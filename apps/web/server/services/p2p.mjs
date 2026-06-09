@@ -58,13 +58,16 @@ export function attachP2PSocket(roomId, socket, peerName) {
     type: "system",
     event: "joined",
     peerId,
+    peer: publicPeer(peer),
     peers: publicPeers(room)
   }));
   broadcast(room, peerId, {
     type: "system",
     event: "peer-joined",
-    peer: publicPeer(peer)
+    peer: publicPeer(peer),
+    peers: publicPeers(room)
   });
+  broadcastPresence(room);
 
   socket.on("message", (rawMessage) => {
     const parsed = parseSocketMessage(rawMessage);
@@ -85,8 +88,10 @@ export function attachP2PSocket(roomId, socket, peerName) {
     broadcast(room, peerId, {
       type: "system",
       event: "peer-left",
-      peer: publicPeer(peer)
+      peer: publicPeer(peer),
+      peers: publicPeers(room)
     });
+    broadcastPresence(room);
   });
 }
 
@@ -106,6 +111,19 @@ function broadcast(room, exceptPeerId, payload) {
   const encoded = JSON.stringify(payload);
   for (const [peerId, peer] of room.peers) {
     if (peerId !== exceptPeerId && peer.socket.readyState === 1) {
+      peer.socket.send(encoded);
+    }
+  }
+}
+
+function broadcastPresence(room) {
+  const encoded = JSON.stringify({
+    type: "system",
+    event: "peer-list",
+    peers: publicPeers(room)
+  });
+  for (const peer of room.peers.values()) {
+    if (peer.socket.readyState === 1) {
       peer.socket.send(encoded);
     }
   }

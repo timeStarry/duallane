@@ -58,6 +58,10 @@ input:focus-visible {
   outline-offset: 2px;
 }
 
+#root {
+  min-height: 100vh;
+}
+
 .shell {
   min-height: 100vh;
   display: grid;
@@ -433,9 +437,10 @@ input {
 }
 
 .chat-panel {
-  min-height: 650px;
+  height: min(760px, calc(100vh - 118px));
+  min-height: 560px;
   display: grid;
-  grid-template-rows: auto auto minmax(260px, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   overflow: hidden;
 }
 
@@ -468,36 +473,64 @@ input {
   font-weight: 750;
 }
 
+.share-block {
+  margin: 10px 18px 0;
+}
+
 .share-strip {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  padding: 10px 18px;
+  padding: 8px;
+  border: 1px solid var(--line);
   border-top: 1px solid var(--line);
+  border-radius: 8px;
   color: var(--muted);
-  background: #fff;
+  background: #fffdf8;
   font-size: 0.84rem;
 }
 
-.share-strip span {
+.share-meta {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 6px;
+  padding: 0 8px;
+  color: var(--relay-dark);
+  background: #e8f3f4;
+  font-weight: 850;
+}
+
+.share-link-text {
   min-width: 0;
   overflow: hidden;
+  border-radius: 6px;
+  padding: 0 4px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.share-strip .icon-button {
-  width: 32px;
-  height: 32px;
+.share-strip .secondary {
+  min-height: 32px;
+}
+
+.copy-fallback {
+  margin: 6px 2px 0;
+  color: var(--yellow);
+  font-size: 0.78rem;
+  font-weight: 750;
 }
 
 .message-list {
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
   overflow: auto;
   padding: 18px;
+  overscroll-behavior: contain;
 }
 
 .empty-state {
@@ -556,6 +589,10 @@ input {
 }
 
 .composer {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
   padding: 14px;
   border-top: 1px solid var(--line);
   background: var(--panel-2);
@@ -830,13 +867,13 @@ input {
   }
 
   .chat-panel {
-    min-height: 620px;
+    height: calc(100vh - 96px);
+    min-height: 560px;
   }
 
-  .chat-header,
   .composer {
+    grid-template-columns: 1fr;
     align-items: stretch;
-    flex-direction: column;
   }
 
   .chat-status {

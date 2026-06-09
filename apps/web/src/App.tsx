@@ -21,10 +21,12 @@ import {
   X
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import type { RefObject } from "react";
 
 type Lane = "entry" | "p2p" | "workspace";
 type P2pStep = "name" | "waiting" | "chat" | "ended";
 type ConnectionState = "idle" | "connecting" | "connected" | "offline" | "error";
+type CopyState = "idle" | "copied" | "failed";
 type Message = {
   id: string;
   author: string;
@@ -68,6 +70,10 @@ type AuditEvent = {
   actor: string;
   result: "success" | "rejected" | "failure";
   at: string;
+};
+type Peer = {
+  id: string;
+  name: string;
 };
 
 const workspaceUsers: WorkspaceUser[] = [
@@ -149,6 +155,47 @@ function getInviteLink(roomId: string) {
   return `${window.location.origin}/?lane=p2p&room=${encodeURIComponent(roomId)}`;
 }
 
+async function copyText(value: string) {
+  try {
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    // Fall back to the legacy path below for LAN HTTP browsers.
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.readOnly = true;
+  textarea.style.position = "fixed";
+  textarea.style.inset = "0 auto auto 0";
+  textarea.style.width = "1px";
+  textarea.style.height = "1px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  try {
+    return document.execCommand("copy");
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
+function getO2OState(peerCount: number, socketState: ConnectionState): ConnectionState {
+  if (socketState === "error" || socketState === "connecting") {
+    return socketState;
+  }
+  if (peerCount >= 2) {
+    return "connected";
+  }
+  if (socketState === "offline") {
+    return "offline";
+  }
+  return "idle";
+}
+
 export function App() {
   const [lane, setLane] = useState<Lane>("entry");
   const [p2pStep, setP2pStep] = useState<P2pStep>("name");
@@ -160,7 +207,12 @@ export function App() {
   const [p2pMessages, setP2pMessages] = useState<Message[]>([]);
   const [p2pDraft, setP2pDraft] = useState("");
   const [sessionSaved, setSessionSaved] = useState<"idle" | "saved" | "discarded">("idle");
+  const [p2pPeers, setP2pPeers] = useState<Peer[]>([]);
+  const [p2pSocketState, setP2pSocketState] = useState<ConnectionState>("idle");
+  const [copyState, setCopyState] = useState<CopyState>("idle");
   const wsRef = useRef<WebSocket | null>(null);
+  const p2pMessageListRef = useRef<HTMLDivElement | null>(null);
+  const workspaceMessageListRef = useRef<HTMLDivElement | null>(null);
 
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [workspaceError, setWorkspaceError] = useState("");
@@ -174,6 +226,21 @@ export function App() {
     () => conversations.find((conversation) => conversation.id === activeConversation)?.name ?? "Conversation",
     [activeConversation, conversations]
   );
+  const p2pConnectionState = getO2OState(p2pPeers.length, p2pSocketState);
+
+  useEffect(() => {
+    p2pMessageListRef.current?.scrollTo({
+      top: p2pMessageListRef.current.scrollHeight,
+      behavior: "smooth"
+    });
+  }, [p2pMessages.length]);
+
+  useEffect(() => {
+    workspaceMessageListRef.current?.scrollTo({
+      top: workspaceMessageListRef.current.scrollHeight,
+      behavior: "smooth"
+    });
+  }, [workspaceMessages.length]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -193,18 +260,25 @@ export function App() {
       return;
     }
 
-    setP2pStatus("connecting");
+    setP2pSocketState("connecting");
     setP2pError("");
     const socket = new WebSocket(getWsUrl(roomId, displayName.trim() || "Guest"));
     wsRef.current = socket;
 
     socket.addEventListener("open", () => {
-      setP2pStatus("connected");
+      setP2pSocketState("connected");
     });
 
     socket.addEventListener("message", (event) => {
       const incoming = parsePeerMessage(event.data);
+      if (incoming?.peers) {
+        setP2pPeers(incoming.peers);
+      }
       if (!incoming) {
+        return;
+      }
+      const body = incoming.body;
+      if (!body) {
         return;
       }
       setP2pMessages((messages) => [
@@ -212,7 +286,7 @@ export function App() {
         {
           id: makeId("p2p"),
           author: incoming.author,
-          body: incoming.body,
+          body,
           lane: "p2p",
           at: nowLabel()
         }
@@ -220,11 +294,12 @@ export function App() {
     });
 
     socket.addEventListener("close", () => {
-      setP2pStatus((status) => (status === "connecting" ? "offline" : status));
+      setP2pSocketState((status) => (status === "connecting" ? "offline" : status));
+      setP2pPeers([]);
     });
 
     socket.addEventListener("error", () => {
-      setP2pStatus("error");
+      setP2pSocketState("error");
       setP2pError("Realtime signaling is not available yet. You can still review the local UI flow.");
     });
 
@@ -242,6 +317,7 @@ export function App() {
     }
 
     setP2pStatus("connecting");
+    setP2pSocketState("idle");
     setP2pError("");
     setSessionSaved("idle");
 
@@ -378,8 +454,17 @@ export function App() {
     setP2pError("");
     setP2pMessages([]);
     setP2pDraft("");
+    setP2pPeers([]);
+    setP2pSocketState("idle");
+    setCopyState("idle");
     setRoomId("");
     setInviteLink("");
+  }
+
+  async function copyInviteLink() {
+    const didCopy = await copyText(inviteLink);
+    setCopyState(didCopy ? "copied" : "failed");
+    window.setTimeout(() => setCopyState("idle"), 1800);
   }
 
   return (
@@ -463,7 +548,7 @@ export function App() {
                   className="icon-button"
                   type="button"
                   title="Copy invite link"
-                  onClick={() => void navigator.clipboard?.writeText(inviteLink)}
+                  onClick={() => void copyInviteLink()}
                 >
                   <Clipboard size={18} />
                 </button>
@@ -476,13 +561,14 @@ export function App() {
                 <button
                   className="secondary"
                   type="button"
-                  onClick={() => void navigator.clipboard?.writeText(inviteLink)}
+                  onClick={() => void copyInviteLink()}
                 >
                   <Clipboard size={18} />
-                  Copy link
+                  {copyState === "copied" ? "Copied" : "Copy link"}
                 </button>
               </div>
               <StatusPill state={p2pStatus} fallbackText="Ready to share" />
+              {copyState === "failed" && <InlineNotice tone="warning" text="Copy failed. Select the link text manually." />}
               {p2pError && <InlineNotice tone="warning" text={p2pError} />}
             </div>
           )}
@@ -493,8 +579,11 @@ export function App() {
               subtitle={`Room ${roomId || "local"}`}
               trustText="No server-side content storage"
               shareLink={inviteLink}
-              status={<StatusPill state={p2pStatus} fallbackText="Local preview mode" />}
+              onCopyShare={copyInviteLink}
+              copyState={copyState}
+              status={<StatusPill state={p2pConnectionState} fallbackText="Waiting for peer" />}
               messages={p2pMessages}
+              messageListRef={p2pMessageListRef}
               draft={p2pDraft}
               onDraft={setP2pDraft}
               onSend={sendP2pMessage}
@@ -624,6 +713,7 @@ export function App() {
               trustText="Server-retained messages and files"
               status={<StatusPill state={workspaceReady ? "connected" : "offline"} fallbackText="Invite gate pending" />}
               messages={workspaceMessages}
+              messageListRef={workspaceMessageListRef}
               draft={workspaceDraft}
               onDraft={setWorkspaceDraft}
               onSend={sendWorkspaceMessage}
@@ -684,7 +774,7 @@ export function App() {
   );
 }
 
-function parsePeerMessage(raw: unknown): { author: string; body: string } | null {
+function parsePeerMessage(raw: unknown): { author: string; body?: string; peers?: Peer[] } | null {
   if (typeof raw !== "string") {
     return { author: "Peer", body: "Received a binary signaling payload." };
   }
@@ -696,12 +786,39 @@ function parsePeerMessage(raw: unknown): { author: string; body: string } | null
       body?: string;
       from?: { name?: string };
       peer?: { name?: string };
+      peers?: Peer[];
     };
 
     if (parsed.type === "system") {
       const peerName = parsed.peer?.name ?? "Peer";
-      const eventLabel = parsed.event === "peer-joined" ? `${peerName} joined.` : parsed.event;
-      return eventLabel ? { author: "System", body: eventLabel } : null;
+      if (parsed.event === "joined") {
+        return {
+          author: "System",
+          body: `${peerName} joined the room.`,
+          peers: parsed.peers
+        };
+      }
+      if (parsed.event === "peer-joined") {
+        return {
+          author: "System",
+          body: `${peerName} joined the room.`,
+          peers: parsed.peers
+        };
+      }
+      if (parsed.event === "peer-left") {
+        return {
+          author: "System",
+          body: `${peerName} left the room.`,
+          peers: parsed.peers
+        };
+      }
+      if (parsed.event === "peer-list") {
+        return {
+          author: "System",
+          peers: parsed.peers
+        };
+      }
+      return parsed.event ? { author: "System", body: parsed.event, peers: parsed.peers } : null;
     }
 
     if (typeof parsed.body === "string" && parsed.body.trim()) {
@@ -784,7 +901,7 @@ function StatusPill({ state, fallbackText }: { state: ConnectionState; fallbackT
   const labels: Record<ConnectionState, string> = {
     idle: fallbackText,
     connecting: "Connecting",
-    connected: "Connected",
+    connected: "Peer online",
     offline: fallbackText,
     error: "Limited mode"
   };
@@ -806,8 +923,11 @@ function ChatPanel({
   subtitle,
   trustText,
   shareLink,
+  onCopyShare,
+  copyState,
   status,
   messages,
+  messageListRef,
   draft,
   onDraft,
   onSend,
@@ -819,8 +939,11 @@ function ChatPanel({
   subtitle: string;
   trustText: string;
   shareLink?: string;
+  onCopyShare?: () => void;
+  copyState?: CopyState;
   status: React.ReactNode;
   messages: Message[];
+  messageListRef?: RefObject<HTMLDivElement | null>;
   draft: string;
   onDraft: (value: string) => void;
   onSend: (event: FormEvent<HTMLFormElement>) => void;
@@ -850,20 +973,27 @@ function ChatPanel({
         <span>{trustText}</span>
       </div>
       {shareLink && (
-        <div className="share-strip">
-          <Link2 size={16} />
-          <span>{shareLink}</span>
-          <button
-            className="icon-button"
-            type="button"
-            title="Copy invite link"
-            onClick={() => void navigator.clipboard?.writeText(shareLink)}
-          >
-            <Clipboard size={16} />
-          </button>
+        <div className="share-block">
+          <div className="share-strip">
+            <div className="share-meta">
+              <Link2 size={16} />
+              <span>Invite</span>
+            </div>
+            <span className="share-link-text">{shareLink}</span>
+            <button
+              className="secondary compact"
+              type="button"
+              title="Copy invite link"
+              onClick={onCopyShare}
+            >
+              <Clipboard size={16} />
+              {copyState === "copied" ? "Copied" : "Copy"}
+            </button>
+          </div>
+          {copyState === "failed" && <p className="copy-fallback">Copy failed. Select the link manually.</p>}
         </div>
       )}
-      <div className="message-list" aria-live="polite">
+      <div className="message-list" ref={messageListRef} aria-live="polite">
         {messages.length === 0 ? (
           <div className="empty-state">
             <MessageSquare size={26} />
