@@ -115,7 +115,21 @@ function nowLabel() {
 }
 
 function makeId(prefix: string) {
-  return `${prefix}-${crypto.randomUUID()}`;
+  return `${prefix}-${randomId()}`;
+}
+
+function randomId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const values = new Uint32Array(4);
+    crypto.getRandomValues(values);
+    return Array.from(values, (value) => value.toString(16).padStart(8, "0")).join("");
+  }
+
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 async function parseJson<T>(response: Response): Promise<T> {
@@ -222,11 +236,11 @@ export function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ displayName: name })
       }).then((response) => parseJson<{ roomId?: string; id?: string; inviteLink?: string }>(response));
-      const nextRoomId = data.roomId ?? data.id ?? crypto.randomUUID().slice(0, 8);
+      const nextRoomId = data.roomId ?? data.id ?? randomId().slice(0, 8);
       setRoomId(nextRoomId);
       setInviteLink(data.inviteLink ?? `${window.location.origin}/?p2p=${encodeURIComponent(nextRoomId)}`);
     } catch (error) {
-      const nextRoomId = crypto.randomUUID().slice(0, 8);
+      const nextRoomId = randomId().slice(0, 8);
       setRoomId(nextRoomId);
       setInviteLink(`${window.location.origin}/?p2p=${encodeURIComponent(nextRoomId)}`);
       setP2pError(error instanceof Error ? `Room API unavailable: ${error.message}` : "Room API unavailable.");
