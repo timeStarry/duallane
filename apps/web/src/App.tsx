@@ -41,6 +41,21 @@ type Conversation = {
   unread: number;
   last: string;
 };
+type ApiMessage = {
+  id: string;
+  authorName?: string;
+  body: string;
+  createdAt?: string;
+};
+type ApiConversation = {
+  id: string;
+  title?: string;
+  name?: string;
+  type: "direct" | "group";
+  messageCount?: number;
+  last?: string;
+  messages?: ApiMessage[];
+};
 type WorkspaceUser = {
   id: string;
   name: string;
@@ -110,9 +125,10 @@ async function parseJson<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
-function getWsUrl(roomId: string) {
+function getWsUrl(roomId: string, name: string) {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}/ws/p2p/${encodeURIComponent(roomId)}`;
+  const query = new URLSearchParams({ name });
+  return `${protocol}//${window.location.host}/ws/p2p/${encodeURIComponent(roomId)}?${query}`;
 }
 
 export function App() {
@@ -148,7 +164,7 @@ export function App() {
 
     setP2pStatus("connecting");
     setP2pError("");
-    const socket = new WebSocket(getWsUrl(roomId));
+    const socket = new WebSocket(getWsUrl(roomId, displayName.trim() || "Guest"));
     wsRef.current = socket;
 
     socket.addEventListener("open", () => {
@@ -157,13 +173,16 @@ export function App() {
     });
 
     socket.addEventListener("message", (event) => {
-      const body = typeof event.data === "string" ? event.data : "Received a binary signaling payload.";
+      const incoming = parsePeerMessage(event.data);
+      if (!incoming) {
+        return;
+      }
       setP2pMessages((messages) => [
         ...messages,
         {
           id: makeId("p2p"),
-          author: "Peer",
-          body,
+          author: incoming.author,
+          body: incoming.body,
           lane: "p2p",
           at: nowLabel()
         }
@@ -224,7 +243,7 @@ export function App() {
     }
 
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(body);
+      wsRef.current.send(JSON.stringify({ type: "message", body }));
     }
 
     setP2pMessages((messages) => [
@@ -277,12 +296,14 @@ export function App() {
 
     try {
       const data = await fetch("/api/workspace/conversations").then((response) =>
-        parseJson<{ conversations?: Conversation[] } | Conversation[]>(response)
+        parseJson<{ conversations?: ApiConversation[] } | ApiConversation[]>(response)
       );
       const nextConversations = Array.isArray(data) ? data : data.conversations;
       if (nextConversations?.length) {
-        setConversations(nextConversations);
-        setActiveConversation(nextConversations[0].id);
+        const mappedConversations = nextConversations.map(mapApiConversation);
+        setConversations(mappedConversations);
+        setActiveConversation(mappedConversations[0].id);
+        setWorkspaceMessages(mapApiMessages(nextConversations[0].messages ?? []));
       }
     } catch {
       setConversations(fallbackConversations);
@@ -603,6 +624,75 @@ export function App() {
       )}
     </main>
   );
+}
+
+function parsePeerMessage(raw: unknown): { author: string; body: string } | null {
+  if (typeof raw !== "string") {
+    return { author: "Peer", body: "Received a binary signaling payload." };
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as {
+      type?: string;
+      event?: string;
+      body?: string;
+      from?: { name?: string };
+      peer?: { name?: string };
+    };
+
+    if (parsed.type === "system") {
+      const peerName = parsed.peer?.name ?? "Peer";
+      const eventLabel = parsed.event === "peer-joined" ? `${peerName} joined.` : parsed.event;
+      return eventLabel ? { author: "System", body: eventLabel } : null;
+    }
+
+    if (typeof parsed.body === "string" && parsed.body.trim()) {
+      return {
+        author: parsed.from?.name ?? "Peer",
+        body: parsed.body
+      };
+    }
+
+    return null;
+  } catch {
+    return { author: "Peer", body: raw };
+  }
+}
+
+function mapApiConversation(conversation: ApiConversation): Conversation {
+  const latestMessage = conversation.messages?.at(-1);
+  return {
+    id: conversation.id,
+    name: conversation.title ?? conversation.name ?? "Conversation",
+    type: conversation.type,
+    unread: 0,
+    last: latestMessage?.body ?? conversation.last ?? `${conversation.messageCount ?? 0} retained messages`
+  };
+}
+
+function mapApiMessages(messages: ApiMessage[]): Message[] {
+  if (!messages.length) {
+    return initialWorkspaceMessages;
+  }
+
+  return messages.map((message) => ({
+    id: message.id,
+    author: message.authorName ?? "Workspace user",
+    body: message.body,
+    lane: "workspace",
+    at: message.createdAt ? nowLabelFromDate(message.createdAt) : nowLabel()
+  }));
+}
+
+function nowLabelFromDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return nowLabel();
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
 }
 
 function TopBar({
