@@ -14,6 +14,10 @@ pnpm dev
 The frontend runs at `http://127.0.0.1:5173` and proxies API/WebSocket traffic to
 `http://127.0.0.1:8787`.
 
+Invite links are generated from the browser origin, so the public URL should be
+the frontend URL. In a reverse-proxy deployment, expose one origin and route
+`/api` plus `/ws` to the backend service.
+
 ## Production Shape
 
 ```bash

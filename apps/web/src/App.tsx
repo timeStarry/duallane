@@ -145,6 +145,10 @@ function getWsUrl(roomId: string, name: string) {
   return `${protocol}//${window.location.host}/ws/p2p/${encodeURIComponent(roomId)}?${query}`;
 }
 
+function getInviteLink(roomId: string) {
+  return `${window.location.origin}/?lane=p2p&room=${encodeURIComponent(roomId)}`;
+}
+
 export function App() {
   const [lane, setLane] = useState<Lane>("entry");
   const [p2pStep, setP2pStep] = useState<P2pStep>("name");
@@ -170,6 +174,19 @@ export function App() {
     () => conversations.find((conversation) => conversation.id === activeConversation)?.name ?? "Conversation",
     [activeConversation, conversations]
   );
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const incomingRoomId = params.get("room");
+    if (params.get("lane") !== "p2p" || !incomingRoomId) {
+      return;
+    }
+
+    setLane("p2p");
+    setP2pStep("name");
+    setRoomId(incomingRoomId);
+    setInviteLink(getInviteLink(incomingRoomId));
+  }, []);
 
   useEffect(() => {
     if (p2pStep !== "chat" || !roomId) {
@@ -228,6 +245,13 @@ export function App() {
     setP2pError("");
     setSessionSaved("idle");
 
+    if (roomId) {
+      setInviteLink(getInviteLink(roomId));
+      setP2pStatus("idle");
+      setP2pStep("chat");
+      return;
+    }
+
     try {
       const data = await fetch("/api/p2p/rooms", {
         method: "POST",
@@ -236,11 +260,11 @@ export function App() {
       }).then((response) => parseJson<{ roomId?: string; id?: string; inviteLink?: string }>(response));
       const nextRoomId = data.roomId ?? data.id ?? randomId().slice(0, 8);
       setRoomId(nextRoomId);
-      setInviteLink(data.inviteLink ?? `${window.location.origin}/?p2p=${encodeURIComponent(nextRoomId)}`);
+      setInviteLink(getInviteLink(nextRoomId));
     } catch (error) {
       const nextRoomId = randomId().slice(0, 8);
       setRoomId(nextRoomId);
-      setInviteLink(`${window.location.origin}/?p2p=${encodeURIComponent(nextRoomId)}`);
+      setInviteLink(getInviteLink(nextRoomId));
       setP2pError(error instanceof Error ? `Room API unavailable: ${error.message}` : "Room API unavailable.");
     } finally {
       setP2pStatus("idle");
@@ -354,6 +378,8 @@ export function App() {
     setP2pError("");
     setP2pMessages([]);
     setP2pDraft("");
+    setRoomId("");
+    setInviteLink("");
   }
 
   return (
@@ -398,8 +424,12 @@ export function App() {
                 <Radio size={30} />
               </div>
               <p className="eyebrow">No account required</p>
-              <h2 id="p2p-title">Start a private direct session.</h2>
-              <p className="quiet">Your display name is only shown to the peer in this local session.</p>
+              <h2 id="p2p-title">{roomId ? "Join a private direct session." : "Start a private direct session."}</h2>
+              <p className="quiet">
+                {roomId
+                  ? `Enter a display name to join room ${roomId}.`
+                  : "Your display name is only shown to the peer in this local session."}
+              </p>
               <form className="stack-form" onSubmit={createP2pRoom}>
                 <label>
                   <span>Display name</span>
@@ -412,8 +442,8 @@ export function App() {
                   />
                 </label>
                 <button className="primary direct-button" type="submit" disabled={!displayName.trim()}>
-                  <Plus size={18} />
-                  Start session
+                  {roomId ? <MessageSquare size={18} /> : <Plus size={18} />}
+                  {roomId ? "Join session" : "Start session"}
                 </button>
               </form>
             </div>
