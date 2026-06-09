@@ -1,0 +1,14 @@
+services:
+  duallane:
+    build: .
+    ports:
+      - "8787:8787"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+      DUALLANE_DATA_DIR: /app/data
+      SESSION_SECRET: ${SESSION_SECRET:-replace-this-before-production}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8787}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
