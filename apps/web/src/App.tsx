@@ -172,7 +172,7 @@ export function App() {
   );
 
   useEffect(() => {
-    if (p2pStep !== "waiting" || !roomId) {
+    if (p2pStep !== "chat" || !roomId) {
       return;
     }
 
@@ -183,7 +183,6 @@ export function App() {
 
     socket.addEventListener("open", () => {
       setP2pStatus("connected");
-      setP2pStep("chat");
     });
 
     socket.addEventListener("message", (event) => {
@@ -210,7 +209,6 @@ export function App() {
     socket.addEventListener("error", () => {
       setP2pStatus("error");
       setP2pError("Realtime signaling is not available yet. You can still review the local UI flow.");
-      setP2pStep("chat");
     });
 
     return () => {
@@ -245,6 +243,7 @@ export function App() {
       setInviteLink(`${window.location.origin}/?p2p=${encodeURIComponent(nextRoomId)}`);
       setP2pError(error instanceof Error ? `Room API unavailable: ${error.message}` : "Room API unavailable.");
     } finally {
+      setP2pStatus("idle");
       setP2pStep("waiting");
     }
   }
@@ -427,7 +426,7 @@ export function App() {
               </div>
               <p className="eyebrow">Room ready</p>
               <h2>Share this invite link.</h2>
-              <p className="quiet">Room ID {roomId}. Waiting for peer signaling.</p>
+              <p className="quiet">Room ID {roomId}. Copy the link first, then enter the chat when you are ready.</p>
               <div className="copy-box">
                 <span>{inviteLink}</span>
                 <button
@@ -439,7 +438,21 @@ export function App() {
                   <Clipboard size={18} />
                 </button>
               </div>
-              <StatusPill state={p2pStatus} fallbackText="Connecting to signaling" />
+              <div className="action-row">
+                <button className="primary direct-button" type="button" onClick={() => setP2pStep("chat")}>
+                  <MessageSquare size={18} />
+                  Enter chat
+                </button>
+                <button
+                  className="secondary"
+                  type="button"
+                  onClick={() => void navigator.clipboard?.writeText(inviteLink)}
+                >
+                  <Clipboard size={18} />
+                  Copy link
+                </button>
+              </div>
+              <StatusPill state={p2pStatus} fallbackText="Ready to share" />
               {p2pError && <InlineNotice tone="warning" text={p2pError} />}
             </div>
           )}
@@ -449,6 +462,7 @@ export function App() {
               title="Direct session"
               subtitle={`Room ${roomId || "local"}`}
               trustText="No server-side content storage"
+              shareLink={inviteLink}
               status={<StatusPill state={p2pStatus} fallbackText="Local preview mode" />}
               messages={p2pMessages}
               draft={p2pDraft}
@@ -761,6 +775,7 @@ function ChatPanel({
   title,
   subtitle,
   trustText,
+  shareLink,
   status,
   messages,
   draft,
@@ -773,6 +788,7 @@ function ChatPanel({
   title: string;
   subtitle: string;
   trustText: string;
+  shareLink?: string;
   status: React.ReactNode;
   messages: Message[];
   draft: string;
@@ -803,6 +819,20 @@ function ChatPanel({
         <ShieldCheck size={16} />
         <span>{trustText}</span>
       </div>
+      {shareLink && (
+        <div className="share-strip">
+          <Link2 size={16} />
+          <span>{shareLink}</span>
+          <button
+            className="icon-button"
+            type="button"
+            title="Copy invite link"
+            onClick={() => void navigator.clipboard?.writeText(shareLink)}
+          >
+            <Clipboard size={16} />
+          </button>
+        </div>
+      )}
       <div className="message-list" aria-live="polite">
         {messages.length === 0 ? (
           <div className="empty-state">
