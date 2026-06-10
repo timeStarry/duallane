@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n api,web -c cyan,magenta \"node --watch server/index.mjs\" \"vite --host 127.0.0.1\"",
+    "dev": "concurrently -n api,web -c cyan,magenta \"node --watch server/index.mjs\" \"vite --host 0.0.0.0\"",
     "build": "tsc -b && vite build",
     "start": "NODE_ENV=production node server/index.mjs",
     "test": "vitest run",
