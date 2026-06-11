@@ -1,4 +1,5 @@
 const ROOM_TTL_MS = 2 * 60 * 60 * 1000;
+const MAX_ROOM_PEERS = 2;
 
 export function createP2PRoom(displayName, baseUrl) {
   const now = Date.now();
@@ -42,6 +43,11 @@ export function attachP2PSocket(roomId, socket, peerName) {
   const room = rooms.get(roomId);
   if (!room) {
     socket.send(JSON.stringify({ type: "system", event: "room-not-found" }));
+    socket.close();
+    return;
+  }
+  if (room.peers.size >= MAX_ROOM_PEERS) {
+    socket.send(JSON.stringify({ type: "system", event: "room-full" }));
     socket.close();
     return;
   }

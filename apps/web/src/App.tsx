@@ -9,6 +9,7 @@ import {
   FileCheck2,
   FileUp,
   Github,
+  History,
   KeyRound,
   Link2,
   LockKeyhole,
@@ -18,12 +19,14 @@ import {
   Moon,
   Plus,
   Radio,
+  RefreshCw,
   Save,
   Search,
   Send,
   ShieldCheck,
   ShieldHalf,
   Sun,
+  Trash2,
   UsersRound,
   X
 } from "lucide-react";
@@ -31,9 +34,11 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 
 type Lane = "entry" | "p2p" | "workspace";
-type P2pStep = "name" | "waiting" | "chat" | "ended";
+type P2pStep = "name" | "waiting" | "chat" | "ended" | "invalid-room";
 type ConnectionState = "idle" | "connecting" | "connected" | "offline" | "error";
 type P2pTransportMode = "waiting" | "direct" | "relay-text" | "offline" | "error";
+type DataChannelState = "idle" | RTCDataChannelState;
+type P2pRoomIssue = "" | "not-found" | "full";
 type CopyState = "idle" | "copied" | "failed";
 type ThemeMode = "system" | "light" | "dark";
 type ResolvedTheme = "light" | "dark";
@@ -46,6 +51,9 @@ type FileTransfer = {
   status: FileTransferStatus;
   progress: number;
   downloadUrl?: string;
+  failureReason?: string;
+  riskNote?: string;
+  retryable?: boolean;
 };
 type Message = {
   id: string;
@@ -107,12 +115,13 @@ type PeerSocketMessage = {
   peers?: Peer[];
   peerId?: string;
   signal?: SignalMessage;
+  systemEvent?: "room-not-found" | "room-full";
 };
 type DataEnvelope =
   | { kind: "chat"; id: string; author: string; body: string; at: string }
   | { kind: "file-offer"; transferId: string; author: string; name: string; size: number; mimeType: string }
   | { kind: "file-accept"; transferId: string }
-  | { kind: "file-reject"; transferId: string }
+  | { kind: "file-reject"; transferId: string; reason?: string }
   | { kind: "file-chunk"; transferId: string; index: number; total: number; data: string }
   | { kind: "file-complete"; transferId: string };
 type IncomingFileBuffer = {
@@ -135,8 +144,23 @@ type RoomDetail = {
   label: string;
   value: string;
 };
+type SavedP2pSession = {
+  id: string;
+  roomId: string;
+  displayName: string;
+  savedAt: string;
+  messages: Message[];
+};
+type ConnectionAdvice = {
+  title: string;
+  body: string;
+  items: string[];
+};
 
 const FILE_CHUNK_SIZE = 16 * 1024;
+const P2P_LARGE_FILE_WARNING_BYTES = 100 * 1024 * 1024;
+const P2P_MAX_FILE_BYTES = 512 * 1024 * 1024;
+const P2P_SAVED_SESSIONS_KEY = "duallane-p2p-sessions";
 const THEME_STORAGE_KEY = "duallane-theme-mode";
 
 const workspaceUsers: WorkspaceUser[] = [
@@ -351,6 +375,64 @@ function p2pTrustText(mode: P2pTransportMode) {
   return "服务器不保存对话内容";
 }
 
+function getConnectionAdvice({
+  roomIssue,
+  peerCount,
+  socketState,
+  rtcState,
+  mode
+}: {
+  roomIssue: P2pRoomIssue;
+  peerCount: number;
+  socketState: ConnectionState;
+  rtcState: ConnectionState;
+  mode: P2pTransportMode;
+}): ConnectionAdvice | null {
+  if (roomIssue === "not-found") {
+    return {
+      title: "房间不存在或已过期",
+      body: "这个邀请链接已经不可用。请让发起方重新创建房间，并复制新的邀请链接。",
+      items: ["返回后重新创建房间", "确认复制的是最新链接", "房间开启后让双方都保持页面打开"]
+    };
+  }
+  if (roomIssue === "full") {
+    return {
+      title: "房间已满",
+      body: "一对一直连房间只允许两端加入。请确认是否已经有另一端在线，或重新创建一个房间。",
+      items: ["关闭多余窗口后重试", "需要新的对象时重新创建房间", "多人协作请改用工作区"]
+    };
+  }
+  if (mode === "error" || socketState === "error" || rtcState === "error") {
+    return {
+      title: "连接异常",
+      body: "信令或浏览器直连协商失败。当前页面可以保留消息记录，但建议重建连接路径。",
+      items: ["让对方保持页面打开并刷新一次", "复制新链接重新进入房间", "需要稳定留存和文件中转时改用工作区"]
+    };
+  }
+  if (mode === "offline") {
+    return {
+      title: "对方离线或连接已断开",
+      body: "直连会话依赖双方页面同时在线。任一方关闭页面、休眠或网络切换都会中断。",
+      items: ["让对方重新打开同一邀请链接", "无法恢复时复制新链接重建房间", "重要文件建议改用工作区中转"]
+    };
+  }
+  if (mode === "relay-text" && peerCount >= 2) {
+    return {
+      title: "文件通道还未就绪",
+      body: "文本可以临时通过信令中转，文件需要等待浏览器直连数据通道建立。",
+      items: ["双方保持页面打开 10 到 20 秒", "检查浏览器是否禁用了 WebRTC", "仍无法建立时改用工作区中转文件"]
+    };
+  }
+  if (mode === "waiting") {
+    return {
+      title: "等待对方加入",
+      body: "复制邀请链接给对方。对方打开页面并输入名称后，系统会自动协商直连路径。",
+      items: ["确认对方打开的是最新链接", "让对方不要关闭页面", "房间过期后需要重新创建"]
+    };
+  }
+  return null;
+}
+
 function transferStatusLabel(status: FileTransferStatus) {
   const labels: Record<FileTransferStatus, string> = {
     offered: "等待确认",
@@ -384,7 +466,7 @@ function getFileMessageBody(transfer: FileTransfer) {
   if (transfer.status === "rejected") {
     return "文件传输已被拒绝。";
   }
-  return "文件传输失败。";
+  return transfer.failureReason ? `文件传输失败：${transfer.failureReason}` : "文件传输失败。";
 }
 
 function getTransferProgress(doneBytes: number, totalBytes: number) {
@@ -423,9 +505,13 @@ function parseDataEnvelope(raw: string): DataEnvelope | null {
     }
 
     if (
-      (value.kind === "file-accept" || value.kind === "file-reject" || value.kind === "file-complete") &&
+      (value.kind === "file-accept" || value.kind === "file-complete") &&
       typeof value.transferId === "string"
     ) {
+      return value as DataEnvelope;
+    }
+
+    if (value.kind === "file-reject" && typeof value.transferId === "string") {
       return value as DataEnvelope;
     }
 
@@ -487,6 +573,119 @@ function waitForBufferedAmount(channel: RTCDataChannel) {
   });
 }
 
+function getFileRiskNote(fileSize: number) {
+  if (fileSize >= P2P_LARGE_FILE_WARNING_BYTES) {
+    return `大文件 ${formatBytes(fileSize)} 对网络稳定性要求较高，中断后需要重新发送。`;
+  }
+  return undefined;
+}
+
+function getFileLimitText() {
+  return `当前直连通道建议单个文件不超过 ${formatBytes(P2P_MAX_FILE_BYTES)}。`;
+}
+
+function sanitizeMessagesForStorage(messages: Message[]) {
+  return messages.map((message) => ({
+    ...message,
+    fileTransfer: message.fileTransfer
+      ? {
+          ...message.fileTransfer,
+          downloadUrl: undefined
+        }
+      : undefined
+  }));
+}
+
+function getSavedP2pSessions(): SavedP2pSession[] {
+  if (typeof localStorage === "undefined") {
+    return [];
+  }
+
+  const sessions: SavedP2pSession[] = [];
+  try {
+    const stored = localStorage.getItem(P2P_SAVED_SESSIONS_KEY);
+    const parsed = stored ? JSON.parse(stored) : [];
+    if (Array.isArray(parsed)) {
+      for (const session of parsed) {
+        if (
+          session &&
+          typeof session.id === "string" &&
+          typeof session.roomId === "string" &&
+          typeof session.savedAt === "string" &&
+          Array.isArray(session.messages)
+        ) {
+          sessions.push({
+            id: session.id,
+            roomId: session.roomId,
+            displayName: typeof session.displayName === "string" ? session.displayName : "本机",
+            savedAt: session.savedAt,
+            messages: session.messages as Message[]
+          });
+        }
+      }
+    }
+  } catch {
+    // Ignore malformed local records and keep the UI usable.
+  }
+
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (!key || key === P2P_SAVED_SESSIONS_KEY || !key.startsWith("duallane-p2p-")) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(localStorage.getItem(key) ?? "[]");
+      if (!Array.isArray(parsed)) {
+        continue;
+      }
+      const roomId = key.replace("duallane-p2p-", "") || "legacy";
+      const legacyId = `legacy-${roomId}`;
+      if (!sessions.some((session) => session.id === legacyId)) {
+        sessions.push({
+          id: legacyId,
+          roomId,
+          displayName: "本机",
+          savedAt: new Date(0).toISOString(),
+          messages: parsed as Message[]
+        });
+      }
+    } catch {
+      // Ignore malformed legacy records.
+    }
+  }
+
+  return sessions.sort((first, second) => Date.parse(second.savedAt) - Date.parse(first.savedAt));
+}
+
+function writeSavedP2pSessions(sessions: SavedP2pSession[]) {
+  localStorage.setItem(P2P_SAVED_SESSIONS_KEY, JSON.stringify(sessions));
+}
+
+function formatSavedAt(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime()) || date.getTime() === 0) {
+    return "早期记录";
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+}
+
+function downloadJson(filename: string, data: unknown) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
@@ -499,12 +698,17 @@ export function App() {
   const [inviteLink, setInviteLink] = useState("");
   const [p2pStatus, setP2pStatus] = useState<ConnectionState>("idle");
   const [p2pError, setP2pError] = useState("");
+  const [p2pRoomIssue, setP2pRoomIssue] = useState<P2pRoomIssue>("");
   const [p2pMessages, setP2pMessages] = useState<Message[]>([]);
   const [p2pDraft, setP2pDraft] = useState("");
-  const [sessionSaved, setSessionSaved] = useState<"idle" | "saved" | "discarded">("idle");
+  const [sessionSaved, setSessionSaved] = useState<"idle" | "saved">("idle");
+  const [savedP2pSessions, setSavedP2pSessions] = useState<SavedP2pSession[]>(() => getSavedP2pSessions());
+  const [selectedSavedSessionId, setSelectedSavedSessionId] = useState("");
+  const [savedSessionsOpen, setSavedSessionsOpen] = useState(false);
   const [p2pPeers, setP2pPeers] = useState<Peer[]>([]);
   const [p2pSocketState, setP2pSocketState] = useState<ConnectionState>("idle");
   const [p2pRtcState, setP2pRtcState] = useState<ConnectionState>("idle");
+  const [p2pDataChannelState, setP2pDataChannelState] = useState<DataChannelState>("idle");
   const [copyState, setCopyState] = useState<CopyState>("idle");
   const [roomDetailsOpen, setRoomDetailsOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -530,7 +734,24 @@ export function App() {
   );
   const p2pConnectionState = getO2OState(p2pPeers.length, p2pSocketState, p2pRtcState);
   const p2pTransportMode = getP2pTransportMode(p2pPeers.length, p2pSocketState, p2pRtcState);
-  const p2pCanTransferFiles = p2pRtcState === "connected" && dataChannelRef.current?.readyState === "open";
+  const p2pCanTransferFiles = p2pDataChannelState === "open";
+  const selectedSavedSession = savedP2pSessions.find((session) => session.id === selectedSavedSessionId);
+  const p2pRoomIssueTitle = p2pRoomIssue === "full" ? "房间已满。" : "房间不存在或已过期。";
+  const p2pRoomIssueText =
+    p2pRoomIssue === "full"
+      ? "一对一直连房间只允许两端加入。请关闭多余窗口后重试，或重新创建房间。"
+      : "这个邀请链接已经无法加入。请重新创建房间，并把新的邀请链接发给对方。";
+  const connectionAdvice = useMemo(
+    () =>
+      getConnectionAdvice({
+        roomIssue: p2pRoomIssue,
+        peerCount: p2pPeers.length,
+        socketState: p2pSocketState,
+        rtcState: p2pRtcState,
+        mode: p2pTransportMode
+      }),
+    [p2pPeers.length, p2pRoomIssue, p2pRtcState, p2pSocketState, p2pTransportMode]
+  );
   const roomDetails = useMemo<RoomDetail[]>(
     () => [
       { label: "房间 ID", value: roomId || "本地预览" },
@@ -539,14 +760,30 @@ export function App() {
       { label: "信令", value: connectionStateLabel(p2pSocketState) },
       { label: "直连数据通道", value: connectionStateLabel(p2pRtcState) },
       { label: "消息路径", value: p2pTransportModeDescription(p2pTransportMode, p2pPeers.length) },
-      { label: "文件路径", value: p2pCanTransferFiles ? "浏览器直连文件传输可用。" : "等待直连数据通道。" },
+      {
+        label: "文件路径",
+        value: p2pCanTransferFiles
+          ? "浏览器直连文件传输可用。"
+          : p2pDataChannelState === "connecting"
+            ? "文件通道正在打开。"
+            : "等待直连数据通道。"
+      },
       {
         label: "保存方式",
         value:
           "支持的浏览器会询问保存位置；其他浏览器会按下载设置保存。"
       }
     ],
-    [displayName, p2pCanTransferFiles, p2pPeers, p2pRtcState, p2pSocketState, p2pTransportMode, roomId]
+    [
+      displayName,
+      p2pCanTransferFiles,
+      p2pDataChannelState,
+      p2pPeers,
+      p2pRtcState,
+      p2pSocketState,
+      p2pTransportMode,
+      roomId
+    ]
   );
 
   useEffect(() => {
@@ -585,6 +822,12 @@ export function App() {
   }, [workspaceMessages.length]);
 
   useEffect(() => {
+    if (!selectedSavedSessionId && savedP2pSessions.length > 0) {
+      setSelectedSavedSessionId(savedP2pSessions[0].id);
+    }
+  }, [savedP2pSessions, selectedSavedSessionId]);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const incomingRoomId = params.get("room");
     if (params.get("lane") !== "p2p" || !incomingRoomId) {
@@ -595,6 +838,7 @@ export function App() {
     setP2pStep("name");
     setRoomId(incomingRoomId);
     setInviteLink(getInviteLink(incomingRoomId));
+    setP2pRoomIssue("");
   }, []);
 
   useEffect(() => {
@@ -604,7 +848,9 @@ export function App() {
 
     setP2pSocketState("connecting");
     setP2pRtcState("connecting");
+    setP2pDataChannelState("idle");
     setP2pError("");
+    setP2pRoomIssue("");
     const socket = new WebSocket(getWsUrl(roomId, displayName.trim() || "访客"));
     wsRef.current = socket;
 
@@ -616,14 +862,24 @@ export function App() {
 
     const attachChannel = (channel: RTCDataChannel) => {
       dataChannelRef.current = channel;
-      channel.addEventListener("open", () => setP2pRtcState("connected"));
+      setP2pDataChannelState(channel.readyState);
+      channel.addEventListener("open", () => {
+        setP2pDataChannelState("open");
+        setP2pRtcState("connected");
+      });
       channel.addEventListener("close", () => {
         if (dataChannelRef.current === channel) {
           dataChannelRef.current = null;
         }
+        setP2pDataChannelState("closed");
         setP2pRtcState("offline");
+        markInterruptedTransfers("文件通道已断开，请确认双方页面在线后重新发送");
       });
-      channel.addEventListener("error", () => setP2pRtcState("error"));
+      channel.addEventListener("error", () => {
+        setP2pDataChannelState("closed");
+        setP2pRtcState("error");
+        markInterruptedTransfers("文件通道异常，请刷新或重建房间后重新发送");
+      });
       channel.addEventListener("message", (event) => {
         if (typeof event.data !== "string") {
           return;
@@ -666,6 +922,15 @@ export function App() {
       if (!incoming) {
         return;
       }
+      if (incoming.systemEvent === "room-not-found" || incoming.systemEvent === "room-full") {
+        setP2pRoomIssue(incoming.systemEvent === "room-full" ? "full" : "not-found");
+        setP2pSocketState("error");
+        setP2pRtcState("error");
+        setP2pDataChannelState("idle");
+        setP2pPeers([]);
+        setP2pStep("invalid-room");
+        return;
+      }
       const signal = incoming.signal;
       if (signal) {
         await handleSignalMessage(peerConnection, sendSignal, signal);
@@ -703,12 +968,15 @@ export function App() {
     socket.addEventListener("close", () => {
       setP2pSocketState((status) => (status === "connecting" ? "offline" : status));
       setP2pRtcState("offline");
+      setP2pDataChannelState("closed");
       setP2pPeers([]);
+      markInterruptedTransfers("连接已断开，请重建房间或让对方重新打开页面后重新发送");
     });
 
     socket.addEventListener("error", () => {
       setP2pSocketState("error");
       setP2pRtcState("error");
+      setP2pDataChannelState("closed");
       setP2pError("实时信令暂不可用，你仍然可以查看本地界面流程。");
     });
 
@@ -718,6 +986,7 @@ export function App() {
       peerConnection.close();
       wsRef.current = null;
       dataChannelRef.current = null;
+      setP2pDataChannelState("idle");
       pendingIceRef.current = [];
       pendingFilesRef.current.clear();
       incomingFilesRef.current.clear();
@@ -734,12 +1003,33 @@ export function App() {
     setP2pStatus("connecting");
     setP2pSocketState("idle");
     setP2pError("");
+    setP2pRoomIssue("");
     setSessionSaved("idle");
 
     if (roomId) {
-      setInviteLink(getInviteLink(roomId));
-      setP2pStatus("idle");
-      setP2pStep("chat");
+      try {
+        const response = await fetch(`/api/p2p/rooms/${encodeURIComponent(roomId)}`);
+        if (response.status === 404) {
+          setP2pStatus("error");
+          setP2pSocketState("error");
+          setP2pRtcState("error");
+          setP2pDataChannelState("idle");
+          setP2pRoomIssue("not-found");
+          setP2pStep("invalid-room");
+          return;
+        }
+        if (!response.ok) {
+          setP2pError(`房间校验暂不可用：${response.status} ${response.statusText || "请求失败"}`);
+        }
+        setInviteLink(getInviteLink(roomId));
+        setP2pStatus("idle");
+        setP2pStep("chat");
+      } catch (error) {
+        setP2pError(error instanceof Error ? `房间校验暂不可用：${error.message}` : "房间校验暂不可用。");
+        setInviteLink(getInviteLink(roomId));
+        setP2pStatus("idle");
+        setP2pStep("chat");
+      }
       return;
     }
 
@@ -749,17 +1039,19 @@ export function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ displayName: name })
       }).then((response) => parseJson<{ roomId?: string; id?: string; inviteLink?: string }>(response));
-      const nextRoomId = data.roomId ?? data.id ?? randomId().slice(0, 8);
+      const nextRoomId = data.roomId ?? data.id;
+      if (!nextRoomId) {
+        throw new Error("房间 API 未返回房间 ID");
+      }
       setRoomId(nextRoomId);
       setInviteLink(getInviteLink(nextRoomId));
+      setP2pStep("waiting");
     } catch (error) {
-      const nextRoomId = randomId().slice(0, 8);
-      setRoomId(nextRoomId);
-      setInviteLink(getInviteLink(nextRoomId));
+      setRoomId("");
+      setInviteLink("");
       setP2pError(error instanceof Error ? `房间 API 暂不可用：${error.message}` : "房间 API 暂不可用。");
     } finally {
       setP2pStatus("idle");
-      setP2pStep("waiting");
     }
   }
 
@@ -805,7 +1097,7 @@ export function App() {
         {
           id: makeId("p2p"),
           author: "系统",
-          body: "加密直连文件传输尚未就绪，请等待对方在线。",
+          body: "加密直连文件传输尚未就绪。请让对方保持页面打开，或改用工作区中转。",
           lane: "p2p",
           at: nowLabel()
         }
@@ -814,6 +1106,32 @@ export function App() {
     }
 
     const transferId = makeId("file");
+    const riskNote = getFileRiskNote(file.size);
+    if (file.size > P2P_MAX_FILE_BYTES) {
+      setP2pMessages((messages) => [
+        ...messages,
+        {
+          id: transferId,
+          author: displayName.trim() || "你",
+          body: `文件未发送：${getFileLimitText()} 大文件请拆分后重试，或改用工作区中转。`,
+          lane: "p2p",
+          at: nowLabel(),
+          self: true,
+          fileTransfer: {
+            id: transferId,
+            name: file.name,
+            size: file.size,
+            mimeType: file.type || "application/octet-stream",
+            status: "failed",
+            progress: 0,
+            failureReason: `超过 ${formatBytes(P2P_MAX_FILE_BYTES)} 的直连上限`,
+            riskNote: "大文件更适合使用工作区中转，便于断点外的重新上传和审计留存。"
+          }
+        }
+      ]);
+      return;
+    }
+
     pendingFilesRef.current.set(transferId, file);
     dataChannel.send(
       JSON.stringify({
@@ -840,7 +1158,9 @@ export function App() {
           size: file.size,
           mimeType: file.type || "application/octet-stream",
           status: "waiting",
-          progress: 0
+          progress: 0,
+          riskNote,
+          retryable: true
         }
       }
     ]);
@@ -897,7 +1217,8 @@ export function App() {
             size: envelope.size,
             mimeType: envelope.mimeType,
             status: "offered",
-            progress: 0
+            progress: 0,
+            riskNote: getFileRiskNote(envelope.size)
           }
         }
       ]);
@@ -907,7 +1228,11 @@ export function App() {
     if (envelope.kind === "file-accept") {
       const file = pendingFilesRef.current.get(envelope.transferId);
       if (!file) {
-        updateP2pFileTransfer(envelope.transferId, { status: "failed" });
+        updateP2pFileTransfer(envelope.transferId, {
+          status: "failed",
+          failureReason: "本机已找不到待发送文件，请重新选择文件发送",
+          retryable: false
+        });
         return;
       }
       void sendP2pFile(envelope.transferId, file);
@@ -917,7 +1242,11 @@ export function App() {
     if (envelope.kind === "file-reject") {
       pendingFilesRef.current.delete(envelope.transferId);
       incomingFilesRef.current.delete(envelope.transferId);
-      updateP2pFileTransfer(envelope.transferId, { status: "rejected", progress: 0 });
+      updateP2pFileTransfer(envelope.transferId, {
+        status: "rejected",
+        progress: 0,
+        failureReason: envelope.reason || "对方拒绝接收"
+      });
       return;
     }
 
@@ -1004,21 +1333,51 @@ export function App() {
     );
   }
 
+  function markInterruptedTransfers(reason: string) {
+    setP2pMessages((messages) =>
+      messages.map((message) => {
+        const transfer = message.fileTransfer;
+        if (!transfer || !["waiting", "sending", "receiving", "offered"].includes(transfer.status)) {
+          return message;
+        }
+        const nextTransfer = {
+          ...transfer,
+          status: "failed" as const,
+          failureReason: reason,
+          retryable: Boolean(message.self && pendingFilesRef.current.has(transfer.id))
+        };
+        return {
+          ...message,
+          body: getFileMessageBody(nextTransfer),
+          fileTransfer: nextTransfer
+        };
+      })
+    );
+  }
+
   async function sendP2pFile(transferId: string, file: File) {
     const dataChannel = dataChannelRef.current;
     if (dataChannel?.readyState !== "open") {
-      updateP2pFileTransfer(transferId, { status: "failed" });
+      updateP2pFileTransfer(transferId, {
+        status: "failed",
+        failureReason: "直连数据通道已断开，请重连后重新发送",
+        retryable: true
+      });
       return;
     }
 
-    updateP2pFileTransfer(transferId, { status: "sending", progress: 0 });
+    updateP2pFileTransfer(transferId, { status: "sending", progress: 0, failureReason: undefined });
     const total = Math.max(1, Math.ceil(file.size / FILE_CHUNK_SIZE));
     for (let index = 0; index < total; index += 1) {
       const chunk = file.slice(index * FILE_CHUNK_SIZE, Math.min(file.size, (index + 1) * FILE_CHUNK_SIZE));
       const buffer = await chunk.arrayBuffer();
       await waitForBufferedAmount(dataChannel);
       if (dataChannel.readyState !== "open") {
-        updateP2pFileTransfer(transferId, { status: "failed" });
+        updateP2pFileTransfer(transferId, {
+          status: "failed",
+          failureReason: "传输中断，请确认双方页面在线后重新发送",
+          retryable: true
+        });
         return;
       }
       dataChannel.send(
@@ -1035,22 +1394,57 @@ export function App() {
 
     dataChannel.send(JSON.stringify({ kind: "file-complete", transferId } satisfies DataEnvelope));
     pendingFilesRef.current.delete(transferId);
-    updateP2pFileTransfer(transferId, { status: "complete", progress: 100 });
+    updateP2pFileTransfer(transferId, { status: "complete", progress: 100, retryable: false });
   }
 
   async function acceptP2pFile(transferId: string) {
     const accepted = sendEnvelope({ kind: "file-accept", transferId });
     if (!accepted) {
-      updateP2pFileTransfer(transferId, { status: "failed" });
+      updateP2pFileTransfer(transferId, {
+        status: "failed",
+        failureReason: "接受时直连通道已断开，请让对方重新发送"
+      });
       return;
     }
-    updateP2pFileTransfer(transferId, { status: "receiving", progress: 0 });
+    updateP2pFileTransfer(transferId, { status: "receiving", progress: 0, failureReason: undefined });
   }
 
   function rejectP2pFile(transferId: string) {
     incomingFilesRef.current.delete(transferId);
-    sendEnvelope({ kind: "file-reject", transferId });
-    updateP2pFileTransfer(transferId, { status: "rejected", progress: 0 });
+    sendEnvelope({ kind: "file-reject", transferId, reason: "对方拒绝接收" });
+    updateP2pFileTransfer(transferId, { status: "rejected", progress: 0, failureReason: "你已拒绝接收" });
+  }
+
+  function retryP2pFile(transferId: string) {
+    const file = pendingFilesRef.current.get(transferId);
+    const dataChannel = dataChannelRef.current;
+    if (!file) {
+      updateP2pFileTransfer(transferId, {
+        status: "failed",
+        failureReason: "本机已找不到原文件，请重新选择文件",
+        retryable: false
+      });
+      return;
+    }
+    if (dataChannel?.readyState !== "open") {
+      updateP2pFileTransfer(transferId, {
+        status: "failed",
+        failureReason: "直连数据通道未恢复，请等待对方在线后重试",
+        retryable: true
+      });
+      return;
+    }
+    updateP2pFileTransfer(transferId, { status: "waiting", progress: 0, failureReason: undefined });
+    dataChannel.send(
+      JSON.stringify({
+        kind: "file-offer",
+        transferId,
+        author: displayName.trim() || "对方",
+        name: file.name,
+        size: file.size,
+        mimeType: file.type || "application/octet-stream"
+      } satisfies DataEnvelope)
+    );
   }
 
   async function saveP2pFile(transfer: FileTransfer) {
@@ -1082,6 +1476,38 @@ export function App() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  }
+
+  function saveP2pSession() {
+    const now = new Date().toISOString();
+    const session: SavedP2pSession = {
+      id: makeId("session"),
+      roomId: roomId || "本地",
+      displayName: displayName.trim() || "本机",
+      savedAt: now,
+      messages: sanitizeMessagesForStorage(p2pMessages)
+    };
+    const nextSessions = [session, ...savedP2pSessions].slice(0, 30);
+    writeSavedP2pSessions(nextSessions);
+    setSavedP2pSessions(nextSessions);
+    setSelectedSavedSessionId(session.id);
+    setSessionSaved("saved");
+  }
+
+  function exportP2pSession(session: SavedP2pSession) {
+    downloadJson(`duallane-p2p-${session.roomId}-${session.savedAt.slice(0, 10)}.json`, session);
+  }
+
+  function clearSavedP2pSessions() {
+    writeSavedP2pSessions([]);
+    setSavedP2pSessions([]);
+    setSelectedSavedSessionId("");
+    setSavedSessionsOpen(false);
+  }
+
+  function discardP2pSession() {
+    setP2pMessages([]);
+    resetToEntry();
   }
 
   async function openWorkspace() {
@@ -1144,21 +1570,51 @@ export function App() {
 
   function resetToEntry() {
     wsRef.current?.close();
+    dataChannelRef.current?.close();
     setLane("entry");
     setP2pStep("name");
     setP2pStatus("idle");
     setP2pError("");
+    setP2pRoomIssue("");
     setP2pMessages([]);
     setP2pDraft("");
+    setSessionSaved("idle");
     setP2pPeers([]);
     setP2pSocketState("idle");
     setP2pRtcState("idle");
+    setP2pDataChannelState("idle");
     setRoomDetailsOpen(false);
+    setSavedSessionsOpen(false);
     setCopyState("idle");
     pendingFilesRef.current.clear();
     incomingFilesRef.current.clear();
     setRoomId("");
     setInviteLink("");
+  }
+
+  function startNewP2pRoom() {
+    wsRef.current?.close();
+    dataChannelRef.current?.close();
+    setLane("p2p");
+    setP2pStep("name");
+    setP2pStatus("idle");
+    setP2pError("");
+    setP2pRoomIssue("");
+    setP2pMessages([]);
+    setP2pDraft("");
+    setP2pPeers([]);
+    setP2pSocketState("idle");
+    setP2pRtcState("idle");
+    setP2pDataChannelState("idle");
+    setRoomDetailsOpen(false);
+    setSavedSessionsOpen(false);
+    setCopyState("idle");
+    setSessionSaved("idle");
+    pendingFilesRef.current.clear();
+    incomingFilesRef.current.clear();
+    setRoomId("");
+    setInviteLink("");
+    window.history.replaceState({}, "", window.location.pathname);
   }
 
   async function copyInviteLink() {
@@ -1232,6 +1688,25 @@ export function App() {
                   {roomId ? "加入会话" : "开始会话"}
                 </button>
               </form>
+              {p2pError && <InlineNotice tone="warning" text={p2pError} />}
+              {savedP2pSessions.length > 0 && (
+                <div className="local-records-block">
+                  <button className="secondary compact" type="button" onClick={() => setSavedSessionsOpen((open) => !open)}>
+                    <History size={16} />
+                    {savedSessionsOpen ? "收起已保存记录" : "查看已保存记录"}
+                  </button>
+                  {savedSessionsOpen && (
+                    <SavedSessionsPanel
+                      sessions={savedP2pSessions}
+                      selectedSession={selectedSavedSession}
+                      selectedSessionId={selectedSavedSessionId}
+                      onSelect={setSelectedSavedSessionId}
+                      onExport={exportP2pSession}
+                      onClear={clearSavedP2pSessions}
+                    />
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -1246,26 +1721,19 @@ export function App() {
               <div className="copy-box">
                 <span>{inviteLink}</span>
                 <button
-                  className="icon-button"
+                  className="secondary compact"
                   type="button"
                   title="复制邀请链接"
                   onClick={() => void copyInviteLink()}
                 >
                   <Clipboard size={18} />
+                  {copyState === "copied" ? "已复制" : "复制"}
                 </button>
               </div>
               <div className="action-row">
                 <button className="primary direct-button" type="button" onClick={() => setP2pStep("chat")}>
                   <MessageSquare size={18} />
                   进入聊天
-                </button>
-                <button
-                  className="secondary"
-                  type="button"
-                  onClick={() => void copyInviteLink()}
-                >
-                  <Clipboard size={18} />
-                  {copyState === "copied" ? "已复制" : "复制链接"}
                 </button>
               </div>
               <StatusPill state={p2pStatus} fallbackText="可分享" />
@@ -1305,16 +1773,40 @@ export function App() {
               onAcceptFile={(transferId) => void acceptP2pFile(transferId)}
               onRejectFile={rejectP2pFile}
               onSaveFile={(transfer) => void saveP2pFile(transfer)}
+              onRetryFile={retryP2pFile}
               onEnd={() => {
                 wsRef.current?.close();
                 setP2pStep("ended");
               }}
+              guidance={connectionAdvice ? <ConnectionAdvicePanel advice={connectionAdvice} /> : undefined}
               fileLabel="选择文件"
               fileInputDisabled={!p2pCanTransferFiles}
               fileInputTitle={
                 p2pCanTransferFiles ? "选择文件进行加密点对点传输" : "等待对方数据通道上线"
               }
             />
+          )}
+
+          {p2pStep === "invalid-room" && (
+            <div className="single-action">
+              <div className="center-icon direct-bg" aria-hidden="true">
+                <AlertCircle size={30} />
+              </div>
+              <p className="eyebrow">房间不可用</p>
+              <h2>{p2pRoomIssueTitle}</h2>
+              <p className="quiet">{p2pRoomIssueText}</p>
+              <div className="action-row">
+                <button className="primary direct-button" type="button" onClick={startNewP2pRoom}>
+                  <RefreshCw size={18} />
+                  重新创建房间
+                </button>
+                <button className="secondary" type="button" onClick={resetToEntry}>
+                  <ArrowLeft size={18} />
+                  返回通道选择
+                </button>
+              </div>
+              <InlineNotice tone="warning" text="房间只保存短时信令状态；过期或服务重启后，需要使用新链接。" />
+            </div>
           )}
 
           {p2pStep === "ended" && (
@@ -1326,31 +1818,41 @@ export function App() {
               <h2>本次会话已结束。</h2>
               <p className="quiet">你可以只在这个浏览器中保留记录，也可以立即丢弃本地状态。</p>
               <div className="action-row">
-                <button
-                  className="primary direct-button"
-                  type="button"
-                  onClick={() => {
-                    localStorage.setItem(`duallane-p2p-${roomId}`, JSON.stringify(p2pMessages));
-                    setSessionSaved("saved");
-                  }}
-                >
-                  <Save size={18} />
-                  保存到本地
-                </button>
-                <button
-                  className="secondary"
-                  type="button"
-                  onClick={() => {
-                    setP2pMessages([]);
-                    setSessionSaved("discarded");
-                  }}
-                >
-                  <X size={18} />
-                  不保存并关闭
-                </button>
+                {sessionSaved === "saved" ? (
+                  <button className="primary direct-button" type="button" onClick={resetToEntry}>
+                    <ArrowLeft size={18} />
+                    返回首页
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      className="primary direct-button"
+                      type="button"
+                      onClick={saveP2pSession}
+                    >
+                      <Save size={18} />
+                      保存到本地
+                    </button>
+                    <button
+                      className="secondary"
+                      type="button"
+                      onClick={discardP2pSession}
+                    >
+                      <X size={18} />
+                      不保存并关闭
+                    </button>
+                  </>
+                )}
               </div>
               {sessionSaved === "saved" && <InlineNotice tone="success" text="已保存到本机浏览器存储。" />}
-              {sessionSaved === "discarded" && <InlineNotice tone="warning" text="本地会话状态已丢弃。" />}
+              <SavedSessionsPanel
+                sessions={savedP2pSessions}
+                selectedSession={selectedSavedSession}
+                selectedSessionId={selectedSavedSessionId}
+                onSelect={setSelectedSavedSessionId}
+                onExport={exportP2pSession}
+                onClear={clearSavedP2pSessions}
+              />
             </div>
           )}
         </section>
@@ -1516,6 +2018,20 @@ function parsePeerMessage(raw: unknown): PeerSocketMessage | null {
 
     if (parsed.type === "system") {
       const peerName = parsed.peer?.name ?? "对方";
+      if (parsed.event === "room-not-found") {
+        return {
+          author: "系统",
+          body: "房间不存在或已过期，请重新创建。",
+          systemEvent: "room-not-found"
+        };
+      }
+      if (parsed.event === "room-full") {
+        return {
+          author: "系统",
+          body: "房间已满，请重新创建。",
+          systemEvent: "room-full"
+        };
+      }
       if (parsed.event === "joined") {
         return {
           author: "系统",
@@ -1715,6 +2231,22 @@ function InlineNotice({ tone, text }: { tone: "info" | "success" | "warning"; te
   );
 }
 
+function ConnectionAdvicePanel({ advice }: { advice: ConnectionAdvice }) {
+  return (
+    <section className="connection-advice" aria-label="连接建议">
+      <div>
+        <strong>{advice.title}</strong>
+        <p>{advice.body}</p>
+      </div>
+      <ul>
+        {advice.items.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function RoomDetails({
   open,
   details,
@@ -1766,22 +2298,97 @@ function RoomDetails({
   );
 }
 
+function SavedSessionsPanel({
+  sessions,
+  selectedSession,
+  selectedSessionId,
+  onSelect,
+  onExport,
+  onClear
+}: {
+  sessions: SavedP2pSession[];
+  selectedSession?: SavedP2pSession;
+  selectedSessionId: string;
+  onSelect: (sessionId: string) => void;
+  onExport: (session: SavedP2pSession) => void;
+  onClear: () => void;
+}) {
+  return (
+    <section className="saved-sessions" aria-label="已保存会话记录">
+      <div className="saved-sessions-header">
+        <span>
+          <History size={16} />
+          已保存记录
+        </span>
+        <button className="secondary compact" type="button" onClick={onClear} disabled={!sessions.length}>
+          <Trash2 size={15} />
+          清除
+        </button>
+      </div>
+      {sessions.length === 0 ? (
+        <p className="saved-empty">暂无本地保存记录。</p>
+      ) : (
+        <>
+          <div className="saved-session-list">
+            {sessions.map((session) => (
+              <button
+                className={session.id === selectedSessionId ? "saved-session active" : "saved-session"}
+                key={session.id}
+                type="button"
+                onClick={() => onSelect(session.id)}
+              >
+                <strong>房间 {session.roomId}</strong>
+                <span>
+                  {formatSavedAt(session.savedAt)} · {session.messages.length} 条
+                </span>
+              </button>
+            ))}
+          </div>
+          {selectedSession && (
+            <div className="saved-session-preview">
+              <div className="saved-preview-toolbar">
+                <span>{selectedSession.messages.length} 条消息</span>
+                <button className="secondary compact" type="button" onClick={() => onExport(selectedSession)}>
+                  <Download size={15} />
+                  导出
+                </button>
+              </div>
+              <div className="saved-message-list">
+                {selectedSession.messages.slice(0, 8).map((message) => (
+                  <article key={message.id}>
+                    <strong>{message.author}</strong>
+                    <span>{message.at}</span>
+                    <p>{message.body}</p>
+                  </article>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function FileTransferCard({
   transfer,
   self,
   onAccept,
   onReject,
-  onSave
+  onSave,
+  onRetry
 }: {
   transfer: FileTransfer;
   self: boolean;
   onAccept?: (transferId: string) => void;
   onReject?: (transferId: string) => void;
   onSave?: (transfer: FileTransfer) => void;
+  onRetry?: (transferId: string) => void;
 }) {
   const isActive = transfer.status === "sending" || transfer.status === "receiving";
   const canRespond = !self && transfer.status === "offered";
   const canSave = !self && transfer.status === "complete";
+  const canRetry = self && transfer.retryable && (transfer.status === "failed" || transfer.status === "rejected");
 
   return (
     <div className={`file-transfer ${transfer.status}`}>
@@ -1804,6 +2411,8 @@ function FileTransferCard({
       {isActive && (
         <p className="transfer-tip">提示：文件加密传输期间，双方应保持页面在线。</p>
       )}
+      {transfer.riskNote && <p className="transfer-tip">{transfer.riskNote}</p>}
+      {transfer.failureReason && <p className="transfer-tip">原因：{transfer.failureReason}</p>}
       {canRespond && (
         <div className="file-transfer-actions">
           <button className="primary compact direct-button" type="button" onClick={() => onAccept?.(transfer.id)}>
@@ -1827,6 +2436,14 @@ function FileTransferCard({
           </div>
         </>
       )}
+      {canRetry && (
+        <div className="file-transfer-actions">
+          <button className="secondary compact" type="button" onClick={() => onRetry?.(transfer.id)}>
+            <RefreshCw size={16} />
+            重新发送
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1849,7 +2466,9 @@ function ChatPanel({
   onAcceptFile,
   onRejectFile,
   onSaveFile,
+  onRetryFile,
   onEnd,
+  guidance,
   fileLabel,
   fileInputDisabled = false,
   fileInputTitle
@@ -1871,7 +2490,9 @@ function ChatPanel({
   onAcceptFile?: (transferId: string) => void;
   onRejectFile?: (transferId: string) => void;
   onSaveFile?: (transfer: FileTransfer) => void;
+  onRetryFile?: (transferId: string) => void;
   onEnd?: () => void;
+  guidance?: React.ReactNode;
   fileLabel: string;
   fileInputDisabled?: boolean;
   fileInputTitle?: string;
@@ -1899,6 +2520,7 @@ function ChatPanel({
       </div>
       <div className="chat-extras">
         {details}
+        {guidance}
         {shareLink && (
           <div className="share-block">
             <div className="share-strip">
@@ -1942,6 +2564,7 @@ function ChatPanel({
                   onAccept={onAcceptFile}
                   onReject={onRejectFile}
                   onSave={onSaveFile}
+                  onRetry={onRetryFile}
                 />
               )}
               {message.fileName && (
