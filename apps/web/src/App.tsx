@@ -21,6 +21,7 @@ import {
   Save,
   Send,
   ShieldCheck,
+  Smile,
   Sun,
   Trash2,
   UsersRound,
@@ -28,6 +29,7 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
+import { MessageBody, emotePacks, getEmoteInsertText, type EmoteItem } from "./emotes";
 
 type Lane = "entry" | "p2p" | "workspace-dev";
 type P2pStep = "name" | "waiting" | "chat" | "ended" | "invalid-room";
@@ -2589,7 +2591,7 @@ function SavedSessionsPanel({
                   <article key={message.id}>
                     <strong>{message.author}</strong>
                     <span>{message.at}</span>
-                    <p>{message.body}</p>
+                    <MessageBody body={message.body} />
                   </article>
                 ))}
               </div>
@@ -2723,6 +2725,17 @@ function ChatPanel({
   fileInputDisabled?: boolean;
   fileInputTitle?: string;
 }) {
+  const [emotePanelOpen, setEmotePanelOpen] = useState(false);
+  const insertEmote = (item: EmoteItem) => {
+    const insertText = getEmoteInsertText(item);
+    const nextDraft =
+      item.kind === "image"
+        ? `${draft}${draft && !/\s$/.test(draft) ? " " : ""}${insertText} `
+        : `${draft}${insertText}`;
+    onDraft(nextDraft);
+    setEmotePanelOpen(false);
+  };
+
   return (
     <section className="chat-panel" aria-label={title}>
       <header className="chat-header">
@@ -2756,7 +2769,7 @@ function ChatPanel({
                 <strong>{message.author}</strong>
                 <span>{message.at}</span>
               </div>
-              <p>{message.body}</p>
+              <MessageBody body={message.body} />
               {message.fileTransfer && (
                 <FileTransferCard
                   transfer={message.fileTransfer}
@@ -2797,6 +2810,18 @@ function ChatPanel({
             }}
           />
         </label>
+        <div className="emote-composer">
+          <button
+            className="secondary emote-toggle"
+            type="button"
+            aria-expanded={emotePanelOpen}
+            title="插入表情"
+            onClick={() => setEmotePanelOpen((open) => !open)}
+          >
+            <Smile size={17} />
+          </button>
+          {emotePanelOpen && <EmotePicker onSelect={insertEmote} />}
+        </div>
         <input
           value={draft}
           onChange={(event) => onDraft(event.target.value)}
@@ -2809,5 +2834,46 @@ function ChatPanel({
         </button>
       </form>
     </section>
+  );
+}
+
+function EmotePicker({ onSelect }: { onSelect: (item: EmoteItem) => void }) {
+  const [activePackId, setActivePackId] = useState(emotePacks[0]?.id ?? "emoji");
+  const activePack = emotePacks.find((pack) => pack.id === activePackId) ?? emotePacks[0];
+
+  return (
+    <div className="emote-picker" role="dialog" aria-label="选择表情">
+      <div className="emote-pack-tabs" role="tablist" aria-label="表情包">
+        {emotePacks.map((pack) => (
+          <button
+            className={pack.id === activePack.id ? "active" : ""}
+            key={pack.id}
+            type="button"
+            role="tab"
+            aria-selected={pack.id === activePack.id}
+            onClick={() => setActivePackId(pack.id)}
+          >
+            {pack.label}
+          </button>
+        ))}
+      </div>
+      <div className="emote-grid">
+        {activePack.items.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            title={item.label}
+            aria-label={item.label}
+            onClick={() => onSelect(item)}
+          >
+            {item.kind === "unicode" ? (
+              <span className="unicode-emote">{item.value}</span>
+            ) : (
+              <img alt="" decoding="async" draggable={false} src={item.src} />
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }

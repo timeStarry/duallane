@@ -1091,6 +1091,24 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.message-body {
+  white-space: pre-wrap;
+}
+
+.message-emote-image {
+  width: 30px;
+  height: 30px;
+  display: inline-block;
+  margin: 0 2px;
+  object-fit: contain;
+  vertical-align: -8px;
+}
+
+.message-emote-fallback {
+  color: var(--relay-dark);
+  font-weight: 800;
+}
+
 .file-chip {
   max-width: 100%;
   display: inline-flex;
@@ -1215,12 +1233,96 @@ button:disabled {
 
 .composer {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   padding: 14px;
   border-top: 1px solid var(--line);
   background: var(--panel-2);
+}
+
+.emote-composer {
+  position: relative;
+}
+
+.emote-toggle {
+  width: 42px;
+  padding: 0;
+}
+
+.emote-picker {
+  position: absolute;
+  z-index: 18;
+  left: 0;
+  bottom: calc(100% + 10px);
+  width: min(360px, calc(100vw - 28px));
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.emote-pack-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.emote-pack-tabs button {
+  min-width: 0;
+  min-height: 32px;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.emote-pack-tabs button:hover,
+.emote-pack-tabs button.active {
+  color: var(--ink);
+  background: var(--surface-soft);
+}
+
+.emote-grid {
+  max-height: 176px;
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 6px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.emote-grid button {
+  width: 100%;
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 4px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.emote-grid button:hover {
+  border-color: var(--hover-line);
+  background: var(--surface-tint);
+}
+
+.emote-grid img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
+
+.unicode-emote {
+  font-size: 1.28rem;
+  line-height: 1;
 }
 
 .file-button {
@@ -1577,10 +1679,20 @@ button:disabled {
   }
 
   .composer {
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
     align-items: center;
     gap: 8px;
     padding: 8px;
+  }
+
+  .emote-picker {
+    left: auto;
+    right: -56px;
+    width: min(340px, calc(100vw - 16px));
+  }
+
+  .emote-grid {
+    grid-template-columns: repeat(7, 1fr);
   }
 
   .chat-status {

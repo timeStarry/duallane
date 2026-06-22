@@ -1,0 +1,28 @@
+{
+  "packs": [
+    {
+      "id": "bili",
+      "label": "B站",
+      "items": [
+        { "id": "like", "label": "点赞", "token": "[bili:like]", "src": "/emotes/bili/like.svg" },
+        { "id": "wow", "label": "妙啊", "token": "[bili:wow]", "src": "/emotes/bili/wow.svg" }
+      ]
+    },
+    {
+      "id": "douyin",
+      "label": "抖音",
+      "items": [
+        { "id": "laugh", "label": "笑哭", "token": "[douyin:laugh]", "src": "/emotes/douyin/laugh.svg" },
+        { "id": "cover", "label": "捂脸", "token": "[douyin:cover]", "src": "/emotes/douyin/cover.svg" }
+      ]
+    },
+    {
+      "id": "qq",
+      "label": "QQ",
+      "items": [
+        { "id": "smile", "label": "微笑", "token": "[qq:smile]", "src": "/emotes/qq/smile.svg" },
+        { "id": "cry", "label": "流泪", "token": "[qq:cry]", "src": "/emotes/qq/cry.svg" }
+      ]
+    }
+  ]
+}
