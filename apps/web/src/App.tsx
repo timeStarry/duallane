@@ -8,9 +8,7 @@ import {
   Download,
   FileCheck2,
   FileUp,
-  Github,
   History,
-  KeyRound,
   Link2,
   LockKeyhole,
   LogOut,
@@ -21,10 +19,8 @@ import {
   Radio,
   RefreshCw,
   Save,
-  Search,
   Send,
   ShieldCheck,
-  ShieldHalf,
   Sun,
   Trash2,
   UsersRound,
@@ -33,7 +29,7 @@ import {
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 
-type Lane = "entry" | "p2p" | "workspace";
+type Lane = "entry" | "p2p" | "workspace-dev";
 type P2pStep = "name" | "waiting" | "chat" | "ended" | "invalid-room";
 type ConnectionState = "idle" | "connecting" | "connected" | "offline" | "error";
 type P2pTransportMode = "waiting" | "direct" | "relay-text" | "offline" | "error";
@@ -64,41 +60,6 @@ type Message = {
   self?: boolean;
   fileName?: string;
   fileTransfer?: FileTransfer;
-};
-type Conversation = {
-  id: string;
-  name: string;
-  type: "direct" | "group";
-  unread: number;
-  last: string;
-};
-type ApiMessage = {
-  id: string;
-  authorName?: string;
-  body: string;
-  createdAt?: string;
-};
-type ApiConversation = {
-  id: string;
-  title?: string;
-  name?: string;
-  type: "direct" | "group";
-  messageCount?: number;
-  last?: string;
-  messages?: ApiMessage[];
-};
-type WorkspaceUser = {
-  id: string;
-  name: string;
-  role: "owner" | "admin" | "member" | "auditor";
-  status: "online" | "away" | "offline";
-};
-type AuditEvent = {
-  id: string;
-  action: string;
-  actor: string;
-  result: "success" | "rejected" | "failure";
-  at: string;
 };
 type Peer = {
   id: string;
@@ -162,43 +123,6 @@ const P2P_LARGE_FILE_WARNING_BYTES = 100 * 1024 * 1024;
 const P2P_MAX_FILE_BYTES = 512 * 1024 * 1024;
 const P2P_SAVED_SESSIONS_KEY = "duallane-p2p-sessions";
 const THEME_STORAGE_KEY = "duallane-theme-mode";
-
-const workspaceUsers: WorkspaceUser[] = [
-  { id: "u-001", name: "陈 Mira", role: "owner", status: "online" },
-  { id: "u-014", name: "Jon Bell", role: "admin", status: "away" },
-  { id: "u-027", name: "Nadia Ali", role: "member", status: "online" },
-  { id: "u-030", name: "Theo Park", role: "auditor", status: "offline" }
-];
-
-const fallbackConversations: Conversation[] = [
-  { id: "ops", name: "运营协作", type: "group", unread: 2, last: "配额复核已完成" },
-  { id: "mira", name: "陈 Mira", type: "direct", unread: 0, last: "邀请已接受" },
-  { id: "handoff", name: "事件交接", type: "group", unread: 0, last: "审计导出已附上" }
-];
-
-const fallbackAudit: AuditEvent[] = [
-  { id: "a-1", action: "邀请已创建", actor: "陈 Mira", result: "success", at: "09:42" },
-  { id: "a-2", action: "文件配额已检查", actor: "Jon Bell", result: "success", at: "10:16" },
-  { id: "a-3", action: "下载被拒绝", actor: "Nadia Ali", result: "rejected", at: "10:31" }
-];
-
-const initialWorkspaceMessages: Message[] = [
-  {
-    id: "w-1",
-    author: "陈 Mira",
-    body: "GitHub 邀请门禁已启用。新成员需要先接受邀请，才能进入工作区。",
-    lane: "workspace",
-    at: "09:44"
-  },
-  {
-    id: "w-2",
-    author: "Jon Bell",
-    body: "每日传输配额会同时统计上传和下载。",
-    lane: "workspace",
-    at: "10:18",
-    fileName: "quota-ledger.csv"
-  }
-];
 
 function getStoredThemeMode(): ThemeMode {
   if (typeof localStorage === "undefined") {
@@ -290,7 +214,7 @@ function getO2OState(peerCount: number, socketState: ConnectionState, rtcState: 
   if (socketState === "error" || socketState === "connecting") {
     return socketState;
   }
-  if (peerCount >= 2 && rtcState === "connected") {
+  if (socketState === "connected" && peerCount >= 2) {
     return "connected";
   }
   if (peerCount >= 2) {
@@ -310,11 +234,14 @@ function getP2pTransportMode(
   if (rtcState === "connected") {
     return "direct";
   }
-  if (socketState === "error" || rtcState === "error") {
+  if (socketState === "error") {
     return "error";
   }
   if (socketState === "connected" && peerCount >= 2) {
     return "relay-text";
+  }
+  if (rtcState === "error") {
+    return "error";
   }
   if (socketState === "connected") {
     return "waiting";
@@ -718,20 +645,6 @@ export function App() {
   const pendingFilesRef = useRef<Map<string, File>>(new Map());
   const incomingFilesRef = useRef<Map<string, IncomingFileBuffer>>(new Map());
   const p2pMessageListRef = useRef<HTMLDivElement | null>(null);
-  const workspaceMessageListRef = useRef<HTMLDivElement | null>(null);
-
-  const [workspaceLoading, setWorkspaceLoading] = useState(false);
-  const [workspaceError, setWorkspaceError] = useState("");
-  const [workspaceReady, setWorkspaceReady] = useState(false);
-  const [conversations, setConversations] = useState<Conversation[]>(fallbackConversations);
-  const [activeConversation, setActiveConversation] = useState(fallbackConversations[0].id);
-  const [workspaceMessages, setWorkspaceMessages] = useState<Message[]>(initialWorkspaceMessages);
-  const [workspaceDraft, setWorkspaceDraft] = useState("");
-
-  const activeConversationName = useMemo(
-    () => conversations.find((conversation) => conversation.id === activeConversation)?.name ?? "会话",
-    [activeConversation, conversations]
-  );
   const p2pConnectionState = getO2OState(p2pPeers.length, p2pSocketState, p2pRtcState);
   const p2pTransportMode = getP2pTransportMode(p2pPeers.length, p2pSocketState, p2pRtcState);
   const p2pCanTransferFiles = p2pDataChannelState === "open";
@@ -815,13 +728,6 @@ export function App() {
   }, [p2pMessages.length]);
 
   useEffect(() => {
-    workspaceMessageListRef.current?.scrollTo({
-      top: workspaceMessageListRef.current.scrollHeight,
-      behavior: "smooth"
-    });
-  }, [workspaceMessages.length]);
-
-  useEffect(() => {
     if (!selectedSavedSessionId && savedP2pSessions.length > 0) {
       setSelectedSavedSessionId(savedP2pSessions[0].id);
     }
@@ -830,6 +736,11 @@ export function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const incomingRoomId = params.get("room");
+    if (params.get("lane") === "workspace") {
+      setLane("workspace-dev");
+      return;
+    }
+
     if (params.get("lane") !== "p2p" || !incomingRoomId) {
       return;
     }
@@ -1510,64 +1421,6 @@ export function App() {
     resetToEntry();
   }
 
-  async function openWorkspace() {
-    setLane("workspace");
-    setWorkspaceLoading(true);
-    setWorkspaceError("");
-
-    try {
-      await fetch("/api/workspace/bootstrap").then((response) =>
-        parseJson<{ user?: unknown; inviteOnly?: boolean }>(response)
-      );
-      setWorkspaceReady(true);
-    } catch (error) {
-      setWorkspaceError(
-        error instanceof Error
-          ? `工作区初始化暂不可用：${error.message}`
-          : "工作区初始化暂不可用。"
-      );
-      setWorkspaceReady(false);
-    }
-
-    try {
-      const data = await fetch("/api/workspace/conversations").then((response) =>
-        parseJson<{ conversations?: ApiConversation[] } | ApiConversation[]>(response)
-      );
-      const nextConversations = Array.isArray(data) ? data : data.conversations;
-      if (nextConversations?.length) {
-        const mappedConversations = nextConversations.map(mapApiConversation);
-        setConversations(mappedConversations);
-        setActiveConversation(mappedConversations[0].id);
-        setWorkspaceMessages(mapApiMessages(nextConversations[0].messages ?? []));
-      }
-    } catch {
-      setConversations(fallbackConversations);
-    } finally {
-      setWorkspaceLoading(false);
-    }
-  }
-
-  function sendWorkspaceMessage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const body = workspaceDraft.trim();
-    if (!body) {
-      return;
-    }
-
-    setWorkspaceMessages((messages) => [
-      ...messages,
-      {
-        id: makeId("workspace"),
-        author: "你",
-        body,
-        lane: "workspace",
-        at: nowLabel(),
-        self: true
-      }
-    ]);
-    setWorkspaceDraft("");
-  }
-
   function resetToEntry() {
     wsRef.current?.close();
     dataChannelRef.current?.close();
@@ -1640,7 +1493,7 @@ export function App() {
               <strong>一对一直连</strong>
               <span>无需登录，仅使用服务器做信令协调；对话内容不在服务器保存。</span>
             </button>
-            <button className="lane-choice workspace-choice" type="button" onClick={openWorkspace}>
+            <button className="lane-choice workspace-choice" type="button" onClick={() => setLane("workspace-dev")}>
               <span className="lane-icon" aria-hidden="true">
                 <ShieldCheck size={28} />
               </span>
@@ -1778,7 +1631,7 @@ export function App() {
                 wsRef.current?.close();
                 setP2pStep("ended");
               }}
-              guidance={connectionAdvice ? <ConnectionAdvicePanel advice={connectionAdvice} /> : undefined}
+              statusDetail={connectionAdvice ? <ConnectionAdvicePanel advice={connectionAdvice} /> : undefined}
               fileLabel="选择文件"
               fileInputDisabled={!p2pCanTransferFiles}
               fileInputTitle={
@@ -1858,138 +1711,39 @@ export function App() {
         </section>
       )}
 
-      {lane === "workspace" && (
-        <section className="workspace-shell" aria-labelledby="workspace-title">
+      {lane === "workspace-dev" && (
+        <section className="lane-surface" aria-labelledby="workspace-dev-title">
           <TopBar
             label="可审计中继通道"
             title="工作区"
-            icon={<ShieldHalf size={18} />}
+            icon={<ShieldCheck size={18} />}
             onBack={resetToEntry}
           />
-          <div className="workspace-status">
-            <span>
-              <KeyRound size={16} />
-              邀请制
-            </span>
-            <span>
-              <Github size={16} />
-              需要 GitHub 登录
-            </span>
-            <span>
-              <ShieldCheck size={16} />
-              权限角色与审计日志
-            </span>
-          </div>
-          {workspaceLoading && <InlineNotice tone="info" text="正在检查工作区初始化状态和会话列表..." />}
-          {workspaceError && <InlineNotice tone="warning" text={`${workspaceError} 当前展示本地预览数据。`} />}
-
-          <div className="workspace-grid">
-            <aside className="sidebar" aria-label="工作区导航">
-              <div className="search-field">
-                <Search size={16} />
-                <input placeholder="查找会话" aria-label="查找会话" />
-              </div>
-              <div className="section-title">
-                <span>会话</span>
-                <button className="icon-button" type="button" title="新建会话">
-                  <Plus size={16} />
-                </button>
-              </div>
-              <div className="conversation-list">
-                {conversations.map((conversation) => (
-                  <button
-                    className={conversation.id === activeConversation ? "conversation active" : "conversation"}
-                    key={conversation.id}
-                    type="button"
-                    onClick={() => setActiveConversation(conversation.id)}
-                  >
-                    <span className="conversation-icon" aria-hidden="true">
-                      {conversation.type === "group" ? <UsersRound size={17} /> : <MessageSquare size={17} />}
-                    </span>
-                    <span>
-                      <strong>{conversation.name}</strong>
-                      <small>{conversation.last}</small>
-                    </span>
-                    {conversation.unread > 0 && <em>{conversation.unread}</em>}
-                  </button>
-                ))}
-              </div>
-              <div className="member-list">
-                <div className="section-title">
-                  <span>成员</span>
-                </div>
-                {workspaceUsers.map((user) => (
-                  <div className="member" key={user.id}>
-                    <span className={`presence ${user.status}`} aria-hidden="true" />
-                    <span>
-                      <strong>{user.name}</strong>
-                      <small>{roleLabel(user.role)}</small>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </aside>
-
-            <ChatPanel
-              title={activeConversationName}
-              subtitle={workspaceReady ? "已认证工作区" : "后端就绪前的预览"}
-              trustText="消息和文件由服务器留存"
-              status={<StatusPill state={workspaceReady ? "connected" : "offline"} fallbackText="邀请门禁待就绪" />}
-              messages={workspaceMessages}
-              messageListRef={workspaceMessageListRef}
-              draft={workspaceDraft}
-              onDraft={setWorkspaceDraft}
-              onSend={sendWorkspaceMessage}
-              onFile={(file) =>
-                setWorkspaceMessages((messages) => [
-                  ...messages,
-                  {
-                    id: makeId("workspace"),
-                    author: "你",
-                    body: "已加入中继上传和配额检查队列。",
-                    lane: "workspace",
-                    at: nowLabel(),
-                    self: true,
-                    fileName: file.name
-                  }
-                ])
-              }
-              fileLabel="添加文件"
-            />
-
-            <aside className="audit-panel" aria-label="管理与审计">
-              <div className="admin-strip">
-                <strong>管理</strong>
-                <span>每日 2 GiB 传输配额</span>
-              </div>
-              <div className="metric-grid">
-                <div>
-                  <strong>10k</strong>
-                  <span>消息留存</span>
-                </div>
-                <div>
-                  <strong>4</strong>
-                  <span>启用角色</span>
-                </div>
-              </div>
-              <div className="section-title">
-                <span>审计</span>
-              </div>
-              <div className="audit-list">
-                {fallbackAudit.map((event) => (
-                  <div className="audit-row" key={event.id}>
-                    <span className={`audit-dot ${event.result}`} aria-hidden="true" />
-                    <span>
-                      <strong>{event.action}</strong>
-                      <small>
-                        {event.actor} 于 {event.at}
-                      </small>
-                    </span>
-                    <em>{auditResultLabel(event.result)}</em>
-                  </div>
-                ))}
-              </div>
-            </aside>
+          <div className="single-action development-state">
+            <div className="center-icon workspace-dev-bg" aria-hidden="true">
+              <ShieldCheck size={30} />
+            </div>
+            <p className="eyebrow">功能正在开发中</p>
+            <h2 id="workspace-dev-title">工作区中转暂未开放。</h2>
+            <p className="quiet">
+              工作区涉及登录、权限、消息留存、文件配额和审计能力。正式上线前，所有入口和越权跳转都会统一拦截到这里。
+            </p>
+            <div className="development-list" aria-label="暂未开放能力">
+              <span>GitHub 登录与邀请门禁</span>
+              <span>服务端中转文件与配额</span>
+              <span>消息留存和审计导出</span>
+            </div>
+            <div className="action-row">
+              <button className="primary direct-button" type="button" onClick={() => setLane("p2p")}>
+                <LockKeyhole size={18} />
+                使用一对一直连
+              </button>
+              <button className="secondary" type="button" onClick={resetToEntry}>
+                <ArrowLeft size={18} />
+                返回首页
+              </button>
+            </div>
+            <InlineNotice tone="info" text="当前可交付链路为 O2O 私密直连；工作区 API 已默认关闭，避免误用未完成能力。" />
           </div>
         </section>
       )}
@@ -2088,63 +1842,6 @@ function parsePeerMessage(raw: unknown): PeerSocketMessage | null {
   }
 }
 
-function mapApiConversation(conversation: ApiConversation): Conversation {
-  const latestMessage = conversation.messages?.at(-1);
-  return {
-    id: conversation.id,
-    name: conversation.title ?? conversation.name ?? "会话",
-    type: conversation.type,
-    unread: 0,
-    last: latestMessage?.body ?? conversation.last ?? `已留存 ${conversation.messageCount ?? 0} 条消息`
-  };
-}
-
-function mapApiMessages(messages: ApiMessage[]): Message[] {
-  if (!messages.length) {
-    return initialWorkspaceMessages;
-  }
-
-  return messages.map((message) => ({
-    id: message.id,
-    author: message.authorName ?? "工作区成员",
-    body: message.body,
-    lane: "workspace",
-    at: message.createdAt ? nowLabelFromDate(message.createdAt) : nowLabel()
-  }));
-}
-
-function nowLabelFromDate(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return nowLabel();
-  }
-  return new Intl.DateTimeFormat("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit"
-  }).format(date);
-}
-
-function roleLabel(role: WorkspaceUser["role"]) {
-  const labels: Record<WorkspaceUser["role"], string> = {
-    owner: "所有者",
-    admin: "管理员",
-    member: "成员",
-    auditor: "审计员"
-  };
-
-  return labels[role];
-}
-
-function auditResultLabel(result: AuditEvent["result"]) {
-  const labels: Record<AuditEvent["result"], string> = {
-    success: "成功",
-    rejected: "已拒绝",
-    failure: "失败"
-  };
-
-  return labels[result];
-}
-
 function ThemeSwitch({
   mode,
   resolvedTheme,
@@ -2233,17 +1930,18 @@ function InlineNotice({ tone, text }: { tone: "info" | "success" | "warning"; te
 
 function ConnectionAdvicePanel({ advice }: { advice: ConnectionAdvice }) {
   return (
-    <section className="connection-advice" aria-label="连接建议">
-      <div>
-        <strong>{advice.title}</strong>
-        <p>{advice.body}</p>
-      </div>
+    <details className="connection-advice">
+      <summary>
+        <AlertCircle size={15} />
+        <span>{advice.title}</span>
+      </summary>
+      <p>{advice.body}</p>
       <ul>
         {advice.items.map((item) => (
           <li key={item}>{item}</li>
         ))}
       </ul>
-    </section>
+    </details>
   );
 }
 
@@ -2468,7 +2166,7 @@ function ChatPanel({
   onSaveFile,
   onRetryFile,
   onEnd,
-  guidance,
+  statusDetail,
   fileLabel,
   fileInputDisabled = false,
   fileInputTitle
@@ -2492,7 +2190,7 @@ function ChatPanel({
   onSaveFile?: (transfer: FileTransfer) => void;
   onRetryFile?: (transferId: string) => void;
   onEnd?: () => void;
-  guidance?: React.ReactNode;
+  statusDetail?: React.ReactNode;
   fileLabel: string;
   fileInputDisabled?: boolean;
   fileInputTitle?: string;
@@ -2506,6 +2204,7 @@ function ChatPanel({
         </div>
         <div className="chat-status">
           {status}
+          {statusDetail}
           {onEnd && (
             <button className="secondary compact" type="button" onClick={onEnd}>
               <LogOut size={16} />
@@ -2520,7 +2219,6 @@ function ChatPanel({
       </div>
       <div className="chat-extras">
         {details}
-        {guidance}
         {shareLink && (
           <div className="share-block">
             <div className="share-strip">

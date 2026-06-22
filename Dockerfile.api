@@ -1,0 +1,23 @@
+ARG NODE_IMAGE=docker.m.daocloud.io/library/node:22-alpine
+
+FROM ${NODE_IMAGE} AS deps
+WORKDIR /app
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/web/package.json apps/web/package.json
+RUN pnpm install --frozen-lockfile --prod
+
+FROM ${NODE_IMAGE} AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+ENV HOST=0.0.0.0
+ENV PORT=8787
+ENV WORKSPACE_ENABLED=false
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/web/package.json apps/web/package.json
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules
+COPY apps/web/server ./apps/web/server
+EXPOSE 8787
+CMD ["pnpm", "--filter", "@duallane/web", "start"]

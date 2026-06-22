@@ -1,14 +1,31 @@
 services:
-  duallane:
-    build: .
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
     ports:
-      - "8787:8787"
+      - "${DUALLANE_WEB_BIND:-127.0.0.1}:${DUALLANE_WEB_PORT:-8787}:8080"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    expose:
+      - "8787"
     environment:
       HOST: 0.0.0.0
       PORT: 8787
       DUALLANE_DATA_DIR: /app/data
       SESSION_SECRET: ${SESSION_SECRET:-replace-this-before-production}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8787}
+      WORKSPACE_ENABLED: ${WORKSPACE_ENABLED:-false}
+      SERVE_STATIC: "false"
     volumes:
-      - ./data:/app/data
+      - duallane-data:/app/data
     restart: unless-stopped
+
+volumes:
+  duallane-data:

@@ -22,8 +22,23 @@ the frontend URL. In a reverse-proxy deployment, expose one origin and route
 
 ```bash
 cp .env.example .env
-docker compose up --build
+docker compose up -d --build
 ```
 
-Production WebRTC and GitHub OAuth callbacks should be served over HTTPS. Keep
-the relay workspace invite-only before exposing it beyond a trusted LAN/VPN.
+The production compose file exposes only the `web` service on
+`DUALLANE_WEB_BIND:DUALLANE_WEB_PORT` and keeps the API service inside the Docker
+network. The web container serves the built frontend through Nginx and forwards
+`/api` plus `/ws` to the private API container, including WebSocket upgrade
+headers.
+
+`SERVE_STATIC=false` is set for the API container in compose so static assets are
+served only by the web gateway. Running `pnpm start` directly still supports the
+single-process static server unless `SERVE_STATIC=false` is set.
+
+For a public deployment, point your outer Nginx/TLS virtual host at
+`127.0.0.1:${DUALLANE_WEB_PORT:-8787}` and set `PUBLIC_BASE_URL` to the final
+HTTPS origin. Production WebRTC should be served over HTTPS.
+
+The workspace relay lane is intentionally disabled by default. Workspace UI
+entry points and `/api/workspace/*` return a "功能正在开发中" state until
+`WORKSPACE_ENABLED=true` is set for future development or controlled testing.

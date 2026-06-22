@@ -14,12 +14,15 @@ import {
   reserveTransferQuota,
   WorkspaceValidationError
 } from "./services/workspace.mjs";
+import { blockWorkspace, isWorkspaceEnabled } from "./services/workspace-gate.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 const dataDir = process.env.DUALLANE_DATA_DIR ?? path.resolve(rootDir, "../../data");
 const port = Number(process.env.PORT ?? 8787);
 const host = process.env.HOST ?? "127.0.0.1";
+const workspaceEnabled = isWorkspaceEnabled();
+const serveStatic = process.env.SERVE_STATIC !== "false";
 
 await mkdir(dataDir, { recursive: true });
 const db = openDatabase(dataDir);
@@ -65,15 +68,25 @@ app.get("/ws/p2p/:roomId", { websocket: true }, (socket, request) => {
   attachP2PSocket(request.params.roomId, socket, peerName);
 });
 
-app.get("/api/workspace/bootstrap", async () => {
+app.get("/api/workspace/bootstrap", async (_request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
   return getWorkspaceBootstrap(db);
 });
 
-app.get("/api/workspace/conversations", async () => {
+app.get("/api/workspace/conversations", async (_request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
   return { conversations: listConversations(db) };
 });
 
 app.post("/api/workspace/messages", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+
   try {
     const message = createRelayMessage(db, request, request.body ?? {});
     return reply.code(201).send({ message });
@@ -86,6 +99,10 @@ app.post("/api/workspace/messages", async (request, reply) => {
 });
 
 app.post("/api/workspace/transfers/reserve", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+
   try {
     const reservation = reserveTransferQuota(db, request, request.body ?? {});
     const statusCode = reservation.status === "rejected" ? 409 : 201;
@@ -98,7 +115,7 @@ app.post("/api/workspace/transfers/reserve", async (request, reply) => {
   }
 });
 
-if (process.env.NODE_ENV === "production") {
+if (process.env.NODE_ENV === "production" && serveStatic) {
   const distDir = path.resolve(rootDir, "dist");
   await app.register(fastifyStatic, {
     root: distDir,
