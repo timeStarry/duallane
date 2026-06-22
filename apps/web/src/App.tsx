@@ -1225,8 +1225,7 @@ export function App() {
     try {
       const nextSecret = generateRoomSecret();
       const data = await fetch("/api/p2p/rooms", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" }
+        method: "POST"
       }).then((response) => parseJson<{ roomId?: string; id?: string; inviteLink?: string }>(response));
       const nextRoomId = data.roomId ?? data.id;
       if (!nextRoomId) {
