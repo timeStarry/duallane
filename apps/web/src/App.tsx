@@ -147,6 +147,8 @@ const THEME_STORAGE_KEY = "duallane-theme-mode";
 const P2P_SECRET_BYTES = 32;
 const AES_GCM_NONCE_BYTES = 12;
 const SECURE_ENVELOPE_VERSION = 1;
+const P2P_MAX_PARTICIPANTS = 2;
+const P2P_DEFAULT_PARTICIPANTS = 2;
 
 const secureChannels: SecureChannel[] = ["signal", "ws-chat", "profile"];
 
@@ -425,7 +427,7 @@ function p2pTransportModeDescription(mode: P2pTransportMode, peerCount: number) 
     return "消息和文件走浏览器直连。";
   }
   if (mode === "relay-text") {
-    return "文本暂走信令中转；文件等待直连通道。";
+    return "文本暂走信令中转。文件等待直连通道。";
   }
   if (mode === "offline") {
     return "对方离线或连接已断开。";
@@ -438,10 +440,10 @@ function p2pTransportModeDescription(mode: P2pTransportMode, peerCount: number) 
 
 function p2pTrustText(mode: P2pTransportMode) {
   if (mode === "direct") {
-    return "当前为浏览器直连；服务器不保存对话内容";
+    return "当前为浏览器直连。服务器不保存对话内容";
   }
   if (mode === "relay-text") {
-    return "当前文本走临时中转；服务器不保存对话内容";
+    return "当前文本走临时中转。服务器不保存对话内容";
   }
   return "服务器不保存对话内容";
 }
@@ -776,6 +778,7 @@ export function App() {
   const [p2pRoomIssue, setP2pRoomIssue] = useState<P2pRoomIssue>("");
   const [roomSecret, setRoomSecret] = useState("");
   const [securityPassphrase, setSecurityPassphrase] = useState("");
+  const [p2pParticipantCount, setP2pParticipantCount] = useState(P2P_DEFAULT_PARTICIPANTS);
   const [verificationCode, setVerificationCode] = useState("");
   const [p2pMessages, setP2pMessages] = useState<Message[]>([]);
   const [p2pDraft, setP2pDraft] = useState("");
@@ -847,7 +850,7 @@ export function App() {
       {
         label: "保存方式",
         value:
-          "支持的浏览器会询问保存位置；其他浏览器会按下载设置保存。"
+          "支持的浏览器会询问保存位置。其他浏览器会按下载设置保存。"
       }
     ],
     [
@@ -1246,7 +1249,9 @@ export function App() {
     try {
       const nextSecret = generateRoomSecret();
       const data = await fetch("/api/p2p/rooms", {
-        method: "POST"
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maxPeers: p2pParticipantCount })
       }).then((response) => parseJson<{ roomId?: string; id?: string; inviteLink?: string }>(response));
       const nextRoomId = data.roomId ?? data.id;
       if (!nextRoomId) {
@@ -1769,6 +1774,7 @@ export function App() {
     setInviteLink("");
     setRoomSecret("");
     setSecurityPassphrase("");
+    setP2pParticipantCount(P2P_DEFAULT_PARTICIPANTS);
     setVerificationCode("");
   }
 
@@ -1798,6 +1804,7 @@ export function App() {
     setInviteLink("");
     setRoomSecret("");
     setSecurityPassphrase("");
+    setP2pParticipantCount(P2P_DEFAULT_PARTICIPANTS);
     setVerificationCode("");
     window.history.replaceState({}, "", window.location.pathname);
   }
@@ -1815,7 +1822,7 @@ export function App() {
         <section className="entry" aria-labelledby="entry-title">
           <div className="entry-heading">
             <p className="eyebrow">DualLane</p>
-            <h1 id="entry-title">开始对话前，先选择通信通道。</h1>
+            <h1 id="entry-title">开始加密对话</h1>
           </div>
           <div className="lane-grid" aria-label="通信通道">
             <button className="lane-choice direct-choice" type="button" onClick={() => setLane("p2p")}>
@@ -1823,7 +1830,7 @@ export function App() {
                 <LockKeyhole size={28} />
               </span>
               <strong>一对一直连</strong>
-              <span>无需登录，仅使用服务器做信令协调；对话内容不在服务器保存。</span>
+              <span>无需登录，仅使用服务器做信令协调。<br />对话内容不在服务器保存。</span>
             </button>
             <button className="lane-choice workspace-choice" type="button" onClick={() => setLane("workspace-dev")}>
               <span className="lane-icon" aria-hidden="true">
@@ -1878,12 +1885,42 @@ export function App() {
                     autoComplete="off"
                   />
                 </label>
+                {!roomId && (
+                  <div className="participant-field" aria-label="会话参与人数">
+                    <div>
+                      <span>会话参与人数</span>
+                      <strong>{p2pParticipantCount} 人</strong>
+                    </div>
+                    <div className="participant-options">
+                      {[P2P_DEFAULT_PARTICIPANTS].map((count) => (
+                        <button
+                          className={p2pParticipantCount === count ? "active" : ""}
+                          key={count}
+                          type="button"
+                          aria-pressed={p2pParticipantCount === count}
+                          onClick={() => setP2pParticipantCount(count)}
+                        >
+                          {count} 人
+                        </button>
+                      ))}
+                    </div>
+                    <small>当前私密直连链路上限为 {P2P_MAX_PARTICIPANTS} 人。</small>
+                  </div>
+                )}
                 <button className="primary direct-button" type="submit" disabled={!displayName.trim()}>
                   {roomId ? <MessageSquare size={18} /> : <Plus size={18} />}
                   {roomId ? "加入会话" : "开始会话"}
                 </button>
               </form>
-              <InlineNotice tone="info" text="邀请链接包含端到端加密密钥；安全口令只在本机参与派生，不会发送到服务器。" />
+              <InlineNotice
+                tone="info"
+                text={
+                  <>
+                    邀请链接包含端到端加密密钥；<br />
+                    安全口令只在本机参与派生，不会发送到服务器。
+                  </>
+                }
+              />
               {p2pError && <InlineNotice tone="warning" text={p2pError} />}
               {savedP2pSessions.length > 0 && (
                 <div className="local-records-block">
@@ -1913,7 +1950,10 @@ export function App() {
               </div>
               <p className="eyebrow">房间已就绪</p>
               <h2>分享这个邀请链接。</h2>
-              <p className="quiet">房间 ID 为 {roomId}。复制完整链接，确认包含 #k= 安全片段后再发给对方。</p>
+              <p className="quiet">
+                房间 ID 为 {roomId}。<br />
+                复制完整链接，确认包含 #k= 安全片段后再发给对方。
+              </p>
               <div className="copy-box">
                 <span>{inviteLink}</span>
                 <button
@@ -1932,7 +1972,6 @@ export function App() {
                   进入聊天
                 </button>
               </div>
-              <StatusPill state={p2pStatus} fallbackText="可分享" />
               {copyState === "failed" && <InlineNotice tone="warning" text="复制失败，请手动选择链接文本。" />}
               {p2pError && <InlineNotice tone="warning" text={p2pError} />}
             </div>
@@ -2003,7 +2042,15 @@ export function App() {
                   返回通道选择
                 </button>
               </div>
-              <InlineNotice tone="warning" text="房间只保存短时信令状态；过期或服务重启后，需要使用新链接。" />
+              <InlineNotice
+                tone="warning"
+                text={
+                  <>
+                    房间只保存短时信令状态；<br />
+                    过期或服务重启后，需要使用新链接。
+                  </>
+                }
+              />
             </div>
           )}
 
@@ -2014,7 +2061,10 @@ export function App() {
               </div>
               <p className="eyebrow">会话已关闭</p>
               <h2>本次会话已结束。</h2>
-              <p className="quiet">服务器不保存对话内容；选择本地保存或导出时，记录会以明文保存在本机浏览器或文件中。</p>
+              <p className="quiet">
+                服务器不保存对话内容；<br />
+                选择本地保存或导出时，记录会以明文保存在本机浏览器或文件中。
+              </p>
               <div className="action-row">
                 {sessionSaved === "saved" ? (
                   <button className="primary direct-button" type="button" onClick={resetToEntry}>
@@ -2071,7 +2121,8 @@ export function App() {
             <p className="eyebrow">功能正在开发中</p>
             <h2 id="workspace-dev-title">工作区中转暂未开放。</h2>
             <p className="quiet">
-              工作区涉及登录、权限、消息留存、文件配额和审计能力。正式上线前，所有入口和越权跳转都会统一拦截到这里。
+              工作区涉及登录、权限、消息留存、文件配额和审计能力。<br />
+              正式上线前，所有入口和越权跳转都会统一拦截到这里。
             </p>
             <div className="development-list" aria-label="暂未开放能力">
               <span>GitHub 登录与邀请门禁</span>
@@ -2088,7 +2139,15 @@ export function App() {
                 返回首页
               </button>
             </div>
-            <InlineNotice tone="info" text="当前可交付链路为 O2O 私密直连；工作区 API 已默认关闭，避免误用未完成能力。" />
+            <InlineNotice
+              tone="info"
+              text={
+                <>
+                  当前可交付链路为 O2O 私密直连；<br />
+                  工作区 API 已默认关闭，避免误用未完成能力。
+                </>
+              }
+            />
           </div>
         </section>
       )}
@@ -2302,19 +2361,7 @@ function TopBar({
   );
 }
 
-function StatusPill({ state, fallbackText }: { state: ConnectionState; fallbackText: string }) {
-  const labels: Record<ConnectionState, string> = {
-    idle: fallbackText,
-    connecting: "连接中",
-    connected: "对方在线",
-    offline: fallbackText,
-    error: "受限模式"
-  };
-
-  return <span className={`status-pill ${state}`}>{labels[state]}</span>;
-}
-
-function InlineNotice({ tone, text }: { tone: "info" | "success" | "warning"; text: string }) {
+function InlineNotice({ tone, text }: { tone: "info" | "success" | "warning"; text: React.ReactNode }) {
   return (
     <p className={`notice ${tone}`}>
       {tone === "warning" ? <AlertCircle size={16} /> : <Check size={16} />}
@@ -2516,7 +2563,10 @@ function SavedSessionsPanel({
         <p className="saved-empty">暂无本地保存记录。</p>
       ) : (
         <>
-          <p className="saved-empty">这些记录仅保存在本机浏览器，内容为明文；导出文件同样为明文 JSON。</p>
+          <p className="saved-empty">
+            这些记录仅保存在本机浏览器，内容为明文；<br />
+            导出文件同样为明文 JSON。
+          </p>
           <div className="saved-session-list">
             {sessions.map((session) => (
               <button
@@ -2615,7 +2665,10 @@ function FileTransferCard({
       )}
       {canSave && (
         <>
-          <p className="transfer-tip">浏览器支持时会选择保存位置；否则会按默认下载设置保存。</p>
+          <p className="transfer-tip">
+            浏览器支持时会选择保存位置；<br />
+            否则会按默认下载设置保存。
+          </p>
           <div className="file-transfer-actions">
             <button className="primary compact direct-button" type="button" onClick={() => onSave?.(transfer)}>
               <Download size={16} />

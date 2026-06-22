@@ -36,6 +36,14 @@ describe("p2p service", () => {
     expect(first).not.toHaveProperty("createdBy");
   });
 
+  it("keeps room capacity aligned with the current one-to-one link", () => {
+    const room = createP2PRoom("http://127.0.0.1:5173", { maxPeers: 99 });
+    const state = getP2PRoom(room.roomId);
+
+    expect(room.maxPeers).toBe(2);
+    expect(state.maxPeers).toBe(2);
+  });
+
   it("rejects the third peer for one-to-one rooms", () => {
     const { roomId } = createP2PRoom("http://127.0.0.1:5173");
     const first = new MockSocket();

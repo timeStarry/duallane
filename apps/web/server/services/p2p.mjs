@@ -2,7 +2,8 @@ const ROOM_TTL_MS = 2 * 60 * 60 * 1000;
 const MAX_ROOM_PEERS = 2;
 const DEFAULT_EMPTY_ROOM_GRACE_MS = 10 * 1000;
 
-export function createP2PRoom(baseUrl) {
+export function createP2PRoom(baseUrl, options = {}) {
+  const maxPeers = normalizeMaxPeers(options.maxPeers);
   const now = Date.now();
   const roomId = makeRoomId();
   const expiresAt = new Date(now + ROOM_TTL_MS).toISOString();
@@ -10,6 +11,7 @@ export function createP2PRoom(baseUrl) {
     id: roomId,
     createdAt: new Date(now).toISOString(),
     expiresAt,
+    maxPeers,
     cleanupTimer: null,
     peers: new Map()
   };
@@ -19,7 +21,8 @@ export function createP2PRoom(baseUrl) {
   return {
     roomId,
     inviteLink: `${baseUrl.replace(/\/$/, "")}/?lane=p2p&room=${roomId}`,
-    expiresAt
+    expiresAt,
+    maxPeers
   };
 }
 
@@ -33,7 +36,8 @@ export function getP2PRoom(roomId) {
   return {
     roomId: room.id,
     expiresAt: room.expiresAt,
-    peerCount: room.peers.size
+    peerCount: room.peers.size,
+    maxPeers: room.maxPeers
   };
 }
 
@@ -45,7 +49,7 @@ export function attachP2PSocket(roomId, socket) {
     socket.close();
     return;
   }
-  if (room.peers.size >= MAX_ROOM_PEERS) {
+  if (room.peers.size >= room.maxPeers) {
     socket.send(JSON.stringify({ type: "system", event: "room-full" }));
     socket.close();
     return;
@@ -204,6 +208,14 @@ function cancelRoomCleanup(room) {
 function getEmptyRoomGraceMs() {
   const parsed = Number(process.env.DUALLANE_EMPTY_ROOM_GRACE_MS);
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : DEFAULT_EMPTY_ROOM_GRACE_MS;
+}
+
+function normalizeMaxPeers(value) {
+  const parsed = Number(value ?? MAX_ROOM_PEERS);
+  if (!Number.isSafeInteger(parsed) || parsed < 2 || parsed > MAX_ROOM_PEERS) {
+    return MAX_ROOM_PEERS;
+  }
+  return parsed;
 }
 
 function makeRoomId() {

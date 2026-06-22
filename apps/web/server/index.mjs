@@ -77,7 +77,11 @@ app.get("/api/health", async () => ({
 
 app.post("/api/p2p/rooms", async (request, reply) => {
   const baseUrl = process.env.PUBLIC_BASE_URL || `${request.protocol}://${request.host}`;
-  const room = createP2PRoom(baseUrl);
+  const maxPeers = request.body && typeof request.body === "object" ? request.body.maxPeers : undefined;
+  if (maxPeers !== 2) {
+    return reply.code(400).send({ error: "maxPeers must be 2 for p2p rooms" });
+  }
+  const room = createP2PRoom(baseUrl, { maxPeers });
   return reply.code(201).send(room);
 });
 
