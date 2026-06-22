@@ -6,6 +6,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDatabase } from "./services/db.mjs";
+import { getIceServers } from "./services/ice.mjs";
 import { attachP2PSocket, createP2PRoom, getP2PRoom } from "./services/p2p.mjs";
 import {
   createRelayMessage,
@@ -28,8 +29,38 @@ await mkdir(dataDir, { recursive: true });
 const db = openDatabase(dataDir);
 
 const app = Fastify({
-  logger: true,
+  logger: {
+    redact: {
+      paths: [
+        "req.headers.authorization",
+        "req.headers.cookie",
+        "req.query",
+        "req.body",
+        "res.body"
+      ],
+      remove: true
+    },
+    serializers: {
+      req(request) {
+        return {
+          method: request.method,
+          url: request.routerPath || request.url.split("?")[0],
+          host: request.hostname,
+          remoteAddress: request.ip
+        };
+      }
+    }
+  },
   genReqId: () => crypto.randomUUID()
+});
+
+app.addHook("onRequest", async (_request, reply) => {
+  reply.header("Referrer-Policy", "no-referrer");
+  reply.header("X-Content-Type-Options", "nosniff");
+  reply.header(
+    "Content-Security-Policy",
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+  );
 });
 
 await app.register(fastifyCookie, {
@@ -45,15 +76,14 @@ app.get("/api/health", async () => ({
 }));
 
 app.post("/api/p2p/rooms", async (request, reply) => {
-  const displayName = normalizeDisplayName(request.body?.displayName);
-  if (!displayName) {
-    return reply.code(400).send({ error: "displayName is required" });
-  }
-
   const baseUrl = process.env.PUBLIC_BASE_URL || `${request.protocol}://${request.host}`;
-  const room = createP2PRoom(displayName, baseUrl);
+  const room = createP2PRoom(baseUrl);
   return reply.code(201).send(room);
 });
+
+app.get("/api/p2p/ice-servers", async () => ({
+  iceServers: getIceServers()
+}));
 
 app.get("/api/p2p/rooms/:roomId", async (request, reply) => {
   const room = getP2PRoom(request.params.roomId);
@@ -64,8 +94,7 @@ app.get("/api/p2p/rooms/:roomId", async (request, reply) => {
 });
 
 app.get("/ws/p2p/:roomId", { websocket: true }, (socket, request) => {
-  const peerName = normalizeDisplayName(request.query.name) || "Guest";
-  attachP2PSocket(request.params.roomId, socket, peerName);
+  attachP2PSocket(request.params.roomId, socket);
 });
 
 app.get("/api/workspace/bootstrap", async (_request, reply) => {
@@ -127,10 +156,3 @@ if (process.env.NODE_ENV === "production" && serveStatic) {
 }
 
 app.listen({ port, host });
-
-function normalizeDisplayName(value) {
-  if (typeof value !== "string") {
-    return "";
-  }
-  return value.trim().slice(0, 80);
-}

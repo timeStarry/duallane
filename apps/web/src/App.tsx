@@ -34,10 +34,22 @@ type P2pStep = "name" | "waiting" | "chat" | "ended" | "invalid-room";
 type ConnectionState = "idle" | "connecting" | "connected" | "offline" | "error";
 type P2pTransportMode = "waiting" | "direct" | "relay-text" | "offline" | "error";
 type DataChannelState = "idle" | RTCDataChannelState;
-type P2pRoomIssue = "" | "not-found" | "full";
+type P2pRoomIssue = "" | "not-found" | "full" | "missing-key";
 type CopyState = "idle" | "copied" | "failed";
 type ThemeMode = "system" | "light" | "dark";
 type ResolvedTheme = "light" | "dark";
+type SecureChannel = "signal" | "ws-chat" | "profile";
+type SecureEnvelope = {
+  type: "secure";
+  v: 1;
+  channel: SecureChannel;
+  nonce: string;
+  ciphertext: string;
+};
+type SecureKeys = Record<SecureChannel, CryptoKey>;
+type IceServersResponse = {
+  iceServers?: RTCIceServer[];
+};
 type FileTransferStatus = "offered" | "waiting" | "sending" | "receiving" | "complete" | "rejected" | "failed";
 type FileTransfer = {
   id: string;
@@ -63,8 +75,14 @@ type Message = {
 };
 type Peer = {
   id: string;
+  name?: string;
+};
+type PeerProfile = {
+  kind: "profile";
+  peerId?: string;
   name: string;
 };
+type ChatEnvelope = Extract<DataEnvelope, { kind: "chat" }>;
 type SignalMessage = {
   signal?: "offer" | "answer" | "ice";
   description?: RTCSessionDescriptionInit;
@@ -75,7 +93,9 @@ type PeerSocketMessage = {
   body?: string;
   peers?: Peer[];
   peerId?: string;
+  from?: Peer;
   signal?: SignalMessage;
+  secure?: SecureEnvelope;
   systemEvent?: "room-not-found" | "room-full";
 };
 type DataEnvelope =
@@ -123,6 +143,11 @@ const P2P_LARGE_FILE_WARNING_BYTES = 100 * 1024 * 1024;
 const P2P_MAX_FILE_BYTES = 512 * 1024 * 1024;
 const P2P_SAVED_SESSIONS_KEY = "duallane-p2p-sessions";
 const THEME_STORAGE_KEY = "duallane-theme-mode";
+const P2P_SECRET_BYTES = 32;
+const AES_GCM_NONCE_BYTES = 12;
+const SECURE_ENVELOPE_VERSION = 1;
+
+const secureChannels: SecureChannel[] = ["signal", "ws-chat", "profile"];
 
 function getStoredThemeMode(): ThemeMode {
   if (typeof localStorage === "undefined") {
@@ -138,6 +163,114 @@ function getSystemTheme(): ResolvedTheme {
     return "light";
   }
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function normalizePassphrase(value: string) {
+  return value.trim().normalize("NFKC");
+}
+
+function bytesToBase64Url(bytes: Uint8Array) {
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function base64UrlToBytes(value: string) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function generateRoomSecret() {
+  const bytes = new Uint8Array(P2P_SECRET_BYTES);
+  crypto.getRandomValues(bytes);
+  return bytesToBase64Url(bytes);
+}
+
+function getRoomSecretFromHash(hash = window.location.hash) {
+  const fragment = hash.startsWith("#") ? hash.slice(1) : hash;
+  const params = new URLSearchParams(fragment);
+  const secret = params.get("k");
+  return secret && /^[A-Za-z0-9_-]{43}$/.test(secret) ? secret : "";
+}
+
+function withRoomSecret(link: string, secret: string) {
+  const url = new URL(link);
+  url.hash = new URLSearchParams({ k: secret }).toString();
+  return url.toString();
+}
+
+async function deriveP2pKeys(roomId: string, secret: string, passphrase: string): Promise<SecureKeys> {
+  const encoder = new TextEncoder();
+  const ikm = base64UrlToBytes(secret);
+  const baseKey = await crypto.subtle.importKey("raw", ikm, "HKDF", false, ["deriveKey", "deriveBits"]);
+  const salt = encoder.encode(`duallane-p2p:${roomId}:${normalizePassphrase(passphrase)}`);
+  const entries = await Promise.all(
+    secureChannels.map(async (channel) => {
+      const key = await crypto.subtle.deriveKey(
+        {
+          name: "HKDF",
+          hash: "SHA-256",
+          salt,
+          info: encoder.encode(`duallane-p2p-v1:${channel}`)
+        },
+        baseKey,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"]
+      );
+      return [channel, key] as const;
+    })
+  );
+  return Object.fromEntries(entries) as SecureKeys;
+}
+
+async function getP2pVerificationCode(roomId: string, secret: string, passphrase: string) {
+  const encoder = new TextEncoder();
+  const ikm = base64UrlToBytes(secret);
+  const baseKey = await crypto.subtle.importKey("raw", ikm, "HKDF", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: encoder.encode(`duallane-p2p:${roomId}:${normalizePassphrase(passphrase)}`),
+      info: encoder.encode("duallane-p2p-v1:verify")
+    },
+    baseKey,
+    32
+  );
+  const value = new DataView(bits).getUint32(0);
+  return String(value % 1_000_000).padStart(6, "0");
+}
+
+async function encryptSecurePayload(keys: SecureKeys, channel: SecureChannel, payload: unknown): Promise<SecureEnvelope> {
+  const nonce = new Uint8Array(AES_GCM_NONCE_BYTES);
+  crypto.getRandomValues(nonce);
+  const plaintext = new TextEncoder().encode(JSON.stringify(payload));
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, keys[channel], plaintext);
+  return {
+    type: "secure",
+    v: SECURE_ENVELOPE_VERSION,
+    channel,
+    nonce: bytesToBase64Url(nonce),
+    ciphertext: bytesToBase64Url(new Uint8Array(ciphertext))
+  };
+}
+
+async function decryptSecurePayload<T>(keys: SecureKeys, envelope: SecureEnvelope): Promise<T> {
+  const plaintext = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: base64UrlToBytes(envelope.nonce) },
+    keys[envelope.channel],
+    base64UrlToBytes(envelope.ciphertext)
+  );
+  return JSON.parse(new TextDecoder().decode(plaintext)) as T;
 }
 
 function nowLabel() {
@@ -172,14 +305,24 @@ async function parseJson<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
-function getWsUrl(roomId: string, name: string) {
+function getWsUrl(roomId: string) {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const query = new URLSearchParams({ name });
-  return `${protocol}//${window.location.host}/ws/p2p/${encodeURIComponent(roomId)}?${query}`;
+  return `${protocol}//${window.location.host}/ws/p2p/${encodeURIComponent(roomId)}`;
 }
 
 function getInviteLink(roomId: string) {
   return `${window.location.origin}/?lane=p2p&room=${encodeURIComponent(roomId)}`;
+}
+
+async function getIceServers() {
+  try {
+    const data = await fetch("/api/p2p/ice-servers").then((response) => parseJson<IceServersResponse>(response));
+    return Array.isArray(data.iceServers) && data.iceServers.length > 0
+      ? data.iceServers
+      : [{ urls: "stun:stun.l.google.com:19302" }];
+  } catch {
+    return [{ urls: "stun:stun.l.google.com:19302" }];
+  }
 }
 
 async function copyText(value: string) {
@@ -405,57 +548,61 @@ function getTransferProgress(doneBytes: number, totalBytes: number) {
 
 function parseDataEnvelope(raw: string): DataEnvelope | null {
   try {
-    const value = JSON.parse(raw) as Partial<DataEnvelope>;
-    if (!value || typeof value !== "object" || typeof value.kind !== "string") {
-      return null;
-    }
-
-    if (
-      value.kind === "chat" &&
-      typeof value.id === "string" &&
-      typeof value.author === "string" &&
-      typeof value.body === "string" &&
-      typeof value.at === "string"
-    ) {
-      return value as DataEnvelope;
-    }
-
-    if (
-      value.kind === "file-offer" &&
-      typeof value.transferId === "string" &&
-      typeof value.author === "string" &&
-      typeof value.name === "string" &&
-      typeof value.size === "number" &&
-      typeof value.mimeType === "string"
-    ) {
-      return value as DataEnvelope;
-    }
-
-    if (
-      (value.kind === "file-accept" || value.kind === "file-complete") &&
-      typeof value.transferId === "string"
-    ) {
-      return value as DataEnvelope;
-    }
-
-    if (value.kind === "file-reject" && typeof value.transferId === "string") {
-      return value as DataEnvelope;
-    }
-
-    if (
-      value.kind === "file-chunk" &&
-      typeof value.transferId === "string" &&
-      typeof value.index === "number" &&
-      typeof value.total === "number" &&
-      typeof value.data === "string"
-    ) {
-      return value as DataEnvelope;
-    }
-
-    return null;
+    return parseDataEnvelopeValue(JSON.parse(raw));
   } catch {
     return null;
   }
+}
+
+function parseDataEnvelopeValue(value: unknown): DataEnvelope | null {
+  const envelope = value as Partial<DataEnvelope>;
+  if (!envelope || typeof envelope !== "object" || typeof envelope.kind !== "string") {
+    return null;
+  }
+
+  if (
+    envelope.kind === "chat" &&
+    typeof envelope.id === "string" &&
+    typeof envelope.author === "string" &&
+    typeof envelope.body === "string" &&
+    typeof envelope.at === "string"
+  ) {
+    return envelope as DataEnvelope;
+  }
+
+  if (
+    envelope.kind === "file-offer" &&
+    typeof envelope.transferId === "string" &&
+    typeof envelope.author === "string" &&
+    typeof envelope.name === "string" &&
+    typeof envelope.size === "number" &&
+    typeof envelope.mimeType === "string"
+  ) {
+    return envelope as DataEnvelope;
+  }
+
+  if (
+    (envelope.kind === "file-accept" || envelope.kind === "file-complete") &&
+    typeof envelope.transferId === "string"
+  ) {
+    return envelope as DataEnvelope;
+  }
+
+  if (envelope.kind === "file-reject" && typeof envelope.transferId === "string") {
+    return envelope as DataEnvelope;
+  }
+
+  if (
+    envelope.kind === "file-chunk" &&
+    typeof envelope.transferId === "string" &&
+    typeof envelope.index === "number" &&
+    typeof envelope.total === "number" &&
+    typeof envelope.data === "string"
+  ) {
+    return envelope as DataEnvelope;
+  }
+
+  return null;
 }
 
 function formatBytes(bytes: number) {
@@ -626,6 +773,9 @@ export function App() {
   const [p2pStatus, setP2pStatus] = useState<ConnectionState>("idle");
   const [p2pError, setP2pError] = useState("");
   const [p2pRoomIssue, setP2pRoomIssue] = useState<P2pRoomIssue>("");
+  const [roomSecret, setRoomSecret] = useState("");
+  const [securityPassphrase, setSecurityPassphrase] = useState("");
+  const [verificationCode, setVerificationCode] = useState("");
   const [p2pMessages, setP2pMessages] = useState<Message[]>([]);
   const [p2pDraft, setP2pDraft] = useState("");
   const [sessionSaved, setSessionSaved] = useState<"idle" | "saved">("idle");
@@ -640,7 +790,10 @@ export function App() {
   const [roomDetailsOpen, setRoomDetailsOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
+  const secureKeysRef = useRef<SecureKeys | null>(null);
   const peerIdRef = useRef("");
+  const p2pPeersRef = useRef<Peer[]>([]);
+  const peerProfilesRef = useRef<Map<string, string>>(new Map());
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
   const pendingFilesRef = useRef<Map<string, File>>(new Map());
   const incomingFilesRef = useRef<Map<string, IncomingFileBuffer>>(new Map());
@@ -648,10 +801,18 @@ export function App() {
   const p2pConnectionState = getO2OState(p2pPeers.length, p2pSocketState, p2pRtcState);
   const p2pTransportMode = getP2pTransportMode(p2pPeers.length, p2pSocketState, p2pRtcState);
   const p2pCanTransferFiles = p2pDataChannelState === "open";
+  const canStartPeerSession = Boolean(roomId && roomSecret && verificationCode);
   const selectedSavedSession = savedP2pSessions.find((session) => session.id === selectedSavedSessionId);
-  const p2pRoomIssueTitle = p2pRoomIssue === "full" ? "房间已满。" : "房间不存在或已过期。";
+  const p2pRoomIssueTitle =
+    p2pRoomIssue === "missing-key"
+      ? "邀请链接不完整。"
+      : p2pRoomIssue === "full"
+        ? "房间已满。"
+        : "房间不存在或已过期。";
   const p2pRoomIssueText =
-    p2pRoomIssue === "full"
+    p2pRoomIssue === "missing-key"
+      ? "这个邀请链接缺少安全密钥。请让发起方重新复制完整链接，确认链接包含 #k=... 后再打开。"
+      : p2pRoomIssue === "full"
       ? "一对一直连房间只允许两端加入。请关闭多余窗口后重试，或重新创建房间。"
       : "这个邀请链接已经无法加入。请重新创建房间，并把新的邀请链接发给对方。";
   const connectionAdvice = useMemo(
@@ -668,6 +829,7 @@ export function App() {
   const roomDetails = useMemo<RoomDetail[]>(
     () => [
       { label: "房间 ID", value: roomId || "本地预览" },
+      { label: "安全码", value: verificationCode || "等待密钥" },
       { label: "你", value: displayName.trim() || "访客" },
       { label: "已连接成员", value: p2pPeers.length ? p2pPeers.map((peer) => peer.name).join(", ") : "等待中" },
       { label: "信令", value: connectionStateLabel(p2pSocketState) },
@@ -695,7 +857,8 @@ export function App() {
       p2pRtcState,
       p2pSocketState,
       p2pTransportMode,
-      roomId
+      roomId,
+      verificationCode
     ]
   );
 
@@ -728,6 +891,10 @@ export function App() {
   }, [p2pMessages.length]);
 
   useEffect(() => {
+    p2pPeersRef.current = p2pPeers;
+  }, [p2pPeers]);
+
+  useEffect(() => {
     if (!selectedSavedSessionId && savedP2pSessions.length > 0) {
       setSelectedSavedSessionId(savedP2pSessions[0].id);
     }
@@ -745,30 +912,89 @@ export function App() {
       return;
     }
 
+    const incomingSecret = getRoomSecretFromHash();
+    if (!incomingSecret) {
+      setLane("p2p");
+      setP2pStep("invalid-room");
+      setRoomId(incomingRoomId);
+      setP2pRoomIssue("missing-key");
+      return;
+    }
+
     setLane("p2p");
     setP2pStep("name");
     setRoomId(incomingRoomId);
-    setInviteLink(getInviteLink(incomingRoomId));
+    setRoomSecret(incomingSecret);
+    setInviteLink(withRoomSecret(getInviteLink(incomingRoomId), incomingSecret));
     setP2pRoomIssue("");
   }, []);
 
   useEffect(() => {
-    if (p2pStep !== "chat" || !roomId) {
+    let cancelled = false;
+    secureKeysRef.current = null;
+    setVerificationCode("");
+    if (!roomId || !roomSecret) {
       return;
     }
 
+    deriveP2pKeys(roomId, roomSecret, securityPassphrase)
+      .then(async (keys) => {
+        const code = await getP2pVerificationCode(roomId, roomSecret, securityPassphrase);
+        if (cancelled) {
+          return;
+        }
+        secureKeysRef.current = keys;
+        setVerificationCode(code);
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        secureKeysRef.current = null;
+        setVerificationCode("");
+        setP2pError("安全密钥不可用，请重新复制完整邀请链接。");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [roomId, roomSecret, securityPassphrase]);
+
+  useEffect(() => {
+    if (p2pStep !== "chat" || !canStartPeerSession) {
+      return;
+    }
+
+    const keys = secureKeysRef.current;
+    if (!keys) {
+      setP2pError("正在准备端到端加密密钥，请稍后再进入聊天。");
+      return;
+    }
+
+    let disposed = false;
+    let peerConnection: RTCPeerConnection | null = null;
+    let socket: WebSocket | null = null;
     setP2pSocketState("connecting");
     setP2pRtcState("connecting");
     setP2pDataChannelState("idle");
     setP2pError("");
     setP2pRoomIssue("");
-    const socket = new WebSocket(getWsUrl(roomId, displayName.trim() || "访客"));
-    wsRef.current = socket;
+
+    const sendSecure = async (channel: SecureChannel, payload: unknown) => {
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(await encryptSecurePayload(keys, channel, payload)));
+      }
+    };
 
     const sendSignal = (payload: unknown) => {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify(payload));
-      }
+      void sendSecure("signal", payload);
+    };
+
+    const publishProfile = () => {
+      void sendSecure("profile", {
+        kind: "profile",
+        name: displayName.trim() || "访客"
+      } satisfies PeerProfile);
     };
 
     const attachChannel = (channel: RTCDataChannel) => {
@@ -799,36 +1025,49 @@ export function App() {
       });
     };
 
-    const peerConnection = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-    });
-
-    peerConnection.addEventListener("icecandidate", (event) => {
-      if (event.candidate) {
-        sendSignal({ type: "signal", signal: "ice", candidate: event.candidate.toJSON() });
+    void (async () => {
+      const iceServers = await getIceServers();
+      if (disposed) {
+        return;
       }
-    });
-    peerConnection.addEventListener("connectionstatechange", () => {
-      if (peerConnection.connectionState === "connected") {
-        setP2pRtcState("connected");
-      } else if (["failed", "disconnected"].includes(peerConnection.connectionState)) {
-        setP2pRtcState("offline");
-      } else if (peerConnection.connectionState === "connecting") {
-        setP2pRtcState("connecting");
-      }
-    });
-    peerConnection.addEventListener("datachannel", (event) => {
-      attachChannel(event.channel);
-    });
+      peerConnection = new RTCPeerConnection({
+        iceServers,
+        iceTransportPolicy: "all"
+      });
 
-    socket.addEventListener("open", () => {
-      setP2pSocketState("connected");
-    });
+      peerConnection.addEventListener("icecandidate", (event) => {
+        if (event.candidate) {
+          sendSignal({ type: "signal", signal: "ice", candidate: event.candidate.toJSON() });
+        }
+      });
+      peerConnection.addEventListener("connectionstatechange", () => {
+        if (!peerConnection) {
+          return;
+        }
+        if (peerConnection.connectionState === "connected") {
+          setP2pRtcState("connected");
+        } else if (["failed", "disconnected"].includes(peerConnection.connectionState)) {
+          setP2pRtcState("offline");
+        } else if (peerConnection.connectionState === "connecting") {
+          setP2pRtcState("connecting");
+        }
+      });
+      peerConnection.addEventListener("datachannel", (event) => {
+        attachChannel(event.channel);
+      });
 
-    socket.addEventListener("message", async (event) => {
+      socket = new WebSocket(getWsUrl(roomId));
+      wsRef.current = socket;
+
+      socket.addEventListener("open", () => {
+        setP2pSocketState("connected");
+        publishProfile();
+      });
+
+      socket.addEventListener("message", async (event) => {
       const incoming = parsePeerMessage(event.data);
       if (incoming?.peers) {
-        setP2pPeers(incoming.peers);
+        setP2pPeers(resolvePeers(incoming.peers, peerProfilesRef.current));
       }
       if (!incoming) {
         return;
@@ -842,15 +1081,60 @@ export function App() {
         setP2pStep("invalid-room");
         return;
       }
-      const signal = incoming.signal;
-      if (signal) {
-        await handleSignalMessage(peerConnection, sendSignal, signal);
-        return;
-      }
       if (incoming.peerId) {
         peerIdRef.current = incoming.peerId;
+        publishProfile();
       }
-      if (incoming.peers && incoming.peers.length >= 2 && peerIdRef.current) {
+      if (incoming.secure) {
+        try {
+          const decrypted = await decryptSecurePayload<unknown>(keys, incoming.secure);
+          if (incoming.secure.channel === "signal") {
+            const signal = normalizeSignalPayload(decrypted);
+            if (signal && peerConnection) {
+              await handleSignalMessage(peerConnection, sendSignal, signal);
+            }
+            return;
+          }
+          if (incoming.secure.channel === "profile") {
+            const profile = normalizeProfilePayload(decrypted);
+            if (profile) {
+              const senderId = incoming.from?.id ?? findRemotePeerId(incoming.peers ?? p2pPeersRef.current, peerIdRef.current);
+              if (senderId) {
+                peerProfilesRef.current.set(senderId, profile.name);
+                setP2pPeers((peers) => resolvePeers(peers, peerProfilesRef.current));
+              }
+            }
+            return;
+          }
+          if (incoming.secure.channel === "ws-chat") {
+            const chat = normalizeWsChatPayload(decrypted);
+            if (chat) {
+              setP2pMessages((messages) => [
+                ...messages,
+                {
+                  id: chat.id,
+                  author: chat.author,
+                  body: chat.body,
+                  lane: "p2p",
+                  at: chat.at
+                }
+              ]);
+            }
+            return;
+          }
+        } catch {
+          setP2pError("收到无法解密的内容，请确认双方安全口令和邀请链接一致。");
+          return;
+        }
+      }
+      const signal = incoming.signal;
+      if (signal) {
+        if (peerConnection) {
+          await handleSignalMessage(peerConnection, sendSignal, signal);
+        }
+        return;
+      }
+      if (incoming.peers && incoming.peers.length >= 2 && peerIdRef.current && peerConnection) {
         const initiator = peerIdRef.current === [...incoming.peers].sort((a, b) => a.id.localeCompare(b.id))[0].id;
         if (initiator && !dataChannelRef.current) {
           const channel = peerConnection.createDataChannel("duallane-p2p");
@@ -860,41 +1144,29 @@ export function App() {
           sendSignal({ type: "signal", signal: "offer", description: offer });
         }
       }
-      const body = incoming.body;
-      if (!body) {
-        return;
-      }
-      setP2pMessages((messages) => [
-        ...messages,
-        {
-          id: makeId("p2p"),
-          author: incoming.author,
-          body,
-          lane: "p2p",
-          at: nowLabel()
-        }
-      ]);
-    });
+      });
 
-    socket.addEventListener("close", () => {
-      setP2pSocketState((status) => (status === "connecting" ? "offline" : status));
-      setP2pRtcState("offline");
-      setP2pDataChannelState("closed");
-      setP2pPeers([]);
-      markInterruptedTransfers("连接已断开，请重建房间或让对方重新打开页面后重新发送");
-    });
+      socket.addEventListener("close", () => {
+        setP2pSocketState((status) => (status === "connecting" ? "offline" : status));
+        setP2pRtcState("offline");
+        setP2pDataChannelState("closed");
+        setP2pPeers([]);
+        markInterruptedTransfers("连接已断开，请重建房间或让对方重新打开页面后重新发送");
+      });
 
-    socket.addEventListener("error", () => {
-      setP2pSocketState("error");
-      setP2pRtcState("error");
-      setP2pDataChannelState("closed");
-      setP2pError("实时信令暂不可用，你仍然可以查看本地界面流程。");
-    });
+      socket.addEventListener("error", () => {
+        setP2pSocketState("error");
+        setP2pRtcState("error");
+        setP2pDataChannelState("closed");
+        setP2pError("实时信令暂不可用，你仍然可以查看本地界面流程。");
+      });
+    })();
 
     return () => {
-      socket.close();
+      disposed = true;
+      socket?.close();
       dataChannelRef.current?.close();
-      peerConnection.close();
+      peerConnection?.close();
       wsRef.current = null;
       dataChannelRef.current = null;
       setP2pDataChannelState("idle");
@@ -902,7 +1174,7 @@ export function App() {
       pendingFilesRef.current.clear();
       incomingFilesRef.current.clear();
     };
-  }, [p2pStep, roomId]);
+  }, [canStartPeerSession, displayName, p2pStep, roomId]);
 
   async function createP2pRoom(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -918,6 +1190,12 @@ export function App() {
     setSessionSaved("idle");
 
     if (roomId) {
+      if (!roomSecret) {
+        setP2pStatus("error");
+        setP2pRoomIssue("missing-key");
+        setP2pStep("invalid-room");
+        return;
+      }
       try {
         const response = await fetch(`/api/p2p/rooms/${encodeURIComponent(roomId)}`);
         if (response.status === 404) {
@@ -932,12 +1210,12 @@ export function App() {
         if (!response.ok) {
           setP2pError(`房间校验暂不可用：${response.status} ${response.statusText || "请求失败"}`);
         }
-        setInviteLink(getInviteLink(roomId));
+        setInviteLink(withRoomSecret(getInviteLink(roomId), roomSecret));
         setP2pStatus("idle");
         setP2pStep("chat");
       } catch (error) {
         setP2pError(error instanceof Error ? `房间校验暂不可用：${error.message}` : "房间校验暂不可用。");
-        setInviteLink(getInviteLink(roomId));
+        setInviteLink(withRoomSecret(getInviteLink(roomId), roomSecret));
         setP2pStatus("idle");
         setP2pStep("chat");
       }
@@ -945,17 +1223,18 @@ export function App() {
     }
 
     try {
+      const nextSecret = generateRoomSecret();
       const data = await fetch("/api/p2p/rooms", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ displayName: name })
+        headers: { "Content-Type": "application/json" }
       }).then((response) => parseJson<{ roomId?: string; id?: string; inviteLink?: string }>(response));
       const nextRoomId = data.roomId ?? data.id;
       if (!nextRoomId) {
         throw new Error("房间 API 未返回房间 ID");
       }
       setRoomId(nextRoomId);
-      setInviteLink(getInviteLink(nextRoomId));
+      setRoomSecret(nextSecret);
+      setInviteLink(withRoomSecret(getInviteLink(nextRoomId), nextSecret));
       setP2pStep("waiting");
     } catch (error) {
       setRoomId("");
@@ -966,7 +1245,7 @@ export function App() {
     }
   }
 
-  function sendP2pMessage(event: FormEvent<HTMLFormElement>) {
+  async function sendP2pMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const body = p2pDraft.trim();
     if (!body) {
@@ -993,7 +1272,22 @@ export function App() {
         } satisfies DataEnvelope)
       );
     } else if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "message", body }));
+      const keys = secureKeysRef.current;
+      if (!keys) {
+        setP2pError("端到端加密密钥尚未就绪，无法通过中转发送。");
+        return;
+      }
+      wsRef.current.send(
+        JSON.stringify(
+          await encryptSecurePayload(keys, "ws-chat", {
+            kind: "chat",
+            id: message.id,
+            author: message.author,
+            body: message.body,
+            at: message.at
+          } satisfies DataEnvelope)
+        )
+      );
     }
 
     setP2pMessages((messages) => [...messages, message]);
@@ -1421,9 +1715,16 @@ export function App() {
     resetToEntry();
   }
 
-  function resetToEntry() {
+  function endP2pSocket() {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "leave" }));
+    }
     wsRef.current?.close();
     dataChannelRef.current?.close();
+  }
+
+  function resetToEntry() {
+    endP2pSocket();
     setLane("entry");
     setP2pStep("name");
     setP2pStatus("idle");
@@ -1441,13 +1742,18 @@ export function App() {
     setCopyState("idle");
     pendingFilesRef.current.clear();
     incomingFilesRef.current.clear();
+    peerProfilesRef.current.clear();
+    secureKeysRef.current = null;
+    peerIdRef.current = "";
     setRoomId("");
     setInviteLink("");
+    setRoomSecret("");
+    setSecurityPassphrase("");
+    setVerificationCode("");
   }
 
   function startNewP2pRoom() {
-    wsRef.current?.close();
-    dataChannelRef.current?.close();
+    endP2pSocket();
     setLane("p2p");
     setP2pStep("name");
     setP2pStatus("idle");
@@ -1465,8 +1771,14 @@ export function App() {
     setSessionSaved("idle");
     pendingFilesRef.current.clear();
     incomingFilesRef.current.clear();
+    peerProfilesRef.current.clear();
+    secureKeysRef.current = null;
+    peerIdRef.current = "";
     setRoomId("");
     setInviteLink("");
+    setRoomSecret("");
+    setSecurityPassphrase("");
+    setVerificationCode("");
     window.history.replaceState({}, "", window.location.pathname);
   }
 
@@ -1536,11 +1848,22 @@ export function App() {
                     placeholder="小陈"
                   />
                 </label>
+                <label>
+                  <span>安全口令（可选）</span>
+                  <input
+                    value={securityPassphrase}
+                    onChange={(event) => setSecurityPassphrase(event.target.value)}
+                    maxLength={64}
+                    placeholder="双方输入同一口令"
+                    autoComplete="off"
+                  />
+                </label>
                 <button className="primary direct-button" type="submit" disabled={!displayName.trim()}>
                   {roomId ? <MessageSquare size={18} /> : <Plus size={18} />}
                   {roomId ? "加入会话" : "开始会话"}
                 </button>
               </form>
+              <InlineNotice tone="info" text="邀请链接包含端到端加密密钥；安全口令只在本机参与派生，不会发送到服务器。" />
               {p2pError && <InlineNotice tone="warning" text={p2pError} />}
               {savedP2pSessions.length > 0 && (
                 <div className="local-records-block">
@@ -1570,7 +1893,7 @@ export function App() {
               </div>
               <p className="eyebrow">房间已就绪</p>
               <h2>分享这个邀请链接。</h2>
-              <p className="quiet">房间 ID 为 {roomId}。先复制链接，准备好后再进入聊天。</p>
+              <p className="quiet">房间 ID 为 {roomId}。复制完整链接，确认包含 #k= 安全片段后再发给对方。</p>
               <div className="copy-box">
                 <span>{inviteLink}</span>
                 <button
@@ -1597,25 +1920,28 @@ export function App() {
 
           {p2pStep === "chat" && (
             <ChatPanel
-              title="直连会话"
+              title="一对一直连"
               subtitle={`房间 ${roomId || "本地"}`}
-              trustText={p2pTrustText(p2pTransportMode)}
+              hideTitle
               details={
                 <RoomDetails
                   open={roomDetailsOpen}
                   details={roomDetails}
                   peers={p2pPeers}
+                  shareLink={inviteLink}
+                  onCopyShare={copyInviteLink}
+                  copyState={copyState}
                   onToggle={() => setRoomDetailsOpen((open) => !open)}
                 />
               }
-              shareLink={inviteLink}
-              onCopyShare={copyInviteLink}
-              copyState={copyState}
               status={
-                <>
-                  <StatusPill state={p2pConnectionState} fallbackText="等待对方" />
-                  <TransportPill mode={p2pTransportMode} />
-                </>
+                <P2pStatusControl
+                  state={p2pConnectionState}
+                  mode={p2pTransportMode}
+                  peerCount={p2pPeers.length}
+                  advice={connectionAdvice}
+                  trustText={p2pTrustText(p2pTransportMode)}
+                />
               }
               messages={p2pMessages}
               messageListRef={p2pMessageListRef}
@@ -1628,10 +1954,9 @@ export function App() {
               onSaveFile={(transfer) => void saveP2pFile(transfer)}
               onRetryFile={retryP2pFile}
               onEnd={() => {
-                wsRef.current?.close();
+                endP2pSocket();
                 setP2pStep("ended");
               }}
-              statusDetail={connectionAdvice ? <ConnectionAdvicePanel advice={connectionAdvice} /> : undefined}
               fileLabel="选择文件"
               fileInputDisabled={!p2pCanTransferFiles}
               fileInputTitle={
@@ -1669,7 +1994,7 @@ export function App() {
               </div>
               <p className="eyebrow">会话已关闭</p>
               <h2>本次会话已结束。</h2>
-              <p className="quiet">你可以只在这个浏览器中保留记录，也可以立即丢弃本地状态。</p>
+              <p className="quiet">服务器不保存对话内容；选择本地保存或导出时，记录会以明文保存在本机浏览器或文件中。</p>
               <div className="action-row">
                 {sessionSaved === "saved" ? (
                   <button className="primary direct-button" type="button" onClick={resetToEntry}>
@@ -1697,7 +2022,7 @@ export function App() {
                   </>
                 )}
               </div>
-              {sessionSaved === "saved" && <InlineNotice tone="success" text="已保存到本机浏览器存储。" />}
+              {sessionSaved === "saved" && <InlineNotice tone="success" text="已保存到本机浏览器明文存储。" />}
               <SavedSessionsPanel
                 sessions={savedP2pSessions}
                 selectedSession={selectedSavedSession}
@@ -1753,25 +2078,23 @@ export function App() {
 
 function parsePeerMessage(raw: unknown): PeerSocketMessage | null {
   if (typeof raw !== "string") {
-    return { author: "对方", body: "收到一段二进制信令数据。" };
+    return null;
   }
 
   try {
     const parsed = JSON.parse(raw) as {
       type?: string;
       event?: string;
-      body?: string;
-      from?: { name?: string };
-      peer?: { name?: string };
       peers?: Peer[];
       peerId?: string;
-      signal?: "offer" | "answer" | "ice";
-      description?: RTCSessionDescriptionInit;
-      candidate?: RTCIceCandidateInit;
+      from?: Peer;
+      v?: number;
+      channel?: SecureChannel;
+      nonce?: string;
+      ciphertext?: string;
     };
 
     if (parsed.type === "system") {
-      const peerName = parsed.peer?.name ?? "对方";
       if (parsed.event === "room-not-found") {
         return {
           author: "系统",
@@ -1789,7 +2112,6 @@ function parsePeerMessage(raw: unknown): PeerSocketMessage | null {
       if (parsed.event === "joined") {
         return {
           author: "系统",
-          body: `${peerName} 已加入房间。`,
           peers: parsed.peers,
           peerId: parsed.peerId
         };
@@ -1797,14 +2119,12 @@ function parsePeerMessage(raw: unknown): PeerSocketMessage | null {
       if (parsed.event === "peer-joined") {
         return {
           author: "系统",
-          body: `${peerName} 已加入房间。`,
           peers: parsed.peers
         };
       }
       if (parsed.event === "peer-left") {
         return {
           author: "系统",
-          body: `${peerName} 已离开房间。`,
           peers: parsed.peers
         };
       }
@@ -1818,28 +2138,74 @@ function parsePeerMessage(raw: unknown): PeerSocketMessage | null {
       return parsed.event ? { author: "系统", body: parsed.event, peers: parsed.peers } : null;
     }
 
-    if (parsed.type === "signal" && parsed.signal) {
+    if (parsed.type === "secure" && parsed.v === SECURE_ENVELOPE_VERSION && isSecureChannel(parsed.channel)) {
       return {
-        author: parsed.from?.name ?? "对方",
-        signal: {
-          signal: parsed.signal,
-          description: parsed.description,
-          candidate: parsed.candidate
+        author: "对方",
+        peers: parsed.peers,
+        from: parsed.from,
+        secure: {
+          type: "secure",
+          v: SECURE_ENVELOPE_VERSION,
+          channel: parsed.channel,
+          nonce: String(parsed.nonce || ""),
+          ciphertext: String(parsed.ciphertext || "")
         }
-      };
-    }
-
-    if (typeof parsed.body === "string" && parsed.body.trim()) {
-      return {
-        author: parsed.from?.name ?? "对方",
-        body: parsed.body
       };
     }
 
     return null;
   } catch {
-    return { author: "对方", body: raw };
+    return null;
   }
+}
+
+function isSecureChannel(value: unknown): value is SecureChannel {
+  return value === "signal" || value === "ws-chat" || value === "profile";
+}
+
+function resolvePeers(peers: Peer[] = [], profiles: Map<string, string>) {
+  return peers.map((peer) => ({
+    id: peer.id,
+    name: profiles.get(peer.id) ?? "对方"
+  }));
+}
+
+function findRemotePeerId(peers: Peer[], selfPeerId: string) {
+  return peers.find((peer) => peer.id !== selfPeerId)?.id ?? "";
+}
+
+function normalizeSignalPayload(value: unknown): SignalMessage | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const payload = value as SignalMessage & { type?: string };
+  if (payload.type !== "signal" || !payload.signal) {
+    return null;
+  }
+  return {
+    signal: payload.signal,
+    description: payload.description,
+    candidate: payload.candidate
+  };
+}
+
+function normalizeProfilePayload(value: unknown): PeerProfile | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const payload = value as { kind?: string; name?: string };
+  if (payload.kind !== "profile" || typeof payload.name !== "string") {
+    return null;
+  }
+  return {
+    kind: "profile",
+    name: payload.name.trim().slice(0, 40) || "对方"
+  };
+}
+
+function normalizeWsChatPayload(value: unknown): ChatEnvelope | null {
+  const envelope = parseDataEnvelopeValue(value);
+  return envelope?.kind === "chat" ? envelope : null;
 }
 
 function ThemeSwitch({
@@ -1915,10 +2281,6 @@ function StatusPill({ state, fallbackText }: { state: ConnectionState; fallbackT
   return <span className={`status-pill ${state}`}>{labels[state]}</span>;
 }
 
-function TransportPill({ mode }: { mode: P2pTransportMode }) {
-  return <span className={`transport-pill ${mode}`}>{p2pTransportModeLabel(mode)}</span>;
-}
-
 function InlineNotice({ tone, text }: { tone: "info" | "success" | "warning"; text: string }) {
   return (
     <p className={`notice ${tone}`}>
@@ -1928,19 +2290,91 @@ function InlineNotice({ tone, text }: { tone: "info" | "success" | "warning"; te
   );
 }
 
-function ConnectionAdvicePanel({ advice }: { advice: ConnectionAdvice }) {
+function getP2pStatusSummary(state: ConnectionState, mode: P2pTransportMode, peerCount: number) {
+  if (mode === "direct") {
+    return "浏览器直连";
+  }
+  if (mode === "relay-text") {
+    return "文本中转";
+  }
+  if (mode === "error" || state === "error") {
+    return "连接异常";
+  }
+  if (mode === "offline" || state === "offline") {
+    return "对方离线";
+  }
+  if (peerCount >= 2) {
+    return "协商直连";
+  }
+  return "等待对方";
+}
+
+function getP2pStatusTone(state: ConnectionState, mode: P2pTransportMode) {
+  if (mode === "direct") {
+    return "direct";
+  }
+  if (mode === "error" || state === "error") {
+    return "error";
+  }
+  if (mode === "offline" || state === "offline") {
+    return "offline";
+  }
+  if (mode === "relay-text") {
+    return "relay";
+  }
+  return "waiting";
+}
+
+function getDefaultP2pStatusTips(mode: P2pTransportMode, peerCount: number) {
+  if (mode === "direct") {
+    return ["可以发送文本和文件", "双方关闭页面后会话结束"];
+  }
+  if (mode === "relay-text") {
+    return ["文本可继续发送", "文件需等待直连通道", "长时间未恢复时复制新链接重试"];
+  }
+  if (mode === "waiting" && peerCount >= 2) {
+    return ["双方保持页面打开", "浏览器会继续协商直连路径"];
+  }
+  return ["复制邀请链接给对方", "双方保持页面打开"];
+}
+
+function P2pStatusControl({
+  state,
+  mode,
+  peerCount,
+  advice,
+  trustText
+}: {
+  state: ConnectionState;
+  mode: P2pTransportMode;
+  peerCount: number;
+  advice: ConnectionAdvice | null;
+  trustText: string;
+}) {
+  const summary = getP2pStatusSummary(state, mode, peerCount);
+  const tone = getP2pStatusTone(state, mode);
+  const tips = advice?.items ?? getDefaultP2pStatusTips(mode, peerCount);
+  const body = advice?.body ?? p2pTransportModeDescription(mode, peerCount);
+
   return (
-    <details className="connection-advice">
+    <details className={`p2p-status-control ${tone}`}>
       <summary>
-        <AlertCircle size={15} />
-        <span>{advice.title}</span>
+        <span className="status-dot" aria-hidden="true" />
+        <span>{summary}</span>
+        <ChevronDown className="status-chevron" size={15} aria-hidden="true" />
       </summary>
-      <p>{advice.body}</p>
-      <ul>
-        {advice.items.map((item) => (
-          <li key={item}>{item}</li>
-        ))}
-      </ul>
+      <div className="p2p-status-popover">
+        <strong>{advice?.title ?? p2pTransportModeLabel(mode)}</strong>
+        <p>{body}</p>
+        <small>{trustText}</small>
+        {tips.length > 0 && (
+          <ul>
+            {tips.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        )}
+      </div>
     </details>
   );
 }
@@ -1949,19 +2383,25 @@ function RoomDetails({
   open,
   details,
   peers,
+  shareLink,
+  onCopyShare,
+  copyState,
   onToggle
 }: {
   open: boolean;
   details: RoomDetail[];
   peers: Peer[];
+  shareLink?: string;
+  onCopyShare?: () => void;
+  copyState?: CopyState;
   onToggle: () => void;
 }) {
   return (
-    <section className={open ? "room-details open" : "room-details"} aria-label="房间详情">
+    <section className={open ? "room-details open" : "room-details"} aria-label="会话信息">
       <button className="room-details-toggle" type="button" onClick={onToggle} aria-expanded={open}>
         <span>
           <UsersRound size={16} />
-          房间详情
+          会话信息
         </span>
         {open ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
       </button>
@@ -1990,6 +2430,25 @@ function RoomDetails({
               </span>
             )}
           </div>
+          {shareLink && (
+            <div className="share-strip">
+              <div className="share-meta">
+                <Link2 size={16} />
+                <span>邀请</span>
+              </div>
+              <span className="share-link-text">{shareLink}</span>
+              <button
+                className="secondary compact"
+                type="button"
+                title="复制邀请链接"
+                onClick={onCopyShare}
+              >
+                <Clipboard size={16} />
+                {copyState === "copied" ? "已复制" : "复制"}
+              </button>
+            </div>
+          )}
+          {copyState === "failed" && <p className="copy-fallback">复制失败，请手动选择链接。</p>}
         </div>
       )}
     </section>
@@ -2027,6 +2486,7 @@ function SavedSessionsPanel({
         <p className="saved-empty">暂无本地保存记录。</p>
       ) : (
         <>
+          <p className="saved-empty">这些记录仅保存在本机浏览器，内容为明文；导出文件同样为明文 JSON。</p>
           <div className="saved-session-list">
             {sessions.map((session) => (
               <button
@@ -2149,11 +2609,8 @@ function FileTransferCard({
 function ChatPanel({
   title,
   subtitle,
-  trustText,
+  hideTitle = false,
   details,
-  shareLink,
-  onCopyShare,
-  copyState,
   status,
   messages,
   messageListRef,
@@ -2166,18 +2623,14 @@ function ChatPanel({
   onSaveFile,
   onRetryFile,
   onEnd,
-  statusDetail,
   fileLabel,
   fileInputDisabled = false,
   fileInputTitle
 }: {
   title: string;
   subtitle: string;
-  trustText: string;
+  hideTitle?: boolean;
   details?: React.ReactNode;
-  shareLink?: string;
-  onCopyShare?: () => void;
-  copyState?: CopyState;
   status: React.ReactNode;
   messages: Message[];
   messageListRef?: RefObject<HTMLDivElement | null>;
@@ -2190,7 +2643,6 @@ function ChatPanel({
   onSaveFile?: (transfer: FileTransfer) => void;
   onRetryFile?: (transferId: string) => void;
   onEnd?: () => void;
-  statusDetail?: React.ReactNode;
   fileLabel: string;
   fileInputDisabled?: boolean;
   fileInputTitle?: string;
@@ -2198,13 +2650,12 @@ function ChatPanel({
   return (
     <section className="chat-panel" aria-label={title}>
       <header className="chat-header">
-        <div>
+        <div className={hideTitle ? "chat-heading title-hidden" : "chat-heading"}>
           <p className="eyebrow">{subtitle}</p>
-          <h2>{title}</h2>
+          {!hideTitle && <h2>{title}</h2>}
         </div>
         <div className="chat-status">
           {status}
-          {statusDetail}
           {onEnd && (
             <button className="secondary compact" type="button" onClick={onEnd}>
               <LogOut size={16} />
@@ -2213,33 +2664,8 @@ function ChatPanel({
           )}
         </div>
       </header>
-      <div className="trust-strip">
-        <ShieldCheck size={16} />
-        <span>{trustText}</span>
-      </div>
       <div className="chat-extras">
         {details}
-        {shareLink && (
-          <div className="share-block">
-            <div className="share-strip">
-              <div className="share-meta">
-                <Link2 size={16} />
-                <span>邀请</span>
-              </div>
-              <span className="share-link-text">{shareLink}</span>
-              <button
-                className="secondary compact"
-                type="button"
-                title="复制邀请链接"
-                onClick={onCopyShare}
-              >
-                <Clipboard size={16} />
-                {copyState === "copied" ? "已复制" : "复制"}
-              </button>
-            </div>
-            {copyState === "failed" && <p className="copy-fallback">复制失败，请手动选择链接。</p>}
-          </div>
-        )}
       </div>
       <div className="message-list" ref={messageListRef} aria-live="polite">
         {messages.length === 0 ? (
