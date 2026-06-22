@@ -76,6 +76,7 @@ type Message = {
 type Peer = {
   id: string;
   name?: string;
+  self?: boolean;
 };
 type PeerProfile = {
   kind: "profile";
@@ -96,7 +97,7 @@ type PeerSocketMessage = {
   from?: Peer;
   signal?: SignalMessage;
   secure?: SecureEnvelope;
-  systemEvent?: "room-not-found" | "room-full";
+  systemEvent?: "room-not-found" | "room-full" | "joined" | "peer-joined" | "peer-left" | "peer-list";
 };
 type DataEnvelope =
   | { kind: "chat"; id: string; author: string; body: string; at: string }
@@ -788,6 +789,7 @@ export function App() {
   const [p2pDataChannelState, setP2pDataChannelState] = useState<DataChannelState>("idle");
   const [copyState, setCopyState] = useState<CopyState>("idle");
   const [roomDetailsOpen, setRoomDetailsOpen] = useState(false);
+  const localDisplayName = displayName.trim() || "访客";
   const wsRef = useRef<WebSocket | null>(null);
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
   const secureKeysRef = useRef<SecureKeys | null>(null);
@@ -829,9 +831,8 @@ export function App() {
   const roomDetails = useMemo<RoomDetail[]>(
     () => [
       { label: "房间 ID", value: roomId || "本地预览" },
-      { label: "安全码", value: verificationCode || "等待密钥" },
-      { label: "你", value: displayName.trim() || "访客" },
-      { label: "已连接成员", value: p2pPeers.length ? p2pPeers.map((peer) => peer.name).join(", ") : "等待中" },
+      { label: "安全校验码", value: verificationCode || "等待密钥" },
+      { label: "你", value: localDisplayName },
       { label: "信令", value: connectionStateLabel(p2pSocketState) },
       { label: "直连数据通道", value: connectionStateLabel(p2pRtcState) },
       { label: "消息路径", value: p2pTransportModeDescription(p2pTransportMode, p2pPeers.length) },
@@ -850,7 +851,7 @@ export function App() {
       }
     ],
     [
-      displayName,
+      localDisplayName,
       p2pCanTransferFiles,
       p2pDataChannelState,
       p2pPeers,
@@ -991,9 +992,13 @@ export function App() {
     };
 
     const publishProfile = () => {
+      if (peerIdRef.current) {
+        peerProfilesRef.current.set(peerIdRef.current, localDisplayName);
+      }
       void sendSecure("profile", {
         kind: "profile",
-        name: displayName.trim() || "访客"
+        peerId: peerIdRef.current || undefined,
+        name: localDisplayName
       } satisfies PeerProfile);
     };
 
@@ -1066,9 +1071,6 @@ export function App() {
 
       socket.addEventListener("message", async (event) => {
       const incoming = parsePeerMessage(event.data);
-      if (incoming?.peers) {
-        setP2pPeers(resolvePeers(incoming.peers, peerProfilesRef.current));
-      }
       if (!incoming) {
         return;
       }
@@ -1083,7 +1085,26 @@ export function App() {
       }
       if (incoming.peerId) {
         peerIdRef.current = incoming.peerId;
+        peerProfilesRef.current.set(incoming.peerId, localDisplayName);
         publishProfile();
+      }
+      if (incoming.peers) {
+        setP2pPeers(resolvePeers(incoming.peers, peerProfilesRef.current, peerIdRef.current, localDisplayName));
+      }
+      if (incoming.systemEvent === "peer-joined" || (incoming.systemEvent === "joined" && (incoming.peers?.length ?? 0) >= 2)) {
+        publishProfile();
+      }
+      if (incoming.body && ["joined", "peer-joined", "peer-left"].includes(incoming.systemEvent || "")) {
+        setP2pMessages((messages) => [
+          ...messages,
+          {
+            id: makeId("system"),
+            author: "系统",
+            body: incoming.body || "",
+            lane: "p2p",
+            at: nowLabel()
+          }
+        ]);
       }
       if (incoming.secure) {
         try {
@@ -1098,10 +1119,10 @@ export function App() {
           if (incoming.secure.channel === "profile") {
             const profile = normalizeProfilePayload(decrypted);
             if (profile) {
-              const senderId = incoming.from?.id ?? findRemotePeerId(incoming.peers ?? p2pPeersRef.current, peerIdRef.current);
+              const senderId = profile.peerId ?? incoming.from?.id ?? findRemotePeerId(incoming.peers ?? p2pPeersRef.current, peerIdRef.current);
               if (senderId) {
                 peerProfilesRef.current.set(senderId, profile.name);
-                setP2pPeers((peers) => resolvePeers(peers, peerProfilesRef.current));
+                setP2pPeers((peers) => resolvePeers(peers, peerProfilesRef.current, peerIdRef.current, localDisplayName));
               }
             }
             return;
@@ -1174,7 +1195,7 @@ export function App() {
       pendingFilesRef.current.clear();
       incomingFilesRef.current.clear();
     };
-  }, [canStartPeerSession, displayName, p2pStep, roomId]);
+  }, [canStartPeerSession, localDisplayName, p2pStep, roomId]);
 
   async function createP2pRoom(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1844,7 +1865,7 @@ export function App() {
                     value={displayName}
                     onChange={(event) => setDisplayName(event.target.value)}
                     maxLength={40}
-                    placeholder="小陈"
+                    placeholder="会话显示名称"
                   />
                 </label>
                 <label>
@@ -2111,6 +2132,8 @@ function parsePeerMessage(raw: unknown): PeerSocketMessage | null {
       if (parsed.event === "joined") {
         return {
           author: "系统",
+          body: parsed.peers && parsed.peers.length >= 2 ? "你已加入房间，正在建立连接。" : "你已进入房间，等待对方加入。",
+          systemEvent: "joined",
           peers: parsed.peers,
           peerId: parsed.peerId
         };
@@ -2118,18 +2141,23 @@ function parsePeerMessage(raw: unknown): PeerSocketMessage | null {
       if (parsed.event === "peer-joined") {
         return {
           author: "系统",
+          body: "对方已加入房间，正在建立连接。",
+          systemEvent: "peer-joined",
           peers: parsed.peers
         };
       }
       if (parsed.event === "peer-left") {
         return {
           author: "系统",
+          body: "对方已离开房间。",
+          systemEvent: "peer-left",
           peers: parsed.peers
         };
       }
       if (parsed.event === "peer-list") {
         return {
           author: "系统",
+          systemEvent: "peer-list",
           peers: parsed.peers,
           peerId: parsed.peerId
         };
@@ -2162,11 +2190,16 @@ function isSecureChannel(value: unknown): value is SecureChannel {
   return value === "signal" || value === "ws-chat" || value === "profile";
 }
 
-function resolvePeers(peers: Peer[] = [], profiles: Map<string, string>) {
+function resolvePeers(peers: Peer[] = [], profiles: Map<string, string>, selfPeerId: string, selfName: string) {
   return peers.map((peer) => ({
     id: peer.id,
-    name: profiles.get(peer.id) ?? "对方"
+    name: peer.id === selfPeerId ? selfName : profiles.get(peer.id) ?? "对方",
+    self: peer.id === selfPeerId
   }));
+}
+
+function formatPeerName(peer: Peer) {
+  return peer.self ? `你（${peer.name || "访客"}）` : peer.name || "对方";
 }
 
 function findRemotePeerId(peers: Peer[], selfPeerId: string) {
@@ -2192,12 +2225,13 @@ function normalizeProfilePayload(value: unknown): PeerProfile | null {
   if (!value || typeof value !== "object") {
     return null;
   }
-  const payload = value as { kind?: string; name?: string };
+  const payload = value as { kind?: string; peerId?: string; name?: string };
   if (payload.kind !== "profile" || typeof payload.name !== "string") {
     return null;
   }
   return {
     kind: "profile",
+    peerId: typeof payload.peerId === "string" ? payload.peerId : undefined,
     name: payload.name.trim().slice(0, 40) || "对方"
   };
 }
@@ -2414,19 +2448,16 @@ function RoomDetails({
               </div>
             ))}
           </dl>
-          <div className="peer-list-inline" aria-label="已连接成员">
+          <p className="verification-help">
+            安全校验码由邀请链接密钥和可选安全口令派生。双方看到的数字一致，说明使用的是同一组端到端加密密钥。
+          </p>
+          <div className="peer-list-inline" aria-label="在线状态">
+            <span className="presence online" aria-hidden="true" />
+            <strong>{peers.length ? `${peers.length}/2 在线` : "等待对方"}</strong>
             {peers.length ? (
-              peers.map((peer) => (
-                <span key={peer.id}>
-                  <span className="presence online" aria-hidden="true" />
-                  {peer.name}
-                </span>
-              ))
+              <span>{peers.map(formatPeerName).join("、")}</span>
             ) : (
-              <span>
-                <span className="presence" aria-hidden="true" />
-                等待对方
-              </span>
+              <span>复制邀请链接给对方加入</span>
             )}
           </div>
           {shareLink && (
@@ -2674,7 +2705,7 @@ function ChatPanel({
           </div>
         ) : (
           messages.map((message) => (
-            <article className={message.self ? "message self" : "message"} key={message.id}>
+            <article className={message.self ? "message self" : message.author === "系统" ? "message system" : "message"} key={message.id}>
               <div className="message-meta">
                 <strong>{message.author}</strong>
                 <span>{message.at}</span>

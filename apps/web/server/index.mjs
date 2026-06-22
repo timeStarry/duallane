@@ -54,19 +54,6 @@ const app = Fastify({
   genReqId: () => crypto.randomUUID()
 });
 
-app.removeContentTypeParser("application/json");
-app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
-  if (!body) {
-    done(null, {});
-    return;
-  }
-  try {
-    done(null, JSON.parse(body));
-  } catch (error) {
-    done(error);
-  }
-});
-
 app.addHook("onRequest", async (_request, reply) => {
   reply.header("Referrer-Policy", "no-referrer");
   reply.header("X-Content-Type-Options", "nosniff");

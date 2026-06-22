@@ -723,6 +723,7 @@ button:disabled {
 }
 
 .chat-header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -757,6 +758,10 @@ button:disabled {
   display: none;
 }
 
+.chat-extras {
+  min-height: 0;
+}
+
 .p2p-status-control {
   position: relative;
   width: fit-content;
@@ -779,6 +784,12 @@ button:disabled {
 
 .p2p-status-control summary::-webkit-details-marker {
   display: none;
+}
+
+.p2p-status-control summary > span:not(.status-dot) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .p2p-status-control .status-dot {
@@ -896,8 +907,7 @@ button:disabled {
   font-weight: 850;
 }
 
-.room-details-toggle span,
-.peer-list-inline span {
+.room-details-toggle span {
   min-width: 0;
   display: inline-flex;
   align-items: center;
@@ -910,6 +920,7 @@ button:disabled {
 }
 
 .room-details-body {
+  min-height: 0;
   display: grid;
   gap: 10px;
   padding: 0 18px 14px;
@@ -947,22 +958,47 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
-.peer-list-inline {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.verification-help {
+  margin: 0;
+  border: 1px solid rgb(35 109 120 / 22%);
+  border-radius: 8px;
+  padding: 9px 10px;
+  color: var(--relay-dark);
+  background: var(--info-bg);
+  font-size: 0.78rem;
+  font-weight: 750;
+  line-height: 1.45;
 }
 
-.peer-list-inline span {
-  min-height: 28px;
-  max-width: 100%;
+.peer-list-inline {
+  min-width: 0;
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
   border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 3px 9px;
+  border-radius: 8px;
+  padding: 7px 10px;
   color: var(--muted);
   background: var(--surface);
+}
+
+.peer-list-inline strong {
+  color: var(--ink);
   font-size: 0.78rem;
   font-weight: 800;
+  white-space: nowrap;
+}
+
+.peer-list-inline > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .share-strip {
@@ -1043,6 +1079,27 @@ button:disabled {
   align-self: flex-end;
   border-color: rgb(35 109 120 / 25%);
   background: var(--message-self);
+}
+
+.message.system {
+  width: fit-content;
+  max-width: min(520px, 100%);
+  align-self: center;
+  border-color: transparent;
+  padding: 8px 11px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  text-align: center;
+}
+
+.message.system .message-meta {
+  display: none;
+}
+
+.message.system p {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 750;
 }
 
 .message-meta {
@@ -1445,9 +1502,16 @@ button:disabled {
 }
 
 @media (max-width: 760px) {
+  html,
+  body,
+  #root {
+    min-height: 100dvh;
+  }
+
   .shell {
     align-items: start;
-    padding: 12px;
+    min-height: 100dvh;
+    padding: 10px;
   }
 
   .theme-switch {
@@ -1474,9 +1538,9 @@ button:disabled {
   }
 
   .topbar {
-    min-height: 50px;
+    min-height: 44px;
     gap: 10px;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
     padding-right: 128px;
   }
 
@@ -1485,7 +1549,7 @@ button:disabled {
   }
 
   .topbar-title h1 {
-    font-size: 1.42rem;
+    font-size: 1.32rem;
   }
 
   .icon-button {
@@ -1513,7 +1577,7 @@ button:disabled {
   }
 
   .chat-panel {
-    height: calc(100dvh - 74px);
+    height: calc(100dvh - 72px);
     min-height: 0;
     grid-template-rows: auto auto minmax(0, 1fr) auto;
   }
@@ -1521,7 +1585,7 @@ button:disabled {
   .chat-header {
     align-items: center;
     gap: 10px;
-    padding: 10px 12px;
+    padding: 8px 10px;
   }
 
   .chat-header h2 {
@@ -1542,12 +1606,13 @@ button:disabled {
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: 8px;
-    padding: 10px;
+    padding: 8px;
   }
 
   .chat-status {
     flex-wrap: nowrap;
     justify-content: flex-end;
+    gap: 6px;
   }
 
   .chat-status > * {
@@ -1555,18 +1620,36 @@ button:disabled {
   }
 
   .p2p-status-control {
-    position: static;
+    max-width: min(46vw, 184px);
   }
 
   .p2p-status-popover {
+    position: fixed;
     left: 0;
-    right: auto;
-    top: calc(100% + 6px);
-    max-width: calc(100vw - 28px);
+    right: 0;
+    top: 118px;
+    width: calc(100vw - 24px);
+    max-width: 360px;
+    margin: 0 auto;
   }
 
   .message {
     width: 100%;
+  }
+
+  .message.system {
+    width: fit-content;
+  }
+
+  .room-details.open .room-details-body {
+    max-height: min(42dvh, 360px);
+    overflow: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .development-list {
@@ -1611,38 +1694,79 @@ button:disabled {
 
   .topbar {
     align-items: flex-start;
-    padding-right: 118px;
+    min-height: 42px;
+    margin-bottom: 6px;
+    padding-right: 116px;
+  }
+
+  .topbar-title h1 {
+    font-size: 1.24rem;
   }
 
   .chat-panel {
-    height: calc(100dvh - 66px);
+    height: calc(100dvh - 58px);
     min-height: 0;
   }
 
+  .chat-header {
+    gap: 8px;
+    padding: 7px 8px;
+  }
+
+  .chat-heading.title-hidden {
+    flex-basis: 108px;
+  }
+
+  .chat-heading .eyebrow {
+    font-size: 0.68rem;
+  }
+
+  .chat-status .secondary.compact {
+    min-height: 34px;
+    padding-inline: 9px;
+  }
+
   .room-details-toggle {
-    min-height: 36px;
-    padding-inline: 12px;
+    min-height: 34px;
+    padding-inline: 10px;
     font-size: 0.8rem;
   }
 
   .message-list {
-    padding: 12px;
+    padding: 10px;
   }
 
   .room-details-body {
-    padding: 0 12px 12px;
+    gap: 8px;
+    padding: 0 10px 10px;
   }
 
   .detail-grid {
     grid-template-columns: 1fr;
+    gap: 7px;
+  }
+
+  .detail-grid div {
+    padding: 8px 9px;
+  }
+
+  .verification-help {
+    font-size: 0.75rem;
   }
 
   .peer-list-inline {
-    display: none;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .peer-list-inline > span:last-child {
+    grid-column: 1 / -1;
   }
 
   .share-strip {
     grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 7px;
   }
 
   .share-meta {
@@ -1661,5 +1785,23 @@ button:disabled {
 
   .workspace-status span {
     width: 100%;
+  }
+
+  .p2p-status-control {
+    max-width: 150px;
+  }
+
+  .p2p-status-control summary {
+    min-height: 34px;
+    padding-inline: 10px 8px;
+    font-size: 0.78rem;
+  }
+
+  .p2p-status-popover {
+    top: 104px;
+  }
+
+  .empty-state {
+    min-height: 180px;
   }
 }
