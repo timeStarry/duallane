@@ -388,6 +388,13 @@ h2 {
   font-weight: 750;
 }
 
+.stack-form label span small {
+  margin-left: 8px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 750;
+}
+
 input {
   min-width: 0;
   width: 100%;
@@ -464,64 +471,6 @@ input {
   color: var(--muted);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.participant-field {
-  display: grid;
-  gap: 9px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 11px 12px;
-  color: var(--muted);
-  background: var(--panel);
-  text-align: left;
-}
-
-.participant-field div {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.participant-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.participant-options button {
-  min-height: 34px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 0 12px;
-  color: var(--muted);
-  background: var(--surface);
-  cursor: pointer;
-  font-weight: 850;
-}
-
-.participant-options button.active {
-  border-color: rgb(196 81 51 / 34%);
-  color: var(--direct-dark);
-  background: rgb(196 81 51 / 10%);
-}
-
-.participant-field span,
-.participant-field small {
-  color: var(--muted);
-  font-size: 0.82rem;
-  font-weight: 750;
-}
-
-.participant-field strong {
-  color: var(--ink);
-  font-size: 0.9rem;
-  font-weight: 850;
-}
-
-.participant-field small {
-  line-height: 1.4;
 }
 
 .notice {

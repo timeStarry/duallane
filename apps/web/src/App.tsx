@@ -1886,26 +1886,19 @@ export function App() {
                   />
                 </label>
                 {!roomId && (
-                  <div className="participant-field" aria-label="会话参与人数">
-                    <div>
-                      <span>会话参与人数</span>
-                      <strong>{p2pParticipantCount} 人</strong>
-                    </div>
-                    <div className="participant-options">
-                      {[P2P_DEFAULT_PARTICIPANTS].map((count) => (
-                        <button
-                          className={p2pParticipantCount === count ? "active" : ""}
-                          key={count}
-                          type="button"
-                          aria-pressed={p2pParticipantCount === count}
-                          onClick={() => setP2pParticipantCount(count)}
-                        >
-                          {count} 人
-                        </button>
-                      ))}
-                    </div>
-                    <small>当前私密直连链路上限为 {P2P_MAX_PARTICIPANTS} 人。</small>
-                  </div>
+                  <label>
+                    <span>
+                      会话参与人数
+                      <small title={`当前私密直连链路上限为 ${P2P_MAX_PARTICIPANTS} 人。`}>
+                        上限 {P2P_MAX_PARTICIPANTS} 人
+                      </small>
+                    </span>
+                    <input
+                      readOnly
+                      value={`${p2pParticipantCount} 人`}
+                      aria-label="会话参与人数"
+                    />
+                  </label>
                 )}
                 <button className="primary direct-button" type="submit" disabled={!displayName.trim()}>
                   {roomId ? <MessageSquare size={18} /> : <Plus size={18} />}
