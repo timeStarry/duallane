@@ -29,7 +29,7 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
-import { MessageBody, emotePacks, getEmoteInsertText, type EmoteItem } from "./emotes";
+import { MessageBody, getEmoteInsertText, visibleEmotePacks, type EmoteItem } from "./emotes";
 
 type Lane = "entry" | "p2p" | "workspace-dev";
 type P2pStep = "name" | "waiting" | "chat" | "ended" | "invalid-room";
@@ -2838,13 +2838,13 @@ function ChatPanel({
 }
 
 function EmotePicker({ onSelect }: { onSelect: (item: EmoteItem) => void }) {
-  const [activePackId, setActivePackId] = useState(emotePacks[0]?.id ?? "emoji");
-  const activePack = emotePacks.find((pack) => pack.id === activePackId) ?? emotePacks[0];
+  const [activePackId, setActivePackId] = useState(visibleEmotePacks[0]?.id ?? "emoji");
+  const activePack = visibleEmotePacks.find((pack) => pack.id === activePackId) ?? visibleEmotePacks[0];
 
   return (
     <div className="emote-picker" role="dialog" aria-label="选择表情">
       <div className="emote-pack-tabs" role="tablist" aria-label="表情包">
-        {emotePacks.map((pack) => (
+        {visibleEmotePacks.map((pack) => (
           <button
             className={pack.id === activePack.id ? "active" : ""}
             key={pack.id}
