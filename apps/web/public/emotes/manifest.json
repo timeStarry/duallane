@@ -1033,6 +1033,1103 @@
       "source": "local-replaceable-pack; public Douyin web entry did not expose a stable asset manifest"
     },
     {
+      "id": "wechat",
+      "label": "微信",
+      "items": [
+        {
+          "kind": "image",
+          "id": "微笑",
+          "label": "微笑",
+          "token": "[wechat:微笑]",
+          "src": "/emotes/wechat/u5fae-u7b11.png",
+          "aliases": [
+            "微笑"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "撇嘴",
+          "label": "撇嘴",
+          "token": "[wechat:撇嘴]",
+          "src": "/emotes/wechat/u6487-u5634.png",
+          "aliases": [
+            "撇嘴"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "色",
+          "label": "色",
+          "token": "[wechat:色]",
+          "src": "/emotes/wechat/u8272.png",
+          "aliases": [
+            "色"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "发呆",
+          "label": "发呆",
+          "token": "[wechat:发呆]",
+          "src": "/emotes/wechat/u53d1-u5446.png",
+          "aliases": [
+            "发呆"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "得意",
+          "label": "得意",
+          "token": "[wechat:得意]",
+          "src": "/emotes/wechat/u5f97-u610f.png",
+          "aliases": [
+            "得意"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "流泪",
+          "label": "流泪",
+          "token": "[wechat:流泪]",
+          "src": "/emotes/wechat/u6d41-u6cea.png",
+          "aliases": [
+            "流泪"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "害羞",
+          "label": "害羞",
+          "token": "[wechat:害羞]",
+          "src": "/emotes/wechat/u5bb3-u7f9e.png",
+          "aliases": [
+            "害羞"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "闭嘴",
+          "label": "闭嘴",
+          "token": "[wechat:闭嘴]",
+          "src": "/emotes/wechat/u95ed-u5634.png",
+          "aliases": [
+            "闭嘴"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "睡",
+          "label": "睡",
+          "token": "[wechat:睡]",
+          "src": "/emotes/wechat/u7761.png",
+          "aliases": [
+            "睡"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "大哭",
+          "label": "大哭",
+          "token": "[wechat:大哭]",
+          "src": "/emotes/wechat/u5927-u54ed.png",
+          "aliases": [
+            "大哭"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "尴尬",
+          "label": "尴尬",
+          "token": "[wechat:尴尬]",
+          "src": "/emotes/wechat/u5c34-u5c2c.png",
+          "aliases": [
+            "尴尬"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "发怒",
+          "label": "发怒",
+          "token": "[wechat:发怒]",
+          "src": "/emotes/wechat/u53d1-u6012.png",
+          "aliases": [
+            "发怒"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "调皮",
+          "label": "调皮",
+          "token": "[wechat:调皮]",
+          "src": "/emotes/wechat/u8c03-u76ae.png",
+          "aliases": [
+            "调皮"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "呲牙",
+          "label": "呲牙",
+          "token": "[wechat:呲牙]",
+          "src": "/emotes/wechat/u5472-u7259.png",
+          "aliases": [
+            "呲牙"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "惊讶",
+          "label": "惊讶",
+          "token": "[wechat:惊讶]",
+          "src": "/emotes/wechat/u60ca-u8bb6.png",
+          "aliases": [
+            "惊讶"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "难过",
+          "label": "难过",
+          "token": "[wechat:难过]",
+          "src": "/emotes/wechat/u96be-u8fc7.png",
+          "aliases": [
+            "难过"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "囧",
+          "label": "囧",
+          "token": "[wechat:囧]",
+          "src": "/emotes/wechat/u56e7.png",
+          "aliases": [
+            "囧"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "抓狂",
+          "label": "抓狂",
+          "token": "[wechat:抓狂]",
+          "src": "/emotes/wechat/u6293-u72c2.png",
+          "aliases": [
+            "抓狂"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "吐",
+          "label": "吐",
+          "token": "[wechat:吐]",
+          "src": "/emotes/wechat/u5410.png",
+          "aliases": [
+            "吐"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "偷笑",
+          "label": "偷笑",
+          "token": "[wechat:偷笑]",
+          "src": "/emotes/wechat/u5077-u7b11.png",
+          "aliases": [
+            "偷笑"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "愉快",
+          "label": "愉快",
+          "token": "[wechat:愉快]",
+          "src": "/emotes/wechat/u6109-u5feb.png",
+          "aliases": [
+            "愉快"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "白眼",
+          "label": "白眼",
+          "token": "[wechat:白眼]",
+          "src": "/emotes/wechat/u767d-u773c.png",
+          "aliases": [
+            "白眼"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "傲慢",
+          "label": "傲慢",
+          "token": "[wechat:傲慢]",
+          "src": "/emotes/wechat/u50b2-u6162.png",
+          "aliases": [
+            "傲慢"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "困",
+          "label": "困",
+          "token": "[wechat:困]",
+          "src": "/emotes/wechat/u56f0.png",
+          "aliases": [
+            "困"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "惊恐",
+          "label": "惊恐",
+          "token": "[wechat:惊恐]",
+          "src": "/emotes/wechat/u60ca-u6050.png",
+          "aliases": [
+            "惊恐"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "憨笑",
+          "label": "憨笑",
+          "token": "[wechat:憨笑]",
+          "src": "/emotes/wechat/u61a8-u7b11.png",
+          "aliases": [
+            "憨笑"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "悠闲",
+          "label": "悠闲",
+          "token": "[wechat:悠闲]",
+          "src": "/emotes/wechat/u60a0-u95f2.png",
+          "aliases": [
+            "悠闲"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "咒骂",
+          "label": "咒骂",
+          "token": "[wechat:咒骂]",
+          "src": "/emotes/wechat/u5492-u9a82.png",
+          "aliases": [
+            "咒骂"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "疑问",
+          "label": "疑问",
+          "token": "[wechat:疑问]",
+          "src": "/emotes/wechat/u7591-u95ee.png",
+          "aliases": [
+            "疑问"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "嘘",
+          "label": "嘘",
+          "token": "[wechat:嘘]",
+          "src": "/emotes/wechat/u5618.png",
+          "aliases": [
+            "嘘"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "晕",
+          "label": "晕",
+          "token": "[wechat:晕]",
+          "src": "/emotes/wechat/u6655.png",
+          "aliases": [
+            "晕"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "衰",
+          "label": "衰",
+          "token": "[wechat:衰]",
+          "src": "/emotes/wechat/u8870.png",
+          "aliases": [
+            "衰"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "骷髅",
+          "label": "骷髅",
+          "token": "[wechat:骷髅]",
+          "src": "/emotes/wechat/u9ab7-u9ac5.png",
+          "aliases": [
+            "骷髅"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "敲打",
+          "label": "敲打",
+          "token": "[wechat:敲打]",
+          "src": "/emotes/wechat/u6572-u6253.png",
+          "aliases": [
+            "敲打"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "再见",
+          "label": "再见",
+          "token": "[wechat:再见]",
+          "src": "/emotes/wechat/u518d-u89c1.png",
+          "aliases": [
+            "再见"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "擦汗",
+          "label": "擦汗",
+          "token": "[wechat:擦汗]",
+          "src": "/emotes/wechat/u64e6-u6c57.png",
+          "aliases": [
+            "擦汗"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "抠鼻",
+          "label": "抠鼻",
+          "token": "[wechat:抠鼻]",
+          "src": "/emotes/wechat/u62a0-u9f3b.png",
+          "aliases": [
+            "抠鼻"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "鼓掌",
+          "label": "鼓掌",
+          "token": "[wechat:鼓掌]",
+          "src": "/emotes/wechat/u9f13-u638c.png",
+          "aliases": [
+            "鼓掌"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "坏笑",
+          "label": "坏笑",
+          "token": "[wechat:坏笑]",
+          "src": "/emotes/wechat/u574f-u7b11.png",
+          "aliases": [
+            "坏笑"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "右哼哼",
+          "label": "右哼哼",
+          "token": "[wechat:右哼哼]",
+          "src": "/emotes/wechat/u53f3-u54fc-u54fc.png",
+          "aliases": [
+            "右哼哼"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "鄙视",
+          "label": "鄙视",
+          "token": "[wechat:鄙视]",
+          "src": "/emotes/wechat/u9119-u89c6.png",
+          "aliases": [
+            "鄙视"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "委屈",
+          "label": "委屈",
+          "token": "[wechat:委屈]",
+          "src": "/emotes/wechat/u59d4-u5c48.png",
+          "aliases": [
+            "委屈"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "快哭了",
+          "label": "快哭了",
+          "token": "[wechat:快哭了]",
+          "src": "/emotes/wechat/u5feb-u54ed-u4e86.png",
+          "aliases": [
+            "快哭了"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "阴险",
+          "label": "阴险",
+          "token": "[wechat:阴险]",
+          "src": "/emotes/wechat/u9634-u9669.png",
+          "aliases": [
+            "阴险"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "亲亲",
+          "label": "亲亲",
+          "token": "[wechat:亲亲]",
+          "src": "/emotes/wechat/u4eb2-u4eb2.png",
+          "aliases": [
+            "亲亲"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "可怜",
+          "label": "可怜",
+          "token": "[wechat:可怜]",
+          "src": "/emotes/wechat/u53ef-u601c.png",
+          "aliases": [
+            "可怜"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "笑脸",
+          "label": "笑脸",
+          "token": "[wechat:笑脸]",
+          "src": "/emotes/wechat/u7b11-u8138.png",
+          "aliases": [
+            "笑脸"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "生病",
+          "label": "生病",
+          "token": "[wechat:生病]",
+          "src": "/emotes/wechat/u751f-u75c5.png",
+          "aliases": [
+            "生病"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "脸红",
+          "label": "脸红",
+          "token": "[wechat:脸红]",
+          "src": "/emotes/wechat/u8138-u7ea2.png",
+          "aliases": [
+            "脸红"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "破涕为笑",
+          "label": "破涕为笑",
+          "token": "[wechat:破涕为笑]",
+          "src": "/emotes/wechat/u7834-u6d95-u4e3a-u7b11.png",
+          "aliases": [
+            "破涕为笑"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "恐惧",
+          "label": "恐惧",
+          "token": "[wechat:恐惧]",
+          "src": "/emotes/wechat/u6050-u60e7.png",
+          "aliases": [
+            "恐惧"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "失望",
+          "label": "失望",
+          "token": "[wechat:失望]",
+          "src": "/emotes/wechat/u5931-u671b.png",
+          "aliases": [
+            "失望"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "无语",
+          "label": "无语",
+          "token": "[wechat:无语]",
+          "src": "/emotes/wechat/u65e0-u8bed.png",
+          "aliases": [
+            "无语"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "嘿哈",
+          "label": "嘿哈",
+          "token": "[wechat:嘿哈]",
+          "src": "/emotes/wechat/u563f-u54c8.png",
+          "aliases": [
+            "嘿哈"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "捂脸",
+          "label": "捂脸",
+          "token": "[wechat:捂脸]",
+          "src": "/emotes/wechat/u6342-u8138.png",
+          "aliases": [
+            "捂脸"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "机智",
+          "label": "机智",
+          "token": "[wechat:机智]",
+          "src": "/emotes/wechat/u673a-u667a.png",
+          "aliases": [
+            "机智"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "皱眉",
+          "label": "皱眉",
+          "token": "[wechat:皱眉]",
+          "src": "/emotes/wechat/u76b1-u7709.png",
+          "aliases": [
+            "皱眉"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "耶",
+          "label": "耶",
+          "token": "[wechat:耶]",
+          "src": "/emotes/wechat/u8036.png",
+          "aliases": [
+            "耶"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "吃瓜",
+          "label": "吃瓜",
+          "token": "[wechat:吃瓜]",
+          "src": "/emotes/wechat/u5403-u74dc.png",
+          "aliases": [
+            "吃瓜"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "加油",
+          "label": "加油",
+          "token": "[wechat:加油]",
+          "src": "/emotes/wechat/u52a0-u6cb9.png",
+          "aliases": [
+            "加油"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "汗",
+          "label": "汗",
+          "token": "[wechat:汗]",
+          "src": "/emotes/wechat/u6c57.png",
+          "aliases": [
+            "汗"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "天啊",
+          "label": "天啊",
+          "token": "[wechat:天啊]",
+          "src": "/emotes/wechat/u5929-u554a.png",
+          "aliases": [
+            "天啊"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "Emm",
+          "label": "Emm",
+          "token": "[wechat:Emm]",
+          "src": "/emotes/wechat/u45-u6d-u6d.png",
+          "aliases": [
+            "Emm"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "社会社会",
+          "label": "社会社会",
+          "token": "[wechat:社会社会]",
+          "src": "/emotes/wechat/u793e-u4f1a-u793e-u4f1a.png",
+          "aliases": [
+            "社会社会"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "旺柴",
+          "label": "旺柴",
+          "token": "[wechat:旺柴]",
+          "src": "/emotes/wechat/u65fa-u67f4.png",
+          "aliases": [
+            "旺柴"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "好的",
+          "label": "好的",
+          "token": "[wechat:好的]",
+          "src": "/emotes/wechat/u597d-u7684.png",
+          "aliases": [
+            "好的"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "打脸",
+          "label": "打脸",
+          "token": "[wechat:打脸]",
+          "src": "/emotes/wechat/u6253-u8138.png",
+          "aliases": [
+            "打脸"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "哇",
+          "label": "哇",
+          "token": "[wechat:哇]",
+          "src": "/emotes/wechat/u54c7.png",
+          "aliases": [
+            "哇"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "翻白眼",
+          "label": "翻白眼",
+          "token": "[wechat:翻白眼]",
+          "src": "/emotes/wechat/u7ffb-u767d-u773c.png",
+          "aliases": [
+            "翻白眼"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "666",
+          "label": "666",
+          "token": "[wechat:666]",
+          "src": "/emotes/wechat/u36-u36-u36.png",
+          "aliases": [
+            "666"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "让我看看",
+          "label": "让我看看",
+          "token": "[wechat:让我看看]",
+          "src": "/emotes/wechat/u8ba9-u6211-u770b-u770b.png",
+          "aliases": [
+            "让我看看"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "叹气",
+          "label": "叹气",
+          "token": "[wechat:叹气]",
+          "src": "/emotes/wechat/u53f9-u6c14.png",
+          "aliases": [
+            "叹气"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "苦涩",
+          "label": "苦涩",
+          "token": "[wechat:苦涩]",
+          "src": "/emotes/wechat/u82e6-u6da9.png",
+          "aliases": [
+            "苦涩"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "裂开",
+          "label": "裂开",
+          "token": "[wechat:裂开]",
+          "src": "/emotes/wechat/u88c2-u5f00.png",
+          "aliases": [
+            "裂开"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "奸笑",
+          "label": "奸笑",
+          "token": "[wechat:奸笑]",
+          "src": "/emotes/wechat/u5978-u7b11.png",
+          "aliases": [
+            "奸笑"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "握手",
+          "label": "握手",
+          "token": "[wechat:握手]",
+          "src": "/emotes/wechat/u63e1-u624b.png",
+          "aliases": [
+            "握手"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "胜利",
+          "label": "胜利",
+          "token": "[wechat:胜利]",
+          "src": "/emotes/wechat/u80dc-u5229.png",
+          "aliases": [
+            "胜利"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "抱拳",
+          "label": "抱拳",
+          "token": "[wechat:抱拳]",
+          "src": "/emotes/wechat/u62b1-u62f3.png",
+          "aliases": [
+            "抱拳"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "勾引",
+          "label": "勾引",
+          "token": "[wechat:勾引]",
+          "src": "/emotes/wechat/u52fe-u5f15.png",
+          "aliases": [
+            "勾引"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "拳头",
+          "label": "拳头",
+          "token": "[wechat:拳头]",
+          "src": "/emotes/wechat/u62f3-u5934.png",
+          "aliases": [
+            "拳头"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "OK",
+          "label": "OK",
+          "token": "[wechat:OK]",
+          "src": "/emotes/wechat/u4f-u4b.png",
+          "aliases": [
+            "OK"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "合十",
+          "label": "合十",
+          "token": "[wechat:合十]",
+          "src": "/emotes/wechat/u5408-u5341.png",
+          "aliases": [
+            "合十"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "强",
+          "label": "强",
+          "token": "[wechat:强]",
+          "src": "/emotes/wechat/u5f3a.png",
+          "aliases": [
+            "强"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "拥抱",
+          "label": "拥抱",
+          "token": "[wechat:拥抱]",
+          "src": "/emotes/wechat/u62e5-u62b1.png",
+          "aliases": [
+            "拥抱"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "弱",
+          "label": "弱",
+          "token": "[wechat:弱]",
+          "src": "/emotes/wechat/u5f31.png",
+          "aliases": [
+            "弱"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "猪头",
+          "label": "猪头",
+          "token": "[wechat:猪头]",
+          "src": "/emotes/wechat/u732a-u5934.png",
+          "aliases": [
+            "猪头"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "跳跳",
+          "label": "跳跳",
+          "token": "[wechat:跳跳]",
+          "src": "/emotes/wechat/u8df3-u8df3.png",
+          "aliases": [
+            "跳跳"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "发抖",
+          "label": "发抖",
+          "token": "[wechat:发抖]",
+          "src": "/emotes/wechat/u53d1-u6296.png",
+          "aliases": [
+            "发抖"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "转圈",
+          "label": "转圈",
+          "token": "[wechat:转圈]",
+          "src": "/emotes/wechat/u8f6c-u5708.png",
+          "aliases": [
+            "转圈"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "庆祝",
+          "label": "庆祝",
+          "token": "[wechat:庆祝]",
+          "src": "/emotes/wechat/u5e86-u795d.png",
+          "aliases": [
+            "庆祝"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "礼物",
+          "label": "礼物",
+          "token": "[wechat:礼物]",
+          "src": "/emotes/wechat/u793c-u7269.png",
+          "aliases": [
+            "礼物"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "红包",
+          "label": "红包",
+          "token": "[wechat:红包]",
+          "src": "/emotes/wechat/u7ea2-u5305.png",
+          "aliases": [
+            "红包"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "發",
+          "label": "發",
+          "token": "[wechat:發]",
+          "src": "/emotes/wechat/u767c.png",
+          "aliases": [
+            "發"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "福",
+          "label": "福",
+          "token": "[wechat:福]",
+          "src": "/emotes/wechat/u798f.png",
+          "aliases": [
+            "福"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "烟花",
+          "label": "烟花",
+          "token": "[wechat:烟花]",
+          "src": "/emotes/wechat/u70df-u82b1.png",
+          "aliases": [
+            "烟花"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "爆竹",
+          "label": "爆竹",
+          "token": "[wechat:爆竹]",
+          "src": "/emotes/wechat/u7206-u7af9.png",
+          "aliases": [
+            "爆竹"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "嘴唇",
+          "label": "嘴唇",
+          "token": "[wechat:嘴唇]",
+          "src": "/emotes/wechat/u5634-u5507.png",
+          "aliases": [
+            "嘴唇"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "爱心",
+          "label": "爱心",
+          "token": "[wechat:爱心]",
+          "src": "/emotes/wechat/u7231-u5fc3.png",
+          "aliases": [
+            "爱心"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "心碎",
+          "label": "心碎",
+          "token": "[wechat:心碎]",
+          "src": "/emotes/wechat/u5fc3-u788e.png",
+          "aliases": [
+            "心碎"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "啤酒",
+          "label": "啤酒",
+          "token": "[wechat:啤酒]",
+          "src": "/emotes/wechat/u5564-u9152.png",
+          "aliases": [
+            "啤酒"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "咖啡",
+          "label": "咖啡",
+          "token": "[wechat:咖啡]",
+          "src": "/emotes/wechat/u5496-u5561.png",
+          "aliases": [
+            "咖啡"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "蛋糕",
+          "label": "蛋糕",
+          "token": "[wechat:蛋糕]",
+          "src": "/emotes/wechat/u86cb-u7cd5.png",
+          "aliases": [
+            "蛋糕"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "凋谢",
+          "label": "凋谢",
+          "token": "[wechat:凋谢]",
+          "src": "/emotes/wechat/u51cb-u8c22.png",
+          "aliases": [
+            "凋谢"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "菜刀",
+          "label": "菜刀",
+          "token": "[wechat:菜刀]",
+          "src": "/emotes/wechat/u83dc-u5200.png",
+          "aliases": [
+            "菜刀"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "炸弹",
+          "label": "炸弹",
+          "token": "[wechat:炸弹]",
+          "src": "/emotes/wechat/u70b8-u5f39.png",
+          "aliases": [
+            "炸弹"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "便便",
+          "label": "便便",
+          "token": "[wechat:便便]",
+          "src": "/emotes/wechat/u4fbf-u4fbf.png",
+          "aliases": [
+            "便便"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "太阳",
+          "label": "太阳",
+          "token": "[wechat:太阳]",
+          "src": "/emotes/wechat/u592a-u9633.png",
+          "aliases": [
+            "太阳"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "月亮",
+          "label": "月亮",
+          "token": "[wechat:月亮]",
+          "src": "/emotes/wechat/u6708-u4eae.png",
+          "aliases": [
+            "月亮"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "玫瑰",
+          "label": "玫瑰",
+          "token": "[wechat:玫瑰]",
+          "src": "/emotes/wechat/u73ab-u7470.png",
+          "aliases": [
+            "玫瑰"
+          ]
+        }
+      ],
+      "source": "https://github.com/xxk8/wechat-emojis"
+    },
+    {
       "id": "qq",
       "label": "QQ",
       "items": [

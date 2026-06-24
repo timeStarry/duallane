@@ -2790,7 +2790,7 @@ function ChatPanel({
           ))
         )}
       </div>
-      <form className="composer" onSubmit={onSend}>
+      <form className={emotePanelOpen ? "composer emote-open" : "composer"} onSubmit={onSend}>
         <label
           className={fileInputDisabled ? "file-button disabled" : "file-button"}
           title={fileInputTitle}

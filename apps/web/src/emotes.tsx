@@ -20,14 +20,14 @@ export type ImageEmoteItem = {
 export type EmoteItem = UnicodeEmoteItem | ImageEmoteItem;
 
 export type EmotePack = {
-  id: "emoji" | "bili" | "douyin" | "qq" | "feishu";
+  id: "emoji" | "bili" | "douyin" | "wechat" | "qq" | "feishu";
   label: string;
   items: EmoteItem[];
 };
 
 export { emotePacks };
 
-export const visibleEmotePacks = emotePacks.filter((pack) => pack.id !== "douyin");
+export const visibleEmotePacks = emotePacks.filter((pack) => pack.id !== "douyin" && pack.id !== "qq");
 
 const imageEmoteByToken = new Map<string, ImageEmoteItem>();
 
@@ -49,7 +49,7 @@ for (const pack of emotePacks) {
   }
 }
 
-const imageEmoteTokenPattern = /\[(bili|douyin|qq|feishu):([^\]\s:]+)\]/g;
+const imageEmoteTokenPattern = /\[(bili|douyin|wechat|qq|feishu):([^\]\s:]+)\]/g;
 
 export function getEmoteInsertText(item: EmoteItem) {
   return item.kind === "unicode" ? item.value : item.token;

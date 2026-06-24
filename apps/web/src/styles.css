@@ -1685,13 +1685,41 @@ button:disabled {
     padding: 8px;
   }
 
+  .composer.emote-open {
+    align-items: end;
+  }
+
+  .composer.emote-open .emote-composer {
+    display: contents;
+  }
+
+  .composer.emote-open .emote-toggle {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
   .emote-picker {
-    left: auto;
-    right: -56px;
-    width: min(340px, calc(100vw - 16px));
+    position: static;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: 100%;
+    max-height: min(44dvh, 320px);
+    margin-top: 2px;
+    box-shadow: none;
+  }
+
+  .emote-pack-tabs {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  .emote-pack-tabs button {
+    min-height: 30px;
   }
 
   .emote-grid {
+    max-height: min(32dvh, 236px);
     grid-template-columns: repeat(7, 1fr);
   }
 
