@@ -166,5 +166,5 @@ Later:
 - Transfer files.
 - Test peer disconnect and reconnect copy.
 - End the session and verify local-save prompt.
-- Verify no private direct message/file content appears in SQLite, logs, or shared-space tables.
+- Verify no private direct message/file content appears in PostgreSQL, logs, or shared-space tables.
 - Verify WebSocket fallback carries encrypted envelopes only.

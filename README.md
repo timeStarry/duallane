@@ -64,6 +64,14 @@ minimum shared-space settings are:
 
 - `WORKSPACE_ENABLED=true`
 - `WORKSPACE_FRONTEND_URL=http://127.0.0.1:5173`
+- `DATABASE_URL=postgresql://...`
+
+Workspace persistence requires PostgreSQL. When running the API directly,
+`DATABASE_AUTO_MIGRATE=true` applies pending versioned migrations at startup.
+Use `pnpm --filter @duallane/web db:migrate` to run them explicitly. P2P-only
+development does not require a database while Workspace remains disabled.
+The migration runner initializes PostgreSQL schemas; it does not import legacy
+`duallane.sqlite` data automatically.
 
 `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` can be left empty outside
 production. In that mode, the GitHub login route uses the seeded owner fallback:
@@ -91,6 +99,12 @@ network. The web container serves the built frontend through Nginx and forwards
 `/api` plus `/ws` to the private API container, including WebSocket upgrade
 headers.
 
+Compose starts PostgreSQL, waits for its health check, runs the one-shot
+`migrate` service, and only then starts the API. Set a strong
+`POSTGRES_PASSWORD` before deployment. Back up both the `duallane-postgres`
+database volume and the `duallane-data` file volume; Workspace attachment bytes
+remain on the local file volume.
+
 `SERVE_STATIC=false` is set for the API container in compose so static assets are
 served only by the web gateway. Running `pnpm start` directly still supports the
 single-process static server unless `SERVE_STATIC=false` is set.
@@ -107,6 +121,14 @@ If shared space is enabled in production, configure `GITHUB_CLIENT_ID`,
 `GITHUB_CLIENT_SECRET`, `PUBLIC_BASE_URL`, and a long random `SESSION_SECRET`.
 Production GitHub login fails closed when the OAuth client ID or secret is
 missing.
+
+The default deployment runs one API instance. PostgreSQL supports concurrent
+requests, but scaling the API horizontally also requires shared attachment
+storage and a cross-instance realtime event transport.
+
+For PostgreSQL integration tests, point `TEST_DATABASE_URL` at a disposable
+database and run `pnpm --filter @duallane/web test:postgres`. Each run creates
+and removes an isolated schema.
 
 For private-lane reliability, configure TURN fallback with either
 `DUALLANE_TURN_SHARED_SECRET` for coturn REST credentials or static

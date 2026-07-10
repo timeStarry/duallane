@@ -51,8 +51,9 @@ erDiagram
   SPACES ||--o{ AUDIT_LOGS : records
 ```
 
-The actual implementation can use SQLite tables and JSON columns, but the
-relationships above should remain stable.
+The implementation uses PostgreSQL tables with versioned SQL migrations. JSON
+message and event envelopes remain serialized text at the persistence boundary
+so the existing versioned application protocol stays stable.
 
 ## 4. ID And Time Conventions
 
@@ -515,7 +516,7 @@ Recommended indexes:
 - `workspace_events(space_id, seq)`
 - `audit_logs(space_id, created_at)`
 
-P0 can use simple SQLite indexes. The important point is to keep permission
+P0 uses focused PostgreSQL indexes. The important point is to keep permission
 filters on indexed fields before rendering product views.
 
 ## 8. Retention And Cleanup

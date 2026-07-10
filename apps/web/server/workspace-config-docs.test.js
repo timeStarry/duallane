@@ -15,6 +15,8 @@ describe("workspace configuration docs", () => {
     expect(envExample).toContain("WORKSPACE_ENABLED=false");
     expect(envExample).toContain("GITHUB_CLIENT_ID=");
     expect(envExample).toContain("GITHUB_CLIENT_SECRET=");
+    expect(envExample).toContain("DATABASE_URL=postgresql://");
+    expect(envExample).toContain("POSTGRES_PASSWORD=");
   });
 
   it("documents local fallback and production OAuth requirements", async () => {
@@ -36,11 +38,27 @@ describe("workspace configuration docs", () => {
     expect(compose).toContain("GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}");
     expect(compose).toContain("WORKSPACE_FRONTEND_URL: ${WORKSPACE_FRONTEND_URL:-}");
     expect(compose).toContain("TRUST_PROXY: ${TRUST_PROXY:-true}");
+    expect(compose).toContain("image: postgres:17-alpine");
+    expect(compose).toContain("condition: service_completed_successfully");
+    expect(compose).toContain("DATABASE_AUTO_MIGRATE: \"false\"");
+    expect(compose).toContain("PGHOST: postgres");
+    expect(compose).toContain("PGPASSWORD: ${POSTGRES_PASSWORD:-replace-this-before-production}");
     expect(envExample).toContain("WORKSPACE_FRONTEND_URL=\n");
     expect(envExample).not.toContain("WORKSPACE_FRONTEND_URL=http://127.0.0.1:5173");
     expect(envExample).toContain("TRUST_PROXY=true");
     expect(nginx).toContain("map $http_x_forwarded_proto $duallane_forwarded_proto");
     expect(nginx).toContain("proxy_set_header X-Forwarded-Proto $duallane_forwarded_proto");
+  });
+
+  it("uses versioned PostgreSQL migrations without a runtime SQLite fallback", async () => {
+    const database = await readFile(path.join(repoRoot, "apps", "web", "server", "services", "db.mjs"), "utf8");
+    const migration = await readFile(path.join(repoRoot, "apps", "web", "server", "migrations", "001_initial.sql"), "utf8");
+
+    expect(database).toContain('from "pg"');
+    expect(database).not.toContain('from "node:sqlite"');
+    expect(migration).toContain("byte_size BIGINT");
+    expect(migration).toContain("workspace_event_cursors");
+    expect(migration).not.toContain("PRAGMA");
   });
 
   it("documents production OAuth state matching as a required auth boundary", async () => {

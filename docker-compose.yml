@@ -13,12 +13,23 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     expose:
       - "8787"
     environment:
       HOST: 0.0.0.0
       PORT: 8787
       DUALLANE_DATA_DIR: /app/data
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB:-duallane}
+      PGUSER: ${POSTGRES_USER:-duallane}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-replace-this-before-production}
+      DATABASE_AUTO_MIGRATE: "false"
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
+      DATABASE_SSL: "false"
       SESSION_SECRET: ${SESSION_SECRET:-replace-this-before-production}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8787}
       WORKSPACE_ENABLED: ${WORKSPACE_ENABLED:-false}
@@ -31,5 +42,39 @@ services:
       - duallane-data:/app/data
     restart: unless-stopped
 
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: ["pnpm", "--filter", "@duallane/web", "db:migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB:-duallane}
+      PGUSER: ${POSTGRES_USER:-duallane}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-replace-this-before-production}
+      DATABASE_POOL_MAX: "2"
+      DATABASE_SSL: "false"
+    restart: "no"
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-duallane}
+      POSTGRES_USER: ${POSTGRES_USER:-duallane}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-replace-this-before-production}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - duallane-postgres:/var/lib/postgresql/data
+    restart: unless-stopped
+
 volumes:
   duallane-data:
+  duallane-postgres:

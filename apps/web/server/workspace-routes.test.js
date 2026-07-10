@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "./index.mjs";
-import { openDatabase } from "./services/db.mjs";
+import { openTestDatabase } from "./services/test-database.mjs";
 
 describe("workspace routes", () => {
   let dataDir;
@@ -20,8 +20,10 @@ describe("workspace routes", () => {
   });
 
   async function makeApp(env = {}) {
+    const db = openTestDatabase(dataDir);
     const app = await createApp({
       dataDir,
+      db,
       env: {
         WORKSPACE_ENABLED: "true",
         NODE_ENV: "test",
@@ -30,6 +32,7 @@ describe("workspace routes", () => {
       },
       logger: false
     });
+    app.addHook("onClose", async () => db.close());
     const originalInject = app.inject.bind(app);
     app.inject = (options, ...rest) => {
       if (
@@ -57,7 +60,7 @@ describe("workspace routes", () => {
   }
 
   function ensureRouteFixtureGroupMember() {
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     try {
       const existing = db.prepare("SELECT id FROM users WHERE github_login = ?").get("route-group-fixture");
       if (existing?.id) {
@@ -82,7 +85,7 @@ describe("workspace routes", () => {
   }
 
   function getAttachmentStorageKey(attachmentId) {
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     try {
       const row = db.prepare("SELECT storage_key AS storageKey FROM attachments WHERE id = ?").get(attachmentId);
       return row?.storageKey;
@@ -92,7 +95,7 @@ describe("workspace routes", () => {
   }
 
   function getWorkspaceContentCounts() {
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     try {
       return {
         messages: db.prepare("SELECT COUNT(*) AS count FROM messages").get().count,
@@ -108,7 +111,7 @@ describe("workspace routes", () => {
   }
 
   function getLatestAudit(action, actorUserId) {
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     try {
       return db.prepare(`
         SELECT action, target_type AS targetType, target_id AS targetId, result, reason
@@ -124,7 +127,7 @@ describe("workspace routes", () => {
   }
 
   function getLatestAuditByAction(action) {
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     try {
       return db.prepare(`
         SELECT action, target_type AS targetType, target_id AS targetId, result, reason
@@ -206,6 +209,26 @@ describe("workspace routes", () => {
     });
   });
 
+  it("starts without PostgreSQL when workspace is disabled", async () => {
+    const app = await createApp({
+      dataDir,
+      env: {
+        WORKSPACE_ENABLED: "false",
+        NODE_ENV: "test",
+        SERVE_STATIC: "false"
+      },
+      logger: false
+    });
+    apps.push(app);
+
+    const health = await app.inject({ method: "GET", url: "/api/health" });
+    const logout = await app.inject({ method: "POST", url: "/api/auth/logout" });
+
+    expect(health.statusCode).toBe(200);
+    expect(logout.statusCode).toBe(200);
+    expect(logout.json()).toEqual({ ok: true });
+  });
+
   it("keeps health responses free of local storage paths", async () => {
     const app = await makeApp();
     const response = await app.inject({
@@ -267,8 +290,10 @@ describe("workspace routes", () => {
   });
 
   it("redirects development root entry requests with default static settings", async () => {
+    const db = openTestDatabase(dataDir);
     const app = await createApp({
       dataDir,
+      db,
       env: {
         WORKSPACE_ENABLED: "true",
         NODE_ENV: "development",
@@ -276,6 +301,7 @@ describe("workspace routes", () => {
       },
       logger: false
     });
+    app.addHook("onClose", async () => db.close());
     apps.push(app);
 
     const response = await app.inject({
@@ -335,7 +361,7 @@ describe("workspace routes", () => {
       }
     });
 
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     try {
       expect(db.prepare("SELECT github_id AS githubId FROM users WHERE id = 'usr_owner'").get()).toEqual({
         githubId: "route-stable-owner"
@@ -816,7 +842,7 @@ describe("workspace routes", () => {
       reason: "insufficient permission"
     });
 
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     try {
       const target = db.prepare("SELECT revoked_at AS revokedAt FROM invites WHERE id = ?").get(targetInviteId);
       expect(target.revokedAt).toBeNull();
@@ -1648,7 +1674,7 @@ describe("workspace routes", () => {
       "group file access loss"
     ]);
 
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     try {
       const audit = db.prepare(`
         SELECT result, reason
@@ -1955,7 +1981,7 @@ describe("workspace routes", () => {
     expect(forged.json().message.kind).toBe("user");
     expect(forged.json().message.ai).toBeUndefined();
 
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     try {
       const audit = db.prepare(`
         SELECT actor_user_id AS actorUserId
@@ -2019,7 +2045,7 @@ describe("workspace routes", () => {
     });
     expectNoWorkspaceInternals(rejected.json(), ["raw client fallback must not persist"]);
 
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     try {
       const persisted = db.prepare("SELECT COUNT(*) AS count FROM messages WHERE client_message_id = ?").get("route-invalid-block");
       expect(persisted.count).toBe(0);
@@ -2140,7 +2166,7 @@ describe("workspace routes", () => {
 
   it("pushes new workspace events to connected realtime clients", async () => {
     const app = await makeApp();
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     let currentSeq;
     try {
       currentSeq = db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM workspace_events").get().seq;
@@ -2200,7 +2226,7 @@ describe("workspace routes", () => {
 
   it("projects realtime member payload capabilities for the receiving member", async () => {
     const app = await makeApp();
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     let currentSeq;
     try {
       currentSeq = db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM workspace_events").get().seq;
@@ -2309,7 +2335,7 @@ describe("workspace routes", () => {
     expect(accepted.statusCode).toBe(201);
     const memberId = accepted.json().user.id;
 
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     let currentSeq;
     try {
       currentSeq = db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM workspace_events").get().seq;
@@ -2413,7 +2439,7 @@ describe("workspace routes", () => {
     expect(accepted.statusCode).toBe(201);
     const memberId = accepted.json().user.id;
 
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     let currentSeq;
     try {
       currentSeq = db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM workspace_events").get().seq;
@@ -2538,7 +2564,7 @@ describe("workspace routes", () => {
     });
     expect(hiddenConversation.statusCode).toBe(201);
 
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     let currentSeq;
     try {
       currentSeq = db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM workspace_events").get().seq;
@@ -2651,7 +2677,7 @@ describe("workspace routes", () => {
     expect(memberAccepted.statusCode).toBe(201);
     const memberId = memberAccepted.json().user.id;
 
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     let currentSeq;
     try {
       currentSeq = db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM workspace_events").get().seq;
@@ -2745,7 +2771,7 @@ describe("workspace routes", () => {
 
   it("does not expose transfer ids in realtime attachment-created frames", async () => {
     const app = await makeApp();
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     let beforeSeq;
     try {
       beforeSeq = db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM workspace_events").get().seq;
@@ -2828,7 +2854,7 @@ describe("workspace routes", () => {
     expect(accepted.statusCode).toBe(201);
     const memberId = accepted.json().user.id;
 
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     let currentSeq;
     try {
       currentSeq = db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM workspace_events").get().seq;
@@ -2957,7 +2983,7 @@ describe("workspace routes", () => {
     expect(conversation.statusCode).toBe(201);
     const conversationId = conversation.json().conversation.id;
 
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     let currentSeq;
     try {
       currentSeq = db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM workspace_events").get().seq;
@@ -3111,7 +3137,7 @@ describe("workspace routes", () => {
     expect(direct.statusCode).toBe(201);
     const conversationId = direct.json().conversation.id;
 
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     let currentSeq;
     try {
       currentSeq = db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM workspace_events").get().seq;
@@ -3713,7 +3739,7 @@ describe("workspace routes", () => {
       reason: "insufficient permission"
     });
 
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     try {
       const invite = db.prepare("SELECT revoked_at AS revokedAt FROM invites WHERE id = ?").get(ownerInviteId);
       expect(invite.revokedAt).toBeNull();
@@ -3819,7 +3845,7 @@ describe("workspace routes", () => {
     expect(memberBootstrap.statusCode).toBe(200);
     expect(memberBootstrap.json().policy.usedTodayBytes).toBe(content.byteLength * 2);
 
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     try {
       const ledgerUsers = db.prepare(`
         SELECT user_id AS userId, direction, status
@@ -4417,7 +4443,7 @@ describe("workspace routes", () => {
     expect(downloadReserve.statusCode).toBe(404);
     expect(downloadReserve.json().error.code).toBe("file.storage_missing");
 
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     try {
       const used = db.prepare(`
         SELECT COALESCE(SUM(byte_size), 0) AS used
@@ -4461,7 +4487,7 @@ describe("workspace routes", () => {
     expect(metadataOnlyComplete.statusCode).toBe(404);
     expect(metadataOnlyComplete.json().error.code).toBe("file.storage_missing");
 
-    const afterMetadataOnlyDb = openDatabase(dataDir);
+    const afterMetadataOnlyDb = openTestDatabase(dataDir);
     try {
       const used = afterMetadataOnlyDb.prepare(`
         SELECT COALESCE(SUM(byte_size), 0) AS used
@@ -4497,7 +4523,7 @@ describe("workspace routes", () => {
     expect(mismatch.statusCode).toBe(400);
     expect(mismatch.json().error.code).toBe("upload.invalid");
 
-    const db = openDatabase(dataDir);
+    const db = openTestDatabase(dataDir);
     try {
       const used = db.prepare(`
         SELECT COALESCE(SUM(byte_size), 0) AS used

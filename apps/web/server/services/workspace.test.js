@@ -2,7 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_SPACE_ID, openDatabase, SEEDED_OWNER_EMAIL, SEEDED_OWNER_GITHUB_LOGIN } from "./db.mjs";
+import { DEFAULT_SPACE_ID, SEEDED_OWNER_EMAIL, SEEDED_OWNER_GITHUB_LOGIN } from "./db.mjs";
+import { openTestDatabase } from "./test-database.mjs";
 import { DAILY_QUOTA_BYTES } from "./quota.mjs";
 import {
   acceptInvite,
@@ -58,16 +59,16 @@ function textContent(text) {
   };
 }
 
-function ensureFixtureGroupMember(db) {
+async function ensureFixtureGroupMember(db) {
   const existing = db.prepare("SELECT id FROM users WHERE github_login = ?").get("group-fixture-member");
   if (existing?.id) {
     return { id: existing.id };
   }
-  const invite = createInvite(db, request, {
+  const invite = await createInvite(db, request, {
     actorId: "usr_owner",
     code: "GROUP-FIXTURE-MEMBER"
   });
-  return acceptInvite(db, request, {
+  return await acceptInvite(db, request, {
     code: invite.code,
     githubLogin: "group-fixture-member",
     email: "group-fixture-member@example.com",
@@ -75,13 +76,13 @@ function ensureFixtureGroupMember(db) {
   });
 }
 
-function createConversation(db, request, input) {
+async function createConversation(db, request, input) {
   if (input?.type !== "group" || Object.hasOwn(input, "memberIds")) {
-    return createWorkspaceConversation(db, request, input);
+    return await createWorkspaceConversation(db, request, input);
   }
-  return createWorkspaceConversation(db, request, {
+  return await createWorkspaceConversation(db, request, {
     ...input,
-    memberIds: [ensureFixtureGroupMember(db).id]
+    memberIds: [(await ensureFixtureGroupMember(db)).id]
   });
 }
 
@@ -91,7 +92,7 @@ describe("workspace service", () => {
 
   beforeEach(async () => {
     dataDir = await mkdtemp(path.join(tmpdir(), "duallane-test-"));
-    db = openDatabase(dataDir);
+    db = openTestDatabase(dataDir);
   });
 
   afterEach(async () => {
@@ -99,7 +100,7 @@ describe("workspace service", () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  it("seeds the first owner and default shared space", () => {
+  it("seeds the first owner and default shared space", async () => {
     const owner = db.prepare(`
       SELECT u.github_login AS githubLogin, u.email, sm.role
       FROM users u
@@ -116,8 +117,8 @@ describe("workspace service", () => {
     expect(space.name).toBe("默认空间");
   });
 
-  it("binds the seeded owner to a GitHub identity", () => {
-    const owner = bindGitHubUser(db, request, {
+  it("binds the seeded owner to a GitHub identity", async () => {
+    const owner = await bindGitHubUser(db, request, {
       githubId: "12345",
       githubLogin: SEEDED_OWNER_GITHUB_LOGIN,
       email: SEEDED_OWNER_EMAIL,
@@ -130,15 +131,15 @@ describe("workspace service", () => {
     expect(row.lastLoginAt).toBeTruthy();
   });
 
-  it("keeps a bound GitHub id stable while allowing profile renames", () => {
-    bindGitHubUser(db, request, {
+  it("keeps a bound GitHub id stable while allowing profile renames", async () => {
+    await bindGitHubUser(db, request, {
       githubId: "stable-owner-id",
       githubLogin: SEEDED_OWNER_GITHUB_LOGIN,
       email: SEEDED_OWNER_EMAIL,
       displayName: "Original Owner"
     });
 
-    const renamed = bindGitHubUser(db, request, {
+    const renamed = await bindGitHubUser(db, request, {
       githubId: "stable-owner-id",
       githubLogin: "renamed-owner",
       email: "renamed-owner@example.com",
@@ -151,23 +152,23 @@ describe("workspace service", () => {
       email: "renamed-owner@example.com"
     });
 
-    expect(() =>
-      bindGitHubUser(db, request, {
+    await expect(async () =>
+      await bindGitHubUser(db, request, {
         githubId: "different-owner-id",
         githubLogin: "renamed-owner",
         email: "different-owner@example.com",
         displayName: "Different Account"
       })
-    ).toThrow("GitHub 身份与已有账号不一致");
+    ).rejects.toThrow("GitHub 身份与已有账号不一致");
 
-    expect(() =>
-      bindGitHubUser(db, request, {
+    await expect(async () =>
+      await bindGitHubUser(db, request, {
         githubId: "recycled-seeded-login-id",
         githubLogin: SEEDED_OWNER_GITHUB_LOGIN,
         email: "recycled-owner@example.com",
         displayName: "Recycled Login"
       })
-    ).toThrow("GitHub 身份与已有账号不一致");
+    ).rejects.toThrow("GitHub 身份与已有账号不一致");
 
     const stored = db.prepare(`
       SELECT github_id AS githubId, github_login AS githubLogin, email
@@ -187,30 +188,30 @@ describe("workspace service", () => {
     expect(rejection).toEqual({ result: "rejected", reason: "auth.identity_conflict", count: 2 });
   });
 
-  it("does not consume an invite when its GitHub identity conflicts", () => {
-    const firstInvite = createInvite(db, request, {
+  it("does not consume an invite when its GitHub identity conflicts", async () => {
+    const firstInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       code: "IDENTITY-FIRST"
     });
-    acceptInvite(db, request, {
+    await acceptInvite(db, request, {
       code: firstInvite.code,
       githubId: "stable-member-id",
       githubLogin: "stable-member",
       email: "stable-member@example.com"
     });
-    const secondInvite = createInvite(db, request, {
+    const secondInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       code: "IDENTITY-SECOND"
     });
 
-    expect(() =>
-      acceptInvite(db, request, {
+    await expect(async () =>
+      await acceptInvite(db, request, {
         code: secondInvite.code,
         githubId: "different-member-id",
         githubLogin: "stable-member",
         email: "different-member@example.com"
       })
-    ).toThrow("GitHub 身份与已有账号不一致");
+    ).rejects.toThrow("GitHub 身份与已有账号不一致");
 
     expect(db.prepare("SELECT uses FROM invites WHERE id = ?").get(secondInvite.id).uses).toBe(0);
     const rejection = db.prepare(`
@@ -223,7 +224,7 @@ describe("workspace service", () => {
     expect(rejection).toEqual({ result: "rejected", reason: "auth.identity_conflict" });
   });
 
-  it("rolls back GitHub login binding when audit persistence fails", () => {
+  it("rolls back GitHub login binding when audit persistence fails", async () => {
     db.exec(`
       CREATE TRIGGER fail_login_success_audit
       BEFORE INSERT ON audit_logs
@@ -233,14 +234,14 @@ describe("workspace service", () => {
       END
     `);
     try {
-      expect(() =>
-        bindGitHubUser(db, request, {
+      await expect(async () =>
+        await bindGitHubUser(db, request, {
           githubId: "rollback-login",
           githubLogin: SEEDED_OWNER_GITHUB_LOGIN,
           email: SEEDED_OWNER_EMAIL,
           displayName: "timeStarry"
         })
-      ).toThrow(/login success audit failed/);
+      ).rejects.toThrow(/login success audit failed/);
     } finally {
       db.exec("DROP TRIGGER fail_login_success_audit");
     }
@@ -250,21 +251,21 @@ describe("workspace service", () => {
     expect(row.lastLoginAt).toBeNull();
   });
 
-  it("rejects uninvited GitHub users and writes an operation record", () => {
-    expect(() =>
-      bindGitHubUser(db, request, {
+  it("rejects uninvited GitHub users and writes an operation record", async () => {
+    await expect(async () =>
+      await bindGitHubUser(db, request, {
         githubId: "999",
         githubLogin: "outsider",
         email: "outsider@example.com"
       })
-    ).toThrow("该 GitHub 用户尚未被邀请");
+    ).rejects.toThrow("该 GitHub 用户尚未被邀请");
 
     const audit = db.prepare("SELECT result, reason FROM audit_logs WHERE action = 'login.rejected'").get();
     expect(audit).toEqual({ result: "rejected", reason: "not invited" });
   });
 
-  it("allows owner/admin invite creation but rejects members", () => {
-    const ownerInvite = createInvite(db, request, {
+  it("allows owner/admin invite creation but rejects members", async () => {
+    const ownerInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "admin",
       maxUses: 2,
@@ -272,21 +273,21 @@ describe("workspace service", () => {
     });
     expect(ownerInvite.defaultRole).toBe("admin");
 
-    const admin = acceptInvite(db, request, {
+    const admin = await acceptInvite(db, request, {
       code: "OWNER-ADMIN",
       githubLogin: "space-admin",
       email: "admin@example.com",
       displayName: "Space Admin"
     });
 
-    const memberInvite = createInvite(db, request, {
+    const memberInvite = await createInvite(db, request, {
       actorId: admin.id,
       defaultRole: "member",
       code: "ADMIN-MEMBER"
     });
     expect(memberInvite.defaultRole).toBe("member");
 
-    const member = acceptInvite(db, request, {
+    const member = await acceptInvite(db, request, {
       code: "ADMIN-MEMBER",
       githubId: "member-gh-id",
       githubLogin: "space-member",
@@ -297,17 +298,17 @@ describe("workspace service", () => {
     expect(memberRow.githubId).toBe("member-gh-id");
     expect(member.githubId).toBe("member-gh-id");
 
-    expect(() =>
-      createInvite(db, request, {
+    await expect(async () =>
+      await createInvite(db, request, {
         actorId: member.id,
         defaultRole: "member",
         code: "MEMBER-INVITE"
       })
-    ).toThrow(WorkspacePermissionError);
+    ).rejects.toThrow(WorkspacePermissionError);
   });
 
-  it("derives invite expiry from hour-based product input", () => {
-    const invite = createInvite(db, request, {
+  it("derives invite expiry from hour-based product input", async () => {
+    const invite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "member",
       code: "EXPIRY-HOURS",
@@ -323,42 +324,42 @@ describe("workspace service", () => {
     expect(row.expiresAt).toBe(invite.expiresAt);
   });
 
-  it("projects role permissions without exposing operation-record access", () => {
-    const adminInvite = createInvite(db, request, {
+  it("projects role permissions without exposing operation-record access", async () => {
+    const adminInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "admin",
       code: "ROLE-MATRIX-ADMIN"
     });
-    const admin = acceptInvite(db, request, {
+    const admin = await acceptInvite(db, request, {
       code: adminInvite.code,
       githubLogin: "role-matrix-admin",
       email: "role-matrix-admin@example.com"
     });
-    const memberInvite = createInvite(db, request, {
+    const memberInvite = await createInvite(db, request, {
       actorId: admin.id,
       defaultRole: "member",
       code: "ROLE-MATRIX-MEMBER"
     });
-    const member = acceptInvite(db, request, {
+    const member = await acceptInvite(db, request, {
       code: memberInvite.code,
       githubLogin: "role-matrix-member",
       email: "role-matrix-member@example.com"
     });
-    const auditorInvite = createInvite(db, request, {
+    const auditorInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "auditor",
       code: "ROLE-MATRIX-AUDITOR"
     });
-    const auditor = acceptInvite(db, request, {
+    const auditor = await acceptInvite(db, request, {
       code: auditorInvite.code,
       githubLogin: "role-matrix-auditor",
       email: "role-matrix-auditor@example.com"
     });
 
-    const ownerPermissions = getWorkspaceBootstrap(db, "usr_owner").permissions;
-    const adminPermissions = getWorkspaceBootstrap(db, admin.id).permissions;
-    const memberPermissions = getWorkspaceBootstrap(db, member.id).permissions;
-    const auditorPermissions = getWorkspaceBootstrap(db, auditor.id).permissions;
+    const ownerPermissions = (await getWorkspaceBootstrap(db, "usr_owner")).permissions;
+    const adminPermissions = (await getWorkspaceBootstrap(db, admin.id)).permissions;
+    const memberPermissions = (await getWorkspaceBootstrap(db, member.id)).permissions;
+    const auditorPermissions = (await getWorkspaceBootstrap(db, auditor.id)).permissions;
 
     expect(ownerPermissions).toMatchObject({
       canCreateMemberInvite: true,
@@ -400,34 +401,34 @@ describe("workspace service", () => {
       canDownload: false,
       canViewOperationRecords: false
     });
-    expect(getWorkspaceBootstrap(db, member.id).invites).toEqual([]);
-    expect(getWorkspaceBootstrap(db, auditor.id).invites).toEqual([]);
+    expect((await getWorkspaceBootstrap(db, member.id)).invites).toEqual([]);
+    expect((await getWorkspaceBootstrap(db, auditor.id)).invites).toEqual([]);
   });
 
-  it("limits bootstrap invite projections to invites each role can manage", () => {
-    const adminInvite = createInvite(db, request, {
+  it("limits bootstrap invite projections to invites each role can manage", async () => {
+    const adminInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "admin",
       code: "VISIBLE-ADMIN"
     });
-    const admin = acceptInvite(db, request, {
+    const admin = await acceptInvite(db, request, {
       code: adminInvite.code,
       githubLogin: "visible-admin",
       email: "visible-admin@example.com"
     });
-    const memberInvite = createInvite(db, request, {
+    const memberInvite = await createInvite(db, request, {
       actorId: admin.id,
       defaultRole: "member",
       code: "VISIBLE-MEMBER"
     });
-    const ownerInvite = createInvite(db, request, {
+    const ownerInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "owner",
       code: "VISIBLE-OWNER"
     });
 
-    const ownerBootstrap = getWorkspaceBootstrap(db, "usr_owner");
-    const adminBootstrap = getWorkspaceBootstrap(db, admin.id);
+    const ownerBootstrap = await getWorkspaceBootstrap(db, "usr_owner");
+    const adminBootstrap = await getWorkspaceBootstrap(db, admin.id);
 
     expect(ownerBootstrap.invites.map((invite) => invite.id)).toEqual(
       expect.arrayContaining([adminInvite.id, memberInvite.id, ownerInvite.id])
@@ -442,14 +443,14 @@ describe("workspace service", () => {
     expect(JSON.stringify(adminBootstrap.invites)).not.toContain(adminInvite.id);
   });
 
-  it("records rejected invite creation when the requested default role is invalid", () => {
-    expect(() =>
-      createInvite(db, request, {
+  it("records rejected invite creation when the requested default role is invalid", async () => {
+    await expect(async () =>
+      await createInvite(db, request, {
         actorId: "usr_owner",
         defaultRole: "operator",
         code: "INVALID-ROLE-INVITE"
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     const invite = db.prepare("SELECT 1 FROM invites WHERE code_preview = ?").get("INVA...");
     expect(invite).toBeUndefined();
@@ -463,7 +464,7 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "rejected", reason: "role.invalid" });
   });
 
-  it("rolls back invite creation when audit persistence fails", () => {
+  it("rolls back invite creation when audit persistence fails", async () => {
     db.exec(`
       CREATE TRIGGER fail_invite_create_audit
       BEFORE INSERT ON audit_logs
@@ -473,12 +474,12 @@ describe("workspace service", () => {
       END
     `);
     try {
-      expect(() =>
-        createInvite(db, request, {
+      await expect(async () =>
+        await createInvite(db, request, {
           actorId: "usr_owner",
           code: "CREATE-TXN"
         })
-      ).toThrow(/invite create audit failed/);
+      ).rejects.toThrow(/invite create audit failed/);
     } finally {
       db.exec("DROP TRIGGER fail_invite_create_audit");
     }
@@ -487,45 +488,45 @@ describe("workspace service", () => {
     expect(invite).toBeUndefined();
   });
 
-  it("revokes invites through privileged members and rejects revoked invite acceptance", () => {
-    const adminInvite = createInvite(db, request, {
+  it("revokes invites through privileged members and rejects revoked invite acceptance", async () => {
+    const adminInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "admin",
       code: "REVOKE-ADMIN"
     });
-    const admin = acceptInvite(db, request, {
+    const admin = await acceptInvite(db, request, {
       code: adminInvite.code,
       githubLogin: "revoke-admin",
       email: "revoke-admin@example.com",
       displayName: "Revoke Admin"
     });
 
-    const memberInvite = createInvite(db, request, {
+    const memberInvite = await createInvite(db, request, {
       actorId: admin.id,
       defaultRole: "member",
       code: "REVOKE-MEMBER"
     });
-    const revoked = revokeInvite(db, request, {
+    const revoked = await revokeInvite(db, request, {
       actorId: admin.id,
       inviteId: memberInvite.id
     });
     expect(revoked.id).toBe(memberInvite.id);
     expect(revoked.revokedAt).toBeTruthy();
 
-    expect(() =>
-      acceptInvite(db, request, {
+    await expect(async () =>
+      await acceptInvite(db, request, {
         code: memberInvite.code,
         githubLogin: "revoked-member",
         email: "revoked-member@example.com"
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     const audit = db.prepare("SELECT result FROM audit_logs WHERE action = 'invite.revoke' AND target_id = ?").get(memberInvite.id);
     expect(audit.result).toBe("success");
   });
 
-  it("rolls back invite revocation when audit persistence fails", () => {
-    const invite = createInvite(db, request, {
+  it("rolls back invite revocation when audit persistence fails", async () => {
+    const invite = await createInvite(db, request, {
       actorId: "usr_owner",
       code: "REVOKE-TXN"
     });
@@ -539,12 +540,12 @@ describe("workspace service", () => {
       END
     `);
     try {
-      expect(() =>
-        revokeInvite(db, request, {
+      await expect(async () =>
+        await revokeInvite(db, request, {
           actorId: "usr_owner",
           inviteId: invite.id
         })
-      ).toThrow(/invite revoke audit failed/);
+      ).rejects.toThrow(/invite revoke audit failed/);
     } finally {
       db.exec("DROP TRIGGER fail_invite_revoke_audit");
     }
@@ -553,13 +554,13 @@ describe("workspace service", () => {
     expect(row.revokedAt).toBeNull();
   });
 
-  it("records rejected invite revocation when the invite does not exist", () => {
-    expect(() =>
-      revokeInvite(db, request, {
+  it("records rejected invite revocation when the invite does not exist", async () => {
+    await expect(async () =>
+      await revokeInvite(db, request, {
         actorId: "usr_owner",
         inviteId: "missing-invite"
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     const audit = db.prepare(`
       SELECT result, reason
@@ -571,29 +572,29 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "rejected", reason: "invite not found" });
   });
 
-  it("prevents admins from revoking privileged invites and writes an operation record", () => {
-    const adminInvite = createInvite(db, request, {
+  it("prevents admins from revoking privileged invites and writes an operation record", async () => {
+    const adminInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "admin",
       code: "REVOKE-PRIVILEGED-ADMIN"
     });
-    const admin = acceptInvite(db, request, {
+    const admin = await acceptInvite(db, request, {
       code: adminInvite.code,
       githubLogin: "revoke-privileged-admin",
       email: "revoke-privileged-admin@example.com"
     });
-    const ownerInvite = createInvite(db, request, {
+    const ownerInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "owner",
       code: "REVOKE-PRIVILEGED-OWNER"
     });
 
-    expect(() =>
-      revokeInvite(db, request, {
+    await expect(async () =>
+      await revokeInvite(db, request, {
         actorId: admin.id,
         inviteId: ownerInvite.id
       })
-    ).toThrow(WorkspacePermissionError);
+    ).rejects.toThrow(WorkspacePermissionError);
 
     const row = db.prepare("SELECT revoked_at AS revokedAt FROM invites WHERE id = ?").get(ownerInvite.id);
     expect(row.revokedAt).toBeNull();
@@ -607,27 +608,27 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "rejected", reason: "insufficient permission" });
   });
 
-  it("rejects invite revocation by normal members and writes an operation record", () => {
-    const memberInvite = createInvite(db, request, {
+  it("rejects invite revocation by normal members and writes an operation record", async () => {
+    const memberInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       code: "REVOKE-NORMAL-MEMBER"
     });
-    const member = acceptInvite(db, request, {
+    const member = await acceptInvite(db, request, {
       code: memberInvite.code,
       githubLogin: "revoke-normal-member",
       email: "revoke-normal-member@example.com"
     });
-    const targetInvite = createInvite(db, request, {
+    const targetInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       code: "REVOKE-TARGET"
     });
 
-    expect(() =>
-      revokeInvite(db, request, {
+    await expect(async () =>
+      await revokeInvite(db, request, {
         actorId: member.id,
         inviteId: targetInvite.id
       })
-    ).toThrow(WorkspacePermissionError);
+    ).rejects.toThrow(WorkspacePermissionError);
 
     const row = db.prepare("SELECT revoked_at AS revokedAt FROM invites WHERE id = ?").get(targetInvite.id);
     expect(row.revokedAt).toBeNull();
@@ -641,38 +642,38 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "rejected", reason: "insufficient permission" });
   });
 
-  it("rejects expired and exhausted invites with operation records", () => {
-    const expiredInvite = createInvite(db, request, {
+  it("rejects expired and exhausted invites with operation records", async () => {
+    const expiredInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       code: "EXPIRED-INVITE",
       expiresAt: "2000-01-01T00:00:00.000Z"
     });
-    expect(() =>
-      acceptInvite(db, request, {
+    await expect(async () =>
+      await acceptInvite(db, request, {
         code: expiredInvite.code,
         githubLogin: "expired-member",
         email: "expired-member@example.com"
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
-    const exhaustedInvite = createInvite(db, request, {
+    const exhaustedInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       code: "EXHAUSTED-INVITE",
       maxUses: 1
     });
-    const firstMember = acceptInvite(db, request, {
+    const firstMember = await acceptInvite(db, request, {
       code: exhaustedInvite.code,
       githubLogin: "exhausted-first",
       email: "exhausted-first@example.com"
     });
     expect(firstMember.role).toBe("member");
-    expect(() =>
-      acceptInvite(db, request, {
+    await expect(async () =>
+      await acceptInvite(db, request, {
         code: exhaustedInvite.code,
         githubLogin: "exhausted-second",
         email: "exhausted-second@example.com"
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     const rows = db.prepare(`
       SELECT target_id AS targetId, result, reason
@@ -699,21 +700,21 @@ describe("workspace service", () => {
     ].sort((left, right) => left.id.localeCompare(right.id)));
   });
 
-  it("does not over-consume invite uses when the invite becomes exhausted before transaction commit", () => {
-    const invite = createInvite(db, request, {
+  it("does not over-consume invite uses when the invite becomes exhausted before transaction commit", async () => {
+    const invite = await createInvite(db, request, {
       actorId: "usr_owner",
       code: "TXN-EXHAUSTED",
       maxUses: 1
     });
     db.prepare("UPDATE invites SET uses = max_uses WHERE id = ?").run(invite.id);
 
-    expect(() =>
-      acceptInvite(db, request, {
+    await expect(async () =>
+      await acceptInvite(db, request, {
         code: invite.code,
         githubLogin: "txn-exhausted",
         email: "txn-exhausted@example.com"
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     const inviteRow = db.prepare("SELECT uses, max_uses AS maxUses FROM invites WHERE id = ?").get(invite.id);
     expect(inviteRow).toEqual({ uses: 1, maxUses: 1 });
@@ -729,8 +730,8 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "rejected", reason: "invite exhausted" });
   });
 
-  it("rolls back invite acceptance when downstream persistence fails", () => {
-    const invite = createInvite(db, request, {
+  it("rolls back invite acceptance when downstream persistence fails", async () => {
+    const invite = await createInvite(db, request, {
       actorId: "usr_owner",
       code: "TXN-INVITE"
     });
@@ -744,13 +745,13 @@ describe("workspace service", () => {
       END
     `);
     try {
-      expect(() =>
-        acceptInvite(db, request, {
+      await expect(async () =>
+        await acceptInvite(db, request, {
           code: invite.code,
           githubLogin: "txn-member",
           email: "txn-member@example.com"
         })
-      ).toThrow(/member join event failed/);
+      ).rejects.toThrow(/member join event failed/);
     } finally {
       db.exec("DROP TRIGGER fail_member_join_event");
     }
@@ -767,12 +768,12 @@ describe("workspace service", () => {
     expect(successAudit).toBeUndefined();
   });
 
-  it("does not notify realtime subscribers for rolled-back transactional events", () => {
+  it("does not notify realtime subscribers for rolled-back transactional events", async () => {
     const notifiedEvents = [];
     const unsubscribe = subscribeWorkspaceEvents((event) => {
       notifiedEvents.push(event);
     });
-    const invite = createInvite(db, request, {
+    const invite = await createInvite(db, request, {
       actorId: "usr_owner",
       code: "TXN-NOTIFY"
     });
@@ -787,13 +788,13 @@ describe("workspace service", () => {
       END
     `);
     try {
-      expect(() =>
-        acceptInvite(db, request, {
+      await expect(async () =>
+        await acceptInvite(db, request, {
           code: invite.code,
           githubLogin: "txn-notify",
           email: "txn-notify@example.com"
         })
-      ).toThrow(/invite accept audit failed/);
+      ).rejects.toThrow(/invite accept audit failed/);
     } finally {
       db.exec("DROP TRIGGER fail_invite_accept_audit");
       unsubscribe();
@@ -808,12 +809,12 @@ describe("workspace service", () => {
     expect(notifiedEvents).toEqual([]);
   });
 
-  it("rolls back member role updates when audit persistence fails", () => {
-    const invite = createInvite(db, request, {
+  it("rolls back member role updates when audit persistence fails", async () => {
+    const invite = await createInvite(db, request, {
       actorId: "usr_owner",
       code: "ROLE-TXN"
     });
-    const member = acceptInvite(db, request, {
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "role-txn",
       email: "role-txn@example.com"
@@ -828,13 +829,13 @@ describe("workspace service", () => {
       END
     `);
     try {
-      expect(() =>
-        updateMemberRole(db, request, {
+      await expect(async () =>
+        await updateMemberRole(db, request, {
           actorId: "usr_owner",
           userId: member.id,
           role: "admin"
         })
-      ).toThrow(/role update audit failed/);
+      ).rejects.toThrow(/role update audit failed/);
     } finally {
       db.exec("DROP TRIGGER fail_role_update_audit");
     }
@@ -849,24 +850,24 @@ describe("workspace service", () => {
     expect(event).toBeUndefined();
   });
 
-  it("lets the owner update member roles and records the change", () => {
-    const invite = createInvite(db, request, {
+  it("lets the owner update member roles and records the change", async () => {
+    const invite = await createInvite(db, request, {
       actorId: "usr_owner",
       code: "ROLE-MEMBER"
     });
-    const member = acceptInvite(db, request, {
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "role-member",
       email: "role-member@example.com"
     });
 
-    const updated = updateMemberRole(db, request, {
+    const updated = await updateMemberRole(db, request, {
       actorId: "usr_owner",
       userId: member.id,
       role: "admin"
     });
     expect(updated.role).toBe("admin");
-    expect(getWorkspaceBootstrap(db, "usr_owner").members.find((item) => item.id === member.id).role).toBe("admin");
+    expect((await getWorkspaceBootstrap(db, "usr_owner")).members.find((item) => item.id === member.id).role).toBe("admin");
 
     const audit = db.prepare(`
       SELECT result, reason
@@ -887,24 +888,24 @@ describe("workspace service", () => {
     expect(JSON.parse(event.payloadJson).role).toBe("admin");
   });
 
-  it("records rejected member role updates when the requested role is invalid", () => {
-    const invite = createInvite(db, request, {
+  it("records rejected member role updates when the requested role is invalid", async () => {
+    const invite = await createInvite(db, request, {
       actorId: "usr_owner",
       code: "ROLE-INVALID"
     });
-    const member = acceptInvite(db, request, {
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "role-invalid",
       email: "role-invalid@example.com"
     });
 
-    expect(() =>
-      updateMemberRole(db, request, {
+    await expect(async () =>
+      await updateMemberRole(db, request, {
         actorId: "usr_owner",
         userId: member.id,
         role: "operator"
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     const audit = db.prepare(`
       SELECT result, reason
@@ -916,34 +917,34 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "rejected", reason: "role.invalid" });
   });
 
-  it("rejects member role updates from non-owners and protects the owner role", () => {
-    const adminInvite = createInvite(db, request, {
+  it("rejects member role updates from non-owners and protects the owner role", async () => {
+    const adminInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "admin",
       code: "ROLE-ADMIN"
     });
-    const admin = acceptInvite(db, request, {
+    const admin = await acceptInvite(db, request, {
       code: adminInvite.code,
       githubLogin: "role-admin",
       email: "role-admin@example.com"
     });
-    const memberInvite = createInvite(db, request, {
+    const memberInvite = await createInvite(db, request, {
       actorId: admin.id,
       code: "ROLE-NORMAL"
     });
-    const member = acceptInvite(db, request, {
+    const member = await acceptInvite(db, request, {
       code: memberInvite.code,
       githubLogin: "role-normal",
       email: "role-normal@example.com"
     });
 
-    expect(() =>
-      updateMemberRole(db, request, {
+    await expect(async () =>
+      await updateMemberRole(db, request, {
         actorId: admin.id,
         userId: member.id,
         role: "admin"
       })
-    ).toThrow(WorkspacePermissionError);
+    ).rejects.toThrow(WorkspacePermissionError);
 
     const deniedAudit = db.prepare(`
       SELECT result, reason
@@ -954,13 +955,13 @@ describe("workspace service", () => {
     `).get(admin.id);
     expect(deniedAudit).toEqual({ result: "rejected", reason: "insufficient permission" });
 
-    expect(() =>
-      updateMemberRole(db, request, {
+    await expect(async () =>
+      await updateMemberRole(db, request, {
         actorId: "usr_owner",
         userId: "usr_owner",
         role: "admin"
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     const ownerAudit = db.prepare(`
       SELECT result, reason
@@ -972,42 +973,42 @@ describe("workspace service", () => {
     expect(ownerAudit).toEqual({ result: "rejected", reason: "self role update" });
   });
 
-  it("removes a space member and revokes their conversation, file, and session access", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "REMOVE-MEMBER" });
-    const member = acceptInvite(db, request, {
+  it("removes a space member and revokes their conversation, file, and session access", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "REMOVE-MEMBER" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "remove-member",
       email: "remove-member@example.com"
     });
-    const conversation = createConversation(db, request, {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Removal group",
       memberIds: [member.id]
     });
-    const upload = reserveUpload(db, request, {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       fileName: "visible.txt",
       mimeType: "text/plain",
       byteSize: 12
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: upload.id,
       storageVerifiedByteSize: 12
     });
-    const session = createWorkspaceSession(db, member.id);
+    const session = await createWorkspaceSession(db, member.id);
 
-    const removed = removeSpaceMember(db, request, {
+    const removed = await removeSpaceMember(db, request, {
       actorId: "usr_owner",
       userId: member.id
     });
     expect(removed).toMatchObject({ ok: true, userId: member.id });
-    expect(listMembers(db, "usr_owner").map((item) => item.id)).not.toContain(member.id);
-    expect(() => listConversations(db, member.id)).toThrow(WorkspaceAuthError);
-    expect(() => listFiles(db, member.id)).toThrow(WorkspaceAuthError);
-    expect(getSessionUserId(db, session.token)).toBeNull();
+    expect((await listMembers(db, "usr_owner")).map((item) => item.id)).not.toContain(member.id);
+    await expect(async () => await listConversations(db, member.id)).rejects.toThrow(WorkspaceAuthError);
+    await expect(async () => await listFiles(db, member.id)).rejects.toThrow(WorkspaceAuthError);
+    expect(await getSessionUserId(db, session.token)).toBeNull();
 
     const audit = db.prepare("SELECT result FROM audit_logs WHERE action = 'member.remove' AND target_id = ?").get(member.id);
     expect(audit.result).toBe("success");
@@ -1015,69 +1016,69 @@ describe("workspace service", () => {
     expect(event.type).toBe("workspace.member_removed");
   });
 
-  it("filters workspace members by query, role, kind, and limit", () => {
-    const adminInvite = createInvite(db, request, {
+  it("filters workspace members by query, role, kind, and limit", async () => {
+    const adminInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "admin",
       code: "FILTER-ADMIN"
     });
-    acceptInvite(db, request, {
+    await acceptInvite(db, request, {
       code: adminInvite.code,
       githubLogin: "filter-admin",
       email: "filter-admin@example.com",
       displayName: "Filter Admin"
     });
-    const memberInvite = createInvite(db, request, {
+    const memberInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       code: "FILTER-MEMBER"
     });
-    acceptInvite(db, request, {
+    await acceptInvite(db, request, {
       code: memberInvite.code,
       githubLogin: "filter-member",
       email: "filter-member@example.com",
       displayName: "Filter Member"
     });
 
-    expect(listMembers(db, "usr_owner", { q: "filter", role: "admin" }).map((member) => member.githubLogin)).toEqual(["filter-admin"]);
-    expect(listMembers(db, "usr_owner", { kind: "human", limit: 1 })).toHaveLength(1);
+    expect((await listMembers(db, "usr_owner", { q: "filter", role: "admin" })).map((member) => member.githubLogin)).toEqual(["filter-admin"]);
+    expect(await listMembers(db, "usr_owner", { kind: "human", limit: 1 })).toHaveLength(1);
   });
 
-  it("rejects member removal by non-owners and protects the current account", () => {
-    const adminInvite = createInvite(db, request, {
+  it("rejects member removal by non-owners and protects the current account", async () => {
+    const adminInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "admin",
       code: "REMOVE-ADMIN"
     });
-    const admin = acceptInvite(db, request, {
+    const admin = await acceptInvite(db, request, {
       code: adminInvite.code,
       githubLogin: "remove-admin",
       email: "remove-admin@example.com"
     });
-    const memberInvite = createInvite(db, request, {
+    const memberInvite = await createInvite(db, request, {
       actorId: admin.id,
       code: "REMOVE-NORMAL"
     });
-    const member = acceptInvite(db, request, {
+    const member = await acceptInvite(db, request, {
       code: memberInvite.code,
       githubLogin: "remove-normal",
       email: "remove-normal@example.com"
     });
 
-    expect(() =>
-      removeSpaceMember(db, request, {
+    await expect(async () =>
+      await removeSpaceMember(db, request, {
         actorId: admin.id,
         userId: member.id
       })
-    ).toThrow(WorkspacePermissionError);
+    ).rejects.toThrow(WorkspacePermissionError);
 
-    expect(() =>
-      removeSpaceMember(db, request, {
+    await expect(async () =>
+      await removeSpaceMember(db, request, {
         actorId: "usr_owner",
         userId: "usr_owner"
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
-    expect(listMembers(db, "usr_owner").map((item) => item.id)).toContain(member.id);
+    expect((await listMembers(db, "usr_owner")).map((item) => item.id)).toContain(member.id);
     const deniedAudit = db.prepare(`
       SELECT result, reason
       FROM audit_logs
@@ -1088,18 +1089,18 @@ describe("workspace service", () => {
     expect(deniedAudit).toEqual({ result: "rejected", reason: "insufficient permission" });
   });
 
-  it("lets members create direct conversations but not group conversations", () => {
-    const invite = createInvite(db, request, {
+  it("lets members create direct conversations but not group conversations", async () => {
+    const invite = await createInvite(db, request, {
       actorId: "usr_owner",
       code: "DIRECT-MEMBER"
     });
-    const member = acceptInvite(db, request, {
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "direct-member",
       email: "direct@example.com"
     });
 
-    const direct = createConversation(db, request, {
+    const direct = await createConversation(db, request, {
       actorId: member.id,
       type: "direct",
       targetUserId: "usr_owner"
@@ -1111,7 +1112,7 @@ describe("workspace service", () => {
       displayName: "timeStarry"
     });
 
-    const reused = createConversation(db, request, {
+    const reused = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "direct",
       targetUserId: member.id
@@ -1123,25 +1124,25 @@ describe("workspace service", () => {
       displayName: member.displayName
     });
 
-    const memberListed = listConversations(db, member.id).find((item) => item.id === direct.id);
-    const ownerListed = listConversations(db, "usr_owner").find((item) => item.id === direct.id);
+    const memberListed = (await listConversations(db, member.id)).find((item) => item.id === direct.id);
+    const ownerListed = (await listConversations(db, "usr_owner")).find((item) => item.id === direct.id);
     expect(memberListed.displayTitle).toBe("timeStarry");
     expect(ownerListed.displayTitle).toBe(member.displayName);
 
-    const memberCreateEvent = listWorkspaceEvents(db, member.id, 0).find((event) => event.type === "conversation.created" && event.conversationId === direct.id);
-    const ownerCreateEvent = listWorkspaceEvents(db, "usr_owner", 0).find((event) => event.type === "conversation.created" && event.conversationId === direct.id);
+    const memberCreateEvent = (await listWorkspaceEvents(db, member.id, 0)).find((event) => event.type === "conversation.created" && event.conversationId === direct.id);
+    const ownerCreateEvent = (await listWorkspaceEvents(db, "usr_owner", 0)).find((event) => event.type === "conversation.created" && event.conversationId === direct.id);
     expect(memberCreateEvent.payload.conversation.displayTitle).toBe("timeStarry");
     expect(memberCreateEvent.payload.conversation.otherMember.id).toBe("usr_owner");
     expect(ownerCreateEvent.payload.conversation.displayTitle).toBe(member.displayName);
     expect(ownerCreateEvent.payload.conversation.otherMember.id).toBe(member.id);
 
-    expect(() =>
-      createConversation(db, request, {
+    await expect(async () =>
+      await createConversation(db, request, {
         actorId: member.id,
         type: "group",
         title: "Member group"
       })
-    ).toThrow(WorkspacePermissionError);
+    ).rejects.toThrow(WorkspacePermissionError);
 
     const audit = db.prepare(`
       SELECT result, reason
@@ -1153,12 +1154,12 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "rejected", reason: "insufficient permission" });
   });
 
-  it("rolls back direct conversation creation when audit persistence fails", () => {
-    const invite = createInvite(db, request, {
+  it("rolls back direct conversation creation when audit persistence fails", async () => {
+    const invite = await createInvite(db, request, {
       actorId: "usr_owner",
       code: "DIRECT-TXN"
     });
-    const member = acceptInvite(db, request, {
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "direct-txn",
       email: "direct-txn@example.com"
@@ -1173,13 +1174,13 @@ describe("workspace service", () => {
       END
     `);
     try {
-      expect(() =>
-        createConversation(db, request, {
+      await expect(async () =>
+        await createConversation(db, request, {
           actorId: member.id,
           type: "direct",
           targetUserId: "usr_owner"
         })
-      ).toThrow(/direct conversation audit failed/);
+      ).rejects.toThrow(/direct conversation audit failed/);
     } finally {
       db.exec("DROP TRIGGER fail_direct_conversation_audit");
     }
@@ -1192,19 +1193,19 @@ describe("workspace service", () => {
     expect(event).toBeUndefined();
   });
 
-  it("records rejected conversation creation when the type is invalid", () => {
+  it("records rejected conversation creation when the type is invalid", async () => {
     const before = {
       conversations: db.prepare("SELECT COUNT(*) AS count FROM conversations").get().count,
       events: db.prepare("SELECT COUNT(*) AS count FROM workspace_events").get().count,
       audits: db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'conversation.create'").get().count
     };
 
-    expect(() =>
-      createConversation(db, request, {
+    await expect(async () =>
+      await createConversation(db, request, {
         actorId: "usr_owner",
         type: "channel"
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     expect(db.prepare("SELECT COUNT(*) AS count FROM conversations").get().count).toBe(before.conversations);
     expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_events").get().count).toBe(before.events);
@@ -1218,7 +1219,7 @@ describe("workspace service", () => {
     `).get()).toEqual({ result: "rejected", reason: "invalid type" });
   });
 
-  it("records rejected direct conversation validation without creating rows", () => {
+  it("records rejected direct conversation validation without creating rows", async () => {
     const before = {
       conversations: db.prepare("SELECT COUNT(*) AS count FROM conversations").get().count,
       memberships: db.prepare("SELECT COUNT(*) AS count FROM conversation_members").get().count,
@@ -1226,21 +1227,21 @@ describe("workspace service", () => {
       audits: db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'conversation.create'").get().count
     };
 
-    expect(() =>
-      createConversation(db, request, {
+    await expect(async () =>
+      await createConversation(db, request, {
         actorId: "usr_owner",
         type: "direct",
         targetUserId: "usr_owner"
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
-    expect(() =>
-      createConversation(db, request, {
+    await expect(async () =>
+      await createConversation(db, request, {
         actorId: "usr_owner",
         type: "direct",
         targetUserId: "missing-direct-member"
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     expect(db.prepare("SELECT COUNT(*) AS count FROM conversations").get().count).toBe(before.conversations);
     expect(db.prepare("SELECT COUNT(*) AS count FROM conversation_members").get().count).toBe(before.memberships);
@@ -1255,24 +1256,24 @@ describe("workspace service", () => {
     `).get()).toEqual({ result: "rejected", reason: "invalid target" });
   });
 
-  it("requires a group name and selected member when creating group conversations", () => {
-    expect(() =>
-      createConversation(db, request, {
+  it("requires a group name and selected member when creating group conversations", async () => {
+    await expect(async () =>
+      await createConversation(db, request, {
         actorId: "usr_owner",
         type: "group",
         title: "   ",
         memberIds: ["usr_owner"]
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
-    expect(() =>
-      createConversation(db, request, {
+    await expect(async () =>
+      await createConversation(db, request, {
         actorId: "usr_owner",
         type: "group",
         title: "x".repeat(81),
         memberIds: ["usr_owner"]
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     const before = {
       conversations: db.prepare("SELECT COUNT(*) AS count FROM conversations").get().count,
@@ -1281,14 +1282,14 @@ describe("workspace service", () => {
       audits: db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'conversation.create'").get().count
     };
 
-    expect(() =>
-      createConversation(db, request, {
+    await expect(async () =>
+      await createConversation(db, request, {
         actorId: "usr_owner",
         type: "group",
         title: "No selected members",
         memberIds: []
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     expect(db.prepare("SELECT COUNT(*) AS count FROM conversations").get().count).toBe(before.conversations);
     expect(db.prepare("SELECT COUNT(*) AS count FROM conversation_members").get().count).toBe(before.memberships);
@@ -1303,7 +1304,7 @@ describe("workspace service", () => {
     `).get()).toEqual({ result: "rejected", reason: "invalid members" });
   });
 
-  it("does not leave partial group conversations when selected members are invalid", () => {
+  it("does not leave partial group conversations when selected members are invalid", async () => {
     const before = {
       conversations: db.prepare("SELECT COUNT(*) AS count FROM conversations").get().count,
       memberships: db.prepare("SELECT COUNT(*) AS count FROM conversation_members").get().count,
@@ -1311,14 +1312,14 @@ describe("workspace service", () => {
       audits: db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'conversation.create'").get().count
     };
 
-    expect(() =>
-      createConversation(db, request, {
+    await expect(async () =>
+      await createConversation(db, request, {
         actorId: "usr_owner",
         type: "group",
         title: "Invalid selected member",
         memberIds: ["missing-member"]
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     expect(db.prepare("SELECT COUNT(*) AS count FROM conversations").get().count).toBe(before.conversations);
     expect(db.prepare("SELECT COUNT(*) AS count FROM conversation_members").get().count).toBe(before.memberships);
@@ -1333,14 +1334,14 @@ describe("workspace service", () => {
     `).get()).toEqual({ result: "rejected", reason: "member.not_found" });
   });
 
-  it("persists structured messages and deduplicates clientMessageId", () => {
-    const conversation = createConversation(db, request, {
+  it("persists structured messages and deduplicates clientMessageId", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Structured"
     });
 
-    const message = createStructuredMessage(db, request, {
+    const message = await createStructuredMessage(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       clientMessageId: "client-1",
@@ -1354,7 +1355,7 @@ describe("workspace service", () => {
     const row = db.prepare("SELECT content_json AS contentJson FROM messages WHERE id = ?").get(message.id);
     expect(JSON.parse(row.contentJson).plainText).toBe("A structured message");
 
-    const duplicate = createStructuredMessage(db, request, {
+    const duplicate = await createStructuredMessage(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       clientMessageId: "client-1",
@@ -1362,31 +1363,31 @@ describe("workspace service", () => {
     });
     expect(duplicate.id).toBe(message.id);
 
-    expect(() =>
-      createStructuredMessage(db, request, {
+    await expect(async () =>
+      await createStructuredMessage(db, request, {
         actorId: "usr_owner",
         conversationId: conversation.id,
         clientMessageId: "client-1",
         content: textContent("Different")
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
   });
 
-  it("supports all P0 structured message block types with server canonicalization", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "BLOCK-MEMBER" });
-    const member = acceptInvite(db, request, {
+  it("supports all P0 structured message block types with server canonicalization", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "BLOCK-MEMBER" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "block-member",
       email: "block-member@example.com",
       displayName: "Block Member"
     });
-    const conversation = createConversation(db, request, {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "All blocks",
       memberIds: [member.id]
     });
-    const upload = reserveUpload(db, request, {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       fileName: "blocks.txt",
@@ -1394,13 +1395,13 @@ describe("workspace service", () => {
       byteSize: 16,
       visibility: "conversation"
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: upload.id,
       storageVerifiedByteSize: 16
     });
 
-    const message = createStructuredMessage(db, request, {
+    const message = await createStructuredMessage(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       clientMessageId: "all-blocks",
@@ -1433,8 +1434,8 @@ describe("workspace service", () => {
     expect(message.plainText).toBe("Hi @Block Member see spec:thumbsup:[文件]");
     expect(message.attachments.map((attachment) => attachment.id)).toEqual([upload.attachment.id]);
 
-    expect(() =>
-      createStructuredMessage(db, request, {
+    await expect(async () =>
+      await createStructuredMessage(db, request, {
         actorId: "usr_owner",
         conversationId: conversation.id,
         clientMessageId: "bad-link",
@@ -1443,25 +1444,25 @@ describe("workspace service", () => {
           blocks: [{ type: "link", url: "javascript:alert(1)" }]
         }
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
   });
 
-  it("rejects mentions for space members outside the current conversation", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "MENTION-OUTSIDE" });
-    const member = acceptInvite(db, request, {
+  it("rejects mentions for space members outside the current conversation", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "MENTION-OUTSIDE" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "mention-outside",
       email: "mention-outside@example.com",
       displayName: "Outside Mention"
     });
-    const conversation = createConversation(db, request, {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Mention boundary"
     });
 
-    expect(() =>
-      createStructuredMessage(db, request, {
+    await expect(async () =>
+      await createStructuredMessage(db, request, {
         actorId: "usr_owner",
         conversationId: conversation.id,
         clientMessageId: "outside-mention",
@@ -1473,7 +1474,7 @@ describe("workspace service", () => {
           ]
         }
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     const row = db.prepare("SELECT COUNT(*) AS count FROM messages WHERE client_message_id = ?").get("outside-mention");
     expect(row.count).toBe(0);
@@ -1487,27 +1488,27 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "rejected", reason: "message.invalid_mention" });
   });
 
-  it("does not allow private staging attachments to be published through messages", () => {
-    const conversation = createConversation(db, request, {
+  it("does not allow private staging attachments to be published through messages", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Staging attachment boundary"
     });
-    const upload = reserveUpload(db, request, {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "staging-only.txt",
       mimeType: "text/plain",
       byteSize: 12,
       visibility: "private_staging"
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: upload.id,
       storageVerifiedByteSize: 12
     });
 
-    expect(() =>
-      createStructuredMessage(db, request, {
+    await expect(async () =>
+      await createStructuredMessage(db, request, {
         actorId: "usr_owner",
         conversationId: conversation.id,
         clientMessageId: "staging-attachment",
@@ -1519,7 +1520,7 @@ describe("workspace service", () => {
           ]
         }
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     const attachment = db.prepare("SELECT visibility, conversation_id AS conversationId FROM attachments WHERE id = ?").get(upload.attachment.id);
     expect(attachment).toEqual({ visibility: "private_staging", conversationId: null });
@@ -1527,20 +1528,20 @@ describe("workspace service", () => {
     expect(links.count).toBe(0);
   });
 
-  it("rolls back message creation and attachment linking when audit persistence fails", () => {
-    const conversation = createConversation(db, request, {
+  it("rolls back message creation and attachment linking when audit persistence fails", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Message transaction"
     });
-    const upload = reserveUpload(db, request, {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "message-txn.txt",
       mimeType: "text/plain",
       byteSize: 12,
       visibility: "space"
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: upload.id,
       storageVerifiedByteSize: 12
@@ -1555,8 +1556,8 @@ describe("workspace service", () => {
       END
     `);
     try {
-      expect(() =>
-        createStructuredMessage(db, request, {
+      await expect(async () =>
+        await createStructuredMessage(db, request, {
           actorId: "usr_owner",
           conversationId: conversation.id,
           clientMessageId: "message-txn",
@@ -1568,7 +1569,7 @@ describe("workspace service", () => {
             ]
           }
         })
-      ).toThrow(/message create audit failed/);
+      ).rejects.toThrow(/message create audit failed/);
     } finally {
       db.exec("DROP TRIGGER fail_message_create_audit");
     }
@@ -1583,41 +1584,41 @@ describe("workspace service", () => {
     expect(event).toBeUndefined();
   });
 
-  it("tracks unread counts and marks conversations as read", () => {
+  it("tracks unread counts and marks conversations as read", async () => {
     const membershipColumns = db.prepare("PRAGMA table_info(conversation_members)").all().map((column) => column.name);
     expect(membershipColumns).toEqual(expect.arrayContaining(["last_read_message_id", "last_read_at", "last_read_seq", "notification_level"]));
 
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "UNREAD-MEMBER" });
-    const member = acceptInvite(db, request, {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "UNREAD-MEMBER" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "unread-member",
       email: "unread@example.com"
     });
-    const conversation = createConversation(db, request, {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "direct",
       targetUserId: member.id
     });
 
-    createStructuredMessage(db, request, {
+    await createStructuredMessage(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       clientMessageId: "unread-1",
       content: textContent("Unread for member")
     });
-    createStructuredMessage(db, request, {
+    await createStructuredMessage(db, request, {
       actorId: member.id,
       conversationId: conversation.id,
       clientMessageId: "member-own",
       content: textContent("Own message")
     });
 
-    const beforeRead = listConversations(db, member.id).find((item) => item.id === conversation.id);
+    const beforeRead = (await listConversations(db, member.id)).find((item) => item.id === conversation.id);
     expect(beforeRead.unreadCount).toBe(1);
     expect(beforeRead.lastReadSeq).toBeNull();
     expect(beforeRead.notificationLevel).toBe("all");
 
-    const read = markConversationRead(db, request, {
+    const read = await markConversationRead(db, request, {
       actorId: member.id,
       conversationId: conversation.id
     });
@@ -1625,7 +1626,7 @@ describe("workspace service", () => {
     expect(read.lastReadSeq).toBeGreaterThan(0);
     expect(read.notificationLevel).toBe("all");
 
-    const afterRead = listConversations(db, member.id).find((item) => item.id === conversation.id);
+    const afterRead = (await listConversations(db, member.id)).find((item) => item.id === conversation.id);
     expect(afterRead.unreadCount).toBe(0);
     expect(afterRead.lastReadMessageId).toBeTruthy();
     expect(afterRead.lastReadAt).toBeTruthy();
@@ -1633,33 +1634,33 @@ describe("workspace service", () => {
     expect(afterRead.notificationLevel).toBe("all");
   });
 
-  it("updates conversation notification levels only for the current member", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "NOTIFY-MEMBER" });
-    const member = acceptInvite(db, request, {
+  it("updates conversation notification levels only for the current member", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "NOTIFY-MEMBER" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "notify-member",
       email: "notify@example.com"
     });
-    const conversation = createConversation(db, request, {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "direct",
       targetUserId: member.id
     });
 
-    const updated = updateConversationNotificationLevel(db, request, {
+    const updated = await updateConversationNotificationLevel(db, request, {
       actorId: member.id,
       conversationId: conversation.id,
       level: "muted"
     });
     expect(updated.notificationLevel).toBe("muted");
 
-    const memberConversation = listConversations(db, member.id).find((item) => item.id === conversation.id);
-    const ownerConversation = listConversations(db, "usr_owner").find((item) => item.id === conversation.id);
+    const memberConversation = (await listConversations(db, member.id)).find((item) => item.id === conversation.id);
+    const ownerConversation = (await listConversations(db, "usr_owner")).find((item) => item.id === conversation.id);
     expect(memberConversation.notificationLevel).toBe("muted");
     expect(ownerConversation.notificationLevel).toBe("all");
 
-    const memberEvent = listWorkspaceEvents(db, member.id, 0).find((event) => event.type === "conversation.notification_updated");
-    const ownerEvent = listWorkspaceEvents(db, "usr_owner", 0).find((event) => event.type === "conversation.notification_updated");
+    const memberEvent = (await listWorkspaceEvents(db, member.id, 0)).find((event) => event.type === "conversation.notification_updated");
+    const ownerEvent = (await listWorkspaceEvents(db, "usr_owner", 0)).find((event) => event.type === "conversation.notification_updated");
     expect(memberEvent).toMatchObject({
       targetType: "user",
       targetId: member.id,
@@ -1675,24 +1676,24 @@ describe("workspace service", () => {
     expect(ownerEvent).toBeUndefined();
   });
 
-  it("rejects invalid conversation notification levels", () => {
-    const conversation = createConversation(db, request, {
+  it("rejects invalid conversation notification levels", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Invalid notification"
     });
 
-    expect(() =>
-      updateConversationNotificationLevel(db, request, {
+    await expect(async () =>
+      await updateConversationNotificationLevel(db, request, {
         actorId: "usr_owner",
         conversationId: conversation.id,
         level: "loud"
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
   });
 
-  it("enforces conversation message retention for visible history", () => {
-    const conversation = createConversation(db, request, {
+  it("enforces conversation message retention for visible history", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Retention"
@@ -1700,7 +1701,7 @@ describe("workspace service", () => {
     db.prepare("UPDATE conversations SET retention_count = 2 WHERE id = ?").run(conversation.id);
 
     for (const text of ["first", "second", "third"]) {
-      createStructuredMessage(db, request, {
+      await createStructuredMessage(db, request, {
         actorId: "usr_owner",
         conversationId: conversation.id,
         clientMessageId: `retention-${text}`,
@@ -1718,46 +1719,46 @@ describe("workspace service", () => {
     expect(rows.slice(0, 2).every((row) => row.deletedAt)).toBe(true);
     expect(rows.slice(2).every((row) => row.deletedAt === null)).toBe(true);
 
-    const visibleMessages = listMessages(db, "usr_owner", conversation.id, { limit: 20 });
+    const visibleMessages = await listMessages(db, "usr_owner", conversation.id, { limit: 20 });
     expect(visibleMessages.map((message) => message.plainText)).toEqual(["second", "third"]);
     expect(visibleMessages.some((message) => Object.hasOwn(message, "contentJson"))).toBe(false);
 
-    const listed = listConversations(db, "usr_owner").find((item) => item.id === conversation.id);
+    const listed = (await listConversations(db, "usr_owner")).find((item) => item.id === conversation.id);
     expect(listed.messageCount).toBe(2);
     expect(listed.latestMessages.map((message) => message.plainText)).toEqual(["second", "third"]);
   });
 
-  it("writes conversation-visible system messages for group changes", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "SYSTEM-MEMBER" });
-    const member = acceptInvite(db, request, {
+  it("writes conversation-visible system messages for group changes", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "SYSTEM-MEMBER" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "system-member",
       email: "system-member@example.com",
       displayName: "System Member"
     });
-    const conversation = createConversation(db, request, {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "System group"
     });
 
-    addConversationMember(db, request, {
+    await addConversationMember(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       userId: member.id
     });
-    updateGroupConversation(db, request, {
+    await updateGroupConversation(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       title: "Renamed system group"
     });
-    removeConversationMember(db, request, {
+    await removeConversationMember(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       userId: member.id
     });
 
-    const messages = listMessages(db, "usr_owner", conversation.id, { limit: 20 });
+    const messages = await listMessages(db, "usr_owner", conversation.id, { limit: 20 });
     expect(messages.map((message) => message.plainText)).toEqual([
       "timeStarry 创建了群聊「System group」",
       "timeStarry 邀请 System Member 加入群聊",
@@ -1766,7 +1767,7 @@ describe("workspace service", () => {
     ]);
     expect(messages.every((message) => message.kind === "system" && message.authorKind === "system")).toBe(true);
 
-    const messageEvent = listWorkspaceEvents(db, "usr_owner", 0).find((event) =>
+    const messageEvent = (await listWorkspaceEvents(db, "usr_owner", 0)).find((event) =>
       event.type === "message.created" &&
       event.payload.message?.plainText === "timeStarry 邀请 System Member 加入群聊"
     );
@@ -1774,27 +1775,27 @@ describe("workspace service", () => {
     expect(JSON.stringify(messageEvent)).not.toContain("system-member@example.com");
   });
 
-  it("projects product-ready conversation fields without leaking viewer internals", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "CONVERSATION-PRODUCT-FIELDS" });
-    const member = acceptInvite(db, request, {
+  it("projects product-ready conversation fields without leaking viewer internals", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "CONVERSATION-PRODUCT-FIELDS" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "conversation-product-member",
       email: "conversation-product-member@example.com"
     });
-    const conversation = createConversation(db, request, {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Product conversation fields",
       memberIds: [member.id]
     });
-    createStructuredMessage(db, request, {
+    await createStructuredMessage(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       clientMessageId: "product-fields-message",
       content: textContent("Product field summary")
     });
 
-    const ownerConversation = listConversations(db, "usr_owner").find((item) => item.id === conversation.id);
+    const ownerConversation = (await listConversations(db, "usr_owner")).find((item) => item.id === conversation.id);
     expect(ownerConversation).toMatchObject({
       displayTitle: "Product conversation fields",
       memberCount: 2,
@@ -1809,7 +1810,7 @@ describe("workspace service", () => {
     expect(ownerConversation.lastMessageAt).toBeTruthy();
     expect(ownerConversation.viewerRole).toBeUndefined();
 
-    const memberConversation = listConversations(db, member.id).find((item) => item.id === conversation.id);
+    const memberConversation = (await listConversations(db, member.id)).find((item) => item.id === conversation.id);
     expect(memberConversation.capabilities).toEqual({
       canSendMessage: true,
       canUploadFile: true,
@@ -1817,12 +1818,12 @@ describe("workspace service", () => {
     });
     expect(JSON.stringify(memberConversation)).not.toContain("viewerRole");
 
-    const direct = createConversation(db, request, {
+    const direct = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "direct",
       targetUserId: member.id
     });
-    const directConversation = listConversations(db, "usr_owner").find((item) => item.id === direct.id);
+    const directConversation = (await listConversations(db, "usr_owner")).find((item) => item.id === direct.id);
     expect(directConversation.capabilities).toMatchObject({
       canSendMessage: true,
       canUploadFile: true,
@@ -1830,28 +1831,28 @@ describe("workspace service", () => {
     });
   });
 
-  it("keeps attachments and message links when message retention hides old messages", () => {
-    const conversation = createConversation(db, request, {
+  it("keeps attachments and message links when message retention hides old messages", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Retention attachments"
     });
     db.prepare("UPDATE conversations SET retention_count = 1 WHERE id = ?").run(conversation.id);
 
-    const upload = reserveUpload(db, request, {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "retained-attachment.txt",
       mimeType: "text/plain",
       byteSize: 32,
       visibility: "space"
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: upload.id,
       storageVerifiedByteSize: 32
     });
 
-    const messageWithAttachment = createStructuredMessage(db, request, {
+    const messageWithAttachment = await createStructuredMessage(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       clientMessageId: "retention-file-1",
@@ -1863,7 +1864,7 @@ describe("workspace service", () => {
         ]
       }
     });
-    createStructuredMessage(db, request, {
+    await createStructuredMessage(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       clientMessageId: "retention-file-2",
@@ -1888,24 +1889,24 @@ describe("workspace service", () => {
       WHERE message_id = ? AND attachment_id = ?
     `).get(messageWithAttachment.id, upload.attachment.id);
     expect(link).toEqual({ messageId: messageWithAttachment.id, attachmentId: upload.attachment.id });
-    expect(listFiles(db, "usr_owner", { conversationId: conversation.id }).map((file) => file.id)).toContain(upload.attachment.id);
+    expect((await listFiles(db, "usr_owner", { conversationId: conversation.id })).map((file) => file.id)).toContain(upload.attachment.id);
 
-    const messageList = listMessages(db, "usr_owner", conversation.id, { limit: 10 });
+    const messageList = await listMessages(db, "usr_owner", conversation.id, { limit: 10 });
     const serialized = JSON.stringify(messageList);
     expect(serialized).not.toContain("contentJson");
     expect(serialized).not.toContain("storageKey");
     expect(serialized).not.toContain("uploadTransferId");
   });
 
-  it("returns the most recent messages in chronological order", () => {
-    const conversation = createConversation(db, request, {
+  it("returns the most recent messages in chronological order", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Recent messages"
     });
 
     for (const text of ["one", "two", "three", "four"]) {
-      createStructuredMessage(db, request, {
+      await createStructuredMessage(db, request, {
         actorId: "usr_owner",
         conversationId: conversation.id,
         clientMessageId: `recent-${text}`,
@@ -1913,23 +1914,23 @@ describe("workspace service", () => {
       });
     }
 
-    const messages = listMessages(db, "usr_owner", conversation.id, { limit: 2 });
+    const messages = await listMessages(db, "usr_owner", conversation.id, { limit: 2 });
     expect(messages.map((message) => message.plainText)).toEqual(["three", "four"]);
 
-    const listed = listConversations(db, "usr_owner").find((item) => item.id === conversation.id);
+    const listed = (await listConversations(db, "usr_owner")).find((item) => item.id === conversation.id);
     expect(listed.latestMessages.map((message) => message.plainText)).toEqual(["timeStarry 创建了群聊「Recent messages」", "one", "two", "three", "four"]);
     expect(listed.latestMessages.at(-1).plainText).toBe("four");
   });
 
-  it("loads older messages before a message cursor", () => {
-    const conversation = createConversation(db, request, {
+  it("loads older messages before a message cursor", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Paged messages"
     });
 
     for (const text of ["one", "two", "three", "four"]) {
-      createStructuredMessage(db, request, {
+      await createStructuredMessage(db, request, {
         actorId: "usr_owner",
         conversationId: conversation.id,
         clientMessageId: `paged-${text}`,
@@ -1937,30 +1938,30 @@ describe("workspace service", () => {
       });
     }
 
-    const latest = listMessages(db, "usr_owner", conversation.id, { limit: 2 });
+    const latest = await listMessages(db, "usr_owner", conversation.id, { limit: 2 });
     expect(latest.map((message) => message.plainText)).toEqual(["three", "four"]);
 
-    const older = listMessages(db, "usr_owner", conversation.id, {
+    const older = await listMessages(db, "usr_owner", conversation.id, {
       before: latest[0].id,
       limit: 2
     });
     expect(older.map((message) => message.plainText)).toEqual(["one", "two"]);
-    expect(listMessages(db, "usr_owner", conversation.id, { before: "missing", limit: 2 })).toEqual([]);
+    expect(await listMessages(db, "usr_owner", conversation.id, { before: "missing", limit: 2 })).toEqual([]);
   });
 
-  it("orders conversations by latest retained activity", () => {
-    const olderConversation = createConversation(db, request, {
+  it("orders conversations by latest retained activity", async () => {
+    const olderConversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Older active conversation"
     });
-    const newerConversation = createConversation(db, request, {
+    const newerConversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Newer quiet conversation"
     });
 
-    const activeMessage = createStructuredMessage(db, request, {
+    const activeMessage = await createStructuredMessage(db, request, {
       actorId: "usr_owner",
       conversationId: olderConversation.id,
       clientMessageId: "activity-latest",
@@ -1972,34 +1973,34 @@ describe("workspace service", () => {
     db.prepare("UPDATE messages SET created_at = ? WHERE conversation_id = ? AND kind = 'system'").run("2026-01-01T00:00:00.000Z", olderConversation.id);
     db.prepare("UPDATE messages SET created_at = ? WHERE conversation_id = ? AND kind = 'system'").run("2026-01-02T00:00:00.000Z", newerConversation.id);
 
-    const conversations = listConversations(db, "usr_owner");
+    const conversations = await listConversations(db, "usr_owner");
     expect(conversations.map((conversation) => conversation.id).slice(0, 2)).toEqual([olderConversation.id, newerConversation.id]);
     expect(conversations[0].lastActivityAt).toBe("2026-01-03T00:00:00.000Z");
     expect(conversations[1].lastActivityAt).toBe("2026-01-02T00:00:00.000Z");
   });
 
-  it("rejects non-member message creation and writes audit", () => {
-    const conversation = createConversation(db, request, {
+  it("rejects non-member message creation and writes audit", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Owner only"
     });
 
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "OUTSIDER" });
-    const outsider = acceptInvite(db, request, {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "OUTSIDER" });
+    const outsider = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "outsider-member",
       email: "outsider-member@example.com"
     });
 
-    expect(() =>
-      createStructuredMessage(db, request, {
+    await expect(async () =>
+      await createStructuredMessage(db, request, {
         actorId: outsider.id,
         conversationId: conversation.id,
         clientMessageId: "outsider-1",
         content: textContent("Should not land")
       })
-    ).toThrow(WorkspacePermissionError);
+    ).rejects.toThrow(WorkspacePermissionError);
 
     const audit = db.prepare(`
       SELECT result, reason
@@ -2011,15 +2012,15 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "rejected", reason: "not a conversation member" });
   });
 
-  it("writes audit rows for invalid structured message rejections", () => {
-    const conversation = createConversation(db, request, {
+  it("writes audit rows for invalid structured message rejections", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Message validation"
     });
 
-    expect(() =>
-      createStructuredMessage(db, request, {
+    await expect(async () =>
+      await createStructuredMessage(db, request, {
         actorId: "usr_owner",
         conversationId: conversation.id,
         clientMessageId: "invalid-block",
@@ -2028,7 +2029,7 @@ describe("workspace service", () => {
           blocks: [{ type: "unknown", text: "Nope" }]
         }
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     const audit = db.prepare(`
       SELECT result, reason
@@ -2040,28 +2041,28 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "rejected", reason: "message.invalid_block" });
   });
 
-  it("writes audit rows for message idempotency conflicts", () => {
-    const conversation = createConversation(db, request, {
+  it("writes audit rows for message idempotency conflicts", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Message idempotency audit"
     });
 
-    createStructuredMessage(db, request, {
+    await createStructuredMessage(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       clientMessageId: "conflict-message",
       content: textContent("Original")
     });
 
-    expect(() =>
-      createStructuredMessage(db, request, {
+    await expect(async () =>
+      await createStructuredMessage(db, request, {
         actorId: "usr_owner",
         conversationId: conversation.id,
         clientMessageId: "conflict-message",
         content: textContent("Changed")
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     const audit = db.prepare(`
       SELECT result, reason
@@ -2073,8 +2074,8 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "rejected", reason: "message.idempotency_conflict" });
   });
 
-  it("reserves upload quota, allows standalone attachments, and releases quota on failure", () => {
-    const upload = reserveUpload(db, request, {
+  it("reserves upload quota, allows standalone attachments, and releases quota on failure", async () => {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "standalone.txt",
       mimeType: "text/plain",
@@ -2085,10 +2086,10 @@ describe("workspace service", () => {
     expect(upload.status).toBe("reserved");
     expect(upload.attachment.status).toBe("pending");
 
-    const filesBeforeComplete = listFiles(db, "usr_owner");
+    const filesBeforeComplete = await listFiles(db, "usr_owner");
     expect(filesBeforeComplete).toHaveLength(0);
 
-    const failed = failUpload(db, request, {
+    const failed = await failUpload(db, request, {
       actorId: "usr_owner",
       uploadId: upload.id,
       reason: "test failure"
@@ -2103,7 +2104,7 @@ describe("workspace service", () => {
     expect(used.used).toBe(0);
   });
 
-  it("rolls back upload reservation state when audit persistence fails", () => {
+  it("rolls back upload reservation state when audit persistence fails", async () => {
     db.exec(`
       CREATE TRIGGER fail_upload_reserve_audit
       BEFORE INSERT ON audit_logs
@@ -2113,15 +2114,15 @@ describe("workspace service", () => {
       END
     `);
     try {
-      expect(() =>
-        reserveUpload(db, request, {
+      await expect(async () =>
+        await reserveUpload(db, request, {
           actorId: "usr_owner",
           fileName: "upload-txn.txt",
           mimeType: "text/plain",
           byteSize: 128,
           visibility: "space"
         })
-      ).toThrow(/upload reserve audit failed/);
+      ).rejects.toThrow(/upload reserve audit failed/);
     } finally {
       db.exec("DROP TRIGGER fail_upload_reserve_audit");
     }
@@ -2134,7 +2135,7 @@ describe("workspace service", () => {
     expect(event).toBeUndefined();
   });
 
-  it("records rejected upload reservations for invalid request metadata", () => {
+  it("records rejected upload reservations for invalid request metadata", async () => {
     const before = {
       attachments: db.prepare("SELECT COUNT(*) AS count FROM attachments").get().count,
       transfers: db.prepare("SELECT COUNT(*) AS count FROM transfer_ledger").get().count,
@@ -2142,30 +2143,30 @@ describe("workspace service", () => {
       audits: db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'file.upload.reserve'").get().count
     };
 
-    expect(() =>
-      reserveUpload(db, request, {
+    await expect(async () =>
+      await reserveUpload(db, request, {
         actorId: "usr_owner",
         fileName: "bad-size.bin",
         byteSize: -1,
         visibility: "space"
       })
-    ).toThrow(WorkspaceValidationError);
-    expect(() =>
-      reserveUpload(db, request, {
+    ).rejects.toThrow(WorkspaceValidationError);
+    await expect(async () =>
+      await reserveUpload(db, request, {
         actorId: "usr_owner",
         fileName: "bad-visibility.bin",
         byteSize: 1,
         visibility: "global"
       })
-    ).toThrow(WorkspaceValidationError);
-    expect(() =>
-      reserveUpload(db, request, {
+    ).rejects.toThrow(WorkspaceValidationError);
+    await expect(async () =>
+      await reserveUpload(db, request, {
         actorId: "usr_owner",
         fileName: "   ",
         byteSize: 1,
         visibility: "space"
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     expect(db.prepare("SELECT COUNT(*) AS count FROM attachments").get().count).toBe(before.attachments);
     expect(db.prepare("SELECT COUNT(*) AS count FROM transfer_ledger").get().count).toBe(before.transfers);
@@ -2181,8 +2182,8 @@ describe("workspace service", () => {
     expect(reasons).toEqual(["file.invalid", "file.invalid_visibility", "file.invalid_size"]);
   });
 
-  it("releases upload quota when completion byte verification fails", () => {
-    const upload = reserveUpload(db, request, {
+  it("releases upload quota when completion byte verification fails", async () => {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "mismatch.txt",
       mimeType: "text/plain",
@@ -2190,13 +2191,13 @@ describe("workspace service", () => {
       visibility: "space"
     });
 
-    expect(() =>
-      completeUpload(db, request, {
+    await expect(async () =>
+      await completeUpload(db, request, {
         actorId: "usr_owner",
         uploadId: upload.id,
         storageVerifiedByteSize: 512
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     const used = db.prepare(`
       SELECT COALESCE(SUM(byte_size), 0) AS used
@@ -2227,8 +2228,8 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "failure", reason: "upload.size_mismatch" });
   });
 
-  it("releases stale pending upload reservations before reporting quota", () => {
-    const upload = reserveUpload(db, request, {
+  it("releases stale pending upload reservations before reporting quota", async () => {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "abandoned.bin",
       mimeType: "application/octet-stream",
@@ -2245,7 +2246,7 @@ describe("workspace service", () => {
     `).get();
     expect(usedBeforeCleanup.used).toBe(4096);
 
-    const bootstrap = getWorkspaceBootstrap(db, "usr_owner");
+    const bootstrap = await getWorkspaceBootstrap(db, "usr_owner");
     expect(bootstrap.policy.usedTodayBytes).toBe(0);
     expect(bootstrap.policy.remainingQuotaBytes).toBe(DAILY_QUOTA_BYTES);
 
@@ -2275,8 +2276,8 @@ describe("workspace service", () => {
     });
   });
 
-  it("rolls back stale upload cleanup when audit persistence fails", () => {
-    const upload = reserveUpload(db, request, {
+  it("rolls back stale upload cleanup when audit persistence fails", async () => {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "stale-txn.bin",
       mimeType: "application/octet-stream",
@@ -2295,7 +2296,7 @@ describe("workspace service", () => {
       END
     `);
     try {
-      expect(() => releaseStaleUploadReservations(db)).toThrow(/stale upload audit failed/);
+      await expect(async () => await releaseStaleUploadReservations(db)).rejects.toThrow(/stale upload audit failed/);
     } finally {
       db.exec("DROP TRIGGER fail_stale_upload_audit");
     }
@@ -2308,8 +2309,8 @@ describe("workspace service", () => {
     expect(event).toBeUndefined();
   });
 
-  it("does not release fresh pending upload reservations during stale cleanup", () => {
-    const upload = reserveUpload(db, request, {
+  it("does not release fresh pending upload reservations during stale cleanup", async () => {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "fresh.bin",
       mimeType: "application/octet-stream",
@@ -2317,7 +2318,7 @@ describe("workspace service", () => {
       visibility: "space"
     });
 
-    expect(releaseStaleUploadReservations(db)).toBe(0);
+    expect(await releaseStaleUploadReservations(db)).toBe(0);
 
     const transfer = db.prepare("SELECT status FROM transfer_ledger WHERE id = ?").get(upload.id);
     expect(transfer.status).toBe("reserved");
@@ -2325,20 +2326,20 @@ describe("workspace service", () => {
     expect(attachment.status).toBe("pending");
   });
 
-  it("downloads only after quota check and rejects oversized downloads before transfer", () => {
-    const smallUpload = reserveUpload(db, request, {
+  it("downloads only after quota check and rejects oversized downloads before transfer", async () => {
+    const smallUpload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "download-ok.bin",
       mimeType: "application/octet-stream",
       byteSize: 256,
       visibility: "space"
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: smallUpload.id,
       storageVerifiedByteSize: 256
     });
-    const download = reserveDownload(db, request, {
+    const download = await reserveDownload(db, request, {
       actorId: "usr_owner",
       attachmentId: smallUpload.attachment.id
     });
@@ -2355,20 +2356,20 @@ describe("workspace service", () => {
     expect(successfulAuditActions).toContain("file.download.completed");
 
     const fillBytes = DAILY_QUOTA_BYTES - download.usedToday;
-    const upload = reserveUpload(db, request, {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "big.bin",
       mimeType: "application/octet-stream",
       byteSize: fillBytes,
       visibility: "space"
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: upload.id,
       storageVerifiedByteSize: fillBytes
     });
 
-    const rejected = reserveDownload(db, request, {
+    const rejected = await reserveDownload(db, request, {
       actorId: "usr_owner",
       attachmentId: upload.attachment.id
     });
@@ -2400,20 +2401,20 @@ describe("workspace service", () => {
     });
   });
 
-  it("rolls back download reservations when audit persistence fails", () => {
-    const upload = reserveUpload(db, request, {
+  it("rolls back download reservations when audit persistence fails", async () => {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "download-txn.bin",
       mimeType: "application/octet-stream",
       byteSize: 256,
       visibility: "space"
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: upload.id,
       storageVerifiedByteSize: 256
     });
-    const usedBefore = getWorkspaceBootstrap(db, "usr_owner").policy.usedTodayBytes;
+    const usedBefore = (await getWorkspaceBootstrap(db, "usr_owner")).policy.usedTodayBytes;
 
     db.exec(`
       CREATE TRIGGER fail_download_reserve_audit
@@ -2424,12 +2425,12 @@ describe("workspace service", () => {
       END
     `);
     try {
-      expect(() =>
-        reserveDownload(db, request, {
+      await expect(async () =>
+        await reserveDownload(db, request, {
           actorId: "usr_owner",
           attachmentId: upload.attachment.id
         })
-      ).toThrow(/download reserve audit failed/);
+      ).rejects.toThrow(/download reserve audit failed/);
     } finally {
       db.exec("DROP TRIGGER fail_download_reserve_audit");
     }
@@ -2440,16 +2441,16 @@ describe("workspace service", () => {
       WHERE direction = 'download' AND attachment_id = ?
     `).get(upload.attachment.id);
     expect(downloadLedger).toBeUndefined();
-    expect(getWorkspaceBootstrap(db, "usr_owner").policy.usedTodayBytes).toBe(usedBefore);
+    expect((await getWorkspaceBootstrap(db, "usr_owner")).policy.usedTodayBytes).toBe(usedBefore);
   });
 
-  it("rejects file downloads outside the visible scope and records the rejection", () => {
-    const conversation = createConversation(db, request, {
+  it("rejects file downloads outside the visible scope and records the rejection", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Scoped files"
     });
-    const upload = reserveUpload(db, request, {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       visibility: "conversation",
@@ -2457,24 +2458,24 @@ describe("workspace service", () => {
       mimeType: "text/plain",
       byteSize: 64
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: upload.id,
       storageVerifiedByteSize: 64
     });
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "FILE-SCOPE" });
-    const member = acceptInvite(db, request, {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "FILE-SCOPE" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "file-scope-member",
       email: "file-scope-member@example.com"
     });
 
-    expect(() =>
-      reserveDownload(db, request, {
+    await expect(async () =>
+      await reserveDownload(db, request, {
         actorId: member.id,
         attachmentId: upload.attachment.id
       })
-    ).toThrow(WorkspacePermissionError);
+    ).rejects.toThrow(WorkspacePermissionError);
 
     const audit = db.prepare(`
       SELECT result, reason
@@ -2486,21 +2487,21 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "rejected", reason: "not a conversation member" });
   });
 
-  it("creates visible files after upload completion", () => {
-    const upload = reserveUpload(db, request, {
+  it("creates visible files after upload completion", async () => {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "share.txt",
       mimeType: "text/plain",
       byteSize: 128,
       visibility: "space"
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: upload.id,
       storageVerifiedByteSize: 128
     });
 
-    const files = listFiles(db, "usr_owner");
+    const files = await listFiles(db, "usr_owner");
     expect(files).toHaveLength(1);
     expect(files[0].fileName).toBe("share.txt");
     expect(files[0]).toMatchObject({
@@ -2517,25 +2518,25 @@ describe("workspace service", () => {
     expect(files[0].storageKey).toBeUndefined();
   });
 
-  it("filters visible files by scope, query, conversation, and uploader", () => {
-    const conversation = createConversation(db, request, {
+  it("filters visible files by scope, query, conversation, and uploader", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "File Filter Room"
     });
-    const standalone = reserveUpload(db, request, {
+    const standalone = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "standalone-report.txt",
       mimeType: "text/plain",
       byteSize: 64,
       visibility: "space"
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: standalone.id,
       storageVerifiedByteSize: 64
     });
-    const conversationFile = reserveUpload(db, request, {
+    const conversationFile = await reserveUpload(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       visibility: "conversation",
@@ -2543,39 +2544,39 @@ describe("workspace service", () => {
       mimeType: "application/pdf",
       byteSize: 128
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: conversationFile.id,
       storageVerifiedByteSize: 128
     });
 
-    expect(listFiles(db, "usr_owner", { scope: "standalone" }).map((file) => file.id)).toEqual([standalone.attachment.id]);
-    expect(listFiles(db, "usr_owner", { scope: "conversation" }).map((file) => file.id)).toEqual([conversationFile.attachment.id]);
-    expect(listFiles(db, "usr_owner", { conversationId: conversation.id }).map((file) => file.id)).toEqual([conversationFile.attachment.id]);
-    expect(listFiles(db, "usr_owner", { uploaderId: "usr_owner", q: "brief" }).map((file) => file.id)).toEqual([conversationFile.attachment.id]);
+    expect((await listFiles(db, "usr_owner", { scope: "standalone" })).map((file) => file.id)).toEqual([standalone.attachment.id]);
+    expect((await listFiles(db, "usr_owner", { scope: "conversation" })).map((file) => file.id)).toEqual([conversationFile.attachment.id]);
+    expect((await listFiles(db, "usr_owner", { conversationId: conversation.id })).map((file) => file.id)).toEqual([conversationFile.attachment.id]);
+    expect((await listFiles(db, "usr_owner", { uploaderId: "usr_owner", q: "brief" })).map((file) => file.id)).toEqual([conversationFile.attachment.id]);
   });
 
-  it("projects file capabilities from the current viewer", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "FILE-CAPABILITY-MEMBER" });
-    const member = acceptInvite(db, request, {
+  it("projects file capabilities from the current viewer", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "FILE-CAPABILITY-MEMBER" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "file-capability-member",
       email: "file-capability-member@example.com"
     });
-    const upload = reserveUpload(db, request, {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "viewer-capability.txt",
       mimeType: "text/plain",
       byteSize: 64,
       visibility: "space"
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: upload.id,
       storageVerifiedByteSize: 64
     });
 
-    const [visibleFile] = listFiles(db, member.id);
+    const [visibleFile] = await listFiles(db, member.id);
     expect(visibleFile).toMatchObject({
       id: upload.attachment.id,
       uploader: {
@@ -2589,13 +2590,13 @@ describe("workspace service", () => {
     });
   });
 
-  it("keeps space-visible uploads detached from conversations even when a conversationId is supplied", () => {
-    const conversation = createConversation(db, request, {
+  it("keeps space-visible uploads detached from conversations even when a conversationId is supplied", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Detached file room"
     });
-    const upload = reserveUpload(db, request, {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       visibility: "space",
@@ -2603,7 +2604,7 @@ describe("workspace service", () => {
       mimeType: "text/plain",
       byteSize: 32
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: upload.id,
       storageVerifiedByteSize: 32
@@ -2611,35 +2612,35 @@ describe("workspace service", () => {
 
     const attachment = db.prepare("SELECT visibility, conversation_id AS conversationId FROM attachments WHERE id = ?").get(upload.attachment.id);
     expect(attachment).toEqual({ visibility: "space", conversationId: null });
-    expect(listFiles(db, "usr_owner", { scope: "standalone" }).map((file) => file.id)).toEqual([upload.attachment.id]);
-    expect(listFiles(db, "usr_owner", { conversationId: conversation.id }).map((file) => file.id)).toEqual([]);
+    expect((await listFiles(db, "usr_owner", { scope: "standalone" })).map((file) => file.id)).toEqual([upload.attachment.id]);
+    expect((await listFiles(db, "usr_owner", { conversationId: conversation.id })).map((file) => file.id)).toEqual([]);
   });
 
-  it("blocks file library access for roles without download permission", () => {
-    const auditorInvite = createInvite(db, request, {
+  it("blocks file library access for roles without download permission", async () => {
+    const auditorInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "auditor",
       code: "AUDITOR-FILES"
     });
-    const auditor = acceptInvite(db, request, {
+    const auditor = await acceptInvite(db, request, {
       code: auditorInvite.code,
       githubLogin: "auditor-files",
       email: "auditor-files@example.com"
     });
-    const upload = reserveUpload(db, request, {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "space-visible.txt",
       mimeType: "text/plain",
       byteSize: 12,
       visibility: "space"
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: upload.id,
       storageVerifiedByteSize: 12
     });
 
-    expect(() => listFiles(db, auditor.id, {}, request)).toThrow(WorkspacePermissionError);
+    await expect(async () => await listFiles(db, auditor.id, {}, request)).rejects.toThrow(WorkspacePermissionError);
 
     const audit = db.prepare(`
       SELECT result, reason
@@ -2651,32 +2652,32 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "rejected", reason: "insufficient permission" });
   });
 
-  it("removes attachments without deleting records and blocks later downloads", () => {
-    const upload = reserveUpload(db, request, {
+  it("removes attachments without deleting records and blocks later downloads", async () => {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "remove-file.txt",
       mimeType: "text/plain",
       byteSize: 64,
       visibility: "space"
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: upload.id,
       storageVerifiedByteSize: 64
     });
 
-    const removed = removeAttachment(db, request, {
+    const removed = await removeAttachment(db, request, {
       actorId: "usr_owner",
       attachmentId: upload.attachment.id
     });
     expect(removed).toEqual({ ok: true, attachmentId: upload.attachment.id });
-    expect(listFiles(db, "usr_owner").map((file) => file.id)).not.toContain(upload.attachment.id);
-    expect(() =>
-      reserveDownload(db, request, {
+    expect((await listFiles(db, "usr_owner")).map((file) => file.id)).not.toContain(upload.attachment.id);
+    await expect(async () =>
+      await reserveDownload(db, request, {
         actorId: "usr_owner",
         attachmentId: upload.attachment.id
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     const row = db.prepare("SELECT status FROM attachments WHERE id = ?").get(upload.attachment.id);
     expect(row.status).toBe("removed");
@@ -2686,33 +2687,33 @@ describe("workspace service", () => {
     expect(event.type).toBe("attachment.removed");
   });
 
-  it("rejects attachment removal by ordinary non-uploaders", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "FILE-REMOVER" });
-    const member = acceptInvite(db, request, {
+  it("rejects attachment removal by ordinary non-uploaders", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "FILE-REMOVER" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "file-remover",
       email: "file-remover@example.com"
     });
-    const upload = reserveUpload(db, request, {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "owner-file.txt",
       mimeType: "text/plain",
       byteSize: 64,
       visibility: "space"
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: upload.id,
       storageVerifiedByteSize: 64
     });
 
-    expect(() =>
-      removeAttachment(db, request, {
+    await expect(async () =>
+      await removeAttachment(db, request, {
         actorId: member.id,
         attachmentId: upload.attachment.id
       })
-    ).toThrow(WorkspacePermissionError);
-    expect(listFiles(db, "usr_owner").map((file) => file.id)).toContain(upload.attachment.id);
+    ).rejects.toThrow(WorkspacePermissionError);
+    expect((await listFiles(db, "usr_owner")).map((file) => file.id)).toContain(upload.attachment.id);
     const audit = db.prepare(`
       SELECT result, reason
       FROM audit_logs
@@ -2723,32 +2724,32 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "rejected", reason: "insufficient permission" });
   });
 
-  it("emits monotonic workspace events visible to allowed members", () => {
-    const conversation = createConversation(db, request, {
+  it("emits monotonic workspace events visible to allowed members", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Events"
     });
-    createStructuredMessage(db, request, {
+    await createStructuredMessage(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       clientMessageId: "event-1",
       content: textContent("Event message")
     });
 
-    const events = listWorkspaceEvents(db, "usr_owner", 0);
+    const events = await listWorkspaceEvents(db, "usr_owner", 0);
     const seqs = events.map((event) => event.seq);
     expect(seqs).toEqual([...seqs].sort((left, right) => left - right));
     expect(events.some((event) => event.type === "message.created")).toBe(true);
   });
 
-  it("includes safe projection payloads in message and attachment events", () => {
-    const conversation = createConversation(db, request, {
+  it("includes safe projection payloads in message and attachment events", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Projection events"
     });
-    const upload = reserveUpload(db, request, {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       visibility: "conversation",
@@ -2756,19 +2757,19 @@ describe("workspace service", () => {
       mimeType: "text/plain",
       byteSize: 64
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: upload.id,
       storageVerifiedByteSize: 64
     });
-    createStructuredMessage(db, request, {
+    await createStructuredMessage(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       clientMessageId: "projection-message",
       content: textContent("Projection message")
     });
 
-    const events = listWorkspaceEvents(db, "usr_owner", 0);
+    const events = await listWorkspaceEvents(db, "usr_owner", 0);
     const messageEvent = events.find((event) => event.type === "message.created" && event.payload.message?.clientMessageId === "projection-message");
     expect(messageEvent.payload.message).toMatchObject({
       plainText: "Projection message",
@@ -2793,8 +2794,8 @@ describe("workspace service", () => {
     expect(createdAttachmentEvent.payload.attachment.storageKey).toBeUndefined();
   });
 
-  it("sanitizes realtime event payloads through product projection allowlists", () => {
-    const conversation = createConversation(db, request, {
+  it("sanitizes realtime event payloads through product projection allowlists", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Projection allowlist"
@@ -2871,7 +2872,7 @@ describe("workspace service", () => {
       "2026-01-01T00:00:00.000Z"
     );
 
-    const event = listWorkspaceEvents(db, "usr_owner", seq - 1).find((item) => item.id === "evt_projection_allowlist");
+    const event = (await listWorkspaceEvents(db, "usr_owner", seq - 1)).find((item) => item.id === "evt_projection_allowlist");
     expect(event.payload.message.plainText).toBe("Allowed text");
     expect(event.payload.message.attachments[0]).toMatchObject({
       id: "att_projection_allowlist",
@@ -2896,14 +2897,14 @@ describe("workspace service", () => {
     expect(serialized).not.toContain("provider-internal");
   });
 
-  it("keeps transfer rejection realtime events actor-local", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "TRANSFER-LOCAL" });
-    const member = acceptInvite(db, request, {
+  it("keeps transfer rejection realtime events actor-local", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "TRANSFER-LOCAL" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "transfer-local",
       email: "transfer-local@example.com"
     });
-    const first = reserveUpload(db, request, {
+    const first = await reserveUpload(db, request, {
       actorId: member.id,
       fileName: "quota-fill.bin",
       mimeType: "application/octet-stream",
@@ -2911,7 +2912,7 @@ describe("workspace service", () => {
       visibility: "space"
     });
     expect(first.status).toBe("reserved");
-    const rejected = reserveUpload(db, request, {
+    const rejected = await reserveUpload(db, request, {
       actorId: member.id,
       fileName: "quota-reject.bin",
       mimeType: "application/octet-stream",
@@ -2921,8 +2922,8 @@ describe("workspace service", () => {
     expect(rejected.status).toBe("rejected");
     expect(rejected.id).toBeUndefined();
 
-    const memberEvents = listWorkspaceEvents(db, member.id, 0);
-    const ownerEvents = listWorkspaceEvents(db, "usr_owner", 0);
+    const memberEvents = await listWorkspaceEvents(db, member.id, 0);
+    const ownerEvents = await listWorkspaceEvents(db, "usr_owner", 0);
     const rejectionEvent = memberEvents.find((event) => event.type === "transfer.rejected");
     expect(rejectionEvent).toMatchObject({
       actorId: member.id,
@@ -2943,35 +2944,35 @@ describe("workspace service", () => {
     expect(ownerEvents.some((event) => event.type === "transfer.rejected")).toBe(false);
   });
 
-  it("filters attachment realtime events by file visibility", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "ATTACHMENT-EVENTS" });
-    const member = acceptInvite(db, request, {
+  it("filters attachment realtime events by file visibility", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "ATTACHMENT-EVENTS" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "attachment-events",
       email: "attachment-events@example.com"
     });
-    const privateUpload = reserveUpload(db, request, {
+    const privateUpload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "private-staging.txt",
       mimeType: "text/plain",
       byteSize: 32,
       visibility: "private_staging"
     });
-    const spaceUpload = reserveUpload(db, request, {
+    const spaceUpload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "space-visible.txt",
       mimeType: "text/plain",
       byteSize: 32,
       visibility: "space"
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: spaceUpload.id,
       storageVerifiedByteSize: 32
     });
 
-    const memberEvents = listWorkspaceEvents(db, member.id, 0);
-    const ownerEvents = listWorkspaceEvents(db, "usr_owner", 0);
+    const memberEvents = await listWorkspaceEvents(db, member.id, 0);
+    const ownerEvents = await listWorkspaceEvents(db, "usr_owner", 0);
     expect(ownerEvents.some((event) => event.type === "attachment.created" && event.targetId === privateUpload.attachment.id)).toBe(true);
     expect(memberEvents.some((event) => event.type === "attachment.created" && event.targetId === privateUpload.attachment.id)).toBe(false);
     expect(memberEvents.some((event) => event.type === "attachment.created" && event.targetId === spaceUpload.attachment.id)).toBe(false);
@@ -2989,28 +2990,28 @@ describe("workspace service", () => {
     });
   });
 
-  it("projects attachment realtime capabilities from the receiving member", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "ATTACHMENT-CAPABILITY-EVENTS" });
-    const member = acceptInvite(db, request, {
+  it("projects attachment realtime capabilities from the receiving member", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "ATTACHMENT-CAPABILITY-EVENTS" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "attachment-capability-events",
       email: "attachment-capability-events@example.com"
     });
-    const upload = reserveUpload(db, request, {
+    const upload = await reserveUpload(db, request, {
       actorId: member.id,
       fileName: "member-owned-space-file.txt",
       mimeType: "text/plain",
       byteSize: 32,
       visibility: "space"
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: member.id,
       uploadId: upload.id,
       storageVerifiedByteSize: 32
     });
 
-    const memberEvent = listWorkspaceEvents(db, member.id, 0).find((event) => event.type === "attachment.available" && event.targetId === upload.attachment.id);
-    const ownerEvent = listWorkspaceEvents(db, "usr_owner", 0).find((event) => event.type === "attachment.available" && event.targetId === upload.attachment.id);
+    const memberEvent = (await listWorkspaceEvents(db, member.id, 0)).find((event) => event.type === "attachment.available" && event.targetId === upload.attachment.id);
+    const ownerEvent = (await listWorkspaceEvents(db, "usr_owner", 0)).find((event) => event.type === "attachment.available" && event.targetId === upload.attachment.id);
 
     expect(memberEvent.payload.attachment.capabilities).toEqual({
       canDownload: true,
@@ -3025,20 +3026,20 @@ describe("workspace service", () => {
     expect(JSON.stringify(ownerEvent)).not.toContain("attachment-capability-events@example.com");
   });
 
-  it("projects message attachment capabilities from the receiving member", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "MESSAGE-ATTACHMENT-CAPS" });
-    const member = acceptInvite(db, request, {
+  it("projects message attachment capabilities from the receiving member", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "MESSAGE-ATTACHMENT-CAPS" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "message-attachment-caps",
       email: "message-attachment-caps@example.com"
     });
-    const conversation = createConversation(db, request, {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Message attachment capabilities",
       memberIds: [member.id]
     });
-    const upload = reserveUpload(db, request, {
+    const upload = await reserveUpload(db, request, {
       actorId: member.id,
       conversationId: conversation.id,
       visibility: "conversation",
@@ -3046,12 +3047,12 @@ describe("workspace service", () => {
       mimeType: "text/plain",
       byteSize: 32
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: member.id,
       uploadId: upload.id,
       storageVerifiedByteSize: 32
     });
-    createStructuredMessage(db, request, {
+    await createStructuredMessage(db, request, {
       actorId: member.id,
       conversationId: conversation.id,
       clientMessageId: "message-attachment-caps",
@@ -3064,8 +3065,8 @@ describe("workspace service", () => {
       }
     });
 
-    const memberMessage = listMessages(db, member.id, conversation.id).find((message) => message.clientMessageId === "message-attachment-caps");
-    const ownerMessage = listMessages(db, "usr_owner", conversation.id).find((message) => message.clientMessageId === "message-attachment-caps");
+    const memberMessage = (await listMessages(db, member.id, conversation.id)).find((message) => message.clientMessageId === "message-attachment-caps");
+    const ownerMessage = (await listMessages(db, "usr_owner", conversation.id)).find((message) => message.clientMessageId === "message-attachment-caps");
     expect(memberMessage.attachments[0].capabilities).toEqual({
       canDownload: true,
       canRemove: true
@@ -3075,56 +3076,56 @@ describe("workspace service", () => {
       canRemove: true
     });
 
-    const memberEvent = listWorkspaceEvents(db, member.id, 0).find((event) => event.type === "message.created" && event.payload.message?.clientMessageId === "message-attachment-caps");
-    const ownerEvent = listWorkspaceEvents(db, "usr_owner", 0).find((event) => event.type === "message.created" && event.payload.message?.clientMessageId === "message-attachment-caps");
+    const memberEvent = (await listWorkspaceEvents(db, member.id, 0)).find((event) => event.type === "message.created" && event.payload.message?.clientMessageId === "message-attachment-caps");
+    const ownerEvent = (await listWorkspaceEvents(db, "usr_owner", 0)).find((event) => event.type === "message.created" && event.payload.message?.clientMessageId === "message-attachment-caps");
     expect(memberEvent.payload.message.attachments[0].capabilities.canRemove).toBe(true);
     expect(ownerEvent.payload.message.attachments[0].capabilities.canRemove).toBe(true);
     expect(memberEvent.payload.message.attachments[0].storageKey).toBeUndefined();
     expect(JSON.stringify(ownerEvent)).not.toContain("message-attachment-caps@example.com");
   });
 
-  it("filters event visibility before applying the replay limit", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "EVENT-LIMIT" });
-    const member = acceptInvite(db, request, {
+  it("filters event visibility before applying the replay limit", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "EVENT-LIMIT" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "event-limit",
       email: "event-limit@example.com"
     });
 
     for (let index = 0; index < 205; index += 1) {
-      createConversation(db, request, {
+      await createConversation(db, request, {
         actorId: "usr_owner",
         type: "group",
         title: `Owner private ${index}`
       });
     }
 
-    const visible = createConversation(db, request, {
+    const visible = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Visible after hidden events",
       memberIds: [member.id]
     });
 
-    const memberEvents = listWorkspaceEvents(db, member.id, 0);
+    const memberEvents = await listWorkspaceEvents(db, member.id, 0);
     expect(memberEvents.some((event) => event.type === "conversation.created" && event.targetId === visible.id)).toBe(true);
     expect(memberEvents.some((event) => event.payloadJson)).toBe(false);
     expect(memberEvents.hasMore).toBe(false);
 
-    const ownerEvents = listWorkspaceEvents(db, "usr_owner", 0);
+    const ownerEvents = await listWorkspaceEvents(db, "usr_owner", 0);
     expect(ownerEvents).toHaveLength(200);
     expect(ownerEvents.hasMore).toBe(true);
   });
 
-  it("writes group conversation creation before member-added events", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "EVENT-ORDER" });
-    const member = acceptInvite(db, request, {
+  it("writes group conversation creation before member-added events", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "EVENT-ORDER" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "event-order",
       email: "event-order@example.com"
     });
 
-    const conversation = createConversation(db, request, {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Event order",
@@ -3141,34 +3142,34 @@ describe("workspace service", () => {
     expect(eventTypes.slice(0, 2)).toEqual(["conversation.created", "conversation.member_added"]);
   });
 
-  it("does not expose operation records through bootstrap", () => {
-    const bootstrap = getWorkspaceBootstrap(db, "usr_owner");
+  it("does not expose operation records through bootstrap", async () => {
+    const bootstrap = await getWorkspaceBootstrap(db, "usr_owner");
     expect(bootstrap.audits).toBeUndefined();
     expect(bootstrap.policy.operationRecords).toBeUndefined();
     expect(bootstrap.auth.githubOAuthReady).toBeUndefined();
     expect(bootstrap.permissions.canViewOperationRecords).toBe(false);
   });
 
-  it("includes first-screen conversations and files in bootstrap without internal fields", () => {
-    const conversation = createConversation(db, request, {
+  it("includes first-screen conversations and files in bootstrap without internal fields", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Bootstrap first screen"
     });
-    const upload = reserveUpload(db, request, {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "bootstrap-file.txt",
       mimeType: "text/plain",
       byteSize: 128,
       visibility: "space"
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: upload.id,
       storageVerifiedByteSize: 128
     });
 
-    const bootstrap = getWorkspaceBootstrap(db, "usr_owner");
+    const bootstrap = await getWorkspaceBootstrap(db, "usr_owner");
     expect(bootstrap.conversations.map((item) => item.id)).toContain(conversation.id);
     expect(bootstrap.files.map((item) => item.id)).toContain(upload.attachment.id);
     expect(JSON.stringify(bootstrap)).not.toContain("storageKey");
@@ -3177,9 +3178,9 @@ describe("workspace service", () => {
     expect(JSON.stringify(bootstrap)).not.toContain("audit_logs");
   });
 
-  it("does not expose email or provider ids in member projections", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "PUBLIC-MEMBER" });
-    const member = acceptInvite(db, request, {
+  it("does not expose email or provider ids in member projections", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "PUBLIC-MEMBER" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubId: "public-provider-id",
       githubLogin: "public-member",
@@ -3190,53 +3191,53 @@ describe("workspace service", () => {
     const stored = db.prepare("SELECT github_id AS githubId, email FROM users WHERE id = ?").get(member.id);
     expect(stored).toEqual({ githubId: "public-provider-id", email: "public-member@example.com" });
 
-    const bootstrapMember = getWorkspaceBootstrap(db, "usr_owner").members.find((item) => item.id === member.id);
+    const bootstrapMember = (await getWorkspaceBootstrap(db, "usr_owner")).members.find((item) => item.id === member.id);
     expect(bootstrapMember.githubLogin).toBe("public-member");
     expect(bootstrapMember.email).toBeUndefined();
     expect(bootstrapMember.githubId).toBeUndefined();
 
-    const memberBootstrap = getWorkspaceBootstrap(db, member.id);
+    const memberBootstrap = await getWorkspaceBootstrap(db, member.id);
     expect(memberBootstrap.auth.currentUser.githubLogin).toBe("public-member");
     expect(memberBootstrap.auth.currentUser.email).toBeUndefined();
     expect(memberBootstrap.auth.currentUser.githubId).toBeUndefined();
 
-    const listedMember = listMembers(db, "usr_owner", { q: "public" })[0];
+    const listedMember = (await listMembers(db, "usr_owner", { q: "public" }))[0];
     expect(listedMember.githubLogin).toBe("public-member");
     expect(listedMember.email).toBeUndefined();
     expect(listedMember.githubId).toBeUndefined();
-    expect(listMembers(db, "usr_owner", { q: "public-member@example.com" })).toEqual([]);
+    expect(await listMembers(db, "usr_owner", { q: "public-member@example.com" })).toEqual([]);
 
-    const event = listWorkspaceEvents(db, "usr_owner", 0).find((item) => item.type === "workspace.member_joined" && item.targetId === member.id);
+    const event = (await listWorkspaceEvents(db, "usr_owner", 0)).find((item) => item.type === "workspace.member_joined" && item.targetId === member.id);
     expect(event.payload.member.email).toBeUndefined();
     expect(event.payload.member.githubId).toBeUndefined();
     expect(event.payload.member.capabilities.canStartDirectConversation).toBe(true);
 
-    const selfEvent = listWorkspaceEvents(db, member.id, 0).find((item) => item.type === "workspace.member_joined" && item.targetId === member.id);
+    const selfEvent = (await listWorkspaceEvents(db, member.id, 0)).find((item) => item.type === "workspace.member_joined" && item.targetId === member.id);
     expect(selfEvent.payload.member.capabilities.canStartDirectConversation).toBe(false);
   });
 
-  it("projects member realtime capabilities from the receiving member", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "MEMBER-CAPABILITY-EVENTS" });
-    const member = acceptInvite(db, request, {
+  it("projects member realtime capabilities from the receiving member", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "MEMBER-CAPABILITY-EVENTS" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "member-capability-events",
       email: "member-capability-events@example.com",
       displayName: "Member Capability Events"
     });
-    const auditorInvite = createInvite(db, request, {
+    const auditorInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "auditor",
       code: "MEMBER-CAPABILITY-AUDITOR"
     });
-    const auditor = acceptInvite(db, request, {
+    const auditor = await acceptInvite(db, request, {
       code: auditorInvite.code,
       githubLogin: "member-capability-auditor",
       email: "member-capability-auditor@example.com"
     });
 
-    const ownerEvent = listWorkspaceEvents(db, "usr_owner", 0).find((item) => item.type === "workspace.member_joined" && item.targetId === member.id);
-    const memberEvent = listWorkspaceEvents(db, member.id, 0).find((item) => item.type === "workspace.member_joined" && item.targetId === member.id);
-    const auditorViewEvents = listWorkspaceEvents(db, auditor.id, 0);
+    const ownerEvent = (await listWorkspaceEvents(db, "usr_owner", 0)).find((item) => item.type === "workspace.member_joined" && item.targetId === member.id);
+    const memberEvent = (await listWorkspaceEvents(db, member.id, 0)).find((item) => item.type === "workspace.member_joined" && item.targetId === member.id);
+    const auditorViewEvents = await listWorkspaceEvents(db, auditor.id, 0);
 
     expect(ownerEvent.payload.member.capabilities.canStartDirectConversation).toBe(true);
     expect(memberEvent.payload.member.capabilities.canStartDirectConversation).toBe(false);
@@ -3244,95 +3245,95 @@ describe("workspace service", () => {
     expect(JSON.stringify(ownerEvent)).not.toContain("member-capability-events@example.com");
   });
 
-  it("reports current user quota usage and remaining quota in bootstrap", () => {
-    const initial = getWorkspaceBootstrap(db, "usr_owner");
+  it("reports current user quota usage and remaining quota in bootstrap", async () => {
+    const initial = await getWorkspaceBootstrap(db, "usr_owner");
     expect(initial.policy.dailyQuotaBytes).toBe(DAILY_QUOTA_BYTES);
     expect(initial.policy.usedTodayBytes).toBe(0);
     expect(initial.policy.remainingQuotaBytes).toBe(DAILY_QUOTA_BYTES);
 
-    const upload = reserveUpload(db, request, {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       fileName: "quota.txt",
       mimeType: "text/plain",
       byteSize: 4096,
       visibility: "space"
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: upload.id,
       storageVerifiedByteSize: 4096
     });
 
-    const afterUpload = getWorkspaceBootstrap(db, "usr_owner");
+    const afterUpload = await getWorkspaceBootstrap(db, "usr_owner");
     expect(afterUpload.policy.usedTodayBytes).toBe(4096);
     expect(afterUpload.policy.remainingQuotaBytes).toBe(DAILY_QUOTA_BYTES - 4096);
   });
 
-  it("returns only joined conversations", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "JOINED" });
-    const member = acceptInvite(db, request, {
+  it("returns only joined conversations", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "JOINED" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "joined-member",
       email: "joined@example.com"
     });
 
-    const ownerOnly = createConversation(db, request, {
+    const ownerOnly = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Owner only"
     });
-    const direct = createConversation(db, request, {
+    const direct = await createConversation(db, request, {
       actorId: member.id,
       type: "direct",
       targetUserId: "usr_owner"
     });
 
-    const conversations = listConversations(db, member.id);
+    const conversations = await listConversations(db, member.id);
     expect(conversations.map((conversation) => conversation.id)).toContain(direct.id);
     expect(conversations.map((conversation) => conversation.id)).not.toContain(ownerOnly.id);
   });
 
-  it("prevents reserved auditors from joining conversations or reading message events", () => {
-    const auditorInvite = createInvite(db, request, {
+  it("prevents reserved auditors from joining conversations or reading message events", async () => {
+    const auditorInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "auditor",
       code: "AUDITOR-NO-CHAT"
     });
-    const auditor = acceptInvite(db, request, {
+    const auditor = await acceptInvite(db, request, {
       code: auditorInvite.code,
       githubLogin: "auditor-no-chat",
       email: "auditor-no-chat@example.com"
     });
-    const conversation = createConversation(db, request, {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Auditor hidden group"
     });
-    expect(() =>
-      addConversationMember(db, request, {
+    await expect(async () =>
+      await addConversationMember(db, request, {
         actorId: "usr_owner",
         conversationId: conversation.id,
         userId: auditor.id
       })
-    ).toThrow(WorkspaceValidationError);
-    createStructuredMessage(db, request, {
+    ).rejects.toThrow(WorkspaceValidationError);
+    await createStructuredMessage(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       clientMessageId: "auditor-hidden-message",
       content: textContent("Auditor must not see this")
     });
 
-    expect(() => listConversations(db, auditor.id, request)).toThrow(WorkspacePermissionError);
-    expect(() => getConversationDetails(db, auditor.id, conversation.id, request)).toThrow(WorkspacePermissionError);
-    expect(() => listMessages(db, auditor.id, conversation.id, { request })).toThrow(WorkspacePermissionError);
-    expect(() =>
-      markConversationRead(db, request, {
+    await expect(async () => await listConversations(db, auditor.id, request)).rejects.toThrow(WorkspacePermissionError);
+    await expect(async () => await getConversationDetails(db, auditor.id, conversation.id, request)).rejects.toThrow(WorkspacePermissionError);
+    await expect(async () => await listMessages(db, auditor.id, conversation.id, { request })).rejects.toThrow(WorkspacePermissionError);
+    await expect(async () =>
+      await markConversationRead(db, request, {
         actorId: auditor.id,
         conversationId: conversation.id
       })
-    ).toThrow(WorkspacePermissionError);
+    ).rejects.toThrow(WorkspacePermissionError);
 
-    const events = listWorkspaceEvents(db, auditor.id, 0);
+    const events = await listWorkspaceEvents(db, auditor.id, 0);
     expect(events.some((event) => event.type === "message.created")).toBe(false);
     expect(JSON.stringify(events)).not.toContain("Auditor must not see this");
 
@@ -3369,16 +3370,16 @@ describe("workspace service", () => {
     });
   });
 
-  it("lists and filters visible space members", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "MEMBER-LIST" });
-    const member = acceptInvite(db, request, {
+  it("lists and filters visible space members", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "MEMBER-LIST" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "filter-member",
       email: "filter@example.com",
       displayName: "Filter Member"
     });
 
-    const members = listMembers(db, "usr_owner");
+    const members = await listMembers(db, "usr_owner");
     expect(members.map((item) => item.id)).toContain(member.id);
     expect(members.find((item) => item.id === member.id)).toMatchObject({
       roleLabel: "成员",
@@ -3388,51 +3389,51 @@ describe("workspace service", () => {
     });
     expect(members.find((item) => item.id === "usr_owner")?.capabilities.canStartDirectConversation).toBe(false);
 
-    const filtered = listMembers(db, "usr_owner", { query: "filter" });
+    const filtered = await listMembers(db, "usr_owner", { query: "filter" });
     expect(filtered.map((item) => item.githubLogin)).toEqual(["filter-member"]);
 
-    const memberView = listMembers(db, member.id);
+    const memberView = await listMembers(db, member.id);
     expect(memberView.find((item) => item.id === "usr_owner")?.capabilities.canStartDirectConversation).toBe(true);
 
-    const auditorInvite = createInvite(db, request, {
+    const auditorInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "auditor",
       code: "MEMBER-LIST-AUDITOR"
     });
-    const auditor = acceptInvite(db, request, {
+    const auditor = await acceptInvite(db, request, {
       code: auditorInvite.code,
       githubLogin: "member-list-auditor",
       email: "member-list-auditor@example.com"
     });
-    const auditorView = listMembers(db, auditor.id);
+    const auditorView = await listMembers(db, auditor.id);
     expect(auditorView.every((item) => item.capabilities.canStartDirectConversation === false)).toBe(true);
   });
 
-  it("hides reserved operation-review roles from normal member projections", () => {
-    const memberInvite = createInvite(db, request, { actorId: "usr_owner", code: "MEMBER-ROLE-PROJECTION" });
-    const member = acceptInvite(db, request, {
+  it("hides reserved operation-review roles from normal member projections", async () => {
+    const memberInvite = await createInvite(db, request, { actorId: "usr_owner", code: "MEMBER-ROLE-PROJECTION" });
+    const member = await acceptInvite(db, request, {
       code: memberInvite.code,
       githubLogin: "member-role-projection",
       email: "member-role-projection@example.com"
     });
-    const auditorInvite = createInvite(db, request, {
+    const auditorInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "auditor",
       code: "AUDITOR-ROLE-PROJECTION"
     });
-    const auditor = acceptInvite(db, request, {
+    const auditor = await acceptInvite(db, request, {
       code: auditorInvite.code,
       githubLogin: "reserved-role-projection",
       email: "reserved-role-projection@example.com"
     });
 
-    const ownerView = listMembers(db, "usr_owner").find((item) => item.id === auditor.id);
+    const ownerView = (await listMembers(db, "usr_owner")).find((item) => item.id === auditor.id);
     expect(ownerView).toMatchObject({
       role: "auditor",
       roleLabel: "预留角色"
     });
 
-    const memberView = listMembers(db, member.id).find((item) => item.id === auditor.id);
+    const memberView = (await listMembers(db, member.id)).find((item) => item.id === auditor.id);
     expect(memberView).toMatchObject({
       role: "member",
       roleLabel: "成员",
@@ -3441,7 +3442,7 @@ describe("workspace service", () => {
       }
     });
 
-    const memberBootstrap = getWorkspaceBootstrap(db, member.id);
+    const memberBootstrap = await getWorkspaceBootstrap(db, member.id);
     expect(memberBootstrap.members.find((item) => item.id === auditor.id)).toMatchObject({
       role: "member",
       roleLabel: "成员"
@@ -3450,33 +3451,33 @@ describe("workspace service", () => {
     expect(JSON.stringify(memberBootstrap)).not.toContain("记录查看员");
     expect(JSON.stringify(memberBootstrap)).not.toContain("预留角色");
 
-    const ownerEvent = listWorkspaceEvents(db, "usr_owner", 0).find((item) => item.type === "workspace.member_joined" && item.targetId === auditor.id);
-    const memberEvent = listWorkspaceEvents(db, member.id, 0).find((item) => item.type === "workspace.member_joined" && item.targetId === auditor.id);
+    const ownerEvent = (await listWorkspaceEvents(db, "usr_owner", 0)).find((item) => item.type === "workspace.member_joined" && item.targetId === auditor.id);
+    const memberEvent = (await listWorkspaceEvents(db, member.id, 0)).find((item) => item.type === "workspace.member_joined" && item.targetId === auditor.id);
     expect(ownerEvent.payload.role).toBe("auditor");
     expect(ownerEvent.payload.member.roleLabel).toBe("预留角色");
     expect(memberEvent.payload.role).toBe("member");
     expect(memberEvent.payload.member.roleLabel).toBe("成员");
   });
 
-  it("rejects direct conversations with reserved operation-review members", () => {
-    const auditorInvite = createInvite(db, request, {
+  it("rejects direct conversations with reserved operation-review members", async () => {
+    const auditorInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "auditor",
       code: "AUDITOR-DIRECT-TARGET"
     });
-    const auditor = acceptInvite(db, request, {
+    const auditor = await acceptInvite(db, request, {
       code: auditorInvite.code,
       githubLogin: "auditor-direct-target",
       email: "auditor-direct-target@example.com"
     });
 
-    expect(() =>
-      createWorkspaceConversation(db, request, {
+    await expect(async () =>
+      await createWorkspaceConversation(db, request, {
         actorId: "usr_owner",
         type: "direct",
         targetUserId: auditor.id
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     const audit = db.prepare(`
       SELECT result, reason
@@ -3488,40 +3489,40 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "rejected", reason: "invalid target" });
   });
 
-  it("rejects reserved operation-review members as group chat participants", () => {
-    const auditorInvite = createInvite(db, request, {
+  it("rejects reserved operation-review members as group chat participants", async () => {
+    const auditorInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "auditor",
       code: "AUDITOR-GROUP-TARGET"
     });
-    const auditor = acceptInvite(db, request, {
+    const auditor = await acceptInvite(db, request, {
       code: auditorInvite.code,
       githubLogin: "auditor-group-target",
       email: "auditor-group-target@example.com"
     });
 
-    expect(() =>
-      createWorkspaceConversation(db, request, {
+    await expect(async () =>
+      await createWorkspaceConversation(db, request, {
         actorId: "usr_owner",
         type: "group",
         title: "Invalid reserved member group",
         memberIds: [auditor.id]
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
-    const conversation = createConversation(db, request, {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Valid managed group"
     });
 
-    expect(() =>
-      addConversationMember(db, request, {
+    await expect(async () =>
+      await addConversationMember(db, request, {
         actorId: "usr_owner",
         conversationId: conversation.id,
         userId: auditor.id
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     const membership = db.prepare(`
       SELECT 1
@@ -3562,27 +3563,27 @@ describe("workspace service", () => {
     });
   });
 
-  it("lets owner or admin add and remove group members", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "GROUP-MEMBER" });
-    const member = acceptInvite(db, request, {
+  it("lets owner or admin add and remove group members", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "GROUP-MEMBER" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "group-member",
       email: "group-member@example.com"
     });
-    const conversation = createConversation(db, request, {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Managed group"
     });
 
-    const afterAdd = addConversationMember(db, request, {
+    const afterAdd = await addConversationMember(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       userId: member.id
     });
     expect(afterAdd.members.map((item) => item.id)).toContain(member.id);
 
-    const afterRemove = removeConversationMember(db, request, {
+    const afterRemove = await removeConversationMember(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       userId: member.id
@@ -3599,25 +3600,25 @@ describe("workspace service", () => {
     expect(eventTypes).toContain("conversation.member_removed");
   });
 
-  it("does not emit duplicate member-added events for active group members", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "GROUP-MEMBER-IDEMPOTENT" });
-    const member = acceptInvite(db, request, {
+  it("does not emit duplicate member-added events for active group members", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "GROUP-MEMBER-IDEMPOTENT" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "group-member-idempotent",
       email: "group-member-idempotent@example.com"
     });
-    const conversation = createConversation(db, request, {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Idempotent member add"
     });
 
-    addConversationMember(db, request, {
+    await addConversationMember(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       userId: member.id
     });
-    addConversationMember(db, request, {
+    await addConversationMember(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       userId: member.id
@@ -3633,14 +3634,14 @@ describe("workspace service", () => {
     expect(addedEvents.count).toBe(1);
   });
 
-  it("rolls back group member additions when audit persistence fails", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "GROUP-ADD-TXN" });
-    const member = acceptInvite(db, request, {
+  it("rolls back group member additions when audit persistence fails", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "GROUP-ADD-TXN" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "group-add-txn",
       email: "group-add-txn@example.com"
     });
-    const conversation = createConversation(db, request, {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Transactional add"
@@ -3655,13 +3656,13 @@ describe("workspace service", () => {
       END
     `);
     try {
-      expect(() =>
-        addConversationMember(db, request, {
+      await expect(async () =>
+        await addConversationMember(db, request, {
           actorId: "usr_owner",
           conversationId: conversation.id,
           userId: member.id
         })
-      ).toThrow(/group member add audit failed/);
+      ).rejects.toThrow(/group member add audit failed/);
     } finally {
       db.exec("DROP TRIGGER fail_group_member_add_audit");
     }
@@ -3682,20 +3683,20 @@ describe("workspace service", () => {
     expect(event).toBeUndefined();
   });
 
-  it("records rejected group member additions when the target member is unavailable", () => {
-    const conversation = createConversation(db, request, {
+  it("records rejected group member additions when the target member is unavailable", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Missing add target"
     });
 
-    expect(() =>
-      addConversationMember(db, request, {
+    await expect(async () =>
+      await addConversationMember(db, request, {
         actorId: "usr_owner",
         conversationId: conversation.id,
         userId: "missing-member"
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     const membership = db.prepare(`
       SELECT 1
@@ -3721,27 +3722,27 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "rejected", reason: "member.not_found" });
   });
 
-  it("records rejected group member removal after permission checks", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "GROUP-REJECT-AUDIT" });
-    const member = acceptInvite(db, request, {
+  it("records rejected group member removal after permission checks", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "GROUP-REJECT-AUDIT" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "group-reject-audit",
       email: "group-reject-audit@example.com"
     });
-    const conversation = createConversation(db, request, {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Rejected member management",
       memberIds: [member.id]
     });
 
-    expect(() =>
-      removeConversationMember(db, request, {
+    await expect(async () =>
+      await removeConversationMember(db, request, {
         actorId: "usr_owner",
         conversationId: conversation.id,
         userId: "usr_owner"
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     let audit = db.prepare(`
       SELECT result, reason
@@ -3752,19 +3753,19 @@ describe("workspace service", () => {
     `).get(conversation.id);
     expect(audit).toEqual({ result: "rejected", reason: "self removal" });
 
-    removeConversationMember(db, request, {
+    await removeConversationMember(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       userId: member.id
     });
 
-    expect(() =>
-      removeConversationMember(db, request, {
+    await expect(async () =>
+      await removeConversationMember(db, request, {
         actorId: "usr_owner",
         conversationId: conversation.id,
         userId: member.id
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     audit = db.prepare(`
       SELECT result, reason
@@ -3776,14 +3777,14 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "rejected", reason: "member not in conversation" });
   });
 
-  it("rolls back group member removals when audit persistence fails", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "GROUP-REMOVE-TXN" });
-    const member = acceptInvite(db, request, {
+  it("rolls back group member removals when audit persistence fails", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "GROUP-REMOVE-TXN" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "group-remove-txn",
       email: "group-remove-txn@example.com"
     });
-    const conversation = createConversation(db, request, {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Transactional remove",
@@ -3799,13 +3800,13 @@ describe("workspace service", () => {
       END
     `);
     try {
-      expect(() =>
-        removeConversationMember(db, request, {
+      await expect(async () =>
+        await removeConversationMember(db, request, {
           actorId: "usr_owner",
           conversationId: conversation.id,
           userId: member.id
         })
-      ).toThrow(/group member remove audit failed/);
+      ).rejects.toThrow(/group member remove audit failed/);
     } finally {
       db.exec("DROP TRIGGER fail_group_member_remove_audit");
     }
@@ -3826,20 +3827,20 @@ describe("workspace service", () => {
     expect(event).toBeUndefined();
   });
 
-  it("removes group file visibility and future conversation events after member removal", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "GROUP-FILE-ACCESS" });
-    const member = acceptInvite(db, request, {
+  it("removes group file visibility and future conversation events after member removal", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "GROUP-FILE-ACCESS" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "group-file-member",
       email: "group-file-member@example.com"
     });
-    const conversation = createConversation(db, request, {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Scoped group files",
       memberIds: [member.id]
     });
-    const upload = reserveUpload(db, request, {
+    const upload = await reserveUpload(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       visibility: "conversation",
@@ -3847,60 +3848,60 @@ describe("workspace service", () => {
       mimeType: "text/plain",
       byteSize: 64
     });
-    completeUpload(db, request, {
+    await completeUpload(db, request, {
       actorId: "usr_owner",
       uploadId: upload.id,
       storageVerifiedByteSize: 64
     });
-    expect(listFiles(db, member.id).map((file) => file.id)).toContain(upload.attachment.id);
+    expect((await listFiles(db, member.id)).map((file) => file.id)).toContain(upload.attachment.id);
 
     const beforeRemovalSeq = db.prepare("SELECT MAX(seq) AS seq FROM workspace_events").get().seq;
-    removeConversationMember(db, request, {
+    await removeConversationMember(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       userId: member.id
     });
-    createStructuredMessage(db, request, {
+    await createStructuredMessage(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       clientMessageId: "after-removal",
       content: textContent("After removal")
     });
 
-    expect(listConversations(db, member.id).map((item) => item.id)).not.toContain(conversation.id);
-    expect(listFiles(db, member.id).map((file) => file.id)).not.toContain(upload.attachment.id);
-    expect(() =>
-      reserveDownload(db, request, {
+    expect((await listConversations(db, member.id)).map((item) => item.id)).not.toContain(conversation.id);
+    expect((await listFiles(db, member.id)).map((file) => file.id)).not.toContain(upload.attachment.id);
+    await expect(async () =>
+      await reserveDownload(db, request, {
         actorId: member.id,
         attachmentId: upload.attachment.id
       })
-    ).toThrow(WorkspacePermissionError);
+    ).rejects.toThrow(WorkspacePermissionError);
 
-    const events = listWorkspaceEvents(db, member.id, beforeRemovalSeq);
+    const events = await listWorkspaceEvents(db, member.id, beforeRemovalSeq);
     expect(events.some((event) => event.type === "conversation.member_removed" && event.targetId === member.id)).toBe(true);
     expect(events.some((event) => event.type === "message.created" && event.payload.message?.clientMessageId === "after-removal")).toBe(false);
   });
 
-  it("lets a member leave a group conversation", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "LEAVE-GROUP" });
-    const member = acceptInvite(db, request, {
+  it("lets a member leave a group conversation", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "LEAVE-GROUP" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "leave-member",
       email: "leave-member@example.com"
     });
-    const conversation = createConversation(db, request, {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Leaveable group",
       memberIds: [member.id]
     });
 
-    const result = leaveConversation(db, request, {
+    const result = await leaveConversation(db, request, {
       actorId: member.id,
       conversationId: conversation.id
     });
     expect(result).toEqual({ ok: true, conversationId: conversation.id });
-    expect(listConversations(db, member.id).map((item) => item.id)).not.toContain(conversation.id);
+    expect((await listConversations(db, member.id)).map((item) => item.id)).not.toContain(conversation.id);
 
     const event = db.prepare(`
       SELECT type, target_id AS targetId
@@ -3915,7 +3916,7 @@ describe("workspace service", () => {
     expect(audit.result).toBe("success");
   });
 
-  it("rejects leaving a group when the actor is the last member", () => {
+  it("rejects leaving a group when the actor is the last member", async () => {
     const now = new Date().toISOString();
     const conversationId = "conv_last_member_fixture";
     db.prepare(`
@@ -3927,12 +3928,12 @@ describe("workspace service", () => {
       VALUES (?, 'usr_owner', ?, NULL)
     `).run(conversationId, now);
 
-    expect(() =>
-      leaveConversation(db, request, {
+    await expect(async () =>
+      await leaveConversation(db, request, {
         actorId: "usr_owner",
         conversationId
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     const audit = db.prepare(`
       SELECT result, reason
@@ -3944,14 +3945,14 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "rejected", reason: "last member" });
   });
 
-  it("lets owner or admin rename group conversations and records the change", () => {
-    const conversation = createConversation(db, request, {
+  it("lets owner or admin rename group conversations and records the change", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Old group name"
     });
 
-    const renamed = updateGroupConversation(db, request, {
+    const renamed = await updateGroupConversation(db, request, {
       actorId: "usr_owner",
       conversationId: conversation.id,
       title: "New group name"
@@ -3972,20 +3973,20 @@ describe("workspace service", () => {
     expect(audit.result).toBe("success");
   });
 
-  it("records rejected group rename validation after permission checks", () => {
-    const conversation = createConversation(db, request, {
+  it("records rejected group rename validation after permission checks", async () => {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Rename validation"
     });
 
-    expect(() =>
-      updateGroupConversation(db, request, {
+    await expect(async () =>
+      await updateGroupConversation(db, request, {
         actorId: "usr_owner",
         conversationId: conversation.id,
         title: ""
       })
-    ).toThrow(WorkspaceValidationError);
+    ).rejects.toThrow(WorkspaceValidationError);
 
     const audit = db.prepare(`
       SELECT result, reason
@@ -3997,26 +3998,26 @@ describe("workspace service", () => {
     expect(audit).toEqual({ result: "rejected", reason: "invalid title" });
   });
 
-  it("rejects normal member group management and records the rejection", () => {
-    const invite = createInvite(db, request, { actorId: "usr_owner", code: "NO-GROUP-MANAGE" });
-    const member = acceptInvite(db, request, {
+  it("rejects normal member group management and records the rejection", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "NO-GROUP-MANAGE" });
+    const member = await acceptInvite(db, request, {
       code: invite.code,
       githubLogin: "normal-member",
       email: "normal-member@example.com"
     });
-    const conversation = createConversation(db, request, {
+    const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
       title: "Owner managed"
     });
 
-    expect(() =>
-      addConversationMember(db, request, {
+    await expect(async () =>
+      await addConversationMember(db, request, {
         actorId: member.id,
         conversationId: conversation.id,
         userId: member.id
       })
-    ).toThrow(WorkspacePermissionError);
+    ).rejects.toThrow(WorkspacePermissionError);
 
     const audit = db.prepare(`
       SELECT result, reason
@@ -4027,12 +4028,12 @@ describe("workspace service", () => {
     `).get(member.id);
     expect(audit).toEqual({ result: "rejected", reason: "insufficient permission" });
 
-    expect(() =>
-      updateGroupConversation(db, request, {
+    await expect(async () =>
+      await updateGroupConversation(db, request, {
         actorId: member.id,
         conversationId: conversation.id,
         title: "Not allowed"
       })
-    ).toThrow(WorkspacePermissionError);
+    ).rejects.toThrow(WorkspacePermissionError);
   });
 });

@@ -342,14 +342,16 @@ Recommended MVP stack:
 - Backend: Node/Fastify.
 - Realtime: WebSocket.
 - Private direct: WebRTC DataChannel plus WebSocket signaling.
-- Database: SQLite for self-hosted MVP.
+- Database: PostgreSQL with versioned migrations.
 - File storage: local filesystem volume.
 - Deployment: Docker Compose.
 
 Suggested services:
 
-- `web`: frontend and API server, either integrated or reverse-proxied.
-- `db`: not needed for SQLite MVP; use a mounted volume.
+- `web`: Nginx frontend gateway and reverse proxy.
+- `api`: private Node/Fastify service.
+- `postgres`: persistent Workspace metadata, messages, quotas, events, and audits.
+- `migrate`: one-shot schema migration and seed service.
 - `storage`: local mounted upload directory.
 - Optional future `turn`: coturn for improved private-direct connection success.
 
@@ -474,7 +476,7 @@ Phase 3:
 
 - Application-layer end-to-end encryption for private direct with key verification.
 - Optional encrypted shared-space room mode.
-- PostgreSQL support.
+- Shared attachment storage and cross-instance realtime transport.
 - Multi-device session management.
 - Public open-source deployment templates.
 - Backup and restore tooling.
@@ -523,7 +525,7 @@ Recommended defaults are included where possible.
 
 | Question | Recommended default |
 | --- | --- |
-| Database | SQLite for MVP. |
+| Database | PostgreSQL with versioned migrations. |
 | File storage | Local mounted volume. |
 | Private direct persistence | Ask at session end; default to not saving. |
 | Shared-space message retention | Recent `10000` messages per conversation. |

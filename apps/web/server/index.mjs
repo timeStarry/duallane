@@ -67,7 +67,20 @@ export async function createApp(options = {}) {
   const trustProxy = options.trustProxy ?? env.TRUST_PROXY === "true";
 
   await mkdir(dataDir, { recursive: true });
-  const db = options.db ?? openDatabase(dataDir);
+  const db = options.db ?? (workspaceEnabled
+    ? await openDatabase(env.DATABASE_URL, {
+      migrate: env.DATABASE_AUTO_MIGRATE !== "false",
+      host: env.PGHOST,
+      port: normalizePositiveInteger(env.PGPORT),
+      database: env.PGDATABASE,
+      user: env.PGUSER,
+      password: env.PGPASSWORD,
+      maxConnections: normalizePositiveInteger(env.DATABASE_POOL_MAX),
+      ssl: env.DATABASE_SSL === "true"
+        ? { rejectUnauthorized: env.DATABASE_SSL_REJECT_UNAUTHORIZED !== "false" }
+        : undefined
+    })
+    : null);
 
   const app = Fastify({
     trustProxy,
@@ -96,9 +109,9 @@ export async function createApp(options = {}) {
     genReqId: () => crypto.randomUUID()
   });
 
-  if (!options.db) {
+  if (db && !options.db) {
     app.addHook("onClose", async () => {
-      db.close();
+      await db.close();
     });
   }
 
@@ -209,13 +222,13 @@ app.get("/api/auth/github/callback", async (request, reply) => {
     const pendingInvite = normalizeQueryString(request.cookies?.duallane_pending_invite);
     let user;
     try {
-      user = bindGitHubUser(db, request, profile);
+      user = await bindGitHubUser(db, request, profile);
     } catch (error) {
       if (!(error instanceof WorkspaceError) || error.code !== "auth.not_invited" || !pendingInvite) {
         throw error;
       }
       try {
-        user = acceptInvite(db, request, { ...profile, code: pendingInvite });
+        user = await acceptInvite(db, request, { ...profile, code: pendingInvite });
       } catch (inviteError) {
         if (inviteError instanceof WorkspaceError && inviteError.code.startsWith("invite.")) {
           reply.clearCookie("duallane_pending_invite", { path: "/api/auth/github" });
@@ -224,7 +237,7 @@ app.get("/api/auth/github/callback", async (request, reply) => {
       }
     }
 
-    const session = createWorkspaceSession(db, user.id);
+    const session = await createWorkspaceSession(db, user.id);
     reply.setCookie(WORKSPACE_SESSION_COOKIE, session.token, {
       httpOnly: true,
       sameSite: "lax",
@@ -245,7 +258,9 @@ app.get("/api/auth/github/callback", async (request, reply) => {
 
 app.post("/api/auth/logout", async (request, reply) => {
   const token = request.cookies?.[WORKSPACE_SESSION_COOKIE];
-  revokeWorkspaceSession(db, token);
+  if (workspaceEnabled) {
+    await revokeWorkspaceSession(db, token);
+  }
   reply.clearCookie(WORKSPACE_SESSION_COOKIE, { path: "/" });
   return { ok: true };
 });
@@ -255,7 +270,7 @@ app.get("/api/workspace/bootstrap", async (request, reply) => {
     return blockWorkspace(reply);
   }
   try {
-    return getWorkspaceBootstrap(db, getWorkspaceUserId(request));
+    return await getWorkspaceBootstrap(db, await getWorkspaceUserId(request));
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }
@@ -266,7 +281,7 @@ app.post("/api/workspace/invites", async (request, reply) => {
     return blockWorkspace(reply);
   }
   try {
-    const invite = createInvite(db, request, { ...(request.body ?? {}), actorId: getWorkspaceUserId(request) });
+    const invite = await createInvite(db, request, { ...(request.body ?? {}), actorId: await getWorkspaceUserId(request) });
     return reply.code(201).send({ invite: withInviteUrl(env, invite) });
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
@@ -278,8 +293,8 @@ app.post("/api/workspace/invites/:inviteId/revoke", async (request, reply) => {
     return blockWorkspace(reply);
   }
   try {
-    const invite = revokeInvite(db, request, {
-      actorId: getWorkspaceUserId(request),
+    const invite = await revokeInvite(db, request, {
+      actorId: await getWorkspaceUserId(request),
       inviteId: request.params.inviteId
     });
     return reply.send({ invite });
@@ -293,12 +308,12 @@ app.post("/api/workspace/invites/:code/accept", async (request, reply) => {
     return blockWorkspace(reply);
   }
   if (env.NODE_ENV === "production") {
-    recordInviteAcceptRejection(db, request, "auth.github_required");
+    await recordInviteAcceptRejection(db, request, "auth.github_required");
     return sendWorkspaceError(reply, request, new WorkspaceError("auth.github_required", "请通过 GitHub 登录接受邀请", 401));
   }
   try {
-    const user = acceptInvite(db, request, { ...(request.body ?? {}), code: request.params.code });
-    const session = createWorkspaceSession(db, user.id);
+    const user = await acceptInvite(db, request, { ...(request.body ?? {}), code: request.params.code });
+    const session = await createWorkspaceSession(db, user.id);
     reply.setCookie(WORKSPACE_SESSION_COOKIE, session.token, {
       httpOnly: true,
       sameSite: "lax",
@@ -317,7 +332,7 @@ app.get("/api/workspace/conversations", async (request, reply) => {
     return blockWorkspace(reply);
   }
   try {
-    return { conversations: listConversations(db, getWorkspaceUserId(request), request) };
+    return { conversations: await listConversations(db, await getWorkspaceUserId(request), request) };
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }
@@ -328,7 +343,7 @@ app.get("/api/workspace/conversations/:conversationId", async (request, reply) =
     return blockWorkspace(reply);
   }
   try {
-    return { conversation: getConversationDetails(db, getWorkspaceUserId(request), request.params.conversationId, request) };
+    return { conversation: await getConversationDetails(db, await getWorkspaceUserId(request), request.params.conversationId, request) };
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }
@@ -340,7 +355,7 @@ app.get("/api/workspace/members", async (request, reply) => {
   }
   try {
     return {
-      members: listMembers(db, getWorkspaceUserId(request), {
+      members: await listMembers(db, await getWorkspaceUserId(request), {
         query: request.query?.q,
         role: request.query?.role,
         kind: request.query?.kind,
@@ -357,9 +372,9 @@ app.patch("/api/workspace/members/:userId/role", async (request, reply) => {
     return blockWorkspace(reply);
   }
   try {
-    const member = updateMemberRole(db, request, {
+    const member = await updateMemberRole(db, request, {
       ...(request.body ?? {}),
-      actorId: getWorkspaceUserId(request),
+      actorId: await getWorkspaceUserId(request),
       userId: request.params.userId
     });
     return { member };
@@ -373,8 +388,8 @@ app.delete("/api/workspace/members/:userId", async (request, reply) => {
     return blockWorkspace(reply);
   }
   try {
-    return removeSpaceMember(db, request, {
-      actorId: getWorkspaceUserId(request),
+    return await removeSpaceMember(db, request, {
+      actorId: await getWorkspaceUserId(request),
       userId: request.params.userId
     });
   } catch (error) {
@@ -387,7 +402,7 @@ app.post("/api/workspace/conversations", async (request, reply) => {
     return blockWorkspace(reply);
   }
   try {
-    const conversation = createConversation(db, request, { ...(request.body ?? {}), actorId: getWorkspaceUserId(request) });
+    const conversation = await createConversation(db, request, { ...(request.body ?? {}), actorId: await getWorkspaceUserId(request) });
     return reply.code(201).send({ conversation });
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
@@ -399,9 +414,9 @@ app.post("/api/workspace/groups/:conversationId/members", async (request, reply)
     return blockWorkspace(reply);
   }
   try {
-    const conversation = addConversationMember(db, request, {
+    const conversation = await addConversationMember(db, request, {
       ...(request.body ?? {}),
-      actorId: getWorkspaceUserId(request),
+      actorId: await getWorkspaceUserId(request),
       conversationId: request.params.conversationId
     });
     return reply.code(201).send({ conversation });
@@ -415,8 +430,8 @@ app.delete("/api/workspace/groups/:conversationId/members/:userId", async (reque
     return blockWorkspace(reply);
   }
   try {
-    const conversation = removeConversationMember(db, request, {
-      actorId: getWorkspaceUserId(request),
+    const conversation = await removeConversationMember(db, request, {
+      actorId: await getWorkspaceUserId(request),
       conversationId: request.params.conversationId,
       userId: request.params.userId
     });
@@ -431,9 +446,9 @@ app.patch("/api/workspace/groups/:conversationId", async (request, reply) => {
     return blockWorkspace(reply);
   }
   try {
-    const conversation = updateGroupConversation(db, request, {
+    const conversation = await updateGroupConversation(db, request, {
       ...(request.body ?? {}),
-      actorId: getWorkspaceUserId(request),
+      actorId: await getWorkspaceUserId(request),
       conversationId: request.params.conversationId
     });
     return { conversation };
@@ -447,8 +462,8 @@ app.post("/api/workspace/groups/:conversationId/leave", async (request, reply) =
     return blockWorkspace(reply);
   }
   try {
-    return leaveConversation(db, request, {
-      actorId: getWorkspaceUserId(request),
+    return await leaveConversation(db, request, {
+      actorId: await getWorkspaceUserId(request),
       conversationId: request.params.conversationId
     });
   } catch (error) {
@@ -462,7 +477,7 @@ app.get("/api/workspace/conversations/:conversationId/messages", async (request,
   }
   try {
     return {
-      messages: listMessages(db, getWorkspaceUserId(request), request.params.conversationId, {
+      messages: await listMessages(db, await getWorkspaceUserId(request), request.params.conversationId, {
         request,
         before: request.query?.before,
         limit: request.query?.limit
@@ -478,8 +493,8 @@ app.post("/api/workspace/conversations/:conversationId/read", async (request, re
     return blockWorkspace(reply);
   }
   try {
-    const conversation = markConversationRead(db, request, {
-      actorId: getWorkspaceUserId(request),
+    const conversation = await markConversationRead(db, request, {
+      actorId: await getWorkspaceUserId(request),
       conversationId: request.params.conversationId
     });
     return { conversation };
@@ -493,9 +508,9 @@ app.patch("/api/workspace/conversations/:conversationId/notification", async (re
     return blockWorkspace(reply);
   }
   try {
-    const conversation = updateConversationNotificationLevel(db, request, {
+    const conversation = await updateConversationNotificationLevel(db, request, {
       ...(request.body ?? {}),
-      actorId: getWorkspaceUserId(request),
+      actorId: await getWorkspaceUserId(request),
       conversationId: request.params.conversationId
     });
     return { conversation };
@@ -509,7 +524,7 @@ app.post("/api/workspace/messages", async (request, reply) => {
     return blockWorkspace(reply);
   }
   try {
-    const message = createStructuredMessage(db, request, { ...(request.body ?? {}), actorId: getWorkspaceUserId(request) });
+    const message = await createStructuredMessage(db, request, { ...(request.body ?? {}), actorId: await getWorkspaceUserId(request) });
     return reply.code(201).send({ message });
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
@@ -521,7 +536,7 @@ app.post("/api/workspace/files/uploads/reserve", async (request, reply) => {
     return blockWorkspace(reply);
   }
   try {
-    const reservation = reserveUpload(db, request, { ...(request.body ?? {}), actorId: getWorkspaceUserId(request) });
+    const reservation = await reserveUpload(db, request, { ...(request.body ?? {}), actorId: await getWorkspaceUserId(request) });
     const statusCode = reservation.status === "rejected" ? 409 : 201;
     return reply.code(statusCode).send(reservation);
   } catch (error) {
@@ -533,12 +548,12 @@ app.post("/api/workspace/files/uploads/:uploadId/complete", async (request, repl
   if (!workspaceEnabled) {
     return blockWorkspace(reply);
   }
-  const actorId = getWorkspaceUserId(request);
+  const actorId = await getWorkspaceUserId(request);
   let upload;
   try {
-    upload = getReservedUpload(db, actorId, request.params.uploadId);
+    upload = await getReservedUpload(db, actorId, request.params.uploadId);
     const stored = await statStoredAttachment(dataDir, upload.attachment.storageKey, upload.attachment.byteSize);
-    return completeUpload(db, request, {
+    return await completeUpload(db, request, {
       ...(request.body ?? {}),
       actorId,
       uploadId: request.params.uploadId,
@@ -548,7 +563,7 @@ app.post("/api/workspace/files/uploads/:uploadId/complete", async (request, repl
     if (upload) {
       await removeStoredAttachment(dataDir, upload.attachment.storageKey);
       try {
-        failUpload(db, request, {
+        await failUpload(db, request, {
           actorId,
           uploadId: request.params.uploadId,
           reason: error instanceof Error ? error.message : "upload complete failed"
@@ -565,12 +580,12 @@ app.put("/api/workspace/files/uploads/:uploadId/content", async (request, reply)
   if (!workspaceEnabled) {
     return blockWorkspace(reply);
   }
-  const actorId = getWorkspaceUserId(request);
+  const actorId = await getWorkspaceUserId(request);
   let upload;
   try {
-    upload = getReservedUpload(db, actorId, request.params.uploadId);
+    upload = await getReservedUpload(db, actorId, request.params.uploadId);
     const stored = await saveUploadStream(dataDir, upload.attachment.storageKey, request.body, upload.attachment.byteSize);
-    return completeUpload(db, request, {
+    return await completeUpload(db, request, {
       actorId,
       uploadId: request.params.uploadId,
       storageVerifiedByteSize: stored.byteSize
@@ -579,7 +594,7 @@ app.put("/api/workspace/files/uploads/:uploadId/content", async (request, reply)
     if (upload) {
       await removeStoredAttachment(dataDir, upload.attachment.storageKey);
       try {
-        failUpload(db, request, {
+        await failUpload(db, request, {
           actorId,
           uploadId: request.params.uploadId,
           reason: error instanceof Error ? error.message : "upload failed"
@@ -597,7 +612,7 @@ app.post("/api/workspace/files/uploads/:uploadId/fail", async (request, reply) =
     return blockWorkspace(reply);
   }
   try {
-    return failUpload(db, request, { ...(request.body ?? {}), actorId: getWorkspaceUserId(request), uploadId: request.params.uploadId });
+    return await failUpload(db, request, { ...(request.body ?? {}), actorId: await getWorkspaceUserId(request), uploadId: request.params.uploadId });
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }
@@ -609,7 +624,7 @@ app.get("/api/workspace/files", async (request, reply) => {
   }
   try {
     return {
-      files: listFiles(db, getWorkspaceUserId(request), {
+      files: await listFiles(db, await getWorkspaceUserId(request), {
         scope: request.query?.scope,
         conversationId: request.query?.conversationId,
         uploaderId: request.query?.uploaderId,
@@ -627,8 +642,8 @@ app.delete("/api/workspace/files/:attachmentId", async (request, reply) => {
     return blockWorkspace(reply);
   }
   try {
-    return removeAttachment(db, request, {
-      actorId: getWorkspaceUserId(request),
+    return await removeAttachment(db, request, {
+      actorId: await getWorkspaceUserId(request),
       attachmentId: request.params.attachmentId
     });
   } catch (error) {
@@ -641,10 +656,10 @@ app.post("/api/workspace/files/:attachmentId/downloads/reserve", async (request,
     return blockWorkspace(reply);
   }
   try {
-    const actorId = getWorkspaceUserId(request);
-    const candidate = getDownloadableAttachment(db, request, actorId, request.params.attachmentId);
+    const actorId = await getWorkspaceUserId(request);
+    const candidate = await getDownloadableAttachment(db, request, actorId, request.params.attachmentId);
     await statStoredAttachment(dataDir, candidate.storageKey, candidate.byteSize);
-    const reservation = reserveDownload(db, request, { ...(request.body ?? {}), actorId, attachmentId: request.params.attachmentId });
+    const reservation = await reserveDownload(db, request, { ...(request.body ?? {}), actorId, attachmentId: request.params.attachmentId });
     const statusCode = reservation.status === "rejected" ? 409 : 201;
     return reply.code(statusCode).send(reservation);
   } catch (error) {
@@ -657,19 +672,19 @@ app.get("/api/workspace/files/:attachmentId/download", async (request, reply) =>
     return blockWorkspace(reply);
   }
   try {
-    const actorId = getWorkspaceUserId(request);
-    const candidate = getDownloadableAttachment(db, request, actorId, request.params.attachmentId);
+    const actorId = await getWorkspaceUserId(request);
+    const candidate = await getDownloadableAttachment(db, request, actorId, request.params.attachmentId);
     await statStoredAttachment(dataDir, candidate.storageKey, candidate.byteSize);
     const downloadId = normalizeQueryString(request.query?.downloadId);
     let attachment;
     if (downloadId) {
-      ({ attachment } = getCompletedDownload(db, actorId, request.params.attachmentId, downloadId));
+      ({ attachment } = await getCompletedDownload(db, actorId, request.params.attachmentId, downloadId));
     } else {
-      const reservation = reserveDownload(db, request, { actorId, attachmentId: request.params.attachmentId });
+      const reservation = await reserveDownload(db, request, { actorId, attachmentId: request.params.attachmentId });
       if (reservation.status === "rejected") {
         return reply.code(409).send(reservation);
       }
-      ({ attachment } = getCompletedDownload(db, actorId, request.params.attachmentId, reservation.id));
+      ({ attachment } = await getCompletedDownload(db, actorId, request.params.attachmentId, reservation.id));
     }
     const stored = await statStoredAttachment(dataDir, attachment.storageKey, attachment.byteSize);
     reply.header("Content-Type", attachment.mimeType || "application/octet-stream");
@@ -689,17 +704,17 @@ app.get("/ws/workspace", { websocket: true }, (socket, request) => {
 
   let subscribedUserId = null;
   let lastDeliveredSeq = 0;
-  const unsubscribe = subscribeWorkspaceEvents((writtenEvent) => {
+  const unsubscribe = subscribeWorkspaceEvents(async (writtenEvent) => {
     if (!subscribedUserId || socket.readyState !== 1) {
       return;
     }
     let events;
     try {
-      const pushedEvent = getWorkspaceEventForUser(db, subscribedUserId, writtenEvent.id);
+      const pushedEvent = await getWorkspaceEventForUser(db, subscribedUserId, writtenEvent.id);
       if (!pushedEvent) {
         return;
       }
-      events = listWorkspaceEvents(db, subscribedUserId, Math.min(lastDeliveredSeq, pushedEvent.seq - 1));
+      events = await listWorkspaceEvents(db, subscribedUserId, Math.min(lastDeliveredSeq, pushedEvent.seq - 1));
     } catch (error) {
       socket.send(JSON.stringify(toWorkspaceSocketError(request, error)));
       socket.close(error instanceof WorkspaceError ? 1008 : 1011, "workspace access changed");
@@ -714,7 +729,7 @@ app.get("/ws/workspace", { websocket: true }, (socket, request) => {
         version: 1,
         type: "sync.required",
         spaceId: DEFAULT_SPACE_ID,
-        currentSeq: getWorkspaceEventCursor(db),
+        currentSeq: await getWorkspaceEventCursor(db),
         reason: "replay_limit"
       }));
     }
@@ -723,16 +738,16 @@ app.get("/ws/workspace", { websocket: true }, (socket, request) => {
   socket.on("close", unsubscribe);
   socket.on("error", unsubscribe);
 
-  socket.on("message", (raw) => {
+  socket.on("message", async (raw) => {
     try {
       const parsed = JSON.parse(raw.toString());
-      const userId = getWorkspaceUserId(request);
+      const userId = await getWorkspaceUserId(request);
       if (parsed.type !== "hello") {
         socket.send(JSON.stringify({ version: 1, type: "error", error: { code: "realtime.invalid", message: "实时同步请求无效" } }));
         return;
       }
       const lastSeq = Math.max(0, Number(parsed.lastSeq) || 0);
-      const currentSeq = getWorkspaceEventCursor(db);
+      const currentSeq = await getWorkspaceEventCursor(db);
       if (lastSeq > currentSeq) {
         socket.send(JSON.stringify({
           version: 1,
@@ -743,7 +758,7 @@ app.get("/ws/workspace", { websocket: true }, (socket, request) => {
         }));
         return;
       }
-      const events = listWorkspaceEvents(db, userId, lastSeq);
+      const events = await listWorkspaceEvents(db, userId, lastSeq);
       socket.send(JSON.stringify({
         version: 1,
         type: "ready",
@@ -782,12 +797,12 @@ if (env.NODE_ENV === "production" && serveStatic) {
 
 return app;
 
-function getWorkspaceUserId(request) {
+async function getWorkspaceUserId(request) {
   const headerUserId = request.headers["x-workspace-user-id"];
   if (env.NODE_ENV !== "production" && typeof headerUserId === "string" && headerUserId) {
     return headerUserId;
   }
-  return getSessionUserId(db, request.cookies?.[WORKSPACE_SESSION_COOKIE]);
+  return await getSessionUserId(db, request.cookies?.[WORKSPACE_SESSION_COOKIE]);
 }
 
 async function resolveGitHubProfile(request) {
@@ -924,6 +939,11 @@ function encodeHeaderValue(value) {
 
 function normalizeQueryString(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizePositiveInteger(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function workspaceFrontendUrl(env, pathnameAndQuery) {

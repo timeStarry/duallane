@@ -1,4 +1,4 @@
-export function writeAudit(db, event) {
+export async function writeAudit(db, event) {
   const now = new Date().toISOString();
   const audit = {
     id: event.id ?? crypto.randomUUID(),
@@ -16,7 +16,7 @@ export function writeAudit(db, event) {
     createdAt: event.createdAt ?? now
   };
 
-  db.prepare(`
+  await db.prepare(`
     INSERT INTO audit_logs (
       id, space_id, actor_user_id, actor_github_login, action, target_type, target_id,
       result, reason, ip_address, user_agent, request_id, created_at
