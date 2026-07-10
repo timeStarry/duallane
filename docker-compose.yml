@@ -22,6 +22,10 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-replace-this-before-production}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8787}
       WORKSPACE_ENABLED: ${WORKSPACE_ENABLED:-false}
+      WORKSPACE_FRONTEND_URL: ${WORKSPACE_FRONTEND_URL:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      TRUST_PROXY: ${TRUST_PROXY:-true}
       SERVE_STATIC: "false"
     volumes:
       - duallane-data:/app/data

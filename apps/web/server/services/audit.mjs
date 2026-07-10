@@ -2,6 +2,7 @@ export function writeAudit(db, event) {
   const now = new Date().toISOString();
   const audit = {
     id: event.id ?? crypto.randomUUID(),
+    spaceId: event.spaceId ?? null,
     actorUserId: event.actorUserId ?? null,
     actorGithubLogin: event.actorGithubLogin ?? null,
     action: event.action,
@@ -17,12 +18,13 @@ export function writeAudit(db, event) {
 
   db.prepare(`
     INSERT INTO audit_logs (
-      id, actor_user_id, actor_github_login, action, target_type, target_id,
+      id, space_id, actor_user_id, actor_github_login, action, target_type, target_id,
       result, reason, ip_address, user_agent, request_id, created_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     audit.id,
+    audit.spaceId,
     audit.actorUserId,
     audit.actorGithubLogin,
     audit.action,

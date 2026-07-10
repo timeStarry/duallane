@@ -1,6 +1,8 @@
 export const WORKSPACE_UNDER_DEVELOPMENT_RESPONSE = {
-  error: "workspace under development",
-  message: "工作区功能正在开发中"
+  error: {
+    code: "workspace.disabled",
+    message: "共享空间暂未开放"
+  }
 };
 
 export function isWorkspaceEnabled(env = process.env) {

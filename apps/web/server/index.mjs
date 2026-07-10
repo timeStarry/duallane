@@ -2,57 +2,105 @@ import Fastify from "fastify";
 import fastifyCookie from "@fastify/cookie";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
+import { createReadStream } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { openDatabase } from "./services/db.mjs";
+import { DEFAULT_SPACE_ID, openDatabase } from "./services/db.mjs";
 import { getIceServers } from "./services/ice.mjs";
 import { attachP2PSocket, createP2PRoom, getP2PRoom } from "./services/p2p.mjs";
 import {
-  createRelayMessage,
+  acceptInvite,
+  addConversationMember,
+  bindGitHubUser,
+  completeUpload,
+  createConversation,
+  createInvite,
+  createStructuredMessage,
+  createWorkspaceSession,
+  failUpload,
+  getCompletedDownload,
+  getConversationDetails,
+  getDownloadableAttachment,
+  getReservedUpload,
+  getSessionUserId,
+  getWorkspaceEventForUser,
+  getWorkspaceEventCursor,
   getWorkspaceBootstrap,
+  leaveConversation,
   listConversations,
-  reserveTransferQuota,
-  WorkspaceValidationError
+  listFiles,
+  listMembers,
+  listMessages,
+  listWorkspaceEvents,
+  markConversationRead,
+  recordInviteAcceptRejection,
+  removeConversationMember,
+  removeAttachment,
+  removeSpaceMember,
+  reserveDownload,
+  reserveUpload,
+  revokeInvite,
+  revokeWorkspaceSession,
+  subscribeWorkspaceEvents,
+  updateMemberRole,
+  updateGroupConversation,
+  updateConversationNotificationLevel,
+  WORKSPACE_SESSION_COOKIE,
+  WorkspaceError
 } from "./services/workspace.mjs";
 import { blockWorkspace, isWorkspaceEnabled } from "./services/workspace-gate.mjs";
+import {
+  removeStoredAttachment,
+  saveUploadStream,
+  statStoredAttachment
+} from "./services/workspace-storage.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
-const dataDir = process.env.DUALLANE_DATA_DIR ?? path.resolve(rootDir, "../../data");
-const port = Number(process.env.PORT ?? 8787);
-const host = process.env.HOST ?? "127.0.0.1";
-const workspaceEnabled = isWorkspaceEnabled();
-const serveStatic = process.env.SERVE_STATIC !== "false";
 
-await mkdir(dataDir, { recursive: true });
-const db = openDatabase(dataDir);
+export async function createApp(options = {}) {
+  const env = options.env ?? process.env;
+  const dataDir = options.dataDir ?? env.DUALLANE_DATA_DIR ?? path.resolve(rootDir, "../../data");
+  const workspaceEnabled = isWorkspaceEnabled(env);
+  const serveStatic = env.SERVE_STATIC !== "false";
+  const trustProxy = options.trustProxy ?? env.TRUST_PROXY === "true";
 
-const app = Fastify({
-  logger: {
-    redact: {
-      paths: [
-        "req.headers.authorization",
-        "req.headers.cookie",
-        "req.query",
-        "req.body",
-        "res.body"
-      ],
-      remove: true
-    },
-    serializers: {
-      req(request) {
-        return {
-          method: request.method,
-          url: request.routerPath || request.url.split("?")[0],
-          host: request.hostname,
-          remoteAddress: request.ip
-        };
+  await mkdir(dataDir, { recursive: true });
+  const db = options.db ?? openDatabase(dataDir);
+
+  const app = Fastify({
+    trustProxy,
+    logger: options.logger ?? {
+      redact: {
+        paths: [
+          "req.headers.authorization",
+          "req.headers.cookie",
+          "req.query",
+          "req.body",
+          "res.body"
+        ],
+        remove: true
+      },
+      serializers: {
+        req(request) {
+          return {
+            method: request.method,
+            url: request.routerPath || request.url.split("?")[0],
+            host: request.hostname,
+            remoteAddress: request.ip
+          };
+        }
       }
-    }
-  },
-  genReqId: () => crypto.randomUUID()
-});
+    },
+    genReqId: () => crypto.randomUUID()
+  });
+
+  if (!options.db) {
+    app.addHook("onClose", async () => {
+      db.close();
+    });
+  }
 
 app.addHook("onRequest", async (_request, reply) => {
   reply.header("Referrer-Policy", "no-referrer");
@@ -64,19 +112,27 @@ app.addHook("onRequest", async (_request, reply) => {
 });
 
 await app.register(fastifyCookie, {
-  secret: process.env.SESSION_SECRET || "duallane-local-dev-secret-change-me"
+  secret: env.SESSION_SECRET || "duallane-local-dev-secret-change-me"
 });
 await app.register(fastifyWebsocket);
+app.addContentTypeParser("application/octet-stream", (_request, payload, done) => {
+  done(null, payload);
+});
 
 app.get("/api/health", async () => ({
   ok: true,
   service: "duallane",
-  lane: "ready",
-  dataDir
+  lane: "ready"
 }));
 
+if (env.NODE_ENV !== "production") {
+  app.get("/", async (request, reply) => {
+    return reply.redirect(workspaceFrontendUrl(env, request.url));
+  });
+}
+
 app.post("/api/p2p/rooms", async (request, reply) => {
-  const baseUrl = process.env.PUBLIC_BASE_URL || `${request.protocol}://${request.host}`;
+  const baseUrl = env.PUBLIC_BASE_URL || `${request.protocol}://${request.host}`;
   const maxPeers = request.body && typeof request.body === "object" ? request.body.maxPeers : undefined;
   if (maxPeers !== 2) {
     return reply.code(400).send({ error: "maxPeers must be 2 for p2p rooms" });
@@ -101,54 +157,619 @@ app.get("/ws/p2p/:roomId", { websocket: true }, (socket, request) => {
   attachP2PSocket(request.params.roomId, socket);
 });
 
-app.get("/api/workspace/bootstrap", async (_request, reply) => {
+app.get("/api/auth/github/start", async (request, reply) => {
   if (!workspaceEnabled) {
     return blockWorkspace(reply);
   }
-  return getWorkspaceBootstrap(db);
+
+  const clientId = env.GITHUB_CLIENT_ID;
+  const clientSecret = env.GITHUB_CLIENT_SECRET;
+  const publicBaseUrl = env.PUBLIC_BASE_URL || `${request.protocol}://${request.host}`;
+  const redirectUri = new URL("/api/auth/github/callback", publicBaseUrl).toString();
+  const state = crypto.randomUUID();
+  const pendingInvite = normalizeQueryString(request.query?.invite);
+  reply.setCookie("duallane_oauth_state", state, {
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/api/auth/github",
+    secure: request.protocol === "https"
+  });
+  if (pendingInvite) {
+    reply.setCookie("duallane_pending_invite", pendingInvite, {
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/api/auth/github",
+      secure: request.protocol === "https"
+    });
+  }
+
+  if (!clientId || !clientSecret) {
+    if (env.NODE_ENV === "production") {
+      return sendWorkspaceError(reply, request, new WorkspaceError("auth.github_not_configured", "GitHub 登录尚未配置", 503));
+    }
+    return reply.redirect(`${redirectUri}?githubLogin=timeStarry&email=timestarry%40qq.com&displayName=timeStarry`);
+  }
+
+  const authUrl = new URL("https://github.com/login/oauth/authorize");
+  authUrl.searchParams.set("client_id", clientId);
+  authUrl.searchParams.set("redirect_uri", redirectUri);
+  authUrl.searchParams.set("scope", "read:user user:email");
+  authUrl.searchParams.set("state", state);
+  return reply.redirect(authUrl.toString());
 });
 
-app.get("/api/workspace/conversations", async (_request, reply) => {
+app.get("/api/auth/github/callback", async (request, reply) => {
   if (!workspaceEnabled) {
     return blockWorkspace(reply);
   }
-  return { conversations: listConversations(db) };
+  reply.clearCookie("duallane_oauth_state", { path: "/api/auth/github" });
+
+  try {
+    const profile = await resolveGitHubProfile(request);
+    const pendingInvite = normalizeQueryString(request.cookies?.duallane_pending_invite);
+    let user;
+    try {
+      user = bindGitHubUser(db, request, profile);
+    } catch (error) {
+      if (!(error instanceof WorkspaceError) || error.code !== "auth.not_invited" || !pendingInvite) {
+        throw error;
+      }
+      try {
+        user = acceptInvite(db, request, { ...profile, code: pendingInvite });
+      } catch (inviteError) {
+        if (inviteError instanceof WorkspaceError && inviteError.code.startsWith("invite.")) {
+          reply.clearCookie("duallane_pending_invite", { path: "/api/auth/github" });
+        }
+        throw inviteError;
+      }
+    }
+
+    const session = createWorkspaceSession(db, user.id);
+    reply.setCookie(WORKSPACE_SESSION_COOKIE, session.token, {
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      secure: request.protocol === "https",
+      expires: new Date(session.expiresAt)
+    });
+    reply.clearCookie("duallane_pending_invite", { path: "/api/auth/github" });
+
+    if (request.headers.accept?.includes("application/json") || request.query?.format === "json") {
+      return { user: publicWorkspaceUser(user), session: { expiresAt: session.expiresAt } };
+    }
+    return reply.redirect(workspaceFrontendUrl(env, "/?lane=workspace"));
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/auth/logout", async (request, reply) => {
+  const token = request.cookies?.[WORKSPACE_SESSION_COOKIE];
+  revokeWorkspaceSession(db, token);
+  reply.clearCookie(WORKSPACE_SESSION_COOKIE, { path: "/" });
+  return { ok: true };
+});
+
+app.get("/api/workspace/bootstrap", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    return getWorkspaceBootstrap(db, getWorkspaceUserId(request));
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/invites", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    const invite = createInvite(db, request, { ...(request.body ?? {}), actorId: getWorkspaceUserId(request) });
+    return reply.code(201).send({ invite: withInviteUrl(env, invite) });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/invites/:inviteId/revoke", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    const invite = revokeInvite(db, request, {
+      actorId: getWorkspaceUserId(request),
+      inviteId: request.params.inviteId
+    });
+    return reply.send({ invite });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/invites/:code/accept", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  if (env.NODE_ENV === "production") {
+    recordInviteAcceptRejection(db, request, "auth.github_required");
+    return sendWorkspaceError(reply, request, new WorkspaceError("auth.github_required", "请通过 GitHub 登录接受邀请", 401));
+  }
+  try {
+    const user = acceptInvite(db, request, { ...(request.body ?? {}), code: request.params.code });
+    const session = createWorkspaceSession(db, user.id);
+    reply.setCookie(WORKSPACE_SESSION_COOKIE, session.token, {
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      secure: request.protocol === "https",
+      expires: new Date(session.expiresAt)
+    });
+    return reply.code(201).send({ user: publicWorkspaceUser(user) });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.get("/api/workspace/conversations", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    return { conversations: listConversations(db, getWorkspaceUserId(request), request) };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.get("/api/workspace/conversations/:conversationId", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    return { conversation: getConversationDetails(db, getWorkspaceUserId(request), request.params.conversationId, request) };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.get("/api/workspace/members", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    return {
+      members: listMembers(db, getWorkspaceUserId(request), {
+        query: request.query?.q,
+        role: request.query?.role,
+        kind: request.query?.kind,
+        limit: request.query?.limit
+      })
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.patch("/api/workspace/members/:userId/role", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    const member = updateMemberRole(db, request, {
+      ...(request.body ?? {}),
+      actorId: getWorkspaceUserId(request),
+      userId: request.params.userId
+    });
+    return { member };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.delete("/api/workspace/members/:userId", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    return removeSpaceMember(db, request, {
+      actorId: getWorkspaceUserId(request),
+      userId: request.params.userId
+    });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/conversations", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    const conversation = createConversation(db, request, { ...(request.body ?? {}), actorId: getWorkspaceUserId(request) });
+    return reply.code(201).send({ conversation });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/groups/:conversationId/members", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    const conversation = addConversationMember(db, request, {
+      ...(request.body ?? {}),
+      actorId: getWorkspaceUserId(request),
+      conversationId: request.params.conversationId
+    });
+    return reply.code(201).send({ conversation });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.delete("/api/workspace/groups/:conversationId/members/:userId", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    const conversation = removeConversationMember(db, request, {
+      actorId: getWorkspaceUserId(request),
+      conversationId: request.params.conversationId,
+      userId: request.params.userId
+    });
+    return { conversation };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.patch("/api/workspace/groups/:conversationId", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    const conversation = updateGroupConversation(db, request, {
+      ...(request.body ?? {}),
+      actorId: getWorkspaceUserId(request),
+      conversationId: request.params.conversationId
+    });
+    return { conversation };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/groups/:conversationId/leave", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    return leaveConversation(db, request, {
+      actorId: getWorkspaceUserId(request),
+      conversationId: request.params.conversationId
+    });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.get("/api/workspace/conversations/:conversationId/messages", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    return {
+      messages: listMessages(db, getWorkspaceUserId(request), request.params.conversationId, {
+        request,
+        before: request.query?.before,
+        limit: request.query?.limit
+      })
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/conversations/:conversationId/read", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    const conversation = markConversationRead(db, request, {
+      actorId: getWorkspaceUserId(request),
+      conversationId: request.params.conversationId
+    });
+    return { conversation };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.patch("/api/workspace/conversations/:conversationId/notification", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    const conversation = updateConversationNotificationLevel(db, request, {
+      ...(request.body ?? {}),
+      actorId: getWorkspaceUserId(request),
+      conversationId: request.params.conversationId
+    });
+    return { conversation };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
 });
 
 app.post("/api/workspace/messages", async (request, reply) => {
   if (!workspaceEnabled) {
     return blockWorkspace(reply);
   }
-
   try {
-    const message = createRelayMessage(db, request, request.body ?? {});
+    const message = createStructuredMessage(db, request, { ...(request.body ?? {}), actorId: getWorkspaceUserId(request) });
     return reply.code(201).send({ message });
   } catch (error) {
-    if (error instanceof WorkspaceValidationError) {
-      return reply.code(400).send({ error: error.message });
-    }
-    throw error;
+    return sendWorkspaceError(reply, request, error);
   }
 });
 
-app.post("/api/workspace/transfers/reserve", async (request, reply) => {
+app.post("/api/workspace/files/uploads/reserve", async (request, reply) => {
   if (!workspaceEnabled) {
     return blockWorkspace(reply);
   }
-
   try {
-    const reservation = reserveTransferQuota(db, request, request.body ?? {});
+    const reservation = reserveUpload(db, request, { ...(request.body ?? {}), actorId: getWorkspaceUserId(request) });
     const statusCode = reservation.status === "rejected" ? 409 : 201;
     return reply.code(statusCode).send(reservation);
   } catch (error) {
-    if (error instanceof WorkspaceValidationError) {
-      return reply.code(400).send({ error: error.message });
-    }
-    throw error;
+    return sendWorkspaceError(reply, request, error);
   }
 });
 
-if (process.env.NODE_ENV === "production" && serveStatic) {
+app.post("/api/workspace/files/uploads/:uploadId/complete", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  const actorId = getWorkspaceUserId(request);
+  let upload;
+  try {
+    upload = getReservedUpload(db, actorId, request.params.uploadId);
+    const stored = await statStoredAttachment(dataDir, upload.attachment.storageKey, upload.attachment.byteSize);
+    return completeUpload(db, request, {
+      ...(request.body ?? {}),
+      actorId,
+      uploadId: request.params.uploadId,
+      storageVerifiedByteSize: stored.byteSize
+    });
+  } catch (error) {
+    if (upload) {
+      await removeStoredAttachment(dataDir, upload.attachment.storageKey);
+      try {
+        failUpload(db, request, {
+          actorId,
+          uploadId: request.params.uploadId,
+          reason: error instanceof Error ? error.message : "upload complete failed"
+        });
+      } catch {
+        // Preserve the original completion/storage error for the client.
+      }
+    }
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.put("/api/workspace/files/uploads/:uploadId/content", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  const actorId = getWorkspaceUserId(request);
+  let upload;
+  try {
+    upload = getReservedUpload(db, actorId, request.params.uploadId);
+    const stored = await saveUploadStream(dataDir, upload.attachment.storageKey, request.body, upload.attachment.byteSize);
+    return completeUpload(db, request, {
+      actorId,
+      uploadId: request.params.uploadId,
+      storageVerifiedByteSize: stored.byteSize
+    });
+  } catch (error) {
+    if (upload) {
+      await removeStoredAttachment(dataDir, upload.attachment.storageKey);
+      try {
+        failUpload(db, request, {
+          actorId,
+          uploadId: request.params.uploadId,
+          reason: error instanceof Error ? error.message : "upload failed"
+        });
+      } catch {
+        // Preserve the original upload/storage error for the client.
+      }
+    }
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/files/uploads/:uploadId/fail", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    return failUpload(db, request, { ...(request.body ?? {}), actorId: getWorkspaceUserId(request), uploadId: request.params.uploadId });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.get("/api/workspace/files", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    return {
+      files: listFiles(db, getWorkspaceUserId(request), {
+        scope: request.query?.scope,
+        conversationId: request.query?.conversationId,
+        uploaderId: request.query?.uploaderId,
+        q: request.query?.q,
+        limit: request.query?.limit
+      }, request)
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.delete("/api/workspace/files/:attachmentId", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    return removeAttachment(db, request, {
+      actorId: getWorkspaceUserId(request),
+      attachmentId: request.params.attachmentId
+    });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/files/:attachmentId/downloads/reserve", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    const actorId = getWorkspaceUserId(request);
+    const candidate = getDownloadableAttachment(db, request, actorId, request.params.attachmentId);
+    await statStoredAttachment(dataDir, candidate.storageKey, candidate.byteSize);
+    const reservation = reserveDownload(db, request, { ...(request.body ?? {}), actorId, attachmentId: request.params.attachmentId });
+    const statusCode = reservation.status === "rejected" ? 409 : 201;
+    return reply.code(statusCode).send(reservation);
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.get("/api/workspace/files/:attachmentId/download", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    const actorId = getWorkspaceUserId(request);
+    const candidate = getDownloadableAttachment(db, request, actorId, request.params.attachmentId);
+    await statStoredAttachment(dataDir, candidate.storageKey, candidate.byteSize);
+    const downloadId = normalizeQueryString(request.query?.downloadId);
+    let attachment;
+    if (downloadId) {
+      ({ attachment } = getCompletedDownload(db, actorId, request.params.attachmentId, downloadId));
+    } else {
+      const reservation = reserveDownload(db, request, { actorId, attachmentId: request.params.attachmentId });
+      if (reservation.status === "rejected") {
+        return reply.code(409).send(reservation);
+      }
+      ({ attachment } = getCompletedDownload(db, actorId, request.params.attachmentId, reservation.id));
+    }
+    const stored = await statStoredAttachment(dataDir, attachment.storageKey, attachment.byteSize);
+    reply.header("Content-Type", attachment.mimeType || "application/octet-stream");
+    reply.header("Content-Length", String(attachment.byteSize));
+    reply.header("Content-Disposition", `attachment; filename="${encodeHeaderValue(attachment.fileName)}"`);
+    return reply.send(createReadStream(stored.path));
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.get("/ws/workspace", { websocket: true }, (socket, request) => {
+  if (!workspaceEnabled) {
+    socket.close(1013, "workspace disabled");
+    return;
+  }
+
+  let subscribedUserId = null;
+  let lastDeliveredSeq = 0;
+  const unsubscribe = subscribeWorkspaceEvents((writtenEvent) => {
+    if (!subscribedUserId || socket.readyState !== 1) {
+      return;
+    }
+    let events;
+    try {
+      const pushedEvent = getWorkspaceEventForUser(db, subscribedUserId, writtenEvent.id);
+      if (!pushedEvent) {
+        return;
+      }
+      events = listWorkspaceEvents(db, subscribedUserId, Math.min(lastDeliveredSeq, pushedEvent.seq - 1));
+    } catch (error) {
+      socket.send(JSON.stringify(toWorkspaceSocketError(request, error)));
+      socket.close(error instanceof WorkspaceError ? 1008 : 1011, "workspace access changed");
+      return;
+    }
+    for (const event of events) {
+      socket.send(JSON.stringify({ version: 1, type: "event", event }));
+      lastDeliveredSeq = Math.max(lastDeliveredSeq, event.seq);
+    }
+    if (events.hasMore) {
+      socket.send(JSON.stringify({
+        version: 1,
+        type: "sync.required",
+        spaceId: DEFAULT_SPACE_ID,
+        currentSeq: getWorkspaceEventCursor(db),
+        reason: "replay_limit"
+      }));
+    }
+  });
+
+  socket.on("close", unsubscribe);
+  socket.on("error", unsubscribe);
+
+  socket.on("message", (raw) => {
+    try {
+      const parsed = JSON.parse(raw.toString());
+      const userId = getWorkspaceUserId(request);
+      if (parsed.type !== "hello") {
+        socket.send(JSON.stringify({ version: 1, type: "error", error: { code: "realtime.invalid", message: "实时同步请求无效" } }));
+        return;
+      }
+      const lastSeq = Math.max(0, Number(parsed.lastSeq) || 0);
+      const currentSeq = getWorkspaceEventCursor(db);
+      if (lastSeq > currentSeq) {
+        socket.send(JSON.stringify({
+          version: 1,
+          type: "sync.required",
+          spaceId: DEFAULT_SPACE_ID,
+          currentSeq,
+          reason: "cursor_ahead"
+        }));
+        return;
+      }
+      const events = listWorkspaceEvents(db, userId, lastSeq);
+      socket.send(JSON.stringify({
+        version: 1,
+        type: "ready",
+        spaceId: DEFAULT_SPACE_ID,
+        currentSeq,
+        replayFrom: lastSeq + 1,
+        replayCount: events.length,
+        hasMore: Boolean(events.hasMore)
+      }));
+      for (const event of events) {
+        socket.send(JSON.stringify({ version: 1, type: "event", event }));
+      }
+      subscribedUserId = userId;
+      lastDeliveredSeq = events.length > 0
+        ? Math.max(lastSeq, ...events.map((event) => event.seq))
+        : currentSeq;
+    } catch (error) {
+      socket.send(JSON.stringify(toWorkspaceSocketError(request, error)));
+      if (error instanceof WorkspaceError && error.statusCode === 401) {
+        socket.close(1008, "workspace access required");
+      }
+    }
+  });
+});
+
+if (env.NODE_ENV === "production" && serveStatic) {
   const distDir = path.resolve(rootDir, "dist");
   await app.register(fastifyStatic, {
     root: distDir,
@@ -159,4 +780,177 @@ if (process.env.NODE_ENV === "production" && serveStatic) {
   });
 }
 
-app.listen({ port, host });
+return app;
+
+function getWorkspaceUserId(request) {
+  const headerUserId = request.headers["x-workspace-user-id"];
+  if (env.NODE_ENV !== "production" && typeof headerUserId === "string" && headerUserId) {
+    return headerUserId;
+  }
+  return getSessionUserId(db, request.cookies?.[WORKSPACE_SESSION_COOKIE]);
+}
+
+async function resolveGitHubProfile(request) {
+  const query = request.query ?? {};
+  if (env.NODE_ENV !== "production" && (query.githubLogin || query.email || query.githubId)) {
+    return {
+      githubId: query.githubId,
+      githubLogin: query.githubLogin,
+      email: query.email,
+      displayName: query.displayName,
+      avatarUrl: query.avatarUrl
+    };
+  }
+
+  if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET || !query.code) {
+    if (env.NODE_ENV === "production") {
+      throw new WorkspaceError("auth.github_not_configured", "GitHub 登录尚未配置", 503);
+    }
+    return {
+      githubLogin: "timeStarry",
+      email: "timestarry@qq.com",
+      displayName: "timeStarry"
+    };
+  }
+
+  if (env.NODE_ENV === "production" && !request.cookies?.duallane_oauth_state) {
+    throw new WorkspaceError("auth.invalid_state", "登录状态校验失败", 400);
+  }
+
+  if (request.cookies?.duallane_oauth_state && query.state !== request.cookies.duallane_oauth_state) {
+    throw new WorkspaceError("auth.invalid_state", "登录状态校验失败", 400);
+  }
+
+  const publicBaseUrl = env.PUBLIC_BASE_URL || `${request.protocol}://${request.host}`;
+  const redirectUri = new URL("/api/auth/github/callback", publicBaseUrl).toString();
+  const tokenResponse = await fetch("https://github.com/login/oauth/access_token", {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({
+      client_id: env.GITHUB_CLIENT_ID,
+      client_secret: env.GITHUB_CLIENT_SECRET,
+      code: query.code,
+      redirect_uri: redirectUri
+    })
+  });
+  const tokenPayload = await tokenResponse.json();
+  if (!tokenPayload.access_token) {
+    throw new WorkspaceError("auth.github_failed", "GitHub 登录失败", 502);
+  }
+
+  const userResponse = await fetch("https://api.github.com/user", {
+    headers: {
+      authorization: `Bearer ${tokenPayload.access_token}`,
+      accept: "application/vnd.github+json"
+    }
+  });
+  const userPayload = await userResponse.json();
+  const email = userPayload.email || await fetchPrimaryGitHubEmail(tokenPayload.access_token);
+  return {
+    githubId: String(userPayload.id || ""),
+    githubLogin: userPayload.login,
+    email,
+    displayName: userPayload.name || userPayload.login,
+    avatarUrl: userPayload.avatar_url
+  };
+}
+
+async function fetchPrimaryGitHubEmail(accessToken) {
+  const response = await fetch("https://api.github.com/user/emails", {
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      accept: "application/vnd.github+json"
+    }
+  });
+  const emails = await response.json();
+  if (!Array.isArray(emails)) {
+    return "";
+  }
+  const primary = emails.find((email) => email.primary && email.verified) || emails.find((email) => email.verified);
+  return primary?.email ?? "";
+}
+
+function sendWorkspaceError(reply, request, error) {
+  const payload = toWorkspaceError(request, error);
+  return reply.code(error instanceof WorkspaceError ? error.statusCode : 500).send(payload);
+}
+
+function publicWorkspaceUser(user) {
+  if (!user) {
+    return null;
+  }
+  return {
+    id: user.id,
+    githubLogin: user.githubLogin,
+    displayName: user.displayName,
+    avatarUrl: user.avatarUrl,
+    kind: user.kind,
+    role: user.role,
+    joinedAt: user.joinedAt
+  };
+}
+
+function toWorkspaceError(request, error) {
+  if (error instanceof WorkspaceError) {
+    return {
+      error: {
+        code: error.code,
+        message: error.message
+      }
+    };
+  }
+  return {
+    error: {
+      code: "internal.error",
+      message: "服务暂时不可用"
+    }
+  };
+}
+
+function toWorkspaceSocketError(request, error) {
+  return {
+    version: 1,
+    type: "error",
+    ...toWorkspaceError(request, error)
+  };
+}
+
+function encodeHeaderValue(value) {
+  return String(value ?? "download").replace(/["\\\r\n]/g, "_");
+}
+
+function normalizeQueryString(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function workspaceFrontendUrl(env, pathnameAndQuery) {
+  const configured = normalizeQueryString(env.WORKSPACE_FRONTEND_URL || env.FRONTEND_BASE_URL);
+  if (configured) {
+    return new URL(pathnameAndQuery, configured).toString();
+  }
+  if (env.NODE_ENV !== "production") {
+    return new URL(pathnameAndQuery, "http://127.0.0.1:5173").toString();
+  }
+  return pathnameAndQuery;
+}
+
+function withInviteUrl(env, invite) {
+  if (!invite?.code) {
+    return invite;
+  }
+  return {
+    ...invite,
+    inviteUrl: workspaceFrontendUrl(env, `/?lane=workspace&invite=${encodeURIComponent(invite.code)}`)
+  };
+}
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const port = Number(process.env.PORT ?? 8787);
+  const host = process.env.HOST ?? "127.0.0.1";
+  const app = await createApp();
+  await app.listen({ port, host });
+}
