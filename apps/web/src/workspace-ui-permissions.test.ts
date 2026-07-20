@@ -75,6 +75,24 @@ describe("workspace UI permission boundaries", () => {
     expect(styles).toContain("background: var(--surface-tint);");
   });
 
+  it("keeps workspace controls content-sized and delegates height to result regions", () => {
+    const styles = readStyles();
+
+    expect(styles).toMatch(/\.workspace-content-panel\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/s);
+    expect(styles).not.toMatch(/\.workspace-content-panel\s*\{[^}]*grid-template-rows:/s);
+    expect(styles).toMatch(
+      /\.workspace-content-panel > \.workspace-file-browser,[^}]*\.workspace-content-panel > \.workspace-member-grid,[^}]*\.workspace-content-panel > \.workspace-settings-section\s*\{[^}]*flex:\s*1 1 auto;/s
+    );
+    expect(styles).toMatch(
+      /\.workspace-member-grid,[^}]*\.workspace-file-table,[^}]*\.workspace-invite-list,[^}]*\.workspace-role-list\s*\{[^}]*grid-auto-rows:\s*max-content;[^}]*align-content:\s*start;/s
+    );
+    expect(styles).toMatch(/\.workspace-info-grid\s*\{[^}]*grid-auto-rows:\s*max-content;[^}]*align-content:\s*start;/s);
+    expect(styles).toMatch(/\.space-tabs\s*\{[^}]*grid-template-columns:\s*none;[^}]*grid-auto-flow:\s*column;/s);
+    expect(styles).toMatch(
+      /\.workspace-filter-tabs\[aria-label="成员角色筛选"\]\s*\{[^}]*grid-template-columns:\s*none;[^}]*grid-auto-flow:\s*column;/s
+    );
+  });
+
   it("keeps invite and role management behind privileged permission checks", () => {
     const source = readSource();
 

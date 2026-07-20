@@ -2153,15 +2153,31 @@ button:disabled {
 .workspace-task-panel,
 .workspace-content-panel,
 .workspace-empty-panel {
-  display: grid;
-  align-content: start;
   gap: 14px;
   overflow: hidden;
   padding: 18px;
 }
 
+.workspace-task-panel,
+.workspace-empty-panel {
+  display: grid;
+  align-content: start;
+}
+
 .workspace-content-panel {
-  grid-template-rows: auto auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-content-panel > * {
+  flex: 0 0 auto;
+}
+
+.workspace-content-panel > .workspace-file-browser,
+.workspace-content-panel > .workspace-member-grid,
+.workspace-content-panel > .workspace-settings-section {
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .workspace-empty-panel {
@@ -2300,6 +2316,14 @@ button:disabled {
   overflow: auto;
 }
 
+.workspace-member-grid,
+.workspace-file-table,
+.workspace-invite-list,
+.workspace-role-list {
+  grid-auto-rows: max-content;
+  align-content: start;
+}
+
 .workspace-picker-list {
   max-height: min(420px, 44vh);
 }
@@ -2425,6 +2449,8 @@ button:disabled {
 .workspace-info-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: max-content;
+  align-content: start;
   gap: 10px;
 }
 
@@ -2488,7 +2514,11 @@ button:disabled {
 }
 
 .space-tabs {
+  width: fit-content;
   max-width: 420px;
+  grid-template-columns: none;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(112px, 1fr);
 }
 
 .workspace-filter-tabs {
@@ -2503,7 +2533,9 @@ button:disabled {
 }
 
 .workspace-filter-tabs[aria-label="成员角色筛选"] {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: none;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
 }
 
 .workspace-filter-tabs button {
@@ -2540,8 +2572,26 @@ button:disabled {
 
 .workspace-file-browser {
   min-height: 0;
-  display: block;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
+}
+
+.workspace-file-browser > .workspace-file-table {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.workspace-content-panel > .workspace-settings-section {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.workspace-content-panel > .workspace-settings-section > .workspace-invite-list,
+.workspace-content-panel > .workspace-settings-section > .workspace-role-list {
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .workspace-file-row.active {
@@ -2985,12 +3035,32 @@ button:disabled {
     overflow: visible;
   }
 
+  .workspace-content-panel {
+    overflow: auto;
+  }
+
+  .workspace-content-panel > .workspace-file-browser,
+  .workspace-content-panel > .workspace-member-grid,
+  .workspace-content-panel > .workspace-settings-section,
+  .workspace-file-browser > .workspace-file-table,
+  .workspace-content-panel > .workspace-settings-section > .workspace-invite-list,
+  .workspace-content-panel > .workspace-settings-section > .workspace-role-list {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+
   .workspace-filter-tabs {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .workspace-filter-tabs[aria-label="成员角色筛选"] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+  }
+
+  .space-tabs {
+    grid-auto-columns: minmax(84px, 1fr);
   }
 
   .workspace-filter-tabs.compact {
