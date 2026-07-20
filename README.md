@@ -103,7 +103,8 @@ Compose starts PostgreSQL, waits for its health check, runs the one-shot
 `migrate` service, and only then starts the API. Set a strong
 `POSTGRES_PASSWORD` before deployment. Back up both the `duallane-postgres`
 database volume and the `duallane-data` file volume; Workspace attachment bytes
-remain on the local file volume.
+remain on the local file volume. `POSTGRES_IMAGE` defaults to the DaoCloud
+mirror and can be changed to another trusted PostgreSQL 17 image registry.
 
 `SERVE_STATIC=false` is set for the API container in compose so static assets are
 served only by the web gateway. Running `pnpm start` directly still supports the

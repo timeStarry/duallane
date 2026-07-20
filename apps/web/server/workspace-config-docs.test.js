@@ -16,6 +16,7 @@ describe("workspace configuration docs", () => {
     expect(envExample).toContain("GITHUB_CLIENT_ID=");
     expect(envExample).toContain("GITHUB_CLIENT_SECRET=");
     expect(envExample).toContain("DATABASE_URL=postgresql://");
+    expect(envExample).toContain("POSTGRES_IMAGE=docker.m.daocloud.io/library/postgres:17-alpine");
     expect(envExample).toContain("POSTGRES_PASSWORD=");
   });
 
@@ -38,7 +39,7 @@ describe("workspace configuration docs", () => {
     expect(compose).toContain("GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}");
     expect(compose).toContain("WORKSPACE_FRONTEND_URL: ${WORKSPACE_FRONTEND_URL:-}");
     expect(compose).toContain("TRUST_PROXY: ${TRUST_PROXY:-true}");
-    expect(compose).toContain("image: postgres:17-alpine");
+    expect(compose).toContain("image: ${POSTGRES_IMAGE:-docker.m.daocloud.io/library/postgres:17-alpine}");
     expect(compose).toContain("condition: service_completed_successfully");
     expect(compose).toContain("DATABASE_AUTO_MIGRATE: \"false\"");
     expect(compose).toContain("PGHOST: postgres");

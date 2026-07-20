@@ -61,7 +61,7 @@ services:
     restart: "no"
 
   postgres:
-    image: postgres:17-alpine
+    image: ${POSTGRES_IMAGE:-docker.m.daocloud.io/library/postgres:17-alpine}
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-duallane}
       POSTGRES_USER: ${POSTGRES_USER:-duallane}
