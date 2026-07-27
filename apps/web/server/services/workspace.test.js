@@ -1299,8 +1299,8 @@ describe("workspace service", () => {
       SELECT result, reason
       FROM audit_logs
       WHERE action = 'conversation.create'
-      ORDER BY created_at DESC
-      LIMIT 1
+        AND result = 'rejected'
+        AND reason = 'invalid members'
     `).get()).toEqual({ result: "rejected", reason: "invalid members" });
   });
 

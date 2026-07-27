@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile as readRawFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -6,6 +6,10 @@ import { MESSAGE_CONTENT_FORMAT } from "./services/workspace.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
+
+async function readFile(filePath, encoding) {
+  return (await readRawFile(filePath, encoding)).replace(/\r\n/g, "\n");
+}
 
 describe("workspace configuration docs", () => {
   it("does not advertise an unused owner environment variable", async () => {

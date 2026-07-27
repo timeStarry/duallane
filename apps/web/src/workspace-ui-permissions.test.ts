@@ -6,12 +6,16 @@ import { describe, expect, it } from "vitest";
 const sourcePath = join(dirname(fileURLToPath(import.meta.url)), "App.tsx");
 const stylesPath = join(dirname(fileURLToPath(import.meta.url)), "styles.css");
 
+function normalizeLineEndings(content: string) {
+  return content.replace(/\r\n/g, "\n");
+}
+
 function readSource() {
-  return readFileSync(sourcePath, "utf8");
+  return normalizeLineEndings(readFileSync(sourcePath, "utf8"));
 }
 
 function readStyles() {
-  return readFileSync(stylesPath, "utf8");
+  return normalizeLineEndings(readFileSync(stylesPath, "utf8"));
 }
 
 describe("workspace UI permission boundaries", () => {
