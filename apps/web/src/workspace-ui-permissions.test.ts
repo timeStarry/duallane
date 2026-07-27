@@ -165,7 +165,8 @@ describe("workspace UI permission boundaries", () => {
     expect(realtimeSyncSource).toContain("refreshWorkspaceBootstrap()");
     expect(realtimeSyncSource).toContain("refreshWorkspaceConversations()");
     expect(realtimeSyncSource).toContain("refreshWorkspaceFiles()");
-    expect(realtimeSyncSource).toContain("workspaceRealtimeSeqRef.current = Math.max(0, Number(currentSeqValue))");
+    expect(realtimeSyncSource).toContain("const nextCursor = Number.isFinite(currentSeqValue) ? Number(currentSeqValue) : Number(bootstrap.eventCursor)");
+    expect(realtimeSyncSource).toContain("workspaceRealtimeSeqRef.current = Math.max(0, nextCursor)");
     expect(realtimeSyncSource).toContain("setWorkspaceRealtimeState(\"connected\")");
 
     const bootstrapStart = source.indexOf("async function refreshWorkspaceBootstrap");
@@ -175,6 +176,7 @@ describe("workspace UI permission boundaries", () => {
     const bootstrapSource = source.slice(bootstrapStart, bootstrapEnd);
     expect(bootstrapSource).toContain("setWorkspaceBootstrap(data)");
     expect(bootstrapSource).toContain("setWorkspaceDirectoryMembers(data.members)");
+    expect(bootstrapSource).toContain("return data");
 
     const filesStart = source.indexOf("async function refreshWorkspaceFiles");
     const filesEnd = source.indexOf("async function projectWorkspaceEvents", filesStart);
@@ -195,7 +197,8 @@ describe("workspace UI permission boundaries", () => {
 
     expect(realtimeSource).toContain('socket.addEventListener("open"');
     expect(realtimeSource).toContain("requestEvents()");
-    expect(realtimeSource).toContain('if (envelope.hasMore)');
+    expect(realtimeSource).toContain("replayHasMore = Boolean(envelope.hasMore)");
+    expect(realtimeSource).toContain("if (replayEventsRemaining === 0 && replayHasMore)");
     expect(realtimeSource).toContain("window.setTimeout(requestEvents, 0)");
     expect(realtimeSource).not.toContain("setInterval(requestEvents");
     expect(realtimeSource).not.toContain("pollTimer");
@@ -225,7 +228,7 @@ describe("workspace UI permission boundaries", () => {
     expect(errorHandlerSource).toContain('showWorkspaceNotice("warning", error?.message || "实时同步异常")');
   });
 
-  it("deduplicates realtime events, applies them in sequence order, and syncs on gaps", () => {
+  it("deduplicates visible realtime events, applies them in order, and honors explicit resyncs", () => {
     const source = readSource();
     const realtimeStart = source.indexOf("const connectWorkspaceEvents = () => {");
     const realtimeEnd = source.indexOf("async function loadWorkspace", realtimeStart);
@@ -238,13 +241,12 @@ describe("workspace UI permission boundaries", () => {
     expect(source).toContain("function normalizeWorkspaceRealtimeEvents(events: WorkspaceEvent[])");
     expect(source).toContain(".filter((event) => event.id && !workspaceSeenEventIdsRef.current.has(event.id))");
     expect(source).toContain(".sort((left, right) => left.seq - right.seq)");
-    expect(source).toContain("function hasWorkspaceRealtimeGap(events: WorkspaceEvent[])");
-    expect(source).toContain("if (event.seq !== expectedSeq + 1)");
+    expect(source).not.toContain("function hasWorkspaceRealtimeGap(events: WorkspaceEvent[])");
     expect(source).toContain("function rememberWorkspaceRealtimeEvents(events: WorkspaceEvent[])");
     expect(source).toContain("workspaceSeenEventIdsRef.current.add(event.id)");
     expect(source).toContain("async function syncWorkspaceRealtimeState(currentSeqValue?: number)");
     expect(realtimeSource).toContain("const events = normalizeWorkspaceRealtimeEvents(getWorkspaceRealtimeEvents(envelope));");
-    expect(realtimeSource).toContain("if (hasWorkspaceRealtimeGap(events))");
+    expect(realtimeSource).toContain('if (envelope.type === "sync.required")');
     expect(realtimeSource).toContain("void syncWorkspaceRealtimeState(Number(envelope.currentSeq));");
     expect(realtimeSource).toContain("rememberWorkspaceRealtimeEvents(events);");
   });

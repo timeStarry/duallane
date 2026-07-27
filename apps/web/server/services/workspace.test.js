@@ -115,6 +115,8 @@ describe("workspace service", () => {
 
     const space = db.prepare("SELECT id, name FROM spaces WHERE id = ?").get(DEFAULT_SPACE_ID);
     expect(space.name).toBe("默认空间");
+    const currentSeq = db.prepare("SELECT COALESCE(MAX(seq), 0) AS currentSeq FROM workspace_events").get().currentSeq;
+    expect((await getWorkspaceBootstrap(db)).eventCursor).toBe(currentSeq);
   });
 
   it("binds the seeded owner to a GitHub identity", async () => {
@@ -1612,6 +1614,24 @@ describe("workspace service", () => {
       clientMessageId: "member-own",
       content: textContent("Own message")
     });
+    await createWorkspaceConversation(db, request, {
+      actorId: "usr_owner",
+      type: "group",
+      title: "Unread cursor isolation",
+      memberIds: [member.id]
+    });
+
+    const latestMessageEvent = db.prepare(`
+      SELECT m.id, we.seq AS eventSeq
+      FROM messages m
+      INNER JOIN workspace_events we
+        ON we.type = 'message.created' AND we.target_id = m.id
+      WHERE m.conversation_id = ? AND m.deleted_at IS NULL
+      ORDER BY m.created_at DESC, we.seq DESC, m.id DESC
+      LIMIT 1
+    `).get(conversation.id);
+    const globalEventCursor = db.prepare("SELECT MAX(seq) AS eventCursor FROM workspace_events").get().eventCursor;
+    expect(globalEventCursor).toBeGreaterThan(latestMessageEvent.eventSeq);
 
     const beforeRead = (await listConversations(db, member.id)).find((item) => item.id === conversation.id);
     expect(beforeRead.unreadCount).toBe(1);
@@ -1623,7 +1643,8 @@ describe("workspace service", () => {
       conversationId: conversation.id
     });
     expect(read.unreadCount).toBe(0);
-    expect(read.lastReadSeq).toBeGreaterThan(0);
+    expect(read.lastReadMessageId).toBe(latestMessageEvent.id);
+    expect(read.lastReadSeq).toBe(latestMessageEvent.eventSeq);
     expect(read.notificationLevel).toBe("all");
 
     const afterRead = (await listConversations(db, member.id)).find((item) => item.id === conversation.id);
@@ -1632,6 +1653,41 @@ describe("workspace service", () => {
     expect(afterRead.lastReadAt).toBeTruthy();
     expect(afterRead.lastReadSeq).toBe(read.lastReadSeq);
     expect(afterRead.notificationLevel).toBe("all");
+
+    const sameTimestampMessage = await createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      clientMessageId: "unread-same-timestamp",
+      content: textContent("Unread despite matching the read timestamp")
+    });
+    db.prepare("UPDATE messages SET created_at = ? WHERE id = ?").run(afterRead.lastReadAt, sameTimestampMessage.id);
+
+    const afterSameTimestamp = (await listConversations(db, member.id)).find((item) => item.id === conversation.id);
+    expect(afterSameTimestamp.unreadCount).toBe(1);
+
+    const sameTimestampEvent = db.prepare(`
+      SELECT seq
+      FROM workspace_events
+      WHERE type = 'message.created' AND target_id = ?
+    `).get(sameTimestampMessage.id);
+    const readSameTimestamp = await markConversationRead(db, request, {
+      actorId: member.id,
+      conversationId: conversation.id
+    });
+    expect(readSameTimestamp.lastReadMessageId).toBe(sameTimestampMessage.id);
+    expect(readSameTimestamp.lastReadSeq).toBe(sameTimestampEvent.seq);
+
+    const advancedReadSeq = sameTimestampEvent.seq + 100;
+    db.prepare(`
+      UPDATE conversation_members
+      SET last_read_seq = ?
+      WHERE conversation_id = ? AND user_id = ?
+    `).run(advancedReadSeq, conversation.id, member.id);
+    const monotonicRead = await markConversationRead(db, request, {
+      actorId: member.id,
+      conversationId: conversation.id
+    });
+    expect(monotonicRead.lastReadSeq).toBe(advancedReadSeq);
   });
 
   it("updates conversation notification levels only for the current member", async () => {

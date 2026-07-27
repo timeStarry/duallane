@@ -32,6 +32,18 @@ import {
 import { Fragment, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from "react";
 import { MessageBody, getEmoteInsertText, renderMessageParts, visibleEmotePacks, type EmoteItem } from "./emotes";
+import {
+  P2P_FILE_CHUNK_SIZE,
+  P2P_MAX_CHAT_BYTES,
+  P2P_MAX_FILE_BYTES,
+  getP2pFileChunkCount,
+  parseDataEnvelope,
+  parseDataEnvelopeValue,
+  sha256Base64Url,
+  validateP2pFileChunk,
+  validateP2pFileCompletion,
+  type DataEnvelope
+} from "./p2p-protocol";
 import { createWorkspaceJsonHeaders } from "./workspace-http";
 import { getWorkspaceEntryUrl, getWorkspaceLoginUrl, parseEntryRoute } from "./workspace-url";
 
@@ -56,7 +68,7 @@ type SecureKeys = Record<SecureChannel, CryptoKey>;
 type IceServersResponse = {
   iceServers?: RTCIceServer[];
 };
-type FileTransferStatus = "offered" | "waiting" | "sending" | "receiving" | "complete" | "rejected" | "failed";
+type FileTransferStatus = "offered" | "waiting" | "sending" | "receiving" | "verifying" | "complete" | "rejected" | "failed";
 type FileTransfer = {
   id: string;
   name: string;
@@ -77,7 +89,7 @@ type Message = {
   at: string;
   createdAt?: string;
   self?: boolean;
-  localState?: "sending" | "failed";
+  localState?: "sending" | "delivered" | "failed";
   failureReason?: string;
   fileName?: string;
   content?: {
@@ -138,6 +150,7 @@ type WorkspaceBootstrap = {
   conversations?: WorkspaceConversation[];
   files?: WorkspaceFile[];
   invites: WorkspaceInvite[];
+  eventCursor?: number;
 };
 type WorkspaceInvite = {
   id: string;
@@ -350,7 +363,7 @@ type PeerProfile = {
   peerId?: string;
   name: string;
 };
-type ChatEnvelope = Extract<DataEnvelope, { kind: "chat" }>;
+type P2pMessageEnvelope = Extract<DataEnvelope, { kind: "chat" | "chat-ack" }>;
 type SignalMessage = {
   signal?: "offer" | "answer" | "ice";
   description?: RTCSessionDescriptionInit;
@@ -366,18 +379,14 @@ type PeerSocketMessage = {
   secure?: SecureEnvelope;
   systemEvent?: "room-not-found" | "room-full" | "joined" | "peer-joined" | "peer-left" | "peer-list";
 };
-type DataEnvelope =
-  | { kind: "chat"; id: string; author: string; body: string; at: string }
-  | { kind: "file-offer"; transferId: string; author: string; name: string; size: number; mimeType: string }
-  | { kind: "file-accept"; transferId: string }
-  | { kind: "file-reject"; transferId: string; reason?: string }
-  | { kind: "file-chunk"; transferId: string; index: number; total: number; data: string }
-  | { kind: "file-complete"; transferId: string };
 type IncomingFileBuffer = {
   name: string;
   size: number;
+  total: number;
   mimeType: string;
-  chunks: Uint8Array<ArrayBuffer>[];
+  accepted: boolean;
+  chunks: Array<Uint8Array<ArrayBuffer> | undefined>;
+  chunkDigests: Array<string | undefined>;
   receivedBytes: number;
   blob?: Blob;
 };
@@ -406,9 +415,7 @@ type ConnectionAdvice = {
   items: string[];
 };
 
-const FILE_CHUNK_SIZE = 16 * 1024;
 const P2P_LARGE_FILE_WARNING_BYTES = 100 * 1024 * 1024;
-const P2P_MAX_FILE_BYTES = 512 * 1024 * 1024;
 const P2P_SAVED_SESSIONS_KEY = "duallane-p2p-sessions";
 const THEME_STORAGE_KEY = "duallane-theme-mode";
 const P2P_SECRET_BYTES = 32;
@@ -416,6 +423,10 @@ const AES_GCM_NONCE_BYTES = 12;
 const SECURE_ENVELOPE_VERSION = 1;
 const P2P_MAX_PARTICIPANTS = 2;
 const P2P_DEFAULT_PARTICIPANTS = 2;
+const P2P_MESSAGE_ACK_TIMEOUT_MS = 10_000;
+const P2P_FILE_ACK_TIMEOUT_MS = 10_000;
+const P2P_RECONNECT_DELAY_MS = 1_500;
+const P2P_RTC_NEGOTIATION_TIMEOUT_MS = 5_000;
 
 const secureChannels: SecureChannel[] = ["signal", "ws-chat", "profile"];
 
@@ -1160,15 +1171,15 @@ function getConnectionAdvice({
   if (mode === "error" || socketState === "error" || rtcState === "error") {
     return {
       title: "连接异常",
-      body: "信令或浏览器直连协商失败。当前页面可以保留消息记录，但建议重建连接路径。",
-      items: ["让对方保持页面打开并刷新一次", "复制新链接重新进入房间", "需要稳定保留时上传到共享空间"]
+      body: "信令或浏览器直连协商暂时失败，系统正在自动重连。当前页面会保留本地消息记录。",
+      items: ["双方保持页面打开并等待几秒", "长时间未恢复时重新打开同一链接", "需要稳定保留时上传到共享空间"]
     };
   }
   if (mode === "offline") {
     return {
       title: "对方离线或连接已断开",
-      body: "直连会话依赖双方页面同时在线。任一方关闭页面、休眠或网络切换都会中断。",
-      items: ["让对方重新打开同一邀请链接", "无法恢复时复制新链接重建房间", "重要文件建议上传到共享空间"]
+      body: "直连会话依赖双方页面同时在线，系统会在页面保持打开时自动尝试恢复连接。",
+      items: ["等待对方重新上线并保持页面打开", "长时间未恢复时重新打开同一链接", "重要文件建议上传到共享空间"]
     };
   }
   if (mode === "relay-text" && peerCount >= 2) {
@@ -1194,6 +1205,7 @@ function transferStatusLabel(status: FileTransferStatus) {
     waiting: "等待对方",
     sending: "发送中",
     receiving: "接收中",
+    verifying: "等待校验",
     complete: "已完成",
     rejected: "已拒绝",
     failed: "失败"
@@ -1215,6 +1227,9 @@ function getFileMessageBody(transfer: FileTransfer) {
   if (transfer.status === "receiving") {
     return "正在接收加密文件，请双方保持页面在线。";
   }
+  if (transfer.status === "verifying") {
+    return "文件已发送，等待对方完成完整性校验。";
+  }
   if (transfer.status === "complete") {
     return "文件传输已完成。";
   }
@@ -1229,65 +1244,6 @@ function getTransferProgress(doneBytes: number, totalBytes: number) {
     return 100;
   }
   return Math.min(100, Math.round((doneBytes / totalBytes) * 100));
-}
-
-function parseDataEnvelope(raw: string): DataEnvelope | null {
-  try {
-    return parseDataEnvelopeValue(JSON.parse(raw));
-  } catch {
-    return null;
-  }
-}
-
-function parseDataEnvelopeValue(value: unknown): DataEnvelope | null {
-  const envelope = value as Partial<DataEnvelope>;
-  if (!envelope || typeof envelope !== "object" || typeof envelope.kind !== "string") {
-    return null;
-  }
-
-  if (
-    envelope.kind === "chat" &&
-    typeof envelope.id === "string" &&
-    typeof envelope.author === "string" &&
-    typeof envelope.body === "string" &&
-    typeof envelope.at === "string"
-  ) {
-    return envelope as DataEnvelope;
-  }
-
-  if (
-    envelope.kind === "file-offer" &&
-    typeof envelope.transferId === "string" &&
-    typeof envelope.author === "string" &&
-    typeof envelope.name === "string" &&
-    typeof envelope.size === "number" &&
-    typeof envelope.mimeType === "string"
-  ) {
-    return envelope as DataEnvelope;
-  }
-
-  if (
-    (envelope.kind === "file-accept" || envelope.kind === "file-complete") &&
-    typeof envelope.transferId === "string"
-  ) {
-    return envelope as DataEnvelope;
-  }
-
-  if (envelope.kind === "file-reject" && typeof envelope.transferId === "string") {
-    return envelope as DataEnvelope;
-  }
-
-  if (
-    envelope.kind === "file-chunk" &&
-    typeof envelope.transferId === "string" &&
-    typeof envelope.index === "number" &&
-    typeof envelope.total === "number" &&
-    typeof envelope.data === "string"
-  ) {
-    return envelope as DataEnvelope;
-  }
-
-  return null;
 }
 
 function formatBytes(bytes: number) {
@@ -1347,12 +1303,12 @@ function base64ToBytes(value: string): Uint8Array<ArrayBuffer> {
 }
 
 function waitForBufferedAmount(channel: RTCDataChannel) {
-  if (channel.bufferedAmount < 1024 * 1024) {
+  if (channel.readyState !== "open" || channel.bufferedAmount < 1024 * 1024) {
     return Promise.resolve();
   }
   return new Promise<void>((resolve) => {
     const timer = window.setInterval(() => {
-      if (channel.bufferedAmount < 512 * 1024) {
+      if (channel.readyState !== "open" || channel.bufferedAmount < 512 * 1024) {
         window.clearInterval(timer);
         resolve();
       }
@@ -1548,6 +1504,7 @@ export function App() {
   const [workspaceUploading, setWorkspaceUploading] = useState(false);
   const [workspaceGroupMemberBusyId, setWorkspaceGroupMemberBusyId] = useState("");
   const [workspaceRealtimeState, setWorkspaceRealtimeState] = useState<WorkspaceRealtimeState>("idle");
+  const [documentVisible, setDocumentVisible] = useState(() => typeof document === "undefined" || document.visibilityState === "visible");
   const [workspaceHistoryLoadingByConversation, setWorkspaceHistoryLoadingByConversation] = useState<Record<string, boolean>>({});
   const [workspaceHistoryExhaustedByConversation, setWorkspaceHistoryExhaustedByConversation] = useState<Record<string, boolean>>({});
   const localDisplayName = displayName.trim() || "访客";
@@ -1562,8 +1519,15 @@ export function App() {
   const p2pPeersRef = useRef<Peer[]>([]);
   const peerProfilesRef = useRef<Map<string, string>>(new Map());
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
+  const p2pDataMessageQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const p2pSessionGenerationRef = useRef(0);
+  const pendingP2pMessageTimersRef = useRef<Map<string, number>>(new Map());
+  const pendingP2pMessageAttemptsRef = useRef<Map<string, number>>(new Map());
+  const pendingP2pFileAckTimersRef = useRef<Map<string, number>>(new Map());
   const pendingFilesRef = useRef<Map<string, File>>(new Map());
+  const cancelledP2pFileTransfersRef = useRef<Set<string>>(new Set());
   const incomingFilesRef = useRef<Map<string, IncomingFileBuffer>>(new Map());
+  const p2pDownloadUrlsRef = useRef<Map<string, string>>(new Map());
   const p2pMessageListRef = useRef<HTMLDivElement | null>(null);
   const workspaceMessageListRef = useRef<HTMLDivElement | null>(null);
   const workspaceCreatePanelRef = useRef<HTMLDivElement | null>(null);
@@ -1883,6 +1847,20 @@ export function App() {
   const workspaceContextVisible = workspaceContextAvailable && !workspaceContextCollapsed;
 
   useEffect(() => {
+    return () => {
+      clearP2pMessageAckTimers();
+      clearP2pFileAckTimers();
+      clearIncomingP2pFiles();
+    };
+  }, []);
+
+  useEffect(() => {
+    const updateVisibility = () => setDocumentVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", updateVisibility);
+    return () => document.removeEventListener("visibilitychange", updateVisibility);
+  }, []);
+
+  useEffect(() => {
     document.documentElement.dataset.theme = resolvedTheme;
     document.documentElement.dataset.themeMode = themeMode;
     document.documentElement.style.colorScheme = resolvedTheme;
@@ -1972,11 +1950,32 @@ export function App() {
   }, [workspaceContextTab, workspaceSelectedConversation?.id, workspaceSelectedConversation?.title, workspaceSelectedConversation?.type]);
 
   useEffect(() => {
-    if (lane !== "workspace-dev" || workspaceStatus !== "ready" || !workspaceSelectedConversationId) {
+    const mobileConversationHidden = window.matchMedia("(max-width: 760px)").matches && workspaceMobilePane !== "main";
+    if (
+      lane !== "workspace-dev" ||
+      workspaceStatus !== "ready" ||
+      workspaceRealtimeState !== "connected" ||
+      workspaceView !== "chat" ||
+      !documentVisible ||
+      mobileConversationHidden ||
+      !workspaceSelectedConversationId
+    ) {
+      return;
+    }
+    if ((workspaceSelectedConversation?.unreadCount ?? 1) <= 0) {
       return;
     }
     void markWorkspaceConversationRead(workspaceSelectedConversationId);
-  }, [lane, workspaceSelectedConversationId, workspaceStatus]);
+  }, [
+    documentVisible,
+    lane,
+    workspaceMobilePane,
+    workspaceSelectedConversation?.unreadCount,
+    workspaceSelectedConversationId,
+    workspaceRealtimeState,
+    workspaceStatus,
+    workspaceView
+  ]);
 
   useEffect(() => {
     if (
@@ -2035,6 +2034,8 @@ export function App() {
 
     let disposed = false;
     let reconnectTimer: number | undefined;
+    let replayEventsRemaining = 0;
+    let replayHasMore = false;
 
     const connectWorkspaceEvents = () => {
       if (disposed) {
@@ -2072,10 +2073,13 @@ export function App() {
         }
         if (envelope.type === "ready") {
           const currentSeq = Number(envelope.currentSeq);
+          replayEventsRemaining = Math.max(0, Number(envelope.replayCount) || 0);
+          replayHasMore = Boolean(envelope.hasMore);
           if (envelope.replayCount === 0 && Number.isFinite(currentSeq)) {
             workspaceRealtimeSeqRef.current = Math.max(workspaceRealtimeSeqRef.current, currentSeq);
           }
-          if (envelope.hasMore) {
+          if (replayEventsRemaining === 0 && replayHasMore) {
+            replayHasMore = false;
             window.setTimeout(requestEvents, 0);
           }
           setWorkspaceRealtimeState("connected");
@@ -2090,14 +2094,17 @@ export function App() {
           setWorkspaceRealtimeState("connected");
           return;
         }
-        if (hasWorkspaceRealtimeGap(events)) {
-          void syncWorkspaceRealtimeState(Number(envelope.currentSeq));
-          return;
-        }
         setWorkspaceRealtimeState("syncing");
         void projectWorkspaceEvents(events)
           .then(() => {
             rememberWorkspaceRealtimeEvents(events);
+            if (replayEventsRemaining > 0) {
+              replayEventsRemaining = Math.max(0, replayEventsRemaining - events.length);
+              if (replayEventsRemaining === 0 && replayHasMore) {
+                replayHasMore = false;
+                window.setTimeout(requestEvents, 0);
+              }
+            }
           })
           .catch((error) => {
             if (!disposed) {
@@ -2108,9 +2115,6 @@ export function App() {
           .finally(() => {
             if (!disposed) {
               setWorkspaceRealtimeState("connected");
-              if (envelope.hasMore) {
-                window.setTimeout(requestEvents, 0);
-              }
             }
           });
       });
@@ -2213,19 +2217,65 @@ export function App() {
       setP2pError("正在准备端到端加密密钥，请稍后再进入聊天。");
       return;
     }
+    const sessionKeys: SecureKeys = keys;
+    const sessionGeneration = p2pSessionGenerationRef.current + 1;
+    p2pSessionGenerationRef.current = sessionGeneration;
 
     let disposed = false;
+    let iceServers: RTCIceServer[] = [];
     let peerConnection: RTCPeerConnection | null = null;
     let socket: WebSocket | null = null;
+    let rtcReconnectTimer: number | undefined;
+    let rtcNegotiationTimer: number | undefined;
+    let socketReconnectTimer: number | undefined;
+    let reconnectAllowed = true;
+    let hasJoinedRoom = false;
     setP2pSocketState("connecting");
     setP2pRtcState("connecting");
     setP2pDataChannelState("idle");
     setP2pError("");
     setP2pRoomIssue("");
 
+    const cancelRtcReconnect = () => {
+      if (rtcReconnectTimer !== undefined) {
+        window.clearTimeout(rtcReconnectTimer);
+        rtcReconnectTimer = undefined;
+      }
+    };
+
+    const cancelRtcNegotiationTimeout = () => {
+      if (rtcNegotiationTimer !== undefined) {
+        window.clearTimeout(rtcNegotiationTimer);
+        rtcNegotiationTimer = undefined;
+      }
+    };
+
+    const scheduleRtcReconnect = () => {
+      if (disposed || !reconnectAllowed || rtcReconnectTimer !== undefined) {
+        return;
+      }
+      rtcReconnectTimer = window.setTimeout(() => {
+        rtcReconnectTimer = undefined;
+        if (!disposed && reconnectAllowed) {
+          void renegotiateRtc(true);
+        }
+      }, P2P_RECONNECT_DELAY_MS);
+    };
+
     const sendSecure = async (channel: SecureChannel, payload: unknown) => {
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify(await encryptSecurePayload(keys, channel, payload)));
+      const activeSocket = socket;
+      if (activeSocket?.readyState !== WebSocket.OPEN) {
+        return false;
+      }
+      try {
+        const securePayload = await encryptSecurePayload(sessionKeys, channel, payload);
+        if (disposed || socket !== activeSocket || activeSocket.readyState !== WebSocket.OPEN) {
+          return false;
+        }
+        activeSocket.send(JSON.stringify(securePayload));
+        return true;
+      } catch {
+        return false;
       }
     };
 
@@ -2248,185 +2298,404 @@ export function App() {
       dataChannelRef.current = channel;
       setP2pDataChannelState(channel.readyState);
       channel.addEventListener("open", () => {
+        if (disposed || dataChannelRef.current !== channel) {
+          return;
+        }
+        cancelRtcReconnect();
+        cancelRtcNegotiationTimeout();
+        setP2pError("");
         setP2pDataChannelState("open");
         setP2pRtcState("connected");
       });
       channel.addEventListener("close", () => {
-        if (dataChannelRef.current === channel) {
-          dataChannelRef.current = null;
+        if (disposed || dataChannelRef.current !== channel) {
+          return;
         }
+        dataChannelRef.current = null;
         setP2pDataChannelState("closed");
         setP2pRtcState("offline");
         markInterruptedTransfers("文件通道已断开，请确认双方页面在线后重新发送");
+        if (wsRef.current?.readyState !== WebSocket.OPEN) {
+          markPendingP2pMessagesFailed("连接已断开，消息未送达");
+        }
+        scheduleRtcReconnect();
       });
       channel.addEventListener("error", () => {
-        setP2pDataChannelState("closed");
-        setP2pRtcState("error");
-        markInterruptedTransfers("文件通道异常，请刷新或重建房间后重新发送");
-      });
-      channel.addEventListener("message", (event) => {
-        if (typeof event.data !== "string") {
+        if (disposed || dataChannelRef.current !== channel) {
           return;
         }
-        void handleDataChannelMessage(event.data);
+        dataChannelRef.current = null;
+        setP2pDataChannelState("closed");
+        setP2pRtcState("error");
+        markInterruptedTransfers("文件通道异常，请等待自动重连后重新发送");
+        if (wsRef.current?.readyState !== WebSocket.OPEN) {
+          markPendingP2pMessagesFailed("连接异常，消息未送达");
+        }
+        scheduleRtcReconnect();
+      });
+      channel.addEventListener("message", (event) => {
+        if (disposed || dataChannelRef.current !== channel || typeof event.data !== "string") {
+          return;
+        }
+        p2pDataMessageQueueRef.current = p2pDataMessageQueueRef.current
+          .then(() => {
+            if (disposed || p2pSessionGenerationRef.current !== sessionGeneration) {
+              return;
+            }
+            return handleDataChannelMessage(event.data, sessionGeneration);
+          })
+          .catch(() => {
+            if (!disposed) {
+              setP2pError("收到无效的直连数据，请让对方重试。");
+            }
+          });
       });
     };
 
-    void (async () => {
-      const iceServers = await getIceServers();
-      if (disposed) {
-        return;
+    function isRtcInitiator() {
+      const selfId = peerIdRef.current;
+      const peers = p2pPeersRef.current;
+      return Boolean(selfId && peers.length >= 2 && selfId === [...peers].sort((a, b) => a.id.localeCompare(b.id))[0]?.id);
+    }
+
+    function replacePeerConnection() {
+      cancelRtcNegotiationTimeout();
+      const previousChannel = dataChannelRef.current;
+      if (previousChannel && previousChannel.readyState !== "closed") {
+        markInterruptedTransfers("直连正在自动恢复，请等待恢复后重新发送文件");
       }
-      peerConnection = new RTCPeerConnection({
+      dataChannelRef.current = null;
+      previousChannel?.close();
+      const previousConnection = peerConnection;
+      peerConnection = null;
+      previousConnection?.close();
+      pendingIceRef.current = [];
+
+      const connection = new RTCPeerConnection({
         iceServers,
         iceTransportPolicy: "all"
       });
+      peerConnection = connection;
+      setP2pRtcState("connecting");
+      setP2pDataChannelState("connecting");
 
-      peerConnection.addEventListener("icecandidate", (event) => {
-        if (event.candidate) {
+      connection.addEventListener("icecandidate", (event) => {
+        if (!disposed && peerConnection === connection && event.candidate) {
           sendSignal({ type: "signal", signal: "ice", candidate: event.candidate.toJSON() });
         }
       });
-      peerConnection.addEventListener("connectionstatechange", () => {
-        if (!peerConnection) {
+      connection.addEventListener("connectionstatechange", () => {
+        if (disposed || peerConnection !== connection) {
           return;
         }
-        if (peerConnection.connectionState === "connected") {
+        if (connection.connectionState === "connected") {
+          cancelRtcReconnect();
+          cancelRtcNegotiationTimeout();
           setP2pRtcState("connected");
-        } else if (["failed", "disconnected"].includes(peerConnection.connectionState)) {
+        } else if (["failed", "disconnected", "closed"].includes(connection.connectionState)) {
           setP2pRtcState("offline");
-        } else if (peerConnection.connectionState === "connecting") {
+          scheduleRtcReconnect();
+        } else if (connection.connectionState === "connecting") {
           setP2pRtcState("connecting");
         }
       });
-      peerConnection.addEventListener("datachannel", (event) => {
-        attachChannel(event.channel);
+      connection.addEventListener("datachannel", (event) => {
+        if (!disposed && peerConnection === connection) {
+          attachChannel(event.channel);
+        }
       });
+      return connection;
+    }
 
-      socket = new WebSocket(getWsUrl(roomId));
-      wsRef.current = socket;
-
-      socket.addEventListener("open", () => {
-        setP2pSocketState("connected");
-        publishProfile();
-      });
-
-      socket.addEventListener("message", async (event) => {
-      const incoming = parsePeerMessage(event.data);
-      if (!incoming) {
-        return;
-      }
-      if (incoming.systemEvent === "room-not-found" || incoming.systemEvent === "room-full") {
-        setP2pRoomIssue(incoming.systemEvent === "room-full" ? "full" : "not-found");
-        setP2pSocketState("error");
-        setP2pRtcState("error");
-        setP2pDataChannelState("idle");
-        setP2pPeers([]);
-        setP2pStep("invalid-room");
-        return;
-      }
-      if (incoming.peerId) {
-        peerIdRef.current = incoming.peerId;
-        peerProfilesRef.current.set(incoming.peerId, localDisplayName);
-        publishProfile();
-      }
-      if (incoming.peers) {
-        setP2pPeers(resolvePeers(incoming.peers, peerProfilesRef.current, peerIdRef.current, localDisplayName));
-      }
-      if (incoming.systemEvent === "peer-joined" || (incoming.systemEvent === "joined" && (incoming.peers?.length ?? 0) >= 2)) {
-        publishProfile();
-      }
-      if (incoming.body && ["joined", "peer-joined", "peer-left"].includes(incoming.systemEvent || "")) {
-        setP2pMessages((messages) => [
-          ...messages,
-          {
-            id: makeId("system"),
-            author: "系统",
-            body: incoming.body || "",
-            lane: "p2p",
-            at: nowLabel()
-          }
-        ]);
-      }
-      if (incoming.secure) {
-        try {
-          const decrypted = await decryptSecurePayload<unknown>(keys, incoming.secure);
-          if (incoming.secure.channel === "signal") {
-            const signal = normalizeSignalPayload(decrypted);
-            if (signal && peerConnection) {
-              await handleSignalMessage(peerConnection, sendSignal, signal);
-            }
-            return;
-          }
-          if (incoming.secure.channel === "profile") {
-            const profile = normalizeProfilePayload(decrypted);
-            if (profile) {
-              const senderId = profile.peerId ?? incoming.from?.id ?? findRemotePeerId(incoming.peers ?? p2pPeersRef.current, peerIdRef.current);
-              if (senderId) {
-                peerProfilesRef.current.set(senderId, profile.name);
-                setP2pPeers((peers) => resolvePeers(peers, peerProfilesRef.current, peerIdRef.current, localDisplayName));
-              }
-            }
-            return;
-          }
-          if (incoming.secure.channel === "ws-chat") {
-            const chat = normalizeWsChatPayload(decrypted);
-            if (chat) {
-              setP2pMessages((messages) => [
-                ...messages,
-                {
-                  id: chat.id,
-                  author: chat.author,
-                  body: chat.body,
-                  lane: "p2p",
-                  at: chat.at
-                }
-              ]);
-            }
-            return;
-          }
-        } catch {
-          setP2pError("收到无法解密的内容，请确认双方安全口令和邀请链接一致。");
+    function startRtcNegotiationTimeout(connection: RTCPeerConnection) {
+      cancelRtcNegotiationTimeout();
+      rtcNegotiationTimer = window.setTimeout(() => {
+        rtcNegotiationTimer = undefined;
+        if (disposed || peerConnection !== connection || connection.connectionState === "connected") {
           return;
         }
-      }
-      const signal = incoming.signal;
-      if (signal) {
-        if (peerConnection) {
-          await handleSignalMessage(peerConnection, sendSignal, signal);
-        }
+        replacePeerConnection();
+        setP2pRtcState("offline");
+        setP2pError("直连协商未收到对方响应，正在自动重试。");
+        scheduleRtcReconnect();
+      }, P2P_RTC_NEGOTIATION_TIMEOUT_MS);
+    }
+
+    async function renegotiateRtc(iceRestart: boolean) {
+      if (disposed || !reconnectAllowed || socket?.readyState !== WebSocket.OPEN || p2pPeersRef.current.length < 2) {
         return;
       }
-      if (incoming.peers && incoming.peers.length >= 2 && peerIdRef.current && peerConnection) {
-        const initiator = peerIdRef.current === [...incoming.peers].sort((a, b) => a.id.localeCompare(b.id))[0].id;
-        if (initiator && !dataChannelRef.current) {
-          const channel = peerConnection.createDataChannel("duallane-p2p");
-          attachChannel(channel);
-          const offer = await peerConnection.createOffer();
-          await peerConnection.setLocalDescription(offer);
-          sendSignal({ type: "signal", signal: "offer", description: offer });
+
+      let connection = peerConnection;
+      if (!connection || ["closed", "failed"].includes(connection.connectionState)) {
+        connection = replacePeerConnection();
+      }
+      if (!isRtcInitiator()) {
+        return;
+      }
+      if (connection.signalingState !== "stable") {
+        connection = replacePeerConnection();
+      }
+
+      const currentChannel = dataChannelRef.current;
+      if (!currentChannel || currentChannel.readyState === "closed") {
+        attachChannel(connection.createDataChannel("duallane-p2p"));
+      } else if (currentChannel.readyState === "closing") {
+        scheduleRtcReconnect();
+        return;
+      } else if (currentChannel.readyState === "open" && connection.connectionState === "connected" && !iceRestart) {
+        return;
+      }
+
+      setP2pRtcState("connecting");
+      try {
+        const shouldRestartIce = iceRestart && connection.connectionState !== "new";
+        if (shouldRestartIce) {
+          connection.restartIce();
+        }
+        const offer = await connection.createOffer(shouldRestartIce ? { iceRestart: true } : undefined);
+        if (disposed || peerConnection !== connection || connection.signalingState !== "stable") {
+          return;
+        }
+        await connection.setLocalDescription(offer);
+        const sent = await sendSecure("signal", { type: "signal", signal: "offer", description: offer });
+        if (disposed || peerConnection !== connection) {
+          return;
+        }
+        if (!sent) {
+          if (peerConnection === connection) {
+            replacePeerConnection();
+          }
+          setP2pRtcState("offline");
+          scheduleRtcReconnect();
+        } else {
+          startRtcNegotiationTimeout(connection);
+        }
+      } catch {
+        if (!disposed && peerConnection === connection) {
+          replacePeerConnection();
+          setP2pRtcState("offline");
+          setP2pError("直连恢复暂未成功，正在自动重试。");
+          scheduleRtcReconnect();
         }
       }
-      });
+    }
 
-      socket.addEventListener("close", () => {
-        setP2pSocketState((status) => (status === "connecting" ? "offline" : status));
-        setP2pRtcState("offline");
-        setP2pDataChannelState("closed");
-        setP2pPeers([]);
-        markInterruptedTransfers("连接已断开，请重建房间或让对方重新打开页面后重新发送");
-      });
+    async function applySignal(signal: SignalMessage) {
+      let connection = peerConnection;
+      if (
+        signal.signal === "offer" &&
+        (!connection || ["closed", "failed"].includes(connection.connectionState) || connection.signalingState !== "stable")
+      ) {
+        connection = replacePeerConnection();
+      } else if (signal.signal === "ice" && (!connection || ["closed", "failed"].includes(connection.connectionState))) {
+        connection = replacePeerConnection();
+      }
+      if (!connection || connection.connectionState === "closed") {
+        return;
+      }
+      if (signal.signal === "answer" && connection.signalingState !== "have-local-offer") {
+        return;
+      }
+      try {
+        await handleSignalMessage(connection, sendSignal, signal);
+        if (signal.signal === "answer") {
+          cancelRtcNegotiationTimeout();
+          setP2pError("");
+        }
+      } catch {
+        if (!disposed && peerConnection === connection) {
+          setP2pRtcState("offline");
+          scheduleRtcReconnect();
+        }
+      }
+    }
 
-      socket.addEventListener("error", () => {
-        setP2pSocketState("error");
-        setP2pRtcState("error");
-        setP2pDataChannelState("closed");
-        setP2pError("实时信令暂不可用，你仍然可以查看本地界面流程。");
-      });
+    void (async () => {
+      iceServers = await getIceServers();
+      if (disposed) {
+        return;
+      }
+      replacePeerConnection();
+
+      function scheduleSocketReconnect() {
+        if (disposed || !reconnectAllowed || socketReconnectTimer !== undefined) {
+          return;
+        }
+        socketReconnectTimer = window.setTimeout(() => {
+          socketReconnectTimer = undefined;
+          connectSocket();
+        }, P2P_RECONNECT_DELAY_MS);
+      }
+
+      function connectSocket() {
+        if (disposed || !reconnectAllowed) {
+          return;
+        }
+        setP2pSocketState("connecting");
+        const nextSocket = new WebSocket(getWsUrl(roomId));
+        socket = nextSocket;
+        wsRef.current = nextSocket;
+
+        nextSocket.addEventListener("open", () => {
+          if (disposed || socket !== nextSocket) {
+            return;
+          }
+          if (socketReconnectTimer !== undefined) {
+            window.clearTimeout(socketReconnectTimer);
+            socketReconnectTimer = undefined;
+          }
+          setP2pSocketState("connected");
+          setP2pError("");
+          publishProfile();
+        });
+
+        nextSocket.addEventListener("message", async (event) => {
+          if (disposed || socket !== nextSocket) {
+            return;
+          }
+          const incoming = parsePeerMessage(event.data);
+          if (!incoming) {
+            return;
+          }
+          if (incoming.systemEvent === "room-full" && hasJoinedRoom) {
+            setP2pSocketState("offline");
+            setP2pError("旧的信令连接仍在释放，正在自动重试。");
+            nextSocket.close();
+            return;
+          }
+          if (incoming.systemEvent === "room-not-found" || incoming.systemEvent === "room-full") {
+            reconnectAllowed = false;
+            cancelRtcReconnect();
+            if (socketReconnectTimer !== undefined) {
+              window.clearTimeout(socketReconnectTimer);
+              socketReconnectTimer = undefined;
+            }
+            setP2pRoomIssue(incoming.systemEvent === "room-full" ? "full" : "not-found");
+            setP2pSocketState("error");
+            setP2pRtcState("error");
+            setP2pDataChannelState("idle");
+            setP2pPeers([]);
+            setP2pStep("invalid-room");
+            return;
+          }
+          if (incoming.peerId) {
+            hasJoinedRoom = true;
+            peerIdRef.current = incoming.peerId;
+            peerProfilesRef.current.set(incoming.peerId, localDisplayName);
+            publishProfile();
+          }
+          if (incoming.peers) {
+            const resolvedPeers = resolvePeers(incoming.peers, peerProfilesRef.current, peerIdRef.current, localDisplayName);
+            p2pPeersRef.current = resolvedPeers;
+            setP2pPeers(resolvedPeers);
+          }
+          if (incoming.systemEvent === "peer-joined" || (incoming.systemEvent === "joined" && (incoming.peers?.length ?? 0) >= 2)) {
+            publishProfile();
+          }
+          if (incoming.body && ["joined", "peer-joined", "peer-left"].includes(incoming.systemEvent || "")) {
+            setP2pMessages((messages) => [
+              ...messages,
+              {
+                id: makeId("system"),
+                author: "系统",
+                body: incoming.body || "",
+                lane: "p2p",
+                at: nowLabel()
+              }
+            ]);
+          }
+          if (incoming.secure) {
+            try {
+              const decrypted = await decryptSecurePayload<unknown>(sessionKeys, incoming.secure);
+              if (
+                disposed ||
+                p2pSessionGenerationRef.current !== sessionGeneration ||
+                socket !== nextSocket
+              ) {
+                return;
+              }
+              if (incoming.secure.channel === "signal") {
+                const signal = normalizeSignalPayload(decrypted);
+                if (signal) {
+                  await applySignal(signal);
+                }
+                return;
+              }
+              if (incoming.secure.channel === "profile") {
+                const profile = normalizeProfilePayload(decrypted);
+                if (profile) {
+                  const senderId = profile.peerId ?? incoming.from?.id ?? findRemotePeerId(incoming.peers ?? p2pPeersRef.current, peerIdRef.current);
+                  if (senderId) {
+                    peerProfilesRef.current.set(senderId, profile.name);
+                    setP2pPeers((peers) => resolvePeers(peers, peerProfilesRef.current, peerIdRef.current, localDisplayName));
+                  }
+                }
+                return;
+              }
+              if (incoming.secure.channel === "ws-chat") {
+                const messageEnvelope = normalizeWsChatPayload(decrypted);
+                if (messageEnvelope) {
+                  await handleP2pMessageEnvelope(messageEnvelope);
+                }
+                return;
+              }
+            } catch {
+              if (!disposed && p2pSessionGenerationRef.current === sessionGeneration) {
+                setP2pError("收到无法解密的内容，请确认双方安全口令和邀请链接一致。");
+              }
+              return;
+            }
+          }
+          const signal = incoming.signal;
+          if (signal) {
+            await applySignal(signal);
+            return;
+          }
+          if (incoming.peers && incoming.peers.length >= 2 && peerIdRef.current) {
+            void renegotiateRtc(false);
+          }
+        });
+
+        nextSocket.addEventListener("close", () => {
+          if (disposed || socket !== nextSocket) {
+            return;
+          }
+          socket = null;
+          if (wsRef.current === nextSocket) {
+            wsRef.current = null;
+          }
+          setP2pSocketState("offline");
+          if (dataChannelRef.current?.readyState !== "open") {
+            markPendingP2pMessagesFailed("信令连接已断开，消息未送达");
+          }
+          scheduleSocketReconnect();
+        });
+
+        nextSocket.addEventListener("error", () => {
+          if (disposed || socket !== nextSocket) {
+            return;
+          }
+          setP2pSocketState("error");
+          setP2pError("实时信令暂不可用，正在尝试重新连接。");
+          nextSocket.close();
+        });
+      }
+
+      connectSocket();
     })();
 
     return () => {
       disposed = true;
+      cancelRtcReconnect();
+      cancelRtcNegotiationTimeout();
+      if (p2pSessionGenerationRef.current === sessionGeneration) {
+        p2pSessionGenerationRef.current += 1;
+      }
+      p2pDataMessageQueueRef.current = Promise.resolve();
+      if (socketReconnectTimer !== undefined) {
+        window.clearTimeout(socketReconnectTimer);
+      }
       socket?.close();
       dataChannelRef.current?.close();
       peerConnection?.close();
@@ -2434,8 +2703,6 @@ export function App() {
       dataChannelRef.current = null;
       setP2pDataChannelState("idle");
       pendingIceRef.current = [];
-      pendingFilesRef.current.clear();
-      incomingFilesRef.current.clear();
     };
   }, [canStartPeerSession, localDisplayName, p2pStep, roomId]);
 
@@ -2515,6 +2782,8 @@ export function App() {
     setWorkspaceNotice(null);
     try {
       const bootstrap = await workspaceJson<WorkspaceBootstrap>("/api/workspace/bootstrap");
+      workspaceRealtimeSeqRef.current = Math.max(0, Number(bootstrap.eventCursor) || 0);
+      workspaceSeenEventIdsRef.current.clear();
       const [conversations, files, members] = await Promise.all([
         bootstrap.conversations
           ? Promise.resolve({ conversations: bootstrap.conversations })
@@ -2566,6 +2835,7 @@ export function App() {
     const data = await workspaceJson<WorkspaceBootstrap>("/api/workspace/bootstrap");
     setWorkspaceBootstrap(data);
     setWorkspaceDirectoryMembers(data.members);
+    return data;
   }
 
   function setWorkspaceConversationDraft(conversationId: string, draft: string) {
@@ -2713,20 +2983,6 @@ export function App() {
       .sort((left, right) => left.seq - right.seq);
   }
 
-  function hasWorkspaceRealtimeGap(events: WorkspaceEvent[]) {
-    let expectedSeq = workspaceRealtimeSeqRef.current;
-    for (const event of events) {
-      if (event.seq <= expectedSeq) {
-        continue;
-      }
-      if (event.seq !== expectedSeq + 1) {
-        return true;
-      }
-      expectedSeq = event.seq;
-    }
-    return false;
-  }
-
   function rememberWorkspaceRealtimeEvents(events: WorkspaceEvent[]) {
     for (const event of events) {
       workspaceSeenEventIdsRef.current.add(event.id);
@@ -2737,9 +2993,10 @@ export function App() {
   async function syncWorkspaceRealtimeState(currentSeqValue?: number) {
     setWorkspaceRealtimeState("syncing");
     try {
-      await Promise.all([refreshWorkspaceBootstrap(), refreshWorkspaceConversations(), refreshWorkspaceFiles()]);
-      if (Number.isFinite(currentSeqValue)) {
-        workspaceRealtimeSeqRef.current = Math.max(0, Number(currentSeqValue));
+      const [bootstrap] = await Promise.all([refreshWorkspaceBootstrap(), refreshWorkspaceConversations(), refreshWorkspaceFiles()]);
+      const nextCursor = Number.isFinite(currentSeqValue) ? Number(currentSeqValue) : Number(bootstrap.eventCursor);
+      if (Number.isFinite(nextCursor)) {
+        workspaceRealtimeSeqRef.current = Math.max(0, nextCursor);
       }
       setWorkspaceRealtimeState("connected");
     } catch (error) {
@@ -2749,7 +3006,7 @@ export function App() {
   }
 
   async function projectWorkspaceEvents(events: WorkspaceEvent[]) {
-    const tasks: Promise<void>[] = [];
+    const tasks: Promise<unknown>[] = [];
     let needsMembers = false;
     let needsConversations = false;
     let needsFiles = false;
@@ -3880,40 +4137,186 @@ export function App() {
       body,
       lane: "p2p" as const,
       at: nowLabel(),
-      self: true
+      self: true,
+      localState: "sending" as const
     };
-    const dataChannel = dataChannelRef.current;
-    if (dataChannel?.readyState === "open") {
-      dataChannel.send(
-        JSON.stringify({
-          kind: "chat",
-          id: message.id,
-          author: message.author,
-          body: message.body,
-          at: message.at
-        } satisfies DataEnvelope)
-      );
-    } else if (wsRef.current?.readyState === WebSocket.OPEN) {
-      const keys = secureKeysRef.current;
-      if (!keys) {
-        setP2pError("端到端加密密钥尚未就绪，无法通过中转发送。");
-        return;
-      }
-      wsRef.current.send(
-        JSON.stringify(
-          await encryptSecurePayload(keys, "ws-chat", {
-            kind: "chat",
-            id: message.id,
-            author: message.author,
-            body: message.body,
-            at: message.at
-          } satisfies DataEnvelope)
-        )
-      );
-    }
-
     setP2pMessages((messages) => [...messages, message]);
     setP2pDraft("");
+    await transmitP2pChat(message);
+  }
+
+  async function retryP2pMessage(messageId: string) {
+    const message = p2pMessages.find((item) => item.id === messageId && item.self && !item.fileTransfer);
+    if (!message) {
+      return;
+    }
+    updateP2pMessageDelivery(message.id, "sending");
+    await transmitP2pChat({ ...message, localState: "sending", failureReason: undefined });
+  }
+
+  async function transmitP2pChat(message: Message) {
+    clearP2pMessageAckTimer(message.id);
+    const attempt = (pendingP2pMessageAttemptsRef.current.get(message.id) ?? 0) + 1;
+    pendingP2pMessageAttemptsRef.current.set(message.id, attempt);
+    if (dataChannelRef.current?.readyState !== "open" && p2pPeersRef.current.length < 2) {
+      pendingP2pMessageAttemptsRef.current.delete(message.id);
+      updateP2pMessageDelivery(message.id, "failed", "对方尚未在线，消息未送达");
+      return;
+    }
+    if (new TextEncoder().encode(message.body).byteLength > P2P_MAX_CHAT_BYTES) {
+      pendingP2pMessageAttemptsRef.current.delete(message.id);
+      updateP2pMessageDelivery(message.id, "failed", `消息超过 ${formatBytes(P2P_MAX_CHAT_BYTES)} 的直连上限`);
+      return;
+    }
+    const sent = await sendP2pMessageEnvelope({
+      kind: "chat",
+      id: message.id,
+      author: message.author,
+      body: message.body,
+      at: message.at
+    });
+    if (pendingP2pMessageAttemptsRef.current.get(message.id) !== attempt) {
+      return;
+    }
+    if (!sent) {
+      pendingP2pMessageAttemptsRef.current.delete(message.id);
+      updateP2pMessageDelivery(message.id, "failed", "当前没有可用连接，消息未送达");
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (pendingP2pMessageAttemptsRef.current.get(message.id) !== attempt) {
+        return;
+      }
+      pendingP2pMessageTimersRef.current.delete(message.id);
+      pendingP2pMessageAttemptsRef.current.delete(message.id);
+      updateP2pMessageDelivery(message.id, "failed", "未收到对方确认，请检查连接后重试");
+    }, P2P_MESSAGE_ACK_TIMEOUT_MS);
+    pendingP2pMessageTimersRef.current.set(message.id, timer);
+  }
+
+  async function sendP2pMessageEnvelope(envelope: Extract<DataEnvelope, { kind: "chat" | "chat-ack" }>) {
+    const dataChannel = dataChannelRef.current;
+    const socket = wsRef.current;
+    const canUseEncryptedSocket = socket?.readyState === WebSocket.OPEN && Boolean(secureKeysRef.current);
+    if (dataChannel?.readyState === "open" && (dataChannel.bufferedAmount < 512 * 1024 || !canUseEncryptedSocket)) {
+      try {
+        dataChannel.send(JSON.stringify(envelope));
+        return true;
+      } catch {
+        // The encrypted WebSocket path below can still carry text acknowledgements.
+      }
+    }
+    const keys = secureKeysRef.current;
+    if (socket?.readyState !== WebSocket.OPEN || !keys) {
+      return false;
+    }
+    try {
+      const secureEnvelope = await encryptSecurePayload(keys, "ws-chat", envelope);
+      if (secureEnvelope.ciphertext.length > 16_384 || socket.readyState !== WebSocket.OPEN) {
+        throw new Error("secure envelope unavailable");
+      }
+      socket.send(JSON.stringify(secureEnvelope));
+      return true;
+    } catch {
+      if (dataChannel?.readyState === "open") {
+        try {
+          dataChannel.send(JSON.stringify(envelope));
+          return true;
+        } catch {
+          return false;
+        }
+      }
+      return false;
+    }
+  }
+
+  async function handleP2pMessageEnvelope(envelope: Extract<DataEnvelope, { kind: "chat" | "chat-ack" }>) {
+    if (envelope.kind === "chat-ack") {
+      pendingP2pMessageAttemptsRef.current.delete(envelope.messageId);
+      clearP2pMessageAckTimer(envelope.messageId);
+      updateP2pMessageDelivery(envelope.messageId, "delivered");
+      return;
+    }
+    setP2pMessages((messages) =>
+      messages.some((message) => message.id === envelope.id)
+        ? messages
+        : [
+            ...messages,
+            {
+              id: envelope.id,
+              author: envelope.author,
+              body: envelope.body,
+              lane: "p2p",
+              at: envelope.at
+            }
+          ]
+    );
+    await sendP2pMessageEnvelope({ kind: "chat-ack", messageId: envelope.id });
+  }
+
+  function updateP2pMessageDelivery(messageId: string, localState?: "sending" | "delivered" | "failed", failureReason?: string) {
+    setP2pMessages((messages) =>
+      messages.map((message) =>
+        message.id === messageId
+          ? { ...message, localState, failureReason }
+          : message
+      )
+    );
+  }
+
+  function clearP2pMessageAckTimer(messageId: string) {
+    const timer = pendingP2pMessageTimersRef.current.get(messageId);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      pendingP2pMessageTimersRef.current.delete(messageId);
+    }
+  }
+
+  function clearP2pMessageAckTimers() {
+    for (const timer of pendingP2pMessageTimersRef.current.values()) {
+      window.clearTimeout(timer);
+    }
+    pendingP2pMessageTimersRef.current.clear();
+    pendingP2pMessageAttemptsRef.current.clear();
+  }
+
+  function clearP2pFileAckTimer(transferId: string) {
+    const timer = pendingP2pFileAckTimersRef.current.get(transferId);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      pendingP2pFileAckTimersRef.current.delete(transferId);
+    }
+  }
+
+  function clearP2pFileAckTimers() {
+    for (const timer of pendingP2pFileAckTimersRef.current.values()) {
+      window.clearTimeout(timer);
+    }
+    pendingP2pFileAckTimersRef.current.clear();
+  }
+
+  function startP2pFileAckTimer(transferId: string) {
+    clearP2pFileAckTimer(transferId);
+    const timer = window.setTimeout(() => {
+      pendingP2pFileAckTimersRef.current.delete(transferId);
+      updateP2pFileTransfer(transferId, {
+        status: "failed",
+        failureReason: "未收到对方的文件校验确认，请重试",
+        retryable: pendingFilesRef.current.has(transferId)
+      });
+    }, P2P_FILE_ACK_TIMEOUT_MS);
+    pendingP2pFileAckTimersRef.current.set(transferId, timer);
+  }
+
+  function markPendingP2pMessagesFailed(reason: string) {
+    clearP2pMessageAckTimers();
+    setP2pMessages((messages) =>
+      messages.map((message) =>
+        message.self && message.localState === "sending"
+          ? { ...message, localState: "failed", failureReason: reason }
+          : message
+      )
+    );
   }
 
   function addP2pFile(file: File) {
@@ -3960,35 +4363,36 @@ export function App() {
     }
 
     pendingFilesRef.current.set(transferId, file);
-    dataChannel.send(
-      JSON.stringify({
-        kind: "file-offer",
-        transferId,
-        author: displayName.trim() || "对方",
-        name: file.name,
-        size: file.size,
-        mimeType: file.type || "application/octet-stream"
-      } satisfies DataEnvelope)
-    );
+    const offered = sendEnvelope({
+      kind: "file-offer",
+      transferId,
+      author: displayName.trim() || "对方",
+      name: file.name,
+      size: file.size,
+      mimeType: file.type || "application/octet-stream",
+      total: getP2pFileChunkCount(file.size)
+    });
+    const initialTransfer: FileTransfer = {
+      id: transferId,
+      name: file.name,
+      size: file.size,
+      mimeType: file.type || "application/octet-stream",
+      status: offered ? "waiting" : "failed",
+      progress: 0,
+      riskNote,
+      retryable: true,
+      failureReason: offered ? undefined : "直连数据通道已断开"
+    };
     setP2pMessages((messages) => [
       ...messages,
       {
         id: transferId,
         author: displayName.trim() || "你",
-        body: "文件请求已发送，等待对方接受。",
+        body: getFileMessageBody(initialTransfer),
         lane: "p2p",
         at: nowLabel(),
         self: true,
-        fileTransfer: {
-          id: transferId,
-          name: file.name,
-          size: file.size,
-          mimeType: file.type || "application/octet-stream",
-          status: "waiting",
-          progress: 0,
-          riskNote,
-          retryable: true
-        }
+        fileTransfer: initialTransfer
       }
     ]);
   }
@@ -3998,57 +4402,76 @@ export function App() {
     if (dataChannel?.readyState !== "open") {
       return false;
     }
-    dataChannel.send(JSON.stringify(envelope));
-    return true;
+    try {
+      dataChannel.send(JSON.stringify(envelope));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
-  async function handleDataChannelMessage(raw: string) {
+  async function handleDataChannelMessage(raw: string, sessionGeneration: number) {
+    if (p2pSessionGenerationRef.current !== sessionGeneration) {
+      return;
+    }
     const envelope = parseDataEnvelope(raw);
     if (!envelope) {
       return;
     }
 
-    if (envelope.kind === "chat") {
-      setP2pMessages((messages) => [
-        ...messages,
-        {
-          id: envelope.id,
-          author: envelope.author,
-          body: envelope.body,
-          lane: "p2p",
-          at: envelope.at
-        }
-      ]);
+    if (envelope.kind === "chat" || envelope.kind === "chat-ack") {
+      await handleP2pMessageEnvelope(envelope);
       return;
     }
 
     if (envelope.kind === "file-offer") {
+      const existingFile = incomingFilesRef.current.get(envelope.transferId);
+      if (existingFile?.blob) {
+        if (
+          existingFile.name === envelope.name &&
+          existingFile.size === envelope.size &&
+          existingFile.total === envelope.total &&
+          existingFile.mimeType === (envelope.mimeType || "application/octet-stream")
+        ) {
+          sendEnvelope({ kind: "file-ack", transferId: envelope.transferId });
+        } else {
+          sendEnvelope({ kind: "file-error", transferId: envelope.transferId, reason: "文件重试信息不一致" });
+        }
+        return;
+      }
+      releaseIncomingP2pFile(envelope.transferId);
+      cancelledP2pFileTransfersRef.current.delete(envelope.transferId);
       incomingFilesRef.current.set(envelope.transferId, {
         name: envelope.name,
         size: envelope.size,
+        total: envelope.total,
         mimeType: envelope.mimeType || "application/octet-stream",
+        accepted: false,
         chunks: [],
+        chunkDigests: [],
         receivedBytes: 0
       });
-      setP2pMessages((messages) => [
-        ...messages,
-        {
+      const incomingMessage: Message = {
+        id: envelope.transferId,
+        author: envelope.author || "对方",
+        body: "收到一个加密文件传输请求。",
+        lane: "p2p",
+        at: nowLabel(),
+        fileTransfer: {
           id: envelope.transferId,
-          author: envelope.author || "对方",
-          body: "收到一个加密文件传输请求。",
-          lane: "p2p",
-          at: nowLabel(),
-          fileTransfer: {
-            id: envelope.transferId,
-            name: envelope.name,
-            size: envelope.size,
-            mimeType: envelope.mimeType,
-            status: "offered",
-            progress: 0,
-            riskNote: getFileRiskNote(envelope.size)
-          }
+          name: envelope.name,
+          size: envelope.size,
+          mimeType: envelope.mimeType,
+          status: "offered",
+          progress: 0,
+          riskNote: getFileRiskNote(envelope.size)
         }
-      ]);
+      };
+      setP2pMessages((messages) =>
+        messages.some((message) => message.id === envelope.transferId)
+          ? messages.map((message) => message.id === envelope.transferId ? incomingMessage : message)
+          : [...messages, incomingMessage]
+      );
       return;
     }
 
@@ -4062,13 +4485,24 @@ export function App() {
         });
         return;
       }
-      void sendP2pFile(envelope.transferId, file);
+      cancelledP2pFileTransfersRef.current.delete(envelope.transferId);
+      void sendP2pFile(envelope.transferId, file).catch(() => {
+        clearP2pFileAckTimer(envelope.transferId);
+        if (!cancelledP2pFileTransfersRef.current.has(envelope.transferId)) {
+          updateP2pFileTransfer(envelope.transferId, {
+            status: "failed",
+            failureReason: "文件读取或加密失败，请重新发送",
+            retryable: true
+          });
+        }
+      });
       return;
     }
 
     if (envelope.kind === "file-reject") {
-      pendingFilesRef.current.delete(envelope.transferId);
-      incomingFilesRef.current.delete(envelope.transferId);
+      clearP2pFileAckTimer(envelope.transferId);
+      cancelledP2pFileTransfersRef.current.add(envelope.transferId);
+      releaseIncomingP2pFile(envelope.transferId);
       updateP2pFileTransfer(envelope.transferId, {
         status: "rejected",
         progress: 0,
@@ -4082,10 +4516,39 @@ export function App() {
       if (!incomingFile) {
         return;
       }
-      const bytes = base64ToBytes(envelope.data);
-      const previousBytes = incomingFile.chunks[envelope.index]?.byteLength ?? 0;
+      if (!incomingFile.accepted) {
+        failIncomingP2pFile(envelope.transferId, "文件尚未确认接收");
+        return;
+      }
+      let bytes: Uint8Array<ArrayBuffer>;
+      try {
+        bytes = base64ToBytes(envelope.data);
+      } catch {
+        failIncomingP2pFile(envelope.transferId, "文件分片无法解码");
+        return;
+      }
+      const metadataFailure = validateP2pFileChunk(incomingFile, envelope, bytes);
+      const digest = await sha256Base64Url(bytes.buffer);
+      if (
+        p2pSessionGenerationRef.current !== sessionGeneration ||
+        incomingFilesRef.current.get(envelope.transferId) !== incomingFile
+      ) {
+        return;
+      }
+      if (metadataFailure || digest !== envelope.sha256) {
+        failIncomingP2pFile(envelope.transferId, metadataFailure || "文件分片校验失败");
+        return;
+      }
+      const previousDigest = incomingFile.chunkDigests[envelope.index];
+      if (previousDigest) {
+        if (previousDigest !== digest) {
+          failIncomingP2pFile(envelope.transferId, "收到冲突的重复分片");
+        }
+        return;
+      }
       incomingFile.chunks[envelope.index] = bytes;
-      incomingFile.receivedBytes += bytes.byteLength - previousBytes;
+      incomingFile.chunkDigests[envelope.index] = digest;
+      incomingFile.receivedBytes += bytes.byteLength;
       updateP2pFileTransfer(envelope.transferId, {
         status: "receiving",
         progress: getTransferProgress(incomingFile.receivedBytes, incomingFile.size)
@@ -4098,12 +4561,80 @@ export function App() {
       if (!incomingFile) {
         return;
       }
-      const blob = new Blob(incomingFile.chunks, { type: incomingFile.mimeType || "application/octet-stream" });
+      if (incomingFile.blob) {
+        if (envelope.total === incomingFile.total && envelope.size === incomingFile.size) {
+          sendEnvelope({ kind: "file-ack", transferId: envelope.transferId });
+        } else {
+          sendEnvelope({ kind: "file-error", transferId: envelope.transferId, reason: "文件完成信息不一致" });
+        }
+        return;
+      }
+      const completionFailure = validateP2pFileCompletion(incomingFile, envelope);
+      if (completionFailure) {
+        failIncomingP2pFile(envelope.transferId, completionFailure);
+        return;
+      }
+      const completeChunks = incomingFile.chunks as Uint8Array<ArrayBuffer>[];
+      const blob = new Blob(completeChunks, { type: incomingFile.mimeType || "application/octet-stream" });
+      if (blob.size !== incomingFile.size) {
+        failIncomingP2pFile(envelope.transferId, "文件组装后的大小不一致");
+        return;
+      }
       incomingFile.blob = blob;
+      incomingFile.chunks = [];
+      incomingFile.chunkDigests = [];
       const downloadUrl = URL.createObjectURL(blob);
+      p2pDownloadUrlsRef.current.set(envelope.transferId, downloadUrl);
       updateP2pFileTransfer(envelope.transferId, { status: "complete", progress: 100, downloadUrl });
-      sendEnvelope({ kind: "file-complete", transferId: envelope.transferId });
+      sendEnvelope({ kind: "file-ack", transferId: envelope.transferId });
+      return;
     }
+
+    if (envelope.kind === "file-ack") {
+      clearP2pFileAckTimer(envelope.transferId);
+      cancelledP2pFileTransfersRef.current.add(envelope.transferId);
+      pendingFilesRef.current.delete(envelope.transferId);
+      updateP2pFileTransfer(envelope.transferId, { status: "complete", progress: 100, retryable: false });
+      return;
+    }
+
+    if (envelope.kind === "file-error") {
+      clearP2pFileAckTimer(envelope.transferId);
+      cancelledP2pFileTransfersRef.current.add(envelope.transferId);
+      updateP2pFileTransfer(envelope.transferId, {
+        status: "failed",
+        failureReason: envelope.reason,
+        retryable: pendingFilesRef.current.has(envelope.transferId)
+      });
+    }
+  }
+
+  function failIncomingP2pFile(transferId: string, reason: string) {
+    releaseIncomingP2pFile(transferId);
+    updateP2pFileTransfer(transferId, {
+      status: "failed",
+      progress: 0,
+      failureReason: reason,
+      retryable: false
+    });
+    sendEnvelope({ kind: "file-error", transferId, reason });
+  }
+
+  function releaseIncomingP2pFile(transferId: string) {
+    incomingFilesRef.current.delete(transferId);
+    const downloadUrl = p2pDownloadUrlsRef.current.get(transferId);
+    if (downloadUrl) {
+      URL.revokeObjectURL(downloadUrl);
+      p2pDownloadUrlsRef.current.delete(transferId);
+    }
+  }
+
+  function clearIncomingP2pFiles() {
+    incomingFilesRef.current.clear();
+    for (const downloadUrl of p2pDownloadUrlsRef.current.values()) {
+      URL.revokeObjectURL(downloadUrl);
+    }
+    p2pDownloadUrlsRef.current.clear();
   }
 
   async function handleSignalMessage(
@@ -4161,10 +4692,16 @@ export function App() {
   }
 
   function markInterruptedTransfers(reason: string) {
+    clearP2pFileAckTimers();
+    for (const [transferId, incomingFile] of incomingFilesRef.current) {
+      if (!incomingFile.blob) {
+        releaseIncomingP2pFile(transferId);
+      }
+    }
     setP2pMessages((messages) =>
       messages.map((message) => {
         const transfer = message.fileTransfer;
-        if (!transfer || !["waiting", "sending", "receiving", "offered"].includes(transfer.status)) {
+        if (!transfer || !["waiting", "sending", "receiving", "verifying", "offered"].includes(transfer.status)) {
           return message;
         }
         const nextTransfer = {
@@ -4183,6 +4720,7 @@ export function App() {
   }
 
   async function sendP2pFile(transferId: string, file: File) {
+    clearP2pFileAckTimer(transferId);
     const dataChannel = dataChannelRef.current;
     if (dataChannel?.readyState !== "open") {
       updateP2pFileTransfer(transferId, {
@@ -4193,35 +4731,60 @@ export function App() {
       return;
     }
 
+    const sendTransferEnvelope = (envelope: DataEnvelope) => {
+      if (dataChannelRef.current !== dataChannel || dataChannel.readyState !== "open") {
+        return false;
+      }
+      try {
+        dataChannel.send(JSON.stringify(envelope));
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const failInterruptedTransfer = () => {
+      clearP2pFileAckTimer(transferId);
+      updateP2pFileTransfer(transferId, {
+        status: "failed",
+        failureReason: "传输中断，请确认双方页面在线后重新发送",
+        retryable: true
+      });
+    };
+
     updateP2pFileTransfer(transferId, { status: "sending", progress: 0, failureReason: undefined });
-    const total = Math.max(1, Math.ceil(file.size / FILE_CHUNK_SIZE));
+    const total = getP2pFileChunkCount(file.size);
     for (let index = 0; index < total; index += 1) {
-      const chunk = file.slice(index * FILE_CHUNK_SIZE, Math.min(file.size, (index + 1) * FILE_CHUNK_SIZE));
-      const buffer = await chunk.arrayBuffer();
-      await waitForBufferedAmount(dataChannel);
-      if (dataChannel.readyState !== "open") {
-        updateP2pFileTransfer(transferId, {
-          status: "failed",
-          failureReason: "传输中断，请确认双方页面在线后重新发送",
-          retryable: true
-        });
+      if (cancelledP2pFileTransfersRef.current.has(transferId)) {
         return;
       }
-      dataChannel.send(
-        JSON.stringify({
+      const chunk = file.slice(index * P2P_FILE_CHUNK_SIZE, Math.min(file.size, (index + 1) * P2P_FILE_CHUNK_SIZE));
+      const buffer = await chunk.arrayBuffer();
+      const sha256 = await sha256Base64Url(buffer);
+      await waitForBufferedAmount(dataChannel);
+      if (cancelledP2pFileTransfersRef.current.has(transferId)) {
+        return;
+      }
+      if (!sendTransferEnvelope({
           kind: "file-chunk",
           transferId,
           index,
           total,
+          sha256,
           data: arrayBufferToBase64(buffer)
-        } satisfies DataEnvelope)
-      );
+        })) {
+        failInterruptedTransfer();
+        return;
+      }
       updateP2pFileTransfer(transferId, { progress: Math.round(((index + 1) / total) * 100) });
     }
 
-    dataChannel.send(JSON.stringify({ kind: "file-complete", transferId } satisfies DataEnvelope));
-    pendingFilesRef.current.delete(transferId);
-    updateP2pFileTransfer(transferId, { status: "complete", progress: 100, retryable: false });
+    startP2pFileAckTimer(transferId);
+    if (!sendTransferEnvelope({ kind: "file-complete", transferId, total, size: file.size })) {
+      failInterruptedTransfer();
+      return;
+    }
+    updateP2pFileTransfer(transferId, { status: "verifying", progress: 100, retryable: true });
   }
 
   async function acceptP2pFile(transferId: string) {
@@ -4233,18 +4796,24 @@ export function App() {
       });
       return;
     }
+    cancelledP2pFileTransfersRef.current.delete(transferId);
+    const incomingFile = incomingFilesRef.current.get(transferId);
+    if (incomingFile) {
+      incomingFile.accepted = true;
+    }
     updateP2pFileTransfer(transferId, { status: "receiving", progress: 0, failureReason: undefined });
   }
 
   function rejectP2pFile(transferId: string) {
-    incomingFilesRef.current.delete(transferId);
+    cancelledP2pFileTransfersRef.current.add(transferId);
+    releaseIncomingP2pFile(transferId);
     sendEnvelope({ kind: "file-reject", transferId, reason: "对方拒绝接收" });
     updateP2pFileTransfer(transferId, { status: "rejected", progress: 0, failureReason: "你已拒绝接收" });
   }
 
   function retryP2pFile(transferId: string) {
+    clearP2pFileAckTimer(transferId);
     const file = pendingFilesRef.current.get(transferId);
-    const dataChannel = dataChannelRef.current;
     if (!file) {
       updateP2pFileTransfer(transferId, {
         status: "failed",
@@ -4253,7 +4822,7 @@ export function App() {
       });
       return;
     }
-    if (dataChannel?.readyState !== "open") {
+    if (dataChannelRef.current?.readyState !== "open") {
       updateP2pFileTransfer(transferId, {
         status: "failed",
         failureReason: "直连数据通道未恢复，请等待对方在线后重试",
@@ -4261,17 +4830,24 @@ export function App() {
       });
       return;
     }
+    cancelledP2pFileTransfersRef.current.delete(transferId);
     updateP2pFileTransfer(transferId, { status: "waiting", progress: 0, failureReason: undefined });
-    dataChannel.send(
-      JSON.stringify({
-        kind: "file-offer",
-        transferId,
-        author: displayName.trim() || "对方",
-        name: file.name,
-        size: file.size,
-        mimeType: file.type || "application/octet-stream"
-      } satisfies DataEnvelope)
-    );
+    const offered = sendEnvelope({
+      kind: "file-offer",
+      transferId,
+      author: displayName.trim() || "对方",
+      name: file.name,
+      size: file.size,
+      mimeType: file.type || "application/octet-stream",
+      total: getP2pFileChunkCount(file.size)
+    });
+    if (!offered) {
+      updateP2pFileTransfer(transferId, {
+        status: "failed",
+        failureReason: "直连数据通道未恢复，请等待对方在线后重试",
+        retryable: true
+      });
+    }
   }
 
   async function saveP2pFile(transfer: FileTransfer) {
@@ -4296,6 +4872,7 @@ export function App() {
       }
     }
 
+    const temporaryDownloadUrl = !transfer.downloadUrl;
     const downloadUrl = transfer.downloadUrl ?? URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = downloadUrl;
@@ -4303,6 +4880,9 @@ export function App() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    if (temporaryDownloadUrl) {
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+    }
   }
 
   function saveP2pSession() {
@@ -4363,8 +4943,13 @@ export function App() {
     setRoomDetailsOpen(false);
     setSavedSessionsOpen(false);
     setCopyState("idle");
+    p2pSessionGenerationRef.current += 1;
+    p2pDataMessageQueueRef.current = Promise.resolve();
     pendingFilesRef.current.clear();
-    incomingFilesRef.current.clear();
+    cancelledP2pFileTransfersRef.current.clear();
+    clearIncomingP2pFiles();
+    clearP2pMessageAckTimers();
+    clearP2pFileAckTimers();
     peerProfilesRef.current.clear();
     secureKeysRef.current = null;
     peerIdRef.current = "";
@@ -4393,8 +4978,13 @@ export function App() {
     setSavedSessionsOpen(false);
     setCopyState("idle");
     setSessionSaved("idle");
+    p2pSessionGenerationRef.current += 1;
+    p2pDataMessageQueueRef.current = Promise.resolve();
     pendingFilesRef.current.clear();
-    incomingFilesRef.current.clear();
+    cancelledP2pFileTransfersRef.current.clear();
+    clearIncomingP2pFiles();
+    clearP2pMessageAckTimers();
+    clearP2pFileAckTimers();
     peerProfilesRef.current.clear();
     secureKeysRef.current = null;
     peerIdRef.current = "";
@@ -4598,6 +5188,7 @@ export function App() {
               draft={p2pDraft}
               onDraft={setP2pDraft}
               onSend={sendP2pMessage}
+              onRetryMessage={(messageId) => void retryP2pMessage(messageId)}
               onFile={addP2pFile}
               onAcceptFile={(transferId) => void acceptP2pFile(transferId)}
               onRejectFile={rejectP2pFile}
@@ -5933,9 +6524,9 @@ function normalizeProfilePayload(value: unknown): PeerProfile | null {
   };
 }
 
-function normalizeWsChatPayload(value: unknown): ChatEnvelope | null {
+function normalizeWsChatPayload(value: unknown): P2pMessageEnvelope | null {
   const envelope = parseDataEnvelopeValue(value);
-  return envelope?.kind === "chat" ? envelope : null;
+  return envelope?.kind === "chat" || envelope?.kind === "chat-ack" ? envelope : null;
 }
 
 function ThemeSwitch({
@@ -6261,7 +6852,7 @@ function FileTransferCard({
   onSave?: (transfer: FileTransfer) => void;
   onRetry?: (transferId: string) => void;
 }) {
-  const isActive = transfer.status === "sending" || transfer.status === "receiving";
+  const isActive = transfer.status === "sending" || transfer.status === "receiving" || transfer.status === "verifying";
   const canRespond = !self && transfer.status === "offered";
   const canSave = !self && transfer.status === "complete";
   const canRetry = self && transfer.retryable && (transfer.status === "failed" || transfer.status === "rejected");
@@ -6594,7 +7185,13 @@ function ChatPanel({
                   )}
                   {message.localState && (
                     <div className={`message-local-state ${message.localState}`}>
-                      <span>{message.localState === "sending" ? "发送中" : message.failureReason || "发送失败"}</span>
+                      <span>
+                        {message.localState === "sending"
+                          ? "发送中"
+                          : message.localState === "delivered"
+                            ? "已送达"
+                            : message.failureReason || "发送失败"}
+                      </span>
                       {message.localState === "failed" && onRetryMessage && (
                         <button type="button" onClick={() => onRetryMessage(message.id)}>
                           <RefreshCw size={14} />

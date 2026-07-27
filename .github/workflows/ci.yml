@@ -54,6 +54,12 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Validate Docker Compose
+        run: docker compose config
+
+      - name: Build Docker images
+        run: docker compose build web api migrate
+
       - name: Install Chromium and system dependencies
         run: pnpm exec playwright install --with-deps chromium
 

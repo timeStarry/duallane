@@ -155,7 +155,7 @@ app.post("/api/p2p/rooms", async (request, reply) => {
 });
 
 app.get("/api/p2p/ice-servers", async () => ({
-  iceServers: getIceServers()
+  iceServers: getIceServers(env)
 }));
 
 app.get("/api/p2p/rooms/:roomId", async (request, reply) => {
@@ -704,22 +704,19 @@ app.get("/ws/workspace", { websocket: true }, (socket, request) => {
 
   let subscribedUserId = null;
   let lastDeliveredSeq = 0;
-  const unsubscribe = subscribeWorkspaceEvents(async (writtenEvent) => {
-    if (!subscribedUserId || socket.readyState !== 1) {
-      return;
-    }
-    let events;
-    try {
+  let replayInProgress = false;
+  let replayCatchUpRequired = false;
+
+  async function deliverWorkspaceEvents(writtenEvent) {
+    let replayAfterSeq = lastDeliveredSeq;
+    if (writtenEvent) {
       const pushedEvent = await getWorkspaceEventForUser(db, subscribedUserId, writtenEvent.id);
       if (!pushedEvent) {
         return;
       }
-      events = await listWorkspaceEvents(db, subscribedUserId, Math.min(lastDeliveredSeq, pushedEvent.seq - 1));
-    } catch (error) {
-      socket.send(JSON.stringify(toWorkspaceSocketError(request, error)));
-      socket.close(error instanceof WorkspaceError ? 1008 : 1011, "workspace access changed");
-      return;
+      replayAfterSeq = Math.min(lastDeliveredSeq, pushedEvent.seq - 1);
     }
+    const events = await listWorkspaceEvents(db, subscribedUserId, replayAfterSeq);
     for (const event of events) {
       socket.send(JSON.stringify({ version: 1, type: "event", event }));
       lastDeliveredSeq = Math.max(lastDeliveredSeq, event.seq);
@@ -732,6 +729,22 @@ app.get("/ws/workspace", { websocket: true }, (socket, request) => {
         currentSeq: await getWorkspaceEventCursor(db),
         reason: "replay_limit"
       }));
+    }
+  }
+
+  const unsubscribe = subscribeWorkspaceEvents(async (writtenEvent) => {
+    if (!subscribedUserId || socket.readyState !== 1) {
+      return;
+    }
+    if (replayInProgress) {
+      replayCatchUpRequired = true;
+      return;
+    }
+    try {
+      await deliverWorkspaceEvents(writtenEvent);
+    } catch (error) {
+      socket.send(JSON.stringify(toWorkspaceSocketError(request, error)));
+      socket.close(error instanceof WorkspaceError ? 1008 : 1011, "workspace access changed");
     }
   });
 
@@ -758,23 +771,40 @@ app.get("/ws/workspace", { websocket: true }, (socket, request) => {
         }));
         return;
       }
-      const events = await listWorkspaceEvents(db, userId, lastSeq);
-      socket.send(JSON.stringify({
-        version: 1,
-        type: "ready",
-        spaceId: DEFAULT_SPACE_ID,
-        currentSeq,
-        replayFrom: lastSeq + 1,
-        replayCount: events.length,
-        hasMore: Boolean(events.hasMore)
-      }));
-      for (const event of events) {
-        socket.send(JSON.stringify({ version: 1, type: "event", event }));
-      }
       subscribedUserId = userId;
-      lastDeliveredSeq = events.length > 0
-        ? Math.max(lastSeq, ...events.map((event) => event.seq))
-        : currentSeq;
+      replayInProgress = true;
+      replayCatchUpRequired = false;
+      try {
+        const events = await listWorkspaceEvents(db, userId, lastSeq);
+        const replayCurrentSeq = events.length > 0
+          ? Math.max(currentSeq, ...events.map((event) => event.seq))
+          : currentSeq;
+        socket.send(JSON.stringify({
+          version: 1,
+          type: "ready",
+          spaceId: DEFAULT_SPACE_ID,
+          currentSeq: replayCurrentSeq,
+          replayFrom: lastSeq + 1,
+          replayCount: events.length,
+          hasMore: Boolean(events.hasMore)
+        }));
+        for (const event of events) {
+          socket.send(JSON.stringify({ version: 1, type: "event", event }));
+        }
+        lastDeliveredSeq = events.length > 0
+          ? Math.max(lastSeq, ...events.map((event) => event.seq))
+          : replayCurrentSeq;
+        while (replayCatchUpRequired && socket.readyState === 1) {
+          replayCatchUpRequired = false;
+          await deliverWorkspaceEvents();
+        }
+      } catch (error) {
+        subscribedUserId = null;
+        replayCatchUpRequired = false;
+        throw error;
+      } finally {
+        replayInProgress = false;
+      }
     } catch (error) {
       socket.send(JSON.stringify(toWorkspaceSocketError(request, error)));
       if (error instanceof WorkspaceError && error.statusCode === 401) {

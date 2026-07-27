@@ -145,8 +145,12 @@ and removes an isolated schema.
 For private-lane reliability, configure TURN fallback with either
 `DUALLANE_TURN_SHARED_SECRET` for coturn REST credentials or static
 `DUALLANE_TURN_USERNAME` / `DUALLANE_TURN_CREDENTIAL` values. Prefer `turns:`
-URLs. WebSocket fallback carries only end-to-end encrypted envelopes; messages,
-profiles, and signaling are not sent to the server as plaintext.
+URLs. `DUALLANE_STUN_URLS` and `DUALLANE_TURN_URLS` accept comma-separated
+server URLs, `DUALLANE_TURN_TTL_SECONDS` controls REST credential lifetime, and
+`DUALLANE_EMPTY_ROOM_GRACE_MS` controls how long an empty private room remains
+available for reconnecting. WebSocket fallback carries only end-to-end
+encrypted envelopes; messages, profiles, and signaling are not sent to the
+server as plaintext.
 
 Access logs should avoid query strings and payloads. The bundled Nginx gateway
 uses a path-only log format and security headers; put HSTS on the outer TLS

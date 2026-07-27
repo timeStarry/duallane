@@ -19,8 +19,9 @@ describe("workspace routes", () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  async function makeApp(env = {}) {
-    const db = openTestDatabase(dataDir);
+  async function makeApp(env = {}, options = {}) {
+    const rawDb = openTestDatabase(dataDir);
+    const db = options.wrapDb ? options.wrapDb(rawDb) : rawDb;
     const app = await createApp({
       dataDir,
       db,
@@ -32,7 +33,7 @@ describe("workspace routes", () => {
       },
       logger: false
     });
-    app.addHook("onClose", async () => db.close());
+    app.addHook("onClose", async () => rawDb.close());
     const originalInject = app.inject.bind(app);
     app.inject = (options, ...rest) => {
       if (
@@ -2220,6 +2221,108 @@ describe("workspace routes", () => {
       expect(frame.event.payloadJson).toBeUndefined();
       expect(JSON.stringify(frame)).not.toContain("requestId");
     } finally {
+      ws.terminate();
+    }
+  });
+
+  it("delivers workspace events persisted while hello replay switches to live updates", async () => {
+    let signalReplayStarted;
+    let releaseReplay;
+    const replayStarted = new Promise((resolve) => {
+      signalReplayStarted = resolve;
+    });
+    const replayReleased = new Promise((resolve) => {
+      releaseReplay = resolve;
+    });
+    let replayBlocked = false;
+    const app = await makeApp({}, {
+      wrapDb(rawDb) {
+        return {
+          prepare(sql) {
+            const statement = rawDb.prepare(sql);
+            if (!replayBlocked && sql.includes("FROM workspace_events") && sql.includes("seq > ?")) {
+              return {
+                async all(...params) {
+                  const rows = statement.all(...params);
+                  replayBlocked = true;
+                  signalReplayStarted();
+                  await replayReleased;
+                  return rows;
+                }
+              };
+            }
+            return statement;
+          },
+          transaction: rawDb.transaction,
+          lock: rawDb.lock
+        };
+      }
+    });
+    const db = openTestDatabase(dataDir);
+    let currentSeq;
+    try {
+      currentSeq = db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM workspace_events").get().seq;
+    } finally {
+      db.close();
+    }
+
+    await app.ready();
+    const ws = await app.injectWS("/ws/workspace", {
+      headers: {
+        "x-workspace-user-id": "usr_owner"
+      }
+    });
+
+    try {
+      const frames = readWsJsonFrames(ws, 4);
+      ws.send(JSON.stringify({ version: 1, type: "hello", lastSeq: currentSeq }));
+      await replayStarted;
+
+      const conversation = await app.inject({
+        method: "POST",
+        url: "/api/workspace/conversations",
+        headers: {
+          "content-type": "application/json",
+          "x-workspace-user-id": "usr_owner"
+        },
+        payload: {
+          type: "group",
+          title: "Hello replay race"
+        }
+      });
+      expect(conversation.statusCode).toBe(201);
+      releaseReplay();
+
+      const [ready, ...events] = await frames;
+      expect(ready).toMatchObject({
+        version: 1,
+        type: "ready",
+        currentSeq,
+        replayCount: 0
+      });
+      expect(events).toHaveLength(3);
+      expect(events.map((event) => event.event.seq)).toEqual([currentSeq + 1, currentSeq + 2, currentSeq + 3]);
+      expect(events.map((event) => event.event.type)).toEqual([
+        "conversation.created",
+        "conversation.member_added",
+        "message.created"
+      ]);
+      expect(events[0]).toMatchObject({
+        version: 1,
+        type: "event",
+        event: {
+          seq: currentSeq + 1,
+          type: "conversation.created",
+          payload: {
+            conversation: {
+              id: conversation.json().conversation.id,
+              title: "Hello replay race"
+            }
+          }
+        }
+      });
+    } finally {
+      releaseReplay();
       ws.terminate();
     }
   });

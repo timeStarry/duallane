@@ -91,6 +91,7 @@ export async function getWorkspaceBootstrap(db, userId = "usr_owner") {
     throw new WorkspaceAuthError("auth.required", "请先登录共享空间");
   }
   await releaseStaleUploadReservations(db);
+  const eventCursor = await getWorkspaceEventCursor(db);
 
   const space = await getDefaultSpace(db);
   const members = (await listSpaceMembers(db)).map((member) => publicMember(member, currentUser));
@@ -118,7 +119,8 @@ export async function getWorkspaceBootstrap(db, userId = "usr_owner") {
     members,
     conversations,
     files,
-    invites
+    invites,
+    eventCursor
   };
 }
 
@@ -831,8 +833,20 @@ export async function listConversations(db, userId = "usr_owner", request = null
           AND m.deleted_at IS NULL
           AND (m.author_id IS NULL OR m.author_id != ?)
           AND (
-            cm.last_read_at IS NULL
-            OR m.created_at > cm.last_read_at
+            (
+              cm.last_read_seq IS NOT NULL
+              AND EXISTS (
+                SELECT 1
+                FROM workspace_events we
+                WHERE we.type = 'message.created'
+                  AND we.target_id = m.id
+                  AND we.seq > cm.last_read_seq
+              )
+            )
+            OR (
+              cm.last_read_seq IS NULL
+              AND (cm.last_read_at IS NULL OR m.created_at > cm.last_read_at)
+            )
           )
       ) AS unreadCount
     FROM conversations c
@@ -1253,21 +1267,48 @@ export async function markConversationRead(db, request, input) {
     targetId: conversationId
   });
   await requireConversationMember(db, actor.id, conversationId, { request, actor, action: "conversation.read" });
-  const latest = await db.prepare(`
-    SELECT id, created_at AS createdAt
-    FROM messages
-    WHERE conversation_id = ? AND deleted_at IS NULL
-    ORDER BY created_at DESC
-    LIMIT 1
-  `).get(conversationId);
-  const now = new Date().toISOString();
-  const lastReadSeq = await getWorkspaceEventCursor(db);
-  await db.prepare(`
-    UPDATE conversation_members
-    SET last_read_message_id = ?, last_read_at = ?, last_read_seq = ?
-    WHERE conversation_id = ? AND user_id = ? AND removed_at IS NULL
-  `).run(latest?.id ?? null, latest?.createdAt ?? now, lastReadSeq, conversationId, actor.id);
-  return await getConversation(db, actor.id, conversationId);
+  return await runWorkspaceTransaction(db, async () => {
+    const marker = await db.prepare(`
+      WITH latest_message AS (
+        SELECT m.id, m.created_at, we.seq AS event_seq
+        FROM messages m
+        LEFT JOIN workspace_events we
+          ON we.space_id = m.space_id
+          AND we.conversation_id = m.conversation_id
+          AND we.type = 'message.created'
+          AND we.target_id = m.id
+        WHERE m.conversation_id = ? AND m.deleted_at IS NULL
+        ORDER BY m.created_at DESC, we.seq DESC, m.id DESC
+        LIMIT 1
+      )
+      SELECT
+        latest_message.id,
+        latest_message.created_at AS createdAt,
+        COALESCE(
+          latest_message.event_seq,
+          (SELECT COALESCE(MAX(seq), 0) FROM workspace_events WHERE space_id = ?)
+        ) AS lastReadSeq
+      FROM (SELECT 1) AS marker_anchor
+      LEFT JOIN latest_message ON 1 = 1
+    `).get(conversationId, DEFAULT_SPACE_ID);
+    const lastReadSeq = Number(marker.lastReadSeq) || 0;
+    await db.prepare(`
+      UPDATE conversation_members
+      SET last_read_message_id = ?, last_read_at = ?, last_read_seq = ?
+      WHERE conversation_id = ?
+        AND user_id = ?
+        AND removed_at IS NULL
+        AND (last_read_seq IS NULL OR last_read_seq <= ?)
+    `).run(
+      marker.id ?? null,
+      marker.createdAt ?? new Date().toISOString(),
+      lastReadSeq,
+      conversationId,
+      actor.id,
+      lastReadSeq
+    );
+    return await getConversation(db, actor.id, conversationId);
+  });
 }
 
 export async function updateConversationNotificationLevel(db, request, input) {
@@ -2147,8 +2188,20 @@ async function getConversation(db, userId, conversationId, context = {}) {
           AND m.deleted_at IS NULL
           AND (m.author_id IS NULL OR m.author_id != ?)
           AND (
-            cm.last_read_at IS NULL
-            OR m.created_at > cm.last_read_at
+            (
+              cm.last_read_seq IS NOT NULL
+              AND EXISTS (
+                SELECT 1
+                FROM workspace_events we
+                WHERE we.type = 'message.created'
+                  AND we.target_id = m.id
+                  AND we.seq > cm.last_read_seq
+              )
+            )
+            OR (
+              cm.last_read_seq IS NULL
+              AND (cm.last_read_at IS NULL OR m.created_at > cm.last_read_at)
+            )
           )
       ) AS unreadCount
     FROM conversations

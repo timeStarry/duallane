@@ -22,6 +22,13 @@ describe("workspace configuration docs", () => {
     expect(envExample).toContain("DATABASE_URL=postgresql://");
     expect(envExample).toContain("POSTGRES_IMAGE=docker.m.daocloud.io/library/postgres:17-alpine");
     expect(envExample).toContain("POSTGRES_PASSWORD=");
+    expect(envExample).toContain("DUALLANE_STUN_URLS=stun:stun.l.google.com:19302");
+    expect(envExample).toContain("DUALLANE_TURN_URLS=");
+    expect(envExample).toContain("DUALLANE_TURN_SHARED_SECRET=");
+    expect(envExample).toContain("DUALLANE_TURN_TTL_SECONDS=600");
+    expect(envExample).toContain("DUALLANE_TURN_USERNAME=");
+    expect(envExample).toContain("DUALLANE_TURN_CREDENTIAL=");
+    expect(envExample).toContain("DUALLANE_EMPTY_ROOM_GRACE_MS=10000");
   });
 
   it("documents local fallback and production OAuth requirements", async () => {
@@ -48,11 +55,33 @@ describe("workspace configuration docs", () => {
     expect(compose).toContain("DATABASE_AUTO_MIGRATE: \"false\"");
     expect(compose).toContain("PGHOST: postgres");
     expect(compose).toContain("PGPASSWORD: ${POSTGRES_PASSWORD:-replace-this-before-production}");
+    expect(compose).toContain("DUALLANE_STUN_URLS: ${DUALLANE_STUN_URLS:-stun:stun.l.google.com:19302}");
+    expect(compose).toContain("DUALLANE_TURN_URLS: ${DUALLANE_TURN_URLS:-}");
+    expect(compose).toContain("DUALLANE_TURN_SHARED_SECRET: ${DUALLANE_TURN_SHARED_SECRET:-}");
+    expect(compose).toContain("DUALLANE_TURN_TTL_SECONDS: ${DUALLANE_TURN_TTL_SECONDS:-600}");
+    expect(compose).toContain("DUALLANE_TURN_USERNAME: ${DUALLANE_TURN_USERNAME:-}");
+    expect(compose).toContain("DUALLANE_TURN_CREDENTIAL: ${DUALLANE_TURN_CREDENTIAL:-}");
+    expect(compose).toContain("DUALLANE_EMPTY_ROOM_GRACE_MS: ${DUALLANE_EMPTY_ROOM_GRACE_MS:-10000}");
     expect(envExample).toContain("WORKSPACE_FRONTEND_URL=\n");
     expect(envExample).not.toContain("WORKSPACE_FRONTEND_URL=http://127.0.0.1:5173");
     expect(envExample).toContain("TRUST_PROXY=true");
     expect(nginx).toContain("map $http_x_forwarded_proto $duallane_forwarded_proto");
     expect(nginx).toContain("proxy_set_header X-Forwarded-Proto $duallane_forwarded_proto");
+  });
+
+  it("documents private-lane relay and room lifecycle settings", async () => {
+    const readme = await readFile(path.join(repoRoot, "README.md"), "utf8");
+    const server = await readFile(path.join(repoRoot, "apps", "web", "server", "index.mjs"), "utf8");
+
+    expect(readme).toContain("DUALLANE_TURN_SHARED_SECRET");
+    expect(readme).toContain("DUALLANE_STUN_URLS");
+    expect(readme).toContain("DUALLANE_TURN_URLS");
+    expect(readme).toContain("DUALLANE_TURN_TTL_SECONDS");
+    expect(readme).toContain("DUALLANE_TURN_USERNAME");
+    expect(readme).toContain("DUALLANE_TURN_CREDENTIAL");
+    expect(readme).toContain("DUALLANE_EMPTY_ROOM_GRACE_MS");
+    expect(readme).toContain("Prefer `turns:`");
+    expect(server).toContain("iceServers: getIceServers(env)");
   });
 
   it("uses versioned PostgreSQL migrations without a runtime SQLite fallback", async () => {
