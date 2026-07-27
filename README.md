@@ -53,6 +53,17 @@ pnpm dev
 The frontend runs at `http://127.0.0.1:5173` and proxies API/WebSocket traffic to
 `http://127.0.0.1:8787`.
 
+Run the browser-level P2P and Workspace core flows with Playwright:
+
+```bash
+pnpm exec playwright install chromium
+pnpm test:e2e
+```
+
+The E2E suite starts isolated local services and uses a temporary SQLite test
+double for Workspace, so it does not require PostgreSQL. Keep PostgreSQL
+integration coverage separate through `TEST_DATABASE_URL` and `test:postgres`.
+
 When testing Workspace locally, set `WORKSPACE_FRONTEND_URL=http://127.0.0.1:5173`
 so the GitHub login fallback returns to the frontend dev server. Use the same
 host in the browser, preferably `127.0.0.1`, so the workspace session cookie is

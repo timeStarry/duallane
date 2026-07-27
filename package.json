@@ -9,7 +9,11 @@
     "build": "pnpm --filter @duallane/web build",
     "start": "pnpm --filter @duallane/web start",
     "test": "pnpm --filter @duallane/web test",
+    "test:e2e": "playwright test",
     "lint": "pnpm --filter @duallane/web lint"
   },
-  "packageManager": "pnpm@10.30.3"
+  "packageManager": "pnpm@10.30.3",
+  "devDependencies": {
+    "@playwright/test": "^1.62.0"
+  }
 }
