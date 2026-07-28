@@ -34,6 +34,7 @@ import {
   listMessages,
   listWorkspaceEvents,
   markConversationRead,
+  recordGitHubLoginRejection,
   recordInviteAcceptRejection,
   removeConversationMember,
   removeAttachment,
@@ -58,6 +59,9 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
+const DEFAULT_GITHUB_OAUTH_TIMEOUT_MS = 8000;
+const MAX_GITHUB_OAUTH_TIMEOUT_MS = 30000;
+const GITHUB_API_USER_AGENT = "DualLane/0.1";
 
 export async function createApp(options = {}) {
   const env = options.env ?? process.env;
@@ -65,6 +69,12 @@ export async function createApp(options = {}) {
   const workspaceEnabled = isWorkspaceEnabled(env);
   const serveStatic = env.SERVE_STATIC !== "false";
   const trustProxy = options.trustProxy ?? env.TRUST_PROXY === "true";
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const githubOAuthTimeoutMs = Math.min(
+    normalizePositiveInteger(options.githubOAuthTimeoutMs ?? env.GITHUB_OAUTH_TIMEOUT_MS)
+      ?? DEFAULT_GITHUB_OAUTH_TIMEOUT_MS,
+    MAX_GITHUB_OAUTH_TIMEOUT_MS
+  );
 
   await mkdir(dataDir, { recursive: true });
   const db = options.db ?? (workspaceEnabled
@@ -104,7 +114,8 @@ export async function createApp(options = {}) {
             remoteAddress: request.ip
           };
         }
-      }
+      },
+      ...(options.loggerStream ? { stream: options.loggerStream } : {})
     },
     genReqId: () => crypto.randomUUID()
   });
@@ -868,54 +879,93 @@ async function resolveGitHubProfile(request) {
 
   const publicBaseUrl = env.PUBLIC_BASE_URL || `${request.protocol}://${request.host}`;
   const redirectUri = new URL("/api/auth/github/callback", publicBaseUrl).toString();
-  const tokenResponse = await fetch("https://github.com/login/oauth/access_token", {
-    method: "POST",
-    headers: {
-      accept: "application/json",
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({
-      client_id: env.GITHUB_CLIENT_ID,
-      client_secret: env.GITHUB_CLIENT_SECRET,
-      code: query.code,
-      redirect_uri: redirectUri
-    })
-  });
-  const tokenPayload = await tokenResponse.json();
-  if (!tokenPayload.access_token) {
-    throw new WorkspaceError("auth.github_failed", "GitHub 登录失败", 502);
-  }
+  let phase = "token";
 
-  const userResponse = await fetch("https://api.github.com/user", {
-    headers: {
-      authorization: `Bearer ${tokenPayload.access_token}`,
-      accept: "application/vnd.github+json"
+  try {
+    const signal = AbortSignal.timeout(githubOAuthTimeoutMs);
+    const tokenResponse = await fetchImpl("https://github.com/login/oauth/access_token", {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        "user-agent": GITHUB_API_USER_AGENT
+      },
+      body: JSON.stringify({
+        client_id: env.GITHUB_CLIENT_ID,
+        client_secret: env.GITHUB_CLIENT_SECRET,
+        code: query.code,
+        redirect_uri: redirectUri
+      }),
+      signal
+    });
+    if (!tokenResponse.ok) {
+      throw githubOAuthFailure();
     }
-  });
-  const userPayload = await userResponse.json();
-  const email = userPayload.email || await fetchPrimaryGitHubEmail(tokenPayload.access_token);
-  return {
-    githubId: String(userPayload.id || ""),
-    githubLogin: userPayload.login,
-    email,
-    displayName: userPayload.name || userPayload.login,
-    avatarUrl: userPayload.avatar_url
-  };
+    const tokenPayload = await tokenResponse.json();
+    const accessToken = normalizeQueryString(tokenPayload?.access_token);
+    if (!accessToken) {
+      throw githubOAuthFailure();
+    }
+
+    phase = "profile";
+    const userResponse = await fetchImpl("https://api.github.com/user", {
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        accept: "application/vnd.github+json",
+        "user-agent": GITHUB_API_USER_AGENT
+      },
+      signal
+    });
+    if (!userResponse.ok) {
+      throw githubOAuthFailure();
+    }
+    const userPayload = await userResponse.json();
+    const githubId = userPayload?.id === undefined || userPayload?.id === null
+      ? ""
+      : String(userPayload.id).trim();
+    const githubLogin = normalizeQueryString(userPayload?.login);
+    if (!githubId || !githubLogin) {
+      throw githubOAuthFailure();
+    }
+
+    phase = "email";
+    const email = normalizeQueryString(userPayload.email) || await fetchPrimaryGitHubEmail(accessToken, signal);
+    return {
+      githubId,
+      githubLogin,
+      email,
+      displayName: normalizeQueryString(userPayload.name) || githubLogin,
+      avatarUrl: normalizeQueryString(userPayload.avatar_url)
+    };
+  } catch {
+    request.log.warn({ event: "github_oauth_failed", phase }, "GitHub OAuth exchange failed");
+    await recordGitHubLoginRejection(db, request, phase);
+    throw githubOAuthFailure();
+  }
 }
 
-async function fetchPrimaryGitHubEmail(accessToken) {
-  const response = await fetch("https://api.github.com/user/emails", {
+async function fetchPrimaryGitHubEmail(accessToken, signal) {
+  const response = await fetchImpl("https://api.github.com/user/emails", {
     headers: {
       authorization: `Bearer ${accessToken}`,
-      accept: "application/vnd.github+json"
-    }
+      accept: "application/vnd.github+json",
+      "user-agent": GITHUB_API_USER_AGENT
+    },
+    signal
   });
+  if (!response.ok) {
+    throw githubOAuthFailure();
+  }
   const emails = await response.json();
   if (!Array.isArray(emails)) {
-    return "";
+    throw githubOAuthFailure();
   }
   const primary = emails.find((email) => email.primary && email.verified) || emails.find((email) => email.verified);
-  return primary?.email ?? "";
+  return normalizeQueryString(primary?.email);
+}
+
+function githubOAuthFailure() {
+  return new WorkspaceError("auth.github_failed", "GitHub 登录失败", 502);
 }
 
 function sendWorkspaceError(reply, request, error) {

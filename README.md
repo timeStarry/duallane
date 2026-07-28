@@ -132,7 +132,8 @@ controlled reverse proxy. Production WebRTC should be served over HTTPS.
 If shared space is enabled in production, configure `GITHUB_CLIENT_ID`,
 `GITHUB_CLIENT_SECRET`, `PUBLIC_BASE_URL`, and a long random `SESSION_SECRET`.
 Production GitHub login fails closed when the OAuth client ID or secret is
-missing.
+missing. `GITHUB_OAUTH_TIMEOUT_MS` sets the total time budget shared by the
+GitHub token, profile, and email requests and defaults to `8000` milliseconds.
 
 The default deployment runs one API instance. PostgreSQL supports concurrent
 requests, but scaling the API horizontally also requires shared attachment
@@ -154,7 +155,9 @@ server as plaintext.
 
 Access logs should avoid query strings and payloads. The bundled Nginx gateway
 uses a path-only log format and security headers; put HSTS on the outer TLS
-proxy, for example Caddy or public Nginx.
+proxy, for example Caddy or public Nginx. The outer proxy must also use
+path-only access logs and suppress raw request-line error logs specifically for
+`/api/auth/github/callback`, because its query contains one-time OAuth secrets.
 
 The shared space lane is intentionally disabled by default. Shared space UI
 entry points and `/api/workspace/*` return a "功能正在开发中" state until

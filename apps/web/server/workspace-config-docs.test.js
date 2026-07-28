@@ -19,6 +19,7 @@ describe("workspace configuration docs", () => {
     expect(envExample).toContain("WORKSPACE_ENABLED=false");
     expect(envExample).toContain("GITHUB_CLIENT_ID=");
     expect(envExample).toContain("GITHUB_CLIENT_SECRET=");
+    expect(envExample).toContain("GITHUB_OAUTH_TIMEOUT_MS=8000");
     expect(envExample).toContain("DATABASE_URL=postgresql://");
     expect(envExample).toContain("POSTGRES_IMAGE=docker.m.daocloud.io/library/postgres:17-alpine");
     expect(envExample).toContain("POSTGRES_PASSWORD=");
@@ -48,6 +49,7 @@ describe("workspace configuration docs", () => {
 
     expect(compose).toContain("GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}");
     expect(compose).toContain("GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}");
+    expect(compose).toContain("GITHUB_OAUTH_TIMEOUT_MS: ${GITHUB_OAUTH_TIMEOUT_MS:-8000}");
     expect(compose).toContain("WORKSPACE_FRONTEND_URL: ${WORKSPACE_FRONTEND_URL:-}");
     expect(compose).toContain("TRUST_PROXY: ${TRUST_PROXY:-true}");
     expect(compose).toContain("image: ${POSTGRES_IMAGE:-docker.m.daocloud.io/library/postgres:17-alpine}");
@@ -67,6 +69,12 @@ describe("workspace configuration docs", () => {
     expect(envExample).toContain("TRUST_PROXY=true");
     expect(nginx).toContain("map $http_x_forwarded_proto $duallane_forwarded_proto");
     expect(nginx).toContain("proxy_set_header X-Forwarded-Proto $duallane_forwarded_proto");
+    const callbackLocation = nginx.match(/location = \/api\/auth\/github\/callback \{([\s\S]*?)\n  \}/)?.[1] ?? "";
+    expect(callbackLocation).toContain("error_log /dev/null crit;");
+    expect(callbackLocation).toContain("proxy_pass http://api:8787;");
+    expect(nginx).toContain('"$request_method $uri $server_protocol"');
+    expect(nginx).not.toContain("$request_uri");
+    expect(nginx).not.toContain("$http_referer");
   });
 
   it("documents private-lane relay and room lifecycle settings", async () => {

@@ -2851,6 +2851,17 @@ async function writeWorkspaceAudit(db, request, event) {
   });
 }
 
+export async function recordGitHubLoginRejection(db, request, phase) {
+  const safePhase = ["token", "profile", "email"].includes(phase) ? phase : "exchange";
+  await writeWorkspaceAudit(db, request, {
+    action: "login.rejected",
+    targetType: "github_oauth",
+    targetId: safePhase,
+    result: "rejected",
+    reason: "auth.github_failed"
+  });
+}
+
 export async function recordInviteAcceptRejection(db, request, reason) {
   await writeWorkspaceAudit(db, request, {
     action: "invite.accept",

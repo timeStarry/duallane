@@ -31,7 +31,10 @@ describe("workspace routes", () => {
         SERVE_STATIC: "false",
         ...env
       },
-      logger: false
+      fetchImpl: options.fetchImpl,
+      githubOAuthTimeoutMs: options.githubOAuthTimeoutMs,
+      loggerStream: options.loggerStream,
+      ...(options.useDefaultLogger ? {} : { logger: options.logger ?? false })
     });
     app.addHook("onClose", async () => rawDb.close());
     const originalInject = app.inject.bind(app);
@@ -589,6 +592,184 @@ describe("workspace routes", () => {
     });
     expect(response.cookies.some((cookie) => cookie.name === "duallane_oauth_state" && cookie.value === "")).toBe(true);
     expect(response.cookies.some((cookie) => cookie.name === "duallane_workspace" && cookie.value)).toBe(false);
+  });
+
+  it("bounds the complete GitHub OAuth exchange and returns a stable safe error", async () => {
+    const callbackCode = "timeout-callback-code";
+    const callbackState = "timeout-callback-state";
+    const clientSecret = "timeout-client-secret";
+    const observedSignals = [];
+    const fetchImpl = (_url, options) => new Promise((_resolve, reject) => {
+      expect(options.headers["user-agent"]).toBe("DualLane/0.1");
+      observedSignals.push(options.signal);
+      options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+    });
+    const app = await makeApp({
+      NODE_ENV: "production",
+      GITHUB_CLIENT_ID: "timeout-client-id",
+      GITHUB_CLIENT_SECRET: clientSecret
+    }, {
+      fetchImpl,
+      githubOAuthTimeoutMs: 25
+    });
+
+    const startedAt = performance.now();
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/auth/github/callback?format=json&code=${callbackCode}&state=${callbackState}`,
+      cookies: {
+        duallane_oauth_state: callbackState
+      }
+    });
+
+    expect(performance.now() - startedAt).toBeLessThan(1000);
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toEqual({
+      error: {
+        code: "auth.github_failed",
+        message: "GitHub 登录失败"
+      }
+    });
+    expect(observedSignals).toHaveLength(1);
+    expect(observedSignals[0].aborted).toBe(true);
+    expect(response.cookies.some((cookie) => cookie.name === "duallane_workspace" && cookie.value)).toBe(false);
+    expectNoWorkspaceInternals(response.json(), [callbackCode, callbackState, clientSecret, "TimeoutError"]);
+    expect(getLatestAuditByAction("login.rejected")).toEqual({
+      action: "login.rejected",
+      targetType: "github_oauth",
+      targetId: "token",
+      result: "rejected",
+      reason: "auth.github_failed"
+    });
+  });
+
+  it("bounds invalid GitHub OAuth timeout configuration without returning an internal error", async () => {
+    const callbackState = "oversized-timeout-state";
+    const app = await makeApp({
+      NODE_ENV: "production",
+      GITHUB_CLIENT_ID: "oversized-timeout-client-id",
+      GITHUB_CLIENT_SECRET: "oversized-timeout-client-secret",
+      GITHUB_OAUTH_TIMEOUT_MS: "4294967296"
+    }, {
+      fetchImpl: async () => new Response(null, { status: 503 })
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/auth/github/callback?format=json&code=oversized-timeout-code&state=${callbackState}`,
+      cookies: {
+        duallane_oauth_state: callbackState
+      }
+    });
+
+    expect(response.statusCode).toBe(502);
+    expect(response.json().error.code).toBe("auth.github_failed");
+  });
+
+  it.each([
+    ["token", "https://github.com/login/oauth/access_token"],
+    ["profile", "https://api.github.com/user"],
+    ["email", "https://api.github.com/user/emails"]
+  ])("maps GitHub %s upstream failures to the same safe error", async (_phase, failingUrl) => {
+    const callbackCode = "provider-callback-code";
+    const callbackState = "provider-callback-state";
+    const clientSecret = "provider-client-secret";
+    const accessToken = "provider-access-token";
+    const providerMessage = "provider-sensitive-error-body";
+    const observedSignals = [];
+    const fetchImpl = async (url, options) => {
+      expect(options.headers["user-agent"]).toBe("DualLane/0.1");
+      observedSignals.push(options.signal);
+      if (url === failingUrl) {
+        return new Response(JSON.stringify({ message: providerMessage, token: accessToken }), {
+          status: 503,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url === "https://github.com/login/oauth/access_token") {
+        return Response.json({ access_token: accessToken });
+      }
+      if (url === "https://api.github.com/user") {
+        return Response.json({ id: 12345, login: "provider-user", email: null });
+      }
+      return Response.json([{ email: "provider-user@example.com", primary: true, verified: true }]);
+    };
+    const app = await makeApp({
+      NODE_ENV: "production",
+      GITHUB_CLIENT_ID: "provider-client-id",
+      GITHUB_CLIENT_SECRET: clientSecret
+    }, { fetchImpl });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/auth/github/callback?format=json&code=${callbackCode}&state=${callbackState}`,
+      cookies: {
+        duallane_oauth_state: callbackState
+      }
+    });
+
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toEqual({
+      error: {
+        code: "auth.github_failed",
+        message: "GitHub 登录失败"
+      }
+    });
+    expect(new Set(observedSignals).size).toBe(1);
+    expect(response.cookies.some((cookie) => cookie.name === "duallane_workspace" && cookie.value)).toBe(false);
+    expectNoWorkspaceInternals(response.json(), [
+      callbackCode,
+      callbackState,
+      clientSecret,
+      accessToken,
+      providerMessage
+    ]);
+    expect(getLatestAuditByAction("login.rejected")).toEqual({
+      action: "login.rejected",
+      targetType: "github_oauth",
+      targetId: _phase,
+      result: "rejected",
+      reason: "auth.github_failed"
+    });
+  });
+
+  it("keeps GitHub callback secrets out of default application logs", async () => {
+    const callbackCode = "logger-callback-code";
+    const callbackState = "logger-callback-state";
+    const cookieSecret = "logger-cookie-secret";
+    const authorizationSecret = "logger-authorization-secret";
+    const clientSecret = "logger-client-secret";
+    let logOutput = "";
+    const app = await makeApp({
+      NODE_ENV: "production",
+      GITHUB_CLIENT_ID: "logger-client-id",
+      GITHUB_CLIENT_SECRET: clientSecret
+    }, {
+      fetchImpl: async () => new Response(null, { status: 503 }),
+      useDefaultLogger: true,
+      loggerStream: {
+        write(chunk) {
+          logOutput += String(chunk);
+        }
+      }
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/auth/github/callback?format=json&code=${callbackCode}&state=${callbackState}`,
+      headers: {
+        authorization: `Bearer ${authorizationSecret}`,
+        cookie: `duallane_oauth_state=${callbackState}; extra=${cookieSecret}`
+      }
+    });
+
+    expect(response.statusCode).toBe(502);
+    expect(logOutput).toContain('"url":"/api/auth/github/callback"');
+    expect(logOutput).toContain('"event":"github_oauth_failed"');
+    expect(logOutput).toContain('"phase":"token"');
+    for (const secret of [callbackCode, callbackState, cookieSecret, authorizationSecret, clientSecret]) {
+      expect(logOutput).not.toContain(secret);
+    }
   });
 
   it("requires GitHub login for direct invite acceptance in production", async () => {
