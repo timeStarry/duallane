@@ -714,3 +714,17 @@ P2:
 - Advanced group policies.
 - Export/backup flows.
 - Owner/admin operation-record review, if product need is confirmed.
+
+## 27. Stable Chat Viewport Behavior
+
+- The Workspace shell owns one 100dvh viewport and passes remaining height
+  through the product grid and active chat column with min-height: 0.
+- Only the message list scrolls. Header, conversation extras, and composer dock
+  remain visible.
+- Reply preview and the composer form are one dock/grid child, so opening a
+  reply cannot create an implicit layout row or push the input off-screen.
+- New messages auto-scroll only while the user is within 80 px of the bottom.
+  Loading older messages or reading history does not force a jump to the latest
+  message.
+- Desktop and mobile layouts must keep the textarea and active reply preview
+  inside the viewport for long conversations.

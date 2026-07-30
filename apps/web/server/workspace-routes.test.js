@@ -878,6 +878,106 @@ describe("workspace routes", () => {
     expectNoWorkspaceInternals(members.json(), ["route-member@example.com"]);
   });
 
+  it("enforces contact-scoped member discovery and owner-managed visibility routes", async () => {
+    const app = await makeApp();
+    for (const fixture of [
+      { code: "ROUTE-VISIBLE-MEMBER", login: "route-visible-member", name: "Route Visible Member" },
+      { code: "ROUTE-HIDDEN-MEMBER", login: "route-hidden-member", name: "Route Hidden Member" }
+    ]) {
+      expect((await app.inject({
+        method: "POST",
+        url: "/api/workspace/invites",
+        headers: {
+          "content-type": "application/json",
+          "x-workspace-user-id": "usr_owner"
+        },
+        payload: { code: fixture.code, defaultRole: "member", maxUses: 1 }
+      })).statusCode).toBe(201);
+      expect((await app.inject({
+        method: "POST",
+        url: `/api/workspace/invites/${fixture.code}/accept`,
+        headers: { "content-type": "application/json" },
+        payload: {
+          githubLogin: fixture.login,
+          email: `${fixture.login}@example.com`,
+          displayName: fixture.name
+        }
+      })).statusCode).toBe(201);
+    }
+
+    const db = openTestDatabase(dataDir);
+    const visibleUserId = db.prepare("SELECT id FROM users WHERE github_login = 'route-visible-member'").get().id;
+    const hiddenUserId = db.prepare("SELECT id FROM users WHERE github_login = 'route-hidden-member'").get().id;
+    db.close();
+
+    const initial = await app.inject({
+      method: "GET",
+      url: "/api/workspace/members",
+      headers: { "x-workspace-user-id": visibleUserId }
+    });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json().members.map((member) => member.id)).toEqual([visibleUserId]);
+
+    expect((await app.inject({
+      method: "POST",
+      url: "/api/workspace/conversations",
+      headers: {
+        "content-type": "application/json",
+        "x-workspace-user-id": "usr_owner"
+      },
+      payload: { type: "direct", targetUserId: visibleUserId }
+    })).statusCode).toBe(201);
+
+    const contacts = await app.inject({
+      method: "GET",
+      url: "/api/workspace/members",
+      headers: { "x-workspace-user-id": visibleUserId }
+    });
+    expect(contacts.statusCode).toBe(200);
+    expect(contacts.json().members.map((member) => member.id)).toEqual(
+      expect.arrayContaining([visibleUserId, "usr_owner"])
+    );
+    expect(contacts.json().members.map((member) => member.id)).not.toContain(hiddenUserId);
+    expect(contacts.json().members.find((member) => member.id === "usr_owner")).toMatchObject({
+      role: "admin",
+      roleLabel: "管理员"
+    });
+
+    const forbidden = await app.inject({
+      method: "GET",
+      url: `/api/workspace/member-visibility/${visibleUserId}`,
+      headers: { "x-workspace-user-id": visibleUserId }
+    });
+    expect(forbidden.statusCode).toBe(403);
+    expect(forbidden.json().error.code).toBe("permission.denied");
+
+    const granted = await app.inject({
+      method: "PUT",
+      url: `/api/workspace/member-visibility/${visibleUserId}`,
+      headers: {
+        "content-type": "application/json",
+        "x-workspace-user-id": "usr_owner"
+      },
+      payload: { visibleUserIds: [hiddenUserId] }
+    });
+    expect(granted.statusCode).toBe(200);
+    expect(granted.json().visibility).toMatchObject({
+      viewerUserId: visibleUserId,
+      grantedUserIds: [hiddenUserId]
+    });
+
+    const afterGrant = await app.inject({
+      method: "GET",
+      url: "/api/workspace/members",
+      headers: { "x-workspace-user-id": visibleUserId }
+    });
+    expect(afterGrant.json().members.map((member) => member.id)).toContain(hiddenUserId);
+    expectNoWorkspaceInternals(afterGrant.json(), [
+      "route-visible-member@example.com",
+      "route-hidden-member@example.com"
+    ]);
+  });
+
   it("revokes invites through workspace routes", async () => {
     const app = await makeApp();
     const invite = await app.inject({
@@ -2664,11 +2764,11 @@ describe("workspace routes", () => {
         url: "/api/workspace/conversations",
         headers: {
           "content-type": "application/json",
-          "x-workspace-user-id": memberId
+          "x-workspace-user-id": "usr_owner"
         },
         payload: {
           type: "direct",
-          targetUserId: "usr_owner"
+          targetUserId: memberId
         }
       });
       expect(visible.statusCode).toBe(201);
@@ -2754,15 +2854,15 @@ describe("workspace routes", () => {
         url: "/api/workspace/conversations",
         headers: {
           "content-type": "application/json",
-          "x-workspace-user-id": memberId
+          "x-workspace-user-id": "usr_owner"
         },
         payload: {
           type: "direct",
-          targetUserId: "usr_owner"
+          targetUserId: memberId
         }
       });
       expect(direct.statusCode).toBe(201);
-      expect(direct.json().conversation.displayTitle).toBe("timeStarry");
+      expect(direct.json().conversation.displayTitle).toBe("Realtime Viewer Direct");
 
       const [frame] = await pushedFrames;
       expect(frame).toMatchObject({

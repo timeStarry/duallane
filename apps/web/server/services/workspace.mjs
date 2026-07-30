@@ -2,6 +2,13 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes } from "node:crypto";
 import { DEFAULT_SPACE_ID, SEEDED_OWNER_EMAIL, SEEDED_OWNER_GITHUB_LOGIN, SEEDED_OWNER_ID } from "./db.mjs";
 import { canReserveQuota, DAILY_QUOTA_BYTES, remainingQuota } from "./quota.mjs";
+import {
+  canViewMember,
+  getMemberVisibilityRule,
+  listVisibleMemberIds,
+  MEMBER_VISIBILITY_BASIS,
+  replaceMemberVisibilityGrants
+} from "./member-visibility.mjs";
 import { writeAudit } from "./audit.mjs";
 
 export const MESSAGE_CONTENT_FORMAT = "duallane.message+json;v=1";
@@ -94,7 +101,7 @@ export async function getWorkspaceBootstrap(db, userId = "usr_owner") {
   const eventCursor = await getWorkspaceEventCursor(db);
 
   const space = await getDefaultSpace(db);
-  const members = (await listSpaceMembers(db)).map((member) => publicMember(member, currentUser));
+  const members = (await listVisibleSpaceMembers(db, currentUser)).map((member) => publicMember(member, currentUser));
   const usedTodayBytes = await getUsedToday(db, currentUser.id);
 
   const invites = await listVisibleInvitesForRole(db, currentUser.role);
@@ -113,7 +120,8 @@ export async function getWorkspaceBootstrap(db, userId = "usr_owner") {
       dailyQuotaBytes: DAILY_QUOTA_BYTES,
       usedTodayBytes,
       remainingQuotaBytes: remainingQuota(usedTodayBytes),
-      messageRetentionCount: DEFAULT_RETENTION_COUNT
+      messageRetentionCount: DEFAULT_RETENTION_COUNT,
+      memberVisibilityBasis: MEMBER_VISIBILITY_BASIS
     },
     permissions,
     members,
@@ -130,7 +138,7 @@ export async function listMembers(db, userId = "usr_owner", options = {}) {
   const role = normalizeString(options.role);
   const kind = normalizeString(options.kind);
   const limit = Math.min(parsePositiveInteger(options.limit, 200), 500);
-  const members = (await listSpaceMembers(db)).map((member) => publicMember(member, actor));
+  const members = (await listVisibleSpaceMembers(db, actor)).map((member) => publicMember(member, actor));
   return members.filter((member) => {
     if (role && member.role !== role) {
       return false;
@@ -183,6 +191,76 @@ async function listVisibleInvitesForRole(db, role) {
     `).all(DEFAULT_SPACE_ID);
   }
   return [];
+}
+
+export async function getManagedMemberVisibility(db, request, input) {
+  const actor = await requireActor(db, input.actorId);
+  await requireCapability(db, request, actor, "member.visibility.manage", {
+    targetType: "member",
+    targetId: input.userId
+  });
+  const viewer = await ensureActiveSpaceMember(db, normalizeString(input.userId));
+  return await getMemberVisibilityRule(db, {
+    spaceId: DEFAULT_SPACE_ID,
+    viewerUserId: viewer.id
+  });
+}
+
+export async function updateManagedMemberVisibility(db, request, input) {
+  const actor = await requireActor(db, input.actorId);
+  const viewerUserId = normalizeString(input.userId);
+  await requireCapability(db, request, actor, "member.visibility.manage", {
+    targetType: "member",
+    targetId: viewerUserId
+  });
+  const viewer = await ensureActiveSpaceMember(db, viewerUserId);
+  const visibleUserIds = uniqueStrings(Array.isArray(input.visibleUserIds) ? input.visibleUserIds : [])
+    .filter((userId) => userId !== viewer.id);
+  try {
+    await Promise.all(visibleUserIds.map(async (userId) => await ensureActiveSpaceMember(db, userId)));
+  } catch (error) {
+    await writeMutationValidationRejection(
+      db,
+      request,
+      actor,
+      "member.visibility_update",
+      "member",
+      viewer.id,
+      error
+    );
+    throw error;
+  }
+
+  return await runWorkspaceTransaction(db, async () => {
+    const now = new Date().toISOString();
+    await replaceMemberVisibilityGrants(db, {
+      spaceId: DEFAULT_SPACE_ID,
+      viewerUserId: viewer.id,
+      visibleUserIds,
+      createdBy: actor.id,
+      createdAt: now
+    });
+    const visibility = await getMemberVisibilityRule(db, {
+      spaceId: DEFAULT_SPACE_ID,
+      viewerUserId: viewer.id
+    });
+    await writeEvent(db, {
+      type: "workspace.member_visibility_updated",
+      actorId: actor.id,
+      targetType: "user",
+      targetId: viewer.id,
+      payload: { userId: viewer.id }
+    });
+    await writeWorkspaceAudit(db, request, {
+      actorUserId: actor.id,
+      actorGithubLogin: actor.githubLogin,
+      action: "member.visibility_update",
+      targetType: "member",
+      targetId: viewer.id,
+      result: "success"
+    });
+    return visibility;
+  });
 }
 
 export async function updateMemberRole(db, request, input) {
@@ -888,6 +966,10 @@ export async function createConversation(db, request, input) {
       await writeConversationCreateRejection(db, request, actor, "invalid target");
       throw new WorkspaceValidationError("conversation.invalid_target", "成员不存在");
     }
+    if (!await canViewMember(db, { spaceId: DEFAULT_SPACE_ID, actor, visibleUserId: target.id })) {
+      await writeConversationCreateRejection(db, request, actor, "target not visible");
+      throw new WorkspaceValidationError("conversation.invalid_target", "成员不存在或当前不可见");
+    }
     if (target.role === "auditor") {
       await writeConversationCreateRejection(db, request, actor, "invalid target");
       throw new WorkspaceValidationError("conversation.invalid_target", "请选择可聊天的空间成员");
@@ -921,7 +1003,17 @@ export async function createConversation(db, request, input) {
   const memberIds = uniqueStrings([actor.id, ...selectedMemberIds]);
   let members;
   try {
-    members = await Promise.all(memberIds.map(async (memberId) => await ensureChatParticipantMember(db, memberId)));
+    members = await Promise.all(memberIds.map(async (memberId) => {
+      const member = await ensureChatParticipantMember(db, memberId);
+      if (memberId !== actor.id && !await canViewMember(db, {
+        spaceId: DEFAULT_SPACE_ID,
+        actor,
+        visibleUserId: memberId
+      })) {
+        throw new WorkspaceValidationError("member.not_visible", "部分成员当前不可见");
+      }
+      return member;
+    }));
   } catch (error) {
     if (error instanceof WorkspaceError) {
       await writeConversationCreateRejection(db, request, actor, error.code);
@@ -1018,6 +1110,22 @@ export async function addConversationMember(db, request, input) {
   `).get(conversation.id, member.id);
   if (activeMembership) {
     return await getConversation(db, actor.id, conversation.id);
+  }
+  if (!await canViewMember(db, {
+    spaceId: DEFAULT_SPACE_ID,
+    actor,
+    visibleUserId: member.id
+  })) {
+    await writeWorkspaceAudit(db, request, {
+      actorUserId: actor.id,
+      actorGithubLogin: actor.githubLogin,
+      action: "conversation.member_add",
+      targetType: "conversation",
+      targetId: conversation.id,
+      result: "rejected",
+      reason: "member.not_visible"
+    });
+    throw new WorkspaceValidationError("member.not_visible", "成员当前不可见");
   }
 
   return await runWorkspaceTransaction(db, async () => {
@@ -2217,6 +2325,11 @@ async function getConversation(db, userId, conversationId, context = {}) {
   }, actor);
 }
 
+async function listVisibleSpaceMembers(db, actor) {
+  const visibleIds = await listVisibleMemberIds(db, { spaceId: DEFAULT_SPACE_ID, actor });
+  return (await listSpaceMembers(db)).filter((member) => visibleIds.has(member.id));
+}
+
 async function listSpaceMembers(db) {
   return await db.prepare(`
     SELECT
@@ -2487,6 +2600,9 @@ function publicMember(member, actor = null) {
 }
 
 function publicMemberRole(member, actor = null) {
+  if (member?.role === "owner" && actor?.role !== "owner") {
+    return "admin";
+  }
   if (member?.role === "auditor" && actor?.role !== "owner" && actor?.id !== member?.id) {
     return "member";
   }
@@ -2917,6 +3033,44 @@ async function canSeeEvent(db, actor, event) {
   if (event.type === "transfer.rejected") {
     return event.actorId === actor.id;
   }
+  if (event.type === "workspace.member_visibility_updated") {
+    return actor.role === "owner" || event.targetId === actor.id;
+  }
+  if (
+    (event.type === "workspace.member_joined" || event.type === "workspace.member_updated") &&
+    event.targetType === "user" &&
+    event.targetId
+  ) {
+    return await canViewMember(db, {
+      spaceId: DEFAULT_SPACE_ID,
+      actor,
+      visibleUserId: event.targetId
+    });
+  }
+  if (event.type === "workspace.member_removed" && event.targetType === "user" && event.targetId) {
+    if (actor.role === "owner" || event.targetId === actor.id) {
+      return true;
+    }
+    return Boolean(await db.prepare(`
+      SELECT 1
+      WHERE EXISTS (
+        SELECT 1
+        FROM conversations c
+        INNER JOIN conversation_members viewer_cm
+          ON viewer_cm.conversation_id = c.id
+          AND viewer_cm.user_id = ?
+        INNER JOIN conversation_members visible_cm
+          ON visible_cm.conversation_id = c.id
+          AND visible_cm.user_id = ?
+        WHERE c.space_id = ? AND c.type = 'direct'
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM member_visibility_grants
+        WHERE space_id = ? AND viewer_user_id = ? AND visible_user_id = ?
+      )
+    `).get(actor.id, event.targetId, DEFAULT_SPACE_ID, DEFAULT_SPACE_ID, actor.id, event.targetId));
+  }
   if (event.type === "conversation.notification_updated") {
     return event.targetType === "user" && event.targetId === actor.id;
   }
@@ -2994,6 +3148,11 @@ async function publicWorkspaceEventPayload(db, actor, type, payload) {
       userId: normalizeString(payload.userId),
       role: member?.role ?? normalizeString(payload.role),
       member
+    });
+  }
+  if (type === "workspace.member_visibility_updated") {
+    return removeUndefinedValues({
+      userId: normalizeString(payload.userId)
     });
   }
   if (type === "workspace.member_removed") {
@@ -3264,6 +3423,7 @@ function permissionsForRole(role) {
   return {
     canCreateMemberInvite: canCreateInvite(role, "member"),
     canCreatePrivilegedInvite: role === "owner",
+    canManageMemberVisibility: hasCapability(role, "member.visibility.manage"),
     canReadConversations: hasCapability(role, "conversation.read"),
     canCreateGroup: hasCapability(role, "conversation.create_group"),
     canCreateDirect: hasCapability(role, "conversation.create_direct"),

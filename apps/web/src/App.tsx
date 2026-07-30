@@ -118,6 +118,7 @@ type WorkspaceUser = {
 type WorkspacePermissions = {
   canCreateMemberInvite: boolean;
   canCreatePrivilegedInvite: boolean;
+  canManageMemberVisibility: boolean;
   canReadConversations: boolean;
   canCreateGroup: boolean;
   canCreateDirect: boolean;
@@ -130,6 +131,14 @@ type WorkspacePolicy = {
   usedTodayBytes?: number;
   remainingQuotaBytes?: number;
   messageRetentionCount: number;
+  memberVisibilityBasis: "direct_contacts";
+};
+type WorkspaceMemberVisibility = {
+  basis: "direct_contacts";
+  viewerUserId: string;
+  automaticUserIds: string[];
+  grantedUserIds: string[];
+  visibleUserIds: string[];
 };
 type WorkspaceBootstrap = {
   auth: {
@@ -254,7 +263,7 @@ type WorkspaceMobilePane = "list" | "main" | "details";
 type WorkspaceCreateMode = "" | "direct" | "group";
 type WorkspaceContextMode = "conversation" | "file";
 type WorkspaceContextTab = "overview" | "members" | "files" | "settings";
-type WorkspaceSpaceTab = "overview" | "invites" | "roles";
+type WorkspaceSpaceTab = "overview" | "invites" | "roles" | "visibility";
 type WorkspaceFileFilter = "all" | "conversation" | "standalone" | "mine";
 type WorkspaceMemberRoleFilter = "all" | WorkspaceUser["role"];
 type WorkspaceMemberKindFilter = "all" | WorkspaceUser["kind"];
@@ -1498,6 +1507,10 @@ export function App() {
   const [workspaceFileQuery, setWorkspaceFileQuery] = useState("");
   const [workspaceMemberRoleFilter, setWorkspaceMemberRoleFilter] = useState<WorkspaceMemberRoleFilter>("all");
   const [workspaceMemberKindFilter, setWorkspaceMemberKindFilter] = useState<WorkspaceMemberKindFilter>("all");
+  const [workspaceVisibilityViewerId, setWorkspaceVisibilityViewerId] = useState("");
+  const [workspaceMemberVisibility, setWorkspaceMemberVisibility] = useState<WorkspaceMemberVisibility | null>(null);
+  const [workspaceVisibilityLoading, setWorkspaceVisibilityLoading] = useState(false);
+  const [workspaceVisibilitySaving, setWorkspaceVisibilitySaving] = useState(false);
   const [workspaceGroupMemberIds, setWorkspaceGroupMemberIds] = useState<string[]>([]);
   const [workspaceFileFilter, setWorkspaceFileFilter] = useState<WorkspaceFileFilter>("all");
   const [workspaceSelectedFileId, setWorkspaceSelectedFileId] = useState("");
@@ -1533,6 +1546,8 @@ export function App() {
   const workspaceCreatePanelRef = useRef<HTMLDivElement | null>(null);
   const workspaceCreateSearchInputRef = useRef<HTMLInputElement | null>(null);
   const workspacePreserveScrollRef = useRef(false);
+  const workspaceStickToBottomRef = useRef(true);
+  const workspaceScrolledConversationIdRef = useRef("");
   const p2pConnectionState = getO2OState(p2pPeers.length, p2pSocketState, p2pRtcState);
   const p2pTransportMode = getP2pTransportMode(p2pPeers.length, p2pSocketState, p2pRtcState);
   const p2pCanTransferFiles = p2pDataChannelState === "open";
@@ -1689,6 +1704,16 @@ export function App() {
       )
     );
   }, [workspaceDirectoryMembers, workspaceMemberKindFilter, workspaceMemberQuery, workspaceMemberRoleFilter]);
+  const workspaceVisibilityViewers = useMemo(
+    () =>
+      (workspaceBootstrap?.members ?? []).filter(
+        (member) =>
+          member.id !== workspaceBootstrap?.auth.currentUser.id &&
+          member.kind === "human" &&
+          member.role !== "auditor"
+      ),
+    [workspaceBootstrap?.auth.currentUser.id, workspaceBootstrap?.members]
+  );
   const workspaceSelectableMembers = useMemo(
     () => {
       const query = workspacePickerMemberQuery.trim().toLowerCase();
@@ -1901,9 +1926,15 @@ export function App() {
       workspacePreserveScrollRef.current = false;
       return;
     }
+    const conversationChanged = workspaceScrolledConversationIdRef.current !== workspaceSelectedConversationId;
+    workspaceScrolledConversationIdRef.current = workspaceSelectedConversationId;
+    if (!conversationChanged && !workspaceStickToBottomRef.current) {
+      return;
+    }
+    workspaceStickToBottomRef.current = true;
     list.scrollTo({
       top: list.scrollHeight,
-      behavior: "smooth"
+      behavior: conversationChanged ? "auto" : "smooth"
     });
   }, [workspaceMessages.length, workspaceSelectedConversationId]);
 
@@ -2014,14 +2045,50 @@ export function App() {
   useEffect(() => {
     if (
       (workspaceSpaceTab === "invites" && !workspaceBootstrap?.permissions.canCreateMemberInvite) ||
-      (workspaceSpaceTab === "roles" && !workspaceBootstrap?.permissions.canCreatePrivilegedInvite)
+      (workspaceSpaceTab === "roles" && !workspaceBootstrap?.permissions.canCreatePrivilegedInvite) ||
+      (workspaceSpaceTab === "visibility" && !workspaceBootstrap?.permissions.canManageMemberVisibility)
     ) {
       setWorkspaceSpaceTab("overview");
     }
   }, [
     workspaceBootstrap?.permissions.canCreateMemberInvite,
     workspaceBootstrap?.permissions.canCreatePrivilegedInvite,
+    workspaceBootstrap?.permissions.canManageMemberVisibility,
     workspaceSpaceTab
+  ]);
+
+  useEffect(() => {
+    if (
+      lane !== "workspace-dev" ||
+      workspaceStatus !== "ready" ||
+      workspaceView !== "space" ||
+      workspaceSpaceTab !== "visibility" ||
+      !workspaceBootstrap?.permissions.canManageMemberVisibility
+    ) {
+      return;
+    }
+    const viewerId = workspaceVisibilityViewers.some((member) => member.id === workspaceVisibilityViewerId)
+      ? workspaceVisibilityViewerId
+      : workspaceVisibilityViewers[0]?.id ?? "";
+    if (!viewerId) {
+      setWorkspaceVisibilityViewerId("");
+      setWorkspaceMemberVisibility(null);
+      return;
+    }
+    if (viewerId !== workspaceVisibilityViewerId) {
+      setWorkspaceVisibilityViewerId(viewerId);
+      setWorkspaceMemberVisibility(null);
+      return;
+    }
+    void loadWorkspaceMemberVisibility(viewerId);
+  }, [
+    lane,
+    workspaceBootstrap?.permissions.canManageMemberVisibility,
+    workspaceSpaceTab,
+    workspaceStatus,
+    workspaceView,
+    workspaceVisibilityViewerId,
+    workspaceVisibilityViewers
   ]);
 
   useEffect(() => {
@@ -3029,6 +3096,22 @@ export function App() {
         continue;
       }
 
+      if (event.type === "workspace.member_visibility_updated") {
+        const viewerUserId = payload.userId || event.targetId || "";
+        if (viewerUserId === workspaceBootstrap?.auth.currentUser.id) {
+          needsMembers = true;
+          needsBootstrap = true;
+        }
+        if (
+          workspaceBootstrap?.permissions.canManageMemberVisibility &&
+          viewerUserId &&
+          viewerUserId === workspaceVisibilityViewerId
+        ) {
+          tasks.push(loadWorkspaceMemberVisibility(viewerUserId));
+        }
+        continue;
+      }
+
       if (event.type === "workspace.member_removed") {
         if (payload.userId) {
           removeWorkspaceMemberFromClient(payload.userId);
@@ -3070,11 +3153,9 @@ export function App() {
 
       if (event.type === "conversation.member_added") {
         if (payload.conversationId && payload.member) {
-          upsertWorkspaceMember(payload.member);
           upsertWorkspaceConversationMember(payload.conversationId, payload.member);
         } else {
           needsConversations = true;
-          needsMembers = true;
         }
         continue;
       }
@@ -3468,6 +3549,67 @@ export function App() {
         ? selected.filter((id) => id !== userId)
         : [...selected, userId]
     );
+  }
+
+  async function loadWorkspaceMemberVisibility(viewerUserId: string) {
+    if (!workspaceBootstrap?.permissions.canManageMemberVisibility || !viewerUserId) {
+      return;
+    }
+    setWorkspaceVisibilityLoading(true);
+    try {
+      const data = await workspaceJson<{ visibility: WorkspaceMemberVisibility }>(
+        "/api/workspace/member-visibility/" + encodeURIComponent(viewerUserId)
+      );
+      setWorkspaceMemberVisibility(data.visibility);
+    } catch (error) {
+      setWorkspaceMemberVisibility(null);
+      showWorkspaceNotice("warning", error instanceof Error ? error.message : "成员可见范围加载失败");
+    } finally {
+      setWorkspaceVisibilityLoading(false);
+    }
+  }
+
+  function toggleWorkspaceVisibilityGrant(userId: string) {
+    setWorkspaceMemberVisibility((current) => {
+      if (!current || current.automaticUserIds.includes(userId)) {
+        return current;
+      }
+      const grantedUserIds = current.grantedUserIds.includes(userId)
+        ? current.grantedUserIds.filter((id) => id !== userId)
+        : [...current.grantedUserIds, userId];
+      return {
+        ...current,
+        grantedUserIds,
+        visibleUserIds: Array.from(new Set([current.viewerUserId, ...current.automaticUserIds, ...grantedUserIds]))
+      };
+    });
+  }
+
+  async function saveWorkspaceMemberVisibility() {
+    if (
+      !workspaceBootstrap?.permissions.canManageMemberVisibility ||
+      !workspaceVisibilityViewerId ||
+      !workspaceMemberVisibility
+    ) {
+      return;
+    }
+    setWorkspaceVisibilitySaving(true);
+    clearWorkspaceNotice();
+    try {
+      const data = await workspaceJson<{ visibility: WorkspaceMemberVisibility }>(
+        "/api/workspace/member-visibility/" + encodeURIComponent(workspaceVisibilityViewerId),
+        {
+          method: "PUT",
+          body: JSON.stringify({ visibleUserIds: workspaceMemberVisibility.grantedUserIds })
+        }
+      );
+      setWorkspaceMemberVisibility(data.visibility);
+      showWorkspaceNotice("success", "成员可见范围已更新");
+    } catch (error) {
+      showWorkspaceNotice("warning", error instanceof Error ? error.message : "成员可见范围更新失败");
+    } finally {
+      setWorkspaceVisibilitySaving(false);
+    }
   }
 
   async function updateWorkspaceMemberRole(member: WorkspaceUser, role: WorkspaceUser["role"]) {
@@ -5353,7 +5495,10 @@ export function App() {
                 </div>
                 <div className="workspace-status-meta">
                   <span><FileUp size={15} />今日 {workspaceRemainingText}</span>
-                  <span><UsersRound size={15} />{workspaceBootstrap.members.length} 位成员</span>
+                  <span>
+                    <UsersRound size={15} />
+                    {workspaceBootstrap.members.length} {workspaceBootstrap.auth.currentUser.role === "owner" ? "位成员" : "位可见联系人"}
+                  </span>
                   <span><History size={15} />保留最近 {workspaceBootstrap.policy.messageRetentionCount} 条</span>
                 </div>
               </div>
@@ -5602,6 +5747,9 @@ export function App() {
                         status={<span className={`workspace-chat-status ${workspaceRealtimeState}`}>共享空间保存消息和文件 · {workspaceRealtimeStateLabel(workspaceRealtimeState)}</span>}
                         messages={workspaceMessages}
                         messageListRef={workspaceMessageListRef}
+                        onMessageListScroll={(list) => {
+                          workspaceStickToBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight <= 80;
+                        }}
                         olderMessagesAvailable={workspaceCanLoadOlderMessages}
                         olderMessagesLoading={workspaceHistoryLoading}
                         onLoadOlderMessages={() => void loadOlderWorkspaceMessages(workspaceSelectedConversation.id)}
@@ -5808,7 +5956,7 @@ export function App() {
                         </button>
                         <div>
                           <p className="eyebrow">成员</p>
-                          <h2>空间成员</h2>
+                          <h2>{workspaceBootstrap.auth.currentUser.role === "owner" ? "空间成员" : "可联系成员"}</h2>
                         </div>
                         {workspaceBootstrap.permissions.canCreateMemberInvite && (
                           <button
@@ -5840,7 +5988,11 @@ export function App() {
                           { id: "admin" as const, label: "管理员" },
                           { id: "member" as const, label: "成员" },
                           { id: "auditor" as const, label: "预留角色", visible: workspaceBootstrap.permissions.canCreatePrivilegedInvite }
-                        ].filter((filter) => filter.id !== "auditor" || filter.visible).map((filter) => (
+                        ].filter(
+                          (filter) =>
+                            (filter.id !== "owner" || workspaceBootstrap.auth.currentUser.role === "owner") &&
+                            (filter.id !== "auditor" || filter.visible)
+                        ).map((filter) => (
                           <button
                             className={workspaceMemberRoleFilter === filter.id ? "active" : ""}
                             type="button"
@@ -5869,7 +6021,9 @@ export function App() {
                             </button>
                           ))}
                         </div>
-                        <span>{workspaceFilteredMembers.length} 位</span>
+                        <span>
+                          {workspaceFilteredMembers.length} {workspaceBootstrap.auth.currentUser.role === "owner" ? "位成员" : "位联系人"}
+                        </span>
                       </div>
                       <div className="workspace-member-grid">
                         {workspaceFilteredMembers.length === 0 ? (
@@ -5912,7 +6066,8 @@ export function App() {
                         {[
                           { id: "overview" as const, label: "概览", visible: true },
                           { id: "invites" as const, label: "邀请", visible: workspaceBootstrap.permissions.canCreateMemberInvite },
-                          { id: "roles" as const, label: "权限", visible: workspaceBootstrap.permissions.canCreatePrivilegedInvite }
+                          { id: "roles" as const, label: "权限", visible: workspaceBootstrap.permissions.canCreatePrivilegedInvite },
+                          { id: "visibility" as const, label: "可见范围", visible: workspaceBootstrap.permissions.canManageMemberVisibility }
                         ].filter((tab) => tab.visible).map((tab) => (
                           <button
                             className={workspaceSpaceTab === tab.id ? "active" : ""}
@@ -5933,9 +6088,9 @@ export function App() {
                               <small>{workspaceBootstrap.auth.currentUser.githubLogin}</small>
                             </div>
                             <div>
-                              <span>成员</span>
+                              <span>{workspaceBootstrap.auth.currentUser.role === "owner" ? "成员" : "可见联系人"}</span>
                               <strong>{workspaceBootstrap.members.length} 位</strong>
-                              <small>邀请加入</small>
+                              <small>{workspaceBootstrap.auth.currentUser.role === "owner" ? "邀请加入" : "私聊及授权范围"}</small>
                             </div>
                             <div>
                               <span>今日传输额度</span>
@@ -6033,6 +6188,74 @@ export function App() {
                               </div>
                             ))}
                           </div>
+                        </section>
+                      )}
+                      {workspaceSpaceTab === "visibility" && workspaceBootstrap.permissions.canManageMemberVisibility && (
+                        <section className="workspace-settings-section workspace-visibility-settings">
+                          <div className="workspace-section-header">
+                            <div className="section-title">
+                              <span>成员可见范围</span>
+                            </div>
+                            <button
+                              className="primary compact"
+                              type="button"
+                              disabled={!workspaceMemberVisibility || workspaceVisibilityLoading || workspaceVisibilitySaving}
+                              onClick={() => void saveWorkspaceMemberVisibility()}
+                            >
+                              {workspaceVisibilitySaving ? "保存中" : "保存"}
+                            </button>
+                          </div>
+                          {workspaceVisibilityViewers.length === 0 ? (
+                            <p className="saved-empty">当前没有可配置的成员。</p>
+                          ) : (
+                            <>
+                              <label className="workspace-visibility-viewer">
+                                <span>查看者</span>
+                                <select
+                                  value={workspaceVisibilityViewerId}
+                                  onChange={(event) => {
+                                    setWorkspaceVisibilityViewerId(event.target.value);
+                                    setWorkspaceMemberVisibility(null);
+                                  }}
+                                >
+                                  {workspaceVisibilityViewers.map((member) => (
+                                    <option value={member.id} key={member.id}>
+                                      {member.displayName} · {workspaceMemberRoleLabel(member)}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <div className="workspace-visibility-list" aria-busy={workspaceVisibilityLoading}>
+                                {workspaceVisibilityLoading || !workspaceMemberVisibility ? (
+                                  <p className="saved-empty">正在加载可见范围。</p>
+                                ) : (
+                                  workspaceBootstrap.members
+                                    .filter((member) => member.id !== workspaceVisibilityViewerId)
+                                    .map((member) => {
+                                      const automatic = workspaceMemberVisibility.automaticUserIds.includes(member.id);
+                                      const granted = workspaceMemberVisibility.grantedUserIds.includes(member.id);
+                                      return (
+                                        <label className="workspace-visibility-row" key={member.id}>
+                                          <input
+                                            type="checkbox"
+                                            checked={automatic || granted}
+                                            disabled={automatic || workspaceVisibilitySaving}
+                                            onChange={() => toggleWorkspaceVisibilityGrant(member.id)}
+                                          />
+                                          <span className="workspace-avatar small">{workspaceMemberInitial(member.displayName)}</span>
+                                          <span>
+                                            <strong>{member.displayName}</strong>
+                                            <small>
+                                              {member.githubLogin} · {automatic ? "已有私聊" : granted ? "已授权" : workspaceMemberRoleLabel(member)}
+                                            </small>
+                                          </span>
+                                        </label>
+                                      );
+                                    })
+                                )}
+                              </div>
+                            </>
+                          )}
                         </section>
                       )}
                     </div>
@@ -6999,6 +7222,7 @@ function ChatPanel({
   status,
   messages,
   messageListRef,
+  onMessageListScroll,
   olderMessagesAvailable = false,
   olderMessagesLoading = false,
   onLoadOlderMessages,
@@ -7031,6 +7255,7 @@ function ChatPanel({
   status: ReactNode;
   messages: Message[];
   messageListRef?: RefObject<HTMLDivElement | null>;
+  onMessageListScroll?: (list: HTMLDivElement) => void;
   olderMessagesAvailable?: boolean;
   olderMessagesLoading?: boolean;
   onLoadOlderMessages?: () => void;
@@ -7107,7 +7332,12 @@ function ChatPanel({
       <div className="chat-extras">
         {details}
       </div>
-      <div className="message-list" ref={messageListRef} aria-live="polite">
+      <div
+        className="message-list"
+        ref={messageListRef}
+        aria-live="polite"
+        onScroll={(event) => onMessageListScroll?.(event.currentTarget)}
+      >
         {olderMessagesAvailable && onLoadOlderMessages && (
           <div className="message-history-control">
             <button className="secondary compact" type="button" disabled={olderMessagesLoading} onClick={onLoadOlderMessages}>
@@ -7211,7 +7441,8 @@ function ChatPanel({
           })
         )}
       </div>
-      {replyTarget && (
+      <div className="composer-dock">
+        {replyTarget && (
         <div className="composer-reply">
           <span>
             回复 <strong>{replyTarget.author}</strong>：{replyTarget.body}
@@ -7220,7 +7451,7 @@ function ChatPanel({
             <X size={15} />
           </button>
         </div>
-      )}
+        )}
       <form ref={composerFormRef} className={toolPanelOpen ? "composer tool-open" : "composer"} onSubmit={onSend}>
         <label
           className={fileInputDisabled ? "file-button disabled" : "file-button"}
@@ -7287,6 +7518,7 @@ function ChatPanel({
           <span>{sending ? "发送中" : "发送"}</span>
         </button>
       </form>
+      </div>
     </section>
   );
 }

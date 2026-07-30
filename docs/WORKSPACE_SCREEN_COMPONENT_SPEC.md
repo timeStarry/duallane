@@ -624,3 +624,25 @@ Anti-patterns:
   internals, or platform logs.
 - The implementation can satisfy daily chat/file/member tasks without forcing
   users through settings.
+
+## 21. Contact Directory And Composer Dock
+
+Non-owner member screen:
+
+- Heading: 可联系成员.
+- Count suffix: 位联系人.
+- No 主人 role filter.
+- Owners are rendered as 管理员.
+
+Owner visibility settings:
+
+- Viewer selector.
+- Contact checklist.
+- Automatic direct contacts are checked and disabled.
+- Explicit grants are editable and saved as one replacement set.
+
+Chat surface:
+
+- message-list is the only vertical scroll container.
+- composer-dock contains both optional reply preview and the composer form.
+- Opening emoji, mention, or reply UI must not change the chat column height.

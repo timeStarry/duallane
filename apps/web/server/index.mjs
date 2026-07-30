@@ -22,6 +22,7 @@ import {
   getCompletedDownload,
   getConversationDetails,
   getDownloadableAttachment,
+  getManagedMemberVisibility,
   getReservedUpload,
   getSessionUserId,
   getWorkspaceEventForUser,
@@ -47,6 +48,7 @@ import {
   updateMemberRole,
   updateGroupConversation,
   updateConversationNotificationLevel,
+  updateManagedMemberVisibility,
   WORKSPACE_SESSION_COOKIE,
   WorkspaceError
 } from "./services/workspace.mjs";
@@ -371,6 +373,39 @@ app.get("/api/workspace/members", async (request, reply) => {
         role: request.query?.role,
         kind: request.query?.kind,
         limit: request.query?.limit
+      })
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.get("/api/workspace/member-visibility/:userId", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    return {
+      visibility: await getManagedMemberVisibility(db, request, {
+        actorId: await getWorkspaceUserId(request),
+        userId: request.params.userId
+      })
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.put("/api/workspace/member-visibility/:userId", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    return {
+      visibility: await updateManagedMemberVisibility(db, request, {
+        ...(request.body ?? {}),
+        actorId: await getWorkspaceUserId(request),
+        userId: request.params.userId
       })
     };
   } catch (error) {

@@ -16,6 +16,7 @@ import {
   createWorkspaceSession,
   failUpload,
   getConversationDetails,
+  getManagedMemberVisibility,
   getSessionUserId,
   getWorkspaceBootstrap,
   leaveConversation,
@@ -38,6 +39,7 @@ import {
   updateMemberRole,
   updateConversationNotificationLevel,
   updateGroupConversation,
+  updateManagedMemberVisibility,
   WorkspaceAuthError,
   WorkspacePermissionError,
   WorkspaceValidationError
@@ -405,6 +407,116 @@ describe("workspace service", () => {
     });
     expect((await getWorkspaceBootstrap(db, member.id)).invites).toEqual([]);
     expect((await getWorkspaceBootstrap(db, auditor.id)).invites).toEqual([]);
+  });
+
+  it("limits non-owner member discovery to direct contacts and owner grants", async () => {
+    const adminInvite = await createInvite(db, request, {
+      actorId: "usr_owner",
+      defaultRole: "admin",
+      code: "VISIBILITY-ADMIN"
+    });
+    const admin = await acceptInvite(db, request, {
+      code: adminInvite.code,
+      githubLogin: "visibility-admin",
+      email: "visibility-admin@example.com",
+      displayName: "Visibility Admin"
+    });
+    const memberInvite = await createInvite(db, request, {
+      actorId: "usr_owner",
+      code: "VISIBILITY-MEMBER"
+    });
+    const member = await acceptInvite(db, request, {
+      code: memberInvite.code,
+      githubLogin: "visibility-member",
+      email: "visibility-member@example.com",
+      displayName: "Visibility Member"
+    });
+    const unrelatedInvite = await createInvite(db, request, {
+      actorId: "usr_owner",
+      code: "VISIBILITY-UNRELATED"
+    });
+    const unrelated = await acceptInvite(db, request, {
+      code: unrelatedInvite.code,
+      githubLogin: "visibility-unrelated",
+      email: "visibility-unrelated@example.com",
+      displayName: "Visibility Unrelated"
+    });
+
+    expect((await listMembers(db, admin.id)).map((item) => item.id)).toEqual([admin.id]);
+    expect((await listMembers(db, member.id)).map((item) => item.id)).toEqual([member.id]);
+
+    await expect(async () =>
+      await createConversation(db, request, {
+        actorId: member.id,
+        type: "direct",
+        targetUserId: "usr_owner"
+      })
+    ).rejects.toThrow("成员不存在或当前不可见");
+
+    await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "direct",
+      targetUserId: member.id
+    });
+    await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "direct",
+      targetUserId: admin.id
+    });
+
+    const memberContacts = await listMembers(db, member.id);
+    expect(memberContacts.map((item) => item.id)).toEqual(expect.arrayContaining([member.id, "usr_owner"]));
+    expect(memberContacts.map((item) => item.id)).not.toContain(unrelated.id);
+    expect(memberContacts.find((item) => item.id === "usr_owner")).toMatchObject({
+      role: "admin",
+      roleLabel: "管理员"
+    });
+    expect((await listMembers(db, admin.id)).find((item) => item.id === "usr_owner")).toMatchObject({
+      role: "admin",
+      roleLabel: "管理员"
+    });
+
+    const ownerMembers = await listMembers(db, "usr_owner");
+    expect(ownerMembers.find((item) => item.id === "usr_owner")).toMatchObject({
+      role: "owner",
+      roleLabel: "空间主人"
+    });
+    expect(ownerMembers.map((item) => item.id)).toEqual(
+      expect.arrayContaining(["usr_owner", admin.id, member.id, unrelated.id])
+    );
+
+    const granted = await updateManagedMemberVisibility(db, request, {
+      actorId: "usr_owner",
+      userId: member.id,
+      visibleUserIds: [unrelated.id]
+    });
+    expect(granted).toMatchObject({
+      basis: "direct_contacts",
+      viewerUserId: member.id,
+      grantedUserIds: [unrelated.id]
+    });
+    expect((await listMembers(db, member.id)).map((item) => item.id)).toContain(unrelated.id);
+    expect(await getManagedMemberVisibility(db, request, {
+      actorId: "usr_owner",
+      userId: member.id
+    })).toMatchObject({
+      automaticUserIds: ["usr_owner"],
+      grantedUserIds: [unrelated.id]
+    });
+
+    await updateManagedMemberVisibility(db, request, {
+      actorId: "usr_owner",
+      userId: member.id,
+      visibleUserIds: []
+    });
+    expect((await listMembers(db, member.id)).map((item) => item.id)).not.toContain(unrelated.id);
+
+    await expect(async () =>
+      await getManagedMemberVisibility(db, request, {
+        actorId: member.id,
+        userId: admin.id
+      })
+    ).rejects.toThrow(WorkspacePermissionError);
   });
 
   it("limits bootstrap invite projections to invites each role can manage", async () => {
@@ -1102,6 +1214,12 @@ describe("workspace service", () => {
       email: "direct@example.com"
     });
 
+    await updateManagedMemberVisibility(db, request, {
+      actorId: "usr_owner",
+      userId: member.id,
+      visibleUserIds: ["usr_owner"]
+    });
+
     const direct = await createConversation(db, request, {
       actorId: member.id,
       type: "direct",
@@ -1165,6 +1283,12 @@ describe("workspace service", () => {
       code: invite.code,
       githubLogin: "direct-txn",
       email: "direct-txn@example.com"
+    });
+
+    await updateManagedMemberVisibility(db, request, {
+      actorId: "usr_owner",
+      userId: member.id,
+      visibleUserIds: ["usr_owner"]
     });
 
     db.exec(`
@@ -3339,9 +3463,9 @@ describe("workspace service", () => {
       title: "Owner only"
     });
     const direct = await createConversation(db, request, {
-      actorId: member.id,
+      actorId: "usr_owner",
       type: "direct",
-      targetUserId: "usr_owner"
+      targetUserId: member.id
     });
 
     const conversations = await listConversations(db, member.id);
@@ -3448,6 +3572,11 @@ describe("workspace service", () => {
     const filtered = await listMembers(db, "usr_owner", { query: "filter" });
     expect(filtered.map((item) => item.githubLogin)).toEqual(["filter-member"]);
 
+    await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "direct",
+      targetUserId: member.id
+    });
     const memberView = await listMembers(db, member.id);
     expect(memberView.find((item) => item.id === "usr_owner")?.capabilities.canStartDirectConversation).toBe(true);
 
@@ -3481,6 +3610,12 @@ describe("workspace service", () => {
       code: auditorInvite.code,
       githubLogin: "reserved-role-projection",
       email: "reserved-role-projection@example.com"
+    });
+
+    await updateManagedMemberVisibility(db, request, {
+      actorId: "usr_owner",
+      userId: member.id,
+      visibleUserIds: [auditor.id]
     });
 
     const ownerView = (await listMembers(db, "usr_owner")).find((item) => item.id === auditor.id);
@@ -3654,6 +3789,59 @@ describe("workspace service", () => {
     `).all(conversation.id).map((row) => row.type);
     expect(eventTypes).toContain("conversation.member_added");
     expect(eventTypes).toContain("conversation.member_removed");
+  });
+
+  it("blocks group member additions outside the actor contact scope", async () => {
+    const adminInvite = await createInvite(db, request, {
+      actorId: "usr_owner",
+      defaultRole: "admin",
+      code: "GROUP-HIDDEN-ADMIN"
+    });
+    const admin = await acceptInvite(db, request, {
+      code: adminInvite.code,
+      githubLogin: "group-hidden-admin",
+      email: "group-hidden-admin@example.com"
+    });
+    const hiddenInvite = await createInvite(db, request, {
+      actorId: "usr_owner",
+      code: "GROUP-HIDDEN-TARGET"
+    });
+    const hiddenMember = await acceptInvite(db, request, {
+      code: hiddenInvite.code,
+      githubLogin: "group-hidden-target",
+      email: "group-hidden-target@example.com"
+    });
+    const conversation = await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "group",
+      title: "Contact-scoped group",
+      memberIds: [admin.id]
+    });
+
+    await expect(async () =>
+      await addConversationMember(db, request, {
+        actorId: admin.id,
+        conversationId: conversation.id,
+        userId: hiddenMember.id
+      })
+    ).rejects.toMatchObject({ code: "member.not_visible" });
+
+    const rejection = db.prepare(
+      "SELECT result, reason FROM audit_logs WHERE actor_user_id = ? AND action = 'conversation.member_add' ORDER BY created_at DESC LIMIT 1"
+    ).get(admin.id);
+    expect(rejection).toEqual({ result: "rejected", reason: "member.not_visible" });
+
+    await updateManagedMemberVisibility(db, request, {
+      actorId: "usr_owner",
+      userId: admin.id,
+      visibleUserIds: [hiddenMember.id]
+    });
+    const updated = await addConversationMember(db, request, {
+      actorId: admin.id,
+      conversationId: conversation.id,
+      userId: hiddenMember.id
+    });
+    expect(updated.members.map((member) => member.id)).toContain(hiddenMember.id);
   });
 
   it("does not emit duplicate member-added events for active group members", async () => {

@@ -305,7 +305,8 @@ describe("workspace UI permission boundaries", () => {
 
     expect(source).not.toContain("记录查看");
     expect(source).toContain('{ id: "auditor" as const, label: "预留角色", visible: workspaceBootstrap.permissions.canCreatePrivilegedInvite }');
-    expect(source).toContain('.filter((filter) => filter.id !== "auditor" || filter.visible)');
+    expect(source).toContain('(filter.id !== "owner" || workspaceBootstrap.auth.currentUser.role === "owner")');
+    expect(source).toContain('(filter.id !== "auditor" || filter.visible)');
     expect(source).toContain('WORKSPACE_ROLE_OPTIONS.filter((role) => role !== "auditor" || workspaceBootstrap.permissions.canCreatePrivilegedInvite)');
   });
 

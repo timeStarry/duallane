@@ -373,3 +373,15 @@ P2:
 - Destructive settings require confirmation.
 - Operation records stay database-only in P0.
 - Settings do not become the default landing surface for daily Workspace usage.
+
+## 17. Member Visibility Settings
+
+The owner-only 可见范围 tab manages contact discovery separately from RBAC.
+
+- Select a non-owner viewer.
+- Show every possible target with current role metadata.
+- Mark direct-conversation contacts as 已有私聊; these rows are checked and
+  cannot be removed from this surface.
+- Mark explicit grants as 已授权; these rows can be selected or cleared.
+- Save replaces only the explicit grant set and writes an operation record.
+- Regular members and admins do not receive this tab or either management API.

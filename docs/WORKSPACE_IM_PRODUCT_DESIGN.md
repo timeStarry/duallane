@@ -483,3 +483,16 @@ P2:
   list and conversation details/context.
 - Mobile layout uses navigation or sheets instead of shrinking three desktop
   columns into an unusable page.
+
+## 17. Contact-Scoped Discovery
+
+- The member view is a contact directory for non-owners, not a list of every
+  account in the space.
+- A new member initially sees only their own directory entry. The owner can
+  establish the first direct conversation or grant specific contacts.
+- After a direct conversation exists, both participants remain automatic
+  contacts. An owner grant can be removed without removing automatic contacts.
+- Non-owners see the highest role label as 管理员, including for the actual
+  space owner.
+- Group participants remain visible in group details without being promoted
+  into the contact directory.

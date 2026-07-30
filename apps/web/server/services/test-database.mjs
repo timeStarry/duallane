@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -10,9 +10,9 @@ import {
   SEEDED_OWNER_ID
 } from "./db.mjs";
 
-const migrationPath = path.resolve(
+const migrationsDir = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  "../migrations/001_initial.sql"
+  "../migrations"
 );
 
 // Fast unit tests use SQLite as a test double. Runtime code only opens PostgreSQL.
@@ -22,7 +22,9 @@ export function openTestDatabase(dataDir) {
   db.exec("PRAGMA foreign_keys = ON");
   const initialized = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'").get();
   if (!initialized) {
-    db.exec(readFileSync(migrationPath, "utf8"));
+    for (const fileName of readdirSync(migrationsDir).filter((name) => /^\d+.*\.sql$/.test(name)).sort()) {
+      db.exec(readFileSync(path.join(migrationsDir, fileName), "utf8"));
+    }
     seedTestWorkspace(db);
   }
 

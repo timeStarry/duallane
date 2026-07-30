@@ -344,3 +344,20 @@ but the UI should be designed around the stable concepts.
 - User-facing errors are understandable and do not leak internals.
 - Owner/admin controls are grouped under settings or contextual group/member
   management.
+
+## 15. Implemented Member Visibility Policy
+
+- Stored RBAC keeps owner as the authority role. When the viewer is not an
+  owner, an owner is projected as admin / 管理员; authorization never uses this
+  projected role.
+- Owners can discover all active space members. Other roles can discover only
+  themselves, users with an existing direct conversation, and users explicitly
+  granted by an owner.
+- Group membership is visible inside that group context but does not expand the
+  global member directory.
+- Direct-chat creation, group creation, and group-member addition all use the
+  same server-side visibility check. Supplying a guessed user ID does not bypass
+  discovery policy.
+- Owner-managed grants use GET and PUT
+  /api/workspace/member-visibility/:userId; rejected management attempts are
+  audited.

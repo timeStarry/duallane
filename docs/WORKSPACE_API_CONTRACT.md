@@ -794,3 +794,27 @@ P2:
 - WebSocket events are permission-filtered and replay-capable.
 - Normal member APIs do not expose operation records, ledgers, OAuth internals,
   storage keys, request IDs, IP addresses, or user agents.
+
+## 15. Member Visibility Contract
+
+GET /api/workspace/members is viewer-scoped. Owners receive all active members;
+non-owners receive self, direct contacts, and owner-granted contacts. For a
+non-owner response, an owner is serialized as role admin and roleLabel 管理员.
+
+Owner-only management endpoints:
+
+- GET /api/workspace/member-visibility/:userId
+- PUT /api/workspace/member-visibility/:userId
+
+The PUT body is an object with visibleUserIds. The response includes:
+
+- basis: direct_contacts
+- viewerUserId
+- automaticUserIds
+- grantedUserIds
+- visibleUserIds
+
+bootstrap.policy.memberVisibilityBasis is direct_contacts, and
+bootstrap.permissions.canManageMemberVisibility identifies the owner management
+surface. Conversation and group-member mutations enforce the same visibility
+scope server-side.
