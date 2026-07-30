@@ -727,7 +727,7 @@ describe("workspace UI permission boundaries", () => {
     expect(submitSource).toContain("uploadCompleted = true");
     expect(submitSource).toContain("attachments: [completed.attachment]");
     expect(submitSource).toContain('state: "sending"');
-    expect(submitSource).toContain('const message = error instanceof Error ? error.message : "文件已上传，消息发送失败"');
+    expect(submitSource).toContain('const message = userFacingErrorMessage(error, "文件已上传，消息发送失败")');
     expect(submitSource).toContain('state: "failed"');
     expect(submitSource).toContain("showWorkspaceNotice(\"warning\", message)");
     expect(submitSource).toContain("return;");

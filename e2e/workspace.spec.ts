@@ -97,7 +97,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await enterWorkspaceAsSeededOwner(ownerPage);
 
     await ownerPage.getByRole("button", { name: "空间", exact: true }).click();
-    await ownerPage.getByRole("tablist", { name: "空间设置" }).getByRole("button", { name: "邀请", exact: true }).click();
+    await ownerPage.getByRole("tablist", { name: "空间设置" }).getByRole("tab", { name: "邀请", exact: true }).click();
     await ownerPage.getByRole("button", { name: "创建成员邀请" }).click();
     await expect(ownerPage.getByText("邀请已创建，可以复制发送给成员。", { exact: true })).toBeVisible();
 
@@ -175,7 +175,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
 
     const ownerWorkspaceNavigation = ownerPage.getByRole("navigation", { name: "共享空间视图" });
     await ownerWorkspaceNavigation.getByRole("button", { name: "空间", exact: true }).click();
-    await ownerPage.getByRole("tablist", { name: "空间设置" }).getByRole("button", { name: "可见范围", exact: true }).click();
+    await ownerPage.getByRole("tablist", { name: "空间设置" }).getByRole("tab", { name: "可见范围", exact: true }).click();
     const automaticOwnerContact = ownerPage.locator(".workspace-visibility-row").filter({ hasText: "timeStarry" });
     await expect(automaticOwnerContact.getByText("已有私聊", { exact: false })).toBeVisible();
     await expect(automaticOwnerContact.locator('input[type="checkbox"]')).toBeChecked();
@@ -223,6 +223,22 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(memberDirectRegion).toBeVisible();
     await expect(memberDirectRegion.getByLabel("输入消息")).toBeInViewport();
     await expect(memberDirectRegion.locator(".composer-reply")).toBeInViewport();
+    const mobileTitle = memberDirectRegion.getByRole("heading", { name: "timeStarry" });
+    await expect(mobileTitle).toBeVisible();
+    const mobileHeaderLayout = await memberDirectRegion.locator(".chat-header").evaluate((header) => {
+      const heading = header.querySelector<HTMLElement>(".chat-heading");
+      const status = header.querySelector<HTMLElement>(".chat-status");
+      if (!heading || !status) {
+        throw new Error("移动聊天标题或状态区缺失");
+      }
+      return {
+        headingRight: heading.getBoundingClientRect().right,
+        headingWidth: heading.getBoundingClientRect().width,
+        statusLeft: status.getBoundingClientRect().left
+      };
+    });
+    expect(mobileHeaderLayout.headingWidth).toBeGreaterThan(0);
+    expect(mobileHeaderLayout.headingRight).toBeLessThanOrEqual(mobileHeaderLayout.statusLeft + 1);
     await memberDirectRegion.getByRole("button", { name: "取消回复" }).click();
     await memberPage.setViewportSize({ width: 1280, height: 720 });
 
@@ -245,6 +261,15 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     const ownerGroupRegion = ownerPage.getByRole("region", { name: groupTitle });
     await expect(ownerGroupRegion).toBeVisible();
     await expect(ownerPage.getByLabel("当前会话详情").getByText("E2E 成员", { exact: true })).toBeVisible();
+    const detailTabs = ownerPage.getByRole("tablist", { name: "会话详情" });
+    const overviewTab = detailTabs.getByRole("tab", { name: "概览" });
+    const membersTab = detailTabs.getByRole("tab", { name: "成员" });
+    const selectedDetailTab = detailTabs.locator('[role="tab"][aria-selected="true"]');
+    await selectedDetailTab.focus();
+    await selectedDetailTab.press("Home");
+    await expect(overviewTab).toHaveAttribute("aria-selected", "true");
+    await overviewTab.press("ArrowRight");
+    await expect(membersTab).toHaveAttribute("aria-selected", "true");
 
     const memberGroupConversation = memberPage
       .getByLabel("共享空间导航")
@@ -282,7 +307,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(memberGroupRegion.getByText(messageOutsideChatView, { exact: true })).toBeVisible();
     await expect.poll(() => workspaceConversationUnreadCount(memberPage, groupId)).toBe(0);
 
-    const fileName = "workspace-e2e-bytes.bin";
+    const fileName = "workspace-e2e-long-file-name-for-detail-panel-overflow-regression.bin";
     const fileBytes = Buffer.from([0, 1, 2, 3, 127, 128, 254, 255, 68, 117, 97, 108, 76, 97, 110, 101]);
     await ownerGroupRegion.locator('input[type="file"]').setInputFiles({
       name: fileName,
@@ -294,7 +319,35 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await memberFileCard.click();
     const fileDetails = memberPage.getByLabel("文件详情");
     await expect(fileDetails.getByText(fileName, { exact: true }).first()).toBeVisible();
+    await expect(fileDetails.getByTitle("收起详情")).toBeVisible();
+    const fileDetailLayout = await fileDetails.evaluate((panel) => {
+      const panelRect = panel.getBoundingClientRect();
+      const title = panel.querySelector<HTMLElement>(".workspace-context-title");
+      const closeButton = panel.querySelector<HTMLElement>('.workspace-context-header [title="收起详情"]');
 
+      const body = panel.querySelector<HTMLElement>(".workspace-context-body");
+      if (!title || !closeButton || !body) {
+        throw new Error("文件详情标题或收起按钮缺失");
+      }
+
+      const titleRect = title.getBoundingClientRect();
+      const closeButtonRect = closeButton.getBoundingClientRect();
+
+      return {
+        panelRight: panelRect.right,
+        titleRight: titleRect.right,
+        closeButtonRight: closeButtonRect.right,
+        titleClientWidth: title.clientWidth,
+        titleScrollWidth: title.scrollWidth,
+        bodyScrollTop: body.scrollTop
+      };
+    });
+    expect(fileDetailLayout.titleRight).toBeLessThanOrEqual(fileDetailLayout.panelRight + 1);
+    expect(fileDetailLayout.closeButtonRight).toBeLessThanOrEqual(fileDetailLayout.panelRight + 1);
+    expect(fileDetailLayout.titleScrollWidth).toBeLessThanOrEqual(fileDetailLayout.titleClientWidth + 1);
+
+
+    expect(fileDetailLayout.bodyScrollTop).toBe(0);
     const downloadPromise = memberPage.waitForEvent("download");
     await fileDetails.getByRole("button", { name: "下载文件", exact: true }).click();
     const download = await downloadPromise;

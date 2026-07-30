@@ -46,6 +46,7 @@ import {
 } from "./p2p-protocol";
 import { createWorkspaceJsonHeaders } from "./workspace-http";
 import { getWorkspaceEntryUrl, getWorkspaceLoginUrl, parseEntryRoute } from "./workspace-url";
+import { userFacingErrorMessage } from "./user-facing-error";
 
 type Lane = "entry" | "p2p" | "workspace-dev";
 type P2pStep = "name" | "waiting" | "chat" | "ended" | "invalid-room";
@@ -2175,7 +2176,7 @@ export function App() {
           })
           .catch((error) => {
             if (!disposed) {
-              showWorkspaceNotice("warning", error instanceof Error ? error.message : "同步共享空间失败");
+              showWorkspaceNotice("warning", userFacingErrorMessage(error, "同步共享空间失败"));
               setWorkspaceRealtimeState("error");
             }
           })
@@ -2811,7 +2812,7 @@ export function App() {
         setP2pStatus("idle");
         setP2pStep("chat");
       } catch (error) {
-        setP2pError(error instanceof Error ? `房间校验暂不可用：${error.message}` : "房间校验暂不可用。");
+        setP2pError(userFacingErrorMessage(error, "房间校验暂不可用。"));
         setInviteLink(withRoomSecret(getInviteLink(roomId), roomSecret));
         setP2pStatus("idle");
         setP2pStep("chat");
@@ -2837,7 +2838,7 @@ export function App() {
     } catch (error) {
       setRoomId("");
       setInviteLink("");
-      setP2pError(error instanceof Error ? `房间 API 暂不可用：${error.message}` : "房间 API 暂不可用。");
+      setP2pError(userFacingErrorMessage(error, "房间 API 暂不可用。"));
     } finally {
       setP2pStatus("idle");
     }
@@ -2875,7 +2876,7 @@ export function App() {
       setWorkspaceHistoryExhaustedByConversation({});
       setWorkspaceStatus("ready");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "共享空间暂时不可用";
+      const message = userFacingErrorMessage(error, "共享空间暂时不可用");
       const code = error instanceof WorkspaceClientError ? error.code : "";
       setWorkspaceError(code === "auth.required" ? "" : message);
       setWorkspaceStatus(code === "workspace.disabled" ? "disabled" : code.startsWith("auth.") ? "auth" : "error");
@@ -3067,7 +3068,7 @@ export function App() {
       }
       setWorkspaceRealtimeState("connected");
     } catch (error) {
-      showWorkspaceNotice("warning", error instanceof Error ? error.message : "同步共享空间失败");
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "同步共享空间失败"));
       setWorkspaceRealtimeState("error");
     }
   }
@@ -3440,7 +3441,7 @@ export function App() {
       setWorkspaceConversations((conversations) => upsertWorkspaceConversationList(conversations, data.conversation));
       showWorkspaceNotice("success", "会话提醒已更新");
     } catch (error) {
-      showWorkspaceNotice("warning", error instanceof Error ? error.message : "提醒设置保存失败");
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "提醒设置保存失败"));
     }
   }
 
@@ -3487,7 +3488,7 @@ export function App() {
         setWorkspaceHistoryExhaustedByConversation((current) => ({ ...current, [conversationId]: true }));
       }
     } catch (error) {
-      showWorkspaceNotice("warning", error instanceof Error ? error.message : "历史消息加载失败");
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "历史消息加载失败"));
     } finally {
       setWorkspaceHistoryLoadingByConversation((current) => ({ ...current, [conversationId]: false }));
     }
@@ -3563,7 +3564,7 @@ export function App() {
       setWorkspaceMemberVisibility(data.visibility);
     } catch (error) {
       setWorkspaceMemberVisibility(null);
-      showWorkspaceNotice("warning", error instanceof Error ? error.message : "成员可见范围加载失败");
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "成员可见范围加载失败"));
     } finally {
       setWorkspaceVisibilityLoading(false);
     }
@@ -3606,7 +3607,7 @@ export function App() {
       setWorkspaceMemberVisibility(data.visibility);
       showWorkspaceNotice("success", "成员可见范围已更新");
     } catch (error) {
-      showWorkspaceNotice("warning", error instanceof Error ? error.message : "成员可见范围更新失败");
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "成员可见范围更新失败"));
     } finally {
       setWorkspaceVisibilitySaving(false);
     }
@@ -3640,7 +3641,7 @@ export function App() {
       showWorkspaceNotice("success", "成员权限已更新");
       await refreshWorkspaceBootstrap();
     } catch (error) {
-      showWorkspaceNotice("warning", error instanceof Error ? error.message : "成员权限更新失败");
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "成员权限更新失败"));
     }
   }
 
@@ -3661,7 +3662,7 @@ export function App() {
       showWorkspaceNotice("success", "成员已移出共享空间");
       await Promise.all([refreshWorkspaceBootstrap(), refreshWorkspaceMembers(), refreshWorkspaceConversations(), refreshWorkspaceFiles()]);
     } catch (error) {
-      showWorkspaceNotice("warning", error instanceof Error ? error.message : "移出成员失败");
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "移出成员失败"));
     }
   }
 
@@ -3686,7 +3687,7 @@ export function App() {
       setWorkspaceContextTab("overview");
       setWorkspaceMobilePane("main");
     } catch (error) {
-      showWorkspaceNotice("warning", error instanceof Error ? error.message : "发起私聊失败");
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "发起私聊失败"));
     }
   }
 
@@ -3724,7 +3725,7 @@ export function App() {
       setWorkspaceContextTab("members");
       setWorkspaceMobilePane("main");
     } catch (error) {
-      showWorkspaceNotice("warning", error instanceof Error ? error.message : "创建会话失败");
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "创建会话失败"));
     }
   }
 
@@ -3746,7 +3747,7 @@ export function App() {
       setWorkspaceConversations((conversations) => upsertWorkspaceConversationList(conversations, data.conversation));
       showWorkspaceNotice("success", `${member?.displayName ?? "成员"} 已加入群聊`);
     } catch (error) {
-      showWorkspaceNotice("warning", error instanceof Error ? error.message : "添加成员失败");
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "添加成员失败"));
     } finally {
       setWorkspaceGroupMemberBusyId("");
     }
@@ -3773,7 +3774,7 @@ export function App() {
       setWorkspaceConversations((conversations) => upsertWorkspaceConversationList(conversations, data.conversation));
       showWorkspaceNotice("success", `${member?.displayName ?? "成员"} 已移出群聊`);
     } catch (error) {
-      showWorkspaceNotice("warning", error instanceof Error ? error.message : "移出成员失败");
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "移出成员失败"));
     } finally {
       setWorkspaceGroupMemberBusyId("");
     }
@@ -3801,7 +3802,7 @@ export function App() {
       setWorkspaceConversations((conversations) => upsertWorkspaceConversationList(conversations, data.conversation));
       showWorkspaceNotice("success", "群聊名称已更新");
     } catch (error) {
-      showWorkspaceNotice("warning", error instanceof Error ? error.message : "群聊名称更新失败");
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "群聊名称更新失败"));
     }
   }
 
@@ -3828,7 +3829,7 @@ export function App() {
       setWorkspaceMobilePane("list");
       showWorkspaceNotice("success", "已离开群聊");
     } catch (error) {
-      showWorkspaceNotice("warning", error instanceof Error ? error.message : "离开群聊失败");
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "离开群聊失败"));
     }
   }
 
@@ -3844,7 +3845,7 @@ export function App() {
       await loadWorkspace();
       showWorkspaceNotice("success", "邀请已创建，可以复制发送给成员。");
     } catch (error) {
-      showWorkspaceNotice("warning", error instanceof Error ? error.message : "创建邀请失败");
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "创建邀请失败"));
     }
   }
 
@@ -3876,7 +3877,7 @@ export function App() {
       await refreshWorkspaceBootstrap();
       showWorkspaceNotice("success", "邀请已撤销");
     } catch (error) {
-      showWorkspaceNotice("warning", error instanceof Error ? error.message : "撤销邀请失败");
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "撤销邀请失败"));
     }
   }
 
@@ -3918,7 +3919,7 @@ export function App() {
         blocks
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "消息发送失败";
+      const message = userFacingErrorMessage(error, "消息发送失败");
       setWorkspaceLocalMessages((messages) =>
         messages.map((item) =>
           item.clientMessageId === clientMessageId
@@ -3947,7 +3948,7 @@ export function App() {
     try {
       await submitWorkspaceMessage(localMessage);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "消息发送失败";
+      const message = userFacingErrorMessage(error, "消息发送失败");
       setWorkspaceLocalMessages((messages) =>
         messages.map((item) =>
           item.id === messageId ? { ...item, state: "failed", failureReason: message } : item
@@ -4016,7 +4017,7 @@ export function App() {
       await submitWorkspaceFileUpload(localFileId, file, scope, targetConversation?.id);
       await refreshWorkspaceBootstrap();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "文件上传失败";
+      const message = userFacingErrorMessage(error, "文件上传失败");
       setWorkspaceFileLocalState(localFileId, "failed", message);
       showWorkspaceNotice("warning", message);
     } finally {
@@ -4040,7 +4041,7 @@ export function App() {
       await submitWorkspaceFileUpload(file.id, localUpload.file, localUpload.scope, file.conversationId || undefined);
       await refreshWorkspaceBootstrap();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "文件上传失败";
+      const message = userFacingErrorMessage(error, "文件上传失败");
       setWorkspaceFileLocalState(file.id, "failed", message);
       showWorkspaceNotice("warning", message);
     }
@@ -4119,7 +4120,7 @@ export function App() {
             blocks
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : "文件已上传，消息发送失败";
+          const message = userFacingErrorMessage(error, "文件已上传，消息发送失败");
           setWorkspaceLocalMessages((messages) =>
             messages.map((item) =>
               item.clientMessageId === clientMessageId
@@ -4238,7 +4239,7 @@ export function App() {
       if (downloadReserved) {
         await refreshWorkspaceBootstrap();
       }
-      showWorkspaceNotice("warning", error instanceof Error ? error.message : "文件下载失败");
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "文件下载失败"));
     }
   }
 
@@ -4262,7 +4263,7 @@ export function App() {
       showWorkspaceNotice("success", "文件已移除");
       await Promise.all([refreshWorkspaceFiles(), refreshWorkspaceConversations()]);
     } catch (error) {
-      showWorkspaceNotice("warning", error instanceof Error ? error.message : "移除文件失败");
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "移除文件失败"));
     }
   }
 
@@ -5744,7 +5745,7 @@ export function App() {
                             </button>
                           </>
                         }
-                        status={<span className={`workspace-chat-status ${workspaceRealtimeState}`}>共享空间保存消息和文件 · {workspaceRealtimeStateLabel(workspaceRealtimeState)}</span>}
+                        status={<span className="workspace-chat-status desktop-only">共享空间保存消息和文件</span>}
                         messages={workspaceMessages}
                         messageListRef={workspaceMessageListRef}
                         onMessageListScroll={(list) => {
@@ -6062,7 +6063,12 @@ export function App() {
                           <h2>空间信息</h2>
                         </div>
                       </div>
-                      <div className="workspace-context-tabs space-tabs" role="tablist" aria-label="空间设置">
+                      <div
+                        className="workspace-context-tabs space-tabs"
+                        role="tablist"
+                        aria-label="空间设置"
+                        onKeyDown={handleTabListKeyDown}
+                      >
                         {[
                           { id: "overview" as const, label: "概览", visible: true },
                           { id: "invites" as const, label: "邀请", visible: workspaceBootstrap.permissions.canCreateMemberInvite },
@@ -6073,6 +6079,9 @@ export function App() {
                             className={workspaceSpaceTab === tab.id ? "active" : ""}
                             key={tab.id}
                             type="button"
+                            role="tab"
+                            aria-selected={workspaceSpaceTab === tab.id}
+                            tabIndex={workspaceSpaceTab === tab.id ? 0 : -1}
                             onClick={() => setWorkspaceSpaceTab(tab.id)}
                           >
                             {tab.label}
@@ -6273,7 +6282,7 @@ export function App() {
                     >
                       <ArrowLeft size={16} />
                     </button>
-                    <div>
+                    <div className="workspace-context-title">
                       <p className="eyebrow">{workspaceContextMode === "file" ? "文件详情" : workspaceSelectedConversation ? "会话详情" : "空间概览"}</p>
                       <strong>
                         {workspaceContextMode === "file"
@@ -6288,13 +6297,13 @@ export function App() {
                     </button>
                   </div>
                   {workspaceContextMode === "file" ? (
-                    <div className="workspace-context-body">
+                    <div className="workspace-context-body" key={`file-${workspaceSelectedFile?.id ?? "none"}`}>
                       {workspaceSelectedFile ? (
                         <>
                           <div className="workspace-file-detail-head">
                             <FileCheck2 size={22} />
                             <div>
-                              <strong>{workspaceSelectedFile.fileName}</strong>
+                              <strong title={workspaceSelectedFile.fileName}>{workspaceSelectedFile.fileName}</strong>
                               <small>{workspaceFileScope(workspaceSelectedFile, workspaceConversations)}</small>
                             </div>
                           </div>
@@ -6398,11 +6407,19 @@ export function App() {
                     </div>
                   ) : workspaceSelectedConversation ? (
                     <>
-                      <div className="workspace-context-tabs" role="tablist" aria-label="会话详情">
+                      <div
+                        className="workspace-context-tabs"
+                        role="tablist"
+                        aria-label="会话详情"
+                        onKeyDown={handleTabListKeyDown}
+                      >
                         {workspaceVisibleContextTabs.map((tab) => (
                           <button
                             className={workspaceContextTab === tab.id ? "active" : ""}
                             key={tab.id}
+                            role="tab"
+                            aria-selected={workspaceContextTab === tab.id}
+                            tabIndex={workspaceContextTab === tab.id ? 0 : -1}
                             type="button"
                             onClick={() => setWorkspaceContextTab(tab.id)}
                           >
@@ -6411,7 +6428,7 @@ export function App() {
                         ))}
                       </div>
                       {workspaceContextTab === "overview" && (
-                        <div className="workspace-context-body">
+                        <div className="workspace-context-body" key={`conversation-${workspaceSelectedConversation.id}-overview`}>
                           <div className="workspace-info-grid compact-info">
                             <div>
                               <span>类型</span>
@@ -6437,7 +6454,7 @@ export function App() {
                         </div>
                       )}
                       {workspaceContextTab === "members" && (
-                        <div className="workspace-context-body">
+                        <div className="workspace-context-body" key={`conversation-${workspaceSelectedConversation.id}-members`}>
                           <label className="workspace-search compact-search">
                             <span>查找成员</span>
                             <input
@@ -6507,7 +6524,7 @@ export function App() {
                         </div>
                       )}
                       {workspaceContextTab === "files" && (
-                        <div className="workspace-context-body">
+                        <div className="workspace-context-body" key={`conversation-${workspaceSelectedConversation.id}-files`}>
                           <div className="workspace-file-list">
                             {workspaceConversationFiles.length === 0 ? (
                               <p className="saved-empty">此会话暂无文件。</p>
@@ -6537,18 +6554,26 @@ export function App() {
                         </div>
                       )}
                       {workspaceContextTab === "settings" && (
-                        <div className="workspace-context-body">
+                        <div className="workspace-context-body" key={`conversation-${workspaceSelectedConversation.id}-settings`}>
                           <p className="saved-empty">此会话保留最近 {workspaceSelectedConversation.retentionCount} 条消息。</p>
                           <div className="workspace-settings-section">
                             <div className="workspace-section-header">
                               <span>会话提醒</span>
                             </div>
-                            <div className="workspace-filter-tabs notification-tabs" role="tablist" aria-label="会话提醒设置">
+                            <div
+                              className="workspace-filter-tabs notification-tabs"
+                              role="tablist"
+                              aria-label="会话提醒设置"
+                              onKeyDown={handleTabListKeyDown}
+                            >
                               {(["all", "mentions", "muted"] as WorkspaceNotificationLevel[]).map((level) => (
                                 <button
                                   className={(workspaceSelectedConversation.notificationLevel ?? "all") === level ? "active" : ""}
                                   key={level}
                                   type="button"
+                                  role="tab"
+                                  aria-selected={(workspaceSelectedConversation.notificationLevel ?? "all") === level}
+                                  tabIndex={(workspaceSelectedConversation.notificationLevel ?? "all") === level ? 0 : -1}
                                   onClick={() => void updateWorkspaceConversationNotification(level)}
                                 >
                                   {workspaceNotificationLevelLabel(level)}
@@ -6592,7 +6617,7 @@ export function App() {
                       )}
                     </>
                   ) : (
-                    <div className="workspace-context-body">
+                    <div className="workspace-context-body" key="conversation-none">
                       <p className="saved-empty">选择会话后可查看概览、成员和文件。</p>
                     </div>
                   )}
@@ -6813,9 +6838,41 @@ function TopBar({
   );
 }
 
+function handleTabListKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+    return;
+  }
+
+  const tabs = Array.from(
+    event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]:not(:disabled)')
+  );
+  if (tabs.length === 0) {
+    return;
+  }
+
+  const currentTab = (event.target as HTMLElement).closest<HTMLButtonElement>('[role="tab"]');
+  const currentIndex = Math.max(0, currentTab ? tabs.indexOf(currentTab) : 0);
+  let nextIndex = currentIndex;
+
+  if (event.key === "ArrowLeft") {
+    nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+  } else if (event.key === "ArrowRight") {
+    nextIndex = (currentIndex + 1) % tabs.length;
+  } else if (event.key === "Home") {
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    nextIndex = tabs.length - 1;
+  }
+
+  event.preventDefault();
+  const nextTab = tabs[nextIndex];
+  nextTab.focus();
+  nextTab.click();
+}
+
 function InlineNotice({ tone, text }: { tone: "info" | "success" | "warning"; text: React.ReactNode }) {
   return (
-    <p className={`notice ${tone}`}>
+    <p className={`notice ${tone}`} role={tone === "warning" ? "alert" : "status"}>
       {tone === "warning" ? <AlertCircle size={16} /> : <Check size={16} />}
       {text}
     </p>
@@ -7549,7 +7606,7 @@ function EmotePicker({ onSelect }: { onSelect: (item: EmoteItem) => void }) {
 
   return (
     <div className="emote-picker" role="dialog" aria-label="选择表情">
-      <div className="emote-pack-tabs" role="tablist" aria-label="表情包">
+      <div className="emote-pack-tabs" role="tablist" aria-label="表情包" onKeyDown={handleTabListKeyDown}>
         {visibleEmotePacks.map((pack) => (
           <button
             className={pack.id === activePack.id ? "active" : ""}
@@ -7558,6 +7615,7 @@ function EmotePicker({ onSelect }: { onSelect: (item: EmoteItem) => void }) {
             role="tab"
             aria-selected={pack.id === activePack.id}
             onClick={() => setActivePackId(pack.id)}
+            tabIndex={pack.id === activePack.id ? 0 : -1}
           >
             {pack.label}
           </button>
