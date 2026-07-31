@@ -50,7 +50,8 @@ import {
   updateConversationNotificationLevel,
   updateManagedMemberVisibility,
   WORKSPACE_SESSION_COOKIE,
-  WorkspaceError
+  WorkspaceError,
+  WorkspaceValidationError
 } from "./services/workspace.mjs";
 import { blockWorkspace, isWorkspaceEnabled } from "./services/workspace-gate.mjs";
 import {
@@ -713,6 +714,27 @@ app.post("/api/workspace/files/:attachmentId/downloads/reserve", async (request,
   }
 });
 
+app.get("/api/workspace/files/:attachmentId/preview", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    const actorId = await getWorkspaceUserId(request);
+    const attachment = await getDownloadableAttachment(db, request, actorId, request.params.attachmentId);
+    if (!isPreviewableImageMimeType(attachment.mimeType)) {
+      throw new WorkspaceValidationError("file.preview_unsupported", "该文件不支持图片预览");
+    }
+    const stored = await statStoredAttachment(dataDir, attachment.storageKey, attachment.byteSize);
+    reply.header("Content-Type", attachment.mimeType);
+    reply.header("Content-Length", String(attachment.byteSize));
+    reply.header("Content-Disposition", `inline; filename="${encodeHeaderValue(attachment.fileName)}"`);
+    reply.header("Cache-Control", "private, no-store");
+    return reply.send(createReadStream(stored.path));
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
 app.get("/api/workspace/files/:attachmentId/download", async (request, reply) => {
   if (!workspaceEnabled) {
     return blockWorkspace(reply);
@@ -1050,6 +1072,10 @@ function toWorkspaceSocketError(request, error) {
 
 function encodeHeaderValue(value) {
   return String(value ?? "download").replace(/["\\\r\n]/g, "_");
+}
+
+function isPreviewableImageMimeType(mimeType) {
+  return ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp"].includes(String(mimeType).toLowerCase());
 }
 
 function normalizeQueryString(value) {

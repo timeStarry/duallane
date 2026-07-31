@@ -4564,6 +4564,101 @@ describe("workspace routes", () => {
     expect(after.json().policy.usedTodayBytes).toBe(content.byteLength * 2);
   });
 
+  it("previews visible images inline without consuming download quota", async () => {
+    const app = await makeApp();
+    const content = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    const reserve = await app.inject({
+      method: "POST",
+      url: "/api/workspace/files/uploads/reserve",
+      headers: {
+        "content-type": "application/json",
+        "x-workspace-user-id": "usr_owner"
+      },
+      payload: {
+        fileName: "preview.png",
+        mimeType: "image/png",
+        byteSize: content.byteLength,
+        visibility: "space"
+      }
+    });
+    expect(reserve.statusCode).toBe(201);
+    const upload = reserve.json();
+
+    const complete = await app.inject({
+      method: "PUT",
+      url: `/api/workspace/files/uploads/${upload.id}/content`,
+      headers: {
+        "content-type": "application/octet-stream",
+        "x-workspace-user-id": "usr_owner"
+      },
+      payload: content
+    });
+    expect(complete.statusCode).toBe(200);
+
+    const preview = await app.inject({
+      method: "GET",
+      url: `/api/workspace/files/${upload.attachment.id}/preview`,
+      headers: {
+        "x-workspace-user-id": "usr_owner"
+      }
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.headers["content-type"]).toBe("image/png");
+    expect(preview.headers["content-disposition"]).toBe('inline; filename="preview.png"');
+    expect(preview.headers["cache-control"]).toBe("private, no-store");
+    expect(preview.rawPayload.equals(content)).toBe(true);
+
+    const after = await app.inject({
+      method: "GET",
+      url: "/api/workspace/bootstrap",
+      headers: {
+        "x-workspace-user-id": "usr_owner"
+      }
+    });
+    expect(after.statusCode).toBe(200);
+    expect(after.json().policy.usedTodayBytes).toBe(content.byteLength);
+  });
+
+  it("rejects inline previews for non-image attachments", async () => {
+    const app = await makeApp();
+    const content = Buffer.from("not an image", "utf8");
+    const reserve = await app.inject({
+      method: "POST",
+      url: "/api/workspace/files/uploads/reserve",
+      headers: {
+        "content-type": "application/json",
+        "x-workspace-user-id": "usr_owner"
+      },
+      payload: {
+        fileName: "notes.txt",
+        mimeType: "text/plain",
+        byteSize: content.byteLength,
+        visibility: "space"
+      }
+    });
+    expect(reserve.statusCode).toBe(201);
+    const upload = reserve.json();
+    const complete = await app.inject({
+      method: "PUT",
+      url: `/api/workspace/files/uploads/${upload.id}/content`,
+      headers: {
+        "content-type": "application/octet-stream",
+        "x-workspace-user-id": "usr_owner"
+      },
+      payload: content
+    });
+    expect(complete.statusCode).toBe(200);
+
+    const preview = await app.inject({
+      method: "GET",
+      url: `/api/workspace/files/${upload.attachment.id}/preview`,
+      headers: {
+        "x-workspace-user-id": "usr_owner"
+      }
+    });
+    expect(preview.statusCode).toBe(400);
+    expect(preview.json().error.code).toBe("file.preview_unsupported");
+  });
   it("lists structured messages without raw persistence fields", async () => {
     const app = await makeApp();
     const conversation = await app.inject({

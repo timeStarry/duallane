@@ -518,6 +518,40 @@ input {
   line-height: 1.4;
 }
 
+.toast-region {
+  position: fixed;
+  z-index: 80;
+  top: 76px;
+  right: 18px;
+  width: min(420px, calc(100vw - 28px));
+  pointer-events: none;
+}
+
+.toast-region .notice {
+  max-width: none;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  margin: 0;
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+}
+
+.notice-dismiss {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  margin: -4px -5px -4px 2px;
+  border-radius: 7px;
+  color: currentColor;
+  background: transparent;
+  cursor: pointer;
+}
+
+.notice-dismiss:hover {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
 .notice.warning {
   border-color: rgb(183 121 31 / 35%);
   color: var(--warning-fg);
@@ -1250,6 +1284,25 @@ button:disabled {
   font-weight: 750;
 }
 
+.message-file-card.image {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0;
+  overflow: hidden;
+}
+
+.message-file-card.image > span {
+  min-width: 0;
+  padding: 0 10px 10px;
+}
+
+.message-image-preview {
+  width: 100%;
+  max-height: 280px;
+  display: block;
+  object-fit: contain;
+  background: var(--surface-soft);
+}
+
 .reply-preview,
 .composer-reply {
   min-width: 0;
@@ -1403,6 +1456,16 @@ button:disabled {
 .file-transfer.failed {
   border-color: rgb(182 66 58 / 28%);
   background: var(--transfer-rejected);
+}
+
+.file-transfer-image-preview {
+  width: min(360px, 100%);
+  max-height: 280px;
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  object-fit: contain;
+  background: var(--surface-soft);
 }
 
 .file-transfer-main {
@@ -1640,6 +1703,9 @@ button:disabled {
 
 .file-button {
   position: relative;
+  width: 42px;
+  min-height: 42px;
+  padding: 0;
   flex: 0 0 auto;
 }
 
@@ -3356,14 +3422,6 @@ button:disabled {
     padding: 0;
   }
 
-  .file-button span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-  }
 
   .send-button {
     min-width: 46px;

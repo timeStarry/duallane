@@ -307,6 +307,26 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(memberGroupRegion.getByText(messageOutsideChatView, { exact: true })).toBeVisible();
     await expect.poll(() => workspaceConversationUnreadCount(memberPage, groupId)).toBe(0);
 
+    const pastedImageName = "workspace-e2e-pasted-image.png";
+    const pastedImageBytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64"
+    );
+    await ownerGroupRegion.getByLabel("输入消息").evaluate((textarea, image) => {
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([new Uint8Array(image.bytes)], image.name, { type: "image/png" }));
+      textarea.dispatchEvent(new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: transfer
+      }));
+    }, { name: pastedImageName, bytes: Array.from(pastedImageBytes) });
+
+    const pastedImageCard = memberGroupRegion.getByRole("button").filter({ hasText: pastedImageName });
+    await expect(pastedImageCard).toBeVisible();
+    const pastedImagePreview = pastedImageCard.locator("img.message-image-preview");
+    await expect(pastedImagePreview).toBeVisible();
+    await expect.poll(() => pastedImagePreview.evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
     const fileName = "workspace-e2e-long-file-name-for-detail-panel-overflow-regression.bin";
     const fileBytes = Buffer.from([0, 1, 2, 3, 127, 128, 254, 255, 68, 117, 97, 108, 76, 97, 110, 101]);
     await ownerGroupRegion.locator('input[type="file"]').setInputFiles({
@@ -355,6 +375,10 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     const downloadPath = await download.path();
     expect(downloadPath).not.toBeNull();
     expect(await readFile(downloadPath!)).toEqual(fileBytes);
+    const downloadToast = memberPage.getByRole("status").filter({ hasText: `已开始下载 ${fileName}` });
+    await expect(downloadToast).toBeVisible();
+    await downloadToast.getByRole("button", { name: "关闭提示" }).click();
+    await expect(downloadToast).toHaveCount(0);
 
     const socketClosed = await memberPage.evaluate(() =>
       (window as Window & { __closeWorkspaceSocketForE2E?: () => boolean }).__closeWorkspaceSocketForE2E?.() ?? false

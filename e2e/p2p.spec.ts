@@ -268,17 +268,27 @@ test("two private-lane users exchange messages and a file without sending plaint
     await expect(ownerPage.getByText(guestSecretMessage, { exact: true })).toBeVisible();
     await expect(privateMessage(guestPage, guestSecretMessage).locator(".message-local-state")).toContainText("已送达");
 
-    const privateFileBytes = Buffer.from("private file bytes stay on the browser data channel");
+    const privateFileBytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64"
+    );
     await ownerPage.locator('input[type="file"]').setInputFiles({
-      name: "private-lane-e2e.txt",
-      mimeType: "text/plain",
+      name: "private-lane-e2e.png",
+      mimeType: "image/png",
       buffer: privateFileBytes
     });
-    await expect(guestPage.getByText("private-lane-e2e.txt", { exact: true })).toBeVisible();
-    const guestFileTransfer = fileTransfer(guestPage, "private-lane-e2e.txt");
+    await expect(guestPage.getByText("private-lane-e2e.png", { exact: true })).toBeVisible();
+    const guestFileTransfer = fileTransfer(guestPage, "private-lane-e2e.png");
     await guestFileTransfer.getByRole("button", { name: "接受" }).click();
     await expect(guestFileTransfer).toContainText("已完成");
-    await expect(fileTransfer(ownerPage, "private-lane-e2e.txt")).toContainText("已完成");
+    const ownerFileTransfer = fileTransfer(ownerPage, "private-lane-e2e.png");
+    await expect(ownerFileTransfer).toContainText("已完成");
+    const ownerImagePreview = ownerFileTransfer.locator("img.file-transfer-image-preview");
+    const guestImagePreview = guestFileTransfer.locator("img.file-transfer-image-preview");
+    await expect(ownerImagePreview).toBeVisible();
+    await expect(guestImagePreview).toBeVisible();
+    await expect.poll(() => ownerImagePreview.evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+    await expect.poll(() => guestImagePreview.evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
 
     await guestPage.evaluate(() => {
       Object.defineProperty(window, "showSaveFilePicker", { configurable: true, value: undefined });
@@ -286,7 +296,7 @@ test("two private-lane users exchange messages and a file without sending plaint
     const downloadPromise = guestPage.waitForEvent("download");
     await guestFileTransfer.getByRole("button", { name: "保存" }).click();
     const download = await downloadPromise;
-    expect(download.suggestedFilename()).toBe("private-lane-e2e.txt");
+    expect(download.suggestedFilename()).toBe("private-lane-e2e.png");
     const downloadPath = await download.path();
     expect(downloadPath).not.toBeNull();
     if (!downloadPath) {
@@ -342,7 +352,6 @@ test("two private-lane users exchange messages and a file without sending plaint
     expect(serializedFrames).not.toContain(roomSecret);
     expect(serializedFrames).not.toContain(ownerSecretMessage);
     expect(serializedFrames).not.toContain(guestSecretMessage);
-    expect(serializedFrames).not.toContain("private file bytes stay on the browser data channel");
     expect(serializedFrames).not.toContain(privateFileBytes.toString("base64"));
   } finally {
     await Promise.all(contexts.map((context) => context.close()));

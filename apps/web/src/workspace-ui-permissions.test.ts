@@ -736,7 +736,7 @@ describe("workspace UI permission boundaries", () => {
     expect(submitSource.indexOf("uploadCompleted = true")).toBeLessThan(submitSource.indexOf("await submitWorkspaceMessage"));
   });
 
-  it("refreshes quota after a reserved download fails before the browser save starts", () => {
+  it("delegates reserved downloads to the browser instead of buffering file bytes", () => {
     const source = readSource();
     const downloadStart = source.indexOf("async function reserveWorkspaceDownload");
     const downloadEnd = source.indexOf("async function removeWorkspaceFile", downloadStart);
@@ -744,13 +744,30 @@ describe("workspace UI permission boundaries", () => {
     expect(downloadEnd).toBeGreaterThan(downloadStart);
     const downloadSource = source.slice(downloadStart, downloadEnd);
 
-    expect(downloadSource).toContain("let downloadReserved = false");
-    expect(downloadSource).toContain("downloadReserved = true");
-    expect(downloadSource).toContain("if (downloadReserved) {");
-    expect(downloadSource).toContain("await refreshWorkspaceBootstrap()");
-    expect(downloadSource.indexOf("downloadReserved = true")).toBeLessThan(downloadSource.indexOf("const response = await workspaceFetch"));
+    expect(downloadSource).toContain("const params = new URLSearchParams({ downloadId: reserve.id })");
+    expect(downloadSource).toContain('const link = document.createElement("a")');
+    expect(downloadSource).toContain("link.href = `/api/workspace/files/");
+    expect(downloadSource).toContain("link.download = file.fileName");
+    expect(downloadSource).not.toContain("response.blob()");
+    expect(downloadSource).not.toContain("URL.createObjectURL");
   });
 
+  it("supports dismissible toasts, image previews, pasted images, and an icon-only file control", () => {
+    const source = readSource();
+
+    expect(source).toContain('className="toast-region"');
+    expect(source).toContain("onDismiss={clearWorkspaceNotice}");
+    expect(source).toContain('aria-label="关闭提示"');
+    expect(source).toContain("/preview`}");
+    expect(source).toContain("isPreviewableImageMimeType(attachment.mimeType)");
+    expect(source).toContain("file-transfer-image-preview");
+    expect(source).toContain("p2pDownloadUrlsRef.current.set(transferId, previewUrl)");
+    expect(source).toContain("onPaste={handleDraftPaste}");
+    expect(source).toContain("event.clipboardData.items");
+    expect(source).toContain('item.type.startsWith("image/")');
+    expect(source).toContain("aria-label={fileLabel}");
+    expect(source).not.toContain("<span>{fileLabel}</span>");
+  });
   it("gates file downloads with the download permission capability", () => {
     const source = readSource();
     const downloadStart = source.indexOf("async function reserveWorkspaceDownload");

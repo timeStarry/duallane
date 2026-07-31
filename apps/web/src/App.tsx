@@ -4208,7 +4208,6 @@ export function App() {
       return;
     }
     clearWorkspaceNotice();
-    let downloadReserved = false;
     try {
       const reserve = await workspaceJson<
         { status: "completed"; id: string } | { status: "rejected" }
@@ -4221,24 +4220,16 @@ export function App() {
         await refreshWorkspaceBootstrap();
         return;
       }
-      downloadReserved = true;
       const params = new URLSearchParams({ downloadId: reserve.id });
-      const response = await workspaceFetch(`/api/workspace/files/${encodeURIComponent(file.id)}/download?${params.toString()}`);
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
-      link.href = url;
+      link.href = `/api/workspace/files/${encodeURIComponent(file.id)}/download?${params.toString()}`;
       link.download = file.fileName;
       document.body.appendChild(link);
       link.click();
       link.remove();
-      URL.revokeObjectURL(url);
       showWorkspaceNotice("success", `已开始下载 ${file.fileName}`);
       await refreshWorkspaceBootstrap();
     } catch (error) {
-      if (downloadReserved) {
-        await refreshWorkspaceBootstrap();
-      }
       showWorkspaceNotice("warning", userFacingErrorMessage(error, "文件下载失败"));
     }
   }
@@ -4506,22 +4497,28 @@ export function App() {
     }
 
     pendingFilesRef.current.set(transferId, file);
+    const mimeType = file.type || "application/octet-stream";
+    const previewUrl = isPreviewableImageMimeType(mimeType) ? URL.createObjectURL(file) : undefined;
+    if (previewUrl) {
+      p2pDownloadUrlsRef.current.set(transferId, previewUrl);
+    }
     const offered = sendEnvelope({
       kind: "file-offer",
       transferId,
       author: displayName.trim() || "对方",
       name: file.name,
       size: file.size,
-      mimeType: file.type || "application/octet-stream",
+      mimeType,
       total: getP2pFileChunkCount(file.size)
     });
     const initialTransfer: FileTransfer = {
       id: transferId,
       name: file.name,
       size: file.size,
-      mimeType: file.type || "application/octet-stream",
+      mimeType,
       status: offered ? "waiting" : "failed",
       progress: 0,
+      downloadUrl: previewUrl,
       riskNote,
       retryable: true,
       failureReason: offered ? undefined : "直连数据通道已断开"
@@ -5503,7 +5500,15 @@ export function App() {
                   <span><History size={15} />保留最近 {workspaceBootstrap.policy.messageRetentionCount} 条</span>
                 </div>
               </div>
-              {workspaceNotice && <InlineNotice tone={workspaceNotice.tone} text={workspaceNotice.text} />}
+              {workspaceNotice && (
+                <div className="toast-region" aria-live="polite" aria-atomic="true">
+                  <InlineNotice
+                    tone={workspaceNotice.tone}
+                    text={workspaceNotice.text}
+                    onDismiss={clearWorkspaceNotice}
+                  />
+                </div>
+              )}
               <div className={`workspace-product-shell mobile-pane-${workspaceMobilePane}${workspaceContextVisible ? "" : " context-hidden"}`}>
                 <aside className="workspace-rail" aria-label="共享空间导航">
                   <div className="workspace-rail-header">
@@ -6870,12 +6875,25 @@ function handleTabListKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
   nextTab.click();
 }
 
-function InlineNotice({ tone, text }: { tone: "info" | "success" | "warning"; text: React.ReactNode }) {
+function InlineNotice({
+  tone,
+  text,
+  onDismiss
+}: {
+  tone: "info" | "success" | "warning";
+  text: React.ReactNode;
+  onDismiss?: () => void;
+}) {
   return (
-    <p className={`notice ${tone}`} role={tone === "warning" ? "alert" : "status"}>
+    <div className={`notice ${tone}`} role={tone === "warning" ? "alert" : "status"}>
       {tone === "warning" ? <AlertCircle size={16} /> : <Check size={16} />}
-      {text}
-    </p>
+      <span>{text}</span>
+      {onDismiss && (
+        <button className="notice-dismiss" type="button" aria-label="关闭提示" title="关闭提示" onClick={onDismiss}>
+          <X size={15} />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -7139,6 +7157,9 @@ function FileTransferCard({
 
   return (
     <div className={`file-transfer ${transfer.status}`}>
+      {transfer.downloadUrl && isPreviewableImageMimeType(transfer.mimeType) && (
+        <img className="file-transfer-image-preview" src={transfer.downloadUrl} alt={transfer.name} />
+      )}
       <div className="file-transfer-main">
         <span className="file-transfer-icon" aria-hidden="true">
           {transfer.status === "complete" ? <FileCheck2 size={18} /> : <FileUp size={18} />}
@@ -7237,15 +7258,25 @@ function WorkspaceStructuredMessage({
         }
         if (block.type === "attachment") {
           const attachment = attachmentsById.get(block.attachmentId);
+          const previewable = attachment?.status === "available" && isPreviewableImageMimeType(attachment.mimeType);
           return (
             <button
-              className="message-file-card"
+              className={previewable ? "message-file-card image" : "message-file-card"}
               type="button"
               key={`${index}-attachment`}
               disabled={!attachment || attachment.status !== "available"}
               onClick={() => attachment && onOpenAttachment?.(attachment)}
             >
-              <FileCheck2 size={18} />
+              {previewable ? (
+                <img
+                  className="message-image-preview"
+                  src={`/api/workspace/files/${encodeURIComponent(attachment.id)}/preview`}
+                  alt={attachment.fileName}
+                  loading="lazy"
+                />
+              ) : (
+                <FileCheck2 size={18} />
+              )}
               <span>
                 <strong>{attachment?.fileName || "文件"}</strong>
                 <small>
@@ -7267,6 +7298,10 @@ function isKnownWorkspaceMessageBlock(block: WorkspaceContentBlock) {
     block.type === "link" ||
     block.type === "emoji" ||
     block.type === "attachment";
+}
+
+function isPreviewableImageMimeType(mimeType: string) {
+  return ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp"].includes(mimeType.toLowerCase());
 }
 
 function ChatPanel({
@@ -7365,6 +7400,19 @@ function ChatPanel({
     if (!sendDisabled) {
       composerFormRef.current?.requestSubmit();
     }
+  };
+  const handleDraftPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (fileInputDisabled || sending) {
+      return;
+    }
+    const image = Array.from(event.clipboardData.items)
+      .find((item) => item.kind === "file" && item.type.startsWith("image/"))
+      ?.getAsFile() ?? Array.from(event.clipboardData.files).find((file) => file.type.startsWith("image/"));
+    if (!image) {
+      return;
+    }
+    event.preventDefault();
+    onFile(image);
   };
 
   return (
@@ -7512,13 +7560,13 @@ function ChatPanel({
       <form ref={composerFormRef} className={toolPanelOpen ? "composer tool-open" : "composer"} onSubmit={onSend}>
         <label
           className={fileInputDisabled ? "file-button disabled" : "file-button"}
-          title={fileInputTitle}
+          title={fileInputTitle ?? fileLabel}
           aria-disabled={fileInputDisabled}
         >
           <FileUp size={17} />
-          <span>{fileLabel}</span>
           <input
             type="file"
+            aria-label={fileLabel}
             disabled={fileInputDisabled}
             onChange={(event) => {
               const file = event.currentTarget.files?.[0];
@@ -7566,6 +7614,7 @@ function ChatPanel({
           value={draft}
           onChange={(event) => onDraft(event.target.value)}
           onKeyDown={handleDraftKeyDown}
+          onPaste={handleDraftPaste}
           placeholder="输入消息"
           aria-label="输入消息"
           disabled={sending}
