@@ -28,15 +28,17 @@ describe("workspace UI permission boundaries", () => {
     const workspaceRenderSource = source.slice(renderStart, renderEnd);
 
     expect(source).toContain('type WorkspaceMobilePane = "list" | "main" | "details";');
-    expect(workspaceRenderSource).toContain('<div className={`workspace-product-shell mobile-pane-${workspaceMobilePane}${workspaceContextVisible ? "" : " context-hidden"}`}>');
-    expect(source).toContain("const [workspaceContextCollapsed, setWorkspaceContextCollapsed] = useState(false);");
+    expect(workspaceRenderSource).toContain('<WorkspaceShell mobilePane={workspaceMobilePane} contextVisible={workspaceContextVisible}>');
+    expect(source).toContain("const [workspaceContextCollapsed, setWorkspaceContextCollapsed] = useState(() =>");
+    expect(source).toContain('localStorage.getItem(WORKSPACE_CONTEXT_STORAGE_KEY) !== "true"');
+    expect(source).toContain("localStorage.setItem(WORKSPACE_CONTEXT_STORAGE_KEY, String(!workspaceContextCollapsed));");
     expect(source).toContain("const workspaceContextVisible = workspaceContextAvailable && !workspaceContextCollapsed;");
     expect(workspaceRenderSource).toContain('<aside className="workspace-rail" aria-label="共享空间导航">');
     expect(workspaceRenderSource).toContain('<section className="workspace-main" aria-label="共享空间主视图">');
     expect(workspaceRenderSource).toContain("{workspaceContextVisible && (");
-    expect(workspaceRenderSource).toContain('<aside className="workspace-context" aria-label={workspaceContextMode === "file" ? "文件详情" : "当前会话详情"}>');
+    expect(workspaceRenderSource).toContain('<WorkspaceContextDrawer label={workspaceContextMode === "file" ? "文件详情" : "当前会话详情"}>');
     expect(workspaceRenderSource.indexOf('className="workspace-rail"')).toBeLessThan(workspaceRenderSource.indexOf('className="workspace-main"'));
-    expect(workspaceRenderSource.indexOf('className="workspace-main"')).toBeLessThan(workspaceRenderSource.indexOf('className="workspace-context"'));
+    expect(workspaceRenderSource.indexOf('className="workspace-main"')).toBeLessThan(workspaceRenderSource.indexOf("<WorkspaceContextDrawer"));
   });
 
   it("keeps mobile shared-space navigation to one primary pane at a time", () => {
@@ -245,7 +247,9 @@ describe("workspace UI permission boundaries", () => {
     expect(source).toContain("function rememberWorkspaceRealtimeEvents(events: WorkspaceEvent[])");
     expect(source).toContain("workspaceSeenEventIdsRef.current.add(event.id)");
     expect(source).toContain("async function syncWorkspaceRealtimeState(currentSeqValue?: number)");
-    expect(realtimeSource).toContain("const events = normalizeWorkspaceRealtimeEvents(getWorkspaceRealtimeEvents(envelope));");
+    expect(realtimeSource).toContain("const incomingEvents = getWorkspaceRealtimeEvents(envelope);");
+    expect(realtimeSource).toContain("workspaceRealtimeEventQueueRef.current = workspaceRealtimeEventQueueRef.current");
+    expect(realtimeSource).toContain("const events = normalizeWorkspaceRealtimeEvents(incomingEvents);");
     expect(realtimeSource).toContain('if (envelope.type === "sync.required")');
     expect(realtimeSource).toContain("void syncWorkspaceRealtimeState(Number(envelope.currentSeq));");
     expect(realtimeSource).toContain("rememberWorkspaceRealtimeEvents(events);");
@@ -260,7 +264,7 @@ describe("workspace UI permission boundaries", () => {
     const eventProjectorSource = source.slice(eventProjectorStart, eventProjectorEnd);
 
     expect(eventProjectorSource).toContain('if (event.type === "workspace.member_joined" || event.type === "workspace.member_updated")');
-    expect(eventProjectorSource).toContain('event.type === "workspace.member_updated" && payload.userId === workspaceBootstrap?.auth.currentUser.id');
+    expect(eventProjectorSource).toContain('event.type === "workspace.member_updated" && payload.userId === workspaceCurrentUserIdRef.current');
     expect(eventProjectorSource).toContain("needsBootstrap = true;");
     expect(eventProjectorSource).toContain("if (needsBootstrap) tasks.push(refreshWorkspaceBootstrap());");
 
@@ -295,7 +299,7 @@ describe("workspace UI permission boundaries", () => {
 
     expect(eventProjectorSource).toContain('if (event.type === "message.created")');
     expect(eventProjectorSource).toContain("upsertWorkspaceMessage(payload.message, payload.conversation)");
-    expect(eventProjectorSource).toContain("payload.conversationId && payload.conversationId === workspaceSelectedConversationId");
+    expect(eventProjectorSource).toContain("payload.conversationId && payload.conversationId === workspaceSelectedConversationIdRef.current");
     expect(eventProjectorSource).toContain("tasks.push(refreshWorkspaceConversationMessages(payload.conversationId));");
     expect(eventProjectorSource).toContain("needsConversations = true;");
   });

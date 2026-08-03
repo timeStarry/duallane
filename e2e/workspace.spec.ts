@@ -1,13 +1,28 @@
 import { readFile } from "node:fs/promises";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 test.describe.configure({ timeout: 120_000 });
 
 async function enterWorkspaceAsSeededOwner(page: Page) {
   await page.goto("/?lane=workspace");
   await page.getByRole("button", { name: "使用 GitHub 登录" }).click();
-  await expect(page.getByLabel("空间状态").getByText("timeStarry", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("空间状态").getByText("实时同步", { exact: true })).toBeVisible();
+  await expect(page.locator(".workspace-user-trigger").getByText("timeStarry", { exact: true })).toBeVisible();
+  await expect(page.locator(".workspace-product-shell")).toBeVisible();
+  await expect(page.locator(".workspace-connection-state")).toHaveCount(0);
+}
+
+async function openWorkspaceCreateMenu(page: Page, action: "发起私聊" | "创建群聊") {
+  await page.getByTitle("新建").click();
+  await page.locator(".workspace-create-menu").getByRole("button", { name: action, exact: true }).click();
+}
+
+async function openWorkspaceSpaceSettings(page: Page) {
+  await page.locator(".workspace-user-trigger").click();
+  await page.locator(".workspace-user-menu").getByRole("button", { name: "空间信息与设置", exact: true }).click();
+}
+
+async function sendWorkspaceComposer(page: Page | Locator) {
+  await page.locator("form.workspace-composer button.workspace-send-button").click();
 }
 
 async function installWorkspaceSocketControl(page: Page) {
@@ -96,7 +111,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await installWorkspaceSocketControl(memberPage);
     await enterWorkspaceAsSeededOwner(ownerPage);
 
-    await ownerPage.getByRole("button", { name: "空间", exact: true }).click();
+    await openWorkspaceSpaceSettings(ownerPage);
     await ownerPage.getByRole("tablist", { name: "空间设置" }).getByRole("tab", { name: "邀请", exact: true }).click();
     await ownerPage.getByRole("button", { name: "创建成员邀请" }).click();
     await expect(ownerPage.getByText("邀请已创建，可以复制发送给成员。", { exact: true })).toBeVisible();
@@ -126,17 +141,16 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await memberPage.goto("/?lane=workspace");
     const bootstrapPayload = await (await memberBootstrapResponse).json() as { eventCursor?: number };
     expect(await memberWorkspaceHello).toBe(bootstrapPayload.eventCursor);
-    await expect(memberPage.getByLabel("空间状态").getByText("E2E 成员", { exact: true })).toBeVisible();
-    await expect(memberPage.getByLabel("空间状态").getByText("实时同步", { exact: true })).toBeVisible();
+    await expect(memberPage.locator(".workspace-user-trigger").getByText("E2E 成员", { exact: true })).toBeVisible();
+    await expect(memberPage.locator(".workspace-connection-state")).toHaveCount(0);
     await expect(memberPage.getByRole("button", { name: "创建群聊" })).toHaveCount(0);
-    await expect(ownerPage.getByLabel("空间状态").getByText("2 位成员", { exact: true })).toBeVisible();
 
     const initialMemberDirectory = await memberPage.request.get("/api/workspace/members");
     expect(initialMemberDirectory.status()).toBe(200);
     expect((await initialMemberDirectory.json() as { members: Array<{ id: string }> }).members.map((member) => member.id))
       .toEqual([acceptedMember.id]);
 
-    await ownerPage.getByLabel("共享空间导航").getByRole("button", { name: "发起私聊" }).click();
+    await openWorkspaceCreateMenu(ownerPage, "发起私聊");
     const directPicker = ownerPage.getByRole("dialog", { name: "发起私聊" });
     await directPicker.getByRole("button", { name: /E2E 成员/ }).click();
 
@@ -174,7 +188,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await memberConversation.click();
 
     const ownerWorkspaceNavigation = ownerPage.getByRole("navigation", { name: "共享空间视图" });
-    await ownerWorkspaceNavigation.getByRole("button", { name: "空间", exact: true }).click();
+    await openWorkspaceSpaceSettings(ownerPage);
     await ownerPage.getByRole("tablist", { name: "空间设置" }).getByRole("tab", { name: "可见范围", exact: true }).click();
     const automaticOwnerContact = ownerPage.locator(".workspace-visibility-row").filter({ hasText: "timeStarry" });
     await expect(automaticOwnerContact.getByText("已有私聊", { exact: false })).toBeVisible();
@@ -185,12 +199,12 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
 
     const memberMessage = "workspace-e2e-member-message";
     await memberPage.getByLabel("输入消息").fill(memberMessage);
-    await memberPage.locator("form.composer button.send-button").click();
+    await sendWorkspaceComposer(memberPage);
     await expect(ownerPage.getByRole("region", { name: "E2E 成员" }).getByText(memberMessage, { exact: true })).toBeVisible();
 
     const ownerMessage = "workspace-e2e-owner-message";
     await ownerPage.getByLabel("输入消息").fill(ownerMessage);
-    await ownerPage.locator("form.composer button.send-button").click();
+    await sendWorkspaceComposer(ownerPage);
     const memberDirectRegion = memberPage.getByRole("region", { name: "timeStarry" });
     await expect(memberDirectRegion.getByText(ownerMessage, { exact: true })).toBeVisible();
 
@@ -211,11 +225,11 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       expect(response.status()).toBe(201);
     }
     await expect(memberDirectRegion.getByText("workspace-e2e-history-27", { exact: true })).toBeVisible();
-    const directMessageList = memberDirectRegion.locator(".message-list");
+    const directMessageList = memberDirectRegion.locator(".workspace-message-list");
     await expect.poll(() => directMessageList.evaluate((list) => list.scrollHeight > list.clientHeight)).toBe(true);
     await expect(memberDirectRegion.getByLabel("输入消息")).toBeInViewport();
 
-    await memberDirectRegion.locator(".message-reply").last().click();
+    await memberDirectRegion.getByTitle("回复").last().click();
     await expect(memberDirectRegion.locator(".composer-reply")).toBeVisible();
     await expect(memberDirectRegion.getByLabel("输入消息")).toBeInViewport();
 
@@ -223,27 +237,27 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(memberDirectRegion).toBeVisible();
     await expect(memberDirectRegion.getByLabel("输入消息")).toBeInViewport();
     await expect(memberDirectRegion.locator(".composer-reply")).toBeInViewport();
-    const mobileTitle = memberDirectRegion.getByRole("heading", { name: "timeStarry" });
+    const mobileTitle = memberDirectRegion.locator(".workspace-chat-heading strong").filter({ hasText: "timeStarry" });
     await expect(mobileTitle).toBeVisible();
-    const mobileHeaderLayout = await memberDirectRegion.locator(".chat-header").evaluate((header) => {
-      const heading = header.querySelector<HTMLElement>(".chat-heading");
-      const status = header.querySelector<HTMLElement>(".chat-status");
-      if (!heading || !status) {
-        throw new Error("移动聊天标题或状态区缺失");
+    const mobileHeaderLayout = await memberDirectRegion.locator(".workspace-chat-header").evaluate((header) => {
+      const heading = header.querySelector<HTMLElement>(".workspace-chat-heading");
+      const actions = header.querySelector<HTMLElement>(".workspace-chat-actions");
+      if (!heading || !actions) {
+        throw new Error("移动聊天标题或操作区缺失");
       }
       return {
         headingRight: heading.getBoundingClientRect().right,
         headingWidth: heading.getBoundingClientRect().width,
-        statusLeft: status.getBoundingClientRect().left
+        actionsLeft: actions.getBoundingClientRect().left
       };
     });
     expect(mobileHeaderLayout.headingWidth).toBeGreaterThan(0);
-    expect(mobileHeaderLayout.headingRight).toBeLessThanOrEqual(mobileHeaderLayout.statusLeft + 1);
+    expect(mobileHeaderLayout.headingRight).toBeLessThanOrEqual(mobileHeaderLayout.actionsLeft + 1);
     await memberDirectRegion.getByRole("button", { name: "取消回复" }).click();
     await memberPage.setViewportSize({ width: 1280, height: 720 });
 
     const groupTitle = "E2E 双用户群聊";
-    await ownerPage.getByRole("button", { name: "创建群聊" }).click();
+    await openWorkspaceCreateMenu(ownerPage, "创建群聊");
     const groupDialog = ownerPage.getByRole("dialog", { name: "创建群聊" });
     await groupDialog.getByLabel("群聊名称").fill(groupTitle);
     await groupDialog.getByRole("button", { name: /E2E 成员/ }).click();
@@ -260,7 +274,11 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
 
     const ownerGroupRegion = ownerPage.getByRole("region", { name: groupTitle });
     await expect(ownerGroupRegion).toBeVisible();
-    await expect(ownerPage.getByLabel("当前会话详情").getByText("E2E 成员", { exact: true })).toBeVisible();
+    await expect(ownerPage.getByLabel("当前会话详情")).toHaveCount(0);
+    await expect.poll(() => ownerPage.evaluate(() => localStorage.getItem("duallane.workspace.context-open"))).toBe("false");
+    await ownerGroupRegion.getByTitle("查看详情").click();
+    await expect(ownerPage.getByLabel("当前会话详情").getByText("2 位成员", { exact: true })).toBeVisible();
+    await expect.poll(() => ownerPage.evaluate(() => localStorage.getItem("duallane.workspace.context-open"))).toBe("true");
     const detailTabs = ownerPage.getByRole("tablist", { name: "会话详情" });
     const overviewTab = detailTabs.getByRole("tab", { name: "概览" });
     const membersTab = detailTabs.getByRole("tab", { name: "成员" });
@@ -270,6 +288,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(overviewTab).toHaveAttribute("aria-selected", "true");
     await overviewTab.press("ArrowRight");
     await expect(membersTab).toHaveAttribute("aria-selected", "true");
+    await expect(ownerPage.getByLabel("当前会话详情").getByText("E2E 成员", { exact: true })).toBeVisible();
 
     const memberGroupConversation = memberPage
       .getByLabel("共享空间导航")
@@ -282,15 +301,54 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
 
     const groupMemberMessage = "workspace-e2e-group-member-message";
     await memberGroupRegion.getByLabel("输入消息").fill(groupMemberMessage);
-    await memberGroupRegion.locator("form.composer button.send-button").click();
+    await sendWorkspaceComposer(memberGroupRegion);
     await expect(ownerGroupRegion.getByText(groupMemberMessage, { exact: true })).toBeVisible();
 
     const groupOwnerMessage = "workspace-e2e-group-owner-message";
     await ownerGroupRegion.getByLabel("输入消息").fill(groupOwnerMessage);
-    await ownerGroupRegion.locator("form.composer button.send-button").click();
+    await sendWorkspaceComposer(ownerGroupRegion);
     await expect(memberGroupRegion.getByText(groupOwnerMessage, { exact: true })).toBeVisible();
     await expect(memberGroupConversation.locator(".unread-badge")).toHaveCount(0);
     await expect.poll(() => workspaceConversationUnreadCount(memberPage, groupId)).toBe(0);
+
+    await memberConversation.click();
+    await directMessageList.evaluate((list) => {
+      list.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -120 }));
+      list.scrollTop = Math.min(180, Math.max(0, list.scrollHeight - list.clientHeight - 120));
+      list.dispatchEvent(new Event("scroll"));
+    });
+    const savedDirectScrollTop = await directMessageList.evaluate((list) => list.scrollTop);
+    await memberGroupConversation.click();
+    await memberConversation.click();
+    await expect.poll(() => directMessageList.evaluate((list) => list.scrollTop)).toBeCloseTo(savedDirectScrollTop, 0);
+
+    await directMessageList.evaluate((list) => {
+      list.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -120 }));
+      list.scrollTop = 0;
+      list.dispatchEvent(new Event("scroll"));
+    });
+    const historyMessage = "workspace-e2e-new-message-while-reading-history";
+    const historyMessageResponse = await ownerPage.request.post("/api/workspace/messages", {
+      data: {
+        conversationId: directConversationId,
+        clientMessageId: "workspace-e2e-reading-history",
+        content: {
+          format: "duallane.message+json;v=1",
+          plainText: historyMessage,
+          blocks: [{ type: "text", text: historyMessage }]
+        }
+      }
+    });
+    expect(historyMessageResponse.status()).toBe(201);
+    await expect(memberDirectRegion.getByText(historyMessage, { exact: true })).toBeVisible();
+    await expect(memberDirectRegion.getByText("以下为未读消息", { exact: true })).toBeVisible();
+    const jumpToLatest = memberDirectRegion.getByRole("button", { name: "1 条新消息", exact: true });
+    await expect(jumpToLatest).toBeVisible();
+    expect(await directMessageList.evaluate((list) => list.scrollTop)).toBeLessThanOrEqual(2);
+    await jumpToLatest.click();
+    await expect(jumpToLatest).toHaveCount(0);
+    await expect.poll(() => workspaceConversationUnreadCount(memberPage, directConversationId)).toBe(0);
+    await memberGroupConversation.click();
 
     const workspaceViewNavigation = memberPage.getByRole("navigation", { name: "共享空间视图" });
     await workspaceViewNavigation.getByRole("button", { name: "文件", exact: true }).click();
@@ -299,7 +357,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       response.url().endsWith("/api/workspace/messages") && response.request().method() === "POST"
     );
     await ownerGroupRegion.getByLabel("输入消息").fill(messageOutsideChatView);
-    await ownerGroupRegion.locator("form.composer button.send-button").click();
+    await sendWorkspaceComposer(ownerGroupRegion);
     expect((await hiddenViewMessageResponse).status()).toBe(201);
     await expect.poll(() => workspaceConversationUnreadCount(memberPage, groupId)).toBe(1);
 
@@ -312,6 +370,21 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
       "base64"
     );
+    let attachmentReserveCount = 0;
+    let rejectNextAttachment = true;
+    await ownerPage.route("**/api/workspace/files/uploads/reserve", async (route) => {
+      attachmentReserveCount += 1;
+      if (rejectNextAttachment) {
+        rejectNextAttachment = false;
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { code: "internal.error", message: "E2E upload failure" } })
+        });
+        return;
+      }
+      await route.continue();
+    });
     await ownerGroupRegion.getByLabel("输入消息").evaluate((textarea, image) => {
       const transfer = new DataTransfer();
       transfer.items.add(new File([new Uint8Array(image.bytes)], image.name, { type: "image/png" }));
@@ -322,11 +395,6 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       }));
     }, { name: pastedImageName, bytes: Array.from(pastedImageBytes) });
 
-    const pastedImageCard = memberGroupRegion.getByRole("button").filter({ hasText: pastedImageName });
-    await expect(pastedImageCard).toBeVisible();
-    const pastedImagePreview = pastedImageCard.locator("img.message-image-preview");
-    await expect(pastedImagePreview).toBeVisible();
-    await expect.poll(() => pastedImagePreview.evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
     const fileName = "workspace-e2e-long-file-name-for-detail-panel-overflow-regression.bin";
     const fileBytes = Buffer.from([0, 1, 2, 3, 127, 128, 254, 255, 68, 117, 97, 108, 76, 97, 110, 101]);
     await ownerGroupRegion.locator('input[type="file"]').setInputFiles({
@@ -334,6 +402,42 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       mimeType: "application/octet-stream",
       buffer: fileBytes
     });
+    const stagedFiles = ownerGroupRegion.getByLabel("待发送附件");
+    await expect(stagedFiles.getByText(pastedImageName, { exact: true })).toBeVisible();
+    await expect(stagedFiles.getByText(fileName, { exact: true })).toBeVisible();
+    expect(attachmentReserveCount).toBe(0);
+    await expect(memberGroupRegion.getByRole("button").filter({ hasText: pastedImageName })).toHaveCount(0);
+    await expect(memberGroupRegion.getByRole("button").filter({ hasText: fileName })).toHaveCount(0);
+
+    await sendWorkspaceComposer(ownerGroupRegion);
+    await expect(stagedFiles.locator(".workspace-staged-file.failed")).toHaveCount(1);
+    await expect(stagedFiles.locator(".workspace-staged-file.uploaded")).toHaveCount(1);
+    expect(attachmentReserveCount).toBe(2);
+    await expect(memberGroupRegion.getByRole("button").filter({ hasText: pastedImageName })).toHaveCount(0);
+    await expect(memberGroupRegion.getByRole("button").filter({ hasText: fileName })).toHaveCount(0);
+
+    const attachmentMessageRequest = ownerPage.waitForRequest((request) =>
+      request.url().endsWith("/api/workspace/messages") && request.method() === "POST"
+    );
+    await sendWorkspaceComposer(ownerGroupRegion);
+    const attachmentPayload = (await attachmentMessageRequest).postDataJSON() as {
+      content: { blocks: Array<{ type: string }> };
+    };
+    expect(attachmentPayload.content.blocks.filter((block) => block.type === "attachment")).toHaveLength(2);
+    expect(attachmentReserveCount).toBe(3);
+    await ownerPage.unroute("**/api/workspace/files/uploads/reserve");
+
+    const pastedImageCard = memberGroupRegion.getByRole("button").filter({ hasText: pastedImageName });
+    await expect(pastedImageCard).toBeVisible();
+    const pastedImagePreview = pastedImageCard.locator("img.message-image-preview");
+    await expect(pastedImagePreview).toBeVisible();
+    await expect.poll(() => pastedImagePreview.evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+    await pastedImageCard.click();
+    const imageViewer = memberPage.getByRole("dialog", { name: pastedImageName });
+    await expect(imageViewer).toBeVisible();
+    await memberPage.keyboard.press("Escape");
+    await expect(imageViewer).toHaveCount(0);
+
     const memberFileCard = memberGroupRegion.getByRole("button").filter({ hasText: fileName });
     await expect(memberFileCard).toBeVisible();
     await memberFileCard.click();
@@ -385,23 +489,50 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     );
     expect(socketClosed).toBe(true);
     await memberContext.setOffline(true);
-    await expect(memberPage.getByLabel("空间状态").getByText("实时同步已断开", { exact: true })).toBeVisible();
+    await expect(memberPage.locator(".workspace-connection-state").getByText("实时同步已断开", { exact: true })).toBeVisible();
 
     const replayedMessage = "workspace-e2e-message-during-reconnect";
     const replayedMessageResponse = ownerPage.waitForResponse((response) =>
       response.url().endsWith("/api/workspace/messages") && response.request().method() === "POST"
     );
     await ownerGroupRegion.getByLabel("输入消息").fill(replayedMessage);
-    await ownerGroupRegion.locator("form.composer button.send-button").click();
+    await sendWorkspaceComposer(ownerGroupRegion);
     expect((await replayedMessageResponse).status()).toBe(201);
     await expect(memberGroupRegion.getByText(replayedMessage, { exact: true })).toHaveCount(0);
     await expect.poll(() => workspaceConversationUnreadCount(memberPage, groupId)).toBe(1);
 
     await memberContext.setOffline(false);
     await expect(memberGroupRegion.getByText(replayedMessage, { exact: true })).toBeVisible();
-    await expect(memberPage.getByLabel("空间状态").getByText("实时同步", { exact: true })).toBeVisible();
+    await expect(memberPage.locator(".workspace-connection-state")).toHaveCount(0);
     await expect(memberGroupConversation.locator(".unread-badge")).toHaveCount(0);
     await expect.poll(() => workspaceConversationUnreadCount(memberPage, groupId)).toBe(0);
+
+    for (const viewport of [
+      { width: 2048, height: 1152 },
+      { width: 1440, height: 900 },
+      { width: 1024, height: 768 }
+    ]) {
+      await memberPage.setViewportSize(viewport);
+      await expect(memberPage.locator(".workspace-product-shell")).toBeVisible();
+      expect(await memberPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      const shellBox = await memberPage.locator(".workspace-product-shell").boundingBox();
+      expect(shellBox?.width).toBeGreaterThanOrEqual(viewport.width - 1);
+    }
+
+    for (const viewport of [
+      { width: 390, height: 844 },
+      { width: 360, height: 800 }
+    ]) {
+      await memberPage.setViewportSize(viewport);
+      const mobileNavigation = memberPage.getByRole("navigation", { name: "共享空间移动导航" });
+      await expect(mobileNavigation).toBeVisible();
+      await mobileNavigation.getByRole("button", { name: "聊天", exact: true }).click();
+      await expect(memberPage.getByLabel("共享空间导航")).toBeVisible();
+      await memberGroupConversation.click();
+      await expect(memberGroupRegion.getByText(replayedMessage, { exact: true })).toBeInViewport();
+      await expect(memberGroupRegion.getByLabel("输入消息")).toBeInViewport();
+      expect(await memberPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    }
   } finally {
     await Promise.all([ownerContext.close(), memberContext.close()]);
   }

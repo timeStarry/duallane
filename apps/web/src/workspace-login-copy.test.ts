@@ -9,7 +9,7 @@ describe("workspace login entry copy", () => {
   it("keeps the public shared-space login entry focused on GitHub login only", () => {
     const source = readFileSync(sourcePath, "utf8");
     const start = source.indexOf('{workspaceStatus !== "ready" || !workspaceBootstrap ? (');
-    const end = source.indexOf('<div className="workspace-status"', start);
+    const end = source.indexOf("<WorkspaceShell", start);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
 
