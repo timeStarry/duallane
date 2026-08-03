@@ -1625,6 +1625,7 @@ export function App() {
   const workspaceStickToBottomRef = useRef(true);
   const workspaceScrolledConversationIdRef = useRef("");
   const workspaceScrollPositionsRef = useRef<Map<string, number>>(new Map());
+  const workspaceStickToBottomByConversationRef = useRef<Map<string, boolean>>(new Map());
   const workspaceScrollIntentUntilRef = useRef(0);
   const workspaceUploadControllersRef = useRef<Map<string, AbortController>>(new Map());
   const workspaceComposerAttachmentsRef = useRef<Record<string, WorkspaceComposerAttachment[]>>({});
@@ -2104,11 +2105,18 @@ export function App() {
     const conversationChanged = workspaceScrolledConversationIdRef.current !== workspaceSelectedConversationId;
     workspaceScrolledConversationIdRef.current = workspaceSelectedConversationId;
     if (conversationChanged) {
+      workspaceScrollIntentUntilRef.current = 0;
       const savedPosition = workspaceScrollPositionsRef.current.get(workspaceSelectedConversationId);
-      const targetTop = typeof savedPosition === "number" ? savedPosition : list.scrollHeight;
+      const savedStickToBottom = workspaceStickToBottomByConversationRef.current.get(
+        workspaceSelectedConversationId
+      );
+      const shouldStickToBottom = typeof savedPosition !== "number" || savedStickToBottom !== false;
+      const targetTop = shouldStickToBottom ? list.scrollHeight : savedPosition;
+      workspaceStickToBottomRef.current = shouldStickToBottom;
       list.scrollTo({ top: targetTop, behavior: "auto" });
-      workspaceStickToBottomRef.current = list.scrollHeight - targetTop - list.clientHeight <= 80;
-      handleWorkspaceMessageListScroll(list);
+      if (shouldStickToBottom) {
+        handleWorkspaceMessageListScroll(list);
+      }
       return;
     }
     if (!conversationChanged && !workspaceStickToBottomRef.current) {
@@ -2129,13 +2137,15 @@ export function App() {
     }
     let frame = 0;
     const keepPinnedToBottom = () => {
-      const distanceFromBottom = list.scrollHeight - list.scrollTop - list.clientHeight;
-      if (!workspaceStickToBottomRef.current && distanceFromBottom > 80) {
+      if (!workspaceStickToBottomRef.current) {
         return;
       }
       workspaceStickToBottomRef.current = true;
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
+        if (!workspaceStickToBottomRef.current) {
+          return;
+        }
         list.scrollTo({ top: list.scrollHeight, behavior: "auto" });
         handleWorkspaceMessageListScroll(list);
       });
@@ -3135,6 +3145,15 @@ export function App() {
   function selectWorkspaceConversation(conversationId: string) {
     const previousId = workspaceSelectedConversationId;
     if (previousId && previousId !== conversationId) {
+      const list = workspaceMessageListRef.current;
+      if (list) {
+        const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight <= 80;
+        workspaceScrollPositionsRef.current.set(previousId, list.scrollTop);
+        workspaceStickToBottomByConversationRef.current.set(previousId, nearBottom);
+        workspaceStickToBottomRef.current = nearBottom;
+      }
+      workspaceScrollIntentUntilRef.current = 0;
+
       setWorkspaceUnreadAnchorByConversation((anchors) => {
         const { [previousId]: _removed, ...rest } = anchors;
         return rest;
@@ -3763,12 +3782,19 @@ export function App() {
       return;
     }
     const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight <= 80;
+    const hasScrollIntent = performance.now() <= workspaceScrollIntentUntilRef.current;
     if (nearBottom) {
-      workspaceStickToBottomRef.current = true;
-    } else if (performance.now() <= workspaceScrollIntentUntilRef.current) {
+      if (workspaceStickToBottomRef.current || hasScrollIntent) {
+        workspaceStickToBottomRef.current = true;
+      }
+    } else if (hasScrollIntent) {
       workspaceStickToBottomRef.current = false;
     }
     workspaceScrollPositionsRef.current.set(conversationId, list.scrollTop);
+    workspaceStickToBottomByConversationRef.current.set(
+      conversationId,
+      workspaceStickToBottomRef.current
+    );
     if (!nearBottom) {
       return;
     }
