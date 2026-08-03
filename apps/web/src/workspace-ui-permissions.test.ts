@@ -81,6 +81,19 @@ describe("workspace UI permission boundaries", () => {
     expect(styles).toContain("background: var(--surface-tint);");
   });
 
+  it("keeps workspace surfaces warm and reserves teal for interaction accents", () => {
+    const styles = readStyles();
+
+    expect(styles).toMatch(
+      /\.workspace-mode\s*\{[^}]*--bg:\s*#f5f2ec;[^}]*--panel:\s*#fffdf8;[^}]*--surface-soft:\s*#f2eee7;[^}]*--surface-tint:\s*#ebe6dc;[^}]*--accent-soft:\s*#e6f0f1;/s
+    );
+    expect(styles).toMatch(/\.workspace-rail\s*\{[^}]*background:\s*var\(--panel-2\);/s);
+    expect(styles).toMatch(
+      /\.workspace-tabs button\.active\s*\{[^}]*background:\s*var\(--surface-soft\);[^}]*box-shadow:\s*inset 0 -2px 0 var\(--relay\);/s
+    );
+    expect(styles).not.toContain("--surface-tint: #e4f0f1;");
+  });
+
   it("keeps workspace controls content-sized and delegates height to result regions", () => {
     const styles = readStyles();
 

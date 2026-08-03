@@ -3652,16 +3652,18 @@ button:disabled {
 }
 
 .workspace-mode {
-  --bg: #eef1f3;
-  --panel: #ffffff;
-  --panel-2: #f7f8fa;
-  --surface: #ffffff;
-  --surface-soft: #f1f4f5;
-  --surface-tint: #e4f0f1;
-  --line: #d8dee2;
-  --hover-line: #aab8bd;
-  --ink: #182226;
-  --muted: #65747a;
+  --bg: #f5f2ec;
+  --panel: #fffdf8;
+  --panel-2: #f7f3ec;
+  --surface: #fffefa;
+  --surface-soft: #f2eee7;
+  --surface-tint: #ebe6dc;
+  --accent-soft: #e6f0f1;
+  --line: #ded7cc;
+  --hover-line: #b0a99f;
+  --ink: #1c2320;
+  --muted: #6b746e;
+  --message-self: #f2eee7;
   width: 100%;
   padding: 0;
   place-items: stretch;
@@ -3669,16 +3671,18 @@ button:disabled {
 }
 
 html[data-theme="dark"] .workspace-mode {
-  --bg: #111715;
-  --panel: #18201d;
-  --panel-2: #141b19;
-  --surface: #1c2622;
-  --surface-soft: #222d29;
-  --surface-tint: #1d383c;
-  --line: #33423d;
-  --hover-line: #587068;
+  --bg: #121513;
+  --panel: #1a1e1b;
+  --panel-2: #151815;
+  --surface: #202521;
+  --surface-soft: #272c28;
+  --surface-tint: #2c312c;
+  --accent-soft: #1d383c;
+  --line: #394039;
+  --hover-line: #606a62;
   --ink: #edf3ef;
   --muted: #a5b2ac;
+  --message-self: #272c28;
 }
 
 .workspace-mode .workspace-shell {
@@ -3720,6 +3724,7 @@ html[data-theme="dark"] .workspace-mode {
   gap: 0;
   padding: 0;
   border-right: 1px solid var(--line);
+  background: var(--panel-2);
 }
 
 .workspace-rail-header {
@@ -3786,7 +3791,8 @@ html[data-theme="dark"] .workspace-mode {
 
 .workspace-tabs button.active {
   color: var(--relay-dark);
-  background: var(--surface-tint);
+  background: var(--surface-soft);
+  box-shadow: inset 0 -2px 0 var(--relay);
 }
 
 .workspace-rail > .workspace-search {
@@ -4123,6 +4129,10 @@ html[data-theme="dark"] .workspace-mode {
   background: var(--surface-tint);
   font-size: 0.72rem;
   font-weight: 600;
+}
+
+.workspace-mode .message-mention {
+  background: var(--accent-soft);
 }
 
 .workspace-message.grouped .workspace-message-avatar {
@@ -4830,7 +4840,8 @@ html[data-theme="dark"] .workspace-mode {
 
   .workspace-mobile-nav button.active {
     color: var(--relay-dark);
-    background: var(--surface-tint);
+    background: var(--surface-soft);
+    box-shadow: inset 0 2px 0 var(--relay);
   }
 
   .workspace-chat-panel {
