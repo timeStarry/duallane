@@ -2248,6 +2248,8 @@ describe("workspace service", () => {
       SELECT result, reason
       FROM audit_logs
       WHERE actor_user_id = 'usr_owner' AND action = 'message.create' AND target_id = ?
+        AND result = 'rejected'
+        AND reason = 'message.idempotency_conflict'
       ORDER BY created_at DESC
       LIMIT 1
     `).get(conversation.id);
