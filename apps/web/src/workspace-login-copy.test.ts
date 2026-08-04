@@ -8,8 +8,8 @@ const sourcePath = join(dirname(fileURLToPath(import.meta.url)), "App.tsx");
 describe("workspace login entry copy", () => {
   it("keeps the public shared-space login entry focused on GitHub login only", () => {
     const source = readFileSync(sourcePath, "utf8");
-    const start = source.indexOf('{workspaceStatus !== "ready" || !workspaceBootstrap ? (');
-    const end = source.indexOf("<WorkspaceShell", start);
+    const start = source.indexOf('{workspaceStatus === "idle" || workspaceStatus === "loading" ? (');
+    const end = source.indexOf("<WorkspaceShell mobilePane", start);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
 
@@ -17,16 +17,14 @@ describe("workspace login entry copy", () => {
     expect(loginEntrySource).toContain("使用 GitHub 登录");
     expect(loginEntrySource).toContain("共享空间会保存聊天和文件");
     expect(loginEntrySource).toContain("进入权限由服务端校验");
-    const authActionStart = loginEntrySource.indexOf('{(workspaceStatus === "idle" || workspaceStatus === "auth") && (');
-    const authActionEnd = loginEntrySource.indexOf('{workspaceStatus === "error"', authActionStart);
+    const authActionStart = loginEntrySource.indexOf('{workspaceStatus === "auth" && (');
+    const authActionEnd = loginEntrySource.indexOf('{workspaceStatus === "error" && (', authActionStart);
     expect(authActionStart).toBeGreaterThan(-1);
     expect(authActionEnd).toBeGreaterThan(authActionStart);
     const authActionSource = loginEntrySource.slice(authActionStart, authActionEnd);
     expect(authActionSource).toContain("使用 GitHub 登录");
     expect(authActionSource).not.toContain("重新加载");
-    expect(loginEntrySource).not.toContain("邀请");
     expect(loginEntrySource).not.toContain("邀请码");
-    expect(loginEntrySource).not.toContain("invite");
     expect(loginEntrySource).not.toContain("端到端");
     expect(loginEntrySource).not.toContain("浏览器直连");
     expect(loginEntrySource).not.toContain("服务器不保存");

@@ -217,8 +217,8 @@ test("two private-lane users exchange messages and a file without sending plaint
 
     await joinPrivateRoom(guestPage, inviteLink, "直连用户乙");
 
-    await expect(ownerPage.locator("details.p2p-status-control > summary").getByText("浏览器直连", { exact: true })).toBeVisible({ timeout: 20_000 });
-    await expect(guestPage.locator("details.p2p-status-control > summary").getByText("浏览器直连", { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(ownerPage.locator("button.p2p-status-trigger").getByText("浏览器直连", { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(guestPage.locator("button.p2p-status-trigger").getByText("浏览器直连", { exact: true })).toBeVisible({ timeout: 20_000 });
 
     await retryMessageCard.getByRole("button", { name: "重试" }).click();
     await expect(guestPage.getByText(retryMessage, { exact: true })).toHaveCount(1);
@@ -358,6 +358,71 @@ test("two private-lane users exchange messages and a file without sending plaint
   }
 });
 
+test("private-lane mobile shell keeps composer, popovers and touch targets in view", async ({ browser }) => {
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    hasTouch: true
+  });
+  const page = await context.newPage();
+
+  try {
+    await createPrivateRoom(page, "移动布局用户");
+    const composer = page.locator("form.composer");
+    const input = page.getByLabel("输入消息");
+    const statusTrigger = page.locator("button.p2p-status-trigger");
+
+    for (const viewport of [
+      { width: 390, height: 844 },
+      { width: 360, height: 800 },
+      { width: 844, height: 390 }
+    ]) {
+      await page.setViewportSize(viewport);
+      await expect(page.locator(".p2p-shell")).toBeVisible();
+      await expect(input).toBeInViewport();
+      const layout = await page.evaluate(() => ({
+        viewportHeight: window.innerHeight,
+        documentWidth: document.documentElement.scrollWidth,
+        documentHeight: document.documentElement.scrollHeight,
+        composerBottom: document.querySelector("form.composer")?.getBoundingClientRect().bottom ?? 0
+      }));
+      expect(layout.documentWidth).toBeLessThanOrEqual(viewport.width);
+      expect(layout.documentHeight).toBeLessThanOrEqual(layout.viewportHeight + 1);
+      expect(layout.composerBottom).toBeLessThanOrEqual(layout.viewportHeight + 1);
+    }
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const targetBoxes = await Promise.all([
+      statusTrigger.boundingBox(),
+      page.getByTitle("插入表情").boundingBox(),
+      page.locator("form.composer button.send-button").boundingBox()
+    ]);
+    for (const box of targetBoxes) {
+      expect(box?.width).toBeGreaterThanOrEqual(44);
+      expect(box?.height).toBeGreaterThanOrEqual(44);
+    }
+
+    await statusTrigger.click();
+    const statusDialog = page.getByRole("dialog", { name: /等待对方|等待直连|连接/ });
+    await expect(statusDialog).toBeVisible();
+    await expect(statusDialog.getByTitle("关闭连接状态")).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(statusDialog).toHaveCount(0);
+    await expect(statusTrigger).toBeFocused();
+
+    const emoteTrigger = page.getByTitle("插入表情");
+    await emoteTrigger.click();
+    const emotePicker = page.getByRole("dialog", { name: "选择表情" });
+    await expect(emotePicker).toBeVisible();
+    await expect(input).toBeInViewport();
+    const pickerHeight = await emotePicker.evaluate((element) => element.getBoundingClientRect().height);
+    expect(pickerHeight).toBeLessThanOrEqual(844 * 0.4 + 1);
+    await page.keyboard.press("Escape");
+    await expect(emotePicker).toHaveCount(0);
+    await expect(input).toBeFocused();
+  } finally {
+    await context.close();
+  }
+});
 test("private-lane text falls back to encrypted WebSocket relay and receives acknowledgements", async ({ browser }) => {
   const ownerContext = await browser.newContext();
   const guestContext = await browser.newContext();
@@ -376,8 +441,8 @@ test("private-lane text falls back to encrypted WebSocket relay and receives ack
     await joinPrivateRoom(guestPage, inviteLink, "中转用户乙");
 
     const relayStatus = "文本中转";
-    await expect(ownerPage.locator("details.p2p-status-control > summary").getByText(relayStatus, { exact: true })).toBeVisible({ timeout: 20_000 });
-    await expect(guestPage.locator("details.p2p-status-control > summary").getByText(relayStatus, { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(ownerPage.locator("button.p2p-status-trigger").getByText(relayStatus, { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(guestPage.locator("button.p2p-status-trigger").getByText(relayStatus, { exact: true })).toBeVisible({ timeout: 20_000 });
 
     const ownerMessage = "p2p-e2e-encrypted-relay-owner";
     await ownerPage.getByLabel("输入消息").fill(ownerMessage);
@@ -397,8 +462,8 @@ test("private-lane text falls back to encrypted WebSocket relay and receives ack
 
     enableOwnerSignaling();
     enableGuestSignaling();
-    await expect(ownerPage.locator("details.p2p-status-control > summary").getByText("浏览器直连", { exact: true })).toBeVisible({ timeout: 20_000 });
-    await expect(guestPage.locator("details.p2p-status-control > summary").getByText("浏览器直连", { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(ownerPage.locator("button.p2p-status-trigger").getByText("浏览器直连", { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(guestPage.locator("button.p2p-status-trigger").getByText("浏览器直连", { exact: true })).toBeVisible({ timeout: 20_000 });
   } finally {
     await Promise.all(contexts.map((context) => context.close()));
   }
@@ -419,8 +484,8 @@ test("private-lane rebuilds RTC and DataChannel connections after an abrupt clos
     await joinPrivateRoom(guestPage, inviteLink, "恢复用户乙");
 
     const directStatus = "浏览器直连";
-    const ownerDirectStatus = ownerPage.locator("details.p2p-status-control > summary").getByText(directStatus, { exact: true });
-    const guestDirectStatus = guestPage.locator("details.p2p-status-control > summary").getByText(directStatus, { exact: true });
+    const ownerDirectStatus = ownerPage.locator("button.p2p-status-trigger").getByText(directStatus, { exact: true });
+    const guestDirectStatus = guestPage.locator("button.p2p-status-trigger").getByText(directStatus, { exact: true });
     await expect(ownerDirectStatus).toBeVisible({ timeout: 20_000 });
     await expect(guestDirectStatus).toBeVisible({ timeout: 20_000 });
 

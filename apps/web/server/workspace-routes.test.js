@@ -5061,4 +5061,90 @@ describe("workspace routes", () => {
 
     expect(getWorkspaceContentCounts()).toEqual(before);
   });
+  it("returns idempotent Reaction status codes and calibrated summaries", async () => {
+    const app = await makeApp();
+    const callback = await app.inject({
+      method: "GET",
+      url: "/api/auth/github/callback?format=json&githubId=reaction-route-owner&githubLogin=timeStarry&email=timestarry%40qq.com&displayName=timeStarry"
+    });
+    const sessionCookie = callback.cookies.find((cookie) => cookie.name === "duallane_workspace");
+    expect(sessionCookie?.value).toBeTruthy();
+    const cookies = { duallane_workspace: sessionCookie.value };
+
+    const conversationResponse = await app.inject({
+      method: "POST",
+      url: "/api/workspace/conversations",
+      cookies,
+      payload: { type: "group", title: "Reaction route" }
+    });
+    expect(conversationResponse.statusCode).toBe(201);
+    const conversationId = conversationResponse.json().conversation.id;
+
+    const messageResponse = await app.inject({
+      method: "POST",
+      url: "/api/workspace/messages",
+      cookies,
+      payload: {
+        conversationId,
+        clientMessageId: "reaction-route-message",
+        content: {
+          format: "duallane.message+json;v=1",
+          plainText: "Reaction route message",
+          blocks: [{ type: "text", text: "Reaction route message" }]
+        }
+      }
+    });
+    expect(messageResponse.statusCode).toBe(201);
+    const messageId = messageResponse.json().message.id;
+
+    const add = await app.inject({
+      method: "POST",
+      url: "/api/workspace/messages/" + encodeURIComponent(messageId) + "/reactions",
+      cookies,
+      payload: { emoteKey: "feishu:ok" }
+    });
+    expect(add.statusCode).toBe(201);
+    expect(add.json()).toMatchObject({
+      messageId,
+      reactions: [{
+        emoteKey: "feishu:ok",
+        count: 1,
+        reactedByCurrentUser: true
+      }]
+    });
+
+    const duplicate = await app.inject({
+      method: "POST",
+      url: "/api/workspace/messages/" + encodeURIComponent(messageId) + "/reactions",
+      cookies,
+      payload: { emoteKey: "feishu:ok" }
+    });
+    expect(duplicate.statusCode).toBe(200);
+    expect(duplicate.json()).toEqual(add.json());
+
+    const remove = await app.inject({
+      method: "DELETE",
+      url: "/api/workspace/messages/" + encodeURIComponent(messageId) + "/reactions/feishu%3Aok",
+      cookies
+    });
+    expect(remove.statusCode).toBe(200);
+    expect(remove.json()).toEqual({ messageId, reactions: [] });
+
+    const duplicateRemove = await app.inject({
+      method: "DELETE",
+      url: "/api/workspace/messages/" + encodeURIComponent(messageId) + "/reactions/feishu%3Aok",
+      cookies
+    });
+    expect(duplicateRemove.statusCode).toBe(200);
+    expect(duplicateRemove.json()).toEqual(remove.json());
+
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/api/workspace/messages/" + encodeURIComponent(messageId) + "/reactions",
+      cookies,
+      payload: { emoteKey: "douyin:laughwithtears" }
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json().error.code).toBe("reaction.invalid_emote");
+  });
 });

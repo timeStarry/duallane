@@ -29,6 +29,39 @@ export { emotePacks };
 
 export const visibleEmotePacks = emotePacks.filter((pack) => pack.id !== "douyin" && pack.id !== "qq");
 
+
+export type ReactionEmote = {
+  emoteKey: string;
+  pack: EmotePack;
+  item: EmoteItem;
+};
+
+const reactionEmoteByKey = new Map<string, ReactionEmote>();
+for (const pack of emotePacks) {
+  for (const item of pack.items) {
+    const emoteKey = `${pack.id}:${item.id}`;
+    reactionEmoteByKey.set(emoteKey, { emoteKey, pack, item });
+  }
+}
+
+export function getReactionEmote(emoteKey: string) {
+  return reactionEmoteByKey.get(emoteKey);
+}
+
+export function getReactionEmoteKey(packId: EmotePack["id"], item: EmoteItem) {
+  return `${packId}:${item.id}`;
+}
+
+export function ReactionEmoteGlyph({ emoteKey }: { emoteKey: string }) {
+  const emote = getReactionEmote(emoteKey);
+  if (!emote) {
+    return <span className="reaction-emote-fallback" aria-hidden="true">?</span>;
+  }
+  if (emote.item.kind === "unicode") {
+    return <span className="unicode-emote" aria-hidden="true">{emote.item.value}</span>;
+  }
+  return <MessageEmoteImage emote={emote.item} token={emote.item.token} />;
+}
 const imageEmoteByToken = new Map<string, ImageEmoteItem>();
 
 for (const pack of emotePacks) {

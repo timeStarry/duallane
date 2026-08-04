@@ -173,7 +173,7 @@ summary:focus-visible {
   background: transparent;
   cursor: pointer;
   font-size: 0.78rem;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .theme-switch button:hover {
@@ -208,7 +208,7 @@ summary:focus-visible {
   margin: 0 0 8px;
   color: var(--relay);
   font-size: 0.74rem;
-  font-weight: 850;
+  font-weight: 600;
   letter-spacing: 0;
   text-transform: uppercase;
 }
@@ -349,7 +349,7 @@ h2 {
 .topbar-title span {
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 800;
+  font-weight: 600;
   text-transform: uppercase;
 }
 
@@ -413,14 +413,14 @@ h2 {
 .stack-form label span {
   color: var(--muted);
   font-size: 0.82rem;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .stack-form label span small {
   margin-left: 8px;
   color: var(--muted);
   font-size: 0.74rem;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 input {
@@ -444,7 +444,7 @@ input {
   gap: 8px;
   border-radius: 8px;
   padding: 0 14px;
-  font-weight: 800;
+  font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -574,7 +574,7 @@ input {
   max-width: none;
   margin: 0;
   font-size: 0.82rem;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .notice .icon,
@@ -628,7 +628,7 @@ button:disabled {
   color: var(--muted);
   background: var(--panel);
   font-size: 0.8rem;
-  font-weight: 800;
+  font-weight: 600;
   line-height: 1.3;
 }
 
@@ -660,7 +660,7 @@ button:disabled {
   gap: 8px;
   color: var(--muted);
   font-size: 0.8rem;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .saved-empty {
@@ -705,7 +705,7 @@ button:disabled {
 .saved-session span {
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .saved-session-preview {
@@ -834,7 +834,7 @@ button:disabled {
   background: var(--surface);
   cursor: pointer;
   font-size: 0.82rem;
-  font-weight: 850;
+  font-weight: 600;
   list-style: none;
   white-space: nowrap;
 }
@@ -931,7 +931,7 @@ button:disabled {
 
 .p2p-status-popover small {
   color: var(--relay-dark);
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .p2p-status-popover ul {
@@ -940,7 +940,7 @@ button:disabled {
   padding-left: 18px;
 }
 
-.p2p-status-control:not([open]) .p2p-status-popover {
+.p2p-status-control:not(.open) .p2p-status-popover {
   display: none;
 }
 
@@ -961,7 +961,7 @@ button:disabled {
   background: transparent;
   cursor: pointer;
   font-size: 0.84rem;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .room-details-toggle span {
@@ -1002,7 +1002,7 @@ button:disabled {
   margin-bottom: 3px;
   color: var(--muted);
   font-size: 0.75rem;
-  font-weight: 850;
+  font-weight: 600;
   text-transform: uppercase;
 }
 
@@ -1010,7 +1010,7 @@ button:disabled {
   margin: 0;
   color: var(--ink);
   font-size: 0.84rem;
-  font-weight: 750;
+  font-weight: 500;
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -1023,7 +1023,7 @@ button:disabled {
   color: var(--relay-dark);
   background: var(--info-bg);
   font-size: 0.78rem;
-  font-weight: 750;
+  font-weight: 500;
   line-height: 1.45;
 }
 
@@ -1044,7 +1044,7 @@ button:disabled {
 .peer-list-inline strong {
   color: var(--ink);
   font-size: 0.78rem;
-  font-weight: 800;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -1053,7 +1053,7 @@ button:disabled {
   overflow: hidden;
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 750;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1081,7 +1081,7 @@ button:disabled {
   padding: 0 8px;
   color: var(--relay-dark);
   background: var(--surface-tint);
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .share-link-text {
@@ -1101,7 +1101,7 @@ button:disabled {
   margin: 6px 2px 0;
   color: var(--yellow);
   font-size: 0.78rem;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .message-list {
@@ -1129,7 +1129,7 @@ button:disabled {
   margin: 2px 0;
   color: var(--muted);
   font-size: 0.75rem;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .message-day-separator span {
@@ -1186,7 +1186,7 @@ button:disabled {
 .message.system p {
   color: var(--muted);
   font-size: 0.82rem;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .message-meta {
@@ -1224,7 +1224,7 @@ button:disabled {
   align-items: center;
   border-radius: 999px;
   padding: 2px 7px;
-  font-weight: 850;
+  font-weight: 600;
   text-decoration: none;
 }
 
@@ -1281,7 +1281,7 @@ button:disabled {
   margin-top: 2px;
   color: var(--muted);
   font-size: 0.76rem;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .message-file-card.image {
@@ -1348,7 +1348,7 @@ button:disabled {
 .reply-preview span,
 .composer-reply span {
   font-size: 0.8rem;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .message-reply {
@@ -1360,7 +1360,7 @@ button:disabled {
   background: transparent;
   cursor: pointer;
   font-size: 0.76rem;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .message-reply:hover {
@@ -1376,7 +1376,7 @@ button:disabled {
   margin-top: 8px;
   color: var(--muted);
   font-size: 0.76rem;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .message-local-state.failed {
@@ -1412,7 +1412,7 @@ button:disabled {
 
 .message-emote-fallback {
   color: var(--relay-dark);
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .file-chip {
@@ -1427,7 +1427,7 @@ button:disabled {
   color: var(--relay-dark);
   background: var(--surface);
   font-size: 0.8rem;
-  font-weight: 800;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
@@ -1538,7 +1538,7 @@ button:disabled {
 
 .transfer-tip {
   margin: -2px 0 0;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .file-transfer-actions {
@@ -1638,7 +1638,7 @@ button:disabled {
   margin-top: 2px;
   color: var(--muted);
   font-size: 0.76rem;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .emote-pack-tabs {
@@ -1655,7 +1655,7 @@ button:disabled {
   background: transparent;
   cursor: pointer;
   font-size: 0.78rem;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .emote-pack-tabs button:hover,
@@ -1760,7 +1760,7 @@ button:disabled {
   color: var(--muted);
   background: var(--panel);
   font-size: 0.8rem;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .workspace-status-user {
@@ -1842,7 +1842,7 @@ button:disabled {
   gap: 10px;
   color: var(--muted);
   font-size: 0.76rem;
-  font-weight: 850;
+  font-weight: 600;
   text-transform: uppercase;
 }
 
@@ -1935,7 +1935,7 @@ button:disabled {
   background: var(--direct);
   font-size: 0.74rem;
   font-style: normal;
-  font-weight: 850;
+  font-weight: 600;
   text-align: center;
 }
 
@@ -2020,7 +2020,7 @@ button:disabled {
   color: var(--muted);
   font-size: 0.75rem;
   font-style: normal;
-  font-weight: 850;
+  font-weight: 600;
   text-transform: uppercase;
 }
 
@@ -2034,7 +2034,7 @@ button:disabled {
   color: var(--muted);
   background: var(--panel);
   font-size: 0.78rem;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .workspace-invite-panel {
@@ -2086,7 +2086,7 @@ button:disabled {
   margin-top: 3px;
   color: var(--muted);
   font-size: 0.76rem;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .workspace-product-shell {
@@ -2229,7 +2229,7 @@ button:disabled {
   background: transparent;
   cursor: pointer;
   font-size: 0.8rem;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .workspace-tabs button:hover,
@@ -2264,7 +2264,7 @@ button:disabled {
 .conversation-side time {
   color: var(--muted);
   font-size: 0.75rem;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .conversation-side .unread-badge {
@@ -2278,7 +2278,7 @@ button:disabled {
   background: var(--relay);
   font-size: 0.75rem;
   font-style: normal;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .workspace-task-panel,
@@ -2357,7 +2357,7 @@ button:disabled {
   margin: 0 0 5px;
   color: var(--relay);
   font-size: 0.78rem;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .workspace-home-actions {
@@ -2387,7 +2387,7 @@ button:disabled {
   display: block;
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .workspace-home-summary strong {
@@ -2424,7 +2424,7 @@ button:disabled {
 .workspace-group-form label span {
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .workspace-search.compact-search {
@@ -2531,7 +2531,7 @@ button:disabled {
   border-radius: 8px;
   color: var(--relay-dark);
   background: var(--surface-tint);
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .workspace-avatar.small {
@@ -2565,7 +2565,7 @@ button:disabled {
   margin-top: 3px;
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .workspace-member-grid {
@@ -2598,7 +2598,7 @@ button:disabled {
   display: block;
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .workspace-info-grid strong {
@@ -2613,7 +2613,7 @@ button:disabled {
   margin: 12px 0 0;
   color: var(--muted);
   font-size: 0.86rem;
-  font-weight: 750;
+  font-weight: 500;
   line-height: 1.45;
 }
 
@@ -2635,7 +2635,7 @@ button:disabled {
   background: transparent;
   cursor: pointer;
   font-size: 0.78rem;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .workspace-context-tabs button:hover,
@@ -2677,7 +2677,7 @@ button:disabled {
   background: transparent;
   cursor: pointer;
   font-size: 0.78rem;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .workspace-filter-tabs button:hover,
@@ -2698,7 +2698,7 @@ button:disabled {
   flex: 0 0 auto;
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .workspace-file-browser {
@@ -2745,7 +2745,7 @@ button:disabled {
   color: var(--muted);
   font-size: 0.75rem;
   font-style: normal;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .workspace-file-detail {
@@ -2784,7 +2784,7 @@ button:disabled {
   margin-top: 3px;
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .workspace-file-detail-head strong {
@@ -2869,7 +2869,7 @@ button:disabled {
   color: var(--muted);
   font-size: 0.75rem;
   font-style: normal;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .workspace-role-row select {
@@ -2879,7 +2879,7 @@ button:disabled {
   padding: 0 8px;
   color: var(--ink);
   background: var(--panel);
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .workspace-visibility-settings {
@@ -2896,7 +2896,7 @@ button:disabled {
 .workspace-visibility-viewer > span {
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .workspace-visibility-viewer select {
@@ -2906,7 +2906,7 @@ button:disabled {
   padding: 0 10px;
   color: var(--ink);
   background: var(--panel);
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .workspace-visibility-list {
@@ -2949,7 +2949,7 @@ button:disabled {
   margin-top: 3px;
   color: var(--muted);
   font-size: 0.76rem;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 @media (max-width: 980px) {
@@ -3294,7 +3294,7 @@ button:disabled {
   }
 
   .chat-panel {
-    height: calc(100dvh - 72px);
+    height: 100%;
     min-height: 0;
     grid-template-rows: auto auto minmax(0, 1fr) auto;
   }
@@ -3387,7 +3387,7 @@ button:disabled {
     position: fixed;
     left: 0;
     right: 0;
-    top: 118px;
+    top: auto;
     width: calc(100vw - 24px);
     max-width: 360px;
     margin: 0 auto;
@@ -3456,7 +3456,7 @@ button:disabled {
   }
 
   .chat-panel {
-    height: calc(100dvh - 58px);
+    height: 100%;
     min-height: 0;
   }
 
@@ -3599,7 +3599,7 @@ button:disabled {
   }
 
   .p2p-status-popover {
-    top: 104px;
+    top: auto;
   }
 
   .empty-state {
@@ -4926,5 +4926,648 @@ html[data-theme="dark"] .workspace-mode {
 
   .workspace-image-viewer {
     padding: 8px;
+  }
+}
+
+/* Workspace message identity, Markdown and reactions */
+.workspace-avatar {
+  overflow: hidden;
+  font-weight: 600;
+}
+
+.workspace-avatar > img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.workspace-message.self {
+  border-left: 2px solid color-mix(in srgb, var(--relay) 58%, transparent);
+  background: color-mix(in srgb, var(--relay) 4%, transparent);
+}
+
+.workspace-message.self:hover,
+.workspace-message.self:focus-within {
+  background: color-mix(in srgb, var(--relay) 7%, transparent);
+}
+
+.workspace-message-avatar-slot {
+  width: 32px;
+  min-height: 32px;
+}
+
+.workspace-message-avatar-slot .workspace-message-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  font-size: 0.8rem;
+}
+
+.workspace-message.grouped .workspace-message-avatar-slot {
+  min-height: 0;
+}
+
+.workspace-markdown {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+}
+
+.workspace-markdown > :first-child {
+  margin-top: 0;
+}
+
+.workspace-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.workspace-markdown p,
+.workspace-markdown ul,
+.workspace-markdown ol,
+.workspace-markdown blockquote,
+.workspace-markdown pre {
+  margin: 0 0 0.45rem;
+}
+
+.workspace-markdown ul,
+.workspace-markdown ol {
+  padding-left: 1.35rem;
+}
+
+.workspace-markdown li + li {
+  margin-top: 0.18rem;
+}
+
+.workspace-markdown blockquote {
+  border-left: 3px solid var(--line);
+  padding-left: 0.75rem;
+  color: var(--muted);
+}
+
+.workspace-markdown h3,
+.workspace-markdown h4 {
+  margin: 0.35rem 0 0.3rem;
+  color: var(--ink);
+  font-size: 0.96rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.workspace-markdown h4 {
+  font-size: 0.9rem;
+}
+
+.workspace-markdown a {
+  color: var(--relay-dark);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.workspace-markdown code {
+  border-radius: 4px;
+  padding: 0.08rem 0.3rem;
+  background: var(--surface-soft);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 0.84em;
+}
+
+.workspace-markdown pre {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.65rem 0.75rem;
+  background: var(--surface-soft);
+}
+
+.workspace-markdown pre code {
+  padding: 0;
+  background: transparent;
+  white-space: pre;
+}
+
+.structured-message.image-only {
+  display: block;
+}
+
+.message-image-only {
+  width: fit-content;
+  max-width: min(480px, 100%);
+  display: block;
+  overflow: hidden;
+  border: 0;
+  border-radius: 6px;
+  padding: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.message-image-only .message-image-preview {
+  width: auto;
+  max-width: 100%;
+  max-height: 360px;
+  display: block;
+  border-radius: 6px;
+  object-fit: contain;
+}
+
+.workspace-reaction-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 5px;
+}
+
+.workspace-reaction {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--muted);
+  background: var(--panel);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+.workspace-reaction:hover {
+  border-color: var(--hover-line);
+  color: var(--ink);
+  background: var(--surface-soft);
+}
+
+.workspace-reaction.active {
+  border-color: color-mix(in srgb, var(--relay) 42%, var(--line));
+  color: var(--relay-dark);
+  background: color-mix(in srgb, var(--relay) 9%, var(--panel));
+}
+
+.workspace-reaction:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.workspace-reaction .message-emote-image {
+  width: 18px;
+  height: 18px;
+}
+
+.workspace-reaction .unicode-emote {
+  font-size: 1rem;
+}
+
+.workspace-reaction-picker-anchor {
+  position: relative;
+}
+
+.workspace-reaction-picker-anchor > .emote-picker {
+  right: 0;
+  left: auto;
+  bottom: auto;
+  top: calc(100% + 6px);
+  width: min(360px, calc(100vw - 28px));
+  z-index: 60;
+}
+
+@media (max-width: 760px) {
+  .workspace-message-avatar-slot {
+    width: 30px;
+  }
+
+  .workspace-message-avatar-slot .workspace-message-avatar {
+    width: 30px;
+    height: 30px;
+  }
+
+  .message-image-only {
+    max-width: 100%;
+  }
+
+  .message-image-only .message-image-preview {
+    max-height: min(52dvh, 360px);
+  }
+
+  .workspace-reaction-picker-anchor > .emote-picker {
+    position: fixed;
+    inset: auto 8px calc(74px + env(safe-area-inset-bottom)) 8px;
+    width: auto;
+    max-height: 40dvh;
+    box-shadow: 0 12px 32px rgb(20 30 27 / 18%);
+  }
+}
+
+/* Operational UI standardization */
+:root {
+  --font-ui: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --text-xs: 0.72rem;
+  --text-sm: 0.8rem;
+  --text-md: 0.9rem;
+  --text-base: 1rem;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --line-compact: 1.35;
+  --line-body: 1.55;
+}
+
+body,
+button,
+input,
+textarea,
+select {
+  font-family: var(--font-ui);
+}
+
+time,
+small,
+.unread-badge,
+.workspace-selection-count,
+.workspace-user-summary strong,
+.workspace-context-summary strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.p2p-mode {
+  width: 100%;
+  height: 100dvh;
+  min-height: 0;
+  place-items: stretch center;
+  overflow: hidden;
+  padding: 16px;
+}
+
+.p2p-shell {
+  width: min(1180px, 100%);
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-self: stretch;
+}
+
+.p2p-shell > .topbar {
+  min-width: 0;
+  margin-bottom: 10px;
+}
+
+.p2p-shell > .chat-panel {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.p2p-shell > .single-action {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.p2p-mode .chat-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.p2p-mode .chat-heading,
+.p2p-mode .chat-heading .eyebrow,
+.p2p-mode .chat-status {
+  min-width: 0;
+}
+
+.p2p-mode .chat-heading .eyebrow,
+.p2p-mode .p2p-status-trigger > span:not(.status-dot) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.p2p-status-trigger {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 10px 3px 12px;
+  color: var(--ink);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.p2p-status-control.open .status-chevron {
+  transform: rotate(180deg);
+}
+
+.p2p-status-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.p2p-status-popover-header strong {
+  min-width: 0;
+}
+
+.workspace-member-filter {
+  position: relative;
+}
+
+.workspace-member-filter > button {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--ink);
+  background: var(--panel);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  list-style: none;
+}
+
+.workspace-member-filter.open > button svg:last-child {
+  transform: rotate(180deg);
+}
+
+.workspace-member-filter-menu {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 220px;
+  max-height: min(420px, 60dvh);
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--panel);
+  box-shadow: 0 14px 36px rgb(23 32 29 / 14%);
+}
+
+.workspace-member-filter-menu [role="group"] {
+  display: grid;
+  gap: 2px;
+}
+
+.workspace-member-filter-menu [role="group"] > span {
+  padding: 5px 8px 3px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.workspace-member-filter-menu button {
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  border-radius: 6px;
+  padding: 0 8px;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+
+.workspace-member-filter-menu button:hover,
+.workspace-member-filter-menu button[aria-checked="true"] {
+  background: var(--surface-soft);
+}
+
+.workspace-member-filter-menu button:not([aria-checked="true"]) {
+  padding-left: 31px;
+}
+
+.workspace-skeleton-shell {
+  overflow: hidden;
+}
+
+.workspace-skeleton-shell .workspace-rail,
+.workspace-skeleton-shell .workspace-main,
+.workspace-skeleton-shell .workspace-context {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+}
+
+.workspace-skeleton-brand,
+.workspace-skeleton-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 10px;
+}
+
+.workspace-skeleton-brand {
+  min-height: 48px;
+  margin-bottom: 14px;
+}
+
+.workspace-skeleton-brand > span:last-child,
+.workspace-skeleton-chat-header,
+.workspace-skeleton-composer,
+.workspace-skeleton-avatar,
+.workspace-skeleton-lines i,
+.workspace-skeleton-tail {
+  display: block;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--muted) 12%, var(--surface-soft));
+}
+
+.workspace-skeleton-brand > span:last-child {
+  width: 64%;
+  height: 14px;
+}
+
+.workspace-skeleton-avatar {
+  width: 34px;
+  height: 34px;
+}
+
+.workspace-skeleton-list {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+}
+
+.workspace-skeleton-list.message {
+  flex: 1 1 auto;
+  padding: 12px max(18px, calc((100% - 900px) / 2));
+}
+
+.workspace-skeleton-row {
+  min-height: 54px;
+  padding: 7px 4px;
+}
+
+.workspace-skeleton-lines {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.workspace-skeleton-lines i {
+  width: min(72%, 300px);
+  height: 11px;
+}
+
+.workspace-skeleton-lines i:last-child {
+  width: min(48%, 210px);
+  height: 9px;
+}
+
+.workspace-skeleton-tail {
+  width: 30px;
+  height: 9px;
+}
+
+.workspace-skeleton-chat-header {
+  flex: 0 0 auto;
+  width: 44%;
+  height: 18px;
+  margin: 8px 4px 22px;
+}
+
+.workspace-skeleton-composer {
+  flex: 0 0 auto;
+  width: 100%;
+  height: 54px;
+  margin-top: auto;
+}
+
+@keyframes workspace-skeleton-pulse {
+  0%,
+  100% {
+    opacity: 0.62;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+.workspace-skeleton-shell [class*="workspace-skeleton-"] {
+  animation: workspace-skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+.workspace-skeleton-shell .workspace-skeleton-shell,
+.workspace-skeleton-shell .workspace-skeleton-list,
+.workspace-skeleton-shell .workspace-skeleton-lines {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-skeleton-shell [class*="workspace-skeleton-"] {
+    animation: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .p2p-mode {
+    padding: 0;
+  }
+
+  .p2p-shell {
+    width: 100%;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .p2p-shell > .topbar {
+    min-height: 54px;
+    margin: 0;
+    padding: 7px 8px;
+  }
+
+  .p2p-shell > .chat-panel {
+    height: 100%;
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 0;
+  }
+
+  .p2p-status-popover {
+    position: fixed;
+    z-index: 90;
+    inset: auto 0 0;
+    width: 100%;
+    max-width: none;
+    max-height: min(60dvh, 460px);
+    overflow: auto;
+    margin: 0;
+    border: 1px solid var(--line);
+    border-bottom: 0;
+    border-radius: 8px 8px 0 0;
+    padding: 14px max(14px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+    background: var(--panel);
+    box-shadow: 0 -18px 44px rgb(23 32 29 / 18%);
+  }
+
+  .p2p-mode .composer-dock {
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+
+  .p2p-mode .emote-picker,
+  .p2p-mode .mention-picker {
+    max-height: 40dvh;
+  }
+
+  .workspace-skeleton-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-skeleton-shell .workspace-main,
+  .workspace-skeleton-shell .workspace-context {
+    display: none;
+  }
+
+  .workspace-member-filter-menu {
+    position: fixed;
+    inset: auto 10px calc(64px + env(safe-area-inset-bottom)) 10px;
+    width: auto;
+    max-height: 48dvh;
+  }
+}
+
+@media (pointer: coarse) {
+  .p2p-mode button,
+  .p2p-mode summary,
+  .p2p-mode .file-button,
+  .workspace-mode button,
+  .workspace-mode summary,
+  .workspace-mode .workspace-composer-icon,
+  .workspace-mode .file-button {
+    min-height: 44px;
+  }
+
+  .p2p-mode .icon-button,
+  .p2p-mode .send-button,
+  .p2p-mode .composer-tool-button,
+  .workspace-mode .icon-button,
+  .workspace-mode .workspace-send-button,
+  .workspace-mode .workspace-composer-icon {
+    min-width: 44px;
+    width: 44px;
+    height: 44px;
+  }
+
+  .workspace-reaction {
+    min-width: 44px;
+    min-height: 44px;
   }
 }

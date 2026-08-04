@@ -11,6 +11,7 @@ import {
   Download,
   FileCheck2,
   FileUp,
+  Github,
   History,
   Link2,
   LockKeyhole,
@@ -34,7 +35,19 @@ import {
 } from "lucide-react";
 import { Fragment, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from "react";
-import { MessageBody, getEmoteInsertText, renderMessageParts, visibleEmotePacks, type EmoteItem } from "./emotes";
+import {
+  MessageBody,
+  ReactionEmoteGlyph,
+  getEmoteInsertText,
+  getReactionEmote,
+  getReactionEmoteKey,
+  renderMessageParts,
+  visibleEmotePacks,
+  type EmoteItem,
+  type EmotePack
+} from "./emotes";
+import { WorkspaceAvatar } from "./WorkspaceAvatar";
+import { WorkspaceMarkdown } from "./WorkspaceMarkdown";
 import {
   P2P_FILE_CHUNK_SIZE,
   P2P_MAX_CHAT_BYTES,
@@ -85,9 +98,23 @@ type FileTransfer = {
   riskNote?: string;
   retryable?: boolean;
 };
+type WorkspaceReactionUser = {
+  id: string;
+  displayName: string;
+  githubLogin?: string;
+  avatarUrl?: string;
+  createdAt: string;
+};
+type WorkspaceReactionGroup = {
+  emoteKey: string;
+  count: number;
+  reactedByCurrentUser: boolean;
+  users: WorkspaceReactionUser[];
+};
 type Message = {
   id: string;
   author: string;
+  authorAvatarUrl?: string;
   body: string;
   lane: "p2p" | "workspace";
   at: string;
@@ -100,6 +127,7 @@ type Message = {
     blocks: WorkspaceContentBlock[];
   };
   attachments?: WorkspaceAttachment[];
+  reactions?: WorkspaceReactionGroup[];
   replyTo?: {
     author: string;
     body: string;
@@ -197,6 +225,7 @@ type WorkspaceMessage = {
   authorId: string;
   authorName?: string;
   authorGithubLogin?: string;
+  authorAvatarUrl?: string;
   authorKind: "human" | "bot" | "system";
   kind: "user" | "bot" | "system";
   clientMessageId?: string;
@@ -211,6 +240,7 @@ type WorkspaceMessage = {
   editedAt?: string | null;
   deletedAt?: string | null;
   attachments: WorkspaceAttachment[];
+  reactions: WorkspaceReactionGroup[];
 };
 type WorkspaceConversation = {
   id: string;
@@ -311,6 +341,7 @@ type WorkspaceEventPayload = {
   conversation?: WorkspaceConversation | null;
   messageId?: string;
   message?: WorkspaceMessage | null;
+  reactions?: WorkspaceReactionGroup[];
   attachmentId?: string;
   attachment?: WorkspaceFile | null;
   status?: WorkspaceAttachment["status"];
@@ -1314,6 +1345,17 @@ function getTransferProgress(doneBytes: number, totalBytes: number) {
   return Math.min(100, Math.round((doneBytes / totalBytes) * 100));
 }
 
+
+function workspaceMemberSecondaryText(member: WorkspaceUser) {
+  const details = [`@${member.githubLogin}`];
+  if (member.role !== "member") {
+    details.push(workspaceMemberRoleLabel(member));
+  }
+  if (member.kind !== "human") {
+    details.push(workspaceMemberKindLabel(member.kind));
+  }
+  return details.join(" · ");
+}
 function formatBytes(bytes: number) {
   if (bytes < 1024) {
     return `${bytes} B`;
@@ -1505,6 +1547,55 @@ function getFocusableElements(container: HTMLElement) {
   ).filter((element) => element.offsetParent !== null || element === document.activeElement);
 }
 
+
+export function applyWorkspaceReactionOptimistic(
+  groups: WorkspaceReactionGroup[],
+  emoteKey: string,
+  user: WorkspaceReactionUser
+) {
+  const existing = groups.find((group) => group.emoteKey === emoteKey);
+  if (existing?.reactedByCurrentUser) {
+    return groups
+      .map((group) => {
+        if (group.emoteKey !== emoteKey) {
+          return group;
+        }
+        const users = group.users.filter((candidate) => candidate.id !== user.id);
+        return {
+          ...group,
+          count: users.length,
+          reactedByCurrentUser: false,
+          users
+        };
+      })
+      .filter((group) => group.count > 0);
+  }
+  if (existing) {
+    return groups.map((group) =>
+      group.emoteKey === emoteKey
+        ? {
+            ...group,
+            count: group.users.some((candidate) => candidate.id === user.id)
+              ? group.users.length
+              : group.users.length + 1,
+            reactedByCurrentUser: true,
+            users: group.users.some((candidate) => candidate.id === user.id)
+              ? group.users
+              : [...group.users, user]
+          }
+        : group
+    );
+  }
+  return [
+    ...groups,
+    {
+      emoteKey,
+      count: 1,
+      reactedByCurrentUser: true,
+      users: [user]
+    }
+  ];
+}
 export function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
@@ -1587,6 +1678,8 @@ export function App() {
   const [workspaceRealtimeState, setWorkspaceRealtimeState] = useState<WorkspaceRealtimeState>("idle");
   const [workspaceCreateMenuOpen, setWorkspaceCreateMenuOpen] = useState(false);
   const [workspaceUserMenuOpen, setWorkspaceUserMenuOpen] = useState(false);
+  const [workspaceMemberFilterOpen, setWorkspaceMemberFilterOpen] = useState(false);
+  const [workspaceReactionPendingKeys, setWorkspaceReactionPendingKeys] = useState<string[]>([]);
   const [workspaceImagePreview, setWorkspaceImagePreview] = useState<WorkspaceAttachment | null>(null);
   const [documentVisible, setDocumentVisible] = useState(() => typeof document === "undefined" || document.visibilityState === "visible");
   const [workspaceHistoryLoadingByConversation, setWorkspaceHistoryLoadingByConversation] = useState<Record<string, boolean>>({});
@@ -1598,6 +1691,7 @@ export function App() {
   const workspaceSeenEventIdsRef = useRef<Set<string>>(new Set());
   const workspaceRealtimeEventQueueRef = useRef<Promise<void>>(Promise.resolve());
   const workspaceSendingRef = useRef(false);
+  const workspaceReactionLocksRef = useRef<Set<string>>(new Set());
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
   const secureKeysRef = useRef<SecureKeys | null>(null);
   const peerIdRef = useRef("");
@@ -1615,11 +1709,15 @@ export function App() {
   const p2pDownloadUrlsRef = useRef<Map<string, string>>(new Map());
   const p2pMessageListRef = useRef<HTMLDivElement | null>(null);
   const workspaceMessageListRef = useRef<HTMLDivElement | null>(null);
-  const workspaceCreatePanelRef = useRef<HTMLDivElement | null>(null);
   const workspaceCreateSearchInputRef = useRef<HTMLInputElement | null>(null);
   const workspaceCreateMenuRef = useRef<HTMLDivElement | null>(null);
+  const workspaceCreateTriggerRef = useRef<HTMLButtonElement | null>(null);
   const workspaceUserMenuRef = useRef<HTMLDivElement | null>(null);
+  const workspaceUserTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const workspaceMemberFilterRef = useRef<HTMLDivElement | null>(null);
+  const workspaceMemberFilterTriggerRef = useRef<HTMLButtonElement | null>(null);
   const workspaceImageViewerRef = useRef<HTMLDivElement | null>(null);
+  const workspaceImageCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const workspacePreserveScrollRef = useRef(false);
   const workspacePreviousScrollHeightRef = useRef(0);
   const workspaceStickToBottomRef = useRef(true);
@@ -1869,20 +1967,25 @@ export function App() {
       const confirmedClientMessageIds = new Set(rawMessages.map((message) => message.clientMessageId).filter(Boolean));
       const serverMessages = rawMessages.map((message) => {
         const reply = message.replyToMessageId ? messageById.get(message.replyToMessageId) : undefined;
+        const self = message.authorId === workspaceBootstrap?.auth.currentUser.id;
         const author = message.kind === "system" || message.authorKind === "system"
           ? "系统"
-          : message.authorName || message.authorGithubLogin || "成员";
+          : self
+            ? "你"
+            : message.authorName || message.authorGithubLogin || "成员";
         return {
           id: message.id,
           author,
+          authorAvatarUrl: message.authorAvatarUrl,
           body: message.plainText,
           lane: "workspace" as const,
           at: formatWorkspaceTime(message.createdAt),
           createdAt: message.createdAt,
-          self: message.authorId === workspaceBootstrap?.auth.currentUser.id,
+          self,
           fileName: message.attachments[0]?.fileName,
           content: message.content,
           attachments: message.attachments,
+          reactions: message.reactions,
           replyTo: reply
             ? {
                 author: reply.authorName || reply.authorGithubLogin || "成员",
@@ -1901,7 +2004,8 @@ export function App() {
           const reply = message.replyToMessageId ? messageById.get(message.replyToMessageId) : undefined;
           return {
             id: message.id,
-            author: workspaceBootstrap?.auth.currentUser.displayName || "我",
+            author: "你",
+            authorAvatarUrl: workspaceBootstrap?.auth.currentUser.avatarUrl,
             body: message.body,
             lane: "workspace" as const,
             at: formatWorkspaceTime(message.createdAt),
@@ -1913,6 +2017,7 @@ export function App() {
               blocks: message.blocks
             },
             attachments: message.attachments ?? [],
+            reactions: [],
             replyTo: reply
               ? {
                   author: reply.authorName || reply.authorGithubLogin || "成员",
@@ -1926,7 +2031,7 @@ export function App() {
       );
     },
     [
-      workspaceBootstrap?.auth.currentUser.displayName,
+      workspaceBootstrap?.auth.currentUser.avatarUrl,
       workspaceBootstrap?.auth.currentUser.id,
       workspaceLocalMessages,
       workspaceSelectedConversation?.id,
@@ -2004,47 +2109,105 @@ export function App() {
   }, [workspaceBootstrap?.auth.currentUser.id]);
 
   useEffect(() => {
-    if (!workspaceCreateMenuOpen && !workspaceUserMenuOpen) {
+    if (!workspaceCreateMenuOpen && !workspaceUserMenuOpen && !workspaceMemberFilterOpen) {
       return;
     }
+    const openMenu = workspaceCreateMenuOpen
+      ? workspaceCreateMenuRef.current
+      : workspaceUserMenuOpen
+        ? workspaceUserMenuRef.current
+        : workspaceMemberFilterRef.current;
+    const trigger = workspaceCreateMenuOpen
+      ? workspaceCreateTriggerRef.current
+      : workspaceUserMenuOpen
+        ? workspaceUserTriggerRef.current
+        : workspaceMemberFilterTriggerRef.current;
+    const frame = window.requestAnimationFrame(() => {
+      openMenu?.querySelector<HTMLButtonElement>('[role^="menuitem"]:not(:disabled)')?.focus();
+    });
+    const closeMenu = () => {
+      setWorkspaceCreateMenuOpen(false);
+      setWorkspaceUserMenuOpen(false);
+      setWorkspaceMemberFilterOpen(false);
+      window.requestAnimationFrame(() => trigger?.focus());
+    };
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (workspaceCreateMenuOpen && !workspaceCreateMenuRef.current?.contains(target)) {
-        setWorkspaceCreateMenuOpen(false);
-      }
-      if (workspaceUserMenuOpen && !workspaceUserMenuRef.current?.contains(target)) {
-        setWorkspaceUserMenuOpen(false);
+      if (
+        (workspaceCreateMenuOpen && !workspaceCreateMenuRef.current?.contains(target)) ||
+        (workspaceUserMenuOpen && !workspaceUserMenuRef.current?.contains(target)) ||
+        (workspaceMemberFilterOpen && !workspaceMemberFilterRef.current?.contains(target))
+      ) {
+        closeMenu();
       }
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") {
-        return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeMenu();
       }
-      setWorkspaceCreateMenuOpen(false);
-      setWorkspaceUserMenuOpen(false);
     };
     document.addEventListener("pointerdown", handlePointerDown);
     document.addEventListener("keydown", handleKeyDown);
     return () => {
+      window.cancelAnimationFrame(frame);
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [workspaceCreateMenuOpen, workspaceUserMenuOpen]);
+  }, [workspaceCreateMenuOpen, workspaceMemberFilterOpen, workspaceUserMenuOpen]);
 
   useEffect(() => {
-    if (!workspaceImagePreview) {
+    if (!workspaceImagePreview || !workspaceImageViewerRef.current) {
       return;
     }
+    const dialog = workspaceImageViewerRef.current;
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    const siblings = dialog.parentElement
+      ? Array.from(dialog.parentElement.children).filter(
+          (element): element is HTMLElement => element instanceof HTMLElement && element !== dialog
+        )
+      : [];
+    const previousInert = siblings.map((element) => element.inert);
+    siblings.forEach((element) => {
+      element.inert = true;
+    });
+    document.body.style.overflow = "hidden";
+
+    const frame = window.requestAnimationFrame(() => workspaceImageCloseButtonRef.current?.focus());
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        event.preventDefault();
         setWorkspaceImagePreview(null);
+        return;
+      }
+      if (event.key !== "Tab") {
+        return;
+      }
+      const focusable = getFocusableElements(dialog);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
       }
     };
-    workspaceImageViewerRef.current?.focus();
     document.addEventListener("keydown", handleKeyDown);
     return () => {
+      window.cancelAnimationFrame(frame);
       document.removeEventListener("keydown", handleKeyDown);
+      siblings.forEach((element, index) => {
+        element.inert = previousInert[index];
+      });
+      document.body.style.overflow = previousOverflow;
       if (previousFocus?.isConnected) {
         previousFocus.focus();
       }
@@ -3309,6 +3472,9 @@ export function App() {
     setWorkspaceRealtimeState("idle");
     setWorkspaceCreateMenuOpen(false);
     setWorkspaceUserMenuOpen(false);
+    setWorkspaceMemberFilterOpen(false);
+    setWorkspaceReactionPendingKeys([]);
+    workspaceReactionLocksRef.current.clear();
     setWorkspaceImagePreview(null);
     setWorkspaceHistoryLoadingByConversation({});
     setWorkspaceHistoryExhaustedByConversation({});
@@ -3516,6 +3682,15 @@ export function App() {
         continue;
       }
 
+      if (event.type === "reaction.added" || event.type === "reaction.removed") {
+        if (payload.messageId && payload.reactions) {
+          updateWorkspaceMessageReactions(payload.messageId, payload.reactions);
+        } else if (payload.conversationId === workspaceSelectedConversationIdRef.current) {
+          tasks.push(refreshWorkspaceConversationMessages(payload.conversationId));
+        }
+        continue;
+      }
+
       if (event.type === "attachment.created" || event.type === "attachment.available" || event.type === "attachment.failed") {
         if (payload.attachment) {
           upsertWorkspaceFile(payload.attachment);
@@ -3695,6 +3870,68 @@ export function App() {
     });
   }
 
+
+  function updateWorkspaceMessageReactions(messageId: string, reactions: WorkspaceReactionGroup[]) {
+    setWorkspaceConversations((conversations) =>
+      conversations.map((conversation) => ({
+        ...conversation,
+        latestMessages: conversation.latestMessages.map((message) =>
+          message.id === messageId ? { ...message, reactions } : message
+        )
+      }))
+    );
+  }
+
+  async function toggleWorkspaceReaction(messageId: string, emoteKey: string) {
+    const lockKey = `${messageId}::${emoteKey}`;
+    if (workspaceReactionLocksRef.current.has(lockKey) || !workspaceBootstrap) {
+      return;
+    }
+    const message = workspaceConversations
+      .flatMap((conversation) => conversation.latestMessages)
+      .find((candidate) => candidate.id === messageId);
+    if (!message) {
+      return;
+    }
+
+    const originalReactions = message.reactions ?? [];
+    const reacted = originalReactions.some(
+      (group) => group.emoteKey === emoteKey && group.reactedByCurrentUser
+    );
+    const currentUser = workspaceBootstrap.auth.currentUser;
+    const optimisticReactions = applyWorkspaceReactionOptimistic(originalReactions, emoteKey, {
+      id: currentUser.id,
+      displayName: currentUser.displayName,
+      githubLogin: currentUser.githubLogin,
+      avatarUrl: currentUser.avatarUrl,
+      createdAt: new Date().toISOString()
+    });
+
+    workspaceReactionLocksRef.current.add(lockKey);
+    setWorkspaceReactionPendingKeys((keys) => [...keys, lockKey]);
+    updateWorkspaceMessageReactions(messageId, optimisticReactions);
+
+    try {
+      const response = await workspaceJson<{
+        messageId: string;
+        reactions: WorkspaceReactionGroup[];
+      }>(
+        reacted
+          ? `/api/workspace/messages/${encodeURIComponent(messageId)}/reactions/${encodeURIComponent(emoteKey)}`
+          : `/api/workspace/messages/${encodeURIComponent(messageId)}/reactions`,
+        reacted
+          ? { method: "DELETE" }
+          : { method: "POST", body: JSON.stringify({ emoteKey }) }
+      );
+      updateWorkspaceMessageReactions(response.messageId, response.reactions);
+    } catch (error) {
+      updateWorkspaceMessageReactions(messageId, originalReactions);
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "表情回复更新失败"));
+    } finally {
+      workspaceReactionLocksRef.current.delete(lockKey);
+      setWorkspaceReactionPendingKeys((keys) => keys.filter((key) => key !== lockKey));
+    }
+  }
   function upsertWorkspaceFile(file: WorkspaceFile | WorkspaceAttachment) {
     if (!("uploaderId" in file) || !file.uploaderId || !("createdAt" in file) || !file.createdAt) {
       return;
@@ -3925,32 +4162,13 @@ export function App() {
   function closeWorkspaceCreate() {
     setWorkspaceCreateMode("");
     setWorkspaceMobilePane("list");
+    window.requestAnimationFrame(() => workspaceCreateTriggerRef.current?.focus());
   }
 
   function handleWorkspaceCreatePanelKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape") {
       event.preventDefault();
       closeWorkspaceCreate();
-      return;
-    }
-    if (event.key !== "Tab" || !workspaceCreatePanelRef.current) {
-      return;
-    }
-    const focusable = getFocusableElements(workspaceCreatePanelRef.current);
-    if (focusable.length === 0) {
-      event.preventDefault();
-      return;
-    }
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-      return;
-    }
-    if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
     }
   }
 
@@ -5705,7 +5923,9 @@ export function App() {
   }
 
   return (
-    <main className={lane === "workspace-dev" ? "shell workspace-mode" : "shell"}>
+    <main
+      className={lane === "workspace-dev" ? "shell workspace-mode" : lane === "p2p" ? "shell p2p-mode" : "shell"}
+    >
       {(lane !== "workspace-dev" || workspaceStatus !== "ready" || !workspaceBootstrap) && (
         <ThemeSwitch mode={themeMode} resolvedTheme={resolvedTheme} onModeChange={setThemeMode} />
       )}
@@ -5735,7 +5955,7 @@ export function App() {
       )}
 
       {lane === "p2p" && (
-        <section className="lane-surface" aria-labelledby="p2p-title">
+        <section className="lane-surface p2p-shell" aria-labelledby="p2p-title">
           <TopBar
             label="P2P 私密通道"
             title="一对一直连"
@@ -5992,8 +6212,19 @@ export function App() {
       )}
 
       {lane === "workspace-dev" && (
-        <section className="workspace-shell" aria-labelledby="workspace-dev-title">
-          {(workspaceStatus !== "ready" || !workspaceBootstrap) && (
+        <section
+          className="workspace-shell"
+          aria-labelledby="workspace-dev-title"
+          aria-busy={workspaceStatus === "idle" || workspaceStatus === "loading"}
+          data-app-state={
+            workspaceStatus === "idle" || workspaceStatus === "loading"
+              ? "loading"
+              : workspaceStatus === "ready" && workspaceBootstrap
+                ? "ready"
+                : "error"
+          }
+        >
+          {workspaceStatus !== "idle" && workspaceStatus !== "loading" && (workspaceStatus !== "ready" || !workspaceBootstrap) && (
             <TopBar
               label="共享空间"
               title={workspaceBootstrap?.space.name ?? "共享空间"}
@@ -6001,19 +6232,21 @@ export function App() {
               onBack={resetToEntry}
             />
           )}
-          {workspaceStatus !== "ready" || !workspaceBootstrap ? (
+          {workspaceStatus === "idle" || workspaceStatus === "loading" ? (
+            <WorkspaceShellSkeleton />
+          ) : workspaceStatus !== "ready" || !workspaceBootstrap ? (
             <div className="single-action development-state">
               <div className="center-icon workspace-dev-bg" aria-hidden="true">
                 <ShieldCheck size={30} />
               </div>
               <p className="eyebrow">
-                {workspaceStatus === "loading" ? "正在连接" : workspaceStatus === "disabled" ? "暂未开放" : "需要登录"}
+                {workspaceStatus === "disabled" ? "暂未开放" : workspaceStatus === "error" ? "加载失败" : "需要登录"}
               </p>
               <h2 id="workspace-dev-title">
-                {workspaceStatus === "loading"
-                  ? "正在进入共享空间。"
-                  : workspaceStatus === "disabled"
-                    ? "共享空间暂未开放。"
+                {workspaceStatus === "disabled"
+                  ? "共享空间暂未开放。"
+                  : workspaceStatus === "error"
+                    ? "共享空间加载失败。"
                     : "登录后进入共享空间。"}
               </h2>
               <p className="quiet">
@@ -6021,11 +6254,11 @@ export function App() {
                 进入权限由服务端校验。
               </p>
               {workspaceError && <InlineNotice tone={workspaceStatus === "disabled" ? "info" : "warning"} text={workspaceError} />}
-              {(workspaceStatus === "idle" || workspaceStatus === "auth" || workspaceStatus === "error") && (
+              {(workspaceStatus === "auth" || workspaceStatus === "error") && (
                 <div className="action-row">
-                  {(workspaceStatus === "idle" || workspaceStatus === "auth") && (
-                    <button className="primary direct-button" type="button" onClick={() => window.location.assign(getWorkspaceLoginUrl(workspacePendingInviteCode))}>
-                      <ShieldCheck size={18} />
+                  {workspaceStatus === "auth" && (
+                    <button className="primary workspace-login-button" type="button" onClick={() => window.location.assign(getWorkspaceLoginUrl(workspacePendingInviteCode))}>
+                      <Github size={18} />
                       使用 GitHub 登录
                     </button>
                   )}
@@ -6053,9 +6286,7 @@ export function App() {
                 <aside className="workspace-rail" aria-label="共享空间导航">
                   <div className="workspace-rail-header">
                     <div className="workspace-space-identity">
-                      <span className="workspace-avatar" aria-hidden="true">
-                        {workspaceMemberInitial(workspaceBootstrap.space.name)}
-                      </span>
+                      <WorkspaceAvatar name={workspaceBootstrap.space.name} decorative />
                       <span>
                       <strong>{workspaceBootstrap.space.name}</strong>
                         <small>共享空间</small>
@@ -6063,10 +6294,15 @@ export function App() {
                     </div>
                     <div className="workspace-popover-anchor" ref={workspaceCreateMenuRef}>
                       <button
+                        ref={workspaceCreateTriggerRef}
+                        id="workspace-create-menu-trigger"
                         className="icon-button"
                         type="button"
                         title="新建"
+                        aria-label="新建"
+                        aria-haspopup="menu"
                         aria-expanded={workspaceCreateMenuOpen}
+                        aria-controls={workspaceCreateMenuOpen ? "workspace-create-menu" : undefined}
                         onClick={() => {
                           setWorkspaceUserMenuOpen(false);
                           setWorkspaceCreateMenuOpen((open) => !open);
@@ -6075,15 +6311,21 @@ export function App() {
                         <Plus size={18} />
                       </button>
                       {workspaceCreateMenuOpen && (
-                        <div className="workspace-popover workspace-create-menu">
+                        <div
+                          className="workspace-popover workspace-create-menu"
+                          id="workspace-create-menu"
+                          role="menu"
+                          aria-label="新建菜单"
+                          onKeyDown={handleMenuKeyDown}
+                        >
                           {workspaceBootstrap.permissions.canCreateDirect && (
-                            <button type="button" onClick={() => openWorkspaceCreate("direct")}>
+                            <button role="menuitem" type="button" onClick={() => openWorkspaceCreate("direct")}>
                               <MessageSquare size={16} />
                               发起私聊
                             </button>
                           )}
                           {workspaceBootstrap.permissions.canCreateGroup && (
-                            <button type="button" onClick={() => openWorkspaceCreate("group")}>
+                            <button role="menuitem" type="button" onClick={() => openWorkspaceCreate("group")}>
                               <UsersRound size={16} />
                               创建群聊
                             </button>
@@ -6102,6 +6344,8 @@ export function App() {
                         className={workspaceView === item.id ? "active" : ""}
                         key={item.id}
                         type="button"
+                        aria-current={workspaceView === item.id ? "page" : undefined}
+                        aria-controls="workspace-main-panel"
                         onClick={() => {
                           setWorkspaceView(item.id);
                           setWorkspaceMobilePane(item.id === "chat" ? "list" : "main");
@@ -6133,6 +6377,7 @@ export function App() {
                           className={conversation.id === workspaceSelectedConversationId ? "conversation active" : "conversation"}
                           type="button"
                           key={conversation.id}
+                          aria-current={conversation.id === workspaceSelectedConversationId ? "true" : undefined}
                           onClick={() => selectWorkspaceConversation(conversation.id)}
                         >
                           <span className="conversation-icon center-icon" aria-hidden="true">
@@ -6163,17 +6408,24 @@ export function App() {
                     )}
                     <div className="workspace-popover-anchor" ref={workspaceUserMenuRef}>
                       <button
+                        ref={workspaceUserTriggerRef}
+                        id="workspace-user-menu-trigger"
                         className="workspace-user-trigger"
                         type="button"
+                        aria-haspopup="menu"
                         aria-expanded={workspaceUserMenuOpen}
+                        aria-controls={workspaceUserMenuOpen ? "workspace-user-menu" : undefined}
                         onClick={() => {
                           setWorkspaceCreateMenuOpen(false);
                           setWorkspaceUserMenuOpen((open) => !open);
                         }}
                       >
-                        <span className="workspace-avatar small">
-                          {workspaceMemberInitial(workspaceBootstrap.auth.currentUser.displayName)}
-                        </span>
+                        <WorkspaceAvatar
+                          name={workspaceBootstrap.auth.currentUser.displayName}
+                          avatarUrl={workspaceBootstrap.auth.currentUser.avatarUrl}
+                          className="small"
+                          decorative
+                        />
                         <span>
                           <strong>{workspaceBootstrap.auth.currentUser.displayName}</strong>
                           <small>{workspaceRoleLabel(workspaceBootstrap.auth.currentUser.role)}</small>
@@ -6181,13 +6433,20 @@ export function App() {
                         <ChevronUp size={15} />
                       </button>
                       {workspaceUserMenuOpen && (
-                        <div className="workspace-popover workspace-user-menu">
-                          <div className="workspace-user-summary">
+                        <div
+                          className="workspace-popover workspace-user-menu"
+                          id="workspace-user-menu"
+                          role="menu"
+                          aria-label="账号菜单"
+                          onKeyDown={handleMenuKeyDown}
+                        >
+                          <div className="workspace-user-summary" role="presentation">
                             <span>今日传输额度</span>
                             <strong>{workspaceRemainingText}</strong>
                             <small>{workspaceQuotaDetailText}</small>
                           </div>
                           <button
+                            role="menuitem"
                             type="button"
                             onClick={() => {
                               setWorkspaceView("space");
@@ -6198,16 +6457,16 @@ export function App() {
                             <Settings size={16} />
                             空间信息与设置
                           </button>
-                          <button type="button" onClick={() => void loadWorkspace()}>
+                          <button role="menuitem" type="button" onClick={() => void loadWorkspace()}>
                             <RefreshCw size={16} />
                             重新同步
                           </button>
                           <ThemeSwitch mode={themeMode} resolvedTheme={resolvedTheme} onModeChange={setThemeMode} inline />
-                          <button type="button" onClick={resetToEntry}>
+                          <button role="menuitem" type="button" onClick={resetToEntry}>
                             <ArrowLeft size={16} />
                             返回入口
                           </button>
-                          <button className="danger-action" type="button" onClick={() => void logoutWorkspace()}>
+                          <button role="menuitem" className="danger-action" type="button" onClick={() => void logoutWorkspace()}>
                             <LogOut size={16} />
                             退出共享空间
                           </button>
@@ -6217,13 +6476,12 @@ export function App() {
                   </div>
                 </aside>
 
-                <section className="workspace-main" aria-label="共享空间主视图">
+                <section className="workspace-main" id="workspace-main-panel" aria-label="共享空间主视图">
                   {workspaceCreateMode && (
                     <div
                       className="workspace-task-panel"
-                      ref={workspaceCreatePanelRef}
-                      role="dialog"
-                      aria-modal="true"
+
+                      role="region"
                       aria-label={workspaceCreateMode === "direct" ? "发起私聊" : "创建群聊"}
                       onKeyDown={handleWorkspaceCreatePanelKeyDown}
                     >
@@ -6272,7 +6530,7 @@ export function App() {
                                   key={member.id}
                                   onClick={() => toggleWorkspaceGroupMember(member.id)}
                                 >
-                                  <span className="workspace-avatar">{workspaceMemberInitial(member.displayName)}</span>
+                                  <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} decorative />
                                   <span>
                                     <strong>{member.displayName}</strong>
                                     <small>{member.githubLogin} · {workspaceMemberRoleLabel(member)}</small>
@@ -6310,7 +6568,7 @@ export function App() {
                                 key={member.id}
                                 onClick={() => void createWorkspaceDirect(member.id)}
                               >
-                                <span className="workspace-avatar">{workspaceMemberInitial(member.displayName)}</span>
+                                <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} decorative />
                                 <span>
                                   <strong>{member.displayName}</strong>
                                   <small>{member.githubLogin} · {workspaceMemberRoleLabel(member)}</small>
@@ -6390,6 +6648,9 @@ export function App() {
                             showWorkspaceNotice(copied ? "success" : "warning", copied ? "消息已复制" : "消息复制失败")
                           );
                         }}
+                        onToggleReaction={(messageId, emoteKey) => void toggleWorkspaceReaction(messageId, emoteKey)}
+                        reactionPendingKeys={workspaceReactionPendingKeys}
+                        currentUserId={workspaceBootstrap.auth.currentUser.id}
                         mentionMembers={workspaceSelectedConversation.members.filter(
                           (member) => member.id !== workspaceBootstrap.auth.currentUser.id
                         )}
@@ -6604,60 +6865,96 @@ export function App() {
                           placeholder="输入昵称或 GitHub 登录名"
                         />
                       </label>
-                      <div className="workspace-filter-tabs" aria-label="成员角色筛选">
-                        {[
-                          { id: "all" as const, label: "全部" },
-                          { id: "owner" as const, label: "主人" },
-                          { id: "admin" as const, label: "管理员" },
-                          { id: "member" as const, label: "成员" },
-                          { id: "auditor" as const, label: "预留角色", visible: workspaceBootstrap.permissions.canCreatePrivilegedInvite }
-                        ].filter(
-                          (filter) =>
-                            (filter.id !== "owner" || workspaceBootstrap.auth.currentUser.role === "owner") &&
-                            (filter.id !== "auditor" || filter.visible)
-                        ).map((filter) => (
-                          <button
-                            className={workspaceMemberRoleFilter === filter.id ? "active" : ""}
-                            type="button"
-                            key={filter.id}
-                            onClick={() => setWorkspaceMemberRoleFilter(filter.id)}
-                          >
-                            {filter.label}
-                          </button>
-                        ))}
-                      </div>
+
                       <div className="workspace-member-toolbar">
-                        <div className="workspace-filter-tabs compact" aria-label="成员类型筛选">
-                          {[
-                            { id: "all" as const, label: "全部类型" },
-                            { id: "human" as const, label: "成员" },
-                            { id: "bot" as const, label: "机器人" },
-                            { id: "system" as const, label: "系统" }
-                          ].map((filter) => (
-                            <button
-                              className={workspaceMemberKindFilter === filter.id ? "active" : ""}
-                              type="button"
-                              key={filter.id}
-                              onClick={() => setWorkspaceMemberKindFilter(filter.id)}
+                        <div
+                          className={workspaceMemberFilterOpen ? "workspace-member-filter open" : "workspace-member-filter"}
+                          ref={workspaceMemberFilterRef}
+                        >
+                          <button
+                            ref={workspaceMemberFilterTriggerRef}
+                            id="workspace-member-filter-trigger"
+                            type="button"
+                            aria-haspopup="menu"
+                            aria-expanded={workspaceMemberFilterOpen}
+                            aria-controls="workspace-member-filter-menu"
+                            onClick={() => {
+                              setWorkspaceCreateMenuOpen(false);
+                              setWorkspaceUserMenuOpen(false);
+                              setWorkspaceMemberFilterOpen((open) => !open);
+                            }}
+                          >
+                            <Settings size={15} />
+                            筛选
+                            <ChevronDown size={14} />
+                          </button>
+                          {workspaceMemberFilterOpen && (
+                            <div
+                              className="workspace-member-filter-menu"
+                              id="workspace-member-filter-menu"
+                              role="menu"
+                              aria-labelledby="workspace-member-filter-trigger"
+                              onKeyDown={handleMenuKeyDown}
                             >
-                              {filter.label}
-                            </button>
-                          ))}
+                              {workspaceBootstrap.auth.currentUser.role === "owner" && (
+                                <div role="group" aria-label="按角色筛选">
+                                  <span>角色</span>
+                                  {[
+                                    { id: "all" as const, label: "全部角色" },
+                                    { id: "owner" as const, label: "主人" },
+                                    { id: "admin" as const, label: "管理员" },
+                                    { id: "member" as const, label: "成员" },
+                                    { id: "auditor" as const, label: "预留角色", visible: workspaceBootstrap.permissions.canCreatePrivilegedInvite }
+                                  ].filter((filter) => filter.id !== "auditor" || filter.visible).map((filter) => (
+                                    <button
+                                      role="menuitemradio"
+                                      aria-checked={workspaceMemberRoleFilter === filter.id}
+                                      type="button"
+                                      key={filter.id}
+                                      onClick={() => setWorkspaceMemberRoleFilter(filter.id)}
+                                    >
+                                      {workspaceMemberRoleFilter === filter.id && <Check size={14} />}
+                                      {filter.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                              <div role="group" aria-label="按类型筛选">
+                                <span>类型</span>
+                                {[
+                                  { id: "all" as const, label: "全部类型" },
+                                  { id: "human" as const, label: "成员" },
+                                  { id: "bot" as const, label: "机器人" },
+                                  { id: "system" as const, label: "系统" }
+                                ].map((filter) => (
+                                  <button
+                                    role="menuitemradio"
+                                    aria-checked={workspaceMemberKindFilter === filter.id}
+                                    type="button"
+                                    key={filter.id}
+                                    onClick={() => setWorkspaceMemberKindFilter(filter.id)}
+                                  >
+                                    {workspaceMemberKindFilter === filter.id && <Check size={14} />}
+                                    {filter.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                         <span>
                           {workspaceFilteredMembers.length} {workspaceBootstrap.auth.currentUser.role === "owner" ? "位成员" : "位联系人"}
                         </span>
-                      </div>
-                      <div className="workspace-member-grid">
+                      </div>                      <div className="workspace-member-grid" role="list">
                         {workspaceFilteredMembers.length === 0 ? (
                           <p className="saved-empty">没有找到匹配的成员。</p>
                         ) : (
                           workspaceFilteredMembers.map((member) => (
-                          <article className="workspace-member-card" key={member.id}>
-                            <span className="workspace-avatar">{workspaceMemberInitial(member.displayName)}</span>
+                          <article className="workspace-member-card" role="listitem" key={member.id}>
+                            <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} decorative />
                             <span>
                               <strong>{member.displayName}</strong>
-                              <small>{member.githubLogin} · {workspaceMemberRoleLabel(member)} · {workspaceMemberKindLabel(member.kind)}</small>
+                              <small>{workspaceMemberSecondaryText(member)}</small>
                             </span>
                             {member.id !== workspaceBootstrap.auth.currentUser.id &&
                               workspaceBootstrap.permissions.canCreateDirect &&
@@ -6793,7 +7090,7 @@ export function App() {
                           <div className="workspace-role-list">
                             {workspaceBootstrap.members.map((member) => (
                               <div className="workspace-role-row" key={member.id}>
-                                <span className="workspace-avatar small">{workspaceMemberInitial(member.displayName)}</span>
+                                <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} className="small" decorative />
                                 <span>
                                   <strong>{member.displayName}</strong>
                                   <small>{member.githubLogin} · 当前 {workspaceMemberRoleLabel(member)}</small>
@@ -6877,7 +7174,7 @@ export function App() {
                                             disabled={automatic || workspaceVisibilitySaving}
                                             onChange={() => toggleWorkspaceVisibilityGrant(member.id)}
                                           />
-                                          <span className="workspace-avatar small">{workspaceMemberInitial(member.displayName)}</span>
+                                          <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} className="small" decorative />
                                           <span>
                                             <strong>{member.displayName}</strong>
                                             <small>
@@ -7056,11 +7353,11 @@ export function App() {
                       {workspaceContextTab === "overview" && (
                         <div className="workspace-context-body" key={`conversation-${workspaceSelectedConversation.id}-overview`}>
                           <div className="workspace-context-profile">
-                            <span className="workspace-avatar">
-                              {workspaceMemberInitial(
-                                workspaceConversationTitle(workspaceSelectedConversation, workspaceBootstrap.auth.currentUser.id)
-                              )}
-                            </span>
+                            <WorkspaceAvatar
+                              name={workspaceConversationTitle(workspaceSelectedConversation, workspaceBootstrap.auth.currentUser.id)}
+                              avatarUrl={workspaceSelectedConversation.otherMember?.avatarUrl}
+                              decorative
+                            />
                             <div>
                               <strong>{workspaceConversationTitle(workspaceSelectedConversation, workspaceBootstrap.auth.currentUser.id)}</strong>
                               <small>
@@ -7108,7 +7405,7 @@ export function App() {
                             ) : (
                               workspaceConversationMembers.map((member) => (
                                 <div className="member context-member" key={member.id}>
-                                  <span className="workspace-avatar small">{workspaceMemberInitial(member.displayName)}</span>
+                                  <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} className="small" decorative />
                                   <span>
                                     <strong>{member.displayName}</strong>
                                     <small>{member.githubLogin} · {workspaceMemberRoleLabel(member)}</small>
@@ -7148,7 +7445,7 @@ export function App() {
                                       disabled={workspaceGroupMemberBusyId === member.id}
                                       onClick={() => void addWorkspaceGroupMember(member.id)}
                                     >
-                                      <span className="workspace-avatar small">{workspaceMemberInitial(member.displayName)}</span>
+                                      <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} className="small" decorative />
                                       <span>
                                         <strong>{member.displayName}</strong>
                                         <small>{member.githubLogin} · {workspaceMemberRoleLabel(member)}</small>
@@ -7274,6 +7571,8 @@ export function App() {
                     className={workspaceView === item.id ? "active" : ""}
                     key={item.id}
                     type="button"
+                    aria-current={workspaceView === item.id ? "page" : undefined}
+                    aria-controls="workspace-main-panel"
                     onClick={() => {
                       setWorkspaceView(item.id);
                       setWorkspaceMobilePane(item.id === "chat" ? "list" : "main");
@@ -7291,7 +7590,8 @@ export function App() {
                   className="workspace-image-viewer"
                   role="dialog"
                   aria-modal="true"
-                  aria-label={workspaceImagePreview.fileName}
+                  aria-labelledby="workspace-image-viewer-title"
+                  aria-describedby="workspace-image-viewer-description"
                   tabIndex={-1}
                   onKeyDown={(event) => {
                     if (event.key === "Escape") setWorkspaceImagePreview(null);
@@ -7300,8 +7600,11 @@ export function App() {
                     if (event.currentTarget === event.target) setWorkspaceImagePreview(null);
                   }}
                 >
+                  <p className="sr-only" id="workspace-image-viewer-description">
+                    图片预览，可下载图片或打开文件详情。
+                  </p>
                   <div className="workspace-image-viewer-toolbar">
-                    <strong>{workspaceImagePreview.fileName}</strong>
+                    <strong id="workspace-image-viewer-title">{workspaceImagePreview.fileName}</strong>
                     <div>
                       {workspaceImagePreviewFile && (
                         <>
@@ -7326,7 +7629,13 @@ export function App() {
                           </button>
                         </>
                       )}
-                      <button className="icon-button" type="button" title="关闭预览" onClick={() => setWorkspaceImagePreview(null)}>
+                      <button
+                        ref={workspaceImageCloseButtonRef}
+                        className="icon-button"
+                        type="button"
+                        title="关闭预览"
+                        onClick={() => setWorkspaceImagePreview(null)}
+                      >
                         <X size={18} />
                       </button>
                     </div>
@@ -7508,14 +7817,20 @@ function ThemeSwitch({
   ];
 
   return (
-    <div className={inline ? "theme-switch inline-theme-switch" : "theme-switch"} aria-label="外观模式">
+    <div
+      className={inline ? "theme-switch inline-theme-switch" : "theme-switch"}
+      role={inline ? "group" : undefined}
+      aria-label="外观模式"
+    >
       {options.map((option) => (
         <button
           className={mode === option.value ? "active" : ""}
           key={option.value}
           type="button"
           title={option.title}
-          aria-pressed={mode === option.value}
+          role={inline ? "menuitemradio" : undefined}
+          aria-checked={inline ? mode === option.value : undefined}
+          aria-pressed={inline ? undefined : mode === option.value}
           onClick={() => onModeChange(option.value)}
         >
           {option.icon}
@@ -7553,6 +7868,29 @@ function TopBar({
   );
 }
 
+
+function handleMenuKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+    return;
+  }
+  const items = Array.from(
+    event.currentTarget.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]:not(:disabled)')
+  );
+  if (items.length === 0) {
+    return;
+  }
+  event.preventDefault();
+  const currentIndex = items.findIndex((item) => item === document.activeElement);
+  const nextIndex =
+    event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? items.length - 1
+        : event.key === "ArrowDown"
+          ? (currentIndex + 1 + items.length) % items.length
+          : (currentIndex - 1 + items.length) % items.length;
+  items[nextIndex].focus();
+}
 function handleTabListKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
     return;
@@ -7655,6 +7993,7 @@ function getDefaultP2pStatusTips(mode: P2pTransportMode, peerCount: number) {
   return ["复制邀请链接给对方", "双方保持页面打开"];
 }
 
+
 function P2pStatusControl({
   state,
   mode,
@@ -7668,34 +8007,91 @@ function P2pStatusControl({
   advice: ConnectionAdvice | null;
   trustText: string;
 }) {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const summary = getP2pStatusSummary(state, mode, peerCount);
   const tone = getP2pStatusTone(state, mode);
   const tips = advice?.items ?? getDefaultP2pStatusTips(mode, peerCount);
   const body = advice?.body ?? p2pTransportModeDescription(mode, peerCount);
 
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => panelRef.current?.querySelector<HTMLButtonElement>("[data-close]")?.focus());
+    const close = () => {
+      setOpen(false);
+      window.requestAnimationFrame(() => triggerRef.current?.focus());
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!panelRef.current?.contains(target) && !triggerRef.current?.contains(target)) {
+        close();
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+      }
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
   return (
-    <details className={`p2p-status-control ${tone}`}>
-      <summary>
+    <div className={`p2p-status-control ${tone}${open ? " open" : ""}`}>
+      <button
+        ref={triggerRef}
+        className="p2p-status-trigger"
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls="p2p-status-panel"
+        onClick={() => setOpen((current) => !current)}
+      >
         <span className="status-dot" aria-hidden="true" />
         <span>{summary}</span>
         <ChevronDown className="status-chevron" size={15} aria-hidden="true" />
-      </summary>
-      <div className="p2p-status-popover">
-        <strong>{advice?.title ?? p2pTransportModeLabel(mode)}</strong>
-        <p>{body}</p>
-        <small>{trustText}</small>
-        {tips.length > 0 && (
-          <ul>
-            {tips.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </details>
+      </button>
+      {open && (
+        <div
+          ref={panelRef}
+          className="p2p-status-popover"
+          id="p2p-status-panel"
+          role="dialog"
+          aria-labelledby="p2p-status-title"
+          aria-describedby="p2p-status-description"
+        >
+          <div className="p2p-status-popover-header">
+            <strong id="p2p-status-title">{advice?.title ?? p2pTransportModeLabel(mode)}</strong>
+            <button className="icon-button" type="button" data-close title="关闭连接状态" onClick={() => {
+              setOpen(false);
+              window.requestAnimationFrame(() => triggerRef.current?.focus());
+            }}>
+              <X size={16} />
+            </button>
+          </div>
+          <p id="p2p-status-description">{body}</p>
+          <small>{trustText}</small>
+          {tips.length > 0 && (
+            <ul>
+              {tips.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
-
 function RoomDetails({
   open,
   details,
@@ -7929,6 +8325,23 @@ function FileTransferCard({
   );
 }
 
+
+export function getWorkspaceSingleImageAttachment<
+  T extends { id: string; status: string; mimeType: string }
+>(
+  blocks: Array<{ type: string; attachmentId?: string }>,
+  attachments?: T[]
+): T | null {
+  const onlyBlock = blocks.length === 1 ? blocks[0] : null;
+  return onlyBlock?.type === "attachment" &&
+    attachments?.length === 1 &&
+    attachments[0].id === onlyBlock.attachmentId &&
+    attachments[0].status === "available" &&
+    isPreviewableImageMimeType(attachments[0].mimeType)
+      ? attachments[0]
+      : null;
+}
+
 function WorkspaceStructuredMessage({
   message,
   onOpenAttachment,
@@ -7945,11 +8358,34 @@ function WorkspaceStructuredMessage({
   }
 
   const attachmentsById = new Map((message.attachments ?? []).map((attachment) => [attachment.id, attachment]));
+  const singleImageAttachment = getWorkspaceSingleImageAttachment(blocks, message.attachments);
+
+  if (singleImageAttachment) {
+    return (
+      <div className="message-body structured-message image-only">
+        <button
+          className="message-image-only"
+          type="button"
+          aria-label={`预览图片 ${singleImageAttachment.fileName}`}
+          onClick={() => onPreviewImage?.(singleImageAttachment)}
+        >
+          <img
+            className="message-image-preview"
+            src={`/api/workspace/files/${encodeURIComponent(singleImageAttachment.id)}/preview`}
+            alt={singleImageAttachment.fileName}
+            decoding="async"
+            loading="lazy"
+          />
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="message-body structured-message">
       {blocks.map((block, index) => {
         if (block.type === "text") {
-          return <span key={`${index}-text`}>{renderMessageParts(block.text)}</span>;
+          return <WorkspaceMarkdown key={`${index}-text`}>{block.text}</WorkspaceMarkdown>;
         }
         if (block.type === "mention") {
           return (
@@ -7960,7 +8396,7 @@ function WorkspaceStructuredMessage({
         }
         if (block.type === "link") {
           return (
-            <a className="message-link" href={block.url} key={`${index}-link`} rel="noreferrer" target="_blank">
+            <a className="message-link" href={block.url} key={`${index}-link`} rel="noopener noreferrer" target="_blank">
               {block.label || block.url}
             </a>
           );
@@ -7976,6 +8412,7 @@ function WorkspaceStructuredMessage({
               className={previewable ? "message-file-card image" : "message-file-card"}
               type="button"
               key={`${index}-attachment`}
+              aria-label={attachment ? `查看文件 ${attachment.fileName}` : "文件不可用"}
               disabled={!attachment || attachment.status !== "available"}
               onClick={() => {
                 if (!attachment) {
@@ -7993,6 +8430,7 @@ function WorkspaceStructuredMessage({
                   className="message-image-preview"
                   src={`/api/workspace/files/${encodeURIComponent(attachment.id)}/preview`}
                   alt={attachment.fileName}
+                  decoding="async"
                   loading="lazy"
                 />
               ) : (
@@ -8012,7 +8450,6 @@ function WorkspaceStructuredMessage({
     </div>
   );
 }
-
 function isKnownWorkspaceMessageBlock(block: WorkspaceContentBlock) {
   return block.type === "text" ||
     block.type === "mention" ||
@@ -8025,6 +8462,55 @@ function isPreviewableImageMimeType(mimeType: string) {
   return ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp"].includes(mimeType.toLowerCase());
 }
 
+
+type WorkspaceSkeletonVariant = "conversation" | "message" | "file" | "member" | "setting";
+
+function WorkspaceSkeletonRows({
+  variant,
+  count
+}: {
+  variant: WorkspaceSkeletonVariant;
+  count: number;
+}) {
+  return (
+    <div className={`workspace-skeleton-list ${variant}`}>
+      {Array.from({ length: count }, (_, index) => (
+        <div className="workspace-skeleton-row" key={index}>
+          <span className="workspace-skeleton-avatar" />
+          <span className="workspace-skeleton-lines">
+            <i />
+            <i />
+          </span>
+          <span className="workspace-skeleton-tail" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function WorkspaceShellSkeleton() {
+  return (
+    <div className="workspace-product-shell workspace-skeleton-shell">
+      <span className="sr-only" role="status">正在加载共享空间</span>
+      <aside className="workspace-rail" aria-hidden="true">
+        <div className="workspace-skeleton-brand">
+          <span className="workspace-skeleton-avatar" />
+          <span />
+        </div>
+        <WorkspaceSkeletonRows variant="conversation" count={7} />
+      </aside>
+      <section className="workspace-main" aria-hidden="true">
+        <div className="workspace-skeleton-chat-header" />
+        <WorkspaceSkeletonRows variant="message" count={8} />
+        <div className="workspace-skeleton-composer" />
+      </section>
+      <aside className="workspace-context" aria-hidden="true">
+        <div className="workspace-skeleton-chat-header" />
+        <WorkspaceSkeletonRows variant="setting" count={5} />
+      </aside>
+    </div>
+  );
+}
 function WorkspaceShell({
   mobilePane,
   contextVisible,
@@ -8049,6 +8535,50 @@ function WorkspaceContextDrawer({ label, children }: { label: string; children: 
   );
 }
 
+
+function WorkspaceReactionBar({
+  messageId,
+  reactions,
+  currentUserId,
+  pendingKeys,
+  onToggle
+}: {
+  messageId: string;
+  reactions: WorkspaceReactionGroup[];
+  currentUserId: string;
+  pendingKeys: string[];
+  onToggle: (messageId: string, emoteKey: string) => void;
+}) {
+  if (reactions.length === 0) {
+    return <></>;
+  }
+  return (
+    <div className="workspace-reaction-bar" aria-label="消息表情回复">
+      {reactions.map((group) => {
+        const names = group.users.map((user) => user.id === currentUserId ? "你" : user.displayName);
+        const fullNames = names.join("、");
+        const compactLabel = names.length <= 2 ? fullNames : String(group.count);
+        const emote = getReactionEmote(group.emoteKey);
+        const pending = pendingKeys.includes(`${messageId}::${group.emoteKey}`);
+        return (
+          <button
+            className={group.reactedByCurrentUser ? "workspace-reaction active" : "workspace-reaction"}
+            type="button"
+            key={group.emoteKey}
+            aria-label={`${emote?.item.label || "表情"}，${fullNames || `${group.count} 人`}`}
+            aria-pressed={group.reactedByCurrentUser}
+            disabled={pending}
+            title={fullNames}
+            onClick={() => onToggle(messageId, group.emoteKey)}
+          >
+            <ReactionEmoteGlyph emoteKey={group.emoteKey} />
+            <span>{compactLabel}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 function WorkspaceChatPanel({
   title,
   subtitle,
@@ -8078,6 +8608,9 @@ function WorkspaceChatPanel({
   onOpenAttachment,
   onPreviewImage,
   onCopyMessage,
+  onToggleReaction,
+  reactionPendingKeys,
+  currentUserId,
   mentionMembers,
   fileInputDisabled,
   sending
@@ -8110,15 +8643,22 @@ function WorkspaceChatPanel({
   onOpenAttachment: (attachment: WorkspaceAttachment) => void;
   onPreviewImage: (attachment: WorkspaceAttachment) => void;
   onCopyMessage: (message: Message) => void;
+  onToggleReaction: (messageId: string, emoteKey: string) => void;
+  reactionPendingKeys: string[];
+  currentUserId: string;
   mentionMembers: WorkspaceUser[];
   fileInputDisabled: boolean;
   sending: boolean;
 }) {
   const [emotePanelOpen, setEmotePanelOpen] = useState(false);
   const [mentionPanelOpen, setMentionPanelOpen] = useState(false);
+  const [reactionPickerMessageId, setReactionPickerMessageId] = useState("");
   const [dragActive, setDragActive] = useState(false);
   const composerFormRef = useRef<HTMLFormElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const emoteTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const mentionTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const reactionPickerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const historySentinelRef = useRef<HTMLDivElement | null>(null);
   const canMention = mentionMembers.length > 0;
   const toolPanelOpen = emotePanelOpen || mentionPanelOpen;
@@ -8170,15 +8710,23 @@ function WorkspaceChatPanel({
         : `${draft}${insertText}`
     );
     setEmotePanelOpen(false);
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
   };
   const insertMention = (member: WorkspaceUser) => {
     onDraft(`${draft}${draft && !/\s$/.test(draft) ? " " : ""}@${member.displayName} `);
     setMentionPanelOpen(false);
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+  const closeWorkspaceComposerPopover = () => {
+    setEmotePanelOpen(false);
+    setMentionPanelOpen(false);
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
   };
   const handleDraftKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Escape") {
-      setEmotePanelOpen(false);
-      setMentionPanelOpen(false);
+      event.preventDefault();
+      event.stopPropagation();
+      closeWorkspaceComposerPopover();
       return;
     }
     if (event.key !== "Enter" || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) {
@@ -8305,9 +8853,19 @@ function WorkspaceChatPanel({
                 {index === unreadIndex && (
                   <div className="workspace-unread-divider" role="separator"><span>以下为未读消息</span></div>
                 )}
-                <article className={`workspace-message${message.self ? " self" : ""}${groupedWithPrevious ? " grouped" : ""}`}>
-                  <div className="workspace-message-avatar" aria-hidden="true">
-                    {!groupedWithPrevious && workspaceMemberInitial(message.author)}
+                <article
+                  className={`workspace-message${message.self ? " self" : ""}${groupedWithPrevious ? " grouped" : ""}`}
+                  data-testid={`workspace-message-${message.id}`}
+                >
+                  <div className="workspace-message-avatar-slot" aria-hidden="true">
+                    {!groupedWithPrevious && (
+                      <WorkspaceAvatar
+                        name={message.author}
+                        avatarUrl={message.authorAvatarUrl}
+                        className="workspace-message-avatar"
+                        decorative
+                      />
+                    )}
                   </div>
                   <div className="workspace-message-content">
                     {!groupedWithPrevious && (
@@ -8326,6 +8884,13 @@ function WorkspaceChatPanel({
                       message={message}
                       onOpenAttachment={onOpenAttachment}
                       onPreviewImage={onPreviewImage}
+                    />
+                    <WorkspaceReactionBar
+                      messageId={message.id}
+                      reactions={message.reactions ?? []}
+                      currentUserId={currentUserId}
+                      pendingKeys={reactionPendingKeys}
+                      onToggle={onToggleReaction}
                     />
                     {message.localState && (
                       <div className={`message-local-state ${message.localState}`}>
@@ -8347,6 +8912,46 @@ function WorkspaceChatPanel({
                   </div>
                   {!message.localState && (
                     <div className="workspace-message-actions">
+                      <div
+                        className="workspace-reaction-picker-anchor"
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape" && reactionPickerMessageId === message.id) {
+                            event.preventDefault();
+                            setReactionPickerMessageId("");
+                            window.requestAnimationFrame(() => reactionPickerTriggerRef.current?.focus());
+                          }
+                        }}
+                      >
+                        <button
+
+                          type="button"
+                          title="添加表情回复"
+                          aria-haspopup="dialog"
+                          aria-expanded={reactionPickerMessageId === message.id}
+                          aria-controls={"workspace-reaction-picker-" + message.id}
+                          onClick={(event) => {
+                            reactionPickerTriggerRef.current = event.currentTarget;
+                            setReactionPickerMessageId((current) => current === message.id ? "" : message.id);
+                          }}
+                        >
+                          <Smile size={15} />
+                        </button>
+                        {reactionPickerMessageId === message.id && (
+                          <EmotePicker
+                            id={"workspace-reaction-picker-" + message.id}
+                            label="选择消息表情回复"
+                            onEscape={() => {
+                              setReactionPickerMessageId("");
+                              window.requestAnimationFrame(() => reactionPickerTriggerRef.current?.focus());
+                            }}
+                            onSelect={(item, packId) => {
+                              onToggleReaction(message.id, getReactionEmoteKey(packId, item));
+                              setReactionPickerMessageId("");
+                              window.requestAnimationFrame(() => reactionPickerTriggerRef.current?.focus());
+                            }}
+                          />
+                        )}
+                      </div>
                       <button type="button" title="回复" onClick={() => onReply(message.id)}>
                         <MessageSquare size={15} />
                       </button>
@@ -8409,7 +9014,17 @@ function WorkspaceChatPanel({
             ))}
           </div>
         )}
-        <form ref={composerFormRef} className={toolPanelOpen ? "workspace-composer tool-open" : "workspace-composer"} onSubmit={onSend}>
+        <form
+          ref={composerFormRef}
+          className={toolPanelOpen ? "workspace-composer tool-open" : "workspace-composer"}
+          onSubmit={onSend}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && toolPanelOpen) {
+              event.preventDefault();
+              closeWorkspaceComposerPopover();
+            }
+          }}
+        >
           <div className="workspace-composer-tools">
             <label className={fileInputDisabled ? "workspace-composer-icon disabled" : "workspace-composer-icon"} title="添加附件">
               <FileUp size={18} />
@@ -8426,9 +9041,12 @@ function WorkspaceChatPanel({
               />
             </label>
             <button
+              ref={emoteTriggerRef}
               className="workspace-composer-icon"
               type="button"
+              aria-haspopup="dialog"
               aria-expanded={emotePanelOpen}
+              aria-controls="workspace-composer-emote-picker"
               title="插入表情"
               onClick={() => {
                 setMentionPanelOpen(false);
@@ -8439,9 +9057,12 @@ function WorkspaceChatPanel({
             </button>
             {canMention && (
               <button
+                ref={mentionTriggerRef}
                 className="workspace-composer-icon"
                 type="button"
+                aria-haspopup="dialog"
                 aria-expanded={mentionPanelOpen}
+                aria-controls="workspace-composer-mention-picker"
                 title="提及成员"
                 onClick={() => {
                   setEmotePanelOpen(false);
@@ -8451,8 +9072,21 @@ function WorkspaceChatPanel({
                 <AtSign size={18} />
               </button>
             )}
-            {emotePanelOpen && <EmotePicker onSelect={insertEmote} />}
-            {mentionPanelOpen && <MentionPicker members={mentionMembers} onSelect={insertMention} />}
+            {emotePanelOpen && (
+              <EmotePicker
+                id="workspace-composer-emote-picker"
+                onSelect={insertEmote}
+                onEscape={closeWorkspaceComposerPopover}
+              />
+            )}
+            {mentionPanelOpen && (
+              <MentionPicker
+                id="workspace-composer-mention-picker"
+                members={mentionMembers}
+                onSelect={insertMention}
+                onEscape={closeWorkspaceComposerPopover}
+              />
+            )}
           </div>
           <textarea
             ref={textareaRef}
@@ -8550,6 +9184,9 @@ function ChatPanel({
   const [emotePanelOpen, setEmotePanelOpen] = useState(false);
   const [mentionPanelOpen, setMentionPanelOpen] = useState(false);
   const composerFormRef = useRef<HTMLFormElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const emoteTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const mentionTriggerRef = useRef<HTMLButtonElement | null>(null);
   const canMention = Boolean(mentionMembers?.length);
   const insertEmote = (item: EmoteItem) => {
     const insertText = getEmoteInsertText(item);
@@ -8559,16 +9196,29 @@ function ChatPanel({
         : `${draft}${insertText}`;
     onDraft(nextDraft);
     setEmotePanelOpen(false);
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
   };
   const insertMention = (member: WorkspaceUser) => {
     const insertText = `@${member.displayName}`;
     const nextDraft = `${draft}${draft && !/\s$/.test(draft) ? " " : ""}${insertText} `;
     onDraft(nextDraft);
     setMentionPanelOpen(false);
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+  const closeP2pComposerPopover = () => {
+    setEmotePanelOpen(false);
+    setMentionPanelOpen(false);
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
   };
   const toolPanelOpen = emotePanelOpen || mentionPanelOpen;
   const sendDisabled = sending || !draft.trim();
   const handleDraftKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeP2pComposerPopover();
+      return;
+    }
     if (event.key !== "Enter" || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) {
       return;
     }
@@ -8733,7 +9383,17 @@ function ChatPanel({
           </button>
         </div>
         )}
-      <form ref={composerFormRef} className={toolPanelOpen ? "composer tool-open" : "composer"} onSubmit={onSend}>
+      <form
+        ref={composerFormRef}
+        className={toolPanelOpen ? "composer tool-open" : "composer"}
+        onSubmit={onSend}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && toolPanelOpen) {
+            event.preventDefault();
+            closeP2pComposerPopover();
+          }
+        }}
+      >
         <label
           className={fileInputDisabled ? "file-button disabled" : "file-button"}
           title={fileInputTitle ?? fileLabel}
@@ -8756,9 +9416,12 @@ function ChatPanel({
         <div className="composer-tools">
           <div className="composer-tool-buttons">
             <button
+              ref={emoteTriggerRef}
               className="secondary composer-tool-button"
               type="button"
+              aria-haspopup="dialog"
               aria-expanded={emotePanelOpen}
+              aria-controls="p2p-composer-emote-picker"
               title="插入表情"
               onClick={() => {
                 setMentionPanelOpen(false);
@@ -8769,9 +9432,12 @@ function ChatPanel({
             </button>
             {canMention && (
               <button
+                ref={mentionTriggerRef}
                 className="secondary composer-tool-button"
                 type="button"
+                aria-haspopup="dialog"
                 aria-expanded={mentionPanelOpen}
+                aria-controls="p2p-composer-mention-picker"
                 title="提及成员"
                 onClick={() => {
                   setEmotePanelOpen(false);
@@ -8782,10 +9448,24 @@ function ChatPanel({
               </button>
             )}
           </div>
-          {emotePanelOpen && <EmotePicker onSelect={insertEmote} />}
-          {mentionPanelOpen && mentionMembers && <MentionPicker members={mentionMembers} onSelect={insertMention} />}
+          {emotePanelOpen && (
+            <EmotePicker
+              id="p2p-composer-emote-picker"
+              onSelect={insertEmote}
+              onEscape={closeP2pComposerPopover}
+            />
+          )}
+          {mentionPanelOpen && mentionMembers && (
+            <MentionPicker
+              id="p2p-composer-mention-picker"
+              members={mentionMembers}
+              onSelect={insertMention}
+              onEscape={closeP2pComposerPopover}
+            />
+          )}
         </div>
         <textarea
+          ref={textareaRef}
           rows={1}
           value={draft}
           onChange={(event) => onDraft(event.target.value)}
@@ -8805,15 +9485,37 @@ function ChatPanel({
   );
 }
 
-function MentionPicker({ members, onSelect }: { members: WorkspaceUser[]; onSelect: (member: WorkspaceUser) => void }) {
+function MentionPicker({
+  id,
+  members,
+  onSelect,
+  onEscape
+}: {
+  id?: string;
+  members: WorkspaceUser[];
+  onSelect: (member: WorkspaceUser) => void;
+  onEscape?: () => void;
+}) {
   return (
-    <div className="mention-picker" role="dialog" aria-label="提及成员">
+    <div
+      className="mention-picker"
+      id={id}
+      role="dialog"
+      aria-label="提及成员"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          onEscape?.();
+        }
+      }}
+    >
       {members.length === 0 ? (
         <p className="saved-empty">没有可提及的成员。</p>
       ) : (
         members.map((member) => (
           <button className="mention-row" type="button" key={member.id} onClick={() => onSelect(member)}>
-            <span className="workspace-avatar small">{workspaceMemberInitial(member.displayName)}</span>
+            <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} className="small" decorative />
             <span>
               <strong>{member.displayName}</strong>
               <small>{member.githubLogin} · {workspaceMemberRoleLabel(member)}</small>
@@ -8825,12 +9527,34 @@ function MentionPicker({ members, onSelect }: { members: WorkspaceUser[]; onSele
   );
 }
 
-function EmotePicker({ onSelect }: { onSelect: (item: EmoteItem) => void }) {
+function EmotePicker({
+  id,
+  onSelect,
+  onEscape,
+  label = "选择表情"
+}: {
+  id?: string;
+  onSelect: (item: EmoteItem, packId: EmotePack["id"]) => void;
+  onEscape?: () => void;
+  label?: string;
+}) {
   const [activePackId, setActivePackId] = useState(visibleEmotePacks[0]?.id ?? "emoji");
   const activePack = visibleEmotePacks.find((pack) => pack.id === activePackId) ?? visibleEmotePacks[0];
 
   return (
-    <div className="emote-picker" role="dialog" aria-label="选择表情">
+    <div
+      className="emote-picker"
+      id={id}
+      role="dialog"
+      aria-label={label}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          onEscape?.();
+        }
+      }}
+    >
       <div className="emote-pack-tabs" role="tablist" aria-label="表情包" onKeyDown={handleTabListKeyDown}>
         {visibleEmotePacks.map((pack) => (
           <button
@@ -8853,7 +9577,7 @@ function EmotePicker({ onSelect }: { onSelect: (item: EmoteItem) => void }) {
             type="button"
             title={item.label}
             aria-label={item.label}
-            onClick={() => onSelect(item)}
+            onClick={() => onSelect(item, activePack.id)}
           >
             {item.kind === "unicode" ? (
               <span className="unicode-emote">{item.value}</span>

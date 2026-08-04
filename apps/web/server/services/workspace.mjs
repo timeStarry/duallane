@@ -10,6 +10,9 @@ import {
   replaceMemberVisibilityGrants
 } from "./member-visibility.mjs";
 import { writeAudit } from "./audit.mjs";
+import { sanitizeGitHubAvatarUrl } from "./avatar.mjs";
+import { getReactionEmote, isVisibleReactionEmoteKey } from "./emote-catalog.mjs";
+import { markdownToPlainText } from "./markdown.mjs";
 
 export const MESSAGE_CONTENT_FORMAT = "duallane.message+json;v=1";
 export const DEFAULT_RETENTION_COUNT = 10000;
@@ -505,7 +508,7 @@ export async function bindGitHubUser(db, request, profile) {
   const githubLogin = normalizeString(profile.githubLogin);
   const email = normalizeString(profile.email);
   const displayName = normalizeString(profile.displayName) || githubLogin;
-  const avatarUrl = normalizeString(profile.avatarUrl);
+  const avatarUrl = sanitizeGitHubAvatarUrl(profile.avatarUrl);
 
   if (!githubLogin && !email && !githubId) {
     throw new WorkspaceValidationError("auth.invalid_profile", "GitHub 身份信息不完整");
@@ -691,7 +694,7 @@ export async function acceptInvite(db, request, input) {
   const githubLogin = normalizeString(input.githubLogin);
   const email = normalizeString(input.email);
   const displayName = normalizeString(input.displayName) || githubLogin;
-  const avatarUrl = normalizeString(input.avatarUrl);
+  const avatarUrl = sanitizeGitHubAvatarUrl(input.avatarUrl);
   if (!code || !githubLogin) {
     throw new WorkspaceValidationError("invite.invalid", "邀请码和 GitHub 用户不能为空");
   }
@@ -1495,6 +1498,7 @@ export async function listMessages(db, userId, conversationId, options = {}) {
       recent.authorId,
       u.display_name AS authorName,
       u.github_login AS authorGithubLogin,
+      u.avatar_url AS authorAvatarUrl,
       recent.authorKind,
       recent.kind,
       recent.clientMessageId,
@@ -1535,13 +1539,115 @@ export async function listMessages(db, userId, conversationId, options = {}) {
     ? [conversationId, before.createdAt, before.createdAt, before.messageCursorId, limit]
     : [conversationId, limit]));
 
+  const reactionsByMessageId = await listMessageReactionGroups(db, rows.map((row) => row.id), actor);
   return await Promise.all(rows.map(async (row) => await publicMessage({
     ...row,
     content: JSON.parse(row.contentJson),
-    attachments: await listMessageAttachments(db, row.id)
+    attachments: await listMessageAttachments(db, row.id),
+    reactions: reactionsByMessageId.get(row.id) ?? []
   }, actor, db)));
 }
 
+
+async function requireReactionTarget(db, request, actor, messageId, action) {
+  const message = await db.prepare(`
+    SELECT id, conversation_id AS conversationId, kind
+    FROM messages
+    WHERE id = ? AND deleted_at IS NULL
+  `).get(messageId);
+  if (!message) {
+    throw new WorkspaceError("message.not_found", "消息不存在", 404);
+  }
+  try {
+    await requireConversationMember(db, actor.id, message.conversationId, {
+      request,
+      actor,
+      action
+    });
+  } catch (error) {
+    if (error instanceof WorkspacePermissionError) {
+      throw new WorkspacePermissionError("permission.denied", "你没有执行该操作的权限");
+    }
+    throw error;
+  }
+  if (message.kind !== "user" && message.kind !== "bot") {
+    throw new WorkspaceValidationError("reaction.unsupported_message", "该消息不支持表情回复");
+  }
+  return message;
+}
+
+export async function addMessageReaction(db, request, input) {
+  const actor = await requireActor(db, input.actorId);
+  const messageId = normalizeString(input.messageId);
+  const emoteKey = normalizeString(input.emoteKey);
+  if (!isVisibleReactionEmoteKey(emoteKey)) {
+    throw new WorkspaceValidationError("reaction.invalid_emote", "该表情不可用于消息回复");
+  }
+  const message = await requireReactionTarget(db, request, actor, messageId, "reaction.add");
+
+  return await runWorkspaceTransaction(db, async () => {
+    const result = await db.prepare(`
+      INSERT INTO message_reactions (message_id, user_id, emote_key, created_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT (message_id, user_id, emote_key) DO NOTHING
+    `).run(message.id, actor.id, emoteKey, new Date().toISOString());
+    const reactions = (await listMessageReactionGroups(db, [message.id], actor)).get(message.id) ?? [];
+    if (result.changes > 0) {
+      await writeEvent(db, {
+        type: "reaction.added",
+        actorId: actor.id,
+        conversationId: message.conversationId,
+        targetType: "message",
+        targetId: message.id,
+        payload: {
+          messageId: message.id,
+          conversationId: message.conversationId
+        }
+      });
+    }
+    return {
+      messageId: message.id,
+      reactions,
+      created: result.changes > 0
+    };
+  });
+}
+
+export async function removeMessageReaction(db, request, input) {
+  const actor = await requireActor(db, input.actorId);
+  const messageId = normalizeString(input.messageId);
+  const emoteKey = normalizeString(input.emoteKey);
+  if (!getReactionEmote(emoteKey)) {
+    throw new WorkspaceValidationError("reaction.invalid_emote", "该表情不存在");
+  }
+  const message = await requireReactionTarget(db, request, actor, messageId, "reaction.remove");
+
+  return await runWorkspaceTransaction(db, async () => {
+    const result = await db.prepare(`
+      DELETE FROM message_reactions
+      WHERE message_id = ? AND user_id = ? AND emote_key = ?
+    `).run(message.id, actor.id, emoteKey);
+    const reactions = (await listMessageReactionGroups(db, [message.id], actor)).get(message.id) ?? [];
+    if (result.changes > 0) {
+      await writeEvent(db, {
+        type: "reaction.removed",
+        actorId: actor.id,
+        conversationId: message.conversationId,
+        targetType: "message",
+        targetId: message.id,
+        payload: {
+          messageId: message.id,
+          conversationId: message.conversationId
+        }
+      });
+    }
+    return {
+      messageId: message.id,
+      reactions,
+      removed: result.changes > 0
+    };
+  });
+}
 export async function createStructuredMessage(db, request, input) {
   const actor = await requireActor(db, input.actorId);
   const conversationId = normalizeString(input.conversationId);
@@ -2403,6 +2509,58 @@ async function listMessageAttachments(db, messageId) {
   `).all(messageId);
 }
 
+
+async function listMessageReactionGroups(db, messageIds, actor = null) {
+  const ids = uniqueStrings(messageIds);
+  const groupsByMessageId = new Map(ids.map((id) => [id, []]));
+  if (ids.length === 0) {
+    return groupsByMessageId;
+  }
+
+  const placeholders = ids.map(() => "?").join(", ");
+  const rows = await db.prepare(`
+    SELECT
+      mr.message_id AS messageId,
+      mr.emote_key AS emoteKey,
+      mr.created_at AS reactionCreatedAt,
+      u.id AS userId,
+      u.display_name AS displayName,
+      u.github_login AS githubLogin,
+      u.avatar_url AS avatarUrl
+    FROM message_reactions mr
+    INNER JOIN users u ON u.id = mr.user_id
+    WHERE mr.message_id IN (${placeholders})
+    ORDER BY mr.created_at ASC, u.display_name ASC, u.id ASC
+  `).all(...ids);
+
+  const groupByKey = new Map();
+  for (const row of rows) {
+    const key = `${row.messageId}\u0000${row.emoteKey}`;
+    let group = groupByKey.get(key);
+    if (!group) {
+      group = {
+        emoteKey: row.emoteKey,
+        count: 0,
+        reactedByCurrentUser: false,
+        users: []
+      };
+      groupByKey.set(key, group);
+      groupsByMessageId.get(row.messageId)?.push(group);
+    }
+    group.users.push({
+      id: row.userId,
+      displayName: row.displayName,
+      githubLogin: row.githubLogin,
+      avatarUrl: sanitizeGitHubAvatarUrl(row.avatarUrl) || undefined,
+      createdAt: row.reactionCreatedAt
+    });
+    group.count += 1;
+    if (actor?.id === row.userId) {
+      group.reactedByCurrentUser = true;
+    }
+  }
+  return groupsByMessageId;
+}
 async function normalizeMessageContent(db, actor, conversationId, content) {
   if (!content || typeof content !== "object") {
     throw new WorkspaceValidationError("message.invalid_content", "消息内容格式无效");
@@ -2471,7 +2629,7 @@ async function normalizeBlock(db, actor, conversationId, block) {
 
 function buildPlainText(blocks) {
   return blocks.map((block) => {
-    if (block.type === "text") return block.text;
+    if (block.type === "text") return markdownToPlainText(block.text);
     if (block.type === "mention") return `@${block.label}`;
     if (block.type === "link") return block.label || block.url;
     if (block.type === "emoji") return `:${block.shortcode}:`;
@@ -2588,7 +2746,7 @@ function publicMember(member, actor = null) {
     id: member.id,
     githubLogin: member.githubLogin,
     displayName: member.displayName,
-    avatarUrl: member.avatarUrl,
+    avatarUrl: sanitizeGitHubAvatarUrl(member.avatarUrl),
     kind: member.kind,
     role: projectedRole,
     roleLabel: ROLE_LABELS[projectedRole] ?? "成员",
@@ -2645,17 +2803,19 @@ function publicAttachment(attachment, actor) {
 
 async function publicMessage(message, actor = null, db = null) {
   if (!message) return null;
+  const content = publicMessageContent(message.content);
   return {
     id: message.id,
     conversationId: message.conversationId,
     authorId: message.authorId,
     authorName: message.authorName,
     authorGithubLogin: message.authorGithubLogin,
+    authorAvatarUrl: sanitizeGitHubAvatarUrl(message.authorAvatarUrl),
     authorKind: message.authorKind,
     kind: message.kind,
     clientMessageId: message.clientMessageId,
-    content: publicMessageContent(message.content),
-    plainText: message.plainText,
+    content,
+    plainText: content.plainText || publicString(message.plainText),
     replyToMessageId: message.replyToMessageId,
     createdAt: message.createdAt,
     editedAt: message.editedAt,
@@ -2664,7 +2824,8 @@ async function publicMessage(message, actor = null, db = null) {
       ? await Promise.all(message.attachments.map(async (attachment) =>
         db && actor ? await publicAttachmentPayloadForActor(db, actor, attachment) : publicAttachment(attachment, actor)
       ))
-      : []
+      : [],
+    reactions: Array.isArray(message.reactions) ? message.reactions : []
   };
 }
 
@@ -2676,10 +2837,11 @@ function publicMessageContent(content) {
       blocks: []
     };
   }
+  const blocks = Array.isArray(content.blocks) ? content.blocks.map(publicMessageBlock).filter(Boolean) : [];
   return {
     format: publicString(content.format),
-    plainText: publicString(content.plainText),
-    blocks: Array.isArray(content.blocks) ? content.blocks.map(publicMessageBlock).filter(Boolean) : []
+    plainText: buildPlainText(blocks).trim(),
+    blocks
   };
 }
 
@@ -3199,6 +3361,17 @@ async function publicWorkspaceEventPayload(db, actor, type, payload) {
       conversation: await publicConversationPayloadForActor(db, actor, payload.conversation)
     });
   }
+  if (type === "reaction.added" || type === "reaction.removed") {
+    const messageId = normalizeString(payload.messageId);
+    const reactions = messageId
+      ? (await listMessageReactionGroups(db, [messageId], actor)).get(messageId) ?? []
+      : [];
+    return removeUndefinedValues({
+      messageId,
+      conversationId: normalizeString(payload.conversationId),
+      reactions
+    });
+  }
   if (type === "attachment.created" || type === "attachment.available" || type === "attachment.failed" || type === "attachment.removed") {
     return removeUndefinedValues({
       attachmentId: normalizeString(payload.attachmentId),
@@ -3251,6 +3424,7 @@ async function publicMessagePayloadForActor(db, actor, message) {
         m.author_id AS authorId,
         u.display_name AS authorName,
         u.github_login AS authorGithubLogin,
+        u.avatar_url AS authorAvatarUrl,
         m.author_kind AS authorKind,
         m.kind,
         m.client_message_id AS clientMessageId,
@@ -3265,10 +3439,12 @@ async function publicMessagePayloadForActor(db, actor, message) {
       WHERE m.id = ? AND m.deleted_at IS NULL
     `).get(messageId);
     if (row) {
+      const reactionsByMessageId = await listMessageReactionGroups(db, [row.id], actor);
       return await publicMessage({
         ...row,
         content: JSON.parse(row.contentJson),
-        attachments: await listMessageAttachments(db, row.id)
+        attachments: await listMessageAttachments(db, row.id),
+        reactions: reactionsByMessageId.get(row.id) ?? []
       }, actor, db);
     }
   }

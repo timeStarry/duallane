@@ -8,6 +8,7 @@ import { DAILY_QUOTA_BYTES } from "./quota.mjs";
 import {
   acceptInvite,
   addConversationMember,
+  addMessageReaction,
   bindGitHubUser,
   completeUpload,
   createConversation as createWorkspaceConversation,
@@ -29,6 +30,7 @@ import {
   MESSAGE_CONTENT_FORMAT,
   removeConversationMember,
   removeAttachment,
+  removeMessageReaction,
   removeSpaceMember,
   reserveDownload,
   reserveUpload,
@@ -4281,5 +4283,219 @@ describe("workspace service", () => {
         title: "Not allowed"
       })
     ).rejects.toThrow(WorkspacePermissionError);
+  });
+  it("persists raw Workspace Markdown while projecting clean summaries", async () => {
+    const conversation = await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "group",
+      title: "Markdown summaries"
+    });
+    const markdown = "**粗体** 与 [链接](https://example.test)\n\n- 第一项\n- 第二项";
+    const message = await createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      clientMessageId: "markdown-summary",
+      content: {
+        format: MESSAGE_CONTENT_FORMAT,
+        plainText: "客户端摘要不会被信任",
+        blocks: [{ type: "text", text: markdown }]
+      }
+    });
+
+    expect(message.content.blocks).toEqual([{ type: "text", text: markdown }]);
+    expect(message.plainText).toBe("粗体 与 链接\n第一项\n第二项");
+
+    const stored = db.prepare("SELECT content_json AS contentJson, plain_text AS plainText FROM messages WHERE id = ?").get(message.id);
+    expect(JSON.parse(stored.contentJson).blocks[0].text).toBe(markdown);
+    expect(stored.plainText).toBe(message.plainText);
+
+    const legacyContent = JSON.parse(stored.contentJson);
+    legacyContent.plainText = markdown;
+    db.prepare("UPDATE messages SET content_json = ?, plain_text = ? WHERE id = ?")
+      .run(JSON.stringify(legacyContent), markdown, message.id);
+
+    const projected = (await listMessages(db, "usr_owner", conversation.id))
+      .find((item) => item.id === message.id);
+    expect(projected.content.blocks[0].text).toBe(markdown);
+    expect(projected.content.plainText).toBe("粗体 与 链接\n第一项\n第二项");
+    expect(projected.plainText).toBe(projected.content.plainText);
+  });
+
+  it("adds, aggregates and removes reactions idempotently without changing conversation counters", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "REACTION-MEMBER" });
+    const member = await acceptInvite(db, request, {
+      code: invite.code,
+      githubLogin: "reaction-member",
+      email: "reaction-member@example.com",
+      displayName: "Reaction Member",
+      avatarUrl: "https://avatars.githubusercontent.com/u/4242?v=4"
+    });
+    const conversation = await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "direct",
+      targetUserId: member.id
+    });
+    const message = await createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      clientMessageId: "reaction-message",
+      content: textContent("React to this")
+    });
+    const before = (await listConversations(db, member.id)).find((item) => item.id === conversation.id);
+
+    const first = await addMessageReaction(db, request, {
+      actorId: member.id,
+      messageId: message.id,
+      emoteKey: "feishu:ok"
+    });
+    expect(first.created).toBe(true);
+    expect(first.reactions).toEqual([{
+      emoteKey: "feishu:ok",
+      count: 1,
+      reactedByCurrentUser: true,
+      users: [{
+        id: member.id,
+        displayName: "Reaction Member",
+        githubLogin: "reaction-member",
+        avatarUrl: "https://avatars.githubusercontent.com/u/4242?v=4",
+        createdAt: expect.any(String)
+      }]
+    }]);
+
+    const duplicate = await addMessageReaction(db, request, {
+      actorId: member.id,
+      messageId: message.id,
+      emoteKey: "feishu:ok"
+    });
+    expect(duplicate.created).toBe(false);
+    expect(duplicate.reactions).toEqual(first.reactions);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_events WHERE type = 'reaction.added' AND target_id = ?").get(message.id).count)
+      .toBe(1);
+
+    await addMessageReaction(db, request, {
+      actorId: "usr_owner",
+      messageId: message.id,
+      emoteKey: "feishu:ok"
+    });
+    const memberProjection = (await listMessages(db, member.id, conversation.id))
+      .find((item) => item.id === message.id);
+    expect(memberProjection.reactions[0]).toMatchObject({
+      emoteKey: "feishu:ok",
+      count: 2,
+      reactedByCurrentUser: true
+    });
+    expect(memberProjection.reactions[0].users.map((user) => user.id))
+      .toEqual([member.id, "usr_owner"]);
+
+    const reactionEvent = (await listWorkspaceEvents(db, member.id, 0))
+      .findLast((event) => event.type === "reaction.added" && event.targetId === message.id);
+    expect(reactionEvent.payload).toMatchObject({
+      messageId: message.id,
+      conversationId: conversation.id,
+      reactions: [{
+        emoteKey: "feishu:ok",
+        count: 2
+      }]
+    });
+
+    const removed = await removeMessageReaction(db, request, {
+      actorId: member.id,
+      messageId: message.id,
+      emoteKey: "feishu:ok"
+    });
+    expect(removed.removed).toBe(true);
+    expect(removed.reactions[0]).toMatchObject({
+      count: 1,
+      reactedByCurrentUser: false
+    });
+    const duplicateRemoval = await removeMessageReaction(db, request, {
+      actorId: member.id,
+      messageId: message.id,
+      emoteKey: "feishu:ok"
+    });
+    expect(duplicateRemoval.removed).toBe(false);
+    expect(duplicateRemoval.reactions).toEqual(removed.reactions);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_events WHERE type = 'reaction.removed' AND target_id = ?").get(message.id).count)
+      .toBe(1);
+
+    const after = (await listConversations(db, member.id)).find((item) => item.id === conversation.id);
+    expect({
+      lastActivityAt: after.lastActivityAt,
+      messageCount: after.messageCount,
+      unreadCount: after.unreadCount
+    }).toEqual({
+      lastActivityAt: before.lastActivityAt,
+      messageCount: before.messageCount,
+      unreadCount: before.unreadCount
+    });
+  });
+
+  it("enforces reaction emote, membership and message-kind boundaries and cascades cleanup", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "REACTION-TARGET" });
+    const member = await acceptInvite(db, request, {
+      code: invite.code,
+      githubLogin: "reaction-target",
+      email: "reaction-target@example.com"
+    });
+    const outsiderInvite = await createInvite(db, request, { actorId: "usr_owner", code: "REACTION-OUTSIDER" });
+    const outsider = await acceptInvite(db, request, {
+      code: outsiderInvite.code,
+      githubLogin: "reaction-outsider",
+      email: "reaction-outsider@example.com"
+    });
+    const conversation = await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "direct",
+      targetUserId: member.id
+    });
+    const message = await createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      clientMessageId: "reaction-boundaries",
+      content: textContent("Boundary target")
+    });
+
+    await expect(addMessageReaction(db, request, {
+      actorId: member.id,
+      messageId: message.id,
+      emoteKey: "douyin:laughwithtears"
+    })).rejects.toMatchObject({ code: "reaction.invalid_emote" });
+    await expect(addMessageReaction(db, request, {
+      actorId: member.id,
+      messageId: message.id,
+      emoteKey: "missing:nope"
+    })).rejects.toMatchObject({ code: "reaction.invalid_emote" });
+    await expect(addMessageReaction(db, request, {
+      actorId: outsider.id,
+      messageId: message.id,
+      emoteKey: "feishu:ok"
+    })).rejects.toMatchObject({ code: "permission.denied" });
+    await expect(addMessageReaction(db, request, {
+      actorId: member.id,
+      messageId: "missing-message",
+      emoteKey: "feishu:ok"
+    })).rejects.toMatchObject({ code: "message.not_found" });
+
+    const group = await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "group",
+      title: "Reaction system boundary"
+    });
+    const systemMessage = (await listMessages(db, "usr_owner", group.id))
+      .find((item) => item.kind === "system");
+    await expect(addMessageReaction(db, request, {
+      actorId: "usr_owner",
+      messageId: systemMessage.id,
+      emoteKey: "feishu:ok"
+    })).rejects.toMatchObject({ code: "reaction.unsupported_message" });
+
+    await addMessageReaction(db, request, {
+      actorId: member.id,
+      messageId: message.id,
+      emoteKey: "feishu:ok"
+    });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM message_reactions WHERE message_id = ?").get(message.id).count).toBe(1);
+    db.prepare("DELETE FROM messages WHERE id = ?").run(message.id);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM message_reactions WHERE message_id = ?").get(message.id).count).toBe(0);
   });
 });

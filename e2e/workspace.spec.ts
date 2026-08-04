@@ -6,6 +6,8 @@ test.describe.configure({ timeout: 120_000 });
 async function enterWorkspaceAsSeededOwner(page: Page) {
   await page.goto("/?lane=workspace");
   await page.getByRole("button", { name: "使用 GitHub 登录" }).click();
+  await expect(page.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
+  await expect(page.locator(".workspace-shell")).toHaveAttribute("aria-busy", "false");
   await expect(page.locator(".workspace-user-trigger").getByText("timeStarry", { exact: true })).toBeVisible();
   await expect(page.locator(".workspace-product-shell")).toBeVisible();
   await expect(page.locator(".workspace-connection-state")).toHaveCount(0);
@@ -13,12 +15,12 @@ async function enterWorkspaceAsSeededOwner(page: Page) {
 
 async function openWorkspaceCreateMenu(page: Page, action: "发起私聊" | "创建群聊") {
   await page.getByTitle("新建").click();
-  await page.locator(".workspace-create-menu").getByRole("button", { name: action, exact: true }).click();
+  await page.locator(".workspace-create-menu").getByRole("menuitem", { name: action, exact: true }).click();
 }
 
 async function openWorkspaceSpaceSettings(page: Page) {
   await page.locator(".workspace-user-trigger").click();
-  await page.locator(".workspace-user-menu").getByRole("button", { name: "空间信息与设置", exact: true }).click();
+  await page.locator(".workspace-user-menu").getByRole("menuitem", { name: "空间信息与设置", exact: true }).click();
 }
 
 async function sendWorkspaceComposer(page: Page | Locator) {
@@ -101,6 +103,74 @@ function waitForWorkspaceHello(page: Page) {
   });
 }
 
+test("workspace loading, navigation and menu focus semantics are stable", async ({ page }) => {
+  let releaseBootstrap = () => {};
+  const bootstrapGate = new Promise<void>((resolve) => {
+    releaseBootstrap = resolve;
+  });
+  let holdFirstBootstrap = true;
+  await page.route("**/api/workspace/bootstrap", async (route) => {
+    if (holdFirstBootstrap) {
+      holdFirstBootstrap = false;
+      await bootstrapGate;
+    }
+    await route.continue();
+  });
+
+  await page.goto("/?lane=workspace");
+  const shell = page.locator(".workspace-shell");
+  await expect(shell).toHaveAttribute("data-app-state", "loading");
+  await expect(shell).toHaveAttribute("aria-busy", "true");
+  await expect(page.getByRole("status").filter({ hasText: "正在加载共享空间" })).toBeVisible();
+  releaseBootstrap();
+
+  await page.getByRole("button", { name: "使用 GitHub 登录" }).click();
+  await expect(shell).toHaveAttribute("data-app-state", "ready");
+  await expect(shell).toHaveAttribute("aria-busy", "false");
+
+  const viewNavigation = page.getByRole("navigation", { name: "共享空间视图" });
+  const chatTab = viewNavigation.getByRole("button", { name: "聊天", exact: true });
+  const memberTab = viewNavigation.getByRole("button", { name: "成员", exact: true });
+  await expect(chatTab).toHaveAttribute("aria-current", "page");
+  await expect(chatTab).toHaveAttribute("aria-controls", "workspace-main-panel");
+  await memberTab.click();
+  await expect(memberTab).toHaveAttribute("aria-current", "page");
+  await expect(chatTab).not.toHaveAttribute("aria-current", "page");
+
+  const createTrigger = page.getByTitle("新建");
+  await createTrigger.click();
+  const createMenu = page.getByRole("menu", { name: "新建菜单" });
+  const directMenuItem = createMenu.getByRole("menuitem", { name: "发起私聊" });
+  await expect(directMenuItem).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(createTrigger).toBeFocused();
+
+  await createTrigger.click();
+  await directMenuItem.click();
+  const createTask = page.getByRole("region", { name: "发起私聊" });
+  await expect(createTask.getByPlaceholder("输入昵称或 GitHub 登录名")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(createTask).toHaveCount(0);
+  await expect(createTrigger).toBeFocused();
+
+  const userTrigger = page.locator(".workspace-user-trigger");
+  await userTrigger.click();
+  const userMenu = page.getByRole("menu", { name: "账号菜单" });
+  await expect(userMenu.getByRole("menuitem", { name: "空间信息与设置" })).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(userMenu.getByRole("menuitem", { name: "退出共享空间" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(userTrigger).toBeFocused();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileNavigation = page.getByRole("navigation", { name: "共享空间移动导航" });
+  await expect(mobileNavigation).toBeVisible();
+  const mobileChat = mobileNavigation.getByRole("button", { name: "聊天", exact: true });
+  const mobileChatBox = await mobileChat.boundingBox();
+  expect(mobileChatBox?.height).toBeGreaterThanOrEqual(44);
+  expect(mobileChatBox?.width).toBeGreaterThanOrEqual(44);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
 test("two workspace users complete direct, group, file, unread, and reconnect flows", async ({ browser }) => {
   const ownerContext = await browser.newContext();
   const memberContext = await browser.newContext();
@@ -151,7 +221,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       .toEqual([acceptedMember.id]);
 
     await openWorkspaceCreateMenu(ownerPage, "发起私聊");
-    const directPicker = ownerPage.getByRole("dialog", { name: "发起私聊" });
+    const directPicker = ownerPage.getByRole("region", { name: "发起私聊" });
     await directPicker.getByRole("button", { name: /E2E 成员/ }).click();
 
     const ownerConversation = ownerPage
@@ -258,7 +328,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
 
     const groupTitle = "E2E 双用户群聊";
     await openWorkspaceCreateMenu(ownerPage, "创建群聊");
-    const groupDialog = ownerPage.getByRole("dialog", { name: "创建群聊" });
+    const groupDialog = ownerPage.getByRole("region", { name: "创建群聊" });
     await groupDialog.getByLabel("群聊名称").fill(groupTitle);
     await groupDialog.getByRole("button", { name: /E2E 成员/ }).click();
     await expect(groupDialog.getByText("已选 1 位", { exact: true })).toBeVisible();
@@ -310,6 +380,31 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(memberGroupRegion.getByText(groupOwnerMessage, { exact: true })).toBeVisible();
     await expect(memberGroupConversation.locator(".unread-badge")).toHaveCount(0);
     await expect.poll(() => workspaceConversationUnreadCount(memberPage, groupId)).toBe(0);
+
+    const markdownSource = "**Workspace Markdown**\n\n- 第一项\n- 第二项";
+    await ownerGroupRegion.getByLabel("输入消息").fill(markdownSource);
+    await sendWorkspaceComposer(ownerGroupRegion);
+    const markdownMessage = memberGroupRegion.locator("article.workspace-message").filter({ hasText: "Workspace Markdown" });
+    await expect(markdownMessage.locator(".workspace-markdown strong").getByText("Workspace Markdown", { exact: true })).toBeVisible();
+    await expect(markdownMessage.locator(".workspace-markdown li")).toHaveCount(2);
+
+    const reactionMessage = memberGroupRegion.locator("article.workspace-message").filter({ hasText: groupOwnerMessage });
+    const reactionTrigger = reactionMessage.getByTitle("添加表情回复");
+    await reactionTrigger.click();
+    const reactionPicker = memberPage.getByRole("dialog", { name: "选择消息表情回复" });
+    await reactionPicker.getByRole("tab", { name: "飞书", exact: true }).click();
+    await reactionPicker.getByRole("button", { name: "OK", exact: true }).click();
+    await expect(reactionTrigger).toBeFocused();
+    const memberReaction = reactionMessage.getByRole("button", { name: /OK，你/ });
+    await expect(memberReaction).toHaveAttribute("aria-pressed", "true");
+
+    const ownerReactionMessage = ownerGroupRegion.locator("article.workspace-message").filter({ hasText: groupOwnerMessage });
+    const ownerReaction = ownerReactionMessage.getByRole("button", { name: /OK，E2E 成员/ });
+    await expect(ownerReaction).toBeVisible();
+    await ownerReaction.click();
+    await expect(memberReaction).toHaveAccessibleName(/OK，你、timeStarry/);
+    await memberReaction.click();
+    await expect(ownerReactionMessage.getByRole("button", { name: /OK，你/ })).toBeVisible();
 
     await memberConversation.click();
     await directMessageList.evaluate((list) => {
@@ -435,8 +530,15 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await pastedImageCard.click();
     const imageViewer = memberPage.getByRole("dialog", { name: pastedImageName });
     await expect(imageViewer).toBeVisible();
+    const imageCloseButton = imageViewer.getByTitle("关闭预览");
+    await expect(imageCloseButton).toBeFocused();
+    await memberPage.keyboard.press("Tab");
+    await expect(imageViewer.getByTitle("下载图片")).toBeFocused();
+    await memberPage.keyboard.press("Shift+Tab");
+    await expect(imageCloseButton).toBeFocused();
     await memberPage.keyboard.press("Escape");
     await expect(imageViewer).toHaveCount(0);
+    await expect(pastedImageCard).toBeFocused();
 
     const memberFileCard = memberGroupRegion.getByRole("button").filter({ hasText: fileName });
     await expect(memberFileCard).toBeVisible();

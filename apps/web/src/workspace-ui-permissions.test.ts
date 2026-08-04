@@ -34,7 +34,7 @@ describe("workspace UI permission boundaries", () => {
     expect(source).toContain("localStorage.setItem(WORKSPACE_CONTEXT_STORAGE_KEY, String(!workspaceContextCollapsed));");
     expect(source).toContain("const workspaceContextVisible = workspaceContextAvailable && !workspaceContextCollapsed;");
     expect(workspaceRenderSource).toContain('<aside className="workspace-rail" aria-label="共享空间导航">');
-    expect(workspaceRenderSource).toContain('<section className="workspace-main" aria-label="共享空间主视图">');
+    expect(workspaceRenderSource).toContain('<section className="workspace-main" id="workspace-main-panel" aria-label="共享空间主视图">');
     expect(workspaceRenderSource).toContain("{workspaceContextVisible && (");
     expect(workspaceRenderSource).toContain('<WorkspaceContextDrawer label={workspaceContextMode === "file" ? "文件详情" : "当前会话详情"}>');
     expect(workspaceRenderSource.indexOf('className="workspace-rail"')).toBeLessThan(workspaceRenderSource.indexOf('className="workspace-main"'));
@@ -322,8 +322,8 @@ describe("workspace UI permission boundaries", () => {
 
     expect(source).not.toContain("记录查看");
     expect(source).toContain('{ id: "auditor" as const, label: "预留角色", visible: workspaceBootstrap.permissions.canCreatePrivilegedInvite }');
-    expect(source).toContain('(filter.id !== "owner" || workspaceBootstrap.auth.currentUser.role === "owner")');
-    expect(source).toContain('(filter.id !== "auditor" || filter.visible)');
+    expect(source).toContain('{workspaceBootstrap.auth.currentUser.role === "owner" && (');
+    expect(source).toContain('filter.id !== "auditor" || filter.visible');
     expect(source).toContain('WORKSPACE_ROLE_OPTIONS.filter((role) => role !== "auditor" || workspaceBootstrap.permissions.canCreatePrivilegedInvite)');
   });
 
@@ -408,7 +408,7 @@ describe("workspace UI permission boundaries", () => {
     }
   });
 
-  it("keeps create-chat and create-group sheets keyboard accessible", () => {
+  it("keeps create-chat and create-group task pages keyboard accessible without modal semantics", () => {
     const source = readSource();
     const renderStart = source.indexOf('{workspaceCreateMode && (');
     const renderEnd = source.indexOf('{!workspaceCreateMode && workspaceView === "chat"', renderStart);
@@ -416,16 +416,14 @@ describe("workspace UI permission boundaries", () => {
     expect(renderEnd).toBeGreaterThan(renderStart);
     const createSheetSource = source.slice(renderStart, renderEnd);
 
-    expect(source).toContain("const workspaceCreatePanelRef = useRef<HTMLDivElement | null>(null);");
+    expect(source).not.toContain("workspaceCreatePanelRef");
     expect(source).toContain("const workspaceCreateSearchInputRef = useRef<HTMLInputElement | null>(null);");
     expect(source).toContain("workspaceCreateSearchInputRef.current?.focus()");
     expect(source).toContain('if (event.key === "Escape")');
-    expect(source).toContain('if (event.key !== "Tab" || !workspaceCreatePanelRef.current)');
-    expect(source).toContain("last.focus()");
-    expect(source).toContain("first.focus()");
-    expect(createSheetSource).toContain('role="dialog"');
-    expect(createSheetSource).toContain('aria-modal="true"');
-    expect(createSheetSource).toContain("ref={workspaceCreatePanelRef}");
+    expect(source).toContain("workspaceCreateTriggerRef.current?.focus()");
+    expect(createSheetSource).toContain('role="region"');
+    expect(createSheetSource).not.toContain('role="dialog"');
+    expect(createSheetSource).not.toContain('aria-modal="true"');
     expect(createSheetSource).toContain("onKeyDown={handleWorkspaceCreatePanelKeyDown}");
     expect(createSheetSource).toContain("ref={workspaceCreateSearchInputRef}");
     expect(createSheetSource).toContain("onClick={closeWorkspaceCreate}");
@@ -443,7 +441,8 @@ describe("workspace UI permission boundaries", () => {
     expect(chatPanelSource).toContain("const handleDraftKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {");
     expect(chatPanelSource).toContain('event.key !== "Enter" || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey');
     expect(chatPanelSource).toContain("composerFormRef.current?.requestSubmit()");
-    expect(chatPanelSource).toContain('<form ref={composerFormRef}');
+    expect(chatPanelSource).toContain("<form");
+    expect(chatPanelSource).toContain("ref={composerFormRef}");
     expect(chatPanelSource).toContain("<textarea");
     expect(chatPanelSource).toContain("rows={1}");
     expect(chatPanelSource).toContain("onKeyDown={handleDraftKeyDown}");
@@ -546,7 +545,10 @@ describe("workspace UI permission boundaries", () => {
     expect(renderStart).toBeGreaterThan(-1);
     expect(renderEnd).toBeGreaterThan(renderStart);
     const renderSource = source.slice(renderStart, renderEnd);
-    expect(renderSource).toContain("workspaceMemberRoleLabel(member)");
+    expect(source).toContain("function workspaceMemberSecondaryText(member: WorkspaceUser)");
+    expect(source).toContain('if (member.role !== "member")');
+    expect(source).toContain("details.push(workspaceMemberRoleLabel(member))");
+    expect(renderSource).toContain("workspaceMemberSecondaryText(member)");
     expect(renderSource).toContain("member.capabilities?.canStartDirectConversation !== false");
   });
 

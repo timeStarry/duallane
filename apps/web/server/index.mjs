@@ -12,6 +12,7 @@ import { attachP2PSocket, createP2PRoom, getP2PRoom } from "./services/p2p.mjs";
 import {
   acceptInvite,
   addConversationMember,
+  addMessageReaction,
   bindGitHubUser,
   completeUpload,
   createConversation,
@@ -39,6 +40,7 @@ import {
   recordInviteAcceptRejection,
   removeConversationMember,
   removeAttachment,
+  removeMessageReaction,
   removeSpaceMember,
   reserveDownload,
   reserveUpload,
@@ -134,7 +136,7 @@ app.addHook("onRequest", async (_request, reply) => {
   reply.header("X-Content-Type-Options", "nosniff");
   reply.header(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: https://avatars.githubusercontent.com; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
   );
 });
 
@@ -573,6 +575,44 @@ app.post("/api/workspace/messages", async (request, reply) => {
   try {
     const message = await createStructuredMessage(db, request, { ...(request.body ?? {}), actorId: await getWorkspaceUserId(request) });
     return reply.code(201).send({ message });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/messages/:messageId/reactions", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    const result = await addMessageReaction(db, request, {
+      ...(request.body ?? {}),
+      actorId: await getWorkspaceUserId(request),
+      messageId: request.params.messageId
+    });
+    return reply.code(result.created ? 201 : 200).send({
+      messageId: result.messageId,
+      reactions: result.reactions
+    });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.delete("/api/workspace/messages/:messageId/reactions/:emoteKey", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    const result = await removeMessageReaction(db, request, {
+      actorId: await getWorkspaceUserId(request),
+      messageId: request.params.messageId,
+      emoteKey: request.params.emoteKey
+    });
+    return {
+      messageId: result.messageId,
+      reactions: result.reactions
+    };
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }

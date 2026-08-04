@@ -19,5 +19,6 @@ COPY apps/web/package.json apps/web/package.json
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules
 COPY apps/web/server ./apps/web/server
+COPY apps/web/shared ./apps/web/shared
 EXPOSE 8787
 CMD ["pnpm", "--filter", "@duallane/web", "start"]
