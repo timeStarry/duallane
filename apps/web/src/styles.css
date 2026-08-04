@@ -1642,20 +1642,30 @@ button:disabled {
 }
 
 .emote-pack-tabs {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  min-width: 0;
+  display: flex;
   gap: 6px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
 }
 
 .emote-pack-tabs button {
-  min-width: 0;
-  min-height: 32px;
+  min-width: 56px;
+  height: 32px;
+  flex: 1 0 56px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 7px;
+  padding: 0 8px;
   color: var(--muted);
   background: transparent;
   cursor: pointer;
   font-size: 0.78rem;
   font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .emote-pack-tabs button:hover,
@@ -1666,8 +1676,9 @@ button:disabled {
 
 .emote-grid {
   max-height: 176px;
+  min-width: 0;
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  grid-template-columns: repeat(8, minmax(34px, 1fr));
   gap: 6px;
   overflow: auto;
   padding-right: 2px;
@@ -1675,7 +1686,8 @@ button:disabled {
 
 .emote-grid button {
   width: 100%;
-  aspect-ratio: 1;
+  height: 36px;
+  min-width: 0;
   display: grid;
   place-items: center;
   border: 1px solid transparent;
@@ -1693,6 +1705,7 @@ button:disabled {
 .emote-grid img {
   width: 28px;
   height: 28px;
+  display: block;
   object-fit: contain;
 }
 
@@ -2607,6 +2620,86 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.workspace-system-statistics {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+
+.workspace-statistics-header {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.workspace-statistics-header h3,
+.workspace-statistics-header p {
+  margin: 0;
+}
+
+.workspace-statistics-header h3 {
+  font-size: 0.96rem;
+  font-weight: 600;
+}
+
+.workspace-statistics-header p {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.workspace-statistics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  border-block: 1px solid var(--line);
+}
+
+.workspace-statistics-grid > div {
+  min-width: 0;
+  border-left: 1px solid var(--line);
+  padding: 12px;
+}
+
+.workspace-statistics-grid > div:first-child {
+  border-left: 0;
+}
+
+.workspace-statistics-grid span,
+.workspace-statistics-grid small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.workspace-statistics-grid strong {
+  display: block;
+  margin: 5px 0 4px;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-statistics-status {
+  margin: 0;
+  border-block: 1px solid var(--line);
+  padding: 14px 2px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.workspace-statistics-status.error {
+  color: var(--danger);
 }
 
 .workspace-space-note {
@@ -4188,7 +4281,8 @@ html[data-theme="dark"] .workspace-mode {
   opacity: 1;
 }
 
-.workspace-message-actions button {
+.workspace-message-actions > button,
+.workspace-message-actions > .workspace-reaction-picker-anchor > button {
   width: 30px;
   height: 30px;
   display: grid;
@@ -4199,7 +4293,8 @@ html[data-theme="dark"] .workspace-mode {
   cursor: pointer;
 }
 
-.workspace-message-actions button:hover {
+.workspace-message-actions > button:hover,
+.workspace-message-actions > .workspace-reaction-picker-anchor > button:hover {
   color: var(--ink);
   background: var(--panel);
 }
@@ -4872,7 +4967,8 @@ html[data-theme="dark"] .workspace-mode {
     align-self: start;
   }
 
-  .workspace-message-actions button {
+  .workspace-message-actions > button,
+  .workspace-message-actions > .workspace-reaction-picker-anchor > button {
     width: 28px;
     height: 28px;
   }

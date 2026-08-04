@@ -30,6 +30,7 @@ import {
   getWorkspaceEventForUser,
   getWorkspaceEventCursor,
   getWorkspaceBootstrap,
+  getWorkspaceStatistics,
   leaveConversation,
   listConversations,
   listFiles,
@@ -301,6 +302,20 @@ app.get("/api/workspace/bootstrap", async (request, reply) => {
   }
 });
 
+app.get("/api/workspace/statistics", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    return {
+      statistics: await getWorkspaceStatistics(db, request, {
+        actorId: await getWorkspaceUserId(request)
+      })
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
 app.post("/api/workspace/invites", async (request, reply) => {
   if (!workspaceEnabled) {
     return blockWorkspace(reply);

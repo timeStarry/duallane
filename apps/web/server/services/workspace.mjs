@@ -135,6 +135,70 @@ export async function getWorkspaceBootstrap(db, userId = "usr_owner") {
   };
 }
 
+export async function getWorkspaceStatistics(db, request, input) {
+  const actor = await requireActor(db, input.actorId);
+  await requireCapability(db, request, actor, "workspace.statistics.read");
+
+  const now = input.now instanceof Date ? input.now : new Date(input.now ?? Date.now());
+  if (Number.isNaN(now.getTime())) {
+    throw new WorkspaceValidationError("statistics.invalid_time", "统计时间无效");
+  }
+  const dayStartedAt = new Date(now);
+  dayStartedAt.setHours(0, 0, 0, 0);
+  const todayBoundary = dayStartedAt.toISOString();
+
+  const [members, conversations, messages, files] = await Promise.all([
+    db.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        COALESCE(SUM(CASE WHEN joined_at >= ? THEN 1 ELSE 0 END), 0) AS today
+      FROM space_members
+      WHERE space_id = ?
+    `).get(todayBoundary, DEFAULT_SPACE_ID),
+    db.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        COALESCE(SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END), 0) AS today
+      FROM conversations
+      WHERE space_id = ?
+    `).get(todayBoundary, DEFAULT_SPACE_ID),
+    db.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        COALESCE(SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END), 0) AS today
+      FROM messages
+      WHERE space_id = ?
+    `).get(todayBoundary, DEFAULT_SPACE_ID),
+    db.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        COALESCE(SUM(CASE WHEN completed_at >= ? THEN 1 ELSE 0 END), 0) AS today,
+        COALESCE(SUM(byte_size), 0) AS totalBytes,
+        COALESCE(SUM(CASE WHEN completed_at >= ? THEN byte_size ELSE 0 END), 0) AS todayBytes
+      FROM attachments
+      WHERE space_id = ? AND completed_at IS NOT NULL
+    `).get(todayBoundary, todayBoundary, DEFAULT_SPACE_ID)
+  ]);
+
+  return {
+    asOf: now.toISOString(),
+    dayStartedAt: todayBoundary,
+    totals: {
+      members: statisticsNumber(members.total),
+      conversations: statisticsNumber(conversations.total),
+      messages: statisticsNumber(messages.total),
+      files: statisticsNumber(files.total),
+      uploadedBytes: statisticsNumber(files.totalBytes)
+    },
+    today: {
+      members: statisticsNumber(members.today),
+      conversations: statisticsNumber(conversations.today),
+      messages: statisticsNumber(messages.today),
+      files: statisticsNumber(files.today),
+      uploadedBytes: statisticsNumber(files.todayBytes)
+    }
+  };
+}
 export async function listMembers(db, userId = "usr_owner", options = {}) {
   const actor = await requireActor(db, userId);
   const query = normalizeString(options.query || options.q).toLowerCase();
@@ -3617,6 +3681,10 @@ async function getDefaultSpace(db) {
   `).get(DEFAULT_SPACE_ID);
 }
 
+function statisticsNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
 function parsePositiveInteger(value, fallback) {
   const number = Number(value);
   return Number.isSafeInteger(number) && number > 0 ? number : fallback;

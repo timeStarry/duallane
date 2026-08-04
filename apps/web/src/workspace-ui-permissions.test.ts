@@ -94,6 +94,42 @@ describe("workspace UI permission boundaries", () => {
     expect(styles).not.toContain("--surface-tint: #e4f0f1;");
   });
 
+  it("keeps reaction picker controls independent from message action sizing", () => {
+    const styles = readStyles();
+
+    expect(styles).not.toContain(".workspace-message-actions button {");
+    expect(styles).toContain(".workspace-message-actions > .workspace-reaction-picker-anchor > button {");
+    const tabRules = styles.slice(
+      styles.indexOf(".emote-pack-tabs button {"),
+      styles.indexOf("}", styles.indexOf(".emote-pack-tabs button {"))
+    );
+    const gridButtonRules = styles.slice(
+      styles.indexOf(".emote-grid button {"),
+      styles.indexOf("}", styles.indexOf(".emote-grid button {"))
+    );
+    const gridImageRules = styles.slice(
+      styles.indexOf(".emote-grid img {"),
+      styles.indexOf("}", styles.indexOf(".emote-grid img {"))
+    );
+    expect(tabRules).toContain("min-width: 56px;");
+    expect(tabRules).toContain("white-space: nowrap;");
+    expect(gridButtonRules).toContain("height: 36px;");
+    expect(gridButtonRules).toContain("place-items: center;");
+    expect(gridImageRules).toContain("display: block;");
+    expect(gridImageRules).toContain("object-fit: contain;");
+  });
+
+  it("loads and renders system statistics only for the space owner", () => {
+    const source = readSource();
+
+    expect(source).toContain('workspaceBootstrap?.auth.currentUser.role !== "owner"');
+    expect(source).toContain('workspaceJson<{ statistics: WorkspaceStatistics }>("/api/workspace/statistics")');
+    expect(source).toContain('{workspaceBootstrap.auth.currentUser.role === "owner" && (');
+    expect(source).toContain('aria-labelledby="workspace-system-statistics-title"');
+    expect(source).toContain('<h3 id="workspace-system-statistics-title">系统统计</h3>');
+    expect(source).toContain("workspaceStatistics.totals.messages");
+    expect(source).toContain("workspaceStatistics.today.messages");
+  });
   it("keeps workspace controls content-sized and delegates height to result regions", () => {
     const styles = readStyles();
 

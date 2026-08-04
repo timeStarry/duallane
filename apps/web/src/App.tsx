@@ -193,6 +193,19 @@ type WorkspaceBootstrap = {
   invites: WorkspaceInvite[];
   eventCursor?: number;
 };
+type WorkspaceStatisticsValues = {
+  members: number;
+  conversations: number;
+  messages: number;
+  files: number;
+  uploadedBytes: number;
+};
+type WorkspaceStatistics = {
+  asOf: string;
+  dayStartedAt: string;
+  totals: WorkspaceStatisticsValues;
+  today: WorkspaceStatisticsValues;
+};
 type WorkspaceInvite = {
   id: string;
   code?: string;
@@ -1626,6 +1639,9 @@ export function App() {
   const [copyState, setCopyState] = useState<CopyState>("idle");
   const [roomDetailsOpen, setRoomDetailsOpen] = useState(false);
   const [workspaceBootstrap, setWorkspaceBootstrap] = useState<WorkspaceBootstrap | null>(null);
+  const [workspaceStatistics, setWorkspaceStatistics] = useState<WorkspaceStatistics | null>(null);
+  const [workspaceStatisticsLoading, setWorkspaceStatisticsLoading] = useState(false);
+  const [workspaceStatisticsError, setWorkspaceStatisticsError] = useState("");
   const [workspaceConversations, setWorkspaceConversations] = useState<WorkspaceConversation[]>([]);
   const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFile[]>([]);
   const [workspaceLibraryFiles, setWorkspaceLibraryFiles] = useState<WorkspaceFile[]>([]);
@@ -2437,6 +2453,29 @@ export function App() {
     workspaceSpaceTab
   ]);
 
+  useEffect(() => {
+    if (workspaceBootstrap?.auth.currentUser.role !== "owner") {
+      setWorkspaceStatistics(null);
+      setWorkspaceStatisticsError("");
+      setWorkspaceStatisticsLoading(false);
+      return;
+    }
+    if (
+      lane !== "workspace-dev" ||
+      workspaceStatus !== "ready" ||
+      workspaceView !== "space" ||
+      workspaceSpaceTab !== "overview"
+    ) {
+      return;
+    }
+    void refreshWorkspaceStatistics();
+  }, [
+    lane,
+    workspaceBootstrap?.auth.currentUser.role,
+    workspaceSpaceTab,
+    workspaceStatus,
+    workspaceView
+  ]);
   useEffect(() => {
     if (
       lane !== "workspace-dev" ||
@@ -3269,6 +3308,21 @@ export function App() {
     }
   }
 
+  async function refreshWorkspaceStatistics() {
+    if (workspaceBootstrap?.auth.currentUser.role !== "owner") {
+      return;
+    }
+    setWorkspaceStatisticsLoading(true);
+    setWorkspaceStatisticsError("");
+    try {
+      const data = await workspaceJson<{ statistics: WorkspaceStatistics }>("/api/workspace/statistics");
+      setWorkspaceStatistics(data.statistics);
+    } catch (error) {
+      setWorkspaceStatisticsError(userFacingErrorMessage(error, "系统统计暂时无法加载"));
+    } finally {
+      setWorkspaceStatisticsLoading(false);
+    }
+  }
   async function refreshWorkspaceMembers() {
     const params = new URLSearchParams();
     const query = workspaceMemberQuery.trim();
@@ -3432,6 +3486,9 @@ export function App() {
     workspaceRealtimeEventQueueRef.current = Promise.resolve();
     workspaceSendingRef.current = false;
     setWorkspaceBootstrap(null);
+    setWorkspaceStatistics(null);
+    setWorkspaceStatisticsLoading(false);
+    setWorkspaceStatisticsError("");
     setWorkspaceConversations([]);
     setWorkspaceFiles([]);
     setWorkspaceLibraryFiles([]);
@@ -7035,6 +7092,66 @@ export function App() {
                               <small>按会话保留</small>
                             </div>
                           </div>
+                          {workspaceBootstrap.auth.currentUser.role === "owner" && (
+                            <section
+                              className="workspace-system-statistics"
+                              aria-labelledby="workspace-system-statistics-title"
+                              aria-busy={workspaceStatisticsLoading}
+                            >
+                              <div className="workspace-statistics-header">
+                                <div>
+                                  <h3 id="workspace-system-statistics-title">系统统计</h3>
+                                  <p>累计总量与今日新增</p>
+                                </div>
+                                {workspaceStatisticsError && (
+                                  <button className="secondary compact" type="button" onClick={() => void refreshWorkspaceStatistics()}>
+                                    重试
+                                  </button>
+                                )}
+                              </div>
+                              {workspaceStatistics ? (
+                                <div className="workspace-statistics-grid" title={`统计截至 ${formatWorkspaceTime(workspaceStatistics.asOf)}`}>
+                                  {[
+                                    {
+                                      label: "成员",
+                                      total: `${workspaceStatistics.totals.members.toLocaleString("zh-CN")} 位`,
+                                      today: `今日 +${workspaceStatistics.today.members.toLocaleString("zh-CN")}`
+                                    },
+                                    {
+                                      label: "会话",
+                                      total: workspaceStatistics.totals.conversations.toLocaleString("zh-CN"),
+                                      today: `今日 +${workspaceStatistics.today.conversations.toLocaleString("zh-CN")}`
+                                    },
+                                    {
+                                      label: "消息",
+                                      total: workspaceStatistics.totals.messages.toLocaleString("zh-CN"),
+                                      today: `今日 +${workspaceStatistics.today.messages.toLocaleString("zh-CN")}`
+                                    },
+                                    {
+                                      label: "文件",
+                                      total: workspaceStatistics.totals.files.toLocaleString("zh-CN"),
+                                      today: `今日 +${workspaceStatistics.today.files.toLocaleString("zh-CN")}`
+                                    },
+                                    {
+                                      label: "上传量",
+                                      total: formatBytes(workspaceStatistics.totals.uploadedBytes),
+                                      today: `今日 +${formatBytes(workspaceStatistics.today.uploadedBytes)}`
+                                    }
+                                  ].map((metric) => (
+                                    <div key={metric.label}>
+                                      <span>{metric.label}</span>
+                                      <strong>{metric.total}</strong>
+                                      <small>{metric.today}</small>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className={workspaceStatisticsError ? "workspace-statistics-status error" : "workspace-statistics-status"} role="status">
+                                  {workspaceStatisticsError || "正在读取统计数据..."}
+                                </p>
+                              )}
+                            </section>
+                          )}
                           <p className="workspace-space-note">共享空间保存消息和文件，方便成员稍后查看。</p>
                         </>
                       )}

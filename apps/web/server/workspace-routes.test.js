@@ -194,6 +194,58 @@ describe("workspace routes", () => {
     });
   }
 
+  it("serves system statistics to the owner and denies regular members", async () => {
+    const app = await makeApp();
+    const ownerResponse = await app.inject({
+      method: "GET",
+      url: "/api/workspace/statistics",
+      headers: {
+        "x-workspace-user-id": "usr_owner"
+      }
+    });
+
+    expect(ownerResponse.statusCode).toBe(200);
+    expect(ownerResponse.json().statistics).toMatchObject({
+      totals: {
+        members: expect.any(Number),
+        conversations: expect.any(Number),
+        messages: expect.any(Number),
+        files: expect.any(Number),
+        uploadedBytes: expect.any(Number)
+      },
+      today: {
+        members: expect.any(Number),
+        conversations: expect.any(Number),
+        messages: expect.any(Number),
+        files: expect.any(Number),
+        uploadedBytes: expect.any(Number)
+      }
+    });
+
+    const fixtureDb = openTestDatabase(dataDir);
+    const now = new Date().toISOString();
+    fixtureDb.prepare("INSERT INTO users (id, github_id, github_login, email, display_name, avatar_url, kind, created_at, last_login_at) VALUES ('usr_stats_route_member', NULL, 'stats-route-member', NULL, 'Stats Route Member', NULL, 'human', ?, NULL)")
+      .run(now);
+    fixtureDb.prepare("INSERT INTO space_members (space_id, user_id, role, joined_at, removed_at) VALUES ('spc_default', 'usr_stats_route_member', 'member', ?, NULL)")
+      .run(now);
+    fixtureDb.close();
+
+    const memberResponse = await app.inject({
+      method: "GET",
+      url: "/api/workspace/statistics",
+      headers: {
+        "x-workspace-user-id": "usr_stats_route_member"
+      }
+    });
+    expect(memberResponse.statusCode).toBe(403);
+    expect(memberResponse.json()).toEqual({
+      error: {
+        code: "permission.denied",
+        message: "你没有执行该操作的权限"
+      }
+    });
+    expectNoWorkspaceInternals(memberResponse.json());
+  });
   it("keeps workspace HTTP routes disabled without the feature flag", async () => {
     const app = await makeApp({ WORKSPACE_ENABLED: "false" });
     const response = await app.inject({

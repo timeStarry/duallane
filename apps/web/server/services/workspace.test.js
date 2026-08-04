@@ -20,6 +20,7 @@ import {
   getManagedMemberVisibility,
   getSessionUserId,
   getWorkspaceBootstrap,
+  getWorkspaceStatistics,
   leaveConversation,
   listConversations,
   listFiles,
@@ -104,6 +105,78 @@ describe("workspace service", () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
+  it("returns owner-only cumulative and today workspace statistics", async () => {
+    const now = new Date("2026-08-04T12:00:00.000Z");
+    const dayStartedAt = new Date(now);
+    dayStartedAt.setHours(0, 0, 0, 0);
+    const older = new Date(dayStartedAt.getTime() - 1000).toISOString();
+    const today = new Date(dayStartedAt.getTime() + 1000).toISOString();
+    const before = await getWorkspaceStatistics(db, request, { actorId: "usr_owner", now });
+
+    for (const [id, login, joinedAt] of [
+      ["usr_stats_older", "stats-older", older],
+      ["usr_stats_today", "stats-today", today]
+    ]) {
+      db.prepare("INSERT INTO users (id, github_id, github_login, email, display_name, avatar_url, kind, created_at, last_login_at) VALUES (?, NULL, ?, NULL, ?, NULL, 'human', ?, NULL)")
+        .run(id, login, login, joinedAt);
+      db.prepare("INSERT INTO space_members (space_id, user_id, role, joined_at, removed_at) VALUES (?, ?, 'member', ?, NULL)")
+        .run(DEFAULT_SPACE_ID, id, joinedAt);
+    }
+
+    for (const [id, createdAt] of [
+      ["conv_stats_older", older],
+      ["conv_stats_today", today]
+    ]) {
+      db.prepare("INSERT INTO conversations (id, space_id, type, title, direct_key, retention_count, created_by, created_at) VALUES (?, ?, 'group', ?, NULL, 10000, 'usr_owner', ?)")
+        .run(id, DEFAULT_SPACE_ID, id, createdAt);
+      db.prepare("INSERT INTO messages (id, space_id, conversation_id, author_id, author_kind, kind, client_message_id, content_format, content_json, plain_text, reply_to_message_id, created_at, edited_at, deleted_at) VALUES (?, ?, ?, 'usr_owner', 'human', 'user', NULL, ?, '{}', ?, NULL, ?, NULL, NULL)")
+        .run("msg_" + id, DEFAULT_SPACE_ID, id, MESSAGE_CONTENT_FORMAT, id, createdAt);
+    }
+
+    for (const [id, byteSize, completedAt] of [
+      ["att_stats_older", 110, older],
+      ["att_stats_today", 40, today]
+    ]) {
+      db.prepare("INSERT INTO attachments (id, space_id, uploader_id, conversation_id, visibility, status, file_name, mime_type, byte_size, storage_key, upload_transfer_id, created_at, completed_at) VALUES (?, ?, 'usr_owner', NULL, 'space', 'available', ?, 'text/plain', ?, ?, NULL, ?, ?)")
+        .run(id, DEFAULT_SPACE_ID, id + ".txt", byteSize, id + ".txt", completedAt, completedAt);
+    }
+
+    db.prepare("UPDATE space_members SET removed_at = ? WHERE user_id = 'usr_stats_older'").run(today);
+    db.prepare("UPDATE messages SET deleted_at = ? WHERE id = 'msg_conv_stats_older'").run(today);
+    db.prepare("UPDATE attachments SET status = 'removed' WHERE id = 'att_stats_older'").run();
+
+    const after = await getWorkspaceStatistics(db, request, { actorId: "usr_owner", now });
+    expect(after.dayStartedAt).toBe(dayStartedAt.toISOString());
+    expect(after.totals).toEqual({
+      members: before.totals.members + 2,
+      conversations: before.totals.conversations + 2,
+      messages: before.totals.messages + 2,
+      files: before.totals.files + 2,
+      uploadedBytes: before.totals.uploadedBytes + 150
+    });
+    expect(after.today).toEqual({
+      members: before.today.members + 1,
+      conversations: before.today.conversations + 1,
+      messages: before.today.messages + 1,
+      files: before.today.files + 1,
+      uploadedBytes: before.today.uploadedBytes + 40
+    });
+
+    await expect(getWorkspaceStatistics(db, request, {
+      actorId: "usr_stats_today",
+      now
+    })).rejects.toMatchObject({ code: "permission.denied" });
+    db.prepare("UPDATE space_members SET role = 'admin' WHERE user_id = 'usr_stats_today'").run();
+    await expect(getWorkspaceStatistics(db, request, {
+      actorId: "usr_stats_today",
+      now
+    })).rejects.toMatchObject({ code: "permission.denied" });
+    expect(db.prepare("SELECT result, reason FROM audit_logs WHERE actor_user_id = ? AND action = 'workspace.statistics.read' ORDER BY created_at DESC LIMIT 1")
+      .get("usr_stats_today")).toEqual({
+      result: "rejected",
+      reason: "insufficient permission"
+    });
+  });
   it("seeds the first owner and default shared space", async () => {
     const owner = db.prepare(`
       SELECT u.github_login AS githubLogin, u.email, sm.role
