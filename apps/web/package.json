@@ -28,6 +28,7 @@
     "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
     "strip-markdown": "^6.0.0",
+    "undici": "^7.29.0",
     "unified": "^11.0.5",
     "vite": "^7.2.7"
   },

@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_SPACE_ID, openDatabase } from "./services/db.mjs";
 import { getIceServers } from "./services/ice.mjs";
+import { createGitHubFetch } from "./services/github-fetch.mjs";
 import { attachP2PSocket, createP2PRoom, getP2PRoom } from "./services/p2p.mjs";
 import {
   acceptInvite,
@@ -74,7 +75,11 @@ export async function createApp(options = {}) {
   const workspaceEnabled = isWorkspaceEnabled(env);
   const serveStatic = env.SERVE_STATIC !== "false";
   const trustProxy = options.trustProxy ?? env.TRUST_PROXY === "true";
-  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const githubClient = createGitHubFetch({
+    fetchImpl: options.fetchImpl,
+    proxyUrl: env.GITHUB_PROXY_URL
+  });
+  const githubFetch = githubClient.fetch;
   const githubOAuthTimeoutMs = Math.min(
     normalizePositiveInteger(options.githubOAuthTimeoutMs ?? env.GITHUB_OAUTH_TIMEOUT_MS)
       ?? DEFAULT_GITHUB_OAUTH_TIMEOUT_MS,
@@ -123,6 +128,10 @@ export async function createApp(options = {}) {
       ...(options.loggerStream ? { stream: options.loggerStream } : {})
     },
     genReqId: () => crypto.randomUUID()
+  });
+
+  app.addHook("onClose", async () => {
+    await githubClient.close();
   });
 
   if (db && !options.db) {
@@ -980,7 +989,7 @@ async function resolveGitHubProfile(request) {
 
   try {
     const signal = AbortSignal.timeout(githubOAuthTimeoutMs);
-    const tokenResponse = await fetchImpl("https://github.com/login/oauth/access_token", {
+    const tokenResponse = await githubFetch("https://github.com/login/oauth/access_token", {
       method: "POST",
       headers: {
         accept: "application/json",
@@ -1005,7 +1014,7 @@ async function resolveGitHubProfile(request) {
     }
 
     phase = "profile";
-    const userResponse = await fetchImpl("https://api.github.com/user", {
+    const userResponse = await githubFetch("https://api.github.com/user", {
       headers: {
         authorization: `Bearer ${accessToken}`,
         accept: "application/vnd.github+json",
@@ -1042,7 +1051,7 @@ async function resolveGitHubProfile(request) {
 }
 
 async function fetchPrimaryGitHubEmail(accessToken, signal) {
-  const response = await fetchImpl("https://api.github.com/user/emails", {
+  const response = await githubFetch("https://api.github.com/user/emails", {
     headers: {
       authorization: `Bearer ${accessToken}`,
       accept: "application/vnd.github+json",

@@ -135,6 +135,24 @@ Production GitHub login fails closed when the OAuth client ID or secret is
 missing. `GITHUB_OAUTH_TIMEOUT_MS` sets the total time budget shared by the
 GitHub token, profile, and email requests and defaults to `8000` milliseconds.
 
+If the deployment host cannot reach GitHub OAuth directly, enable the optional
+GitHub-only V2Ray profile. Put the subscription URL in an untracked host file
+with mode `600`, then set `COMPOSE_PROFILES=github-proxy`,
+`GITHUB_PROXY_URL=http://v2ray:10809`, and `V2RAY_SUBSCRIPTION_FILE` to that
+file's absolute path. The generated V2Ray config lives in a private Docker
+volume, the proxy port is exposed only to the Compose network, and routing
+rejects non-GitHub destinations. Validate and start it with:
+
+```bash
+docker compose --profile github-proxy run --rm v2ray-config
+docker compose --profile github-proxy run --rm --no-deps v2ray test -c /etc/v2ray/config.json
+docker compose --profile github-proxy up -d --build
+```
+
+To refresh an updated subscription, rerun `v2ray-config` and restart the
+`v2ray` service. Never store the subscription URL in `.env`, Git, or command
+output; only the secret file path belongs in `.env`.
+
 The default deployment runs one API instance. PostgreSQL supports concurrent
 requests, but scaling the API horizontally also requires shared attachment
 storage and a cross-instance realtime event transport.

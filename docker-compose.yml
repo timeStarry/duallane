@@ -37,6 +37,7 @@ services:
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
       GITHUB_OAUTH_TIMEOUT_MS: ${GITHUB_OAUTH_TIMEOUT_MS:-8000}
+      GITHUB_PROXY_URL: ${GITHUB_PROXY_URL:-}
       TRUST_PROXY: ${TRUST_PROXY:-true}
       SERVE_STATIC: "false"
       DUALLANE_STUN_URLS: ${DUALLANE_STUN_URLS:-stun:stun.l.google.com:19302}
@@ -48,6 +49,32 @@ services:
       DUALLANE_EMPTY_ROOM_GRACE_MS: ${DUALLANE_EMPTY_ROOM_GRACE_MS:-10000}
     volumes:
       - duallane-data:/app/data
+    restart: unless-stopped
+
+  v2ray-config:
+    profiles: ["github-proxy"]
+    image: ${NODE_IMAGE:-docker.m.daocloud.io/library/node:22-alpine}
+    command: ["node", "/app/deploy/v2ray/render-config.mjs"]
+    environment:
+      V2RAY_SUBSCRIPTION_FILE: /run/secrets/v2ray-subscription
+    secrets:
+      - v2ray-subscription
+    volumes:
+      - ./deploy/v2ray/render-config.mjs:/app/deploy/v2ray/render-config.mjs:ro
+      - duallane-v2ray-config:/config
+    restart: "no"
+
+  v2ray:
+    profiles: ["github-proxy"]
+    image: ${V2RAY_IMAGE:-dockerproxy.net/v2fly/v2fly-core@sha256:d06727b221fe8cbaed2dd1d23f9d8270cb6581dc1c2c2949bd4d04d4c332eee3}
+    command: ["run", "-c", "/etc/v2ray/config.json"]
+    depends_on:
+      v2ray-config:
+        condition: service_completed_successfully
+    expose:
+      - "10809"
+    volumes:
+      - duallane-v2ray-config:/etc/v2ray:ro
     restart: unless-stopped
 
   migrate:
@@ -86,3 +113,8 @@ services:
 volumes:
   duallane-data:
   duallane-postgres:
+  duallane-v2ray-config:
+
+secrets:
+  v2ray-subscription:
+    file: ${V2RAY_SUBSCRIPTION_FILE:-./deploy/v2ray/subscription-url.example}
