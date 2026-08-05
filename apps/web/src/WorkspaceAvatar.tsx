@@ -11,8 +11,12 @@ export function sanitizeWorkspaceAvatarUrl(value?: string | null) {
   if (!value) {
     return "";
   }
+  const candidate = value.trim();
+  if (/^\/assets\/[a-z0-9][a-z0-9._/-]*$/i.test(candidate) && !candidate.includes("..")) {
+    return candidate;
+  }
   try {
-    const url = new URL(value);
+    const url = new URL(candidate);
     if (
       url.protocol !== "https:" ||
       url.hostname !== "avatars.githubusercontent.com" ||

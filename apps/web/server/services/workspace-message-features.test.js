@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeGitHubAvatarUrl } from "./avatar.mjs";
+import { sanitizeGitHubAvatarUrl, sanitizeWorkspaceAvatarUrl } from "./avatar.mjs";
 import {
   getReactionEmote,
   isVisibleReactionEmoteKey,
@@ -7,6 +7,12 @@ import {
   publicReactionEmote
 } from "./emote-catalog.mjs";
 import { markdownToPlainText } from "./markdown.mjs";
+import {
+  BEACON_IDENTITY,
+  getConversationPolicyCapabilities,
+  getSystemIdentityConversationCapabilities,
+  SYSTEM_IDENTITY_CONVERSATION_POLICIES
+} from "./system-identities.mjs";
 
 describe("GitHub avatar projection", () => {
   it("allows only HTTPS avatars.githubusercontent.com URLs without credentials or ports", () => {
@@ -22,6 +28,25 @@ describe("GitHub avatar projection", () => {
     ]) {
       expect(sanitizeGitHubAvatarUrl(value)).toBe("");
     }
+  });
+
+  it("allows only controlled same-origin Workspace asset paths", () => {
+    expect(sanitizeWorkspaceAvatarUrl("/assets/beacon-avatar.png")).toBe("/assets/beacon-avatar.png");
+    expect(sanitizeWorkspaceAvatarUrl("/assets/../secret.png")).toBe("");
+    expect(sanitizeWorkspaceAvatarUrl("/uploads/user-content.png")).toBe("");
+  });
+});
+
+describe("system identity conversation policy", () => {
+  it("keeps bot identity separate from group participation capability", () => {
+    expect(getSystemIdentityConversationCapabilities(BEACON_IDENTITY)).toEqual({
+      canStartDirectConversation: true,
+      canJoinGroups: false
+    });
+    expect(getConversationPolicyCapabilities(SYSTEM_IDENTITY_CONVERSATION_POLICIES.GROUP_CAPABLE)).toEqual({
+      canStartDirectConversation: true,
+      canJoinGroups: true
+    });
   });
 });
 

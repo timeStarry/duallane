@@ -605,14 +605,15 @@ describe("workspace UI permission boundaries", () => {
     expect(selectableStart).toBeGreaterThan(-1);
     expect(selectableEnd).toBeGreaterThan(selectableStart);
     const selectableSource = source.slice(selectableStart, selectableEnd);
-    expect(selectableSource).toContain("member.capabilities?.canStartDirectConversation !== false");
+    expect(selectableSource).toContain("member.capabilities?.canStartDirectConversation === true");
+    expect(selectableSource).toContain("member.capabilities?.canJoinGroups === true");
     expect(selectableSource).toContain("workspaceMemberRoleLabel(member)");
 
     const addableStart = selectableEnd;
     const addableEnd = source.indexOf("const workspaceContextMemberQueryText", addableStart);
     expect(addableEnd).toBeGreaterThan(addableStart);
     const addableSource = source.slice(addableStart, addableEnd);
-    expect(addableSource).toContain("member.capabilities?.canStartDirectConversation !== false");
+    expect(addableSource).toContain("member.capabilities?.canJoinGroups === true");
     expect(addableSource).toContain("!workspaceSelectedConversation?.members.some((item) => item.id === member.id)");
 
     const renderStart = source.indexOf("workspaceFilteredMembers.map((member) => (");
@@ -624,7 +625,7 @@ describe("workspace UI permission boundaries", () => {
     expect(source).toContain('if (member.role !== "member")');
     expect(source).toContain("details.push(workspaceMemberRoleLabel(member))");
     expect(renderSource).toContain("workspaceMemberSecondaryText(member)");
-    expect(renderSource).toContain("member.capabilities?.canStartDirectConversation !== false");
+    expect(renderSource).toContain("member.capabilities?.canStartDirectConversation === true");
   });
 
   it("keeps read and notification state on the conversation view model", () => {
@@ -713,6 +714,20 @@ describe("workspace UI permission boundaries", () => {
     expect(source).toContain('workspaceSelectedConversation.type === "group" && workspaceCanManageSelectedGroup');
     expect(source).toContain('workspaceCanManageSelectedGroup &&\n                                    member.id !== workspaceBootstrap.auth.currentUser.id');
     expect(source).toContain('{workspaceCanManageSelectedGroup ? (');
+  });
+
+  it("uses server-projected bot identity and conversation capabilities", () => {
+    const source = readSource();
+    const styles = readStyles();
+
+    expect(source).toContain("canJoinGroups?: boolean;");
+    expect(source).toContain('member.capabilities?.canJoinGroups === true');
+    expect(source).toContain('member.capabilities?.canStartDirectConversation === true');
+    expect(source).toContain('if (kind !== "bot")');
+    expect(source).toContain('aria-label="官方机器人"');
+    expect(source).toContain('workspaceSelectedConversation.otherMember?.description || "私聊"');
+    expect(source).toContain('member.capabilities?.canManage === false');
+    expect(styles).toContain(".workspace-bot-badge");
   });
 
   it("keeps direct-chat details focused on overview and files only", () => {

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_SPACE_ID, SEEDED_OWNER_EMAIL, SEEDED_OWNER_GITHUB_LOGIN } from "./db.mjs";
 import { openTestDatabase } from "./test-database.mjs";
 import { DAILY_QUOTA_BYTES } from "./quota.mjs";
+import { BEACON_IDENTITY, BEACON_USER_ID } from "./system-identities.mjs";
 import {
   acceptInvite,
   addConversationMember,
@@ -103,6 +104,255 @@ describe("workspace service", () => {
   afterEach(async () => {
     db.close();
     await rm(dataDir, { recursive: true, force: true });
+  });
+
+  it("seeds and repairs the managed Beacon identity without allowing authentication", async () => {
+    const beacon = (await listMembers(db, "usr_owner")).find((member) => member.id === BEACON_USER_ID);
+    expect(beacon).toMatchObject({
+      id: BEACON_USER_ID,
+      displayName: "信标",
+      description: "文件传输助手",
+      avatarUrl: "/assets/beacon-avatar.png",
+      kind: "bot",
+      role: "member",
+      capabilities: {
+        canStartDirectConversation: true,
+        canJoinGroups: false,
+        canManage: false
+      }
+    });
+    expect(beacon.githubLogin).toBeUndefined();
+
+    db.prepare(`
+      UPDATE users
+      SET display_name = 'Modified', avatar_url = NULL, kind = 'system', last_login_at = ?
+      WHERE id = ?
+    `).run(new Date().toISOString(), BEACON_USER_ID);
+    db.prepare(`
+      UPDATE space_members
+      SET role = 'admin', removed_at = ?
+      WHERE space_id = ? AND user_id = ?
+    `).run(new Date().toISOString(), DEFAULT_SPACE_ID, BEACON_USER_ID);
+    db.close();
+    db = openTestDatabase(dataDir);
+
+    expect(db.prepare(`
+      SELECT display_name AS displayName, avatar_url AS avatarUrl, kind, last_login_at AS lastLoginAt
+      FROM users WHERE id = ?
+    `).get(BEACON_USER_ID)).toEqual({
+      displayName: BEACON_IDENTITY.displayName,
+      avatarUrl: BEACON_IDENTITY.avatarUrl,
+      kind: BEACON_IDENTITY.kind,
+      lastLoginAt: null
+    });
+    expect(db.prepare(`
+      SELECT role, removed_at AS removedAt
+      FROM space_members WHERE space_id = ? AND user_id = ?
+    `).get(DEFAULT_SPACE_ID, BEACON_USER_ID)).toEqual({ role: "member", removedAt: null });
+
+    await expect(createWorkspaceSession(db, BEACON_USER_ID)).rejects.toMatchObject({ code: "auth.identity_forbidden" });
+    await expect(listMembers(db, BEACON_USER_ID)).rejects.toMatchObject({ code: "auth.identity_forbidden" });
+  });
+
+  it("keeps Beacon visible without grants and isolates one direct conversation per user", async () => {
+    const firstInvite = await createInvite(db, request, { actorId: "usr_owner", code: "BEACON-FIRST" });
+    const first = await acceptInvite(db, request, {
+      code: firstInvite.code,
+      githubLogin: "beacon-first",
+      email: "beacon-first@example.com"
+    });
+    const secondInvite = await createInvite(db, request, { actorId: "usr_owner", code: "BEACON-SECOND" });
+    const second = await acceptInvite(db, request, {
+      code: secondInvite.code,
+      githubLogin: "beacon-second",
+      email: "beacon-second@example.com"
+    });
+
+    for (const member of [first, second]) {
+      expect((await listMembers(db, member.id)).find((item) => item.id === BEACON_USER_ID)).toMatchObject({
+        kind: "bot",
+        description: "文件传输助手"
+      });
+    }
+
+    const visibility = await updateManagedMemberVisibility(db, request, {
+      actorId: "usr_owner",
+      userId: first.id,
+      visibleUserIds: [BEACON_USER_ID]
+    });
+    expect(visibility.automaticUserIds).toContain(BEACON_USER_ID);
+    expect(visibility.grantedUserIds).not.toContain(BEACON_USER_ID);
+    expect(db.prepare(`
+      SELECT 1 FROM member_visibility_grants
+      WHERE space_id = ? AND viewer_user_id = ? AND visible_user_id = ?
+    `).get(DEFAULT_SPACE_ID, first.id, BEACON_USER_ID)).toBeUndefined();
+
+    const firstConversation = await createConversation(db, request, {
+      actorId: first.id,
+      type: "direct",
+      targetUserId: BEACON_USER_ID
+    });
+    const reused = await createConversation(db, request, {
+      actorId: first.id,
+      type: "direct",
+      targetUserId: BEACON_USER_ID
+    });
+    const secondConversation = await createConversation(db, request, {
+      actorId: second.id,
+      type: "direct",
+      targetUserId: BEACON_USER_ID
+    });
+
+    expect(reused.id).toBe(firstConversation.id);
+    expect(secondConversation.id).not.toBe(firstConversation.id);
+    expect(firstConversation).toMatchObject({
+      displayTitle: "信标",
+      otherMember: { id: BEACON_USER_ID, kind: "bot", description: "文件传输助手" }
+    });
+  });
+
+  it("uses conversation policy, not bot kind, to reject Beacon from groups", async () => {
+    const member = await ensureFixtureGroupMember(db);
+    await expect(createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "group",
+      title: "Invalid Beacon group",
+      memberIds: [BEACON_USER_ID]
+    })).rejects.toMatchObject({ code: "member.not_chat_participant" });
+
+    const group = await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "group",
+      title: "Regular group",
+      memberIds: [member.id]
+    });
+    await expect(addConversationMember(db, request, {
+      actorId: "usr_owner",
+      conversationId: group.id,
+      userId: BEACON_USER_ID
+    })).rejects.toMatchObject({ code: "member.not_chat_participant" });
+    expect(db.prepare(`
+      SELECT 1 FROM conversation_members
+      WHERE conversation_id = ? AND user_id = ? AND removed_at IS NULL
+    `).get(group.id, BEACON_USER_ID)).toBeUndefined();
+  });
+
+  it("prevents owners and other members from reading Beacon messages or known attachment ids", async () => {
+    const firstInvite = await createInvite(db, request, { actorId: "usr_owner", code: "BEACON-PRIVATE-FIRST" });
+    const first = await acceptInvite(db, request, {
+      code: firstInvite.code,
+      githubLogin: "beacon-private-first",
+      email: "beacon-private-first@example.com"
+    });
+    const secondInvite = await createInvite(db, request, { actorId: "usr_owner", code: "BEACON-PRIVATE-SECOND" });
+    const second = await acceptInvite(db, request, {
+      code: secondInvite.code,
+      githubLogin: "beacon-private-second",
+      email: "beacon-private-second@example.com"
+    });
+    const conversation = await createConversation(db, request, {
+      actorId: first.id,
+      type: "direct",
+      targetUserId: BEACON_USER_ID
+    });
+    const secretText = "private Beacon content";
+    await createStructuredMessage(db, request, {
+      actorId: first.id,
+      conversationId: conversation.id,
+      clientMessageId: "beacon-private-text",
+      content: textContent(secretText)
+    });
+    const upload = await reserveUpload(db, request, {
+      actorId: first.id,
+      conversationId: conversation.id,
+      visibility: "conversation",
+      fileName: "private-beacon.txt",
+      mimeType: "text/plain",
+      byteSize: 32
+    });
+    await completeUpload(db, request, {
+      actorId: first.id,
+      uploadId: upload.id,
+      storageVerifiedByteSize: 32
+    });
+    await createStructuredMessage(db, request, {
+      actorId: first.id,
+      conversationId: conversation.id,
+      clientMessageId: "beacon-private-file",
+      content: {
+        format: MESSAGE_CONTENT_FORMAT,
+        plainText: "[文件]",
+        blocks: [{ type: "attachment", attachmentId: upload.attachment.id }]
+      }
+    });
+
+    for (const actorId of ["usr_owner", second.id]) {
+      await expect(listMessages(db, actorId, conversation.id)).rejects.toThrow(WorkspacePermissionError);
+      await expect(reserveDownload(db, request, {
+        actorId,
+        attachmentId: upload.attachment.id
+      })).rejects.toThrow(WorkspacePermissionError);
+      await expect(removeAttachment(db, request, {
+        actorId,
+        attachmentId: upload.attachment.id
+      })).rejects.toThrow(WorkspacePermissionError);
+    }
+    expect((await listFiles(db, "usr_owner")).map((file) => file.id)).not.toContain(upload.attachment.id);
+    expect((await listFiles(db, first.id)).map((file) => file.id)).toContain(upload.attachment.id);
+
+    const ownerGroup = await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "group",
+      title: "Owner files"
+    });
+    await expect(createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: ownerGroup.id,
+      clientMessageId: "beacon-private-reference",
+      content: {
+        format: MESSAGE_CONTENT_FORMAT,
+        plainText: "[文件]",
+        blocks: [{ type: "attachment", attachmentId: upload.attachment.id }]
+      }
+    })).rejects.toThrow(WorkspacePermissionError);
+
+    const auditRows = db.prepare(`
+      SELECT action, target_type AS targetType, target_id AS targetId, result, reason
+      FROM audit_logs WHERE actor_user_id = ?
+    `).all(first.id);
+    expect(JSON.stringify(auditRows)).not.toContain(secretText);
+    expect(JSON.stringify(auditRows)).not.toContain("private-beacon.txt");
+  });
+
+  it("rejects OAuth binding, invite binding, role changes, and removal for Beacon", async () => {
+    await expect(bindGitHubUser(db, request, {
+      githubId: "beacon-oauth-id",
+      githubLogin: BEACON_IDENTITY.githubLogin,
+      email: "beacon-oauth@example.com"
+    })).rejects.toMatchObject({ code: "auth.identity_forbidden" });
+
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "BEACON-LOGIN" });
+    await expect(acceptInvite(db, request, {
+      code: invite.code,
+      githubId: "beacon-invite-id",
+      githubLogin: BEACON_IDENTITY.githubLogin,
+      email: "beacon-invite@example.com"
+    })).rejects.toMatchObject({ code: "auth.identity_forbidden" });
+    expect(db.prepare("SELECT uses FROM invites WHERE id = ?").get(invite.id).uses).toBe(0);
+
+    await expect(updateMemberRole(db, request, {
+      actorId: "usr_owner",
+      userId: BEACON_USER_ID,
+      role: "admin"
+    })).rejects.toMatchObject({ code: "member.system_managed" });
+    await expect(removeSpaceMember(db, request, {
+      actorId: "usr_owner",
+      userId: BEACON_USER_ID
+    })).rejects.toMatchObject({ code: "member.system_managed" });
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM audit_logs
+      WHERE target_id = ? AND result = 'rejected' AND reason = 'member.system_managed'
+    `).get(BEACON_USER_ID).count).toBe(2);
   });
 
   it("returns owner-only cumulative and today workspace statistics", async () => {
@@ -517,8 +767,8 @@ describe("workspace service", () => {
       displayName: "Visibility Unrelated"
     });
 
-    expect((await listMembers(db, admin.id)).map((item) => item.id)).toEqual([admin.id]);
-    expect((await listMembers(db, member.id)).map((item) => item.id)).toEqual([member.id]);
+    expect((await listMembers(db, admin.id)).map((item) => item.id)).toEqual([admin.id, BEACON_USER_ID]);
+    expect((await listMembers(db, member.id)).map((item) => item.id)).toEqual([member.id, BEACON_USER_ID]);
 
     await expect(async () =>
       await createConversation(db, request, {
@@ -575,7 +825,7 @@ describe("workspace service", () => {
       actorId: "usr_owner",
       userId: member.id
     })).toMatchObject({
-      automaticUserIds: ["usr_owner"],
+      automaticUserIds: ["usr_owner", BEACON_USER_ID],
       grantedUserIds: [unrelated.id]
     });
 
@@ -3372,7 +3622,7 @@ describe("workspace service", () => {
     const ownerEvents = await listWorkspaceEvents(db, "usr_owner", 0);
     expect(ownerEvents).toHaveLength(200);
     expect(ownerEvents.hasMore).toBe(true);
-  });
+  }, 15_000);
 
   it("writes group conversation creation before member-added events", async () => {
     const invite = await createInvite(db, request, { actorId: "usr_owner", code: "EVENT-ORDER" });

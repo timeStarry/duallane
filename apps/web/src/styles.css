@@ -5162,6 +5162,40 @@ html[data-theme="dark"] .workspace-mode {
   object-fit: cover;
 }
 
+.workspace-identity-name {
+  max-width: 100%;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  vertical-align: middle;
+}
+
+.workspace-identity-name > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-bot-badge {
+  min-width: 25px;
+  height: 16px;
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--relay) 28%, var(--line));
+  border-radius: 4px;
+  padding: 0 4px;
+  color: var(--relay-dark);
+  background: color-mix(in srgb, var(--relay) 8%, var(--panel));
+  font-size: 0.58rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
 .workspace-message.self {
   border-left: 2px solid color-mix(in srgb, var(--relay) 58%, transparent);
   background: color-mix(in srgb, var(--relay) 4%, transparent);

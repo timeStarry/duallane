@@ -126,6 +126,7 @@ type Message = {
   id: string;
   author: string;
   authorAvatarUrl?: string;
+  authorKind?: "human" | "bot" | "system";
   body: string;
   lane: "p2p" | "workspace";
   at: string;
@@ -147,14 +148,17 @@ type Message = {
 };
 type WorkspaceUser = {
   id: string;
-  githubLogin: string;
+  githubLogin?: string;
   displayName: string;
+  description?: string;
   avatarUrl?: string;
   kind: "human" | "bot" | "system";
   role: "owner" | "admin" | "member" | "auditor";
   roleLabel?: string;
   capabilities?: {
     canStartDirectConversation?: boolean;
+    canJoinGroups?: boolean;
+    canManage?: boolean;
   };
   joinedAt: string;
 };
@@ -949,6 +953,22 @@ function workspaceMemberKindLabel(kind: WorkspaceUser["kind"]) {
   return labels[kind];
 }
 
+function WorkspaceBotBadge({ kind }: { kind?: WorkspaceUser["kind"] }) {
+  if (kind !== "bot") {
+    return null;
+  }
+  return <span className="workspace-bot-badge" aria-label="官方机器人">BOT</span>;
+}
+
+function WorkspaceIdentityName({ name, kind }: { name: string; kind?: WorkspaceUser["kind"] }) {
+  return (
+    <span className="workspace-identity-name">
+      <span>{name}</span>
+      <WorkspaceBotBadge kind={kind} />
+    </span>
+  );
+}
+
 function workspaceRealtimeStateLabel(state: WorkspaceRealtimeState) {
   const labels: Record<WorkspaceRealtimeState, string> = {
     idle: "等待实时同步",
@@ -1210,7 +1230,9 @@ function findNextWorkspaceLink(text: string, cursor: number) {
 
 function getWorkspaceMentionOptions(members: WorkspaceUser[]) {
   return members.flatMap((member) => {
-    const labels = Array.from(new Set([member.displayName, member.githubLogin].map((value) => value.trim()).filter(Boolean)));
+    const labels = Array.from(new Set(
+      [member.displayName, member.githubLogin].filter((value): value is string => Boolean(value)).map((value) => value.trim())
+    ));
     return labels.map((label) => ({
       token: `@${label}`,
       member
@@ -1371,11 +1393,16 @@ function getTransferProgress(doneBytes: number, totalBytes: number) {
 
 
 function workspaceMemberSecondaryText(member: WorkspaceUser) {
-  const details = [`@${member.githubLogin}`];
+  const details: string[] = [];
+  if (member.description) {
+    details.push(member.description);
+  } else if (member.githubLogin) {
+    details.push(`@${member.githubLogin}`);
+  }
   if (member.role !== "member") {
     details.push(workspaceMemberRoleLabel(member));
   }
-  if (member.kind !== "human") {
+  if (member.kind === "system") {
     details.push(workspaceMemberKindLabel(member.kind));
   }
   return details.join(" · ");
@@ -1986,7 +2013,7 @@ export function App() {
         workspaceConversationTitle(conversation, workspaceBootstrap?.auth.currentUser.id),
         workspaceConversationPreview(conversation),
         conversation.type === "group" ? "群聊" : "私聊",
-        ...conversation.members.map((member) => `${member.displayName} ${member.githubLogin}`)
+        ...conversation.members.map((member) => `${member.displayName} ${member.githubLogin ?? ""}`)
       ].some((value) => value.toLowerCase().includes(query))
     );
   }, [workspaceBootstrap?.auth.currentUser.id, workspaceConversationQuery, workspaceConversations]);
@@ -2072,22 +2099,26 @@ export function App() {
     () => {
       const query = workspacePickerMemberQuery.trim().toLowerCase();
       return (workspaceBootstrap?.members ?? []).filter(
-        (member) =>
-          member.id !== workspaceBootstrap?.auth.currentUser.id &&
-          member.capabilities?.canStartDirectConversation !== false &&
+        (member) => {
+          const eligible = workspaceCreateMode === "group"
+            ? member.capabilities?.canJoinGroups === true
+            : member.capabilities?.canStartDirectConversation === true;
+          return member.id !== workspaceBootstrap?.auth.currentUser.id &&
+          eligible &&
           (!query ||
             [member.displayName, member.githubLogin, workspaceMemberRoleLabel(member), workspaceMemberKindLabel(member.kind)]
               .filter(Boolean)
-              .some((value) => value!.toLowerCase().includes(query)))
+              .some((value) => value!.toLowerCase().includes(query)));
+        }
       );
     },
-    [workspaceBootstrap?.auth.currentUser.id, workspaceBootstrap?.members, workspacePickerMemberQuery]
+    [workspaceBootstrap?.auth.currentUser.id, workspaceBootstrap?.members, workspaceCreateMode, workspacePickerMemberQuery]
   );
   const workspaceAddableMembers = useMemo(
     () =>
       (workspaceBootstrap?.members ?? []).filter(
         (member) =>
-          member.capabilities?.canStartDirectConversation !== false &&
+          member.capabilities?.canJoinGroups === true &&
           !workspaceSelectedConversation?.members.some((item) => item.id === member.id)
       ),
     [workspaceBootstrap?.members, workspaceSelectedConversation?.members]
@@ -2131,6 +2162,7 @@ export function App() {
           id: message.id,
           author,
           authorAvatarUrl: message.authorAvatarUrl,
+          authorKind: message.authorKind,
           body: message.plainText,
           lane: "workspace" as const,
           at: formatWorkspaceTime(message.createdAt),
@@ -2160,6 +2192,7 @@ export function App() {
             id: message.id,
             author: "你",
             authorAvatarUrl: workspaceBootstrap?.auth.currentUser.avatarUrl,
+            authorKind: "human" as const,
             body: message.body,
             lane: "workspace" as const,
             at: formatWorkspaceTime(message.createdAt),
@@ -6597,11 +6630,23 @@ export function App() {
                           aria-current={conversation.id === workspaceSelectedConversationId ? "true" : undefined}
                           onClick={() => selectWorkspaceConversation(conversation.id)}
                         >
-                          <span className="conversation-icon center-icon" aria-hidden="true">
-                            {conversation.type === "group" ? <UsersRound size={17} /> : <MessageSquare size={17} />}
-                          </span>
+                          {conversation.type === "group" ? (
+                            <span className="conversation-icon center-icon" aria-hidden="true"><UsersRound size={17} /></span>
+                          ) : (
+                            <WorkspaceAvatar
+                              name={workspaceConversationTitle(conversation, workspaceBootstrap.auth.currentUser.id)}
+                              avatarUrl={conversation.otherMember?.avatarUrl}
+                              className="conversation-icon"
+                              decorative
+                            />
+                          )}
                           <span>
-                            <strong>{workspaceConversationTitle(conversation, workspaceBootstrap.auth.currentUser.id)}</strong>
+                            <strong>
+                              <WorkspaceIdentityName
+                                name={workspaceConversationTitle(conversation, workspaceBootstrap.auth.currentUser.id)}
+                                kind={conversation.otherMember?.kind}
+                              />
+                            </strong>
                             <small>{workspaceConversationPreview(conversation)}</small>
                           </span>
                           <span className="conversation-side">
@@ -6749,8 +6794,8 @@ export function App() {
                                 >
                                   <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} decorative />
                                   <span>
-                                    <strong>{member.displayName}</strong>
-                                    <small>{member.githubLogin} · {workspaceMemberRoleLabel(member)}</small>
+                                    <strong><WorkspaceIdentityName name={member.displayName} kind={member.kind} /></strong>
+                                    <small>{workspaceMemberSecondaryText(member)}</small>
                                   </span>
                                   {workspaceGroupMemberIds.includes(member.id) && <Check size={17} />}
                                 </button>
@@ -6787,8 +6832,8 @@ export function App() {
                               >
                                 <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} decorative />
                                 <span>
-                                  <strong>{member.displayName}</strong>
-                                  <small>{member.githubLogin} · {workspaceMemberRoleLabel(member)}</small>
+                                  <strong><WorkspaceIdentityName name={member.displayName} kind={member.kind} /></strong>
+                                  <small>{workspaceMemberSecondaryText(member)}</small>
                                 </span>
                                 <MessageSquare size={17} />
                               </button>
@@ -6803,7 +6848,10 @@ export function App() {
                     workspaceSelectedConversation ? (
                       <WorkspaceChatPanel
                         title={workspaceConversationTitle(workspaceSelectedConversation, workspaceBootstrap.auth.currentUser.id)}
-                        subtitle={workspaceSelectedConversation.type === "group" ? `${workspaceConversationMemberCount(workspaceSelectedConversation)} 位成员` : "私聊"}
+                        titleKind={workspaceSelectedConversation.otherMember?.kind}
+                        subtitle={workspaceSelectedConversation.type === "group"
+                          ? `${workspaceConversationMemberCount(workspaceSelectedConversation)} 位成员`
+                          : workspaceSelectedConversation.otherMember?.description || "私聊"}
                         leadingAction={
                           <button className="icon-button mobile-only" type="button" title="返回会话列表" onClick={() => setWorkspaceMobilePane("list")}>
                             <ArrowLeft size={16} />
@@ -7170,12 +7218,12 @@ export function App() {
                           <article className="workspace-member-card" role="listitem" key={member.id}>
                             <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} decorative />
                             <span>
-                              <strong>{member.displayName}</strong>
+                              <strong><WorkspaceIdentityName name={member.displayName} kind={member.kind} /></strong>
                               <small>{workspaceMemberSecondaryText(member)}</small>
                             </span>
                             {member.id !== workspaceBootstrap.auth.currentUser.id &&
                               workspaceBootstrap.permissions.canCreateDirect &&
-                              member.capabilities?.canStartDirectConversation !== false && (
+                              member.capabilities?.canStartDirectConversation === true && (
                               <button
                                 className="icon-button"
                                 type="button"
@@ -7369,11 +7417,13 @@ export function App() {
                               <div className="workspace-role-row" key={member.id}>
                                 <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} className="small" decorative />
                                 <span>
-                                  <strong>{member.displayName}</strong>
-                                  <small>{member.githubLogin} · 当前 {workspaceMemberRoleLabel(member)}</small>
+                                  <strong><WorkspaceIdentityName name={member.displayName} kind={member.kind} /></strong>
+                                  <small>{workspaceMemberSecondaryText(member)}</small>
                                 </span>
                                 {member.id === workspaceBootstrap.auth.currentUser.id ? (
                                   <em>当前账号</em>
+                                ) : member.capabilities?.canManage === false ? (
+                                  <em>系统维护</em>
                                 ) : (
                                   <span className="workspace-role-actions">
                                     <label>
@@ -7453,9 +7503,9 @@ export function App() {
                                           />
                                           <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} className="small" decorative />
                                           <span>
-                                            <strong>{member.displayName}</strong>
+                                            <strong><WorkspaceIdentityName name={member.displayName} kind={member.kind} /></strong>
                                             <small>
-                                              {member.githubLogin} · {automatic ? "已有私聊" : granted ? "已授权" : workspaceMemberRoleLabel(member)}
+                                              {member.description || (automatic ? "已有私聊" : granted ? "已授权" : workspaceMemberSecondaryText(member))}
                                             </small>
                                           </span>
                                         </label>
@@ -7636,11 +7686,16 @@ export function App() {
                               decorative
                             />
                             <div>
-                              <strong>{workspaceConversationTitle(workspaceSelectedConversation, workspaceBootstrap.auth.currentUser.id)}</strong>
+                              <strong>
+                                <WorkspaceIdentityName
+                                  name={workspaceConversationTitle(workspaceSelectedConversation, workspaceBootstrap.auth.currentUser.id)}
+                                  kind={workspaceSelectedConversation.otherMember?.kind}
+                                />
+                              </strong>
                               <small>
                                 {workspaceSelectedConversation.type === "group"
                                   ? `${workspaceConversationMemberCount(workspaceSelectedConversation)} 位成员`
-                                  : "私聊"}
+                                  : workspaceSelectedConversation.otherMember?.description || "私聊"}
                               </small>
                             </div>
                           </div>
@@ -7684,8 +7739,8 @@ export function App() {
                                 <div className="member context-member" key={member.id}>
                                   <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} className="small" decorative />
                                   <span>
-                                    <strong>{member.displayName}</strong>
-                                    <small>{member.githubLogin} · {workspaceMemberRoleLabel(member)}</small>
+                                    <strong><WorkspaceIdentityName name={member.displayName} kind={member.kind} /></strong>
+                                    <small>{workspaceMemberSecondaryText(member)}</small>
                                   </span>
                                   {workspaceSelectedConversation.type === "group" &&
                                     workspaceCanManageSelectedGroup &&
@@ -7724,8 +7779,8 @@ export function App() {
                                     >
                                       <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} className="small" decorative />
                                       <span>
-                                        <strong>{member.displayName}</strong>
-                                        <small>{member.githubLogin} · {workspaceMemberRoleLabel(member)}</small>
+                                        <strong><WorkspaceIdentityName name={member.displayName} kind={member.kind} /></strong>
+                                        <small>{workspaceMemberSecondaryText(member)}</small>
                                       </span>
                                       {workspaceGroupMemberBusyId === member.id ? <RefreshCw size={15} /> : <Plus size={15} />}
                                     </button>
@@ -8858,6 +8913,7 @@ function WorkspaceReactionBar({
 }
 function WorkspaceChatPanel({
   title,
+  titleKind,
   subtitle,
   leadingAction,
   trailingAction,
@@ -8893,6 +8949,7 @@ function WorkspaceChatPanel({
   sending
 }: {
   title: string;
+  titleKind?: WorkspaceUser["kind"];
   subtitle: string;
   leadingAction?: ReactNode;
   trailingAction?: ReactNode;
@@ -9115,7 +9172,7 @@ function WorkspaceChatPanel({
       <header className="workspace-chat-header">
         {leadingAction}
         <div className="workspace-chat-heading">
-          <strong>{title}</strong>
+          <strong><WorkspaceIdentityName name={title} kind={titleKind} /></strong>
           <span>{subtitle}</span>
         </div>
         <div className="workspace-chat-actions">{trailingAction}</div>
@@ -9208,7 +9265,7 @@ function WorkspaceChatPanel({
                   <div className="workspace-message-content">
                     {!groupedWithPrevious && (
                       <div className="workspace-message-meta">
-                        <strong>{message.author}</strong>
+                        <strong><WorkspaceIdentityName name={message.author} kind={message.authorKind} /></strong>
                         <time>{message.at}</time>
                       </div>
                     )}
@@ -9924,8 +9981,8 @@ function MentionPicker({
           <button className="mention-row" type="button" key={member.id} onClick={() => onSelect(member)}>
             <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} className="small" decorative />
             <span>
-              <strong>{member.displayName}</strong>
-              <small>{member.githubLogin} · {workspaceMemberRoleLabel(member)}</small>
+              <strong><WorkspaceIdentityName name={member.displayName} kind={member.kind} /></strong>
+              <small>{workspaceMemberSecondaryText(member)}</small>
             </span>
           </button>
         ))

@@ -27,6 +27,15 @@ describe("workspace avatar", () => {
     expect(sanitizeWorkspaceAvatarUrl("not a url")).toBe("");
   });
 
+  it("accepts controlled same-origin system avatar assets", () => {
+    expect(sanitizeWorkspaceAvatarUrl("/assets/beacon-avatar.png")).toBe("/assets/beacon-avatar.png");
+    expect(sanitizeWorkspaceAvatarUrl("/assets/../private.png")).toBe("");
+    const html = renderToStaticMarkup(
+      <WorkspaceAvatar name="信标" avatarUrl="/assets/beacon-avatar.png" />
+    );
+    expect(html).toContain('src="/assets/beacon-avatar.png"');
+  });
+
   it("renders a stable initial when no safe avatar exists", () => {
     expect(workspaceAvatarInitial(" Alice")).toBe("A");
     expect(workspaceAvatarInitial("")).toBe("?");

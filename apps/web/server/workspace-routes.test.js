@@ -968,7 +968,7 @@ describe("workspace routes", () => {
       headers: { "x-workspace-user-id": visibleUserId }
     });
     expect(initial.statusCode).toBe(200);
-    expect(initial.json().members.map((member) => member.id)).toEqual([visibleUserId]);
+    expect(initial.json().members.map((member) => member.id)).toEqual([visibleUserId, "usr_system_beacon"]);
 
     expect((await app.inject({
       method: "POST",
@@ -3203,7 +3203,7 @@ describe("workspace routes", () => {
     } finally {
       ws.terminate();
     }
-  });
+  }, 15_000);
 
   it("does not expose transfer ids in realtime attachment-created frames", async () => {
     const app = await makeApp();

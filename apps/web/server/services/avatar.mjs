@@ -19,3 +19,11 @@ export function sanitizeGitHubAvatarUrl(value) {
     return "";
   }
 }
+
+export function sanitizeWorkspaceAvatarUrl(value) {
+  const candidate = typeof value === "string" ? value.trim() : "";
+  if (/^\/assets\/[a-z0-9][a-z0-9._/-]*$/i.test(candidate) && !candidate.includes("..")) {
+    return candidate;
+  }
+  return sanitizeGitHubAvatarUrl(candidate);
+}

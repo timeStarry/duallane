@@ -10,9 +10,17 @@ import {
   replaceMemberVisibilityGrants
 } from "./member-visibility.mjs";
 import { writeAudit } from "./audit.mjs";
-import { sanitizeGitHubAvatarUrl } from "./avatar.mjs";
+import { sanitizeGitHubAvatarUrl, sanitizeWorkspaceAvatarUrl } from "./avatar.mjs";
 import { getReactionEmote, isVisibleReactionEmoteKey } from "./emote-catalog.mjs";
 import { markdownToPlainText } from "./markdown.mjs";
+import {
+  getSystemIdentityConversationCapabilities,
+  getSystemIdentityDefinition,
+  hasParticipantOnlyContent,
+  isAuthenticationAllowedIdentity,
+  isMemberManagedIdentity,
+  listAlwaysVisibleSystemIdentityIds
+} from "./system-identities.mjs";
 
 export const MESSAGE_CONTENT_FORMAT = "duallane.message+json;v=1";
 export const DEFAULT_RETENTION_COUNT = 10000;
@@ -56,6 +64,13 @@ async function runWorkspaceTransaction(db, callback) {
 }
 
 export async function createWorkspaceSession(db, userId, ttlMs = 1000 * 60 * 60 * 24 * 14) {
+  const identity = await getUserWithRole(db, normalizeString(userId));
+  if (!identity) {
+    throw new WorkspaceAuthError("auth.required", "请先登录共享空间");
+  }
+  if (!isAuthenticationAllowedIdentity(identity)) {
+    throw new WorkspaceAuthError("auth.identity_forbidden", "该系统身份不能登录共享空间");
+  }
   const token = randomBytes(32).toString("base64url");
   const now = new Date();
   const expiresAt = new Date(now.getTime() + ttlMs);
@@ -63,8 +78,8 @@ export async function createWorkspaceSession(db, userId, ttlMs = 1000 * 60 * 60 
   await db.prepare(`
     INSERT INTO sessions (id, token_hash, user_id, created_at, expires_at, revoked_at)
     VALUES (?, ?, ?, ?, ?, NULL)
-  `).run(id, hashSecret(token), userId, now.toISOString(), expiresAt.toISOString());
-  return { id, token, userId, expiresAt: expiresAt.toISOString() };
+  `).run(id, hashSecret(token), identity.id, now.toISOString(), expiresAt.toISOString());
+  return { id, token, userId: identity.id, expiresAt: expiresAt.toISOString() };
 }
 
 export async function getSessionUserId(db, token) {
@@ -73,12 +88,17 @@ export async function getSessionUserId(db, token) {
     return null;
   }
   const row = await db.prepare(`
-    SELECT user_id AS userId
+    SELECT sessions.user_id AS userId
     FROM sessions
-    WHERE token_hash = ?
-      AND revoked_at IS NULL
-      AND expires_at > ?
-  `).get(hashSecret(normalized), new Date().toISOString());
+    INNER JOIN users ON users.id = sessions.user_id AND users.kind = 'human'
+    INNER JOIN space_members sm
+      ON sm.user_id = sessions.user_id
+      AND sm.space_id = ?
+      AND sm.removed_at IS NULL
+    WHERE sessions.token_hash = ?
+      AND sessions.revoked_at IS NULL
+      AND sessions.expires_at > ?
+  `).get(DEFAULT_SPACE_ID, hashSecret(normalized), new Date().toISOString());
   return row?.userId ?? null;
 }
 
@@ -96,10 +116,7 @@ export async function revokeWorkspaceSession(db, token) {
 }
 
 export async function getWorkspaceBootstrap(db, userId = "usr_owner") {
-  const currentUser = await getUserWithRole(db, userId);
-  if (!currentUser) {
-    throw new WorkspaceAuthError("auth.required", "请先登录共享空间");
-  }
+  const currentUser = await requireActor(db, userId);
   await releaseStaleUploadReservations(db);
   const eventCursor = await getWorkspaceEventCursor(db);
 
@@ -281,8 +298,9 @@ export async function updateManagedMemberVisibility(db, request, input) {
     targetId: viewerUserId
   });
   const viewer = await ensureActiveSpaceMember(db, viewerUserId);
+  const alwaysVisibleIds = new Set(listAlwaysVisibleSystemIdentityIds());
   const visibleUserIds = uniqueStrings(Array.isArray(input.visibleUserIds) ? input.visibleUserIds : [])
-    .filter((userId) => userId !== viewer.id);
+    .filter((userId) => userId !== viewer.id && !alwaysVisibleIds.has(userId));
   try {
     await Promise.all(visibleUserIds.map(async (userId) => await ensureActiveSpaceMember(db, userId)));
   } catch (error) {
@@ -370,6 +388,19 @@ export async function updateMemberRole(db, request, input) {
       reason: "member not found"
     });
     throw new WorkspaceValidationError("member.not_found", "空间成员不存在");
+  }
+
+  if (!isMemberManagedIdentity(member)) {
+    await writeWorkspaceAudit(db, request, {
+      actorUserId: actor.id,
+      actorGithubLogin: actor.githubLogin,
+      action: "member.role_update",
+      targetType: "member",
+      targetId: member.id,
+      result: "rejected",
+      reason: "member.system_managed"
+    });
+    throw new WorkspaceValidationError("member.system_managed", "系统成员的权限由服务维护");
   }
 
   if (member.role === "owner" && nextRole !== "owner") {
@@ -483,6 +514,19 @@ export async function removeSpaceMember(db, request, input) {
     throw new WorkspaceValidationError("member.not_found", "空间成员不存在");
   }
 
+  if (!isMemberManagedIdentity(member)) {
+    await writeWorkspaceAudit(db, request, {
+      actorUserId: actor.id,
+      actorGithubLogin: actor.githubLogin,
+      action: "member.remove",
+      targetType: "member",
+      targetId: member.id,
+      result: "rejected",
+      reason: "member.system_managed"
+    });
+    throw new WorkspaceValidationError("member.system_managed", "系统成员不能被移出空间");
+  }
+
   if (member.role === "owner") {
     const ownerCount = (await db.prepare(`
       SELECT COUNT(*) AS count
@@ -588,7 +632,7 @@ export async function bindGitHubUser(db, request, profile) {
       assertGitHubIdentityCanBind(user, githubId);
     }
   } catch (error) {
-    if (error instanceof WorkspaceError && error.code === "auth.identity_conflict") {
+    if (error instanceof WorkspaceError && ["auth.identity_conflict", "auth.identity_forbidden"].includes(error.code)) {
       await writeWorkspaceAudit(db, request, {
         actorUserId: null,
         actorGithubLogin: githubLogin || null,
@@ -805,7 +849,7 @@ export async function acceptInvite(db, request, input) {
   try {
     existing = await resolveGitHubIdentityUser(db, { githubId, githubLogin, email });
   } catch (error) {
-    if (error instanceof WorkspaceError && error.code === "auth.identity_conflict") {
+    if (error instanceof WorkspaceError && ["auth.identity_conflict", "auth.identity_forbidden"].includes(error.code)) {
       await writeWorkspaceAudit(db, request, {
         actorGithubLogin: githubLogin || null,
         action: "invite.accept",
@@ -920,6 +964,7 @@ async function resolveGitHubIdentityUser(db, { githubId, githubLogin, email }) {
   ).values()];
 
   if (byId) {
+    assertAuthenticationIdentityAllowed(byId);
     if (aliasMatches.some((candidate) => candidate.id !== byId.id)) {
       throwGitHubIdentityConflict();
     }
@@ -930,13 +975,21 @@ async function resolveGitHubIdentityUser(db, { githubId, githubLogin, email }) {
     throwGitHubIdentityConflict();
   }
   const aliasUser = aliasMatches[0] ?? null;
+  assertAuthenticationIdentityAllowed(aliasUser);
   assertGitHubIdentityCanBind(aliasUser, githubId);
   return aliasUser;
 }
 
 function assertGitHubIdentityCanBind(user, githubId) {
+  assertAuthenticationIdentityAllowed(user);
   if (user?.github_id && user.github_id !== githubId) {
     throwGitHubIdentityConflict();
+  }
+}
+
+function assertAuthenticationIdentityAllowed(user) {
+  if (user && !isAuthenticationAllowedIdentity(user)) {
+    throw new WorkspaceAuthError("auth.identity_forbidden", "该系统身份不能绑定登录凭据");
   }
 }
 
@@ -1037,7 +1090,7 @@ export async function createConversation(db, request, input) {
       await writeConversationCreateRejection(db, request, actor, "target not visible");
       throw new WorkspaceValidationError("conversation.invalid_target", "成员不存在或当前不可见");
     }
-    if (target.role === "auditor") {
+    if (!canStartDirectConversationWith(target)) {
       await writeConversationCreateRejection(db, request, actor, "invalid target");
       throw new WorkspaceValidationError("conversation.invalid_target", "请选择可聊天的空间成员");
     }
@@ -1071,7 +1124,7 @@ export async function createConversation(db, request, input) {
   let members;
   try {
     members = await Promise.all(memberIds.map(async (memberId) => {
-      const member = await ensureChatParticipantMember(db, memberId);
+      const member = await ensureGroupParticipantMember(db, memberId);
       if (memberId !== actor.id && !await canViewMember(db, {
         spaceId: DEFAULT_SPACE_ID,
         actor,
@@ -1155,7 +1208,7 @@ export async function addConversationMember(db, request, input) {
   const conversation = await getGroupConversationForManage(db, conversationId);
   let member;
   try {
-    member = await ensureChatParticipantMember(db, userId);
+    member = await ensureGroupParticipantMember(db, userId);
   } catch (error) {
     if (error instanceof WorkspaceError) {
       await writeWorkspaceAudit(db, request, {
@@ -2248,7 +2301,15 @@ export async function removeAttachment(db, request, input) {
   if (!attachment || attachment.spaceId !== DEFAULT_SPACE_ID || attachment.status === "removed") {
     throw new WorkspaceValidationError("file.not_found", "文件不存在或已移除");
   }
-  if (attachment.uploaderId !== actor.id && !["owner", "admin"].includes(actor.role)) {
+  const participantOnly = attachment.conversationId
+    ? await isParticipantOnlyConversation(db, attachment.conversationId)
+    : false;
+  const canRemove = attachment.uploaderId === actor.id || (
+    !participantOnly &&
+    attachment.visibility !== "private_staging" &&
+    ["owner", "admin"].includes(actor.role)
+  );
+  if (!canRemove) {
     await writeWorkspaceAudit(db, request, {
       actorUserId: actor.id,
       actorGithubLogin: actor.githubLogin,
@@ -2615,7 +2676,7 @@ async function listMessageReactionGroups(db, messageIds, actor = null) {
       id: row.userId,
       displayName: row.displayName,
       githubLogin: row.githubLogin,
-      avatarUrl: sanitizeGitHubAvatarUrl(row.avatarUrl) || undefined,
+      avatarUrl: sanitizeWorkspaceAvatarUrl(row.avatarUrl) || undefined,
       createdAt: row.reactionCreatedAt
     });
     group.count += 1;
@@ -2714,7 +2775,7 @@ async function validateAttachmentForMessage(db, actor, conversationId, attachmen
   if (attachment.visibility === "private_staging") {
     throw new WorkspaceValidationError("message.invalid_attachment", "附件尚未发布");
   }
-  if (attachment.uploaderId !== actor.id && !["owner", "admin"].includes(actor.role)) {
+  if (attachment.uploaderId !== actor.id) {
     await validateAttachmentVisible(db, null, actor, attachment);
   }
   if (attachment.visibility === "conversation" && attachment.conversationId && attachment.conversationId !== conversationId) {
@@ -2726,10 +2787,14 @@ async function validateAttachmentVisible(db, request, actor, attachment) {
   if (attachment.visibility === "space") {
     return;
   }
-  if (attachment.uploaderId === actor.id || ["owner", "admin"].includes(actor.role)) {
+  if (attachment.uploaderId === actor.id) {
     return;
   }
   if (attachment.visibility === "conversation" && attachment.conversationId) {
+    const participantOnly = await isParticipantOnlyConversation(db, attachment.conversationId);
+    if (!participantOnly && ["owner", "admin"].includes(actor.role)) {
+      return;
+    }
     const membership = await db.prepare(`
       SELECT 1
       FROM conversation_members cm
@@ -2761,6 +2826,19 @@ async function validateAttachmentVisible(db, request, actor, attachment) {
     });
   }
   throw new WorkspacePermissionError("permission.denied", "你没有访问该文件的权限");
+}
+
+async function isParticipantOnlyConversation(db, conversationId) {
+  if (!conversationId) {
+    return false;
+  }
+  const members = await db.prepare(`
+    SELECT cm.user_id AS id
+    FROM conversations c
+    INNER JOIN conversation_members cm ON cm.conversation_id = c.id
+    WHERE c.id = ? AND c.space_id = ? AND c.type = 'direct'
+  `).all(conversationId, DEFAULT_SPACE_ID);
+  return members.some((member) => hasParticipantOnlyContent(member));
 }
 
 async function getDownloadableAttachmentForActor(db, request, actor, attachmentId) {
@@ -2798,24 +2876,27 @@ async function getAttachment(db, attachmentId) {
 
 function publicMember(member, actor = null) {
   if (!member) return null;
+  const systemIdentity = getSystemIdentityDefinition(member);
   const projectedRole = publicMemberRole(member, actor);
   const canStartDirectConversation = Boolean(
     actor &&
     actor.id !== member.id &&
-    member.kind === "human" &&
-    member.role !== "auditor" &&
+    canStartDirectConversationWith(member) &&
     hasCapability(actor.role, "conversation.create_direct")
   );
   return {
     id: member.id,
-    githubLogin: member.githubLogin,
-    displayName: member.displayName,
-    avatarUrl: sanitizeGitHubAvatarUrl(member.avatarUrl),
-    kind: member.kind,
+    githubLogin: member.kind === "human" ? member.githubLogin : undefined,
+    displayName: systemIdentity?.displayName ?? member.displayName,
+    description: systemIdentity?.description,
+    avatarUrl: sanitizeWorkspaceAvatarUrl(systemIdentity?.avatarUrl ?? member.avatarUrl),
+    kind: systemIdentity?.kind ?? member.kind,
     role: projectedRole,
     roleLabel: ROLE_LABELS[projectedRole] ?? "成员",
     capabilities: {
-      canStartDirectConversation
+      canStartDirectConversation,
+      canJoinGroups: canJoinGroupConversation(member),
+      canManage: Boolean(actor && isMemberManagedIdentity(member) && hasCapability(actor.role, "member.role_update"))
     },
     joinedAt: member.joinedAt
   };
@@ -2868,14 +2949,15 @@ function publicAttachment(attachment, actor) {
 async function publicMessage(message, actor = null, db = null) {
   if (!message) return null;
   const content = publicMessageContent(message.content);
+  const authorIdentity = getSystemIdentityDefinition(message.authorId);
   return {
     id: message.id,
     conversationId: message.conversationId,
     authorId: message.authorId,
-    authorName: message.authorName,
-    authorGithubLogin: message.authorGithubLogin,
-    authorAvatarUrl: sanitizeGitHubAvatarUrl(message.authorAvatarUrl),
-    authorKind: message.authorKind,
+    authorName: authorIdentity?.displayName ?? message.authorName,
+    authorGithubLogin: message.authorKind === "human" ? message.authorGithubLogin : undefined,
+    authorAvatarUrl: sanitizeWorkspaceAvatarUrl(authorIdentity?.avatarUrl ?? message.authorAvatarUrl),
+    authorKind: authorIdentity?.kind ?? message.authorKind,
     kind: message.kind,
     clientMessageId: message.clientMessageId,
     content,
@@ -3324,16 +3406,32 @@ async function canSeeAttachmentEvent(db, actor, event) {
   if (!attachment || attachment.spaceId !== DEFAULT_SPACE_ID) {
     return false;
   }
-  if (attachment.uploaderId === actor.id || ["owner", "admin"].includes(actor.role)) {
+  if (attachment.uploaderId === actor.id) {
     return true;
   }
-  if (event.type === "attachment.created" || event.type === "attachment.failed") {
+  if (attachment.visibility === "private_staging") {
     return false;
+  }
+  const participantOnly = attachment.visibility === "conversation" && attachment.conversationId
+    ? await isParticipantOnlyConversation(db, attachment.conversationId)
+    : false;
+  if (participantOnly) {
+    return Boolean(await db.prepare(`
+      SELECT 1
+      FROM conversation_members
+      WHERE conversation_id = ? AND user_id = ? AND removed_at IS NULL
+    `).get(attachment.conversationId, actor.id));
+  }
+  if (event.type === "attachment.created" || event.type === "attachment.failed") {
+    return ["owner", "admin"].includes(actor.role);
   }
   if (attachment.visibility === "space") {
     return actor.role !== "auditor";
   }
   if (attachment.visibility === "conversation" && attachment.conversationId) {
+    if (["owner", "admin"].includes(actor.role)) {
+      return true;
+    }
     if (!hasCapability(actor.role, "conversation.read")) {
       return false;
     }
@@ -3535,6 +3633,9 @@ async function requireActor(db, userId) {
   if (!actor) {
     throw new WorkspaceAuthError("auth.required", "请先登录共享空间");
   }
+  if (!isAuthenticationAllowedIdentity(actor)) {
+    throw new WorkspaceAuthError("auth.identity_forbidden", "该系统身份不能执行用户操作");
+  }
   return actor;
 }
 
@@ -3565,12 +3666,31 @@ async function ensureActiveSpaceMember(db, userId) {
   return user;
 }
 
-async function ensureChatParticipantMember(db, userId) {
+async function ensureGroupParticipantMember(db, userId) {
   const user = await ensureActiveSpaceMember(db, userId);
-  if (!hasCapability(user.role, "conversation.read") || !hasCapability(user.role, "message.create")) {
-    throw new WorkspaceValidationError("member.not_chat_participant", "请选择可聊天的空间成员");
+  if (!canJoinGroupConversation(user)) {
+    throw new WorkspaceValidationError("member.not_chat_participant", "请选择可加入群聊的空间成员");
   }
   return user;
+}
+
+function canStartDirectConversationWith(member) {
+  const systemIdentity = getSystemIdentityDefinition(member);
+  if (systemIdentity) {
+    return getSystemIdentityConversationCapabilities(systemIdentity).canStartDirectConversation;
+  }
+  return member?.kind === "human" && member.role !== "auditor";
+}
+
+function canJoinGroupConversation(member) {
+  if (!hasCapability(member?.role, "conversation.read") || !hasCapability(member?.role, "message.create")) {
+    return false;
+  }
+  const systemIdentity = getSystemIdentityDefinition(member);
+  if (systemIdentity) {
+    return getSystemIdentityConversationCapabilities(systemIdentity).canJoinGroups;
+  }
+  return member?.kind === "human";
 }
 
 async function isActiveConversationMember(db, userId, conversationId) {

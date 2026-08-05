@@ -1,3 +1,5 @@
+import { listAlwaysVisibleSystemIdentityIds } from "./system-identities.mjs";
+
 export const MEMBER_VISIBILITY_BASIS = "direct_contacts";
 
 export async function listVisibleMemberIds(db, { spaceId, actor }) {
@@ -39,7 +41,11 @@ export async function listVisibleMemberIds(db, { spaceId, actor }) {
         )
       )
   `).all(spaceId, actor.id, actor.id, spaceId, spaceId, actor.id);
-  return new Set(rows.map((row) => row.userId));
+  const visibleIds = new Set(rows.map((row) => row.userId));
+  for (const userId of await listActiveAlwaysVisibleMemberIds(db, spaceId)) {
+    visibleIds.add(userId);
+  }
+  return visibleIds;
 }
 
 export async function canViewMember(db, { spaceId, actor, visibleUserId }) {
@@ -74,8 +80,12 @@ export async function getMemberVisibilityRule(db, { spaceId, viewerUserId }) {
     WHERE space_id = ? AND viewer_user_id = ?
     ORDER BY visible_user_id
   `).all(spaceId, viewerUserId);
-  const automaticUserIds = automaticRows.map((row) => row.userId);
-  const grantedUserIds = grantedRows.map((row) => row.userId);
+  const automaticUserIds = Array.from(new Set([
+    ...automaticRows.map((row) => row.userId),
+    ...await listActiveAlwaysVisibleMemberIds(db, spaceId)
+  ]));
+  const alwaysVisibleIds = new Set(listAlwaysVisibleSystemIdentityIds());
+  const grantedUserIds = grantedRows.map((row) => row.userId).filter((userId) => !alwaysVisibleIds.has(userId));
   return {
     basis: MEMBER_VISIBILITY_BASIS,
     viewerUserId,
@@ -92,11 +102,12 @@ export async function replaceMemberVisibilityGrants(db, {
   createdBy,
   createdAt
 }) {
+  const alwaysVisibleIds = new Set(listAlwaysVisibleSystemIdentityIds());
   await db.prepare(`
     DELETE FROM member_visibility_grants
     WHERE space_id = ? AND viewer_user_id = ?
   `).run(spaceId, viewerUserId);
-  for (const visibleUserId of visibleUserIds) {
+  for (const visibleUserId of visibleUserIds.filter((userId) => !alwaysVisibleIds.has(userId))) {
     await db.prepare(`
       INSERT INTO member_visibility_grants (
         space_id, viewer_user_id, visible_user_id, created_by, created_at
@@ -104,4 +115,19 @@ export async function replaceMemberVisibilityGrants(db, {
       VALUES (?, ?, ?, ?, ?)
     `).run(spaceId, viewerUserId, visibleUserId, createdBy, createdAt);
   }
+}
+
+async function listActiveAlwaysVisibleMemberIds(db, spaceId) {
+  const activeIds = [];
+  for (const userId of listAlwaysVisibleSystemIdentityIds()) {
+    const row = await db.prepare(`
+      SELECT user_id AS userId
+      FROM space_members
+      WHERE space_id = ? AND user_id = ? AND removed_at IS NULL
+    `).get(spaceId, userId);
+    if (row) {
+      activeIds.push(row.userId);
+    }
+  }
+  return activeIds;
 }

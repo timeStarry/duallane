@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const baseURL = "http://127.0.0.1:5173";
+const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER === "true";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -31,13 +32,13 @@ export default defineConfig({
     {
       command: "node e2e/support/test-server.mjs",
       url: "http://127.0.0.1:8787/api/health",
-      reuseExistingServer: false,
+      reuseExistingServer,
       timeout: 120_000
     },
     {
       command: "pnpm --filter @duallane/web exec vite --host 127.0.0.1 --port 5173 --strictPort",
       url: baseURL,
-      reuseExistingServer: false,
+      reuseExistingServer,
       timeout: 120_000
     }
   ]

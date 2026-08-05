@@ -217,8 +217,52 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
 
     const initialMemberDirectory = await memberPage.request.get("/api/workspace/members");
     expect(initialMemberDirectory.status()).toBe(200);
-    expect((await initialMemberDirectory.json() as { members: Array<{ id: string }> }).members.map((member) => member.id))
-      .toEqual([acceptedMember.id]);
+    const initialMembers = (await initialMemberDirectory.json() as {
+      members: Array<{
+        id: string;
+        displayName: string;
+        description?: string;
+        kind: string;
+        capabilities?: { canStartDirectConversation?: boolean; canJoinGroups?: boolean };
+      }>;
+    }).members;
+    expect(initialMembers.map((member) => member.id)).toEqual([acceptedMember.id, "usr_system_beacon"]);
+    expect(initialMembers.find((member) => member.id === "usr_system_beacon")).toMatchObject({
+      displayName: "信标",
+      description: "文件传输助手",
+      kind: "bot",
+      capabilities: {
+        canStartDirectConversation: true,
+        canJoinGroups: false
+      }
+    });
+
+    await openWorkspaceCreateMenu(memberPage, "发起私聊");
+    const memberDirectPicker = memberPage.getByRole("region", { name: "发起私聊" });
+    const beaconPickerRow = memberDirectPicker.getByRole("button", { name: /信标/ });
+    await expect(beaconPickerRow.getByText("BOT", { exact: true })).toBeVisible();
+    await expect(beaconPickerRow.getByText("文件传输助手", { exact: true })).toBeVisible();
+    await beaconPickerRow.click();
+
+    const beaconRegion = memberPage.getByRole("region", { name: "信标" });
+    await expect(beaconRegion).toBeVisible();
+    await expect(beaconRegion.locator(".workspace-chat-heading").getByText("BOT", { exact: true })).toBeVisible();
+    await expect(beaconRegion.locator(".workspace-chat-heading").getByText("文件传输助手", { exact: true })).toBeVisible();
+    const beaconText = "workspace-e2e-beacon-private";
+    await beaconRegion.getByLabel("输入消息").fill(beaconText);
+    await sendWorkspaceComposer(beaconRegion);
+    await expect(beaconRegion.getByText(beaconText, { exact: true })).toBeVisible();
+
+    const beaconConversationId = await workspaceConversationId(memberPage, "信标");
+    const reusedBeacon = await memberPage.request.post("/api/workspace/conversations", {
+      data: { type: "direct", targetUserId: "usr_system_beacon" }
+    });
+    expect(reusedBeacon.status()).toBe(201);
+    expect((await reusedBeacon.json() as { conversation: { id: string } }).conversation.id).toBe(beaconConversationId);
+    const forbiddenBeaconMessages = await ownerPage.request.get(
+      `/api/workspace/conversations/${encodeURIComponent(beaconConversationId)}/messages`
+    );
+    expect(forbiddenBeaconMessages.status()).toBe(403);
 
     await openWorkspaceCreateMenu(ownerPage, "发起私聊");
     const directPicker = ownerPage.getByRole("region", { name: "发起私聊" });
@@ -254,6 +298,9 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(memberPage.getByRole("heading", { name: "可联系成员" })).toBeVisible();
     await expect(memberPage.getByRole("button", { name: "主人", exact: true })).toHaveCount(0);
     await expect(memberPage.locator(".workspace-member-card").filter({ hasText: "timeStarry" }).getByText("管理员", { exact: false })).toBeVisible();
+    const beaconMemberRow = memberPage.locator(".workspace-member-card").filter({ hasText: "信标" });
+    await expect(beaconMemberRow.getByText("BOT", { exact: true })).toBeVisible();
+    await expect(beaconMemberRow.getByText("文件传输助手", { exact: true })).toBeVisible();
     await memberWorkspaceNavigation.getByRole("button", { name: "聊天", exact: true }).click();
     await memberConversation.click();
 
@@ -330,6 +377,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await openWorkspaceCreateMenu(ownerPage, "创建群聊");
     const groupDialog = ownerPage.getByRole("region", { name: "创建群聊" });
     await groupDialog.getByLabel("群聊名称").fill(groupTitle);
+    await expect(groupDialog.getByRole("button", { name: /信标/ })).toHaveCount(0);
     await groupDialog.getByRole("button", { name: /E2E 成员/ }).click();
     await expect(groupDialog.getByText("已选 1 位", { exact: true })).toBeVisible();
     const groupResponsePromise = ownerPage.waitForResponse((response) =>
