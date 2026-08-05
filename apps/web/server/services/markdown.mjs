@@ -10,7 +10,7 @@ const unsupportedSummaryNodes = new Set([
   "table"
 ]);
 
-function removeUnsupportedSummaryNodes() {
+function normalizeSummaryNodes() {
   return (tree) => {
     const visit = (node) => {
       if (!Array.isArray(node?.children)) {
@@ -19,6 +19,12 @@ function removeUnsupportedSummaryNodes() {
       node.children = node.children
         .filter((child) => !unsupportedSummaryNodes.has(child?.type))
         .map((child) => {
+          if (child?.type === "code") {
+            return {
+              type: "paragraph",
+              children: [{ type: "text", value: typeof child.value === "string" ? child.value : "" }]
+            };
+          }
           visit(child);
           return child;
         });
@@ -30,7 +36,7 @@ function removeUnsupportedSummaryNodes() {
 const markdownProcessor = unified()
   .use(remarkParse)
   .use(remarkGfm)
-  .use(removeUnsupportedSummaryNodes)
+  .use(normalizeSummaryNodes)
   .use(stripMarkdown);
 
 export function markdownToPlainText(value) {

@@ -401,8 +401,6 @@ type WorkspaceComposerAttachment = {
 const WORKSPACE_ROLE_OPTIONS: WorkspaceUser["role"][] = ["owner", "admin", "member", "auditor"];
 const WORKSPACE_CONTEXT_STORAGE_KEY = "duallane.workspace.context-open";
 const WORKSPACE_MAX_STAGED_ATTACHMENTS = 10;
-const WORKSPACE_MESSAGE_URL_PATTERN = /https?:\/\/[^\s<>"']+/gi;
-const WORKSPACE_TRAILING_URL_PUNCTUATION_PATTERN = /[),.，。！？!?;；:：]+$/;
 type WorkspaceErrorPayload = {
   error?: {
     code: string;
@@ -1179,53 +1177,26 @@ function canRemoveWorkspaceFile(file: WorkspaceFile, currentUser?: WorkspaceUser
   return Boolean(currentUser && (file.uploaderId === currentUser.id || currentUser.role === "owner" || currentUser.role === "admin"));
 }
 
-function buildWorkspaceMessageBlocks(text: string, mentionMembers: WorkspaceUser[] = []): WorkspaceContentBlock[] {
+export function buildWorkspaceMessageBlocks(text: string, mentionMembers: WorkspaceUser[] = []): WorkspaceContentBlock[] {
   const blocks: WorkspaceContentBlock[] = [];
   let cursor = 0;
   const mentionOptions = getWorkspaceMentionOptions(mentionMembers);
 
   while (cursor < text.length) {
-    const nextLink = findNextWorkspaceLink(text, cursor);
     const nextMention = findNextWorkspaceMention(text, cursor, mentionOptions);
-    const next =
-      nextLink && nextMention
-        ? nextLink.start <= nextMention.start
-          ? nextLink
-          : nextMention
-        : nextLink ?? nextMention;
-
-    if (!next) {
+    if (!nextMention) {
       blocks.push({ type: "text", text: text.slice(cursor) });
       break;
     }
 
-    if (next.start > cursor) {
-      blocks.push({ type: "text", text: text.slice(cursor, next.start) });
+    if (nextMention.start > cursor) {
+      blocks.push({ type: "text", text: text.slice(cursor, nextMention.start) });
     }
-    blocks.push(next.block);
-    cursor = next.end;
+    blocks.push(nextMention.block);
+    cursor = nextMention.end;
   }
 
   return blocks.filter((block) => block.type !== "text" || block.text.length > 0);
-}
-
-function findNextWorkspaceLink(text: string, cursor: number) {
-  WORKSPACE_MESSAGE_URL_PATTERN.lastIndex = cursor;
-  const match = WORKSPACE_MESSAGE_URL_PATTERN.exec(text);
-  if (!match) {
-    return null;
-  }
-  const rawUrl = match[0];
-  const start = match.index;
-  const url = rawUrl.replace(WORKSPACE_TRAILING_URL_PUNCTUATION_PATTERN, "");
-  if (!url) {
-    return null;
-  }
-  return {
-    start,
-    end: start + url.length,
-    block: { type: "link", url, label: getWorkspaceLinkLabel(url) } satisfies WorkspaceContentBlock
-  };
 }
 
 function getWorkspaceMentionOptions(members: WorkspaceUser[]) {
@@ -1275,15 +1246,6 @@ function findNextWorkspaceMention(
 
 function isWorkspaceMentionBoundary(value?: string) {
   return !value || /[\s,，.。!?！？;；:：()[\]{}"'“”‘’<>]/.test(value);
-}
-
-function getWorkspaceLinkLabel(url: string) {
-  try {
-    const parsed = new URL(url);
-    return parsed.hostname.replace(/^www\./i, "");
-  } catch {
-    return url;
-  }
 }
 
 function getConnectionAdvice({
@@ -4758,9 +4720,10 @@ export function App() {
 
   async function sendWorkspaceMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const body = workspaceDraft.trim();
+    const body = workspaceDraft;
+    const hasBody = body.trim().length > 0;
     const stagedAttachments = workspaceComposerAttachmentsByConversation[workspaceSelectedConversationId] ?? [];
-    if ((!body && stagedAttachments.length === 0) || !workspaceSelectedConversation || workspaceSendingRef.current) {
+    if ((!hasBody && stagedAttachments.length === 0) || !workspaceSelectedConversation || workspaceSendingRef.current) {
       return;
     }
     const conversation = workspaceSelectedConversation;
@@ -4778,7 +4741,7 @@ export function App() {
       const clientMessageId = makeId("wm");
       const replyToMessageId = workspaceReplyToMessageId || null;
       const localMessageId = makeId("wlm");
-      const textBlocks = body ? buildWorkspaceMessageBlocks(body, conversation.members) : [];
+      const textBlocks = hasBody ? buildWorkspaceMessageBlocks(body, conversation.members) : [];
       const blocks: WorkspaceContentBlock[] = [
         ...textBlocks,
         ...uploadedAttachments.map((attachment) => ({
@@ -4786,7 +4749,7 @@ export function App() {
           attachmentId: attachment.id
         }))
       ];
-      const messageBody = body || `[文件] ${uploadedAttachments.map((attachment) => attachment.fileName).join("、")}`;
+      const messageBody = hasBody ? body : `[文件] ${uploadedAttachments.map((attachment) => attachment.fileName).join("、")}`;
       setWorkspaceLocalMessages((messages) => [
         ...messages.filter((message) => message.clientMessageId !== clientMessageId),
         {
@@ -6536,9 +6499,9 @@ export function App() {
                 <aside className="workspace-rail" aria-label="共享空间导航">
                   <div className="workspace-rail-header">
                     <div className="workspace-space-identity">
-                      <WorkspaceAvatar name={workspaceBootstrap.space.name} decorative />
+                      <img className="workspace-space-logo" src="/icon-512.png" alt="" aria-hidden="true" />
                       <span>
-                      <strong>{workspaceBootstrap.space.name}</strong>
+                        <strong>{workspaceBootstrap.space.name}</strong>
                         <small>共享空间</small>
                       </span>
                     </div>

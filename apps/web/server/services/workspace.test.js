@@ -4632,6 +4632,45 @@ describe("workspace service", () => {
     expect(JSON.parse(stored.contentJson).blocks[0].text).toBe(markdown);
     expect(stored.plainText).toBe(message.plainText);
 
+    const codeMarkdown = "~~~python\nimport stdio\nmain() {}\n~~~";
+    const codeMessage = await createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      clientMessageId: "markdown-code-only",
+      content: {
+        format: MESSAGE_CONTENT_FORMAT,
+        blocks: [{ type: "text", text: codeMarkdown }]
+      }
+    });
+    expect(codeMessage.content.blocks).toEqual([{ type: "text", text: codeMarkdown }]);
+    expect(codeMessage.plainText).toBe("import stdio\nmain() {}");
+
+    const incompleteLink = "[链接文本](https://)";
+    const incompleteLinkMessage = await createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      clientMessageId: "markdown-incomplete-link",
+      content: {
+        format: MESSAGE_CONTENT_FORMAT,
+        blocks: [{ type: "text", text: incompleteLink }]
+      }
+    });
+    expect(incompleteLinkMessage.content.blocks).toEqual([{ type: "text", text: incompleteLink }]);
+    expect(incompleteLinkMessage.plainText).toBe("链接文本");
+
+    const literalUrlText = "访问 https://example.test/files?id=42 查看文件";
+    const literalUrlMessage = await createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      clientMessageId: "markdown-literal-url",
+      content: {
+        format: MESSAGE_CONTENT_FORMAT,
+        blocks: [{ type: "text", text: literalUrlText }]
+      }
+    });
+    expect(literalUrlMessage.content.blocks).toEqual([{ type: "text", text: literalUrlText }]);
+    expect(literalUrlMessage.plainText).toBe(literalUrlText);
+
     const legacyContent = JSON.parse(stored.contentJson);
     legacyContent.plainText = markdown;
     db.prepare("UPDATE messages SET content_json = ?, plain_text = ? WHERE id = ?")

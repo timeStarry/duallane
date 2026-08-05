@@ -66,6 +66,11 @@ describe("workspace Markdown summaries", () => {
     const tick = String.fromCharCode(96);
     expect(markdownToPlainText("## 标题\n\n" + tick + "code" + tick)).toBe("标题\ncode");
   });
+
+  it("keeps fenced code as meaningful message text", () => {
+    expect(markdownToPlainText("~~~python\nimport stdio\nmain() {}\n~~~"))
+      .toBe("import stdio\nmain() {}");
+  });
 });
 
 describe("shared Reaction emote catalog", () => {

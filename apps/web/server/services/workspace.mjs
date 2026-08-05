@@ -2754,13 +2754,23 @@ async function normalizeBlock(db, actor, conversationId, block) {
 
 function buildPlainText(blocks) {
   return blocks.map((block) => {
-    if (block.type === "text") return markdownToPlainText(block.text);
+    if (block.type === "text") {
+      return markdownToPlainText(block.text) || fallbackTextSummary(block.text);
+    }
     if (block.type === "mention") return `@${block.label}`;
     if (block.type === "link") return block.label || block.url;
     if (block.type === "emoji") return `:${block.shortcode}:`;
     if (block.type === "attachment") return "[文件]";
     return "";
   }).join("");
+}
+
+function fallbackTextSummary(value) {
+  return publicString(value)
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\t ]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .trim();
 }
 
 function extractAttachmentIds(content) {

@@ -727,7 +727,11 @@ describe("workspace UI permission boundaries", () => {
     expect(source).toContain('aria-label="官方机器人"');
     expect(source).toContain('workspaceSelectedConversation.otherMember?.description || "私聊"');
     expect(source).toContain('member.capabilities?.canManage === false');
+    expect(source).toContain('className="workspace-space-logo"');
+    expect(source).toContain('src="/icon-512.png"');
     expect(styles).toContain(".workspace-bot-badge");
+    expect(styles).toContain(".workspace-chat-heading > strong");
+    expect(styles).toContain(".workspace-chat-heading > span");
   });
 
   it("keeps direct-chat details focused on overview and files only", () => {

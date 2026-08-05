@@ -128,6 +128,11 @@ test("workspace loading, navigation and menu focus semantics are stable", async 
   await expect(shell).toHaveAttribute("data-app-state", "ready");
   await expect(shell).toHaveAttribute("aria-busy", "false");
 
+  const spaceLogo = page.locator(".workspace-space-logo");
+  await expect(spaceLogo).toHaveAttribute("src", "/icon-512.png");
+  await expect(spaceLogo).toHaveCSS("width", "36px");
+  await expect(spaceLogo).toHaveCSS("height", "36px");
+
   const viewNavigation = page.getByRole("navigation", { name: "共享空间视图" });
   const chatTab = viewNavigation.getByRole("button", { name: "聊天", exact: true });
   const memberTab = viewNavigation.getByRole("button", { name: "成员", exact: true });
@@ -246,12 +251,45 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
 
     const beaconRegion = memberPage.getByRole("region", { name: "信标" });
     await expect(beaconRegion).toBeVisible();
-    await expect(beaconRegion.locator(".workspace-chat-heading").getByText("BOT", { exact: true })).toBeVisible();
+    const beaconHeaderBadge = beaconRegion.locator(".workspace-chat-heading").getByText("BOT", { exact: true });
+    await expect(beaconHeaderBadge).toBeVisible();
+    const beaconHeaderBadgeBox = await beaconHeaderBadge.boundingBox();
+    expect(beaconHeaderBadgeBox?.width).toBeLessThan(50);
+    expect(beaconHeaderBadgeBox?.height).toBeLessThanOrEqual(20);
     await expect(beaconRegion.locator(".workspace-chat-heading").getByText("文件传输助手", { exact: true })).toBeVisible();
     const beaconText = "workspace-e2e-beacon-private";
     await beaconRegion.getByLabel("输入消息").fill(beaconText);
     await sendWorkspaceComposer(beaconRegion);
     await expect(beaconRegion.getByText(beaconText, { exact: true })).toBeVisible();
+
+    const codeOnlyMarkdown = "~~~python\nimport stdio\nmain() {}\n~~~";
+    await beaconRegion.getByLabel("输入消息").fill(codeOnlyMarkdown);
+    const codeMessageResponse = memberPage.waitForResponse((response) =>
+      response.url().endsWith("/api/workspace/messages") && response.request().method() === "POST"
+    );
+    await sendWorkspaceComposer(beaconRegion);
+    expect((await codeMessageResponse).status()).toBe(201);
+    await expect(beaconRegion.locator("pre code").filter({ hasText: "import stdio" })).toBeVisible();
+
+    await beaconRegion.getByLabel("输入消息").fill("[链接文本](https://)");
+    const incompleteLinkResponse = memberPage.waitForResponse((response) =>
+      response.url().endsWith("/api/workspace/messages") && response.request().method() === "POST"
+    );
+    await sendWorkspaceComposer(beaconRegion);
+    expect((await incompleteLinkResponse).status()).toBe(201);
+    await expect(beaconRegion.getByText("链接文本", { exact: true })).toBeVisible();
+
+    const literalUrl = "https://example.test/files?id=42";
+    await beaconRegion.getByLabel("输入消息").fill(`访问 ${literalUrl} 查看文件`);
+    const literalUrlResponse = memberPage.waitForResponse((response) =>
+      response.url().endsWith("/api/workspace/messages") && response.request().method() === "POST"
+    );
+    await sendWorkspaceComposer(beaconRegion);
+    expect((await literalUrlResponse).status()).toBe(201);
+    const literalUrlBody = beaconRegion.locator(".workspace-markdown").filter({ hasText: literalUrl }).last();
+    const literalUrlLink = literalUrlBody.getByRole("link", { name: literalUrl, exact: true });
+    await expect(literalUrlLink).toHaveAttribute("href", literalUrl);
+    await expect(literalUrlBody).toHaveText(`访问 ${literalUrl} 查看文件`);
 
     const beaconConversationId = await workspaceConversationId(memberPage, "信标");
     const reusedBeacon = await memberPage.request.post("/api/workspace/conversations", {

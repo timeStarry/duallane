@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyWorkspaceMarkdownFormat,
   applyWorkspaceReactionOptimistic,
+  buildWorkspaceMessageBlocks,
   getWorkspaceSingleImageAttachment,
   shouldApplyWorkspaceReactionResponse
 } from "./App";
@@ -79,6 +80,21 @@ describe("workspace Markdown composer formatting", () => {
       selectionEnd: 8
     });
   });
+
+  it("keeps Markdown and incomplete links in raw text blocks", () => {
+    expect(buildWorkspaceMessageBlocks("[链接文本](https://)")).toEqual([{
+      type: "text",
+      text: "[链接文本](https://)"
+    }]);
+    expect(buildWorkspaceMessageBlocks("~~~python\nmain() {}\n~~~")).toEqual([{
+      type: "text",
+      text: "~~~python\nmain() {}\n~~~"
+    }]);
+    expect(buildWorkspaceMessageBlocks("访问 https://example.test/files?id=42 查看文件")).toEqual([{
+      type: "text",
+      text: "访问 https://example.test/files?id=42 查看文件"
+    }]);
+  });
 });
 
 describe("workspace Reaction response ordering", () => {
@@ -116,6 +132,17 @@ describe("restricted workspace Markdown", () => {
     expect(html).not.toContain("javascript:");
     expect(html).toContain('href="https://example.test/path"');
     expect(html).toContain('rel="noopener noreferrer"');
+  });
+
+  it("autolinks a literal URL without replacing its original text", () => {
+    const url = "https://example.test/files?id=42";
+    const html = renderToStaticMarkup(
+      <WorkspaceMarkdown>{`访问 ${url} 查看文件`}</WorkspaceMarkdown>
+    );
+    expect(html).toContain(`href="${url}"`);
+    expect(html).toContain(`>${url}</a>`);
+    expect(html).toContain(`访问 <a`);
+    expect(html).toContain(`</a> 查看文件`);
   });
 });
 

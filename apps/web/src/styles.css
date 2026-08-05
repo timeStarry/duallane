@@ -3833,9 +3833,12 @@ html[data-theme="dark"] .workspace-mode {
   gap: 10px;
 }
 
-.workspace-space-identity .workspace-avatar {
+.workspace-space-logo {
   width: 36px;
   height: 36px;
+  display: block;
+  border-radius: 8px;
+  object-fit: cover;
 }
 
 .workspace-space-identity > span:last-child,
@@ -4118,21 +4121,21 @@ html[data-theme="dark"] .workspace-mode {
   flex: 1 1 auto;
 }
 
-.workspace-chat-heading strong,
-.workspace-chat-heading span {
+.workspace-chat-heading > strong,
+.workspace-chat-heading > span {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.workspace-chat-heading strong {
+.workspace-chat-heading > strong {
   color: var(--ink);
   font-size: 0.94rem;
   font-weight: 600;
 }
 
-.workspace-chat-heading span {
+.workspace-chat-heading > span {
   margin-top: 2px;
   color: var(--muted);
   font-size: 0.72rem;
