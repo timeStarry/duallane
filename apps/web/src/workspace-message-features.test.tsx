@@ -4,8 +4,10 @@ import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
+  applyWorkspaceMarkdownFormat,
   applyWorkspaceReactionOptimistic,
-  getWorkspaceSingleImageAttachment
+  getWorkspaceSingleImageAttachment,
+  shouldApplyWorkspaceReactionResponse
 } from "./App";
 import {
   WorkspaceAvatar,
@@ -34,6 +36,46 @@ describe("workspace avatar", () => {
     expect(html).toContain("Alice 的头像");
     expect(html).toContain(">A</span>");
     expect(html).not.toContain("<img");
+  });
+});
+
+describe("workspace Markdown composer formatting", () => {
+  it("wraps selected inline content and keeps the original text selected", () => {
+    expect(applyWorkspaceMarkdownFormat("hello", 0, 5, "bold")).toEqual({
+      value: "**hello**",
+      selectionStart: 2,
+      selectionEnd: 7
+    });
+  });
+
+  it("inserts editable placeholders for an empty selection", () => {
+    expect(applyWorkspaceMarkdownFormat("", 0, 0, "italic")).toEqual({
+      value: "*斜体文本*",
+      selectionStart: 1,
+      selectionEnd: 5
+    });
+  });
+
+  it("formats multiline lists, links and code blocks", () => {
+    expect(applyWorkspaceMarkdownFormat("alpha\nbeta", 0, 10, "ordered-list").value)
+      .toBe("1. alpha\n2. beta");
+    expect(applyWorkspaceMarkdownFormat("站点", 0, 2, "link")).toEqual({
+      value: "[站点](https://)",
+      selectionStart: 5,
+      selectionEnd: 13
+    });
+    expect(applyWorkspaceMarkdownFormat("code", 0, 4, "code-block")).toEqual({
+      value: "~~~\ncode\n~~~",
+      selectionStart: 4,
+      selectionEnd: 8
+    });
+  });
+});
+
+describe("workspace Reaction response ordering", () => {
+  it("ignores an HTTP result after a newer realtime aggregate arrives", () => {
+    expect(shouldApplyWorkspaceReactionResponse(41, 40)).toBe(false);
+    expect(shouldApplyWorkspaceReactionResponse(40, 40)).toBe(true);
   });
 });
 

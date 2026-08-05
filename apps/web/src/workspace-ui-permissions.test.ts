@@ -94,6 +94,45 @@ describe("workspace UI permission boundaries", () => {
     expect(styles).not.toContain("--surface-tint: #e4f0f1;");
   });
 
+  it("keeps Workspace formatting optional and the mobile composer viewport-safe", () => {
+    const source = readSource();
+    const styles = readStyles();
+    const mobileStart = styles.indexOf("@media (max-width: 760px)", styles.indexOf(".workspace-composer textarea {"));
+    const mobileStyles = styles.slice(mobileStart);
+
+    expect(source).toContain("const [formatToolbarOpen, setFormatToolbarOpen] = useState(false);");
+    expect(source).toContain('role="toolbar"');
+    expect(source).toContain('aria-label="消息格式"');
+    expect(source).toContain('aria-pressed={formatToolbarOpen}');
+    expect(source).toContain('composerExpanded && "expanded"');
+    expect(source).toContain('aria-pressed={composerExpanded}');
+
+    const toolbarStart = styles.indexOf(".workspace-format-toolbar {");
+    const toolbarStyles = styles.slice(toolbarStart, styles.indexOf("}", toolbarStart));
+    expect(toolbarStyles).toContain("grid-column: 1 / -1;");
+    expect(toolbarStyles).toContain("overflow-x: auto;");
+
+    const expandedStart = styles.indexOf(".workspace-composer.expanded textarea {");
+    const expandedStyles = styles.slice(expandedStart, styles.indexOf("}", expandedStart));
+    expect(expandedStyles).toContain("max-height: min(42dvh, 360px);");
+
+    const mobileTextareaStart = mobileStyles.indexOf(".workspace-composer textarea {");
+    const mobileTextareaStyles = mobileStyles.slice(
+      mobileTextareaStart,
+      mobileStyles.indexOf("}", mobileTextareaStart)
+    );
+    expect(mobileTextareaStyles).toContain("grid-column: 1 / -1;");
+    expect(mobileTextareaStyles).toContain("grid-row: 1;");
+
+    const mobileFormattingStart = mobileStyles.indexOf(".workspace-composer.formatting-open textarea {");
+    const mobileFormattingStyles = mobileStyles.slice(
+      mobileFormattingStart,
+      mobileStyles.indexOf("}", mobileFormattingStart)
+    );
+    expect(mobileFormattingStyles).toContain("grid-row: 2;");
+    expect(mobileStyles).toContain(".workspace-composer.formatting-open .workspace-composer-actions {");
+    expect(mobileStyles).toContain("grid-row: 3;");
+  });
   it("keeps reaction picker controls independent from message action sizing", () => {
     const styles = readStyles();
 

@@ -3,24 +3,33 @@ import {
   AtSign,
   ArrowLeft,
   BellOff,
+  Bold,
   ChevronDown,
   ChevronUp,
   Check,
   Clipboard,
+  Code2,
   Copy,
   Download,
   FileCheck2,
+  FileCode2,
   FileUp,
   Github,
   History,
+  Italic,
   Link2,
+  List,
+  ListOrdered,
   LockKeyhole,
   LogOut,
+  Maximize2,
   MessageSquare,
+  Minimize2,
   Monitor,
   Moon,
   PanelRightOpen,
   Plus,
+  Quote,
   Radio,
   RefreshCw,
   Save,
@@ -28,8 +37,10 @@ import {
   Settings,
   ShieldCheck,
   Smile,
+  Strikethrough,
   Sun,
   Trash2,
+  Type,
   UsersRound,
   X
 } from "lucide-react";
@@ -1561,6 +1572,128 @@ function getFocusableElements(container: HTMLElement) {
 }
 
 
+export type WorkspaceMarkdownFormat =
+  | "bold"
+  | "italic"
+  | "strikethrough"
+  | "inline-code"
+  | "quote"
+  | "unordered-list"
+  | "ordered-list"
+  | "link"
+  | "code-block";
+
+export type WorkspaceMarkdownEdit = {
+  value: string;
+  selectionStart: number;
+  selectionEnd: number;
+};
+
+function workspaceMarkdownSelection(value: string, selectionStart: number, selectionEnd: number) {
+  const start = Math.max(0, Math.min(value.length, Math.min(selectionStart, selectionEnd)));
+  const end = Math.max(start, Math.min(value.length, Math.max(selectionStart, selectionEnd)));
+  return { start, end };
+}
+
+function wrapWorkspaceMarkdownSelection(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  prefix: string,
+  suffix: string,
+  placeholder: string
+): WorkspaceMarkdownEdit {
+  const { start, end } = workspaceMarkdownSelection(value, selectionStart, selectionEnd);
+  const content = value.slice(start, end) || placeholder;
+  return {
+    value: value.slice(0, start) + prefix + content + suffix + value.slice(end),
+    selectionStart: start + prefix.length,
+    selectionEnd: start + prefix.length + content.length
+  };
+}
+
+function prefixWorkspaceMarkdownLines(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  prefixForLine: (index: number) => string
+): WorkspaceMarkdownEdit {
+  const selection = workspaceMarkdownSelection(value, selectionStart, selectionEnd);
+  const lineStart = value.lastIndexOf("\n", Math.max(0, selection.start - 1)) + 1;
+  const nextLineBreak = value.indexOf("\n", selection.end);
+  const lineEnd = nextLineBreak === -1 ? value.length : nextLineBreak;
+  const formatted = value
+    .slice(lineStart, lineEnd)
+    .split("\n")
+    .map((line, index) => prefixForLine(index) + line)
+    .join("\n");
+  return {
+    value: value.slice(0, lineStart) + formatted + value.slice(lineEnd),
+    selectionStart: lineStart,
+    selectionEnd: lineStart + formatted.length
+  };
+}
+
+export function applyWorkspaceMarkdownFormat(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  format: WorkspaceMarkdownFormat
+): WorkspaceMarkdownEdit {
+  if (format === "bold") {
+    return wrapWorkspaceMarkdownSelection(value, selectionStart, selectionEnd, "**", "**", "粗体文本");
+  }
+  if (format === "italic") {
+    return wrapWorkspaceMarkdownSelection(value, selectionStart, selectionEnd, "*", "*", "斜体文本");
+  }
+  if (format === "strikethrough") {
+    return wrapWorkspaceMarkdownSelection(value, selectionStart, selectionEnd, "~~", "~~", "删除线文本");
+  }
+  if (format === "inline-code") {
+    return wrapWorkspaceMarkdownSelection(value, selectionStart, selectionEnd, "`", "`", "代码");
+  }
+  if (format === "code-block") {
+    return wrapWorkspaceMarkdownSelection(value, selectionStart, selectionEnd, "~~~\n", "\n~~~", "代码");
+  }
+  if (format === "quote") {
+    return prefixWorkspaceMarkdownLines(value, selectionStart, selectionEnd, () => "> ");
+  }
+  if (format === "unordered-list") {
+    return prefixWorkspaceMarkdownLines(value, selectionStart, selectionEnd, () => "- ");
+  }
+  if (format === "ordered-list") {
+    return prefixWorkspaceMarkdownLines(value, selectionStart, selectionEnd, (index) => String(index + 1) + ". ");
+  }
+
+  const selection = workspaceMarkdownSelection(value, selectionStart, selectionEnd);
+  const label = value.slice(selection.start, selection.end) || "链接文本";
+  const prefix = "[" + label + "](";
+  const url = "https://";
+  return {
+    value: value.slice(0, selection.start) + prefix + url + ")" + value.slice(selection.end),
+    selectionStart: selection.start + prefix.length,
+    selectionEnd: selection.start + prefix.length + url.length
+  };
+}
+
+const WORKSPACE_MARKDOWN_FORMAT_GROUPS = [
+  [
+    { format: "bold", label: "粗体", icon: Bold },
+    { format: "italic", label: "斜体", icon: Italic },
+    { format: "strikethrough", label: "删除线", icon: Strikethrough },
+    { format: "inline-code", label: "行内代码", icon: Code2 }
+  ],
+  [
+    { format: "quote", label: "引用", icon: Quote },
+    { format: "unordered-list", label: "无序列表", icon: List },
+    { format: "ordered-list", label: "有序列表", icon: ListOrdered }
+  ],
+  [
+    { format: "link", label: "链接", icon: Link2 },
+    { format: "code-block", label: "代码块", icon: FileCode2 }
+  ]
+] as const;
+
 export function applyWorkspaceReactionOptimistic(
   groups: WorkspaceReactionGroup[],
   emoteKey: string,
@@ -1608,6 +1741,10 @@ export function applyWorkspaceReactionOptimistic(
       users: [user]
     }
   ];
+}
+
+export function shouldApplyWorkspaceReactionResponse(currentEventSeq: number, eventSeqAtRequest: number) {
+  return currentEventSeq <= eventSeqAtRequest;
 }
 export function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
@@ -1708,6 +1845,7 @@ export function App() {
   const workspaceRealtimeEventQueueRef = useRef<Promise<void>>(Promise.resolve());
   const workspaceSendingRef = useRef(false);
   const workspaceReactionLocksRef = useRef<Set<string>>(new Set());
+  const workspaceReactionEventSeqRef = useRef<Map<string, number>>(new Map());
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
   const secureKeysRef = useRef<SecureKeys | null>(null);
   const peerIdRef = useRef("");
@@ -3367,7 +3505,6 @@ export function App() {
         const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight <= 80;
         workspaceScrollPositionsRef.current.set(previousId, list.scrollTop);
         workspaceStickToBottomByConversationRef.current.set(previousId, nearBottom);
-        workspaceStickToBottomRef.current = nearBottom;
       }
       workspaceScrollIntentUntilRef.current = 0;
 
@@ -3376,6 +3513,7 @@ export function App() {
         return rest;
       });
     }
+    workspaceStickToBottomRef.current = false;
     setWorkspaceSelectedConversationId(conversationId);
     setWorkspaceView("chat");
     setWorkspaceContextMode("conversation");
@@ -3741,7 +3879,7 @@ export function App() {
 
       if (event.type === "reaction.added" || event.type === "reaction.removed") {
         if (payload.messageId && payload.reactions) {
-          updateWorkspaceMessageReactions(payload.messageId, payload.reactions);
+          updateWorkspaceMessageReactions(payload.messageId, payload.reactions, event.seq);
         } else if (payload.conversationId === workspaceSelectedConversationIdRef.current) {
           tasks.push(refreshWorkspaceConversationMessages(payload.conversationId));
         }
@@ -3928,7 +4066,18 @@ export function App() {
   }
 
 
-  function updateWorkspaceMessageReactions(messageId: string, reactions: WorkspaceReactionGroup[]) {
+  function updateWorkspaceMessageReactions(
+    messageId: string,
+    reactions: WorkspaceReactionGroup[],
+    eventSeq?: number
+  ) {
+    if (eventSeq !== undefined) {
+      const latestEventSeq = workspaceReactionEventSeqRef.current.get(messageId) ?? 0;
+      if (eventSeq < latestEventSeq) {
+        return;
+      }
+      workspaceReactionEventSeqRef.current.set(messageId, eventSeq);
+    }
     setWorkspaceConversations((conversations) =>
       conversations.map((conversation) => ({
         ...conversation,
@@ -3956,6 +4105,7 @@ export function App() {
       (group) => group.emoteKey === emoteKey && group.reactedByCurrentUser
     );
     const currentUser = workspaceBootstrap.auth.currentUser;
+    const eventSeqAtRequest = workspaceReactionEventSeqRef.current.get(messageId) ?? 0;
     const optimisticReactions = applyWorkspaceReactionOptimistic(originalReactions, emoteKey, {
       id: currentUser.id,
       displayName: currentUser.displayName,
@@ -3980,9 +4130,19 @@ export function App() {
           ? { method: "DELETE" }
           : { method: "POST", body: JSON.stringify({ emoteKey }) }
       );
-      updateWorkspaceMessageReactions(response.messageId, response.reactions);
+      if (shouldApplyWorkspaceReactionResponse(
+        workspaceReactionEventSeqRef.current.get(messageId) ?? 0,
+        eventSeqAtRequest
+      )) {
+        updateWorkspaceMessageReactions(response.messageId, response.reactions);
+      }
     } catch (error) {
-      updateWorkspaceMessageReactions(messageId, originalReactions);
+      if (shouldApplyWorkspaceReactionResponse(
+        workspaceReactionEventSeqRef.current.get(messageId) ?? 0,
+        eventSeqAtRequest
+      )) {
+        updateWorkspaceMessageReactions(messageId, originalReactions);
+      }
       showWorkspaceNotice("warning", userFacingErrorMessage(error, "表情回复更新失败"));
     } finally {
       workspaceReactionLocksRef.current.delete(lockKey);
@@ -8771,6 +8931,8 @@ function WorkspaceChatPanel({
   const [mentionPanelOpen, setMentionPanelOpen] = useState(false);
   const [reactionPickerMessageId, setReactionPickerMessageId] = useState("");
   const [dragActive, setDragActive] = useState(false);
+  const [formatToolbarOpen, setFormatToolbarOpen] = useState(false);
+  const [composerExpanded, setComposerExpanded] = useState(false);
   const composerFormRef = useRef<HTMLFormElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const emoteTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -8779,6 +8941,12 @@ function WorkspaceChatPanel({
   const historySentinelRef = useRef<HTMLDivElement | null>(null);
   const canMention = mentionMembers.length > 0;
   const toolPanelOpen = emotePanelOpen || mentionPanelOpen;
+  const composerClassName = [
+    "workspace-composer",
+    toolPanelOpen && "tool-open",
+    formatToolbarOpen && "formatting-open",
+    composerExpanded && "expanded"
+  ].filter(Boolean).join(" ");
   const sendDisabled = sending || (!draft.trim() && stagedAttachments.length === 0);
   const unreadIndex = useMemo(() => {
     if (unreadAnchorCount <= 0 || messages.length === 0) {
@@ -8797,9 +8965,26 @@ function WorkspaceChatPanel({
     if (!textarea) {
       return;
     }
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 132)}px`;
-  }, [draft]);
+
+    const syncTextareaHeight = () => {
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+      const maxHeight = composerExpanded ? Math.min(360, viewportHeight * 0.42) : 132;
+      const minHeight = composerExpanded
+        ? Math.min(180, Math.max(132, viewportHeight * 0.22))
+        : 36;
+      textarea.style.height = "auto";
+      const nextHeight = Math.max(minHeight, Math.min(textarea.scrollHeight, maxHeight));
+      textarea.style.height = String(Math.round(nextHeight)) + "px";
+    };
+
+    syncTextareaHeight();
+    window.addEventListener("resize", syncTextareaHeight);
+    window.visualViewport?.addEventListener("resize", syncTextareaHeight);
+    return () => {
+      window.removeEventListener("resize", syncTextareaHeight);
+      window.visualViewport?.removeEventListener("resize", syncTextareaHeight);
+    };
+  }, [composerExpanded, draft]);
 
   useEffect(() => {
     const sentinel = historySentinelRef.current;
@@ -8818,6 +9003,24 @@ function WorkspaceChatPanel({
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [messageListRef, olderMessagesAvailable, olderMessagesLoading, onLoadOlderMessages]);
+
+  const applyMarkdownFormat = (format: WorkspaceMarkdownFormat) => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      return;
+    }
+    const edit = applyWorkspaceMarkdownFormat(
+      draft,
+      textarea.selectionStart,
+      textarea.selectionEnd,
+      format
+    );
+    onDraft(edit.value);
+    window.requestAnimationFrame(() => {
+      textarea.focus();
+      textarea.setSelectionRange(edit.selectionStart, edit.selectionEnd);
+    });
+  };
 
   const insertEmote = (item: EmoteItem) => {
     const insertText = getEmoteInsertText(item);
@@ -8840,10 +9043,28 @@ function WorkspaceChatPanel({
     window.requestAnimationFrame(() => textareaRef.current?.focus());
   };
   const handleDraftKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Escape") {
+    if ((event.metaKey || event.ctrlKey) && !event.altKey) {
+      const shortcutFormat = event.key.toLowerCase() === "b"
+        ? "bold"
+        : event.key.toLowerCase() === "i"
+          ? "italic"
+          : null;
+      if (shortcutFormat) {
+        event.preventDefault();
+        applyMarkdownFormat(shortcutFormat);
+        return;
+      }
+    }
+    if (event.key === "Escape" && toolPanelOpen) {
       event.preventDefault();
       event.stopPropagation();
       closeWorkspaceComposerPopover();
+      return;
+    }
+    if (event.key === "Escape" && formatToolbarOpen) {
+      event.preventDefault();
+      event.stopPropagation();
+      setFormatToolbarOpen(false);
       return;
     }
     if (event.key !== "Enter" || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) {
@@ -9083,13 +9304,13 @@ function WorkspaceChatPanel({
           })
         )}
       </div>
-      {newMessageCount > 0 && (
-        <button className="workspace-new-message-button" type="button" onClick={onJumpToLatest}>
-          <ChevronDown size={15} />
-          {newMessageCount} 条新消息
-        </button>
-      )}
       <div className="workspace-composer-dock">
+        {newMessageCount > 0 && (
+          <button className="workspace-new-message-button" type="button" onClick={onJumpToLatest}>
+            <ChevronDown size={15} />
+            {newMessageCount} 条新消息
+          </button>
+        )}
         {replyTarget && (
           <div className="composer-reply">
             <span>回复 <strong>{replyTarget.author}</strong>：{replyTarget.body}</span>
@@ -9133,12 +9354,21 @@ function WorkspaceChatPanel({
         )}
         <form
           ref={composerFormRef}
-          className={toolPanelOpen ? "workspace-composer tool-open" : "workspace-composer"}
+          className={composerClassName}
           onSubmit={onSend}
           onKeyDown={(event) => {
-            if (event.key === "Escape" && toolPanelOpen) {
+            if (event.key !== "Escape") {
+              return;
+            }
+            if (toolPanelOpen) {
               event.preventDefault();
               closeWorkspaceComposerPopover();
+              return;
+            }
+            if (formatToolbarOpen) {
+              event.preventDefault();
+              setFormatToolbarOpen(false);
+              window.requestAnimationFrame(() => textareaRef.current?.focus());
             }
           }}
         >
@@ -9189,22 +9419,54 @@ function WorkspaceChatPanel({
                 <AtSign size={18} />
               </button>
             )}
-            {emotePanelOpen && (
-              <EmotePicker
-                id="workspace-composer-emote-picker"
-                onSelect={insertEmote}
-                onEscape={closeWorkspaceComposerPopover}
-              />
-            )}
-            {mentionPanelOpen && (
-              <MentionPicker
-                id="workspace-composer-mention-picker"
-                members={mentionMembers}
-                onSelect={insertMention}
-                onEscape={closeWorkspaceComposerPopover}
-              />
-            )}
+            <button
+              className={formatToolbarOpen ? "workspace-composer-icon active" : "workspace-composer-icon"}
+              type="button"
+              aria-label={formatToolbarOpen ? "隐藏格式工具栏" : "显示格式工具栏"}
+              aria-pressed={formatToolbarOpen}
+              aria-expanded={formatToolbarOpen}
+              aria-controls="workspace-composer-format-toolbar"
+              title={formatToolbarOpen ? "隐藏格式工具栏" : "显示格式工具栏"}
+              onClick={() => setFormatToolbarOpen((open) => !open)}
+            >
+              <Type size={18} />
+            </button>
           </div>
+
+          {formatToolbarOpen && (
+            <div
+              id="workspace-composer-format-toolbar"
+              className="workspace-format-toolbar"
+              role="toolbar"
+              aria-label="消息格式"
+            >
+              {WORKSPACE_MARKDOWN_FORMAT_GROUPS.map((group, groupIndex) => (
+                <Fragment key={groupIndex}>
+                  {groupIndex > 0 && <span className="workspace-format-divider" aria-hidden="true" />}
+                  <div
+                    className="workspace-format-group"
+                    role="group"
+                    aria-label={groupIndex === 0 ? "文字样式" : groupIndex === 1 ? "段落格式" : "插入"}
+                  >
+                    {group.map(({ format, label, icon: Icon }) => (
+                      <button
+                        className="workspace-format-button"
+                        type="button"
+                        key={format}
+                        aria-label={label}
+                        title={label}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => applyMarkdownFormat(format)}
+                      >
+                        <Icon size={17} />
+                      </button>
+                    ))}
+                  </div>
+                </Fragment>
+              ))}
+            </div>
+          )}
+
           <textarea
             ref={textareaRef}
             rows={1}
@@ -9214,11 +9476,39 @@ function WorkspaceChatPanel({
             onPaste={handleDraftPaste}
             placeholder="输入消息"
             aria-label="输入消息"
+            aria-keyshortcuts="Control+B Meta+B Control+I Meta+I"
             disabled={sending}
           />
-          <button className="workspace-send-button" type="submit" disabled={sendDisabled} title={sending ? "发送中" : "发送消息"}>
-            {sending ? <RefreshCw size={18} /> : <Send size={18} />}
-          </button>
+          <div className="workspace-composer-actions">
+            <button
+              className="workspace-composer-icon workspace-composer-resize"
+              type="button"
+              aria-label={composerExpanded ? "缩小编辑区" : "扩大编辑区"}
+              aria-pressed={composerExpanded}
+              title={composerExpanded ? "缩小编辑区" : "扩大编辑区"}
+              onClick={() => setComposerExpanded((expanded) => !expanded)}
+            >
+              {composerExpanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+            </button>
+            <button className="workspace-send-button" type="submit" disabled={sendDisabled} title={sending ? "发送中" : "发送消息"}>
+              {sending ? <RefreshCw size={18} /> : <Send size={18} />}
+            </button>
+          </div>
+          {emotePanelOpen && (
+            <EmotePicker
+              id="workspace-composer-emote-picker"
+              onSelect={insertEmote}
+              onEscape={closeWorkspaceComposerPopover}
+            />
+          )}
+          {mentionPanelOpen && (
+            <MentionPicker
+              id="workspace-composer-mention-picker"
+              members={mentionMembers}
+              onSelect={insertMention}
+              onEscape={closeWorkspaceComposerPopover}
+            />
+          )}
         </form>
       </div>
       {dragActive && (

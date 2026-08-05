@@ -381,6 +381,30 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(memberGroupConversation.locator(".unread-badge")).toHaveCount(0);
     await expect.poll(() => workspaceConversationUnreadCount(memberPage, groupId)).toBe(0);
 
+    const ownerComposerInput = ownerGroupRegion.getByLabel("输入消息");
+    await expect(ownerGroupRegion.getByRole("toolbar", { name: "消息格式" })).toHaveCount(0);
+    await ownerComposerInput.fill("Toolbar test");
+    await ownerComposerInput.evaluate((element: HTMLTextAreaElement) => element.setSelectionRange(0, 7));
+    await ownerGroupRegion.getByRole("button", { name: "显示格式工具栏" }).click();
+    const formatToolbar = ownerGroupRegion.getByRole("toolbar", { name: "消息格式" });
+    await expect(formatToolbar).toBeVisible();
+    await formatToolbar.getByRole("button", { name: "粗体" }).click();
+    await expect(ownerComposerInput).toHaveValue("**Toolbar** test");
+
+    const compactComposerHeight = await ownerComposerInput.evaluate((element) =>
+      Number.parseFloat(getComputedStyle(element).height)
+    );
+    await ownerGroupRegion.getByRole("button", { name: "扩大编辑区" }).click();
+    await expect.poll(() => ownerComposerInput.evaluate((element) =>
+      Number.parseFloat(getComputedStyle(element).height)
+    )).toBeGreaterThan(compactComposerHeight + 40);
+    await ownerGroupRegion.getByRole("button", { name: "缩小编辑区" }).click();
+    await expect.poll(() => ownerComposerInput.evaluate((element) =>
+      Number.parseFloat(getComputedStyle(element).height)
+    )).toBeLessThanOrEqual(compactComposerHeight + 1);
+    await ownerGroupRegion.getByRole("button", { name: "隐藏格式工具栏" }).click();
+    await expect(formatToolbar).toHaveCount(0);
+    await ownerComposerInput.fill("");
     const markdownSource = "**Workspace Markdown**\n\n- 第一项\n- 第二项";
     await ownerGroupRegion.getByLabel("输入消息").fill(markdownSource);
     await sendWorkspaceComposer(ownerGroupRegion);
@@ -632,8 +656,28 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       await expect(memberPage.getByLabel("共享空间导航")).toBeVisible();
       await memberGroupConversation.click();
       await expect(memberGroupRegion.getByText(replayedMessage, { exact: true })).toBeInViewport();
-      await expect(memberGroupRegion.getByLabel("输入消息")).toBeInViewport();
+      const mobileComposerInput = memberGroupRegion.getByLabel("输入消息");
+      await expect(mobileComposerInput).toBeInViewport();
+      await memberGroupRegion.getByRole("button", { name: "显示格式工具栏" }).click();
+      const mobileFormatToolbar = memberGroupRegion.getByRole("toolbar", { name: "消息格式" });
+      await expect(mobileFormatToolbar).toBeVisible();
+      const mobileBoldButtonBox = await mobileFormatToolbar.getByRole("button", { name: "粗体" }).boundingBox();
+      expect(mobileBoldButtonBox?.width).toBeGreaterThanOrEqual(44);
+      expect(mobileBoldButtonBox?.height).toBeGreaterThanOrEqual(44);
+      await memberGroupRegion.getByRole("button", { name: "扩大编辑区" }).click();
+      const expandedComposerLayout = await memberGroupRegion.locator(".workspace-composer").evaluate((composer) => {
+        const bounds = composer.getBoundingClientRect();
+        return {
+          top: bounds.top,
+          bottom: bounds.bottom,
+          viewportHeight: window.innerHeight
+        };
+      });
+      expect(expandedComposerLayout.top).toBeGreaterThanOrEqual(0);
+      expect(expandedComposerLayout.bottom).toBeLessThanOrEqual(expandedComposerLayout.viewportHeight + 1);
       expect(await memberPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await memberGroupRegion.getByRole("button", { name: "缩小编辑区" }).click();
+      await memberGroupRegion.getByRole("button", { name: "隐藏格式工具栏" }).click();
     }
   } finally {
     await Promise.all([ownerContext.close(), memberContext.close()]);
