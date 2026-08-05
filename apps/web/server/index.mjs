@@ -791,7 +791,7 @@ app.get("/api/workspace/files/:attachmentId/preview", async (request, reply) => 
     const stored = await statStoredAttachment(dataDir, attachment.storageKey, attachment.byteSize);
     reply.header("Content-Type", attachment.mimeType);
     reply.header("Content-Length", String(attachment.byteSize));
-    reply.header("Content-Disposition", `inline; filename="${encodeHeaderValue(attachment.fileName)}"`);
+    reply.header("Content-Disposition", createContentDisposition("inline", attachment.fileName));
     reply.header("Cache-Control", "private, no-store");
     return reply.send(createReadStream(stored.path));
   } catch (error) {
@@ -821,7 +821,7 @@ app.get("/api/workspace/files/:attachmentId/download", async (request, reply) =>
     const stored = await statStoredAttachment(dataDir, attachment.storageKey, attachment.byteSize);
     reply.header("Content-Type", attachment.mimeType || "application/octet-stream");
     reply.header("Content-Length", String(attachment.byteSize));
-    reply.header("Content-Disposition", `attachment; filename="${encodeHeaderValue(attachment.fileName)}"`);
+    reply.header("Content-Disposition", createContentDisposition("attachment", attachment.fileName));
     return reply.send(createReadStream(stored.path));
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
@@ -1134,8 +1134,18 @@ function toWorkspaceSocketError(request, error) {
   };
 }
 
-function encodeHeaderValue(value) {
-  return String(value ?? "download").replace(/["\\\r\n]/g, "_");
+function createContentDisposition(disposition, value) {
+  const fileName = String(value ?? "download").toWellFormed();
+  const asciiFallback = fileName
+    .replace(/[^\x20-\x7e]/g, "_")
+    .replace(/["\\]/g, "_") || "download";
+  const fallbackHeader = `${disposition}; filename="${asciiFallback}"`;
+  if (asciiFallback === fileName) {
+    return fallbackHeader;
+  }
+  const encodedFileName = encodeURIComponent(fileName)
+    .replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `${fallbackHeader}; filename*=UTF-8''${encodedFileName}`;
 }
 
 function isPreviewableImageMimeType(mimeType) {
