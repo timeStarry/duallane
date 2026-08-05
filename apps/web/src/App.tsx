@@ -9106,6 +9106,10 @@ function WorkspaceChatPanel({
     event.preventDefault();
     onStageFiles(files);
   };
+  const handleComposerSubmit = (event: FormEvent<HTMLFormElement>) => {
+    onSend(event);
+    window.requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
+  };
   const handleDrop = (event: React.DragEvent<HTMLElement>) => {
     event.preventDefault();
     setDragActive(false);
@@ -9375,7 +9379,7 @@ function WorkspaceChatPanel({
         <form
           ref={composerFormRef}
           className={composerClassName}
-          onSubmit={onSend}
+          onSubmit={handleComposerSubmit}
           onKeyDown={(event) => {
             if (event.key !== "Escape") {
               return;
@@ -9497,7 +9501,8 @@ function WorkspaceChatPanel({
             placeholder="输入消息"
             aria-label="输入消息"
             aria-keyshortcuts="Control+B Meta+B Control+I Meta+I"
-            disabled={sending}
+            aria-busy={sending}
+            readOnly={sending}
           />
           <div className="workspace-composer-actions">
             <button

@@ -258,9 +258,11 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     expect(beaconHeaderBadgeBox?.height).toBeLessThanOrEqual(20);
     await expect(beaconRegion.locator(".workspace-chat-heading").getByText("文件传输助手", { exact: true })).toBeVisible();
     const beaconText = "workspace-e2e-beacon-private";
-    await beaconRegion.getByLabel("输入消息").fill(beaconText);
+    const beaconComposer = beaconRegion.getByLabel("输入消息");
+    await beaconComposer.fill(beaconText);
     await sendWorkspaceComposer(beaconRegion);
     await expect(beaconRegion.getByText(beaconText, { exact: true })).toBeVisible();
+    await expect(beaconComposer).toBeFocused();
 
     const codeOnlyMarkdown = "~~~python\nimport stdio\nmain() {}\n~~~";
     await beaconRegion.getByLabel("输入消息").fill(codeOnlyMarkdown);
