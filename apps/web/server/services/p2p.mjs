@@ -20,7 +20,7 @@ export function createP2PRoom(baseUrl, options = {}) {
 
   return {
     roomId,
-    inviteLink: `${baseUrl.replace(/\/$/, "")}/?lane=p2p&room=${roomId}`,
+    inviteLink: `${baseUrl.replace(/\/$/, "")}/direct/${encodeURIComponent(roomId)}`,
     expiresAt,
     maxPeers
   };

@@ -5,7 +5,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 test.describe.configure({ timeout: 120_000 });
 
 async function enterWorkspaceAsSeededOwner(page: Page) {
-  await page.goto("/?lane=workspace");
+  await page.goto("/workspace");
   await page.getByRole("button", { name: "使用 GitHub 登录" }).click();
   await expect(page.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
   await expect(page.locator(".workspace-shell")).toHaveAttribute("aria-busy", "false");
@@ -13,6 +13,84 @@ async function enterWorkspaceAsSeededOwner(page: Page) {
   await expect(page.locator(".workspace-product-shell")).toBeVisible();
   await expect(page.locator(".workspace-connection-state")).toHaveCount(0);
 }
+
+test("public about page exposes the current release and accessible history", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "关于 DualLane 与版本更新" }).click();
+  await expect(page).toHaveURL(/\/about$/);
+  await expect(page.getByRole("heading", { name: "两种边界，一处沟通。" })).toBeVisible();
+  await expect(page.locator(".latest-release").getByText("v0.7.0", { exact: true })).toBeVisible();
+
+  const history = page.locator(".release-history");
+  await expect(history).not.toHaveAttribute("open", "");
+  await history.getByText("查看历史版本", { exact: true }).click();
+  await expect(history).toHaveAttribute("open", "");
+  await expect(page.locator(".historical-release").filter({ hasText: "v0.6.0" })).toBeVisible();
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("heading", { name: "选择沟通方式" })).toBeVisible();
+  await page.goForward();
+  await expect(page).toHaveURL(/\/about$/);
+  await page.reload();
+  await expect(page.locator(".latest-release").getByText("v0.7.0", { exact: true })).toBeVisible();
+});
+
+test("workspace semantic routes survive OAuth, refresh, history, and invalid resources", async ({ page }) => {
+  await page.goto("/workspace/space/email");
+  await page.getByRole("button", { name: "使用 GitHub 登录" }).click();
+  await expect(page.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
+  await expect(page).toHaveURL(/\/workspace\/space\/email$/);
+  await expect(page.getByRole("tab", { name: "邮件", exact: true })).toHaveAttribute("aria-selected", "true");
+
+  await page.reload();
+  await expect(page.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
+  await expect(page.getByRole("tab", { name: "邮件", exact: true })).toHaveAttribute("aria-selected", "true");
+
+  const bootstrapResponse = await page.request.get("/api/workspace/bootstrap");
+  expect(bootstrapResponse.ok()).toBe(true);
+  const bootstrap = await bootstrapResponse.json() as { members: Array<{ id: string; kind: string }> };
+  const beacon = bootstrap.members.find((member) => member.kind === "bot");
+  expect(beacon).toBeTruthy();
+  const conversationResponse = await page.request.post("/api/workspace/conversations", {
+    data: { type: "direct", targetUserId: beacon!.id }
+  });
+  expect(conversationResponse.ok()).toBe(true);
+  const conversation = await conversationResponse.json() as { conversation: { id: string } };
+  await page.goto(`/workspace/chat/${conversation.conversation.id}`);
+  await expect(page.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
+  await expect(page).toHaveURL(new RegExp(`/workspace/chat/${conversation.conversation.id}$`));
+  await page.reload();
+  await expect(page).toHaveURL(new RegExp(`/workspace/chat/${conversation.conversation.id}$`));
+
+  await page.getByRole("navigation", { name: "共享空间视图" }).getByRole("button", { name: "文件", exact: true }).click();
+  await expect(page).toHaveURL(/\/workspace\/files$/);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "共享文件" })).toBeVisible();
+  await page.getByRole("navigation", { name: "共享空间视图" }).getByRole("button", { name: "成员", exact: true }).click();
+  await expect(page).toHaveURL(/\/workspace\/members$/);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "空间成员" })).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(/\/workspace\/files$/);
+  await page.goForward();
+  await expect(page).toHaveURL(/\/workspace\/members$/);
+
+  await page.locator(".workspace-user-trigger").click();
+  await page.locator(".workspace-user-menu").getByRole("menuitem", { name: "账号设置", exact: true }).click();
+  await expect(page).toHaveURL(/\/workspace\/account$/);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "账号与通知" })).toBeVisible();
+
+  await page.goto("/workspace/files/not-a-real-file");
+  await expect(page.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
+  await expect(page).toHaveURL(/\/workspace\/files$/);
+  await expect(page.getByText("该文件不存在或无权访问，已返回文件库")).toBeVisible();
+
+  await page.goto("/?lane=workspace");
+  await expect(page.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
+  await expect(page).not.toHaveURL(/lane=workspace/);
+});
 
 async function openWorkspaceCreateMenu(page: Page, action: "发起私聊" | "创建群聊") {
   await page.getByTitle("新建").click();
@@ -196,8 +274,11 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
 
     const inviteLink = (await ownerPage.locator(".compact-copy > span").textContent())?.trim() ?? "";
     const inviteUrl = new URL(inviteLink);
+    expect(inviteUrl.origin).toBe(new URL(ownerPage.url()).origin);
+    expect(inviteUrl.pathname).toBe("/workspace");
     const inviteCode = inviteUrl.searchParams.get("invite");
     expect(inviteCode).toBeTruthy();
+    await expect(ownerPage.getByRole("definition")).toHaveCount(4);
 
     await memberPage.goto(inviteLink);
     await expect(memberPage.getByRole("button", { name: "使用 GitHub 登录" })).toBeVisible();
@@ -213,6 +294,15 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     });
     expect(acceptResponse.status()).toBe(201);
     const acceptedMember = (await acceptResponse.json() as { user: { id: string } }).user;
+
+    await ownerPage.reload();
+    await expect(ownerPage.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
+    const inviteHistory = ownerPage.locator(".workspace-invite-history");
+    await expect(inviteHistory).not.toHaveAttribute("open", "");
+    await inviteHistory.locator("summary").click();
+    const usedInviteRow = inviteHistory.locator(".workspace-invite-row").filter({ hasText: memberDisplayName });
+    await expect(usedInviteRow).toBeVisible();
+    await expect(usedInviteRow.getByText(memberDisplayName, { exact: true })).toBeVisible();
 
     const memberBootstrapResponse = memberPage.waitForResponse((response) => response.url().endsWith("/api/workspace/bootstrap"));
     const memberWorkspaceHello = waitForWorkspaceHello(memberPage);
@@ -432,6 +522,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     expect(groupResponse.status()).toBe(201);
     const groupPayload = await groupResponse.json() as { conversation: { id: string } };
     const groupId = groupPayload.conversation.id;
+    await expect(ownerPage).toHaveURL(new RegExp(`/workspace/chat/${groupId}$`));
 
     const ownerGroupRegion = ownerPage.getByRole("region", { name: groupTitle });
     await expect(ownerGroupRegion).toBeVisible();
@@ -471,6 +562,15 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(memberGroupRegion.getByText(groupOwnerMessage, { exact: true })).toBeVisible();
     await expect(memberGroupConversation.locator(".unread-badge")).toHaveCount(0);
     await expect.poll(() => workspaceConversationUnreadCount(memberPage, groupId)).toBe(0);
+
+    await ownerGroupRegion.getByTitle("插入表情").click();
+    await expect(ownerPage.getByRole("dialog", { name: "选择表情" })).toBeVisible();
+    await ownerGroupRegion.locator(".workspace-chat-header").click();
+    await expect(ownerPage.getByRole("dialog", { name: "选择表情" })).toHaveCount(0);
+    await ownerGroupRegion.getByTitle("提及成员").click();
+    await expect(ownerPage.getByRole("dialog", { name: "提及成员" })).toBeVisible();
+    await ownerGroupRegion.locator(".workspace-message-list").click({ position: { x: 8, y: 8 } });
+    await expect(ownerPage.getByRole("dialog", { name: "提及成员" })).toHaveCount(0);
 
     const ownerComposerInput = ownerGroupRegion.getByLabel("输入消息");
     await expect(ownerGroupRegion.getByRole("toolbar", { name: "消息格式" })).toHaveCount(0);
@@ -512,6 +612,10 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     const reactionTrigger = reactionMessage.getByTitle("添加表情回复");
     await reactionTrigger.click();
     const reactionPicker = memberPage.getByRole("dialog", { name: "选择消息表情回复" });
+    await expect(reactionPicker).toBeVisible();
+    await memberGroupRegion.locator(".workspace-chat-header").click();
+    await expect(reactionPicker).toHaveCount(0);
+    await reactionTrigger.click();
     await reactionPicker.getByRole("tab", { name: "飞书", exact: true }).click();
     await reactionPicker.getByRole("button", { name: "OK", exact: true }).click();
     await expect(reactionTrigger).toBeFocused();
@@ -580,7 +684,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(memberGroupRegion.getByText(messageOutsideChatView, { exact: true })).toBeVisible();
     await expect.poll(() => workspaceConversationUnreadCount(memberPage, groupId)).toBe(0);
 
-    const pastedImageName = "workspace-e2e-pasted-image.png";
+    const clipboardImageName = "image.png";
     const pastedImageBytes = Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
       "base64"
@@ -608,7 +712,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
         cancelable: true,
         clipboardData: transfer
       }));
-    }, { name: pastedImageName, bytes: Array.from(pastedImageBytes) });
+    }, { name: clipboardImageName, bytes: Array.from(pastedImageBytes) });
 
     const fileName = "workspace-e2e-long-file-name-for-detail-panel-overflow-regression.bin";
     const fileBytes = Buffer.from([0, 1, 2, 3, 127, 128, 254, 255, 68, 117, 97, 108, 76, 97, 110, 101]);
@@ -618,17 +722,20 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       buffer: fileBytes
     });
     const stagedFiles = ownerGroupRegion.getByLabel("待发送附件");
-    await expect(stagedFiles.getByText(pastedImageName, { exact: true })).toBeVisible();
+    const stagedImage = stagedFiles.locator(".workspace-staged-file").first();
+    await expect(stagedImage.locator("img")).toBeVisible();
+    await expect(stagedImage.locator("strong")).toHaveText(/^粘贴图片-\d{8}-\d{6}\.png$/);
+    const pastedImageName = (await stagedImage.locator("strong").textContent())!;
     await expect(stagedFiles.getByText(fileName, { exact: true })).toBeVisible();
     expect(attachmentReserveCount).toBe(0);
-    await expect(memberGroupRegion.getByRole("button").filter({ hasText: pastedImageName })).toHaveCount(0);
+    await expect(memberGroupRegion.getByRole("button", { name: `预览图片 ${pastedImageName}` })).toHaveCount(0);
     await expect(memberGroupRegion.getByRole("button").filter({ hasText: fileName })).toHaveCount(0);
 
     await sendWorkspaceComposer(ownerGroupRegion);
     await expect(stagedFiles.locator(".workspace-staged-file.failed")).toHaveCount(1);
     await expect(stagedFiles.locator(".workspace-staged-file.uploaded")).toHaveCount(1);
     expect(attachmentReserveCount).toBe(2);
-    await expect(memberGroupRegion.getByRole("button").filter({ hasText: pastedImageName })).toHaveCount(0);
+    await expect(memberGroupRegion.getByRole("button", { name: `预览图片 ${pastedImageName}` })).toHaveCount(0);
     await expect(memberGroupRegion.getByRole("button").filter({ hasText: fileName })).toHaveCount(0);
 
     const attachmentMessageRequest = ownerPage.waitForRequest((request) =>
@@ -642,7 +749,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     expect(attachmentReserveCount).toBe(3);
     await ownerPage.unroute("**/api/workspace/files/uploads/reserve");
 
-    const pastedImageCard = memberGroupRegion.getByRole("button").filter({ hasText: pastedImageName });
+    const pastedImageCard = memberGroupRegion.getByRole("button", { name: `预览图片 ${pastedImageName}` });
     await expect(pastedImageCard).toBeVisible();
     const pastedImagePreview = pastedImageCard.locator("img.message-image-preview");
     await expect(pastedImagePreview).toBeVisible();
@@ -659,6 +766,15 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await memberPage.keyboard.press("Escape");
     await expect(imageViewer).toHaveCount(0);
     await expect(pastedImageCard).toBeFocused();
+
+    const memberNavigation = memberPage.getByRole("navigation", { name: "共享空间视图" });
+    await memberNavigation.getByRole("button", { name: "文件", exact: true }).click();
+    const imageLibraryRow = memberPage.locator(".workspace-file-row").filter({ hasText: pastedImageName });
+    const imageLibraryThumbnail = imageLibraryRow.locator(".workspace-file-thumbnail img");
+    await expect(imageLibraryThumbnail).toBeVisible();
+    await expect.poll(() => imageLibraryThumbnail.evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+    await memberNavigation.getByRole("button", { name: "聊天", exact: true }).click();
+    await expect(memberGroupRegion).toBeVisible();
 
     const memberFileCard = memberGroupRegion.getByRole("button").filter({ hasText: fileName });
     await expect(memberFileCard).toBeVisible();
@@ -706,6 +822,9 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await downloadToast.getByRole("button", { name: "关闭提示" }).click();
     await expect(downloadToast).toHaveCount(0);
 
+    await memberPage.getByRole("navigation", { name: "共享空间视图" }).getByRole("button", { name: "聊天", exact: true }).click();
+    await expect(memberGroupRegion).toBeVisible();
+
     const socketClosed = await memberPage.evaluate(() =>
       (window as Window & { __closeWorkspaceSocketForE2E?: () => boolean }).__closeWorkspaceSocketForE2E?.() ?? false
     );
@@ -726,8 +845,15 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await memberContext.setOffline(false);
     await expect(memberGroupRegion.getByText(replayedMessage, { exact: true })).toBeVisible();
     await expect(memberPage.locator(".workspace-connection-state")).toHaveCount(0);
-    await expect(memberGroupConversation.locator(".unread-badge")).toHaveCount(0);
+    const reconnectNewMessages = memberGroupRegion.getByRole("button", { name: /\d+ 条新消息/ });
+    await expect.poll(async () =>
+      (await reconnectNewMessages.isVisible()) || (await workspaceConversationUnreadCount(memberPage, groupId)) === 0
+    ).toBe(true);
+    if (await reconnectNewMessages.isVisible()) {
+      await reconnectNewMessages.click();
+    }
     await expect.poll(() => workspaceConversationUnreadCount(memberPage, groupId)).toBe(0);
+    await expect(memberGroupConversation.locator(".unread-badge")).toHaveCount(0);
 
     for (const viewport of [
       { width: 2048, height: 1152 },

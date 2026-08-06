@@ -1,6 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const baseURL = "http://127.0.0.1:5173";
+const webPort = Number(process.env.E2E_WEB_PORT || 5173);
+const apiPort = Number(process.env.E2E_API_PORT || 8787);
+const baseURL = `http://127.0.0.1:${webPort}`;
+const apiURL = `http://127.0.0.1:${apiPort}`;
 const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER === "true";
 
 export default defineConfig({
@@ -31,13 +34,20 @@ export default defineConfig({
   webServer: [
     {
       command: "node e2e/support/test-server.mjs",
-      url: "http://127.0.0.1:8787/api/health",
+      url: `${apiURL}/api/health`,
+      env: {
+        E2E_API_PORT: String(apiPort),
+        E2E_WEB_PORT: String(webPort)
+      },
       reuseExistingServer,
       timeout: 120_000
     },
     {
-      command: "pnpm --filter @duallane/web exec vite --host 127.0.0.1 --port 5173 --strictPort",
+      command: `pnpm --filter @duallane/web exec vite --host 127.0.0.1 --port ${webPort} --strictPort`,
       url: baseURL,
+      env: {
+        DUALLANE_API_ORIGIN: apiURL
+      },
       reuseExistingServer,
       timeout: 120_000
     }

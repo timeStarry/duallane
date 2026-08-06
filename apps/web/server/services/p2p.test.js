@@ -34,6 +34,7 @@ describe("p2p service", () => {
     expect(second.roomId).toMatch(/^[A-Za-z0-9_-]{22}$/);
     expect(first.roomId).not.toBe(second.roomId);
     expect(first).not.toHaveProperty("createdBy");
+    expect(first.inviteLink).toBe(`http://127.0.0.1:5173/direct/${first.roomId}`);
   });
 
   it("keeps room capacity aligned with the current one-to-one link", () => {

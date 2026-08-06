@@ -188,3 +188,11 @@ path-only access logs and suppress raw request-line error logs specifically for
 The shared space lane is intentionally disabled by default. Shared space UI
 entry points and `/api/workspace/*` return a "功能正在开发中" state until
 `WORKSPACE_ENABLED=true` is set for controlled Workspace MVP testing.
+
+## Release convention
+
+- Keep the root package, `apps/web/package.json`, and the newest entry in `apps/web/src/releases.ts` on the same semantic version.
+- Add the new release entry before changing package versions. Versions must be unique and ordered newest first.
+- Each release records a date, title, summary, and categorized user-visible changes; the release-history test intentionally fails when these fields or version synchronization are missing.
+- The public changelog contains only behavior ordinary members can see or use. Keep databases, protocols, deployment, privileged configuration, and other implementation details out of `/about`.
+- Review `/about` and its expandable historical timeline before publishing.

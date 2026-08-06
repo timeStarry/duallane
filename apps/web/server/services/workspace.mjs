@@ -124,7 +124,7 @@ export async function getWorkspaceBootstrap(db, userId = "usr_owner") {
   const members = (await listVisibleSpaceMembers(db, currentUser)).map((member) => publicMember(member, currentUser));
   const usedTodayBytes = await getUsedToday(db, currentUser.id);
 
-  const invites = await listVisibleInvitesForRole(db, currentUser.role);
+  const inviteProjection = await listVisibleInvitesForRole(db, currentUser);
   const permissions = permissionsForRole(currentUser.role);
   const conversations = permissions.canReadConversations ? await listConversations(db, currentUser.id) : [];
   const files = permissions.canDownload ? await listFiles(db, currentUser.id) : [];
@@ -147,7 +147,8 @@ export async function getWorkspaceBootstrap(db, userId = "usr_owner") {
     members,
     conversations,
     files,
-    invites,
+    invites: inviteProjection.invites,
+    inviteSummary: inviteProjection.summary,
     eventCursor
   };
 }
@@ -289,42 +290,102 @@ export async function removeMemberRemark(db, input) {
   return await publicMemberPayloadForActor(db, actor, target.id);
 }
 
-async function listVisibleInvitesForRole(db, role) {
-  if (role === "owner") {
-    return await db.prepare(`
+async function listVisibleInvitesForRole(db, actor) {
+  const canViewAllRoles = actor.role === "owner";
+  if (!canViewAllRoles && !canCreateInvite(actor.role, "member")) {
+    return {
+      invites: [],
+      summary: { total: 0, active: 0, history: 0, acceptedUses: 0, availableUses: 0 }
+    };
+  }
+
+  const roleFilter = canViewAllRoles ? "" : "AND default_role = 'member'";
+  const now = new Date().toISOString();
+  const invites = await db.prepare(`
+    SELECT
+      id,
+      code_preview AS codePreview,
+      default_role AS defaultRole,
+      max_uses AS maxUses,
+      uses,
+      expires_at AS expiresAt,
+      revoked_at AS revokedAt,
+      created_at AS createdAt
+    FROM invites
+    WHERE space_id = ? ${roleFilter}
+    ORDER BY created_at DESC
+    LIMIT 100
+  `).all(DEFAULT_SPACE_ID);
+  const totals = await db.prepare(`
+    SELECT
+      COUNT(*) AS total,
+      COALESCE(SUM(uses), 0) AS acceptedUses,
+      COALESCE(SUM(CASE
+        WHEN revoked_at IS NULL
+          AND (expires_at IS NULL OR expires_at > ?)
+          AND uses < max_uses
+        THEN 1 ELSE 0 END), 0) AS active,
+      COALESCE(SUM(CASE
+        WHEN revoked_at IS NULL
+          AND (expires_at IS NULL OR expires_at > ?)
+          AND uses < max_uses
+        THEN max_uses - uses ELSE 0 END), 0) AS availableUses
+    FROM invites
+    WHERE space_id = ? ${roleFilter}
+  `).get(now, now, DEFAULT_SPACE_ID);
+
+  const visibleMembers = new Map(
+    (await listVisibleSpaceMembers(db, actor)).map((member) => [member.id, member])
+  );
+  const acceptedUsersByInvite = new Map();
+  const visibleAcceptedMembersByInvite = new Map();
+  if (invites.length > 0) {
+    const placeholders = invites.map(() => "?").join(", ");
+    const acceptances = await db.prepare(`
       SELECT
-        id,
-        code_preview AS codePreview,
-        default_role AS defaultRole,
-        max_uses AS maxUses,
-        uses,
-        expires_at AS expiresAt,
-        revoked_at AS revokedAt,
-        created_at AS createdAt
-      FROM invites
+        target_id AS inviteId,
+        actor_user_id AS userId,
+        created_at AS acceptedAt
+      FROM audit_logs
       WHERE space_id = ?
+        AND action = 'invite.accept'
+        AND target_type = 'invite'
+        AND result = 'success'
+        AND actor_user_id IS NOT NULL
+        AND target_id IN (${placeholders})
       ORDER BY created_at DESC
-      LIMIT 20
-    `).all(DEFAULT_SPACE_ID);
+    `).all(DEFAULT_SPACE_ID, ...invites.map((invite) => invite.id));
+
+    for (const acceptance of acceptances) {
+      const acceptedUsers = acceptedUsersByInvite.get(acceptance.inviteId) ?? new Set();
+      if (acceptedUsers.has(acceptance.userId)) continue;
+      acceptedUsers.add(acceptance.userId);
+      acceptedUsersByInvite.set(acceptance.inviteId, acceptedUsers);
+
+      const visibleMember = visibleMembers.get(acceptance.userId);
+      if (!visibleMember) continue;
+      const acceptedMembers = visibleAcceptedMembersByInvite.get(acceptance.inviteId) ?? [];
+      acceptedMembers.push({ ...publicMember(visibleMember, actor), acceptedAt: acceptance.acceptedAt });
+      visibleAcceptedMembersByInvite.set(acceptance.inviteId, acceptedMembers);
+    }
   }
-  if (canCreateInvite(role, "member")) {
-    return await db.prepare(`
-      SELECT
-        id,
-        code_preview AS codePreview,
-        default_role AS defaultRole,
-        max_uses AS maxUses,
-        uses,
-        expires_at AS expiresAt,
-        revoked_at AS revokedAt,
-        created_at AS createdAt
-      FROM invites
-      WHERE space_id = ? AND default_role = 'member'
-      ORDER BY created_at DESC
-      LIMIT 20
-    `).all(DEFAULT_SPACE_ID);
-  }
-  return [];
+
+  const total = Number(totals?.total ?? 0);
+  const active = Number(totals?.active ?? 0);
+  return {
+    invites: invites.map((invite) => ({
+      ...invite,
+      acceptedMemberCount: acceptedUsersByInvite.get(invite.id)?.size ?? 0,
+      acceptedMembers: visibleAcceptedMembersByInvite.get(invite.id) ?? []
+    })),
+    summary: {
+      total,
+      active,
+      history: Math.max(0, total - active),
+      acceptedUses: Number(totals?.acceptedUses ?? 0),
+      availableUses: Number(totals?.availableUses ?? 0)
+    }
+  };
 }
 
 export async function getManagedMemberVisibility(db, request, input) {

@@ -11,6 +11,7 @@ import { getIceServers } from "./services/ice.mjs";
 import { createGitHubFetch } from "./services/github-fetch.mjs";
 import { createWorkspaceEmailService, WorkspaceEmailError } from "./services/workspace-email.mjs";
 import { createWorkspacePresence } from "./services/workspace-presence.mjs";
+import { normalizeWorkspaceReturnTo } from "./services/oauth-return.mjs";
 import { attachP2PSocket, createP2PRoom, getP2PRoom } from "./services/p2p.mjs";
 import {
   acceptInvite,
@@ -231,6 +232,7 @@ app.get("/api/auth/github/start", async (request, reply) => {
   const redirectUri = new URL("/api/auth/github/callback", publicBaseUrl).toString();
   const state = crypto.randomUUID();
   const pendingInvite = normalizeQueryString(request.query?.invite);
+  const returnTo = normalizeWorkspaceReturnTo(request.query?.returnTo);
   reply.setCookie("duallane_oauth_state", state, {
     httpOnly: true,
     sameSite: "lax",
@@ -244,6 +246,16 @@ app.get("/api/auth/github/start", async (request, reply) => {
       path: "/api/auth/github",
       secure: request.protocol === "https"
     });
+  }
+  if (returnTo) {
+    reply.setCookie("duallane_oauth_return", returnTo, {
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/api/auth/github",
+      secure: request.protocol === "https"
+    });
+  } else {
+    reply.clearCookie("duallane_oauth_return", { path: "/api/auth/github" });
   }
 
   if (!clientId || !clientSecret) {
@@ -266,6 +278,8 @@ app.get("/api/auth/github/callback", async (request, reply) => {
     return blockWorkspace(reply);
   }
   reply.clearCookie("duallane_oauth_state", { path: "/api/auth/github" });
+  const returnTo = normalizeWorkspaceReturnTo(request.cookies?.duallane_oauth_return);
+  reply.clearCookie("duallane_oauth_return", { path: "/api/auth/github" });
 
   try {
     const profile = await resolveGitHubProfile(request);
@@ -302,7 +316,7 @@ app.get("/api/auth/github/callback", async (request, reply) => {
     if (request.headers.accept?.includes("application/json") || request.query?.format === "json") {
       return { user: publicWorkspaceUser(user), session: { expiresAt: session.expiresAt } };
     }
-    return reply.redirect(workspaceFrontendUrl(env, "/?lane=workspace"));
+    return reply.redirect(workspaceFrontendUrl(env, returnTo || "/workspace"));
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }
@@ -429,7 +443,7 @@ app.post("/api/workspace/invites", async (request, reply) => {
   }
   try {
     const invite = await createInvite(db, request, { ...(request.body ?? {}), actorId: await getWorkspaceUserId(request) });
-    return reply.code(201).send({ invite: withInviteUrl(env, invite) });
+    return reply.code(201).send({ invite: withInviteUrl(env, invite, request) });
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }
@@ -1369,13 +1383,16 @@ function workspaceFrontendUrl(env, pathnameAndQuery) {
   return pathnameAndQuery;
 }
 
-function withInviteUrl(env, invite) {
+function withInviteUrl(env, invite, request) {
   if (!invite?.code) {
     return invite;
   }
+  const configured = normalizeQueryString(env.WORKSPACE_FRONTEND_URL || env.FRONTEND_BASE_URL || env.PUBLIC_BASE_URL);
+  const requestOrigin = request ? `${request.protocol}://${request.host}` : "";
+  const baseUrl = configured || requestOrigin || "http://127.0.0.1:5173";
   return {
     ...invite,
-    inviteUrl: workspaceFrontendUrl(env, `/?lane=workspace&invite=${encodeURIComponent(invite.code)}`)
+    inviteUrl: new URL(`/workspace?invite=${encodeURIComponent(invite.code)}`, baseUrl).toString()
   };
 }
 }

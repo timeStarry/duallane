@@ -75,10 +75,14 @@ import {
   type DataEnvelope
 } from "./p2p-protocol";
 import { createWorkspaceJsonHeaders } from "./workspace-http";
-import { getWorkspaceEntryUrl, getWorkspaceLoginUrl, parseEntryRoute } from "./workspace-url";
+import { AboutPage } from "./AboutPage";
+import { getAppRouteUrl, parseAppRoute, workspaceRoute, type AppRoute } from "./app-route";
+import { getWorkspaceEntryUrl, getWorkspaceLoginUrl } from "./workspace-url";
+import { formatWorkspaceConversationTime } from "./workspace-conversation-time";
+import { isPreviewableImageMimeType, renamePastedImageFiles } from "./workspace-image-files";
 import { userFacingErrorMessage } from "./user-facing-error";
 
-type Lane = "entry" | "p2p" | "workspace-dev";
+type Lane = "entry" | "about" | "p2p" | "workspace-dev";
 type P2pStep = "name" | "waiting" | "chat" | "ended" | "invalid-room";
 type ConnectionState = "idle" | "connecting" | "connected" | "offline" | "error";
 type P2pTransportMode = "waiting" | "direct" | "relay-text" | "offline" | "error";
@@ -212,7 +216,15 @@ type WorkspaceBootstrap = {
   conversations?: WorkspaceConversation[];
   files?: WorkspaceFile[];
   invites: WorkspaceInvite[];
+  inviteSummary: WorkspaceInviteSummary;
   eventCursor?: number;
+};
+type WorkspaceInviteSummary = {
+  total: number;
+  active: number;
+  history: number;
+  acceptedUses: number;
+  availableUses: number;
 };
 type WorkspaceStatisticsValues = {
   members: number;
@@ -238,6 +250,8 @@ type WorkspaceInvite = {
   expiresAt?: string | null;
   revokedAt?: string | null;
   createdAt: string;
+  acceptedMemberCount: number;
+  acceptedMembers: Array<WorkspaceUser & { acceptedAt: string }>;
 };
 type WorkspaceContentBlock =
   | { type: "text"; text: string }
@@ -827,7 +841,19 @@ function getWorkspaceWsUrl() {
 }
 
 function getInviteLink(roomId: string) {
-  return `${window.location.origin}/?lane=p2p&room=${encodeURIComponent(roomId)}`;
+  return `${window.location.origin}/direct/${encodeURIComponent(roomId)}`;
+}
+
+function routeLane(route: AppRoute): Lane {
+  if (route.kind === "about") return "about";
+  if (route.kind === "direct") return "p2p";
+  if (route.kind === "workspace") return "workspace-dev";
+  return "entry";
+}
+
+function workspaceViewFromRoute(route: Extract<AppRoute, { kind: "workspace" }> | null): WorkspaceView {
+  if (!route || route.view === "new") return "chat";
+  return route.view;
 }
 
 async function getIceServers() {
@@ -1075,7 +1101,9 @@ function workspaceConversationPreview(conversation: WorkspaceConversation) {
 }
 
 function workspaceConversationTime(conversation: WorkspaceConversation) {
-  return formatWorkspaceTime(conversation.lastActivityAt || conversation.latestMessages.at(-1)?.createdAt || conversation.createdAt);
+  return formatWorkspaceConversationTime(
+    conversation.lastActivityAt || conversation.latestMessages.at(-1)?.createdAt || conversation.createdAt
+  );
 }
 
 function workspaceConversationTimestamp(conversation: WorkspaceConversation) {
@@ -1201,6 +1229,67 @@ function workspaceInviteStatus(invite: WorkspaceInvite) {
 
 function canRevokeWorkspaceInvite(invite: WorkspaceInvite) {
   return workspaceInviteStatus(invite) === "有效";
+}
+
+function formatWorkspaceInviteDate(value?: string | null) {
+  if (!value) {
+    return "长期有效";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "时间未知";
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+}
+
+function WorkspaceInviteRow({
+  invite,
+  onRevoke
+}: {
+  invite: WorkspaceInvite;
+  onRevoke: (invite: WorkspaceInvite) => void;
+}) {
+  const status = workspaceInviteStatus(invite);
+  const hiddenAcceptedMemberCount = Math.max(0, invite.acceptedMemberCount - invite.acceptedMembers.length);
+  return (
+    <div className="workspace-invite-row">
+      <div className="workspace-invite-main">
+        <div className="workspace-invite-heading">
+          <strong>{invite.codePreview}</strong>
+          <span className={`workspace-invite-status ${status === "有效" ? "active" : "history"}`}>{status}</span>
+        </div>
+        <small>
+          {workspaceRoleLabel(invite.defaultRole)} · 已使用 {invite.uses}/{invite.maxUses} · 创建于 {formatWorkspaceInviteDate(invite.createdAt)}
+        </small>
+        <small>{invite.expiresAt ? `有效至 ${formatWorkspaceInviteDate(invite.expiresAt)}` : "无到期时间"}</small>
+        {invite.acceptedMemberCount > 0 && (
+          <div className="workspace-invite-acceptances" aria-label="通过此邀请加入的成员">
+            <span>已加入</span>
+            <div className="workspace-invite-member-list">
+              {invite.acceptedMembers.map((member) => (
+                <span className="workspace-invite-member" key={member.id} title={`${member.displayName} · ${formatWorkspaceInviteDate(member.acceptedAt)}`}>
+                  <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} className="tiny" decorative />
+                  <span><WorkspaceIdentityName name={member.displayName} kind={member.kind} /></span>
+                </span>
+              ))}
+              {hiddenAcceptedMemberCount > 0 && <em>另有 {hiddenAcceptedMemberCount} 位成员</em>}
+            </div>
+          </div>
+        )}
+      </div>
+      {canRevokeWorkspaceInvite(invite) && (
+        <button className="secondary compact danger-action" type="button" onClick={() => onRevoke(invite)}>
+          撤销
+        </button>
+      )}
+    </div>
+  );
 }
 
 function canRemoveWorkspaceFile(file: WorkspaceFile, currentUser?: WorkspaceUser) {
@@ -1784,19 +1873,30 @@ export function shouldApplyWorkspaceReactionResponse(currentEventSeq: number, ev
   return currentEventSeq <= eventSeqAtRequest;
 }
 export function App() {
+  const initialParsedRouteRef = useRef<ReturnType<typeof parseAppRoute> | null>(null);
+  if (!initialParsedRouteRef.current) {
+    initialParsedRouteRef.current = parseAppRoute(window.location.pathname, window.location.search, window.location.hash);
+  }
+  const initialParsedRoute = initialParsedRouteRef.current;
+  const initialRoute = initialParsedRoute.route;
+  const initialRoomId = initialRoute.kind === "direct" ? initialRoute.roomId : "";
+  const initialRoomSecret = initialRoute.kind === "direct" && initialRoomId ? getRoomSecretFromHash() : "";
+  const initialWorkspaceRoute = initialRoute.kind === "workspace" ? initialRoute : null;
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
     themeMode === "system" ? getSystemTheme() : themeMode
   );
-  const [lane, setLane] = useState<Lane>("entry");
-  const [p2pStep, setP2pStep] = useState<P2pStep>("name");
+  const [lane, setLane] = useState<Lane>(() => routeLane(initialRoute));
+  const [p2pStep, setP2pStep] = useState<P2pStep>(() => initialRoomId && !initialRoomSecret ? "invalid-room" : "name");
   const [displayName, setDisplayName] = useState("");
-  const [roomId, setRoomId] = useState("");
-  const [inviteLink, setInviteLink] = useState("");
+  const [roomId, setRoomId] = useState(initialRoomId);
+  const [inviteLink, setInviteLink] = useState(() => initialRoomId && initialRoomSecret
+    ? withRoomSecret(getInviteLink(initialRoomId), initialRoomSecret)
+    : "");
   const [p2pStatus, setP2pStatus] = useState<ConnectionState>("idle");
   const [p2pError, setP2pError] = useState("");
-  const [p2pRoomIssue, setP2pRoomIssue] = useState<P2pRoomIssue>("");
-  const [roomSecret, setRoomSecret] = useState("");
+  const [p2pRoomIssue, setP2pRoomIssue] = useState<P2pRoomIssue>(() => initialRoomId && !initialRoomSecret ? "missing-key" : "");
+  const [roomSecret, setRoomSecret] = useState(initialRoomSecret);
   const [securityPassphrase, setSecurityPassphrase] = useState("");
   const [p2pParticipantCount, setP2pParticipantCount] = useState(P2P_DEFAULT_PARTICIPANTS);
   const [verificationCode, setVerificationCode] = useState("");
@@ -1820,7 +1920,7 @@ export function App() {
   const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFile[]>([]);
   const [workspaceLibraryFiles, setWorkspaceLibraryFiles] = useState<WorkspaceFile[]>([]);
   const [workspaceDirectoryMembers, setWorkspaceDirectoryMembers] = useState<WorkspaceUser[]>([]);
-  const [workspaceSelectedConversationId, setWorkspaceSelectedConversationId] = useState("");
+  const [workspaceSelectedConversationId, setWorkspaceSelectedConversationId] = useState(initialWorkspaceRoute?.conversationId ?? "");
   const [workspaceDraftByConversation, setWorkspaceDraftByConversation] = useState<Record<string, string>>({});
   const [workspaceReplyToMessageIdByConversation, setWorkspaceReplyToMessageIdByConversation] = useState<Record<string, string>>({});
   const [workspaceComposerAttachmentsByConversation, setWorkspaceComposerAttachmentsByConversation] = useState<
@@ -1835,20 +1935,20 @@ export function App() {
   const [workspaceStatus, setWorkspaceStatus] = useState<"idle" | "loading" | "ready" | "disabled" | "auth" | "error">("idle");
   const [workspaceError, setWorkspaceError] = useState("");
   const [workspaceNotice, setWorkspaceNotice] = useState<WorkspaceNotice | null>(null);
-  const [workspacePendingInviteCode, setWorkspacePendingInviteCode] = useState("");
+  const [workspacePendingInviteCode, setWorkspacePendingInviteCode] = useState(initialWorkspaceRoute?.inviteCode ?? "");
   const [workspaceInviteCode, setWorkspaceInviteCode] = useState("");
   const [workspaceInviteCodeId, setWorkspaceInviteCodeId] = useState("");
   const [workspaceNewGroupTitle, setWorkspaceNewGroupTitle] = useState("");
   const [workspaceGroupRenameTitle, setWorkspaceGroupRenameTitle] = useState("");
-  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("chat");
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(() => workspaceViewFromRoute(initialWorkspaceRoute));
   const [workspaceMobilePane, setWorkspaceMobilePane] = useState<WorkspaceMobilePane>("list");
   const [workspaceContextMode, setWorkspaceContextMode] = useState<WorkspaceContextMode>("conversation");
   const [workspaceContextCollapsed, setWorkspaceContextCollapsed] = useState(() =>
     typeof localStorage === "undefined" || localStorage.getItem(WORKSPACE_CONTEXT_STORAGE_KEY) !== "true"
   );
   const [workspaceContextTab, setWorkspaceContextTab] = useState<WorkspaceContextTab>("overview");
-  const [workspaceSpaceTab, setWorkspaceSpaceTab] = useState<WorkspaceSpaceTab>("overview");
-  const [workspaceCreateMode, setWorkspaceCreateMode] = useState<WorkspaceCreateMode>("");
+  const [workspaceSpaceTab, setWorkspaceSpaceTab] = useState<WorkspaceSpaceTab>(initialWorkspaceRoute?.spaceTab ?? "overview");
+  const [workspaceCreateMode, setWorkspaceCreateMode] = useState<WorkspaceCreateMode>(initialWorkspaceRoute?.createMode ?? "");
   const [workspaceMemberQuery, setWorkspaceMemberQuery] = useState("");
   const [workspacePickerMemberQuery, setWorkspacePickerMemberQuery] = useState("");
   const [workspaceContextMemberQuery, setWorkspaceContextMemberQuery] = useState("");
@@ -1862,8 +1962,8 @@ export function App() {
   const [workspaceVisibilitySaving, setWorkspaceVisibilitySaving] = useState(false);
   const [workspaceGroupMemberIds, setWorkspaceGroupMemberIds] = useState<string[]>([]);
   const [workspaceFileFilter, setWorkspaceFileFilter] = useState<WorkspaceFileFilter>("all");
-  const [workspaceSelectedFileId, setWorkspaceSelectedFileId] = useState("");
-  const [workspaceSelectedMemberId, setWorkspaceSelectedMemberId] = useState("");
+  const [workspaceSelectedFileId, setWorkspaceSelectedFileId] = useState(initialWorkspaceRoute?.fileId ?? "");
+  const [workspaceSelectedMemberId, setWorkspaceSelectedMemberId] = useState(initialWorkspaceRoute?.memberId ?? "");
   const [workspaceUploading, setWorkspaceUploading] = useState(false);
   const [workspaceGroupMemberBusyId, setWorkspaceGroupMemberBusyId] = useState("");
   const [workspaceRealtimeState, setWorkspaceRealtimeState] = useState<WorkspaceRealtimeState>("idle");
@@ -1910,6 +2010,7 @@ export function App() {
   const workspaceMemberFilterTriggerRef = useRef<HTMLButtonElement | null>(null);
   const workspaceImageViewerRef = useRef<HTMLDivElement | null>(null);
   const workspaceImageCloseButtonRef = useRef<HTMLButtonElement | null>(null);
+  const workspaceLoadingRef = useRef(false);
   const workspacePreserveScrollRef = useRef(false);
   const workspacePreviousScrollHeightRef = useRef(0);
   const workspaceStickToBottomRef = useRef(true);
@@ -2573,16 +2674,28 @@ export function App() {
   }, [lane]);
 
   useEffect(() => {
+    if (workspaceStatus !== "ready") {
+      return;
+    }
     if (workspaceConversations.length === 0) {
       if (workspaceSelectedConversationId) {
         setWorkspaceSelectedConversationId("");
+        if (workspaceView === "chat") {
+          replaceWorkspaceRoute(workspaceRoute({ inviteCode: workspacePendingInviteCode }));
+        }
       }
       return;
     }
     if (!workspaceSelectedConversationId || !workspaceConversations.some((conversation) => conversation.id === workspaceSelectedConversationId)) {
-      setWorkspaceSelectedConversationId(workspaceConversations[0].id);
+      const fallbackId = workspaceConversations[0].id;
+      const requestedId = workspaceSelectedConversationId;
+      setWorkspaceSelectedConversationId(fallbackId);
+      if (workspaceView === "chat") {
+        replaceWorkspaceRoute(workspaceRoute({ inviteCode: workspacePendingInviteCode, conversationId: fallbackId }));
+        if (requestedId) showWorkspaceNotice("warning", "该会话不存在或无权访问，已返回最近会话");
+      }
     }
-  }, [workspaceConversations, workspaceSelectedConversationId]);
+  }, [workspaceConversations, workspacePendingInviteCode, workspaceSelectedConversationId, workspaceStatus, workspaceView]);
 
   useEffect(() => {
     if (workspaceSelectedConversation?.type === "group") {
@@ -2599,23 +2712,34 @@ export function App() {
 
   useEffect(() => {
     if (
+      workspaceStatus === "ready" &&
+      workspaceView === "files" &&
       workspaceSelectedFileId &&
       !workspaceFiles.some((file) => file.id === workspaceSelectedFileId) &&
       !workspaceLibraryFiles.some((file) => file.id === workspaceSelectedFileId)
     ) {
       setWorkspaceSelectedFileId("");
+      replaceWorkspaceRoute(workspaceRoute({ inviteCode: workspacePendingInviteCode, view: "files" }));
+      showWorkspaceNotice("warning", "该文件不存在或无权访问，已返回文件库");
     }
-  }, [workspaceFiles, workspaceLibraryFiles, workspaceSelectedFileId]);
+  }, [workspaceFiles, workspaceLibraryFiles, workspacePendingInviteCode, workspaceSelectedFileId, workspaceStatus, workspaceView]);
 
   useEffect(() => {
-    if (workspaceSelectedMemberId && !workspaceDirectoryMembers.some((member) => member.id === workspaceSelectedMemberId)) {
+    if (
+      workspaceStatus === "ready" &&
+      workspaceView === "members" &&
+      workspaceSelectedMemberId &&
+      !workspaceDirectoryMembers.some((member) => member.id === workspaceSelectedMemberId)
+    ) {
       setWorkspaceSelectedMemberId("");
+      replaceWorkspaceRoute(workspaceRoute({ inviteCode: workspacePendingInviteCode, view: "members" }));
+      showWorkspaceNotice("warning", "该成员不存在或不可见，已返回成员目录");
       if (workspaceContextMode === "member") {
         setWorkspaceContextMode("conversation");
         setWorkspaceContextCollapsed(true);
       }
     }
-  }, [workspaceContextMode, workspaceDirectoryMembers, workspaceSelectedMemberId]);
+  }, [workspaceContextMode, workspaceDirectoryMembers, workspacePendingInviteCode, workspaceSelectedMemberId, workspaceStatus, workspaceView]);
 
   useEffect(() => {
     if (!workspaceCreateMode) {
@@ -2642,6 +2766,7 @@ export function App() {
   }, [lane, workspaceMemberKindFilter, workspaceMemberQuery, workspaceMemberRoleFilter, workspaceStatus, workspaceView]);
 
   useEffect(() => {
+    if (workspaceStatus !== "ready") return;
     if (
       (workspaceSpaceTab === "invites" && !workspaceBootstrap?.permissions.canCreateMemberInvite) ||
       (workspaceSpaceTab === "roles" && !workspaceBootstrap?.permissions.canCreatePrivilegedInvite) ||
@@ -2649,12 +2774,16 @@ export function App() {
       (workspaceSpaceTab === "email" && !workspaceBootstrap?.permissions.canManageEmailSettings)
     ) {
       setWorkspaceSpaceTab("overview");
+      replaceWorkspaceRoute(workspaceRoute({ inviteCode: workspacePendingInviteCode, view: "space", spaceTab: "overview" }));
+      showWorkspaceNotice("warning", "当前账号无权访问该空间设置，已返回空间概览");
     }
   }, [
     workspaceBootstrap?.permissions.canCreateMemberInvite,
     workspaceBootstrap?.permissions.canCreatePrivilegedInvite,
     workspaceBootstrap?.permissions.canManageEmailSettings,
     workspaceBootstrap?.permissions.canManageMemberVisibility,
+    workspacePendingInviteCode,
+    workspaceStatus,
     workspaceSpaceTab
   ]);
 
@@ -2846,32 +2975,20 @@ export function App() {
   }, [lane, workspaceStatus, workspaceBootstrap?.auth.currentUser.id]);
 
   useEffect(() => {
-    const entryRoute = parseEntryRoute(window.location.search);
-    if (entryRoute.lane === "workspace") {
-      setWorkspacePendingInviteCode(entryRoute.inviteCode);
-      setLane("workspace-dev");
-      return;
+    if (initialParsedRoute.needsCanonicalReplace) {
+      window.history.replaceState({}, "", initialParsedRoute.canonicalUrl);
     }
+    applyAppRouteState(initialParsedRoute.route);
 
-    if (entryRoute.lane !== "p2p" || !entryRoute.roomId) {
-      return;
-    }
-
-    const incomingSecret = getRoomSecretFromHash();
-    if (!incomingSecret) {
-      setLane("p2p");
-      setP2pStep("invalid-room");
-      setRoomId(entryRoute.roomId);
-      setP2pRoomIssue("missing-key");
-      return;
-    }
-
-    setLane("p2p");
-    setP2pStep("name");
-    setRoomId(entryRoute.roomId);
-    setRoomSecret(incomingSecret);
-    setInviteLink(withRoomSecret(getInviteLink(entryRoute.roomId), incomingSecret));
-    setP2pRoomIssue("");
+    const handlePopState = () => {
+      const parsedRoute = parseAppRoute(window.location.pathname, window.location.search, window.location.hash);
+      if (parsedRoute.needsCanonicalReplace) {
+        window.history.replaceState({}, "", parsedRoute.canonicalUrl);
+      }
+      applyAppRouteState(parsedRoute.route);
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
   useEffect(() => {
@@ -3464,6 +3581,7 @@ export function App() {
       setRoomId(nextRoomId);
       setRoomSecret(nextSecret);
       setInviteLink(withRoomSecret(getInviteLink(nextRoomId), nextSecret));
+      writeAppRoute({ kind: "direct", roomId: nextRoomId }, { replace: true, roomSecret: nextSecret });
       setP2pStep("waiting");
     } catch (error) {
       setRoomId("");
@@ -3475,6 +3593,8 @@ export function App() {
   }
 
   async function loadWorkspace() {
+    if (workspaceLoadingRef.current) return;
+    workspaceLoadingRef.current = true;
     setWorkspaceStatus("loading");
     setWorkspaceError("");
     setWorkspaceNotice(null);
@@ -3510,6 +3630,8 @@ export function App() {
       const code = error instanceof WorkspaceClientError ? error.code : "";
       setWorkspaceError(code === "auth.required" ? "" : message);
       setWorkspaceStatus(code === "workspace.disabled" ? "disabled" : code.startsWith("auth.") ? "auth" : "error");
+    } finally {
+      workspaceLoadingRef.current = false;
     }
   }
 
@@ -3583,6 +3705,7 @@ export function App() {
     workspaceStickToBottomRef.current = false;
     setWorkspaceSelectedConversationId(conversationId);
     setWorkspaceView("chat");
+    writeAppRoute(workspaceRoute({ inviteCode: workspacePendingInviteCode, conversationId }));
     setWorkspaceContextMode("conversation");
     setWorkspaceContextTab("overview");
     setWorkspaceMobilePane("main");
@@ -4035,6 +4158,8 @@ export function App() {
 
   function openWorkspaceMemberDetails(member: WorkspaceUser) {
     setWorkspaceSelectedMemberId(member.id);
+    setWorkspaceView("members");
+    writeAppRoute(workspaceRoute({ inviteCode: workspacePendingInviteCode, view: "members", memberId: member.id }));
     setWorkspaceContextMode("member");
     setWorkspaceContextCollapsed(false);
     setWorkspaceMobilePane("details");
@@ -4287,6 +4412,8 @@ export function App() {
       void refreshWorkspaceFiles();
     }
     setWorkspaceSelectedFileId(attachment.id);
+    setWorkspaceView("files");
+    writeAppRoute(workspaceRoute({ inviteCode: workspacePendingInviteCode, view: "files", fileId: attachment.id }));
     setWorkspaceContextMode("file");
     setWorkspaceContextCollapsed(false);
     setWorkspaceMobilePane("details");
@@ -4462,6 +4589,11 @@ export function App() {
 
   function openWorkspaceCreate(mode: WorkspaceCreateMode) {
     setWorkspaceCreateMode(mode);
+    writeAppRoute(workspaceRoute({
+      inviteCode: workspacePendingInviteCode,
+      view: "new",
+      createMode: mode
+    }));
     setWorkspaceCreateMenuOpen(false);
     setWorkspaceUserMenuOpen(false);
     clearWorkspaceNotice();
@@ -4475,6 +4607,10 @@ export function App() {
   function closeWorkspaceCreate() {
     setWorkspaceCreateMode("");
     setWorkspaceMobilePane("list");
+    writeAppRoute(workspaceRoute({
+      inviteCode: workspacePendingInviteCode,
+      conversationId: workspaceSelectedConversationId
+    }));
     window.requestAnimationFrame(() => workspaceCreateTriggerRef.current?.focus());
   }
 
@@ -4653,15 +4789,10 @@ export function App() {
         })
       });
       setWorkspaceConversations((conversations) => upsertWorkspaceConversationList(conversations, data.conversation));
-      setWorkspaceSelectedConversationId(data.conversation.id);
       setWorkspaceNewGroupTitle("");
       setWorkspaceGroupMemberIds([]);
       setWorkspaceCreateMode("");
-      setWorkspaceSelectedConversationId(data.conversation.id);
-      setWorkspaceView("chat");
-      setWorkspaceContextMode("conversation");
-      setWorkspaceContextTab("overview");
-      setWorkspaceMobilePane("main");
+      selectWorkspaceConversation(data.conversation.id);
     } catch (error) {
       showWorkspaceNotice("warning", userFacingErrorMessage(error, "创建会话失败"));
     }
@@ -4778,7 +4909,8 @@ export function App() {
         method: "POST",
         body: JSON.stringify({ defaultRole: "member", maxUses: 1 })
       });
-      setWorkspaceInviteCode(data.invite.inviteUrl || `${window.location.origin}${getWorkspaceEntryUrl(data.invite.code || "")}`);
+      const invitePath = data.invite.inviteUrl || getWorkspaceEntryUrl(data.invite.code || "");
+      setWorkspaceInviteCode(new URL(invitePath, window.location.origin).toString());
       setWorkspaceInviteCodeId(data.invite.id);
       await loadWorkspace();
       showWorkspaceNotice("success", "邀请已创建，可以复制发送给成员。");
@@ -5344,6 +5476,7 @@ export function App() {
       setWorkspaceLibraryFiles((files) => files.filter((item) => item.id !== file.id));
       setWorkspaceSelectedFileId("");
       setWorkspaceContextMode("conversation");
+      replaceWorkspaceRoute(workspaceRoute({ inviteCode: workspacePendingInviteCode, view: "files" }));
       showWorkspaceNotice("success", "文件已移除");
       await Promise.all([refreshWorkspaceFiles(), refreshWorkspaceConversations()]);
     } catch (error) {
@@ -6158,10 +6291,101 @@ export function App() {
     dataChannelRef.current?.close();
   }
 
+  function applyAppRouteState(route: AppRoute) {
+    if (route.kind === "entry" || route.kind === "about") {
+      setLane(route.kind);
+      setWorkspaceCreateMenuOpen(false);
+      setWorkspaceUserMenuOpen(false);
+      return;
+    }
+
+    if (route.kind === "direct") {
+      const incomingSecret = route.roomId ? getRoomSecretFromHash() : "";
+      setLane("p2p");
+      setRoomId(route.roomId);
+      setRoomSecret(incomingSecret);
+      setInviteLink(route.roomId && incomingSecret ? withRoomSecret(getInviteLink(route.roomId), incomingSecret) : "");
+      setP2pError("");
+      if (route.roomId && !incomingSecret) {
+        setP2pRoomIssue("missing-key");
+        setP2pStep("invalid-room");
+      } else {
+        setP2pRoomIssue("");
+        setP2pStep("name");
+      }
+      return;
+    }
+
+    setLane("workspace-dev");
+    setWorkspacePendingInviteCode(route.inviteCode);
+    setWorkspaceView(workspaceViewFromRoute(route));
+    if (route.view === "chat") {
+      setWorkspaceSelectedConversationId(route.conversationId);
+    }
+    setWorkspaceSelectedFileId(route.fileId);
+    setWorkspaceSelectedMemberId(route.memberId);
+    setWorkspaceSpaceTab(route.spaceTab);
+    setWorkspaceCreateMode(route.createMode);
+    setWorkspaceCreateMenuOpen(false);
+    setWorkspaceUserMenuOpen(false);
+
+    if (route.view === "files" && route.fileId) {
+      setWorkspaceContextMode("file");
+      setWorkspaceContextCollapsed(false);
+      setWorkspaceMobilePane("details");
+    } else if (route.view === "members" && route.memberId) {
+      setWorkspaceContextMode("member");
+      setWorkspaceContextCollapsed(false);
+      setWorkspaceMobilePane("details");
+    } else if (route.view === "chat") {
+      setWorkspaceContextMode("conversation");
+      setWorkspaceMobilePane(route.conversationId ? "main" : "list");
+    } else {
+      setWorkspaceMobilePane("main");
+    }
+  }
+
+  function writeAppRoute(route: AppRoute, options: { replace?: boolean; roomSecret?: string } = {}) {
+    const hash = route.kind === "direct" && options.roomSecret
+      ? `#${new URLSearchParams({ k: options.roomSecret }).toString()}`
+      : "";
+    const nextUrl = `${getAppRouteUrl(route)}${hash}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (nextUrl === currentUrl) return;
+    window.history[options.replace ? "replaceState" : "pushState"]({}, "", nextUrl);
+  }
+
+  function navigateAppRoute(route: AppRoute, options: { replace?: boolean; roomSecret?: string } = {}) {
+    writeAppRoute(route, options);
+    applyAppRouteState(route);
+  }
+
+  function replaceWorkspaceRoute(route: Extract<AppRoute, { kind: "workspace" }>) {
+    writeAppRoute(route, { replace: true });
+  }
+
+  function navigateWorkspaceView(view: WorkspaceView, spaceTab: WorkspaceSpaceTab = "overview") {
+    const route = workspaceRoute({
+      inviteCode: workspacePendingInviteCode,
+      view,
+      conversationId: view === "chat" ? workspaceSelectedConversationId : "",
+      spaceTab
+    });
+    navigateAppRoute(route);
+  }
+
+  function navigateWorkspaceSpaceTab(spaceTab: WorkspaceSpaceTab) {
+    navigateAppRoute(workspaceRoute({
+      inviteCode: workspacePendingInviteCode,
+      view: "space",
+      spaceTab
+    }));
+  }
+
   function resetToEntry() {
     endP2pSocket();
     clearWorkspaceClientState();
-    setLane("entry");
+    navigateAppRoute({ kind: "entry" });
     setP2pStep("name");
     setP2pStatus("idle");
     setP2pError("");
@@ -6196,7 +6420,7 @@ export function App() {
 
   function startNewP2pRoom() {
     endP2pSocket();
-    setLane("p2p");
+    navigateAppRoute({ kind: "direct", roomId: "" });
     setP2pStep("name");
     setP2pStatus("idle");
     setP2pError("");
@@ -6227,7 +6451,6 @@ export function App() {
     setSecurityPassphrase("");
     setP2pParticipantCount(P2P_DEFAULT_PARTICIPANTS);
     setVerificationCode("");
-    window.history.replaceState({}, "", window.location.pathname);
   }
 
   async function copyInviteLink() {
@@ -6238,26 +6461,26 @@ export function App() {
 
   return (
     <main
-      className={lane === "workspace-dev" ? "shell workspace-mode" : lane === "p2p" ? "shell p2p-mode" : "shell"}
+      className={lane === "workspace-dev" ? "shell workspace-mode" : lane === "p2p" ? "shell p2p-mode" : lane === "about" ? "shell about-mode" : "shell"}
     >
       {(lane !== "workspace-dev" || workspaceStatus !== "ready" || !workspaceBootstrap) && (
         <ThemeSwitch mode={themeMode} resolvedTheme={resolvedTheme} onModeChange={setThemeMode} />
       )}
       {lane === "entry" && (
-        <section className="entry" aria-labelledby="entry-title">
+        <section className="entry page-enter" aria-labelledby="entry-title">
           <div className="entry-heading">
             <p className="eyebrow">DualLane</p>
             <h1 id="entry-title">选择沟通方式</h1>
           </div>
           <div className="lane-grid" aria-label="通信通道">
-            <button className="lane-choice direct-choice" type="button" onClick={() => setLane("p2p")}>
+            <button className="lane-choice direct-choice" type="button" onClick={() => navigateAppRoute({ kind: "direct", roomId: "" })}>
               <span className="lane-icon" aria-hidden="true">
                 <LockKeyhole size={28} />
               </span>
               <strong>一对一直连</strong>
               <span>无需登录，适合临时的一对一交流。<br />对话内容不在服务器保存。</span>
             </button>
-            <button className="lane-choice workspace-choice" type="button" onClick={() => setLane("workspace-dev")}>
+            <button className="lane-choice workspace-choice" type="button" onClick={() => navigateAppRoute(workspaceRoute())}>
               <span className="lane-icon" aria-hidden="true">
                 <ShieldCheck size={28} />
               </span>
@@ -6265,8 +6488,13 @@ export function App() {
               <span>和熟人或小组长期共享聊天与文件。<br />需要登录和邀请。</span>
             </button>
           </div>
+          <button className="entry-about-link" type="button" onClick={() => navigateAppRoute({ kind: "about" })}>
+            关于 DualLane 与版本更新
+          </button>
         </section>
       )}
+
+      {lane === "about" && <AboutPage onBack={() => navigateAppRoute({ kind: "entry" })} />}
 
       {lane === "p2p" && (
         <section className="lane-surface p2p-shell" aria-labelledby="p2p-title">
@@ -6571,7 +6799,7 @@ export function App() {
               {(workspaceStatus === "auth" || workspaceStatus === "error") && (
                 <div className="action-row">
                   {workspaceStatus === "auth" && (
-                    <button className="primary workspace-login-button" type="button" onClick={() => window.location.assign(getWorkspaceLoginUrl(workspacePendingInviteCode))}>
+                    <button className="primary workspace-login-button" type="button" onClick={() => window.location.assign(getWorkspaceLoginUrl(workspacePendingInviteCode, `${window.location.pathname}${window.location.search}`))}>
                       <Github size={18} />
                       使用 GitHub 登录
                     </button>
@@ -6661,7 +6889,7 @@ export function App() {
                         aria-current={workspaceView === item.id ? "page" : undefined}
                         aria-controls="workspace-main-panel"
                         onClick={() => {
-                          setWorkspaceView(item.id);
+                          navigateWorkspaceView(item.id);
                           setWorkspaceMobilePane(item.id === "chat" ? "list" : "main");
                           setWorkspaceCreateMode("");
                           setWorkspaceCreateMenuOpen(false);
@@ -6775,7 +7003,7 @@ export function App() {
                             role="menuitem"
                             type="button"
                             onClick={() => {
-                              setWorkspaceView("account");
+                              navigateWorkspaceView("account");
                               setWorkspaceMobilePane("main");
                               setWorkspaceUserMenuOpen(false);
                             }}
@@ -6787,7 +7015,7 @@ export function App() {
                             role="menuitem"
                             type="button"
                             onClick={() => {
-                              setWorkspaceView("space");
+                              navigateWorkspaceView("space");
                               setWorkspaceMobilePane("main");
                               setWorkspaceUserMenuOpen(false);
                             }}
@@ -7027,7 +7255,7 @@ export function App() {
                             className="secondary"
                             type="button"
                             onClick={() => {
-                              setWorkspaceView("members");
+                              navigateWorkspaceView("members");
                               setWorkspaceMobilePane("main");
                             }}
                           >
@@ -7038,7 +7266,7 @@ export function App() {
                             className="secondary"
                             type="button"
                             onClick={() => {
-                              setWorkspaceView("files");
+                              navigateWorkspaceView("files");
                               setWorkspaceMobilePane("main");
                             }}
                           >
@@ -7143,12 +7371,13 @@ export function App() {
                                     type="button"
                                     onClick={() => {
                                       setWorkspaceSelectedFileId(file.id);
+                                      writeAppRoute(workspaceRoute({ inviteCode: workspacePendingInviteCode, view: "files", fileId: file.id }));
                                       setWorkspaceContextMode("file");
                                       setWorkspaceContextCollapsed(false);
                                       setWorkspaceMobilePane("details");
                                     }}
                                   >
-                                    <FileCheck2 size={18} />
+                                    <WorkspaceFileThumbnail file={file} />
                                     <span>
                                       <strong>{file.fileName}</strong>
                                       <small>
@@ -7188,8 +7417,7 @@ export function App() {
                             className="secondary"
                             type="button"
                             onClick={() => {
-                              setWorkspaceView("space");
-                              setWorkspaceSpaceTab("invites");
+                              navigateWorkspaceSpaceTab("invites");
                               setWorkspaceMobilePane("main");
                             }}
                           >
@@ -7362,14 +7590,21 @@ export function App() {
                             role="tab"
                             aria-selected={workspaceSpaceTab === tab.id}
                             tabIndex={workspaceSpaceTab === tab.id ? 0 : -1}
-                            onClick={() => setWorkspaceSpaceTab(tab.id)}
+                            id={`workspace-space-tab-${tab.id}`}
+                            aria-controls={`workspace-space-panel-${tab.id}`}
+                            onClick={() => navigateWorkspaceSpaceTab(tab.id)}
                           >
                             {tab.label}
                           </button>
                         ))}
                       </div>
                       {workspaceSpaceTab === "overview" && (
-                        <>
+                        <div
+                          className="workspace-space-tab-panel page-enter"
+                          id="workspace-space-panel-overview"
+                          role="tabpanel"
+                          aria-labelledby="workspace-space-tab-overview"
+                        >
                           <div className="workspace-info-grid">
                             <div>
                               <span>当前身份</span>
@@ -7453,13 +7688,14 @@ export function App() {
                             </section>
                           )}
                           <p className="workspace-space-note">共享空间保存消息和文件，方便成员稍后查看。</p>
-                        </>
+                        </div>
                       )}
                       {workspaceSpaceTab === "invites" && workspaceBootstrap.permissions.canCreateMemberInvite && (
-                        <section className="workspace-settings-section">
+                        <section className="workspace-settings-section workspace-space-tab-panel page-enter" id="workspace-space-panel-invites" role="tabpanel" aria-labelledby="workspace-space-tab-invites">
                           <div className="workspace-section-header">
-                            <div className="section-title">
-                              <span>邀请成员</span>
+                            <div>
+                              <h3>邀请成员</h3>
+                              <p>创建一次性成员邀请，并查看每条邀请的使用情况。</p>
                             </div>
                             <button className="secondary" type="button" onClick={() => void createWorkspaceInvite()}>
                               <Plus size={17} />
@@ -7475,32 +7711,62 @@ export function App() {
                               </button>
                             </div>
                           )}
-                          {workspaceBootstrap.invites.length > 0 ? (
-                            <div className="workspace-invite-list">
-                              {workspaceBootstrap.invites.map((invite) => {
-                                const status = workspaceInviteStatus(invite);
-                                return (
-                                  <div className="workspace-invite-row" key={invite.id}>
-                                    <span>
-                                      <strong>{invite.codePreview}</strong>
-                                      <small>{workspaceRoleLabel(invite.defaultRole)} · {invite.uses}/{invite.maxUses} · {status}</small>
-                                    </span>
-                                    {canRevokeWorkspaceInvite(invite) && (
-                                      <button className="secondary compact danger-action" type="button" onClick={() => void revokeWorkspaceInvite(invite)}>
-                                        撤销
-                                      </button>
-                                    )}
+                          <dl className="workspace-invite-summary" aria-label="邀请统计">
+                            {[
+                              ["有效邀请", workspaceBootstrap.inviteSummary.active],
+                              ["已加入", workspaceBootstrap.inviteSummary.acceptedUses],
+                              ["剩余名额", workspaceBootstrap.inviteSummary.availableUses],
+                              ["历史邀请", workspaceBootstrap.inviteSummary.history]
+                            ].map(([label, value]) => (
+                              <div key={label}>
+                                <dt>{label}</dt>
+                                <dd>{value}</dd>
+                              </div>
+                            ))}
+                          </dl>
+                          {workspaceBootstrap.invites.length > 0 ? (() => {
+                            const activeInvites = workspaceBootstrap.invites.filter(canRevokeWorkspaceInvite);
+                            const historyInvites = workspaceBootstrap.invites.filter((invite) => !canRevokeWorkspaceInvite(invite));
+                            return (
+                              <div className="workspace-invite-groups">
+                                <section className="workspace-invite-group" aria-labelledby="workspace-active-invites-title">
+                                  <div className="workspace-invite-group-heading">
+                                    <h4 id="workspace-active-invites-title">有效邀请</h4>
+                                    <span>{activeInvites.length}</span>
                                   </div>
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            <p className="saved-empty">还没有可用邀请。</p>
+                                  {activeInvites.length > 0 ? (
+                                    <div className="workspace-invite-list">
+                                      {activeInvites.map((invite) => (
+                                        <WorkspaceInviteRow invite={invite} key={invite.id} onRevoke={(item) => void revokeWorkspaceInvite(item)} />
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <p className="saved-empty">当前没有生效中的邀请。</p>
+                                  )}
+                                </section>
+                                {historyInvites.length > 0 && (
+                                  <details className="workspace-invite-history">
+                                    <summary>
+                                      <span>历史邀请</span>
+                                      <small>{historyInvites.length} 条</small>
+                                      <ChevronDown size={16} aria-hidden="true" />
+                                    </summary>
+                                    <div className="workspace-invite-list">
+                                      {historyInvites.map((invite) => (
+                                        <WorkspaceInviteRow invite={invite} key={invite.id} onRevoke={(item) => void revokeWorkspaceInvite(item)} />
+                                      ))}
+                                    </div>
+                                  </details>
+                                )}
+                              </div>
+                            );
+                          })() : (
+                            <p className="saved-empty">还没有邀请记录。</p>
                           )}
                         </section>
                       )}
                       {workspaceSpaceTab === "roles" && workspaceBootstrap.permissions.canCreatePrivilegedInvite && (
-                        <section className="workspace-settings-section">
+                        <section className="workspace-settings-section workspace-space-tab-panel page-enter" id="workspace-space-panel-roles" role="tabpanel" aria-labelledby="workspace-space-tab-roles">
                           <div className="section-title">
                             <span>成员权限</span>
                           </div>
@@ -7542,7 +7808,7 @@ export function App() {
                         </section>
                       )}
                       {workspaceSpaceTab === "visibility" && workspaceBootstrap.permissions.canManageMemberVisibility && (
-                        <section className="workspace-settings-section workspace-visibility-settings">
+                        <section className="workspace-settings-section workspace-visibility-settings workspace-space-tab-panel page-enter" id="workspace-space-panel-visibility" role="tabpanel" aria-labelledby="workspace-space-tab-visibility">
                           <div className="workspace-section-header">
                             <div className="section-title">
                               <span>成员可见范围</span>
@@ -7610,7 +7876,9 @@ export function App() {
                         </section>
                       )}
                       {workspaceSpaceTab === "email" && workspaceBootstrap.permissions.canManageEmailSettings && (
-                        <WorkspaceEmailSettingsPanel onNotice={showWorkspaceNotice} />
+                        <div className="workspace-space-tab-panel page-enter" id="workspace-space-panel-email" role="tabpanel" aria-labelledby="workspace-space-tab-email">
+                          <WorkspaceEmailSettingsPanel onNotice={showWorkspaceNotice} />
+                        </div>
                       )}
                     </div>
                   )}
@@ -7728,8 +7996,7 @@ export function App() {
                                 className="secondary"
                                 type="button"
                                 onClick={() => {
-                                  setWorkspaceSelectedConversationId(workspaceSelectedFileConversation.id);
-                                  setWorkspaceView("chat");
+                                  selectWorkspaceConversation(workspaceSelectedFileConversation.id);
                                   setWorkspaceContextMode("conversation");
                                   setWorkspaceContextCollapsed(false);
                                   setWorkspaceContextTab("files");
@@ -7915,12 +8182,13 @@ export function App() {
                                   onClick={() => {
                                     setWorkspaceSelectedFileId(file.id);
                                     setWorkspaceView("files");
+                                    writeAppRoute(workspaceRoute({ inviteCode: workspacePendingInviteCode, view: "files", fileId: file.id }));
                                     setWorkspaceContextMode("file");
                                     setWorkspaceContextCollapsed(false);
                                     setWorkspaceMobilePane("details");
                                   }}
                                 >
-                                  <FileCheck2 size={16} />
+                                  <WorkspaceFileThumbnail file={file} compact />
                                   <span>
                                     <strong>{file.fileName}</strong>
                                     <small>{formatBytes(file.byteSize)} · {workspaceFileUploaderName(file)}</small>
@@ -8016,7 +8284,7 @@ export function App() {
                     aria-current={workspaceView === item.id ? "page" : undefined}
                     aria-controls="workspace-main-panel"
                     onClick={() => {
-                      setWorkspaceView(item.id);
+                      navigateWorkspaceView(item.id);
                       setWorkspaceMobilePane(item.id === "chat" ? "list" : "main");
                       setWorkspaceCreateMode("");
                     }}
@@ -9243,7 +9511,38 @@ export function getWorkspaceSingleImageAttachment<
       : null;
 }
 
-function WorkspaceStructuredMessage({
+function WorkspaceFileThumbnail({
+  file,
+  compact = false
+}: {
+  file: WorkspaceAttachment;
+  compact?: boolean;
+}) {
+  const [previewFailed, setPreviewFailed] = useState(false);
+  const previewable = file.status === "available" && isPreviewableImageMimeType(file.mimeType);
+
+  useEffect(() => {
+    setPreviewFailed(false);
+  }, [file.id, file.mimeType, file.status]);
+
+  return (
+    <span className={compact ? "workspace-file-thumbnail compact" : "workspace-file-thumbnail"} aria-hidden="true">
+      {previewable && !previewFailed ? (
+        <img
+          src={`/api/workspace/files/${encodeURIComponent(file.id)}/preview`}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          onError={() => setPreviewFailed(true)}
+        />
+      ) : (
+        <FileCheck2 size={compact ? 16 : 18} />
+      )}
+    </span>
+  );
+}
+
+export function WorkspaceStructuredMessage({
   message,
   onOpenAttachment,
   onPreviewImage,
@@ -9285,61 +9584,89 @@ function WorkspaceStructuredMessage({
     );
   }
 
+  const contentBlocks = blocks.filter((block) => block.type !== "attachment");
+  const attachmentBlocks = blocks.flatMap((block, index) => block.type === "attachment"
+    ? [{ index, attachment: attachmentsById.get(block.attachmentId) }]
+    : []);
+  const imageAttachments = attachmentBlocks
+    .map(({ attachment }) => attachment)
+    .filter((attachment): attachment is WorkspaceAttachment => Boolean(
+      attachment && attachment.status === "available" && isPreviewableImageMimeType(attachment.mimeType)
+    ));
+  const imageAttachmentIds = new Set(imageAttachments.map((attachment) => attachment.id));
+  const fileAttachmentBlocks = attachmentBlocks.filter(({ attachment }) => !attachment || !imageAttachmentIds.has(attachment.id));
+
   return (
     <div className="message-body structured-message">
-      {blocks.map((block, index) => {
-        if (block.type === "text") {
-          return <WorkspaceMarkdown key={`${index}-text`}>{block.text}</WorkspaceMarkdown>;
-        }
-        if (block.type === "mention") {
-          return (
-            <span className="message-mention" key={`${index}-mention`}>
-              @{mentionLabels.get(block.userId) || block.label}
-            </span>
-          );
-        }
-        if (block.type === "link") {
-          return (
-            <a className="message-link" href={block.url} key={`${index}-link`} rel="noopener noreferrer" target="_blank">
-              {block.label || block.url}
-            </a>
-          );
-        }
-        if (block.type === "emoji") {
-          return <span key={`${index}-emoji`}>{renderMessageParts(block.shortcode)}</span>;
-        }
-        if (block.type === "attachment") {
-          const attachment = attachmentsById.get(block.attachmentId);
-          const previewable = attachment?.status === "available" && isPreviewableImageMimeType(attachment.mimeType);
-          return (
+      {contentBlocks.length > 0 && (
+        <div className="message-content-flow">
+          {contentBlocks.map((block, index) => {
+            if (block.type === "text") {
+              return <WorkspaceMarkdown key={`${index}-text`}>{block.text}</WorkspaceMarkdown>;
+            }
+            if (block.type === "mention") {
+              return (
+                <span className="message-mention" key={`${index}-mention`}>
+                  @{mentionLabels.get(block.userId) || block.label}
+                </span>
+              );
+            }
+            if (block.type === "link") {
+              return (
+                <a className="message-link" href={block.url} key={`${index}-link`} rel="noopener noreferrer" target="_blank">
+                  {block.label || block.url}
+                </a>
+              );
+            }
+            if (block.type === "emoji") {
+              return <span key={`${index}-emoji`}>{renderMessageParts(block.shortcode)}</span>;
+            }
+            return <span key={`${index}-fallback`}>{renderMessageParts(message.body)}</span>;
+          })}
+        </div>
+      )}
+      {imageAttachments.length > 0 && (
+        <div
+          className={imageAttachments.length === 1 ? "message-image-grid single" : "message-image-grid multiple"}
+          aria-label={`${imageAttachments.length} 张图片`}
+        >
+          {imageAttachments.map((attachment) => (
             <button
-              className={previewable ? "message-file-card image" : "message-file-card"}
+              className="message-image-tile"
               type="button"
-              key={`${index}-attachment`}
-              aria-label={attachment ? `查看文件 ${attachment.fileName}` : "文件不可用"}
-              disabled={!attachment || attachment.status !== "available"}
+              key={attachment.id}
+              aria-label={`预览图片 ${attachment.fileName}`}
               onClick={() => {
-                if (!attachment) {
-                  return;
-                }
-                if (previewable && onPreviewImage) {
+                if (onPreviewImage) {
                   onPreviewImage(attachment);
                   return;
                 }
                 onOpenAttachment?.(attachment);
               }}
             >
-              {previewable ? (
-                <img
-                  className="message-image-preview"
-                  src={`/api/workspace/files/${encodeURIComponent(attachment.id)}/preview`}
-                  alt={attachment.fileName}
-                  decoding="async"
-                  loading="lazy"
-                />
-              ) : (
-                <FileCheck2 size={18} />
-              )}
+              <img
+                className="message-image-preview"
+                src={`/api/workspace/files/${encodeURIComponent(attachment.id)}/preview`}
+                alt={attachment.fileName}
+                decoding="async"
+                loading="lazy"
+              />
+            </button>
+          ))}
+        </div>
+      )}
+      {fileAttachmentBlocks.length > 0 && (
+        <div className="message-file-list">
+          {fileAttachmentBlocks.map(({ attachment, index }) => (
+            <button
+              className="message-file-card"
+              type="button"
+              key={`${index}-attachment`}
+              aria-label={attachment ? `查看文件 ${attachment.fileName}` : "文件不可用"}
+              disabled={!attachment || attachment.status !== "available"}
+              onClick={() => attachment && onOpenAttachment?.(attachment)}
+            >
+              <FileCheck2 size={18} />
               <span>
                 <strong>{attachment?.fileName || "文件"}</strong>
                 <small>
@@ -9347,10 +9674,9 @@ function WorkspaceStructuredMessage({
                 </small>
               </span>
             </button>
-          );
-        }
-        return <span key={`${index}-fallback`}>{renderMessageParts(message.body)}</span>;
-      })}
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -9361,11 +9687,6 @@ function isKnownWorkspaceMessageBlock(block: WorkspaceContentBlock) {
     block.type === "emoji" ||
     block.type === "attachment";
 }
-
-function isPreviewableImageMimeType(mimeType: string) {
-  return ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp"].includes(mimeType.toLowerCase());
-}
-
 
 type WorkspaceSkeletonVariant = "conversation" | "message" | "file" | "member" | "setting";
 
@@ -9671,6 +9992,31 @@ function WorkspaceChatPanel({
     setMentionPanelOpen(false);
     window.requestAnimationFrame(() => textareaRef.current?.focus());
   };
+  useEffect(() => {
+    if (!toolPanelOpen && !reactionPickerMessageId) {
+      return;
+    }
+    const handleOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      if (toolPanelOpen && !composerFormRef.current?.contains(target)) {
+        setEmotePanelOpen(false);
+        setMentionPanelOpen(false);
+      }
+      if (reactionPickerMessageId) {
+        const reactionAnchor = target instanceof Element
+          ? target.closest<HTMLElement>("[data-reaction-picker-message-id]")
+          : null;
+        if (reactionAnchor?.dataset.reactionPickerMessageId !== reactionPickerMessageId) {
+          setReactionPickerMessageId("");
+        }
+      }
+    };
+    document.addEventListener("pointerdown", handleOutsidePointerDown);
+    return () => document.removeEventListener("pointerdown", handleOutsidePointerDown);
+  }, [reactionPickerMessageId, toolPanelOpen]);
   const handleDraftKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if ((event.metaKey || event.ctrlKey) && !event.altKey) {
       const shortcutFormat = event.key.toLowerCase() === "b"
@@ -9708,7 +10054,7 @@ function WorkspaceChatPanel({
     if (fileInputDisabled || sending) {
       return;
     }
-    const files = Array.from(event.clipboardData.files);
+    const files = renamePastedImageFiles(Array.from(event.clipboardData.files));
     if (files.length === 0) {
       return;
     }
@@ -9886,6 +10232,7 @@ function WorkspaceChatPanel({
                     <div className="workspace-message-actions">
                       <div
                         className="workspace-reaction-picker-anchor"
+                        data-reaction-picker-message-id={message.id}
                         onKeyDown={(event) => {
                           if (event.key === "Escape" && reactionPickerMessageId === message.id) {
                             event.preventDefault();
@@ -10253,6 +10600,20 @@ function ChatPanel({
     window.requestAnimationFrame(() => textareaRef.current?.focus());
   };
   const toolPanelOpen = emotePanelOpen || mentionPanelOpen;
+  useEffect(() => {
+    if (!toolPanelOpen) {
+      return;
+    }
+    const handleOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && !composerFormRef.current?.contains(target)) {
+        setEmotePanelOpen(false);
+        setMentionPanelOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", handleOutsidePointerDown);
+    return () => document.removeEventListener("pointerdown", handleOutsidePointerDown);
+  }, [toolPanelOpen]);
   const sendDisabled = sending || !draft.trim();
   const handleDraftKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Escape") {
@@ -10280,7 +10641,7 @@ function ChatPanel({
       return;
     }
     event.preventDefault();
-    onFile(image);
+    onFile(renamePastedImageFiles([image])[0]);
   };
 
   return (

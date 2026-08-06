@@ -5,8 +5,9 @@ import { createApp } from "../../apps/web/server/index.mjs";
 import { openTestDatabase } from "../../apps/web/server/services/test-database.mjs";
 
 const host = "127.0.0.1";
-const port = 8787;
-const frontendUrl = "http://127.0.0.1:5173";
+const port = Number(process.env.E2E_API_PORT || 8787);
+const frontendPort = Number(process.env.E2E_WEB_PORT || 5173);
+const frontendUrl = `http://127.0.0.1:${frontendPort}`;
 const dataDir = await mkdtemp(path.join(tmpdir(), "duallane-e2e-"));
 const db = openTestDatabase(dataDir);
 

@@ -1,0 +1,90 @@
+export type ReleaseCategory = {
+  title: string;
+  items: string[];
+};
+
+export type DualLaneRelease = {
+  version: string;
+  releasedAt: string;
+  title: string;
+  summary: string;
+  categories: ReleaseCategory[];
+};
+
+export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
+  {
+    version: "0.7.0",
+    releasedAt: "2026-08-06",
+    title: "页面可被准确找回",
+    summary: "让常用页面可以刷新、返回和分享，同时统一空间设置导航并加入克制的状态动效。",
+    categories: [
+      { title: "导航", items: ["刷新、前进和后退会恢复当前页面", "会话、文件、成员和空间设置拥有可分享地址"] },
+      { title: "体验", items: ["空间设置页边界和页签分隔线统一", "菜单、弹层和状态切换增加减弱动效支持"] },
+      { title: "产品", items: ["新增公开关于页与倒序版本时间轴", "旧邀请链接打开后自动进入对应页面"] }
+    ]
+  },
+  {
+    version: "0.6.0",
+    releasedAt: "2026-08-06",
+    title: "身份与通知",
+    summary: "成员可以维护公开昵称、私人备注和个人邮件通知偏好。",
+    categories: [
+      { title: "身份", items: ["支持公开昵称和仅自己可见的成员备注", "各处名称统一按查看者身份投影"] },
+      { title: "通知", items: ["支持通知邮箱验证、逐条提醒和未读摘要", "邮件提醒默认不展示消息正文或附件信息"] },
+      { title: "消息", items: ["Markdown 分割线可作为普通消息发送和预览"] }
+    ]
+  },
+  {
+    version: "0.5.0",
+    releasedAt: "2026-08-05",
+    title: "信标与输入体验",
+    summary: "加入每位成员独立的文件传输助手，并完善连续输入和格式化编辑体验。",
+    categories: [
+      { title: "信标", items: ["默认系统机器人信标对全员可见", "每位用户的信标会话、消息和附件彼此隔离"] },
+      { title: "输入", items: ["新增可收起的 Markdown 格式工具栏", "发送后恢复输入焦点，支持连续输入"] }
+    ]
+  },
+  {
+    version: "0.4.0",
+    releasedAt: "2026-08-04",
+    title: "富消息与互动",
+    summary: "Workspace 消息支持安全 Markdown、表情回复、GitHub 头像和更轻量的图片展示。",
+    categories: [
+      { title: "消息", items: ["受限 Markdown 保留原文语义并阻止不安全嵌入", "单张纯图片消息采用简洁预览"] },
+      { title: "互动", items: ["消息表情回复会在不同设备间保持一致", "空间账号优先展示 GitHub 头像并支持首字母回退"] }
+    ]
+  },
+  {
+    version: "0.3.0",
+    releasedAt: "2026-08-03",
+    title: "成熟 Workspace 消息体验",
+    summary: "重构消息时间线、未读定位、附件暂存、滚动恢复和移动端单面板布局。",
+    categories: [
+      { title: "时间线", items: ["历史阅读时新消息不再强制跳到底部", "支持未读分隔、自动分页和会话滚动恢复"] },
+      { title: "附件", items: ["选择、拖放和粘贴图片先进入本地队列", "多附件上传后作为一条结构化消息发送"] },
+      { title: "布局", items: ["Workspace 使用全高工作台和响应式详情抽屉"] }
+    ]
+  },
+  {
+    version: "0.2.0",
+    releasedAt: "2026-07-10",
+    title: "Workspace MVP",
+    summary: "共享空间开始支持长期保存的消息、成员协作、文件传输和容量限制。",
+    categories: [
+      { title: "协作", items: ["支持私聊、群聊、长期消息和共享文件", "成员、管理员和空间主人看到与身份匹配的操作"] },
+      { title: "容量", items: ["上传和下载前检查今日剩余容量", "会话按空间设置保留最近消息"] }
+    ]
+  },
+  {
+    version: "0.1.0",
+    releasedAt: "2026-06-10",
+    title: "双通道起点",
+    summary: "建立私密直连与共享空间双入口，完成临时会话、文件传输和表情包基础能力。",
+    categories: [
+      { title: "P2P", items: ["浏览器间直连传递文字和文件", "加密密钥仅保存在邀请链接片段中"] },
+      { title: "产品", items: ["区分私密直连和长期共享空间", "引入多套真实表情资源"] }
+    ]
+  }
+];
+
+export const CURRENT_RELEASE = DUAL_LANE_RELEASES[0];

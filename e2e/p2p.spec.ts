@@ -3,6 +3,16 @@ import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
 test.describe.configure({ timeout: 90_000 });
 
+test("legacy P2P links canonicalize without requesting the fragment secret", async ({ page }) => {
+  const requestedUrls: string[] = [];
+  page.on("request", (request) => requestedUrls.push(request.url()));
+  const secret = "a".repeat(43);
+  await page.goto(`/?lane=p2p&room=legacy-room#k=${secret}`);
+  await expect(page).toHaveURL(new RegExp(`/direct/legacy-room#k=${secret}$`));
+  await expect(page.getByRole("heading", { name: "加入私密直连会话。" })).toBeVisible();
+  expect(requestedUrls.some((url) => url.includes(secret) || url.includes("%23k"))).toBe(false);
+});
+
 async function openPrivateLane(page: Page, displayName: string) {
   await page.goto("/");
   await page.getByRole("button", { name: /一对一直连/ }).click();
@@ -203,8 +213,7 @@ test("two private-lane users exchange messages and a file without sending plaint
     const inviteLink = await createPrivateRoom(ownerPage, "直连用户甲");
     const inviteUrl = new URL(inviteLink);
     const roomSecret = inviteUrl.hash.slice("#k=".length);
-    expect(inviteUrl.searchParams.get("lane")).toBe("p2p");
-    expect(inviteUrl.searchParams.get("room")).toBeTruthy();
+    expect(inviteUrl.pathname).toMatch(/^\/direct\/[A-Za-z0-9_-]+$/);
     expect(inviteUrl.hash).toMatch(/^#k=[A-Za-z0-9_-]+$/);
     expect(roomSecret).not.toBe("");
 
@@ -416,6 +425,10 @@ test("private-lane mobile shell keeps composer, popovers and touch targets in vi
     await expect(input).toBeInViewport();
     const pickerHeight = await emotePicker.evaluate((element) => element.getBoundingClientRect().height);
     expect(pickerHeight).toBeLessThanOrEqual(844 * 0.4 + 1);
+    await page.locator(".message-list").click({ position: { x: 8, y: 8 } });
+    await expect(emotePicker).toHaveCount(0);
+    await emoteTrigger.click();
+    await expect(emotePicker).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(emotePicker).toHaveCount(0);
     await expect(input).toBeFocused();

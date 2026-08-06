@@ -423,8 +423,7 @@ describe("workspace UI permission boundaries", () => {
     expect(end).toBeGreaterThan(start);
 
     const inviteActionSource = source.slice(start, end);
-    expect(inviteActionSource).toContain('setWorkspaceView("space")');
-    expect(inviteActionSource).toContain('setWorkspaceSpaceTab("invites")');
+    expect(inviteActionSource).toContain('navigateWorkspaceSpaceTab("invites")');
     expect(inviteActionSource).toContain('setWorkspaceMobilePane("main")');
   });
 
@@ -782,8 +781,8 @@ describe("workspace UI permission boundaries", () => {
     expect(selectedFileSource).toContain("workspaceLibraryFiles.find((file) => file.id === workspaceSelectedFileId)");
     expect(selectedFileSource).toContain("[workspaceFiles, workspaceLibraryFiles, workspaceSelectedFileId]");
 
-    const selectedFileCleanupStart = source.indexOf("if (\n      workspaceSelectedFileId &&");
-    const selectedFileCleanupEnd = source.indexOf("}, [workspaceFiles, workspaceLibraryFiles, workspaceSelectedFileId]);", selectedFileCleanupStart);
+    const selectedFileCleanupStart = source.indexOf('workspaceStatus === "ready" &&\n      workspaceView === "files" &&\n      workspaceSelectedFileId');
+    const selectedFileCleanupEnd = source.indexOf("}, [workspaceFiles, workspaceLibraryFiles, workspacePendingInviteCode, workspaceSelectedFileId, workspaceStatus, workspaceView]);", selectedFileCleanupStart);
     expect(selectedFileCleanupStart).toBeGreaterThan(-1);
     expect(selectedFileCleanupEnd).toBeGreaterThan(selectedFileCleanupStart);
     const selectedFileCleanupSource = source.slice(selectedFileCleanupStart, selectedFileCleanupEnd);

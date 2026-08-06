@@ -962,9 +962,9 @@ function normalizeText(value) {
 
 function normalizeBaseUrl(value) {
   try {
-    return new URL("/?lane=workspace", value || "http://127.0.0.1:8787").toString();
+    return new URL("/workspace", value || "http://127.0.0.1:8787").toString();
   } catch {
-    return "http://127.0.0.1:8787/?lane=workspace";
+    return "http://127.0.0.1:8787/workspace";
   }
 }
 

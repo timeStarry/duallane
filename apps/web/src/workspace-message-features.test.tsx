@@ -8,6 +8,7 @@ import {
   applyWorkspaceReactionOptimistic,
   buildWorkspaceMessageBlocks,
   getWorkspaceSingleImageAttachment,
+  WorkspaceStructuredMessage,
   shouldApplyWorkspaceReactionResponse
 } from "./App";
 import {
@@ -171,6 +172,38 @@ describe("workspace message presentation helpers", () => {
       [{ type: "attachment", attachmentId: image.id }],
       [{ ...image, status: "failed" }]
     )).toBeNull();
+  });
+
+  it("renders message text before a compact multi-image grid and regular files", () => {
+    const html = renderToStaticMarkup(
+      <WorkspaceStructuredMessage
+        message={{
+          id: "message-layout",
+          author: "当前用户",
+          body: "正文",
+          lane: "workspace",
+          at: "15:04",
+          content: {
+            blocks: [
+              { type: "text", text: "正文" },
+              { type: "attachment", attachmentId: "image-1" },
+              { type: "attachment", attachmentId: "image-2" },
+              { type: "attachment", attachmentId: "document-1" }
+            ]
+          },
+          attachments: [
+            { id: "image-1", fileName: "一.png", mimeType: "image/png", byteSize: 10, status: "available" },
+            { id: "image-2", fileName: "二.webp", mimeType: "image/webp", byteSize: 20, status: "available" },
+            { id: "document-1", fileName: "说明.pdf", mimeType: "application/pdf", byteSize: 30, status: "available" }
+          ]
+        }}
+      />
+    );
+
+    expect(html.indexOf("message-content-flow")).toBeLessThan(html.indexOf("message-image-grid multiple"));
+    expect(html.indexOf("message-image-grid multiple")).toBeLessThan(html.indexOf("message-file-list"));
+    expect(html.match(/message-image-tile/g)).toHaveLength(2);
+    expect(html).not.toContain("message-file-card image");
   });
 
   it("optimistically adds, merges and removes current-user reactions", () => {

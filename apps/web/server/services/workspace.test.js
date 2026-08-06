@@ -930,6 +930,12 @@ describe("workspace service", () => {
       defaultRole: "member",
       code: "VISIBLE-MEMBER"
     });
+    const member = await acceptInvite(db, request, {
+      code: memberInvite.code,
+      githubLogin: "invite-visible-member",
+      email: "invite-visible-member@example.com",
+      displayName: "Invite Visible Member"
+    });
     const ownerInvite = await createInvite(db, request, {
       actorId: "usr_owner",
       defaultRole: "owner",
@@ -945,9 +951,34 @@ describe("workspace service", () => {
     expect(adminBootstrap.invites.map((invite) => invite.id)).toEqual([memberInvite.id]);
     expect(adminBootstrap.invites[0]).toMatchObject({
       defaultRole: "member",
-      codePreview: memberInvite.codePreview
+      codePreview: memberInvite.codePreview,
+      acceptedMemberCount: 1,
+      acceptedMembers: []
+    });
+    expect(adminBootstrap.inviteSummary).toEqual({
+      total: 1,
+      active: 0,
+      history: 1,
+      acceptedUses: 1,
+      availableUses: 0
+    });
+    expect(ownerBootstrap.inviteSummary).toEqual({
+      total: 3,
+      active: 1,
+      history: 2,
+      acceptedUses: 2,
+      availableUses: 1
+    });
+    expect(ownerBootstrap.invites.find((invite) => invite.id === memberInvite.id)).toMatchObject({
+      acceptedMemberCount: 1,
+      acceptedMembers: [expect.objectContaining({
+        id: member.id,
+        displayName: "Invite Visible Member"
+      })]
     });
     expect(JSON.stringify(adminBootstrap.invites)).not.toContain("VISIBLE-MEMBER");
+    expect(JSON.stringify(adminBootstrap.invites)).not.toContain("Invite Visible Member");
+    expect(JSON.stringify(ownerBootstrap.invites)).not.toContain("invite-visible-member@example.com");
     expect(JSON.stringify(adminBootstrap.invites)).not.toContain(ownerInvite.id);
     expect(JSON.stringify(adminBootstrap.invites)).not.toContain(adminInvite.id);
   });

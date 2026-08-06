@@ -382,6 +382,37 @@ describe("workspace routes", () => {
     expect(response.cookies.some((cookie) => cookie.name === "duallane_pending_invite" && cookie.value === "INVITE-1")).toBe(true);
   });
 
+  it("stores only safe local Workspace OAuth return paths", async () => {
+    const app = await makeApp();
+    const safe = await app.inject({
+      method: "GET",
+      url: "/api/auth/github/start?returnTo=%2Fworkspace%2Fspace%2Femail"
+    });
+    expect(safe.cookies.some((cookie) => cookie.name === "duallane_oauth_return" && cookie.value === "/workspace/space/email")).toBe(true);
+
+    const unsafe = await app.inject({
+      method: "GET",
+      url: "/api/auth/github/start?returnTo=https%3A%2F%2Fevil.example%2Fworkspace"
+    });
+    expect(unsafe.cookies.some((cookie) => cookie.name === "duallane_oauth_return" && cookie.value)).toBe(false);
+  });
+
+  it("restores and clears the safe Workspace OAuth return path", async () => {
+    const app = await makeApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/auth/github/callback?githubLogin=timeStarry&email=timestarry%40qq.com&displayName=timeStarry",
+      cookies: {
+        duallane_oauth_state: "dev-state",
+        duallane_oauth_return: "/workspace/space/email"
+      }
+    });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe("http://127.0.0.1:5173/workspace/space/email");
+    expect(response.cookies.some((cookie) => cookie.name === "duallane_oauth_return" && cookie.value === "")).toBe(true);
+  });
+
   it("redirects successful development callback back to the frontend dev server", async () => {
     const app = await makeApp();
     const response = await app.inject({
@@ -393,7 +424,7 @@ describe("workspace routes", () => {
     });
 
     expect(response.statusCode).toBe(302);
-    expect(response.headers.location).toBe("http://127.0.0.1:5173/?lane=workspace");
+    expect(response.headers.location).toBe("http://127.0.0.1:5173/workspace");
     expect(response.cookies.some((cookie) => cookie.name === "duallane_oauth_state" && cookie.value === "")).toBe(true);
   });
 
@@ -445,7 +476,7 @@ describe("workspace routes", () => {
     });
 
     expect(response.statusCode).toBe(302);
-    expect(response.headers.location).toBe("http://127.0.0.1:5174/?lane=workspace");
+    expect(response.headers.location).toBe("http://127.0.0.1:5174/workspace");
   });
 
   it("accepts a pending invite during GitHub callback", async () => {
@@ -871,10 +902,32 @@ describe("workspace routes", () => {
       defaultRole: "member",
       maxUses: 1,
       uses: 0,
-      inviteUrl: "http://127.0.0.1:5174/?lane=workspace&invite=ROUTE-INVITE-LINK"
+      inviteUrl: "http://127.0.0.1:5174/workspace?invite=ROUTE-INVITE-LINK"
     });
     expect(response.json().invite.expiresAt).toBeTruthy();
     expectNoWorkspaceInternals(response.json(), ["timestarry@qq.com"]);
+  });
+
+  it("builds an absolute invite link from the trusted request origin", async () => {
+    const app = await makeApp({ TRUST_PROXY: "true" });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/workspace/invites",
+      headers: {
+        "content-type": "application/json",
+        "x-workspace-user-id": "usr_owner",
+        host: "duallane.tsio.top",
+        "x-forwarded-proto": "https"
+      },
+      payload: {
+        code: "ROUTE-REQUEST-ORIGIN",
+        defaultRole: "member",
+        maxUses: 1
+      }
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().invite.inviteUrl).toBe("https://duallane.tsio.top/workspace?invite=ROUTE-REQUEST-ORIGIN");
   });
 
   it("lists workspace members with route-level filtering", async () => {
@@ -2956,6 +3009,7 @@ describe("workspace routes", () => {
       }
     });
     expect(memberInvite.statusCode).toBe(201);
+
     const memberAccepted = await app.inject({
       method: "POST",
       url: "/api/workspace/invites/REALTIME-CURSOR-MEMBER/accept",
@@ -4048,6 +4102,20 @@ describe("workspace routes", () => {
     });
     expect(memberInvite.statusCode).toBe(201);
 
+    const acceptedMember = await app.inject({
+      method: "POST",
+      url: "/api/workspace/invites/ROUTE-BOOTSTRAP-MEMBER/accept",
+      headers: {
+        "content-type": "application/json"
+      },
+      payload: {
+        githubLogin: "route-bootstrap-member",
+        email: "route-bootstrap-member@example.com",
+        displayName: "Route Bootstrap Member"
+      }
+    });
+    expect(acceptedMember.statusCode).toBe(201);
+
     const ownerInvite = await app.inject({
       method: "POST",
       url: "/api/workspace/invites",
@@ -4075,16 +4143,27 @@ describe("workspace routes", () => {
       expect.objectContaining({
         id: memberInvite.json().invite.id,
         defaultRole: "member",
-        codePreview: memberInvite.json().invite.codePreview
+        codePreview: memberInvite.json().invite.codePreview,
+        acceptedMemberCount: 1,
+        acceptedMembers: []
       })
     ]);
+    expect(adminBootstrap.json().inviteSummary).toEqual({
+      total: 1,
+      active: 0,
+      history: 1,
+      acceptedUses: 1,
+      availableUses: 0
+    });
     expectNoWorkspaceInternals(adminBootstrap.json(), [
       "ROUTE-BOOTSTRAP-MEMBER",
       "ROUTE-BOOTSTRAP-ADMIN",
       "ROUTE-BOOTSTRAP-OWNER",
       adminInvite.json().invite.id,
       ownerInvite.json().invite.id,
-      "route-bootstrap-admin@example.com"
+      "route-bootstrap-admin@example.com",
+      "route-bootstrap-member@example.com",
+      "Route Bootstrap Member"
     ]);
 
     const ownerBootstrap = await app.inject({
@@ -4102,6 +4181,21 @@ describe("workspace routes", () => {
         ownerInvite.json().invite.id
       ])
     );
+    expect(ownerBootstrap.json().inviteSummary).toEqual({
+      total: 3,
+      active: 1,
+      history: 2,
+      acceptedUses: 2,
+      availableUses: 1
+    });
+    expect(ownerBootstrap.json().invites.find((invite) => invite.id === memberInvite.json().invite.id)).toMatchObject({
+      acceptedMemberCount: 1,
+      acceptedMembers: [expect.objectContaining({
+        id: acceptedMember.json().user.id,
+        displayName: "Route Bootstrap Member"
+      })]
+    });
+    expectNoWorkspaceInternals(ownerBootstrap.json(), ["route-bootstrap-member@example.com"]);
   });
 
   it("prevents admins from revoking privileged invites through workspace routes", async () => {

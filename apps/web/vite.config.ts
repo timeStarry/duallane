@@ -1,15 +1,17 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+const apiOrigin = process.env.DUALLANE_API_ORIGIN || "http://127.0.0.1:8787";
+
 export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
     proxy: {
-      "/api": "http://127.0.0.1:8787",
-      "/auth": "http://127.0.0.1:8787",
+      "/api": apiOrigin,
+      "/auth": apiOrigin,
       "/ws": {
-        target: "ws://127.0.0.1:8787",
+        target: apiOrigin.replace(/^http/, "ws"),
         ws: true
       }
     }

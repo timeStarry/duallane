@@ -13,11 +13,13 @@ describe("workspace entry url helpers", () => {
   it("passes invite codes to GitHub login without exposing a public invite form", () => {
     expect(getWorkspaceLoginUrl("INVITE-123")).toBe("/api/auth/github/start?invite=INVITE-123");
     expect(getWorkspaceLoginUrl("")).toBe("/api/auth/github/start");
+    expect(getWorkspaceLoginUrl("", "/workspace/space/email")).toBe("/api/auth/github/start?returnTo=%2Fworkspace%2Fspace%2Femail");
+    expect(getWorkspaceLoginUrl("", "https://example.com/workspace")).toBe("/api/auth/github/start");
   });
 
   it("generates shared-space invite links for the public entry page", () => {
-    expect(getWorkspaceEntryUrl("INVITE-123")).toBe("/?lane=workspace&invite=INVITE-123");
-    expect(getWorkspaceEntryUrl("")).toBe("/?lane=workspace");
+    expect(getWorkspaceEntryUrl("INVITE-123")).toBe("/workspace?invite=INVITE-123");
+    expect(getWorkspaceEntryUrl("")).toBe("/workspace");
   });
 
   it("does not forward browser-only invite fragments to workspace login", () => {
@@ -27,7 +29,7 @@ describe("workspace entry url helpers", () => {
       roomId: ""
     });
     expect(getWorkspaceLoginUrl("INVITE-123#k=private-secret")).toBe("/api/auth/github/start?invite=INVITE-123");
-    expect(getWorkspaceEntryUrl("INVITE-123#k=private-secret")).toBe("/?lane=workspace&invite=INVITE-123");
+    expect(getWorkspaceEntryUrl("INVITE-123#k=private-secret")).toBe("/workspace?invite=INVITE-123");
   });
 
   it("keeps p2p room parsing separate from shared-space invites", () => {
