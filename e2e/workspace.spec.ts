@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 test.describe.configure({ timeout: 120_000 });
@@ -161,7 +162,7 @@ test("workspace loading, navigation and menu focus semantics are stable", async 
   const userTrigger = page.locator(".workspace-user-trigger");
   await userTrigger.click();
   const userMenu = page.getByRole("menu", { name: "账号菜单" });
-  await expect(userMenu.getByRole("menuitem", { name: "空间信息与设置" })).toBeFocused();
+  await expect(userMenu.getByRole("menuitem", { name: "账号设置" })).toBeFocused();
   await page.keyboard.press("End");
   await expect(userMenu.getByRole("menuitem", { name: "退出共享空间" })).toBeFocused();
   await page.keyboard.press("Escape");
@@ -177,6 +178,8 @@ test("workspace loading, navigation and menu focus semantics are stable", async 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 test("two workspace users complete direct, group, file, unread, and reconnect flows", async ({ browser }) => {
+  const memberSuffix = randomUUID().slice(0, 8);
+  const memberDisplayName = `E2E 成员 ${memberSuffix}`;
   const ownerContext = await browser.newContext();
   const memberContext = await browser.newContext();
   const ownerPage = await ownerContext.newPage();
@@ -202,10 +205,10 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
 
     const acceptResponse = await memberPage.request.post(`/api/workspace/invites/${encodeURIComponent(inviteCode!)}/accept`, {
       data: {
-        githubId: "duallane-e2e-member-id",
-        githubLogin: "duallane-e2e-member",
-        email: "duallane-e2e-member@example.test",
-        displayName: "E2E 成员"
+        githubId: `duallane-e2e-member-id-${memberSuffix}`,
+        githubLogin: `duallane-e2e-${memberSuffix}`,
+        email: `duallane-e2e-${memberSuffix}@example.test`,
+        displayName: memberDisplayName
       }
     });
     expect(acceptResponse.status()).toBe(201);
@@ -216,7 +219,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await memberPage.goto("/?lane=workspace");
     const bootstrapPayload = await (await memberBootstrapResponse).json() as { eventCursor?: number };
     expect(await memberWorkspaceHello).toBe(bootstrapPayload.eventCursor);
-    await expect(memberPage.locator(".workspace-user-trigger").getByText("E2E 成员", { exact: true })).toBeVisible();
+    await expect(memberPage.locator(".workspace-user-trigger").getByText(memberDisplayName, { exact: true })).toBeVisible();
     await expect(memberPage.locator(".workspace-connection-state")).toHaveCount(0);
     await expect(memberPage.getByRole("button", { name: "创建群聊" })).toHaveCount(0);
 
@@ -306,14 +309,14 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
 
     await openWorkspaceCreateMenu(ownerPage, "发起私聊");
     const directPicker = ownerPage.getByRole("region", { name: "发起私聊" });
-    await directPicker.getByRole("button", { name: /E2E 成员/ }).click();
+    await directPicker.getByRole("button", { name: new RegExp(memberDisplayName) }).click();
 
     const ownerConversation = ownerPage
       .getByLabel("共享空间导航")
       .locator("button.conversation")
-      .filter({ hasText: "E2E 成员" });
+      .filter({ hasText: memberDisplayName });
     await expect(ownerConversation).toBeVisible();
-    await expect(ownerPage.getByRole("region", { name: "E2E 成员" })).toBeVisible();
+    await expect(ownerPage.getByRole("region", { name: memberDisplayName })).toBeVisible();
 
     const memberConversation = memberPage
       .getByLabel("共享空间导航")
@@ -357,7 +360,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     const memberMessage = "workspace-e2e-member-message";
     await memberPage.getByLabel("输入消息").fill(memberMessage);
     await sendWorkspaceComposer(memberPage);
-    await expect(ownerPage.getByRole("region", { name: "E2E 成员" }).getByText(memberMessage, { exact: true })).toBeVisible();
+    await expect(ownerPage.getByRole("region", { name: memberDisplayName }).getByText(memberMessage, { exact: true })).toBeVisible();
 
     const ownerMessage = "workspace-e2e-owner-message";
     await ownerPage.getByLabel("输入消息").fill(ownerMessage);
@@ -365,7 +368,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     const memberDirectRegion = memberPage.getByRole("region", { name: "timeStarry" });
     await expect(memberDirectRegion.getByText(ownerMessage, { exact: true })).toBeVisible();
 
-    const directConversationId = await workspaceConversationId(ownerPage, "E2E 成员");
+    const directConversationId = await workspaceConversationId(ownerPage, memberDisplayName);
     for (let index = 0; index < 28; index += 1) {
       const text = "workspace-e2e-history-" + String(index).padStart(2, "0");
       const response = await ownerPage.request.post("/api/workspace/messages", {
@@ -418,7 +421,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     const groupDialog = ownerPage.getByRole("region", { name: "创建群聊" });
     await groupDialog.getByLabel("群聊名称").fill(groupTitle);
     await expect(groupDialog.getByRole("button", { name: /信标/ })).toHaveCount(0);
-    await groupDialog.getByRole("button", { name: /E2E 成员/ }).click();
+    await groupDialog.getByRole("button", { name: new RegExp(memberDisplayName) }).click();
     await expect(groupDialog.getByText("已选 1 位", { exact: true })).toBeVisible();
     const groupResponsePromise = ownerPage.waitForResponse((response) =>
       response.url().endsWith("/api/workspace/conversations") &&
@@ -446,7 +449,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(overviewTab).toHaveAttribute("aria-selected", "true");
     await overviewTab.press("ArrowRight");
     await expect(membersTab).toHaveAttribute("aria-selected", "true");
-    await expect(ownerPage.getByLabel("当前会话详情").getByText("E2E 成员", { exact: true })).toBeVisible();
+    await expect(ownerPage.getByLabel("当前会话详情").getByText(memberDisplayName, { exact: true })).toBeVisible();
 
     const memberGroupConversation = memberPage
       .getByLabel("共享空间导航")
@@ -500,6 +503,11 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(markdownMessage.locator(".workspace-markdown strong").getByText("Workspace Markdown", { exact: true })).toBeVisible();
     await expect(markdownMessage.locator(".workspace-markdown li")).toHaveCount(2);
 
+    const dividerCount = await memberGroupRegion.locator(".workspace-markdown-divider").count();
+    await ownerGroupRegion.getByLabel("输入消息").fill("---");
+    await sendWorkspaceComposer(ownerGroupRegion);
+    await expect(memberGroupRegion.locator(".workspace-markdown-divider")).toHaveCount(dividerCount + 1);
+
     const reactionMessage = memberGroupRegion.locator("article.workspace-message").filter({ hasText: groupOwnerMessage });
     const reactionTrigger = reactionMessage.getByTitle("添加表情回复");
     await reactionTrigger.click();
@@ -511,7 +519,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(memberReaction).toHaveAttribute("aria-pressed", "true");
 
     const ownerReactionMessage = ownerGroupRegion.locator("article.workspace-message").filter({ hasText: groupOwnerMessage });
-    const ownerReaction = ownerReactionMessage.getByRole("button", { name: /OK，E2E 成员/ });
+    const ownerReaction = ownerReactionMessage.getByRole("button", { name: new RegExp(`OK，${memberDisplayName}`) });
     await expect(ownerReaction).toBeVisible();
     await ownerReaction.click();
     await expect(memberReaction).toHaveAccessibleName(/OK，你、timeStarry/);
@@ -767,6 +775,81 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       await memberGroupRegion.getByRole("button", { name: "缩小编辑区" }).click();
       await memberGroupRegion.getByRole("button", { name: "隐藏格式工具栏" }).click();
     }
+
+    await memberPage.setViewportSize({ width: 1280, height: 720 });
+    await memberPage.locator(".workspace-user-trigger").click();
+    await memberPage.getByRole("menuitem", { name: "账号设置" }).click();
+    await expect(memberPage.getByRole("heading", { name: "账号与通知" })).toBeVisible();
+    await expect(memberPage.getByRole("checkbox", { name: /接受邮件通知/ })).toBeChecked();
+    await expect(memberPage.getByRole("checkbox", { name: /每条消息都通知我/ })).not.toBeChecked();
+    await expect(memberPage.getByRole("checkbox", { name: /超过 2 小时仍未读时通知我/ })).toBeChecked();
+
+    const publicNickname = `公开昵称 ${memberSuffix}`;
+    await memberPage.getByLabel("公开昵称").fill(publicNickname);
+    const profileResponse = memberPage.waitForResponse((response) =>
+      response.url().endsWith("/api/workspace/me/profile") && response.request().method() === "PATCH"
+    );
+    await memberPage.getByRole("button", { name: "保存昵称" }).click();
+    expect((await profileResponse).status()).toBe(200);
+    await expect(memberPage.locator(".workspace-user-trigger").getByText(publicNickname, { exact: true })).toBeVisible();
+
+    await memberPage.setViewportSize({ width: 390, height: 844 });
+    await expect(memberPage.getByRole("heading", { name: "账号与通知" })).toBeVisible();
+    expect(await memberPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+    await ownerPage.setViewportSize({ width: 1280, height: 720 });
+    await ownerPage.getByRole("button", { name: "成员", exact: true }).click();
+    const ownerMemberList = ownerPage.getByRole("region", { name: "共享空间主视图" }).getByRole("list");
+    const publicMemberRow = ownerMemberList.getByRole("button", { name: new RegExp(publicNickname) }).first();
+    await expect(publicMemberRow).toBeVisible();
+    await publicMemberRow.click();
+    const memberDetail = ownerPage.getByRole("complementary", { name: "成员详情" });
+    await expect(memberDetail.getByText(`@duallane-e2e-${memberSuffix}`, { exact: true })).toBeVisible();
+    const privateRemark = `私人备注 ${memberSuffix}`;
+    await memberDetail.getByLabel("私人备注").fill(privateRemark);
+    await memberDetail.getByRole("button", { name: "保存备注" }).click();
+    await expect(memberDetail.getByRole("definition").filter({ hasText: privateRemark })).toHaveText(privateRemark);
+    await expect(ownerMemberList.getByRole("button", { name: new RegExp(privateRemark) }).first()).toBeVisible();
+
+    const mentionProjectionMarker = `mention-projection-${memberSuffix}`;
+    const mentionProjectionResponse = await ownerPage.request.post("/api/workspace/messages", {
+      data: {
+        conversationId: groupId,
+        clientMessageId: mentionProjectionMarker,
+        content: {
+          format: "duallane.message+json;v=1",
+          plainText: mentionProjectionMarker,
+          blocks: [
+            { type: "mention", userId: acceptedMember.id, label: publicNickname },
+            { type: "text", text: ` ${mentionProjectionMarker}` }
+          ]
+        }
+      }
+    });
+    expect(mentionProjectionResponse.status()).toBe(201);
+
+    await ownerPage.getByRole("button", { name: "聊天", exact: true }).click();
+    await ownerPage.getByLabel("共享空间导航").locator("button.conversation").filter({ hasText: groupTitle }).first().click();
+    const ownerProjectedMention = ownerPage.getByRole("region", { name: groupTitle })
+      .locator("article.workspace-message")
+      .filter({ hasText: mentionProjectionMarker });
+    await expect(ownerProjectedMention.locator(".message-mention")).toHaveText(`@${privateRemark}`);
+
+    await memberPage.setViewportSize({ width: 1280, height: 720 });
+    await memberPage.getByRole("button", { name: "聊天", exact: true }).click();
+    await memberPage.getByLabel("共享空间导航").locator("button.conversation").filter({ hasText: groupTitle }).first().click();
+    const memberProjectedMention = memberPage.getByRole("region", { name: groupTitle })
+      .locator("article.workspace-message")
+      .filter({ hasText: mentionProjectionMarker });
+    await expect(memberProjectedMention.locator(".message-mention")).toHaveText(`@${publicNickname}`);
+
+    const isolatedDirectoryResponse = await memberPage.request.get("/api/workspace/members");
+    expect(isolatedDirectoryResponse.status()).toBe(200);
+    const isolatedMember = ((await isolatedDirectoryResponse.json()) as {
+      members: Array<{ id: string; displayName: string; nickname?: string | null; remark?: string }>;
+    }).members.find((candidate) => candidate.id === acceptedMember.id);
+    expect(isolatedMember).toMatchObject({ displayName: publicNickname, nickname: publicNickname });
+    expect(isolatedMember?.remark).toBeUndefined();
   } finally {
     await Promise.all([ownerContext.close(), memberContext.close()]);
   }

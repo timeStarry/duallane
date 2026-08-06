@@ -51,6 +51,7 @@ export function WorkspaceMarkdown({ children }: { children: string }) {
         h4: ({ children: content }) => <h4>{renderMarkdownChildren(content)}</h4>,
         h5: ({ children: content }) => <h4>{renderMarkdownChildren(content)}</h4>,
         h6: ({ children: content }) => <h4>{renderMarkdownChildren(content)}</h4>,
+        hr: () => <hr className="workspace-markdown-divider" />,
         li: ({ children: content }) => <li>{renderMarkdownChildren(content)}</li>,
         ol: ({ children: content }) => <ol>{renderMarkdownChildren(content)}</ol>,
         p: ({ children: content }) => <p>{renderMarkdownChildren(content)}</p>,

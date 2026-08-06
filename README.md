@@ -135,6 +135,14 @@ Production GitHub login fails closed when the OAuth client ID or secret is
 missing. `GITHUB_OAUTH_TIMEOUT_MS` sets the total time budget shared by the
 GitHub token, profile, and email requests and defaults to `8000` milliseconds.
 
+Workspace email settings also require an independent 32-byte Base64 key in
+`WORKSPACE_SMTP_ENCRYPTION_KEY`. Configure it before testing or enabling SMTP;
+do not reuse `SESSION_SECRET`. For example, generate one with
+`openssl rand -base64 32`. Changing the key later makes the stored SMTP
+password unreadable, so disable mail and save a newly tested configuration
+when rotating it. `WORKSPACE_EMAIL_WORKER_ENABLED=false` disables delivery
+without discarding user notification preferences.
+
 If the deployment host cannot reach GitHub OAuth directly, enable the optional
 GitHub-only V2Ray profile. Put the subscription URL in an untracked host file
 with mode `600`, then set `COMPOSE_PROFILES=github-proxy`,

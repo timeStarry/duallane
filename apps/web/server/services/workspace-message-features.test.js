@@ -71,6 +71,11 @@ describe("workspace Markdown summaries", () => {
     expect(markdownToPlainText("~~~python\nimport stdio\nmain() {}\n~~~"))
       .toBe("import stdio\nmain() {}");
   });
+
+  it("projects thematic breaks as a meaningful conversation summary", () => {
+    expect(markdownToPlainText("---")).toBe("[分割线]");
+    expect(markdownToPlainText("上半段\n\n***\n\n下半段")).toBe("上半段\n[分割线]\n下半段");
+  });
 });
 
 describe("shared Reaction emote catalog", () => {

@@ -231,12 +231,62 @@ export async function listMembers(db, userId = "usr_owner", options = {}) {
       return false;
     }
     if (query) {
-      return [member.displayName, member.githubLogin, member.roleLabel, member.role, member.kind]
+      return [member.displayName, member.nickname, member.remark, member.githubLogin, member.roleLabel, member.role, member.kind]
         .filter(Boolean)
         .some((value) => value.toLowerCase().includes(query));
     }
     return true;
   }).slice(0, limit);
+}
+
+export async function updateOwnProfile(db, request, input) {
+  const actor = await requireActor(db, input.actorId);
+  const nickname = input.nickname === null || normalizeString(input.nickname) === ""
+    ? null
+    : normalizeProfileLabel(input.nickname, "profile.nickname_invalid", "昵称");
+  const now = new Date().toISOString();
+  await runWorkspaceTransaction(db, async () => {
+    await db.prepare("UPDATE users SET nickname = ? WHERE id = ? AND kind = 'human'")
+      .run(nickname, actor.id);
+    await writeEvent(db, {
+      type: "workspace.member_updated",
+      actorId: actor.id,
+      targetType: "user",
+      targetId: actor.id,
+      payload: { userId: actor.id }
+    });
+    await writeWorkspaceAudit(db, request, {
+      actorUserId: actor.id,
+      actorGithubLogin: actor.githubLogin,
+      action: "profile.nickname_update",
+      targetType: "user",
+      targetId: actor.id,
+      result: "success"
+    });
+  });
+  return await publicMemberPayloadForActor(db, actor, actor.id);
+}
+
+export async function updateMemberRemark(db, input) {
+  const actor = await requireActor(db, input.actorId);
+  const target = await ensureRemarkTarget(db, actor, input.userId);
+  const remark = normalizeProfileLabel(input.remark, "member.remark_invalid", "备注");
+  await db.prepare(`
+    INSERT INTO user_remarks (owner_user_id, target_user_id, remark, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT (owner_user_id, target_user_id) DO UPDATE SET
+      remark = excluded.remark,
+      updated_at = excluded.updated_at
+  `).run(actor.id, target.id, remark, new Date().toISOString());
+  return await publicMemberPayloadForActor(db, actor, target.id);
+}
+
+export async function removeMemberRemark(db, input) {
+  const actor = await requireActor(db, input.actorId);
+  const target = await ensureRemarkTarget(db, actor, input.userId);
+  await db.prepare("DELETE FROM user_remarks WHERE owner_user_id = ? AND target_user_id = ?")
+    .run(actor.id, target.id);
+  return await publicMemberPayloadForActor(db, actor, target.id);
 }
 
 async function listVisibleInvitesForRole(db, role) {
@@ -901,10 +951,10 @@ export async function acceptInvite(db, request, input) {
     if (!existing) {
       await db.prepare(`
         INSERT INTO users (
-          id, github_id, github_login, email, display_name, avatar_url, kind, created_at, last_login_at
+          id, github_id, github_login, email, display_name, nickname, avatar_url, kind, created_at, last_login_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, 'human', ?, ?)
-      `).run(userId, githubId || null, githubLogin, email || null, displayName, avatarUrl || null, now, now);
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'human', ?, ?)
+      `).run(userId, githubId || null, githubLogin, email || null, displayName, displayName, avatarUrl || null, now, now);
     } else {
       await db.prepare(`
         UPDATE users
@@ -1057,7 +1107,7 @@ export async function listConversations(db, userId = "usr_owner", request = null
     ...conversation,
     viewerId: actor.id,
     viewerRole: actor.role,
-    members: await listConversationMembers(db, conversation.id),
+    members: await listConversationMembers(db, conversation.id, actor.id),
     latestMessages: await listMessages(db, actor.id, conversation.id, { limit: 20 })
   }, actor)));
 }
@@ -1163,7 +1213,7 @@ export async function createConversation(db, request, input) {
       conversationId: id,
       targetType: "conversation",
       targetId: id,
-      payload: { conversationId: id, type: "group", title, conversation: await publicConversation(createdConversation) }
+      payload: { conversationId: id, type: "group", title }
     });
 
     for (const member of members) {
@@ -1466,7 +1516,7 @@ export async function updateGroupConversation(db, request, input) {
       conversationId: conversation.id,
       targetType: "conversation",
       targetId: conversation.id,
-      payload: { conversationId: conversation.id, title, conversation: await publicConversation(renamedConversation) }
+      payload: { conversationId: conversation.id, title }
     });
     await createSystemMessage(db, {
       actor,
@@ -1569,8 +1619,7 @@ export async function updateConversationNotificationLevel(db, request, input) {
       payload: {
         conversationId,
         userId: actor.id,
-        notificationLevel: level,
-        conversation
+        notificationLevel: level
       }
     });
 
@@ -1613,7 +1662,9 @@ export async function listMessages(db, userId, conversationId, options = {}) {
       recent.spaceId,
       recent.conversationId,
       recent.authorId,
-      u.display_name AS authorName,
+      COALESCE(ur.remark, u.nickname, u.github_login, u.display_name) AS authorName,
+      u.nickname AS authorNickname,
+      ur.remark AS authorRemark,
       u.github_login AS authorGithubLogin,
       u.avatar_url AS authorAvatarUrl,
       recent.authorKind,
@@ -1651,10 +1702,11 @@ export async function listMessages(db, userId, conversationId, options = {}) {
       LIMIT ?
     ) recent
     LEFT JOIN users u ON u.id = recent.authorId
+    LEFT JOIN user_remarks ur ON ur.owner_user_id = ? AND ur.target_user_id = u.id
     ORDER BY recent.createdAt ASC, recent.messageCursorId ASC
   `).all(...(before
-    ? [conversationId, before.createdAt, before.createdAt, before.messageCursorId, limit]
-    : [conversationId, limit]));
+    ? [conversationId, before.createdAt, before.createdAt, before.messageCursorId, limit, actor.id]
+    : [conversationId, limit, actor.id]));
 
   const reactionsByMessageId = await listMessageReactionGroups(db, rows.map((row) => row.id), actor);
   return await Promise.all(rows.map(async (row) => await publicMessage({
@@ -1867,7 +1919,7 @@ export async function createStructuredMessage(db, request, input) {
     await enforceRetention(db, conversationId);
     const createdMessage = (await listMessages(db, actor.id, conversationId, { limit: 200 })).find((message) => message.id === id);
     const updatedConversation = await getConversation(db, actor.id, conversationId);
-    await writeEvent(db, {
+    const messageEvent = await writeEvent(db, {
       type: "message.created",
       actorId: actor.id,
       conversationId,
@@ -1876,9 +1928,17 @@ export async function createStructuredMessage(db, request, input) {
       payload: {
         messageId: id,
         conversationId,
-        message: await publicMessage(createdMessage, actor, db),
-        conversation: await publicConversation(updatedConversation)
+        message: await publicMessage(createdMessage, actor, db)
       }
+    });
+
+    await input.scheduleEmailNotifications?.({
+      authorId: actor.id,
+      conversationId,
+      messageId: id,
+      eventSeq: messageEvent.seq,
+      content: normalizedContent,
+      createdAt: now
     });
 
     await writeWorkspaceAudit(db, request, {
@@ -1938,8 +1998,7 @@ async function createSystemMessage(db, { actor, conversationId, plainText }) {
     payload: {
       messageId: id,
       conversationId,
-      message: await publicMessage(systemMessage, actor, db),
-      conversation: await publicConversation(updatedConversation)
+      message: await publicMessage(systemMessage, actor, db)
     }
   });
   return systemMessage;
@@ -2174,7 +2233,7 @@ export async function listFiles(db, userId = "usr_owner", filters = {}, request)
       a.id,
       a.space_id AS spaceId,
       a.uploader_id AS uploaderId,
-      u.display_name AS uploaderName,
+      COALESCE(ur.remark, u.nickname, u.github_login, u.display_name) AS uploaderName,
       c.title AS conversationTitle,
       a.conversation_id AS conversationId,
       a.visibility,
@@ -2186,6 +2245,7 @@ export async function listFiles(db, userId = "usr_owner", filters = {}, request)
       a.completed_at AS completedAt
     FROM attachments a
     INNER JOIN users u ON u.id = a.uploader_id
+    LEFT JOIN user_remarks ur ON ur.owner_user_id = ? AND ur.target_user_id = u.id
     LEFT JOIN conversations c ON c.id = a.conversation_id
     WHERE a.space_id = ?
       AND a.status = 'available'
@@ -2203,7 +2263,7 @@ export async function listFiles(db, userId = "usr_owner", filters = {}, request)
         )
       )
     ORDER BY a.created_at DESC
-  `).all(DEFAULT_SPACE_ID, actor.id, actor.id);
+  `).all(actor.id, DEFAULT_SPACE_ID, actor.id, actor.id);
 
   return rows.filter((file) => {
     if (scope === "conversation" && !(file.visibility === "conversation" || file.conversationId)) {
@@ -2476,7 +2536,7 @@ async function createOrGetDirectConversation(db, request, actor, target) {
       conversationId: id,
       targetType: "conversation",
       targetId: id,
-      payload: { conversationId: id, type: "direct", memberIds: ids, conversation: await publicConversation(createdConversation) }
+      payload: { conversationId: id, type: "direct", memberIds: ids }
     });
     await writeWorkspaceAudit(db, request, {
       actorUserId: actor.id,
@@ -2551,34 +2611,37 @@ async function getConversation(db, userId, conversationId, context = {}) {
     ...conversation,
     viewerId: actor.id,
     viewerRole: actor.role,
-    members: await listConversationMembers(db, conversationId),
+    members: await listConversationMembers(db, conversationId, actor.id),
     latestMessages: await listMessages(db, actor.id, conversationId, { limit: 20 })
   }, actor);
 }
 
 async function listVisibleSpaceMembers(db, actor) {
   const visibleIds = await listVisibleMemberIds(db, { spaceId: DEFAULT_SPACE_ID, actor });
-  return (await listSpaceMembers(db)).filter((member) => visibleIds.has(member.id));
+  return (await listSpaceMembers(db, actor.id)).filter((member) => visibleIds.has(member.id));
 }
 
-async function listSpaceMembers(db) {
+async function listSpaceMembers(db, viewerUserId = "") {
   return await db.prepare(`
     SELECT
       u.id,
       u.github_login AS githubLogin,
       u.email,
       u.display_name AS displayName,
+      u.nickname,
+      ur.remark,
       u.avatar_url AS avatarUrl,
       u.kind,
       sm.role,
       sm.joined_at AS joinedAt
     FROM space_members sm
     INNER JOIN users u ON u.id = sm.user_id
+    LEFT JOIN user_remarks ur ON ur.owner_user_id = ? AND ur.target_user_id = u.id
     WHERE sm.space_id = ? AND sm.removed_at IS NULL
     ORDER BY
       CASE sm.role WHEN 'owner' THEN 1 WHEN 'admin' THEN 2 WHEN 'auditor' THEN 3 ELSE 4 END,
       u.display_name
-  `).all(DEFAULT_SPACE_ID);
+  `).all(viewerUserId, DEFAULT_SPACE_ID);
 }
 
 async function getGroupConversationForManage(db, conversationId) {
@@ -2599,13 +2662,15 @@ async function getGroupConversationForManage(db, conversationId) {
   return conversation;
 }
 
-async function listConversationMembers(db, conversationId) {
+async function listConversationMembers(db, conversationId, viewerUserId = "") {
   return await db.prepare(`
     SELECT
       u.id,
       u.github_login AS githubLogin,
       u.email,
       u.display_name AS displayName,
+      u.nickname,
+      ur.remark,
       u.avatar_url AS avatarUrl,
       u.kind,
       sm.role,
@@ -2613,9 +2678,10 @@ async function listConversationMembers(db, conversationId) {
     FROM conversation_members cm
     INNER JOIN users u ON u.id = cm.user_id
     INNER JOIN space_members sm ON sm.user_id = u.id AND sm.space_id = ?
+    LEFT JOIN user_remarks ur ON ur.owner_user_id = ? AND ur.target_user_id = u.id
     WHERE cm.conversation_id = ? AND cm.removed_at IS NULL
     ORDER BY u.display_name
-  `).all(DEFAULT_SPACE_ID, conversationId);
+  `).all(DEFAULT_SPACE_ID, viewerUserId, conversationId);
 }
 
 async function listMessageAttachments(db, messageId) {
@@ -2649,14 +2715,15 @@ async function listMessageReactionGroups(db, messageIds, actor = null) {
       mr.emote_key AS emoteKey,
       mr.created_at AS reactionCreatedAt,
       u.id AS userId,
-      u.display_name AS displayName,
+      COALESCE(ur.remark, u.nickname, u.github_login, u.display_name) AS displayName,
       u.github_login AS githubLogin,
       u.avatar_url AS avatarUrl
     FROM message_reactions mr
     INNER JOIN users u ON u.id = mr.user_id
+    LEFT JOIN user_remarks ur ON ur.owner_user_id = ? AND ur.target_user_id = u.id
     WHERE mr.message_id IN (${placeholders})
     ORDER BY mr.created_at ASC, u.display_name ASC, u.id ASC
-  `).all(...ids);
+  `).all(actor?.id ?? "", ...ids);
 
   const groupByKey = new Map();
   for (const row of rows) {
@@ -2732,7 +2799,7 @@ async function normalizeBlock(db, actor, conversationId, block) {
     if (!await isActiveConversationMember(db, userId, conversationId)) {
       throw new WorkspaceValidationError("message.invalid_mention", "只能提及当前会话成员");
     }
-    return { type: "mention", userId, label: user.displayName };
+    return { type: "mention", userId, label: user.nickname || user.githubLogin || user.displayName };
   }
   if (block.type === "link") {
     const url = normalizeString(block.url);
@@ -2888,6 +2955,11 @@ function publicMember(member, actor = null) {
   if (!member) return null;
   const systemIdentity = getSystemIdentityDefinition(member);
   const projectedRole = publicMemberRole(member, actor);
+  const nickname = publicString(member.nickname);
+  const remark = actor?.id && actor.id !== member.id && member.kind === "human"
+    ? publicString(member.remark)
+    : "";
+  const displayName = systemIdentity?.displayName ?? (remark || nickname || publicString(member.githubLogin) || "成员");
   const canStartDirectConversation = Boolean(
     actor &&
     actor.id !== member.id &&
@@ -2897,7 +2969,9 @@ function publicMember(member, actor = null) {
   return {
     id: member.id,
     githubLogin: member.kind === "human" ? member.githubLogin : undefined,
-    displayName: systemIdentity?.displayName ?? member.displayName,
+    displayName,
+    nickname: member.kind === "human" ? nickname || null : undefined,
+    remark: remark || undefined,
     description: systemIdentity?.description,
     avatarUrl: sanitizeWorkspaceAvatarUrl(systemIdentity?.avatarUrl ?? member.avatarUrl),
     kind: systemIdentity?.kind ?? member.kind,
@@ -2964,7 +3038,9 @@ async function publicMessage(message, actor = null, db = null) {
     id: message.id,
     conversationId: message.conversationId,
     authorId: message.authorId,
-    authorName: authorIdentity?.displayName ?? message.authorName,
+    authorName: authorIdentity?.displayName ?? message.authorRemark ?? message.authorNickname ?? message.authorGithubLogin ?? message.authorName,
+    authorNickname: message.authorKind === "human" ? message.authorNickname : undefined,
+    authorRemark: message.authorKind === "human" ? message.authorRemark : undefined,
     authorGithubLogin: message.authorKind === "human" ? message.authorGithubLogin : undefined,
     authorAvatarUrl: sanitizeWorkspaceAvatarUrl(authorIdentity?.avatarUrl ?? message.authorAvatarUrl),
     authorKind: authorIdentity?.kind ?? message.authorKind,
@@ -3500,7 +3576,7 @@ async function publicWorkspaceEventPayload(db, actor, type, payload) {
       type: normalizeString(payload.type),
       title: normalizeString(payload.title),
       memberIds: Array.isArray(payload.memberIds) ? uniqueStrings(payload.memberIds) : undefined,
-      conversation: await publicConversationPayloadForActor(db, actor, payload.conversation)
+      conversation: await publicConversationPayloadForActor(db, actor, payload.conversation || payload.conversationId)
     });
   }
   if (type === "conversation.member_added") {
@@ -3522,7 +3598,7 @@ async function publicWorkspaceEventPayload(db, actor, type, payload) {
       conversationId: normalizeString(payload.conversationId),
       userId: normalizeString(payload.userId),
       notificationLevel: normalizeString(payload.notificationLevel),
-      conversation: await publicConversationPayloadForActor(db, actor, payload.conversation)
+      conversation: await publicConversationPayloadForActor(db, actor, payload.conversation || payload.conversationId)
     });
   }
   if (type === "message.created") {
@@ -3530,7 +3606,7 @@ async function publicWorkspaceEventPayload(db, actor, type, payload) {
       messageId: normalizeString(payload.messageId),
       conversationId: normalizeString(payload.conversationId),
       message: await publicMessagePayloadForActor(db, actor, payload.message || payload.messageId),
-      conversation: await publicConversationPayloadForActor(db, actor, payload.conversation)
+      conversation: await publicConversationPayloadForActor(db, actor, payload.conversation || payload.conversationId)
     });
   }
   if (type === "reaction.added" || type === "reaction.removed") {
@@ -3563,7 +3639,9 @@ async function publicWorkspaceEventPayload(db, actor, type, payload) {
 }
 
 async function publicConversationPayloadForActor(db, actor, conversation) {
-  const conversationId = normalizeString(conversation?.id || conversation?.conversationId);
+  const conversationId = normalizeString(
+    typeof conversation === "string" ? conversation : conversation?.id || conversation?.conversationId
+  );
   if (conversationId) {
     try {
       return await getConversation(db, actor.id, conversationId, { actor });
@@ -3579,7 +3657,12 @@ async function publicAttachmentPayloadForActor(db, actor, attachment) {
   if (attachmentId) {
     const current = await getAttachment(db, attachmentId);
     if (current) {
-      return publicAttachment(current, actor);
+      const uploader = await getMemberForViewer(db, current.uploaderId, actor.id);
+      const projectedUploader = uploader ? publicMember(uploader, actor) : null;
+      return publicAttachment({
+        ...current,
+        uploaderName: projectedUploader?.displayName ?? current.uploaderName
+      }, actor);
     }
   }
   return publicAttachment(attachment, actor);
@@ -3594,7 +3677,9 @@ async function publicMessagePayloadForActor(db, actor, message) {
         m.space_id AS spaceId,
         m.conversation_id AS conversationId,
         m.author_id AS authorId,
-        u.display_name AS authorName,
+        COALESCE(ur.remark, u.nickname, u.github_login, u.display_name) AS authorName,
+        u.nickname AS authorNickname,
+        ur.remark AS authorRemark,
         u.github_login AS authorGithubLogin,
         u.avatar_url AS authorAvatarUrl,
         m.author_kind AS authorKind,
@@ -3608,8 +3693,9 @@ async function publicMessagePayloadForActor(db, actor, message) {
         m.deleted_at AS deletedAt
       FROM messages m
       LEFT JOIN users u ON u.id = m.author_id
+      LEFT JOIN user_remarks ur ON ur.owner_user_id = ? AND ur.target_user_id = u.id
       WHERE m.id = ? AND m.deleted_at IS NULL
-    `).get(messageId);
+    `).get(actor.id, messageId);
     if (row) {
       const reactionsByMessageId = await listMessageReactionGroups(db, [row.id], actor);
       return await publicMessage({
@@ -3626,12 +3712,34 @@ async function publicMessagePayloadForActor(db, actor, message) {
 async function publicMemberPayloadForActor(db, actor, member) {
   const memberId = normalizeString(typeof member === "string" ? member : member?.id || member?.userId);
   if (memberId) {
-    const current = await getUserWithRole(db, memberId);
+    const current = await getMemberForViewer(db, memberId, actor.id);
     if (current) {
       return publicMember(current, actor);
     }
   }
   return publicMember(member, actor);
+}
+
+async function getMemberForViewer(db, userId, viewerUserId) {
+  if (!userId) return null;
+  return await db.prepare(`
+    SELECT
+      u.id,
+      u.github_id AS githubId,
+      u.github_login AS githubLogin,
+      u.email,
+      u.display_name AS displayName,
+      u.nickname,
+      ur.remark,
+      u.avatar_url AS avatarUrl,
+      u.kind,
+      sm.role,
+      sm.joined_at AS joinedAt
+    FROM users u
+    INNER JOIN space_members sm ON sm.user_id = u.id
+    LEFT JOIN user_remarks ur ON ur.owner_user_id = ? AND ur.target_user_id = u.id
+    WHERE u.id = ? AND sm.space_id = ? AND sm.removed_at IS NULL
+  `).get(viewerUserId, userId, DEFAULT_SPACE_ID);
 }
 
 function removeUndefinedValues(value) {
@@ -3658,6 +3766,7 @@ async function getUserWithRole(db, userId) {
       u.github_login AS githubLogin,
       u.email,
       u.display_name AS displayName,
+      u.nickname,
       u.avatar_url AS avatarUrl,
       u.kind,
       sm.role,
@@ -3674,6 +3783,21 @@ async function ensureActiveSpaceMember(db, userId) {
     throw new WorkspaceValidationError("member.not_found", "空间成员不存在");
   }
   return user;
+}
+
+async function ensureRemarkTarget(db, actor, userId) {
+  const target = await ensureActiveSpaceMember(db, normalizeString(userId));
+  if (target.id === actor.id || target.kind !== "human") {
+    throw new WorkspaceValidationError("member.remark_unsupported", "只能备注其他空间成员");
+  }
+  if (!await canViewMember(db, {
+    spaceId: DEFAULT_SPACE_ID,
+    actor,
+    visibleUserId: target.id
+  })) {
+    throw new WorkspacePermissionError("permission.denied", "你无法查看此成员");
+  }
+  return target;
 }
 
 async function ensureGroupParticipantMember(db, userId) {
@@ -3794,6 +3918,7 @@ function permissionsForRole(role) {
     canCreateMemberInvite: canCreateInvite(role, "member"),
     canCreatePrivilegedInvite: role === "owner",
     canManageMemberVisibility: hasCapability(role, "member.visibility.manage"),
+    canManageEmailSettings: role === "owner",
     canReadConversations: hasCapability(role, "conversation.read"),
     canCreateGroup: hasCapability(role, "conversation.create_group"),
     canCreateDirect: hasCapability(role, "conversation.create_direct"),
@@ -3851,6 +3976,19 @@ function normalizeAttachmentVisibility(visibility) {
 
 function normalizeString(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeProfileLabel(value, code, label) {
+  const normalized = normalizeString(value);
+  const characters = Array.from(normalized);
+  if (
+    characters.length === 0 ||
+    characters.length > 32 ||
+    /[\u0000-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/u.test(normalized)
+  ) {
+    throw new WorkspaceValidationError(code, `${label}应为 1 至 32 个有效字符`);
+  }
+  return normalized;
 }
 
 function publicString(value) {

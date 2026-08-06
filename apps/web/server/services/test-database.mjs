@@ -50,11 +50,11 @@ function seedTestWorkspace(db) {
   const now = new Date().toISOString();
   db.prepare(`
     INSERT INTO users (
-      id, github_id, github_login, email, display_name, avatar_url, kind, created_at, last_login_at
+      id, github_id, github_login, email, display_name, nickname, avatar_url, kind, created_at, last_login_at
     )
-    VALUES (?, NULL, ?, ?, ?, NULL, 'human', ?, NULL)
+    VALUES (?, NULL, ?, ?, ?, ?, NULL, 'human', ?, NULL)
     ON CONFLICT DO NOTHING
-  `).run(SEEDED_OWNER_ID, SEEDED_OWNER_GITHUB_LOGIN, SEEDED_OWNER_EMAIL, SEEDED_OWNER_GITHUB_LOGIN, now);
+  `).run(SEEDED_OWNER_ID, SEEDED_OWNER_GITHUB_LOGIN, SEEDED_OWNER_EMAIL, SEEDED_OWNER_GITHUB_LOGIN, SEEDED_OWNER_GITHUB_LOGIN, now);
 
   db.prepare(`
     INSERT INTO users (

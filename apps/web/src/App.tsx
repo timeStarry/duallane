@@ -22,8 +22,10 @@ import {
   ListOrdered,
   LockKeyhole,
   LogOut,
+  Mail,
   Maximize2,
   MessageSquare,
+  Minus,
   Minimize2,
   Monitor,
   Moon,
@@ -41,6 +43,7 @@ import {
   Sun,
   Trash2,
   Type,
+  UserRound,
   UsersRound,
   X
 } from "lucide-react";
@@ -150,6 +153,8 @@ type WorkspaceUser = {
   id: string;
   githubLogin?: string;
   displayName: string;
+  nickname?: string | null;
+  remark?: string;
   description?: string;
   avatarUrl?: string;
   kind: "human" | "bot" | "system";
@@ -166,6 +171,7 @@ type WorkspacePermissions = {
   canCreateMemberInvite: boolean;
   canCreatePrivilegedInvite: boolean;
   canManageMemberVisibility: boolean;
+  canManageEmailSettings: boolean;
   canReadConversations: boolean;
   canCreateGroup: boolean;
   canCreateDirect: boolean;
@@ -320,12 +326,12 @@ type WorkspaceFile = WorkspaceAttachment & {
     failureReason?: string;
   };
 };
-type WorkspaceView = "chat" | "files" | "members" | "space";
+type WorkspaceView = "chat" | "files" | "members" | "space" | "account";
 type WorkspaceMobilePane = "list" | "main" | "details";
 type WorkspaceCreateMode = "" | "direct" | "group";
-type WorkspaceContextMode = "conversation" | "file";
+type WorkspaceContextMode = "conversation" | "file" | "member";
 type WorkspaceContextTab = "overview" | "members" | "files" | "settings";
-type WorkspaceSpaceTab = "overview" | "invites" | "roles" | "visibility";
+type WorkspaceSpaceTab = "overview" | "invites" | "roles" | "visibility" | "email";
 type WorkspaceFileFilter = "all" | "conversation" | "standalone" | "mine";
 type WorkspaceMemberRoleFilter = "all" | WorkspaceUser["role"];
 type WorkspaceMemberKindFilter = "all" | WorkspaceUser["kind"];
@@ -334,6 +340,33 @@ type WorkspaceRealtimeState = "idle" | "connecting" | "connected" | "syncing" | 
 type WorkspaceNotice = {
   tone: "info" | "success" | "warning";
   text: string;
+};
+type WorkspaceNotificationPreferences = {
+  email: string | null;
+  maskedEmail: string | null;
+  emailSource: "github" | "custom";
+  emailVerified: boolean;
+  githubEmail: string | null;
+  enabled: boolean;
+  immediateEnabled: boolean;
+  digestEnabled: boolean;
+  mailAvailable: boolean;
+};
+type WorkspaceEmailSettings = {
+  enabled: boolean;
+  smtpHost: string;
+  smtpPort: number;
+  encryption: "starttls" | "tls" | "none";
+  username: string;
+  fromAddress: string;
+  fromName: string;
+  passwordConfigured: boolean;
+  activeFrom?: string | null;
+  lastTestedAt: string | null;
+  lastTestStatus: "success" | "failure" | null;
+  lastTestErrorCode: string | null;
+  lastDeliveryAt?: string | null;
+  failedJobCount: number;
 };
 type WorkspaceTransferDirection = "upload" | "download";
 type WorkspaceEvent = {
@@ -1570,7 +1603,8 @@ export type WorkspaceMarkdownFormat =
   | "unordered-list"
   | "ordered-list"
   | "link"
-  | "code-block";
+  | "code-block"
+  | "divider";
 
 export type WorkspaceMarkdownEdit = {
   value: string;
@@ -1653,6 +1687,19 @@ export function applyWorkspaceMarkdownFormat(
   if (format === "ordered-list") {
     return prefixWorkspaceMarkdownLines(value, selectionStart, selectionEnd, (index) => String(index + 1) + ". ");
   }
+  if (format === "divider") {
+    const selection = workspaceMarkdownSelection(value, selectionStart, selectionEnd);
+    const before = value.slice(0, selection.start).replace(/\s*$/, "");
+    const after = value.slice(selection.end).replace(/^\s*/, "");
+    const prefix = before ? "\n\n" : "";
+    const suffix = after ? "\n\n" : "";
+    const inserted = `${prefix}---${suffix}`;
+    return {
+      value: before + inserted + after,
+      selectionStart: before.length + prefix.length + 3,
+      selectionEnd: before.length + prefix.length + 3
+    };
+  }
 
   const selection = workspaceMarkdownSelection(value, selectionStart, selectionEnd);
   const label = value.slice(selection.start, selection.end) || "链接文本";
@@ -1679,7 +1726,8 @@ const WORKSPACE_MARKDOWN_FORMAT_GROUPS = [
   ],
   [
     { format: "link", label: "链接", icon: Link2 },
-    { format: "code-block", label: "代码块", icon: FileCode2 }
+    { format: "code-block", label: "代码块", icon: FileCode2 },
+    { format: "divider", label: "分割线", icon: Minus }
   ]
 ] as const;
 
@@ -1815,6 +1863,7 @@ export function App() {
   const [workspaceGroupMemberIds, setWorkspaceGroupMemberIds] = useState<string[]>([]);
   const [workspaceFileFilter, setWorkspaceFileFilter] = useState<WorkspaceFileFilter>("all");
   const [workspaceSelectedFileId, setWorkspaceSelectedFileId] = useState("");
+  const [workspaceSelectedMemberId, setWorkspaceSelectedMemberId] = useState("");
   const [workspaceUploading, setWorkspaceUploading] = useState(false);
   const [workspaceGroupMemberBusyId, setWorkspaceGroupMemberBusyId] = useState("");
   const [workspaceRealtimeState, setWorkspaceRealtimeState] = useState<WorkspaceRealtimeState>("idle");
@@ -2016,6 +2065,13 @@ export function App() {
       workspaceLibraryFiles.find((file) => file.id === workspaceSelectedFileId) ??
       null,
     [workspaceFiles, workspaceLibraryFiles, workspaceSelectedFileId]
+  );
+  const workspaceSelectedMember = useMemo(
+    () =>
+      workspaceDirectoryMembers.find((member) => member.id === workspaceSelectedMemberId) ??
+      workspaceBootstrap?.members.find((member) => member.id === workspaceSelectedMemberId) ??
+      null,
+    [workspaceBootstrap?.members, workspaceDirectoryMembers, workspaceSelectedMemberId]
   );
   const workspaceSelectedFileConversation = useMemo(
     () =>
@@ -2224,7 +2280,11 @@ export function App() {
         : "",
     [workspaceBootstrap?.policy, workspaceSelectedFile]
   );
-  const workspaceContextAvailable = workspaceContextMode === "file" ? Boolean(workspaceSelectedFile) : Boolean(workspaceSelectedConversation);
+  const workspaceContextAvailable = workspaceContextMode === "file"
+    ? Boolean(workspaceSelectedFile)
+    : workspaceContextMode === "member"
+      ? Boolean(workspaceSelectedMember)
+      : Boolean(workspaceSelectedConversation);
   const workspaceContextVisible = workspaceContextAvailable && !workspaceContextCollapsed;
 
   useEffect(() => {
@@ -2548,6 +2608,16 @@ export function App() {
   }, [workspaceFiles, workspaceLibraryFiles, workspaceSelectedFileId]);
 
   useEffect(() => {
+    if (workspaceSelectedMemberId && !workspaceDirectoryMembers.some((member) => member.id === workspaceSelectedMemberId)) {
+      setWorkspaceSelectedMemberId("");
+      if (workspaceContextMode === "member") {
+        setWorkspaceContextMode("conversation");
+        setWorkspaceContextCollapsed(true);
+      }
+    }
+  }, [workspaceContextMode, workspaceDirectoryMembers, workspaceSelectedMemberId]);
+
+  useEffect(() => {
     if (!workspaceCreateMode) {
       return;
     }
@@ -2575,13 +2645,15 @@ export function App() {
     if (
       (workspaceSpaceTab === "invites" && !workspaceBootstrap?.permissions.canCreateMemberInvite) ||
       (workspaceSpaceTab === "roles" && !workspaceBootstrap?.permissions.canCreatePrivilegedInvite) ||
-      (workspaceSpaceTab === "visibility" && !workspaceBootstrap?.permissions.canManageMemberVisibility)
+      (workspaceSpaceTab === "visibility" && !workspaceBootstrap?.permissions.canManageMemberVisibility) ||
+      (workspaceSpaceTab === "email" && !workspaceBootstrap?.permissions.canManageEmailSettings)
     ) {
       setWorkspaceSpaceTab("overview");
     }
   }, [
     workspaceBootstrap?.permissions.canCreateMemberInvite,
     workspaceBootstrap?.permissions.canCreatePrivilegedInvite,
+    workspaceBootstrap?.permissions.canManageEmailSettings,
     workspaceBootstrap?.permissions.canManageMemberVisibility,
     workspaceSpaceTab
   ]);
@@ -3927,6 +3999,9 @@ export function App() {
       current
         ? {
             ...current,
+            auth: current.auth.currentUser.id === member.id
+              ? { ...current.auth, currentUser: member }
+              : current.auth,
             members: upsertById(current.members, member).sort(compareWorkspaceMembers)
           }
         : current
@@ -3934,9 +4009,35 @@ export function App() {
     setWorkspaceConversations((conversations) =>
       conversations.map((conversation) => ({
         ...conversation,
-        members: upsertById(conversation.members, member).sort(compareWorkspaceMembers)
+        displayTitle: conversation.type === "direct" && conversation.otherMember?.id === member.id
+          ? member.displayName
+          : conversation.displayTitle,
+        otherMember: conversation.otherMember?.id === member.id ? member : conversation.otherMember,
+        members: conversation.members.some((candidate) => candidate.id === member.id)
+          ? upsertById(conversation.members, member).sort(compareWorkspaceMembers)
+          : conversation.members,
+        latestMessages: conversation.latestMessages.map((message) => ({
+          ...message,
+          authorName: message.authorId === member.id ? member.displayName : message.authorName,
+          reactions: message.reactions.map((reaction) => ({
+            ...reaction,
+            users: reaction.users.map((user) => user.id === member.id ? { ...user, displayName: member.displayName } : user)
+          }))
+        }))
       }))
     );
+    const updateUploader = (file: WorkspaceFile) => file.uploaderId === member.id
+      ? { ...file, uploaderName: member.displayName, uploader: { ...file.uploader, id: member.id, displayName: member.displayName } }
+      : file;
+    setWorkspaceFiles((files) => files.map(updateUploader));
+    setWorkspaceLibraryFiles((files) => files.map(updateUploader));
+  }
+
+  function openWorkspaceMemberDetails(member: WorkspaceUser) {
+    setWorkspaceSelectedMemberId(member.id);
+    setWorkspaceContextMode("member");
+    setWorkspaceContextCollapsed(false);
+    setWorkspaceMobilePane("details");
   }
 
   function removeWorkspaceMemberFromClient(userId: string) {
@@ -6674,6 +6775,18 @@ export function App() {
                             role="menuitem"
                             type="button"
                             onClick={() => {
+                              setWorkspaceView("account");
+                              setWorkspaceMobilePane("main");
+                              setWorkspaceUserMenuOpen(false);
+                            }}
+                          >
+                            <UserRound size={16} />
+                            账号设置
+                          </button>
+                          <button
+                            role="menuitem"
+                            type="button"
+                            onClick={() => {
                               setWorkspaceView("space");
                               setWorkspaceMobilePane("main");
                               setWorkspaceUserMenuOpen(false);
@@ -7179,11 +7292,17 @@ export function App() {
                         ) : (
                           workspaceFilteredMembers.map((member) => (
                           <article className="workspace-member-card" role="listitem" key={member.id}>
-                            <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} decorative />
-                            <span>
-                              <strong><WorkspaceIdentityName name={member.displayName} kind={member.kind} /></strong>
-                              <small>{workspaceMemberSecondaryText(member)}</small>
-                            </span>
+                            <button
+                              className="workspace-member-main"
+                              type="button"
+                              onClick={() => openWorkspaceMemberDetails(member)}
+                            >
+                              <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} decorative />
+                              <span>
+                                <strong><WorkspaceIdentityName name={member.displayName} kind={member.kind} /></strong>
+                                <small>{workspaceMemberSecondaryText(member)}</small>
+                              </span>
+                            </button>
                             {member.id !== workspaceBootstrap.auth.currentUser.id &&
                               workspaceBootstrap.permissions.canCreateDirect &&
                               member.capabilities?.canStartDirectConversation === true && (
@@ -7203,8 +7322,17 @@ export function App() {
                     </div>
                   )}
 
+                  {!workspaceCreateMode && workspaceView === "account" && (
+                    <WorkspaceAccountSettings
+                      currentUser={workspaceBootstrap.auth.currentUser}
+                      onBack={() => setWorkspaceMobilePane("list")}
+                      onUserUpdated={upsertWorkspaceMember}
+                      onNotice={showWorkspaceNotice}
+                    />
+                  )}
+
                   {!workspaceCreateMode && workspaceView === "space" && (
-                    <div className="workspace-content-panel">
+                    <div className="workspace-content-panel workspace-space-panel">
                       <div className="workspace-panel-header">
                         <button className="icon-button mobile-only" type="button" title="返回会话列表" onClick={() => setWorkspaceMobilePane("list")}>
                           <ArrowLeft size={16} />
@@ -7224,7 +7352,8 @@ export function App() {
                           { id: "overview" as const, label: "概览", visible: true },
                           { id: "invites" as const, label: "邀请", visible: workspaceBootstrap.permissions.canCreateMemberInvite },
                           { id: "roles" as const, label: "权限", visible: workspaceBootstrap.permissions.canCreatePrivilegedInvite },
-                          { id: "visibility" as const, label: "可见范围", visible: workspaceBootstrap.permissions.canManageMemberVisibility }
+                          { id: "visibility" as const, label: "可见范围", visible: workspaceBootstrap.permissions.canManageMemberVisibility },
+                          { id: "email" as const, label: "邮件", visible: workspaceBootstrap.permissions.canManageEmailSettings }
                         ].filter((tab) => tab.visible).map((tab) => (
                           <button
                             className={workspaceSpaceTab === tab.id ? "active" : ""}
@@ -7480,26 +7609,31 @@ export function App() {
                           )}
                         </section>
                       )}
+                      {workspaceSpaceTab === "email" && workspaceBootstrap.permissions.canManageEmailSettings && (
+                        <WorkspaceEmailSettingsPanel onNotice={showWorkspaceNotice} />
+                      )}
                     </div>
                   )}
                 </section>
 
                 {workspaceContextVisible && (
-                <WorkspaceContextDrawer label={workspaceContextMode === "file" ? "文件详情" : "当前会话详情"}>
+                <WorkspaceContextDrawer label={workspaceContextMode === "file" ? "文件详情" : workspaceContextMode === "member" ? "成员详情" : "当前会话详情"}>
                   <div className="workspace-context-header">
                     <button
                       className="icon-button mobile-only"
                       type="button"
-                      title={workspaceContextMode === "file" ? "返回文件" : "返回聊天"}
+                      title={workspaceContextMode === "file" ? "返回文件" : workspaceContextMode === "member" ? "返回成员" : "返回聊天"}
                       onClick={() => setWorkspaceMobilePane("main")}
                     >
                       <ArrowLeft size={16} />
                     </button>
                     <div className="workspace-context-title">
-                      <p className="eyebrow">{workspaceContextMode === "file" ? "文件详情" : workspaceSelectedConversation ? "会话详情" : "空间概览"}</p>
+                      <p className="eyebrow">{workspaceContextMode === "file" ? "文件详情" : workspaceContextMode === "member" ? "成员详情" : workspaceSelectedConversation ? "会话详情" : "空间概览"}</p>
                       <strong>
                         {workspaceContextMode === "file"
                           ? workspaceSelectedFile?.fileName ?? "选择文件"
+                          : workspaceContextMode === "member"
+                          ? workspaceSelectedMember?.displayName ?? "选择成员"
                           : workspaceSelectedConversation
                           ? workspaceConversationTitle(workspaceSelectedConversation, workspaceBootstrap.auth.currentUser.id)
                         : workspaceBootstrap.space.name}
@@ -7618,6 +7752,19 @@ export function App() {
                         <p className="saved-empty">选择文件后查看详情和下载操作。</p>
                       )}
                     </div>
+                  ) : workspaceContextMode === "member" ? (
+                    workspaceSelectedMember ? (
+                      <WorkspaceMemberDetail
+                        member={workspaceSelectedMember}
+                        currentUserId={workspaceBootstrap.auth.currentUser.id}
+                        canCreateDirect={workspaceBootstrap.permissions.canCreateDirect}
+                        onMemberUpdated={upsertWorkspaceMember}
+                        onStartDirect={(memberId) => void createWorkspaceDirect(memberId)}
+                        onNotice={showWorkspaceNotice}
+                      />
+                    ) : (
+                      <div className="workspace-context-body"><p className="saved-empty">选择成员后查看详情。</p></div>
+                    )
                   ) : workspaceSelectedConversation ? (
                     <>
                       <div
@@ -8092,6 +8239,465 @@ function normalizeProfilePayload(value: unknown): PeerProfile | null {
 function normalizeWsChatPayload(value: unknown): P2pMessageEnvelope | null {
   const envelope = parseDataEnvelopeValue(value);
   return envelope?.kind === "chat" || envelope?.kind === "chat-ack" ? envelope : null;
+}
+
+function WorkspaceAccountSettings({
+  currentUser,
+  onBack,
+  onUserUpdated,
+  onNotice
+}: {
+  currentUser: WorkspaceUser;
+  onBack: () => void;
+  onUserUpdated: (user: WorkspaceUser) => void;
+  onNotice: (tone: WorkspaceNotice["tone"], text: string) => void;
+}) {
+  const [nickname, setNickname] = useState(currentUser.nickname ?? "");
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [notifications, setNotifications] = useState<WorkspaceNotificationPreferences | null>(null);
+  const [notificationsLoading, setNotificationsLoading] = useState(true);
+  const [notificationsSaving, setNotificationsSaving] = useState(false);
+  const [pendingEmail, setPendingEmail] = useState("");
+  const [challengeId, setChallengeId] = useState("");
+  const [verificationCode, setVerificationCode] = useState("");
+  const [emailBusy, setEmailBusy] = useState(false);
+
+  useEffect(() => {
+    setNickname(currentUser.nickname ?? "");
+  }, [currentUser.id, currentUser.nickname]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setNotificationsLoading(true);
+    void workspaceJson<{ notifications: WorkspaceNotificationPreferences }>("/api/workspace/me/notifications")
+      .then((data) => {
+        if (!cancelled) setNotifications(data.notifications);
+      })
+      .catch((error) => {
+        if (!cancelled) onNotice("warning", userFacingErrorMessage(error, "通知设置暂时无法加载"));
+      })
+      .finally(() => {
+        if (!cancelled) setNotificationsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser.id]);
+
+  async function saveProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setProfileSaving(true);
+    try {
+      const data = await workspaceJson<{ user: WorkspaceUser }>("/api/workspace/me/profile", {
+        method: "PATCH",
+        body: JSON.stringify({ nickname: nickname.trim() || null })
+      });
+      onUserUpdated(data.user);
+      setNickname(data.user.nickname ?? "");
+      onNotice("success", "公开昵称已更新");
+    } catch (error) {
+      onNotice("warning", userFacingErrorMessage(error, "公开昵称保存失败"));
+    } finally {
+      setProfileSaving(false);
+    }
+  }
+
+  async function saveNotifications(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!notifications) return;
+    setNotificationsSaving(true);
+    try {
+      const data = await workspaceJson<{ notifications: WorkspaceNotificationPreferences }>("/api/workspace/me/notifications", {
+        method: "PATCH",
+        body: JSON.stringify({
+          enabled: notifications.enabled,
+          immediateEnabled: notifications.immediateEnabled,
+          digestEnabled: notifications.digestEnabled
+        })
+      });
+      setNotifications(data.notifications);
+      onNotice("success", "通知偏好已保存");
+    } catch (error) {
+      onNotice("warning", userFacingErrorMessage(error, "通知偏好保存失败"));
+    } finally {
+      setNotificationsSaving(false);
+    }
+  }
+
+  async function sendEmailChallenge(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setEmailBusy(true);
+    try {
+      const data = await workspaceJson<{ challengeId: string; pendingEmail: string }>(
+        "/api/workspace/me/notification-email/challenges",
+        { method: "POST", body: JSON.stringify({ email: pendingEmail }) }
+      );
+      setChallengeId(data.challengeId);
+      setVerificationCode("");
+      onNotice("success", `验证码已发送至 ${data.pendingEmail}`);
+    } catch (error) {
+      onNotice("warning", userFacingErrorMessage(error, "验证码发送失败"));
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
+  async function verifyEmail(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setEmailBusy(true);
+    try {
+      const data = await workspaceJson<{ notifications: WorkspaceNotificationPreferences }>(
+        "/api/workspace/me/notification-email/verify",
+        { method: "POST", body: JSON.stringify({ challengeId, code: verificationCode }) }
+      );
+      setNotifications(data.notifications);
+      setChallengeId("");
+      setPendingEmail("");
+      setVerificationCode("");
+      onNotice("success", "通知邮箱已验证并启用");
+    } catch (error) {
+      onNotice("warning", userFacingErrorMessage(error, "邮箱验证失败"));
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
+  async function useGitHubEmail() {
+    setEmailBusy(true);
+    try {
+      const data = await workspaceJson<{ notifications: WorkspaceNotificationPreferences }>(
+        "/api/workspace/me/notification-email/use-github",
+        { method: "POST" }
+      );
+      setNotifications(data.notifications);
+      setChallengeId("");
+      onNotice("success", "已恢复使用 GitHub 邮箱");
+    } catch (error) {
+      onNotice("warning", userFacingErrorMessage(error, "无法使用 GitHub 邮箱"));
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
+  return (
+    <div className="workspace-content-panel workspace-account-panel">
+      <div className="workspace-panel-header">
+        <button className="icon-button mobile-only" type="button" title="返回会话列表" onClick={onBack}>
+          <ArrowLeft size={16} />
+        </button>
+        <div>
+          <p className="eyebrow">账号</p>
+          <h2>账号与通知</h2>
+        </div>
+      </div>
+      <form className="workspace-preference-section" onSubmit={saveProfile}>
+        <div className="workspace-section-header">
+          <div>
+            <h3>公开资料</h3>
+            <p>昵称会显示在所有登录后的共享空间界面。</p>
+          </div>
+          <button className="primary compact" type="submit" disabled={profileSaving}>
+            {profileSaving ? "保存中" : "保存昵称"}
+          </button>
+        </div>
+        <div className="workspace-settings-grid">
+          <label>
+            <span>公开昵称</span>
+            <input value={nickname} maxLength={32} onChange={(event) => setNickname(event.target.value)} placeholder={currentUser.githubLogin || "输入昵称"} />
+          </label>
+          <div className="workspace-readonly-field">
+            <span>GitHub 账号</span>
+            <strong>@{currentUser.githubLogin}</strong>
+          </div>
+        </div>
+      </form>
+
+      <section className="workspace-preference-section" aria-busy={notificationsLoading}>
+        <div className="workspace-section-header">
+          <div>
+            <h3>通知邮箱</h3>
+            <p>{notifications?.maskedEmail || "尚未设置可用邮箱"}</p>
+          </div>
+          {notifications?.emailSource === "custom" && notifications.githubEmail && (
+            <button className="secondary compact" type="button" disabled={emailBusy} onClick={() => void useGitHubEmail()}>
+              使用 GitHub 邮箱
+            </button>
+          )}
+        </div>
+        {!notifications?.mailAvailable && !notificationsLoading && (
+          <p className="workspace-form-status">空间邮件服务尚未启用。偏好会保留，但暂时不会发信。</p>
+        )}
+        <form className="workspace-inline-form" onSubmit={sendEmailChallenge}>
+          <label>
+            <span>更换邮箱</span>
+            <input type="email" value={pendingEmail} onChange={(event) => setPendingEmail(event.target.value)} placeholder="name@example.com" required />
+          </label>
+          <button className="secondary" type="submit" disabled={emailBusy || !notifications?.mailAvailable}>
+            <Mail size={16} />
+            发送验证码
+          </button>
+        </form>
+        {challengeId && (
+          <form className="workspace-inline-form" onSubmit={verifyEmail}>
+            <label>
+              <span>6 位验证码</span>
+              <input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={verificationCode} onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, ""))} required />
+            </label>
+            <button className="primary" type="submit" disabled={emailBusy || verificationCode.length !== 6}>验证邮箱</button>
+          </form>
+        )}
+      </section>
+
+      <form className="workspace-preference-section" onSubmit={saveNotifications}>
+        <div className="workspace-section-header">
+          <div>
+            <h3>消息通知</h3>
+            <p>邮件仅说明存在未读消息，不包含聊天内容或附件信息。</p>
+          </div>
+          <button className="primary compact" type="submit" disabled={!notifications || notificationsSaving}>
+            {notificationsSaving ? "保存中" : "保存偏好"}
+          </button>
+        </div>
+        {notificationsLoading || !notifications ? (
+          <p className="workspace-form-status">正在读取通知设置...</p>
+        ) : (
+          <div className="workspace-toggle-list">
+            <label>
+              <input type="checkbox" checked={notifications.enabled} onChange={(event) => setNotifications({ ...notifications, enabled: event.target.checked })} />
+              <span><strong>接受邮件通知</strong><small>关闭后保留其他选项。</small></span>
+            </label>
+            <label>
+              <input type="checkbox" checked={notifications.immediateEnabled} disabled={!notifications.enabled} onChange={(event) => setNotifications({ ...notifications, immediateEnabled: event.target.checked })} />
+              <span><strong>每条消息都通知我</strong><small>所有设备离线且消息 60 秒后仍未读时发送。</small></span>
+            </label>
+            <label>
+              <input type="checkbox" checked={notifications.digestEnabled} disabled={!notifications.enabled} onChange={(event) => setNotifications({ ...notifications, digestEnabled: event.target.checked })} />
+              <span><strong>超过 2 小时仍未读时通知我</strong><small>跨会话汇总，每个未读周期只发送一次。</small></span>
+            </label>
+          </div>
+        )}
+      </form>
+    </div>
+  );
+}
+
+function WorkspaceMemberDetail({
+  member,
+  currentUserId,
+  canCreateDirect,
+  onMemberUpdated,
+  onStartDirect,
+  onNotice
+}: {
+  member: WorkspaceUser;
+  currentUserId: string;
+  canCreateDirect: boolean;
+  onMemberUpdated: (member: WorkspaceUser) => void;
+  onStartDirect: (memberId: string) => void;
+  onNotice: (tone: WorkspaceNotice["tone"], text: string) => void;
+}) {
+  const [remark, setRemark] = useState(member.remark ?? "");
+  const [saving, setSaving] = useState(false);
+  const canRemark = member.kind === "human" && member.id !== currentUserId;
+
+  useEffect(() => {
+    setRemark(member.remark ?? "");
+  }, [member.id, member.remark]);
+
+  async function saveRemark(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canRemark) return;
+    setSaving(true);
+    try {
+      const path = `/api/workspace/members/${encodeURIComponent(member.id)}/remark`;
+      const data = await workspaceJson<{ member: WorkspaceUser }>(path, remark.trim()
+        ? { method: "PUT", body: JSON.stringify({ remark: remark.trim() }) }
+        : { method: "DELETE" });
+      onMemberUpdated(data.member);
+      setRemark(data.member.remark ?? "");
+      onNotice("success", remark.trim() ? "成员备注已保存" : "成员备注已移除");
+    } catch (error) {
+      onNotice("warning", userFacingErrorMessage(error, "成员备注保存失败"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="workspace-context-body workspace-member-detail">
+      <div className="workspace-context-profile">
+        <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} decorative />
+        <div>
+          <strong><WorkspaceIdentityName name={member.displayName} kind={member.kind} /></strong>
+          <small>{member.description || workspaceMemberRoleLabel(member)}</small>
+        </div>
+      </div>
+      <dl className="workspace-member-facts">
+        {member.remark && <div><dt>我的备注</dt><dd>{member.remark}</dd></div>}
+        <div><dt>公开昵称</dt><dd>{member.nickname || "未设置"}</dd></div>
+        {member.githubLogin && <div><dt>GitHub 账号</dt><dd>@{member.githubLogin}</dd></div>}
+        <div><dt>空间身份</dt><dd>{workspaceMemberRoleLabel(member)}</dd></div>
+      </dl>
+      {canRemark && (
+        <form className="workspace-remark-form" onSubmit={saveRemark}>
+          <label>
+            <span>私人备注</span>
+            <input value={remark} maxLength={32} onChange={(event) => setRemark(event.target.value)} placeholder={member.nickname || member.githubLogin || "输入备注"} />
+          </label>
+          <button className="secondary" type="submit" disabled={saving || (!member.remark && !remark.trim())}>
+            {saving ? "保存中" : remark.trim() || !member.remark ? "保存备注" : "移除备注"}
+          </button>
+        </form>
+      )}
+      {member.id !== currentUserId && canCreateDirect && member.capabilities?.canStartDirectConversation && (
+        <button className="primary" type="button" onClick={() => onStartDirect(member.id)}>
+          <MessageSquare size={16} />
+          发起私聊
+        </button>
+      )}
+    </div>
+  );
+}
+
+function WorkspaceEmailSettingsPanel({ onNotice }: { onNotice: (tone: WorkspaceNotice["tone"], text: string) => void }) {
+  const [settings, setSettings] = useState<WorkspaceEmailSettings | null>(null);
+  const [draft, setDraft] = useState({
+    enabled: false,
+    smtpHost: "",
+    smtpPort: 587,
+    encryption: "starttls" as WorkspaceEmailSettings["encryption"],
+    username: "",
+    password: "",
+    fromAddress: "",
+    fromName: "DualLane"
+  });
+  const [testProof, setTestProof] = useState("");
+  const [testedRecipient, setTestedRecipient] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<"" | "test" | "save">("");
+
+  useEffect(() => {
+    let cancelled = false;
+    void workspaceJson<{ settings: WorkspaceEmailSettings }>("/api/workspace/settings/email")
+      .then((data) => {
+        if (cancelled) return;
+        setSettings(data.settings);
+        setDraft({
+          enabled: data.settings.enabled,
+          smtpHost: data.settings.smtpHost,
+          smtpPort: data.settings.smtpPort,
+          encryption: data.settings.encryption,
+          username: data.settings.username,
+          password: "",
+          fromAddress: data.settings.fromAddress,
+          fromName: data.settings.fromName
+        });
+      })
+      .catch((error) => {
+        if (!cancelled) onNotice("warning", userFacingErrorMessage(error, "邮件配置暂时无法加载"));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function updateDraft<K extends keyof typeof draft>(key: K, value: (typeof draft)[K]) {
+    setDraft((current) => ({ ...current, [key]: value }));
+    setTestProof("");
+    setTestedRecipient("");
+  }
+
+  async function testSettings() {
+    setBusy("test");
+    try {
+      const data = await workspaceJson<{ testProof: string; recipient: string; testedAt: string }>("/api/workspace/settings/email/test", {
+        method: "POST",
+        body: JSON.stringify(draft)
+      });
+      setTestProof(data.testProof);
+      setTestedRecipient(data.recipient);
+      setSettings((current) => current ? { ...current, lastTestedAt: data.testedAt, lastTestStatus: "success", lastTestErrorCode: null } : current);
+      onNotice("success", "测试邮件发送成功，当前配置可保存");
+    } catch (error) {
+      setTestProof("");
+      onNotice("warning", userFacingErrorMessage(error, "测试邮件发送失败"));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function saveSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy("save");
+    try {
+      const data = await workspaceJson<{ settings: WorkspaceEmailSettings }>("/api/workspace/settings/email", {
+        method: "PUT",
+        body: JSON.stringify({ ...draft, testProof })
+      });
+      setSettings(data.settings);
+      setDraft((current) => ({ ...current, password: "" }));
+      setTestProof("");
+      setTestedRecipient("");
+      onNotice("success", data.settings.enabled ? "空间邮件通知已启用" : "邮件配置已保存并停用");
+    } catch (error) {
+      onNotice("warning", userFacingErrorMessage(error, "邮件配置保存失败"));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  if (loading) {
+    return <section className="workspace-settings-section" aria-busy="true"><p className="workspace-form-status">正在读取邮件配置...</p></section>;
+  }
+
+  return (
+    <form className="workspace-settings-section workspace-email-settings" onSubmit={saveSettings}>
+      <div className="workspace-section-header">
+        <div>
+          <h3>邮件服务</h3>
+          <p>SMTP 凭据加密保存。启用配置前必须先发送测试邮件。</p>
+        </div>
+        <label className="workspace-switch">
+          <input type="checkbox" checked={draft.enabled} onChange={(event) => updateDraft("enabled", event.target.checked)} />
+          <span>启用</span>
+        </label>
+      </div>
+      <div className="workspace-settings-grid three-columns">
+        <label><span>SMTP 服务器</span><input value={draft.smtpHost} onChange={(event) => updateDraft("smtpHost", event.target.value)} placeholder="smtp.example.com" required /></label>
+        <label><span>端口</span><input type="number" min={1} max={65535} value={draft.smtpPort} onChange={(event) => updateDraft("smtpPort", Number(event.target.value))} required /></label>
+        <label>
+          <span>加密方式</span>
+          <select value={draft.encryption} onChange={(event) => updateDraft("encryption", event.target.value as WorkspaceEmailSettings["encryption"])}>
+            <option value="starttls">STARTTLS</option>
+            <option value="tls">TLS</option>
+            <option value="none">不加密</option>
+          </select>
+        </label>
+        <label><span>用户名</span><input value={draft.username} onChange={(event) => updateDraft("username", event.target.value)} autoComplete="username" /></label>
+        <label><span>密码</span><input type="password" value={draft.password} onChange={(event) => updateDraft("password", event.target.value)} autoComplete="new-password" placeholder={settings?.passwordConfigured ? "留空以保留现有密码" : "SMTP 密码"} /></label>
+        <label><span>发信地址</span><input type="email" value={draft.fromAddress} onChange={(event) => updateDraft("fromAddress", event.target.value)} placeholder="可留空并使用邮箱格式用户名" /></label>
+        <label><span>显示名称</span><input value={draft.fromName} onChange={(event) => updateDraft("fromName", event.target.value)} required /></label>
+      </div>
+      <div className="workspace-email-health" aria-label="邮件发送状态">
+        <span>最近测试 <strong>{settings?.lastTestedAt ? new Date(settings.lastTestedAt).toLocaleString("zh-CN") : "暂无"}</strong></span>
+        <span>最后发送 <strong>{settings?.lastDeliveryAt ? new Date(settings.lastDeliveryAt).toLocaleString("zh-CN") : "暂无"}</strong></span>
+        <span>失败任务 <strong>{settings?.failedJobCount ?? 0}</strong></span>
+      </div>
+      {testProof && <p className="workspace-form-status success">已通过测试，将发送至 {testedRecipient}。证明 10 分钟内有效。</p>}
+      <div className="workspace-form-actions">
+        <button className="secondary" type="button" disabled={Boolean(busy)} onClick={() => void testSettings()}>
+          <Mail size={16} />
+          {busy === "test" ? "测试中" : "发送测试邮件"}
+        </button>
+        <button className="primary" type="submit" disabled={Boolean(busy) || (draft.enabled && !testProof)}>
+          {busy === "save" ? "保存中" : draft.enabled ? "保存并启用" : "保存配置"}
+        </button>
+      </div>
+    </form>
+  );
 }
 
 function ThemeSwitch({
@@ -8640,11 +9246,13 @@ export function getWorkspaceSingleImageAttachment<
 function WorkspaceStructuredMessage({
   message,
   onOpenAttachment,
-  onPreviewImage
+  onPreviewImage,
+  mentionMembers
 }: {
   message: Message;
   onOpenAttachment?: (attachment: WorkspaceAttachment) => void;
   onPreviewImage?: (attachment: WorkspaceAttachment) => void;
+  mentionMembers?: WorkspaceUser[];
 }) {
   const blocks = message.content?.blocks ?? [];
   const hasUnknownBlock = blocks.some((block) => !isKnownWorkspaceMessageBlock(block));
@@ -8653,6 +9261,7 @@ function WorkspaceStructuredMessage({
   }
 
   const attachmentsById = new Map((message.attachments ?? []).map((attachment) => [attachment.id, attachment]));
+  const mentionLabels = new Map((mentionMembers ?? []).map((member) => [member.id, member.displayName]));
   const singleImageAttachment = getWorkspaceSingleImageAttachment(blocks, message.attachments);
 
   if (singleImageAttachment) {
@@ -8685,7 +9294,7 @@ function WorkspaceStructuredMessage({
         if (block.type === "mention") {
           return (
             <span className="message-mention" key={`${index}-mention`}>
-              @{block.label}
+              @{mentionLabels.get(block.userId) || block.label}
             </span>
           );
         }
@@ -9246,6 +9855,7 @@ function WorkspaceChatPanel({
                       message={message}
                       onOpenAttachment={onOpenAttachment}
                       onPreviewImage={onPreviewImage}
+                      mentionMembers={mentionMembers}
                     />
                     <WorkspaceReactionBar
                       messageId={message.id}

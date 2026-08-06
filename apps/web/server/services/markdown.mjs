@@ -10,6 +10,27 @@ const unsupportedSummaryNodes = new Set([
   "table"
 ]);
 
+function preserveThematicBreaks() {
+  return (tree) => {
+    const visit = (node) => {
+      if (!Array.isArray(node?.children)) {
+        return;
+      }
+      node.children = node.children.map((child) => {
+        if (child?.type === "thematicBreak") {
+          return {
+            type: "paragraph",
+            children: [{ type: "text", value: "[分割线]" }]
+          };
+        }
+        visit(child);
+        return child;
+      });
+    };
+    visit(tree);
+  };
+}
+
 function normalizeSummaryNodes() {
   return (tree) => {
     const visit = (node) => {
@@ -36,6 +57,7 @@ function normalizeSummaryNodes() {
 const markdownProcessor = unified()
   .use(remarkParse)
   .use(remarkGfm)
+  .use(preserveThematicBreaks)
   .use(normalizeSummaryNodes)
   .use(stripMarkdown);
 

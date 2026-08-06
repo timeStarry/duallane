@@ -36,7 +36,7 @@ describe("workspace UI permission boundaries", () => {
     expect(workspaceRenderSource).toContain('<aside className="workspace-rail" aria-label="共享空间导航">');
     expect(workspaceRenderSource).toContain('<section className="workspace-main" id="workspace-main-panel" aria-label="共享空间主视图">');
     expect(workspaceRenderSource).toContain("{workspaceContextVisible && (");
-    expect(workspaceRenderSource).toContain('<WorkspaceContextDrawer label={workspaceContextMode === "file" ? "文件详情" : "当前会话详情"}>');
+    expect(workspaceRenderSource).toContain('<WorkspaceContextDrawer label={workspaceContextMode === "file" ? "文件详情" : workspaceContextMode === "member" ? "成员详情" : "当前会话详情"}>');
     expect(workspaceRenderSource.indexOf('className="workspace-rail"')).toBeLessThan(workspaceRenderSource.indexOf('className="workspace-main"'));
     expect(workspaceRenderSource.indexOf('className="workspace-main"')).toBeLessThan(workspaceRenderSource.indexOf("<WorkspaceContextDrawer"));
   });

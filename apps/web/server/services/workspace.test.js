@@ -41,6 +41,8 @@ import {
   STALE_UPLOAD_RESERVATION_MS,
   subscribeWorkspaceEvents,
   updateMemberRole,
+  updateMemberRemark,
+  updateOwnProfile,
   updateConversationNotificationLevel,
   updateGroupConversation,
   updateManagedMemberVisibility,
@@ -152,6 +154,74 @@ describe("workspace service", () => {
 
     await expect(createWorkspaceSession(db, BEACON_USER_ID)).rejects.toMatchObject({ code: "auth.identity_forbidden" });
     await expect(listMembers(db, BEACON_USER_ID)).rejects.toMatchObject({ code: "auth.identity_forbidden" });
+  });
+
+  it("keeps public nicknames stable across OAuth updates and isolates private remarks", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "PROFILE-MEMBER" });
+    const member = await acceptInvite(db, request, {
+      code: invite.code,
+      githubLogin: "profile-member",
+      email: "profile-member@example.com",
+      displayName: "Provider Name"
+    });
+
+    const updated = await updateOwnProfile(db, request, { actorId: member.id, nickname: "公开昵称" });
+    expect(updated).toMatchObject({ displayName: "公开昵称", nickname: "公开昵称", githubLogin: "profile-member" });
+
+    await bindGitHubUser(db, request, {
+      githubLogin: "profile-member",
+      email: "profile-member@example.com",
+      displayName: "Changed Provider Name"
+    });
+    expect((await getWorkspaceBootstrap(db, member.id)).auth.currentUser).toMatchObject({
+      displayName: "公开昵称",
+      nickname: "公开昵称"
+    });
+
+    const remarked = await updateMemberRemark(db, {
+      actorId: "usr_owner",
+      userId: member.id,
+      remark: "我的备注"
+    });
+    expect(remarked).toMatchObject({ displayName: "我的备注", remark: "我的备注", nickname: "公开昵称" });
+    expect((await listMembers(db, member.id)).find((item) => item.id === member.id)).toMatchObject({
+      displayName: "公开昵称",
+      nickname: "公开昵称"
+    });
+    expect((await listMembers(db, member.id)).find((item) => item.id === member.id).remark).toBeUndefined();
+
+    const conversation = await createWorkspaceConversation(db, request, {
+      actorId: "usr_owner",
+      type: "direct",
+      targetUserId: member.id
+    });
+    await createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      clientMessageId: "profile-private-remark-event",
+      content: textContent("事件投影不应保存私人备注")
+    });
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM workspace_events
+      WHERE payload_json LIKE ?
+    `).get("%我的备注%").count).toBe(0);
+
+    await updateOwnProfile(db, request, { actorId: member.id, nickname: null });
+    await bindGitHubUser(db, request, {
+      githubLogin: "profile-member",
+      email: "profile-member@example.com",
+      displayName: "Another Provider Name"
+    });
+    expect((await getWorkspaceBootstrap(db, member.id)).auth.currentUser).toMatchObject({
+      displayName: "profile-member",
+      nickname: null
+    });
+    await expect(updateMemberRemark(db, {
+      actorId: "usr_owner",
+      userId: BEACON_USER_ID,
+      remark: "不允许"
+    })).rejects.toMatchObject({ code: "member.remark_unsupported" });
   });
 
   it("keeps Beacon visible without grants and isolates one direct conversation per user", async () => {

@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 import { DEFAULT_SPACE_ID, openDatabase } from "./services/db.mjs";
 import { getIceServers } from "./services/ice.mjs";
 import { createGitHubFetch } from "./services/github-fetch.mjs";
+import { createWorkspaceEmailService, WorkspaceEmailError } from "./services/workspace-email.mjs";
+import { createWorkspacePresence } from "./services/workspace-presence.mjs";
 import { attachP2PSocket, createP2PRoom, getP2PRoom } from "./services/p2p.mjs";
 import {
   acceptInvite,
@@ -43,6 +45,7 @@ import {
   removeConversationMember,
   removeAttachment,
   removeMessageReaction,
+  removeMemberRemark,
   removeSpaceMember,
   reserveDownload,
   reserveUpload,
@@ -50,6 +53,8 @@ import {
   revokeWorkspaceSession,
   subscribeWorkspaceEvents,
   updateMemberRole,
+  updateMemberRemark,
+  updateOwnProfile,
   updateGroupConversation,
   updateConversationNotificationLevel,
   updateManagedMemberVisibility,
@@ -102,6 +107,14 @@ export async function createApp(options = {}) {
         : undefined
     })
     : null);
+  const workspacePresence = createWorkspacePresence();
+  const workspaceEmail = db ? createWorkspaceEmailService({
+    db,
+    env,
+    baseUrl: env.WORKSPACE_FRONTEND_URL || env.PUBLIC_BASE_URL,
+    sendMail: options.workspaceEmailSender,
+    now: options.now
+  }) : null;
 
   const app = Fastify({
     trustProxy,
@@ -140,6 +153,17 @@ export async function createApp(options = {}) {
       await db.close();
     });
   }
+
+  const workspaceEmailWorker = workspaceEnabled && workspaceEmail
+    ? workspaceEmail.startWorker({
+      presence: workspacePresence,
+      startupDelayMs: options.workspaceEmailWorkerStartupDelayMs,
+      intervalMs: options.workspaceEmailWorkerIntervalMs
+    })
+    : null;
+  app.addHook("onClose", async () => {
+    workspaceEmailWorker?.stop();
+  });
 
 app.addHook("onRequest", async (_request, reply) => {
   reply.header("Referrer-Policy", "no-referrer");
@@ -263,6 +287,8 @@ app.get("/api/auth/github/callback", async (request, reply) => {
       }
     }
 
+    await workspaceEmail?.syncGitHubEmail(user.id, profile.email);
+
     const session = await createWorkspaceSession(db, user.id);
     reply.setCookie(WORKSPACE_SESSION_COOKIE, session.token, {
       httpOnly: true,
@@ -316,6 +342,87 @@ app.get("/api/workspace/statistics", async (request, reply) => {
     return sendWorkspaceError(reply, request, error);
   }
 });
+
+app.get("/api/workspace/settings/email", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return { settings: await workspaceEmail.getSpaceSettings(await getWorkspaceUserId(request)) };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/settings/email/test", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return await workspaceEmail.testSpaceSettings(request, await getWorkspaceUserId(request), request.body ?? {});
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.put("/api/workspace/settings/email", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return { settings: await workspaceEmail.saveSpaceSettings(request, await getWorkspaceUserId(request), request.body ?? {}) };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.get("/api/workspace/me/notifications", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return { notifications: await workspaceEmail.getPreferences(await getWorkspaceUserId(request)) };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.patch("/api/workspace/me/notifications", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return { notifications: await workspaceEmail.updatePreferences(await getWorkspaceUserId(request), request.body ?? {}) };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/me/notification-email/challenges", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return reply.code(201).send(await workspaceEmail.createEmailChallenge(
+      request,
+      await getWorkspaceUserId(request),
+      request.body ?? {}
+    ));
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/me/notification-email/verify", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return { notifications: await workspaceEmail.verifyEmailChallenge(
+      request,
+      await getWorkspaceUserId(request),
+      request.body ?? {}
+    ) };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/me/notification-email/use-github", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return { notifications: await workspaceEmail.useGitHubEmail(await getWorkspaceUserId(request)) };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
 app.post("/api/workspace/invites", async (request, reply) => {
   if (!workspaceEnabled) {
     return blockWorkspace(reply);
@@ -353,6 +460,7 @@ app.post("/api/workspace/invites/:code/accept", async (request, reply) => {
   }
   try {
     const user = await acceptInvite(db, request, { ...(request.body ?? {}), code: request.params.code });
+    await workspaceEmail?.syncGitHubEmail(user.id, request.body?.email);
     const session = await createWorkspaceSession(db, user.id);
     reply.setCookie(WORKSPACE_SESSION_COOKIE, session.token, {
       httpOnly: true,
@@ -400,6 +508,55 @@ app.get("/api/workspace/members", async (request, reply) => {
         role: request.query?.role,
         kind: request.query?.kind,
         limit: request.query?.limit
+      })
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.patch("/api/workspace/me/profile", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    return {
+      user: await updateOwnProfile(db, request, {
+        ...(request.body ?? {}),
+        actorId: await getWorkspaceUserId(request)
+      })
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.put("/api/workspace/members/:userId/remark", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    return {
+      member: await updateMemberRemark(db, {
+        ...(request.body ?? {}),
+        actorId: await getWorkspaceUserId(request),
+        userId: request.params.userId
+      })
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.delete("/api/workspace/members/:userId/remark", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    return {
+      member: await removeMemberRemark(db, {
+        actorId: await getWorkspaceUserId(request),
+        userId: request.params.userId
       })
     };
   } catch (error) {
@@ -566,10 +723,12 @@ app.post("/api/workspace/conversations/:conversationId/read", async (request, re
     return blockWorkspace(reply);
   }
   try {
+    const actorId = await getWorkspaceUserId(request);
     const conversation = await markConversationRead(db, request, {
-      actorId: await getWorkspaceUserId(request),
+      actorId,
       conversationId: request.params.conversationId
     });
+    await workspaceEmail?.reconcileDigestState(actorId);
     return { conversation };
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
@@ -581,11 +740,13 @@ app.patch("/api/workspace/conversations/:conversationId/notification", async (re
     return blockWorkspace(reply);
   }
   try {
+    const actorId = await getWorkspaceUserId(request);
     const conversation = await updateConversationNotificationLevel(db, request, {
       ...(request.body ?? {}),
-      actorId: await getWorkspaceUserId(request),
+      actorId,
       conversationId: request.params.conversationId
     });
+    await workspaceEmail?.reconcileDigestState(actorId);
     return { conversation };
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
@@ -597,7 +758,11 @@ app.post("/api/workspace/messages", async (request, reply) => {
     return blockWorkspace(reply);
   }
   try {
-    const message = await createStructuredMessage(db, request, { ...(request.body ?? {}), actorId: await getWorkspaceUserId(request) });
+    const message = await createStructuredMessage(db, request, {
+      ...(request.body ?? {}),
+      actorId: await getWorkspaceUserId(request),
+      scheduleEmailNotifications: workspaceEmail?.scheduleMessage
+    });
     return reply.code(201).send({ message });
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
@@ -838,6 +1003,23 @@ app.get("/ws/workspace", { websocket: true }, (socket, request) => {
   let lastDeliveredSeq = 0;
   let replayInProgress = false;
   let replayCatchUpRequired = false;
+  let unregisterPresence = () => {};
+  let socketAlive = true;
+
+  const heartbeat = setInterval(() => {
+    if (socket.readyState !== 1) return;
+    if (!socketAlive) {
+      socket.terminate();
+      return;
+    }
+    socketAlive = false;
+    socket.ping();
+  }, 30_000);
+  heartbeat.unref?.();
+
+  socket.on("pong", () => {
+    socketAlive = true;
+  });
 
   async function deliverWorkspaceEvents(writtenEvent) {
     let replayAfterSeq = lastDeliveredSeq;
@@ -880,8 +1062,15 @@ app.get("/ws/workspace", { websocket: true }, (socket, request) => {
     }
   });
 
-  socket.on("close", unsubscribe);
-  socket.on("error", unsubscribe);
+  const cleanup = () => {
+    clearInterval(heartbeat);
+    unregisterPresence();
+    unregisterPresence = () => {};
+    unsubscribe();
+  };
+
+  socket.on("close", cleanup);
+  socket.on("error", cleanup);
 
   socket.on("message", async (raw) => {
     try {
@@ -930,6 +1119,8 @@ app.get("/ws/workspace", { websocket: true }, (socket, request) => {
           replayCatchUpRequired = false;
           await deliverWorkspaceEvents();
         }
+        unregisterPresence();
+        unregisterPresence = workspacePresence.register(userId, socket);
       } catch (error) {
         subscribedUserId = null;
         replayCatchUpRequired = false;
@@ -1091,7 +1282,10 @@ function githubOAuthFailure() {
 
 function sendWorkspaceError(reply, request, error) {
   const payload = toWorkspaceError(request, error);
-  return reply.code(error instanceof WorkspaceError ? error.statusCode : 500).send(payload);
+  const statusCode = error instanceof WorkspaceError || error instanceof WorkspaceEmailError
+    ? error.statusCode
+    : 500;
+  return reply.code(statusCode).send(payload);
 }
 
 function publicWorkspaceUser(user) {
@@ -1101,7 +1295,10 @@ function publicWorkspaceUser(user) {
   return {
     id: user.id,
     githubLogin: user.githubLogin,
-    displayName: user.displayName,
+    displayName: user.kind === "human"
+      ? user.nickname || user.githubLogin || user.displayName
+      : user.displayName,
+    nickname: user.kind === "human" ? user.nickname || null : undefined,
     avatarUrl: user.avatarUrl,
     kind: user.kind,
     role: user.role,
@@ -1110,7 +1307,7 @@ function publicWorkspaceUser(user) {
 }
 
 function toWorkspaceError(request, error) {
-  if (error instanceof WorkspaceError) {
+  if (error instanceof WorkspaceError || error instanceof WorkspaceEmailError) {
     return {
       error: {
         code: error.code,
