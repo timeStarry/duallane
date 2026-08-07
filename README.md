@@ -134,6 +134,12 @@ multipart cleanup before the first backfill:
 docker compose --profile storage-migration run --rm storage-provision
 ```
 
+Some MinIO releases return `NotImplemented` for bucket-level CORS. In that
+case the provisioner reports gateway CORS mode and still requires versioning,
+private policy verification, and multipart cleanup to pass; use the bundled
+`deploy/caddy/fs.tsio.top.caddy` rules to restrict public paths, methods, and
+preflight origin.
+
 For an existing local volume, choose a stable run ID and preserve it when
 resuming. The backfill uploads active attachments and current avatars to their
 feature prefixes, archives other existing Workspace bytes, then performs a

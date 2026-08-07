@@ -40,6 +40,7 @@ describe("workspace S3 provisioning", () => {
       bucket: "duallane",
       versioning: "Enabled",
       corsOrigin: "https://duallane.tsio.top",
+      corsMode: "bucket",
       multipartAbortDays: 7
     });
     expect(observed).toEqual(expect.arrayContaining([
@@ -47,6 +48,40 @@ describe("workspace S3 provisioning", () => {
       "PutBucketCorsCommand",
       "PutBucketLifecycleConfigurationCommand"
     ]));
+  });
+
+  it("uses the restricted gateway CORS path when MinIO lacks bucket CORS APIs", async () => {
+    const env = await makeEnv();
+    let lifecycleRules = [];
+    let versioning = {};
+    const client = {
+      async send(command) {
+        const name = command.constructor.name;
+        if (name === "GetBucketPolicyCommand") {
+          const error = new Error("none");
+          error.name = "NoSuchBucketPolicy";
+          error.$metadata = { httpStatusCode: 404 };
+          throw error;
+        }
+        if (name === "PutBucketCorsCommand") {
+          const error = new Error("unsupported");
+          error.name = "NotImplemented";
+          error.$metadata = { httpStatusCode: 501 };
+          throw error;
+        }
+        if (name === "PutBucketLifecycleConfigurationCommand") lifecycleRules = command.input.LifecycleConfiguration.Rules;
+        if (name === "PutBucketVersioningCommand") versioning = command.input.VersioningConfiguration;
+        if (name === "GetBucketLifecycleConfigurationCommand") return { Rules: lifecycleRules };
+        if (name === "GetBucketVersioningCommand") return versioning;
+        return {};
+      }
+    };
+
+    await expect(provisionWorkspaceS3Bucket({ env, client })).resolves.toMatchObject({
+      corsMode: "gateway",
+      versioning: "Enabled",
+      multipartAbortDays: 7
+    });
   });
 
   it("refuses a bucket policy with an anonymous principal", async () => {

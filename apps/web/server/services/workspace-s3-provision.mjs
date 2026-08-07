@@ -25,26 +25,37 @@ export async function provisionWorkspaceS3Bucket({ env = process.env, client } =
       secretAccessKey: config.secretKey
     }
   });
+  let stage = "head_bucket";
+  let corsMode = "bucket";
 
   try {
     await s3.send(new HeadBucketCommand({ Bucket: config.bucket }));
+    stage = "private_policy";
     await assertBucketHasNoPublicPolicy(s3, config.bucket);
+    stage = "versioning";
     await s3.send(new PutBucketVersioningCommand({
       Bucket: config.bucket,
       VersioningConfiguration: { Status: "Enabled" }
     }));
-    await s3.send(new PutBucketCorsCommand({
-      Bucket: config.bucket,
-      CORSConfiguration: {
-        CORSRules: [{
-          AllowedOrigins: [appOrigin],
-          AllowedMethods: ["GET", "HEAD"],
-          AllowedHeaders: ["*"],
-          ExposeHeaders: ["ETag", "Content-Length", "Content-Type"],
-          MaxAgeSeconds: 300
-        }]
-      }
-    }));
+    stage = "cors";
+    try {
+      await s3.send(new PutBucketCorsCommand({
+        Bucket: config.bucket,
+        CORSConfiguration: {
+          CORSRules: [{
+            AllowedOrigins: [appOrigin],
+            AllowedMethods: ["GET", "HEAD"],
+            AllowedHeaders: ["*"],
+            ExposeHeaders: ["ETag", "Content-Length", "Content-Type"],
+            MaxAgeSeconds: 300
+          }]
+        }
+      }));
+    } catch (error) {
+      if (!isNotImplementedError(error)) throw error;
+      corsMode = "gateway";
+    }
+    stage = "multipart_lifecycle";
     await s3.send(new PutBucketLifecycleConfigurationCommand({
       Bucket: config.bucket,
       LifecycleConfiguration: {
@@ -57,25 +68,35 @@ export async function provisionWorkspaceS3Bucket({ env = process.env, client } =
       }
     }));
 
-    const [versioning, cors, lifecycle] = await Promise.all([
-      s3.send(new GetBucketVersioningCommand({ Bucket: config.bucket })),
-      s3.send(new GetBucketCorsCommand({ Bucket: config.bucket })),
-      s3.send(new GetBucketLifecycleConfigurationCommand({ Bucket: config.bucket }))
-    ]);
+    stage = "verify_versioning";
+    const versioning = await s3.send(new GetBucketVersioningCommand({ Bucket: config.bucket }));
     if (versioning.Status !== "Enabled") throw new Error("Workspace S3 versioning is not enabled");
-    const corsRule = cors.CORSRules?.find((rule) => rule.AllowedOrigins?.includes(appOrigin));
-    if (!corsRule || !corsRule.AllowedMethods?.includes("GET") || !corsRule.AllowedMethods?.includes("HEAD")) {
-      throw new Error("Workspace S3 CORS verification failed");
+    if (corsMode === "bucket") {
+      stage = "verify_cors";
+      const cors = await s3.send(new GetBucketCorsCommand({ Bucket: config.bucket }));
+      const corsRule = cors.CORSRules?.find((rule) => rule.AllowedOrigins?.includes(appOrigin));
+      if (!corsRule || !corsRule.AllowedMethods?.includes("GET") || !corsRule.AllowedMethods?.includes("HEAD")) {
+        throw new Error("Workspace S3 CORS verification failed");
+      }
     }
+    stage = "verify_multipart_lifecycle";
+    const lifecycle = await s3.send(new GetBucketLifecycleConfigurationCommand({ Bucket: config.bucket }));
     const lifecycleRule = lifecycle.Rules?.find((rule) => rule.ID === "abort-incomplete-multipart-after-7-days");
     if (lifecycleRule?.AbortIncompleteMultipartUpload?.DaysAfterInitiation !== MULTIPART_ABORT_DAYS) {
       throw new Error("Workspace S3 multipart lifecycle verification failed");
     }
+    stage = "verify_private_policy";
     await assertBucketHasNoPublicPolicy(s3, config.bucket);
-    return { bucket: config.bucket, versioning: "Enabled", corsOrigin: appOrigin, multipartAbortDays: MULTIPART_ABORT_DAYS };
+    return {
+      bucket: config.bucket,
+      versioning: "Enabled",
+      corsOrigin: appOrigin,
+      corsMode,
+      multipartAbortDays: MULTIPART_ABORT_DAYS
+    };
   } catch (error) {
     if (error?.code?.startsWith?.("storage.")) throw error;
-    const wrapped = new Error(`Workspace S3 provisioning failed: ${safeProviderCode(error)}`);
+    const wrapped = new Error(`Workspace S3 provisioning failed at ${stage}: ${safeProviderCode(error)}`);
     wrapped.code = "storage.provision_failed";
     throw wrapped;
   } finally {
@@ -107,6 +128,10 @@ function isPublicPrincipal(principal) {
   if (principal === "*") return true;
   if (!principal || typeof principal !== "object") return false;
   return Object.values(principal).flat().includes("*");
+}
+
+function isNotImplementedError(error) {
+  return error?.name === "NotImplemented" || error?.$metadata?.httpStatusCode === 501;
 }
 
 function normalizeAppOrigin(value) {
