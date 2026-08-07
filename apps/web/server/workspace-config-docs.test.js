@@ -77,6 +77,45 @@ describe("workspace configuration docs", () => {
     expect(nginx).not.toContain("$http_referer");
   });
 
+  it("keeps private S3 storage, migration tooling, and public delivery documented and wired", async () => {
+    const compose = await readFile(path.join(repoRoot, "docker-compose.yml"), "utf8");
+    const envExample = await readFile(path.join(repoRoot, ".env.example"), "utf8");
+    const readme = await readFile(path.join(repoRoot, "README.md"), "utf8");
+    const caddy = await readFile(path.join(repoRoot, "deploy", "caddy", "fs.tsio.top.caddy"), "utf8");
+    const credentialsExample = await readFile(
+      path.join(repoRoot, "deploy", "minio", "workspace-s3-credentials.example.json"),
+      "utf8"
+    );
+
+    for (const source of [compose, envExample]) {
+      expect(source).toContain("WORKSPACE_STORAGE_DRIVER");
+      expect(source).toContain("WORKSPACE_S3_ENDPOINT");
+      expect(source).toContain("WORKSPACE_S3_PUBLIC_ENDPOINT");
+      expect(source).toContain("WORKSPACE_S3_BUCKET");
+      expect(source).toContain("WORKSPACE_S3_REGION");
+      expect(source).toContain("WORKSPACE_S3_CREDENTIALS_FILE");
+      expect(source).toContain("WORKSPACE_S3_SIGNED_URL_TTL_SECONDS");
+      expect(source).toContain("WORKSPACE_STORAGE_LOCAL_READ_FALLBACK");
+      expect(source).toContain("WORKSPACE_STORAGE_LOCAL_MIRROR_WRITE");
+    }
+    expect(compose).toContain('profiles: ["storage-migration"]');
+    expect(compose).toContain("WORKSPACE_S3_CREDENTIALS_FILE: /run/secrets/workspace-s3");
+    expect(compose).toContain("mode: 0600");
+    expect(compose).toContain("file: ${WORKSPACE_S3_CREDENTIALS_FILE:-./deploy/minio/workspace-s3-credentials.example.json}");
+    expect(envExample).toContain("WORKSPACE_S3_BUCKET=duallane");
+    expect(envExample).toContain("WORKSPACE_S3_PUBLIC_ENDPOINT=https://fs.tsio.top");
+    expect(credentialsExample).not.toContain("AKIA");
+    expect(readme).toContain("workspace-s3-migration-reports");
+    expect(readme).toContain("complete remote GET and SHA-256 verification");
+
+    expect(caddy).toContain("method GET HEAD");
+    expect(caddy).toContain("method OPTIONS");
+    expect(caddy).toContain("/duallane/workspace/attachments/*");
+    expect(caddy).toContain("/duallane/workspace/profile-avatars/*");
+    expect(caddy).not.toContain("migration-archive");
+    expect(caddy).toContain("output discard");
+  });
+
   it("documents private-lane relay and room lifecycle settings", async () => {
     const readme = await readFile(path.join(repoRoot, "README.md"), "utf8");
     const server = await readFile(path.join(repoRoot, "apps", "web", "server", "index.mjs"), "utf8");

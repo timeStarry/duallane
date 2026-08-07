@@ -5697,7 +5697,7 @@ export function App() {
     clearWorkspaceNotice();
     try {
       const reserve = await workspaceJson<
-        { status: "completed"; id: string } | { status: "rejected" }
+        { status: "completed"; id: string; downloadUrl?: string; expiresAt?: string } | { status: "rejected" }
       >(
         `/api/workspace/files/${encodeURIComponent(file.id)}/downloads/reserve`,
         { method: "POST", body: JSON.stringify({}) }
@@ -5709,8 +5709,9 @@ export function App() {
       }
       const params = new URLSearchParams({ downloadId: reserve.id });
       const link = document.createElement("a");
-      link.href = `/api/workspace/files/${encodeURIComponent(file.id)}/download?${params.toString()}`;
+      link.href = reserve.downloadUrl || `/api/workspace/files/${encodeURIComponent(file.id)}/download?${params.toString()}`;
       link.download = file.fileName;
+      link.rel = "noreferrer";
       document.body.appendChild(link);
       link.click();
       link.remove();

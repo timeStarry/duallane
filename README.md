@@ -113,9 +113,45 @@ headers.
 Compose starts PostgreSQL, waits for its health check, runs the one-shot
 `migrate` service, and only then starts the API. Set a strong
 `POSTGRES_PASSWORD` before deployment. Back up both the `duallane-postgres`
-database volume and the `duallane-data` file volume; Workspace attachment bytes
-remain on the local file volume. `POSTGRES_IMAGE` defaults to the DaoCloud
-mirror and can be changed to another trusted PostgreSQL 17 image registry.
+database volume and the `duallane-data` file volume. The local storage driver
+keeps Workspace attachment and avatar bytes in `duallane-data`; the production
+S3 driver uses a private S3-compatible bucket while the local volume remains
+available for staged migration and rollback. `POSTGRES_IMAGE` defaults to the
+DaoCloud mirror and can be changed to another trusted PostgreSQL 17 image
+registry.
+
+For S3-compatible storage, keep the bucket private and mount a JSON credential
+file containing only `accessKey` and `secretKey`. Set its host path through
+`WORKSPACE_S3_CREDENTIALS_FILE`; Compose exposes it to the API as a `0600`
+secret. The API uploads bytes only after Workspace quota and permission checks,
+and authenticated download or preview requests receive a short-lived signed
+URL. Internal object keys never use the original file name.
+
+Provision bucket versioning, restricted CORS, and seven-day incomplete
+multipart cleanup before the first backfill:
+
+```bash
+docker compose --profile storage-migration run --rm storage-provision
+```
+
+For an existing local volume, choose a stable run ID and preserve it when
+resuming. The backfill uploads active attachments and current avatars to their
+feature prefixes, archives other existing Workspace bytes, then performs a
+complete remote GET and SHA-256 verification for every object. A private report
+is written under `/app/data/workspace-s3-migration-reports`:
+
+```bash
+WORKSPACE_STORAGE_MIGRATION_RUN_ID=production-YYYYMMDD \
+  docker compose --profile storage-migration run --rm storage-migrate
+```
+
+Only after that report completes should `WORKSPACE_STORAGE_DRIVER=s3` be
+enabled. Keep `WORKSPACE_STORAGE_LOCAL_READ_FALLBACK=true` and
+`WORKSPACE_STORAGE_LOCAL_MIRROR_WRITE=true` for the migration window. Disable
+read fallback after the verified cutover, retain mirror writes for seven days,
+and keep the source volume and backup for at least thirty days. Switching the
+driver back to `local` is the rollback path; the database storage keys do not
+change.
 
 `SERVE_STATIC=false` is set for the API container in compose so static assets are
 served only by the web gateway. Running `pnpm start` directly still supports the

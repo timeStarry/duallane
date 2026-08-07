@@ -1,0 +1,250 @@
+import { Readable } from "node:stream";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  createWorkspaceObjectStore,
+  loadWorkspaceS3Config,
+  workspaceArchiveObjectKey,
+  workspaceAttachmentObjectKey,
+  workspaceAvatarObjectKey
+} from "./workspace-object-store.mjs";
+import { resolveWorkspaceStoragePath } from "./workspace-storage.mjs";
+
+describe("workspace object store", () => {
+  const directories = [];
+
+  afterEach(async () => {
+    await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  });
+
+  it("uses opaque, feature-scoped object keys", () => {
+    expect(workspaceAttachmentObjectKey({ spaceId: "spc_default", id: "att-1" }))
+      .toBe("workspace/attachments/spc_default/att-1/content");
+    expect(workspaceAvatarObjectKey({ userId: "usr_1", version: "version-1" }))
+      .toBe("workspace/profile-avatars/usr_1/version-1.webp");
+    expect(workspaceArchiveObjectKey({ runId: "run-1", sha256: "a".repeat(64) }))
+      .toBe(`workspace/migration-archive/run-1/${"a".repeat(64)}`);
+    expect(() => workspaceAttachmentObjectKey({ spaceId: "../escape", id: "att-1" })).toThrow("invalid");
+  });
+
+  it("loads MinIO credentials from a private file without echoing their values in failures", async () => {
+    const directory = await makeDirectory();
+    const credentialsPath = path.join(directory, "credentials.json");
+    await writeFile(credentialsPath, JSON.stringify({ accessKey: "access-secret", secretKey: "secret-secret" }));
+    const config = await loadWorkspaceS3Config(s3Env(credentialsPath));
+    expect(config).toMatchObject({
+      endpoint: "http://100.99.0.4:9000",
+      publicEndpoint: "https://fs.tsio.top",
+      bucket: "duallane",
+      ttlSeconds: 300
+    });
+
+    await writeFile(credentialsPath, "not-json");
+    await expect(loadWorkspaceS3Config(s3Env(credentialsPath))).rejects.toThrow("WORKSPACE_S3_CREDENTIALS_FILE cannot be read");
+  });
+
+  it("uploads verified attachments to S3 and returns a short public signed URL", async () => {
+    const directory = await makeDirectory();
+    const credentialsPath = path.join(directory, "credentials.json");
+    await writeFile(credentialsPath, JSON.stringify({ accessKey: "test-access", secretKey: "test-secret" }));
+    const observed = { uploads: [], commands: [] };
+    const client = {
+      async send(command) {
+        observed.commands.push(command.constructor.name);
+        if (command.constructor.name === "HeadObjectCommand") {
+          const upload = observed.uploads.at(-1);
+          return {
+            ContentLength: upload.byteSize,
+            Metadata: { "duallane-sha256": upload.metadata["duallane-sha256"] }
+          };
+        }
+        return {};
+      },
+      destroy() {}
+    };
+    const store = await createWorkspaceObjectStore({
+      dataDir: directory,
+      env: s3Env(credentialsPath),
+      s3Client: client,
+      publicS3Client: client,
+      presign: async (_client, command, options) => {
+        expect(command.input.Key).toBe("workspace/attachments/spc_default/att-1/content");
+        expect(options.expiresIn).toBe(300);
+        return "https://fs.tsio.top/duallane/workspace/attachments/spc_default/att-1/content?signed=redacted";
+      },
+      uploadFactory: ({ params }) => ({
+        async done() {
+          const chunks = [];
+          for await (const chunk of params.Body) chunks.push(Buffer.from(chunk));
+          observed.uploads.push({
+            key: params.Key,
+            byteSize: Buffer.concat(chunks).byteLength,
+            metadata: params.Metadata
+          });
+        }
+      })
+    });
+    const content = Buffer.from("stored in minio");
+    const attachment = {
+      id: "att-1",
+      spaceId: "spc_default",
+      storageKey: "workspace/spc_default/att-1/private-name.txt",
+      mimeType: "text/plain",
+      byteSize: content.byteLength
+    };
+
+    await store.assertReady();
+    await store.saveAttachment({ attachment, stream: Readable.from(content) });
+    expect(observed.uploads[0].key).toBe("workspace/attachments/spc_default/att-1/content");
+    expect(observed.uploads[0].metadata["duallane-size"]).toBe(String(content.byteLength));
+    expect(JSON.stringify(observed.uploads[0])).not.toContain("private-name.txt");
+    await expect(stat(resolveWorkspaceStoragePath(directory, attachment.storageKey))).rejects.toMatchObject({ code: "ENOENT" });
+
+    const delivery = await store.getAttachmentDelivery(attachment, {
+      contentType: "text/plain",
+      contentDisposition: "attachment; filename=private-name.txt"
+    });
+    expect(delivery).toMatchObject({ kind: "redirect", expiresAt: expect.any(String) });
+    expect(delivery.url).toMatch(/^https:\/\/fs\.tsio\.top\//);
+  });
+
+  it("falls back to local bytes only when S3 reports a missing object", async () => {
+    const directory = await makeDirectory();
+    const credentialsPath = path.join(directory, "credentials.json");
+    await writeFile(credentialsPath, JSON.stringify({ accessKey: "test-access", secretKey: "test-secret" }));
+    const attachment = {
+      id: "att-2",
+      spaceId: "spc_default",
+      storageKey: "workspace/spc_default/att-2/file.txt",
+      mimeType: "text/plain",
+      byteSize: 5
+    };
+    const localPath = resolveWorkspaceStoragePath(directory, attachment.storageKey);
+    await mkdir(path.dirname(localPath), { recursive: true });
+    await writeFile(localPath, "local");
+    const missingClient = {
+      async send(command) {
+        if (command.constructor.name === "HeadObjectCommand") {
+          const error = new Error("missing");
+          error.name = "NoSuchKey";
+          error.$metadata = { httpStatusCode: 404 };
+          throw error;
+        }
+        return {};
+      },
+      destroy() {}
+    };
+    const store = await createWorkspaceObjectStore({
+      dataDir: directory,
+      env: { ...s3Env(credentialsPath), WORKSPACE_STORAGE_LOCAL_READ_FALLBACK: "true" },
+      s3Client: missingClient,
+      publicS3Client: missingClient
+    });
+    await expect(store.getAttachmentDelivery(attachment)).resolves.toMatchObject({
+      kind: "stream",
+      path: localPath,
+      byteSize: 5
+    });
+
+    const unavailableClient = {
+      async send() {
+        throw new Error("socket failed with secret-secret");
+      },
+      destroy() {}
+    };
+    const unavailableStore = await createWorkspaceObjectStore({
+      dataDir: directory,
+      env: { ...s3Env(credentialsPath), WORKSPACE_STORAGE_LOCAL_READ_FALLBACK: "true" },
+      s3Client: unavailableClient,
+      publicS3Client: unavailableClient
+    });
+    await expect(unavailableStore.getAttachmentDelivery(attachment)).rejects.toMatchObject({
+      code: "file.storage_unavailable",
+      statusCode: 503
+    });
+    await expect(unavailableStore.getAttachmentDelivery(attachment)).rejects.not.toThrow("secret-secret");
+    expect(unavailableStore.config).toBeUndefined();
+  });
+
+  it("retains a verified local mirror when migration mirror writes are enabled", async () => {
+    const directory = await makeDirectory();
+    const credentialsPath = path.join(directory, "credentials.json");
+    await writeFile(credentialsPath, JSON.stringify({ accessKey: "test-access", secretKey: "test-secret" }));
+    let uploaded;
+    const client = {
+      async send(command) {
+        if (command.constructor.name === "HeadObjectCommand") {
+          return {
+            ContentLength: uploaded.byteSize,
+            Metadata: uploaded.metadata
+          };
+        }
+        return {};
+      },
+      destroy() {}
+    };
+    const store = await createWorkspaceObjectStore({
+      dataDir: directory,
+      env: { ...s3Env(credentialsPath), WORKSPACE_STORAGE_LOCAL_MIRROR_WRITE: "true" },
+      s3Client: client,
+      publicS3Client: client,
+      uploadFactory: ({ params }) => ({
+        async done() {
+          const chunks = [];
+          for await (const chunk of params.Body) chunks.push(Buffer.from(chunk));
+          uploaded = { byteSize: Buffer.concat(chunks).byteLength, metadata: params.Metadata };
+        }
+      })
+    });
+    const content = Buffer.from("mirrored");
+    const attachment = {
+      id: "att-mirror",
+      spaceId: "spc_default",
+      storageKey: "workspace/spc_default/att-mirror/file.bin",
+      mimeType: "application/octet-stream",
+      byteSize: content.byteLength
+    };
+    await store.saveAttachment({ attachment, stream: Readable.from(content) });
+    await expect(readFile(resolveWorkspaceStoragePath(directory, attachment.storageKey))).resolves.toEqual(content);
+  });
+
+  it("maps missing local avatars to a stable not-found response", async () => {
+    const directory = await makeDirectory();
+    const store = await createWorkspaceObjectStore({ dataDir: directory, env: { WORKSPACE_STORAGE_DRIVER: "local" } });
+    await expect(store.getProfileAvatarDelivery({
+      storageKey: "profile-avatars/usr_1/missing.webp"
+    })).rejects.toMatchObject({ code: "avatar.not_found", statusCode: 404 });
+  });
+
+  it("rejects endpoint path prefixes so signed object paths remain unambiguous", async () => {
+    const directory = await makeDirectory();
+    const credentialsPath = path.join(directory, "credentials.json");
+    await writeFile(credentialsPath, JSON.stringify({ accessKey: "test-access", secretKey: "test-secret" }));
+    await expect(loadWorkspaceS3Config({
+      ...s3Env(credentialsPath),
+      WORKSPACE_S3_PUBLIC_ENDPOINT: "https://fs.tsio.top/minio"
+    })).rejects.toThrow("WORKSPACE_S3_PUBLIC_ENDPOINT is invalid");
+  });
+
+  async function makeDirectory() {
+    const directory = await mkdtemp(path.join(tmpdir(), "duallane-object-store-"));
+    directories.push(directory);
+    return directory;
+  }
+});
+
+function s3Env(credentialsPath) {
+  return {
+    WORKSPACE_STORAGE_DRIVER: "s3",
+    WORKSPACE_S3_ENDPOINT: "http://100.99.0.4:9000",
+    WORKSPACE_S3_PUBLIC_ENDPOINT: "https://fs.tsio.top",
+    WORKSPACE_S3_BUCKET: "duallane",
+    WORKSPACE_S3_REGION: "us-east-1",
+    WORKSPACE_S3_CREDENTIALS_FILE: credentialsPath,
+    WORKSPACE_S3_SIGNED_URL_TTL_SECONDS: "300",
+    WORKSPACE_STORAGE_LOCAL_READ_FALLBACK: "false",
+    WORKSPACE_STORAGE_LOCAL_MIRROR_WRITE: "false"
+  };
+}

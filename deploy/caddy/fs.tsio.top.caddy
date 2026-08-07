@@ -1,0 +1,31 @@
+fs.tsio.top {
+  log {
+    output discard
+  }
+
+  @preflight {
+    method OPTIONS
+    path /duallane/workspace/attachments/* /duallane/workspace/profile-avatars/*
+  }
+  handle @preflight {
+    header Access-Control-Allow-Origin "https://duallane.tsio.top"
+    header Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
+    header Access-Control-Allow-Headers "*"
+    header Access-Control-Max-Age "300"
+    respond "" 204
+  }
+
+  @workspaceObjects {
+    method GET HEAD
+    path /duallane/workspace/attachments/* /duallane/workspace/profile-avatars/*
+  }
+  handle @workspaceObjects {
+    reverse_proxy 100.99.0.4:9000 {
+      header_down -Server
+    }
+  }
+
+  handle {
+    respond "Not found" 404
+  }
+}

@@ -35,6 +35,15 @@ services:
       WORKSPACE_ENABLED: ${WORKSPACE_ENABLED:-false}
       WORKSPACE_SMTP_ENCRYPTION_KEY: ${WORKSPACE_SMTP_ENCRYPTION_KEY:-}
       WORKSPACE_EMAIL_WORKER_ENABLED: ${WORKSPACE_EMAIL_WORKER_ENABLED:-true}
+      WORKSPACE_STORAGE_DRIVER: ${WORKSPACE_STORAGE_DRIVER:-local}
+      WORKSPACE_S3_ENDPOINT: ${WORKSPACE_S3_ENDPOINT:-http://100.99.0.4:9000}
+      WORKSPACE_S3_PUBLIC_ENDPOINT: ${WORKSPACE_S3_PUBLIC_ENDPOINT:-https://fs.tsio.top}
+      WORKSPACE_S3_BUCKET: ${WORKSPACE_S3_BUCKET:-duallane}
+      WORKSPACE_S3_REGION: ${WORKSPACE_S3_REGION:-us-east-1}
+      WORKSPACE_S3_CREDENTIALS_FILE: /run/secrets/workspace-s3
+      WORKSPACE_S3_SIGNED_URL_TTL_SECONDS: ${WORKSPACE_S3_SIGNED_URL_TTL_SECONDS:-300}
+      WORKSPACE_STORAGE_LOCAL_READ_FALLBACK: ${WORKSPACE_STORAGE_LOCAL_READ_FALLBACK:-true}
+      WORKSPACE_STORAGE_LOCAL_MIRROR_WRITE: ${WORKSPACE_STORAGE_LOCAL_MIRROR_WRITE:-true}
       WORKSPACE_FRONTEND_URL: ${WORKSPACE_FRONTEND_URL:-}
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
@@ -51,7 +60,65 @@ services:
       DUALLANE_EMPTY_ROOM_GRACE_MS: ${DUALLANE_EMPTY_ROOM_GRACE_MS:-10000}
     volumes:
       - duallane-data:/app/data
+    secrets:
+      - source: workspace-s3
+        target: workspace-s3
+        mode: 0600
     restart: unless-stopped
+
+  storage-provision:
+    profiles: ["storage-migration"]
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: ["pnpm", "--filter", "@duallane/web", "storage:provision"]
+    environment:
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8787}
+      WORKSPACE_S3_ENDPOINT: ${WORKSPACE_S3_ENDPOINT:-http://100.99.0.4:9000}
+      WORKSPACE_S3_PUBLIC_ENDPOINT: ${WORKSPACE_S3_PUBLIC_ENDPOINT:-https://fs.tsio.top}
+      WORKSPACE_S3_BUCKET: ${WORKSPACE_S3_BUCKET:-duallane}
+      WORKSPACE_S3_REGION: ${WORKSPACE_S3_REGION:-us-east-1}
+      WORKSPACE_S3_CREDENTIALS_FILE: /run/secrets/workspace-s3
+      WORKSPACE_S3_SIGNED_URL_TTL_SECONDS: ${WORKSPACE_S3_SIGNED_URL_TTL_SECONDS:-300}
+    secrets:
+      - source: workspace-s3
+        target: workspace-s3
+        mode: 0600
+    restart: "no"
+
+  storage-migrate:
+    profiles: ["storage-migration"]
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: ["pnpm", "--filter", "@duallane/web", "storage:migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DUALLANE_DATA_DIR: /app/data
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB:-duallane}
+      PGUSER: ${POSTGRES_USER:-duallane}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-replace-this-before-production}
+      DATABASE_POOL_MAX: "2"
+      DATABASE_SSL: "false"
+      WORKSPACE_S3_ENDPOINT: ${WORKSPACE_S3_ENDPOINT:-http://100.99.0.4:9000}
+      WORKSPACE_S3_PUBLIC_ENDPOINT: ${WORKSPACE_S3_PUBLIC_ENDPOINT:-https://fs.tsio.top}
+      WORKSPACE_S3_BUCKET: ${WORKSPACE_S3_BUCKET:-duallane}
+      WORKSPACE_S3_REGION: ${WORKSPACE_S3_REGION:-us-east-1}
+      WORKSPACE_S3_CREDENTIALS_FILE: /run/secrets/workspace-s3
+      WORKSPACE_S3_SIGNED_URL_TTL_SECONDS: ${WORKSPACE_S3_SIGNED_URL_TTL_SECONDS:-300}
+      WORKSPACE_STORAGE_MIGRATION_RUN_ID: ${WORKSPACE_STORAGE_MIGRATION_RUN_ID:-}
+      WORKSPACE_STORAGE_MIGRATION_MODE: ${WORKSPACE_STORAGE_MIGRATION_MODE:-backfill}
+    volumes:
+      - duallane-data:/app/data
+    secrets:
+      - source: workspace-s3
+        target: workspace-s3
+        mode: 0600
+    restart: "no"
 
   v2ray-config:
     profiles: ["github-proxy"]
@@ -118,5 +185,7 @@ volumes:
   duallane-v2ray-config:
 
 secrets:
+  workspace-s3:
+    file: ${WORKSPACE_S3_CREDENTIALS_FILE:-./deploy/minio/workspace-s3-credentials.example.json}
   v2ray-subscription:
     file: ${V2RAY_SUBSCRIPTION_FILE:-./deploy/v2ray/subscription-url.example}

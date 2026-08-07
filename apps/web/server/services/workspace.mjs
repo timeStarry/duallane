@@ -2699,6 +2699,34 @@ export async function reserveDownload(db, request, input) {
   });
 }
 
+export async function releaseDownloadReservation(db, request, input) {
+  const actor = await requireActor(db, input.actorId);
+  const transferId = normalizeString(input.transferId);
+  const now = new Date().toISOString();
+  return await runWorkspaceTransaction(db, async () => {
+    const result = await db.prepare(`
+      UPDATE transfer_ledger
+      SET status = 'failed', completed_at = NULL, released_at = ?
+      WHERE id = ?
+        AND user_id = ?
+        AND direction = 'download'
+        AND status = 'completed'
+    `).run(now, transferId, actor.id);
+    if (result.changes > 0) {
+      await writeWorkspaceAudit(db, request, {
+        actorUserId: actor.id,
+        actorGithubLogin: actor.githubLogin,
+        action: "file.download.release",
+        targetType: "transfer",
+        targetId: transferId,
+        result: "failure",
+        reason: "delivery unavailable"
+      });
+    }
+    return { released: result.changes > 0 };
+  });
+}
+
 export async function removeAttachment(db, request, input) {
   const actor = await requireActor(db, input.actorId);
   const attachmentId = normalizeString(input.attachmentId);
@@ -2759,7 +2787,7 @@ export async function getCompletedDownload(db, actorId, attachmentId, transferId
   const attachment = await getDownloadableAttachmentForActor(db, null, actor, attachmentId);
 
   const transfer = await db.prepare(`
-    SELECT id, byte_size AS byteSize, status, attachment_id AS attachmentId
+    SELECT id, byte_size AS byteSize, status, attachment_id AS attachmentId, created_at AS createdAt
     FROM transfer_ledger
     WHERE id = ?
       AND user_id = ?

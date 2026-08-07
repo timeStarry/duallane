@@ -3,7 +3,7 @@ import fastifyCookie from "@fastify/cookie";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import { createReadStream } from "node:fs";
-import { mkdir, stat } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_SPACE_ID, openDatabase } from "./services/db.mjs";
@@ -47,6 +47,7 @@ import {
   recordInviteAcceptRejection,
   removeConversationMember,
   removeAttachment,
+  releaseDownloadReservation,
   removeMessageReaction,
   removeMemberRemark,
   removeOwnAvatar,
@@ -72,16 +73,10 @@ import {
 import {
   AVATAR_MAX_INPUT_BYTES,
   ProfileAvatarError,
-  removeProfileAvatar,
-  resolveProfileAvatar,
   saveProfileAvatar
 } from "./services/profile-avatar.mjs";
 import { blockWorkspace, isWorkspaceEnabled } from "./services/workspace-gate.mjs";
-import {
-  removeStoredAttachment,
-  saveUploadStream,
-  statStoredAttachment
-} from "./services/workspace-storage.mjs";
+import { createWorkspaceObjectStore } from "./services/workspace-object-store.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
@@ -121,6 +116,10 @@ export async function createApp(options = {}) {
         : undefined
     })
     : null);
+  const workspaceObjectStore = workspaceEnabled
+    ? options.workspaceObjectStore ?? await createWorkspaceObjectStore({ env, dataDir })
+    : null;
+  await workspaceObjectStore?.assertReady();
   const workspacePresence = createWorkspacePresence();
   const workspaceEmail = db ? createWorkspaceEmailService({
     db,
@@ -162,6 +161,10 @@ export async function createApp(options = {}) {
     await githubClient.close();
   });
 
+  app.addHook("onClose", async () => {
+    await workspaceObjectStore?.close();
+  });
+
   if (db && !options.db) {
     app.addHook("onClose", async () => {
       await db.close();
@@ -184,7 +187,7 @@ app.addHook("onRequest", async (_request, reply) => {
   reply.header("X-Content-Type-Options", "nosniff");
   reply.header(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: https://avatars.githubusercontent.com; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: https://avatars.githubusercontent.com https://fs.tsio.top; connect-src 'self' ws: wss: https://fs.tsio.top; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
   );
 });
 
@@ -576,18 +579,20 @@ app.put("/api/workspace/me/avatar", { bodyLimit: AVATAR_MAX_INPUT_BYTES }, async
         : Number(request.headers["content-length"]),
       userId: actorId
     });
+    stored = { ...stored, userId: actorId };
+    await workspaceObjectStore.persistProfileAvatar(stored);
     const result = await setOwnAvatar(db, request, {
       actorId,
       storageKey: stored.storageKey,
       version: stored.version
     });
     if (result.previousStorageKey && result.previousStorageKey !== stored.storageKey) {
-      await removeProfileAvatar(dataDir, result.previousStorageKey).catch(() => {});
+      await workspaceObjectStore.removeProfileAvatar({ storageKey: result.previousStorageKey }).catch(() => {});
     }
     return { user: result.user };
   } catch (error) {
     if (stored?.storageKey) {
-      await removeProfileAvatar(dataDir, stored.storageKey).catch(() => {});
+      await workspaceObjectStore.removeProfileAvatar(stored).catch(() => {});
     }
     return sendWorkspaceError(reply, request, error);
   }
@@ -600,7 +605,7 @@ app.delete("/api/workspace/me/avatar", async (request, reply) => {
   try {
     const result = await removeOwnAvatar(db, request, { actorId: await getWorkspaceUserId(request) });
     if (result.previousStorageKey) {
-      await removeProfileAvatar(dataDir, result.previousStorageKey).catch(() => {});
+      await workspaceObjectStore.removeProfileAvatar({ storageKey: result.previousStorageKey }).catch(() => {});
     }
     return { user: result.user };
   } catch (error) {
@@ -619,20 +624,15 @@ app.get("/api/workspace/avatars/:userId/:version", async (request, reply) => {
       request.params.userId,
       request.params.version
     );
-    const avatarPath = resolveProfileAvatar(dataDir, avatar.storageKey);
-    let avatarStat;
-    try {
-      avatarStat = await stat(avatarPath);
-    } catch (error) {
-      if (error?.code === "ENOENT") {
-        throw new WorkspaceError("avatar.not_found", "头像不存在", 404);
-      }
-      throw error;
-    }
-    reply.header("Content-Type", "image/webp");
-    reply.header("Content-Length", String(avatarStat.size));
-    reply.header("Cache-Control", "private, max-age=31536000, immutable");
-    return reply.send(createReadStream(avatarPath));
+    const delivery = await workspaceObjectStore.getProfileAvatarDelivery({
+      ...avatar,
+      userId: request.params.userId,
+      version: request.params.version
+    });
+    return sendWorkspaceObjectDelivery(reply, delivery, {
+      contentType: "image/webp",
+      cacheControl: delivery.kind === "redirect" ? "private, no-store" : "private, max-age=31536000, immutable"
+    });
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }
@@ -978,7 +978,7 @@ app.post("/api/workspace/files/uploads/:uploadId/complete", async (request, repl
   let upload;
   try {
     upload = await getReservedUpload(db, actorId, request.params.uploadId);
-    const stored = await statStoredAttachment(dataDir, upload.attachment.storageKey, upload.attachment.byteSize);
+    const stored = await workspaceObjectStore.statAttachment(upload.attachment);
     return await completeUpload(db, request, {
       ...(request.body ?? {}),
       actorId,
@@ -987,7 +987,7 @@ app.post("/api/workspace/files/uploads/:uploadId/complete", async (request, repl
     });
   } catch (error) {
     if (upload) {
-      await removeStoredAttachment(dataDir, upload.attachment.storageKey);
+      await workspaceObjectStore.removeAttachment(upload.attachment).catch(() => {});
       try {
         await failUpload(db, request, {
           actorId,
@@ -1010,7 +1010,7 @@ app.put("/api/workspace/files/uploads/:uploadId/content", async (request, reply)
   let upload;
   try {
     upload = await getReservedUpload(db, actorId, request.params.uploadId);
-    const stored = await saveUploadStream(dataDir, upload.attachment.storageKey, request.body, upload.attachment.byteSize);
+    const stored = await workspaceObjectStore.saveAttachment({ attachment: upload.attachment, stream: request.body });
     return await completeUpload(db, request, {
       actorId,
       uploadId: request.params.uploadId,
@@ -1018,7 +1018,7 @@ app.put("/api/workspace/files/uploads/:uploadId/content", async (request, reply)
     });
   } catch (error) {
     if (upload) {
-      await removeStoredAttachment(dataDir, upload.attachment.storageKey);
+      await workspaceObjectStore.removeAttachment(upload.attachment).catch(() => {});
       try {
         await failUpload(db, request, {
           actorId,
@@ -1084,10 +1084,21 @@ app.post("/api/workspace/files/:attachmentId/downloads/reserve", async (request,
   try {
     const actorId = await getWorkspaceUserId(request);
     const candidate = await getDownloadableAttachment(db, request, actorId, request.params.attachmentId);
-    await statStoredAttachment(dataDir, candidate.storageKey, candidate.byteSize);
     const reservation = await reserveDownload(db, request, { ...(request.body ?? {}), actorId, attachmentId: request.params.attachmentId });
     const statusCode = reservation.status === "rejected" ? 409 : 201;
-    return reply.code(statusCode).send(reservation);
+    if (reservation.status === "rejected") {
+      return reply.code(statusCode).send(publicDownloadReservation(reservation));
+    }
+    try {
+      const delivery = await workspaceObjectStore.getAttachmentDelivery(candidate, {
+        contentType: candidate.mimeType || "application/octet-stream",
+        contentDisposition: createContentDisposition("attachment", candidate.fileName)
+      });
+      return reply.code(statusCode).send(publicDownloadReservation(reservation, delivery));
+    } catch (error) {
+      await releaseDownloadReservation(db, request, { actorId, transferId: reservation.id }).catch(() => {});
+      throw error;
+    }
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }
@@ -1103,12 +1114,15 @@ app.get("/api/workspace/files/:attachmentId/preview", async (request, reply) => 
     if (!isPreviewableImageMimeType(attachment.mimeType)) {
       throw new WorkspaceValidationError("file.preview_unsupported", "该文件不支持图片预览");
     }
-    const stored = await statStoredAttachment(dataDir, attachment.storageKey, attachment.byteSize);
-    reply.header("Content-Type", attachment.mimeType);
-    reply.header("Content-Length", String(attachment.byteSize));
-    reply.header("Content-Disposition", createContentDisposition("inline", attachment.fileName));
-    reply.header("Cache-Control", "private, no-store");
-    return reply.send(createReadStream(stored.path));
+    const delivery = await workspaceObjectStore.getAttachmentDelivery(attachment, {
+      contentType: attachment.mimeType,
+      contentDisposition: createContentDisposition("inline", attachment.fileName)
+    });
+    return sendWorkspaceObjectDelivery(reply, delivery, {
+      contentType: attachment.mimeType,
+      contentDisposition: createContentDisposition("inline", attachment.fileName),
+      cacheControl: "private, no-store"
+    });
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }
@@ -1121,23 +1135,24 @@ app.get("/api/workspace/files/:attachmentId/download", async (request, reply) =>
   try {
     const actorId = await getWorkspaceUserId(request);
     const candidate = await getDownloadableAttachment(db, request, actorId, request.params.attachmentId);
-    await statStoredAttachment(dataDir, candidate.storageKey, candidate.byteSize);
     const downloadId = normalizeQueryString(request.query?.downloadId);
     let attachment;
     if (downloadId) {
-      ({ attachment } = await getCompletedDownload(db, actorId, request.params.attachmentId, downloadId));
+      const completed = await getCompletedDownload(db, actorId, request.params.attachmentId, downloadId);
+      assertDownloadGrantFresh(completed.transfer, workspaceObjectStore.signedUrlTtlSeconds);
+      ({ attachment } = completed);
     } else {
+      await workspaceObjectStore.statAttachment(candidate);
       const reservation = await reserveDownload(db, request, { actorId, attachmentId: request.params.attachmentId });
       if (reservation.status === "rejected") {
-        return reply.code(409).send(reservation);
+        return reply.code(409).send(publicDownloadReservation(reservation));
       }
       ({ attachment } = await getCompletedDownload(db, actorId, request.params.attachmentId, reservation.id));
     }
-    const stored = await statStoredAttachment(dataDir, attachment.storageKey, attachment.byteSize);
-    reply.header("Content-Type", attachment.mimeType || "application/octet-stream");
-    reply.header("Content-Length", String(attachment.byteSize));
-    reply.header("Content-Disposition", createContentDisposition("attachment", attachment.fileName));
-    return reply.send(createReadStream(stored.path));
+    const contentType = attachment.mimeType || "application/octet-stream";
+    const contentDisposition = createContentDisposition("attachment", attachment.fileName);
+    const delivery = await workspaceObjectStore.getAttachmentDelivery(attachment, { contentType, contentDisposition });
+    return sendWorkspaceObjectDelivery(reply, delivery, { contentType, contentDisposition });
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }
@@ -1511,6 +1526,38 @@ function normalizeQueryString(value) {
 function normalizePositiveInteger(value) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function sendWorkspaceObjectDelivery(reply, delivery, headers = {}) {
+  if (delivery.kind === "redirect") {
+    reply.header("Cache-Control", headers.cacheControl || "private, no-store");
+    return reply.redirect(delivery.url);
+  }
+  if (headers.contentType) reply.header("Content-Type", headers.contentType);
+  if (headers.contentDisposition) reply.header("Content-Disposition", headers.contentDisposition);
+  if (headers.cacheControl) reply.header("Cache-Control", headers.cacheControl);
+  if (Number.isSafeInteger(delivery.byteSize)) reply.header("Content-Length", String(delivery.byteSize));
+  return reply.send(createReadStream(delivery.path));
+}
+
+function publicDownloadReservation(reservation, delivery) {
+  const { attachment: _attachment, ...safeReservation } = reservation;
+  if (reservation.status !== "completed" || delivery?.kind !== "redirect") {
+    return safeReservation;
+  }
+  return {
+    ...safeReservation,
+    downloadUrl: delivery.url,
+    expiresAt: delivery.expiresAt
+  };
+}
+
+function assertDownloadGrantFresh(transfer, ttlSeconds) {
+  const createdAt = Date.parse(transfer?.createdAt);
+  const maxAgeMs = Math.max(1, Number(ttlSeconds) || 300) * 1000;
+  if (!Number.isFinite(createdAt) || Date.now() - createdAt > maxAgeMs) {
+    throw new WorkspaceValidationError("download.expired", "下载链接已失效，请重新下载");
+  }
 }
 
 function workspaceFrontendUrl(env, pathnameAndQuery) {

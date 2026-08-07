@@ -859,7 +859,7 @@ describe("workspace UI permission boundaries", () => {
 
     expect(downloadSource).toContain("const params = new URLSearchParams({ downloadId: reserve.id })");
     expect(downloadSource).toContain('const link = document.createElement("a")');
-    expect(downloadSource).toContain("link.href = `/api/workspace/files/");
+    expect(downloadSource).toContain("link.href = reserve.downloadUrl || `/api/workspace/files/");
     expect(downloadSource).toContain("link.download = file.fileName");
     expect(downloadSource).not.toContain("response.blob()");
     expect(downloadSource).not.toContain("URL.createObjectURL");

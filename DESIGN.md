@@ -343,7 +343,7 @@ Recommended MVP stack:
 - Realtime: WebSocket.
 - Private direct: WebRTC DataChannel plus WebSocket signaling.
 - Database: PostgreSQL with versioned migrations.
-- File storage: local filesystem volume.
+- File storage: private S3-compatible object storage, with a local adapter for development and rollback.
 - Deployment: Docker Compose.
 
 Suggested services:
@@ -352,7 +352,7 @@ Suggested services:
 - `api`: private Node/Fastify service.
 - `postgres`: persistent Workspace metadata, messages, quotas, events, and audits.
 - `migrate`: one-shot schema migration and seed service.
-- `storage`: local mounted upload directory.
+- `storage`: private S3-compatible bucket for Workspace attachments and profile avatars; the API remains the authenticated upload boundary.
 - Optional future `turn`: coturn for improved private-direct connection success.
 
 MVP deployment assumption:
@@ -526,7 +526,7 @@ Recommended defaults are included where possible.
 | Question | Recommended default |
 | --- | --- |
 | Database | PostgreSQL with versioned migrations. |
-| File storage | Local mounted volume. |
+| File storage | Private S3-compatible bucket; local volume is the development and rollback adapter. |
 | Private direct persistence | Ask at session end; default to not saving. |
 | Shared-space message retention | Recent `10000` messages per conversation. |
 | Shared-space file quota | Upload and download combined, `2 GiB / user / day`. |

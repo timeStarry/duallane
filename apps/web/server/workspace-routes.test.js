@@ -1,9 +1,12 @@
 import { readFile, rm, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "./index.mjs";
 import { openTestDatabase } from "./services/test-database.mjs";
+import { createWorkspaceObjectStore } from "./services/workspace-object-store.mjs";
+import { WorkspaceError } from "./services/workspace.mjs";
 
 describe("workspace routes", () => {
   let dataDir;
@@ -33,6 +36,7 @@ describe("workspace routes", () => {
       },
       fetchImpl: options.fetchImpl,
       githubOAuthTimeoutMs: options.githubOAuthTimeoutMs,
+      workspaceObjectStore: options.workspaceObjectStore,
       loggerStream: options.loggerStream,
       ...(options.useDefaultLogger ? {} : { logger: options.logger ?? false })
     });
@@ -96,6 +100,66 @@ describe("workspace routes", () => {
     } finally {
       db.close();
     }
+  }
+
+  function getLatestDownloadTransfer() {
+    const db = openTestDatabase(dataDir);
+    try {
+      return db.prepare(`
+        SELECT id, status, completed_at AS completedAt, released_at AS releasedAt
+        FROM transfer_ledger
+        WHERE direction = 'download'
+        ORDER BY rowid DESC
+        LIMIT 1
+      `).get();
+    } finally {
+      db.close();
+    }
+  }
+
+  function getOwnerAvatarPath() {
+    const db = openTestDatabase(dataDir);
+    try {
+      const row = db.prepare("SELECT avatar_version AS version FROM users WHERE id = 'usr_owner'").get();
+      return `/api/workspace/avatars/usr_owner/${row?.version}`;
+    } finally {
+      db.close();
+    }
+  }
+
+  function expireDownloadTransfer(transferId) {
+    const db = openTestDatabase(dataDir);
+    try {
+      db.prepare("UPDATE transfer_ledger SET created_at = ? WHERE id = ?")
+        .run(new Date(Date.now() - 301_000).toISOString(), transferId);
+    } finally {
+      db.close();
+    }
+  }
+
+  async function makeSignedObjectStore({ failDelivery = false } = {}) {
+    const local = await createWorkspaceObjectStore({
+      dataDir,
+      env: { WORKSPACE_STORAGE_DRIVER: "local" }
+    });
+    const delivery = async (loader) => {
+      await loader();
+      if (failDelivery) {
+        throw new WorkspaceError("file.storage_unavailable", "文件链接生成失败", 503);
+      }
+      return {
+        kind: "redirect",
+        url: "https://fs.tsio.top/duallane/workspace/attachments/signed?X-Amz-Signature=redacted",
+        expiresAt: new Date(Date.now() + 300_000).toISOString()
+      };
+    };
+    return {
+      ...local,
+      driver: "s3",
+      signedUrlTtlSeconds: 300,
+      getAttachmentDelivery: async (attachment) => delivery(() => local.statAttachment(attachment)),
+      getProfileAvatarDelivery: async (avatar) => delivery(() => local.getProfileAvatarDelivery(avatar))
+    };
   }
 
   function getWorkspaceContentCounts() {
@@ -4763,6 +4827,123 @@ describe("workspace routes", () => {
     });
     expect(after.statusCode).toBe(200);
     expect(after.json().policy.usedTodayBytes).toBe(content.byteLength);
+  });
+
+  it("returns short signed URLs and redirects previews, legacy downloads, and avatars", async () => {
+    const workspaceObjectStore = await makeSignedObjectStore();
+    const app = await makeApp({}, { workspaceObjectStore });
+    const content = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    const reserve = await app.inject({
+      method: "POST",
+      url: "/api/workspace/files/uploads/reserve",
+      headers: { "content-type": "application/json", "x-workspace-user-id": "usr_owner" },
+      payload: { fileName: "signed.png", mimeType: "image/png", byteSize: content.byteLength, visibility: "space" }
+    });
+    const upload = reserve.json();
+    expect((await app.inject({
+      method: "PUT",
+      url: `/api/workspace/files/uploads/${upload.id}/content`,
+      headers: { "content-type": "application/octet-stream", "x-workspace-user-id": "usr_owner" },
+      payload: content
+    })).statusCode).toBe(200);
+
+    const downloadReserve = await app.inject({
+      method: "POST",
+      url: `/api/workspace/files/${upload.attachment.id}/downloads/reserve`,
+      headers: { "x-workspace-user-id": "usr_owner" }
+    });
+    expect(downloadReserve.statusCode).toBe(201);
+    expect(downloadReserve.json()).toMatchObject({
+      status: "completed",
+      downloadUrl: expect.stringMatching(/^https:\/\/fs\.tsio\.top\//),
+      expiresAt: expect.any(String)
+    });
+    expect(JSON.stringify(downloadReserve.json())).not.toContain("storageKey");
+
+    const preview = await app.inject({
+      method: "GET",
+      url: `/api/workspace/files/${upload.attachment.id}/preview`,
+      headers: { "x-workspace-user-id": "usr_owner" }
+    });
+    expect(preview.statusCode).toBe(302);
+    expect(preview.headers.location).toMatch(/^https:\/\/fs\.tsio\.top\//);
+
+    const legacyDownload = await app.inject({
+      method: "GET",
+      url: `/api/workspace/files/${upload.attachment.id}/download?downloadId=${downloadReserve.json().id}`,
+      headers: { "x-workspace-user-id": "usr_owner" }
+    });
+    expect(legacyDownload.statusCode).toBe(302);
+    expect(legacyDownload.headers.location).toMatch(/^https:\/\/fs\.tsio\.top\//);
+
+    const avatarInput = await sharp({
+      create: { width: 32, height: 32, channels: 3, background: "#236d78" }
+    }).png().toBuffer();
+    const avatarUpload = await app.inject({
+      method: "PUT",
+      url: "/api/workspace/me/avatar",
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(avatarInput.byteLength),
+        "x-workspace-user-id": "usr_owner"
+      },
+      payload: avatarInput
+    });
+    expect(avatarUpload.statusCode).toBe(200);
+    const avatar = await app.inject({
+      method: "GET",
+      url: getOwnerAvatarPath(),
+      headers: { "x-workspace-user-id": "usr_owner" }
+    });
+    expect(avatar.statusCode).toBe(302);
+    expect(avatar.headers.location).toMatch(/^https:\/\/fs\.tsio\.top\//);
+
+    expireDownloadTransfer(downloadReserve.json().id);
+    const expiredDownload = await app.inject({
+      method: "GET",
+      url: `/api/workspace/files/${upload.attachment.id}/download?downloadId=${downloadReserve.json().id}`,
+      headers: { "x-workspace-user-id": "usr_owner" }
+    });
+    expect(expiredDownload.statusCode).toBe(400);
+    expect(expiredDownload.json().error.code).toBe("download.expired");
+  });
+
+  it("releases download quota when a signed URL cannot be generated", async () => {
+    const workspaceObjectStore = await makeSignedObjectStore({ failDelivery: true });
+    const app = await makeApp({}, { workspaceObjectStore });
+    const content = Buffer.from("signed delivery failure");
+    const reserve = await app.inject({
+      method: "POST",
+      url: "/api/workspace/files/uploads/reserve",
+      headers: { "content-type": "application/json", "x-workspace-user-id": "usr_owner" },
+      payload: { fileName: "failure.txt", mimeType: "text/plain", byteSize: content.byteLength, visibility: "space" }
+    });
+    const upload = reserve.json();
+    expect((await app.inject({
+      method: "PUT",
+      url: `/api/workspace/files/uploads/${upload.id}/content`,
+      headers: { "content-type": "application/octet-stream", "x-workspace-user-id": "usr_owner" },
+      payload: content
+    })).statusCode).toBe(200);
+
+    const downloadReserve = await app.inject({
+      method: "POST",
+      url: `/api/workspace/files/${upload.attachment.id}/downloads/reserve`,
+      headers: { "x-workspace-user-id": "usr_owner" }
+    });
+    expect(downloadReserve.statusCode).toBe(503);
+    expect(downloadReserve.json().error.code).toBe("file.storage_unavailable");
+    expect(getLatestDownloadTransfer()).toMatchObject({
+      status: "failed",
+      completedAt: null,
+      releasedAt: expect.any(String)
+    });
+    const bootstrap = await app.inject({
+      method: "GET",
+      url: "/api/workspace/bootstrap",
+      headers: { "x-workspace-user-id": "usr_owner" }
+    });
+    expect(bootstrap.json().policy.usedTodayBytes).toBe(content.byteLength);
   });
 
   it("serves non-ASCII file names with RFC 5987 content disposition headers", async () => {

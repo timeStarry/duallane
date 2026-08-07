@@ -1045,7 +1045,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     expect(customAvatarResponse.headers()["content-type"]).toContain("image/webp");
 
     const publicNickname = `公开昵称 ${memberSuffix}`;
-    await memberPage.getByLabel("公开昵称").fill(publicNickname);
+    await memberPage.getByRole("textbox", { name: "公开昵称", exact: true }).fill(publicNickname);
     const discoverabilityToggle = memberPage.getByRole("checkbox", { name: /允许其他成员搜索到我/ });
     await expect(discoverabilityToggle).not.toBeChecked();
     await discoverabilityToggle.check();
@@ -1080,7 +1080,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await outsiderMemberSearch.fill(Array.from(publicNickname)[0]);
     await expect(outsiderPage.locator(".workspace-member-card").filter({ hasText: publicNickname })).toHaveCount(0);
     const discoverableSearchResponse = outsiderPage.waitForResponse((response) =>
-      response.url().includes("/api/workspace/members?") && response.url().includes("query=")
+      response.url().includes("/api/workspace/members?") && response.url().includes("q=")
     );
     await outsiderMemberSearch.fill(Array.from(publicNickname).slice(0, 2).join(""));
     expect((await discoverableSearchResponse).status()).toBe(200);
