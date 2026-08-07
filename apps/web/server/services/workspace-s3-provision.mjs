@@ -62,7 +62,7 @@ export async function provisionWorkspaceS3Bucket({ env = process.env, client } =
         Rules: [{
           ID: "abort-incomplete-multipart-after-7-days",
           Status: "Enabled",
-          Filter: { Prefix: "" },
+          Prefix: "",
           AbortIncompleteMultipartUpload: { DaysAfterInitiation: MULTIPART_ABORT_DAYS }
         }]
       }

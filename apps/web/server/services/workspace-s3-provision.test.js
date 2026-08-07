@@ -48,6 +48,7 @@ describe("workspace S3 provisioning", () => {
       "PutBucketCorsCommand",
       "PutBucketLifecycleConfigurationCommand"
     ]));
+    expect(lifecycleRules[0]).toMatchObject({ Prefix: "", AbortIncompleteMultipartUpload: { DaysAfterInitiation: 7 } });
   });
 
   it("uses the restricted gateway CORS path when MinIO lacks bucket CORS APIs", async () => {
