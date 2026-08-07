@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createWorkspaceObjectStore,
+  cleanupWorkspaceMultipartUploads,
   loadWorkspaceS3Config,
   workspaceArchiveObjectKey,
   workspaceAttachmentObjectKey,
@@ -216,6 +217,35 @@ describe("workspace object store", () => {
     await expect(store.getProfileAvatarDelivery({
       storageKey: "profile-avatars/usr_1/missing.webp"
     })).rejects.toMatchObject({ code: "avatar.not_found", statusCode: 404 });
+  });
+
+  it("aborts only workspace multipart uploads older than seven days", async () => {
+    const aborted = [];
+    const client = {
+      async send(command) {
+        if (command.constructor.name === "ListMultipartUploadsCommand") {
+          return {
+            IsTruncated: false,
+            Uploads: [
+              { Key: "workspace/attachments/spc_default/old/content", UploadId: "old", Initiated: new Date("2026-07-01T00:00:00Z") },
+              { Key: "workspace/attachments/spc_default/new/content", UploadId: "new", Initiated: new Date("2026-08-06T00:00:00Z") },
+              { Key: "outside/old", UploadId: "outside", Initiated: new Date("2026-07-01T00:00:00Z") }
+            ]
+          };
+        }
+        if (command.constructor.name === "AbortMultipartUploadCommand") {
+          aborted.push(command.input);
+          return {};
+        }
+        throw new Error(`unexpected command ${command.constructor.name}`);
+      }
+    };
+    await expect(cleanupWorkspaceMultipartUploads({
+      client,
+      bucket: "duallane",
+      now: new Date("2026-08-07T00:00:00Z")
+    })).resolves.toEqual({ aborted: 1 });
+    expect(aborted).toEqual([expect.objectContaining({ Key: "workspace/attachments/spc_default/old/content", UploadId: "old" })]);
   });
 
   it("rejects endpoint path prefixes so signed object paths remain unambiguous", async () => {

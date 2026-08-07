@@ -140,6 +140,12 @@ private policy verification, and multipart cleanup to pass; use the bundled
 `deploy/caddy/fs.tsio.top.caddy` rules to restrict public paths, methods, and
 preflight origin.
 
+MinIO releases that reject the S3 incomplete-multipart lifecycle rule use an
+application cleanup fallback. Provisioning creates and immediately aborts a
+canary multipart upload to verify the limited credential can list and abort
+uploads. The API then removes incomplete uploads older than seven days at
+startup and every six hours; an access failure still blocks startup.
+
 For an existing local volume, choose a stable run ID and preserve it when
 resuming. The backfill uploads active attachments and current avatars to their
 feature prefixes, archives other existing Workspace bytes, then performs a

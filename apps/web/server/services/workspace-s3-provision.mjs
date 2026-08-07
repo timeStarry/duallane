@@ -10,6 +10,7 @@ import {
   S3Client
 } from "@aws-sdk/client-s3";
 import { loadWorkspaceS3Config } from "./workspace-object-store.mjs";
+import { verifyWorkspaceMultipartCleanupAccess } from "./workspace-object-store.mjs";
 
 const MULTIPART_ABORT_DAYS = 7;
 
@@ -27,6 +28,7 @@ export async function provisionWorkspaceS3Bucket({ env = process.env, client } =
   });
   let stage = "head_bucket";
   let corsMode = "bucket";
+  let multipartCleanupMode = "bucket";
 
   try {
     await s3.send(new HeadBucketCommand({ Bucket: config.bucket }));
@@ -56,17 +58,22 @@ export async function provisionWorkspaceS3Bucket({ env = process.env, client } =
       corsMode = "gateway";
     }
     stage = "multipart_lifecycle";
-    await s3.send(new PutBucketLifecycleConfigurationCommand({
-      Bucket: config.bucket,
-      LifecycleConfiguration: {
-        Rules: [{
-          ID: "abort-incomplete-multipart-after-7-days",
-          Status: "Enabled",
-          Prefix: "",
-          AbortIncompleteMultipartUpload: { DaysAfterInitiation: MULTIPART_ABORT_DAYS }
-        }]
-      }
-    }));
+    try {
+      await s3.send(new PutBucketLifecycleConfigurationCommand({
+        Bucket: config.bucket,
+        LifecycleConfiguration: {
+          Rules: [{
+            ID: "abort-incomplete-multipart-after-7-days",
+            Status: "Enabled",
+            Prefix: "",
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: MULTIPART_ABORT_DAYS }
+          }]
+        }
+      }));
+    } catch (error) {
+      if (!isLifecycleUnsupportedError(error)) throw error;
+      multipartCleanupMode = "application";
+    }
 
     stage = "verify_versioning";
     const versioning = await s3.send(new GetBucketVersioningCommand({ Bucket: config.bucket }));
@@ -79,11 +86,16 @@ export async function provisionWorkspaceS3Bucket({ env = process.env, client } =
         throw new Error("Workspace S3 CORS verification failed");
       }
     }
-    stage = "verify_multipart_lifecycle";
-    const lifecycle = await s3.send(new GetBucketLifecycleConfigurationCommand({ Bucket: config.bucket }));
-    const lifecycleRule = lifecycle.Rules?.find((rule) => rule.ID === "abort-incomplete-multipart-after-7-days");
-    if (lifecycleRule?.AbortIncompleteMultipartUpload?.DaysAfterInitiation !== MULTIPART_ABORT_DAYS) {
-      throw new Error("Workspace S3 multipart lifecycle verification failed");
+    if (multipartCleanupMode === "bucket") {
+      stage = "verify_multipart_lifecycle";
+      const lifecycle = await s3.send(new GetBucketLifecycleConfigurationCommand({ Bucket: config.bucket }));
+      const lifecycleRule = lifecycle.Rules?.find((rule) => rule.ID === "abort-incomplete-multipart-after-7-days");
+      if (lifecycleRule?.AbortIncompleteMultipartUpload?.DaysAfterInitiation !== MULTIPART_ABORT_DAYS) {
+        throw new Error("Workspace S3 multipart lifecycle verification failed");
+      }
+    } else {
+      stage = "verify_application_multipart_cleanup";
+      await verifyWorkspaceMultipartCleanupAccess({ client: s3, bucket: config.bucket });
     }
     stage = "verify_private_policy";
     await assertBucketHasNoPublicPolicy(s3, config.bucket);
@@ -92,6 +104,7 @@ export async function provisionWorkspaceS3Bucket({ env = process.env, client } =
       versioning: "Enabled",
       corsOrigin: appOrigin,
       corsMode,
+      multipartCleanupMode,
       multipartAbortDays: MULTIPART_ABORT_DAYS
     };
   } catch (error) {
@@ -132,6 +145,10 @@ function isPublicPrincipal(principal) {
 
 function isNotImplementedError(error) {
   return error?.name === "NotImplemented" || error?.$metadata?.httpStatusCode === 501;
+}
+
+function isLifecycleUnsupportedError(error) {
+  return isNotImplementedError(error) || error?.name === "InvalidArgument";
 }
 
 function normalizeAppOrigin(value) {

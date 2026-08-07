@@ -2,10 +2,13 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import {
+  AbortMultipartUploadCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
   HeadObjectCommand,
+  ListMultipartUploadsCommand,
   S3Client
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
@@ -22,6 +25,8 @@ const DEFAULT_REGION = "us-east-1";
 const DEFAULT_SIGNED_URL_TTL_SECONDS = 300;
 const MAX_SIGNED_URL_TTL_SECONDS = 900;
 const MULTIPART_PART_SIZE = 8 * 1024 * 1024;
+const STALE_MULTIPART_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const MULTIPART_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 export async function createWorkspaceObjectStore({
   env = process.env,
@@ -155,6 +160,7 @@ function createLocalWorkspaceObjectStore(dataDir) {
 }
 
 function createS3WorkspaceObjectStore({ dataDir, config, internalClient, deliveryClient, presign, uploadFactory }) {
+  let multipartCleanupTimer = null;
   const uploadFile = async ({ key, path, byteSize, sha256, contentType, kind, id }) => {
     try {
       const upload = uploadFactory({
@@ -235,11 +241,19 @@ function createS3WorkspaceObjectStore({ dataDir, config, internalClient, deliver
     async assertReady() {
       try {
         await internalClient.send(new HeadBucketCommand({ Bucket: config.bucket }));
+        await cleanupWorkspaceMultipartUploads({ client: internalClient, bucket: config.bucket });
+        if (!multipartCleanupTimer) {
+          multipartCleanupTimer = setInterval(() => {
+            void cleanupWorkspaceMultipartUploads({ client: internalClient, bucket: config.bucket }).catch(() => {});
+          }, MULTIPART_CLEANUP_INTERVAL_MS);
+          multipartCleanupTimer.unref?.();
+        }
       } catch (error) {
         throw new Error(`Workspace S3 bucket is unavailable: ${safeProviderCode(error)}`);
       }
     },
     async close() {
+      if (multipartCleanupTimer) clearInterval(multipartCleanupTimer);
       internalClient.destroy?.();
       if (deliveryClient !== internalClient) deliveryClient.destroy?.();
     },
@@ -350,6 +364,65 @@ function createS3WorkspaceObjectStore({ dataDir, config, internalClient, deliver
       ]);
     }
   };
+}
+
+export async function cleanupWorkspaceMultipartUploads({
+  client,
+  bucket,
+  now = new Date(),
+  maxAgeMs = STALE_MULTIPART_AGE_MS
+}) {
+  const cutoff = now.getTime() - maxAgeMs;
+  let keyMarker;
+  let uploadIdMarker;
+  let aborted = 0;
+  do {
+    const page = await client.send(new ListMultipartUploadsCommand({
+      Bucket: bucket,
+      Prefix: "workspace/",
+      KeyMarker: keyMarker,
+      UploadIdMarker: uploadIdMarker,
+      MaxUploads: 1000
+    }));
+    for (const upload of page.Uploads ?? []) {
+      const initiatedAt = upload.Initiated instanceof Date ? upload.Initiated.getTime() : Date.parse(upload.Initiated);
+      if (
+        upload.Key?.startsWith("workspace/") &&
+        upload.UploadId &&
+        Number.isFinite(initiatedAt) &&
+        initiatedAt <= cutoff
+      ) {
+        await client.send(new AbortMultipartUploadCommand({
+          Bucket: bucket,
+          Key: upload.Key,
+          UploadId: upload.UploadId
+        }));
+        aborted += 1;
+      }
+    }
+    keyMarker = page.IsTruncated ? page.NextKeyMarker : undefined;
+    uploadIdMarker = page.IsTruncated ? page.NextUploadIdMarker : undefined;
+  } while (keyMarker || uploadIdMarker);
+  return { aborted };
+}
+
+export async function verifyWorkspaceMultipartCleanupAccess({ client, bucket }) {
+  const key = `workspace/migration-archive/provisioning/multipart-cleanup-canary-${crypto.randomUUID()}`;
+  const created = await client.send(new CreateMultipartUploadCommand({
+    Bucket: bucket,
+    Key: key,
+    ContentType: "application/octet-stream",
+    Metadata: {
+      "duallane-kind": "multipart-cleanup-canary",
+      "duallane-id": "provisioning"
+    }
+  }));
+  if (!created.UploadId) throw new Error("Workspace S3 multipart cleanup canary was not created");
+  try {
+    await client.send(new ListMultipartUploadsCommand({ Bucket: bucket, Prefix: "workspace/", MaxUploads: 1 }));
+  } finally {
+    await client.send(new AbortMultipartUploadCommand({ Bucket: bucket, Key: key, UploadId: created.UploadId }));
+  }
 }
 
 async function hashFile(filePath) {
