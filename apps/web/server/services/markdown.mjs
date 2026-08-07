@@ -54,8 +54,15 @@ function normalizeSummaryNodes() {
   };
 }
 
+function disableIndentedCode() {
+  const data = this.data();
+  const extensions = data.micromarkExtensions || (data.micromarkExtensions = []);
+  extensions.push({ disable: { null: ["codeIndented"] } });
+}
+
 const markdownProcessor = unified()
   .use(remarkParse)
+  .use(disableIndentedCode)
   .use(remarkGfm)
   .use(preserveThematicBreaks)
   .use(normalizeSummaryNodes)
@@ -65,6 +72,9 @@ export function markdownToPlainText(value) {
   const source = typeof value === "string" ? value : "";
   if (!source) {
     return "";
+  }
+  if (hasUnclosedFence(source) || containsUnsupportedMarkdown(source)) {
+    return normalizeLiteralSummary(source);
   }
   const tree = markdownProcessor.parse(source);
   const stripped = markdownProcessor.runSync(tree);
@@ -80,4 +90,30 @@ export function markdownToPlainText(value) {
   const leadingSpace = /^\s/.test(source) && plainText ? " " : "";
   const trailingSpace = /\s$/.test(source) && plainText ? " " : "";
   return leadingSpace + plainText + trailingSpace;
+}
+
+function hasUnclosedFence(source) {
+  let fence = "";
+  for (const line of source.replace(/\r\n?/g, "\n").split("\n")) {
+    const match = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (!match) continue;
+    if (!fence) fence = match[1];
+    else if (match[1][0] === fence[0] && match[1].length >= fence.length) fence = "";
+  }
+  return Boolean(fence);
+}
+
+function containsUnsupportedMarkdown(source) {
+  return /!\[[^\]\n]*\]\([^)\n]*\)/.test(source) ||
+    /<\/?[A-Za-z][^>]*>/.test(source) ||
+    /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/m.test(source);
+}
+
+function normalizeLiteralSummary(source) {
+  return source
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\t ]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }

@@ -60,9 +60,9 @@ describe("workspace Markdown summaries", () => {
       .toBe(" 前置 内容 ");
   });
 
-  it("does not include Markdown image alt text or raw syntax", () => {
+  it("keeps unsupported Markdown literal in summaries", () => {
     expect(markdownToPlainText("正文 ![秘密替代文本](https://example.test/a.png)"))
-      .toBe("正文");
+      .toBe("正文 ![秘密替代文本](https://example.test/a.png)");
     const tick = String.fromCharCode(96);
     expect(markdownToPlainText("## 标题\n\n" + tick + "code" + tick)).toBe("标题\ncode");
   });

@@ -24,6 +24,8 @@ import {
 
 export const MESSAGE_CONTENT_FORMAT = "duallane.message+json;v=1";
 export const DEFAULT_RETENTION_COUNT = 10000;
+export const MAX_MESSAGE_TEXT_CODE_POINTS = 30_000;
+export const MAX_MESSAGE_TEXT_BYTES = 100 * 1024;
 export const WORKSPACE_SESSION_COOKIE = "duallane_workspace";
 export const WORKSPACE_EVENT_REPLAY_LIMIT = 200;
 export const STALE_UPLOAD_RESERVATION_MS = 1000 * 60 * 30;
@@ -223,7 +225,25 @@ export async function listMembers(db, userId = "usr_owner", options = {}) {
   const role = normalizeString(options.role);
   const kind = normalizeString(options.kind);
   const limit = Math.min(parsePositiveInteger(options.limit, 200), 500);
-  const members = (await listVisibleSpaceMembers(db, actor)).map((member) => publicMember(member, actor));
+  const visibleIds = await listVisibleMemberIds(db, { spaceId: DEFAULT_SPACE_ID, actor });
+  const discoveryEnabled = Array.from(query).length >= 2;
+  const members = (await listSpaceMembers(db, actor.id))
+    .map((member) => ({ member, normallyVisible: visibleIds.has(member.id) }))
+    .filter(({ member, normallyVisible }) => normallyVisible || (
+      discoveryEnabled &&
+      member.kind === "human" &&
+      member.searchDiscoverable &&
+      [member.nickname, member.githubLogin]
+        .filter(Boolean)
+        .some((value) => value.toLowerCase().includes(query))
+    ))
+    .map(({ member, normallyVisible }) => {
+      const projected = publicMember(member, actor);
+      if (!normallyVisible) {
+        projected.capabilities.canJoinGroups = false;
+      }
+      return projected;
+    });
   return members.filter((member) => {
     if (role && member.role !== role) {
       return false;
@@ -242,13 +262,29 @@ export async function listMembers(db, userId = "usr_owner", options = {}) {
 
 export async function updateOwnProfile(db, request, input) {
   const actor = await requireActor(db, input.actorId);
-  const nickname = input.nickname === null || normalizeString(input.nickname) === ""
-    ? null
-    : normalizeProfileLabel(input.nickname, "profile.nickname_invalid", "昵称");
+  const updatesNickname = Object.hasOwn(input, "nickname");
+  const updatesSearchDiscoverable = Object.hasOwn(input, "searchDiscoverable");
+  const nickname = updatesNickname
+    ? input.nickname === null || normalizeString(input.nickname) === ""
+      ? null
+      : normalizeProfileLabel(input.nickname, "profile.nickname_invalid", "昵称")
+    : undefined;
+  if (updatesSearchDiscoverable && typeof input.searchDiscoverable !== "boolean") {
+    throw new WorkspaceValidationError("profile.search_discoverable_invalid", "搜索可见设置无效");
+  }
+  if (!updatesNickname && !updatesSearchDiscoverable) {
+    return await publicMemberPayloadForActor(db, actor, actor.id);
+  }
   const now = new Date().toISOString();
   await runWorkspaceTransaction(db, async () => {
-    await db.prepare("UPDATE users SET nickname = ? WHERE id = ? AND kind = 'human'")
-      .run(nickname, actor.id);
+    if (updatesNickname) {
+      await db.prepare("UPDATE users SET nickname = ? WHERE id = ? AND kind = 'human'")
+        .run(nickname, actor.id);
+    }
+    if (updatesSearchDiscoverable) {
+      await db.prepare("UPDATE users SET search_discoverable = CASE WHEN ? = 1 THEN TRUE ELSE FALSE END WHERE id = ? AND kind = 'human'")
+        .run(input.searchDiscoverable ? 1 : 0, actor.id);
+    }
     await writeEvent(db, {
       type: "workspace.member_updated",
       actorId: actor.id,
@@ -259,13 +295,103 @@ export async function updateOwnProfile(db, request, input) {
     await writeWorkspaceAudit(db, request, {
       actorUserId: actor.id,
       actorGithubLogin: actor.githubLogin,
-      action: "profile.nickname_update",
+      action: updatesNickname && updatesSearchDiscoverable
+        ? "profile.update"
+        : updatesNickname ? "profile.nickname_update" : "profile.search_discoverable_update",
       targetType: "user",
       targetId: actor.id,
       result: "success"
     });
   });
   return await publicMemberPayloadForActor(db, actor, actor.id);
+}
+
+export async function setOwnAvatar(db, request, input) {
+  const actor = await requireActor(db, input.actorId);
+  const storageKey = publicString(input.storageKey);
+  const version = publicString(input.version);
+  if (storageKey !== `profile-avatars/${actor.id}/${version}.webp` || !/^[a-z0-9-]+$/i.test(version)) {
+    throw new WorkspaceValidationError("avatar.invalid", "头像数据无效");
+  }
+  const previous = await db.prepare("SELECT avatar_storage_key AS storageKey FROM users WHERE id = ?").get(actor.id);
+  const now = new Date().toISOString();
+  await runWorkspaceTransaction(db, async () => {
+    await db.prepare(`
+      UPDATE users
+      SET avatar_storage_key = ?, avatar_version = ?, avatar_updated_at = ?, avatar_url = ?
+      WHERE id = ? AND kind = 'human'
+    `).run(storageKey, version, now, `/api/workspace/avatars/${actor.id}/${version}`, actor.id);
+    await writeEvent(db, {
+      type: "workspace.member_updated",
+      actorId: actor.id,
+      targetType: "user",
+      targetId: actor.id,
+      payload: { userId: actor.id }
+    });
+    await writeWorkspaceAudit(db, request, {
+      actorUserId: actor.id,
+      actorGithubLogin: actor.githubLogin,
+      action: "profile.avatar_update",
+      targetType: "user",
+      targetId: actor.id,
+      result: "success"
+    });
+  });
+  return {
+    user: await publicMemberPayloadForActor(db, actor, actor.id),
+    previousStorageKey: previous?.storageKey || null
+  };
+}
+
+export async function removeOwnAvatar(db, request, input) {
+  const actor = await requireActor(db, input.actorId);
+  const previous = await db.prepare("SELECT avatar_storage_key AS storageKey FROM users WHERE id = ?").get(actor.id);
+  await runWorkspaceTransaction(db, async () => {
+    await db.prepare(`
+      UPDATE users
+      SET avatar_storage_key = NULL, avatar_version = NULL, avatar_updated_at = NULL, avatar_url = github_avatar_url
+      WHERE id = ? AND kind = 'human'
+    `).run(actor.id);
+    await writeEvent(db, {
+      type: "workspace.member_updated",
+      actorId: actor.id,
+      targetType: "user",
+      targetId: actor.id,
+      payload: { userId: actor.id }
+    });
+    await writeWorkspaceAudit(db, request, {
+      actorUserId: actor.id,
+      actorGithubLogin: actor.githubLogin,
+      action: "profile.avatar_remove",
+      targetType: "user",
+      targetId: actor.id,
+      result: "success"
+    });
+  });
+  return {
+    user: await publicMemberPayloadForActor(db, actor, actor.id),
+    previousStorageKey: previous?.storageKey || null
+  };
+}
+
+export async function getProfileAvatar(db, actorId, userId, version) {
+  const actor = await requireActor(db, actorId);
+  const visibleIds = await listVisibleMemberIds(db, { spaceId: DEFAULT_SPACE_ID, actor });
+  const avatar = await db.prepare(`
+    SELECT u.avatar_storage_key AS storageKey, u.search_discoverable AS searchDiscoverable
+    FROM users u
+    INNER JOIN space_members sm ON sm.user_id = u.id
+    WHERE u.id = ? AND u.kind = 'human' AND u.avatar_version = ?
+      AND u.avatar_storage_key IS NOT NULL
+      AND sm.space_id = ? AND sm.removed_at IS NULL
+  `).get(normalizeString(userId), normalizeString(version), DEFAULT_SPACE_ID);
+  if (!avatar) {
+    throw new WorkspaceError("avatar.not_found", "头像不存在", 404);
+  }
+  if (!visibleIds.has(normalizeString(userId)) && !avatar.searchDiscoverable) {
+    throw new WorkspaceError("avatar.not_found", "头像不存在", 404);
+  }
+  return avatar;
 }
 
 export async function updateMemberRemark(db, input) {
@@ -778,10 +904,20 @@ export async function bindGitHubUser(db, request, profile) {
         github_login = COALESCE(?, github_login),
         email = COALESCE(?, email),
         display_name = COALESCE(?, display_name),
-        avatar_url = COALESCE(?, avatar_url),
+        github_avatar_url = COALESCE(?, github_avatar_url),
+        avatar_url = CASE WHEN avatar_storage_key IS NULL THEN COALESCE(?, avatar_url) ELSE avatar_url END,
         last_login_at = ?
       WHERE id = ?
-    `).run(githubId || null, githubLogin || null, email || null, displayName || null, avatarUrl || null, now, user.id);
+    `).run(
+      githubId || null,
+      githubLogin || null,
+      email || null,
+      displayName || null,
+      avatarUrl || null,
+      avatarUrl || null,
+      now,
+      user.id
+    );
 
     await writeWorkspaceAudit(db, request, {
       actorUserId: user.id,
@@ -1012,10 +1148,10 @@ export async function acceptInvite(db, request, input) {
     if (!existing) {
       await db.prepare(`
         INSERT INTO users (
-          id, github_id, github_login, email, display_name, nickname, avatar_url, kind, created_at, last_login_at
+          id, github_id, github_login, email, display_name, nickname, avatar_url, github_avatar_url, kind, created_at, last_login_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'human', ?, ?)
-      `).run(userId, githubId || null, githubLogin, email || null, displayName, displayName, avatarUrl || null, now, now);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'human', ?, ?)
+      `).run(userId, githubId || null, githubLogin, email || null, displayName, displayName, avatarUrl || null, avatarUrl || null, now, now);
     } else {
       await db.prepare(`
         UPDATE users
@@ -1024,10 +1160,20 @@ export async function acceptInvite(db, request, input) {
           github_login = COALESCE(?, github_login),
           email = COALESCE(?, email),
           display_name = COALESCE(?, display_name),
-          avatar_url = COALESCE(?, avatar_url),
+          github_avatar_url = COALESCE(?, github_avatar_url),
+          avatar_url = CASE WHEN avatar_storage_key IS NULL THEN COALESCE(?, avatar_url) ELSE avatar_url END,
           last_login_at = ?
         WHERE id = ?
-      `).run(githubId || null, githubLogin || null, email || null, displayName || null, avatarUrl || null, now, userId);
+      `).run(
+        githubId || null,
+        githubLogin || null,
+        email || null,
+        displayName || null,
+        avatarUrl || null,
+        avatarUrl || null,
+        now,
+        userId
+      );
     }
 
     await db.prepare(`
@@ -1197,7 +1343,8 @@ export async function createConversation(db, request, input) {
       await writeConversationCreateRejection(db, request, actor, "invalid target");
       throw new WorkspaceValidationError("conversation.invalid_target", "成员不存在");
     }
-    if (!await canViewMember(db, { spaceId: DEFAULT_SPACE_ID, actor, visibleUserId: target.id })) {
+    const targetVisible = await canViewMember(db, { spaceId: DEFAULT_SPACE_ID, actor, visibleUserId: target.id });
+    if (!targetVisible && !(target.kind === "human" && target.searchDiscoverable)) {
       await writeConversationCreateRejection(db, request, actor, "target not visible");
       throw new WorkspaceValidationError("conversation.invalid_target", "成员不存在或当前不可见");
     }
@@ -1700,23 +1847,44 @@ export async function listMessages(db, userId, conversationId, options = {}) {
     action: "conversation.read"
   });
   const limit = Math.min(parsePositiveInteger(options.limit, 80), 200);
+  const aroundMessageId = normalizeString(options.around);
+  if (aroundMessageId) {
+    const anchor = await db.prepare(`
+      SELECT id FROM messages
+      WHERE id = ? AND conversation_id = ? AND deleted_at IS NULL
+    `).get(aroundMessageId, conversationId);
+    if (!anchor) return [];
+    const sideLimit = Math.max(1, Math.floor((limit - 1) / 2));
+    const [older, anchorMessage, newer] = await Promise.all([
+      listMessages(db, userId, conversationId, { ...options, around: undefined, before: aroundMessageId, after: undefined, limit: sideLimit }),
+      publicMessagePayloadForActor(db, actor, aroundMessageId),
+      listMessages(db, userId, conversationId, { ...options, around: undefined, before: undefined, after: aroundMessageId, limit: sideLimit })
+    ]);
+    return [...older, ...(anchorMessage ? [anchorMessage] : []), ...newer];
+  }
   const beforeMessageId = normalizeString(options.before);
-  const before = beforeMessageId
+  const afterMessageId = normalizeString(options.after);
+  const cursorMessageId = beforeMessageId || afterMessageId;
+  const cursor = cursorMessageId
     ? await db.prepare(`
       SELECT created_at AS createdAt, id AS messageCursorId
       FROM messages
       WHERE id = ? AND conversation_id = ? AND deleted_at IS NULL
-    `).get(beforeMessageId, conversationId)
+    `).get(cursorMessageId, conversationId)
     : null;
-  if (beforeMessageId && !before) {
+  if (cursorMessageId && !cursor) {
     return [];
   }
-  const cursorFilter = before
-    ? `AND (
+  const cursorFilter = cursor
+    ? beforeMessageId ? `AND (
           m.created_at < ?
           OR (m.created_at = ? AND m.id < ?)
+        )` : `AND (
+          m.created_at > ?
+          OR (m.created_at = ? AND m.id > ?)
         )`
     : "";
+  const innerOrder = afterMessageId ? "ASC" : "DESC";
   const rows = await db.prepare(`
     SELECT
       recent.id,
@@ -1759,23 +1927,139 @@ export async function listMessages(db, userId, conversationId, options = {}) {
       WHERE m.conversation_id = ?
         AND m.deleted_at IS NULL
         ${cursorFilter}
-      ORDER BY m.created_at DESC, m.id DESC
+      ORDER BY m.created_at ${innerOrder}, m.id ${innerOrder}
       LIMIT ?
     ) recent
     LEFT JOIN users u ON u.id = recent.authorId
     LEFT JOIN user_remarks ur ON ur.owner_user_id = ? AND ur.target_user_id = u.id
     ORDER BY recent.createdAt ASC, recent.messageCursorId ASC
-  `).all(...(before
-    ? [conversationId, before.createdAt, before.createdAt, before.messageCursorId, limit, actor.id]
+  `).all(...(cursor
+    ? [conversationId, cursor.createdAt, cursor.createdAt, cursor.messageCursorId, limit, actor.id]
     : [conversationId, limit, actor.id]));
 
   const reactionsByMessageId = await listMessageReactionGroups(db, rows.map((row) => row.id), actor);
+  const pinsByMessageId = await listMessagePins(db, rows.map((row) => row.id), actor);
   return await Promise.all(rows.map(async (row) => await publicMessage({
     ...row,
     content: JSON.parse(row.contentJson),
     attachments: await listMessageAttachments(db, row.id),
-    reactions: reactionsByMessageId.get(row.id) ?? []
+    reactions: reactionsByMessageId.get(row.id) ?? [],
+    pin: pinsByMessageId.get(row.id)
   }, actor, db)));
+}
+
+export async function listPinnedMessages(db, userId, conversationId, options = {}) {
+  const actor = await requireActor(db, userId);
+  const conversation = await requireGroupConversationMember(db, actor, conversationId, options.request, "message.pin.list");
+  const limit = Math.min(parsePositiveInteger(options.limit, 20), 100);
+  const rows = await db.prepare(`
+    SELECT message_id AS messageId, pinned_by_user_id AS pinnedByUserId, created_at AS pinnedAt
+    FROM conversation_pinned_messages
+    WHERE conversation_id = ?
+    ORDER BY created_at DESC, message_id DESC
+    LIMIT ?
+  `).all(conversation.id, limit);
+  const items = [];
+  for (const row of rows) {
+    const message = await publicMessagePayloadForActor(db, actor, row.messageId);
+    if (!message) continue;
+    items.push({
+      messageId: row.messageId,
+      pinnedByUserId: row.pinnedByUserId,
+      pinnedAt: row.pinnedAt,
+      canUnpin: canUnpinMessage(actor, message.authorId),
+      message
+    });
+  }
+  return items;
+}
+
+export async function pinGroupMessage(db, request, input) {
+  const actor = await requireActor(db, input.actorId);
+  const message = await requirePinTarget(db, actor, input.conversationId, input.messageId, request, "message.pin");
+  if (message.authorId !== actor.id) {
+    throw new WorkspaceValidationError("pin.not_author", "只能常驻自己发送的消息");
+  }
+  return await runWorkspaceTransaction(db, async () => {
+    await db.lock(`duallane:pin:${message.conversationId}:${actor.id}`);
+    const existing = await db.prepare(`
+      SELECT 1 FROM conversation_pinned_messages WHERE conversation_id = ? AND message_id = ?
+    `).get(message.conversationId, message.id);
+    if (existing) {
+      return (await listPinnedMessages(db, actor.id, message.conversationId)).find((item) => item.messageId === message.id);
+    }
+    const counter = await db.prepare(`
+      INSERT INTO conversation_pin_counters (conversation_id, user_id, pin_count)
+      VALUES (?, ?, 1)
+      ON CONFLICT (conversation_id, user_id) DO UPDATE SET pin_count = conversation_pin_counters.pin_count + 1
+      WHERE conversation_pin_counters.pin_count < 3
+      RETURNING pin_count AS pinCount
+    `).run(message.conversationId, actor.id);
+    if (counter.changes === 0) {
+      throw new WorkspaceValidationError("pin.limit_reached", "每人在每个群聊最多常驻 3 条消息");
+    }
+    const now = new Date().toISOString();
+    await db.prepare(`
+      INSERT INTO conversation_pinned_messages (conversation_id, message_id, pinned_by_user_id, created_at)
+      VALUES (?, ?, ?, ?)
+    `).run(message.conversationId, message.id, actor.id, now);
+    await writeEvent(db, {
+      type: "message.pinned",
+      actorId: actor.id,
+      conversationId: message.conversationId,
+      targetType: "message",
+      targetId: message.id,
+      payload: { conversationId: message.conversationId, messageId: message.id }
+    });
+    await writeWorkspaceAudit(db, request, {
+      actorUserId: actor.id,
+      actorGithubLogin: actor.githubLogin,
+      action: "message.pin",
+      targetType: "message",
+      targetId: message.id,
+      result: "success"
+    });
+    return (await listPinnedMessages(db, actor.id, message.conversationId)).find((item) => item.messageId === message.id);
+  });
+}
+
+export async function unpinGroupMessage(db, request, input) {
+  const actor = await requireActor(db, input.actorId);
+  const message = await requirePinTarget(db, actor, input.conversationId, input.messageId, request, "message.unpin");
+  if (!canUnpinMessage(actor, message.authorId)) {
+    throw new WorkspacePermissionError("permission.denied", "你没有取消此常驻消息的权限");
+  }
+  return await runWorkspaceTransaction(db, async () => {
+    await db.lock(`duallane:pin:${message.conversationId}:${message.authorId}`);
+    const pin = await db.prepare(`
+      SELECT pinned_by_user_id AS pinnedByUserId
+      FROM conversation_pinned_messages WHERE conversation_id = ? AND message_id = ?
+    `).get(message.conversationId, message.id);
+    if (!pin) return { messageId: message.id, removed: false };
+    await db.prepare("DELETE FROM conversation_pinned_messages WHERE conversation_id = ? AND message_id = ?")
+      .run(message.conversationId, message.id);
+    await db.prepare(`
+      UPDATE conversation_pin_counters SET pin_count = CASE WHEN pin_count > 0 THEN pin_count - 1 ELSE 0 END
+      WHERE conversation_id = ? AND user_id = ?
+    `).run(message.conversationId, pin.pinnedByUserId);
+    await writeEvent(db, {
+      type: "message.unpinned",
+      actorId: actor.id,
+      conversationId: message.conversationId,
+      targetType: "message",
+      targetId: message.id,
+      payload: { conversationId: message.conversationId, messageId: message.id }
+    });
+    await writeWorkspaceAudit(db, request, {
+      actorUserId: actor.id,
+      actorGithubLogin: actor.githubLogin,
+      action: "message.unpin",
+      targetType: "message",
+      targetId: message.id,
+      result: "success"
+    });
+    return { messageId: message.id, removed: true };
+  });
 }
 
 
@@ -2692,6 +2976,7 @@ async function listSpaceMembers(db, viewerUserId = "") {
       u.nickname,
       ur.remark,
       u.avatar_url AS avatarUrl,
+      u.search_discoverable AS searchDiscoverable,
       u.kind,
       sm.role,
       sm.joined_at AS joinedAt
@@ -2814,6 +3099,59 @@ async function listMessageReactionGroups(db, messageIds, actor = null) {
   }
   return groupsByMessageId;
 }
+
+async function listMessagePins(db, messageIds, actor) {
+  const ids = uniqueStrings(messageIds);
+  const pins = new Map();
+  if (ids.length === 0) return pins;
+  const placeholders = ids.map(() => "?").join(", ");
+  const rows = await db.prepare(`
+    SELECT p.message_id AS messageId, p.pinned_by_user_id AS pinnedByUserId,
+      p.created_at AS pinnedAt, m.author_id AS authorId
+    FROM conversation_pinned_messages p
+    INNER JOIN messages m ON m.id = p.message_id
+    WHERE p.message_id IN (${placeholders})
+  `).all(...ids);
+  for (const row of rows) {
+    pins.set(row.messageId, {
+      pinnedByUserId: row.pinnedByUserId,
+      pinnedAt: row.pinnedAt,
+      canUnpin: canUnpinMessage(actor, row.authorId)
+    });
+  }
+  return pins;
+}
+
+function canUnpinMessage(actor, authorId) {
+  return actor?.id === authorId || actor?.role === "owner" || actor?.role === "admin";
+}
+
+async function requireGroupConversationMember(db, actor, conversationId, request, action) {
+  const id = normalizeString(conversationId);
+  const conversation = await db.prepare(`
+    SELECT id, type FROM conversations WHERE id = ? AND space_id = ?
+  `).get(id, DEFAULT_SPACE_ID);
+  if (!conversation) throw new WorkspaceError("message.not_found", "消息不存在", 404);
+  if (conversation.type !== "group") throw new WorkspaceValidationError("pin.group_only", "只有群聊支持常驻消息");
+  await requireCapability(db, request, actor, "conversation.read", { targetType: "conversation", targetId: id });
+  await requireConversationMember(db, actor.id, id, { request, actor, action });
+  return conversation;
+}
+
+async function requirePinTarget(db, actor, conversationId, messageId, request, action) {
+  const conversation = await requireGroupConversationMember(db, actor, conversationId, request, action);
+  const message = await db.prepare(`
+    SELECT id, conversation_id AS conversationId, author_id AS authorId, kind
+    FROM messages
+    WHERE id = ? AND conversation_id = ? AND deleted_at IS NULL
+  `).get(normalizeString(messageId), conversation.id);
+  if (!message) throw new WorkspaceError("message.not_found", "消息不存在", 404);
+  if (message.kind !== "user" || !message.authorId) {
+    throw new WorkspaceValidationError("pin.not_author", "该消息不能设为常驻");
+  }
+  return message;
+}
+
 async function normalizeMessageContent(db, actor, conversationId, content) {
   if (!content || typeof content !== "object") {
     throw new WorkspaceValidationError("message.invalid_content", "消息内容格式无效");
@@ -2824,6 +3162,10 @@ async function normalizeMessageContent(db, actor, conversationId, content) {
   const blocks = Array.isArray(content.blocks) ? content.blocks : [];
   if (blocks.length === 0) {
     throw new WorkspaceValidationError("message.empty", "消息不能为空");
+  }
+  const rawText = blocks.filter((block) => block?.type === "text").map((block) => typeof block.text === "string" ? block.text : "").join("");
+  if (Array.from(rawText).length > MAX_MESSAGE_TEXT_CODE_POINTS || Buffer.byteLength(rawText, "utf8") > MAX_MESSAGE_TEXT_BYTES) {
+    throw new WorkspaceValidationError("message.too_long", "消息正文过长，请作为文件发送");
   }
 
   const normalizedBlocks = await Promise.all(
@@ -2883,7 +3225,8 @@ async function normalizeBlock(db, actor, conversationId, block) {
 function buildPlainText(blocks) {
   return blocks.map((block) => {
     if (block.type === "text") {
-      return markdownToPlainText(block.text) || fallbackTextSummary(block.text);
+      const summary = markdownToPlainText(block.text) || fallbackTextSummary(block.text);
+      return summary || (/\s/.test(block.text) ? " " : "");
     }
     if (block.type === "mention") return `@${block.label}`;
     if (block.type === "link") return block.label || block.url;
@@ -3035,6 +3378,9 @@ function publicMember(member, actor = null) {
     remark: remark || undefined,
     description: systemIdentity?.description,
     avatarUrl: sanitizeWorkspaceAvatarUrl(systemIdentity?.avatarUrl ?? member.avatarUrl),
+    searchDiscoverable: actor?.id === member.id && member.kind === "human"
+      ? Boolean(member.searchDiscoverable)
+      : undefined,
     kind: systemIdentity?.kind ?? member.kind,
     role: projectedRole,
     roleLabel: ROLE_LABELS[projectedRole] ?? "成员",
@@ -3118,7 +3464,8 @@ async function publicMessage(message, actor = null, db = null) {
         db && actor ? await publicAttachmentPayloadForActor(db, actor, attachment) : publicAttachment(attachment, actor)
       ))
       : [],
-    reactions: Array.isArray(message.reactions) ? message.reactions : []
+    reactions: Array.isArray(message.reactions) ? message.reactions : [],
+    pin: message.pin || undefined
   };
 }
 
@@ -3216,16 +3563,18 @@ async function enforceRetention(db, conversationId) {
     return;
   }
   const stale = await db.prepare(`
-    SELECT id
-    FROM messages
-    WHERE conversation_id = ?
-      AND deleted_at IS NULL
-      AND id NOT IN (
-        SELECT id
-        FROM messages
-        WHERE conversation_id = ?
-          AND deleted_at IS NULL
-        ORDER BY created_at DESC, id DESC
+    SELECT m.id
+    FROM messages m
+    WHERE m.conversation_id = ?
+      AND m.deleted_at IS NULL
+      AND NOT EXISTS (SELECT 1 FROM conversation_pinned_messages p WHERE p.message_id = m.id)
+      AND m.id NOT IN (
+        SELECT recent.id
+        FROM messages recent
+        WHERE recent.conversation_id = ?
+          AND recent.deleted_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM conversation_pinned_messages p WHERE p.message_id = recent.id)
+        ORDER BY recent.created_at DESC, recent.id DESC
         LIMIT ?
       )
   `).all(conversationId, conversationId, conversation.retentionCount);
@@ -3681,6 +4030,12 @@ async function publicWorkspaceEventPayload(db, actor, type, payload) {
       reactions
     });
   }
+  if (type === "message.pinned" || type === "message.unpinned") {
+    return removeUndefinedValues({
+      messageId: normalizeString(payload.messageId),
+      conversationId: normalizeString(payload.conversationId)
+    });
+  }
   if (type === "attachment.created" || type === "attachment.available" || type === "attachment.failed" || type === "attachment.removed") {
     return removeUndefinedValues({
       attachmentId: normalizeString(payload.attachmentId),
@@ -3759,11 +4114,13 @@ async function publicMessagePayloadForActor(db, actor, message) {
     `).get(actor.id, messageId);
     if (row) {
       const reactionsByMessageId = await listMessageReactionGroups(db, [row.id], actor);
+      const pinsByMessageId = await listMessagePins(db, [row.id], actor);
       return await publicMessage({
         ...row,
         content: JSON.parse(row.contentJson),
         attachments: await listMessageAttachments(db, row.id),
-        reactions: reactionsByMessageId.get(row.id) ?? []
+        reactions: reactionsByMessageId.get(row.id) ?? [],
+        pin: pinsByMessageId.get(row.id)
       }, actor, db);
     }
   }
@@ -3793,6 +4150,7 @@ async function getMemberForViewer(db, userId, viewerUserId) {
       u.nickname,
       ur.remark,
       u.avatar_url AS avatarUrl,
+      u.search_discoverable AS searchDiscoverable,
       u.kind,
       sm.role,
       sm.joined_at AS joinedAt
@@ -3829,6 +4187,7 @@ async function getUserWithRole(db, userId) {
       u.display_name AS displayName,
       u.nickname,
       u.avatar_url AS avatarUrl,
+      u.search_discoverable AS searchDiscoverable,
       u.kind,
       sm.role,
       sm.joined_at AS joinedAt
@@ -4060,8 +4419,7 @@ function normalizeTextBlock(value) {
   if (typeof value !== "string") {
     return "";
   }
-  const text = value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
-  return text.trim() ? text : "";
+  return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
 }
 
 function equalsIgnoreCase(left, right) {

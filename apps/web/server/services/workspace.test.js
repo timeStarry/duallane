@@ -19,6 +19,7 @@ import {
   failUpload,
   getConversationDetails,
   getManagedMemberVisibility,
+  getProfileAvatar,
   getSessionUserId,
   getWorkspaceBootstrap,
   getWorkspaceStatistics,
@@ -26,26 +27,31 @@ import {
   listConversations,
   listFiles,
   listMessages,
+  listPinnedMessages,
   listMembers,
   listWorkspaceEvents,
   markConversationRead,
+  pinGroupMessage,
   MESSAGE_CONTENT_FORMAT,
   removeConversationMember,
   removeAttachment,
   removeMessageReaction,
   removeSpaceMember,
+  removeOwnAvatar,
   reserveDownload,
   reserveUpload,
   releaseStaleUploadReservations,
   revokeInvite,
   STALE_UPLOAD_RESERVATION_MS,
   subscribeWorkspaceEvents,
+  setOwnAvatar,
   updateMemberRole,
   updateMemberRemark,
   updateOwnProfile,
   updateConversationNotificationLevel,
   updateGroupConversation,
   updateManagedMemberVisibility,
+  unpinGroupMessage,
   WorkspaceAuthError,
   WorkspacePermissionError,
   WorkspaceValidationError
@@ -167,6 +173,61 @@ describe("workspace service", () => {
 
     const updated = await updateOwnProfile(db, request, { actorId: member.id, nickname: "公开昵称" });
     expect(updated).toMatchObject({ displayName: "公开昵称", nickname: "公开昵称", githubLogin: "profile-member" });
+
+    const discoverable = await updateOwnProfile(db, request, { actorId: member.id, searchDiscoverable: true });
+    expect(discoverable).toMatchObject({ nickname: "公开昵称", searchDiscoverable: true });
+    expect((await listMembers(db, "usr_owner", { query: "profile" })).find((item) => item.id === member.id)).toBeTruthy();
+    expect((await listMembers(db, "usr_owner", { query: "p" })).find((item) => item.id === member.id)).toBeTruthy();
+
+    const hiddenViewerInvite = await createInvite(db, request, { actorId: "usr_owner", code: "PROFILE-HIDDEN-VIEWER" });
+    const hiddenViewer = await acceptInvite(db, request, {
+      code: hiddenViewerInvite.code,
+      githubLogin: "profile-hidden-viewer",
+      displayName: "Hidden Viewer"
+    });
+    expect((await listMembers(db, hiddenViewer.id, { query: "p" })).map((item) => item.id)).not.toContain(member.id);
+    const discoveredMember = (await listMembers(db, hiddenViewer.id, { query: "profile" }))
+      .find((item) => item.id === member.id);
+    expect(discoveredMember).toBeTruthy();
+    expect(discoveredMember.capabilities).toMatchObject({
+      canStartDirectConversation: true,
+      canJoinGroups: false
+    });
+    const discoveredDirect = await createWorkspaceConversation(db, request, {
+      actorId: hiddenViewer.id,
+      type: "direct",
+      targetUserId: member.id
+    });
+    expect(discoveredDirect.type).toBe("direct");
+
+    const avatar = await setOwnAvatar(db, request, {
+      actorId: member.id,
+      storageKey: `profile-avatars/${member.id}/custom.webp`,
+      version: "custom"
+    });
+    expect(avatar.user.avatarUrl).toBe(`/api/workspace/avatars/${member.id}/custom`);
+    expect((await getProfileAvatar(db, hiddenViewer.id, member.id, "custom")).storageKey)
+      .toBe(`profile-avatars/${member.id}/custom.webp`);
+    const avatarOutsiderInvite = await createInvite(db, request, { actorId: "usr_owner", code: "PROFILE-AVATAR-OUTSIDER" });
+    const avatarOutsider = await acceptInvite(db, request, {
+      code: avatarOutsiderInvite.code,
+      githubLogin: "profile-avatar-outsider",
+      displayName: "Avatar Outsider"
+    });
+    await updateOwnProfile(db, request, { actorId: member.id, searchDiscoverable: false });
+    await expect(getProfileAvatar(db, avatarOutsider.id, member.id, "custom"))
+      .rejects.toMatchObject({ code: "avatar.not_found" });
+    await updateOwnProfile(db, request, { actorId: member.id, searchDiscoverable: true });
+    expect((await getProfileAvatar(db, avatarOutsider.id, member.id, "custom")).storageKey)
+      .toBe(`profile-avatars/${member.id}/custom.webp`);
+    await bindGitHubUser(db, request, {
+      githubLogin: "profile-member",
+      avatarUrl: "https://avatars.githubusercontent.com/u/9001?v=4"
+    });
+    expect((await getWorkspaceBootstrap(db, member.id)).auth.currentUser.avatarUrl)
+      .toBe(`/api/workspace/avatars/${member.id}/custom`);
+    const restored = await removeOwnAvatar(db, request, { actorId: member.id });
+    expect(restored.user.avatarUrl).toBe("https://avatars.githubusercontent.com/u/9001?v=4");
 
     await bindGitHubUser(db, request, {
       githubLogin: "profile-member",
@@ -1997,6 +2058,70 @@ describe("workspace service", () => {
         }
       })
     ).rejects.toThrow(WorkspaceValidationError);
+  });
+
+  it("accepts mention-only messages and whitespace separators between mentions", async () => {
+    const firstInvite = await createInvite(db, request, { actorId: "usr_owner", code: "MENTION-ONLY-FIRST" });
+    const firstMember = await acceptInvite(db, request, {
+      code: firstInvite.code,
+      githubLogin: "mention-only-first",
+      email: "mention-only-first@example.com",
+      displayName: "First Mention"
+    });
+    const secondInvite = await createInvite(db, request, { actorId: "usr_owner", code: "MENTION-ONLY-SECOND" });
+    const secondMember = await acceptInvite(db, request, {
+      code: secondInvite.code,
+      githubLogin: "mention-only-second",
+      email: "mention-only-second@example.com",
+      displayName: "Second Mention"
+    });
+    const conversation = await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "group",
+      title: "Mention-only messages",
+      memberIds: [firstMember.id, secondMember.id]
+    });
+
+    const mentionOnly = await createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      clientMessageId: "mention-only",
+      content: {
+        format: MESSAGE_CONTENT_FORMAT,
+        blocks: [{ type: "mention", userId: firstMember.id, label: "Spoofed" }]
+      }
+    });
+    expect(mentionOnly.plainText).toBe("@First Mention");
+
+    const separatedMentions = await createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      clientMessageId: "mention-separated",
+      content: {
+        format: MESSAGE_CONTENT_FORMAT,
+        blocks: [
+          { type: "mention", userId: firstMember.id, label: "Spoofed" },
+          { type: "text", text: " " },
+          { type: "mention", userId: secondMember.id, label: "Spoofed" }
+        ]
+      }
+    });
+    expect(separatedMentions.content.blocks).toEqual([
+      { type: "mention", userId: firstMember.id, label: "First Mention" },
+      { type: "text", text: " " },
+      { type: "mention", userId: secondMember.id, label: "Second Mention" }
+    ]);
+    expect(separatedMentions.plainText).toBe("@First Mention @Second Mention");
+
+    await expect(createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      clientMessageId: "whitespace-only",
+      content: {
+        format: MESSAGE_CONTENT_FORMAT,
+        blocks: [{ type: "text", text: " \n\t " }]
+      }
+    })).rejects.toMatchObject({ code: "message.empty" });
   });
 
   it("rejects mentions for space members outside the current conversation", async () => {
@@ -4782,6 +4907,111 @@ describe("workspace service", () => {
     expect(projected.content.blocks[0].text).toBe(markdown);
     expect(projected.content.plainText).toBe("粗体 与 链接\n第一项\n第二项");
     expect(projected.plainText).toBe(projected.content.plainText);
+  });
+
+  it("pins only an author's group messages with an atomic per-user limit and retention exemption", async () => {
+    const memberInvite = await createInvite(db, request, { actorId: "usr_owner", code: "PIN-MEMBER" });
+    const member = await acceptInvite(db, request, {
+      code: memberInvite.code,
+      githubLogin: "pin-member",
+      displayName: "Pin Member"
+    });
+    const group = await createWorkspaceConversation(db, request, {
+      actorId: "usr_owner",
+      type: "group",
+      title: "Pinned messages",
+      memberIds: [member.id]
+    });
+    const messages = [];
+    for (let index = 0; index < 4; index += 1) {
+      messages.push(await createStructuredMessage(db, request, {
+        actorId: "usr_owner",
+        conversationId: group.id,
+        clientMessageId: `pin-owner-${index}`,
+        content: textContent(`owner message ${index}`)
+      }));
+    }
+
+    let before = (await listConversations(db, "usr_owner")).find((item) => item.id === group.id);
+    const firstPin = await pinGroupMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: group.id,
+      messageId: messages[1].id
+    });
+    expect(firstPin).toMatchObject({ messageId: messages[1].id, canUnpin: true });
+    const memberPinEvent = (await listWorkspaceEvents(db, member.id, 0))
+      .findLast((event) => event.type === "message.pinned" && event.targetId === messages[1].id);
+    expect(memberPinEvent?.payload).toEqual({
+      messageId: messages[1].id,
+      conversationId: group.id
+    });
+    expect((await pinGroupMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: group.id,
+      messageId: messages[1].id
+    })).messageId).toBe(messages[1].id);
+    await pinGroupMessage(db, request, { actorId: "usr_owner", conversationId: group.id, messageId: messages[2].id });
+    await pinGroupMessage(db, request, { actorId: "usr_owner", conversationId: group.id, messageId: messages[3].id });
+    db.prepare("UPDATE conversations SET retention_count = 2 WHERE id = ?").run(group.id);
+    const fourth = await createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: group.id,
+      clientMessageId: "pin-owner-fourth",
+      content: textContent("owner fourth pin")
+    });
+    await expect(pinGroupMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: group.id,
+      messageId: fourth.id
+    })).rejects.toMatchObject({ code: "pin.limit_reached" });
+    await expect(pinGroupMessage(db, request, {
+      actorId: member.id,
+      conversationId: group.id,
+      messageId: messages[2].id
+    })).rejects.toMatchObject({ code: "pin.not_author" });
+
+    const memberMessage = await createStructuredMessage(db, request, {
+      actorId: member.id,
+      conversationId: group.id,
+      clientMessageId: "pin-member-own",
+      content: textContent("member pinned")
+    });
+    before = (await listConversations(db, "usr_owner")).find((item) => item.id === group.id);
+    await pinGroupMessage(db, request, { actorId: member.id, conversationId: group.id, messageId: memberMessage.id });
+    expect((await listPinnedMessages(db, member.id, group.id)).find((pin) => pin.messageId === memberMessage.id)?.canUnpin).toBe(true);
+    expect((await listPinnedMessages(db, "usr_owner", group.id)).find((pin) => pin.messageId === memberMessage.id)?.canUnpin).toBe(true);
+    await unpinGroupMessage(db, request, { actorId: "usr_owner", conversationId: group.id, messageId: memberMessage.id });
+    const memberUnpinEvent = (await listWorkspaceEvents(db, member.id, 0))
+      .findLast((event) => event.type === "message.unpinned" && event.targetId === memberMessage.id);
+    expect(memberUnpinEvent?.payload).toEqual({
+      messageId: memberMessage.id,
+      conversationId: group.id
+    });
+
+    const after = (await listConversations(db, "usr_owner")).find((item) => item.id === group.id);
+    expect(after.unreadCount).toBe(before.unreadCount);
+    expect(after.lastActivityAt).toBe(memberMessage.createdAt);
+    expect(db.prepare("SELECT deleted_at AS deletedAt FROM messages WHERE id = ?").get(messages[1].id).deletedAt).toBeNull();
+    const around = await listMessages(db, "usr_owner", group.id, { around: messages[2].id, limit: 3 });
+    expect(around.map((message) => message.id)).toContain(messages[2].id);
+    expect(around.find((message) => message.id === messages[2].id)?.pin).toBeTruthy();
+    expect(db.prepare("SELECT payload_json AS payload FROM workspace_events WHERE type = 'message.pinned' LIMIT 1").get().payload)
+      .not.toContain("owner message");
+  });
+
+  it("rejects oversized structured text before persistence", async () => {
+    const conversation = await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "group",
+      title: "Long message limit"
+    });
+    await expect(createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      clientMessageId: "too-long-message",
+      content: textContent("字".repeat(30_001))
+    })).rejects.toMatchObject({ code: "message.too_long" });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM messages WHERE client_message_id = ?").get("too-long-message").count).toBe(0);
   });
 
   it("adds, aggregates and removes reactions idempotently without changing conversation counters", async () => {

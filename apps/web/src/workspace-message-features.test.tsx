@@ -8,6 +8,10 @@ import {
   applyWorkspaceReactionOptimistic,
   buildWorkspaceMessageBlocks,
   getWorkspaceSingleImageAttachment,
+  isWorkspaceTextOverAttachmentLimit,
+  serializeWorkspaceMessageForCopy,
+  shouldCollapseWorkspaceMessageText,
+  workspaceConversationPreview,
   WorkspaceStructuredMessage,
   shouldApplyWorkspaceReactionResponse
 } from "./App";
@@ -36,6 +40,8 @@ describe("workspace avatar", () => {
       <WorkspaceAvatar name="信标" avatarUrl="/assets/beacon-avatar.png" />
     );
     expect(html).toContain('src="/assets/beacon-avatar.png"');
+    expect(sanitizeWorkspaceAvatarUrl("/api/workspace/avatars/usr-1/version-1"))
+      .toBe("/api/workspace/avatars/usr-1/version-1");
   });
 
   it("renders a stable initial when no safe avatar exists", () => {
@@ -121,18 +127,29 @@ describe("restricted workspace Markdown", () => {
     expect(html).toContain("<ul>");
   });
 
-  it("drops images, raw HTML, tables and unsafe links", () => {
+  it("shows unsupported Markdown as literal source and removes unsafe links", () => {
     const html = renderToStaticMarkup(
       <WorkspaceMarkdown>
         {"![图片](https://example.test/a.png)\n\n<script>alert(1)</script>\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n[安全](https://example.test/path) [危险](javascript:alert(1))"}
       </WorkspaceMarkdown>
     );
-    expect(html).not.toContain("<img");
+    expect(html).not.toContain('<img src="https://example.test/a.png"');
     expect(html).not.toContain("<script");
     expect(html).not.toContain("<table");
-    expect(html).not.toContain("javascript:");
-    expect(html).toContain('href="https://example.test/path"');
-    expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).not.toContain('href="javascript:');
+    expect(html).toContain("![图片](https://example.test/a.png)");
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(html).toContain("| A | B |");
+    expect(html).toContain("[安全](https://example.test/path)");
+  });
+
+  it("keeps indented text literal and falls back for an unclosed fence", () => {
+    const indented = renderToStaticMarkup(<WorkspaceMarkdown>{"    普通缩进\n下一行"}</WorkspaceMarkdown>);
+    expect(indented).not.toContain("<code>");
+    expect(indented).toContain("    普通缩进");
+    const unclosed = renderToStaticMarkup(<WorkspaceMarkdown>{"```ts\nconst value = 1"}</WorkspaceMarkdown>);
+    expect(unclosed).not.toContain("<pre>");
+    expect(unclosed).toContain("```ts");
   });
 
   it("autolinks a literal URL without replacing its original text", () => {
@@ -172,6 +189,50 @@ describe("workspace message presentation helpers", () => {
       [{ type: "attachment", attachmentId: image.id }],
       [{ ...image, status: "failed" }]
     )).toBeNull();
+  });
+
+  it("copies raw blocks and applies long-message thresholds without dropping Markdown", () => {
+    expect(serializeWorkspaceMessageForCopy({
+      body: "fallback",
+      content: { blocks: [
+        { type: "text", text: "**粗体** " },
+        { type: "mention", userId: "usr_alice", label: "Alice" },
+        { type: "link", label: "站点", url: "https://example.test" }
+      ] },
+      attachments: []
+    })).toBe("**粗体** @Alice[站点](https://example.test)");
+    expect(shouldCollapseWorkspaceMessageText([{ type: "text", text: "a".repeat(701) }])).toBe(true);
+    expect(shouldCollapseWorkspaceMessageText([{ type: "text", text: "短消息" }])).toBe(false);
+    expect(isWorkspaceTextOverAttachmentLimit("字".repeat(30_001))).toBe(true);
+    expect(isWorkspaceTextOverAttachmentLimit("短消息")).toBe(false);
+  });
+
+  it("prefixes group previews with the projected author only for user messages", () => {
+    const message = {
+      authorName: "Alice",
+      kind: "user" as const,
+      plainText: "今天的进度"
+    };
+    const baseConversation = {
+      lastMessagePlainText: "今天的进度",
+      latestMessages: [message],
+      memberCount: 3,
+      members: []
+    };
+
+    expect(workspaceConversationPreview({
+      ...baseConversation,
+      type: "group"
+    })).toBe("Alice：今天的进度");
+    expect(workspaceConversationPreview({
+      ...baseConversation,
+      type: "direct"
+    })).toBe("今天的进度");
+    expect(workspaceConversationPreview({
+      ...baseConversation,
+      type: "group",
+      latestMessages: [{ ...message, kind: "system", authorName: "系统" }]
+    })).toBe("今天的进度");
   });
 
   it("renders message text before a compact multi-image grid and regular files", () => {

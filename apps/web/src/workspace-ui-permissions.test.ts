@@ -97,7 +97,7 @@ describe("workspace UI permission boundaries", () => {
   it("keeps Workspace formatting optional and the mobile composer viewport-safe", () => {
     const source = readSource();
     const styles = readStyles();
-    const mobileStart = styles.indexOf("@media (max-width: 760px)", styles.indexOf(".workspace-composer textarea {"));
+    const mobileStart = styles.indexOf("@media (max-width: 760px)", styles.indexOf(".workspace-composer textarea,"));
     const mobileStyles = styles.slice(mobileStart);
 
     expect(source).toContain("const [formatToolbarOpen, setFormatToolbarOpen] = useState(false);");
@@ -112,11 +112,11 @@ describe("workspace UI permission boundaries", () => {
     expect(toolbarStyles).toContain("grid-column: 1 / -1;");
     expect(toolbarStyles).toContain("overflow-x: auto;");
 
-    const expandedStart = styles.indexOf(".workspace-composer.expanded textarea {");
+    const expandedStart = styles.indexOf(".workspace-composer.expanded textarea,");
     const expandedStyles = styles.slice(expandedStart, styles.indexOf("}", expandedStart));
     expect(expandedStyles).toContain("max-height: min(42dvh, 360px);");
 
-    const mobileTextareaStart = mobileStyles.indexOf(".workspace-composer textarea {");
+    const mobileTextareaStart = mobileStyles.indexOf(".workspace-composer textarea,");
     const mobileTextareaStyles = mobileStyles.slice(
       mobileTextareaStart,
       mobileStyles.indexOf("}", mobileTextareaStart)
@@ -124,7 +124,7 @@ describe("workspace UI permission boundaries", () => {
     expect(mobileTextareaStyles).toContain("grid-column: 1 / -1;");
     expect(mobileTextareaStyles).toContain("grid-row: 1;");
 
-    const mobileFormattingStart = mobileStyles.indexOf(".workspace-composer.formatting-open textarea {");
+    const mobileFormattingStart = mobileStyles.indexOf(".workspace-composer.formatting-open textarea,");
     const mobileFormattingStyles = mobileStyles.slice(
       mobileFormattingStart,
       mobileStyles.indexOf("}", mobileFormattingStart)
@@ -565,13 +565,14 @@ describe("workspace UI permission boundaries", () => {
   it("keeps chat drafts and reply targets scoped to each conversation", () => {
     const source = readSource();
 
-    expect(source).toContain("const [workspaceDraftByConversation, setWorkspaceDraftByConversation] = useState<Record<string, string>>({});");
+    expect(source).toContain("const [workspaceDraftByConversation, setWorkspaceDraftByConversation] = useState<Record<string, WorkspaceComposerDocument>>({});");
     expect(source).toContain("const [workspaceReplyToMessageIdByConversation, setWorkspaceReplyToMessageIdByConversation] = useState<Record<string, string>>({});");
-    expect(source).toContain("const workspaceDraft = workspaceSelectedConversationId ? workspaceDraftByConversation[workspaceSelectedConversationId] ?? \"\" : \"\";");
+    expect(source).toContain("const workspaceDraftDocument = workspaceSelectedConversationId");
+    expect(source).toContain("const workspaceDraft = workspaceDraftDocument.source;");
     expect(source).toContain("? workspaceReplyToMessageIdByConversation[workspaceSelectedConversationId] ?? \"\"");
-    expect(source).toContain("function setWorkspaceConversationDraft(conversationId: string, draft: string)");
+    expect(source).toContain("function setWorkspaceConversationDraft(conversationId: string, draft: WorkspaceComposerDocument | string)");
     expect(source).toContain("function setWorkspaceConversationReplyToMessageId(conversationId: string, messageId: string)");
-    expect(source).toContain("onDraft={(draft) => setWorkspaceConversationDraft(workspaceSelectedConversation.id, draft)}");
+    expect(source).toContain("onDraft={(document) => setWorkspaceConversationDraft(workspaceSelectedConversation.id, document)}");
     expect(source).toContain("onReply={(messageId) => setWorkspaceConversationReplyToMessageId(workspaceSelectedConversation.id, messageId)}");
     expect(source).toContain("onCancelReply={() => setWorkspaceConversationReplyToMessageId(workspaceSelectedConversation.id, \"\")}");
     expect(source).toContain("setWorkspaceDraftByConversation({});");

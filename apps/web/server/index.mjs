@@ -3,7 +3,7 @@ import fastifyCookie from "@fastify/cookie";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import { createReadStream } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_SPACE_ID, openDatabase } from "./services/db.mjs";
@@ -28,6 +28,7 @@ import {
   getConversationDetails,
   getDownloadableAttachment,
   getManagedMemberVisibility,
+  getProfileAvatar,
   getReservedUpload,
   getSessionUserId,
   getWorkspaceEventForUser,
@@ -39,6 +40,7 @@ import {
   listFiles,
   listMembers,
   listMessages,
+  listPinnedMessages,
   listWorkspaceEvents,
   markConversationRead,
   recordGitHubLoginRejection,
@@ -47,12 +49,16 @@ import {
   removeAttachment,
   removeMessageReaction,
   removeMemberRemark,
+  removeOwnAvatar,
   removeSpaceMember,
   reserveDownload,
   reserveUpload,
   revokeInvite,
   revokeWorkspaceSession,
   subscribeWorkspaceEvents,
+  setOwnAvatar,
+  pinGroupMessage,
+  unpinGroupMessage,
   updateMemberRole,
   updateMemberRemark,
   updateOwnProfile,
@@ -63,6 +69,13 @@ import {
   WorkspaceError,
   WorkspaceValidationError
 } from "./services/workspace.mjs";
+import {
+  AVATAR_MAX_INPUT_BYTES,
+  ProfileAvatarError,
+  removeProfileAvatar,
+  resolveProfileAvatar,
+  saveProfileAvatar
+} from "./services/profile-avatar.mjs";
 import { blockWorkspace, isWorkspaceEnabled } from "./services/workspace-gate.mjs";
 import {
   removeStoredAttachment,
@@ -180,6 +193,9 @@ await app.register(fastifyCookie, {
 });
 await app.register(fastifyWebsocket);
 app.addContentTypeParser("application/octet-stream", (_request, payload, done) => {
+  done(null, payload);
+});
+app.addContentTypeParser(["image/jpeg", "image/png", "image/webp"], (_request, payload, done) => {
   done(null, payload);
 });
 
@@ -545,6 +561,83 @@ app.patch("/api/workspace/me/profile", async (request, reply) => {
   }
 });
 
+app.put("/api/workspace/me/avatar", { bodyLimit: AVATAR_MAX_INPUT_BYTES }, async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  let stored;
+  try {
+    const actorId = await getWorkspaceUserId(request);
+    stored = await saveProfileAvatar(dataDir, {
+      stream: request.body,
+      mimeType: normalizeHeaderValue(request.headers["content-type"]),
+      contentLength: request.headers["content-length"] === undefined
+        ? null
+        : Number(request.headers["content-length"]),
+      userId: actorId
+    });
+    const result = await setOwnAvatar(db, request, {
+      actorId,
+      storageKey: stored.storageKey,
+      version: stored.version
+    });
+    if (result.previousStorageKey && result.previousStorageKey !== stored.storageKey) {
+      await removeProfileAvatar(dataDir, result.previousStorageKey).catch(() => {});
+    }
+    return { user: result.user };
+  } catch (error) {
+    if (stored?.storageKey) {
+      await removeProfileAvatar(dataDir, stored.storageKey).catch(() => {});
+    }
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.delete("/api/workspace/me/avatar", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    const result = await removeOwnAvatar(db, request, { actorId: await getWorkspaceUserId(request) });
+    if (result.previousStorageKey) {
+      await removeProfileAvatar(dataDir, result.previousStorageKey).catch(() => {});
+    }
+    return { user: result.user };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.get("/api/workspace/avatars/:userId/:version", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    const avatar = await getProfileAvatar(
+      db,
+      await getWorkspaceUserId(request),
+      request.params.userId,
+      request.params.version
+    );
+    const avatarPath = resolveProfileAvatar(dataDir, avatar.storageKey);
+    let avatarStat;
+    try {
+      avatarStat = await stat(avatarPath);
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        throw new WorkspaceError("avatar.not_found", "头像不存在", 404);
+      }
+      throw error;
+    }
+    reply.header("Content-Type", "image/webp");
+    reply.header("Content-Length", String(avatarStat.size));
+    reply.header("Cache-Control", "private, max-age=31536000, immutable");
+    return reply.send(createReadStream(avatarPath));
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
 app.put("/api/workspace/members/:userId/remark", async (request, reply) => {
   if (!workspaceEnabled) {
     return blockWorkspace(reply);
@@ -724,9 +817,52 @@ app.get("/api/workspace/conversations/:conversationId/messages", async (request,
       messages: await listMessages(db, await getWorkspaceUserId(request), request.params.conversationId, {
         request,
         before: request.query?.before,
+        after: request.query?.after,
+        around: request.query?.around,
         limit: request.query?.limit
       })
     };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.get("/api/workspace/groups/:conversationId/pins", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return {
+      pins: await listPinnedMessages(db, await getWorkspaceUserId(request), request.params.conversationId, {
+        request,
+        limit: request.query?.limit
+      })
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/groups/:conversationId/pins", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    const pin = await pinGroupMessage(db, request, {
+      actorId: await getWorkspaceUserId(request),
+      conversationId: request.params.conversationId,
+      messageId: request.body?.messageId
+    });
+    return reply.code(201).send({ pin });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.delete("/api/workspace/groups/:conversationId/pins/:messageId", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return await unpinGroupMessage(db, request, {
+      actorId: await getWorkspaceUserId(request),
+      conversationId: request.params.conversationId,
+      messageId: request.params.messageId
+    });
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }
@@ -1296,7 +1432,7 @@ function githubOAuthFailure() {
 
 function sendWorkspaceError(reply, request, error) {
   const payload = toWorkspaceError(request, error);
-  const statusCode = error instanceof WorkspaceError || error instanceof WorkspaceEmailError
+  const statusCode = error instanceof WorkspaceError || error instanceof WorkspaceEmailError || error instanceof ProfileAvatarError
     ? error.statusCode
     : 500;
   return reply.code(statusCode).send(payload);
@@ -1314,6 +1450,7 @@ function publicWorkspaceUser(user) {
       : user.displayName,
     nickname: user.kind === "human" ? user.nickname || null : undefined,
     avatarUrl: user.avatarUrl,
+    searchDiscoverable: user.kind === "human" ? Boolean(user.searchDiscoverable) : undefined,
     kind: user.kind,
     role: user.role,
     joinedAt: user.joinedAt
@@ -1321,7 +1458,7 @@ function publicWorkspaceUser(user) {
 }
 
 function toWorkspaceError(request, error) {
-  if (error instanceof WorkspaceError || error instanceof WorkspaceEmailError) {
+  if (error instanceof WorkspaceError || error instanceof WorkspaceEmailError || error instanceof ProfileAvatarError) {
     return {
       error: {
         code: error.code,
@@ -1335,6 +1472,10 @@ function toWorkspaceError(request, error) {
       message: "服务暂时不可用"
     }
   };
+}
+
+function normalizeHeaderValue(value) {
+  return Array.isArray(value) ? String(value[0] ?? "").trim().toLowerCase() : String(value ?? "").trim().toLowerCase();
 }
 
 function toWorkspaceSocketError(request, error) {

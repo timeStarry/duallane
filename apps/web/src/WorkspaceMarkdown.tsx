@@ -1,9 +1,15 @@
 import { Children, Fragment, isValidElement, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { Plugin } from "unified";
 import { renderMessageParts } from "./emotes";
 
 const disallowedElements = ["img", "table", "thead", "tbody", "tr", "th", "td"];
+const disableIndentedCode: Plugin = function () {
+  const data = this.data() as ReturnType<typeof this.data> & { micromarkExtensions?: unknown[] };
+  const extensions = (data.micromarkExtensions ??= []);
+  (extensions as unknown[]).push({ disable: { null: ["codeIndented"] } });
+};
 
 function renderMarkdownChildren(children: ReactNode): ReactNode {
   return Children.map(children, (child, index) => {
@@ -27,11 +33,15 @@ function safeLinkUrl(value: string) {
 }
 
 export function WorkspaceMarkdown({ children }: { children: string }) {
+  const prepared = prepareWorkspaceMarkdown(children);
+  if (prepared.plain) {
+    return <div className="workspace-markdown workspace-markdown-plain">{renderPlainSource(prepared.source)}</div>;
+  }
   return (
     <div className="workspace-markdown">
       <ReactMarkdown
       disallowedElements={disallowedElements}
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={[disableIndentedCode, remarkGfm]}
       skipHtml
       unwrapDisallowed={false}
       urlTransform={safeLinkUrl}
@@ -60,8 +70,52 @@ export function WorkspaceMarkdown({ children }: { children: string }) {
         ul: ({ children: content }) => <ul>{renderMarkdownChildren(content)}</ul>
       }}
     >
-      {children}
+      {prepared.source}
       </ReactMarkdown>
     </div>
   );
+}
+
+export function prepareWorkspaceMarkdown(source: string) {
+  const normalized = source.replace(/\r\n?/g, "\n");
+  if (hasUnclosedFence(normalized) || containsUnsupportedMarkdown(normalized) || normalized.split("\n").some((line) => /^ {4}/.test(line))) {
+    return { source: normalized, plain: true };
+  }
+  const lines = normalized.split("\n");
+  const tableLines = new Set<number>();
+  for (let index = 1; index < lines.length; index += 1) {
+    if (/^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[index])) {
+      tableLines.add(index - 1);
+      tableLines.add(index);
+      if (index + 1 < lines.length && lines[index + 1].includes("|")) tableLines.add(index + 1);
+    }
+  }
+  const escaped = lines.map((line, index) => {
+    let value = tableLines.has(index) ? line.replace(/\|/g, "\\|") : line;
+    value = value.replace(/!\[([^\]\n]*)\]\(([^)\n]*)\)/g, (_match, alt, url) => `!\\[${alt}\\]\\(${url}\\)`);
+    value = value.replace(/<(?=\/?[A-Za-z][^>]*>)/g, "\\<");
+    return value;
+  }).join("\n");
+  return { source: escaped, plain: false };
+}
+
+function hasUnclosedFence(source: string) {
+  let fence = "";
+  for (const line of source.split("\n")) {
+    const match = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (!match) continue;
+    if (!fence) fence = match[1];
+    else if (match[1][0] === fence[0] && match[1].length >= fence.length) fence = "";
+  }
+  return Boolean(fence);
+}
+
+function renderPlainSource(source: string) {
+  return renderMessageParts(source);
+}
+
+function containsUnsupportedMarkdown(source: string) {
+  return /!\[[^\]\n]*\]\([^)\n]*\)/.test(source) ||
+    /<\/?[A-Za-z][^>]*>/.test(source) ||
+    /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/m.test(source);
 }

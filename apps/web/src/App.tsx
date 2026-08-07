@@ -30,6 +30,8 @@ import {
   Monitor,
   Moon,
   PanelRightOpen,
+  Pin,
+  PinOff,
   Plus,
   Quote,
   Radio,
@@ -61,6 +63,12 @@ import {
   type EmotePack
 } from "./emotes";
 import { WorkspaceAvatar } from "./WorkspaceAvatar";
+import { WorkspaceAvatarEditor } from "./WorkspaceAvatarEditor";
+import {
+  WorkspaceComposerEditor,
+  type WorkspaceComposerDocument,
+  type WorkspaceComposerEditorHandle
+} from "./WorkspaceComposerEditor";
 import { WorkspaceMarkdown } from "./WorkspaceMarkdown";
 import {
   P2P_FILE_CHUNK_SIZE,
@@ -131,6 +139,7 @@ type WorkspaceReactionGroup = {
 };
 type Message = {
   id: string;
+  authorId?: string;
   author: string;
   authorAvatarUrl?: string;
   authorKind?: "human" | "bot" | "system";
@@ -147,6 +156,7 @@ type Message = {
   };
   attachments?: WorkspaceAttachment[];
   reactions?: WorkspaceReactionGroup[];
+  pin?: WorkspaceMessagePin;
   replyTo?: {
     author: string;
     body: string;
@@ -161,6 +171,7 @@ type WorkspaceUser = {
   remark?: string;
   description?: string;
   avatarUrl?: string;
+  searchDiscoverable?: boolean;
   kind: "human" | "bot" | "system";
   role: "owner" | "admin" | "member" | "auditor";
   roleLabel?: string;
@@ -289,6 +300,16 @@ type WorkspaceMessage = {
   deletedAt?: string | null;
   attachments: WorkspaceAttachment[];
   reactions: WorkspaceReactionGroup[];
+  pin?: WorkspaceMessagePin;
+};
+type WorkspaceMessagePin = {
+  pinnedByUserId: string;
+  pinnedAt: string;
+  canUnpin: boolean;
+};
+type WorkspacePinnedMessage = WorkspaceMessagePin & {
+  messageId: string;
+  message: WorkspaceMessage;
 };
 type WorkspaceConversation = {
   id: string;
@@ -444,7 +465,11 @@ type WorkspaceComposerAttachment = {
   attachment?: WorkspaceAttachment;
   uploadId?: string;
   failureReason?: string;
+  generatedFromLongMessage?: boolean;
+  generatedSource?: string;
 };
+const WORKSPACE_LONG_MESSAGE_CODE_POINTS = 30_000;
+const WORKSPACE_LONG_MESSAGE_BYTES = 100 * 1024;
 const WORKSPACE_ROLE_OPTIONS: WorkspaceUser["role"][] = ["owner", "admin", "member", "auditor"];
 const WORKSPACE_CONTEXT_STORAGE_KEY = "duallane.workspace.context-open";
 const WORKSPACE_MAX_STAGED_ATTACHMENTS = 10;
@@ -471,7 +496,14 @@ const WORKSPACE_ERROR_COPY: Record<string, string> = {
   "upload.size_mismatch": "文件上传失败，请重试。",
   "upload.invalid_content": "文件上传失败，请重试。",
   "message.invalid_content": "消息内容无法发送，请调整后重试。",
-  "message.idempotency_conflict": "这条消息已发生变化，请重新发送。"
+  "message.idempotency_conflict": "这条消息已发生变化，请重新发送。",
+  "message.too_long": "消息正文过长，请作为 TXT 文件发送。",
+  "pin.group_only": "只有群聊支持常驻消息。",
+  "pin.not_author": "只能常驻自己发送的消息。",
+  "pin.limit_reached": "每人在每个群聊最多常驻 3 条消息。",
+  "avatar.unsupported_format": "头像仅支持 JPEG、PNG 或 WebP。",
+  "avatar.invalid_size": "头像文件大小不符合要求。",
+  "avatar.invalid_image": "头像图片无法解析。"
 };
 class WorkspaceClientError extends Error {
   code: string;
@@ -1083,17 +1115,26 @@ function workspaceConversationTitle(conversation: WorkspaceConversation, current
   return conversation.title;
 }
 
-function workspaceConversationMemberCount(conversation: WorkspaceConversation) {
+function workspaceConversationMemberCount(conversation: { memberCount?: number; members: unknown[] }) {
   return conversation.memberCount ?? conversation.members.length;
 }
 
-function workspaceConversationPreview(conversation: WorkspaceConversation) {
-  if (conversation.lastMessagePlainText) {
-    return conversation.lastMessagePlainText;
-  }
+type WorkspaceConversationPreviewInput = Pick<
+  WorkspaceConversation,
+  "type" | "lastMessagePlainText" | "memberCount" | "members"
+> & {
+  latestMessages: Array<Pick<WorkspaceMessage, "authorName" | "kind" | "plainText">>;
+};
+
+export function workspaceConversationPreview(conversation: WorkspaceConversationPreviewInput) {
   const latest = conversation.latestMessages.at(-1);
-  if (latest) {
-    return latest.plainText;
+  const preview = latest?.plainText || conversation.lastMessagePlainText;
+  if (preview) {
+    const authorName = latest?.authorName?.trim();
+    if (conversation.type === "group" && latest?.kind !== "system" && authorName) {
+      return `${authorName}：${preview}`;
+    }
+    return preview;
   }
   return conversation.type === "group"
     ? `${workspaceConversationMemberCount(conversation)} 位成员`
@@ -1321,6 +1362,20 @@ export function buildWorkspaceMessageBlocks(text: string, mentionMembers: Worksp
   return blocks.filter((block) => block.type !== "text" || block.text.length > 0);
 }
 
+export function serializeWorkspaceMessageForCopy(message: Pick<Message, "body" | "content" | "attachments">) {
+  const blocks = message.content?.blocks ?? [];
+  if (blocks.length === 0) return message.body;
+  const attachments = new Map((message.attachments ?? []).map((attachment) => [attachment.id, attachment.fileName]));
+  const source = blocks.map((block) => {
+    if (block.type === "text") return block.text;
+    if (block.type === "mention") return `@${block.label}`;
+    if (block.type === "link") return block.label ? `[${block.label}](${block.url})` : block.url;
+    if (block.type === "emoji") return `:${block.shortcode}:`;
+    return attachments.get(block.attachmentId) ?? "";
+  }).join("");
+  return source || message.body;
+}
+
 function getWorkspaceMentionOptions(members: WorkspaceUser[]) {
   return members.flatMap((member) => {
     const labels = Array.from(new Set(
@@ -1368,6 +1423,48 @@ function findNextWorkspaceMention(
 
 function isWorkspaceMentionBoundary(value?: string) {
   return !value || /[\s,，.。!?！？;；:：()[\]{}"'“”‘’<>]/.test(value);
+}
+
+export function isWorkspaceTextOverAttachmentLimit(value: string) {
+  return Array.from(value).length > WORKSPACE_LONG_MESSAGE_CODE_POINTS ||
+    new TextEncoder().encode(value).byteLength > WORKSPACE_LONG_MESSAGE_BYTES;
+}
+
+function createWorkspaceLongMessageAttachment(source: string): WorkspaceComposerAttachment {
+  const now = new Date();
+  const stamp = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+    "-",
+    String(now.getHours()).padStart(2, "0"),
+    String(now.getMinutes()).padStart(2, "0"),
+    String(now.getSeconds()).padStart(2, "0")
+  ].join("");
+  return {
+    id: makeId("long-message"),
+    file: new File([source], `长消息-${stamp}.txt`, { type: "text/plain" }),
+    state: "queued",
+    progress: 0,
+    generatedFromLongMessage: true,
+    generatedSource: source
+  };
+}
+
+function workspaceComposerDocumentToContentBlocks(document: WorkspaceComposerDocument): WorkspaceContentBlock[] {
+  const blocks: WorkspaceContentBlock[] = [];
+  for (const block of document.blocks) {
+    if (block.type === "mention") {
+      blocks.push(block);
+      continue;
+    }
+    const text = block.type === "text" ? block.text : block.token;
+    if (!text) continue;
+    const previous = blocks.at(-1);
+    if (previous?.type === "text") previous.text += text;
+    else blocks.push({ type: "text", text });
+  }
+  return blocks;
 }
 
 function getConnectionAdvice({
@@ -1921,7 +2018,7 @@ export function App() {
   const [workspaceLibraryFiles, setWorkspaceLibraryFiles] = useState<WorkspaceFile[]>([]);
   const [workspaceDirectoryMembers, setWorkspaceDirectoryMembers] = useState<WorkspaceUser[]>([]);
   const [workspaceSelectedConversationId, setWorkspaceSelectedConversationId] = useState(initialWorkspaceRoute?.conversationId ?? "");
-  const [workspaceDraftByConversation, setWorkspaceDraftByConversation] = useState<Record<string, string>>({});
+  const [workspaceDraftByConversation, setWorkspaceDraftByConversation] = useState<Record<string, WorkspaceComposerDocument>>({});
   const [workspaceReplyToMessageIdByConversation, setWorkspaceReplyToMessageIdByConversation] = useState<Record<string, string>>({});
   const [workspaceComposerAttachmentsByConversation, setWorkspaceComposerAttachmentsByConversation] = useState<
     Record<string, WorkspaceComposerAttachment[]>
@@ -1971,6 +2068,9 @@ export function App() {
   const [workspaceUserMenuOpen, setWorkspaceUserMenuOpen] = useState(false);
   const [workspaceMemberFilterOpen, setWorkspaceMemberFilterOpen] = useState(false);
   const [workspaceReactionPendingKeys, setWorkspaceReactionPendingKeys] = useState<string[]>([]);
+  const [workspacePinsByConversation, setWorkspacePinsByConversation] = useState<Record<string, WorkspacePinnedMessage[]>>({});
+  const [workspacePinsExpandedByConversation, setWorkspacePinsExpandedByConversation] = useState<Record<string, boolean>>({});
+  const [workspaceHistoryTargetId, setWorkspaceHistoryTargetId] = useState("");
   const [workspaceImagePreview, setWorkspaceImagePreview] = useState<WorkspaceAttachment | null>(null);
   const [documentVisible, setDocumentVisible] = useState(() => typeof document === "undefined" || document.visibilityState === "visible");
   const [workspaceHistoryLoadingByConversation, setWorkspaceHistoryLoadingByConversation] = useState<Record<string, boolean>>({});
@@ -2092,7 +2192,16 @@ export function App() {
     workspaceSelectedConversation?.type === "group" &&
     workspaceSelectedConversation.capabilities?.canManageMembers
   );
-  const workspaceDraft = workspaceSelectedConversationId ? workspaceDraftByConversation[workspaceSelectedConversationId] ?? "" : "";
+  const workspacePinnedMessages = workspaceSelectedConversationId
+    ? workspacePinsByConversation[workspaceSelectedConversationId] ?? []
+    : [];
+  const workspacePinnedMessagesExpanded = workspaceSelectedConversationId
+    ? Boolean(workspacePinsExpandedByConversation[workspaceSelectedConversationId])
+    : false;
+  const workspaceDraftDocument = workspaceSelectedConversationId
+    ? workspaceDraftByConversation[workspaceSelectedConversationId] ?? { source: "", blocks: [] }
+    : { source: "", blocks: [] };
+  const workspaceDraft = workspaceDraftDocument.source;
   const workspaceComposerAttachments = workspaceSelectedConversationId
     ? workspaceComposerAttachmentsByConversation[workspaceSelectedConversationId] ?? []
     : [];
@@ -2279,6 +2388,7 @@ export function App() {
             : message.authorName || message.authorGithubLogin || "成员";
         return {
           id: message.id,
+          authorId: message.authorId,
           author,
           authorAvatarUrl: message.authorAvatarUrl,
           authorKind: message.authorKind,
@@ -2291,6 +2401,7 @@ export function App() {
           content: message.content,
           attachments: message.attachments,
           reactions: message.reactions,
+          pin: message.pin,
           replyTo: reply
             ? {
                 author: reply.authorName || reply.authorGithubLogin || "成员",
@@ -2309,6 +2420,7 @@ export function App() {
           const reply = message.replyToMessageId ? messageById.get(message.replyToMessageId) : undefined;
           return {
             id: message.id,
+            authorId: workspaceBootstrap?.auth.currentUser.id,
             author: "你",
             authorAvatarUrl: workspaceBootstrap?.auth.currentUser.avatarUrl,
             authorKind: "human" as const,
@@ -2604,6 +2716,25 @@ export function App() {
   }, [documentVisible, workspaceMessages.length, workspaceMobilePane, workspaceSelectedConversationId, workspaceView]);
 
   useEffect(() => {
+    if (!workspaceHistoryTargetId || workspaceView !== "chat") return;
+    workspaceStickToBottomRef.current = false;
+    const frame = window.requestAnimationFrame(() => {
+      const target = document.querySelector<HTMLElement>(
+        `[data-message-id="${CSS.escape(workspaceHistoryTargetId)}"]`
+      );
+      target?.scrollIntoView({ block: "center", behavior: "auto" });
+      if (target && workspaceMessageListRef.current) {
+        workspaceScrollPositionsRef.current.set(
+          workspaceSelectedConversationId,
+          workspaceMessageListRef.current.scrollTop
+        );
+        workspaceStickToBottomByConversationRef.current.set(workspaceSelectedConversationId, false);
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [workspaceHistoryTargetId, workspaceMessages.length, workspaceSelectedConversationId, workspaceView]);
+
+  useEffect(() => {
     const list = workspaceMessageListRef.current;
     if (!list || workspaceView !== "chat" || !workspaceSelectedConversationId) {
       return;
@@ -2762,8 +2893,14 @@ export function App() {
     if (lane !== "workspace-dev" || workspaceStatus !== "ready" || workspaceView !== "members") {
       return;
     }
-    void refreshWorkspaceMembers();
+    const timer = window.setTimeout(() => void refreshWorkspaceMembers(), 250);
+    return () => window.clearTimeout(timer);
   }, [lane, workspaceMemberKindFilter, workspaceMemberQuery, workspaceMemberRoleFilter, workspaceStatus, workspaceView]);
+
+  useEffect(() => {
+    if (workspaceStatus !== "ready" || workspaceSelectedConversation?.type !== "group") return;
+    void refreshWorkspacePins(workspaceSelectedConversation.id);
+  }, [workspaceSelectedConversation?.id, workspaceSelectedConversation?.type, workspaceStatus]);
 
   useEffect(() => {
     if (workspaceStatus !== "ready") return;
@@ -3673,16 +3810,19 @@ export function App() {
     return data;
   }
 
-  function setWorkspaceConversationDraft(conversationId: string, draft: string) {
+  function setWorkspaceConversationDraft(conversationId: string, draft: WorkspaceComposerDocument | string) {
     if (!conversationId) {
       return;
     }
+    const document = typeof draft === "string"
+      ? { source: draft, blocks: draft ? [{ type: "text" as const, text: draft }] : [] }
+      : draft;
     setWorkspaceDraftByConversation((drafts) => {
-      if (!draft) {
+      if (!document.source && document.blocks.length === 0) {
         const { [conversationId]: _removed, ...rest } = drafts;
         return rest;
       }
-      return { ...drafts, [conversationId]: draft };
+      return { ...drafts, [conversationId]: document };
     });
   }
 
@@ -3825,6 +3965,9 @@ export function App() {
     setWorkspaceDraftByConversation({});
     setWorkspaceReplyToMessageIdByConversation({});
     setWorkspaceComposerAttachmentsByConversation({});
+    setWorkspacePinsByConversation({});
+    setWorkspacePinsExpandedByConversation({});
+    setWorkspaceHistoryTargetId("");
     setWorkspaceUnreadAnchorByConversation({});
     setWorkspaceNewMessageCountByConversation({});
     setWorkspaceSending(false);
@@ -3929,6 +4072,78 @@ export function App() {
           : conversation
       )
     );
+  }
+
+  async function refreshWorkspacePins(conversationId: string) {
+    const data = await workspaceJson<{ pins: WorkspacePinnedMessage[] }>(
+      `/api/workspace/groups/${encodeURIComponent(conversationId)}/pins?limit=100`
+    );
+    setWorkspacePinsByConversation((current) => ({ ...current, [conversationId]: data.pins }));
+    return data.pins;
+  }
+
+  async function toggleWorkspacePin(message: Message) {
+    if (!workspaceSelectedConversation || workspaceSelectedConversation.type !== "group") return;
+    clearWorkspaceNotice();
+    try {
+      if (message.pin) {
+        await workspaceJson(`/api/workspace/groups/${encodeURIComponent(workspaceSelectedConversation.id)}/pins/${encodeURIComponent(message.id)}`, {
+          method: "DELETE"
+        });
+        showWorkspaceNotice("success", "已取消常驻");
+      } else {
+        await workspaceJson(`/api/workspace/groups/${encodeURIComponent(workspaceSelectedConversation.id)}/pins`, {
+          method: "POST",
+          body: JSON.stringify({ messageId: message.id })
+        });
+        showWorkspaceNotice("success", "消息已设为常驻");
+      }
+      await Promise.all([
+        refreshWorkspacePins(workspaceSelectedConversation.id),
+        refreshWorkspaceConversationMessages(workspaceSelectedConversation.id)
+      ]);
+    } catch (error) {
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, message.pin ? "取消常驻失败" : "设置常驻失败"));
+    }
+  }
+
+  async function removeWorkspacePin(messageId: string) {
+    if (!workspaceSelectedConversation) return;
+    try {
+      await workspaceJson(`/api/workspace/groups/${encodeURIComponent(workspaceSelectedConversation.id)}/pins/${encodeURIComponent(messageId)}`, {
+        method: "DELETE"
+      });
+      await Promise.all([
+        refreshWorkspacePins(workspaceSelectedConversation.id),
+        refreshWorkspaceConversationMessages(workspaceSelectedConversation.id)
+      ]);
+      showWorkspaceNotice("success", "已取消常驻");
+    } catch (error) {
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "取消常驻失败"));
+    }
+  }
+
+  async function openWorkspacePinnedMessage(messageId: string) {
+    if (!workspaceSelectedConversation) return;
+    workspaceStickToBottomRef.current = false;
+    workspaceStickToBottomByConversationRef.current.set(workspaceSelectedConversation.id, false);
+    const data = await workspaceJson<{ messages: WorkspaceMessage[] }>(
+      `/api/workspace/conversations/${encodeURIComponent(workspaceSelectedConversation.id)}/messages?around=${encodeURIComponent(messageId)}&limit=41`
+    );
+    setWorkspaceHistoryTargetId(messageId);
+    setWorkspaceConversations((conversations) => conversations.map((conversation) => conversation.id === workspaceSelectedConversation.id
+      ? { ...conversation, latestMessages: data.messages }
+      : conversation));
+    setWorkspaceContextCollapsed(true);
+    setWorkspaceMobilePane("main");
+  }
+
+  async function returnWorkspaceToLatest() {
+    if (!workspaceSelectedConversation) return;
+    setWorkspaceHistoryTargetId("");
+    workspaceStickToBottomRef.current = true;
+    workspaceStickToBottomByConversationRef.current.set(workspaceSelectedConversation.id, true);
+    await refreshWorkspaceConversationMessages(workspaceSelectedConversation.id);
   }
 
   function normalizeWorkspaceRealtimeEvents(events: WorkspaceEvent[]) {
@@ -4071,6 +4286,14 @@ export function App() {
         if (payload.messageId && payload.reactions) {
           updateWorkspaceMessageReactions(payload.messageId, payload.reactions, event.seq);
         } else if (payload.conversationId === workspaceSelectedConversationIdRef.current) {
+          tasks.push(refreshWorkspaceConversationMessages(payload.conversationId));
+        }
+        continue;
+      }
+
+      if (event.type === "message.pinned" || event.type === "message.unpinned") {
+        if (payload.conversationId === workspaceSelectedConversationIdRef.current) {
+          tasks.push(refreshWorkspacePins(payload.conversationId));
           tasks.push(refreshWorkspaceConversationMessages(payload.conversationId));
         }
         continue;
@@ -4456,6 +4679,10 @@ export function App() {
   function handleWorkspaceMessageListScroll(list: HTMLDivElement) {
     const conversationId = workspaceSelectedConversationId;
     if (!conversationId) {
+      return;
+    }
+    if (workspaceHistoryTargetId) {
+      workspaceStickToBottomRef.current = false;
       return;
     }
     const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight <= 80;
@@ -4953,10 +5180,38 @@ export function App() {
 
   async function sendWorkspaceMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!workspaceSelectedConversation || workspaceSendingRef.current) {
+      return;
+    }
     const body = workspaceDraft;
     const hasBody = body.trim().length > 0;
-    const stagedAttachments = workspaceComposerAttachmentsByConversation[workspaceSelectedConversationId] ?? [];
-    if ((!hasBody && stagedAttachments.length === 0) || !workspaceSelectedConversation || workspaceSendingRef.current) {
+    const hasStructuredBody = hasBody || workspaceDraftDocument.blocks.some(
+      (block) => block.type === "mention" || block.type === "emote"
+    );
+    let stagedAttachments = workspaceComposerAttachmentsByConversation[workspaceSelectedConversationId] ?? [];
+    const shouldConvertLongMessage = isWorkspaceTextOverAttachmentLimit(body);
+    const staleGeneratedAttachments = stagedAttachments.filter(
+      (attachment) => attachment.generatedFromLongMessage && (!shouldConvertLongMessage || attachment.generatedSource !== body)
+    );
+    if (staleGeneratedAttachments.length > 0) {
+      await Promise.all(staleGeneratedAttachments.map((attachment) =>
+        removeWorkspaceComposerAttachment(workspaceSelectedConversationId, attachment.id)
+      ));
+      const staleIds = new Set(staleGeneratedAttachments.map((attachment) => attachment.id));
+      stagedAttachments = stagedAttachments.filter((attachment) => !staleIds.has(attachment.id));
+    }
+    if (shouldConvertLongMessage && !stagedAttachments.some(
+      (attachment) => attachment.generatedFromLongMessage && attachment.generatedSource === body
+    )) {
+      if (stagedAttachments.length >= WORKSPACE_MAX_STAGED_ATTACHMENTS) {
+        showWorkspaceNotice("warning", "长消息需要转换为 TXT，请先移除一个附件");
+        return;
+      }
+      const generatedAttachment = createWorkspaceLongMessageAttachment(body);
+      stagedAttachments = [...stagedAttachments, generatedAttachment];
+      updateWorkspaceComposerAttachments(workspaceSelectedConversationId, () => stagedAttachments);
+    }
+    if ((!hasStructuredBody && stagedAttachments.length === 0)) {
       return;
     }
     const conversation = workspaceSelectedConversation;
@@ -4974,7 +5229,9 @@ export function App() {
       const clientMessageId = makeId("wm");
       const replyToMessageId = workspaceReplyToMessageId || null;
       const localMessageId = makeId("wlm");
-      const textBlocks = hasBody ? buildWorkspaceMessageBlocks(body, conversation.members) : [];
+      const textBlocks = !shouldConvertLongMessage && hasStructuredBody
+        ? workspaceComposerDocumentToContentBlocks(workspaceDraftDocument)
+        : [];
       const blocks: WorkspaceContentBlock[] = [
         ...textBlocks,
         ...uploadedAttachments.map((attachment) => ({
@@ -4982,7 +5239,12 @@ export function App() {
           attachmentId: attachment.id
         }))
       ];
-      const messageBody = hasBody ? body : `[文件] ${uploadedAttachments.map((attachment) => attachment.fileName).join("、")}`;
+      const generatedAttachmentIndex = stagedAttachments.findIndex(
+        (attachment) => attachment.generatedFromLongMessage && attachment.generatedSource === body
+      );
+      const messageBody = shouldConvertLongMessage
+        ? `[长消息] ${uploadedAttachments[generatedAttachmentIndex]?.fileName ?? "长消息.txt"}`
+        : hasBody ? body : `[文件] ${uploadedAttachments.map((attachment) => attachment.fileName).join("、")}`;
       setWorkspaceLocalMessages((messages) => [
         ...messages.filter((message) => message.clientMessageId !== clientMessageId),
         {
@@ -4997,9 +5259,6 @@ export function App() {
           state: "sending"
         }
       ]);
-      setWorkspaceConversationDraft(conversation.id, "");
-      setWorkspaceConversationReplyToMessageId(conversation.id, "");
-      clearWorkspaceComposerAttachments(conversation.id);
       await submitWorkspaceMessage({
         conversationId: conversation.id,
         clientMessageId,
@@ -5007,6 +5266,9 @@ export function App() {
         body: messageBody,
         blocks
       });
+      setWorkspaceConversationDraft(conversation.id, "");
+      setWorkspaceConversationReplyToMessageId(conversation.id, "");
+      clearWorkspaceComposerAttachments(conversation.id);
     } catch (error) {
       const message = userFacingErrorMessage(error, "消息发送失败");
       setWorkspaceLocalMessages((messages) => {
@@ -7199,7 +7461,8 @@ export function App() {
                         newMessageCount={workspaceNewMessageCount}
                         onJumpToLatest={jumpWorkspaceToLatest}
                         draft={workspaceDraft}
-                        onDraft={(draft) => setWorkspaceConversationDraft(workspaceSelectedConversation.id, draft)}
+                        draftDocument={workspaceDraftDocument}
+                        onDraft={(document) => setWorkspaceConversationDraft(workspaceSelectedConversation.id, document)}
                         onSend={sendWorkspaceMessage}
                         stagedAttachments={workspaceComposerAttachments}
                         onStageFiles={stageWorkspaceAttachments}
@@ -7213,16 +7476,22 @@ export function App() {
                         onOpenAttachment={openWorkspaceAttachmentFile}
                         onPreviewImage={setWorkspaceImagePreview}
                         onCopyMessage={(message) => {
-                          void copyText(message.body).then((copied) =>
+                          void copyText(serializeWorkspaceMessageForCopy(message)).then((copied) =>
                             showWorkspaceNotice(copied ? "success" : "warning", copied ? "消息已复制" : "消息复制失败")
                           );
                         }}
                         onToggleReaction={(messageId, emoteKey) => void toggleWorkspaceReaction(messageId, emoteKey)}
                         reactionPendingKeys={workspaceReactionPendingKeys}
                         currentUserId={workspaceBootstrap.auth.currentUser.id}
-                        mentionMembers={workspaceSelectedConversation.members.filter(
-                          (member) => member.id !== workspaceBootstrap.auth.currentUser.id
-                        )}
+                        conversationType={workspaceSelectedConversation.type}
+                        historyTargetId={workspaceHistoryTargetId}
+                        onReturnToLatest={() => void returnWorkspaceToLatest()}
+                        onTogglePin={(message) => void toggleWorkspacePin(message)}
+                        mentionMembers={workspaceSelectedConversation.type === "group"
+                          ? workspaceSelectedConversation.members.filter(
+                            (member) => member.id !== workspaceBootstrap.auth.currentUser.id
+                          )
+                          : []}
                         fileInputDisabled={!workspaceBootstrap.permissions.canUpload}
                         sending={workspaceSending}
                       />
@@ -7482,8 +7751,10 @@ export function App() {
                                       key={filter.id}
                                       onClick={() => setWorkspaceMemberRoleFilter(filter.id)}
                                     >
-                                      {workspaceMemberRoleFilter === filter.id && <Check size={14} />}
-                                      {filter.label}
+                                      <span className="workspace-filter-check" aria-hidden="true">
+                                        {workspaceMemberRoleFilter === filter.id && <Check size={14} />}
+                                      </span>
+                                      <span>{filter.label}</span>
                                     </button>
                                   ))}
                                 </div>
@@ -7503,8 +7774,10 @@ export function App() {
                                     key={filter.id}
                                     onClick={() => setWorkspaceMemberKindFilter(filter.id)}
                                   >
-                                    {workspaceMemberKindFilter === filter.id && <Check size={14} />}
-                                    {filter.label}
+                                    <span className="workspace-filter-check" aria-hidden="true">
+                                      {workspaceMemberKindFilter === filter.id && <Check size={14} />}
+                                    </span>
+                                    <span>{filter.label}</span>
                                   </button>
                                 ))}
                               </div>
@@ -8096,6 +8369,48 @@ export function App() {
                               <strong>{workspaceNotificationLevelLabel(workspaceSelectedConversation.notificationLevel)}</strong>
                             </div>
                           </div>
+                          {workspaceSelectedConversation.type === "group" && (
+                            <section className="workspace-pinned-overview" aria-label="常驻消息">
+                              <div className="workspace-context-section-header">
+                                <span><Pin size={15} />常驻消息</span>
+                                <span className="workspace-context-section-actions">
+                                  <small>{workspacePinnedMessages.length} 条</small>
+                                  {workspacePinnedMessages.length > 3 && (
+                                    <button
+                                      type="button"
+                                      aria-expanded={workspacePinnedMessagesExpanded}
+                                      onClick={() => setWorkspacePinsExpandedByConversation((current) => ({
+                                        ...current,
+                                        [workspaceSelectedConversation.id]: !workspacePinnedMessagesExpanded
+                                      }))}
+                                    >
+                                      {workspacePinnedMessagesExpanded ? "收起" : "查看全部"}
+                                    </button>
+                                  )}
+                                </span>
+                              </div>
+                              {workspacePinnedMessages.length === 0 ? (
+                                <p className="saved-empty">群成员常驻的消息会显示在这里。</p>
+                              ) : (
+                                <div className="workspace-pinned-list">
+                                  {(workspacePinnedMessagesExpanded ? workspacePinnedMessages : workspacePinnedMessages.slice(0, 3)).map((pin) => (
+                                    <article key={pin.messageId}>
+                                      <button type="button" onClick={() => void openWorkspacePinnedMessage(pin.messageId)}>
+                                        <strong>{pin.message.authorName || pin.message.authorGithubLogin || "成员"}</strong>
+                                        <span>{pin.message.plainText || "附件消息"}</span>
+                                        <small>{formatWorkspaceTime(pin.pinnedAt)}</small>
+                                      </button>
+                                      {pin.canUnpin && (
+                                        <button className="icon-button" type="button" title="取消常驻" onClick={() => void removeWorkspacePin(pin.messageId)}>
+                                          <PinOff size={14} />
+                                        </button>
+                                      )}
+                                    </article>
+                                  ))}
+                                </div>
+                              )}
+                            </section>
+                          )}
                         </div>
                       )}
                       {workspaceContextTab === "members" && (
@@ -8521,6 +8836,8 @@ function WorkspaceAccountSettings({
   onNotice: (tone: WorkspaceNotice["tone"], text: string) => void;
 }) {
   const [nickname, setNickname] = useState(currentUser.nickname ?? "");
+  const [searchDiscoverable, setSearchDiscoverable] = useState(Boolean(currentUser.searchDiscoverable));
+  const [avatarSaving, setAvatarSaving] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
   const [notifications, setNotifications] = useState<WorkspaceNotificationPreferences | null>(null);
   const [notificationsLoading, setNotificationsLoading] = useState(true);
@@ -8532,7 +8849,8 @@ function WorkspaceAccountSettings({
 
   useEffect(() => {
     setNickname(currentUser.nickname ?? "");
-  }, [currentUser.id, currentUser.nickname]);
+    setSearchDiscoverable(Boolean(currentUser.searchDiscoverable));
+  }, [currentUser.id, currentUser.nickname, currentUser.searchDiscoverable]);
 
   useEffect(() => {
     let cancelled = false;
@@ -8558,15 +8876,48 @@ function WorkspaceAccountSettings({
     try {
       const data = await workspaceJson<{ user: WorkspaceUser }>("/api/workspace/me/profile", {
         method: "PATCH",
-        body: JSON.stringify({ nickname: nickname.trim() || null })
+        body: JSON.stringify({
+          nickname: nickname.trim() || null,
+          searchDiscoverable
+        })
       });
       onUserUpdated(data.user);
       setNickname(data.user.nickname ?? "");
-      onNotice("success", "公开昵称已更新");
+      setSearchDiscoverable(Boolean(data.user.searchDiscoverable));
+      onNotice("success", "公开资料已更新");
     } catch (error) {
-      onNotice("warning", userFacingErrorMessage(error, "公开昵称保存失败"));
+      onNotice("warning", userFacingErrorMessage(error, "公开资料保存失败"));
     } finally {
       setProfileSaving(false);
+    }
+  }
+
+  async function uploadAvatar(blob: Blob) {
+    setAvatarSaving(true);
+    try {
+      const response = await workspaceFetch("/api/workspace/me/avatar", {
+        method: "PUT",
+        headers: { "content-type": "image/webp" },
+        body: blob
+      });
+      const data = await response.json() as { user: WorkspaceUser };
+      onUserUpdated(data.user);
+      onNotice("success", "头像已更新");
+    } finally {
+      setAvatarSaving(false);
+    }
+  }
+
+  async function deleteAvatar() {
+    setAvatarSaving(true);
+    try {
+      const data = await workspaceJson<{ user: WorkspaceUser }>("/api/workspace/me/avatar", { method: "DELETE" });
+      onUserUpdated(data.user);
+      onNotice("success", "已恢复 GitHub 头像");
+    } catch (error) {
+      onNotice("warning", userFacingErrorMessage(error, "头像恢复失败"));
+    } finally {
+      setAvatarSaving(false);
     }
   }
 
@@ -8662,12 +9013,20 @@ function WorkspaceAccountSettings({
         <div className="workspace-section-header">
           <div>
             <h3>公开资料</h3>
-            <p>昵称会显示在所有登录后的共享空间界面。</p>
+            <p>头像和昵称会显示在所有登录后的共享空间界面。</p>
           </div>
           <button className="primary compact" type="submit" disabled={profileSaving}>
-            {profileSaving ? "保存中" : "保存昵称"}
+            {profileSaving ? "保存中" : "保存资料"}
           </button>
         </div>
+        <WorkspaceAvatarEditor
+          name={currentUser.displayName}
+          avatarUrl={currentUser.avatarUrl}
+          busy={avatarSaving}
+          onUpload={uploadAvatar}
+          onDelete={deleteAvatar}
+          onError={(message) => onNotice("warning", message)}
+        />
         <div className="workspace-settings-grid">
           <label>
             <span>公开昵称</span>
@@ -8678,6 +9037,17 @@ function WorkspaceAccountSettings({
             <strong>@{currentUser.githubLogin}</strong>
           </div>
         </div>
+        <label className="workspace-checkbox-setting">
+          <input
+            type="checkbox"
+            checked={searchDiscoverable}
+            onChange={(event) => setSearchDiscoverable(event.target.checked)}
+          />
+          <span>
+            <strong>允许其他成员搜索到我</strong>
+            <small>开启后，其他成员可以通过公开昵称或 GitHub 登录名找到你并发起私聊。</small>
+          </span>
+        </label>
       </form>
 
       <section className="workspace-preference-section" aria-busy={notificationsLoading}>
@@ -9553,6 +9923,7 @@ export function WorkspaceStructuredMessage({
   onPreviewImage?: (attachment: WorkspaceAttachment) => void;
   mentionMembers?: WorkspaceUser[];
 }) {
+  const [textExpanded, setTextExpanded] = useState(false);
   const blocks = message.content?.blocks ?? [];
   const hasUnknownBlock = blocks.some((block) => !isKnownWorkspaceMessageBlock(block));
   if (message.lane !== "workspace" || blocks.length === 0 || hasUnknownBlock) {
@@ -9595,11 +9966,16 @@ export function WorkspaceStructuredMessage({
     ));
   const imageAttachmentIds = new Set(imageAttachments.map((attachment) => attachment.id));
   const fileAttachmentBlocks = attachmentBlocks.filter(({ attachment }) => !attachment || !imageAttachmentIds.has(attachment.id));
+  const collapsible = shouldCollapseWorkspaceMessageText(contentBlocks);
+  const contentId = `workspace-message-text-${message.id.replace(/[^a-z0-9_-]/gi, "")}`;
 
   return (
     <div className="message-body structured-message">
       {contentBlocks.length > 0 && (
-        <div className="message-content-flow">
+        <div
+          className={collapsible && !textExpanded ? "message-content-flow workspace-message-text collapsed" : "message-content-flow workspace-message-text"}
+          id={contentId}
+        >
           {contentBlocks.map((block, index) => {
             if (block.type === "text") {
               return <WorkspaceMarkdown key={`${index}-text`}>{block.text}</WorkspaceMarkdown>;
@@ -9624,6 +10000,18 @@ export function WorkspaceStructuredMessage({
             return <span key={`${index}-fallback`}>{renderMessageParts(message.body)}</span>;
           })}
         </div>
+      )}
+      {collapsible && (
+        <button
+          className="workspace-message-expand"
+          type="button"
+          aria-controls={contentId}
+          aria-expanded={textExpanded}
+          onClick={() => setTextExpanded((expanded) => !expanded)}
+        >
+          {textExpanded ? "收起" : "展开全文"}
+          {textExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
       )}
       {imageAttachments.length > 0 && (
         <div
@@ -9679,6 +10067,17 @@ export function WorkspaceStructuredMessage({
       )}
     </div>
   );
+}
+
+export function shouldCollapseWorkspaceMessageText(blocks: WorkspaceContentBlock[]) {
+  const visible = blocks.map((block) => {
+    if (block.type === "text") return block.text;
+    if (block.type === "mention") return `@${block.label}`;
+    if (block.type === "link") return block.label || block.url;
+    if (block.type === "emoji") return `:${block.shortcode}:`;
+    return "";
+  }).join("");
+  return Array.from(visible).length > 700 || visible.split(/\r?\n/).length > 10;
 }
 function isKnownWorkspaceMessageBlock(block: WorkspaceContentBlock) {
   return block.type === "text" ||
@@ -9822,6 +10221,7 @@ function WorkspaceChatPanel({
   newMessageCount,
   onJumpToLatest,
   draft,
+  draftDocument,
   onDraft,
   onSend,
   stagedAttachments,
@@ -9837,6 +10237,10 @@ function WorkspaceChatPanel({
   onToggleReaction,
   reactionPendingKeys,
   currentUserId,
+  conversationType,
+  historyTargetId,
+  onReturnToLatest,
+  onTogglePin,
   mentionMembers,
   fileInputDisabled,
   sending
@@ -9858,7 +10262,8 @@ function WorkspaceChatPanel({
   newMessageCount: number;
   onJumpToLatest: () => void;
   draft: string;
-  onDraft: (value: string) => void;
+  draftDocument: WorkspaceComposerDocument;
+  onDraft: (value: WorkspaceComposerDocument) => void;
   onSend: (event: FormEvent<HTMLFormElement>) => void;
   stagedAttachments: WorkspaceComposerAttachment[];
   onStageFiles: (files: File[]) => void;
@@ -9873,23 +10278,35 @@ function WorkspaceChatPanel({
   onToggleReaction: (messageId: string, emoteKey: string) => void;
   reactionPendingKeys: string[];
   currentUserId: string;
+  conversationType: WorkspaceConversation["type"];
+  historyTargetId: string;
+  onReturnToLatest: () => void;
+  onTogglePin: (message: Message) => void;
   mentionMembers: WorkspaceUser[];
   fileInputDisabled: boolean;
   sending: boolean;
 }) {
   const [emotePanelOpen, setEmotePanelOpen] = useState(false);
   const [mentionPanelOpen, setMentionPanelOpen] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
   const [reactionPickerMessageId, setReactionPickerMessageId] = useState("");
   const [dragActive, setDragActive] = useState(false);
   const [formatToolbarOpen, setFormatToolbarOpen] = useState(false);
   const [composerExpanded, setComposerExpanded] = useState(false);
   const composerFormRef = useRef<HTMLFormElement | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const editorRef = useRef<WorkspaceComposerEditorHandle | null>(null);
   const emoteTriggerRef = useRef<HTMLButtonElement | null>(null);
   const mentionTriggerRef = useRef<HTMLButtonElement | null>(null);
   const reactionPickerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const historySentinelRef = useRef<HTMLDivElement | null>(null);
   const canMention = mentionMembers.length > 0;
+  const filteredMentionMembers = useMemo(() => {
+    const query = (mentionQuery ?? "").trim().toLocaleLowerCase();
+    return mentionMembers.filter((member) => !query || [member.displayName, member.githubLogin]
+      .filter(Boolean)
+      .some((value) => value!.toLocaleLowerCase().includes(query)));
+  }, [mentionMembers, mentionQuery]);
   const toolPanelOpen = emotePanelOpen || mentionPanelOpen;
   const composerClassName = [
     "workspace-composer",
@@ -9911,32 +10328,6 @@ function WorkspaceChatPanel({
   }, [messages, unreadAnchorCount, unreadAnchorMessageId]);
 
   useEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) {
-      return;
-    }
-
-    const syncTextareaHeight = () => {
-      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-      const maxHeight = composerExpanded ? Math.min(360, viewportHeight * 0.42) : 132;
-      const minHeight = composerExpanded
-        ? Math.min(180, Math.max(132, viewportHeight * 0.22))
-        : 36;
-      textarea.style.height = "auto";
-      const nextHeight = Math.max(minHeight, Math.min(textarea.scrollHeight, maxHeight));
-      textarea.style.height = String(Math.round(nextHeight)) + "px";
-    };
-
-    syncTextareaHeight();
-    window.addEventListener("resize", syncTextareaHeight);
-    window.visualViewport?.addEventListener("resize", syncTextareaHeight);
-    return () => {
-      window.removeEventListener("resize", syncTextareaHeight);
-      window.visualViewport?.removeEventListener("resize", syncTextareaHeight);
-    };
-  }, [composerExpanded, draft]);
-
-  useEffect(() => {
     const sentinel = historySentinelRef.current;
     const root = messageListRef.current;
     if (!sentinel || !root || !olderMessagesAvailable || olderMessagesLoading) {
@@ -9955,42 +10346,40 @@ function WorkspaceChatPanel({
   }, [messageListRef, olderMessagesAvailable, olderMessagesLoading, onLoadOlderMessages]);
 
   const applyMarkdownFormat = (format: WorkspaceMarkdownFormat) => {
-    const textarea = textareaRef.current;
-    if (!textarea) {
-      return;
-    }
-    const edit = applyWorkspaceMarkdownFormat(
-      draft,
-      textarea.selectionStart,
-      textarea.selectionEnd,
-      format
-    );
-    onDraft(edit.value);
-    window.requestAnimationFrame(() => {
-      textarea.focus();
-      textarea.setSelectionRange(edit.selectionStart, edit.selectionEnd);
-    });
+    const formats: Record<WorkspaceMarkdownFormat, [string, string?, string?]> = {
+      bold: ["**", "**", "粗体文本"],
+      italic: ["*", "*", "斜体文本"],
+      strikethrough: ["~~", "~~", "删除线文本"],
+      "inline-code": ["`", "`", "代码"],
+      quote: ["> ", "", "引用内容"],
+      "unordered-list": ["- ", "", "列表项"],
+      "ordered-list": ["1. ", "", "列表项"],
+      link: ["[", "](https://)", "链接文本"],
+      "code-block": ["~~~\n", "\n~~~", "代码"],
+      divider: ["\n\n---\n\n", "", ""]
+    };
+    editorRef.current?.applyInlineFormat(...formats[format]);
+    window.requestAnimationFrame(() => editorRef.current?.focus());
   };
 
   const insertEmote = (item: EmoteItem) => {
     const insertText = getEmoteInsertText(item);
-    onDraft(
-      item.kind === "image"
-        ? `${draft}${draft && !/\s$/.test(draft) ? " " : ""}${insertText} `
-        : `${draft}${insertText}`
-    );
+    editorRef.current?.insertEmote(item, insertText);
     setEmotePanelOpen(false);
-    window.requestAnimationFrame(() => textareaRef.current?.focus());
+    window.requestAnimationFrame(() => editorRef.current?.focus());
   };
   const insertMention = (member: WorkspaceUser) => {
-    onDraft(`${draft}${draft && !/\s$/.test(draft) ? " " : ""}@${member.displayName} `);
+    const triggerLength = mentionQuery === null ? 0 : mentionQuery.length + 1;
+    editorRef.current?.insertMention(member.id, member.displayName, triggerLength);
     setMentionPanelOpen(false);
-    window.requestAnimationFrame(() => textareaRef.current?.focus());
+    setMentionQuery(null);
+    window.requestAnimationFrame(() => editorRef.current?.focus());
   };
   const closeWorkspaceComposerPopover = () => {
     setEmotePanelOpen(false);
     setMentionPanelOpen(false);
-    window.requestAnimationFrame(() => textareaRef.current?.focus());
+    setMentionQuery(null);
+    window.requestAnimationFrame(() => editorRef.current?.focus());
   };
   useEffect(() => {
     if (!toolPanelOpen && !reactionPickerMessageId) {
@@ -10017,7 +10406,15 @@ function WorkspaceChatPanel({
     document.addEventListener("pointerdown", handleOutsidePointerDown);
     return () => document.removeEventListener("pointerdown", handleOutsidePointerDown);
   }, [reactionPickerMessageId, toolPanelOpen]);
-  const handleDraftKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+  const handleDraftKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (mentionPanelOpen && filteredMentionMembers.length > 0 && ["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "ArrowDown") setMentionActiveIndex((index) => (index + 1) % filteredMentionMembers.length);
+      else if (event.key === "ArrowUp") setMentionActiveIndex((index) => (index - 1 + filteredMentionMembers.length) % filteredMentionMembers.length);
+      else insertMention(filteredMentionMembers[mentionActiveIndex] ?? filteredMentionMembers[0]);
+      return;
+    }
     if ((event.metaKey || event.ctrlKey) && !event.altKey) {
       const shortcutFormat = event.key.toLowerCase() === "b"
         ? "bold"
@@ -10026,6 +10423,7 @@ function WorkspaceChatPanel({
           : null;
       if (shortcutFormat) {
         event.preventDefault();
+        event.stopPropagation();
         applyMarkdownFormat(shortcutFormat);
         return;
       }
@@ -10046,11 +10444,12 @@ function WorkspaceChatPanel({
       return;
     }
     event.preventDefault();
+    event.stopPropagation();
     if (!sendDisabled) {
       composerFormRef.current?.requestSubmit();
     }
   };
-  const handleDraftPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+  const handleDraftPaste = (event: React.ClipboardEvent<HTMLDivElement>) => {
     if (fileInputDisabled || sending) {
       return;
     }
@@ -10063,7 +10462,7 @@ function WorkspaceChatPanel({
   };
   const handleComposerSubmit = (event: FormEvent<HTMLFormElement>) => {
     onSend(event);
-    window.requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
+    window.requestAnimationFrame(() => editorRef.current?.focus());
   };
   const handleDrop = (event: React.DragEvent<HTMLElement>) => {
     event.preventDefault();
@@ -10116,6 +10515,12 @@ function WorkspaceChatPanel({
           }
         }}
       >
+        {historyTargetId && (
+          <div className="workspace-history-window-banner" role="status">
+            <span><Pin size={14} />正在查看常驻消息上下文</span>
+            <button type="button" onClick={onReturnToLatest}>返回最新消息</button>
+          </div>
+        )}
         <div className="workspace-history-sentinel" ref={historySentinelRef}>
           {olderMessagesAvailable && (
             <button className="workspace-history-button" type="button" disabled={olderMessagesLoading} onClick={onLoadOlderMessages}>
@@ -10171,7 +10576,8 @@ function WorkspaceChatPanel({
                   <div className="workspace-unread-divider" role="separator"><span>以下为未读消息</span></div>
                 )}
                 <article
-                  className={`workspace-message${message.self ? " self" : ""}${groupedWithPrevious ? " grouped" : ""}`}
+                  className={`workspace-message${message.self ? " self" : ""}${groupedWithPrevious ? " grouped" : ""}${historyTargetId === message.id ? " history-target" : ""}`}
+                  data-message-id={message.id}
                   data-testid={`workspace-message-${message.id}`}
                 >
                   <div className="workspace-message-avatar-slot" aria-hidden="true">
@@ -10203,6 +10609,12 @@ function WorkspaceChatPanel({
                       onPreviewImage={onPreviewImage}
                       mentionMembers={mentionMembers}
                     />
+                    {message.pin && (
+                      <div className="workspace-message-pin-indicator" title="群常驻消息">
+                        <Pin size={12} aria-hidden="true" />
+                        <span>常驻</span>
+                      </div>
+                    )}
                     <WorkspaceReactionBar
                       messageId={message.id}
                       reactions={message.reactions ?? []}
@@ -10277,6 +10689,16 @@ function WorkspaceChatPanel({
                       <button type="button" title="复制消息" onClick={() => onCopyMessage(message)}>
                         <Copy size={15} />
                       </button>
+                      {conversationType === "group" && (message.pin?.canUnpin || (message.self && !message.pin)) && (
+                        <button
+                          type="button"
+                          title={message.pin ? "取消常驻" : "设为常驻消息"}
+                          aria-pressed={Boolean(message.pin)}
+                          onClick={() => onTogglePin(message)}
+                        >
+                          {message.pin ? <PinOff size={15} /> : <Pin size={15} />}
+                        </button>
+                      )}
                     </div>
                   )}
                 </article>
@@ -10337,19 +10759,21 @@ function WorkspaceChatPanel({
           ref={composerFormRef}
           className={composerClassName}
           onSubmit={handleComposerSubmit}
-          onKeyDown={(event) => {
-            if (event.key !== "Escape") {
+          onKeyDownCapture={(event) => {
+            const target = event.target;
+            if (target instanceof Element && target.closest('[contenteditable="true"][aria-label="输入消息"]')) {
+              handleDraftKeyDown(event);
               return;
             }
-            if (toolPanelOpen) {
-              event.preventDefault();
-              closeWorkspaceComposerPopover();
-              return;
-            }
-            if (formatToolbarOpen) {
-              event.preventDefault();
-              setFormatToolbarOpen(false);
-              window.requestAnimationFrame(() => textareaRef.current?.focus());
+            if (event.key === "Escape") {
+              if (toolPanelOpen) {
+                event.preventDefault();
+                closeWorkspaceComposerPopover();
+              } else if (formatToolbarOpen) {
+                event.preventDefault();
+                setFormatToolbarOpen(false);
+                window.requestAnimationFrame(() => editorRef.current?.focus());
+              }
             }
           }}
         >
@@ -10393,8 +10817,10 @@ function WorkspaceChatPanel({
                 aria-controls="workspace-composer-mention-picker"
                 title="提及成员"
                 onClick={() => {
-                  setEmotePanelOpen(false);
-                  setMentionPanelOpen((open) => !open);
+                setEmotePanelOpen(false);
+                setMentionQuery("");
+                setMentionActiveIndex(0);
+                setMentionPanelOpen((open) => !open);
                 }}
               >
                 <AtSign size={18} />
@@ -10448,17 +10874,24 @@ function WorkspaceChatPanel({
             </div>
           )}
 
-          <textarea
-            ref={textareaRef}
-            rows={1}
-            value={draft}
-            onChange={(event) => onDraft(event.target.value)}
+          <WorkspaceComposerEditor
+            ref={editorRef}
+            value={draftDocument}
+            onChange={onDraft}
+            onMentionQuery={(query) => {
+              if (!canMention) return;
+              const normalizedQuery = (query ?? "").trim().toLocaleLowerCase();
+              const hasMatches = mentionMembers.some((member) => !normalizedQuery || [member.displayName, member.githubLogin]
+                .filter(Boolean)
+                .some((value) => value!.toLocaleLowerCase().includes(normalizedQuery)));
+              setMentionQuery(query);
+              setMentionActiveIndex(0);
+              setMentionPanelOpen(query !== null && hasMatches);
+              if (query !== null) setEmotePanelOpen(false);
+            }}
             onKeyDown={handleDraftKeyDown}
             onPaste={handleDraftPaste}
-            placeholder="输入消息"
-            aria-label="输入消息"
-            aria-keyshortcuts="Control+B Meta+B Control+I Meta+I"
-            aria-busy={sending}
+            expanded={composerExpanded}
             readOnly={sending}
           />
           <div className="workspace-composer-actions">
@@ -10486,7 +10919,7 @@ function WorkspaceChatPanel({
           {mentionPanelOpen && (
             <MentionPicker
               id="workspace-composer-mention-picker"
-              members={mentionMembers}
+              members={filteredMentionMembers}
               onSelect={insertMention}
               onEscape={closeWorkspaceComposerPopover}
             />

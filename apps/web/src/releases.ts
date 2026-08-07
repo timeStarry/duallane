@@ -13,6 +13,17 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.8.0",
+    releasedAt: "2026-08-07",
+    title: "更完整的资料与群聊表达",
+    summary: "完善个人资料、消息输入与长内容体验，并为群聊加入常驻消息。",
+    categories: [
+      { title: "资料", items: ["支持裁剪并上传自定义头像", "可选择允许其他成员通过昵称或 GitHub 登录名找到自己"] },
+      { title: "消息", items: ["群聊输入提及和图片表情更直观", "忠实保留 Markdown 源码、前导空格和复制格式", "长消息可展开阅读，极长内容自动作为 TXT 文件发送"] },
+      { title: "群聊", items: ["成员可以常驻自己发送的重要消息", "群聊概览集中查看常驻内容并定位原消息"] }
+    ]
+  },
+  {
     version: "0.7.0",
     releasedAt: "2026-08-06",
     title: "页面可被准确找回",
