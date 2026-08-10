@@ -15,7 +15,7 @@ export function sanitizeWorkspaceAvatarUrl(value?: string | null) {
   if (/^\/assets\/[a-z0-9][a-z0-9._/-]*$/i.test(candidate) && !candidate.includes("..")) {
     return candidate;
   }
-  if (/^\/api\/workspace\/avatars\/[a-z0-9-]+\/[a-z0-9-]+$/i.test(candidate)) {
+  if (/^\/api\/workspace\/avatars\/[a-z0-9_-]+\/[a-z0-9-]+$/i.test(candidate)) {
     return candidate;
   }
   try {

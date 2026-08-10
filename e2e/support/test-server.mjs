@@ -20,6 +20,7 @@ const app = await createApp({
     SERVE_STATIC: "false",
     PUBLIC_BASE_URL: frontendUrl,
     WORKSPACE_FRONTEND_URL: frontendUrl,
+    WORKSPACE_NTFY_WORKER_ENABLED: "false",
     SESSION_SECRET: "duallane-e2e-session-secret"
   },
   logger: false

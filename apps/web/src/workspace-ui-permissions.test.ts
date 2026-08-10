@@ -982,6 +982,30 @@ describe("workspace UI permission boundaries", () => {
     expect(styles).toContain(".workspace-space-note");
   });
 
+  it("provides private ntfy topic controls and an accessible subscription guide", () => {
+    const source = readSource();
+    const styles = readStyles();
+    const accountStart = source.indexOf("function WorkspaceAccountSettings");
+    const accountEnd = source.indexOf("function WorkspaceMemberDetail", accountStart);
+    expect(accountStart).toBeGreaterThan(-1);
+    expect(accountEnd).toBeGreaterThan(accountStart);
+    const accountSource = source.slice(accountStart, accountEnd);
+
+    expect(accountSource).toContain('workspaceJson<{ ntfy: WorkspaceNtfyPreferences }>("/api/workspace/me/ntfy")');
+    expect(accountSource).toContain('"/api/workspace/me/ntfy/rotate"');
+    expect(accountSource).toContain("刷新我的 topic 字符串");
+    expect(accountSource).toContain("旧 topic 立即失效");
+    expect(accountSource).toContain('role="dialog"');
+    expect(accountSource).toContain('aria-modal="true"');
+    expect(accountSource).toContain("不要分享 topic");
+    expect(accountSource).toContain("https://ntfy.sh/");
+    expect(accountSource).toContain("ntfy-fdroid-release.apk");
+    expect(accountSource).toContain("getFocusableElements(dialog)");
+    expect(source).toContain("installWorkspaceUnreadFavicon");
+    expect(styles).toContain(".workspace-ntfy-dialog");
+    expect(styles).toContain(".workspace-ntfy-topic-row");
+  });
+
   it("does not bind platform internals into the shared-space UI source", () => {
     const source = readSource();
     const renderStart = source.indexOf('{lane === "workspace-dev" && (');

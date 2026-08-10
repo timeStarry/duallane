@@ -10,6 +10,7 @@ import { DEFAULT_SPACE_ID, openDatabase } from "./services/db.mjs";
 import { getIceServers } from "./services/ice.mjs";
 import { createGitHubFetch } from "./services/github-fetch.mjs";
 import { createWorkspaceEmailService, WorkspaceEmailError } from "./services/workspace-email.mjs";
+import { createWorkspaceNtfyService, WorkspaceNtfyError } from "./services/workspace-ntfy.mjs";
 import { createWorkspacePresence } from "./services/workspace-presence.mjs";
 import { normalizeWorkspaceReturnTo } from "./services/oauth-return.mjs";
 import { attachP2PSocket, createP2PRoom, getP2PRoom } from "./services/p2p.mjs";
@@ -128,6 +129,13 @@ export async function createApp(options = {}) {
     sendMail: options.workspaceEmailSender,
     now: options.now
   }) : null;
+  const workspaceNtfy = db ? createWorkspaceNtfyService({
+    db,
+    env,
+    baseUrl: env.WORKSPACE_FRONTEND_URL || env.PUBLIC_BASE_URL,
+    publish: options.workspaceNtfyPublisher,
+    now: options.now
+  }) : null;
 
   const app = Fastify({
     trustProxy,
@@ -180,6 +188,15 @@ export async function createApp(options = {}) {
     : null;
   app.addHook("onClose", async () => {
     workspaceEmailWorker?.stop();
+  });
+  const workspaceNtfyWorker = workspaceEnabled && workspaceNtfy
+    ? workspaceNtfy.startWorker({
+      startupDelayMs: options.workspaceNtfyWorkerStartupDelayMs,
+      intervalMs: options.workspaceNtfyWorkerIntervalMs
+    })
+    : null;
+  app.addHook("onClose", async () => {
+    workspaceNtfyWorker?.stop();
   });
 
 app.addHook("onRequest", async (_request, reply) => {
@@ -451,6 +468,38 @@ app.post("/api/workspace/me/notification-email/use-github", async (request, repl
   if (!workspaceEnabled) return blockWorkspace(reply);
   try {
     return { notifications: await workspaceEmail.useGitHubEmail(await getWorkspaceUserId(request)) };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.get("/api/workspace/me/ntfy", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return { ntfy: await workspaceNtfy.getPreferences(await getWorkspaceUserId(request)) };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.patch("/api/workspace/me/ntfy", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return {
+      ntfy: await workspaceNtfy.updatePreferences(
+        await getWorkspaceUserId(request),
+        request.body ?? {}
+      )
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/me/ntfy/rotate", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return { ntfy: await workspaceNtfy.rotateTopic(await getWorkspaceUserId(request)) };
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }
@@ -911,7 +960,8 @@ app.post("/api/workspace/messages", async (request, reply) => {
     const message = await createStructuredMessage(db, request, {
       ...(request.body ?? {}),
       actorId: await getWorkspaceUserId(request),
-      scheduleEmailNotifications: workspaceEmail?.scheduleMessage
+      scheduleEmailNotifications: workspaceEmail?.scheduleMessage,
+      scheduleNtfyNotifications: workspaceNtfy?.scheduleMessage
     });
     return reply.code(201).send({ message });
   } catch (error) {
@@ -1447,7 +1497,7 @@ function githubOAuthFailure() {
 
 function sendWorkspaceError(reply, request, error) {
   const payload = toWorkspaceError(request, error);
-  const statusCode = error instanceof WorkspaceError || error instanceof WorkspaceEmailError || error instanceof ProfileAvatarError
+  const statusCode = error instanceof WorkspaceError || error instanceof WorkspaceEmailError || error instanceof WorkspaceNtfyError || error instanceof ProfileAvatarError
     ? error.statusCode
     : 500;
   return reply.code(statusCode).send(payload);
@@ -1473,7 +1523,7 @@ function publicWorkspaceUser(user) {
 }
 
 function toWorkspaceError(request, error) {
-  if (error instanceof WorkspaceError || error instanceof WorkspaceEmailError || error instanceof ProfileAvatarError) {
+  if (error instanceof WorkspaceError || error instanceof WorkspaceEmailError || error instanceof WorkspaceNtfyError || error instanceof ProfileAvatarError) {
     return {
       error: {
         code: error.code,

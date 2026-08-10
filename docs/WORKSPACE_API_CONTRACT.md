@@ -432,6 +432,26 @@ Rules:
 - The realtime event is actor-local and should not be delivered to other
   conversation members.
 
+Personal ntfy push settings:
+
+```text
+GET   /api/workspace/me/ntfy
+PATCH /api/workspace/me/ntfy
+POST  /api/workspace/me/ntfy/rotate
+```
+
+Rules:
+
+- Only the current active human member can read or update the setting.
+- Push is enabled by default. The generated topic remains stable until that
+  member explicitly calls the rotate endpoint.
+- Rotation invalidates the old topic and cancels pending deliveries; clients
+  must subscribe to the newly returned topic.
+- `all`, `mentions`, and `muted` conversation levels gate ntfy delivery in the
+  same way as other personal conversation reminders.
+- Push content may identify the projected sender and group title, but never
+  includes message text, attachment names, file links, or download secrets.
+
 ## 8. Message APIs
 
 Load messages:

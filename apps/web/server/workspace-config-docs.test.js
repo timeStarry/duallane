@@ -21,6 +21,8 @@ describe("workspace configuration docs", () => {
     expect(envExample).toContain("GITHUB_CLIENT_SECRET=");
     expect(envExample).toContain("GITHUB_OAUTH_TIMEOUT_MS=8000");
     expect(envExample).toContain("DATABASE_URL=postgresql://");
+    expect(envExample).toContain("WORKSPACE_NTFY_BASE_URL=https://ntfy.tsio.top");
+    expect(envExample).toContain("WORKSPACE_NTFY_WORKER_ENABLED=true");
     expect(envExample).toContain("POSTGRES_IMAGE=docker.m.daocloud.io/library/postgres:17-alpine");
     expect(envExample).toContain("POSTGRES_PASSWORD=");
     expect(envExample).toContain("DUALLANE_STUN_URLS=stun:stun.l.google.com:19302");
@@ -51,6 +53,8 @@ describe("workspace configuration docs", () => {
     expect(compose).toContain("GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}");
     expect(compose).toContain("GITHUB_OAUTH_TIMEOUT_MS: ${GITHUB_OAUTH_TIMEOUT_MS:-8000}");
     expect(compose).toContain("WORKSPACE_FRONTEND_URL: ${WORKSPACE_FRONTEND_URL:-}");
+    expect(compose).toContain("WORKSPACE_NTFY_BASE_URL: ${WORKSPACE_NTFY_BASE_URL:-https://ntfy.tsio.top}");
+    expect(compose).toContain("WORKSPACE_NTFY_WORKER_ENABLED: ${WORKSPACE_NTFY_WORKER_ENABLED:-true}");
     expect(compose).toContain("TRUST_PROXY: ${TRUST_PROXY:-true}");
     expect(compose).toContain("image: ${POSTGRES_IMAGE:-docker.m.daocloud.io/library/postgres:17-alpine}");
     expect(compose).toContain("condition: service_completed_successfully");

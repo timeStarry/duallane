@@ -13,6 +13,17 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.9.0",
+    releasedAt: "2026-08-10",
+    title: "更及时的移动通知",
+    summary: "新增可自行订阅的 ntfy 消息提醒，并强化网页标签页中的未读提示。",
+    categories: [
+      { title: "通知", items: ["每位成员拥有独立且默认开启的 ntfy topic", "群聊提及、仅提及和免打扰规则会同步作用于 ntfy"] },
+      { title: "隐私", items: ["推送不包含消息正文和附件信息", "可主动刷新可能泄露的 topic，并按指引重新订阅"] },
+      { title: "提醒", items: ["网页出现未读消息时，标签页图标会显示提醒状态", "支持减弱动效设置，避免持续闪烁造成干扰"] }
+    ]
+  },
+  {
     version: "0.8.0",
     releasedAt: "2026-08-07",
     title: "更完整的资料与群聊表达",

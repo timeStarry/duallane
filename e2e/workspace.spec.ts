@@ -19,7 +19,7 @@ test("public about page exposes the current release and accessible history", asy
   await page.getByRole("button", { name: "关于 DualLane 与版本更新" }).click();
   await expect(page).toHaveURL(/\/about$/);
   await expect(page.getByRole("heading", { name: "两种边界，一处沟通。" })).toBeVisible();
-  await expect(page.locator(".latest-release").getByText("v0.8.0", { exact: true })).toBeVisible();
+  await expect(page.locator(".latest-release").getByText("v0.9.0", { exact: true })).toBeVisible();
 
   const history = page.locator(".release-history");
   await expect(history).not.toHaveAttribute("open", "");
@@ -33,7 +33,7 @@ test("public about page exposes the current release and accessible history", asy
   await page.goForward();
   await expect(page).toHaveURL(/\/about$/);
   await page.reload();
-  await expect(page.locator(".latest-release").getByText("v0.8.0", { exact: true })).toBeVisible();
+  await expect(page.locator(".latest-release").getByText("v0.9.0", { exact: true })).toBeVisible();
 });
 
 test("workspace semantic routes survive OAuth, refresh, history, and invalid resources", async ({ page }) => {
@@ -599,23 +599,6 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(ownerGroupRegion.locator(".workspace-editor-token.mention")).toHaveCount(0);
     await expect(ownerGroupRegion.locator(".workspace-editor-token.emote")).toHaveCount(0);
 
-    const ownerPinnedMessage = ownerGroupRegion.locator("article.workspace-message").filter({ hasText: groupOwnerMessage });
-    await ownerPinnedMessage.getByTitle("设为常驻消息").click();
-    await expect(ownerPinnedMessage.locator(".workspace-message-pin-indicator")).toHaveText("常驻");
-    const memberPinnedMessage = memberGroupRegion.locator("article.workspace-message").filter({ hasText: groupOwnerMessage });
-    await expect(memberPinnedMessage.locator(".workspace-message-pin-indicator")).toHaveText("常驻");
-    await expect(memberPinnedMessage.getByTitle("取消常驻")).toHaveCount(0);
-
-    await overviewTab.click();
-    const pinnedOverview = ownerPage.getByRole("region", { name: "常驻消息" });
-    await expect(pinnedOverview.getByText(groupOwnerMessage, { exact: true })).toBeVisible();
-    await pinnedOverview.getByRole("button").filter({ hasText: groupOwnerMessage }).click();
-    await expect(ownerGroupRegion.getByText("正在查看常驻消息上下文", { exact: true })).toBeVisible();
-    await expect(ownerPinnedMessage).toHaveClass(/history-target/);
-    await ownerGroupRegion.getByRole("button", { name: "返回最新消息", exact: true }).click();
-    await ownerPinnedMessage.getByTitle("取消常驻").click();
-    await expect(ownerPinnedMessage.locator(".workspace-message-pin-indicator")).toHaveCount(0);
-
     await ownerGroupRegion.getByTitle("插入表情").click();
     await expect(ownerPage.getByRole("dialog", { name: "选择表情" })).toBeVisible();
     await ownerGroupRegion.locator(".workspace-chat-header").click();
@@ -1019,6 +1002,29 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(memberPage.getByRole("checkbox", { name: /接受邮件通知/ })).toBeChecked();
     await expect(memberPage.getByRole("checkbox", { name: /每条消息都通知我/ })).not.toBeChecked();
     await expect(memberPage.getByRole("checkbox", { name: /超过 2 小时仍未读时通知我/ })).toBeChecked();
+    await expect(memberPage.getByRole("checkbox", { name: /接受 ntfy 通知/ })).toBeChecked();
+    const ntfyTopic = memberPage.locator(".workspace-ntfy-topic-row code");
+    const originalNtfyTopic = await ntfyTopic.textContent();
+    expect(originalNtfyTopic).toMatch(new RegExp(`^duallane-duallane-e2e-${memberSuffix}-[A-Za-z0-9]{6}$`));
+    const ntfyHelpTrigger = memberPage.getByRole("button", { name: "使用说明", exact: true });
+    await ntfyHelpTrigger.click();
+    const ntfyDialog = memberPage.getByRole("dialog", { name: "订阅 ntfy 通知" });
+    await expect(ntfyDialog).toBeVisible();
+    await expect(ntfyDialog.getByRole("button", { name: "关闭 ntfy 使用说明" })).toBeFocused();
+    await expect(ntfyDialog.getByText("https://ntfy.tsio.top", { exact: true })).toBeVisible();
+    await expect(ntfyDialog.getByRole("link", { name: /查看 ntfy 下载指引/ })).toHaveAttribute("href", "https://ntfy.sh/");
+    await expect(ntfyDialog.getByRole("link", { name: /直接下载 ntfy 安装包/ })).toHaveAttribute("href", /ntfy-fdroid-release\.apk$/);
+    await memberPage.keyboard.press("Escape");
+    await expect(ntfyDialog).toHaveCount(0);
+    await expect(ntfyHelpTrigger).toBeFocused();
+    await memberPage.getByRole("button", { name: "刷新我的 topic 字符串" }).click();
+    const rotateResponse = memberPage.waitForResponse((response) =>
+      response.url().endsWith("/api/workspace/me/ntfy/rotate") && response.request().method() === "POST"
+    );
+    await memberPage.getByRole("button", { name: "确认刷新" }).click();
+    expect((await rotateResponse).status()).toBe(200);
+    await expect(ntfyTopic).not.toHaveText(originalNtfyTopic!);
+    await expect(memberPage.getByText(/旧 topic 已失效，请在 ntfy 中重新订阅/)).toBeVisible();
 
     await memberPage.locator('input[type="file"][accept="image/jpeg,image/png,image/webp"]').setInputFiles({
       name: "workspace-avatar.png",
@@ -1147,6 +1153,69 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       .locator("article.workspace-message")
       .filter({ hasText: mentionProjectionMarker });
     await expect(memberProjectedMention.locator(".message-mention")).toHaveText(`@${publicNickname}`);
+
+    const groupHistoryPinMessage = "workspace-e2e-group-history-26";
+    for (let index = 0; index < 45; index += 1) {
+      const text = `workspace-e2e-group-history-${String(index).padStart(2, "0")}`;
+      const response = await ownerPage.request.post("/api/workspace/messages", {
+        data: {
+          conversationId: groupId,
+          clientMessageId: `workspace-e2e-group-history-${index}`,
+          content: {
+            format: "duallane.message+json;v=1",
+            plainText: text,
+            blocks: [{ type: "text", text }]
+          }
+        }
+      });
+      expect(response.status()).toBe(201);
+    }
+    await expect(ownerGroupRegion.getByText("workspace-e2e-group-history-44", { exact: true })).toBeVisible();
+
+    const ownerGroupMessageList = ownerGroupRegion.locator(".workspace-message-list");
+    await ownerGroupMessageList.evaluate((list) => {
+      list.scrollTop = 0;
+      list.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    await expect(ownerGroupRegion.getByText("workspace-e2e-group-history-00", { exact: true })).toBeVisible();
+
+    const ownerPinnedMessage = ownerGroupRegion.locator("article.workspace-message").filter({ hasText: groupHistoryPinMessage });
+    await ownerPinnedMessage.getByTitle("设为常驻消息").click();
+    await expect(ownerPinnedMessage.locator(".workspace-message-pin-indicator")).toHaveText("常驻");
+    const memberPinnedMessage = memberGroupRegion.locator("article.workspace-message").filter({ hasText: groupHistoryPinMessage });
+    await expect(memberPinnedMessage.locator(".workspace-message-pin-indicator")).toHaveText("常驻");
+    await expect(memberPinnedMessage.getByTitle("取消常驻")).toHaveCount(0);
+
+    const currentConversationDetails = ownerPage.getByLabel("当前会话详情");
+    if (!(await currentConversationDetails.isVisible())) {
+      await ownerGroupRegion.getByTitle("查看详情").click();
+    }
+    await ownerPage.getByRole("tablist", { name: "会话详情" }).getByRole("tab", { name: "概览" }).click();
+    const pinnedOverview = ownerPage.getByRole("region", { name: "常驻消息" });
+    await expect(pinnedOverview.getByText(groupHistoryPinMessage, { exact: true })).toBeVisible();
+    await pinnedOverview.getByRole("button").filter({ hasText: groupHistoryPinMessage }).click();
+    await expect(ownerGroupRegion.getByText("正在查看常驻消息上下文", { exact: true })).toBeVisible();
+    await expect(ownerPinnedMessage).toHaveClass(/history-target/);
+    await ownerGroupRegion.getByRole("button", { name: "返回最新消息", exact: true }).click();
+    await expect(ownerGroupRegion.getByText("正在查看常驻消息上下文", { exact: true })).toHaveCount(0);
+    await expect.poll(() => ownerGroupMessageList.evaluate((list) =>
+      list.scrollHeight - list.scrollTop - list.clientHeight
+    )).toBeLessThanOrEqual(80);
+    await ownerPinnedMessage.getByTitle("取消常驻").click();
+    await expect(ownerPinnedMessage.locator(".workspace-message-pin-indicator")).toHaveCount(0);
+
+    await expect(ownerGroupRegion.getByText("workspace-e2e-group-history-00", { exact: true })).toHaveCount(0);
+    await ownerGroupMessageList.evaluate((list) => {
+      list.scrollTop = 0;
+      list.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    await expect(ownerGroupRegion.getByText("workspace-e2e-group-history-00", { exact: true })).toBeVisible();
+    const groupReturnToLatest = ownerGroupRegion.getByRole("button", { name: "回到最新消息", exact: true });
+    await expect(groupReturnToLatest).toBeVisible();
+    await groupReturnToLatest.click();
+    await expect.poll(() => ownerGroupMessageList.evaluate((list) =>
+      list.scrollHeight - list.scrollTop - list.clientHeight
+    )).toBeLessThanOrEqual(80);
 
     const isolatedDirectoryResponse = await memberPage.request.get("/api/workspace/members");
     expect(isolatedDirectoryResponse.status()).toBe(200);

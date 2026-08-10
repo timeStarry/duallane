@@ -191,6 +191,13 @@ password unreadable, so disable mail and save a newly tested configuration
 when rotating it. `WORKSPACE_EMAIL_WORKER_ENABLED=false` disables delivery
 without discarding user notification preferences.
 
+Workspace ntfy push defaults to `https://ntfy.tsio.top`. Override it with
+`WORKSPACE_NTFY_BASE_URL` only when moving the self-hosted ntfy service;
+production values must use HTTPS. `WORKSPACE_NTFY_WORKER_ENABLED=false`
+stops delivery without changing each user's switch or generated topic. Topics
+are generated once per human Workspace member and rotate only when that user
+explicitly refreshes the topic from account settings.
+
 If the deployment host cannot reach GitHub OAuth directly, enable the optional
 GitHub-only V2Ray profile. Put the subscription URL in an untracked host file
 with mode `600`, then set `COMPOSE_PROFILES=github-proxy`,

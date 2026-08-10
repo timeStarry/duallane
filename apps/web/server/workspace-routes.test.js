@@ -310,6 +310,41 @@ describe("workspace routes", () => {
     });
     expectNoWorkspaceInternals(memberResponse.json());
   });
+  it("keeps each human member's ntfy topic stable until they explicitly rotate it", async () => {
+    const app = await makeApp({ WORKSPACE_NTFY_BASE_URL: "https://ntfy.example.test" });
+    const headers = { "x-workspace-user-id": "usr_owner" };
+    const first = await app.inject({ method: "GET", url: "/api/workspace/me/ntfy", headers });
+    const second = await app.inject({ method: "GET", url: "/api/workspace/me/ntfy", headers });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().ntfy).toMatchObject({
+      enabled: true,
+      serverUrl: "https://ntfy.example.test"
+    });
+    expect(first.json().ntfy.topic).toMatch(/^duallane-timestarry-[A-Za-z0-9]{6}$/u);
+    expect(second.json().ntfy.topic).toBe(first.json().ntfy.topic);
+
+    const disabled = await app.inject({
+      method: "PATCH",
+      url: "/api/workspace/me/ntfy",
+      headers,
+      payload: { enabled: false }
+    });
+    expect(disabled.statusCode).toBe(200);
+    expect(disabled.json().ntfy).toMatchObject({ enabled: false, topic: first.json().ntfy.topic });
+
+    const rotated = await app.inject({ method: "POST", url: "/api/workspace/me/ntfy/rotate", headers });
+    expect(rotated.statusCode).toBe(200);
+    expect(rotated.json().ntfy.enabled).toBe(false);
+    expect(rotated.json().ntfy.topic).not.toBe(first.json().ntfy.topic);
+
+    const bot = await app.inject({
+      method: "GET",
+      url: "/api/workspace/me/ntfy",
+      headers: { "x-workspace-user-id": "usr_system_beacon" }
+    });
+    expect(bot.statusCode).toBe(401);
+  });
+
   it("keeps workspace HTTP routes disabled without the feature flag", async () => {
     const app = await makeApp({ WORKSPACE_ENABLED: "false" });
     const response = await app.inject({

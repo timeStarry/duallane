@@ -2285,6 +2285,14 @@ export async function createStructuredMessage(db, request, input) {
       content: normalizedContent,
       createdAt: now
     });
+    await input.scheduleNtfyNotifications?.({
+      authorId: actor.id,
+      conversationId,
+      messageId: id,
+      eventSeq: messageEvent.seq,
+      content: normalizedContent,
+      createdAt: now
+    });
 
     await writeWorkspaceAudit(db, request, {
       actorUserId: actor.id,

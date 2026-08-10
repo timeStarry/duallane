@@ -2,6 +2,7 @@ import {
   AlertCircle,
   AtSign,
   ArrowLeft,
+  BellRing,
   BellOff,
   Bold,
   ChevronDown,
@@ -11,6 +12,7 @@ import {
   Code2,
   Copy,
   Download,
+  ExternalLink,
   FileCheck2,
   FileCode2,
   FileUp,
@@ -51,6 +53,7 @@ import {
 } from "lucide-react";
 import { Fragment, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from "react";
+import { createPortal } from "react-dom";
 import {
   MessageBody,
   ReactionEmoteGlyph,
@@ -89,6 +92,7 @@ import { getWorkspaceEntryUrl, getWorkspaceLoginUrl } from "./workspace-url";
 import { formatWorkspaceConversationTime } from "./workspace-conversation-time";
 import { isPreviewableImageMimeType, renamePastedImageFiles } from "./workspace-image-files";
 import { userFacingErrorMessage } from "./user-facing-error";
+import { installWorkspaceUnreadFavicon } from "./workspace-unread-favicon";
 
 type Lane = "entry" | "about" | "p2p" | "workspace-dev";
 type P2pStep = "name" | "waiting" | "chat" | "ended" | "invalid-room";
@@ -386,6 +390,15 @@ type WorkspaceNotificationPreferences = {
   immediateEnabled: boolean;
   digestEnabled: boolean;
   mailAvailable: boolean;
+};
+type WorkspaceNtfyPreferences = {
+  enabled: boolean;
+  topic: string;
+  serverUrl: string;
+  subscriptionUrl: string;
+  createdAt: string;
+  rotatedAt: string | null;
+  updatedAt: string;
 };
 type WorkspaceEmailSettings = {
   enabled: boolean;
@@ -2027,6 +2040,8 @@ export function App() {
     Record<string, { messageId?: string | null; count: number }>
   >({});
   const [workspaceNewMessageCountByConversation, setWorkspaceNewMessageCountByConversation] = useState<Record<string, number>>({});
+  const [workspaceAwayFromLatestByConversation, setWorkspaceAwayFromLatestByConversation] = useState<Record<string, boolean>>({});
+  const [workspaceScrollToLatestRequest, setWorkspaceScrollToLatestRequest] = useState(0);
   const [workspaceSending, setWorkspaceSending] = useState(false);
   const [workspaceLocalMessages, setWorkspaceLocalMessages] = useState<WorkspaceLocalMessage[]>([]);
   const [workspaceStatus, setWorkspaceStatus] = useState<"idle" | "loading" | "ready" | "disabled" | "auth" | "error">("idle");
@@ -2071,6 +2086,7 @@ export function App() {
   const [workspacePinsByConversation, setWorkspacePinsByConversation] = useState<Record<string, WorkspacePinnedMessage[]>>({});
   const [workspacePinsExpandedByConversation, setWorkspacePinsExpandedByConversation] = useState<Record<string, boolean>>({});
   const [workspaceHistoryTargetId, setWorkspaceHistoryTargetId] = useState("");
+  const [workspaceReturningToLatestConversationId, setWorkspaceReturningToLatestConversationId] = useState("");
   const [workspaceImagePreview, setWorkspaceImagePreview] = useState<WorkspaceAttachment | null>(null);
   const [documentVisible, setDocumentVisible] = useState(() => typeof document === "undefined" || document.visibilityState === "visible");
   const [workspaceHistoryLoadingByConversation, setWorkspaceHistoryLoadingByConversation] = useState<Record<string, boolean>>({});
@@ -2118,6 +2134,7 @@ export function App() {
   const workspaceScrollPositionsRef = useRef<Map<string, number>>(new Map());
   const workspaceStickToBottomByConversationRef = useRef<Map<string, boolean>>(new Map());
   const workspaceScrollIntentUntilRef = useRef(0);
+  const workspaceHandledScrollToLatestRequestRef = useRef(0);
   const workspaceUploadControllersRef = useRef<Map<string, AbortController>>(new Map());
   const workspaceComposerAttachmentsRef = useRef<Record<string, WorkspaceComposerAttachment[]>>({});
   const workspaceMarkReadInFlightRef = useRef<Set<string>>(new Set());
@@ -2188,6 +2205,10 @@ export function App() {
   const workspaceSelectedConversation = workspaceConversations.find(
     (conversation) => conversation.id === workspaceSelectedConversationId
   );
+  const workspaceTotalUnreadCount = useMemo(
+    () => workspaceConversations.reduce((total, conversation) => total + Math.max(0, conversation.unreadCount ?? 0), 0),
+    [workspaceConversations]
+  );
   const workspaceCanManageSelectedGroup = Boolean(
     workspaceSelectedConversation?.type === "group" &&
     workspaceSelectedConversation.capabilities?.canManageMembers
@@ -2211,6 +2232,9 @@ export function App() {
   const workspaceNewMessageCount = workspaceSelectedConversationId
     ? workspaceNewMessageCountByConversation[workspaceSelectedConversationId] ?? 0
     : 0;
+  const workspaceAwayFromLatest = workspaceSelectedConversationId
+    ? Boolean(workspaceAwayFromLatestByConversation[workspaceSelectedConversationId])
+    : false;
   const workspaceReplyToMessageId = workspaceSelectedConversationId
     ? workspaceReplyToMessageIdByConversation[workspaceSelectedConversationId] ?? ""
     : "";
@@ -2464,6 +2488,7 @@ export function App() {
     workspaceSelectedConversation &&
       workspaceLoadedMessageCount > 0 &&
       (workspaceSelectedConversation.messageCount ?? 0) > workspaceLoadedMessageCount &&
+      workspaceReturningToLatestConversationId !== workspaceSelectedConversation.id &&
       !workspaceHistoryExhaustedByConversation[workspaceSelectedConversation.id]
   );
   const workspaceReplyTarget = useMemo(
@@ -2642,6 +2667,11 @@ export function App() {
     return () => document.removeEventListener("visibilitychange", updateVisibility);
   }, []);
 
+  useEffect(() => installWorkspaceUnreadFavicon({
+    active: lane === "workspace-dev" && workspaceStatus === "ready" && workspaceTotalUnreadCount > 0,
+    documentVisible
+  }), [documentVisible, lane, workspaceStatus, workspaceTotalUnreadCount]);
+
   useEffect(() => {
     document.documentElement.dataset.theme = resolvedTheme;
     document.documentElement.dataset.themeMode = themeMode;
@@ -2679,7 +2709,10 @@ export function App() {
     if (!list) {
       return;
     }
-    if (workspacePreserveScrollRef.current) {
+    const forceScrollToLatest =
+      workspaceReturningToLatestConversationId === workspaceSelectedConversationId &&
+      workspaceScrollToLatestRequest !== workspaceHandledScrollToLatestRequestRef.current;
+    if (workspacePreserveScrollRef.current && !forceScrollToLatest) {
       workspacePreserveScrollRef.current = false;
       const heightDelta = list.scrollHeight - workspacePreviousScrollHeightRef.current;
       if (heightDelta > 0) {
@@ -2704,7 +2737,7 @@ export function App() {
       }
       return;
     }
-    if (!conversationChanged && !workspaceStickToBottomRef.current) {
+    if (!conversationChanged && !workspaceStickToBottomRef.current && !forceScrollToLatest) {
       return;
     }
     workspaceStickToBottomRef.current = true;
@@ -2713,7 +2746,24 @@ export function App() {
       behavior: "auto"
     });
     handleWorkspaceMessageListScroll(list);
-  }, [documentVisible, workspaceMessages.length, workspaceMobilePane, workspaceSelectedConversationId, workspaceView]);
+    if (forceScrollToLatest) {
+      workspaceHandledScrollToLatestRequestRef.current = workspaceScrollToLatestRequest;
+      setWorkspaceHistoryExhaustedByConversation((current) => {
+        if (!(workspaceSelectedConversationId in current)) return current;
+        const { [workspaceSelectedConversationId]: _removed, ...rest } = current;
+        return rest;
+      });
+      setWorkspaceReturningToLatestConversationId("");
+    }
+  }, [
+    documentVisible,
+    workspaceMessages.length,
+    workspaceMobilePane,
+    workspaceReturningToLatestConversationId,
+    workspaceScrollToLatestRequest,
+    workspaceSelectedConversationId,
+    workspaceView
+  ]);
 
   useEffect(() => {
     if (!workspaceHistoryTargetId || workspaceView !== "chat") return;
@@ -3968,8 +4018,12 @@ export function App() {
     setWorkspacePinsByConversation({});
     setWorkspacePinsExpandedByConversation({});
     setWorkspaceHistoryTargetId("");
+    setWorkspaceReturningToLatestConversationId("");
     setWorkspaceUnreadAnchorByConversation({});
     setWorkspaceNewMessageCountByConversation({});
+    setWorkspaceAwayFromLatestByConversation({});
+    setWorkspaceScrollToLatestRequest(0);
+    workspaceHandledScrollToLatestRequestRef.current = 0;
     setWorkspaceSending(false);
     setWorkspaceLocalMessages([]);
     setWorkspaceError("");
@@ -4125,13 +4179,20 @@ export function App() {
 
   async function openWorkspacePinnedMessage(messageId: string) {
     if (!workspaceSelectedConversation) return;
+    const conversationId = workspaceSelectedConversation.id;
     workspaceStickToBottomRef.current = false;
-    workspaceStickToBottomByConversationRef.current.set(workspaceSelectedConversation.id, false);
+    workspaceStickToBottomByConversationRef.current.set(conversationId, false);
     const data = await workspaceJson<{ messages: WorkspaceMessage[] }>(
-      `/api/workspace/conversations/${encodeURIComponent(workspaceSelectedConversation.id)}/messages?around=${encodeURIComponent(messageId)}&limit=41`
+      `/api/workspace/conversations/${encodeURIComponent(conversationId)}/messages?around=${encodeURIComponent(messageId)}&limit=41`
     );
+    if (workspaceSelectedConversationIdRef.current !== conversationId) return;
+    setWorkspaceHistoryExhaustedByConversation((current) => {
+      if (!(conversationId in current)) return current;
+      const { [conversationId]: _removed, ...rest } = current;
+      return rest;
+    });
     setWorkspaceHistoryTargetId(messageId);
-    setWorkspaceConversations((conversations) => conversations.map((conversation) => conversation.id === workspaceSelectedConversation.id
+    setWorkspaceConversations((conversations) => conversations.map((conversation) => conversation.id === conversationId
       ? { ...conversation, latestMessages: data.messages }
       : conversation));
     setWorkspaceContextCollapsed(true);
@@ -4140,10 +4201,29 @@ export function App() {
 
   async function returnWorkspaceToLatest() {
     if (!workspaceSelectedConversation) return;
-    setWorkspaceHistoryTargetId("");
-    workspaceStickToBottomRef.current = true;
-    workspaceStickToBottomByConversationRef.current.set(workspaceSelectedConversation.id, true);
-    await refreshWorkspaceConversationMessages(workspaceSelectedConversation.id);
+    const conversationId = workspaceSelectedConversation.id;
+    setWorkspaceReturningToLatestConversationId(conversationId);
+    try {
+      await refreshWorkspaceConversationMessages(conversationId);
+      if (workspaceSelectedConversationIdRef.current !== conversationId) {
+        setWorkspaceReturningToLatestConversationId((current) => current === conversationId ? "" : current);
+        return;
+      }
+      workspacePreserveScrollRef.current = false;
+      workspaceStickToBottomRef.current = true;
+      workspaceStickToBottomByConversationRef.current.set(conversationId, true);
+      workspaceScrollPositionsRef.current.delete(conversationId);
+      setWorkspaceHistoryTargetId("");
+      setWorkspaceAwayFromLatestByConversation((current) => {
+        if (!current[conversationId]) return current;
+        const { [conversationId]: _removed, ...rest } = current;
+        return rest;
+      });
+      setWorkspaceScrollToLatestRequest((request) => request + 1);
+    } catch (error) {
+      setWorkspaceReturningToLatestConversationId((current) => current === conversationId ? "" : current);
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "返回最新消息失败"));
+    }
   }
 
   function normalizeWorkspaceRealtimeEvents(events: WorkspaceEvent[]) {
@@ -4365,9 +4445,12 @@ export function App() {
         latestMessages: conversation.latestMessages.map((message) => ({
           ...message,
           authorName: message.authorId === member.id ? member.displayName : message.authorName,
+          authorAvatarUrl: message.authorId === member.id ? member.avatarUrl : message.authorAvatarUrl,
           reactions: message.reactions.map((reaction) => ({
             ...reaction,
-            users: reaction.users.map((user) => user.id === member.id ? { ...user, displayName: member.displayName } : user)
+            users: reaction.users.map((user) => user.id === member.id
+              ? { ...user, displayName: member.displayName, avatarUrl: member.avatarUrl }
+              : user)
           }))
         }))
       }))
@@ -4686,6 +4769,16 @@ export function App() {
       return;
     }
     const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight <= 80;
+    setWorkspaceAwayFromLatestByConversation((current) => {
+      if (!nearBottom && current[conversationId] !== true) {
+        return { ...current, [conversationId]: true };
+      }
+      if (nearBottom && current[conversationId]) {
+        const { [conversationId]: _removed, ...rest } = current;
+        return rest;
+      }
+      return current;
+    });
     const hasScrollIntent = performance.now() <= workspaceScrollIntentUntilRef.current;
     if (nearBottom) {
       if (workspaceStickToBottomRef.current || hasScrollIntent) {
@@ -4728,10 +4821,12 @@ export function App() {
 
   function jumpWorkspaceToLatest() {
     const list = workspaceMessageListRef.current;
-    if (!list) {
+    const conversationId = workspaceSelectedConversationId;
+    if (!list || !conversationId) {
       return;
     }
     workspaceStickToBottomRef.current = true;
+    workspaceStickToBottomByConversationRef.current.set(conversationId, true);
     list.scrollTo({ top: list.scrollHeight, behavior: "auto" });
     handleWorkspaceMessageListScroll(list);
   }
@@ -7460,6 +7555,7 @@ export function App() {
                         unreadAnchorMessageId={workspaceUnreadAnchor?.messageId}
                         unreadAnchorCount={workspaceUnreadAnchor?.count ?? 0}
                         newMessageCount={workspaceNewMessageCount}
+                        awayFromLatest={workspaceAwayFromLatest}
                         onJumpToLatest={jumpWorkspaceToLatest}
                         draft={workspaceDraft}
                         draftDocument={workspaceDraftDocument}
@@ -8847,6 +8943,14 @@ function WorkspaceAccountSettings({
   const [challengeId, setChallengeId] = useState("");
   const [verificationCode, setVerificationCode] = useState("");
   const [emailBusy, setEmailBusy] = useState(false);
+  const [ntfy, setNtfy] = useState<WorkspaceNtfyPreferences | null>(null);
+  const [ntfyLoading, setNtfyLoading] = useState(true);
+  const [ntfySaving, setNtfySaving] = useState(false);
+  const [ntfyHelpOpen, setNtfyHelpOpen] = useState(false);
+  const [ntfyRotateConfirm, setNtfyRotateConfirm] = useState(false);
+  const ntfyHelpTriggerRef = useRef<HTMLButtonElement>(null);
+  const ntfyDialogRef = useRef<HTMLDivElement>(null);
+  const ntfyDialogCloseRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     setNickname(currentUser.nickname ?? "");
@@ -8870,6 +8974,66 @@ function WorkspaceAccountSettings({
       cancelled = true;
     };
   }, [currentUser.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setNtfyLoading(true);
+    void workspaceJson<{ ntfy: WorkspaceNtfyPreferences }>("/api/workspace/me/ntfy")
+      .then((data) => {
+        if (!cancelled) setNtfy(data.ntfy);
+      })
+      .catch((error) => {
+        if (!cancelled) onNotice("warning", userFacingErrorMessage(error, "ntfy 设置暂时无法加载"));
+      })
+      .finally(() => {
+        if (!cancelled) setNtfyLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser.id]);
+
+  useEffect(() => {
+    if (!ntfyHelpOpen || !ntfyDialogRef.current) return;
+    const dialog = ntfyDialogRef.current;
+    const root = document.getElementById("root");
+    const previousRootInert = root?.inert ?? false;
+    const previousOverflow = document.body.style.overflow;
+    if (root) root.inert = true;
+    document.body.style.overflow = "hidden";
+    const frame = window.requestAnimationFrame(() => ntfyDialogCloseRef.current?.focus());
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setNtfyHelpOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = getFocusableElements(dialog);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", handleKeyDown);
+      if (root) root.inert = previousRootInert;
+      document.body.style.overflow = previousOverflow;
+      window.requestAnimationFrame(() => ntfyHelpTriggerRef.current?.focus());
+    };
+  }, [ntfyHelpOpen]);
 
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -8904,6 +9068,8 @@ function WorkspaceAccountSettings({
       const data = await response.json() as { user: WorkspaceUser };
       onUserUpdated(data.user);
       onNotice("success", "头像已更新");
+    } catch (error) {
+      onNotice("warning", userFacingErrorMessage(error, "头像更新失败"));
     } finally {
       setAvatarSaving(false);
     }
@@ -8999,7 +9165,47 @@ function WorkspaceAccountSettings({
     }
   }
 
+  async function saveNtfy(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!ntfy) return;
+    setNtfySaving(true);
+    try {
+      const data = await workspaceJson<{ ntfy: WorkspaceNtfyPreferences }>("/api/workspace/me/ntfy", {
+        method: "PATCH",
+        body: JSON.stringify({ enabled: ntfy.enabled })
+      });
+      setNtfy(data.ntfy);
+      onNotice("success", data.ntfy.enabled ? "ntfy 推送已开启" : "ntfy 推送已关闭");
+    } catch (error) {
+      onNotice("warning", userFacingErrorMessage(error, "ntfy 设置保存失败"));
+    } finally {
+      setNtfySaving(false);
+    }
+  }
+
+  async function rotateNtfyTopic() {
+    setNtfySaving(true);
+    try {
+      const data = await workspaceJson<{ ntfy: WorkspaceNtfyPreferences }>("/api/workspace/me/ntfy/rotate", {
+        method: "POST"
+      });
+      setNtfy(data.ntfy);
+      setNtfyRotateConfirm(false);
+      onNotice("success", "topic 已刷新，旧 topic 已失效，请在 ntfy 中重新订阅");
+    } catch (error) {
+      onNotice("warning", userFacingErrorMessage(error, "topic 刷新失败"));
+    } finally {
+      setNtfySaving(false);
+    }
+  }
+
+  async function copyNtfyValue(value: string, label: string) {
+    const copied = await copyText(value);
+    onNotice(copied ? "success" : "warning", copied ? `${label}已复制` : `${label}复制失败`);
+  }
+
   return (
+    <>
     <div className="workspace-content-panel workspace-account-panel">
       <div className="workspace-panel-header">
         <button className="icon-button mobile-only" type="button" title="返回会话列表" onClick={onBack}>
@@ -9049,6 +9255,80 @@ function WorkspaceAccountSettings({
             <small>开启后，其他成员可以通过公开昵称或 GitHub 登录名找到你并发起私聊。</small>
           </span>
         </label>
+      </form>
+
+      <form className="workspace-preference-section workspace-ntfy-settings" onSubmit={saveNtfy} aria-busy={ntfyLoading}>
+        <div className="workspace-section-header">
+          <div>
+            <h3>ntfy 推送</h3>
+            <p>通过独立 topic 接收无正文的消息提醒，并遵循会话免打扰设置。</p>
+          </div>
+          <div className="workspace-section-actions">
+            <button
+              ref={ntfyHelpTriggerRef}
+              className="secondary compact"
+              type="button"
+              disabled={!ntfy}
+              aria-haspopup="dialog"
+              onClick={() => setNtfyHelpOpen(true)}
+            >
+              使用说明
+            </button>
+            <button className="primary compact" type="submit" disabled={!ntfy || ntfySaving}>
+              {ntfySaving ? "保存中" : "保存"}
+            </button>
+          </div>
+        </div>
+        {ntfyLoading || !ntfy ? (
+          <p className="workspace-form-status">正在读取 ntfy 设置...</p>
+        ) : (
+          <>
+            <label className="workspace-checkbox-setting">
+              <input
+                type="checkbox"
+                checked={ntfy.enabled}
+                onChange={(event) => setNtfy({ ...ntfy, enabled: event.target.checked })}
+              />
+              <span>
+                <strong>接受 ntfy 通知</strong>
+                <small>默认开启。群聊的“仅提及”和“免打扰”规则同样适用。</small>
+              </span>
+            </label>
+            <div className="workspace-ntfy-topic-row">
+              <div>
+                <span>我的 topic</span>
+                <code>{ntfy.topic}</code>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                title="复制 topic"
+                aria-label="复制我的 ntfy topic"
+                onClick={() => void copyNtfyValue(ntfy.topic, "topic")}
+              >
+                <Copy size={16} />
+              </button>
+            </div>
+            <div className="workspace-ntfy-security">
+              <ShieldCheck size={17} />
+              <p>topic 相当于你的通知地址，请勿交给他人。生成后保持不变，只有你主动刷新时才会更换。</p>
+            </div>
+            {ntfyRotateConfirm ? (
+              <div className="workspace-ntfy-rotate-confirm" role="group" aria-label="确认刷新 topic">
+                <p>刷新后旧 topic 立即失效，现有客户端需要重新订阅。</p>
+                <button className="secondary compact" type="button" disabled={ntfySaving} onClick={() => setNtfyRotateConfirm(false)}>取消</button>
+                <button className="secondary compact danger-action" type="button" disabled={ntfySaving} onClick={() => void rotateNtfyTopic()}>
+                  {ntfySaving ? "刷新中" : "确认刷新"}
+                </button>
+              </div>
+            ) : (
+              <button className="workspace-ntfy-rotate" type="button" onClick={() => setNtfyRotateConfirm(true)}>
+                <RefreshCw size={15} />
+                刷新我的 topic 字符串
+              </button>
+            )}
+          </>
+        )}
       </form>
 
       <section className="workspace-preference-section" aria-busy={notificationsLoading}>
@@ -9117,6 +9397,68 @@ function WorkspaceAccountSettings({
         )}
       </form>
     </div>
+    {ntfyHelpOpen && ntfy && createPortal(
+      <div className="workspace-ntfy-dialog-backdrop" onMouseDown={(event) => {
+        if (event.target === event.currentTarget) setNtfyHelpOpen(false);
+      }}>
+        <div
+          ref={ntfyDialogRef}
+          className="workspace-ntfy-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="workspace-ntfy-dialog-title"
+          aria-describedby="workspace-ntfy-dialog-description"
+          tabIndex={-1}
+        >
+          <header>
+            <div>
+              <p className="eyebrow">移动推送</p>
+              <h3 id="workspace-ntfy-dialog-title">订阅 ntfy 通知</h3>
+            </div>
+            <button ref={ntfyDialogCloseRef} className="icon-button" type="button" aria-label="关闭 ntfy 使用说明" title="关闭" onClick={() => setNtfyHelpOpen(false)}>
+              <X size={18} />
+            </button>
+          </header>
+          <p id="workspace-ntfy-dialog-description" className="workspace-ntfy-dialog-intro">
+            在 ntfy 客户端添加新订阅，填写下方 topic，并选择“使用其他服务器”。
+          </p>
+          <ol className="workspace-ntfy-steps">
+            <li><span>1</span><p>安装并打开 ntfy，点击“订阅主题”。</p></li>
+            <li><span>2</span><p>将“我的 topic”粘贴到主题名称。</p></li>
+            <li><span>3</span><p>启用“使用其他服务器”，粘贴服务器地址后订阅。</p></li>
+          </ol>
+          <div className="workspace-ntfy-copy-list">
+            <div>
+              <span>ntfy 服务器</span>
+              <code>{ntfy.serverUrl}</code>
+              <button className="icon-button" type="button" title="复制服务器地址" aria-label="复制 ntfy 服务器地址" onClick={() => void copyNtfyValue(ntfy.serverUrl, "服务器地址")}><Copy size={16} /></button>
+            </div>
+            <div>
+              <span>我的 topic</span>
+              <code>{ntfy.topic}</code>
+              <button className="icon-button" type="button" title="复制 topic" aria-label="复制我的 ntfy topic" onClick={() => void copyNtfyValue(ntfy.topic, "topic")}><Copy size={16} /></button>
+            </div>
+          </div>
+          <div className="workspace-ntfy-warning" role="note">
+            <LockKeyhole size={18} />
+            <p><strong>不要分享 topic。</strong>知道该字符串的人可能订阅你的通知。怀疑泄露时，请回到此页刷新 topic。</p>
+          </div>
+          <div className="workspace-ntfy-downloads">
+            <a className="secondary" href="https://ntfy.sh/" target="_blank" rel="noopener noreferrer">
+              <BellRing size={16} />
+              查看 ntfy 下载指引
+              <ExternalLink size={14} />
+            </a>
+            <a className="secondary" href="https://github.com/binwiederhier/ntfy-android/releases/latest/download/ntfy-fdroid-release.apk" target="_blank" rel="noopener noreferrer">
+              <Download size={16} />
+              如果您的安卓设备无法访问 Google Play，点此直接下载 ntfy 安装包
+            </a>
+          </div>
+        </div>
+      </div>,
+      document.body
+    )}
+    </>
   );
 }
 
@@ -10220,6 +10562,7 @@ function WorkspaceChatPanel({
   unreadAnchorMessageId,
   unreadAnchorCount,
   newMessageCount,
+  awayFromLatest,
   onJumpToLatest,
   draft,
   draftDocument,
@@ -10261,6 +10604,7 @@ function WorkspaceChatPanel({
   unreadAnchorMessageId?: string | null;
   unreadAnchorCount: number;
   newMessageCount: number;
+  awayFromLatest: boolean;
   onJumpToLatest: () => void;
   draft: string;
   draftDocument: WorkspaceComposerDocument;
@@ -10709,10 +11053,10 @@ function WorkspaceChatPanel({
         )}
       </div>
       <div className="workspace-composer-dock">
-        {newMessageCount > 0 && (
+        {!historyTargetId && (newMessageCount > 0 || awayFromLatest) && (
           <button className="workspace-new-message-button" type="button" onClick={onJumpToLatest}>
             <ChevronDown size={15} />
-            {newMessageCount} 条新消息
+            {newMessageCount > 0 ? `${newMessageCount} 条新消息` : "回到最新消息"}
           </button>
         )}
         {replyTarget && (

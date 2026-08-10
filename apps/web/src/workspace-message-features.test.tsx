@@ -42,6 +42,8 @@ describe("workspace avatar", () => {
     expect(html).toContain('src="/assets/beacon-avatar.png"');
     expect(sanitizeWorkspaceAvatarUrl("/api/workspace/avatars/usr-1/version-1"))
       .toBe("/api/workspace/avatars/usr-1/version-1");
+    expect(sanitizeWorkspaceAvatarUrl("/api/workspace/avatars/usr_owner/version-1"))
+      .toBe("/api/workspace/avatars/usr_owner/version-1");
   });
 
   it("renders a stable initial when no safe avatar exists", () => {
