@@ -13,6 +13,17 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.10.0",
+    releasedAt: "2026-08-10",
+    title: "更稳的大文件与个人表情",
+    summary: "大文件采用分段传输，并加入可自定义的表情面板与收藏表情。",
+    categories: [
+      { title: "文件", items: ["大文件会自动分段上传，单段失败可重试而不必从头开始", "上传完成前会校验每一段，降低网络波动导致的文件损坏"] },
+      { title: "表情", items: ["可选择聊天面板中显示的表情包，并始终保留至少一套", "支持上传静图或动图，也可从聊天图片和已有表情加入收藏"] },
+      { title: "个人", items: ["账号设置更名为个人设置", "收藏图片会自动调整尺寸和体积，并可随时移除"] }
+    ]
+  },
+  {
     version: "0.9.0",
     releasedAt: "2026-08-10",
     title: "更及时的移动通知",

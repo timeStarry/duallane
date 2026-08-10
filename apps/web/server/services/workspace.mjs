@@ -2179,6 +2179,7 @@ export async function createStructuredMessage(db, request, input) {
   let normalizedContent;
   let replyToMessageId = null;
   let attachmentIds = [];
+  let customEmoteIds = [];
   try {
     existing = await db.prepare(`
       SELECT id, content_json AS contentJson
@@ -2186,7 +2187,9 @@ export async function createStructuredMessage(db, request, input) {
       WHERE space_id = ? AND conversation_id = ? AND author_id = ? AND client_message_id = ?
     `).get(DEFAULT_SPACE_ID, conversationId, actor.id, clientMessageId);
 
-    normalizedContent = await normalizeMessageContent(db, actor, conversationId, input.content);
+    normalizedContent = await normalizeMessageContent(db, actor, conversationId, input.content, {
+      validateCustomEmote: input.validateCustomEmote
+    });
     if (existing) {
       if (existing.contentJson !== JSON.stringify(normalizedContent)) {
         throw new WorkspaceValidationError("message.idempotency_conflict", "重复消息 ID 对应的内容不一致");
@@ -2203,6 +2206,7 @@ export async function createStructuredMessage(db, request, input) {
     }
 
     attachmentIds = extractAttachmentIds(normalizedContent);
+    customEmoteIds = extractCustomEmoteIds(normalizedContent);
     for (const attachmentId of attachmentIds) {
       await validateAttachmentForMessage(db, actor, conversationId, attachmentId);
     }
@@ -2259,6 +2263,14 @@ export async function createStructuredMessage(db, request, input) {
         SET visibility = 'conversation', conversation_id = COALESCE(conversation_id, ?)
         WHERE id = ?
       `).run(conversationId, attachmentId);
+    }
+
+    for (const customEmoteId of customEmoteIds) {
+      await db.prepare(`
+        INSERT INTO message_custom_emotes (message_id, custom_emote_id)
+        VALUES (?, ?)
+        ON CONFLICT DO NOTHING
+      `).run(id, customEmoteId);
     }
 
     await enforceRetention(db, conversationId);
@@ -3188,7 +3200,7 @@ async function requirePinTarget(db, actor, conversationId, messageId, request, a
   return message;
 }
 
-async function normalizeMessageContent(db, actor, conversationId, content) {
+async function normalizeMessageContent(db, actor, conversationId, content, options = {}) {
   if (!content || typeof content !== "object") {
     throw new WorkspaceValidationError("message.invalid_content", "消息内容格式无效");
   }
@@ -3205,7 +3217,7 @@ async function normalizeMessageContent(db, actor, conversationId, content) {
   }
 
   const normalizedBlocks = await Promise.all(
-    blocks.map(async (block) => await normalizeBlock(db, actor, conversationId, block))
+    blocks.map(async (block) => await normalizeBlock(db, actor, conversationId, block, options))
   );
   const plainText = buildPlainText(normalizedBlocks).trim();
   if (!plainText) {
@@ -3218,7 +3230,7 @@ async function normalizeMessageContent(db, actor, conversationId, content) {
   };
 }
 
-async function normalizeBlock(db, actor, conversationId, block) {
+async function normalizeBlock(db, actor, conversationId, block, options = {}) {
   if (!block || typeof block !== "object" || !MESSAGE_BLOCK_TYPES.has(block.type)) {
     throw new WorkspaceValidationError("message.invalid_block", "消息块格式无效");
   }
@@ -3248,6 +3260,14 @@ async function normalizeBlock(db, actor, conversationId, block) {
   }
   if (block.type === "emoji") {
     const shortcode = normalizeString(block.shortcode);
+    const customMatch = /^custom:([a-f0-9-]{36})$/i.exec(shortcode);
+    if (customMatch) {
+      if (typeof options.validateCustomEmote !== "function") {
+        throw new WorkspaceValidationError("message.invalid_emoji", "收藏表情不可用");
+      }
+      await options.validateCustomEmote(actor.id, customMatch[1]);
+      return { type: "emoji", shortcode: `custom:${customMatch[1].toLowerCase()}` };
+    }
     if (!/^[a-z0-9_+-]{1,64}$/i.test(shortcode)) {
       throw new WorkspaceValidationError("message.invalid_emoji", "表情格式无效");
     }
@@ -3266,7 +3286,7 @@ function buildPlainText(blocks) {
     }
     if (block.type === "mention") return `@${block.label}`;
     if (block.type === "link") return block.label || block.url;
-    if (block.type === "emoji") return `:${block.shortcode}:`;
+    if (block.type === "emoji") return block.shortcode.startsWith("custom:") ? "[表情]" : `:${block.shortcode}:`;
     if (block.type === "attachment") return "[文件]";
     return "";
   }).join("");
@@ -3282,6 +3302,14 @@ function fallbackTextSummary(value) {
 
 function extractAttachmentIds(content) {
   return uniqueStrings(content.blocks.filter((block) => block.type === "attachment").map((block) => block.attachmentId));
+}
+
+function extractCustomEmoteIds(content) {
+  return [...new Set(content.blocks.flatMap((block) => {
+    if (block.type !== "emoji") return [];
+    const match = /^custom:([a-f0-9-]{36})$/i.exec(block.shortcode);
+    return match ? [match[1].toLowerCase()] : [];
+  }))];
 }
 
 async function validateAttachmentForMessage(db, actor, conversationId, attachmentId) {
@@ -3648,7 +3676,7 @@ export async function releaseStaleUploadReservations(db, now = new Date()) {
     WHERE tl.space_id = ?
       AND tl.direction = 'upload'
       AND tl.status = 'reserved'
-      AND tl.created_at < ?
+      AND COALESCE(tl.last_activity_at, tl.created_at) < ?
       AND a.status = 'pending'
   `).all(DEFAULT_SPACE_ID, cutoff);
 

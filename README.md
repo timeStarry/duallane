@@ -114,7 +114,7 @@ Compose starts PostgreSQL, waits for its health check, runs the one-shot
 `migrate` service, and only then starts the API. Set a strong
 `POSTGRES_PASSWORD` before deployment. Back up both the `duallane-postgres`
 database volume and the `duallane-data` file volume. The local storage driver
-keeps Workspace attachment and avatar bytes in `duallane-data`; the production
+keeps Workspace attachment, avatar, and personal emote bytes in `duallane-data`; the production
 S3 driver uses a private S3-compatible bucket while the local volume remains
 available for staged migration and rollback. `POSTGRES_IMAGE` defaults to the
 DaoCloud mirror and can be changed to another trusted PostgreSQL 17 image
@@ -126,6 +126,12 @@ file containing only `accessKey` and `secretKey`. Set its host path through
 secret. The API uploads bytes only after Workspace quota and permission checks,
 and authenticated download or preview requests receive a short-lived signed
 URL. Internal object keys never use the original file name.
+
+Workspace attachment reservations advertise a 4 MiB application part size.
+Larger files are uploaded as independently hashed, idempotent parts and are
+assembled only after every part is present. Keep the gateway request cap above
+one part but bounded; the bundled Nginx configuration uses 11 MiB so avatar and
+personal-emote source uploads also fit without allowing an unbounded body.
 
 Provision bucket versioning, restricted CORS, and seven-day incomplete
 multipart cleanup before the first backfill:
@@ -196,7 +202,7 @@ Workspace ntfy push defaults to `https://ntfy.tsio.top`. Override it with
 production values must use HTTPS. `WORKSPACE_NTFY_WORKER_ENABLED=false`
 stops delivery without changing each user's switch or generated topic. Topics
 are generated once per human Workspace member and rotate only when that user
-explicitly refreshes the topic from account settings.
+explicitly refreshes the topic from personal settings.
 
 If the deployment host cannot reach GitHub OAuth directly, enable the optional
 GitHub-only V2Ray profile. Put the subscription URL in an untracked host file

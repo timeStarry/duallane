@@ -117,6 +117,10 @@ export function workspaceAvatarObjectKey({ userId, version }) {
   return `workspace/profile-avatars/${safeSegment(userId)}/${safeSegment(version)}.webp`;
 }
 
+export function workspaceCustomEmoteObjectKey({ userId, id }) {
+  return `workspace/custom-emotes/${safeSegment(userId)}/${safeSegment(id)}/content.webp`;
+}
+
 export function workspaceArchiveObjectKey({ runId, sha256 }) {
   const digest = String(sha256 ?? "").trim().toLowerCase();
   if (!/^[a-f0-9]{64}$/.test(digest)) {
@@ -145,6 +149,11 @@ function createLocalWorkspaceObjectStore(dataDir) {
     async removeAttachment(attachment) {
       await removeStoredAttachment(dataDir, attachment.storageKey);
     },
+    async readAttachmentBytes(attachment, maxBytes) {
+      const stored = await statStoredAttachment(dataDir, attachment.storageKey, attachment.byteSize);
+      assertReadableSize(stored.byteSize, maxBytes);
+      return await readFile(stored.path);
+    },
     async persistProfileAvatar(stored) {
       return stored;
     },
@@ -155,6 +164,27 @@ function createLocalWorkspaceObjectStore(dataDir) {
     },
     async removeProfileAvatar(avatar) {
       await removeLocalProfileAvatar(dataDir, avatar?.storageKey);
+    },
+    async persistCustomEmote(stored) {
+      const result = await saveUploadStream(
+        dataDir,
+        stored.storageKey,
+        createReadStream(stored.path),
+        stored.byteSize
+      );
+      return { ...stored, ...result, backend: "local" };
+    },
+    async readCustomEmoteBytes(emote, maxBytes) {
+      const stored = await statStoredAttachment(dataDir, emote.storageKey, emote.byteSize);
+      assertReadableSize(stored.byteSize, maxBytes);
+      return await readFile(stored.path);
+    },
+    async getCustomEmoteDelivery(emote) {
+      const stored = await statStoredAttachment(dataDir, emote.storageKey, emote.byteSize);
+      return { kind: "stream", path: stored.path, byteSize: stored.byteSize };
+    },
+    async removeCustomEmote(emote) {
+      if (emote?.storageKey) await removeStoredAttachment(dataDir, emote.storageKey);
     }
   };
 }
@@ -307,6 +337,22 @@ function createS3WorkspaceObjectStore({ dataDir, config, internalClient, deliver
         removeStoredAttachment(dataDir, attachment.storageKey).catch(() => {})
       ]);
     },
+    async readAttachmentBytes(attachment, maxBytes) {
+      try {
+        return await readS3Bytes({
+          client: internalClient,
+          bucket: config.bucket,
+          key: workspaceAttachmentObjectKey(attachment),
+          maxBytes
+        });
+      } catch (error) {
+        if (!isNotFoundError(error)) throw error;
+        if (!config.localReadFallback) throw new WorkspaceError("file.storage_missing", "文件内容不可用", 404);
+        const stored = await statStoredAttachment(dataDir, attachment.storageKey, attachment.byteSize);
+        assertReadableSize(stored.byteSize, maxBytes);
+        return await readFile(stored.path);
+      }
+    },
     async persistProfileAvatar(stored) {
       const sha256 = await hashFile(stored.path);
       await uploadFile({
@@ -362,8 +408,105 @@ function createS3WorkspaceObjectStore({ dataDir, config, internalClient, deliver
           : Promise.resolve(),
         removeLocalProfileAvatar(dataDir, avatar.storageKey).catch(() => {})
       ]);
+    },
+    async persistCustomEmote(stored) {
+      const key = workspaceCustomEmoteObjectKey(stored);
+      try {
+        await uploadFile({
+          key,
+          path: stored.path,
+          byteSize: stored.byteSize,
+          sha256: stored.sha256,
+          contentType: "image/webp",
+          kind: "custom-emote",
+          id: stored.id
+        });
+        if (config.localMirrorWrite) {
+          await saveUploadStream(dataDir, stored.storageKey, createReadStream(stored.path), stored.byteSize);
+        }
+        return { ...stored, backend: "s3" };
+      } catch (error) {
+        await Promise.all([
+          internalClient.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key })).catch(() => {}),
+          removeStoredAttachment(dataDir, stored.storageKey).catch(() => {})
+        ]);
+        throw error;
+      }
+    },
+    async readCustomEmoteBytes(emote, maxBytes) {
+      try {
+        return await readS3Bytes({
+          client: internalClient,
+          bucket: config.bucket,
+          key: workspaceCustomEmoteObjectKey(emote),
+          maxBytes
+        });
+      } catch (error) {
+        if (!isNotFoundError(error)) throw error;
+        if (!config.localReadFallback) throw new WorkspaceError("emote.not_found", "收藏表情不存在", 404);
+        const stored = await statStoredAttachment(dataDir, emote.storageKey, emote.byteSize);
+        assertReadableSize(stored.byteSize, maxBytes);
+        return await readFile(stored.path);
+      }
+    },
+    async getCustomEmoteDelivery(emote, options = {}) {
+      const key = workspaceCustomEmoteObjectKey(emote);
+      try {
+        const head = await internalClient.send(new HeadObjectCommand({ Bucket: config.bucket, Key: key }));
+        if (Number(head.ContentLength) !== Number(emote.byteSize)) {
+          throw new WorkspaceError("emote.storage_mismatch", "收藏表情内容不可用", 500);
+        }
+        return await signedDelivery({
+          key,
+          contentType: "image/webp",
+          contentDisposition: options.contentDisposition
+        });
+      } catch (error) {
+        if (isNotFoundError(error) && config.localReadFallback) {
+          const stored = await statStoredAttachment(dataDir, emote.storageKey, emote.byteSize);
+          return { kind: "stream", path: stored.path, byteSize: stored.byteSize };
+        }
+        if (error instanceof WorkspaceError) throw error;
+        throw storageUnavailable(error, "收藏表情内容不可用");
+      }
+    },
+    async removeCustomEmote(emote) {
+      if (!emote?.storageKey) return;
+      await Promise.all([
+        internalClient.send(new DeleteObjectCommand({
+          Bucket: config.bucket,
+          Key: workspaceCustomEmoteObjectKey(emote)
+        })).catch((error) => {
+          throw storageUnavailable(error, "收藏表情清理失败");
+        }),
+        removeStoredAttachment(dataDir, emote.storageKey).catch(() => {})
+      ]);
     }
   };
+}
+
+async function readS3Bytes({ client, bucket, key, maxBytes }) {
+  let head;
+  try {
+    head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    assertReadableSize(Number(head.ContentLength), maxBytes);
+    const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+    const bytes = await result.Body?.transformToByteArray?.();
+    if (!bytes || bytes.byteLength !== Number(head.ContentLength)) {
+      throw new WorkspaceError("file.storage_mismatch", "文件内容不可用", 500);
+    }
+    return Buffer.from(bytes);
+  } catch (error) {
+    if (error instanceof WorkspaceError) throw error;
+    if (isNotFoundError(error)) throw error;
+    throw storageUnavailable(error, "文件内容不可用");
+  }
+}
+
+function assertReadableSize(byteSize, maxBytes) {
+  if (!Number.isSafeInteger(Number(byteSize)) || Number(byteSize) < 1 || Number(byteSize) > maxBytes) {
+    throw new WorkspaceError("emote.source_too_large", "图片过大，无法收藏为表情", 413);
+  }
 }
 
 export async function cleanupWorkspaceMultipartUploads({

@@ -564,7 +564,10 @@ Response:
   "remainingBytes": 2147350192,
   "dailyQuotaBytes": 2147483648,
   "upload": {
-    "id": "upl_01"
+    "id": "upl_01",
+    "mode": "chunked",
+    "partSize": 4194304,
+    "partCount": 3
   },
   "attachment": {
     "id": "att_01",
@@ -578,6 +581,8 @@ Response:
 Upload content and completion:
 
 ```text
+GET /api/workspace/files/uploads/:uploadId
+PUT /api/workspace/files/uploads/:uploadId/parts/:partNumber
 PUT /api/workspace/files/uploads/:uploadId/content
 POST /api/workspace/files/uploads/:uploadId/complete
 POST /api/workspace/files/uploads/:uploadId/fail
@@ -586,12 +591,50 @@ POST /api/workspace/files/uploads/:uploadId/fail
 Rules:
 
 - Reserve succeeds before bytes are accepted.
+- Files larger than one advertised part use the chunked path. Every part has a
+  fixed expected size and requires `X-DualLane-Part-SHA256`.
+- Uploading the same part number with the same size and digest is idempotent;
+  conflicting content returns `upload.part_conflict`.
+- The status endpoint returns received part numbers and hashes so the browser
+  can skip parts already accepted during the current upload task. Part activity
+  refreshes the stale reservation deadline.
 - Actual stored size must match the reservation.
-- `complete` fails if bytes are missing.
+- `complete` with `{ "mode": "chunked" }` fails if any part is missing, then
+  assembles parts in order and verifies the final object before marking it
+  available.
 - `fail` releases reserved quota.
 - Stale pending upload cleanup is a server responsibility. P0 performs
   opportunistic cleanup during quota reads/reservations so abandoned browser
   uploads do not hold daily transfer amount indefinitely.
+
+## 9.1 Personal Emote APIs
+
+```text
+GET    /api/workspace/me/emote-settings
+PUT    /api/workspace/me/emote-settings
+GET    /api/workspace/me/emotes
+POST   /api/workspace/me/emotes
+POST   /api/workspace/me/emotes/favorite
+PUT    /api/workspace/me/emotes/order
+DELETE /api/workspace/me/emotes/:emoteId
+GET    /api/workspace/emotes/:emoteId/content
+```
+
+Rules:
+
+- At least one built-in pack must remain enabled. The personal favorites pack
+  remains available even when empty.
+- Source uploads accept JPEG, PNG, WebP, and GIF up to 10 MiB. The API decodes,
+  strips metadata, bounds dimensions/frames/duration, and stores normalized
+  WebP content under the caller's private collection.
+- A user may keep up to 100 items and 50 MiB of normalized personal emotes.
+  These bytes do not consume the chat transfer quota.
+- Favoriting a message image requires active membership in that message's
+  conversation. Stored copies remain independent from later message or
+  attachment removal.
+- Custom content is available to its owner and to members of conversations
+  containing a message that references that custom emote. Object keys and S3
+  credentials are never returned by these APIs.
 
 List files:
 

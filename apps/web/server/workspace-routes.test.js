@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile, rm, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -3928,7 +3929,7 @@ describe("workspace routes", () => {
     });
     expect(reserve.statusCode).toBe(201);
     const upload = reserve.json();
-    expect(upload.upload).toEqual({ id: upload.id });
+    expect(upload.upload).toEqual({ id: upload.id, mode: "single", partSize: 4 * 1024 * 1024, partCount: 1 });
     expect(upload.attachment.storageKey).toBeUndefined();
 
     const complete = await app.inject({
@@ -4295,6 +4296,164 @@ describe("workspace routes", () => {
       })]
     });
     expectNoWorkspaceInternals(ownerBootstrap.json(), ["route-bootstrap-member@example.com"]);
+  });
+
+  it("uploads large workspace files through verified resumable parts", async () => {
+    const app = await makeApp();
+    const partSize = 4 * 1024 * 1024;
+    const first = Buffer.alloc(partSize, 0x61);
+    const second = Buffer.from("end");
+    const reserve = await app.inject({
+      method: "POST",
+      url: "/api/workspace/files/uploads/reserve",
+      headers: { "content-type": "application/json", "x-workspace-user-id": "usr_owner" },
+      payload: {
+        fileName: "large.bin",
+        mimeType: "application/octet-stream",
+        byteSize: first.byteLength + second.byteLength,
+        visibility: "space"
+      }
+    });
+    expect(reserve.statusCode).toBe(201);
+    const upload = reserve.json();
+    expect(upload.upload).toMatchObject({ mode: "chunked", partSize, partCount: 2 });
+
+    for (const [index, body] of [first, second].entries()) {
+      const part = await app.inject({
+        method: "PUT",
+        url: `/api/workspace/files/uploads/${upload.id}/parts/${index + 1}`,
+        headers: {
+          "content-type": "application/octet-stream",
+          "x-workspace-user-id": "usr_owner",
+          "x-duallane-part-sha256": createHash("sha256").update(body).digest("hex")
+        },
+        payload: body
+      });
+      expect(part.statusCode).toBe(201);
+    }
+
+    const status = await app.inject({
+      method: "GET",
+      url: `/api/workspace/files/uploads/${upload.id}`,
+      headers: { "x-workspace-user-id": "usr_owner" }
+    });
+    expect(status.statusCode).toBe(200);
+    expect(status.json().parts).toHaveLength(2);
+
+    const complete = await app.inject({
+      method: "POST",
+      url: `/api/workspace/files/uploads/${upload.id}/complete`,
+      headers: { "content-type": "application/json", "x-workspace-user-id": "usr_owner" },
+      payload: { mode: "chunked" }
+    });
+    expect(complete.statusCode).toBe(200);
+    expect(complete.json().attachment).toMatchObject({
+      id: upload.attachment.id,
+      byteSize: first.byteLength + second.byteLength,
+      status: "available"
+    });
+  });
+
+  it("manages personal emote pack preferences and normalized favorites", async () => {
+    const app = await makeApp();
+    const defaults = await app.inject({
+      method: "GET",
+      url: "/api/workspace/me/emote-settings",
+      headers: { "x-workspace-user-id": "usr_owner" }
+    });
+    expect(defaults.statusCode).toBe(200);
+    expect(defaults.json().settings.enabledPackIds.length).toBeGreaterThan(0);
+
+    const invalid = await app.inject({
+      method: "PUT",
+      url: "/api/workspace/me/emote-settings",
+      headers: { "content-type": "application/json", "x-workspace-user-id": "usr_owner" },
+      payload: { enabledPackIds: [] }
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json().error.code).toBe("emote.pack_required");
+
+    const png = await sharp({
+      create: { width: 32, height: 24, channels: 4, background: { r: 18, g: 137, b: 121, alpha: 1 } }
+    }).png().toBuffer();
+    const uploaded = await app.inject({
+      method: "POST",
+      url: "/api/workspace/me/emotes",
+      headers: {
+        "content-type": "image/png",
+        "x-duallane-file-name": encodeURIComponent("收藏.png"),
+        "x-workspace-user-id": "usr_owner"
+      },
+      payload: png
+    });
+    expect(uploaded.statusCode).toBe(201);
+    expect(uploaded.json().emote).toMatchObject({ kind: "custom", label: "收藏" });
+
+    const group = await app.inject({
+      method: "POST",
+      url: "/api/workspace/conversations",
+      headers: { "content-type": "application/json", "x-workspace-user-id": "usr_owner" },
+      payload: { type: "group", title: "Custom Emote Group" }
+    });
+    expect(group.statusCode).toBe(201);
+    const memberId = group.json().conversation.members.find((member) => member.id !== "usr_owner").id;
+    const privateContent = await app.inject({
+      method: "GET",
+      url: uploaded.json().emote.src,
+      headers: { "x-workspace-user-id": memberId }
+    });
+    expect(privateContent.statusCode).toBe(403);
+
+    const spoofedReference = await app.inject({
+      method: "POST",
+      url: "/api/workspace/messages",
+      headers: { "content-type": "application/json", "x-workspace-user-id": memberId },
+      payload: {
+        conversationId: group.json().conversation.id,
+        clientMessageId: "custom-emote-spoofed-reference",
+        content: {
+          format: "duallane.message+json;v=1",
+          plainText: `custom:${uploaded.json().emote.id}`,
+          blocks: [{ type: "text", text: `custom:${uploaded.json().emote.id}` }]
+        }
+      }
+    });
+    expect(spoofedReference.statusCode).toBe(201);
+    const stillPrivateContent = await app.inject({
+      method: "GET",
+      url: uploaded.json().emote.src,
+      headers: { "x-workspace-user-id": memberId }
+    });
+    expect(stillPrivateContent.statusCode).toBe(403);
+
+    const sent = await app.inject({
+      method: "POST",
+      url: "/api/workspace/messages",
+      headers: { "content-type": "application/json", "x-workspace-user-id": "usr_owner" },
+      payload: {
+        conversationId: group.json().conversation.id,
+        clientMessageId: "custom-emote-message",
+        content: {
+          format: "duallane.message+json;v=1",
+          plainText: "[表情]",
+          blocks: [{ type: "emoji", shortcode: `custom:${uploaded.json().emote.id}` }]
+        }
+      }
+    });
+    expect(sent.statusCode).toBe(201);
+    expect(sent.json().message.content.blocks[0]).toEqual({
+      type: "emoji",
+      shortcode: `custom:${uploaded.json().emote.id}`
+    });
+
+    const content = await app.inject({
+      method: "GET",
+      url: uploaded.json().emote.src,
+      headers: { "x-workspace-user-id": memberId }
+    });
+    expect(content.statusCode).toBe(200);
+    expect(content.headers["content-type"]).toContain("image/webp");
+    expect((await sharp(content.rawPayload).metadata()).format).toBe("webp");
   });
 
   it("prevents admins from revoking privileged invites through workspace routes", async () => {
@@ -5250,7 +5409,7 @@ describe("workspace routes", () => {
     });
     expect(reserve.statusCode).toBe(201);
     const upload = reserve.json();
-    expect(upload.upload).toEqual({ id: upload.id });
+    expect(upload.upload).toEqual({ id: upload.id, mode: "single", partSize: 4 * 1024 * 1024, partCount: 1 });
     expect(upload.attachment.storageKey).toBeUndefined();
 
     const complete = await app.inject({

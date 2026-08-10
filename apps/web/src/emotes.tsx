@@ -15,12 +15,14 @@ export type ImageEmoteItem = {
   token: string;
   src: string;
   aliases?: string[];
+  customId?: string;
+  animated?: boolean;
 };
 
 export type EmoteItem = UnicodeEmoteItem | ImageEmoteItem;
 
 export type EmotePack = {
-  id: "emoji" | "bili" | "douyin" | "wechat" | "qq" | "feishu";
+  id: "emoji" | "bili" | "douyin" | "wechat" | "qq" | "feishu" | "custom";
   label: string;
   items: EmoteItem[];
 };
@@ -50,6 +52,17 @@ export function getReactionEmote(emoteKey: string) {
 
 export function getReactionEmoteKey(packId: EmotePack["id"], item: EmoteItem) {
   return `${packId}:${item.id}`;
+}
+
+export function findFirstImageEmoteKey(body: string) {
+  for (const match of body.matchAll(imageEmoteTokenPattern)) {
+    const item = imageEmoteByToken.get(match[0]);
+    if (!item) continue;
+    for (const pack of emotePacks) {
+      if (pack.items.includes(item)) return `${pack.id}:${item.id}`;
+    }
+  }
+  return null;
 }
 
 export function ReactionEmoteGlyph({ emoteKey }: { emoteKey: string }) {

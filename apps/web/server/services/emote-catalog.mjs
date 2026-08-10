@@ -44,3 +44,9 @@ export function listVisibleReactionKeys() {
     .filter(([, emote]) => emote.visible)
     .map(([key]) => key);
 }
+
+export function listVisibleEmotePacks() {
+  return catalog
+    .filter((pack) => !hiddenPackIds.has(pack.id))
+    .map((pack) => ({ id: pack.id, label: pack.label }));
+}

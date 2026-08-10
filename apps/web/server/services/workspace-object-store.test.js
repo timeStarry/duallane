@@ -9,7 +9,8 @@ import {
   loadWorkspaceS3Config,
   workspaceArchiveObjectKey,
   workspaceAttachmentObjectKey,
-  workspaceAvatarObjectKey
+  workspaceAvatarObjectKey,
+  workspaceCustomEmoteObjectKey
 } from "./workspace-object-store.mjs";
 import { resolveWorkspaceStoragePath } from "./workspace-storage.mjs";
 
@@ -25,6 +26,8 @@ describe("workspace object store", () => {
       .toBe("workspace/attachments/spc_default/att-1/content");
     expect(workspaceAvatarObjectKey({ userId: "usr_1", version: "version-1" }))
       .toBe("workspace/profile-avatars/usr_1/version-1.webp");
+    expect(workspaceCustomEmoteObjectKey({ userId: "usr_1", id: "emote-1" }))
+      .toBe("workspace/custom-emotes/usr_1/emote-1/content.webp");
     expect(workspaceArchiveObjectKey({ runId: "run-1", sha256: "a".repeat(64) }))
       .toBe(`workspace/migration-archive/run-1/${"a".repeat(64)}`);
     expect(() => workspaceAttachmentObjectKey({ spaceId: "../escape", id: "att-1" })).toThrow("invalid");
@@ -109,6 +112,69 @@ describe("workspace object store", () => {
     });
     expect(delivery).toMatchObject({ kind: "redirect", expiresAt: expect.any(String) });
     expect(delivery.url).toMatch(/^https:\/\/fs\.tsio\.top\//);
+  });
+
+  it("stores personal emotes in their private S3 prefix and signs their delivery", async () => {
+    const directory = await makeDirectory();
+    const credentialsPath = path.join(directory, "credentials.json");
+    await writeFile(credentialsPath, JSON.stringify({ accessKey: "test-access", secretKey: "test-secret" }));
+    let uploaded;
+    const client = {
+      async send(command) {
+        if (command.constructor.name === "HeadObjectCommand") {
+          return { ContentLength: uploaded.byteSize, Metadata: uploaded.metadata };
+        }
+        return {};
+      },
+      destroy() {}
+    };
+    const store = await createWorkspaceObjectStore({
+      dataDir: directory,
+      env: s3Env(credentialsPath),
+      s3Client: client,
+      publicS3Client: client,
+      presign: async (_client, command, options) => {
+        expect(command.input.Key).toBe("workspace/custom-emotes/usr_1/emote-1/content.webp");
+        expect(options.expiresIn).toBe(300);
+        return "https://fs.tsio.top/duallane/workspace/custom-emotes/usr_1/emote-1/content.webp?signed=redacted";
+      },
+      uploadFactory: ({ params }) => ({
+        async done() {
+          const chunks = [];
+          for await (const chunk of params.Body) chunks.push(Buffer.from(chunk));
+          uploaded = {
+            key: params.Key,
+            byteSize: Buffer.concat(chunks).byteLength,
+            metadata: params.Metadata
+          };
+        }
+      })
+    });
+    const content = Buffer.from("normalized-webp");
+    const stagingPath = path.join(directory, "staged-emote.webp");
+    await writeFile(stagingPath, content);
+    const emote = {
+      id: "emote-1",
+      userId: "usr_1",
+      path: stagingPath,
+      storageKey: "custom-emotes/usr_1/emote-1/content.webp",
+      byteSize: content.byteLength,
+      sha256: "a".repeat(64)
+    };
+
+    await store.persistCustomEmote(emote);
+    expect(uploaded).toMatchObject({
+      key: "workspace/custom-emotes/usr_1/emote-1/content.webp",
+      byteSize: content.byteLength,
+      metadata: expect.objectContaining({
+        "duallane-kind": "custom-emote",
+        "duallane-id": "emote-1"
+      })
+    });
+    await expect(store.getCustomEmoteDelivery(emote)).resolves.toMatchObject({
+      kind: "redirect",
+      url: expect.stringContaining("https://fs.tsio.top/duallane/workspace/custom-emotes/")
+    });
   });
 
   it("falls back to local bytes only when S3 reports a missing object", async () => {

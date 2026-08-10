@@ -3883,6 +3883,81 @@ html[data-theme="dark"] .workspace-mode {
   object-fit: cover;
 }
 
+.emote-upload-tile {
+  position: relative;
+  min-width: 0;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 1px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--text-xs);
+}
+
+.emote-upload-tile:hover {
+  color: var(--relay-dark);
+  border-color: var(--relay);
+  background: var(--surface-tint);
+}
+
+.emote-upload-tile.busy {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.emote-upload-tile input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.emote-custom-tile {
+  position: relative;
+  min-width: 0;
+  height: 44px;
+}
+
+.emote-custom-tile > button:first-child {
+  height: 44px;
+}
+
+.emote-grid .emote-custom-remove {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 20px;
+  height: 20px;
+  border-color: var(--line);
+  border-radius: 50%;
+  padding: 0;
+  color: var(--muted);
+  background: var(--panel);
+  opacity: 0;
+}
+
+.emote-custom-tile:hover .emote-custom-remove,
+.emote-custom-remove:focus-visible {
+  opacity: 1;
+}
+
+.emote-picker-empty,
+.emote-picker-error {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-body);
+}
+
+.emote-picker-error {
+  color: var(--danger-fg);
+}
+
 .workspace-section-actions {
   display: flex;
   align-items: center;
@@ -4756,9 +4831,11 @@ html[data-theme="dark"] .workspace-mode {
   justify-content: center;
 }
 
-.workspace-editor-token.emote .message-emote-image {
+.workspace-editor-token.emote .message-emote-image,
+.workspace-editor-token.emote img {
   width: 22px;
   height: 22px;
+  object-fit: contain;
 }
 
 .workspace-composer.formatting-open textarea,
@@ -5520,6 +5597,41 @@ html[data-theme="dark"] .workspace-mode {
 .workspace-checkbox-setting strong,
 .workspace-checkbox-setting small {
   display: block;
+}
+
+.workspace-emote-pack-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 8px;
+}
+
+.workspace-emote-pack-settings label {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px 10px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.workspace-emote-pack-settings label:has(input:checked) {
+  border-color: color-mix(in srgb, var(--relay) 42%, var(--line));
+  background: var(--surface-tint);
+}
+
+.workspace-emote-pack-settings small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  line-height: var(--line-body);
+}
+
+.workspace-custom-emote-image {
+  width: min(112px, 28vw);
+  height: min(112px, 28vw);
+  object-fit: contain;
 }
 
 .workspace-checkbox-setting small {
@@ -6796,6 +6908,32 @@ small,
   .workspace-reaction {
     min-width: 44px;
     min-height: 44px;
+  }
+
+  .emote-custom-tile,
+  .emote-custom-tile > button:first-child {
+    height: 56px;
+  }
+
+  .emote-grid .emote-custom-remove {
+    top: -8px;
+    right: -8px;
+    min-width: 44px;
+    width: 44px;
+    height: 44px;
+    border: 0;
+    background: transparent;
+    opacity: 1;
+  }
+
+  .emote-grid .emote-custom-remove svg {
+    box-sizing: content-box;
+    width: 14px;
+    height: 14px;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    padding: 3px;
+    background: var(--panel);
   }
 }
 

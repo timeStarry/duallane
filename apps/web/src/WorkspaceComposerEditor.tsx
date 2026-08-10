@@ -74,7 +74,13 @@ class EmoteNode extends DecoratorNode<ReactNode> {
     return { type: "workspace-emote", version: 1, item: this.__item, token: this.__token };
   }
   decorate() {
-    return <span className="workspace-editor-token emote" contentEditable={false}>{renderMessageParts(this.__token)}</span>;
+    return (
+      <span className="workspace-editor-token emote" contentEditable={false}>
+        {this.__item.kind === "image" ? (
+          <img alt={this.__item.label} decoding="async" draggable={false} src={this.__item.src} />
+        ) : renderMessageParts(this.__token)}
+      </span>
+    );
   }
 }
 

@@ -78,12 +78,22 @@ import {
 } from "./services/profile-avatar.mjs";
 import { blockWorkspace, isWorkspaceEnabled } from "./services/workspace-gate.mjs";
 import { createWorkspaceObjectStore } from "./services/workspace-object-store.mjs";
+import {
+  createWorkspaceChunkUploadService,
+  WORKSPACE_UPLOAD_PART_SIZE,
+  workspaceUploadContract
+} from "./services/workspace-upload-chunks.mjs";
+import {
+  createWorkspaceCustomEmoteService,
+  CUSTOM_EMOTE_MAX_INPUT_BYTES
+} from "./services/workspace-custom-emotes.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 const DEFAULT_GITHUB_OAUTH_TIMEOUT_MS = 8000;
 const MAX_GITHUB_OAUTH_TIMEOUT_MS = 30000;
 const GITHUB_API_USER_AGENT = "DualLane/0.1";
+const WORKSPACE_UPLOAD_CHUNK_CLEANUP_INTERVAL_MS = 30 * 60 * 1000;
 
 export async function createApp(options = {}) {
   const env = options.env ?? process.env;
@@ -121,6 +131,14 @@ export async function createApp(options = {}) {
     ? options.workspaceObjectStore ?? await createWorkspaceObjectStore({ env, dataDir })
     : null;
   await workspaceObjectStore?.assertReady();
+  const workspaceChunkUploads = db ? createWorkspaceChunkUploadService({ db, dataDir, now: options.now }) : null;
+  const workspaceCustomEmotes = db ? createWorkspaceCustomEmoteService({
+    db,
+    objectStore: workspaceObjectStore,
+    dataDir,
+    now: options.now
+  }) : null;
+  await workspaceChunkUploads?.cleanupInactive();
   const workspacePresence = createWorkspacePresence();
   const workspaceEmail = db ? createWorkspaceEmailService({
     db,
@@ -173,6 +191,21 @@ export async function createApp(options = {}) {
     await workspaceObjectStore?.close();
   });
 
+  const workspaceChunkCleanupTimer = workspaceChunkUploads
+    ? setInterval(() => {
+        void workspaceChunkUploads.cleanupInactive().catch((error) => {
+          app.log.warn(
+            { code: String(error?.code || "upload.chunk_cleanup_failed") },
+            "Workspace upload chunk cleanup failed"
+          );
+        });
+      }, WORKSPACE_UPLOAD_CHUNK_CLEANUP_INTERVAL_MS)
+    : null;
+  workspaceChunkCleanupTimer?.unref?.();
+  app.addHook("onClose", async () => {
+    if (workspaceChunkCleanupTimer) clearInterval(workspaceChunkCleanupTimer);
+  });
+
   if (db && !options.db) {
     app.addHook("onClose", async () => {
       await db.close();
@@ -215,7 +248,7 @@ await app.register(fastifyWebsocket);
 app.addContentTypeParser("application/octet-stream", (_request, payload, done) => {
   done(null, payload);
 });
-app.addContentTypeParser(["image/jpeg", "image/png", "image/webp"], (_request, payload, done) => {
+app.addContentTypeParser(["image/jpeg", "image/png", "image/webp", "image/gif"], (_request, payload, done) => {
   done(null, payload);
 });
 
@@ -687,6 +720,107 @@ app.get("/api/workspace/avatars/:userId/:version", async (request, reply) => {
   }
 });
 
+app.get("/api/workspace/me/emote-settings", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return { settings: await workspaceCustomEmotes.getSettings(await getWorkspaceUserId(request)) };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.put("/api/workspace/me/emote-settings", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return {
+      settings: await workspaceCustomEmotes.updateSettings(
+        await getWorkspaceUserId(request),
+        request.body?.enabledPackIds
+      )
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.get("/api/workspace/me/emotes", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return await workspaceCustomEmotes.list(await getWorkspaceUserId(request));
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/me/emotes", { bodyLimit: CUSTOM_EMOTE_MAX_INPUT_BYTES }, async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    const emote = await workspaceCustomEmotes.upload({
+      actorId: await getWorkspaceUserId(request),
+      stream: request.body,
+      contentType: normalizeHeaderValue(request.headers["content-type"]),
+      fileName: decodeFileNameHeader(request.headers["x-duallane-file-name"])
+    });
+    return reply.code(201).send({ emote });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/me/emotes/favorite", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    const emote = await workspaceCustomEmotes.favoriteFromMessage({
+      actorId: await getWorkspaceUserId(request),
+      messageId: request.body?.messageId,
+      attachmentId: request.body?.attachmentId,
+      emoteKey: request.body?.emoteKey,
+      customEmoteId: request.body?.customEmoteId
+    });
+    return reply.code(201).send({ emote });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.put("/api/workspace/me/emotes/order", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return await workspaceCustomEmotes.reorder(
+      await getWorkspaceUserId(request),
+      request.body?.emoteIds
+    );
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.delete("/api/workspace/me/emotes/:emoteId", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return await workspaceCustomEmotes.remove(await getWorkspaceUserId(request), request.params.emoteId);
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.get("/api/workspace/emotes/:emoteId/content", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    const delivery = await workspaceCustomEmotes.getDelivery(
+      await getWorkspaceUserId(request),
+      request.params.emoteId
+    );
+    return sendWorkspaceObjectDelivery(reply, delivery, {
+      contentType: "image/webp",
+      contentDisposition: "inline",
+      cacheControl: delivery.kind === "redirect" ? "private, no-store" : "private, max-age=31536000, immutable"
+    });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
 app.put("/api/workspace/members/:userId/remark", async (request, reply) => {
   if (!workspaceEnabled) {
     return blockWorkspace(reply);
@@ -961,7 +1095,8 @@ app.post("/api/workspace/messages", async (request, reply) => {
       ...(request.body ?? {}),
       actorId: await getWorkspaceUserId(request),
       scheduleEmailNotifications: workspaceEmail?.scheduleMessage,
-      scheduleNtfyNotifications: workspaceNtfy?.scheduleMessage
+      scheduleNtfyNotifications: workspaceNtfy?.scheduleMessage,
+      validateCustomEmote: workspaceCustomEmotes?.validateMessageCustomEmote
     });
     return reply.code(201).send({ message });
   } catch (error) {
@@ -1014,7 +1149,43 @@ app.post("/api/workspace/files/uploads/reserve", async (request, reply) => {
   try {
     const reservation = await reserveUpload(db, request, { ...(request.body ?? {}), actorId: await getWorkspaceUserId(request) });
     const statusCode = reservation.status === "rejected" ? 409 : 201;
-    return reply.code(statusCode).send(reservation);
+    const upload = reservation.status === "reserved"
+      ? { ...(reservation.upload ?? {}), ...workspaceUploadContract(reservation.attachment.byteSize) }
+      : reservation.upload;
+    return reply.code(statusCode).send({ ...reservation, upload });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.get("/api/workspace/files/uploads/:uploadId", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    const upload = await getReservedUpload(db, await getWorkspaceUserId(request), request.params.uploadId);
+    return {
+      uploadId: upload.transfer.id,
+      ...(await workspaceChunkUploads.getStatus(upload.transfer.id, upload.transfer.byte_size))
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.put("/api/workspace/files/uploads/:uploadId/parts/:partNumber", {
+  bodyLimit: WORKSPACE_UPLOAD_PART_SIZE
+}, async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    const upload = await getReservedUpload(db, await getWorkspaceUserId(request), request.params.uploadId);
+    const part = await workspaceChunkUploads.savePart({
+      uploadId: upload.transfer.id,
+      partNumber: request.params.partNumber,
+      expectedByteSize: upload.transfer.byte_size,
+      stream: request.body,
+      contentLength: request.headers["content-length"],
+      sha256: request.headers["x-duallane-part-sha256"]
+    });
+    return reply.code(part.reused ? 200 : 201).send({ part });
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }
@@ -1028,7 +1199,9 @@ app.post("/api/workspace/files/uploads/:uploadId/complete", async (request, repl
   let upload;
   try {
     upload = await getReservedUpload(db, actorId, request.params.uploadId);
-    const stored = await workspaceObjectStore.statAttachment(upload.attachment);
+    const stored = request.body?.mode === "chunked"
+      ? await workspaceChunkUploads.assemble({ upload, objectStore: workspaceObjectStore })
+      : await workspaceObjectStore.statAttachment(upload.attachment);
     return await completeUpload(db, request, {
       ...(request.body ?? {}),
       actorId,
@@ -1036,8 +1209,9 @@ app.post("/api/workspace/files/uploads/:uploadId/complete", async (request, repl
       storageVerifiedByteSize: stored.byteSize
     });
   } catch (error) {
-    if (upload) {
+    if (upload && error?.code !== "upload.parts_incomplete") {
       await workspaceObjectStore.removeAttachment(upload.attachment).catch(() => {});
+      await workspaceChunkUploads.cleanup(request.params.uploadId).catch(() => {});
       try {
         await failUpload(db, request, {
           actorId,
@@ -1052,7 +1226,7 @@ app.post("/api/workspace/files/uploads/:uploadId/complete", async (request, repl
   }
 });
 
-app.put("/api/workspace/files/uploads/:uploadId/content", async (request, reply) => {
+app.put("/api/workspace/files/uploads/:uploadId/content", { bodyLimit: WORKSPACE_UPLOAD_PART_SIZE }, async (request, reply) => {
   if (!workspaceEnabled) {
     return blockWorkspace(reply);
   }
@@ -1069,6 +1243,7 @@ app.put("/api/workspace/files/uploads/:uploadId/content", async (request, reply)
   } catch (error) {
     if (upload) {
       await workspaceObjectStore.removeAttachment(upload.attachment).catch(() => {});
+      await workspaceChunkUploads.cleanup(request.params.uploadId).catch(() => {});
       try {
         await failUpload(db, request, {
           actorId,
@@ -1088,7 +1263,9 @@ app.post("/api/workspace/files/uploads/:uploadId/fail", async (request, reply) =
     return blockWorkspace(reply);
   }
   try {
-    return await failUpload(db, request, { ...(request.body ?? {}), actorId: await getWorkspaceUserId(request), uploadId: request.params.uploadId });
+    const result = await failUpload(db, request, { ...(request.body ?? {}), actorId: await getWorkspaceUserId(request), uploadId: request.params.uploadId });
+    await workspaceChunkUploads.cleanup(request.params.uploadId).catch(() => {});
+    return result;
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }
@@ -1541,6 +1718,15 @@ function toWorkspaceError(request, error) {
 
 function normalizeHeaderValue(value) {
   return Array.isArray(value) ? String(value[0] ?? "").trim().toLowerCase() : String(value ?? "").trim().toLowerCase();
+}
+
+function decodeFileNameHeader(value) {
+  const encoded = Array.isArray(value) ? String(value[0] ?? "") : String(value ?? "");
+  try {
+    return decodeURIComponent(encoded).trim().slice(0, 255);
+  } catch {
+    throw new WorkspaceValidationError("emote.invalid_file_name", "表情文件名无效");
+  }
 }
 
 function toWorkspaceSocketError(request, error) {

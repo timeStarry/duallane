@@ -17,6 +17,7 @@ import {
   FileCode2,
   FileUp,
   Github,
+  Heart,
   History,
   Italic,
   Link2,
@@ -58,6 +59,7 @@ import {
   MessageBody,
   ReactionEmoteGlyph,
   getEmoteInsertText,
+  findFirstImageEmoteKey,
   getReactionEmote,
   getReactionEmoteKey,
   renderMessageParts,
@@ -400,6 +402,25 @@ type WorkspaceNtfyPreferences = {
   rotatedAt: string | null;
   updatedAt: string;
 };
+type WorkspaceEmoteSettings = {
+  availablePacks: Array<{ id: Exclude<EmotePack["id"], "custom">; label: string }>;
+  enabledPackIds: Array<Exclude<EmotePack["id"], "custom">>;
+  minimumEnabled: number;
+};
+type WorkspaceCustomEmote = {
+  id: string;
+  kind: "builtin" | "custom";
+  label: string;
+  token: string;
+  src: string;
+  emoteKey?: string;
+  animated: boolean;
+  byteSize?: number;
+  sourceType?: "upload" | "attachment" | "builtin" | "custom";
+  originalFileName?: string;
+  originalMimeType?: string;
+  createdAt: string;
+};
 type WorkspaceEmailSettings = {
   enabled: boolean;
   smtpHost: string;
@@ -481,6 +502,12 @@ type WorkspaceComposerAttachment = {
   generatedFromLongMessage?: boolean;
   generatedSource?: string;
 };
+type WorkspaceUploadContract = {
+  id: string;
+  mode: "single" | "chunked";
+  partSize: number;
+  partCount: number;
+};
 const WORKSPACE_LONG_MESSAGE_CODE_POINTS = 30_000;
 const WORKSPACE_LONG_MESSAGE_BYTES = 100 * 1024;
 const WORKSPACE_ROLE_OPTIONS: WorkspaceUser["role"][] = ["owner", "admin", "member", "auditor"];
@@ -508,6 +535,10 @@ const WORKSPACE_ERROR_COPY: Record<string, string> = {
   "quota.insufficient": "今日传输额度不足。",
   "upload.size_mismatch": "文件上传失败，请重试。",
   "upload.invalid_content": "文件上传失败，请重试。",
+  "upload.part_size_mismatch": "文件分片大小不正确，请重试。",
+  "upload.part_hash_mismatch": "文件分片校验失败，已自动重试。",
+  "upload.parts_incomplete": "文件分片尚未上传完整，请重试。",
+  "http.413": "单次上传内容过大，请使用受支持的文件或刷新后重试。",
   "message.invalid_content": "消息内容无法发送，请调整后重试。",
   "message.idempotency_conflict": "这条消息已发生变化，请重新发送。",
   "message.too_long": "消息正文过长，请作为 TXT 文件发送。",
@@ -516,7 +547,12 @@ const WORKSPACE_ERROR_COPY: Record<string, string> = {
   "pin.limit_reached": "每人在每个群聊最多常驻 3 条消息。",
   "avatar.unsupported_format": "头像仅支持 JPEG、PNG 或 WebP。",
   "avatar.invalid_size": "头像文件大小不符合要求。",
-  "avatar.invalid_image": "头像图片无法解析。"
+  "avatar.invalid_image": "头像图片无法解析。",
+  "emote.invalid_format": "收藏表情仅支持 JPEG、PNG、WebP 或 GIF。",
+  "emote.input_too_large": "收藏表情原图不能超过 10 MiB。",
+  "emote.animation_too_complex": "动图帧数或时长超出限制。",
+  "emote.limit_reached": "收藏表情已达到 100 个上限。",
+  "emote.storage_limit_reached": "收藏表情空间已满。"
 };
 class WorkspaceClientError extends Error {
   code: string;
@@ -830,6 +866,19 @@ function uploadWorkspaceFileContent(
   uploadId: string,
   file: File,
   onProgress: (progress: number) => void,
+  signal: AbortSignal,
+  upload?: WorkspaceUploadContract
+): Promise<{ attachment: WorkspaceAttachment }> {
+  if (upload?.mode === "chunked") {
+    return uploadWorkspaceFileInChunks(uploadId, file, upload, onProgress, signal);
+  }
+  return uploadWorkspaceFileSingleRequest(uploadId, file, onProgress, signal);
+}
+
+function uploadWorkspaceFileSingleRequest(
+  uploadId: string,
+  file: File,
+  onProgress: (progress: number) => void,
   signal: AbortSignal
 ): Promise<{ attachment: WorkspaceAttachment }> {
   return new Promise((resolve, reject) => {
@@ -867,6 +916,144 @@ function uploadWorkspaceFileContent(
     });
     request.send(file);
   });
+}
+
+async function uploadWorkspaceFileInChunks(
+  uploadId: string,
+  file: File,
+  upload: WorkspaceUploadContract,
+  onProgress: (progress: number) => void,
+  signal: AbortSignal
+): Promise<{ attachment: WorkspaceAttachment }> {
+  const status = await workspaceJson<{
+    parts: Array<{ partNumber: number; byteSize: number; sha256: string }>;
+  }>(`/api/workspace/files/uploads/${encodeURIComponent(uploadId)}`);
+  const received = new Map(status.parts.map((part) => [part.partNumber, part]));
+  const completedBytes = new Map<number, number>();
+  const activeBytes = new Map<number, number>();
+  const updateProgress = () => {
+    const loaded = [...completedBytes.values(), ...activeBytes.values()].reduce((total, value) => total + value, 0);
+    onProgress(Math.min(96, Math.max(8, Math.round(8 + (loaded / file.size) * 88))));
+  };
+  let cursor = 1;
+  let failure: unknown = null;
+  const workers = Array.from({ length: Math.min(2, upload.partCount) }, async () => {
+    while (!failure && cursor <= upload.partCount) {
+      const partNumber = cursor;
+      cursor += 1;
+      const start = (partNumber - 1) * upload.partSize;
+      const blob = file.slice(start, Math.min(file.size, start + upload.partSize));
+      const sha256 = await sha256Blob(blob);
+      if (signal.aborted) throw new DOMException("Upload cancelled", "AbortError");
+      const existing = received.get(partNumber);
+      if (existing?.byteSize === blob.size && existing.sha256 === sha256) {
+        completedBytes.set(partNumber, blob.size);
+        updateProgress();
+        continue;
+      }
+      try {
+        await retryWorkspaceUploadPart({
+          uploadId,
+          partNumber,
+          blob,
+          sha256,
+          signal,
+          onProgress: (loaded) => {
+            activeBytes.set(partNumber, loaded);
+            updateProgress();
+          }
+        });
+        activeBytes.delete(partNumber);
+        completedBytes.set(partNumber, blob.size);
+        updateProgress();
+      } catch (error) {
+        failure = error;
+        throw error;
+      }
+    }
+  });
+  await Promise.all(workers);
+  const completed = await workspaceJson<{ attachment: WorkspaceAttachment }>(
+    `/api/workspace/files/uploads/${encodeURIComponent(uploadId)}/complete`,
+    { method: "POST", body: JSON.stringify({ mode: "chunked" }) }
+  );
+  onProgress(100);
+  return completed;
+}
+
+async function retryWorkspaceUploadPart({
+  uploadId,
+  partNumber,
+  blob,
+  sha256,
+  signal,
+  onProgress
+}: {
+  uploadId: string;
+  partNumber: number;
+  blob: Blob;
+  sha256: string;
+  signal: AbortSignal;
+  onProgress: (loaded: number) => void;
+}) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await uploadWorkspacePartRequest(uploadId, partNumber, blob, sha256, signal, onProgress);
+      return;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+function uploadWorkspacePartRequest(
+  uploadId: string,
+  partNumber: number,
+  blob: Blob,
+  sha256: string,
+  signal: AbortSignal,
+  onProgress: (loaded: number) => void
+) {
+  return new Promise<void>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    const abort = () => request.abort();
+    const cleanup = () => signal.removeEventListener("abort", abort);
+    signal.addEventListener("abort", abort, { once: true });
+    request.open("PUT", `/api/workspace/files/uploads/${encodeURIComponent(uploadId)}/parts/${partNumber}`);
+    request.responseType = "json";
+    request.setRequestHeader("content-type", "application/octet-stream");
+    request.setRequestHeader("x-duallane-part-sha256", sha256);
+    request.upload.addEventListener("progress", (event) => onProgress(event.loaded));
+    request.addEventListener("load", () => {
+      cleanup();
+      if (request.status >= 200 && request.status < 300) {
+        resolve();
+        return;
+      }
+      const payload = request.response && typeof request.response === "object"
+        ? request.response as { error?: { code?: string; message?: string } }
+        : {};
+      const code = payload.error?.code || `http.${request.status || 0}`;
+      reject(new WorkspaceClientError(code, WORKSPACE_ERROR_COPY[code] || payload.error?.message || "文件分片上传失败"));
+    });
+    request.addEventListener("error", () => {
+      cleanup();
+      reject(new WorkspaceClientError("network.error", "网络连接失败，请稍后重试"));
+    });
+    request.addEventListener("abort", () => {
+      cleanup();
+      reject(new DOMException("Upload cancelled", "AbortError"));
+    });
+    request.send(blob);
+  });
+}
+
+async function sha256Blob(blob: Blob) {
+  const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
 }
 
 function createWorkspaceClientError(response: Response, payload: WorkspaceErrorPayload | null) {
@@ -1383,10 +1570,31 @@ export function serializeWorkspaceMessageForCopy(message: Pick<Message, "body" |
     if (block.type === "text") return block.text;
     if (block.type === "mention") return `@${block.label}`;
     if (block.type === "link") return block.label ? `[${block.label}](${block.url})` : block.url;
-    if (block.type === "emoji") return `:${block.shortcode}:`;
+    if (block.type === "emoji") return block.shortcode.startsWith("custom:")
+      ? `[${block.shortcode}]`
+      : `:${block.shortcode}:`;
     return attachments.get(block.attachmentId) ?? "";
   }).join("");
   return source || message.body;
+}
+
+function getWorkspaceEmoteFavoriteSource(message: Pick<Message, "content" | "attachments">) {
+  const customBlock = message.content?.blocks.find((block) =>
+    block.type === "emoji" && /^custom:[a-f0-9-]{36}$/i.test(block.shortcode)
+  );
+  if (customBlock?.type === "emoji") {
+    return { customEmoteId: customBlock.shortcode.slice("custom:".length) };
+  }
+  const text = message.content?.blocks
+    .filter((block): block is Extract<WorkspaceContentBlock, { type: "text" }> => block.type === "text")
+    .map((block) => block.text)
+    .join("") ?? "";
+  const emoteKey = findFirstImageEmoteKey(text);
+  if (emoteKey) return { emoteKey };
+  const attachment = message.attachments?.find((item) =>
+    item.status === "available" && isPreviewableImageMimeType(item.mimeType)
+  );
+  return attachment ? { attachmentId: attachment.id } : null;
 }
 
 function getWorkspaceMentionOptions(members: WorkspaceUser[]) {
@@ -1469,6 +1677,10 @@ function workspaceComposerDocumentToContentBlocks(document: WorkspaceComposerDoc
   for (const block of document.blocks) {
     if (block.type === "mention") {
       blocks.push(block);
+      continue;
+    }
+    if (block.type === "emote" && block.item.kind === "image" && block.item.customId) {
+      blocks.push({ type: "emoji", shortcode: `custom:${block.item.customId}` });
       continue;
     }
     const text = block.type === "text" ? block.text : block.token;
@@ -4676,6 +4888,20 @@ export function App() {
       setWorkspaceReactionPendingKeys((keys) => keys.filter((key) => key !== lockKey));
     }
   }
+
+  async function favoriteWorkspaceMessageEmote(message: Message) {
+    const source = getWorkspaceEmoteFavoriteSource(message);
+    if (!source) return;
+    try {
+      await workspaceJson<{ emote: WorkspaceCustomEmote }>("/api/workspace/me/emotes/favorite", {
+        method: "POST",
+        body: JSON.stringify({ messageId: message.id, ...source })
+      });
+      showWorkspaceNotice("success", "已加入收藏表情");
+    } catch (error) {
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "收藏表情失败"));
+    }
+  }
   function upsertWorkspaceFile(file: WorkspaceFile | WorkspaceAttachment) {
     if (!("uploaderId" in file) || !file.uploaderId || !("createdAt" in file) || !file.createdAt) {
       return;
@@ -5442,6 +5668,7 @@ export function App() {
         status: "reserved";
         id: string;
         attachment?: WorkspaceAttachment;
+        upload: WorkspaceUploadContract;
       }>("/api/workspace/files/uploads/reserve", {
         method: "POST",
         body: JSON.stringify({
@@ -5470,7 +5697,8 @@ export function App() {
             )
           );
         },
-        controller.signal
+        controller.signal,
+        reserve.upload
       );
       const uploaded = completed.attachment;
       updateWorkspaceComposerAttachments(conversationId, (attachments) =>
@@ -5642,6 +5870,7 @@ export function App() {
         status: "reserved";
         id: string;
         attachment?: WorkspaceAttachment;
+        upload: WorkspaceUploadContract;
       } | {
         status: "rejected";
       }>("/api/workspace/files/uploads/reserve", {
@@ -5658,13 +5887,13 @@ export function App() {
         throw new Error("今日传输额度不足");
       }
       reservedUploadId = reserve.id;
-      const completed = await workspaceFetch(`/api/workspace/files/uploads/${encodeURIComponent(reserve.id)}/content`, {
-        method: "PUT",
-        headers: {
-          "content-type": "application/octet-stream"
-        },
-        body: file
-      }).then((response) => response.json() as Promise<{ attachment: WorkspaceAttachment }>);
+      const completed = await uploadWorkspaceFileContent(
+        reserve.id,
+        file,
+        () => {},
+        new AbortController().signal,
+        reserve.upload
+      );
       uploadCompleted = true;
       const uploadedFile: WorkspaceFile = {
         ...completed.attachment,
@@ -7367,7 +7596,7 @@ export function App() {
                             }}
                           >
                             <UserRound size={16} />
-                            账号设置
+                            个人设置
                           </button>
                           <button
                             role="menuitem"
@@ -7578,6 +7807,7 @@ export function App() {
                           );
                         }}
                         onToggleReaction={(messageId, emoteKey) => void toggleWorkspaceReaction(messageId, emoteKey)}
+                        onFavoriteEmote={(message) => void favoriteWorkspaceMessageEmote(message)}
                         reactionPendingKeys={workspaceReactionPendingKeys}
                         currentUserId={workspaceBootstrap.auth.currentUser.id}
                         conversationType={workspaceSelectedConversation.type}
@@ -8936,6 +9166,9 @@ function WorkspaceAccountSettings({
   const [searchDiscoverable, setSearchDiscoverable] = useState(Boolean(currentUser.searchDiscoverable));
   const [avatarSaving, setAvatarSaving] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
+  const [emoteSettings, setEmoteSettings] = useState<WorkspaceEmoteSettings | null>(null);
+  const [emoteSettingsLoading, setEmoteSettingsLoading] = useState(true);
+  const [emoteSettingsSaving, setEmoteSettingsSaving] = useState(false);
   const [notifications, setNotifications] = useState<WorkspaceNotificationPreferences | null>(null);
   const [notificationsLoading, setNotificationsLoading] = useState(true);
   const [notificationsSaving, setNotificationsSaving] = useState(false);
@@ -8956,6 +9189,22 @@ function WorkspaceAccountSettings({
     setNickname(currentUser.nickname ?? "");
     setSearchDiscoverable(Boolean(currentUser.searchDiscoverable));
   }, [currentUser.id, currentUser.nickname, currentUser.searchDiscoverable]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setEmoteSettingsLoading(true);
+    void workspaceJson<{ settings: WorkspaceEmoteSettings }>("/api/workspace/me/emote-settings")
+      .then((data) => {
+        if (!cancelled) setEmoteSettings(data.settings);
+      })
+      .catch((error) => {
+        if (!cancelled) onNotice("warning", userFacingErrorMessage(error, "表情设置暂时无法加载"));
+      })
+      .finally(() => {
+        if (!cancelled) setEmoteSettingsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [currentUser.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -9110,6 +9359,24 @@ function WorkspaceAccountSettings({
     }
   }
 
+  async function saveEmoteSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!emoteSettings) return;
+    setEmoteSettingsSaving(true);
+    try {
+      const data = await workspaceJson<{ settings: WorkspaceEmoteSettings }>("/api/workspace/me/emote-settings", {
+        method: "PUT",
+        body: JSON.stringify({ enabledPackIds: emoteSettings.enabledPackIds })
+      });
+      setEmoteSettings(data.settings);
+      onNotice("success", "表情面板已更新");
+    } catch (error) {
+      onNotice("warning", userFacingErrorMessage(error, "表情设置保存失败"));
+    } finally {
+      setEmoteSettingsSaving(false);
+    }
+  }
+
   async function sendEmailChallenge(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setEmailBusy(true);
@@ -9212,8 +9479,8 @@ function WorkspaceAccountSettings({
           <ArrowLeft size={16} />
         </button>
         <div>
-          <p className="eyebrow">账号</p>
-          <h2>账号与通知</h2>
+          <p className="eyebrow">个人</p>
+          <h2>个人设置</h2>
         </div>
       </div>
       <form className="workspace-preference-section" onSubmit={saveProfile}>
@@ -9255,6 +9522,45 @@ function WorkspaceAccountSettings({
             <small>开启后，其他成员可以通过公开昵称或 GitHub 登录名找到你并发起私聊。</small>
           </span>
         </label>
+      </form>
+
+      <form className="workspace-preference-section" onSubmit={saveEmoteSettings} aria-busy={emoteSettingsLoading}>
+        <div className="workspace-section-header">
+          <div>
+            <h3>表情面板</h3>
+            <p>选择聊天时显示的表情包；收藏表情始终保留独立入口。</p>
+          </div>
+          <button className="primary compact" type="submit" disabled={!emoteSettings || emoteSettingsSaving}>
+            {emoteSettingsSaving ? "保存中" : "保存"}
+          </button>
+        </div>
+        {emoteSettingsLoading || !emoteSettings ? (
+          <p className="workspace-form-status">正在读取表情设置...</p>
+        ) : (
+          <div className="workspace-emote-pack-settings">
+            {emoteSettings.availablePacks.map((pack) => {
+              const checked = emoteSettings.enabledPackIds.includes(pack.id);
+              const onlyEnabled = checked && emoteSettings.enabledPackIds.length <= emoteSettings.minimumEnabled;
+              return (
+                <label key={pack.id}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={onlyEnabled}
+                    onChange={(event) => setEmoteSettings({
+                      ...emoteSettings,
+                      enabledPackIds: event.target.checked
+                        ? [...emoteSettings.enabledPackIds, pack.id]
+                        : emoteSettings.enabledPackIds.filter((id) => id !== pack.id)
+                    })}
+                  />
+                  <span>{pack.label}</span>
+                </label>
+              );
+            })}
+            <small>至少保留一个表情包。收藏表情可在聊天表情面板中上传、使用和删除。</small>
+          </div>
+        )}
       </form>
 
       <form className="workspace-preference-section workspace-ntfy-settings" onSubmit={saveNtfy} aria-busy={ntfyLoading}>
@@ -10338,7 +10644,17 @@ export function WorkspaceStructuredMessage({
               );
             }
             if (block.type === "emoji") {
-              return <span key={`${index}-emoji`}>{renderMessageParts(block.shortcode)}</span>;
+              const customId = /^custom:([a-f0-9-]{36})$/i.exec(block.shortcode)?.[1];
+              return customId ? (
+                <img
+                  key={`${index}-emoji`}
+                  className="message-emote-image workspace-custom-emote-image"
+                  src={`/api/workspace/emotes/${encodeURIComponent(customId)}/content`}
+                  alt="收藏表情"
+                  decoding="async"
+                  loading="lazy"
+                />
+              ) : <span key={`${index}-emoji`}>{renderMessageParts(block.shortcode)}</span>;
             }
             return <span key={`${index}-fallback`}>{renderMessageParts(message.body)}</span>;
           })}
@@ -10417,7 +10733,7 @@ export function shouldCollapseWorkspaceMessageText(blocks: WorkspaceContentBlock
     if (block.type === "text") return block.text;
     if (block.type === "mention") return `@${block.label}`;
     if (block.type === "link") return block.label || block.url;
-    if (block.type === "emoji") return `:${block.shortcode}:`;
+    if (block.type === "emoji") return block.shortcode.startsWith("custom:") ? "[表情]" : `:${block.shortcode}:`;
     return "";
   }).join("");
   return Array.from(visible).length > 700 || visible.split(/\r?\n/).length > 10;
@@ -10579,6 +10895,7 @@ function WorkspaceChatPanel({
   onPreviewImage,
   onCopyMessage,
   onToggleReaction,
+  onFavoriteEmote,
   reactionPendingKeys,
   currentUserId,
   conversationType,
@@ -10621,6 +10938,7 @@ function WorkspaceChatPanel({
   onPreviewImage: (attachment: WorkspaceAttachment) => void;
   onCopyMessage: (message: Message) => void;
   onToggleReaction: (messageId: string, emoteKey: string) => void;
+  onFavoriteEmote: (message: Message) => void;
   reactionPendingKeys: string[];
   currentUserId: string;
   conversationType: WorkspaceConversation["type"];
@@ -11016,6 +11334,7 @@ function WorkspaceChatPanel({
                           <EmotePicker
                             id={"workspace-reaction-picker-" + message.id}
                             label="选择消息表情回复"
+                            workspaceFeatures="reaction"
                             onEscape={() => {
                               setReactionPickerMessageId("");
                               window.requestAnimationFrame(() => reactionPickerTriggerRef.current?.focus());
@@ -11034,6 +11353,11 @@ function WorkspaceChatPanel({
                       <button type="button" title="复制消息" onClick={() => onCopyMessage(message)}>
                         <Copy size={15} />
                       </button>
+                      {getWorkspaceEmoteFavoriteSource(message) && (
+                        <button type="button" title="收藏表情" onClick={() => onFavoriteEmote(message)}>
+                          <Heart size={15} />
+                        </button>
+                      )}
                       {conversationType === "group" && (message.pin?.canUnpin || (message.self && !message.pin)) && (
                         <button
                           type="button"
@@ -11257,6 +11581,7 @@ function WorkspaceChatPanel({
           {emotePanelOpen && (
             <EmotePicker
               id="workspace-composer-emote-picker"
+              workspaceFeatures="composer"
               onSelect={insertEmote}
               onEscape={closeWorkspaceComposerPopover}
             />
@@ -11712,15 +12037,97 @@ function EmotePicker({
   id,
   onSelect,
   onEscape,
-  label = "选择表情"
+  label = "选择表情",
+  workspaceFeatures
 }: {
   id?: string;
   onSelect: (item: EmoteItem, packId: EmotePack["id"]) => void;
   onEscape?: () => void;
   label?: string;
+  workspaceFeatures?: "composer" | "reaction";
 }) {
   const [activePackId, setActivePackId] = useState(visibleEmotePacks[0]?.id ?? "emoji");
-  const activePack = visibleEmotePacks.find((pack) => pack.id === activePackId) ?? visibleEmotePacks[0];
+  const [settings, setSettings] = useState<WorkspaceEmoteSettings | null>(null);
+  const [customEmotes, setCustomEmotes] = useState<WorkspaceCustomEmote[]>([]);
+  const [customBusy, setCustomBusy] = useState(false);
+  const [customError, setCustomError] = useState("");
+  const customInputRef = useRef<HTMLInputElement>(null);
+  const enabledPackIds = settings?.enabledPackIds ?? visibleEmotePacks.map((pack) => pack.id);
+  const enabledPacks = visibleEmotePacks.filter((pack) => enabledPackIds.includes(pack.id as Exclude<EmotePack["id"], "custom">));
+  const customPack: EmotePack = {
+    id: "custom",
+    label: "收藏",
+    items: customEmotes.map((emote) => ({
+      kind: "image",
+      id: emote.id,
+      customId: emote.kind === "custom" ? emote.id : undefined,
+      label: emote.label,
+      token: emote.token,
+      src: emote.src,
+      animated: emote.animated
+    }))
+  };
+  const packs = workspaceFeatures === "composer" ? [...enabledPacks, customPack] : enabledPacks;
+  const activePack = packs.find((pack) => pack.id === activePackId) ?? packs[0];
+
+  useEffect(() => {
+    if (!workspaceFeatures) return;
+    let cancelled = false;
+    void Promise.all([
+      workspaceJson<{ settings: WorkspaceEmoteSettings }>("/api/workspace/me/emote-settings"),
+      workspaceFeatures === "composer"
+        ? workspaceJson<{ items: WorkspaceCustomEmote[] }>("/api/workspace/me/emotes")
+        : Promise.resolve({ items: [] as WorkspaceCustomEmote[] })
+    ]).then(([settingsResult, emotesResult]) => {
+      if (cancelled) return;
+      setSettings(settingsResult.settings);
+      setCustomEmotes(emotesResult.items);
+    }).catch(() => {
+      if (!cancelled) setCustomError("表情设置暂时无法加载");
+    });
+    return () => { cancelled = true; };
+  }, [workspaceFeatures]);
+
+  useEffect(() => {
+    if (activePack && activePack.id === activePackId) return;
+    setActivePackId(packs[0]?.id ?? "emoji");
+  }, [activePack, activePackId, packs]);
+
+  async function uploadCustomEmote(file: File) {
+    setCustomBusy(true);
+    setCustomError("");
+    try {
+      const response = await workspaceFetch("/api/workspace/me/emotes", {
+        method: "POST",
+        headers: {
+          "content-type": file.type || "application/octet-stream",
+          "x-duallane-file-name": encodeURIComponent(file.name)
+        },
+        body: file
+      });
+      const data = await response.json() as { emote: WorkspaceCustomEmote };
+      setCustomEmotes((items) => items.some((item) => item.id === data.emote.id) ? items : [...items, data.emote]);
+      setActivePackId("custom");
+    } catch (error) {
+      setCustomError(userFacingErrorMessage(error, "收藏表情上传失败"));
+    } finally {
+      setCustomBusy(false);
+      if (customInputRef.current) customInputRef.current.value = "";
+    }
+  }
+
+  async function removeCustomEmote(emoteId: string) {
+    setCustomBusy(true);
+    setCustomError("");
+    try {
+      await workspaceJson(`/api/workspace/me/emotes/${encodeURIComponent(emoteId)}`, { method: "DELETE" });
+      setCustomEmotes((items) => items.filter((item) => item.id !== emoteId));
+    } catch (error) {
+      setCustomError(userFacingErrorMessage(error, "收藏表情删除失败"));
+    } finally {
+      setCustomBusy(false);
+    }
+  }
 
   return (
     <div
@@ -11737,7 +12144,7 @@ function EmotePicker({
       }}
     >
       <div className="emote-pack-tabs" role="tablist" aria-label="表情包" onKeyDown={handleTabListKeyDown}>
-        {visibleEmotePacks.map((pack) => (
+        {packs.map((pack) => (
           <button
             className={pack.id === activePack.id ? "active" : ""}
             key={pack.id}
@@ -11752,7 +12159,33 @@ function EmotePicker({
         ))}
       </div>
       <div className="emote-grid">
-        {activePack.items.map((item) => (
+        {activePack.id === "custom" && (
+          <label className={customBusy ? "emote-upload-tile busy" : "emote-upload-tile"} title="上传收藏表情">
+            <Plus size={22} />
+            <span>添加</span>
+            <input
+              ref={customInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif"
+              aria-label="上传收藏表情"
+              disabled={customBusy}
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                if (file) void uploadCustomEmote(file);
+              }}
+            />
+          </label>
+        )}
+        {activePack?.items.map((item) => activePack.id === "custom" ? (
+          <div className="emote-custom-tile" key={item.id}>
+            <button type="button" title={item.label} aria-label={item.label} onClick={() => onSelect(item, activePack.id)}>
+              {item.kind === "image" && <img alt="" decoding="async" draggable={false} src={item.src} />}
+            </button>
+            <button className="emote-custom-remove" type="button" title="删除收藏表情" aria-label={`删除收藏表情 ${item.label}`} disabled={customBusy} onClick={() => void removeCustomEmote(item.id)}>
+              <X size={12} />
+            </button>
+          </div>
+        ) : (
           <button
             key={item.id}
             type="button"
@@ -11768,6 +12201,10 @@ function EmotePicker({
           </button>
         ))}
       </div>
+      {activePack?.id === "custom" && customEmotes.length === 0 && !customError && (
+        <p className="emote-picker-empty">收藏表情为空，可上传图片或从消息中收藏。</p>
+      )}
+      {customError && <p className="emote-picker-error" role="status">{customError}</p>}
     </div>
   );
 }

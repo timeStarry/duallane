@@ -19,7 +19,7 @@ test("public about page exposes the current release and accessible history", asy
   await page.getByRole("button", { name: "关于 DualLane 与版本更新" }).click();
   await expect(page).toHaveURL(/\/about$/);
   await expect(page.getByRole("heading", { name: "两种边界，一处沟通。" })).toBeVisible();
-  await expect(page.locator(".latest-release").getByText("v0.9.0", { exact: true })).toBeVisible();
+  await expect(page.locator(".latest-release").getByText("v0.10.0", { exact: true })).toBeVisible();
 
   const history = page.locator(".release-history");
   await expect(history).not.toHaveAttribute("open", "");
@@ -33,7 +33,7 @@ test("public about page exposes the current release and accessible history", asy
   await page.goForward();
   await expect(page).toHaveURL(/\/about$/);
   await page.reload();
-  await expect(page.locator(".latest-release").getByText("v0.9.0", { exact: true })).toBeVisible();
+  await expect(page.locator(".latest-release").getByText("v0.10.0", { exact: true })).toBeVisible();
 });
 
 test("workspace semantic routes survive OAuth, refresh, history, and invalid resources", async ({ page }) => {
@@ -77,10 +77,10 @@ test("workspace semantic routes survive OAuth, refresh, history, and invalid res
   await expect(page).toHaveURL(/\/workspace\/members$/);
 
   await page.locator(".workspace-user-trigger").click();
-  await page.locator(".workspace-user-menu").getByRole("menuitem", { name: "账号设置", exact: true }).click();
+  await page.locator(".workspace-user-menu").getByRole("menuitem", { name: "个人设置", exact: true }).click();
   await expect(page).toHaveURL(/\/workspace\/account$/);
   await page.reload();
-  await expect(page.getByRole("heading", { name: "账号与通知" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "个人设置" })).toBeVisible();
 
   await page.goto("/workspace/files/not-a-real-file");
   await expect(page.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
@@ -240,7 +240,7 @@ test("workspace loading, navigation and menu focus semantics are stable", async 
   const userTrigger = page.locator(".workspace-user-trigger");
   await userTrigger.click();
   const userMenu = page.getByRole("menu", { name: "账号菜单" });
-  await expect(userMenu.getByRole("menuitem", { name: "账号设置" })).toBeFocused();
+  await expect(userMenu.getByRole("menuitem", { name: "个人设置" })).toBeFocused();
   await page.keyboard.press("End");
   await expect(userMenu.getByRole("menuitem", { name: "退出共享空间" })).toBeFocused();
   await page.keyboard.press("Escape");
@@ -997,8 +997,8 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
 
     await memberPage.setViewportSize({ width: 1280, height: 720 });
     await memberPage.locator(".workspace-user-trigger").click();
-    await memberPage.getByRole("menuitem", { name: "账号设置" }).click();
-    await expect(memberPage.getByRole("heading", { name: "账号与通知" })).toBeVisible();
+    await memberPage.getByRole("menuitem", { name: "个人设置" }).click();
+    await expect(memberPage.getByRole("heading", { name: "个人设置" })).toBeVisible();
     await expect(memberPage.getByRole("checkbox", { name: /接受邮件通知/ })).toBeChecked();
     await expect(memberPage.getByRole("checkbox", { name: /每条消息都通知我/ })).not.toBeChecked();
     await expect(memberPage.getByRole("checkbox", { name: /超过 2 小时仍未读时通知我/ })).toBeChecked();
@@ -1096,7 +1096,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(outsiderPage.getByRole("region", { name: publicNickname })).toBeVisible();
 
     await memberPage.setViewportSize({ width: 390, height: 844 });
-    await expect(memberPage.getByRole("heading", { name: "账号与通知" })).toBeVisible();
+    await expect(memberPage.getByRole("heading", { name: "个人设置" })).toBeVisible();
     expect(await memberPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     await ownerPage.setViewportSize({ width: 1280, height: 720 });
@@ -1154,6 +1154,118 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       .filter({ hasText: mentionProjectionMarker });
     await expect(memberProjectedMention.locator(".message-mention")).toHaveText(`@${publicNickname}`);
 
+    await memberPage.goto("/workspace/account");
+    await expect(memberPage.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
+    const emoteSettingsSection = memberPage.locator("form.workspace-preference-section").filter({
+      has: memberPage.getByRole("heading", { name: "表情面板", exact: true })
+    });
+    const emojiPackToggle = emoteSettingsSection.getByRole("checkbox", { name: "Emoji", exact: true });
+    await expect(emojiPackToggle).toBeChecked();
+    for (const packLabel of ["B站", "微信", "飞书"]) {
+      const toggle = emoteSettingsSection.getByRole("checkbox", { name: packLabel, exact: true });
+      if (await toggle.isChecked()) await toggle.uncheck();
+    }
+    await expect(emojiPackToggle).toBeDisabled();
+    const saveEmoteSettingsResponse = memberPage.waitForResponse((response) =>
+      response.url().endsWith("/api/workspace/me/emote-settings") && response.request().method() === "PUT"
+    );
+    await emoteSettingsSection.getByRole("button", { name: "保存", exact: true }).click();
+    expect((await saveEmoteSettingsResponse).status()).toBe(200);
+
+    await memberPage.getByRole("button", { name: "聊天", exact: true }).click();
+    await memberPage.getByLabel("共享空间导航").locator("button.conversation").filter({ hasText: groupTitle }).first().click();
+    await memberGroupRegion.getByTitle("插入表情").click();
+    const memberComposerEmotePicker = memberPage.getByRole("dialog", { name: "选择表情" });
+    await expect(memberComposerEmotePicker.getByRole("tab", { name: "Emoji", exact: true })).toBeVisible();
+    await expect(memberComposerEmotePicker.getByRole("tab", { name: "收藏", exact: true })).toBeVisible();
+    await expect(memberComposerEmotePicker.getByRole("tab", { name: "飞书", exact: true })).toHaveCount(0);
+    await memberComposerEmotePicker.getByRole("tab", { name: "收藏", exact: true }).click();
+
+    const customEmoteFileName = `e2e-custom-emote-${memberSuffix}.png`;
+    const customEmoteLabel = customEmoteFileName.replace(/\.png$/, "");
+    const customEmoteUploadResponse = memberPage.waitForResponse((response) =>
+      response.url().endsWith("/api/workspace/me/emotes") && response.request().method() === "POST"
+    );
+    await memberComposerEmotePicker.getByLabel("上传收藏表情").setInputFiles({
+      name: customEmoteFileName,
+      mimeType: "image/png",
+      buffer: pastedImageBytes
+    });
+    const uploadedCustomEmote = await customEmoteUploadResponse;
+    expect(uploadedCustomEmote.status()).toBe(201);
+    const uploadedCustomEmotePayload = await uploadedCustomEmote.json() as { emote: { id: string } };
+    await memberComposerEmotePicker.getByRole("button", { name: customEmoteLabel, exact: true }).click();
+    await expect(memberGroupRegion.locator(".workspace-editor-token.emote img")).toBeVisible();
+
+    const memberCustomMessageResponse = memberPage.waitForResponse((response) =>
+      response.url().endsWith("/api/workspace/messages") && response.request().method() === "POST"
+    );
+    await sendWorkspaceComposer(memberGroupRegion);
+    const memberCustomMessagePayload = await (await memberCustomMessageResponse).json() as { message: { id: string } };
+    const ownerCustomMessage = ownerGroupRegion.locator(
+      `article.workspace-message[data-message-id="${memberCustomMessagePayload.message.id}"]`
+    );
+    const ownerCustomImage = ownerCustomMessage.locator("img.workspace-custom-emote-image");
+    await expect(ownerCustomImage).toBeVisible();
+    await expect.poll(() => ownerCustomImage.evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+
+    const favoriteCustomEmoteResponse = ownerPage.waitForResponse((response) =>
+      response.url().endsWith("/api/workspace/me/emotes/favorite") && response.request().method() === "POST"
+    );
+    await ownerCustomMessage.getByTitle("收藏表情").click();
+    expect((await favoriteCustomEmoteResponse).status()).toBe(201);
+
+    await memberGroupRegion.getByTitle("插入表情").click();
+    const memberFavoritesAfterSend = memberPage.getByRole("dialog", { name: "选择表情" });
+    await memberFavoritesAfterSend.getByRole("tab", { name: "收藏", exact: true }).click();
+    const deleteOriginalCustomEmote = memberPage.waitForResponse((response) =>
+      response.url().endsWith(`/api/workspace/me/emotes/${uploadedCustomEmotePayload.emote.id}`)
+        && response.request().method() === "DELETE"
+    );
+    await memberFavoritesAfterSend.getByRole("button", {
+      name: `删除收藏表情 ${customEmoteLabel}`,
+      exact: true
+    }).click();
+    expect((await deleteOriginalCustomEmote).status()).toBe(200);
+    await memberGroupRegion.locator(".workspace-chat-header").click();
+
+    await ownerGroupRegion.getByTitle("插入表情").click();
+    const ownerComposerFavorites = ownerPage.getByRole("dialog", { name: "选择表情" });
+    await ownerComposerFavorites.getByRole("tab", { name: "收藏", exact: true }).click();
+    await ownerComposerFavorites.getByRole("button", { name: customEmoteLabel, exact: true }).click();
+    const ownerCopiedCustomMessageResponse = ownerPage.waitForResponse((response) =>
+      response.url().endsWith("/api/workspace/messages") && response.request().method() === "POST"
+    );
+    await sendWorkspaceComposer(ownerGroupRegion);
+    const ownerCopiedCustomMessagePayload = await (await ownerCopiedCustomMessageResponse).json() as { message: { id: string } };
+    const memberCopiedCustomMessage = memberGroupRegion.locator(
+      `article.workspace-message[data-message-id="${ownerCopiedCustomMessagePayload.message.id}"]`
+    );
+    const memberCopiedCustomImage = memberCopiedCustomMessage.locator("img.workspace-custom-emote-image");
+    await expect(memberCopiedCustomImage).toBeVisible();
+    await expect.poll(() => memberCopiedCustomImage.evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+
+    const largeFileName = `workspace-e2e-chunked-${memberSuffix}.bin`;
+    const largeFileBytes = Buffer.alloc(4 * 1024 * 1024 + 257, 0x5a);
+    const largeFileUploadRequests: string[] = [];
+    const trackLargeFileUpload = (request: { url(): string; method(): string }) => {
+      if (request.method() === "PUT" && /\/api\/workspace\/files\/uploads\/[^/]+\/(?:parts\/\d+|content)$/.test(request.url())) {
+        largeFileUploadRequests.push(request.url());
+      }
+    };
+    ownerPage.on("request", trackLargeFileUpload);
+    await ownerGroupRegion.getByLabel("添加附件").setInputFiles({
+      name: largeFileName,
+      mimeType: "application/octet-stream",
+      buffer: largeFileBytes
+    });
+    await sendWorkspaceComposer(ownerGroupRegion);
+    await expect(memberGroupRegion.getByRole("button").filter({ hasText: largeFileName })).toBeVisible();
+    ownerPage.off("request", trackLargeFileUpload);
+    expect(largeFileUploadRequests.filter((url) => /\/parts\/1$/.test(url))).toHaveLength(1);
+    expect(largeFileUploadRequests.filter((url) => /\/parts\/2$/.test(url))).toHaveLength(1);
+    expect(largeFileUploadRequests.filter((url) => /\/content$/.test(url))).toHaveLength(0);
+
     const groupHistoryPinMessage = "workspace-e2e-group-history-26";
     for (let index = 0; index < 45; index += 1) {
       const text = `workspace-e2e-group-history-${String(index).padStart(2, "0")}`;
@@ -1173,13 +1285,8 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(ownerGroupRegion.getByText("workspace-e2e-group-history-44", { exact: true })).toBeVisible();
 
     const ownerGroupMessageList = ownerGroupRegion.locator(".workspace-message-list");
-    await ownerGroupMessageList.evaluate((list) => {
-      list.scrollTop = 0;
-      list.dispatchEvent(new Event("scroll", { bubbles: true }));
-    });
-    await expect(ownerGroupRegion.getByText("workspace-e2e-group-history-00", { exact: true })).toBeVisible();
-
     const ownerPinnedMessage = ownerGroupRegion.locator("article.workspace-message").filter({ hasText: groupHistoryPinMessage });
+    await expect(ownerPinnedMessage).toBeAttached();
     await ownerPinnedMessage.getByTitle("设为常驻消息").click();
     await expect(ownerPinnedMessage.locator(".workspace-message-pin-indicator")).toHaveText("常驻");
     const memberPinnedMessage = memberGroupRegion.locator("article.workspace-message").filter({ hasText: groupHistoryPinMessage });
@@ -1205,11 +1312,31 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(ownerPinnedMessage.locator(".workspace-message-pin-indicator")).toHaveCount(0);
 
     await expect(ownerGroupRegion.getByText("workspace-e2e-group-history-00", { exact: true })).toHaveCount(0);
+    const loadEarlierButton = ownerGroupRegion.getByRole("button", { name: "加载更早消息", exact: true });
+    await expect(loadEarlierButton).toBeAttached();
+    const loadEarlierButtonHandle = await loadEarlierButton.elementHandle();
+    expect(loadEarlierButtonHandle).not.toBeNull();
+    const olderMessagesResponse = ownerPage.waitForResponse((response) =>
+      response.url().includes(`/api/workspace/conversations/${groupId}/messages?`)
+        && response.url().includes("before=")
+        && response.request().method() === "GET"
+    );
+    await loadEarlierButtonHandle!.evaluate((button) => (button as HTMLButtonElement).click());
+    const olderMessagesPayload = await (await olderMessagesResponse).json() as {
+      messages: Array<{ id: string; plainText: string }>;
+    };
+    const loadedHistoryMessage = olderMessagesPayload.messages.find((message) =>
+      message.plainText === "workspace-e2e-group-history-00"
+    );
+    expect(loadedHistoryMessage).toBeTruthy();
+    await expect(ownerGroupRegion.locator(
+      `article.workspace-message[data-message-id="${loadedHistoryMessage!.id}"]`
+    )).toBeAttached();
     await ownerGroupMessageList.evaluate((list) => {
+      list.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -120 }));
       list.scrollTop = 0;
       list.dispatchEvent(new Event("scroll", { bubbles: true }));
     });
-    await expect(ownerGroupRegion.getByText("workspace-e2e-group-history-00", { exact: true })).toBeVisible();
     const groupReturnToLatest = ownerGroupRegion.getByRole("button", { name: "回到最新消息", exact: true });
     await expect(groupReturnToLatest).toBeVisible();
     await groupReturnToLatest.click();

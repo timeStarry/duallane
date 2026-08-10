@@ -116,6 +116,7 @@ describe("workspace configuration docs", () => {
     expect(caddy).toContain("method OPTIONS");
     expect(caddy).toContain("/duallane/workspace/attachments/*");
     expect(caddy).toContain("/duallane/workspace/profile-avatars/*");
+    expect(caddy).toContain("/duallane/workspace/custom-emotes/*");
     expect(caddy).not.toContain("migration-archive");
     expect(caddy).toContain("output discard");
   });
