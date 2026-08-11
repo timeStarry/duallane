@@ -105,6 +105,23 @@ describe("V2Ray subscription renderer", () => {
       fetchImpl
     })).rejects.toThrow("must be an HTTPS URL");
   });
+
+  it("preserves the last-known-good config when refresh fails", async () => {
+    const directory = await makeTemporaryDirectory();
+    const outputPath = path.join(directory, "config.json");
+    const existingConfig = '{"outbounds":[{"tag":"known-good"}]}\n';
+    await writeFile(outputPath, existingConfig, { mode: 0o600 });
+
+    await expect(renderConfig({
+      subscriptionUrl: "https://subscription.example/private-token",
+      outputPath,
+      fetchImpl: async () => {
+        throw new Error("temporary network failure");
+      }
+    })).rejects.toThrow("subscription request failed");
+
+    await expect(readFile(outputPath, "utf8")).resolves.toBe(existingConfig);
+  });
 });
 
 function makeShadowsocksUri(host, port, password) {

@@ -99,12 +99,34 @@ only in the browser key derivation and is not sent to the backend.
 
 ## Production Shape
 
+Production uses the tracked override in `docker-compose.production.yml`. Set
+`POSTGRES_VOLUME_NAME` to a pre-provisioned authoritative volume; never rely on
+an untracked recovery override or a project-generated default volume. For a
+first installation:
+
 ```bash
 cp .env.example .env
-docker compose up -d --build
+docker volume create duallane-postgres-production
+# Set POSTGRES_VOLUME_NAME=duallane-postgres-production and all other secrets in .env.
+bash deploy/production/deploy.sh --bootstrap --expected-commit "$(git rev-parse HEAD)"
 ```
 
-The production compose file exposes only the `web` service on
+Routine upgrades use the same guarded entry point:
+
+```bash
+git pull --ff-only
+bash deploy/production/deploy.sh --expected-commit "$(git rev-parse HEAD)"
+```
+
+Do not use a bare `docker compose up` for an existing production deployment.
+The deployment script validates that the configured PostgreSQL volume matches
+the current container, creates a private logical backup with a SHA-256 sidecar,
+builds the application, runs migrations, starts API/Web without refreshing
+unrelated services, and checks the public health endpoint. It preserves the
+previous API/Web images for automatic application rollback. Database volume
+switches remain an explicit recovery operation outside the routine script.
+
+The production Compose pair exposes only the `web` service on
 `DUALLANE_WEB_BIND:DUALLANE_WEB_PORT` and keeps the API service inside the Docker
 network. The web container serves the built frontend through Nginx and forwards
 `/api` plus `/ws` to the private API container, including WebSocket upgrade
@@ -137,7 +159,8 @@ Provision bucket versioning, restricted CORS, and seven-day incomplete
 multipart cleanup before the first backfill:
 
 ```bash
-docker compose --profile storage-migration run --rm storage-provision
+docker compose -f docker-compose.yml -f docker-compose.production.yml \
+  --profile storage-migration run --rm storage-provision
 ```
 
 Some MinIO releases return `NotImplemented` for bucket-level CORS. In that
@@ -160,7 +183,8 @@ is written under `/app/data/workspace-s3-migration-reports`:
 
 ```bash
 WORKSPACE_STORAGE_MIGRATION_RUN_ID=production-YYYYMMDD \
-  docker compose --profile storage-migration run --rm storage-migrate
+  docker compose -f docker-compose.yml -f docker-compose.production.yml \
+  --profile storage-migration run --rm storage-migrate
 ```
 
 Only after that report completes should `WORKSPACE_STORAGE_DRIVER=s3` be
@@ -210,17 +234,19 @@ with mode `600`, then set `COMPOSE_PROFILES=github-proxy`,
 `GITHUB_PROXY_URL=http://v2ray:10809`, and `V2RAY_SUBSCRIPTION_FILE` to that
 file's absolute path. The generated V2Ray config lives in a private Docker
 volume, the proxy port is exposed only to the Compose network, and routing
-rejects non-GitHub destinations. Validate and start it with:
+rejects non-GitHub destinations. Subscription refresh is intentionally separate
+from application deployment. Provision or refresh, validate, and start it with:
 
 ```bash
-docker compose --profile github-proxy run --rm v2ray-config
+docker compose --profile github-proxy-refresh run --rm v2ray-config
 docker compose --profile github-proxy run --rm --no-deps v2ray test -c /etc/v2ray/config.json
-docker compose --profile github-proxy up -d --build
+docker compose --profile github-proxy up -d --no-deps v2ray
 ```
 
-To refresh an updated subscription, rerun `v2ray-config` and restart the
-`v2ray` service. Never store the subscription URL in `.env`, Git, or command
-output; only the secret file path belongs in `.env`.
+The renderer replaces the config atomically only after a successful download
+and parse. A failed refresh leaves the last-known-good config untouched and
+must not restart the running proxy. Never store the subscription URL in `.env`,
+Git, or command output; only the secret file path belongs in `.env`.
 
 The default deployment runs one API instance. PostgreSQL supports concurrent
 requests, but scaling the API horizontally also requires shared attachment

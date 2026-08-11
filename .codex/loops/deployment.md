@@ -20,9 +20,19 @@ Use this loop for Docker, Nginx, environment, production startup, static serving
    - `docker compose config`
    - build the affected image when available
 5. Check that logs and proxy config do not expose query strings, payloads, cookies, or browser-only secrets.
+6. For the existing production host, deploy only through
+   `deploy/production/deploy.sh --expected-commit <full-sha>`. Do not run a bare
+   `docker compose up`, and do not substitute an untracked recovery override.
+7. Confirm that `POSTGRES_VOLUME_NAME` matches the volume mounted by the current
+   PostgreSQL container. Volume switching is a recovery operation, not a
+   routine deployment step.
+8. Refresh the V2Ray subscription only as an explicit maintenance operation;
+   application deployment must reuse the last-known-good proxy config.
 
 ## Done
 - Compose remains valid.
 - The API remains internal in production compose.
 - Static frontend, `/api`, and `/ws` routes are still coherent.
 - Any manual deployment step or environment variable change is documented.
+- The production script reports the deployed commit, authoritative PostgreSQL
+  volume, backup path, and health-check URL.

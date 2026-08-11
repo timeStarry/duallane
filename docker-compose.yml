@@ -123,7 +123,7 @@ services:
     restart: "no"
 
   v2ray-config:
-    profiles: ["github-proxy"]
+    profiles: ["github-proxy-refresh"]
     image: ${NODE_IMAGE:-docker.m.daocloud.io/library/node:22-alpine}
     command: ["node", "/app/deploy/v2ray/render-config.mjs"]
     environment:
@@ -139,9 +139,6 @@ services:
     profiles: ["github-proxy"]
     image: ${V2RAY_IMAGE:-dockerproxy.net/v2fly/v2fly-core@sha256:d06727b221fe8cbaed2dd1d23f9d8270cb6581dc1c2c2949bd4d04d4c332eee3}
     command: ["run", "-c", "/etc/v2ray/config.json"]
-    depends_on:
-      v2ray-config:
-        condition: service_completed_successfully
     expose:
       - "10809"
     volumes:

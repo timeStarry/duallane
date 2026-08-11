@@ -9,6 +9,7 @@ dist/
 .secrets/
 deploy/minio/workspace-s3-credentials.json
 data/
+backups/
 uploads/
 coverage/
 playwright-report/

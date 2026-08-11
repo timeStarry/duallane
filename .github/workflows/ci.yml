@@ -57,6 +57,15 @@ jobs:
       - name: Validate Docker Compose
         run: docker compose config
 
+      - name: Validate production deployment config
+        env:
+          POSTGRES_VOLUME_NAME: duallane-ci-postgres
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.production.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.production.yml config --format json |
+            node -e "const c=JSON.parse(require('fs').readFileSync(0,'utf8')); const v=c.services.postgres.volumes.find((item) => item.target === '/var/lib/postgresql/data'); if (c.volumes?.[v?.source]?.name !== 'duallane-ci-postgres') throw new Error('production PostgreSQL volume override is ineffective')"
+          bash -n deploy/production/deploy.sh
+
       - name: Build Docker images
         run: docker compose build web api migrate
 

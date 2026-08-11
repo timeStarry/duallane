@@ -1,0 +1,9 @@
+services:
+  postgres:
+    volumes:
+      - production-postgres:/var/lib/postgresql/data
+
+volumes:
+  production-postgres:
+    external: true
+    name: ${POSTGRES_VOLUME_NAME:?POSTGRES_VOLUME_NAME must name the authoritative production volume}
