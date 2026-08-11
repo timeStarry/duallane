@@ -22,6 +22,8 @@ rollback_api_id=""
 rollback_api_ref=""
 rollback_web_id=""
 rollback_web_ref=""
+candidate_api_name=""
+candidate_web_name=""
 
 usage() {
   cat <<'EOF'
@@ -145,6 +147,60 @@ wait_for_app() {
   return 1
 }
 
+wait_for_candidate() {
+  local container_name="$1"
+  local service_name="$2"
+  local attempt status
+  for attempt in {1..40}; do
+    status="$(container_health "${container_name}")"
+    if [[ "${status}" == "healthy" ]]; then
+      return 0
+    fi
+    if [[ "${status}" == "exited" || "${status}" == "dead" || "${status}" == "unhealthy" ]]; then
+      echo "Candidate ${service_name} container entered state ${status}" >&2
+      docker logs --tail 120 "${container_name}" >&2 || true
+      return 1
+    fi
+    sleep 2
+  done
+  echo "Candidate ${service_name} did not become healthy within 80 seconds" >&2
+  docker logs --tail 120 "${container_name}" >&2 || true
+  return 1
+}
+
+cleanup_candidates() {
+  local container_name
+  for container_name in "${candidate_web_name}" "${candidate_api_name}"; do
+    if [[ -n "${container_name}" ]] && docker inspect "${container_name}" >/dev/null 2>&1; then
+      docker rm -f "${container_name}" >/dev/null || true
+    fi
+  done
+  candidate_api_name=""
+  candidate_web_name=""
+}
+
+preflight_api_candidate() {
+  candidate_api_name="duallane-api-candidate-${current_commit:0:12}"
+  docker rm -f "${candidate_api_name}" >/dev/null 2>&1 || true
+  compose run -d --no-deps \
+    --name "${candidate_api_name}" \
+    -e WORKSPACE_EMAIL_WORKER_ENABLED=false \
+    -e WORKSPACE_NTFY_WORKER_ENABLED=false \
+    api >/dev/null
+  wait_for_candidate "${candidate_api_name}" api
+  docker rm -f "${candidate_api_name}" >/dev/null
+  candidate_api_name=""
+}
+
+preflight_web_candidate() {
+  candidate_web_name="duallane-web-candidate-${current_commit:0:12}"
+  docker rm -f "${candidate_web_name}" >/dev/null 2>&1 || true
+  compose run -d --no-deps --name "${candidate_web_name}" web >/dev/null
+  wait_for_candidate "${candidate_web_name}" web
+  docker rm -f "${candidate_web_name}" >/dev/null
+  candidate_web_name=""
+}
+
 capture_rollback_image() {
   local service="$1"
   local container_id
@@ -208,6 +264,7 @@ on_error() {
   if [[ -n "${backup_temporary:-}" ]]; then
     rm -f "${backup_temporary}" || true
   fi
+  cleanup_candidates || true
   restore_runtime_after_daemon_restart || true
   rollback_app || true
   echo "Production deployment failed with exit code ${exit_code}" >&2
@@ -317,8 +374,11 @@ export COMPOSE_PARALLEL_LIMIT="${COMPOSE_PARALLEL_LIMIT:-1}"
 compose build api web migrate
 compose run --rm --no-deps migrate
 
+preflight_api_candidate
 app_replaced=true
-compose up -d --no-deps api web
+compose up -d --no-deps --wait --wait-timeout 120 api
+preflight_web_candidate
+compose up -d --no-deps --wait --wait-timeout 120 web
 
 web_bind="$(read_env_value DUALLANE_WEB_BIND)"
 web_bind="${web_bind:-127.0.0.1}"

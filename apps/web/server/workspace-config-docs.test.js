@@ -68,6 +68,8 @@ describe("workspace configuration docs", () => {
     expect(compose).toContain("DUALLANE_TURN_USERNAME: ${DUALLANE_TURN_USERNAME:-}");
     expect(compose).toContain("DUALLANE_TURN_CREDENTIAL: ${DUALLANE_TURN_CREDENTIAL:-}");
     expect(compose).toContain("DUALLANE_EMPTY_ROOM_GRACE_MS: ${DUALLANE_EMPTY_ROOM_GRACE_MS:-10000}");
+    expect(compose).toContain("healthcheck:");
+    expect(compose).toContain("http://127.0.0.1:8787/api/health");
     expect(envExample).toContain("WORKSPACE_FRONTEND_URL=\n");
     expect(envExample).not.toContain("WORKSPACE_FRONTEND_URL=http://127.0.0.1:5173");
     expect(envExample).toContain("TRUST_PROXY=true");
@@ -79,6 +81,17 @@ describe("workspace configuration docs", () => {
     expect(nginx).toContain('"$request_method $uri $server_protocol"');
     expect(nginx).not.toContain("$request_uri");
     expect(nginx).not.toContain("$http_referer");
+  });
+
+  it("preflights production candidates and waits for health before each service replacement", async () => {
+    const deploy = await readFile(path.join(repoRoot, "deploy", "production", "deploy.sh"), "utf8");
+
+    expect(deploy).toContain("preflight_api_candidate");
+    expect(deploy).toContain("preflight_web_candidate");
+    expect(deploy).toContain("compose up -d --no-deps --wait --wait-timeout 120 api");
+    expect(deploy).toContain("compose up -d --no-deps --wait --wait-timeout 120 web");
+    expect(deploy.indexOf("preflight_api_candidate")).toBeLessThan(deploy.lastIndexOf("compose up -d --no-deps --wait --wait-timeout 120 api"));
+    expect(deploy.indexOf("preflight_web_candidate")).toBeLessThan(deploy.lastIndexOf("compose up -d --no-deps --wait --wait-timeout 120 web"));
   });
 
   it("keeps private S3 storage, migration tooling, and public delivery documented and wired", async () => {

@@ -123,7 +123,10 @@ The deployment script validates that the configured PostgreSQL volume matches
 the current container, creates a private logical backup with a SHA-256 sidecar,
 builds through an isolated `docker-container` BuildKit instance, runs
 migrations, starts API/Web without refreshing unrelated services, and checks
-the bound web gateway directly. It preserves the previous API/Web images for
+the bound web gateway directly. Before replacing either service it starts an
+unpublished candidate from the exact production image and waits for its health
+check; the live API is then replaced and verified before the Web candidate and
+live Web service are started. It preserves the previous API/Web images for
 automatic application rollback. If the Docker daemon restarts during a failed
 deployment, the script restores the existing containers before returning the
 error. Database volume switches remain an explicit recovery operation outside
