@@ -1,5 +1,15 @@
 services:
+  web:
+    restart: always
+
+  api:
+    restart: always
+
+  v2ray:
+    restart: always
+
   postgres:
+    restart: always
     volumes:
       - production-postgres:/var/lib/postgresql/data
 

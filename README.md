@@ -121,16 +121,25 @@ bash deploy/production/deploy.sh --expected-commit "$(git rev-parse HEAD)"
 Do not use a bare `docker compose up` for an existing production deployment.
 The deployment script validates that the configured PostgreSQL volume matches
 the current container, creates a private logical backup with a SHA-256 sidecar,
-builds the application, runs migrations, starts API/Web without refreshing
-unrelated services, and checks the public health endpoint. It preserves the
-previous API/Web images for automatic application rollback. Database volume
-switches remain an explicit recovery operation outside the routine script.
+builds through an isolated `docker-container` BuildKit instance, runs
+migrations, starts API/Web without refreshing unrelated services, and checks
+the bound web gateway directly. It preserves the previous API/Web images for
+automatic application rollback. If the Docker daemon restarts during a failed
+deployment, the script restores the existing containers before returning the
+error. Database volume switches remain an explicit recovery operation outside
+the routine script.
 
 The production Compose pair exposes only the `web` service on
 `DUALLANE_WEB_BIND:DUALLANE_WEB_PORT` and keeps the API service inside the Docker
 network. The web container serves the built frontend through Nginx and forwards
 `/api` plus `/ws` to the private API container, including WebSocket upgrade
 headers.
+
+The script provisions `DUALLANE_BUILDX_BUILDER` on first use with the configured
+`DUALLANE_BUILDKIT_IMAGE`. Production services use `restart: always`, so a
+daemon restart does not leave the database, proxy, API, or web gateway stopped.
+Public HTTPS smoke checks should run from an external client; the application
+host may not support hairpin access through the public gateway.
 
 Compose starts PostgreSQL, waits for its health check, runs the one-shot
 `migrate` service, and only then starts the API. Set a strong

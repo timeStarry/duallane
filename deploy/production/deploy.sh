@@ -81,6 +81,24 @@ wait_for_docker() {
   return 1
 }
 
+ensure_buildx_builder() {
+  local builder_name="$1"
+  local buildkit_image="$2"
+  local driver
+  if ! docker buildx inspect "${builder_name}" >/dev/null 2>&1; then
+    docker buildx create \
+      --name "${builder_name}" \
+      --driver docker-container \
+      --driver-opt "image=${buildkit_image}" >/dev/null
+  fi
+  driver="$(docker buildx inspect "${builder_name}" | sed -n 's/^Driver:[[:space:]]*//p')"
+  if [[ "${driver}" != "docker-container" ]]; then
+    echo "Buildx builder ${builder_name} must use the docker-container driver" >&2
+    return 1
+  fi
+  docker buildx inspect "${builder_name}" --bootstrap >/dev/null
+}
+
 container_volume() {
   local container_id="$1"
   docker inspect "${container_id}" \
@@ -157,12 +175,40 @@ rollback_app() {
   compose up -d --no-deps --force-recreate api web || true
 }
 
+restore_runtime_after_daemon_restart() {
+  local docker_started_after_failure postgres_id service service_id
+  if [[ -z "${docker_started_before:-}" ]]; then
+    return 0
+  fi
+  if ! wait_for_docker; then
+    return 0
+  fi
+  docker_started_after_failure="$(systemctl show docker -p ExecMainStartTimestampMonotonic --value 2>/dev/null || true)"
+  if [[ -z "${docker_started_after_failure}" || "${docker_started_after_failure}" == "${docker_started_before}" ]]; then
+    return 0
+  fi
+
+  echo "Docker daemon restarted during deployment; restoring existing DualLane containers" >&2
+  postgres_id="$(compose ps -a -q postgres 2>/dev/null || true)"
+  if [[ -n "${postgres_id}" ]]; then
+    docker start "${postgres_id}" >/dev/null || true
+    wait_for_postgres "${postgres_id}" || true
+  fi
+  for service in v2ray api web; do
+    service_id="$(compose ps -a -q "${service}" 2>/dev/null || true)"
+    if [[ -n "${service_id}" ]]; then
+      docker start "${service_id}" >/dev/null || true
+    fi
+  done
+}
+
 on_error() {
   local exit_code=$?
   trap - ERR
   if [[ -n "${backup_temporary:-}" ]]; then
     rm -f "${backup_temporary}" || true
   fi
+  restore_runtime_after_daemon_restart || true
   rollback_app || true
   echo "Production deployment failed with exit code ${exit_code}" >&2
   exit "${exit_code}"
@@ -215,11 +261,20 @@ if [[ ! "${postgres_volume}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]+$ ]]; then
 fi
 export POSTGRES_VOLUME_NAME="${postgres_volume}"
 
+buildx_builder="${DUALLANE_BUILDX_BUILDER:-$(read_env_value DUALLANE_BUILDX_BUILDER)}"
+buildx_builder="${buildx_builder:-duallane-production}"
+buildkit_image="${DUALLANE_BUILDKIT_IMAGE:-$(read_env_value DUALLANE_BUILDKIT_IMAGE)}"
+buildkit_image="${buildkit_image:-docker.m.daocloud.io/moby/buildkit:buildx-stable-1}"
+if [[ ! "${buildx_builder}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]+$ || -z "${buildkit_image}" ]]; then
+  echo "DUALLANE_BUILDX_BUILDER or DUALLANE_BUILDKIT_IMAGE is invalid" >&2
+  exit 1
+fi
+
 wait_for_docker
+readonly docker_started_before="$(systemctl show docker -p ExecMainStartTimestampMonotonic --value 2>/dev/null || true)"
 docker volume inspect "${postgres_volume}" >/dev/null
 compose config --quiet
-
-readonly docker_started_before="$(systemctl show docker -p ExecMainStartTimestampMonotonic --value 2>/dev/null || true)"
+ensure_buildx_builder "${buildx_builder}" "${buildkit_image}"
 
 postgres_container="$(compose ps -a -q postgres 2>/dev/null || true)"
 if [[ -n "${postgres_container}" ]]; then
@@ -257,13 +312,27 @@ mv "${backup_temporary}" "${backup_path}"
 capture_rollback_image api
 capture_rollback_image web
 
+export BUILDX_BUILDER="${buildx_builder}"
+export COMPOSE_PARALLEL_LIMIT="${COMPOSE_PARALLEL_LIMIT:-1}"
 compose build api web migrate
 compose run --rm --no-deps migrate
 
 app_replaced=true
 compose up -d --no-deps api web
 
-health_url="${DUALLANE_DEPLOY_HEALTH_URL:-$(read_env_value PUBLIC_BASE_URL)/api/health}"
+web_bind="$(read_env_value DUALLANE_WEB_BIND)"
+web_bind="${web_bind:-127.0.0.1}"
+web_port="$(read_env_value DUALLANE_WEB_PORT)"
+web_port="${web_port:-8787}"
+if [[ "${web_bind}" == "0.0.0.0" ]]; then
+  web_bind="127.0.0.1"
+elif [[ "${web_bind}" == "::" ]]; then
+  web_bind="[::1]"
+elif [[ "${web_bind}" == *:* && "${web_bind}" != \[*\] ]]; then
+  web_bind="[${web_bind}]"
+fi
+health_url="${DUALLANE_DEPLOY_HEALTH_URL:-$(read_env_value DUALLANE_DEPLOY_HEALTH_URL)}"
+health_url="${health_url:-http://${web_bind}:${web_port}/api/health}"
 if [[ ! "${health_url}" =~ ^https?:// ]]; then
   echo "DUALLANE_DEPLOY_HEALTH_URL or PUBLIC_BASE_URL must be an HTTP(S) URL" >&2
   exit 1

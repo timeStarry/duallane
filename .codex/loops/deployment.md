@@ -28,6 +28,9 @@ Use this loop for Docker, Nginx, environment, production startup, static serving
    routine deployment step.
 8. Refresh the V2Ray subscription only as an explicit maintenance operation;
    application deployment must reuse the last-known-good proxy config.
+9. Production builds must use the configured `docker-container` Buildx builder.
+   Do not fall back to Docker's integrated builder when the isolated builder is
+   unavailable.
 
 ## Done
 - Compose remains valid.
