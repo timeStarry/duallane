@@ -214,7 +214,7 @@ export function createWorkspaceNtfyService({
         COALESCE(ur.remark, author.nickname, author.github_login, author.display_name) AS senderName
       FROM workspace_ntfy_jobs j
       INNER JOIN workspace_ntfy_preferences p ON p.user_id = j.user_id
-      INNER JOIN messages m ON m.id = j.message_id AND m.deleted_at IS NULL
+      INNER JOIN messages m ON m.id = j.message_id AND m.deleted_at IS NULL AND m.recalled_at IS NULL
       INNER JOIN users author ON author.id = m.author_id
       INNER JOIN conversations c ON c.id = j.conversation_id
       INNER JOIN conversation_members cm

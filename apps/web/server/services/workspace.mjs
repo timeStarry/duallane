@@ -26,6 +26,7 @@ export const MESSAGE_CONTENT_FORMAT = "duallane.message+json;v=1";
 export const DEFAULT_RETENTION_COUNT = 10000;
 export const MAX_MESSAGE_TEXT_CODE_POINTS = 30_000;
 export const MAX_MESSAGE_TEXT_BYTES = 100 * 1024;
+export const DEFAULT_RECALL_REASON = "内容有误";
 export const WORKSPACE_SESSION_COOKIE = "duallane_workspace";
 export const WORKSPACE_EVENT_REPLAY_LIMIT = 200;
 export const STALE_UPLOAD_RESERVATION_MS = 1000 * 60 * 30;
@@ -264,6 +265,7 @@ export async function updateOwnProfile(db, request, input) {
   const actor = await requireActor(db, input.actorId);
   const updatesNickname = Object.hasOwn(input, "nickname");
   const updatesSearchDiscoverable = Object.hasOwn(input, "searchDiscoverable");
+  const updatesRecallReason = Object.hasOwn(input, "recallReason");
   const nickname = updatesNickname
     ? input.nickname === null || normalizeString(input.nickname) === ""
       ? null
@@ -272,7 +274,12 @@ export async function updateOwnProfile(db, request, input) {
   if (updatesSearchDiscoverable && typeof input.searchDiscoverable !== "boolean") {
     throw new WorkspaceValidationError("profile.search_discoverable_invalid", "搜索可见设置无效");
   }
-  if (!updatesNickname && !updatesSearchDiscoverable) {
+  const recallReason = updatesRecallReason
+    ? input.recallReason === null || normalizeString(input.recallReason) === ""
+      ? null
+      : normalizeRecallReason(input.recallReason)
+    : undefined;
+  if (!updatesNickname && !updatesSearchDiscoverable && !updatesRecallReason) {
     return await publicMemberPayloadForActor(db, actor, actor.id);
   }
   const now = new Date().toISOString();
@@ -285,6 +292,10 @@ export async function updateOwnProfile(db, request, input) {
       await db.prepare("UPDATE users SET search_discoverable = CASE WHEN ? = 1 THEN TRUE ELSE FALSE END WHERE id = ? AND kind = 'human'")
         .run(input.searchDiscoverable ? 1 : 0, actor.id);
     }
+    if (updatesRecallReason) {
+      await db.prepare("UPDATE users SET recall_reason = ? WHERE id = ? AND kind = 'human'")
+        .run(recallReason, actor.id);
+    }
     await writeEvent(db, {
       type: "workspace.member_updated",
       actorId: actor.id,
@@ -295,9 +306,13 @@ export async function updateOwnProfile(db, request, input) {
     await writeWorkspaceAudit(db, request, {
       actorUserId: actor.id,
       actorGithubLogin: actor.githubLogin,
-      action: updatesNickname && updatesSearchDiscoverable
+      action: [updatesNickname, updatesSearchDiscoverable, updatesRecallReason].filter(Boolean).length > 1
         ? "profile.update"
-        : updatesNickname ? "profile.nickname_update" : "profile.search_discoverable_update",
+        : updatesNickname
+          ? "profile.nickname_update"
+          : updatesSearchDiscoverable
+            ? "profile.search_discoverable_update"
+            : "profile.recall_reason_update",
       targetType: "user",
       targetId: actor.id,
       result: "success"
@@ -1345,7 +1360,8 @@ export async function createConversation(db, request, input) {
       throw new WorkspaceValidationError("conversation.invalid_target", "成员不存在");
     }
     const targetVisible = await canViewMember(db, { spaceId: DEFAULT_SPACE_ID, actor, visibleUserId: target.id });
-    if (!targetVisible && !(target.kind === "human" && target.searchDiscoverable)) {
+    const sharesGroup = await shareActiveGroupConversation(db, actor.id, target.id);
+    if (!targetVisible && !sharesGroup && !(target.kind === "human" && target.searchDiscoverable)) {
       await writeConversationCreateRejection(db, request, actor, "target not visible");
       throw new WorkspaceValidationError("conversation.invalid_target", "成员不存在或当前不可见");
     }
@@ -1947,7 +1963,9 @@ export async function listMessages(db, userId, conversationId, options = {}) {
       recent.replyToMessageId,
       recent.createdAt,
       recent.editedAt,
-      recent.deletedAt
+      recent.deletedAt,
+      recent.recalledAt,
+      recent.recallReason
     FROM (
       SELECT
         m.id AS messageCursorId,
@@ -1964,7 +1982,9 @@ export async function listMessages(db, userId, conversationId, options = {}) {
         m.reply_to_message_id AS replyToMessageId,
         m.created_at AS createdAt,
         m.edited_at AS editedAt,
-        m.deleted_at AS deletedAt
+        m.deleted_at AS deletedAt,
+        m.recalled_at AS recalledAt,
+        m.recall_reason AS recallReason
       FROM messages m
       WHERE m.conversation_id = ?
         AND m.deleted_at IS NULL
@@ -1988,6 +2008,110 @@ export async function listMessages(db, userId, conversationId, options = {}) {
     reactions: reactionsByMessageId.get(row.id) ?? [],
     pin: pinsByMessageId.get(row.id)
   }, actor, db)));
+}
+
+export async function recallMessage(db, request, input) {
+  const actor = await requireActor(db, input.actorId);
+  const messageId = normalizeString(input.messageId);
+  try {
+    const target = await db.prepare(`
+      SELECT id, conversation_id AS conversationId, author_id AS authorId,
+        author_kind AS authorKind, kind, recalled_at AS recalledAt
+      FROM messages
+      WHERE id = ? AND deleted_at IS NULL
+    `).get(messageId);
+    if (!target) {
+      throw new WorkspaceError("message.not_found", "消息不存在", 404);
+    }
+    await requireCapability(db, request, actor, "conversation.read", {
+      targetType: "message",
+      targetId: messageId
+    });
+    await requireConversationMember(db, actor.id, target.conversationId, {
+      request,
+      actor,
+      action: "message.recall"
+    });
+    if (target.authorId !== actor.id) {
+      throw new WorkspacePermissionError("permission.denied", "只能撤回自己发送的消息");
+    }
+    if (target.kind !== "user" || target.authorKind !== "human") {
+      throw new WorkspaceValidationError("message.recall_unsupported", "该消息不能撤回");
+    }
+    if (target.recalledAt) {
+      return await publicMessagePayloadForActor(db, actor, target.id);
+    }
+
+    return await runWorkspaceTransaction(db, async () => {
+      const now = new Date().toISOString();
+      const reason = normalizeRecallReason(actor.recallReason || DEFAULT_RECALL_REASON);
+      const authorName = publicString(actor.nickname) || publicString(actor.githubLogin) || publicString(actor.displayName) || "成员";
+      const recallText = `${authorName}因${reason}撤回了一条消息`;
+      const emptyContent = {
+        format: MESSAGE_CONTENT_FORMAT,
+        plainText: "",
+        blocks: []
+      };
+      const update = await db.prepare(`
+        UPDATE messages
+        SET content_json = ?, plain_text = ?, reply_to_message_id = NULL,
+          recalled_at = ?, recall_reason = ?
+        WHERE id = ? AND recalled_at IS NULL AND deleted_at IS NULL
+      `).run(JSON.stringify(emptyContent), recallText, now, reason, target.id);
+      if (update.changes === 0) {
+        return await publicMessagePayloadForActor(db, actor, target.id);
+      }
+
+      await db.prepare("DELETE FROM message_reactions WHERE message_id = ?").run(target.id);
+      await db.prepare("DELETE FROM message_custom_emotes WHERE message_id = ?").run(target.id);
+      const pin = await db.prepare(`
+        SELECT conversation_id AS conversationId, pinned_by_user_id AS pinnedByUserId
+        FROM conversation_pinned_messages
+        WHERE message_id = ?
+      `).get(target.id);
+      if (pin) {
+        await db.prepare("DELETE FROM conversation_pinned_messages WHERE message_id = ?").run(target.id);
+        await db.prepare(`
+          UPDATE conversation_pin_counters
+          SET pin_count = CASE WHEN pin_count > 0 THEN pin_count - 1 ELSE 0 END
+          WHERE conversation_id = ? AND user_id = ?
+        `).run(pin.conversationId, pin.pinnedByUserId);
+      }
+
+      const message = await publicMessagePayloadForActor(db, actor, target.id);
+      const conversation = await getConversation(db, actor.id, target.conversationId, { actor });
+      await writeEvent(db, {
+        type: "message.recalled",
+        actorId: actor.id,
+        conversationId: target.conversationId,
+        targetType: "message",
+        targetId: target.id,
+        payload: { messageId: target.id, conversationId: target.conversationId }
+      });
+      await writeWorkspaceAudit(db, request, {
+        actorUserId: actor.id,
+        actorGithubLogin: actor.githubLogin,
+        action: "message.recall",
+        targetType: "message",
+        targetId: target.id,
+        result: "success"
+      });
+      return { ...message, conversation };
+    });
+  } catch (error) {
+    if (error instanceof WorkspaceError) {
+      await writeWorkspaceAudit(db, request, {
+        actorUserId: actor.id,
+        actorGithubLogin: actor.githubLogin,
+        action: "message.recall",
+        targetType: "message",
+        targetId: messageId || null,
+        result: "rejected",
+        reason: error.code
+      });
+    }
+    throw error;
+  }
 }
 
 export async function listPinnedMessages(db, userId, conversationId, options = {}) {
@@ -3065,6 +3189,7 @@ async function listSpaceMembers(db, viewerUserId = "") {
       u.email,
       u.display_name AS displayName,
       u.nickname,
+      u.recall_reason AS recallReason,
       ur.remark,
       u.avatar_url AS avatarUrl,
       u.search_discoverable AS searchDiscoverable,
@@ -3107,6 +3232,7 @@ async function listConversationMembers(db, conversationId, viewerUserId = "") {
       u.email,
       u.display_name AS displayName,
       u.nickname,
+      u.recall_reason AS recallReason,
       ur.remark,
       u.avatar_url AS avatarUrl,
       u.kind,
@@ -3488,6 +3614,9 @@ function publicMember(member, actor = null) {
     searchDiscoverable: actor?.id === member.id && member.kind === "human"
       ? Boolean(member.searchDiscoverable)
       : undefined,
+    recallReason: actor?.id === member.id && member.kind === "human"
+      ? publicString(member.recallReason) || DEFAULT_RECALL_REASON
+      : undefined,
     kind: systemIdentity?.kind ?? member.kind,
     role: projectedRole,
     roleLabel: ROLE_LABELS[projectedRole] ?? "成员",
@@ -3546,13 +3675,18 @@ function publicAttachment(attachment, actor) {
 
 async function publicMessage(message, actor = null, db = null) {
   if (!message) return null;
-  const content = publicMessageContent(message.content);
+  const recalled = Boolean(message.recalledAt);
+  const content = recalled
+    ? { format: MESSAGE_CONTENT_FORMAT, plainText: "", blocks: [] }
+    : publicMessageContent(message.content);
   const authorIdentity = getSystemIdentityDefinition(message.authorId);
+  const authorName = authorIdentity?.displayName ?? message.authorRemark ?? message.authorNickname ?? message.authorGithubLogin ?? message.authorName;
+  const recallReason = recalled ? publicString(message.recallReason) || DEFAULT_RECALL_REASON : "";
   return {
     id: message.id,
     conversationId: message.conversationId,
     authorId: message.authorId,
-    authorName: authorIdentity?.displayName ?? message.authorRemark ?? message.authorNickname ?? message.authorGithubLogin ?? message.authorName,
+    authorName,
     authorNickname: message.authorKind === "human" ? message.authorNickname : undefined,
     authorRemark: message.authorKind === "human" ? message.authorRemark : undefined,
     authorGithubLogin: message.authorKind === "human" ? message.authorGithubLogin : undefined,
@@ -3561,18 +3695,20 @@ async function publicMessage(message, actor = null, db = null) {
     kind: message.kind,
     clientMessageId: message.clientMessageId,
     content,
-    plainText: content.plainText || publicString(message.plainText),
-    replyToMessageId: message.replyToMessageId,
+    plainText: recalled ? `${authorName || "成员"}因${recallReason}撤回了一条消息` : content.plainText || publicString(message.plainText),
+    replyToMessageId: recalled ? null : message.replyToMessageId,
     createdAt: message.createdAt,
     editedAt: message.editedAt,
     deletedAt: message.deletedAt,
-    attachments: message.attachments
+    recalledAt: message.recalledAt || null,
+    recallReason: recalled ? recallReason : null,
+    attachments: !recalled && message.attachments
       ? await Promise.all(message.attachments.map(async (attachment) =>
         db && actor ? await publicAttachmentPayloadForActor(db, actor, attachment) : publicAttachment(attachment, actor)
       ))
       : [],
-    reactions: Array.isArray(message.reactions) ? message.reactions : [],
-    pin: message.pin || undefined
+    reactions: !recalled && Array.isArray(message.reactions) ? message.reactions : [],
+    pin: recalled ? undefined : message.pin || undefined
   };
 }
 
@@ -4119,7 +4255,7 @@ async function publicWorkspaceEventPayload(db, actor, type, payload) {
       conversation: await publicConversationPayloadForActor(db, actor, payload.conversation || payload.conversationId)
     });
   }
-  if (type === "message.created") {
+  if (type === "message.created" || type === "message.recalled") {
     return removeUndefinedValues({
       messageId: normalizeString(payload.messageId),
       conversationId: normalizeString(payload.conversationId),
@@ -4214,7 +4350,9 @@ async function publicMessagePayloadForActor(db, actor, message) {
         m.reply_to_message_id AS replyToMessageId,
         m.created_at AS createdAt,
         m.edited_at AS editedAt,
-        m.deleted_at AS deletedAt
+        m.deleted_at AS deletedAt,
+        m.recalled_at AS recalledAt,
+        m.recall_reason AS recallReason
       FROM messages m
       LEFT JOIN users u ON u.id = m.author_id
       LEFT JOIN user_remarks ur ON ur.owner_user_id = ? AND ur.target_user_id = u.id
@@ -4256,6 +4394,7 @@ async function getMemberForViewer(db, userId, viewerUserId) {
       u.email,
       u.display_name AS displayName,
       u.nickname,
+      u.recall_reason AS recallReason,
       ur.remark,
       u.avatar_url AS avatarUrl,
       u.search_discoverable AS searchDiscoverable,
@@ -4294,6 +4433,7 @@ async function getUserWithRole(db, userId) {
       u.email,
       u.display_name AS displayName,
       u.nickname,
+      u.recall_reason AS recallReason,
       u.avatar_url AS avatarUrl,
       u.search_discoverable AS searchDiscoverable,
       u.kind,
@@ -4342,6 +4482,23 @@ function canStartDirectConversationWith(member) {
     return getSystemIdentityConversationCapabilities(systemIdentity).canStartDirectConversation;
   }
   return member?.kind === "human" && member.role !== "auditor";
+}
+
+async function shareActiveGroupConversation(db, actorId, targetUserId) {
+  return Boolean(await db.prepare(`
+    SELECT 1
+    FROM conversations c
+    INNER JOIN conversation_members actor_cm
+      ON actor_cm.conversation_id = c.id
+      AND actor_cm.user_id = ?
+      AND actor_cm.removed_at IS NULL
+    INNER JOIN conversation_members target_cm
+      ON target_cm.conversation_id = c.id
+      AND target_cm.user_id = ?
+      AND target_cm.removed_at IS NULL
+    WHERE c.space_id = ? AND c.type = 'group'
+    LIMIT 1
+  `).get(actorId, targetUserId, DEFAULT_SPACE_ID));
 }
 
 function canJoinGroupConversation(member) {
@@ -4532,6 +4689,18 @@ function normalizeProfileLabel(value, code, label) {
     /[\u0000-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/u.test(normalized)
   ) {
     throw new WorkspaceValidationError(code, `${label}应为 1 至 32 个有效字符`);
+  }
+  return normalized;
+}
+
+function normalizeRecallReason(value) {
+  const normalized = normalizeString(value);
+  if (
+    Array.from(normalized).length < 1 ||
+    Array.from(normalized).length > 16 ||
+    /[\u0000-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/u.test(normalized)
+  ) {
+    throw new WorkspaceValidationError("profile.recall_reason_invalid", "撤回文案应为 1 至 16 个有效字符");
   }
   return normalized;
 }

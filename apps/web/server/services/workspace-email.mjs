@@ -504,6 +504,7 @@ export function createWorkspaceEmailService({ db, env = process.env, baseUrl, se
         ON we.type = 'message.created' AND we.target_id = m.id AND we.conversation_id = m.conversation_id
       WHERE m.created_at >= ?
         AND m.deleted_at IS NULL
+        AND m.recalled_at IS NULL
         AND m.kind IN ('user', 'bot')
         AND (m.author_id IS NULL OR m.author_id <> ?)
       ORDER BY m.created_at ASC, m.id ASC
@@ -527,7 +528,7 @@ export function createWorkspaceEmailService({ db, env = process.env, baseUrl, se
         cm.last_read_at AS lastReadAt, m.created_at AS messageCreatedAt, m.content_json AS contentJson
       FROM workspace_email_jobs j
       INNER JOIN user_notification_preferences p ON p.user_id = j.user_id
-      INNER JOIN messages m ON m.id = j.message_id AND m.deleted_at IS NULL
+      INNER JOIN messages m ON m.id = j.message_id AND m.deleted_at IS NULL AND m.recalled_at IS NULL
       INNER JOIN conversation_members cm
         ON cm.conversation_id = j.conversation_id AND cm.user_id = j.user_id AND cm.removed_at IS NULL
       INNER JOIN space_members sm

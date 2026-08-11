@@ -46,6 +46,7 @@ import {
   markConversationRead,
   recordGitHubLoginRejection,
   recordInviteAcceptRejection,
+  recallMessage,
   removeConversationMember,
   removeAttachment,
   releaseDownloadReservation,
@@ -248,7 +249,7 @@ await app.register(fastifyWebsocket);
 app.addContentTypeParser("application/octet-stream", (_request, payload, done) => {
   done(null, payload);
 });
-app.addContentTypeParser(["image/jpeg", "image/png", "image/webp", "image/gif"], (_request, payload, done) => {
+app.addContentTypeParser(["image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp"], (_request, payload, done) => {
   done(null, payload);
 });
 
@@ -1099,6 +1100,21 @@ app.post("/api/workspace/messages", async (request, reply) => {
       validateCustomEmote: workspaceCustomEmotes?.validateMessageCustomEmote
     });
     return reply.code(201).send({ message });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/messages/:messageId/recall", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    const message = await recallMessage(db, request, {
+      actorId: await getWorkspaceUserId(request),
+      messageId: request.params.messageId
+    });
+    return { message };
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }

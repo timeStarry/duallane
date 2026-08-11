@@ -16,8 +16,8 @@ const CUSTOM_EMOTE_MAX_DIMENSION = 4096;
 const CUSTOM_EMOTE_MAX_PIXELS = 40 * 1024 * 1024;
 const CUSTOM_EMOTE_MAX_FRAMES = 60;
 const CUSTOM_EMOTE_MAX_DURATION_MS = 15000;
-const SUPPORTED_FORMATS = new Set(["jpeg", "png", "webp", "gif"]);
-const SUPPORTED_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const SUPPORTED_FORMATS = new Set(["jpeg", "png", "webp", "gif", "bmp"]);
+const SUPPORTED_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp"]);
 
 export function createWorkspaceCustomEmoteService({ db, objectStore, dataDir, now = () => new Date() }) {
   const userLocks = new Map();
@@ -159,7 +159,7 @@ export function createWorkspaceCustomEmoteService({ db, objectStore, dataDir, no
 
     async upload({ actorId, stream, contentType, fileName }) {
       if (!SUPPORTED_MIME_TYPES.has(String(contentType ?? "").toLowerCase())) {
-        throw new WorkspaceValidationError("emote.invalid_format", "仅支持 JPEG、PNG、WebP 或 GIF 图片");
+        throw new WorkspaceValidationError("emote.invalid_format", "仅支持 JPEG、PNG、WebP、GIF 或 BMP 图片");
       }
       const input = await readLimitedStream(stream, CUSTOM_EMOTE_MAX_INPUT_BYTES);
       return await storeProcessed({
@@ -283,13 +283,22 @@ export function createWorkspaceCustomEmoteService({ db, objectStore, dataDir, no
 
 async function normalizeCustomEmote(input, source) {
   let metadata;
+  let sharpInput = input;
+  let sharpInputOptions = { animated: true, limitInputPixels: CUSTOM_EMOTE_MAX_PIXELS, failOn: "warning" };
   try {
-    metadata = await sharp(input, { animated: true, limitInputPixels: CUSTOM_EMOTE_MAX_PIXELS, failOn: "warning" }).metadata();
+    if (String(source.mimeType).toLowerCase() === "image/bmp" || input.subarray(0, 2).toString("ascii") === "BM") {
+      const decoded = decodeBmp(input);
+      metadata = { format: "bmp", width: decoded.width, height: decoded.height, pages: 1 };
+      sharpInput = decoded.data;
+      sharpInputOptions = { raw: { width: decoded.width, height: decoded.height, channels: 4 } };
+    } else {
+      metadata = await sharp(input, sharpInputOptions).metadata();
+    }
   } catch {
     throw new WorkspaceValidationError("emote.decode_failed", "图片无法解析");
   }
   if (!SUPPORTED_FORMATS.has(metadata.format)) {
-    throw new WorkspaceValidationError("emote.invalid_format", "仅支持 JPEG、PNG、WebP 或 GIF 图片");
+    throw new WorkspaceValidationError("emote.invalid_format", "仅支持 JPEG、PNG、WebP、GIF 或 BMP 图片");
   }
   const frameCount = Math.max(1, Number(metadata.pages) || 1);
   const width = Number(metadata.width) || 0;
@@ -304,11 +313,9 @@ async function normalizeCustomEmote(input, source) {
     throw new WorkspaceValidationError("emote.animation_too_complex", "动图帧数或时长超出限制");
   }
 
-  const makeOutput = async (size, quality) => await sharp(input, {
-    animated: frameCount > 1,
-    limitInputPixels: CUSTOM_EMOTE_MAX_PIXELS,
-    failOn: "warning"
-  })
+  const makeOutput = async (size, quality) => await sharp(sharpInput, frameCount > 1
+    ? { animated: true, limitInputPixels: CUSTOM_EMOTE_MAX_PIXELS, failOn: "warning" }
+    : sharpInputOptions)
     .rotate()
     .resize({ width: size, height: size, fit: "inside", withoutEnlargement: true })
     .webp({ quality, effort: 4, loop: 0 })
@@ -334,6 +341,49 @@ async function normalizeCustomEmote(input, source) {
     detectedMimeType: formatMimeType(metadata.format),
     label: normalizeLabel(source.fileName)
   };
+}
+
+function decodeBmp(input) {
+  if (input.length < 54 || input.subarray(0, 2).toString("ascii") !== "BM") {
+    throw new Error("invalid bmp header");
+  }
+  const pixelOffset = input.readUInt32LE(10);
+  const dibSize = input.readUInt32LE(14);
+  const width = input.readInt32LE(18);
+  const signedHeight = input.readInt32LE(22);
+  const planes = input.readUInt16LE(26);
+  const bitsPerPixel = input.readUInt16LE(28);
+  const compression = input.readUInt32LE(30);
+  const height = Math.abs(signedHeight);
+  if (
+    dibSize < 40 || width < 1 || height < 1 || planes !== 1 ||
+    ![24, 32].includes(bitsPerPixel) || compression !== 0 ||
+    width > CUSTOM_EMOTE_MAX_DIMENSION || height > CUSTOM_EMOTE_MAX_DIMENSION ||
+    width * height > CUSTOM_EMOTE_MAX_PIXELS
+  ) {
+    throw new Error("unsupported bmp layout");
+  }
+  const bytesPerPixel = bitsPerPixel / 8;
+  const rowStride = Math.ceil((width * bytesPerPixel) / 4) * 4;
+  if (pixelOffset < 14 + dibSize || pixelOffset + rowStride * height > input.length) {
+    throw new Error("truncated bmp data");
+  }
+  const output = Buffer.allocUnsafe(width * height * 4);
+  for (let outputY = 0; outputY < height; outputY += 1) {
+    const sourceY = signedHeight > 0 ? height - 1 - outputY : outputY;
+    const sourceRow = pixelOffset + sourceY * rowStride;
+    for (let x = 0; x < width; x += 1) {
+      const sourceIndex = sourceRow + x * bytesPerPixel;
+      const outputIndex = (outputY * width + x) * 4;
+      output[outputIndex] = input[sourceIndex + 2];
+      output[outputIndex + 1] = input[sourceIndex + 1];
+      output[outputIndex + 2] = input[sourceIndex];
+      output[outputIndex + 3] = bitsPerPixel === 32 && input[sourceIndex + 3] > 0
+        ? input[sourceIndex + 3]
+        : 255;
+    }
+  }
+  return { data: output, width, height };
 }
 
 async function addBuiltinFavorite(db, actorId, emote, date) {

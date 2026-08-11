@@ -59,6 +59,20 @@ describe("workspace custom emotes", () => {
     expect((await service.list("usr_owner")).items).toEqual([]);
   });
 
+  it("accepts BMP uploads and normalizes them to WebP", async () => {
+    const { service, stored } = await fixture();
+    const bmp = createOnePixelBmp();
+    const emote = await service.upload({
+      actorId: "usr_owner",
+      stream: Readable.from(bmp),
+      contentType: "image/bmp",
+      fileName: "pixel.bmp"
+    });
+
+    expect(emote).toMatchObject({ kind: "custom", label: "pixel", animated: false });
+    expect((await sharp(stored.get(emote.id)).metadata()).format).toBe("webp");
+  });
+
   it("rejects unsupported input types before image processing", async () => {
     const { service } = await fixture();
     await expect(service.upload({
@@ -102,3 +116,18 @@ describe("workspace custom emotes", () => {
     return { db, directory, service, stored, removed };
   }
 });
+
+function createOnePixelBmp() {
+  const buffer = Buffer.alloc(58);
+  buffer.write("BM", 0, "ascii");
+  buffer.writeUInt32LE(buffer.length, 2);
+  buffer.writeUInt32LE(54, 10);
+  buffer.writeUInt32LE(40, 14);
+  buffer.writeInt32LE(1, 18);
+  buffer.writeInt32LE(1, 22);
+  buffer.writeUInt16LE(1, 26);
+  buffer.writeUInt16LE(24, 28);
+  buffer.writeUInt32LE(4, 34);
+  buffer.set([32, 128, 224, 0], 54);
+  return buffer;
+}

@@ -385,7 +385,7 @@ describe("workspace UI permission boundaries", () => {
     expect(eventProjectorEnd).toBeGreaterThan(eventProjectorStart);
     const eventProjectorSource = source.slice(eventProjectorStart, eventProjectorEnd);
 
-    expect(eventProjectorSource).toContain('if (event.type === "message.created")');
+    expect(eventProjectorSource).toContain('if (event.type === "message.created" || event.type === "message.recalled")');
     expect(eventProjectorSource).toContain("upsertWorkspaceMessage(payload.message, payload.conversation)");
     expect(eventProjectorSource).toContain("payload.conversationId && payload.conversationId === workspaceSelectedConversationIdRef.current");
     expect(eventProjectorSource).toContain("tasks.push(refreshWorkspaceConversationMessages(payload.conversationId));");
@@ -712,7 +712,8 @@ describe("workspace UI permission boundaries", () => {
     expect(source).toContain('workspaceSelectedConversation.capabilities?.canManageMembers');
     expect(source).toContain('if (!workspaceSelectedConversation || !workspaceCanManageSelectedGroup) {');
     expect(source).toContain('workspaceSelectedConversation.type === "group" && workspaceCanManageSelectedGroup');
-    expect(source).toContain('workspaceCanManageSelectedGroup &&\n                                    member.id !== workspaceBootstrap.auth.currentUser.id');
+    expect(source).toContain('workspaceBootstrap.permissions.canCreateDirect && member.capabilities?.canStartDirectConversation === true');
+    expect(source).toContain('workspaceSelectedConversation.type === "group" && workspaceCanManageSelectedGroup && (');
     expect(source).toContain('{workspaceCanManageSelectedGroup ? (');
   });
 
@@ -1018,7 +1019,7 @@ describe("workspace UI permission boundaries", () => {
     expect(accountSource).toContain('aria-modal="true"');
     expect(accountSource).toContain("不要分享 topic");
     expect(accountSource).toContain("https://ntfy.sh/");
-    expect(accountSource).toContain("ntfy-fdroid-release.apk");
+    expect(accountSource).toContain("https://f-droid.org/repo/io.heckel.ntfy_63.apk");
     expect(accountSource).toContain("getFocusableElements(dialog)");
     const accountPanelSource = accountSource.slice(0, accountSource.indexOf("{ntfyHelpOpen && ntfy && createPortal"));
     expect(accountPanelSource).not.toContain("ntfy.topic");

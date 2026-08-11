@@ -32,7 +32,10 @@ describe("GitHub avatar projection", () => {
 
   it("allows only controlled same-origin Workspace asset paths", () => {
     expect(sanitizeWorkspaceAvatarUrl("/assets/beacon-avatar.png")).toBe("/assets/beacon-avatar.png");
+    expect(sanitizeWorkspaceAvatarUrl("/api/workspace/avatars/usr_owner/version-1"))
+      .toBe("/api/workspace/avatars/usr_owner/version-1");
     expect(sanitizeWorkspaceAvatarUrl("/assets/../secret.png")).toBe("");
+    expect(sanitizeWorkspaceAvatarUrl("/api/workspace/avatars/usr_owner/version_1")).toBe("");
     expect(sanitizeWorkspaceAvatarUrl("/uploads/user-content.png")).toBe("");
   });
 });

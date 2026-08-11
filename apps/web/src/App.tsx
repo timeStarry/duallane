@@ -51,6 +51,7 @@ import {
   Sun,
   Trash2,
   Type,
+  Undo2,
   UserRound,
   UsersRound,
   X
@@ -176,6 +177,8 @@ type Message = {
   attachments?: WorkspaceAttachment[];
   reactions?: WorkspaceReactionGroup[];
   pin?: WorkspaceMessagePin;
+  recalledAt?: string | null;
+  recallReason?: string | null;
   replyTo?: {
     author: string;
     body: string;
@@ -191,6 +194,7 @@ type WorkspaceUser = {
   description?: string;
   avatarUrl?: string;
   searchDiscoverable?: boolean;
+  recallReason?: string;
   kind: "human" | "bot" | "system";
   role: "owner" | "admin" | "member" | "auditor";
   roleLabel?: string;
@@ -317,6 +321,8 @@ type WorkspaceMessage = {
   createdAt: string;
   editedAt?: string | null;
   deletedAt?: string | null;
+  recalledAt?: string | null;
+  recallReason?: string | null;
   attachments: WorkspaceAttachment[];
   reactions: WorkspaceReactionGroup[];
   pin?: WorkspaceMessagePin;
@@ -564,13 +570,15 @@ const WORKSPACE_ERROR_COPY: Record<string, string> = {
   "message.invalid_content": "消息内容无法发送，请调整后重试。",
   "message.idempotency_conflict": "这条消息已发生变化，请重新发送。",
   "message.too_long": "消息正文过长，请作为 TXT 文件发送。",
+  "message.recall_unsupported": "该消息不能撤回。",
+  "profile.recall_reason_invalid": "撤回文案应为 1 至 16 个有效字符。",
   "pin.group_only": "只有群聊支持常驻消息。",
   "pin.not_author": "只能常驻自己发送的消息。",
   "pin.limit_reached": "每人在每个群聊最多常驻 3 条消息。",
   "avatar.unsupported_format": "头像仅支持 JPEG、PNG 或 WebP。",
   "avatar.invalid_size": "头像文件大小不符合要求。",
   "avatar.invalid_image": "头像图片无法解析。",
-  "emote.invalid_format": "收藏表情仅支持 JPEG、PNG、WebP 或 GIF。",
+  "emote.invalid_format": "收藏表情仅支持 JPEG、PNG、WebP、GIF 或 BMP。",
   "emote.input_too_large": "收藏表情原图不能超过 10 MiB。",
   "emote.animation_too_complex": "动图帧数或时长超出限制。",
   "emote.limit_reached": "收藏表情已达到 100 个上限。",
@@ -2672,6 +2680,8 @@ export function App() {
           attachments: message.attachments,
           reactions: message.reactions,
           pin: message.pin,
+          recalledAt: message.recalledAt,
+          recallReason: message.recallReason,
           replyTo: reply
             ? {
                 author: reply.authorName || reply.authorGithubLogin || "成员",
@@ -2970,17 +2980,11 @@ export function App() {
     workspaceScrolledConversationIdRef.current = workspaceSelectedConversationId;
     if (conversationChanged) {
       workspaceScrollIntentUntilRef.current = 0;
-      const savedPosition = workspaceScrollPositionsRef.current.get(workspaceSelectedConversationId);
-      const savedStickToBottom = workspaceStickToBottomByConversationRef.current.get(
-        workspaceSelectedConversationId
-      );
-      const shouldStickToBottom = typeof savedPosition !== "number" || savedStickToBottom !== false;
-      const targetTop = shouldStickToBottom ? list.scrollHeight : savedPosition;
-      workspaceStickToBottomRef.current = shouldStickToBottom;
-      list.scrollTo({ top: targetTop, behavior: "auto" });
-      if (shouldStickToBottom) {
-        handleWorkspaceMessageListScroll(list);
-      }
+      workspaceStickToBottomRef.current = true;
+      workspaceScrollPositionsRef.current.delete(workspaceSelectedConversationId);
+      workspaceStickToBottomByConversationRef.current.set(workspaceSelectedConversationId, true);
+      list.scrollTo({ top: list.scrollHeight, behavior: "auto" });
+      handleWorkspaceMessageListScroll(list);
       return;
     }
     if (!conversationChanged && !workspaceStickToBottomRef.current && !forceScrollToLatest) {
@@ -4127,12 +4131,6 @@ export function App() {
   function selectWorkspaceConversation(conversationId: string) {
     const previousId = workspaceSelectedConversationId;
     if (previousId && previousId !== conversationId) {
-      const list = workspaceMessageListRef.current;
-      if (list) {
-        const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight <= 80;
-        workspaceScrollPositionsRef.current.set(previousId, list.scrollTop);
-        workspaceStickToBottomByConversationRef.current.set(previousId, nearBottom);
-      }
       workspaceScrollIntentUntilRef.current = 0;
 
       setWorkspaceUnreadAnchorByConversation((anchors) => {
@@ -4140,7 +4138,7 @@ export function App() {
         return rest;
       });
     }
-    workspaceStickToBottomRef.current = false;
+    workspaceStickToBottomRef.current = true;
     setWorkspaceSelectedConversationId(conversationId);
     setWorkspaceView("chat");
     writeAppRoute(workspaceRoute({ inviteCode: workspacePendingInviteCode, conversationId }));
@@ -4431,6 +4429,30 @@ export function App() {
     }
   }
 
+  async function recallWorkspaceMessage(message: Message) {
+    if (!message.self || message.localState || message.recalledAt) return;
+    if (!window.confirm("撤回这条消息？撤回后聊天中不再显示原内容。")) return;
+    try {
+      await workspaceJson<{ message: WorkspaceMessage }>(
+        `/api/workspace/messages/${encodeURIComponent(message.id)}/recall`,
+        { method: "POST" }
+      );
+      if (workspaceSelectedConversation) {
+        await Promise.all([
+          refreshWorkspaceConversationMessages(workspaceSelectedConversation.id),
+          refreshWorkspacePins(workspaceSelectedConversation.id),
+          refreshWorkspaceConversations()
+        ]);
+        if (workspaceReplyToMessageIdByConversation[workspaceSelectedConversation.id] === message.id) {
+          setWorkspaceConversationReplyToMessageId(workspaceSelectedConversation.id, "");
+        }
+      }
+      showWorkspaceNotice("success", "消息已撤回");
+    } catch (error) {
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "撤回消息失败"));
+    }
+  }
+
   async function openWorkspacePinnedMessage(messageId: string) {
     if (!workspaceSelectedConversation) return;
     const conversationId = workspaceSelectedConversation.id;
@@ -4605,13 +4627,16 @@ export function App() {
         continue;
       }
 
-      if (event.type === "message.created") {
+      if (event.type === "message.created" || event.type === "message.recalled") {
         if (payload.message) {
           upsertWorkspaceMessage(payload.message, payload.conversation);
         } else if (payload.conversationId && payload.conversationId === workspaceSelectedConversationIdRef.current) {
           tasks.push(refreshWorkspaceConversationMessages(payload.conversationId));
         } else {
           needsConversations = true;
+        }
+        if (event.type === "message.recalled" && payload.conversationId === workspaceSelectedConversationIdRef.current) {
+          tasks.push(refreshWorkspacePins(payload.conversationId));
         }
         continue;
       }
@@ -7881,6 +7906,7 @@ export function App() {
                         historyTargetId={workspaceHistoryTargetId}
                         onReturnToLatest={() => void returnWorkspaceToLatest()}
                         onTogglePin={(message) => void toggleWorkspacePin(message)}
+                        onRecall={(message) => void recallWorkspaceMessage(message)}
                         mentionMembers={workspaceSelectedConversation.type === "group"
                           ? workspaceSelectedConversation.members.filter(
                             (member) => member.id !== workspaceBootstrap.auth.currentUser.id
@@ -8836,9 +8862,22 @@ export function App() {
                                     <strong><WorkspaceIdentityName name={member.displayName} kind={member.kind} /></strong>
                                     <small>{workspaceMemberSecondaryText(member)}</small>
                                   </span>
-                                  {workspaceSelectedConversation.type === "group" &&
-                                    workspaceCanManageSelectedGroup &&
-                                    member.id !== workspaceBootstrap.auth.currentUser.id && (
+                                  {(member.id !== workspaceBootstrap.auth.currentUser.id &&
+                                    ((workspaceBootstrap.permissions.canCreateDirect && member.capabilities?.canStartDirectConversation === true) ||
+                                      (workspaceSelectedConversation.type === "group" && workspaceCanManageSelectedGroup))) && (
+                                    <div className="context-member-actions">
+                                    {workspaceBootstrap.permissions.canCreateDirect && member.capabilities?.canStartDirectConversation === true && (
+                                      <button
+                                        className="icon-button"
+                                        type="button"
+                                        title={`与 ${member.displayName} 私聊`}
+                                        aria-label={`与 ${member.displayName} 私聊`}
+                                        onClick={() => void createWorkspaceDirect(member.id)}
+                                      >
+                                        <MessageSquare size={15} />
+                                      </button>
+                                    )}
+                                    {workspaceSelectedConversation.type === "group" && workspaceCanManageSelectedGroup && (
                                       <button
                                         className="secondary compact danger-action"
                                         type="button"
@@ -8850,6 +8889,8 @@ export function App() {
                                         {workspaceGroupMemberBusyId === member.id ? "处理中" : "移出"}
                                       </button>
                                     )}
+                                    </div>
+                                  )}
                                 </div>
                               ))
                             )}
@@ -9294,9 +9335,11 @@ function WorkspaceAccountSettings({
   onNotice: (tone: WorkspaceNotice["tone"], text: string) => void;
 }) {
   const [nickname, setNickname] = useState(currentUser.nickname ?? "");
+  const [recallReason, setRecallReason] = useState(currentUser.recallReason ?? "内容有误");
   const [searchDiscoverable, setSearchDiscoverable] = useState(Boolean(currentUser.searchDiscoverable));
   const [avatarSaving, setAvatarSaving] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
+  const [recallReasonSaving, setRecallReasonSaving] = useState(false);
   const [discoverySaving, setDiscoverySaving] = useState(false);
   const [emoteSettings, setEmoteSettings] = useState<WorkspaceEmoteSettings | null>(null);
   const [emoteSettingsLoading, setEmoteSettingsLoading] = useState(true);
@@ -9318,11 +9361,15 @@ function WorkspaceAccountSettings({
   const ntfyDialogCloseRef = useRef<HTMLButtonElement>(null);
   const lastSavedNicknameRef = useRef(currentUser.nickname ?? "");
   const nicknameSaveSequenceRef = useRef(0);
+  const lastSavedRecallReasonRef = useRef(currentUser.recallReason ?? "内容有误");
+  const recallReasonSaveSequenceRef = useRef(0);
 
   useEffect(() => {
     setNickname(currentUser.nickname ?? "");
+    setRecallReason(currentUser.recallReason ?? "内容有误");
     setSearchDiscoverable(Boolean(currentUser.searchDiscoverable));
     lastSavedNicknameRef.current = currentUser.nickname ?? "";
+    lastSavedRecallReasonRef.current = currentUser.recallReason ?? "内容有误";
   }, [currentUser.id]);
 
   useEffect(() => {
@@ -9353,6 +9400,36 @@ function WorkspaceAccountSettings({
     }, 650);
     return () => window.clearTimeout(timer);
   }, [currentUser.id, nickname]);
+
+  useEffect(() => {
+    const normalizedReason = recallReason.trim();
+    if (!normalizedReason || normalizedReason === lastSavedRecallReasonRef.current) return;
+    const saveSequence = recallReasonSaveSequenceRef.current + 1;
+    recallReasonSaveSequenceRef.current = saveSequence;
+    const timer = window.setTimeout(() => {
+      setRecallReasonSaving(true);
+      void workspaceJson<{ user: WorkspaceUser }>("/api/workspace/me/profile", {
+        method: "PATCH",
+        body: JSON.stringify({ recallReason: normalizedReason })
+      })
+        .then((data) => {
+          if (recallReasonSaveSequenceRef.current !== saveSequence) return;
+          const savedReason = data.user.recallReason ?? "内容有误";
+          lastSavedRecallReasonRef.current = savedReason;
+          setRecallReason(savedReason);
+          onUserUpdated(data.user);
+        })
+        .catch((error) => {
+          if (recallReasonSaveSequenceRef.current === saveSequence) {
+            onNotice("warning", userFacingErrorMessage(error, "撤回文案保存失败"));
+          }
+        })
+        .finally(() => {
+          if (recallReasonSaveSequenceRef.current === saveSequence) setRecallReasonSaving(false);
+        });
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [currentUser.id, recallReason]);
 
   useEffect(() => {
     let cancelled = false;
@@ -9657,7 +9734,7 @@ function WorkspaceAccountSettings({
             <h3>公开资料</h3>
             <p>头像和昵称会显示在所有登录后的共享空间界面。</p>
           </div>
-          {(profileSaving || discoverySaving) && <span className="workspace-auto-save-state">正在保存...</span>}
+          {(profileSaving || recallReasonSaving || discoverySaving) && <span className="workspace-auto-save-state">正在保存...</span>}
         </div>
         <WorkspaceAvatarEditor
           name={currentUser.displayName}
@@ -9676,6 +9753,23 @@ function WorkspaceAccountSettings({
             <span>GitHub 账号</span>
             <strong>@{currentUser.githubLogin}</strong>
           </div>
+          <label className="workspace-recall-setting">
+            <span>撤回文案</span>
+            <span className="workspace-recall-input">
+              <span>你因</span>
+              <input
+                value={recallReason}
+                maxLength={16}
+                onChange={(event) => setRecallReason(event.target.value)}
+                onBlur={() => {
+                  if (!recallReason.trim()) setRecallReason(lastSavedRecallReasonRef.current);
+                }}
+                aria-label="自定义撤回原因"
+              />
+              <span>撤回了一条消息</span>
+            </span>
+            <small>1 至 16 个字符；只影响你之后撤回的消息。</small>
+          </label>
         </div>
         <div className="workspace-setting-list">
           <WorkspaceSwitch
@@ -9721,107 +9815,98 @@ function WorkspaceAccountSettings({
         )}
       </section>
 
-      <section className="workspace-preference-section workspace-ntfy-settings" aria-busy={ntfyLoading}>
+      <section className="workspace-preference-section workspace-notification-settings" aria-busy={notificationsLoading || ntfyLoading}>
         <div className="workspace-section-header">
           <div>
-            <h3>ntfy 推送</h3>
-            <p>通过独立 topic 接收无正文的消息提醒，并遵循会话免打扰设置。</p>
+            <h3>通知</h3>
+            <p>集中管理邮件与 ntfy 推送；两种渠道都遵循会话免打扰规则。</p>
           </div>
-          <button
-            ref={ntfyHelpTriggerRef}
-            className="secondary compact"
-            type="button"
-            disabled={!ntfy}
-            aria-haspopup="dialog"
-            onClick={() => setNtfyHelpOpen(true)}
-          >
-            使用说明
-          </button>
-        </div>
-        {ntfyLoading || !ntfy ? (
-          <p className="workspace-form-status">正在读取 ntfy 设置...</p>
-        ) : (
-          <div className="workspace-setting-list">
-            <WorkspaceSwitch
-              checked={ntfy.enabled}
-              disabled={ntfySaving}
-              label="接受 ntfy 通知"
-              description="默认开启。群聊的“仅提及”和“免打扰”规则同样适用。"
-              onChange={(checked) => void updateNtfy(checked)}
-            />
-          </div>
-        )}
-      </section>
-
-      <section className="workspace-preference-section" aria-busy={notificationsLoading}>
-        <div className="workspace-section-header">
-          <div>
-            <h3>通知邮箱</h3>
-            <p>{notifications?.maskedEmail || "尚未设置可用邮箱"}</p>
-          </div>
-          {notifications?.emailSource === "custom" && notifications.githubEmail && (
-            <button className="secondary compact" type="button" disabled={emailBusy} onClick={() => void useGitHubEmail()}>
-              使用 GitHub 邮箱
-            </button>
-          )}
-        </div>
-        {!notifications?.mailAvailable && !notificationsLoading && (
-          <p className="workspace-form-status">空间邮件服务尚未启用。偏好会保留，但暂时不会发信。</p>
-        )}
-        <form className="workspace-inline-form" onSubmit={sendEmailChallenge}>
-          <label>
-            <span>更换邮箱</span>
-            <input type="email" value={pendingEmail} onChange={(event) => setPendingEmail(event.target.value)} placeholder="name@example.com" required />
-          </label>
-          <button className="secondary" type="submit" disabled={emailBusy || !notifications?.mailAvailable}>
-            <Mail size={16} />
-            发送验证码
-          </button>
-        </form>
-        {challengeId && (
-          <form className="workspace-inline-form" onSubmit={verifyEmail}>
-            <label>
-              <span>6 位验证码</span>
-              <input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={verificationCode} onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, ""))} required />
-            </label>
-            <button className="primary" type="submit" disabled={emailBusy || verificationCode.length !== 6}>验证邮箱</button>
-          </form>
-        )}
-      </section>
-
-      <section className="workspace-preference-section">
-        <div className="workspace-section-header">
-          <div>
-            <h3>消息通知</h3>
-            <p>邮件仅说明存在未读消息，不包含聊天内容或附件信息。</p>
-          </div>
-          {notificationsSaving && <span className="workspace-auto-save-state">正在保存...</span>}
+          {(notificationsSaving || ntfySaving) && <span className="workspace-auto-save-state">正在保存...</span>}
         </div>
         {notificationsLoading || !notifications ? (
           <p className="workspace-form-status">正在读取通知设置...</p>
         ) : (
-          <div className="workspace-setting-list">
+          <div className="workspace-notification-groups">
             <WorkspaceSwitch
               checked={notifications.enabled}
               disabled={notificationsSaving}
               label="接受邮件通知"
-              description="关闭后保留其他选项。"
+              description={notifications.maskedEmail || "尚未设置可用邮箱"}
               onChange={(checked) => void updateNotifications({ enabled: checked })}
             />
-            <WorkspaceSwitch
-              checked={notifications.immediateEnabled}
-              disabled={notificationsSaving || !notifications.enabled}
-              label="每条消息都通知我"
-              description="所有设备离线且消息 60 秒后仍未读时发送。"
-              onChange={(checked) => void updateNotifications({ immediateEnabled: checked })}
-            />
-            <WorkspaceSwitch
-              checked={notifications.digestEnabled}
-              disabled={notificationsSaving || !notifications.enabled}
-              label="超过 2 小时仍未读时通知我"
-              description="跨会话汇总，每个未读周期只发送一次。"
-              onChange={(checked) => void updateNotifications({ digestEnabled: checked })}
-            />
+            {notifications.enabled && (
+              <div className="workspace-notification-children">
+                <div className="workspace-notification-email-head">
+                  <span>邮件只说明存在未读消息，不包含聊天内容或附件信息。</span>
+                  {notifications.emailSource === "custom" && notifications.githubEmail && (
+                    <button className="secondary compact" type="button" disabled={emailBusy} onClick={() => void useGitHubEmail()}>
+                      使用 GitHub 邮箱
+                    </button>
+                  )}
+                </div>
+                {!notifications.mailAvailable && (
+                  <p className="workspace-form-status">空间邮件服务尚未启用。偏好会保留，但暂时不会发信。</p>
+                )}
+                <form className="workspace-inline-form" onSubmit={sendEmailChallenge}>
+                  <label>
+                    <span>更换邮箱</span>
+                    <input type="email" value={pendingEmail} onChange={(event) => setPendingEmail(event.target.value)} placeholder="name@example.com" required />
+                  </label>
+                  <button className="secondary" type="submit" disabled={emailBusy || !notifications.mailAvailable}>
+                    <Mail size={16} />
+                    发送验证码
+                  </button>
+                </form>
+                {challengeId && (
+                  <form className="workspace-inline-form" onSubmit={verifyEmail}>
+                    <label>
+                      <span>6 位验证码</span>
+                      <input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={verificationCode} onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, ""))} required />
+                    </label>
+                    <button className="primary" type="submit" disabled={emailBusy || verificationCode.length !== 6}>验证邮箱</button>
+                  </form>
+                )}
+                <div className="workspace-setting-list compact-list">
+                  <WorkspaceSwitch
+                    checked={notifications.immediateEnabled}
+                    disabled={notificationsSaving}
+                    label="每条消息都通知我"
+                    description="所有设备离线且消息 60 秒后仍未读时发送。"
+                    onChange={(checked) => void updateNotifications({ immediateEnabled: checked })}
+                  />
+                  <WorkspaceSwitch
+                    checked={notifications.digestEnabled}
+                    disabled={notificationsSaving}
+                    label="超过 2 小时仍未读时通知我"
+                    description="跨会话汇总，每个未读周期只发送一次。"
+                    onChange={(checked) => void updateNotifications({ digestEnabled: checked })}
+                  />
+                </div>
+              </div>
+            )}
+            <div className="workspace-notification-channel-row">
+              {ntfyLoading || !ntfy ? (
+                <p className="workspace-form-status">正在读取 ntfy 设置...</p>
+              ) : (
+                <WorkspaceSwitch
+                  checked={ntfy.enabled}
+                  disabled={ntfySaving}
+                  label="接受 ntfy 通知"
+                  description="通过独立 topic 接收不含正文的推送。"
+                  onChange={(checked) => void updateNtfy(checked)}
+                />
+              )}
+              <button
+                ref={ntfyHelpTriggerRef}
+                className="secondary compact"
+                type="button"
+                disabled={!ntfy}
+                aria-haspopup="dialog"
+                onClick={() => setNtfyHelpOpen(true)}
+              >
+                使用说明
+              </button>
+            </div>
           </div>
         )}
       </section>
@@ -9892,7 +9977,7 @@ function WorkspaceAccountSettings({
               查看 ntfy 下载指引
               <ExternalLink size={14} />
             </a>
-            <a className="secondary" href="https://github.com/binwiederhier/ntfy-android/releases/latest/download/ntfy-fdroid-release.apk" target="_blank" rel="noopener noreferrer">
+            <a className="secondary" href="https://f-droid.org/repo/io.heckel.ntfy_63.apk" target="_blank" rel="noopener noreferrer">
               <Download size={16} />
               如果您的安卓设备无法访问 Google Play，点此直接下载 ntfy 安装包
             </a>
@@ -11223,6 +11308,7 @@ function WorkspaceChatPanel({
   historyTargetId,
   onReturnToLatest,
   onTogglePin,
+  onRecall,
   mentionMembers,
   fileInputDisabled,
   sending
@@ -11267,6 +11353,7 @@ function WorkspaceChatPanel({
   historyTargetId: string;
   onReturnToLatest: () => void;
   onTogglePin: (message: Message) => void;
+  onRecall: (message: Message) => void;
   mentionMembers: WorkspaceUser[];
   fileInputDisabled: boolean;
   sending: boolean;
@@ -11358,6 +11445,10 @@ function WorkspaceChatPanel({
     editorRef.current?.insertMention(member.id, member.displayName, triggerLength);
     setMentionPanelOpen(false);
     setMentionQuery(null);
+    window.requestAnimationFrame(() => editorRef.current?.focus());
+  };
+  const startReply = (messageId: string) => {
+    onReply(messageId);
     window.requestAnimationFrame(() => editorRef.current?.focus());
   };
   const closeWorkspaceComposerPopover = () => {
@@ -11531,6 +11622,8 @@ function WorkspaceChatPanel({
             const previousTime = previous?.createdAt ? Date.parse(previous.createdAt) : Number.NaN;
             const groupedWithPrevious = Boolean(
               previous &&
+                !message.recalledAt &&
+                !previous.recalledAt &&
                 !message.replyTo &&
                 message.author === previous.author &&
                 message.author !== "系统" &&
@@ -11583,31 +11676,40 @@ function WorkspaceChatPanel({
                         <time>{message.at}</time>
                       </div>
                     )}
-                    {message.replyTo && (
+                    {!message.recalledAt && message.replyTo && (
                       <div className="reply-preview">
                         <strong>{message.replyTo.author}</strong>
                         <span>{message.replyTo.body}</span>
                       </div>
                     )}
-                    <WorkspaceStructuredMessage
-                      message={message}
-                      onOpenAttachment={onOpenAttachment}
-                      onPreviewImage={onPreviewImage}
-                      mentionMembers={mentionMembers}
-                    />
-                    {message.pin && (
+                    {message.recalledAt ? (
+                      <div className="workspace-recalled-message" role="status">
+                        <Undo2 size={14} aria-hidden="true" />
+                        <span>{message.body}</span>
+                      </div>
+                    ) : (
+                      <WorkspaceStructuredMessage
+                        message={message}
+                        onOpenAttachment={onOpenAttachment}
+                        onPreviewImage={onPreviewImage}
+                        mentionMembers={mentionMembers}
+                      />
+                    )}
+                    {!message.recalledAt && message.pin && (
                       <div className="workspace-message-pin-indicator" title="群常驻消息">
                         <Pin size={12} aria-hidden="true" />
                         <span>常驻</span>
                       </div>
                     )}
-                    <WorkspaceReactionBar
-                      messageId={message.id}
-                      reactions={message.reactions ?? []}
-                      currentUserId={currentUserId}
-                      pendingKeys={reactionPendingKeys}
-                      onToggle={onToggleReaction}
-                    />
+                    {!message.recalledAt && (
+                      <WorkspaceReactionBar
+                        messageId={message.id}
+                        reactions={message.reactions ?? []}
+                        currentUserId={currentUserId}
+                        pendingKeys={reactionPendingKeys}
+                        onToggle={onToggleReaction}
+                      />
+                    )}
                     {message.localState && (
                       <div className={`message-local-state ${message.localState}`}>
                         <span>
@@ -11626,7 +11728,7 @@ function WorkspaceChatPanel({
                       </div>
                     )}
                   </div>
-                  {!message.localState && (
+                  {!message.localState && !message.recalledAt && (
                     <div className="workspace-message-actions">
                       <div
                         className="workspace-reaction-picker-anchor"
@@ -11670,7 +11772,7 @@ function WorkspaceChatPanel({
                           />
                         )}
                       </div>
-                      <button type="button" title="回复" onClick={() => onReply(message.id)}>
+                      <button type="button" title="回复" onClick={() => startReply(message.id)}>
                         <MessageSquare size={15} />
                       </button>
                       <button type="button" title="复制消息" onClick={() => onCopyMessage(message)}>
@@ -11689,6 +11791,11 @@ function WorkspaceChatPanel({
                           onClick={() => onTogglePin(message)}
                         >
                           {message.pin ? <PinOff size={15} /> : <Pin size={15} />}
+                        </button>
+                      )}
+                      {message.self && (
+                        <button type="button" title="撤回消息" onClick={() => onRecall(message)}>
+                          <Undo2 size={15} />
                         </button>
                       )}
                     </div>
@@ -11913,6 +12020,7 @@ function WorkspaceChatPanel({
             <MentionPicker
               id="workspace-composer-mention-picker"
               members={filteredMentionMembers}
+              activeIndex={mentionActiveIndex}
               onSelect={insertMention}
               onEscape={closeWorkspaceComposerPopover}
             />
@@ -12317,16 +12425,27 @@ function ChatPanel({
 function MentionPicker({
   id,
   members,
+  activeIndex = -1,
   onSelect,
   onEscape
 }: {
   id?: string;
   members: WorkspaceUser[];
+  activeIndex?: number;
   onSelect: (member: WorkspaceUser) => void;
   onEscape?: () => void;
 }) {
+  const pickerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (activeIndex < 0) return;
+    pickerRef.current
+      ?.querySelector<HTMLElement>(`[data-mention-index="${activeIndex}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
+
   return (
     <div
+      ref={pickerRef}
       className="mention-picker"
       id={id}
       role="dialog"
@@ -12342,8 +12461,15 @@ function MentionPicker({
       {members.length === 0 ? (
         <p className="saved-empty">没有可提及的成员。</p>
       ) : (
-        members.map((member) => (
-          <button className="mention-row" type="button" key={member.id} onClick={() => onSelect(member)}>
+        members.map((member, index) => (
+          <button
+            className={index === activeIndex ? "mention-row active" : "mention-row"}
+            type="button"
+            key={member.id}
+            data-mention-index={index}
+            aria-current={index === activeIndex ? "true" : undefined}
+            onClick={() => onSelect(member)}
+          >
             <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} className="small" decorative />
             <span>
               <strong><WorkspaceIdentityName name={member.displayName} kind={member.kind} /></strong>
@@ -12489,7 +12615,7 @@ function EmotePicker({
             <input
               ref={customInputRef}
               type="file"
-              accept="image/jpeg,image/png,image/webp,image/gif"
+              accept="image/jpeg,image/png,image/webp,image/gif,image/bmp"
               aria-label="上传收藏表情"
               disabled={customBusy}
               onChange={(event) => {

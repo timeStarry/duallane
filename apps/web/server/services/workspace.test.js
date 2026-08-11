@@ -33,6 +33,7 @@ import {
   markConversationRead,
   normalizeGroupAvatarEmoji,
   pinGroupMessage,
+  recallMessage,
   MESSAGE_CONTENT_FORMAT,
   removeConversationMember,
   removeAttachment,
@@ -174,6 +175,10 @@ describe("workspace service", () => {
 
     const updated = await updateOwnProfile(db, request, { actorId: member.id, nickname: "公开昵称" });
     expect(updated).toMatchObject({ displayName: "公开昵称", nickname: "公开昵称", githubLogin: "profile-member" });
+
+    const recallProfile = await updateOwnProfile(db, request, { actorId: member.id, recallReason: "重新组织内容" });
+    expect(recallProfile.recallReason).toBe("重新组织内容");
+    expect((await listMembers(db, "usr_owner")).find((item) => item.id === member.id).recallReason).toBeUndefined();
 
     const discoverable = await updateOwnProfile(db, request, { actorId: member.id, searchDiscoverable: true });
     expect(discoverable).toMatchObject({ nickname: "公开昵称", searchDiscoverable: true });
@@ -2059,6 +2064,42 @@ describe("workspace service", () => {
         }
       })
     ).rejects.toThrow(WorkspaceValidationError);
+  });
+
+  it("lets group members start a direct conversation without making them globally visible", async () => {
+    const firstInvite = await createInvite(db, request, { actorId: "usr_owner", code: "GROUP-DIRECT-A" });
+    const firstMember = await acceptInvite(db, request, {
+      code: firstInvite.code,
+      githubLogin: "group-direct-a",
+      email: "group-direct-a@example.com"
+    });
+    const secondInvite = await createInvite(db, request, { actorId: "usr_owner", code: "GROUP-DIRECT-B" });
+    const secondMember = await acceptInvite(db, request, {
+      code: secondInvite.code,
+      githubLogin: "group-direct-b",
+      email: "group-direct-b@example.com"
+    });
+    await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "group",
+      title: "Shared group",
+      memberIds: [firstMember.id, secondMember.id]
+    });
+
+    expect((await listMembers(db, firstMember.id)).map((member) => member.id))
+      .not.toContain(secondMember.id);
+    const direct = await createConversation(db, request, {
+      actorId: firstMember.id,
+      type: "direct",
+      targetUserId: secondMember.id
+    });
+
+    expect(direct).toMatchObject({
+      type: "direct",
+      otherMember: { id: secondMember.id }
+    });
+    expect((await listMembers(db, firstMember.id)).map((member) => member.id))
+      .toContain(secondMember.id);
   });
 
   it("accepts mention-only messages and whitespace separators between mentions", async () => {
@@ -5028,6 +5069,99 @@ describe("workspace service", () => {
     expect(around.find((message) => message.id === messages[2].id)?.pin).toBeTruthy();
     expect(db.prepare("SELECT payload_json AS payload FROM workspace_events WHERE type = 'message.pinned' LIMIT 1").get().payload)
       .not.toContain("owner message");
+  });
+
+  it("recalls only the author's message without leaking content or deleting file-library attachments", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "RECALL-MEMBER" });
+    const member = await acceptInvite(db, request, {
+      code: invite.code,
+      githubLogin: "recall-member",
+      displayName: "Recall Member"
+    });
+    const group = await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "group",
+      title: "Recall group",
+      memberIds: [member.id]
+    });
+    const upload = await reserveUpload(db, request, {
+      actorId: "usr_owner",
+      conversationId: group.id,
+      visibility: "conversation",
+      fileName: "kept-after-recall.txt",
+      mimeType: "text/plain",
+      byteSize: 12
+    });
+    await completeUpload(db, request, {
+      actorId: "usr_owner",
+      uploadId: upload.id,
+      storageVerifiedByteSize: 12
+    });
+    const message = await createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: group.id,
+      clientMessageId: "recall-secret-message",
+      content: {
+        format: MESSAGE_CONTENT_FORMAT,
+        blocks: [
+          { type: "text", text: "secret recall body" },
+          { type: "attachment", attachmentId: upload.attachment.id }
+        ]
+      }
+    });
+    await pinGroupMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: group.id,
+      messageId: message.id
+    });
+    await addMessageReaction(db, request, {
+      actorId: member.id,
+      messageId: message.id,
+      emoteKey: "feishu:ok"
+    });
+    await updateOwnProfile(db, request, { actorId: "usr_owner", recallReason: "重新组织内容" });
+
+    await expect(recallMessage(db, request, { actorId: member.id, messageId: message.id }))
+      .rejects.toMatchObject({ code: "permission.denied" });
+    const recalled = await recallMessage(db, request, { actorId: "usr_owner", messageId: message.id });
+
+    expect(recalled).toMatchObject({
+      id: message.id,
+      plainText: "timeStarry因重新组织内容撤回了一条消息",
+      recalledAt: expect.any(String),
+      recallReason: "重新组织内容",
+      replyToMessageId: null,
+      attachments: [],
+      reactions: []
+    });
+    expect(recalled.content.blocks).toEqual([]);
+    expect(recalled.pin).toBeUndefined();
+    const stored = db.prepare(`
+      SELECT content_json AS contentJson, plain_text AS plainText, recalled_at AS recalledAt
+      FROM messages WHERE id = ?
+    `).get(message.id);
+    expect(stored.contentJson).not.toContain("secret recall body");
+    expect(stored.plainText).not.toContain("secret recall body");
+    expect(stored.recalledAt).toBeTruthy();
+    expect(db.prepare("SELECT COUNT(*) AS count FROM message_attachments WHERE message_id = ?").get(message.id).count).toBe(1);
+    expect((await listFiles(db, member.id)).map((file) => file.id)).toContain(upload.attachment.id);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM message_reactions WHERE message_id = ?").get(message.id).count).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM conversation_pinned_messages WHERE message_id = ?").get(message.id).count).toBe(0);
+    expect(db.prepare(`
+      SELECT pin_count AS pinCount FROM conversation_pin_counters
+      WHERE conversation_id = ? AND user_id = ?
+    `).get(group.id, "usr_owner").pinCount).toBe(0);
+
+    const memberProjection = (await listMessages(db, member.id, group.id)).find((item) => item.id === message.id);
+    expect(memberProjection.plainText).toBe("timeStarry因重新组织内容撤回了一条消息");
+    const event = (await listWorkspaceEvents(db, member.id, 0))
+      .findLast((item) => item.type === "message.recalled" && item.targetId === message.id);
+    expect(event.payload.message).toMatchObject({ id: message.id, recalledAt: expect.any(String) });
+    expect(JSON.stringify(event)).not.toContain("secret recall body");
+
+    await recallMessage(db, request, { actorId: "usr_owner", messageId: message.id });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_events WHERE type = 'message.recalled' AND target_id = ?").get(message.id).count)
+      .toBe(1);
   });
 
   it("rejects oversized structured text before persistence", async () => {

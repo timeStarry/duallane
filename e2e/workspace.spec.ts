@@ -482,6 +482,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
 
     await memberDirectRegion.getByTitle("回复").last().click();
     await expect(memberDirectRegion.locator(".composer-reply")).toBeVisible();
+    await expect(memberDirectRegion.getByLabel("输入消息")).toBeFocused();
     await expect(memberDirectRegion.getByLabel("输入消息")).toBeInViewport();
 
     await memberPage.setViewportSize({ width: 390, height: 844 });
@@ -577,9 +578,13 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       .filter({ hasText: groupTitle });
     const ownerComposerInput = ownerGroupRegion.getByLabel("输入消息");
     await ownerComposerInput.fill("原子草稿 @");
-    await expect(ownerPage.getByRole("dialog", { name: "提及成员" })).toBeVisible();
+    const mentionPicker = ownerPage.getByRole("dialog", { name: "提及成员" });
+    await expect(mentionPicker).toBeVisible();
+    await expect(mentionPicker.getByRole("button").first()).toHaveAttribute("aria-current", "true");
+    await ownerComposerInput.press("ArrowDown");
+    await ownerComposerInput.press("ArrowUp");
     await ownerComposerInput.press("Enter");
-    await expect(ownerPage.getByRole("dialog", { name: "提及成员" })).toHaveCount(0);
+    await expect(mentionPicker).toHaveCount(0);
     await expect(ownerGroupRegion.locator(".workspace-editor-token.mention")).toHaveCount(1);
     await expect(ownerGroupRegion.locator(".workspace-message-list").getByText("原子草稿", { exact: true })).toHaveCount(0);
 
@@ -654,6 +659,16 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await ownerGroupRegion.getByLabel("输入消息").fill("---");
     await sendWorkspaceComposer(ownerGroupRegion);
     await expect(memberGroupRegion.locator(".workspace-markdown-divider")).toHaveCount(dividerCount + 1);
+
+    const recalledMessageText = `workspace-e2e-recall-${memberSuffix}`;
+    await ownerGroupRegion.getByLabel("输入消息").fill(recalledMessageText);
+    await sendWorkspaceComposer(ownerGroupRegion);
+    const recalledMessage = ownerGroupRegion.locator("article.workspace-message").filter({ hasText: recalledMessageText });
+    await ownerPage.once("dialog", (dialog) => dialog.accept());
+    await recalledMessage.getByTitle("撤回消息").click();
+    await expect(ownerGroupRegion.getByText(recalledMessageText, { exact: true })).toHaveCount(0);
+    await expect(ownerGroupRegion.getByText("timeStarry因内容有误撤回了一条消息", { exact: true })).toBeVisible();
+    await expect(memberGroupRegion.getByText("timeStarry因内容有误撤回了一条消息", { exact: true })).toBeVisible();
 
     const reactionMessage = memberGroupRegion.locator("article.workspace-message").filter({ hasText: groupOwnerMessage });
     const reactionTrigger = reactionMessage.getByTitle("添加表情回复");
@@ -736,10 +751,11 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       list.scrollTop = Math.min(180, Math.max(0, list.scrollHeight - list.clientHeight - 120));
       list.dispatchEvent(new Event("scroll"));
     });
-    const savedDirectScrollTop = await directMessageList.evaluate((list) => list.scrollTop);
     await memberGroupConversation.click();
     await memberConversation.click();
-    await expect.poll(() => directMessageList.evaluate((list) => list.scrollTop)).toBeCloseTo(savedDirectScrollTop, 0);
+    await expect.poll(() => directMessageList.evaluate((list) =>
+      list.scrollHeight - list.scrollTop - list.clientHeight
+    )).toBeLessThanOrEqual(2);
 
     await directMessageList.evaluate((list) => {
       list.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -120 }));
@@ -1036,7 +1052,10 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(ntfyDialog.getByRole("button", { name: "关闭 ntfy 使用说明" })).toBeFocused();
     await expect(ntfyDialog.getByText("https://ntfy.tsio.top", { exact: true })).toBeVisible();
     await expect(ntfyDialog.getByRole("link", { name: /查看 ntfy 下载指引/ })).toHaveAttribute("href", "https://ntfy.sh/");
-    await expect(ntfyDialog.getByRole("link", { name: /直接下载 ntfy 安装包/ })).toHaveAttribute("href", /ntfy-fdroid-release\.apk$/);
+    await expect(ntfyDialog.getByRole("link", { name: /直接下载 ntfy 安装包/ })).toHaveAttribute(
+      "href",
+      "https://f-droid.org/repo/io.heckel.ntfy_63.apk"
+    );
     const ntfyTopic = ntfyDialog.locator(".workspace-ntfy-copy-list > div").filter({ hasText: "我的 topic" }).locator("code");
     const originalNtfyTopic = await ntfyTopic.textContent();
     expect(originalNtfyTopic).toMatch(new RegExp(`^duallane-duallane-e2e-${memberSuffix}-[A-Za-z0-9]{6}$`));
@@ -1075,6 +1094,13 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     const customAvatarResponse = await memberPage.request.get(customAvatarPath!);
     expect(customAvatarResponse.status()).toBe(200);
     expect(customAvatarResponse.headers()["content-type"]).toContain("image/webp");
+    const restoreGitHubAvatar = memberPage.getByRole("button", { name: "恢复 GitHub 头像", exact: true });
+    const avatarDeleteResponse = memberPage.waitForResponse((response) =>
+      response.url().includes("/api/workspace/me/avatar") && response.request().method() === "DELETE"
+    );
+    await restoreGitHubAvatar.click();
+    expect((await avatarDeleteResponse).status()).toBe(200);
+    await expect(restoreGitHubAvatar).toHaveCount(0);
 
     const publicNickname = `公开昵称 ${memberSuffix}`;
     const nicknameResponse = memberPage.waitForResponse((response) =>
