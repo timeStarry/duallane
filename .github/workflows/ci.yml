@@ -60,6 +60,7 @@ jobs:
       - name: Validate production deployment config
         env:
           POSTGRES_VOLUME_NAME: duallane-ci-postgres
+          COMPOSE_PROFILES: github-proxy
         run: |
           docker compose -f docker-compose.yml -f docker-compose.production.yml config --quiet
           docker compose -f docker-compose.yml -f docker-compose.production.yml config --format json |
