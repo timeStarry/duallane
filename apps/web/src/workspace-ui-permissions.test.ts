@@ -579,7 +579,7 @@ describe("workspace UI permission boundaries", () => {
     expect(source).toContain("setWorkspaceReplyToMessageIdByConversation({});");
 
     const conversationSwitchStart = source.indexOf('if (workspaceSelectedConversation?.type === "group")');
-    const conversationSwitchEnd = source.indexOf("}, [workspaceContextTab, workspaceSelectedConversation?.id", conversationSwitchStart);
+    const conversationSwitchEnd = source.indexOf("}, [workspaceContextTab,", conversationSwitchStart);
     expect(conversationSwitchStart).toBeGreaterThan(-1);
     expect(conversationSwitchEnd).toBeGreaterThan(conversationSwitchStart);
     const conversationSwitchSource = source.slice(conversationSwitchStart, conversationSwitchEnd);
@@ -849,7 +849,7 @@ describe("workspace UI permission boundaries", () => {
     expect(submitSource.indexOf("uploadCompleted = true")).toBeLessThan(submitSource.indexOf("await submitWorkspaceMessage"));
   });
 
-  it("delegates reserved downloads to the browser instead of buffering file bytes", () => {
+  it("delegates reserved downloads through the same-origin browser route without buffering file bytes", () => {
     const source = readSource();
     const downloadStart = source.indexOf("async function reserveWorkspaceDownload");
     const downloadEnd = source.indexOf("async function removeWorkspaceFile", downloadStart);
@@ -858,11 +858,26 @@ describe("workspace UI permission boundaries", () => {
     const downloadSource = source.slice(downloadStart, downloadEnd);
 
     expect(downloadSource).toContain("const params = new URLSearchParams({ downloadId: reserve.id })");
-    expect(downloadSource).toContain('const link = document.createElement("a")');
-    expect(downloadSource).toContain("link.href = reserve.downloadUrl || `/api/workspace/files/");
-    expect(downloadSource).toContain("link.download = file.fileName");
+    expect(downloadSource).toContain("window.location.assign(`/api/workspace/files/");
+    expect(downloadSource).not.toContain("reserve.downloadUrl");
+    expect(downloadSource).not.toContain('document.createElement("a")');
     expect(downloadSource).not.toContain("response.blob()");
     expect(downloadSource).not.toContain("URL.createObjectURL");
+  });
+
+  it("offers emoji group avatars and categorized file list or grid views", () => {
+    const source = readSource();
+    const styles = readStyles();
+
+    expect(source).toContain("avatarEmoji?: string | null;");
+    expect(source).toContain("<WorkspaceGroupAvatarEditor");
+    expect(source).toContain("WORKSPACE_GROUP_AVATAR_PRESETS.map");
+    expect(source).toContain("<WorkspaceFileCategoryTabs");
+    expect(source).toContain("<WorkspaceFileViewToggle");
+    expect(source).toContain('workspaceFileCategory === "media" && workspaceFileViewMode === "grid"');
+    expect(source).toContain('workspaceContextFileCategory === "media" && workspaceContextFileViewMode === "grid"');
+    expect(styles).toContain(".workspace-file-table.media-grid");
+    expect(styles).toContain(".workspace-file-thumbnail.large");
   });
 
   it("supports dismissible toasts, image previews, pasted images, and an icon-only file control", () => {

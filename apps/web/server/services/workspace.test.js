@@ -31,6 +31,7 @@ import {
   listMembers,
   listWorkspaceEvents,
   markConversationRead,
+  normalizeGroupAvatarEmoji,
   pinGroupMessage,
   MESSAGE_CONTENT_FORMAT,
   removeConversationMember,
@@ -4907,6 +4908,36 @@ describe("workspace service", () => {
     expect(projected.content.blocks[0].text).toBe(markdown);
     expect(projected.content.plainText).toBe("粗体 与 链接\n第一项\n第二项");
     expect(projected.plainText).toBe(projected.content.plainText);
+  });
+
+  it("stores one emoji grapheme as the group avatar and allows restoring the default", async () => {
+    expect(normalizeGroupAvatarEmoji(" 👩🏽‍💻 ")).toBe("👩🏽‍💻");
+    expect(normalizeGroupAvatarEmoji("🇨🇳")).toBe("🇨🇳");
+    expect(() => normalizeGroupAvatarEmoji("not emoji")).toThrow(WorkspaceValidationError);
+    expect(() => normalizeGroupAvatarEmoji("😀🚀")).toThrow(WorkspaceValidationError);
+
+    const conversation = await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "group",
+      title: "Avatar group",
+      avatarEmoji: "🧭"
+    });
+    expect(conversation.avatarEmoji).toBe("🧭");
+
+    const updated = await updateGroupConversation(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      avatarEmoji: "👩🏽‍💻"
+    });
+    expect(updated.title).toBe("Avatar group");
+    expect(updated.avatarEmoji).toBe("👩🏽‍💻");
+
+    const restored = await updateGroupConversation(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      avatarEmoji: null
+    });
+    expect(restored.avatarEmoji).toBeNull();
   });
 
   it("pins only an author's group messages with an atomic per-user limit and retention exemption", async () => {

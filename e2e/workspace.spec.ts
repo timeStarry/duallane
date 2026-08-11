@@ -511,6 +511,8 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await openWorkspaceCreateMenu(ownerPage, "创建群聊");
     const groupDialog = ownerPage.getByRole("region", { name: "创建群聊" });
     await groupDialog.getByLabel("群聊名称").fill(groupTitle);
+    const groupAvatarEmoji = "🧭";
+    await groupDialog.getByRole("button", { name: `使用 ${groupAvatarEmoji} 作为群头像` }).click();
     await expect(groupDialog.getByRole("button", { name: /信标/ })).toHaveCount(0);
     await groupDialog.getByRole("button", { name: new RegExp(memberDisplayName) }).click();
     await expect(groupDialog.getByText("已选 1 位", { exact: true })).toBeVisible();
@@ -527,6 +529,11 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
 
     const ownerGroupRegion = ownerPage.getByRole("region", { name: groupTitle });
     await expect(ownerGroupRegion).toBeVisible();
+    await expect(ownerGroupRegion.locator(".workspace-chat-header .workspace-group-avatar")).toHaveText(groupAvatarEmoji);
+    await expect(ownerPage.getByLabel("共享空间导航")
+      .locator("button.conversation")
+      .filter({ hasText: groupTitle })
+      .locator(".workspace-group-avatar")).toHaveText(groupAvatarEmoji);
     await expect(ownerPage.getByLabel("当前会话详情")).toHaveCount(0);
     await expect.poll(() => ownerPage.evaluate(() => localStorage.getItem("duallane.workspace.context-open"))).toBe("false");
     await ownerGroupRegion.getByTitle("查看详情").click();
@@ -862,10 +869,21 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
 
     const memberNavigation = memberPage.getByRole("navigation", { name: "共享空间视图" });
     await memberNavigation.getByRole("button", { name: "文件", exact: true }).click();
+    const fileCategoryTabs = memberPage.getByLabel("文件类型筛选");
+    await fileCategoryTabs.getByRole("button", { name: "图片", exact: true }).click();
     const imageLibraryRow = memberPage.locator(".workspace-file-row").filter({ hasText: pastedImageName });
     const imageLibraryThumbnail = imageLibraryRow.locator(".workspace-file-thumbnail img");
     await expect(imageLibraryThumbnail).toBeVisible();
     await expect.poll(() => imageLibraryThumbnail.evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+    await expect(memberPage.locator(".workspace-file-row").filter({ hasText: fileName })).toHaveCount(0);
+    await memberPage.getByRole("button", { name: "方格视图", exact: true }).click();
+    await expect(memberPage.getByRole("button", { name: "方格视图", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(imageLibraryRow).toHaveClass(/media-card/);
+    await memberPage.getByRole("button", { name: "列表视图", exact: true }).click();
+    await fileCategoryTabs.getByRole("button", { name: "其它", exact: true }).click();
+    await expect(memberPage.locator(".workspace-file-row").filter({ hasText: fileName })).toBeVisible();
+    await expect(memberPage.locator(".workspace-file-row").filter({ hasText: pastedImageName })).toHaveCount(0);
+    await fileCategoryTabs.getByRole("button", { name: "全部", exact: true }).click();
     await memberNavigation.getByRole("button", { name: "聊天", exact: true }).click();
     await expect(memberGroupRegion).toBeVisible();
 
@@ -960,6 +978,10 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       expect(shellBox?.width).toBeGreaterThanOrEqual(viewport.width - 1);
     }
 
+    await memberPage.setViewportSize({ width: 1280, height: 720 });
+    await memberGroupRegion.getByTitle("收起详情").click();
+    await expect.poll(() => memberPage.evaluate(() => localStorage.getItem("duallane.workspace.context-open"))).toBe("false");
+
     for (const viewport of [
       { width: 390, height: 844 },
       { width: 360, height: 800 }
@@ -971,6 +993,10 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       await expect(memberPage.getByLabel("共享空间导航")).toBeVisible();
       await memberGroupConversation.click();
       await expect(memberGroupRegion.getByText(replayedMessage, { exact: true })).toBeVisible();
+      await memberGroupRegion.getByRole("button", { name: "详情", exact: true }).click();
+      await expect(memberPage.getByLabel("当前会话详情")).toBeVisible();
+      await memberPage.getByTitle("返回聊天").click();
+      await expect(memberGroupRegion).toBeVisible();
       const mobileComposerInput = memberGroupRegion.getByLabel("输入消息");
       await expect(mobileComposerInput).toBeInViewport();
       await memberGroupRegion.getByRole("button", { name: "显示格式工具栏" }).click();

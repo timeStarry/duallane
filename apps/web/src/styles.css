@@ -4021,6 +4021,208 @@ html[data-theme="dark"] .workspace-mode {
   object-fit: cover;
 }
 
+.workspace-group-avatar {
+  flex: 0 0 auto;
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.workspace-group-avatar-editor {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.workspace-group-avatar-editor legend {
+  margin-bottom: 2px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.workspace-group-avatar-input {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 38px;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-group-avatar-input:not(:has(button)) {
+  grid-template-columns: 38px minmax(0, 1fr);
+}
+
+.workspace-group-avatar-input input {
+  min-width: 0;
+}
+
+.workspace-group-avatar-presets {
+  display: grid;
+  grid-template-columns: repeat(10, minmax(32px, 1fr));
+  gap: 5px;
+}
+
+.workspace-group-avatar-presets button {
+  min-width: 0;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 4px;
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 1.08rem;
+  line-height: 1;
+}
+
+.workspace-group-avatar-presets button:hover,
+.workspace-group-avatar-presets button.active {
+  border-color: var(--relay);
+  background: var(--surface-tint);
+}
+
+.field-error {
+  color: var(--danger);
+  font-size: 0.76rem;
+}
+
+.workspace-file-subnav {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.workspace-file-category-tabs,
+.workspace-file-view-toggle {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.workspace-file-category-tabs {
+  overflow-x: auto;
+}
+
+.workspace-file-category-tabs button,
+.workspace-file-view-toggle button {
+  min-height: 34px;
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.workspace-file-view-toggle {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 2px;
+}
+
+.workspace-file-view-toggle button {
+  min-width: 32px;
+  padding: 5px;
+}
+
+.workspace-file-category-tabs button:hover,
+.workspace-file-category-tabs button.active,
+.workspace-file-view-toggle button:hover,
+.workspace-file-view-toggle button.active {
+  color: var(--ink);
+  background: var(--surface-soft);
+}
+
+.workspace-file-table.media-grid,
+.workspace-file-list.media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  align-content: start;
+  gap: 10px;
+}
+
+.workspace-file-row.media-card {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0;
+  background: var(--surface);
+}
+
+.workspace-file-row.media-card .workspace-file-row-main,
+.workspace-file.media-card {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-content: start;
+  gap: 8px;
+  padding: 8px;
+}
+
+.workspace-file-row.media-card .workspace-file-row-main {
+  padding: 0;
+}
+
+.workspace-file-row.media-card .workspace-file-download {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  border-color: rgb(255 255 255 / 74%);
+  background: rgb(255 255 255 / 88%);
+  box-shadow: 0 2px 8px rgb(17 24 39 / 12%);
+}
+
+.workspace-file-row.media-card em {
+  justify-self: start;
+}
+
+.workspace-file-thumbnail.large {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 4 / 3;
+  border-radius: 6px;
+  font-size: 1.4rem;
+}
+
+.workspace-file-thumbnail.large img {
+  object-fit: cover;
+}
+
+.workspace-file.media-card > span:last-child,
+.workspace-file-row.media-card .workspace-file-row-main > span:nth-child(2) {
+  min-width: 0;
+  width: 100%;
+}
+
+.context-file-subnav {
+  margin-bottom: 10px;
+}
+
+@media (max-width: 760px) {
+  .workspace-group-avatar-presets {
+    grid-template-columns: repeat(5, minmax(42px, 1fr));
+  }
+
+  .workspace-file-table.media-grid,
+  .workspace-file-list.media-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workspace-file-subnav {
+    align-items: stretch;
+  }
+}
+
 .workspace-space-identity > span:last-child,
 .workspace-user-trigger > span:nth-child(2) {
   min-width: 0;

@@ -1693,7 +1693,7 @@ describe("workspace routes", () => {
     expect(removed.json().conversation.members.map((member) => member.id)).not.toContain(memberId);
   });
 
-  it("renames group conversations through workspace routes", async () => {
+  it("updates group names and emoji avatars through workspace routes", async () => {
     const app = await makeApp();
     const group = await app.inject({
       method: "POST",
@@ -1718,12 +1718,26 @@ describe("workspace routes", () => {
         "x-workspace-user-id": "usr_owner"
       },
       payload: {
-        title: "New route group"
+        title: "New route group",
+        avatarEmoji: "📚"
       }
     });
 
     expect(renamed.statusCode).toBe(200);
     expect(renamed.json().conversation.title).toBe("New route group");
+    expect(renamed.json().conversation.avatarEmoji).toBe("📚");
+
+    const invalidAvatar = await app.inject({
+      method: "PATCH",
+      url: `/api/workspace/groups/${conversationId}`,
+      headers: {
+        "content-type": "application/json",
+        "x-workspace-user-id": "usr_owner"
+      },
+      payload: { avatarEmoji: "AB" }
+    });
+    expect(invalidAvatar.statusCode).toBe(400);
+    expect(invalidAvatar.json().error.code).toBe("conversation.invalid_avatar");
   });
 
   it("returns conversation details only to active conversation members", async () => {

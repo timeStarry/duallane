@@ -1265,6 +1265,7 @@ export async function listConversations(db, userId = "usr_owner", request = null
       c.space_id AS spaceId,
       c.type,
       c.title,
+      c.avatar_emoji AS avatarEmoji,
       c.retention_count AS retentionCount,
       c.created_at AS createdAt,
       COALESCE((
@@ -1372,6 +1373,13 @@ export async function createConversation(db, request, input) {
     await writeConversationCreateRejection(db, request, actor, "invalid title");
     throw new WorkspaceValidationError("conversation.invalid_title", "群聊名称过长");
   }
+  let avatarEmoji;
+  try {
+    avatarEmoji = normalizeGroupAvatarEmoji(input.avatarEmoji);
+  } catch (error) {
+    await writeConversationCreateRejection(db, request, actor, error.code || "invalid avatar");
+    throw error;
+  }
   const selectedMemberIds = uniqueStrings(Array.isArray(input.memberIds) ? input.memberIds : [])
     .filter((memberId) => memberId !== actor.id);
   if (selectedMemberIds.length === 0) {
@@ -1402,9 +1410,9 @@ export async function createConversation(db, request, input) {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     await db.prepare(`
-      INSERT INTO conversations (id, space_id, type, title, direct_key, retention_count, created_by, created_at)
-      VALUES (?, ?, 'group', ?, NULL, ?, ?, ?)
-    `).run(id, DEFAULT_SPACE_ID, title, DEFAULT_RETENTION_COUNT, actor.id, now);
+      INSERT INTO conversations (id, space_id, type, title, avatar_emoji, direct_key, retention_count, created_by, created_at)
+      VALUES (?, ?, 'group', ?, ?, NULL, ?, ?, ?)
+    `).run(id, DEFAULT_SPACE_ID, title, avatarEmoji, DEFAULT_RETENTION_COUNT, actor.id, now);
 
     for (const member of members) {
       await db.prepare(`
@@ -1421,7 +1429,7 @@ export async function createConversation(db, request, input) {
       conversationId: id,
       targetType: "conversation",
       targetId: id,
-      payload: { conversationId: id, type: "group", title }
+      payload: { conversationId: id, type: "group", title, avatarEmoji }
     });
 
     for (const member of members) {
@@ -1688,7 +1696,12 @@ export async function updateGroupConversation(db, request, input) {
     targetId: conversationId
   });
   const conversation = await getGroupConversationForManage(db, conversationId);
-  const title = normalizeString(input.title);
+  const titleProvided = Object.prototype.hasOwnProperty.call(input, "title");
+  const avatarProvided = Object.prototype.hasOwnProperty.call(input, "avatarEmoji");
+  const title = titleProvided ? normalizeString(input.title) : conversation.title;
+  if (!titleProvided && !avatarProvided) {
+    throw new WorkspaceValidationError("conversation.invalid_update", "没有可更新的群聊资料");
+  }
   if (!title) {
     await writeWorkspaceAudit(db, request, {
       actorUserId: actor.id,
@@ -1713,10 +1726,28 @@ export async function updateGroupConversation(db, request, input) {
     });
     throw new WorkspaceValidationError("conversation.invalid_title", "群聊名称过长");
   }
+  let avatarEmoji = conversation.avatarEmoji;
+  if (avatarProvided) {
+    try {
+      avatarEmoji = normalizeGroupAvatarEmoji(input.avatarEmoji);
+    } catch (error) {
+      await writeWorkspaceAudit(db, request, {
+        actorUserId: actor.id,
+        actorGithubLogin: actor.githubLogin,
+        action: "conversation.update",
+        targetType: "conversation",
+        targetId: conversation.id,
+        result: "rejected",
+        reason: error.code || "invalid avatar"
+      });
+      throw error;
+    }
+  }
 
   return await runWorkspaceTransaction(db, async () => {
-    await db.prepare("UPDATE conversations SET title = ? WHERE id = ?").run(title, conversation.id);
-    const renamedConversation = await getConversation(db, actor.id, conversation.id, { actor });
+    await db.prepare("UPDATE conversations SET title = ?, avatar_emoji = ? WHERE id = ?")
+      .run(title, avatarEmoji, conversation.id);
+    const updatedConversation = await getConversation(db, actor.id, conversation.id, { actor });
 
     await writeEvent(db, {
       type: "conversation.updated",
@@ -1724,13 +1755,24 @@ export async function updateGroupConversation(db, request, input) {
       conversationId: conversation.id,
       targetType: "conversation",
       targetId: conversation.id,
-      payload: { conversationId: conversation.id, title }
+      payload: { conversationId: conversation.id, title, avatarEmoji, conversation: updatedConversation }
     });
-    await createSystemMessage(db, {
-      actor,
-      conversationId: conversation.id,
-      plainText: `${actor.displayName} 将群聊名称改为「${title}」`
-    });
+    if (titleProvided && title !== conversation.title) {
+      await createSystemMessage(db, {
+        actor,
+        conversationId: conversation.id,
+        plainText: `${actor.displayName} 将群聊名称改为「${title}」`
+      });
+    }
+    if (avatarProvided && avatarEmoji !== conversation.avatarEmoji) {
+      await createSystemMessage(db, {
+        actor,
+        conversationId: conversation.id,
+        plainText: avatarEmoji
+          ? `${actor.displayName} 将群头像改为 ${avatarEmoji}`
+          : `${actor.displayName} 恢复了默认群头像`
+      });
+    }
 
     await writeWorkspaceAudit(db, request, {
       actorUserId: actor.id,
@@ -2956,6 +2998,7 @@ async function getConversation(db, userId, conversationId, context = {}) {
       space_id AS spaceId,
       type,
       title,
+      avatar_emoji AS avatarEmoji,
       retention_count AS retentionCount,
       created_by AS createdBy,
       created_at AS createdAt,
@@ -3043,7 +3086,7 @@ async function getGroupConversationForManage(db, conversationId) {
     throw new WorkspaceValidationError("conversation.required", "会话不能为空");
   }
   const conversation = await db.prepare(`
-    SELECT id, type
+    SELECT id, type, title, avatar_emoji AS avatarEmoji
     FROM conversations
     WHERE id = ? AND space_id = ?
   `).get(conversationId, DEFAULT_SPACE_ID);
@@ -3596,6 +3639,7 @@ async function publicConversation(conversation, actor = null) {
     spaceId: conversation.spaceId,
     type: conversation.type,
     title: conversation.title,
+    avatarEmoji: conversation.type === "group" ? publicString(conversation.avatarEmoji) || null : null,
     displayTitle,
     otherMember,
     retentionCount: conversation.retentionCount,
@@ -4460,6 +4504,23 @@ function normalizeAttachmentVisibility(visibility) {
 
 function normalizeString(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+export function normalizeGroupAvatarEmoji(value) {
+  const candidate = normalizeString(value);
+  if (!candidate) return null;
+
+  const graphemes = Array.from(
+    new Intl.Segmenter("und", { granularity: "grapheme" }).segment(candidate),
+    (item) => item.segment
+  );
+  const isEmoji = /\p{Extended_Pictographic}/u.test(candidate) ||
+    /^\p{Regional_Indicator}{2}$/u.test(candidate) ||
+    /^[#*0-9]\uFE0F?\u20E3$/u.test(candidate);
+  if (graphemes.length !== 1 || Array.from(candidate).length > 16 || !isEmoji) {
+    throw new WorkspaceValidationError("conversation.invalid_avatar", "群头像必须是单个 emoji");
+  }
+  return candidate;
 }
 
 function normalizeProfileLabel(value, code, label) {

@@ -15,12 +15,15 @@ import {
   ExternalLink,
   FileCheck2,
   FileCode2,
+  FileText,
   FileUp,
+  FileVideo,
   Github,
   Heart,
   History,
   Italic,
   Link2,
+  LayoutGrid,
   List,
   ListOrdered,
   LockKeyhole,
@@ -93,6 +96,16 @@ import { getAppRouteUrl, parseAppRoute, workspaceRoute, type AppRoute } from "./
 import { getWorkspaceEntryUrl, getWorkspaceLoginUrl } from "./workspace-url";
 import { formatWorkspaceConversationTime } from "./workspace-conversation-time";
 import { isPreviewableImageMimeType, renamePastedImageFiles } from "./workspace-image-files";
+import {
+  classifyWorkspaceFile,
+  workspaceFileMatchesCategory,
+  type WorkspaceFileCategory,
+  type WorkspaceFileViewMode
+} from "./workspace-file-category";
+import {
+  normalizeWorkspaceGroupAvatarEmoji,
+  WORKSPACE_GROUP_AVATAR_PRESETS
+} from "./workspace-group-avatar";
 import { userFacingErrorMessage } from "./user-facing-error";
 import { installWorkspaceUnreadFavicon } from "./workspace-unread-favicon";
 
@@ -322,6 +335,7 @@ type WorkspaceConversation = {
   spaceId: string;
   type: "direct" | "group";
   title: string;
+  avatarEmoji?: string | null;
   displayTitle?: string;
   otherMember?: WorkspaceUser | null;
   retentionCount: number;
@@ -2271,7 +2285,9 @@ export function App() {
   const [workspaceInviteCode, setWorkspaceInviteCode] = useState("");
   const [workspaceInviteCodeId, setWorkspaceInviteCodeId] = useState("");
   const [workspaceNewGroupTitle, setWorkspaceNewGroupTitle] = useState("");
+  const [workspaceNewGroupAvatarEmoji, setWorkspaceNewGroupAvatarEmoji] = useState("");
   const [workspaceGroupRenameTitle, setWorkspaceGroupRenameTitle] = useState("");
+  const [workspaceGroupAvatarEmoji, setWorkspaceGroupAvatarEmoji] = useState("");
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(() => workspaceViewFromRoute(initialWorkspaceRoute));
   const [workspaceMobilePane, setWorkspaceMobilePane] = useState<WorkspaceMobilePane>("list");
   const [workspaceContextMode, setWorkspaceContextMode] = useState<WorkspaceContextMode>("conversation");
@@ -2294,6 +2310,10 @@ export function App() {
   const [workspaceVisibilitySaving, setWorkspaceVisibilitySaving] = useState(false);
   const [workspaceGroupMemberIds, setWorkspaceGroupMemberIds] = useState<string[]>([]);
   const [workspaceFileFilter, setWorkspaceFileFilter] = useState<WorkspaceFileFilter>("all");
+  const [workspaceFileCategory, setWorkspaceFileCategory] = useState<WorkspaceFileCategory>("all");
+  const [workspaceFileViewMode, setWorkspaceFileViewMode] = useState<WorkspaceFileViewMode>("list");
+  const [workspaceContextFileCategory, setWorkspaceContextFileCategory] = useState<WorkspaceFileCategory>("all");
+  const [workspaceContextFileViewMode, setWorkspaceContextFileViewMode] = useState<WorkspaceFileViewMode>("list");
   const [workspaceSelectedFileId, setWorkspaceSelectedFileId] = useState(initialWorkspaceRoute?.fileId ?? "");
   const [workspaceSelectedMemberId, setWorkspaceSelectedMemberId] = useState(initialWorkspaceRoute?.memberId ?? "");
   const [workspaceUploading, setWorkspaceUploading] = useState(false);
@@ -2490,6 +2510,10 @@ export function App() {
         : [],
     [workspaceFiles, workspaceSelectedConversation]
   );
+  const workspaceFilteredConversationFiles = useMemo(
+    () => workspaceConversationFiles.filter((file) => workspaceFileMatchesCategory(file, workspaceContextFileCategory)),
+    [workspaceContextFileCategory, workspaceConversationFiles]
+  );
   const workspaceFilteredFiles = useMemo(() => {
     const currentUserId = workspaceBootstrap?.auth.currentUser.id;
     const scopedFiles =
@@ -2500,11 +2524,12 @@ export function App() {
         : workspaceFileFilter === "mine"
             ? workspaceLibraryFiles.filter((file) => file.uploaderId === currentUserId)
             : workspaceLibraryFiles;
+    const categorizedFiles = scopedFiles.filter((file) => workspaceFileMatchesCategory(file, workspaceFileCategory));
     const query = workspaceFileQuery.trim().toLowerCase();
     if (!query) {
-      return scopedFiles;
+      return categorizedFiles;
     }
-    return scopedFiles.filter((file) =>
+    return categorizedFiles.filter((file) =>
       [
         file.fileName,
         workspaceFileUploaderName(file),
@@ -2513,7 +2538,7 @@ export function App() {
         file.mimeType
       ].filter(Boolean).some((value) => value.toLowerCase().includes(query))
     );
-  }, [workspaceBootstrap?.auth.currentUser.id, workspaceConversations, workspaceFileFilter, workspaceFileQuery, workspaceLibraryFiles]);
+  }, [workspaceBootstrap?.auth.currentUser.id, workspaceConversations, workspaceFileCategory, workspaceFileFilter, workspaceFileQuery, workspaceLibraryFiles]);
   const workspaceSelectedFile = useMemo(
     () =>
       workspaceFiles.find((file) => file.id === workspaceSelectedFileId) ??
@@ -3102,15 +3127,17 @@ export function App() {
   useEffect(() => {
     if (workspaceSelectedConversation?.type === "group") {
       setWorkspaceGroupRenameTitle(workspaceSelectedConversation.title);
+      setWorkspaceGroupAvatarEmoji(workspaceSelectedConversation.avatarEmoji ?? "");
     } else {
       setWorkspaceGroupRenameTitle("");
+      setWorkspaceGroupAvatarEmoji("");
       if (workspaceContextTab === "members" || workspaceContextTab === "settings") {
         setWorkspaceContextTab("overview");
       }
     }
     setWorkspaceContextMemberQuery("");
     setWorkspaceGroupMemberBusyId("");
-  }, [workspaceContextTab, workspaceSelectedConversation?.id, workspaceSelectedConversation?.title, workspaceSelectedConversation?.type]);
+  }, [workspaceContextTab, workspaceSelectedConversation?.avatarEmoji, workspaceSelectedConversation?.id, workspaceSelectedConversation?.title, workspaceSelectedConversation?.type]);
 
   useEffect(() => {
     if (
@@ -4253,7 +4280,9 @@ export function App() {
     setWorkspaceInviteCode("");
     setWorkspaceInviteCodeId("");
     setWorkspaceNewGroupTitle("");
+    setWorkspaceNewGroupAvatarEmoji("");
     setWorkspaceGroupRenameTitle("");
+    setWorkspaceGroupAvatarEmoji("");
     setWorkspaceView("chat");
     setWorkspaceMobilePane("list");
     setWorkspaceContextMode("conversation");
@@ -4269,6 +4298,10 @@ export function App() {
     setWorkspaceMemberKindFilter("all");
     setWorkspaceGroupMemberIds([]);
     setWorkspaceFileFilter("all");
+    setWorkspaceFileCategory("all");
+    setWorkspaceFileViewMode("list");
+    setWorkspaceContextFileCategory("all");
+    setWorkspaceContextFileViewMode("list");
     setWorkspaceSelectedFileId("");
     setWorkspaceUploading(false);
     setWorkspaceGroupMemberBusyId("");
@@ -5165,6 +5198,7 @@ export function App() {
     setWorkspaceMobilePane("main");
     if (mode === "group") {
       setWorkspaceGroupMemberIds([]);
+      setWorkspaceNewGroupAvatarEmoji("");
     }
   }
 
@@ -5342,6 +5376,11 @@ export function App() {
       showWorkspaceNotice("warning", "请选择至少一位群聊成员");
       return;
     }
+    const avatarEmoji = normalizeWorkspaceGroupAvatarEmoji(workspaceNewGroupAvatarEmoji);
+    if (avatarEmoji === null) {
+      showWorkspaceNotice("warning", "群头像必须是单个 emoji");
+      return;
+    }
     clearWorkspaceNotice();
     try {
       const data = await workspaceJson<{ conversation: WorkspaceConversation }>("/api/workspace/conversations", {
@@ -5349,11 +5388,13 @@ export function App() {
         body: JSON.stringify({
           type: "group",
           title,
+          avatarEmoji: avatarEmoji || null,
           memberIds: workspaceGroupMemberIds
         })
       });
       setWorkspaceConversations((conversations) => upsertWorkspaceConversationList(conversations, data.conversation));
       setWorkspaceNewGroupTitle("");
+      setWorkspaceNewGroupAvatarEmoji("");
       setWorkspaceGroupMemberIds([]);
       setWorkspaceCreateMode("");
       selectWorkspaceConversation(data.conversation.id);
@@ -5423,13 +5464,18 @@ export function App() {
       showWorkspaceNotice("warning", "请输入群聊名称");
       return;
     }
+    const avatarEmoji = normalizeWorkspaceGroupAvatarEmoji(workspaceGroupAvatarEmoji);
+    if (avatarEmoji === null) {
+      showWorkspaceNotice("warning", "群头像必须是单个 emoji");
+      return;
+    }
     clearWorkspaceNotice();
     try {
       const data = await workspaceJson<{ conversation: WorkspaceConversation }>(
         `/api/workspace/groups/${encodeURIComponent(workspaceSelectedConversation.id)}`,
         {
           method: "PATCH",
-          body: JSON.stringify({ title })
+          body: JSON.stringify({ title, avatarEmoji: avatarEmoji || null })
         }
       );
       setWorkspaceConversations((conversations) => upsertWorkspaceConversationList(conversations, data.conversation));
@@ -6048,13 +6094,7 @@ export function App() {
         return;
       }
       const params = new URLSearchParams({ downloadId: reserve.id });
-      const link = document.createElement("a");
-      link.href = reserve.downloadUrl || `/api/workspace/files/${encodeURIComponent(file.id)}/download?${params.toString()}`;
-      link.download = file.fileName;
-      link.rel = "noreferrer";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+      window.location.assign(`/api/workspace/files/${encodeURIComponent(file.id)}/download?${params.toString()}`);
       showWorkspaceNotice("success", `已开始下载 ${file.fileName}`);
       await refreshWorkspaceBootstrap();
     } catch (error) {
@@ -7528,16 +7568,11 @@ export function App() {
                           aria-current={conversation.id === workspaceSelectedConversationId ? "true" : undefined}
                           onClick={() => selectWorkspaceConversation(conversation.id)}
                         >
-                          {conversation.type === "group" ? (
-                            <span className="conversation-icon center-icon" aria-hidden="true"><UsersRound size={17} /></span>
-                          ) : (
-                            <WorkspaceAvatar
-                              name={workspaceConversationTitle(conversation, workspaceBootstrap.auth.currentUser.id)}
-                              avatarUrl={conversation.otherMember?.avatarUrl}
-                              className="conversation-icon"
-                              decorative
-                            />
-                          )}
+                          <WorkspaceConversationAvatar
+                            conversation={conversation}
+                            currentUserId={workspaceBootstrap.auth.currentUser.id}
+                            className="conversation-icon"
+                          />
                           <span>
                             <strong>
                               <WorkspaceIdentityName
@@ -7691,6 +7726,11 @@ export function App() {
                               aria-label="群聊名称"
                             />
                           </label>
+                          <WorkspaceGroupAvatarEditor
+                            value={workspaceNewGroupAvatarEmoji}
+                            onChange={setWorkspaceNewGroupAvatarEmoji}
+                            label="群头像"
+                          />
                           <div className="workspace-picker-list" aria-label="选择群成员">
                             {workspaceSelectableMembers.length === 0 ? (
                               <p className="saved-empty">没有找到可添加的成员。</p>
@@ -7759,6 +7799,13 @@ export function App() {
                       <WorkspaceChatPanel
                         title={workspaceConversationTitle(workspaceSelectedConversation, workspaceBootstrap.auth.currentUser.id)}
                         titleKind={workspaceSelectedConversation.otherMember?.kind}
+                        avatar={
+                          <WorkspaceConversationAvatar
+                            conversation={workspaceSelectedConversation}
+                            currentUserId={workspaceBootstrap.auth.currentUser.id}
+                            className="small"
+                          />
+                        }
                         subtitle={workspaceSelectedConversation.type === "group"
                           ? `${workspaceConversationMemberCount(workspaceSelectedConversation)} 位成员`
                           : workspaceSelectedConversation.otherMember?.description || "私聊"}
@@ -7785,6 +7832,7 @@ export function App() {
                               type="button"
                               onClick={() => {
                                 setWorkspaceContextMode("conversation");
+                                setWorkspaceContextCollapsed(false);
                                 setWorkspaceMobilePane("details");
                               }}
                             >
@@ -7953,6 +8001,12 @@ export function App() {
                           </button>
                         ))}
                       </div>
+                      <div className="workspace-file-subnav">
+                        <WorkspaceFileCategoryTabs value={workspaceFileCategory} onChange={setWorkspaceFileCategory} />
+                        {workspaceFileCategory === "media" && (
+                          <WorkspaceFileViewToggle value={workspaceFileViewMode} onChange={setWorkspaceFileViewMode} />
+                        )}
+                      </div>
                       <label className="workspace-search compact-search">
                         <span className="sr-only">查找文件</span>
                         <input
@@ -7962,7 +8016,9 @@ export function App() {
                         />
                       </label>
                       <div className="workspace-file-browser">
-                        <div className="workspace-file-table">
+                        <div className={workspaceFileCategory === "media" && workspaceFileViewMode === "grid"
+                          ? "workspace-file-table media-grid"
+                          : "workspace-file-table"}>
                           {workspaceFilteredFiles.length === 0 ? (
                             <p className="saved-empty">没有匹配的文件。</p>
                           ) : (
@@ -7977,6 +8033,7 @@ export function App() {
                                 <div
                                   className={[
                                     workspaceSelectedFileId === file.id ? "workspace-file-row active" : "workspace-file-row",
+                                    workspaceFileCategory === "media" && workspaceFileViewMode === "grid" ? "media-card" : "",
                                     file.localUpload?.state ? `local-${file.localUpload.state}` : ""
                                   ].filter(Boolean).join(" ")}
                                   key={file.id}
@@ -7992,7 +8049,7 @@ export function App() {
                                       setWorkspaceMobilePane("details");
                                     }}
                                   >
-                                    <WorkspaceFileThumbnail file={file} />
+                                    <WorkspaceFileThumbnail file={file} large={workspaceFileCategory === "media" && workspaceFileViewMode === "grid"} />
                                     <span>
                                       <strong>{file.fileName}</strong>
                                       <small>
@@ -8676,10 +8733,9 @@ export function App() {
                       {workspaceContextTab === "overview" && (
                         <div className="workspace-context-body" key={`conversation-${workspaceSelectedConversation.id}-overview`}>
                           <div className="workspace-context-profile">
-                            <WorkspaceAvatar
-                              name={workspaceConversationTitle(workspaceSelectedConversation, workspaceBootstrap.auth.currentUser.id)}
-                              avatarUrl={workspaceSelectedConversation.otherMember?.avatarUrl}
-                              decorative
+                            <WorkspaceConversationAvatar
+                              conversation={workspaceSelectedConversation}
+                              currentUserId={workspaceBootstrap.auth.currentUser.id}
                             />
                             <div>
                               <strong>
@@ -8831,13 +8887,23 @@ export function App() {
                       )}
                       {workspaceContextTab === "files" && (
                         <div className="workspace-context-body" key={`conversation-${workspaceSelectedConversation.id}-files`}>
-                          <div className="workspace-file-list">
-                            {workspaceConversationFiles.length === 0 ? (
+                          <div className="workspace-file-subnav context-file-subnav">
+                            <WorkspaceFileCategoryTabs value={workspaceContextFileCategory} onChange={setWorkspaceContextFileCategory} />
+                            {workspaceContextFileCategory === "media" && (
+                              <WorkspaceFileViewToggle value={workspaceContextFileViewMode} onChange={setWorkspaceContextFileViewMode} />
+                            )}
+                          </div>
+                          <div className={workspaceContextFileCategory === "media" && workspaceContextFileViewMode === "grid"
+                            ? "workspace-file-list media-grid"
+                            : "workspace-file-list"}>
+                            {workspaceFilteredConversationFiles.length === 0 ? (
                               <p className="saved-empty">此会话暂无文件。</p>
                             ) : (
-                              workspaceConversationFiles.map((file) => (
+                              workspaceFilteredConversationFiles.map((file) => (
                                 <button
-                                  className="workspace-file"
+                                  className={workspaceContextFileCategory === "media" && workspaceContextFileViewMode === "grid"
+                                    ? "workspace-file media-card"
+                                    : "workspace-file"}
                                   type="button"
                                   key={file.id}
                                   onClick={() => {
@@ -8849,7 +8915,11 @@ export function App() {
                                     setWorkspaceMobilePane("details");
                                   }}
                                 >
-                                  <WorkspaceFileThumbnail file={file} compact />
+                                  <WorkspaceFileThumbnail
+                                    file={file}
+                                    compact={workspaceContextFileViewMode !== "grid"}
+                                    large={workspaceContextFileCategory === "media" && workspaceContextFileViewMode === "grid"}
+                                  />
                                   <span>
                                     <strong>{file.fileName}</strong>
                                     <small>{formatBytes(file.byteSize)} · {workspaceFileUploaderName(file)}</small>
@@ -8895,6 +8965,11 @@ export function App() {
                             <>
                               {workspaceCanManageSelectedGroup ? (
                                 <form className="workspace-group-form" onSubmit={(event) => void renameWorkspaceGroup(event)}>
+                                  <WorkspaceGroupAvatarEditor
+                                    value={workspaceGroupAvatarEmoji}
+                                    onChange={setWorkspaceGroupAvatarEmoji}
+                                    label="群头像"
+                                  />
                                   <label>
                                     <span>群聊名称</span>
                                     <input
@@ -8903,9 +8978,13 @@ export function App() {
                                       placeholder="输入群聊名称"
                                     />
                                   </label>
-                                  <button className="secondary" type="submit">
+                                  <button
+                                    className="secondary"
+                                    type="submit"
+                                    disabled={normalizeWorkspaceGroupAvatarEmoji(workspaceGroupAvatarEmoji) === null}
+                                  >
                                     <Check size={16} />
-                                    保存名称
+                                    保存群资料
                                   </button>
                                   <p className="saved-empty">群聊成员管理在“成员”中进行。</p>
                                 </form>
@@ -10627,22 +10706,164 @@ export function getWorkspaceSingleImageAttachment<
       : null;
 }
 
+function WorkspaceConversationAvatar({
+  conversation,
+  currentUserId,
+  className = ""
+}: {
+  conversation: WorkspaceConversation;
+  currentUserId?: string;
+  className?: string;
+}) {
+  if (conversation.type === "direct") {
+    return (
+      <WorkspaceAvatar
+        name={workspaceConversationTitle(conversation, currentUserId)}
+        avatarUrl={conversation.otherMember?.avatarUrl}
+        className={className}
+        decorative
+      />
+    );
+  }
+  return (
+    <span className={`workspace-avatar workspace-group-avatar ${className}`.trim()} aria-hidden="true">
+      {conversation.avatarEmoji || <UsersRound size={17} />}
+    </span>
+  );
+}
+
+function WorkspaceGroupAvatarEditor({
+  value,
+  onChange,
+  label
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  label: string;
+}) {
+  const normalized = normalizeWorkspaceGroupAvatarEmoji(value);
+  return (
+    <fieldset className="workspace-group-avatar-editor">
+      <legend>{label}（可选）</legend>
+      <div className="workspace-group-avatar-input">
+        <span className="workspace-avatar workspace-group-avatar" aria-hidden="true">
+          {normalized || <UsersRound size={18} />}
+        </span>
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          inputMode="text"
+          maxLength={32}
+          placeholder="输入单个 emoji"
+          aria-label="输入群头像 emoji"
+          aria-invalid={normalized === null}
+        />
+        {value && (
+          <button className="icon-button" type="button" title="恢复默认群头像" onClick={() => onChange("")}>
+            <X size={15} />
+          </button>
+        )}
+      </div>
+      <div className="workspace-group-avatar-presets" aria-label="选择群头像">
+        {WORKSPACE_GROUP_AVATAR_PRESETS.map((emoji) => (
+          <button
+            className={normalized === emoji ? "active" : ""}
+            type="button"
+            key={emoji}
+            aria-label={`使用 ${emoji} 作为群头像`}
+            aria-pressed={normalized === emoji}
+            onClick={() => onChange(emoji)}
+          >
+            {emoji}
+          </button>
+        ))}
+      </div>
+      {normalized === null && <small className="field-error">请输入一个完整的 emoji。</small>}
+    </fieldset>
+  );
+}
+
+function WorkspaceFileCategoryTabs({
+  value,
+  onChange
+}: {
+  value: WorkspaceFileCategory;
+  onChange: (value: WorkspaceFileCategory) => void;
+}) {
+  return (
+    <div className="workspace-file-category-tabs" aria-label="文件类型筛选">
+      {([
+        { id: "all", label: "全部" },
+        { id: "media", label: "图片" },
+        { id: "document", label: "文档" },
+        { id: "other", label: "其它" }
+      ] as const).map((item) => (
+        <button
+          className={value === item.id ? "active" : ""}
+          type="button"
+          key={item.id}
+          aria-pressed={value === item.id}
+          onClick={() => onChange(item.id)}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function WorkspaceFileViewToggle({
+  value,
+  onChange
+}: {
+  value: WorkspaceFileViewMode;
+  onChange: (value: WorkspaceFileViewMode) => void;
+}) {
+  return (
+    <div className="workspace-file-view-toggle" aria-label="文件展示方式">
+      <button
+        className={value === "list" ? "active" : ""}
+        type="button"
+        title="列表视图"
+        aria-label="列表视图"
+        aria-pressed={value === "list"}
+        onClick={() => onChange("list")}
+      >
+        <List size={16} />
+      </button>
+      <button
+        className={value === "grid" ? "active" : ""}
+        type="button"
+        title="方格视图"
+        aria-label="方格视图"
+        aria-pressed={value === "grid"}
+        onClick={() => onChange("grid")}
+      >
+        <LayoutGrid size={16} />
+      </button>
+    </div>
+  );
+}
+
 function WorkspaceFileThumbnail({
   file,
-  compact = false
+  compact = false,
+  large = false
 }: {
   file: WorkspaceAttachment;
   compact?: boolean;
+  large?: boolean;
 }) {
   const [previewFailed, setPreviewFailed] = useState(false);
   const previewable = file.status === "available" && isPreviewableImageMimeType(file.mimeType);
+  const category = classifyWorkspaceFile(file);
 
   useEffect(() => {
     setPreviewFailed(false);
   }, [file.id, file.mimeType, file.status]);
 
   return (
-    <span className={compact ? "workspace-file-thumbnail compact" : "workspace-file-thumbnail"} aria-hidden="true">
+    <span className={`workspace-file-thumbnail${compact ? " compact" : ""}${large ? " large" : ""}`} aria-hidden="true">
       {previewable && !previewFailed ? (
         <img
           src={`/api/workspace/files/${encodeURIComponent(file.id)}/preview`}
@@ -10652,7 +10873,9 @@ function WorkspaceFileThumbnail({
           onError={() => setPreviewFailed(true)}
         />
       ) : (
-        <FileCheck2 size={compact ? 16 : 18} />
+        category === "media" ? <FileVideo size={compact ? 16 : 20} /> :
+          category === "document" ? <FileText size={compact ? 16 : 20} /> :
+            <FileCheck2 size={compact ? 16 : 20} />
       )}
     </span>
   );
@@ -10962,6 +11185,7 @@ function WorkspaceReactionBar({
 function WorkspaceChatPanel({
   title,
   titleKind,
+  avatar,
   subtitle,
   leadingAction,
   trailingAction,
@@ -11005,6 +11229,7 @@ function WorkspaceChatPanel({
 }: {
   title: string;
   titleKind?: WorkspaceUser["kind"];
+  avatar?: ReactNode;
   subtitle: string;
   leadingAction?: ReactNode;
   trailingAction?: ReactNode;
@@ -11252,6 +11477,7 @@ function WorkspaceChatPanel({
     >
       <header className="workspace-chat-header">
         {leadingAction}
+        {avatar}
         <div className="workspace-chat-heading">
           <strong><WorkspaceIdentityName name={title} kind={titleKind} /></strong>
           <span>{subtitle}</span>
