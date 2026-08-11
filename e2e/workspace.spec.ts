@@ -356,7 +356,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     const beaconComposer = beaconRegion.getByLabel("输入消息");
     await beaconComposer.fill(beaconText);
     await sendWorkspaceComposer(beaconRegion);
-    await expect(beaconRegion.getByText(beaconText, { exact: true })).toBeVisible();
+    await expect(beaconRegion.locator(".workspace-message-list").getByText(beaconText, { exact: true })).toBeVisible();
     await expect(beaconComposer).toBeFocused();
 
     const codeOnlyMarkdown = "~~~python\nimport stdio\nmain() {}\n~~~";
@@ -666,9 +666,9 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     const recalledMessage = ownerGroupRegion.locator("article.workspace-message").filter({ hasText: recalledMessageText });
     await ownerPage.once("dialog", (dialog) => dialog.accept());
     await recalledMessage.getByTitle("撤回消息").click();
-    await expect(ownerGroupRegion.getByText(recalledMessageText, { exact: true })).toHaveCount(0);
-    await expect(ownerGroupRegion.getByText("timeStarry因内容有误撤回了一条消息", { exact: true })).toBeVisible();
-    await expect(memberGroupRegion.getByText("timeStarry因内容有误撤回了一条消息", { exact: true })).toBeVisible();
+    await expect(ownerGroupRegion.locator(".workspace-message-list").getByText(recalledMessageText, { exact: true })).toHaveCount(0);
+    await expect(ownerGroupRegion.locator(".workspace-message-list").getByText("timeStarry因内容有误撤回了一条消息", { exact: true })).toBeVisible();
+    await expect(memberGroupRegion.locator(".workspace-message-list").getByText("timeStarry因内容有误撤回了一条消息", { exact: true })).toBeVisible();
 
     const reactionMessage = memberGroupRegion.locator("article.workspace-message").filter({ hasText: groupOwnerMessage });
     const reactionTrigger = reactionMessage.getByTitle("添加表情回复");
