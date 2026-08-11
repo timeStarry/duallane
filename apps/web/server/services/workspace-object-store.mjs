@@ -449,18 +449,20 @@ function createS3WorkspaceObjectStore({ dataDir, config, internalClient, deliver
         return await readFile(stored.path);
       }
     },
-    async getCustomEmoteDelivery(emote, options = {}) {
+    async getCustomEmoteDelivery(emote) {
       const key = workspaceCustomEmoteObjectKey(emote);
       try {
         const head = await internalClient.send(new HeadObjectCommand({ Bucket: config.bucket, Key: key }));
         if (Number(head.ContentLength) !== Number(emote.byteSize)) {
           throw new WorkspaceError("emote.storage_mismatch", "收藏表情内容不可用", 500);
         }
-        return await signedDelivery({
+        const buffer = await readS3Bytes({
+          client: internalClient,
+          bucket: config.bucket,
           key,
-          contentType: "image/webp",
-          contentDisposition: options.contentDisposition
+          maxBytes: Number(emote.byteSize)
         });
+        return { kind: "buffer", buffer, byteSize: buffer.byteLength };
       } catch (error) {
         if (isNotFoundError(error) && config.localReadFallback) {
           const stored = await statStoredAttachment(dataDir, emote.storageKey, emote.byteSize);

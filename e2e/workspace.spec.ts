@@ -999,13 +999,10 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await memberPage.locator(".workspace-user-trigger").click();
     await memberPage.getByRole("menuitem", { name: "个人设置" }).click();
     await expect(memberPage.getByRole("heading", { name: "个人设置" })).toBeVisible();
-    await expect(memberPage.getByRole("checkbox", { name: /接受邮件通知/ })).toBeChecked();
-    await expect(memberPage.getByRole("checkbox", { name: /每条消息都通知我/ })).not.toBeChecked();
-    await expect(memberPage.getByRole("checkbox", { name: /超过 2 小时仍未读时通知我/ })).toBeChecked();
-    await expect(memberPage.getByRole("checkbox", { name: /接受 ntfy 通知/ })).toBeChecked();
-    const ntfyTopic = memberPage.locator(".workspace-ntfy-topic-row code");
-    const originalNtfyTopic = await ntfyTopic.textContent();
-    expect(originalNtfyTopic).toMatch(new RegExp(`^duallane-duallane-e2e-${memberSuffix}-[A-Za-z0-9]{6}$`));
+    await expect(memberPage.getByRole("switch", { name: /接受邮件通知/ })).toHaveAttribute("aria-checked", "true");
+    await expect(memberPage.getByRole("switch", { name: /每条消息都通知我/ })).toHaveAttribute("aria-checked", "false");
+    await expect(memberPage.getByRole("switch", { name: /超过 2 小时仍未读时通知我/ })).toHaveAttribute("aria-checked", "true");
+    await expect(memberPage.getByRole("switch", { name: /接受 ntfy 通知/ })).toHaveAttribute("aria-checked", "true");
     const ntfyHelpTrigger = memberPage.getByRole("button", { name: "使用说明", exact: true });
     await ntfyHelpTrigger.click();
     const ntfyDialog = memberPage.getByRole("dialog", { name: "订阅 ntfy 通知" });
@@ -1014,17 +1011,20 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(ntfyDialog.getByText("https://ntfy.tsio.top", { exact: true })).toBeVisible();
     await expect(ntfyDialog.getByRole("link", { name: /查看 ntfy 下载指引/ })).toHaveAttribute("href", "https://ntfy.sh/");
     await expect(ntfyDialog.getByRole("link", { name: /直接下载 ntfy 安装包/ })).toHaveAttribute("href", /ntfy-fdroid-release\.apk$/);
-    await memberPage.keyboard.press("Escape");
-    await expect(ntfyDialog).toHaveCount(0);
-    await expect(ntfyHelpTrigger).toBeFocused();
-    await memberPage.getByRole("button", { name: "刷新我的 topic 字符串" }).click();
+    const ntfyTopic = ntfyDialog.locator(".workspace-ntfy-copy-list > div").filter({ hasText: "我的 topic" }).locator("code");
+    const originalNtfyTopic = await ntfyTopic.textContent();
+    expect(originalNtfyTopic).toMatch(new RegExp(`^duallane-duallane-e2e-${memberSuffix}-[A-Za-z0-9]{6}$`));
+    await ntfyDialog.getByRole("button", { name: "刷新我的 topic 字符串" }).click();
     const rotateResponse = memberPage.waitForResponse((response) =>
       response.url().endsWith("/api/workspace/me/ntfy/rotate") && response.request().method() === "POST"
     );
-    await memberPage.getByRole("button", { name: "确认刷新" }).click();
+    await ntfyDialog.getByRole("button", { name: "确认刷新" }).click();
     expect((await rotateResponse).status()).toBe(200);
     await expect(ntfyTopic).not.toHaveText(originalNtfyTopic!);
     await expect(memberPage.getByText(/旧 topic 已失效，请在 ntfy 中重新订阅/)).toBeVisible();
+    await memberPage.keyboard.press("Escape");
+    await expect(ntfyDialog).toHaveCount(0);
+    await expect(ntfyHelpTrigger).toBeFocused();
 
     await memberPage.locator('input[type="file"][accept="image/jpeg,image/png,image/webp"]').setInputFiles({
       name: "workspace-avatar.png",
@@ -1051,17 +1051,20 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     expect(customAvatarResponse.headers()["content-type"]).toContain("image/webp");
 
     const publicNickname = `公开昵称 ${memberSuffix}`;
-    await memberPage.getByRole("textbox", { name: "公开昵称", exact: true }).fill(publicNickname);
-    const discoverabilityToggle = memberPage.getByRole("checkbox", { name: /允许其他成员搜索到我/ });
-    await expect(discoverabilityToggle).not.toBeChecked();
-    await discoverabilityToggle.check();
-    const profileResponse = memberPage.waitForResponse((response) =>
+    const nicknameResponse = memberPage.waitForResponse((response) =>
       response.url().endsWith("/api/workspace/me/profile") && response.request().method() === "PATCH"
     );
-    await memberPage.getByRole("button", { name: "保存资料" }).click();
-    expect((await profileResponse).status()).toBe(200);
+    await memberPage.getByRole("textbox", { name: "公开昵称", exact: true }).fill(publicNickname);
+    expect((await nicknameResponse).status()).toBe(200);
+    const discoverabilityToggle = memberPage.getByRole("switch", { name: /允许其他成员搜索到我/ });
+    await expect(discoverabilityToggle).toHaveAttribute("aria-checked", "false");
+    const discoverabilityResponse = memberPage.waitForResponse((response) =>
+      response.url().endsWith("/api/workspace/me/profile") && response.request().method() === "PATCH"
+    );
+    await discoverabilityToggle.click();
+    expect((await discoverabilityResponse).status()).toBe(200);
     await expect(memberPage.locator(".workspace-user-trigger").getByText(publicNickname, { exact: true })).toBeVisible();
-    await expect(discoverabilityToggle).toBeChecked();
+    await expect(discoverabilityToggle).toHaveAttribute("aria-checked", "true");
 
     const outsiderInviteResponse = await ownerPage.request.post("/api/workspace/invites", {
       data: { defaultRole: "member", maxUses: 1 }
@@ -1156,21 +1159,22 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
 
     await memberPage.goto("/workspace/account");
     await expect(memberPage.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
-    const emoteSettingsSection = memberPage.locator("form.workspace-preference-section").filter({
+    const emoteSettingsSection = memberPage.locator("section.workspace-preference-section").filter({
       has: memberPage.getByRole("heading", { name: "表情面板", exact: true })
     });
-    const emojiPackToggle = emoteSettingsSection.getByRole("checkbox", { name: "Emoji", exact: true });
-    await expect(emojiPackToggle).toBeChecked();
+    const emojiPackToggle = emoteSettingsSection.getByRole("button", { name: "Emoji", exact: true });
+    await expect(emojiPackToggle).toHaveAttribute("aria-pressed", "true");
     for (const packLabel of ["B站", "微信", "飞书"]) {
-      const toggle = emoteSettingsSection.getByRole("checkbox", { name: packLabel, exact: true });
-      if (await toggle.isChecked()) await toggle.uncheck();
+      const toggle = emoteSettingsSection.getByRole("button", { name: packLabel, exact: true });
+      if (await toggle.getAttribute("aria-pressed") === "true") {
+        const updateResponse = memberPage.waitForResponse((response) =>
+          response.url().endsWith("/api/workspace/me/emote-settings") && response.request().method() === "PUT"
+        );
+        await toggle.click();
+        expect((await updateResponse).status()).toBe(200);
+      }
     }
     await expect(emojiPackToggle).toBeDisabled();
-    const saveEmoteSettingsResponse = memberPage.waitForResponse((response) =>
-      response.url().endsWith("/api/workspace/me/emote-settings") && response.request().method() === "PUT"
-    );
-    await emoteSettingsSection.getByRole("button", { name: "保存", exact: true }).click();
-    expect((await saveEmoteSettingsResponse).status()).toBe(200);
 
     await memberPage.getByRole("button", { name: "聊天", exact: true }).click();
     await memberPage.getByLabel("共享空间导航").locator("button.conversation").filter({ hasText: groupTitle }).first().click();

@@ -114,7 +114,7 @@ describe("workspace object store", () => {
     expect(delivery.url).toMatch(/^https:\/\/fs\.tsio\.top\//);
   });
 
-  it("stores personal emotes in their private S3 prefix and signs their delivery", async () => {
+  it("stores personal emotes in their private S3 prefix and serves authenticated bytes", async () => {
     const directory = await makeDirectory();
     const credentialsPath = path.join(directory, "credentials.json");
     await writeFile(credentialsPath, JSON.stringify({ accessKey: "test-access", secretKey: "test-secret" }));
@@ -123,6 +123,9 @@ describe("workspace object store", () => {
       async send(command) {
         if (command.constructor.name === "HeadObjectCommand") {
           return { ContentLength: uploaded.byteSize, Metadata: uploaded.metadata };
+        }
+        if (command.constructor.name === "GetObjectCommand") {
+          return { Body: { transformToByteArray: async () => new Uint8Array(content) } };
         }
         return {};
       },
@@ -172,8 +175,9 @@ describe("workspace object store", () => {
       })
     });
     await expect(store.getCustomEmoteDelivery(emote)).resolves.toMatchObject({
-      kind: "redirect",
-      url: expect.stringContaining("https://fs.tsio.top/duallane/workspace/custom-emotes/")
+      kind: "buffer",
+      buffer: content,
+      byteSize: content.byteLength
     });
   });
 

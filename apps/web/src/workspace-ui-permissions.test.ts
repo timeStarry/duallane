@@ -315,7 +315,7 @@ describe("workspace UI permission boundaries", () => {
     expect(errorHandlerSource).toContain('setWorkspaceStatus("auth");');
     expect(errorHandlerSource).toContain("setWorkspaceError(error.message || \"登录后进入共享空间。\")");
     expect(errorHandlerSource).toContain('setWorkspaceRealtimeState("error")');
-    expect(errorHandlerSource).toContain('showWorkspaceNotice("warning", error?.message || "实时同步异常")');
+    expect(errorHandlerSource).toContain('showWorkspaceNotice("warning", error?.message || "实时同步异常", { persistent: true })');
   });
 
   it("deduplicates visible realtime events, applies them in order, and honors explicit resyncs", () => {
@@ -871,6 +871,10 @@ describe("workspace UI permission boundaries", () => {
     expect(source).toContain('className="toast-region"');
     expect(source).toContain("onDismiss={clearWorkspaceNotice}");
     expect(source).toContain('aria-label="关闭提示"');
+    expect(source).toContain("WORKSPACE_NOTICE_AUTO_DISMISS_MS = 5000");
+    expect(source).toContain('className="notice-countdown"');
+    expect(source).toContain('className="notice-progress"');
+    expect(source).toContain('{ persistent: true }');
     expect(source).toContain("/preview`}");
     expect(source).toContain("isPreviewableImageMimeType(attachment.mimeType)");
     expect(source).toContain("file-transfer-image-preview");
@@ -1001,9 +1005,15 @@ describe("workspace UI permission boundaries", () => {
     expect(accountSource).toContain("https://ntfy.sh/");
     expect(accountSource).toContain("ntfy-fdroid-release.apk");
     expect(accountSource).toContain("getFocusableElements(dialog)");
+    const accountPanelSource = accountSource.slice(0, accountSource.indexOf("{ntfyHelpOpen && ntfy && createPortal"));
+    expect(accountPanelSource).not.toContain("ntfy.topic");
+    expect(accountPanelSource).toContain("<WorkspaceSwitch");
+    expect(accountSource).toContain("updateSearchDiscoverable");
+    expect(accountSource).toContain("updateEmoteSettings");
+    expect(accountSource).toContain("updateNotifications");
     expect(source).toContain("installWorkspaceUnreadFavicon");
     expect(styles).toContain(".workspace-ntfy-dialog");
-    expect(styles).toContain(".workspace-ntfy-topic-row");
+    expect(styles).toContain(".workspace-setting-switch");
   });
 
   it("does not bind platform internals into the shared-space UI source", () => {

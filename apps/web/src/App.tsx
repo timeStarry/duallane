@@ -378,9 +378,17 @@ type WorkspaceMemberRoleFilter = "all" | WorkspaceUser["role"];
 type WorkspaceMemberKindFilter = "all" | WorkspaceUser["kind"];
 type WorkspaceNotificationLevel = "all" | "mentions" | "muted";
 type WorkspaceRealtimeState = "idle" | "connecting" | "connected" | "syncing" | "offline" | "error";
+const WORKSPACE_NOTICE_AUTO_DISMISS_MS = 5000;
+type WorkspaceNoticeOptions = {
+  persistent?: boolean;
+  durationMs?: number;
+};
 type WorkspaceNotice = {
+  id: number;
   tone: "info" | "success" | "warning";
   text: string;
+  persistent: boolean;
+  durationMs: number;
 };
 type WorkspaceNotificationPreferences = {
   email: string | null;
@@ -2307,6 +2315,7 @@ export function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const workspaceWsRef = useRef<WebSocket | null>(null);
   const workspaceRealtimeSeqRef = useRef(0);
+  const workspaceNoticeSeqRef = useRef(0);
   const workspaceSeenEventIdsRef = useRef<Set<string>>(new Set());
   const workspaceRealtimeEventQueueRef = useRef<Promise<void>>(Promise.resolve());
   const workspaceSendingRef = useRef(false);
@@ -3334,7 +3343,7 @@ export function App() {
           })
           .catch((error) => {
             if (!disposed) {
-              showWorkspaceNotice("warning", userFacingErrorMessage(error, "同步共享空间失败"));
+              showWorkspaceNotice("warning", userFacingErrorMessage(error, "同步共享空间失败"), { persistent: true });
               setWorkspaceRealtimeState("error");
             }
           })
@@ -4282,7 +4291,7 @@ export function App() {
       return;
     }
     setWorkspaceRealtimeState("error");
-    showWorkspaceNotice("warning", error?.message || "实时同步异常");
+    showWorkspaceNotice("warning", error?.message || "实时同步异常", { persistent: true });
   }
 
   async function logoutWorkspace() {
@@ -5131,8 +5140,15 @@ export function App() {
     setWorkspaceNotice(null);
   }
 
-  function showWorkspaceNotice(tone: WorkspaceNotice["tone"], text: string) {
-    setWorkspaceNotice({ tone, text });
+  function showWorkspaceNotice(tone: WorkspaceNotice["tone"], text: string, options: WorkspaceNoticeOptions = {}) {
+    workspaceNoticeSeqRef.current += 1;
+    setWorkspaceNotice({
+      id: workspaceNoticeSeqRef.current,
+      tone,
+      text,
+      persistent: options.persistent === true,
+      durationMs: options.durationMs ?? WORKSPACE_NOTICE_AUTO_DISMISS_MS
+    });
   }
 
   function openWorkspaceCreate(mode: WorkspaceCreateMode) {
@@ -7405,8 +7421,11 @@ export function App() {
               {workspaceNotice && (
                 <div className="toast-region" aria-live="polite" aria-atomic="true">
                   <InlineNotice
+                    noticeKey={workspaceNotice.id}
                     tone={workspaceNotice.tone}
                     text={workspaceNotice.text}
+                    persistent={workspaceNotice.persistent}
+                    durationMs={workspaceNotice.durationMs}
                     onDismiss={clearWorkspaceNotice}
                   />
                 </div>
@@ -9151,6 +9170,39 @@ function normalizeWsChatPayload(value: unknown): P2pMessageEnvelope | null {
   return envelope?.kind === "chat" || envelope?.kind === "chat-ack" ? envelope : null;
 }
 
+function WorkspaceSwitch({
+  checked,
+  disabled = false,
+  label,
+  description,
+  onChange
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  label: string;
+  description?: string;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <button
+      className="workspace-setting-switch"
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+    >
+      <span className="workspace-setting-switch-copy">
+        <strong>{label}</strong>
+        {description && <small>{description}</small>}
+      </span>
+      <span className="workspace-setting-switch-track" aria-hidden="true">
+        <span />
+      </span>
+    </button>
+  );
+}
+
 function WorkspaceAccountSettings({
   currentUser,
   onBack,
@@ -9166,6 +9218,7 @@ function WorkspaceAccountSettings({
   const [searchDiscoverable, setSearchDiscoverable] = useState(Boolean(currentUser.searchDiscoverable));
   const [avatarSaving, setAvatarSaving] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
+  const [discoverySaving, setDiscoverySaving] = useState(false);
   const [emoteSettings, setEmoteSettings] = useState<WorkspaceEmoteSettings | null>(null);
   const [emoteSettingsLoading, setEmoteSettingsLoading] = useState(true);
   const [emoteSettingsSaving, setEmoteSettingsSaving] = useState(false);
@@ -9184,11 +9237,43 @@ function WorkspaceAccountSettings({
   const ntfyHelpTriggerRef = useRef<HTMLButtonElement>(null);
   const ntfyDialogRef = useRef<HTMLDivElement>(null);
   const ntfyDialogCloseRef = useRef<HTMLButtonElement>(null);
+  const lastSavedNicknameRef = useRef(currentUser.nickname ?? "");
+  const nicknameSaveSequenceRef = useRef(0);
 
   useEffect(() => {
     setNickname(currentUser.nickname ?? "");
     setSearchDiscoverable(Boolean(currentUser.searchDiscoverable));
-  }, [currentUser.id, currentUser.nickname, currentUser.searchDiscoverable]);
+    lastSavedNicknameRef.current = currentUser.nickname ?? "";
+  }, [currentUser.id]);
+
+  useEffect(() => {
+    const normalizedNickname = nickname.trim();
+    if (normalizedNickname === lastSavedNicknameRef.current) return;
+    const saveSequence = nicknameSaveSequenceRef.current + 1;
+    nicknameSaveSequenceRef.current = saveSequence;
+    const timer = window.setTimeout(() => {
+      setProfileSaving(true);
+      void workspaceJson<{ user: WorkspaceUser }>("/api/workspace/me/profile", {
+        method: "PATCH",
+        body: JSON.stringify({ nickname: normalizedNickname || null })
+      })
+        .then((data) => {
+          if (nicknameSaveSequenceRef.current !== saveSequence) return;
+          lastSavedNicknameRef.current = data.user.nickname ?? "";
+          setNickname(data.user.nickname ?? "");
+          onUserUpdated(data.user);
+        })
+        .catch((error) => {
+          if (nicknameSaveSequenceRef.current === saveSequence) {
+            onNotice("warning", userFacingErrorMessage(error, "公开昵称保存失败"));
+          }
+        })
+        .finally(() => {
+          if (nicknameSaveSequenceRef.current === saveSequence) setProfileSaving(false);
+        });
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [currentUser.id, nickname]);
 
   useEffect(() => {
     let cancelled = false;
@@ -9284,25 +9369,22 @@ function WorkspaceAccountSettings({
     };
   }, [ntfyHelpOpen]);
 
-  async function saveProfile(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setProfileSaving(true);
+  async function updateSearchDiscoverable(nextValue: boolean) {
+    const previousValue = searchDiscoverable;
+    setSearchDiscoverable(nextValue);
+    setDiscoverySaving(true);
     try {
       const data = await workspaceJson<{ user: WorkspaceUser }>("/api/workspace/me/profile", {
         method: "PATCH",
-        body: JSON.stringify({
-          nickname: nickname.trim() || null,
-          searchDiscoverable
-        })
+        body: JSON.stringify({ searchDiscoverable: nextValue })
       });
       onUserUpdated(data.user);
-      setNickname(data.user.nickname ?? "");
       setSearchDiscoverable(Boolean(data.user.searchDiscoverable));
-      onNotice("success", "公开资料已更新");
     } catch (error) {
-      onNotice("warning", userFacingErrorMessage(error, "公开资料保存失败"));
+      setSearchDiscoverable(previousValue);
+      onNotice("warning", userFacingErrorMessage(error, "搜索可见性保存失败"));
     } finally {
-      setProfileSaving(false);
+      setDiscoverySaving(false);
     }
   }
 
@@ -9337,40 +9419,46 @@ function WorkspaceAccountSettings({
     }
   }
 
-  async function saveNotifications(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function updateNotifications(patch: Partial<Pick<WorkspaceNotificationPreferences, "enabled" | "immediateEnabled" | "digestEnabled">>) {
     if (!notifications) return;
+    const previous = notifications;
+    const optimistic = { ...notifications, ...patch };
+    setNotifications(optimistic);
     setNotificationsSaving(true);
     try {
       const data = await workspaceJson<{ notifications: WorkspaceNotificationPreferences }>("/api/workspace/me/notifications", {
         method: "PATCH",
         body: JSON.stringify({
-          enabled: notifications.enabled,
-          immediateEnabled: notifications.immediateEnabled,
-          digestEnabled: notifications.digestEnabled
+          enabled: optimistic.enabled,
+          immediateEnabled: optimistic.immediateEnabled,
+          digestEnabled: optimistic.digestEnabled
         })
       });
       setNotifications(data.notifications);
-      onNotice("success", "通知偏好已保存");
     } catch (error) {
+      setNotifications(previous);
       onNotice("warning", userFacingErrorMessage(error, "通知偏好保存失败"));
     } finally {
       setNotificationsSaving(false);
     }
   }
 
-  async function saveEmoteSettings(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function updateEmoteSettings(packId: WorkspaceEmoteSettings["availablePacks"][number]["id"], enabled: boolean) {
     if (!emoteSettings) return;
+    const previous = emoteSettings;
+    const nextEnabledPackIds = enabled
+      ? [...emoteSettings.enabledPackIds, packId]
+      : emoteSettings.enabledPackIds.filter((id) => id !== packId);
+    setEmoteSettings({ ...emoteSettings, enabledPackIds: nextEnabledPackIds });
     setEmoteSettingsSaving(true);
     try {
       const data = await workspaceJson<{ settings: WorkspaceEmoteSettings }>("/api/workspace/me/emote-settings", {
         method: "PUT",
-        body: JSON.stringify({ enabledPackIds: emoteSettings.enabledPackIds })
+        body: JSON.stringify({ enabledPackIds: nextEnabledPackIds })
       });
       setEmoteSettings(data.settings);
-      onNotice("success", "表情面板已更新");
     } catch (error) {
+      setEmoteSettings(previous);
       onNotice("warning", userFacingErrorMessage(error, "表情设置保存失败"));
     } finally {
       setEmoteSettingsSaving(false);
@@ -9432,18 +9520,19 @@ function WorkspaceAccountSettings({
     }
   }
 
-  async function saveNtfy(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function updateNtfy(enabled: boolean) {
     if (!ntfy) return;
+    const previous = ntfy;
+    setNtfy({ ...ntfy, enabled });
     setNtfySaving(true);
     try {
       const data = await workspaceJson<{ ntfy: WorkspaceNtfyPreferences }>("/api/workspace/me/ntfy", {
         method: "PATCH",
-        body: JSON.stringify({ enabled: ntfy.enabled })
+        body: JSON.stringify({ enabled })
       });
       setNtfy(data.ntfy);
-      onNotice("success", data.ntfy.enabled ? "ntfy 推送已开启" : "ntfy 推送已关闭");
     } catch (error) {
+      setNtfy(previous);
       onNotice("warning", userFacingErrorMessage(error, "ntfy 设置保存失败"));
     } finally {
       setNtfySaving(false);
@@ -9483,15 +9572,13 @@ function WorkspaceAccountSettings({
           <h2>个人设置</h2>
         </div>
       </div>
-      <form className="workspace-preference-section" onSubmit={saveProfile}>
+      <section className="workspace-preference-section">
         <div className="workspace-section-header">
           <div>
             <h3>公开资料</h3>
             <p>头像和昵称会显示在所有登录后的共享空间界面。</p>
           </div>
-          <button className="primary compact" type="submit" disabled={profileSaving}>
-            {profileSaving ? "保存中" : "保存资料"}
-          </button>
+          {(profileSaving || discoverySaving) && <span className="workspace-auto-save-state">正在保存...</span>}
         </div>
         <WorkspaceAvatarEditor
           name={currentUser.displayName}
@@ -9511,28 +9598,24 @@ function WorkspaceAccountSettings({
             <strong>@{currentUser.githubLogin}</strong>
           </div>
         </div>
-        <label className="workspace-checkbox-setting">
-          <input
-            type="checkbox"
+        <div className="workspace-setting-list">
+          <WorkspaceSwitch
             checked={searchDiscoverable}
-            onChange={(event) => setSearchDiscoverable(event.target.checked)}
+            disabled={discoverySaving}
+            label="允许其他成员搜索到我"
+            description="开启后，其他成员可以通过公开昵称或 GitHub 登录名找到你并发起私聊。"
+            onChange={(checked) => void updateSearchDiscoverable(checked)}
           />
-          <span>
-            <strong>允许其他成员搜索到我</strong>
-            <small>开启后，其他成员可以通过公开昵称或 GitHub 登录名找到你并发起私聊。</small>
-          </span>
-        </label>
-      </form>
+        </div>
+      </section>
 
-      <form className="workspace-preference-section" onSubmit={saveEmoteSettings} aria-busy={emoteSettingsLoading}>
+      <section className="workspace-preference-section" aria-busy={emoteSettingsLoading}>
         <div className="workspace-section-header">
           <div>
             <h3>表情面板</h3>
             <p>选择聊天时显示的表情包；收藏表情始终保留独立入口。</p>
           </div>
-          <button className="primary compact" type="submit" disabled={!emoteSettings || emoteSettingsSaving}>
-            {emoteSettingsSaving ? "保存中" : "保存"}
-          </button>
+          {emoteSettingsSaving && <span className="workspace-auto-save-state">正在保存...</span>}
         </div>
         {emoteSettingsLoading || !emoteSettings ? (
           <p className="workspace-form-status">正在读取表情设置...</p>
@@ -9542,100 +9625,54 @@ function WorkspaceAccountSettings({
               const checked = emoteSettings.enabledPackIds.includes(pack.id);
               const onlyEnabled = checked && emoteSettings.enabledPackIds.length <= emoteSettings.minimumEnabled;
               return (
-                <label key={pack.id}>
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    disabled={onlyEnabled}
-                    onChange={(event) => setEmoteSettings({
-                      ...emoteSettings,
-                      enabledPackIds: event.target.checked
-                        ? [...emoteSettings.enabledPackIds, pack.id]
-                        : emoteSettings.enabledPackIds.filter((id) => id !== pack.id)
-                    })}
-                  />
+                <button
+                  key={pack.id}
+                  type="button"
+                  aria-pressed={checked}
+                  disabled={emoteSettingsSaving || onlyEnabled}
+                  onClick={() => void updateEmoteSettings(pack.id, !checked)}
+                >
+                  <span className="workspace-emote-pack-check" aria-hidden="true">{checked && <Check size={14} />}</span>
                   <span>{pack.label}</span>
-                </label>
+                </button>
               );
             })}
             <small>至少保留一个表情包。收藏表情可在聊天表情面板中上传、使用和删除。</small>
           </div>
         )}
-      </form>
+      </section>
 
-      <form className="workspace-preference-section workspace-ntfy-settings" onSubmit={saveNtfy} aria-busy={ntfyLoading}>
+      <section className="workspace-preference-section workspace-ntfy-settings" aria-busy={ntfyLoading}>
         <div className="workspace-section-header">
           <div>
             <h3>ntfy 推送</h3>
             <p>通过独立 topic 接收无正文的消息提醒，并遵循会话免打扰设置。</p>
           </div>
-          <div className="workspace-section-actions">
-            <button
-              ref={ntfyHelpTriggerRef}
-              className="secondary compact"
-              type="button"
-              disabled={!ntfy}
-              aria-haspopup="dialog"
-              onClick={() => setNtfyHelpOpen(true)}
-            >
-              使用说明
-            </button>
-            <button className="primary compact" type="submit" disabled={!ntfy || ntfySaving}>
-              {ntfySaving ? "保存中" : "保存"}
-            </button>
-          </div>
+          <button
+            ref={ntfyHelpTriggerRef}
+            className="secondary compact"
+            type="button"
+            disabled={!ntfy}
+            aria-haspopup="dialog"
+            onClick={() => setNtfyHelpOpen(true)}
+          >
+            使用说明
+          </button>
         </div>
         {ntfyLoading || !ntfy ? (
           <p className="workspace-form-status">正在读取 ntfy 设置...</p>
         ) : (
-          <>
-            <label className="workspace-checkbox-setting">
-              <input
-                type="checkbox"
-                checked={ntfy.enabled}
-                onChange={(event) => setNtfy({ ...ntfy, enabled: event.target.checked })}
-              />
-              <span>
-                <strong>接受 ntfy 通知</strong>
-                <small>默认开启。群聊的“仅提及”和“免打扰”规则同样适用。</small>
-              </span>
-            </label>
-            <div className="workspace-ntfy-topic-row">
-              <div>
-                <span>我的 topic</span>
-                <code>{ntfy.topic}</code>
-              </div>
-              <button
-                className="icon-button"
-                type="button"
-                title="复制 topic"
-                aria-label="复制我的 ntfy topic"
-                onClick={() => void copyNtfyValue(ntfy.topic, "topic")}
-              >
-                <Copy size={16} />
-              </button>
-            </div>
-            <div className="workspace-ntfy-security">
-              <ShieldCheck size={17} />
-              <p>topic 相当于你的通知地址，请勿交给他人。生成后保持不变，只有你主动刷新时才会更换。</p>
-            </div>
-            {ntfyRotateConfirm ? (
-              <div className="workspace-ntfy-rotate-confirm" role="group" aria-label="确认刷新 topic">
-                <p>刷新后旧 topic 立即失效，现有客户端需要重新订阅。</p>
-                <button className="secondary compact" type="button" disabled={ntfySaving} onClick={() => setNtfyRotateConfirm(false)}>取消</button>
-                <button className="secondary compact danger-action" type="button" disabled={ntfySaving} onClick={() => void rotateNtfyTopic()}>
-                  {ntfySaving ? "刷新中" : "确认刷新"}
-                </button>
-              </div>
-            ) : (
-              <button className="workspace-ntfy-rotate" type="button" onClick={() => setNtfyRotateConfirm(true)}>
-                <RefreshCw size={15} />
-                刷新我的 topic 字符串
-              </button>
-            )}
-          </>
+          <div className="workspace-setting-list">
+            <WorkspaceSwitch
+              checked={ntfy.enabled}
+              disabled={ntfySaving}
+              label="接受 ntfy 通知"
+              description="默认开启。群聊的“仅提及”和“免打扰”规则同样适用。"
+              onChange={(checked) => void updateNtfy(checked)}
+            />
+          </div>
         )}
-      </form>
+      </section>
 
       <section className="workspace-preference-section" aria-busy={notificationsLoading}>
         <div className="workspace-section-header">
@@ -9673,35 +9710,42 @@ function WorkspaceAccountSettings({
         )}
       </section>
 
-      <form className="workspace-preference-section" onSubmit={saveNotifications}>
+      <section className="workspace-preference-section">
         <div className="workspace-section-header">
           <div>
             <h3>消息通知</h3>
             <p>邮件仅说明存在未读消息，不包含聊天内容或附件信息。</p>
           </div>
-          <button className="primary compact" type="submit" disabled={!notifications || notificationsSaving}>
-            {notificationsSaving ? "保存中" : "保存偏好"}
-          </button>
+          {notificationsSaving && <span className="workspace-auto-save-state">正在保存...</span>}
         </div>
         {notificationsLoading || !notifications ? (
           <p className="workspace-form-status">正在读取通知设置...</p>
         ) : (
-          <div className="workspace-toggle-list">
-            <label>
-              <input type="checkbox" checked={notifications.enabled} onChange={(event) => setNotifications({ ...notifications, enabled: event.target.checked })} />
-              <span><strong>接受邮件通知</strong><small>关闭后保留其他选项。</small></span>
-            </label>
-            <label>
-              <input type="checkbox" checked={notifications.immediateEnabled} disabled={!notifications.enabled} onChange={(event) => setNotifications({ ...notifications, immediateEnabled: event.target.checked })} />
-              <span><strong>每条消息都通知我</strong><small>所有设备离线且消息 60 秒后仍未读时发送。</small></span>
-            </label>
-            <label>
-              <input type="checkbox" checked={notifications.digestEnabled} disabled={!notifications.enabled} onChange={(event) => setNotifications({ ...notifications, digestEnabled: event.target.checked })} />
-              <span><strong>超过 2 小时仍未读时通知我</strong><small>跨会话汇总，每个未读周期只发送一次。</small></span>
-            </label>
+          <div className="workspace-setting-list">
+            <WorkspaceSwitch
+              checked={notifications.enabled}
+              disabled={notificationsSaving}
+              label="接受邮件通知"
+              description="关闭后保留其他选项。"
+              onChange={(checked) => void updateNotifications({ enabled: checked })}
+            />
+            <WorkspaceSwitch
+              checked={notifications.immediateEnabled}
+              disabled={notificationsSaving || !notifications.enabled}
+              label="每条消息都通知我"
+              description="所有设备离线且消息 60 秒后仍未读时发送。"
+              onChange={(checked) => void updateNotifications({ immediateEnabled: checked })}
+            />
+            <WorkspaceSwitch
+              checked={notifications.digestEnabled}
+              disabled={notificationsSaving || !notifications.enabled}
+              label="超过 2 小时仍未读时通知我"
+              description="跨会话汇总，每个未读周期只发送一次。"
+              onChange={(checked) => void updateNotifications({ digestEnabled: checked })}
+            />
           </div>
         )}
-      </form>
+      </section>
     </div>
     {ntfyHelpOpen && ntfy && createPortal(
       <div className="workspace-ntfy-dialog-backdrop" onMouseDown={(event) => {
@@ -9749,6 +9793,20 @@ function WorkspaceAccountSettings({
             <LockKeyhole size={18} />
             <p><strong>不要分享 topic。</strong>知道该字符串的人可能订阅你的通知。怀疑泄露时，请回到此页刷新 topic。</p>
           </div>
+          {ntfyRotateConfirm ? (
+            <div className="workspace-ntfy-rotate-confirm" role="group" aria-label="确认刷新 topic">
+              <p>刷新后旧 topic 立即失效，现有客户端需要重新订阅。</p>
+              <button className="secondary compact" type="button" disabled={ntfySaving} onClick={() => setNtfyRotateConfirm(false)}>取消</button>
+              <button className="secondary compact danger-action" type="button" disabled={ntfySaving} onClick={() => void rotateNtfyTopic()}>
+                {ntfySaving ? "刷新中" : "确认刷新"}
+              </button>
+            </div>
+          ) : (
+            <button className="workspace-ntfy-rotate" type="button" onClick={() => setNtfyRotateConfirm(true)}>
+              <RefreshCw size={15} />
+              刷新我的 topic 字符串
+            </button>
+          )}
           <div className="workspace-ntfy-downloads">
             <a className="secondary" href="https://ntfy.sh/" target="_blank" rel="noopener noreferrer">
               <BellRing size={16} />
@@ -10112,22 +10170,61 @@ function handleTabListKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
 }
 
 function InlineNotice({
+  noticeKey,
   tone,
   text,
+  persistent = false,
+  durationMs = WORKSPACE_NOTICE_AUTO_DISMISS_MS,
   onDismiss
 }: {
+  noticeKey?: string | number;
   tone: "info" | "success" | "warning";
   text: React.ReactNode;
+  persistent?: boolean;
+  durationMs?: number;
   onDismiss?: () => void;
 }) {
+  const [remainingMs, setRemainingMs] = useState(durationMs);
+  const dismissRef = useRef(onDismiss);
+
+  useEffect(() => {
+    dismissRef.current = onDismiss;
+  }, [onDismiss]);
+
+  useEffect(() => {
+    if (persistent || !dismissRef.current || durationMs <= 0) return;
+    const startedAt = Date.now();
+    setRemainingMs(durationMs);
+    const timer = window.setInterval(() => {
+      const remaining = Math.max(0, durationMs - (Date.now() - startedAt));
+      setRemainingMs(remaining);
+      if (remaining === 0) {
+        window.clearInterval(timer);
+        dismissRef.current?.();
+      }
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [durationMs, noticeKey, persistent]);
+
+  const progress = persistent || durationMs <= 0 ? 1 : Math.max(0, remainingMs / durationMs);
   return (
     <div className={`notice ${tone}`} role={tone === "warning" ? "alert" : "status"}>
       {tone === "warning" ? <AlertCircle size={16} /> : <Check size={16} />}
       <span>{text}</span>
       {onDismiss && (
-        <button className="notice-dismiss" type="button" aria-label="关闭提示" title="关闭提示" onClick={onDismiss}>
-          <X size={15} />
-        </button>
+        <span className="notice-actions">
+          {!persistent && durationMs > 0 && (
+            <span className="notice-countdown" aria-hidden="true">{Math.max(1, Math.ceil(remainingMs / 1000))}s</span>
+          )}
+          <button className="notice-dismiss" type="button" aria-label="关闭提示" title="关闭提示" onClick={onDismiss}>
+            <X size={15} />
+          </button>
+        </span>
+      )}
+      {!persistent && durationMs > 0 && (
+        <span className="notice-progress" aria-hidden="true">
+          <span style={{ transform: `scaleX(${progress})` }} />
+        </span>
       )}
     </div>
   );

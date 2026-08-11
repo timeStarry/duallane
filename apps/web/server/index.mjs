@@ -814,7 +814,7 @@ app.get("/api/workspace/emotes/:emoteId/content", async (request, reply) => {
     return sendWorkspaceObjectDelivery(reply, delivery, {
       contentType: "image/webp",
       contentDisposition: "inline",
-      cacheControl: delivery.kind === "redirect" ? "private, no-store" : "private, max-age=31536000, immutable"
+      cacheControl: "private, max-age=31536000, immutable"
     });
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
@@ -1773,6 +1773,7 @@ function sendWorkspaceObjectDelivery(reply, delivery, headers = {}) {
   if (headers.contentDisposition) reply.header("Content-Disposition", headers.contentDisposition);
   if (headers.cacheControl) reply.header("Cache-Control", headers.cacheControl);
   if (Number.isSafeInteger(delivery.byteSize)) reply.header("Content-Length", String(delivery.byteSize));
+  if (delivery.kind === "buffer") return reply.send(delivery.buffer);
   return reply.send(createReadStream(delivery.path));
 }
 

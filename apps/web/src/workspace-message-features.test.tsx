@@ -17,6 +17,7 @@ import {
 } from "./App";
 import {
   WorkspaceAvatar,
+  getWorkspaceAvatarAttemptUrl,
   sanitizeWorkspaceAvatarUrl,
   workspaceAvatarInitial
 } from "./WorkspaceAvatar";
@@ -55,6 +56,13 @@ describe("workspace avatar", () => {
     expect(html).toContain("Alice 的头像");
     expect(html).toContain(">A</span>");
     expect(html).not.toContain("<img");
+  });
+
+  it("retries same-origin custom avatars with a cache-busting URL", () => {
+    const url = "/api/workspace/avatars/usr_owner/version-1";
+    expect(getWorkspaceAvatarAttemptUrl(url, "retry token")).toBe(`${url}?retry=retry%20token`);
+    expect(getWorkspaceAvatarAttemptUrl("https://avatars.githubusercontent.com/u/1?v=4", "retry"))
+      .toBe("https://avatars.githubusercontent.com/u/1?v=4");
   });
 });
 
