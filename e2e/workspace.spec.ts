@@ -14,12 +14,19 @@ async function enterWorkspaceAsSeededOwner(page: Page) {
   await expect(page.locator(".workspace-connection-state")).toHaveCount(0);
 }
 
+async function chooseMessageAction(page: Page, message: Locator, actionName: string) {
+  await message.getByTitle("更多消息操作").click();
+  const menu = page.getByRole("menu", { name: "消息操作" });
+  await expect(menu).toBeVisible();
+  await menu.getByRole("menuitem", { name: actionName, exact: true }).click();
+}
+
 test("public about page exposes the current release and accessible history", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "关于 DualLane 与版本更新" }).click();
   await expect(page).toHaveURL(/\/about$/);
   await expect(page.getByRole("heading", { name: "两种边界，一处沟通。" })).toBeVisible();
-  await expect(page.locator(".latest-release").getByText("v0.11.0", { exact: true })).toBeVisible();
+  await expect(page.locator(".latest-release").getByText("v0.12.0", { exact: true })).toBeVisible();
 
   const history = page.locator(".release-history");
   await expect(history).not.toHaveAttribute("open", "");
@@ -33,7 +40,7 @@ test("public about page exposes the current release and accessible history", asy
   await page.goForward();
   await expect(page).toHaveURL(/\/about$/);
   await page.reload();
-  await expect(page.locator(".latest-release").getByText("v0.11.0", { exact: true })).toBeVisible();
+  await expect(page.locator(".latest-release").getByText("v0.12.0", { exact: true })).toBeVisible();
 });
 
 test("workspace semantic routes survive OAuth, refresh, history, and invalid resources", async ({ page }) => {
@@ -488,7 +495,11 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect.poll(() => directMessageList.evaluate((list) => list.scrollHeight > list.clientHeight)).toBe(true);
     await expect(memberDirectRegion.getByLabel("输入消息")).toBeInViewport();
 
-    await memberDirectRegion.getByTitle("回复").last().click();
+    const latestHistoryMessage = memberDirectRegion.locator('[data-message-id]').filter({ hasText: "workspace-e2e-history-27" });
+    await latestHistoryMessage.click({ button: "right" });
+    const contextMenu = memberPage.getByRole("menu", { name: "消息操作" });
+    await expect(contextMenu).toBeVisible();
+    await contextMenu.getByRole("menuitem", { name: "回复" }).click();
     await expect(memberDirectRegion.locator(".composer-reply")).toBeVisible();
     await expect(memberDirectRegion.getByLabel("输入消息")).toBeFocused();
     await expect(memberDirectRegion.getByLabel("输入消息")).toBeInViewport();
@@ -515,6 +526,15 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     expect(mobileHeaderLayout.headingRight).toBeLessThanOrEqual(mobileHeaderLayout.actionsLeft + 1);
     await memberDirectRegion.getByRole("button", { name: "取消回复" }).click();
     await memberPage.setViewportSize({ width: 1280, height: 720 });
+
+    await memberDirectRegion.locator('[data-message-id]').filter({ hasText: "workspace-e2e-history-25" }).getByTitle("隐藏消息").click();
+    await memberDirectRegion.locator('[data-message-id]').filter({ hasText: "workspace-e2e-history-26" }).getByTitle("隐藏消息").click();
+    const hiddenRun = memberDirectRegion.locator(".workspace-hidden-message-run");
+    await expect(hiddenRun).toContainText("已隐藏 2 条消息");
+    await hiddenRun.getByRole("button", { name: "恢复" }).click();
+    await expect(hiddenRun).toHaveCount(0);
+    await expect(memberDirectRegion.getByText("workspace-e2e-history-25", { exact: true })).toBeVisible();
+    await expect(memberDirectRegion.getByText("workspace-e2e-history-26", { exact: true })).toBeVisible();
 
     const groupTitle = `E2E 双用户群聊 ${memberSuffix}`;
     await openWorkspaceCreateMenu(ownerPage, "创建群聊");
@@ -659,7 +679,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(markdownMessage.locator(".workspace-markdown strong").getByText("Workspace Markdown", { exact: true })).toBeVisible();
     await expect(markdownMessage.locator(".workspace-markdown li")).toHaveCount(2);
     const ownerMarkdownMessage = ownerGroupRegion.locator("article.workspace-message").filter({ hasText: "Workspace Markdown" });
-    await ownerMarkdownMessage.getByTitle("复制消息").click();
+    await chooseMessageAction(ownerPage, ownerMarkdownMessage, "复制消息");
     await expect.poll(async () => (await ownerPage.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, "\n"))
       .toBe(markdownSource);
 
@@ -673,7 +693,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await sendWorkspaceComposer(ownerGroupRegion);
     const recalledMessage = ownerGroupRegion.locator("article.workspace-message").filter({ hasText: recalledMessageText });
     await ownerPage.once("dialog", (dialog) => dialog.accept());
-    await recalledMessage.getByTitle("撤回消息").click();
+    await chooseMessageAction(ownerPage, recalledMessage, "撤回消息");
     await expect(ownerGroupRegion.locator(".workspace-message-list").getByText(recalledMessageText, { exact: true })).toHaveCount(0);
     await expect(ownerGroupRegion.locator(".workspace-message-list").getByText("timeStarry因内容有误撤回了一条消息", { exact: true })).toBeVisible();
     await expect(memberGroupRegion.locator(".workspace-message-list").getByText("timeStarry因内容有误撤回了一条消息", { exact: true })).toBeVisible();
@@ -1286,7 +1306,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     const favoriteCustomEmoteResponse = ownerPage.waitForResponse((response) =>
       response.url().endsWith("/api/workspace/me/emotes/favorite") && response.request().method() === "POST"
     );
-    await ownerCustomMessage.getByTitle("收藏表情").click();
+    await chooseMessageAction(ownerPage, ownerCustomMessage, "收藏表情");
     expect((await favoriteCustomEmoteResponse).status()).toBe(201);
 
     await memberGroupRegion.getByTitle("插入表情").click();
@@ -1361,11 +1381,14 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     const ownerGroupMessageList = ownerGroupRegion.locator(".workspace-message-list");
     const ownerPinnedMessage = ownerGroupRegion.locator("article.workspace-message").filter({ hasText: groupHistoryPinMessage });
     await expect(ownerPinnedMessage).toBeAttached();
-    await ownerPinnedMessage.getByTitle("设为常驻消息").click();
+    await chooseMessageAction(ownerPage, ownerPinnedMessage, "设为常驻消息");
     await expect(ownerPinnedMessage.locator(".workspace-message-pin-indicator")).toHaveText("常驻");
     const memberPinnedMessage = memberGroupRegion.locator("article.workspace-message").filter({ hasText: groupHistoryPinMessage });
     await expect(memberPinnedMessage.locator(".workspace-message-pin-indicator")).toHaveText("常驻");
-    await expect(memberPinnedMessage.getByTitle("取消常驻")).toHaveCount(0);
+    await memberPinnedMessage.getByTitle("更多消息操作").click();
+    const memberPinMenu = memberPage.getByRole("menu", { name: "消息操作" });
+    await expect(memberPinMenu.getByRole("menuitem", { name: "取消常驻", exact: true })).toHaveCount(0);
+    await memberPage.keyboard.press("Escape");
 
     const currentConversationDetails = ownerPage.getByLabel("当前会话详情");
     if (!(await currentConversationDetails.isVisible())) {
@@ -1382,7 +1405,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect.poll(() => ownerGroupMessageList.evaluate((list) =>
       list.scrollHeight - list.scrollTop - list.clientHeight
     )).toBeLessThanOrEqual(80);
-    await ownerPinnedMessage.getByTitle("取消常驻").click();
+    await chooseMessageAction(ownerPage, ownerPinnedMessage, "取消常驻");
     await expect(ownerPinnedMessage.locator(".workspace-message-pin-indicator")).toHaveCount(0);
 
     await expect(ownerGroupRegion.getByText("workspace-e2e-group-history-00", { exact: true })).toHaveCount(0);

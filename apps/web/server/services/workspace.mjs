@@ -2002,14 +2002,59 @@ export async function listMessages(db, userId, conversationId, options = {}) {
   const reactionsByMessageId = await listMessageReactionGroups(db, rows.map((row) => row.id), actor);
   const pinsByMessageId = await listMessagePins(db, rows.map((row) => row.id), actor);
   const emoteSharesByMessageId = await listMessageEmoteCollectionShares(db, rows.map((row) => row.id), actor);
+  const hiddenMessageIds = await listHiddenMessageIds(db, rows.map((row) => row.id), actor.id);
   return await Promise.all(rows.map(async (row) => await publicMessage({
     ...row,
     content: JSON.parse(row.contentJson),
     attachments: await listMessageAttachments(db, row.id),
     reactions: reactionsByMessageId.get(row.id) ?? [],
     pin: pinsByMessageId.get(row.id),
-    emoteCollectionShares: emoteSharesByMessageId.get(row.id)
+    emoteCollectionShares: emoteSharesByMessageId.get(row.id),
+    hiddenByCurrentUser: hiddenMessageIds.has(row.id)
   }, actor, db)));
+}
+
+export async function hideMessage(db, request, input) {
+  const actor = await requireActor(db, input.actorId);
+  const message = await requireHideTarget(db, request, actor, input.messageId);
+  const result = await db.prepare(`
+    INSERT INTO message_hidden_states (user_id, message_id, hidden_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT (user_id, message_id) DO NOTHING
+  `).run(actor.id, message.id, new Date().toISOString());
+  return { messageId: message.id, hidden: true, changed: result.changes > 0 };
+}
+
+export async function unhideMessage(db, request, input) {
+  const actor = await requireActor(db, input.actorId);
+  const message = await requireHideTarget(db, request, actor, input.messageId);
+  const result = await db.prepare(`
+    DELETE FROM message_hidden_states
+    WHERE user_id = ? AND message_id = ?
+  `).run(actor.id, message.id);
+  return { messageId: message.id, hidden: false, changed: result.changes > 0 };
+}
+
+async function requireHideTarget(db, request, actor, messageIdInput) {
+  const messageId = normalizeString(messageIdInput);
+  const message = await db.prepare(`
+    SELECT id, conversation_id AS conversationId
+    FROM messages
+    WHERE id = ? AND deleted_at IS NULL
+  `).get(messageId);
+  if (!message) {
+    throw new WorkspaceError("message.not_found", "消息不存在", 404);
+  }
+  await requireCapability(db, request, actor, "conversation.read", {
+    targetType: "message",
+    targetId: message.id
+  });
+  await requireConversationMember(db, actor.id, message.conversationId, {
+    request,
+    actor,
+    action: "message.hide"
+  });
+  return message;
 }
 
 export async function recallMessage(db, request, input) {
@@ -3805,7 +3850,8 @@ async function publicMessage(message, actor = null, db = null) {
       ))
       : [],
     reactions: !recalled && Array.isArray(message.reactions) ? message.reactions : [],
-    pin: recalled ? undefined : message.pin || undefined
+    pin: recalled ? undefined : message.pin || undefined,
+    hiddenByCurrentUser: Boolean(message.hiddenByCurrentUser)
   };
 }
 
@@ -3867,7 +3913,7 @@ async function publicConversation(conversation, actor = null) {
   const latestMessages = conversation.latestMessages
     ? await Promise.all(conversation.latestMessages.map(async (message) => await publicMessage(message)))
     : [];
-  const lastMessage = latestMessages.at(-1);
+  const lastMessage = [...latestMessages].reverse().find((message) => !message.hiddenByCurrentUser);
   const otherMember = conversation.type === "direct"
     ? members.find((member) => member.id !== conversation.viewerId) ?? null
     : null;
@@ -4468,17 +4514,30 @@ async function publicMessagePayloadForActor(db, actor, message) {
       const reactionsByMessageId = await listMessageReactionGroups(db, [row.id], actor);
       const pinsByMessageId = await listMessagePins(db, [row.id], actor);
       const emoteSharesByMessageId = await listMessageEmoteCollectionShares(db, [row.id], actor);
+      const hiddenMessageIds = await listHiddenMessageIds(db, [row.id], actor.id);
       return await publicMessage({
         ...row,
         content: JSON.parse(row.contentJson),
         attachments: await listMessageAttachments(db, row.id),
         reactions: reactionsByMessageId.get(row.id) ?? [],
         pin: pinsByMessageId.get(row.id),
-        emoteCollectionShares: emoteSharesByMessageId.get(row.id)
+        emoteCollectionShares: emoteSharesByMessageId.get(row.id),
+        hiddenByCurrentUser: hiddenMessageIds.has(row.id)
       }, actor, db);
     }
   }
   return await publicMessage(message, actor, db);
+}
+
+async function listHiddenMessageIds(db, messageIds, userId) {
+  if (!Array.isArray(messageIds) || messageIds.length === 0) return new Set();
+  const placeholders = messageIds.map(() => "?").join(", ");
+  const rows = await db.prepare(`
+    SELECT message_id AS messageId
+    FROM message_hidden_states
+    WHERE user_id = ? AND message_id IN (${placeholders})
+  `).all(userId, ...messageIds);
+  return new Set(rows.map((row) => row.messageId));
 }
 
 async function publicMemberPayloadForActor(db, actor, member) {

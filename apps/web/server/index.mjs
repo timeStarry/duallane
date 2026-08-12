@@ -2,7 +2,7 @@ import Fastify from "fastify";
 import fastifyCookie from "@fastify/cookie";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
-import { createReadStream } from "node:fs";
+import { createReadStream, readFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,6 +36,7 @@ import {
   getWorkspaceEventCursor,
   getWorkspaceBootstrap,
   getWorkspaceStatistics,
+  hideMessage,
   leaveConversation,
   listConversations,
   listFiles,
@@ -62,6 +63,7 @@ import {
   setOwnAvatar,
   pinGroupMessage,
   unpinGroupMessage,
+  unhideMessage,
   updateMemberRole,
   updateMemberRemark,
   updateOwnProfile,
@@ -89,6 +91,7 @@ import {
   CUSTOM_EMOTE_MAX_INPUT_BYTES
 } from "./services/workspace-custom-emotes.mjs";
 
+const APP_VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 const DEFAULT_GITHUB_OAUTH_TIMEOUT_MS = 8000;
@@ -256,7 +259,8 @@ app.addContentTypeParser(["image/jpeg", "image/png", "image/webp", "image/gif", 
 app.get("/api/health", async () => ({
   ok: true,
   service: "duallane",
-  lane: "ready"
+  lane: "ready",
+  appVersion: APP_VERSION
 }));
 
 if (env.NODE_ENV !== "production") {
@@ -406,7 +410,10 @@ app.get("/api/workspace/bootstrap", async (request, reply) => {
     return blockWorkspace(reply);
   }
   try {
-    return await getWorkspaceBootstrap(db, await getWorkspaceUserId(request));
+    return {
+      ...(await getWorkspaceBootstrap(db, await getWorkspaceUserId(request))),
+      appVersion: APP_VERSION
+    };
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }
@@ -1279,6 +1286,34 @@ app.post("/api/workspace/messages/:messageId/recall", async (request, reply) => 
       messageId: request.params.messageId
     });
     return { message };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.put("/api/workspace/messages/:messageId/hidden", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    return await hideMessage(db, request, {
+      actorId: await getWorkspaceUserId(request),
+      messageId: request.params.messageId
+    });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.delete("/api/workspace/messages/:messageId/hidden", async (request, reply) => {
+  if (!workspaceEnabled) {
+    return blockWorkspace(reply);
+  }
+  try {
+    return await unhideMessage(db, request, {
+      actorId: await getWorkspaceUserId(request),
+      messageId: request.params.messageId
+    });
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }

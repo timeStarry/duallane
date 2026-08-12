@@ -13,7 +13,9 @@ import {
   Code2,
   Copy,
   Download,
+  Ellipsis,
   ExternalLink,
+  EyeOff,
   FileCheck2,
   FileCode2,
   FileText,
@@ -61,7 +63,7 @@ import {
   X
 } from "lucide-react";
 import { Fragment, FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from "react";
 import { createPortal } from "react-dom";
 import {
   MessageBody,
@@ -119,6 +121,8 @@ import {
 } from "./workspace-group-avatar";
 import { userFacingErrorMessage } from "./user-facing-error";
 import { installWorkspaceUnreadFavicon } from "./workspace-unread-favicon";
+import { isServerVersionNewer } from "./app-version";
+import { groupHiddenWorkspaceMessages } from "./workspace-hidden-messages";
 
 type Lane = "entry" | "about" | "p2p" | "workspace-dev";
 type P2pStep = "name" | "waiting" | "chat" | "ended" | "invalid-room";
@@ -195,6 +199,7 @@ type Message = {
   pin?: WorkspaceMessagePin;
   recalledAt?: string | null;
   recallReason?: string | null;
+  hiddenByCurrentUser?: boolean;
   replyTo?: {
     author: string;
     body: string;
@@ -248,6 +253,7 @@ type WorkspaceMemberVisibility = {
   visibleUserIds: string[];
 };
 type WorkspaceBootstrap = {
+  appVersion?: string;
   auth: {
     mode: string;
     inviteOnly: boolean;
@@ -340,6 +346,7 @@ type WorkspaceMessage = {
   deletedAt?: string | null;
   recalledAt?: string | null;
   recallReason?: string | null;
+  hiddenByCurrentUser?: boolean;
   attachments: WorkspaceAttachment[];
   reactions: WorkspaceReactionGroup[];
   pin?: WorkspaceMessagePin;
@@ -1460,11 +1467,11 @@ type WorkspaceConversationPreviewInput = Pick<
   WorkspaceConversation,
   "type" | "lastMessagePlainText" | "memberCount" | "members"
 > & {
-  latestMessages: Array<Pick<WorkspaceMessage, "authorName" | "kind" | "plainText">>;
+  latestMessages: Array<Pick<WorkspaceMessage, "authorName" | "kind" | "plainText" | "hiddenByCurrentUser">>;
 };
 
 export function workspaceConversationPreview(conversation: WorkspaceConversationPreviewInput) {
-  const latest = conversation.latestMessages.at(-1);
+  const latest = [...conversation.latestMessages].reverse().find((message) => !message.hiddenByCurrentUser);
   const preview = latest?.plainText || conversation.lastMessagePlainText;
   if (preview) {
     const authorName = latest?.authorName?.trim();
@@ -1476,6 +1483,19 @@ export function workspaceConversationPreview(conversation: WorkspaceConversation
   return conversation.type === "group"
     ? `${workspaceConversationMemberCount(conversation)} 位成员`
     : "还没有消息";
+}
+
+export function workspaceReplyPreview(
+  reply?: Pick<WorkspaceMessage, "authorName" | "authorGithubLogin" | "plainText" | "hiddenByCurrentUser">
+) {
+  if (!reply) return undefined;
+  if (reply.hiddenByCurrentUser) {
+    return { author: "", body: "已隐藏的消息" };
+  }
+  return {
+    author: reply.authorName || reply.authorGithubLogin || "成员",
+    body: reply.plainText
+  };
 }
 
 function workspaceConversationTime(conversation: WorkspaceConversation) {
@@ -2798,12 +2818,8 @@ export function App() {
           pin: message.pin,
           recalledAt: message.recalledAt,
           recallReason: message.recallReason,
-          replyTo: reply
-            ? {
-                author: reply.authorName || reply.authorGithubLogin || "成员",
-                body: reply.plainText
-              }
-            : undefined
+          hiddenByCurrentUser: message.hiddenByCurrentUser,
+          replyTo: workspaceReplyPreview(reply)
         };
       });
       const localMessages = workspaceLocalMessages
@@ -2832,12 +2848,7 @@ export function App() {
             },
             attachments: message.attachments ?? [],
             reactions: [],
-            replyTo: reply
-              ? {
-                  author: reply.authorName || reply.authorGithubLogin || "成员",
-                  body: reply.plainText
-                }
-              : undefined
+            replyTo: workspaceReplyPreview(reply)
           };
         });
       return [...serverMessages, ...localMessages].sort(
@@ -2883,6 +2894,10 @@ export function App() {
     }
     return `已用 ${formatBytes(used)} / ${formatBytes(limit)}`;
   }, [workspaceBootstrap?.policy.dailyQuotaBytes, workspaceBootstrap?.policy.usedTodayBytes]);
+  const workspaceUpdateAvailable = isServerVersionNewer(
+    __DUALLANE_APP_VERSION__,
+    workspaceBootstrap?.appVersion
+  );
   const workspaceSelectedFileQuotaWarning = useMemo(
     () =>
       workspaceSelectedFile
@@ -5008,6 +5023,36 @@ export function App() {
         )
       }))
     );
+  }
+
+  function updateWorkspaceMessagesHidden(messageIds: string[], hidden: boolean) {
+    const targetIds = new Set(messageIds);
+    setWorkspaceConversations((conversations) =>
+      conversations.map((conversation) => ({
+        ...conversation,
+        latestMessages: conversation.latestMessages.map((message) =>
+          targetIds.has(message.id) ? { ...message, hiddenByCurrentUser: hidden } : message
+        )
+      }))
+    );
+  }
+
+  async function setWorkspaceMessagesHidden(messageIds: string[], hidden: boolean) {
+    if (messageIds.length === 0) return;
+    updateWorkspaceMessagesHidden(messageIds, hidden);
+    const method = hidden ? "PUT" : "DELETE";
+    try {
+      await Promise.all(messageIds.map((messageId) => workspaceJson(
+        `/api/workspace/messages/${encodeURIComponent(messageId)}/hidden`,
+        { method }
+      )));
+    } catch (error) {
+      updateWorkspaceMessagesHidden(messageIds, !hidden);
+      if (workspaceSelectedConversationIdRef.current) {
+        await refreshWorkspaceConversationMessages(workspaceSelectedConversationIdRef.current).catch(() => undefined);
+      }
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, hidden ? "隐藏消息失败" : "恢复消息失败"));
+    }
   }
 
   async function toggleWorkspaceReaction(messageId: string, emoteKey: string) {
@@ -7772,6 +7817,12 @@ export function App() {
                     )}
                   </div>
                   <div className="workspace-rail-footer">
+                    {workspaceUpdateAvailable && (
+                      <button className="workspace-version-update" type="button" onClick={() => window.location.reload()}>
+                        <RefreshCw size={14} />
+                        <span>发现新版本，刷新页面</span>
+                      </button>
+                    )}
                     {workspaceRealtimeState !== "connected" && (
                       <div className={`workspace-connection-state ${workspaceRealtimeState}`} role="status">
                         <Radio size={14} />
@@ -7861,6 +7912,12 @@ export function App() {
                 </aside>
 
                 <section className="workspace-main" id="workspace-main-panel" aria-label="共享空间主视图">
+                  {workspaceUpdateAvailable && (
+                    <button className="workspace-version-update workspace-version-update-mobile" type="button" onClick={() => window.location.reload()}>
+                      <RefreshCw size={14} />
+                      <span>新版本已就绪，点击刷新</span>
+                    </button>
+                  )}
                   {workspaceCreateMode && (
                     <div
                       className="workspace-task-panel"
@@ -8059,6 +8116,8 @@ export function App() {
                         onReturnToLatest={() => void returnWorkspaceToLatest()}
                         onTogglePin={(message) => void toggleWorkspacePin(message)}
                         onRecall={(message) => void recallWorkspaceMessage(message)}
+                        onHideMessage={(messageId) => void setWorkspaceMessagesHidden([messageId], true)}
+                        onRestoreHiddenMessages={(messageIds) => void setWorkspaceMessagesHidden(messageIds, false)}
                         mentionMembers={workspaceSelectedConversation.type === "group"
                           ? workspaceSelectedConversation.members.filter(
                             (member) => member.id !== workspaceBootstrap.auth.currentUser.id
@@ -12004,6 +12063,8 @@ function WorkspaceChatPanel({
   onReturnToLatest,
   onTogglePin,
   onRecall,
+  onHideMessage,
+  onRestoreHiddenMessages,
   mentionMembers,
   fileInputDisabled,
   sending,
@@ -12050,6 +12111,8 @@ function WorkspaceChatPanel({
   onReturnToLatest: () => void;
   onTogglePin: (message: Message) => void;
   onRecall: (message: Message) => void;
+  onHideMessage: (messageId: string) => void;
+  onRestoreHiddenMessages: (messageIds: string[]) => void;
   mentionMembers: WorkspaceUser[];
   fileInputDisabled: boolean;
   sending: boolean;
@@ -12060,6 +12123,7 @@ function WorkspaceChatPanel({
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
   const [reactionPickerMessageId, setReactionPickerMessageId] = useState("");
+  const [messageMenu, setMessageMenu] = useState<{ messageId: string; left: number; top: number } | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [formatToolbarOpen, setFormatToolbarOpen] = useState(false);
   const [composerExpanded, setComposerExpanded] = useState(false);
@@ -12068,6 +12132,8 @@ function WorkspaceChatPanel({
   const emoteTriggerRef = useRef<HTMLButtonElement | null>(null);
   const mentionTriggerRef = useRef<HTMLButtonElement | null>(null);
   const reactionPickerTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const messageMenuTriggerRef = useRef<HTMLElement | null>(null);
+  const messageMenuRef = useRef<HTMLDivElement | null>(null);
   const historySentinelRef = useRef<HTMLDivElement | null>(null);
   const canMention = mentionMembers.length > 0;
   const filteredMentionMembers = useMemo(() => {
@@ -12084,6 +12150,7 @@ function WorkspaceChatPanel({
     composerExpanded && "expanded"
   ].filter(Boolean).join(" ");
   const sendDisabled = sending || (!draft.trim() && stagedAttachments.length === 0);
+  const messageDisplayItems = useMemo(() => groupHiddenWorkspaceMessages(messages), [messages]);
   const unreadIndex = useMemo(() => {
     if (unreadAnchorCount <= 0 || messages.length === 0) {
       return -1;
@@ -12179,6 +12246,64 @@ function WorkspaceChatPanel({
     document.addEventListener("pointerdown", handleOutsidePointerDown);
     return () => document.removeEventListener("pointerdown", handleOutsidePointerDown);
   }, [reactionPickerMessageId, toolPanelOpen]);
+  useEffect(() => {
+    if (!messageMenu) return;
+    const focusFrame = window.requestAnimationFrame(() => {
+      messageMenuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    });
+    const handleOutsidePointerDown = (event: PointerEvent) => {
+      if (!(event.target instanceof Node) || messageMenuRef.current?.contains(event.target)) return;
+      setMessageMenu(null);
+    };
+    document.addEventListener("pointerdown", handleOutsidePointerDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("pointerdown", handleOutsidePointerDown);
+    };
+  }, [messageMenu]);
+
+  const closeMessageMenu = (restoreFocus = true) => {
+    setMessageMenu(null);
+    if (restoreFocus) window.requestAnimationFrame(() => messageMenuTriggerRef.current?.focus());
+  };
+  const openMessageMenu = (messageId: string, event: ReactMouseEvent<HTMLElement>, trigger: HTMLElement) => {
+    event.preventDefault();
+    if (event.type !== "contextmenu" && messageMenu?.messageId === messageId) {
+      closeMessageMenu();
+      return;
+    }
+    setReactionPickerMessageId("");
+    messageMenuTriggerRef.current = trigger;
+    const fromContextMenu = event.type === "contextmenu";
+    const rect = trigger.getBoundingClientRect();
+    const desiredLeft = fromContextMenu ? event.clientX : rect.right - 208;
+    const desiredTop = fromContextMenu ? event.clientY : rect.bottom + 5;
+    setMessageMenu({
+      messageId,
+      left: Math.max(8, Math.min(desiredLeft, window.innerWidth - 216)),
+      top: Math.max(8, Math.min(desiredTop, window.innerHeight - 276))
+    });
+  };
+  const handleMessageMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeMessageMenu();
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)'));
+    if (items.length === 0) return;
+    const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+    const nextIndex = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? items.length - 1
+        : event.key === "ArrowDown"
+          ? (currentIndex + 1 + items.length) % items.length
+          : (currentIndex - 1 + items.length) % items.length;
+    items[nextIndex]?.focus();
+  };
   const handleDraftKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
     if (mentionPanelOpen && filteredMentionMembers.length > 0 && ["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) {
       event.preventDefault();
@@ -12310,8 +12435,35 @@ function WorkspaceChatPanel({
             <span>发送消息或分享文件。</span>
           </div>
         ) : (
-          messages.map((message, index) => {
-            const previous = messages[index - 1];
+          messageDisplayItems.map((displayItem) => {
+            const index = displayItem.sourceIndex;
+            if (displayItem.kind === "hidden") {
+              const hiddenMessageIds = displayItem.messages.map((message) => message.id);
+              const firstHiddenMessage = displayItem.messages[0];
+              const previousMessage = messages[index - 1];
+              const showHiddenDaySeparator = Boolean(
+                firstHiddenMessage.createdAt &&
+                getMessageDayKey(firstHiddenMessage.createdAt) !== getMessageDayKey(previousMessage?.createdAt)
+              );
+              const containsUnreadAnchor = unreadIndex >= index && unreadIndex < index + displayItem.messages.length;
+              return (
+                <Fragment key={`hidden-${hiddenMessageIds.join("-")}`}>
+                  {showHiddenDaySeparator && (
+                    <div className="message-day-separator" role="separator"><span>{formatMessageDayLabel(firstHiddenMessage.createdAt)}</span></div>
+                  )}
+                  {containsUnreadAnchor && (
+                    <div className="workspace-unread-divider" role="separator"><span>以下为未读消息</span></div>
+                  )}
+                  <div className="workspace-hidden-message-run" role="status">
+                    <EyeOff size={14} aria-hidden="true" />
+                    <span>已隐藏 {hiddenMessageIds.length} 条消息</span>
+                    <button type="button" onClick={() => onRestoreHiddenMessages(hiddenMessageIds)}>恢复</button>
+                  </div>
+                </Fragment>
+              );
+            }
+            const message = displayItem.message;
+            const previous = messages[index - 1]?.hiddenByCurrentUser ? undefined : messages[index - 1];
             const dayKey = getMessageDayKey(message.createdAt);
             const previousDayKey = getMessageDayKey(previous?.createdAt);
             const showDaySeparator = Boolean(message.createdAt && dayKey !== previousDayKey);
@@ -12330,7 +12482,7 @@ function WorkspaceChatPanel({
                 messageTime - previousTime >= 0 &&
                 messageTime - previousTime <= 5 * 60 * 1000
             );
-            if (message.author === "系统") {
+            if (message.authorKind === "system") {
               return (
                 <Fragment key={message.id}>
                   {showDaySeparator && (
@@ -12339,7 +12491,28 @@ function WorkspaceChatPanel({
                   {index === unreadIndex && (
                     <div className="workspace-unread-divider" role="separator"><span>以下为未读消息</span></div>
                   )}
-                  <div className="workspace-system-message">{message.body}</div>
+                  <article
+                    className="workspace-system-message-row"
+                    data-message-id={message.id}
+                    tabIndex={-1}
+                    onContextMenu={(event) => openMessageMenu(message.id, event, event.currentTarget)}
+                  >
+                    <div className="workspace-system-message">{message.body}</div>
+                    <div className="workspace-message-actions">
+                      <button className="workspace-message-hide-action" type="button" title="隐藏消息" onClick={() => onHideMessage(message.id)}>
+                        <EyeOff size={15} />
+                      </button>
+                      <button
+                        type="button"
+                        title="更多消息操作"
+                        aria-haspopup="menu"
+                        aria-expanded={messageMenu?.messageId === message.id}
+                        onClick={(event) => openMessageMenu(message.id, event, event.currentTarget)}
+                      >
+                        <Ellipsis size={16} />
+                      </button>
+                    </div>
+                  </article>
                 </Fragment>
               );
             }
@@ -12355,6 +12528,8 @@ function WorkspaceChatPanel({
                   className={`workspace-message${message.self ? " self" : ""}${groupedWithPrevious ? " grouped" : ""}${historyTargetId === message.id ? " history-target" : ""}`}
                   data-message-id={message.id}
                   data-testid={`workspace-message-${message.id}`}
+                  tabIndex={-1}
+                  onContextMenu={(event) => openMessageMenu(message.id, event, event.currentTarget)}
                 >
                   <div className="workspace-message-avatar-slot" aria-hidden="true">
                     {!groupedWithPrevious && (
@@ -12425,76 +12600,64 @@ function WorkspaceChatPanel({
                       </div>
                     )}
                   </div>
-                  {!message.localState && !message.recalledAt && (
+                  {!message.localState && (
                     <div className="workspace-message-actions">
-                      <div
-                        className="workspace-reaction-picker-anchor"
-                        data-reaction-picker-message-id={message.id}
-                        onKeyDown={(event) => {
-                          if (event.key === "Escape" && reactionPickerMessageId === message.id) {
-                            event.preventDefault();
-                            setReactionPickerMessageId("");
-                            window.requestAnimationFrame(() => reactionPickerTriggerRef.current?.focus());
-                          }
-                        }}
-                      >
-                        <button
-
-                          type="button"
-                          title="添加表情回复"
-                          aria-haspopup="dialog"
-                          aria-expanded={reactionPickerMessageId === message.id}
-                          aria-controls={"workspace-reaction-picker-" + message.id}
-                          onClick={(event) => {
-                            reactionPickerTriggerRef.current = event.currentTarget;
-                            setReactionPickerMessageId((current) => current === message.id ? "" : message.id);
+                      {!message.recalledAt && (
+                        <div
+                          className="workspace-reaction-picker-anchor"
+                          data-reaction-picker-message-id={message.id}
+                          onKeyDown={(event) => {
+                            if (event.key === "Escape" && reactionPickerMessageId === message.id) {
+                              event.preventDefault();
+                              setReactionPickerMessageId("");
+                              window.requestAnimationFrame(() => reactionPickerTriggerRef.current?.focus());
+                            }
                           }}
                         >
-                          <Smile size={15} />
-                        </button>
-                        {reactionPickerMessageId === message.id && (
-                          <EmotePicker
-                            id={"workspace-reaction-picker-" + message.id}
-                            label="选择消息表情回复"
-                            workspaceFeatures="reaction"
-                            onEscape={() => {
-                              setReactionPickerMessageId("");
-                              window.requestAnimationFrame(() => reactionPickerTriggerRef.current?.focus());
+                          <button
+
+                            type="button"
+                            title="添加表情回复"
+                            aria-haspopup="dialog"
+                            aria-expanded={reactionPickerMessageId === message.id}
+                            aria-controls={"workspace-reaction-picker-" + message.id}
+                            onClick={(event) => {
+                              reactionPickerTriggerRef.current = event.currentTarget;
+                              setReactionPickerMessageId((current) => current === message.id ? "" : message.id);
                             }}
-                            onSelect={(item, packId) => {
-                              onToggleReaction(message.id, getReactionEmoteKey(packId, item));
-                              setReactionPickerMessageId("");
-                              window.requestAnimationFrame(() => reactionPickerTriggerRef.current?.focus());
-                            }}
-                          />
-                        )}
-                      </div>
-                      <button type="button" title="回复" onClick={() => startReply(message.id)}>
-                        <MessageSquare size={15} />
+                          >
+                            <Smile size={15} />
+                          </button>
+                          {reactionPickerMessageId === message.id && (
+                            <EmotePicker
+                              id={"workspace-reaction-picker-" + message.id}
+                              label="选择消息表情回复"
+                              workspaceFeatures="reaction"
+                              onEscape={() => {
+                                setReactionPickerMessageId("");
+                                window.requestAnimationFrame(() => reactionPickerTriggerRef.current?.focus());
+                              }}
+                              onSelect={(item, packId) => {
+                                onToggleReaction(message.id, getReactionEmoteKey(packId, item));
+                                setReactionPickerMessageId("");
+                                window.requestAnimationFrame(() => reactionPickerTriggerRef.current?.focus());
+                              }}
+                            />
+                          )}
+                        </div>
+                      )}
+                      <button className="workspace-message-hide-action" type="button" title="隐藏消息" onClick={() => onHideMessage(message.id)}>
+                        <EyeOff size={15} />
                       </button>
-                      <button type="button" title="复制消息" onClick={() => onCopyMessage(message)}>
-                        <Copy size={15} />
+                      <button
+                        type="button"
+                        title="更多消息操作"
+                        aria-haspopup="menu"
+                        aria-expanded={messageMenu?.messageId === message.id}
+                        onClick={(event) => openMessageMenu(message.id, event, event.currentTarget)}
+                      >
+                        <Ellipsis size={16} />
                       </button>
-                      {getWorkspaceEmoteFavoriteSource(message) && (
-                        <button type="button" title="收藏表情" onClick={() => onFavoriteEmote(message)}>
-                          <Heart size={15} />
-                        </button>
-                      )}
-                      {conversationType === "group" && (message.pin?.canUnpin || (message.self && !message.pin)) && (
-                        <button
-                          type="button"
-                          title={message.pin ? "取消常驻" : "设为常驻消息"}
-                          aria-pressed={Boolean(message.pin)}
-                          onClick={() => onTogglePin(message)}
-                        >
-                          {message.pin ? <PinOff size={15} /> : <Pin size={15} />}
-                        </button>
-                      )}
-                      {message.self && (
-                        <button type="button" title="撤回消息" onClick={() => onRecall(message)}>
-                          <Undo2 size={15} />
-                        </button>
-                      )}
                     </div>
                   )}
                 </article>
@@ -12502,6 +12665,53 @@ function WorkspaceChatPanel({
             );
           })
         )}
+        {messageMenu && (() => {
+          const message = messages.find((candidate) => candidate.id === messageMenu.messageId);
+          if (!message) return <></>;
+          const runAction = (action: () => void) => {
+            closeMessageMenu();
+            action();
+          };
+          return createPortal(
+            <div
+              ref={messageMenuRef}
+              className="workspace-popover workspace-message-menu"
+              role="menu"
+              aria-label="消息操作"
+              style={{ left: messageMenu.left, top: messageMenu.top }}
+              onKeyDown={handleMessageMenuKeyDown}
+            >
+              {message.authorKind !== "system" && !message.recalledAt && (
+                <button role="menuitem" type="button" onClick={() => runAction(() => startReply(message.id))}>
+                  <MessageSquare size={15} />回复
+                </button>
+              )}
+              <button role="menuitem" type="button" onClick={() => runAction(() => onCopyMessage(message))}>
+                <Copy size={15} />复制消息
+              </button>
+              <button role="menuitem" type="button" onClick={() => runAction(() => onHideMessage(message.id))}>
+                <EyeOff size={15} />隐藏消息
+              </button>
+              {getWorkspaceEmoteFavoriteSource(message) && (
+                <button role="menuitem" type="button" onClick={() => runAction(() => onFavoriteEmote(message))}>
+                  <Heart size={15} />收藏表情
+                </button>
+              )}
+              {conversationType === "group" && (message.pin?.canUnpin || (message.self && !message.pin)) && (
+                <button role="menuitem" type="button" onClick={() => runAction(() => onTogglePin(message))}>
+                  {message.pin ? <PinOff size={15} /> : <Pin size={15} />}
+                  {message.pin ? "取消常驻" : "设为常驻消息"}
+                </button>
+              )}
+              {message.self && !message.recalledAt && (
+                <button role="menuitem" type="button" onClick={() => runAction(() => onRecall(message))}>
+                  <Undo2 size={15} />撤回消息
+                </button>
+              )}
+            </div>,
+            document.body
+          );
+        })()}
       </div>
       <div className="workspace-composer-dock">
         {!historyTargetId && (newMessageCount > 0 || awayFromLatest) && (

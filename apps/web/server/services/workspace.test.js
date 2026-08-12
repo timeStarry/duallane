@@ -23,6 +23,7 @@ import {
   getSessionUserId,
   getWorkspaceBootstrap,
   getWorkspaceStatistics,
+  hideMessage,
   leaveConversation,
   listConversations,
   listFiles,
@@ -54,6 +55,7 @@ import {
   updateGroupConversation,
   updateManagedMemberVisibility,
   unpinGroupMessage,
+  unhideMessage,
   WorkspaceAuthError,
   WorkspacePermissionError,
   WorkspaceValidationError
@@ -5177,6 +5179,70 @@ describe("workspace service", () => {
       content: textContent("字".repeat(30_001))
     })).rejects.toMatchObject({ code: "message.too_long" });
     expect(db.prepare("SELECT COUNT(*) AS count FROM messages WHERE client_message_id = ?").get("too-long-message").count).toBe(0);
+  });
+
+  it("hides messages only for the current member and restores them idempotently", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "HIDDEN-MEMBER" });
+    const member = await acceptInvite(db, request, {
+      code: invite.code,
+      githubLogin: "hidden-member",
+      email: "hidden-member@example.com",
+      displayName: "Hidden Member",
+      avatarUrl: "https://avatars.githubusercontent.com/u/8181?v=4"
+    });
+    const conversation = await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "direct",
+      targetUserId: member.id
+    });
+    const message = await createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      clientMessageId: "private-hidden-state",
+      content: textContent("Only the viewer may hide this")
+    });
+    const visibleMessage = await createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      clientMessageId: "visible-before-private-hidden-state",
+      content: textContent("Visible conversation preview")
+    });
+    db.prepare("UPDATE messages SET created_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 1_000).toISOString(), visibleMessage.id);
+    db.prepare("UPDATE messages SET created_at = ? WHERE id = ?")
+      .run(new Date().toISOString(), message.id);
+    const before = (await listConversations(db, member.id)).find((item) => item.id === conversation.id);
+    const eventCount = db.prepare("SELECT COUNT(*) AS count FROM workspace_events").get().count;
+
+    const first = await hideMessage(db, request, { actorId: member.id, messageId: message.id });
+    const duplicate = await hideMessage(db, request, { actorId: member.id, messageId: message.id });
+    expect(first).toEqual({ messageId: message.id, hidden: true, changed: true });
+    expect(duplicate).toEqual({ messageId: message.id, hidden: true, changed: false });
+    expect((await listMessages(db, member.id, conversation.id)).find((item) => item.id === message.id)?.hiddenByCurrentUser).toBe(true);
+    expect((await listMessages(db, "usr_owner", conversation.id)).find((item) => item.id === message.id)?.hiddenByCurrentUser).toBe(false);
+    const hiddenConversation = (await listConversations(db, member.id)).find((item) => item.id === conversation.id);
+    expect(hiddenConversation.lastMessagePlainText).toBe("Visible conversation preview");
+    expect(hiddenConversation.lastMessageAt).toBeTruthy();
+    expect(hiddenConversation.latestMessages.find((item) => item.id === message.id)?.hiddenByCurrentUser).toBe(true);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM message_hidden_states WHERE message_id = ?").get(message.id).count).toBe(1);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_events").get().count).toBe(eventCount);
+
+    const restored = await unhideMessage(db, request, { actorId: member.id, messageId: message.id });
+    const duplicateRestore = await unhideMessage(db, request, { actorId: member.id, messageId: message.id });
+    expect(restored).toEqual({ messageId: message.id, hidden: false, changed: true });
+    expect(duplicateRestore).toEqual({ messageId: message.id, hidden: false, changed: false });
+    expect((await listMessages(db, member.id, conversation.id)).find((item) => item.id === message.id)?.hiddenByCurrentUser).toBe(false);
+
+    const after = (await listConversations(db, member.id)).find((item) => item.id === conversation.id);
+    expect({
+      lastActivityAt: after.lastActivityAt,
+      messageCount: after.messageCount,
+      unreadCount: after.unreadCount
+    }).toEqual({
+      lastActivityAt: before.lastActivityAt,
+      messageCount: before.messageCount,
+      unreadCount: before.unreadCount
+    });
   });
 
   it("adds, aggregates and removes reactions idempotently without changing conversation counters", async () => {

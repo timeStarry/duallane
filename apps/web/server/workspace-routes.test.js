@@ -396,7 +396,8 @@ describe("workspace routes", () => {
     expect(response.json()).toEqual({
       ok: true,
       service: "duallane",
-      lane: "ready"
+      lane: "ready",
+      appVersion: "0.12.0"
     });
   });
 
@@ -5738,5 +5739,56 @@ describe("workspace routes", () => {
     });
     expect(invalid.statusCode).toBe(400);
     expect(invalid.json().error.code).toBe("reaction.invalid_emote");
+  });
+
+  it("hides and restores a message through idempotent viewer-scoped routes", async () => {
+    const app = await makeApp();
+    const callback = await app.inject({
+      method: "GET",
+      url: "/api/auth/github/callback?format=json&githubId=hide-route-owner&githubLogin=timeStarry&email=timestarry%40qq.com&displayName=timeStarry"
+    });
+    const sessionCookie = callback.cookies.find((cookie) => cookie.name === "duallane_workspace");
+    const cookies = { duallane_workspace: sessionCookie.value };
+    const conversationResponse = await app.inject({
+      method: "POST",
+      url: "/api/workspace/conversations",
+      cookies,
+      payload: { type: "group", title: "Hidden route" }
+    });
+    const conversationId = conversationResponse.json().conversation.id;
+    const messageResponse = await app.inject({
+      method: "POST",
+      url: "/api/workspace/messages",
+      cookies,
+      payload: {
+        conversationId,
+        clientMessageId: "hidden-route-message",
+        content: {
+          format: "duallane.message+json;v=1",
+          plainText: "Hide through the route",
+          blocks: [{ type: "text", text: "Hide through the route" }]
+        }
+      }
+    });
+    const messageId = messageResponse.json().message.id;
+    const url = "/api/workspace/messages/" + encodeURIComponent(messageId) + "/hidden";
+
+    const hidden = await app.inject({ method: "PUT", url, cookies });
+    const duplicate = await app.inject({ method: "PUT", url, cookies });
+    expect(hidden.statusCode).toBe(200);
+    expect(hidden.json()).toEqual({ messageId, hidden: true, changed: true });
+    expect(duplicate.json()).toEqual({ messageId, hidden: true, changed: false });
+
+    const listed = await app.inject({
+      method: "GET",
+      url: `/api/workspace/conversations/${encodeURIComponent(conversationId)}/messages`,
+      cookies
+    });
+    expect(listed.json().messages.find((message) => message.id === messageId)?.hiddenByCurrentUser).toBe(true);
+
+    const restored = await app.inject({ method: "DELETE", url, cookies });
+    const duplicateRestore = await app.inject({ method: "DELETE", url, cookies });
+    expect(restored.json()).toEqual({ messageId, hidden: false, changed: true });
+    expect(duplicateRestore.json()).toEqual({ messageId, hidden: false, changed: false });
   });
 });

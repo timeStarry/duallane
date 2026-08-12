@@ -13,6 +13,16 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.12.0",
+    releasedAt: "2026-08-12",
+    title: "更专注的消息时间线",
+    summary: "消息操作更简洁，并可按个人需要隐藏不想看到的内容。",
+    categories: [
+      { title: "消息", items: ["可隐藏任意消息，连续隐藏的内容会合并显示并可随时恢复", "表情回复和常用操作更易触达，右键消息也可打开完整操作菜单"] },
+      { title: "体验", items: ["网页版本落后时会提示刷新，减少更新后继续使用旧页面的问题", "消息中的分割线改为随内容宽度变化的虚线样式"] }
+    ]
+  },
+  {
     version: "0.11.0",
     releasedAt: "2026-08-12",
     title: "我的表情与合集",

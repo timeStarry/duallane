@@ -12,6 +12,7 @@ import {
   serializeWorkspaceMessageForCopy,
   shouldCollapseWorkspaceMessageText,
   workspaceConversationPreview,
+  workspaceReplyPreview,
   WorkspaceStructuredMessage,
   shouldApplyWorkspaceReactionResponse
 } from "./App";
@@ -243,6 +244,20 @@ describe("workspace message presentation helpers", () => {
       type: "group",
       latestMessages: [{ ...message, kind: "system", authorName: "系统" }]
     })).toBe("今天的进度");
+  });
+
+  it("does not expose hidden messages in conversation or reply previews", () => {
+    const visible = { authorName: "Alice", kind: "user" as const, plainText: "可见消息" };
+    const hidden = { authorName: "Bob", kind: "user" as const, plainText: "隐藏正文", hiddenByCurrentUser: true };
+    expect(workspaceConversationPreview({
+      type: "group",
+      lastMessagePlainText: "可见消息",
+      latestMessages: [visible, hidden],
+      memberCount: 3,
+      members: []
+    })).toBe("Alice：可见消息");
+    expect(workspaceReplyPreview(hidden)).toEqual({ author: "", body: "已隐藏的消息" });
+    expect(workspaceReplyPreview(visible)).toEqual({ author: "Alice", body: "可见消息" });
   });
 
   it("renders message text before a compact multi-image grid and regular files", () => {
