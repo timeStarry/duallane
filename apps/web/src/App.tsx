@@ -128,6 +128,7 @@ import {
   rememberPreferredEmotePickerPack,
   type EmotePickerPreferenceScope
 } from "./emote-picker-preference";
+import { getRecentEmojiIds, recordRecentEmojiUse } from "./recent-emojis";
 
 type Lane = "entry" | "about" | "p2p" | "workspace-dev";
 type P2pStep = "name" | "waiting" | "chat" | "ended" | "invalid-room";
@@ -13453,6 +13454,13 @@ function EmotePicker({
     : enabledPacks.map(({ id, label }) => ({ id, label }));
   const activePack = enabledPacks.find((pack) => pack.id === activePackId) ?? enabledPacks[0];
   const activeCollection = library?.collections.find((collection) => collection.id === activeCollectionId) ?? null;
+  const unicodeEmojiItems = visibleEmotePacks.find((pack) => pack.id === "emoji")?.items.filter((item) => item.kind === "unicode") ?? [];
+  const unicodeEmojiIds = unicodeEmojiItems.map((item) => item.id);
+  const [recentEmojiIds, setRecentEmojiIds] = useState(() => getRecentEmojiIds(unicodeEmojiIds));
+  const recentEmojiItems = recentEmojiIds.flatMap((id) => {
+    const item = unicodeEmojiItems.find((candidate) => candidate.id === id);
+    return item ? [item] : [];
+  });
 
   useEffect(() => {
     if (!workspaceFeatures) return;
@@ -13540,6 +13548,13 @@ function EmotePicker({
 
   function selectCustomEmote(emote: WorkspaceCustomEmote) {
     onSelect(workspaceCustomEmoteToItem(emote), "custom");
+  }
+
+  function selectBuiltinEmote(item: EmoteItem, packId: EmotePack["id"]) {
+    if (packId === "emoji" && item.kind === "unicode") {
+      setRecentEmojiIds(recordRecentEmojiUse(item.id, unicodeEmojiIds));
+    }
+    onSelect(item, packId);
   }
 
   function openCollection(collectionId: string) {
@@ -13645,22 +13660,40 @@ function EmotePicker({
           {customError && <p className="emote-picker-error" role="status">{customError}</p>}
         </div>
       ) : (
-        <div className="emote-grid">
-        {activePack?.items.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            title={item.label}
-            aria-label={item.label}
-            onClick={() => onSelect(item, activePack.id)}
-          >
-            {item.kind === "unicode" ? (
-              <span className="unicode-emote">{item.value}</span>
-            ) : (
-              <img alt="" decoding="async" draggable={false} src={item.src} />
-            )}
-          </button>
-        ))}
+        <div className={activePackId === "emoji" ? "emote-builtin-pane with-recents" : "emote-builtin-pane"}>
+          <div className="emote-grid emote-builtin-grid">
+            {activePack?.items.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                title={item.label}
+                aria-label={item.label}
+                onClick={() => selectBuiltinEmote(item, activePack.id)}
+              >
+                {item.kind === "unicode" ? (
+                  <span className="unicode-emote">{item.value}</span>
+                ) : (
+                  <img alt="" decoding="async" draggable={false} src={item.src} />
+                )}
+              </button>
+            ))}
+          </div>
+          {activePackId === "emoji" && (
+            <section className="emote-recent" aria-label="近期常用表情">
+              <span>近期常用</span>
+              {recentEmojiItems.length > 0 ? (
+                <div className="emote-recent-list">
+                  {recentEmojiItems.map((item) => (
+                    <button key={item.id} type="button" title={item.label} aria-label={`近期常用：${item.label}`} onClick={() => selectBuiltinEmote(item, "emoji")}>
+                      <span className="unicode-emote">{item.value}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <small>使用过的 Emoji 会显示在这里</small>
+              )}
+            </section>
+          )}
         </div>
       )}
     </div>
