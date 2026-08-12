@@ -89,8 +89,13 @@ describe("workspace UI permission boundaries", () => {
     expect(source).not.toContain('<span>上传表情</span>');
     expect(source).toContain("onPreviewEmoteCollection={setWorkspaceEmoteCollectionPreviewId}");
     expect(source).toContain('aria-label="表情合集预览"');
+    expect(source).toContain('className="workspace-panel-header workspace-shared-emote-header"');
+    expect(source).toContain('className={imported ? "workspace-shared-emote-item imported" : "workspace-shared-emote-item"}');
+    expect(source).toContain('{importing === "collection" ? "正在添加" : "添加整套"}');
+    expect(source).not.toContain('<button className="secondary compact" type="button" disabled={busy} onClick={() => void importShare([emote.id])}>添加</button>');
     expect(source).not.toContain('className="workspace-emote-manage-row');
     expect(styles).toContain(".workspace-rail-content.chat > .workspace-search");
+    expect(styles).toContain(".workspace-shared-emote-item-action");
     expect(styles).toContain("height: min(820px, calc(100dvh - 48px));");
     expect(styles).toContain(".workspace-shared-emote-body");
     expect(styles).toContain(".workspace-emote-library-grid.organizing");

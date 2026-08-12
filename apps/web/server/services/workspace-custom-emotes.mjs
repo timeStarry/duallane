@@ -75,7 +75,7 @@ export function createWorkspaceCustomEmoteService({ db, objectStore, dataDir, no
           await objectStore.persistCustomEmote(stored);
           persisted = true;
           const orderRow = await db.prepare(`
-            SELECT COALESCE(MAX(sort_order), -1) + 1 AS nextOrder
+            SELECT COALESCE(MIN(sort_order), 0) - 1 AS nextOrder
             FROM workspace_custom_emotes WHERE user_id = ?
           `).get(actor.id);
           await db.prepare(`
@@ -133,7 +133,7 @@ export function createWorkspaceCustomEmoteService({ db, objectStore, dataDir, no
     const id = randomUUID();
     const date = now().toISOString();
     const order = await db.prepare(`
-      SELECT COALESCE(MAX(sort_order), -1) + 1 AS nextOrder
+      SELECT COALESCE(MIN(sort_order), 0) - 1 AS nextOrder
       FROM workspace_custom_emotes WHERE user_id = ?
     `).get(actor.id);
     await db.prepare(`
@@ -757,7 +757,7 @@ async function addBuiltinFavorite(db, actorId, emote, date, placement = {}) {
   }
   await assertCollectionCapacity(db, actorId, 0);
   const orderRow = await db.prepare(`
-    SELECT COALESCE(MAX(sort_order), -1) + 1 AS nextOrder FROM workspace_custom_emotes WHERE user_id = ?
+    SELECT COALESCE(MIN(sort_order), 0) - 1 AS nextOrder FROM workspace_custom_emotes WHERE user_id = ?
   `).get(actorId);
   const id = randomUUID();
   await db.prepare(`
@@ -895,7 +895,7 @@ async function insertLibraryEntry(db, actorId, entryType, targetId, date) {
   `).get(actorId, targetId);
   if (existing) return existing.id;
   const order = await db.prepare(`
-    SELECT COALESCE(MAX(sort_order), -1) + 1 AS nextOrder
+    SELECT COALESCE(MIN(sort_order), 0) - 1 AS nextOrder
     FROM workspace_emote_library_entries WHERE user_id = ?
   `).get(actorId);
   const id = randomUUID();

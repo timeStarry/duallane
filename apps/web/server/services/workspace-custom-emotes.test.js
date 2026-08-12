@@ -140,6 +140,48 @@ describe("workspace custom emotes", () => {
     })).rejects.toMatchObject({ code: "emote.invalid_file_name" });
   });
 
+  it("places newly added emotes and collections at the front of the library", async () => {
+    const { service } = await fixture();
+    const first = await service.upload({
+      actorId: "usr_owner",
+      stream: Readable.from(createOnePixelBmp()),
+      contentType: "image/bmp",
+      fileName: "first.bmp"
+    });
+    const secondPng = await sharp({
+      create: { width: 4, height: 4, channels: 4, background: { r: 40, g: 120, b: 200, alpha: 1 } }
+    }).png().toBuffer();
+    const second = await service.upload({
+      actorId: "usr_owner",
+      stream: Readable.from(secondPng),
+      contentType: "image/png",
+      fileName: "second.png"
+    });
+
+    expect((await service.getLibrary("usr_owner")).entries.map((entry) => entry.emote?.id))
+      .toEqual([second.id, first.id]);
+
+    const collection = await service.createCollection("usr_owner", { name: "置顶合集", emoteIds: [first.id] });
+    let library = await service.getLibrary("usr_owner");
+    expect(library.entries[0]).toMatchObject({ type: "collection", collection: { id: collection.id } });
+
+    const preservedEntryIds = [library.entries[2].id, library.entries[1].id, library.entries[0].id];
+    await service.reorderLibrary("usr_owner", preservedEntryIds);
+    const thirdPng = await sharp({
+      create: { width: 5, height: 5, channels: 4, background: { r: 190, g: 70, b: 90, alpha: 1 } }
+    }).png().toBuffer();
+    const third = await service.upload({
+      actorId: "usr_owner",
+      stream: Readable.from(thirdPng),
+      contentType: "image/png",
+      fileName: "third.png"
+    });
+    library = await service.getLibrary("usr_owner");
+    expect(library.entries[0]).toMatchObject({ type: "emote", emote: { id: third.id } });
+    expect(library.entries.slice(1).map((entry) => entry.id)).toEqual(preservedEntryIds);
+    expect((await service.list("usr_owner")).items[0].id).toBe(third.id);
+  });
+
   it("reuses normalized custom-emote resources when another member favorites them", async () => {
     const { service, db, stored, removed } = await fixture({ member: true });
     const now = new Date().toISOString();

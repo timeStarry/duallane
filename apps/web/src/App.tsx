@@ -10300,7 +10300,8 @@ function WorkspaceSharedEmoteCollectionPage({
 }) {
   const [share, setShare] = useState<WorkspaceEmoteCollectionShare | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [importing, setImporting] = useState<"collection" | string | null>(null);
+  const [importedEmoteIds, setImportedEmoteIds] = useState<string[]>([]);
   useEffect(() => {
     let cancelled = false;
     void workspaceJson<{ share: WorkspaceEmoteCollectionShare }>(
@@ -10317,7 +10318,8 @@ function WorkspaceSharedEmoteCollectionPage({
 
   async function importShare(emoteIds?: string[]) {
     if (!share || share.revokedAt) return;
-    setBusy(true);
+    const action = emoteIds?.[0] || "collection";
+    setImporting(action);
     try {
       await workspaceJson(`/api/workspace/emote-collection-shares/${encodeURIComponent(share.id)}/import`, {
         method: "POST",
@@ -10325,28 +10327,43 @@ function WorkspaceSharedEmoteCollectionPage({
       });
       notifyWorkspaceEmoteLibraryChanged();
       onNotice("success", emoteIds ? "表情已添加到我的收藏" : "表情合集已添加到我的表情");
+      if (emoteIds) {
+        setImportedEmoteIds((current) => [...new Set([...current, ...emoteIds])]);
+      } else {
+        onBack();
+      }
     } catch (error) {
       onNotice("warning", userFacingErrorMessage(error, "导入表情失败"));
     } finally {
-      setBusy(false);
+      setImporting(null);
     }
   }
 
   return (
     <div className={presentation === "dialog" ? "workspace-shared-emote-page dialog" : "workspace-content-panel workspace-shared-emote-page"}>
-      <div className="workspace-panel-header">
-        <button
-          ref={closeButtonRef}
-          className="icon-button"
-          type="button"
-          title={presentation === "dialog" ? "关闭预览" : "返回个人设置"}
-          aria-label={presentation === "dialog" ? "关闭表情合集预览" : "返回个人设置"}
-          onClick={onBack}
-        >
-          {presentation === "dialog" ? <X size={17} /> : <ArrowLeft size={17} />}
-        </button>
-        <div><p className="eyebrow">表情合集</p><h2>{loading ? "正在读取..." : share?.name || "合集分享"}</h2></div>
-      </div>
+      <header className="workspace-panel-header workspace-shared-emote-header">
+        <div className="workspace-shared-emote-heading">
+          {presentation === "page" && (
+            <button className="icon-button" type="button" title="返回个人设置" aria-label="返回个人设置" onClick={onBack}>
+              <ArrowLeft size={17} />
+            </button>
+          )}
+          <div><p className="eyebrow">表情合集</p><h2>{loading ? "正在读取..." : share?.name || "合集分享"}</h2></div>
+        </div>
+        <div className="workspace-shared-emote-header-actions">
+          {share && !share.revokedAt && (
+            <button className="primary compact" type="button" disabled={importing !== null} onClick={() => void importShare()}>
+              <Plus size={15} />
+              {importing === "collection" ? "正在添加" : "添加整套"}
+            </button>
+          )}
+          {presentation === "dialog" && (
+            <button ref={closeButtonRef} className="icon-button" type="button" title="关闭预览" aria-label="关闭表情合集预览" onClick={onBack}>
+              <X size={17} />
+            </button>
+          )}
+        </div>
+      </header>
       <div className="workspace-shared-emote-body">
         {share?.revokedAt ? (
           <div className="workspace-empty-state"><Images size={28} /><strong>合集已停止分享</strong><p>分享者已撤销该链接，已导入的表情不受影响。</p></div>
@@ -10358,15 +10375,26 @@ function WorkspaceSharedEmoteCollectionPage({
             <span>{share.sharedBy.displayName} 分享</span>
           </div>
           <div className="workspace-shared-emote-grid">
-            {share.items.map((emote) => (
-              <article key={emote.id}>
-                <img src={emote.src} alt={emote.label} title={emote.label} loading="lazy" decoding="async" />
-                <button className="secondary compact" type="button" disabled={busy} onClick={() => void importShare([emote.id])}>添加</button>
-              </article>
-            ))}
-          </div>
-          <div className="workspace-section-actions">
-            <button className="primary" type="button" disabled={busy} onClick={() => void importShare()}>添加整套</button>
+            {share.items.map((emote) => {
+              const imported = importedEmoteIds.includes(emote.id);
+              const isImporting = importing === emote.id;
+              return (
+                <button
+                  className={imported ? "workspace-shared-emote-item imported" : "workspace-shared-emote-item"}
+                  key={emote.id}
+                  type="button"
+                  title={imported ? `${emote.label} 已添加` : `添加 ${emote.label}`}
+                  aria-label={imported ? `已添加表情 ${emote.label}` : `添加表情 ${emote.label}`}
+                  disabled={importing !== null || imported}
+                  onClick={() => void importShare([emote.id])}
+                >
+                  <img src={emote.src} alt="" loading="lazy" decoding="async" />
+                  <span className="workspace-shared-emote-item-action" aria-hidden="true">
+                    {imported ? <Check size={16} /> : isImporting ? <span className="workspace-shared-emote-item-pending" /> : <Plus size={16} />}
+                  </span>
+                </button>
+              );
+            })}
           </div>
           </>
         ) : !loading ? (

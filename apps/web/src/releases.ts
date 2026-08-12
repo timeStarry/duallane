@@ -13,6 +13,16 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.13.2",
+    releasedAt: "2026-08-13",
+    title: "更紧凑的表情添加体验",
+    summary: "优化共享空间边距和表情合集操作，让新收藏更快出现在常用位置。",
+    categories: [
+      { title: "表情", items: ["添加整套移至合集顶栏，完成后自动关闭预览并保留当前聊天", "单张表情改为整块点击，添加过程和完成状态更清晰", "新添加的表情与合集默认排列在个人表情库前方"] },
+      { title: "布局", items: ["会话导航、搜索框和内容列表使用更一致的边缘留白"] }
+    ]
+  },
+  {
     version: "0.13.1",
     releasedAt: "2026-08-13",
     title: "更顺手的表情浏览",
