@@ -13,6 +13,16 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.11.0",
+    releasedAt: "2026-08-12",
+    title: "我的表情与合集",
+    summary: "收藏表情升级为可管理、可排序、可分享的个人表情库。",
+    categories: [
+      { title: "管理", items: ["收藏表情位于表情面板第一项，支持批量上传和固定尺寸的合集入口", "单张表情与合集可以混合排序，合集内也可独立调整顺序"] },
+      { title: "分享", items: ["可在空间内分享表情合集，接收者可以逐张或整套添加到自己的表情库", "分享使用快照，撤销分享不会影响已经导入的表情"] }
+    ]
+  },
+  {
     version: "0.10.0",
     releasedAt: "2026-08-10",
     title: "更稳的大文件与个人表情",

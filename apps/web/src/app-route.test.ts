@@ -10,6 +10,11 @@ describe("application routes", () => {
     expect(parseAppRoute("/workspace/files/file-1").route).toMatchObject({ view: "files", fileId: "file-1" });
     expect(parseAppRoute("/workspace/members/user-1").route).toMatchObject({ view: "members", memberId: "user-1" });
     expect(parseAppRoute("/workspace/account").route).toMatchObject({ view: "account" });
+    expect(parseAppRoute("/workspace/account/emotes").route).toMatchObject({ view: "account", accountSection: "emotes" });
+    expect(parseAppRoute("/workspace/emotes/shared/share-1").route).toMatchObject({
+      view: "account",
+      sharedEmoteCollectionId: "share-1"
+    });
     expect(parseAppRoute("/workspace/new/group").route).toMatchObject({ view: "new", createMode: "group" });
     expect(parseAppRoute("/workspace/space/permissions").route).toMatchObject({ view: "space", spaceTab: "roles" });
     expect(parseAppRoute("/workspace/space/email").route).toMatchObject({ view: "space", spaceTab: "email" });
@@ -35,6 +40,8 @@ describe("application routes", () => {
     expect(getAppRouteUrl(workspaceRoute({ conversationId: "conversation 1" }))).toBe("/workspace/chat/conversation%201");
     expect(getAppRouteUrl(workspaceRoute({ view: "space", spaceTab: "roles" }))).toBe("/workspace/space/permissions");
     expect(getAppRouteUrl(workspaceRoute({ view: "files", fileId: "file-1" }))).toBe("/workspace/files/file-1");
+    expect(getAppRouteUrl(workspaceRoute({ view: "account", accountSection: "emotes" }))).toBe("/workspace/account/emotes");
+    expect(getAppRouteUrl(workspaceRoute({ view: "account", sharedEmoteCollectionId: "share-1" }))).toBe("/workspace/emotes/shared/share-1");
   });
 
   it("rejects unsafe OAuth return paths", () => {

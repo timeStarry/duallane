@@ -49,7 +49,7 @@ const ROLE_LABELS = {
 };
 
 const PRIVILEGED_INVITE_ROLES = new Set(["owner", "admin", "auditor"]);
-const MESSAGE_BLOCK_TYPES = new Set(["text", "mention", "link", "emoji", "attachment"]);
+const MESSAGE_BLOCK_TYPES = new Set(["text", "mention", "link", "emoji", "attachment", "emote_collection"]);
 const ATTACHMENT_VISIBILITIES = new Set(["private_staging", "conversation", "space"]);
 
 async function runWorkspaceTransaction(db, callback) {
@@ -2001,12 +2001,14 @@ export async function listMessages(db, userId, conversationId, options = {}) {
 
   const reactionsByMessageId = await listMessageReactionGroups(db, rows.map((row) => row.id), actor);
   const pinsByMessageId = await listMessagePins(db, rows.map((row) => row.id), actor);
+  const emoteSharesByMessageId = await listMessageEmoteCollectionShares(db, rows.map((row) => row.id), actor);
   return await Promise.all(rows.map(async (row) => await publicMessage({
     ...row,
     content: JSON.parse(row.contentJson),
     attachments: await listMessageAttachments(db, row.id),
     reactions: reactionsByMessageId.get(row.id) ?? [],
-    pin: pinsByMessageId.get(row.id)
+    pin: pinsByMessageId.get(row.id),
+    emoteCollectionShares: emoteSharesByMessageId.get(row.id)
   }, actor, db)));
 }
 
@@ -2064,6 +2066,7 @@ export async function recallMessage(db, request, input) {
 
       await db.prepare("DELETE FROM message_reactions WHERE message_id = ?").run(target.id);
       await db.prepare("DELETE FROM message_custom_emotes WHERE message_id = ?").run(target.id);
+      await db.prepare("DELETE FROM message_emote_collection_shares WHERE message_id = ?").run(target.id);
       const pin = await db.prepare(`
         SELECT conversation_id AS conversationId, pinned_by_user_id AS pinnedByUserId
         FROM conversation_pinned_messages
@@ -2346,6 +2349,7 @@ export async function createStructuredMessage(db, request, input) {
   let replyToMessageId = null;
   let attachmentIds = [];
   let customEmoteIds = [];
+  let emoteCollectionShareIds = [];
   try {
     existing = await db.prepare(`
       SELECT id, content_json AS contentJson
@@ -2354,7 +2358,8 @@ export async function createStructuredMessage(db, request, input) {
     `).get(DEFAULT_SPACE_ID, conversationId, actor.id, clientMessageId);
 
     normalizedContent = await normalizeMessageContent(db, actor, conversationId, input.content, {
-      validateCustomEmote: input.validateCustomEmote
+      validateCustomEmote: input.validateCustomEmote,
+      validateCollectionShare: input.validateCollectionShare
     });
     if (existing) {
       if (existing.contentJson !== JSON.stringify(normalizedContent)) {
@@ -2373,6 +2378,7 @@ export async function createStructuredMessage(db, request, input) {
 
     attachmentIds = extractAttachmentIds(normalizedContent);
     customEmoteIds = extractCustomEmoteIds(normalizedContent);
+    emoteCollectionShareIds = extractEmoteCollectionShareIds(normalizedContent);
     for (const attachmentId of attachmentIds) {
       await validateAttachmentForMessage(db, actor, conversationId, attachmentId);
     }
@@ -2437,6 +2443,14 @@ export async function createStructuredMessage(db, request, input) {
         VALUES (?, ?)
         ON CONFLICT DO NOTHING
       `).run(id, customEmoteId);
+    }
+
+    for (const shareId of emoteCollectionShareIds) {
+      await db.prepare(`
+        INSERT INTO message_emote_collection_shares (message_id, share_id)
+        VALUES (?, ?)
+        ON CONFLICT DO NOTHING
+      `).run(id, shareId);
     }
 
     await enforceRetention(db, conversationId);
@@ -3339,6 +3353,74 @@ async function listMessagePins(db, messageIds, actor) {
   return pins;
 }
 
+async function listMessageEmoteCollectionShares(db, messageIds, actor) {
+  const ids = uniqueStrings(messageIds);
+  const byMessageId = new Map(ids.map((id) => [id, new Map()]));
+  if (ids.length === 0) return byMessageId;
+  const placeholders = ids.map(() => "?").join(", ");
+  const shares = await db.prepare(`
+    SELECT mes.message_id AS messageId, s.id, s.snapshot_name AS name,
+      s.item_count AS itemCount, s.created_at AS createdAt, s.revoked_at AS revokedAt,
+      s.shared_by_user_id AS sharedByUserId,
+      COALESCE(sr.remark, su.nickname, su.github_login, su.display_name) AS sharedByName,
+      s.original_creator_user_id AS originalCreatorUserId,
+      COALESCE(orr.remark, ou.nickname, ou.github_login, ou.display_name) AS originalCreatorName
+    FROM message_emote_collection_shares mes
+    INNER JOIN workspace_emote_collection_shares s ON s.id = mes.share_id
+    INNER JOIN users su ON su.id = s.shared_by_user_id
+    INNER JOIN users ou ON ou.id = s.original_creator_user_id
+    LEFT JOIN user_remarks sr ON sr.owner_user_id = ? AND sr.target_user_id = su.id
+    LEFT JOIN user_remarks orr ON orr.owner_user_id = ? AND orr.target_user_id = ou.id
+    WHERE mes.message_id IN (${placeholders})
+  `).all(actor?.id ?? "", actor?.id ?? "", ...ids);
+  const shareIds = uniqueStrings(shares.map((share) => share.id));
+  const coversByShareId = new Map(shareIds.map((id) => [id, []]));
+  if (shareIds.length > 0) {
+    const sharePlaceholders = shareIds.map(() => "?").join(", ");
+    const coverRows = await db.prepare(`
+      SELECT si.share_id AS shareId, e.id, e.source_type AS sourceType,
+        e.source_emote_key AS sourceEmoteKey, e.label, e.frame_count AS frameCount
+      FROM workspace_emote_collection_share_items si
+      INNER JOIN workspace_custom_emotes e ON e.id = si.emote_id
+      WHERE si.share_id IN (${sharePlaceholders}) AND si.sort_order < 4
+      ORDER BY si.share_id, si.sort_order ASC
+    `).all(...shareIds);
+    for (const row of coverRows) {
+      const item = publicSharedEmoteCover(row);
+      if (item) coversByShareId.get(row.shareId)?.push(item);
+    }
+  }
+  for (const share of shares) {
+    byMessageId.get(share.messageId)?.set(share.id, {
+      id: share.id,
+      name: share.name,
+      itemCount: Number(share.itemCount) || 0,
+      createdAt: share.createdAt,
+      revokedAt: share.revokedAt || null,
+      sharedBy: { id: share.sharedByUserId, displayName: share.sharedByName },
+      originalCreator: { id: share.originalCreatorUserId, displayName: share.originalCreatorName },
+      canRevoke: share.sharedByUserId === actor?.id,
+      covers: coversByShareId.get(share.id) ?? [],
+      sharePath: `/workspace/emotes/shared/${encodeURIComponent(share.id)}`
+    });
+  }
+  return byMessageId;
+}
+
+function publicSharedEmoteCover(row) {
+  if (row.sourceType === "builtin") {
+    const emote = getReactionEmote(row.sourceEmoteKey);
+    if (!emote || emote.kind !== "image") return null;
+    return { id: row.id, label: row.label, src: emote.src };
+  }
+  return {
+    id: row.id,
+    label: row.label,
+    src: `/api/workspace/emotes/${encodeURIComponent(row.id)}/content`,
+    animated: Number(row.frameCount) > 1
+  };
+}
+
 function canUnpinMessage(actor, authorId) {
   return actor?.id === authorId || actor?.role === "owner" || actor?.role === "admin";
 }
@@ -3442,6 +3524,14 @@ async function normalizeBlock(db, actor, conversationId, block, options = {}) {
     }
     return { type: "emoji", shortcode };
   }
+  if (block.type === "emote_collection") {
+    const shareId = normalizeString(block.shareId).toLowerCase();
+    if (!/^[a-f0-9-]{36}$/i.test(shareId) || typeof options.validateCollectionShare !== "function") {
+      throw new WorkspaceValidationError("message.invalid_emote_collection", "表情合集分享不可用");
+    }
+    await options.validateCollectionShare(actor.id, shareId);
+    return { type: "emote_collection", shareId };
+  }
   const attachmentId = normalizeString(block.attachmentId);
   await validateAttachmentForMessage(db, actor, conversationId, attachmentId);
   return { type: "attachment", attachmentId };
@@ -3457,6 +3547,7 @@ function buildPlainText(blocks) {
     if (block.type === "link") return block.label || block.url;
     if (block.type === "emoji") return block.shortcode.startsWith("custom:") ? "[表情]" : `:${block.shortcode}:`;
     if (block.type === "attachment") return "[文件]";
+    if (block.type === "emote_collection") return "[表情合集]";
     return "";
   }).join("");
 }
@@ -3479,6 +3570,12 @@ function extractCustomEmoteIds(content) {
     const match = /^custom:([a-f0-9-]{36})$/i.exec(block.shortcode);
     return match ? [match[1].toLowerCase()] : [];
   }))];
+}
+
+function extractEmoteCollectionShareIds(content) {
+  return uniqueStrings(content.blocks
+    .filter((block) => block.type === "emote_collection")
+    .map((block) => block.shareId));
 }
 
 async function validateAttachmentForMessage(db, actor, conversationId, attachmentId) {
@@ -3678,7 +3775,7 @@ async function publicMessage(message, actor = null, db = null) {
   const recalled = Boolean(message.recalledAt);
   const content = recalled
     ? { format: MESSAGE_CONTENT_FORMAT, plainText: "", blocks: [] }
-    : publicMessageContent(message.content);
+    : publicMessageContent(message.content, message.emoteCollectionShares);
   const authorIdentity = getSystemIdentityDefinition(message.authorId);
   const authorName = authorIdentity?.displayName ?? message.authorRemark ?? message.authorNickname ?? message.authorGithubLogin ?? message.authorName;
   const recallReason = recalled ? publicString(message.recallReason) || DEFAULT_RECALL_REASON : "";
@@ -3712,7 +3809,7 @@ async function publicMessage(message, actor = null, db = null) {
   };
 }
 
-function publicMessageContent(content) {
+function publicMessageContent(content, emoteCollectionShares = null) {
   if (!content || typeof content !== "object") {
     return {
       format: "",
@@ -3720,7 +3817,9 @@ function publicMessageContent(content) {
       blocks: []
     };
   }
-  const blocks = Array.isArray(content.blocks) ? content.blocks.map(publicMessageBlock).filter(Boolean) : [];
+  const blocks = Array.isArray(content.blocks)
+    ? content.blocks.map((block) => publicMessageBlock(block, emoteCollectionShares)).filter(Boolean)
+    : [];
   return {
     format: publicString(content.format),
     plainText: buildPlainText(blocks).trim(),
@@ -3728,7 +3827,7 @@ function publicMessageContent(content) {
   };
 }
 
-function publicMessageBlock(block) {
+function publicMessageBlock(block, emoteCollectionShares = null) {
   if (!block || typeof block !== "object") {
     return null;
   }
@@ -3751,6 +3850,13 @@ function publicMessageBlock(block) {
   }
   if (block.type === "attachment") {
     return { type: "attachment", attachmentId: publicString(block.attachmentId) };
+  }
+  if (block.type === "emote_collection") {
+    const shareId = publicString(block.shareId);
+    const share = emoteCollectionShares instanceof Map
+      ? emoteCollectionShares.get(shareId)
+      : block.share && typeof block.share === "object" ? block.share : null;
+    return { type: "emote_collection", shareId, share: share || undefined };
   }
   return null;
 }
@@ -4361,12 +4467,14 @@ async function publicMessagePayloadForActor(db, actor, message) {
     if (row) {
       const reactionsByMessageId = await listMessageReactionGroups(db, [row.id], actor);
       const pinsByMessageId = await listMessagePins(db, [row.id], actor);
+      const emoteSharesByMessageId = await listMessageEmoteCollectionShares(db, [row.id], actor);
       return await publicMessage({
         ...row,
         content: JSON.parse(row.contentJson),
         attachments: await listMessageAttachments(db, row.id),
         reactions: reactionsByMessageId.get(row.id) ?? [],
-        pin: pinsByMessageId.get(row.id)
+        pin: pinsByMessageId.get(row.id),
+        emoteCollectionShares: emoteSharesByMessageId.get(row.id)
       }, actor, db);
     }
   }

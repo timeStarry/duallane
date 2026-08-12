@@ -1,6 +1,7 @@
 export type WorkspaceRouteView = "chat" | "files" | "members" | "account" | "space" | "new";
 export type WorkspaceRouteSpaceTab = "overview" | "invites" | "roles" | "visibility" | "email";
 export type WorkspaceRouteCreateMode = "" | "direct" | "group";
+export type WorkspaceRouteAccountSection = "" | "emotes";
 
 export type AppRoute =
   | { kind: "entry" }
@@ -14,6 +15,8 @@ export type AppRoute =
       memberId: string;
       spaceTab: WorkspaceRouteSpaceTab;
       createMode: WorkspaceRouteCreateMode;
+      accountSection: WorkspaceRouteAccountSection;
+      sharedEmoteCollectionId: string;
       inviteCode: string;
     };
 
@@ -85,8 +88,18 @@ export function parseAppRoute(pathname: string, search = "", hash = ""): ParsedA
       segments.length > 3 || (segments.length === 3 && !memberId) || hasUnexpectedParams(params, ["invite"])
     );
   }
-  if (segments[1] === "account" && segments.length === 2) {
-    return finish(workspaceRoute({ ...base, view: "account" }), hasUnexpectedParams(params, ["invite"]));
+  if (segments[1] === "account" && (segments.length === 2 || (segments.length === 3 && segments[2] === "emotes"))) {
+    return finish(
+      workspaceRoute({ ...base, view: "account", accountSection: segments[2] === "emotes" ? "emotes" : "" }),
+      hasUnexpectedParams(params, ["invite"])
+    );
+  }
+  if (segments[1] === "emotes" && segments[2] === "shared") {
+    const shareId = segments.length === 4 ? normalizeRouteSegment(segments[3]) : "";
+    return finish(
+      workspaceRoute({ ...base, view: "account", sharedEmoteCollectionId: shareId }),
+      segments.length !== 4 || !shareId || hasUnexpectedParams(params, ["invite"])
+    );
   }
   if (segments[1] === "new" && segments.length === 3 && (segments[2] === "direct" || segments[2] === "group")) {
     return finish(
@@ -116,7 +129,8 @@ export function getAppRouteUrl(route: AppRoute) {
   if (route.view === "chat" && route.conversationId) pathname = `/workspace/chat/${encodeURIComponent(route.conversationId)}`;
   if (route.view === "files") pathname = route.fileId ? `/workspace/files/${encodeURIComponent(route.fileId)}` : "/workspace/files";
   if (route.view === "members") pathname = route.memberId ? `/workspace/members/${encodeURIComponent(route.memberId)}` : "/workspace/members";
-  if (route.view === "account") pathname = "/workspace/account";
+  if (route.sharedEmoteCollectionId) pathname = `/workspace/emotes/shared/${encodeURIComponent(route.sharedEmoteCollectionId)}`;
+  else if (route.view === "account") pathname = route.accountSection === "emotes" ? "/workspace/account/emotes" : "/workspace/account";
   if (route.view === "new" && route.createMode) pathname = `/workspace/new/${route.createMode}`;
   if (route.view === "space") pathname = route.spaceTab === "overview" ? "/workspace/space" : `/workspace/space/${spaceTabPath(route.spaceTab)}`;
 
@@ -134,6 +148,8 @@ export function workspaceRoute(input: Partial<Omit<Extract<AppRoute, { kind: "wo
     memberId: input.memberId ?? "",
     spaceTab: input.spaceTab ?? "overview",
     createMode: input.createMode ?? "",
+    accountSection: input.accountSection ?? "",
+    sharedEmoteCollectionId: input.sharedEmoteCollectionId ?? "",
     inviteCode: input.inviteCode ?? ""
   };
 }

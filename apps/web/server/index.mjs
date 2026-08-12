@@ -753,6 +753,15 @@ app.get("/api/workspace/me/emotes", async (request, reply) => {
   }
 });
 
+app.get("/api/workspace/me/emote-library", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return await workspaceCustomEmotes.getLibrary(await getWorkspaceUserId(request));
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
 app.post("/api/workspace/me/emotes", { bodyLimit: CUSTOM_EMOTE_MAX_INPUT_BYTES }, async (request, reply) => {
   if (!workspaceEnabled) return blockWorkspace(reply);
   try {
@@ -760,9 +769,163 @@ app.post("/api/workspace/me/emotes", { bodyLimit: CUSTOM_EMOTE_MAX_INPUT_BYTES }
       actorId: await getWorkspaceUserId(request),
       stream: request.body,
       contentType: normalizeHeaderValue(request.headers["content-type"]),
-      fileName: decodeFileNameHeader(request.headers["x-duallane-file-name"])
+      fileName: decodeFileNameHeader(request.headers["x-duallane-file-name"]),
+      collectionId: String(request.query?.collectionId ?? "").trim(),
+      addToLibrary: request.query?.addToLibrary !== "false"
     });
     return reply.code(201).send({ emote });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.put("/api/workspace/me/emote-library/order", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return await workspaceCustomEmotes.reorderLibrary(
+      await getWorkspaceUserId(request),
+      request.body?.entryIds
+    );
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/me/emote-collections", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    const collection = await workspaceCustomEmotes.createCollection(
+      await getWorkspaceUserId(request),
+      request.body
+    );
+    return reply.code(201).send({ collection });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.patch("/api/workspace/me/emote-collections/:collectionId", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return {
+      collection: await workspaceCustomEmotes.updateCollection(
+        await getWorkspaceUserId(request),
+        request.params.collectionId,
+        request.body
+      )
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.delete("/api/workspace/me/emote-collections/:collectionId", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return await workspaceCustomEmotes.deleteCollection(
+      await getWorkspaceUserId(request),
+      request.params.collectionId,
+      request.query?.itemDisposition === "remove" ? "remove" : "keep"
+    );
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/me/emote-collections/:collectionId/items", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return {
+      collection: await workspaceCustomEmotes.addCollectionItems(
+        await getWorkspaceUserId(request),
+        request.params.collectionId,
+        request.body?.emoteIds
+      )
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.delete("/api/workspace/me/emote-collections/:collectionId/items/:emoteId", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return {
+      collection: await workspaceCustomEmotes.removeCollectionItem(
+        await getWorkspaceUserId(request),
+        request.params.collectionId,
+        request.params.emoteId
+      )
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.put("/api/workspace/me/emote-collections/:collectionId/order", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return {
+      collection: await workspaceCustomEmotes.reorderCollection(
+        await getWorkspaceUserId(request),
+        request.params.collectionId,
+        request.body?.emoteIds
+      )
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/me/emote-collections/:collectionId/shares", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    const share = await workspaceCustomEmotes.createCollectionShare(
+      await getWorkspaceUserId(request),
+      request.params.collectionId
+    );
+    return reply.code(201).send({ share });
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.delete("/api/workspace/me/emote-collection-shares/:shareId", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return {
+      share: await workspaceCustomEmotes.revokeCollectionShare(
+        await getWorkspaceUserId(request),
+        request.params.shareId
+      )
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.get("/api/workspace/emote-collection-shares/:shareId", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return {
+      share: await workspaceCustomEmotes.getCollectionShare(
+        await getWorkspaceUserId(request),
+        request.params.shareId
+      )
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.post("/api/workspace/emote-collection-shares/:shareId/import", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return await workspaceCustomEmotes.importCollectionShare(
+      await getWorkspaceUserId(request),
+      request.params.shareId,
+      request.body
+    );
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }
@@ -1097,7 +1260,8 @@ app.post("/api/workspace/messages", async (request, reply) => {
       actorId: await getWorkspaceUserId(request),
       scheduleEmailNotifications: workspaceEmail?.scheduleMessage,
       scheduleNtfyNotifications: workspaceNtfy?.scheduleMessage,
-      validateCustomEmote: workspaceCustomEmotes?.validateMessageCustomEmote
+      validateCustomEmote: workspaceCustomEmotes?.validateMessageCustomEmote,
+      validateCollectionShare: workspaceCustomEmotes?.validateMessageCollectionShare
     });
     return reply.code(201).send({ message });
   } catch (error) {
