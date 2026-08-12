@@ -474,6 +474,8 @@ type WorkspaceCustomEmote = {
   emoteKey?: string;
   animated: boolean;
   byteSize?: number;
+  width?: number;
+  height?: number;
   sourceType?: "upload" | "attachment" | "builtin" | "custom";
   originalFileName?: string;
   originalMimeType?: string;
@@ -7774,53 +7776,54 @@ export function App() {
                       </button>
                     ))}
                   </nav>
-                  <label className="workspace-search compact-search">
-                    <span className="sr-only">查找会话</span>
-                    <input
-                      value={workspaceConversationQuery}
-                      onChange={(event) => setWorkspaceConversationQuery(event.target.value)}
-                      placeholder="会话、成员或消息"
+                  <div className={`workspace-rail-content ${workspaceView}`}>
+                  {workspaceView === "chat" ? (
+                    <>
+                      <label className="workspace-search compact-search">
+                        <span className="sr-only">查找会话</span>
+                        <input value={workspaceConversationQuery} onChange={(event) => setWorkspaceConversationQuery(event.target.value)} placeholder="会话、成员或消息" />
+                      </label>
+                      <div className="conversation-list workspace-conversation-list">
+                        {workspaceFilteredConversations.length === 0 ? <p className="saved-empty">{workspaceConversations.length === 0 ? "还没有会话。可以从成员列表发起私聊。" : "没有找到匹配的会话。"}</p> : workspaceFilteredConversations.map((conversation) => (
+                          <button className={conversation.id === workspaceSelectedConversationId ? "conversation active" : "conversation"} type="button" key={conversation.id} aria-current={conversation.id === workspaceSelectedConversationId ? "true" : undefined} onClick={() => selectWorkspaceConversation(conversation.id)}>
+                            <WorkspaceConversationAvatar conversation={conversation} currentUserId={workspaceBootstrap.auth.currentUser.id} className="conversation-icon" />
+                            <span><strong><WorkspaceIdentityName name={workspaceConversationTitle(conversation, workspaceBootstrap.auth.currentUser.id)} kind={conversation.otherMember?.kind} /></strong><small>{workspaceConversationPreview(conversation)}</small></span>
+                            <span className="conversation-side"><time>{workspaceConversationTime(conversation)}</time>{(conversation.unreadCount ?? 0) > 0 ? <em className="unread-badge">{conversation.unreadCount}</em> : conversation.notificationLevel === "muted" ? <BellOff className="conversation-muted" size={14} aria-label="已免打扰" /> : null}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  ) : workspaceView === "files" ? (
+                    <WorkspaceFileRail
+                      files={workspaceFilteredFiles}
+                      selectedFileId={workspaceSelectedFileId}
+                      query={workspaceFileQuery}
+                      category={workspaceFileCategory}
+                      onQueryChange={setWorkspaceFileQuery}
+                      onCategoryChange={setWorkspaceFileCategory}
+                      onOpenFile={(file) => {
+                        setWorkspaceSelectedFileId(file.id);
+                        writeAppRoute(workspaceRoute({ inviteCode: workspacePendingInviteCode, view: "files", fileId: file.id }));
+                        setWorkspaceContextMode("file");
+                        setWorkspaceContextCollapsed(false);
+                        setWorkspaceMobilePane("details");
+                      }}
                     />
-                  </label>
-                  <div className="conversation-list workspace-conversation-list">
-                    {workspaceFilteredConversations.length === 0 ? (
-                      <p className="saved-empty">
-                        {workspaceConversations.length === 0 ? "还没有会话。可以从成员列表发起私聊。" : "没有找到匹配的会话。"}
-                      </p>
-                    ) : (
-                      workspaceFilteredConversations.map((conversation) => (
-                        <button
-                          className={conversation.id === workspaceSelectedConversationId ? "conversation active" : "conversation"}
-                          type="button"
-                          key={conversation.id}
-                          aria-current={conversation.id === workspaceSelectedConversationId ? "true" : undefined}
-                          onClick={() => selectWorkspaceConversation(conversation.id)}
-                        >
-                          <WorkspaceConversationAvatar
-                            conversation={conversation}
-                            currentUserId={workspaceBootstrap.auth.currentUser.id}
-                            className="conversation-icon"
-                          />
-                          <span>
-                            <strong>
-                              <WorkspaceIdentityName
-                                name={workspaceConversationTitle(conversation, workspaceBootstrap.auth.currentUser.id)}
-                                kind={conversation.otherMember?.kind}
-                              />
-                            </strong>
-                            <small>{workspaceConversationPreview(conversation)}</small>
-                          </span>
-                          <span className="conversation-side">
-                            <time>{workspaceConversationTime(conversation)}</time>
-                            {(conversation.unreadCount ?? 0) > 0 ? (
-                              <em className="unread-badge">{conversation.unreadCount}</em>
-                            ) : conversation.notificationLevel === "muted" ? (
-                              <BellOff className="conversation-muted" size={14} aria-label="已免打扰" />
-                            ) : null}
-                          </span>
-                        </button>
-                      ))
-                    )}
+                  ) : workspaceView === "members" ? (
+                    <WorkspaceMemberRail
+                      members={workspaceFilteredMembers}
+                      selectedMemberId={workspaceSelectedMemberId}
+                      query={workspaceMemberQuery}
+                      onQueryChange={setWorkspaceMemberQuery}
+                      onOpenMember={(member) => {
+                        setWorkspaceSelectedMemberId(member.id);
+                        writeAppRoute(workspaceRoute({ inviteCode: workspacePendingInviteCode, view: "members", memberId: member.id }));
+                        setWorkspaceContextMode("member");
+                        setWorkspaceContextCollapsed(false);
+                        setWorkspaceMobilePane("details");
+                      }}
+                    />
+                  ) : <div className="workspace-rail-section-empty"><Settings size={22} /><span>设置将在主区域中打开</span></div>}
                   </div>
                   <div className="workspace-rail-footer">
                     {workspaceUpdateAvailable && (
@@ -8838,15 +8841,14 @@ export function App() {
                       <ArrowLeft size={16} />
                     </button>
                     <div className="workspace-context-title">
-                      <p className="eyebrow">{workspaceContextMode === "file" ? "文件详情" : workspaceContextMode === "member" ? "成员详情" : workspaceSelectedConversation ? "会话详情" : "空间概览"}</p>
                       <strong>
                         {workspaceContextMode === "file"
-                          ? workspaceSelectedFile?.fileName ?? "选择文件"
+                          ? "文件信息"
                           : workspaceContextMode === "member"
-                          ? workspaceSelectedMember?.displayName ?? "选择成员"
+                          ? "成员资料"
                           : workspaceSelectedConversation
-                          ? workspaceConversationTitle(workspaceSelectedConversation, workspaceBootstrap.auth.currentUser.id)
-                        : workspaceBootstrap.space.name}
+                          ? "会话详情"
+                          : "空间概览"}
                       </strong>
                     </div>
                     <button className="icon-button desktop-only" type="button" title="收起详情" onClick={() => setWorkspaceContextCollapsed(true)}>
@@ -10333,8 +10335,7 @@ function WorkspaceSharedEmoteCollectionPage({
           <div className="workspace-shared-emote-grid">
             {share.items.map((emote) => (
               <article key={emote.id}>
-                <img src={emote.src} alt={emote.label} loading="lazy" decoding="async" />
-                <span>{emote.label}</span>
+                <img src={emote.src} alt={emote.label} title={emote.label} loading="lazy" decoding="async" />
                 <button className="secondary compact" type="button" disabled={busy} onClick={() => void importShare([emote.id])}>添加</button>
               </article>
             ))}
@@ -10364,6 +10365,10 @@ function WorkspaceEmoteManagerDialog({
   const [busy, setBusy] = useState(false);
   const [collectionId, setCollectionId] = useState("");
   const [newCollectionName, setNewCollectionName] = useState("");
+  const [newCollectionOpen, setNewCollectionOpen] = useState(false);
+  const [organizing, setOrganizing] = useState(false);
+  const [selectedEmoteId, setSelectedEmoteId] = useState("");
+  const [selectedEmoteLabel, setSelectedEmoteLabel] = useState("");
   const [editingCollectionId, setEditingCollectionId] = useState("");
   const [editingName, setEditingName] = useState("");
   const [share, setShare] = useState<WorkspaceEmoteCollectionShareSummary | null>(null);
@@ -10378,6 +10383,24 @@ function WorkspaceEmoteManagerDialog({
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
   const uploadRef = useRef<HTMLInputElement | null>(null);
+  const emoteDetailCloseRef = useRef<HTMLButtonElement | null>(null);
+  const emoteDetailTriggerRef = useRef<HTMLElement | null>(null);
+  const layerStateRef = useRef({
+    selectedEmoteId: "",
+    addExistingOpen: false,
+    shareOpen: false,
+    editingCollectionId: "",
+    newCollectionOpen: false,
+    collectionId: ""
+  });
+  layerStateRef.current = {
+    selectedEmoteId,
+    addExistingOpen,
+    shareOpen: Boolean(share),
+    editingCollectionId,
+    newCollectionOpen,
+    collectionId
+  };
 
   useEffect(() => {
     triggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -10393,7 +10416,18 @@ function WorkspaceEmoteManagerDialog({
     document.body.style.overflow = "hidden";
     const frame = requestAnimationFrame(() => closeRef.current?.focus());
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { event.preventDefault(); onClose(); return; }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        const layer = layerStateRef.current;
+        if (layer.selectedEmoteId) setSelectedEmoteId("");
+        else if (layer.addExistingOpen) setAddExistingOpen(false);
+        else if (layer.shareOpen) setShare(null);
+        else if (layer.editingCollectionId) setEditingCollectionId("");
+        else if (layer.newCollectionOpen) setNewCollectionOpen(false);
+        else if (layer.collectionId) setCollectionId("");
+        else onClose();
+        return;
+      }
       if (event.key !== "Tab" || !dialogRef.current) return;
       const focusable = getFocusableElements(dialogRef.current);
       if (focusable.length === 0) { event.preventDefault(); return; }
@@ -10412,6 +10446,16 @@ function WorkspaceEmoteManagerDialog({
     };
   }, [onClose]);
 
+  useEffect(() => {
+    if (!selectedEmoteId) return;
+    emoteDetailTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const frame = requestAnimationFrame(() => emoteDetailCloseRef.current?.focus());
+    return () => {
+      cancelAnimationFrame(frame);
+      requestAnimationFrame(() => emoteDetailTriggerRef.current?.focus());
+    };
+  }, [selectedEmoteId]);
+
   async function reload() {
     const next = await workspaceJson<WorkspaceEmoteLibrary>("/api/workspace/me/emote-library");
     setLibrary(next);
@@ -10426,7 +10470,7 @@ function WorkspaceEmoteManagerDialog({
     const name = newCollectionName.trim();
     if (!name) return;
     setBusy(true); setError("");
-    try { await workspaceJson("/api/workspace/me/emote-collections", { method: "POST", body: JSON.stringify({ name }) }); setNewCollectionName(""); await reloadAfterMutation(); onNotice("success", "表情合集已创建"); }
+    try { await workspaceJson("/api/workspace/me/emote-collections", { method: "POST", body: JSON.stringify({ name }) }); setNewCollectionName(""); setNewCollectionOpen(false); await reloadAfterMutation(); onNotice("success", "表情合集已创建"); }
     catch (err) { setError(userFacingErrorMessage(err, "合集创建失败")); }
     finally { setBusy(false); }
   }
@@ -10449,10 +10493,29 @@ function WorkspaceEmoteManagerDialog({
     setBusy(true); setError("");
     try {
       await workspaceJson(`/api/workspace/me/emotes/${encodeURIComponent(emote.id)}`, { method: "DELETE" });
+      setSelectedEmoteId("");
       await reloadAfterMutation();
       onNotice("success", "表情已删除");
     } catch (err) {
       setError(userFacingErrorMessage(err, "表情删除失败"));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function renameEmote(emote: WorkspaceCustomEmote) {
+    const label = selectedEmoteLabel.trim();
+    if (!label || label === emote.label) return;
+    setBusy(true); setError("");
+    try {
+      await workspaceJson(`/api/workspace/me/emotes/${encodeURIComponent(emote.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ label })
+      });
+      await reloadAfterMutation();
+      setSelectedEmoteLabel(label);
+      onNotice("success", "表情名称已更新");
+    } catch (err) {
+      setError(userFacingErrorMessage(err, "表情名称保存失败"));
     } finally {
       setBusy(false);
     }
@@ -10625,8 +10688,10 @@ function WorkspaceEmoteManagerDialog({
   }
 
   const selectedCollection = library?.collections.find((item) => item.id === collectionId) ?? null;
+  const selectedEmote = library?.emotes.find((item) => item.id === selectedEmoteId) ?? null;
   const selectedCollectionIds = new Set(selectedCollection?.items.map((item) => item.id) ?? []);
   const availableExistingEmotes = library?.emotes.filter((emote) => !selectedCollectionIds.has(emote.id)) ?? [];
+  const visibleUploadItems = uploadItems.filter((item) => item.state !== "complete");
   return createPortal(
     <div className="workspace-emote-manager-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <div ref={dialogRef} className="workspace-emote-manager" role="dialog" aria-modal="true" aria-labelledby="workspace-emote-manager-title">
@@ -10637,88 +10702,60 @@ function WorkspaceEmoteManagerDialog({
         {loading ? <WorkspaceSkeletonRows variant="setting" count={5} /> : !library ? <p className="workspace-form-status">{error || "暂无数据"}</p> : (
           <div className="workspace-emote-manager-body">
             <div className="workspace-emote-manager-toolbar">
-              <label className="workspace-inline-form compact"><span className="sr-only">新建合集名称</span><input value={newCollectionName} maxLength={32} onChange={(event) => setNewCollectionName(event.target.value)} placeholder="新合集名称" /></label>
-              <button className="secondary" type="button" disabled={busy || !newCollectionName.trim()} onClick={() => void createCollection()}><Plus size={16} /> 新建合集</button>
-              <label className="secondary file-button" title="批量上传表情"><FileUp size={16} /><span>上传</span><input ref={uploadRef} type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,image/bmp" disabled={busy} onChange={(event) => void uploadFiles(event.currentTarget.files)} /></label>
+              <div><strong>{library.usage.itemCount} 张表情</strong><small>{library.usage.collectionCount} 个合集 · {formatBytes(library.usage.totalBytes)}</small></div>
+              <span className="workspace-emote-manager-actions">
+                <button className={organizing ? "secondary compact active" : "secondary compact"} type="button" onClick={() => setOrganizing((value) => !value)}>{organizing ? <Check size={16} /> : <GripVertical size={16} />}{organizing ? "完成" : "整理"}</button>
+                <button className="secondary compact" type="button" onClick={() => setNewCollectionOpen((value) => !value)}><Images size={16} />新建合集</button>
+                <label className="primary compact file-button" title="批量上传表情"><FileUp size={16} /><span>上传表情</span><input ref={uploadRef} type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,image/bmp" disabled={busy} onChange={(event) => void uploadFiles(event.currentTarget.files)} /></label>
+              </span>
             </div>
+            {newCollectionOpen && <form className="workspace-emote-create-collection" onSubmit={(event) => { event.preventDefault(); void createCollection(); }}><label><span>合集名称</span><input value={newCollectionName} maxLength={32} autoFocus onChange={(event) => setNewCollectionName(event.target.value)} placeholder="例如：猫猫日常" /></label><button className="primary compact" type="submit" disabled={busy || !newCollectionName.trim()}>创建</button><button className="secondary compact" type="button" onClick={() => setNewCollectionOpen(false)}>取消</button></form>}
             {error && <p className="emote-picker-error" role="status">{error}</p>}
             {selectedCollection ? (
               <section className="workspace-emote-manager-collection">
                 <div className="workspace-emote-manager-section-head">
-                  <button className="secondary compact" type="button" onClick={() => setCollectionId("")}><ArrowLeft size={15} /> 返回一级表情</button>
-                  <div><h3>{selectedCollection.name}</h3><small>{selectedCollection.items.length} / {library.limits.maxCollectionItems} 张</small></div>
+                  <button className="workspace-emote-manager-back" type="button" onClick={() => { setCollectionId(""); setSelectedEmoteId(""); }}><ArrowLeft size={17} /><span><strong>{selectedCollection.name}</strong><small>{selectedCollection.items.length} / {library.limits.maxCollectionItems} 张</small></span></button>
                   <div className="workspace-emote-manager-actions">
                     <button className="secondary compact" type="button" disabled={busy || availableExistingEmotes.length === 0} onClick={() => { setSelectedExistingIds([]); setAddExistingOpen(true); }}><Plus size={15} /> 添加已有</button>
                     <button className="secondary compact" type="button" disabled={busy} onClick={() => void createShare(selectedCollection)}><Share2 size={15} /> 分享合集</button>
+                    <button className="icon-button" type="button" title="重命名合集" aria-label={`重命名 ${selectedCollection.name}`} onClick={() => { setEditingCollectionId(selectedCollection.id); setEditingName(selectedCollection.name); }}><Type size={16} /></button>
                   </div>
                 </div>
-                <div className="workspace-emote-manage-list">
-                  {selectedCollection.items.map((emote, index) => <EmoteManageRow
-                    key={emote.id}
-                    label={emote.label}
-                    src={emote.src}
-                    index={index}
-                    total={selectedCollection.items.length}
-                    draggable
-                    dragging={draggedEmoteId === emote.id}
-                    onDragStart={() => setDraggedEmoteId(emote.id)}
-                    onDrop={() => { void moveCollectionItemTo(selectedCollection, draggedEmoteId, emote.id); setDraggedEmoteId(""); }}
-                    onDragEnd={() => setDraggedEmoteId("")}
-                    onMove={(delta) => void moveCollectionItem(selectedCollection, index, delta)}
-                    onRemove={() => void removeCollectionItem(selectedCollection, emote)}
+                {editingCollectionId === selectedCollection.id && <form className="workspace-emote-rename-collection" onSubmit={(event) => { event.preventDefault(); void renameCollection(selectedCollection.id); }}><input value={editingName} maxLength={32} onChange={(event) => setEditingName(event.target.value)} autoFocus /><button className="primary compact" type="submit">保存</button><button className="secondary compact" type="button" onClick={() => setEditingCollectionId("")}>取消</button></form>}
+                <div className={organizing ? "workspace-emote-library-grid organizing" : "workspace-emote-library-grid"}>
+                  {selectedCollection.items.map((emote, index) => <EmoteLibraryTile
+                    key={emote.id} emote={emote} index={index} total={selectedCollection.items.length} organizing={organizing} dragging={draggedEmoteId === emote.id}
+                    onOpen={() => { setSelectedEmoteId(emote.id); setSelectedEmoteLabel(emote.label); }} onDragStart={() => setDraggedEmoteId(emote.id)} onDragEnd={() => setDraggedEmoteId("")}
+                    onDrop={() => { void moveCollectionItemTo(selectedCollection, draggedEmoteId, emote.id); setDraggedEmoteId(""); }} onMove={(delta) => void moveCollectionItem(selectedCollection, index, delta)} onRemove={() => void removeCollectionItem(selectedCollection, emote)}
                   />)}
                   {selectedCollection.items.length === 0 && <p className="saved-empty">合集还没有表情，可使用上方上传按钮添加。</p>}
                 </div>
               </section>
             ) : (
               <section>
-                <div className="workspace-emote-manager-section-head"><div><h3>一级表情</h3><small>{library.usage.itemCount} 张 · {library.usage.collectionCount} 个合集</small></div></div>
-                <div className="workspace-emote-manage-list">
-                  {library.entries.map((entry, index) => entry.type === "emote" ? <EmoteManageRow
-                    key={entry.id}
-                    label={entry.emote.label}
-                    src={entry.emote.src}
-                    index={index}
-                    total={library.entries.length}
-                    draggable
-                    dragging={draggedEntryId === entry.id}
-                    onDragStart={() => setDraggedEntryId(entry.id)}
-                    onDrop={() => { void moveEntryTo(draggedEntryId, entry.id); setDraggedEntryId(""); }}
-                    onDragEnd={() => setDraggedEntryId("")}
-                    onMove={(delta) => void moveEntry(index, delta)}
-                    onRemove={() => void deleteEmote(entry.emote)}
-                    removeLabel={`删除表情 ${entry.emote.label}`}
-                  /> : (
-                    <article
-                      className={draggedEntryId === entry.id ? "workspace-emote-manage-row collection dragging" : "workspace-emote-manage-row collection"}
-                      key={entry.id}
-                      onDragOver={(event) => event.preventDefault()}
-                      onDrop={() => { void moveEntryTo(draggedEntryId, entry.id); setDraggedEntryId(""); }}
-                    >
-                      <span className="workspace-emote-drag-handle" draggable onDragStart={() => setDraggedEntryId(entry.id)} onDragEnd={() => setDraggedEntryId("")} title="拖拽排序"><GripVertical size={17} aria-hidden="true" /></span><span className="emote-collection-mini-cover">{entry.collection.items.slice(0, 4).map((emote) => <img key={emote.id} src={emote.src} alt="" />)}</span><span className="workspace-emote-manage-copy"><strong>{entry.collection.name}</strong><small>{entry.collection.items.length} 张</small></span>
-                      <span className="workspace-emote-row-actions">
-                        <button className="secondary compact" type="button" onClick={() => setCollectionId(entry.collection.id)}>打开</button>
-                        <button className="icon-button" type="button" title="重命名合集" aria-label={`重命名 ${entry.collection.name}`} onClick={() => { setEditingCollectionId(entry.collection.id); setEditingName(entry.collection.name); }}><Type size={15} /></button>
-                        <button className="icon-button danger-action" type="button" title="删除合集" aria-label={`删除 ${entry.collection.name}`} onClick={() => void deleteCollection(entry.collection)}><Trash2 size={15} /></button>
-                        <button className="icon-button" type="button" title="前移" aria-label={`前移 ${entry.collection.name}`} disabled={index === 0} onClick={() => void moveEntry(index, -1)}><ChevronUp size={16} /></button>
-                        <button className="icon-button" type="button" title="后移" aria-label={`后移 ${entry.collection.name}`} disabled={index === library.entries.length - 1} onClick={() => void moveEntry(index, 1)}><ChevronDown size={16} /></button>
-                      </span>
-                      {editingCollectionId === entry.collection.id && <form className="workspace-emote-inline-edit" onSubmit={(event) => { event.preventDefault(); void renameCollection(entry.collection.id); }}><input value={editingName} maxLength={32} onChange={(event) => setEditingName(event.target.value)} autoFocus /><button className="secondary compact" type="submit">完成</button></form>}
-                    </article>
-                  ))}
+                <div className="workspace-emote-manager-section-head"><div><h3>表情库</h3><small>{organizing ? "拖动或使用方向按钮调整顺序" : "单张表情与合集按你设定的顺序显示"}</small></div></div>
+                <div className={organizing ? "workspace-emote-library-grid organizing" : "workspace-emote-library-grid"}>
+                  {library.entries.map((entry, index) => entry.type === "emote" ? <EmoteLibraryTile
+                    key={entry.id} emote={entry.emote} index={index} total={library.entries.length} organizing={organizing} dragging={draggedEntryId === entry.id}
+                    onOpen={() => { setSelectedEmoteId(entry.emote.id); setSelectedEmoteLabel(entry.emote.label); }} onDragStart={() => setDraggedEntryId(entry.id)} onDragEnd={() => setDraggedEntryId("")}
+                    onDrop={() => { void moveEntryTo(draggedEntryId, entry.id); setDraggedEntryId(""); }} onMove={(delta) => void moveEntry(index, delta)} onRemove={() => void deleteEmote(entry.emote)}
+                  /> : <EmoteCollectionTile key={entry.id} collection={entry.collection} index={index} total={library.entries.length} organizing={organizing} dragging={draggedEntryId === entry.id}
+                    onOpen={() => { setCollectionId(entry.collection.id); setSelectedEmoteId(""); }} onDragStart={() => setDraggedEntryId(entry.id)} onDragEnd={() => setDraggedEntryId("")}
+                    onDrop={() => { void moveEntryTo(draggedEntryId, entry.id); setDraggedEntryId(""); }} onMove={(delta) => void moveEntry(index, delta)} onRename={() => { setEditingCollectionId(entry.collection.id); setEditingName(entry.collection.name); setCollectionId(entry.collection.id); }} onRemove={() => void deleteCollection(entry.collection)} />)}
                   {library.entries.length === 0 && <p className="saved-empty">还没有收藏表情。使用上传按钮开始建立个人表情库。</p>}
                 </div>
               </section>
             )}
-            {uploadItems.length > 0 && (
+            {visibleUploadItems.length > 0 && (
               <section className="workspace-emote-upload-queue" aria-label="表情上传状态">
-                <div className="workspace-emote-manager-section-head"><div><h3>本次上传</h3><small>{uploadItems.filter((item) => item.state === "complete").length} / {uploadItems.length} 完成</small></div><button className="secondary compact" type="button" onClick={() => setUploadItems([])}>清除记录</button></div>
-                {uploadItems.map((item) => <div className={`workspace-emote-upload-item ${item.state}`} key={item.id}><span>{item.file.name}</span><span className="workspace-upload-progress"><i style={{ width: `${item.progress}%` }} /></span><small>{item.state === "queued" ? "等待中" : item.state === "uploading" ? `${item.progress}%` : item.state === "complete" ? "已完成" : item.error || "上传失败"}</small>{item.state === "failed" && <button className="secondary compact" type="button" disabled={busy} onClick={() => void retryUpload(item)}>重试</button>}</div>)}
+                <div className="workspace-emote-manager-section-head"><div><h3>上传任务</h3><small>完成后自动收起，仅保留失败项目</small></div><button className="secondary compact" type="button" onClick={() => setUploadItems([])}>清除</button></div>
+                {visibleUploadItems.map((item) => <div className={`workspace-emote-upload-item ${item.state}`} key={item.id}><span>{item.file.name}</span><span className="workspace-upload-progress"><i style={{ width: `${item.progress}%` }} /></span><small>{item.state === "queued" ? "等待中" : item.state === "uploading" ? `${item.progress}%` : item.error || "上传失败"}</small>{item.state === "failed" && <button className="secondary compact" type="button" disabled={busy} onClick={() => void retryUpload(item)}>重试</button>}</div>)}
               </section>
             )}
           </div>
         )}
-        {addExistingOpen && selectedCollection && <div className="workspace-emote-share-dialog workspace-emote-existing-dialog" role="dialog" aria-label={`添加表情到 ${selectedCollection.name}`}><h3>添加已有表情</h3><p>可一次选择多张，原表情仍保留在一级表情中。</p><div className="workspace-emote-existing-grid">{availableExistingEmotes.map((emote) => <label key={emote.id} className={selectedExistingIds.includes(emote.id) ? "selected" : ""}><input type="checkbox" checked={selectedExistingIds.includes(emote.id)} onChange={(event) => setSelectedExistingIds((current) => event.target.checked ? [...current, emote.id] : current.filter((id) => id !== emote.id))} /><img src={emote.src} alt="" /><span>{emote.label}</span></label>)}</div><div className="workspace-section-actions"><button className="secondary" type="button" onClick={() => setAddExistingOpen(false)}>取消</button><button className="primary" type="button" disabled={busy || selectedExistingIds.length === 0} onClick={() => void addExistingToCollection(selectedCollection)}>添加 {selectedExistingIds.length || ""} 张</button></div></div>}
+        {selectedEmote && <div className="workspace-emote-detail" role="dialog" aria-label="表情详情"><header><strong>表情详情</strong><button ref={emoteDetailCloseRef} className="icon-button" type="button" title="关闭详情" aria-label="关闭表情详情" onClick={() => setSelectedEmoteId("")}><X size={17} /></button></header><div className="workspace-emote-detail-preview"><img src={selectedEmote.src} alt={selectedEmote.label} /></div><form onSubmit={(event) => { event.preventDefault(); void renameEmote(selectedEmote); }}><label><span>短名称</span><input value={selectedEmoteLabel} maxLength={16} onChange={(event) => setSelectedEmoteLabel(event.target.value)} /><small>只用于识别、搜索和无障碍说明，不会显示在表情网格中。</small></label><button className="primary compact" type="submit" disabled={busy || !selectedEmoteLabel.trim() || selectedEmoteLabel.trim() === selectedEmote.label}>保存名称</button></form><dl><div><dt>类型</dt><dd>{selectedEmote.animated ? "动态表情" : "静态表情"}</dd></div>{selectedEmote.width && selectedEmote.height && <div><dt>尺寸</dt><dd>{selectedEmote.width} × {selectedEmote.height}</dd></div>}{selectedEmote.byteSize && <div><dt>大小</dt><dd>{formatBytes(selectedEmote.byteSize)}</dd></div>}<div><dt>来源</dt><dd title={selectedEmote.originalFileName}>{selectedEmote.originalFileName || (selectedEmote.sourceType === "builtin" ? "内置表情" : "从聊天收藏")}</dd></div></dl><div className="workspace-emote-detail-actions">{selectedCollection && <button className="secondary" type="button" disabled={busy} onClick={() => void removeCollectionItem(selectedCollection, selectedEmote)}>移出当前合集</button>}<button className="secondary danger-action" type="button" disabled={busy} onClick={() => void deleteEmote(selectedEmote)}>从我的表情删除</button></div></div>}
+        {addExistingOpen && selectedCollection && <div className="workspace-emote-share-dialog workspace-emote-existing-dialog" role="dialog" aria-label={`添加表情到 ${selectedCollection.name}`}><h3>添加已有表情</h3><p>可一次选择多张，原表情仍保留在表情库中。</p><div className="workspace-emote-existing-grid">{availableExistingEmotes.map((emote) => <label key={emote.id} title={emote.label} aria-label={emote.label} className={selectedExistingIds.includes(emote.id) ? "selected" : ""}><input type="checkbox" checked={selectedExistingIds.includes(emote.id)} onChange={(event) => setSelectedExistingIds((current) => event.target.checked ? [...current, emote.id] : current.filter((id) => id !== emote.id))} /><img src={emote.src} alt="" />{selectedExistingIds.includes(emote.id) && <span className="workspace-emote-selected-mark"><Check size={15} /></span>}</label>)}</div><div className="workspace-section-actions"><button className="secondary" type="button" onClick={() => setAddExistingOpen(false)}>取消</button><button className="primary" type="button" disabled={busy || selectedExistingIds.length === 0} onClick={() => void addExistingToCollection(selectedCollection)}>添加 {selectedExistingIds.length || ""} 张</button></div></div>}
         {share && <div className="workspace-emote-share-dialog" role="dialog" aria-label="分享表情合集"><h3>分享“{share.name}”</h3>{share.revokedAt ? <p>该分享已撤销，历史卡片会显示为不可用。</p> : <><p>复制登录后链接，或发送到空间内会话。</p><div className="workspace-inline-form"><input readOnly value={`${window.location.origin}${share.sharePath}`} /><button className="secondary compact" type="button" onClick={() => void copyText(`${window.location.origin}${share.sharePath}`)}>复制链接</button></div><label><span>发送到会话</span><select value={shareConversationId} onChange={(event) => setShareConversationId(event.target.value)}><option value="">选择会话</option>{conversations.map((conversation) => <option key={conversation.id} value={conversation.id}>{conversation.displayTitle || conversation.title}</option>)}</select></label><div className="workspace-section-actions"><button className="primary" type="button" disabled={!shareConversationId || busy} onClick={() => void onSendShare(shareConversationId, share)}>发送分享卡片</button>{share.canRevoke && <button className="secondary danger-action" type="button" disabled={busy} onClick={() => void revokeShare()}>撤销分享</button>}</div></>}<button className="icon-button" type="button" title="关闭分享" onClick={() => setShare(null)}><X size={16} /></button></div>}
       </div>
     </div>,
@@ -10726,9 +10763,16 @@ function WorkspaceEmoteManagerDialog({
   );
 }
 
-function EmoteManageRow({ label, src, index, total, draggable = false, dragging = false, onMove, onRemove, removeLabel, onDragStart, onDrop, onDragEnd }: { label: string; src: string; index: number; total: number; draggable?: boolean; dragging?: boolean; onMove: (delta: number) => void; onRemove?: () => void; removeLabel?: string; onDragStart?: () => void; onDrop?: () => void; onDragEnd?: () => void }) {
-  const resolvedRemoveLabel = removeLabel || `将 ${label} 移出合集`;
-  return <article className={dragging ? "workspace-emote-manage-row dragging" : "workspace-emote-manage-row"} onDragOver={(event) => { if (draggable) event.preventDefault(); }} onDrop={onDrop}><span className="workspace-emote-drag-handle" draggable={draggable} onDragStart={onDragStart} onDragEnd={onDragEnd} title={draggable ? "拖拽排序" : undefined}><GripVertical size={17} aria-hidden="true" /></span><img src={src} alt="" /><span className="workspace-emote-manage-copy"><strong>{label}</strong><small>个人表情</small></span><span className="workspace-emote-row-actions">{onRemove && <button className="icon-button danger-action" type="button" title={resolvedRemoveLabel} aria-label={resolvedRemoveLabel} onClick={onRemove}><Trash2 size={15} /></button>}<button className="icon-button" type="button" title="前移" aria-label={`前移 ${label}`} disabled={index === 0} onClick={() => onMove(-1)}><ChevronUp size={16} /></button><button className="icon-button" type="button" title="后移" aria-label={`后移 ${label}`} disabled={index === total - 1} onClick={() => onMove(1)}><ChevronDown size={16} /></button></span></article>;
+function EmoteLibraryTile({ emote, index, total, organizing, dragging, onOpen, onDragStart, onDrop, onDragEnd, onMove, onRemove }: { emote: WorkspaceCustomEmote; index: number; total: number; organizing: boolean; dragging: boolean; onOpen: () => void; onDragStart: () => void; onDrop: () => void; onDragEnd: () => void; onMove: (delta: number) => void; onRemove: () => void }) {
+  return <article className={dragging ? "workspace-emote-library-tile emote dragging" : "workspace-emote-library-tile emote"} onDragOver={(event) => { if (organizing) event.preventDefault(); }} onDrop={onDrop}><button className="workspace-emote-library-preview" type="button" title={emote.label} aria-label={`查看表情 ${emote.label}`} onClick={onOpen}><img src={emote.src} alt="" loading="lazy" decoding="async" />{emote.animated && <span>GIF</span>}</button>{organizing && <EmoteTileControls label={emote.label} index={index} total={total} onMove={onMove} onRemove={onRemove} draggable onDragStart={onDragStart} onDragEnd={onDragEnd} />}</article>;
+}
+
+function EmoteCollectionTile({ collection, index, total, organizing, dragging, onOpen, onDragStart, onDrop, onDragEnd, onMove, onRename, onRemove }: { collection: WorkspaceEmoteCollection; index: number; total: number; organizing: boolean; dragging: boolean; onOpen: () => void; onDragStart: () => void; onDrop: () => void; onDragEnd: () => void; onMove: (delta: number) => void; onRename: () => void; onRemove: () => void }) {
+  return <article className={dragging ? "workspace-emote-library-tile collection dragging" : "workspace-emote-library-tile collection"} onDragOver={(event) => { if (organizing) event.preventDefault(); }} onDrop={onDrop}><button className="workspace-emote-collection-preview" type="button" onClick={onOpen} aria-label={`打开合集 ${collection.name}`}><span className="workspace-emote-collection-cover">{collection.items.slice(0, 4).map((emote) => <img key={emote.id} src={emote.src} alt="" loading="lazy" decoding="async" />)}{collection.items.length === 0 && <Images size={28} />}</span><span><strong>{collection.name}</strong><small>{collection.items.length} 张</small></span></button>{organizing && <EmoteTileControls label={collection.name} index={index} total={total} onMove={onMove} onRemove={onRemove} onRename={onRename} draggable onDragStart={onDragStart} onDragEnd={onDragEnd} />}</article>;
+}
+
+function EmoteTileControls({ label, index, total, draggable, onMove, onRemove, onRename, onDragStart, onDragEnd }: { label: string; index: number; total: number; draggable: boolean; onMove: (delta: number) => void; onRemove: () => void; onRename?: () => void; onDragStart: () => void; onDragEnd: () => void }) {
+  return <div className="workspace-emote-tile-controls"><span className="workspace-emote-drag-handle" draggable={draggable} onDragStart={onDragStart} onDragEnd={onDragEnd} title="拖拽排序"><GripVertical size={16} /></span>{onRename && <button type="button" title="重命名" aria-label={`重命名 ${label}`} onClick={onRename}><Type size={14} /></button>}<button type="button" title="前移" aria-label={`前移 ${label}`} disabled={index === 0} onClick={() => onMove(-1)}><ChevronUp size={15} /></button><button type="button" title="后移" aria-label={`后移 ${label}`} disabled={index === total - 1} onClick={() => onMove(1)}><ChevronDown size={15} /></button><button className="danger-action" type="button" title="删除" aria-label={`删除 ${label}`} onClick={onRemove}><Trash2 size={14} /></button></div>;
 }
 
 function WorkspaceMemberDetail({
@@ -11611,13 +11655,15 @@ function WorkspaceGroupAvatarEditor({
 
 function WorkspaceFileCategoryTabs({
   value,
-  onChange
+  onChange,
+  ariaLabel = "文件类型筛选"
 }: {
   value: WorkspaceFileCategory;
   onChange: (value: WorkspaceFileCategory) => void;
+  ariaLabel?: string;
 }) {
   return (
-    <div className="workspace-file-category-tabs" aria-label="文件类型筛选">
+    <div className="workspace-file-category-tabs" aria-label={ariaLabel}>
       {([
         { id: "all", label: "全部" },
         { id: "media", label: "图片" },
@@ -11972,6 +12018,76 @@ function WorkspaceShellSkeleton() {
         <div className="workspace-skeleton-chat-header" />
         <WorkspaceSkeletonRows variant="setting" count={5} />
       </aside>
+    </div>
+  );
+}
+
+function WorkspaceFileRail({
+  files,
+  selectedFileId,
+  query,
+  category,
+  onQueryChange,
+  onCategoryChange,
+  onOpenFile
+}: {
+  files: WorkspaceFile[];
+  selectedFileId: string;
+  query: string;
+  category: WorkspaceFileCategory;
+  onQueryChange: (value: string) => void;
+  onCategoryChange: (value: WorkspaceFileCategory) => void;
+  onOpenFile: (file: WorkspaceFile) => void;
+}) {
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleFiles = files
+    .filter((file) => workspaceFileMatchesCategory(file, category))
+    .filter((file) => !normalizedQuery || [file.fileName, workspaceFileUploaderName(file)].some((value) => value.toLowerCase().includes(normalizedQuery)))
+    .slice(0, 40);
+  return (
+    <div className="workspace-rail-browser" aria-label="文件快捷浏览">
+      <div className="workspace-rail-browser-heading"><strong>文件</strong><span>{files.length}</span></div>
+      <label className="workspace-search compact-search"><span className="sr-only">查找文件</span><input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="文件名或上传者" /></label>
+      <WorkspaceFileCategoryTabs value={category} onChange={onCategoryChange} ariaLabel="快捷文件类型筛选" />
+      <div className="workspace-rail-browser-list">
+        {visibleFiles.length === 0 ? <p className="saved-empty">没有匹配的文件。</p> : visibleFiles.map((file) => (
+          <button className={selectedFileId === file.id ? "workspace-rail-file active" : "workspace-rail-file"} type="button" key={file.id} onClick={() => onOpenFile(file)}>
+            <WorkspaceFileThumbnail file={file} />
+            <span><strong>{file.fileName}</strong><small>{formatBytes(file.byteSize)} · {workspaceFileUploaderName(file)}</small></span>
+            <ChevronRight size={15} aria-hidden="true" />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceMemberRail({
+  members,
+  selectedMemberId,
+  query,
+  onQueryChange,
+  onOpenMember
+}: {
+  members: WorkspaceUser[];
+  selectedMemberId: string;
+  query: string;
+  onQueryChange: (value: string) => void;
+  onOpenMember: (member: WorkspaceUser) => void;
+}) {
+  return (
+    <div className="workspace-rail-browser" aria-label="成员快捷浏览">
+      <div className="workspace-rail-browser-heading"><strong>成员</strong><span>{members.length}</span></div>
+      <label className="workspace-search compact-search"><span className="sr-only">快捷查找成员</span><input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="昵称或 GitHub 账号" /></label>
+      <div className="workspace-rail-browser-list">
+        {members.length === 0 ? <p className="saved-empty">没有匹配的成员。</p> : members.slice(0, 50).map((member) => (
+          <button className={selectedMemberId === member.id ? "workspace-rail-member active" : "workspace-rail-member"} type="button" key={member.id} onClick={() => onOpenMember(member)}>
+            <WorkspaceAvatar name={member.displayName} avatarUrl={member.avatarUrl} className="small" decorative />
+            <span><strong><WorkspaceIdentityName name={member.displayName} kind={member.kind} /></strong><small>{workspaceMemberSecondaryText(member)}</small></span>
+            <ChevronRight size={15} aria-hidden="true" />
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

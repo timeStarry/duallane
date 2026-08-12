@@ -291,6 +291,8 @@ entry points and `/api/workspace/*` return a "功能正在开发中" state until
 ## Release convention
 
 - Keep the root package, `apps/web/package.json`, and the newest entry in `apps/web/src/releases.ts` on the same semantic version.
+- Treat every set of changes not yet deployed to production as one pending release. Add new user-visible work to that single newest version instead of creating another version before the current pending release is deployed.
+- Start the next semantic version only after the previous version has been deployed and its production health check has passed.
 - Add the new release entry before changing package versions. Versions must be unique and ordered newest first.
 - Each release records a date, title, summary, and categorized user-visible changes; the release-history test intentionally fails when these fields or version synchronization are missing.
 - The public changelog contains only behavior ordinary members can see or use. Keep databases, protocols, deployment, privileged configuration, and other implementation details out of `/about`.

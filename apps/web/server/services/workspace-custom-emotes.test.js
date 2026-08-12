@@ -73,6 +73,25 @@ describe("workspace custom emotes", () => {
     expect((await sharp(stored.get(emote.id)).metadata()).format).toBe("webp");
   });
 
+  it("uses short readable labels and lets owners rename an emote", async () => {
+    const { service } = await fixture();
+    const png = await sharp({
+      create: { width: 16, height: 16, channels: 4, background: { r: 90, g: 120, b: 210, alpha: 1 } }
+    }).png().toBuffer();
+    const uploaded = await service.upload({
+      actorId: "usr_owner",
+      stream: Readable.from(png),
+      contentType: "image/png",
+      fileName: "Screenshot_20260812_183433.png"
+    });
+
+    expect(uploaded.label).toBe("自定义表情");
+    await expect(service.update("usr_owner", uploaded.id, { label: "  开心蓝脸  " }))
+      .resolves.toMatchObject({ id: uploaded.id, label: "开心蓝脸" });
+    await expect(service.update("usr_owner", uploaded.id, { label: "" }))
+      .rejects.toMatchObject({ code: "emote.invalid_label" });
+  });
+
   it("accepts practical animated GIFs above the previous 60-frame limit", async () => {
     const { service, db, stored } = await fixture();
     const gif = await createAnimatedGif({ frameCount: 75, delayMs: 100 });
@@ -85,7 +104,7 @@ describe("workspace custom emotes", () => {
 
     expect(emote).toMatchObject({
       kind: "custom",
-      label: "animated-cat",
+      label: "animated cat",
       animated: true
     });
     expect(db.prepare(`

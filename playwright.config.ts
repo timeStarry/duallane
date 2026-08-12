@@ -8,6 +8,7 @@ const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER === "tr
 
 export default defineConfig({
   testDir: "./e2e",
+  outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR || "test-results",
   fullyParallel: false,
   workers: 1,
   timeout: 45_000,
@@ -43,7 +44,7 @@ export default defineConfig({
       timeout: 120_000
     },
     {
-      command: `pnpm --filter @duallane/web exec vite --host 127.0.0.1 --port ${webPort} --strictPort`,
+      command: `node apps/web/node_modules/vite/bin/vite.js apps/web --host 127.0.0.1 --port ${webPort} --strictPort`,
       url: baseURL,
       env: {
         DUALLANE_API_ORIGIN: apiURL

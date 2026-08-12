@@ -966,6 +966,21 @@ app.put("/api/workspace/me/emotes/order", async (request, reply) => {
   }
 });
 
+app.patch("/api/workspace/me/emotes/:emoteId", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return {
+      emote: await workspaceCustomEmotes.update(
+        await getWorkspaceUserId(request),
+        request.params.emoteId,
+        request.body
+      )
+    };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
 app.delete("/api/workspace/me/emotes/:emoteId", async (request, reply) => {
   if (!workspaceEnabled) return blockWorkspace(reply);
   try {

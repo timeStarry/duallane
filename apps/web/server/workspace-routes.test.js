@@ -397,7 +397,7 @@ describe("workspace routes", () => {
       ok: true,
       service: "duallane",
       lane: "ready",
-      appVersion: "0.12.0"
+      appVersion: "0.13.0"
     });
   });
 
@@ -4403,6 +4403,15 @@ describe("workspace routes", () => {
     });
     expect(uploaded.statusCode).toBe(201);
     expect(uploaded.json().emote).toMatchObject({ kind: "custom", label: "收藏" });
+
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: `/api/workspace/me/emotes/${uploaded.json().emote.id}`,
+      headers: { "content-type": "application/json", "x-workspace-user-id": "usr_owner" },
+      payload: { label: "常用收藏" }
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json().emote).toMatchObject({ id: uploaded.json().emote.id, label: "常用收藏" });
 
     const group = await app.inject({
       method: "POST",

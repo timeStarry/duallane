@@ -568,6 +568,16 @@ export function createWorkspaceCustomEmoteService({ db, objectStore, dataDir, no
       });
     },
 
+    async update(actorId, emoteId, input = {}) {
+      await requireHumanActor(db, actorId);
+      const row = await getOwnEmoteRow(db, actorId, emoteId);
+      if (!row || row.removed_at) throw new WorkspaceError("emote.not_found", "收藏表情不存在", 404);
+      const label = normalizeEmoteLabel(input.label);
+      await db.prepare("UPDATE workspace_custom_emotes SET label = ? WHERE id = ? AND user_id = ?")
+        .run(label, row.id, actorId);
+      return publicCustomEmote({ ...row, label });
+    },
+
     async remove(actorId, emoteId) {
       await requireHumanActor(db, actorId);
       const row = await getOwnEmoteRow(db, actorId, emoteId);
@@ -688,7 +698,7 @@ async function normalizeCustomEmote(input, source) {
     frameCount,
     durationMs,
     detectedMimeType: formatMimeType(metadata.format),
-    label: normalizeLabel(source.fileName)
+    label: normalizeLabel(source.fileName, frameCount > 1)
   };
 }
 
@@ -1182,9 +1192,21 @@ function normalizeFileName(value) {
   return Array.from(baseName).slice(0, 255).join("");
 }
 
-function normalizeLabel(fileName) {
+function normalizeLabel(fileName, animated = false) {
   const base = path.basename(normalizeFileName(fileName)).replace(/\.[^.]+$/, "").trim();
-  return Array.from(base || "收藏表情").slice(0, 40).join("");
+  const compact = base.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  const generic = /^(?:img|image|photo|screenshot|screen shot|wx camera|mmexport|pxl|dsc|download|file)(?:\s*[a-z0-9]+)*$/i.test(compact)
+    || /^[a-f0-9-]{20,}$/i.test(compact)
+    || /^\d{8,}$/.test(compact);
+  return Array.from(!compact || generic ? (animated ? "动态表情" : "自定义表情") : compact).slice(0, 16).join("");
+}
+
+function normalizeEmoteLabel(value) {
+  const normalized = String(value ?? "").toWellFormed().trim();
+  if (!normalized || Array.from(normalized).length > 16 || /[\u0000-\u001f\u007f]/.test(normalized)) {
+    throw new WorkspaceValidationError("emote.invalid_label", "表情名称应为 1 至 16 个有效字符");
+  }
+  return normalized;
 }
 
 function formatMimeType(format) {

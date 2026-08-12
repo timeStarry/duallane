@@ -72,6 +72,24 @@ describe("workspace UI permission boundaries", () => {
     expect(mobileStyles).toContain(".topbar {\n    padding-right: 112px;");
   });
 
+  it("uses task-specific rail content and an image-first personal emote library", () => {
+    const source = readSource();
+    const styles = readStyles();
+
+    expect(source).toContain('className={`workspace-rail-content ${workspaceView}`}');
+    expect(source).toContain("<WorkspaceFileRail");
+    expect(source).toContain("<WorkspaceMemberRail");
+    expect(source).toContain('className={organizing ? "workspace-emote-library-grid organizing" : "workspace-emote-library-grid"}');
+    expect(source).toContain("function EmoteLibraryTile(");
+    expect(source).toContain("function EmoteCollectionTile(");
+    expect(source).toContain("短名称");
+    expect(source).toContain('method: "PATCH"');
+    expect(source).toContain("只用于识别、搜索和无障碍说明，不会显示在表情网格中。");
+    expect(source).not.toContain('className="workspace-emote-manage-row');
+    expect(styles).toContain(".workspace-emote-library-grid.organizing");
+    expect(styles).not.toContain(".workspace-emote-manage-row");
+  });
+
   it("uses theme-aware surfaces for shared-space controls", () => {
     const styles = readStyles();
 

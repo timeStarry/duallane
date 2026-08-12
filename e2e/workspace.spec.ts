@@ -26,7 +26,7 @@ test("public about page exposes the current release and accessible history", asy
   await page.getByRole("button", { name: "关于 DualLane 与版本更新" }).click();
   await expect(page).toHaveURL(/\/about$/);
   await expect(page.getByRole("heading", { name: "两种边界，一处沟通。" })).toBeVisible();
-  await expect(page.locator(".latest-release").getByText("v0.12.0", { exact: true })).toBeVisible();
+  await expect(page.locator(".latest-release").getByText("v0.13.0", { exact: true })).toBeVisible();
 
   const history = page.locator(".release-history");
   await expect(history).not.toHaveAttribute("open", "");
@@ -40,7 +40,7 @@ test("public about page exposes the current release and accessible history", asy
   await page.goForward();
   await expect(page).toHaveURL(/\/about$/);
   await page.reload();
-  await expect(page.locator(".latest-release").getByText("v0.12.0", { exact: true })).toBeVisible();
+  await expect(page.locator(".latest-release").getByText("v0.13.0", { exact: true })).toBeVisible();
 });
 
 test("workspace semantic routes survive OAuth, refresh, history, and invalid resources", async ({ page }) => {
@@ -913,7 +913,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
 
     const memberNavigation = memberPage.getByRole("navigation", { name: "共享空间视图" });
     await memberNavigation.getByRole("button", { name: "文件", exact: true }).click();
-    const fileCategoryTabs = memberPage.getByLabel("文件类型筛选");
+    const fileCategoryTabs = memberPage.getByLabel("文件类型筛选", { exact: true });
     await fileCategoryTabs.getByRole("button", { name: "图片", exact: true }).click();
     const imageLibraryRow = memberPage.locator(".workspace-file-row").filter({ hasText: pastedImageName });
     const imageLibraryThumbnail = imageLibraryRow.locator(".workspace-file-thumbnail img");
@@ -1174,7 +1174,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     expect(outsiderAcceptResponse.status()).toBe(201);
     await outsiderPage.goto("/workspace/members");
     await expect(outsiderPage.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
-    const outsiderMemberSearch = outsiderPage.getByLabel("查找成员");
+    const outsiderMemberSearch = outsiderPage.getByLabel("查找成员", { exact: true });
     await outsiderMemberSearch.fill(Array.from(publicNickname)[0]);
     await expect(outsiderPage.locator(".workspace-member-card").filter({ hasText: publicNickname })).toHaveCount(0);
     const discoverableSearchResponse = outsiderPage.waitForResponse((response) =>
@@ -1276,7 +1276,6 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await memberComposerEmotePicker.getByRole("tab", { name: "收藏", exact: true }).click();
 
     const customEmoteFileName = `e2e-custom-emote-${memberSuffix}.png`;
-    const customEmoteLabel = customEmoteFileName.replace(/\.png$/, "");
     const customEmoteUploadResponse = memberPage.waitForResponse((response) =>
       response.url().endsWith("/api/workspace/me/emotes") && response.request().method() === "POST"
     );
@@ -1287,8 +1286,8 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     });
     const uploadedCustomEmote = await customEmoteUploadResponse;
     expect(uploadedCustomEmote.status()).toBe(201);
-    const uploadedCustomEmotePayload = await uploadedCustomEmote.json() as { emote: { id: string } };
-    await memberComposerEmotePicker.getByRole("button", { name: customEmoteLabel, exact: true }).click();
+    const uploadedCustomEmotePayload = await uploadedCustomEmote.json() as { emote: { id: string; label: string } };
+    await memberComposerEmotePicker.getByRole("button", { name: uploadedCustomEmotePayload.emote.label, exact: true }).click();
     await expect(memberGroupRegion.locator(".workspace-editor-token.emote img")).toBeVisible();
 
     const memberCustomMessageResponse = memberPage.waitForResponse((response) =>
@@ -1309,24 +1308,33 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await chooseMessageAction(ownerPage, ownerCustomMessage, "收藏表情");
     expect((await favoriteCustomEmoteResponse).status()).toBe(201);
 
-    await memberGroupRegion.getByTitle("插入表情").click();
-    const memberFavoritesAfterSend = memberPage.getByRole("dialog", { name: "选择表情" });
-    await memberFavoritesAfterSend.getByRole("tab", { name: "收藏", exact: true }).click();
+    await memberPage.goto("/workspace/account/emotes");
+    await expect(memberPage.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
+    const memberEmoteManager = memberPage.getByRole("dialog", { name: "我的表情" });
+    await expect(memberEmoteManager).toBeVisible();
+    await memberEmoteManager.getByRole("button", {
+      name: `查看表情 ${uploadedCustomEmotePayload.emote.label}`,
+      exact: true
+    }).click();
+    const memberEmoteDetail = memberPage.getByRole("dialog", { name: "表情详情" });
+    await expect(memberEmoteDetail.getByLabel("短名称")).toHaveValue(uploadedCustomEmotePayload.emote.label);
     const deleteOriginalCustomEmote = memberPage.waitForResponse((response) =>
       response.url().endsWith(`/api/workspace/me/emotes/${uploadedCustomEmotePayload.emote.id}`)
         && response.request().method() === "DELETE"
     );
-    await memberFavoritesAfterSend.getByRole("button", {
-      name: `删除收藏表情 ${customEmoteLabel}`,
-      exact: true
-    }).click();
+    memberPage.once("dialog", (dialog) => void dialog.accept());
+    await memberEmoteDetail.getByRole("button", { name: "从我的表情删除", exact: true }).click();
     expect((await deleteOriginalCustomEmote).status()).toBe(200);
-    await memberGroupRegion.locator(".workspace-chat-header").click();
+    await memberEmoteManager.getByRole("button", { name: "关闭我的表情管理", exact: true }).click();
+    await expect(memberEmoteManager).toHaveCount(0);
+    await memberPage.getByRole("button", { name: "聊天", exact: true }).click();
+    await memberPage.getByLabel("共享空间导航").locator("button.conversation").filter({ hasText: groupTitle }).first().click();
+    await expect(memberGroupRegion).toBeVisible();
 
     await ownerGroupRegion.getByTitle("插入表情").click();
     const ownerComposerFavorites = ownerPage.getByRole("dialog", { name: "选择表情" });
     await ownerComposerFavorites.getByRole("tab", { name: "收藏", exact: true }).click();
-    await ownerComposerFavorites.getByRole("button", { name: customEmoteLabel, exact: true }).click();
+    await ownerComposerFavorites.getByRole("button", { name: uploadedCustomEmotePayload.emote.label, exact: true }).click();
     const ownerCopiedCustomMessageResponse = ownerPage.waitForResponse((response) =>
       response.url().endsWith("/api/workspace/messages") && response.request().method() === "POST"
     );
