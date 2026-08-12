@@ -6,6 +6,7 @@ import {
   BellOff,
   Bold,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   Check,
   Clipboard,
@@ -96,7 +97,13 @@ import {
 } from "./p2p-protocol";
 import { createWorkspaceJsonHeaders } from "./workspace-http";
 import { AboutPage } from "./AboutPage";
-import { getAppRouteUrl, parseAppRoute, workspaceRoute, type AppRoute } from "./app-route";
+import {
+  getAppRouteUrl,
+  parseAppRoute,
+  workspaceRoute,
+  type AppRoute,
+  type WorkspaceRouteAccountSection
+} from "./app-route";
 import { getWorkspaceEntryUrl, getWorkspaceLoginUrl } from "./workspace-url";
 import { formatWorkspaceConversationTime } from "./workspace-conversation-time";
 import { isPreviewableImageMimeType, renamePastedImageFiles } from "./workspace-image-files";
@@ -7171,7 +7178,15 @@ export function App() {
   }
 
   function closeWorkspaceEmoteManager() {
-    navigateAppRoute(workspaceRoute({ inviteCode: workspacePendingInviteCode, view: "account" }));
+    navigateAppRoute(workspaceRoute({ inviteCode: workspacePendingInviteCode, view: "account", accountSection: "chat" }));
+  }
+
+  function navigateWorkspaceAccountSection(accountSection: WorkspaceRouteAccountSection) {
+    navigateAppRoute(workspaceRoute({
+      inviteCode: workspacePendingInviteCode,
+      view: "account",
+      accountSection
+    }));
   }
 
   async function sendWorkspaceEmoteCollectionShare(conversationId: string, share: WorkspaceEmoteCollectionShareSummary) {
@@ -8401,10 +8416,13 @@ export function App() {
                       <>
                         <WorkspaceAccountSettings
                           currentUser={workspaceBootstrap.auth.currentUser}
+                          section={workspaceAccountSection}
                           onBack={() => setWorkspaceMobilePane("list")}
+                          onNavigate={navigateWorkspaceAccountSection}
                           onUserUpdated={upsertWorkspaceMember}
                           onNotice={showWorkspaceNotice}
                           onManageEmotes={openWorkspaceEmoteManager}
+                          onLogout={() => void logoutWorkspace()}
                         />
                         {workspaceAccountSection === "emotes" && (
                           <WorkspaceEmoteManagerDialog
@@ -9480,18 +9498,52 @@ function WorkspaceSwitch({
   );
 }
 
+function WorkspaceSettingsRow({
+  icon,
+  title,
+  description,
+  value,
+  onClick,
+  danger = false
+}: {
+  icon: ReactNode;
+  title: string;
+  description?: string;
+  value?: string;
+  onClick: () => void;
+  danger?: boolean;
+}) {
+  return (
+    <button className={danger ? "workspace-settings-row danger-action" : "workspace-settings-row"} type="button" onClick={onClick}>
+      <span className="workspace-settings-row-icon" aria-hidden="true">{icon}</span>
+      <span className="workspace-settings-row-copy">
+        <strong>{title}</strong>
+        {description && <small>{description}</small>}
+      </span>
+      {value && <span className="workspace-settings-row-value">{value}</span>}
+      <ChevronRight className="workspace-settings-row-chevron" size={17} aria-hidden="true" />
+    </button>
+  );
+}
+
 function WorkspaceAccountSettings({
   currentUser,
+  section,
   onBack,
+  onNavigate,
   onUserUpdated,
   onNotice,
-  onManageEmotes
+  onManageEmotes,
+  onLogout
 }: {
   currentUser: WorkspaceUser;
+  section: WorkspaceRouteAccountSection;
   onBack: () => void;
+  onNavigate: (section: WorkspaceRouteAccountSection) => void;
   onUserUpdated: (user: WorkspaceUser) => void;
   onNotice: (tone: WorkspaceNotice["tone"], text: string) => void;
   onManageEmotes: () => void;
+  onLogout: () => void;
 }) {
   const [nickname, setNickname] = useState(currentUser.nickname ?? "");
   const [recallReason, setRecallReason] = useState(currentUser.recallReason ?? "内容有误");
@@ -9885,7 +9937,7 @@ function WorkspaceAccountSettings({
       });
       setNtfy(data.ntfy);
       setNtfyRotateConfirm(false);
-      onNotice("success", "topic 已刷新，旧 topic 已失效，请在 ntfy 中重新订阅");
+      onNotice("success", "推送凭据已重新生成，所有设备需要重新配置");
     } catch (error) {
       onNotice("warning", userFacingErrorMessage(error, "topic 刷新失败"));
     } finally {
@@ -9898,210 +9950,183 @@ function WorkspaceAccountSettings({
     onNotice(copied ? "success" : "warning", copied ? `${label}已复制` : `${label}复制失败`);
   }
 
+  const visibleSection = section === "emotes" ? "chat" : section;
+  const sectionTitles: Record<Exclude<WorkspaceRouteAccountSection, "" | "emotes">, string> = {
+    profile: "账户与资料",
+    privacy: "隐私与发现",
+    chat: "聊天与表情",
+    notifications: "通知",
+    email: "邮件通知",
+    push: "移动推送"
+  };
+  const pageTitle = visibleSection ? sectionTitles[visibleSection] : "个人设置";
+  const returnToParent = () => onNavigate(visibleSection === "email" || visibleSection === "push" ? "notifications" : "");
+  const returnLabel = visibleSection === "email" || visibleSection === "push" ? "返回通知" : "返回个人设置";
+  const enabledPackCount = emoteSettings?.enabledPackIds.length ?? 0;
+  const enabledChannelCount = Number(Boolean(notifications?.enabled)) + Number(Boolean(ntfy?.enabled));
+
   return (
     <>
     <div className="workspace-content-panel workspace-account-panel">
       <div className="workspace-panel-header">
-        <button className="icon-button mobile-only" type="button" title="返回会话列表" onClick={onBack}>
+        <button
+          className={visibleSection ? "icon-button" : "icon-button mobile-only"}
+          type="button"
+          title={visibleSection ? "返回上一级" : "返回会话列表"}
+          aria-label={visibleSection ? returnLabel : "返回会话列表"}
+          onClick={visibleSection ? returnToParent : onBack}
+        >
           <ArrowLeft size={16} />
         </button>
         <div>
           <p className="eyebrow">个人</p>
-          <h2>个人设置</h2>
+          <h2>{pageTitle}</h2>
         </div>
-      </div>
-      <section className="workspace-preference-section">
-        <div className="workspace-section-header">
-          <div>
-            <h3>公开资料</h3>
-            <p>头像和昵称会显示在所有登录后的共享空间界面。</p>
-          </div>
-          {(profileSaving || recallReasonSaving || discoverySaving) && <span className="workspace-auto-save-state">正在保存...</span>}
-        </div>
-        <WorkspaceAvatarEditor
-          name={currentUser.displayName}
-          avatarUrl={currentUser.avatarUrl}
-          busy={avatarSaving}
-          onUpload={uploadAvatar}
-          onDelete={deleteAvatar}
-          onError={(message) => onNotice("warning", message)}
-        />
-        <div className="workspace-settings-grid">
-          <label>
-            <span>公开昵称</span>
-            <input value={nickname} maxLength={32} onChange={(event) => setNickname(event.target.value)} placeholder={currentUser.githubLogin || "输入昵称"} />
-          </label>
-          <div className="workspace-readonly-field">
-            <span>GitHub 账号</span>
-            <strong>@{currentUser.githubLogin}</strong>
-          </div>
-          <label className="workspace-recall-setting">
-            <span>撤回文案</span>
-            <span className="workspace-recall-input">
-              <span>你因</span>
-              <input
-                value={recallReason}
-                maxLength={16}
-                onChange={(event) => setRecallReason(event.target.value)}
-                onBlur={() => {
-                  if (!recallReason.trim()) setRecallReason(lastSavedRecallReasonRef.current);
-                }}
-                aria-label="自定义撤回原因"
-              />
-              <span>撤回了一条消息</span>
-            </span>
-            <small>1 至 16 个字符；只影响你之后撤回的消息。</small>
-          </label>
-        </div>
-        <div className="workspace-setting-list">
-          <WorkspaceSwitch
-            checked={searchDiscoverable}
-            disabled={discoverySaving}
-            label="允许其他成员搜索到我"
-            description="开启后，其他成员可以通过公开昵称或 GitHub 登录名找到你并发起私聊。"
-            onChange={(checked) => void updateSearchDiscoverable(checked)}
-          />
-        </div>
-      </section>
-
-      <section className="workspace-preference-section" aria-busy={emoteSettingsLoading}>
-        <div className="workspace-section-header">
-          <div>
-            <h3>表情面板</h3>
-            <p>选择聊天时显示的表情包；收藏表情始终保留独立入口。</p>
-          </div>
-          {emoteSettingsSaving && <span className="workspace-auto-save-state">正在保存...</span>}
-        </div>
-        {emoteSettingsLoading || !emoteSettings ? (
-          <p className="workspace-form-status">正在读取表情设置...</p>
-        ) : (
-          <div className="workspace-emote-pack-settings">
-            {emoteSettings.availablePacks.map((pack) => {
-              const checked = emoteSettings.enabledPackIds.includes(pack.id);
-              const onlyEnabled = checked && emoteSettings.enabledPackIds.length <= emoteSettings.minimumEnabled;
-              return (
-                <button
-                  key={pack.id}
-                  type="button"
-                  aria-pressed={checked}
-                  disabled={emoteSettingsSaving || onlyEnabled}
-                  onClick={() => void updateEmoteSettings(pack.id, !checked)}
-                >
-                  <span className="workspace-emote-pack-check" aria-hidden="true">{checked && <Check size={14} />}</span>
-                  <span>{pack.label}</span>
-                </button>
-              );
-            })}
-            <small>至少保留一个表情包。收藏表情始终位于面板第一项。</small>
-          </div>
+        {(profileSaving || recallReasonSaving || discoverySaving || emoteSettingsSaving || notificationsSaving || ntfySaving) && (
+          <span className="workspace-auto-save-state" role="status">正在保存...</span>
         )}
-        <button className="workspace-emote-library-summary" type="button" onClick={onManageEmotes}>
-          <span className="workspace-setting-row-icon"><Images size={18} /></span>
-          <span>
-            <strong>我的表情</strong>
-            <small>{emoteLibrarySummary
-              ? `${emoteLibrarySummary.usage.itemCount} 张 · ${formatBytes(emoteLibrarySummary.usage.totalBytes)} · ${emoteLibrarySummary.usage.collectionCount} 个合集`
-              : "查看单张表情、合集和排序"}</small>
-          </span>
-          <ChevronDown size={16} className="workspace-setting-row-chevron" />
-        </button>
-      </section>
-
-      <section className="workspace-preference-section workspace-notification-settings" aria-busy={notificationsLoading || ntfyLoading}>
-        <div className="workspace-section-header">
-          <div>
-            <h3>通知</h3>
-            <p>集中管理邮件与 ntfy 推送；两种渠道都遵循会话免打扰规则。</p>
-          </div>
-          {(notificationsSaving || ntfySaving) && <span className="workspace-auto-save-state">正在保存...</span>}
+      </div>
+      {!visibleSection && (
+        <div className="workspace-settings-index">
+          <section className="workspace-settings-group" aria-labelledby="personal-settings-main">
+            <h3 id="personal-settings-main">设置</h3>
+            <div className="workspace-settings-list">
+              <WorkspaceSettingsRow
+                icon={<UserRound size={18} />}
+                title="账户与资料"
+                description="头像、公开昵称与 GitHub 账号"
+                value={currentUser.nickname || `@${currentUser.githubLogin}`}
+                onClick={() => onNavigate("profile")}
+              />
+              <WorkspaceSettingsRow
+                icon={<LockKeyhole size={18} />}
+                title="隐私与发现"
+                description="管理其他成员如何找到你"
+                value={searchDiscoverable ? "可被搜索" : "不可被搜索"}
+                onClick={() => onNavigate("privacy")}
+              />
+              <WorkspaceSettingsRow
+                icon={<MessageSquare size={18} />}
+                title="聊天与表情"
+                description="撤回提示、表情面板与个人表情"
+                value={emoteSettingsLoading ? "读取中" : `${enabledPackCount} 个表情包`}
+                onClick={() => onNavigate("chat")}
+              />
+              <WorkspaceSettingsRow
+                icon={<BellRing size={18} />}
+                title="通知"
+                description="邮件通知与移动推送"
+                value={notificationsLoading || ntfyLoading ? "读取中" : enabledChannelCount ? `${enabledChannelCount} 个渠道已开启` : "均已关闭"}
+                onClick={() => onNavigate("notifications")}
+              />
+            </div>
+          </section>
+          <section className="workspace-settings-group" aria-labelledby="personal-settings-account">
+            <h3 id="personal-settings-account">账户</h3>
+            <button className="workspace-settings-command danger-action" type="button" onClick={onLogout}>
+              <span className="workspace-settings-row-icon" aria-hidden="true"><LogOut size={18} /></span>
+              <span><strong>退出登录</strong><small>退出当前设备上的共享空间</small></span>
+            </button>
+          </section>
         </div>
-        {notificationsLoading || !notifications ? (
-          <p className="workspace-form-status">正在读取通知设置...</p>
-        ) : (
-          <div className="workspace-notification-groups">
-            <WorkspaceSwitch
-              checked={notifications.enabled}
-              disabled={notificationsSaving}
-              label="接受邮件通知"
-              description={notifications.maskedEmail || "尚未设置可用邮箱"}
-              onChange={(checked) => void updateNotifications({ enabled: checked })}
-            />
-            {notifications.enabled && (
-              <div className="workspace-notification-children">
-                <div className="workspace-notification-email-head">
-                  <span>邮件只说明存在未读消息，不包含聊天内容或附件信息。</span>
-                  {notifications.emailSource === "custom" && notifications.githubEmail && (
-                    <button className="secondary compact" type="button" disabled={emailBusy} onClick={() => void useGitHubEmail()}>
-                      使用 GitHub 邮箱
-                    </button>
-                  )}
-                </div>
-                {!notifications.mailAvailable && (
-                  <p className="workspace-form-status">空间邮件服务尚未启用。偏好会保留，但暂时不会发信。</p>
-                )}
-                <form className="workspace-inline-form" onSubmit={sendEmailChallenge}>
-                  <label>
-                    <span>更换邮箱</span>
-                    <input type="email" value={pendingEmail} onChange={(event) => setPendingEmail(event.target.value)} placeholder="name@example.com" required />
-                  </label>
-                  <button className="secondary" type="submit" disabled={emailBusy || !notifications.mailAvailable}>
-                    <Mail size={16} />
-                    发送验证码
-                  </button>
-                </form>
-                {challengeId && (
-                  <form className="workspace-inline-form" onSubmit={verifyEmail}>
-                    <label>
-                      <span>6 位验证码</span>
-                      <input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={verificationCode} onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, ""))} required />
-                    </label>
-                    <button className="primary" type="submit" disabled={emailBusy || verificationCode.length !== 6}>验证邮箱</button>
-                  </form>
-                )}
-                <div className="workspace-setting-list compact-list">
-                  <WorkspaceSwitch
-                    checked={notifications.immediateEnabled}
-                    disabled={notificationsSaving}
-                    label="每条消息都通知我"
-                    description="所有设备离线且消息 60 秒后仍未读时发送。"
-                    onChange={(checked) => void updateNotifications({ immediateEnabled: checked })}
-                  />
-                  <WorkspaceSwitch
-                    checked={notifications.digestEnabled}
-                    disabled={notificationsSaving}
-                    label="超过 2 小时仍未读时通知我"
-                    description="跨会话汇总，每个未读周期只发送一次。"
-                    onChange={(checked) => void updateNotifications({ digestEnabled: checked })}
-                  />
-                </div>
+      )}
+
+      {visibleSection === "profile" && (
+        <section className="workspace-settings-detail" aria-labelledby="workspace-profile-settings-title">
+          <div className="workspace-settings-detail-intro"><h3 id="workspace-profile-settings-title">公开资料</h3><p>头像和昵称会显示在所有登录后的共享空间界面。</p></div>
+          <WorkspaceAvatarEditor name={currentUser.displayName} avatarUrl={currentUser.avatarUrl} busy={avatarSaving} onUpload={uploadAvatar} onDelete={deleteAvatar} onError={(message) => onNotice("warning", message)} />
+          <div className="workspace-settings-fields">
+            <label>
+              <span>公开昵称</span>
+              <input
+                aria-label="公开昵称"
+                aria-describedby="workspace-nickname-description"
+                value={nickname}
+                maxLength={32}
+                onChange={(event) => setNickname(event.target.value)}
+                placeholder={currentUser.githubLogin || "输入昵称"}
+              />
+              <small id="workspace-nickname-description">最多 32 个字符，修改后自动保存。</small>
+            </label>
+            <div className="workspace-readonly-field"><span>GitHub 账号</span><strong>@{currentUser.githubLogin}</strong></div>
+          </div>
+        </section>
+      )}
+
+      {visibleSection === "privacy" && (
+        <section className="workspace-settings-detail" aria-labelledby="workspace-privacy-settings-title">
+          <div className="workspace-settings-detail-intro"><h3 id="workspace-privacy-settings-title">成员发现</h3><p>控制不在联系人范围内的空间成员是否能找到你。</p></div>
+          <div className="workspace-setting-list">
+            <WorkspaceSwitch checked={searchDiscoverable} disabled={discoverySaving} label="允许其他成员搜索到我" description="开启后，其他成员可以通过公开昵称或 GitHub 登录名找到你并发起私聊。" onChange={(checked) => void updateSearchDiscoverable(checked)} />
+          </div>
+          <p className="workspace-settings-footnote">已有会话和联系人关系不受此设置影响。</p>
+        </section>
+      )}
+
+      {visibleSection === "chat" && (
+        <div className="workspace-settings-detail-stack">
+          <section className="workspace-settings-detail" aria-labelledby="workspace-recall-settings-title">
+            <div className="workspace-settings-detail-intro"><h3 id="workspace-recall-settings-title">撤回提示</h3><p>这段原因会显示在你之后撤回的消息中。</p></div>
+            <label className="workspace-settings-field"><span>撤回原因</span><input value={recallReason} maxLength={16} onChange={(event) => setRecallReason(event.target.value)} onBlur={() => { if (!recallReason.trim()) setRecallReason(lastSavedRecallReasonRef.current); }} aria-label="自定义撤回原因" /><small>消息中将显示“你因{recallReason || "..."}撤回了一条消息”。</small></label>
+          </section>
+          <section className="workspace-settings-detail" aria-labelledby="workspace-emote-panel-title" aria-busy={emoteSettingsLoading}>
+            <div className="workspace-settings-detail-intro"><h3 id="workspace-emote-panel-title">表情面板</h3><p>选择聊天时显示的内置表情包，至少保留一个。</p></div>
+            {emoteSettingsLoading || !emoteSettings ? <WorkspaceSkeletonRows variant="setting" count={3} /> : (
+              <div className="workspace-emote-pack-settings">
+                {emoteSettings.availablePacks.map((pack) => {
+                  const checked = emoteSettings.enabledPackIds.includes(pack.id);
+                  const onlyEnabled = checked && emoteSettings.enabledPackIds.length <= emoteSettings.minimumEnabled;
+                  return <button key={pack.id} type="button" aria-pressed={checked} disabled={emoteSettingsSaving || onlyEnabled} onClick={() => void updateEmoteSettings(pack.id, !checked)}><span className="workspace-emote-pack-check" aria-hidden="true">{checked && <Check size={14} />}</span><span>{pack.label}</span></button>;
+                })}
               </div>
             )}
-            <div className="workspace-notification-channel-row">
-              {ntfyLoading || !ntfy ? (
-                <p className="workspace-form-status">正在读取 ntfy 设置...</p>
-              ) : (
-                <WorkspaceSwitch
-                  checked={ntfy.enabled}
-                  disabled={ntfySaving}
-                  label="接受 ntfy 通知"
-                  description="通过独立 topic 接收不含正文的推送。"
-                  onChange={(checked) => void updateNtfy(checked)}
-                />
-              )}
-              <button
-                ref={ntfyHelpTriggerRef}
-                className="secondary compact"
-                type="button"
-                disabled={!ntfy}
-                aria-haspopup="dialog"
-                onClick={() => setNtfyHelpOpen(true)}
-              >
-                使用说明
-              </button>
+            <div className="workspace-settings-list single-row">
+              <WorkspaceSettingsRow icon={<Images size={18} />} title="我的表情" description="上传、排序、管理合集与分享" value={emoteLibrarySummary ? `${emoteLibrarySummary.usage.itemCount} 张` : "读取中"} onClick={onManageEmotes} />
             </div>
-          </div>
-        )}
-      </section>
+          </section>
+        </div>
+      )}
+
+      {visibleSection === "notifications" && (
+        <section className="workspace-settings-detail" aria-labelledby="workspace-notification-settings-title" aria-busy={notificationsLoading || ntfyLoading}>
+          <div className="workspace-settings-detail-intro"><h3 id="workspace-notification-settings-title">通知渠道</h3><p>所有渠道都遵循每个会话的提醒与免打扰规则。</p></div>
+          {notificationsLoading || ntfyLoading || !notifications || !ntfy ? <WorkspaceSkeletonRows variant="setting" count={2} /> : (
+            <div className="workspace-settings-list">
+              <WorkspaceSettingsRow icon={<Mail size={18} />} title="邮件通知" description="未读消息提醒与通知邮箱" value={notifications.enabled ? "开启" : "关闭"} onClick={() => onNavigate("email")} />
+              <WorkspaceSettingsRow icon={<BellRing size={18} />} title="移动推送" description="通过 ntfy 客户端接收" value={ntfy.enabled ? "已启用" : "未启用"} onClick={() => onNavigate("push")} />
+            </div>
+          )}
+          <p className="workspace-settings-footnote">会话级提醒方式可在聊天详情中单独设置。</p>
+        </section>
+      )}
+
+      {visibleSection === "email" && (
+        <section className="workspace-settings-detail" aria-labelledby="workspace-email-notification-title" aria-busy={notificationsLoading}>
+          <div className="workspace-settings-detail-intro"><h3 id="workspace-email-notification-title">提醒方式</h3><p>邮件仅说明存在未读消息，不包含聊天内容或附件信息。</p></div>
+          {notificationsLoading || !notifications ? <WorkspaceSkeletonRows variant="setting" count={4} /> : (
+            <div className="workspace-notification-groups">
+              <div className="workspace-setting-list"><WorkspaceSwitch checked={notifications.enabled} disabled={notificationsSaving} label="接受邮件通知" description={notifications.maskedEmail || "尚未设置可用邮箱"} onChange={(checked) => void updateNotifications({ enabled: checked })} /></div>
+              {notifications.enabled && <div className="workspace-notification-children">
+                {!notifications.mailAvailable && <p className="workspace-form-status">空间邮件服务尚未启用。偏好会保留，但暂时不会发信。</p>}
+                <div className="workspace-notification-email-head"><span>通知邮箱：{notifications.maskedEmail || "未设置"}</span>{notifications.emailSource === "custom" && notifications.githubEmail && <button className="secondary compact" type="button" disabled={emailBusy} onClick={() => void useGitHubEmail()}>使用 GitHub 邮箱</button>}</div>
+                <form className="workspace-inline-form" onSubmit={sendEmailChallenge}><label><span>更换通知邮箱</span><input type="email" value={pendingEmail} onChange={(event) => setPendingEmail(event.target.value)} placeholder="name@example.com" required /></label><button className="secondary" type="submit" disabled={emailBusy || !notifications.mailAvailable}><Mail size={16} />发送验证码</button></form>
+                {challengeId && <form className="workspace-inline-form" onSubmit={verifyEmail}><label><span>6 位验证码</span><input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={verificationCode} onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, ""))} required /></label><button className="primary" type="submit" disabled={emailBusy || verificationCode.length !== 6}>验证邮箱</button></form>}
+                <div className="workspace-setting-list compact-list"><WorkspaceSwitch checked={notifications.immediateEnabled} disabled={notificationsSaving} label="每条消息都通知我" description="所有设备离线且消息 60 秒后仍未读时发送。" onChange={(checked) => void updateNotifications({ immediateEnabled: checked })} /><WorkspaceSwitch checked={notifications.digestEnabled} disabled={notificationsSaving} label="超过 2 小时仍未读时通知我" description="跨会话汇总，每个未读周期只发送一次。" onChange={(checked) => void updateNotifications({ digestEnabled: checked })} /></div>
+              </div>}
+            </div>
+          )}
+        </section>
+      )}
+
+      {visibleSection === "push" && (
+        <section className="workspace-settings-detail" aria-labelledby="workspace-push-notification-title" aria-busy={ntfyLoading}>
+          <div className="workspace-settings-detail-intro"><h3 id="workspace-push-notification-title">推送状态</h3><p>通过 ntfy 客户端接收不含消息正文的提醒。</p></div>
+          {ntfyLoading || !ntfy ? <WorkspaceSkeletonRows variant="setting" count={2} /> : <>
+            <div className="workspace-setting-list"><WorkspaceSwitch checked={ntfy.enabled} disabled={ntfySaving} label="接受移动推送" description={ntfy.enabled ? "已配置，可在使用说明中查看订阅信息。" : "开启后可按说明配置 ntfy 客户端。"} onChange={(checked) => void updateNtfy(checked)} /></div>
+            <button ref={ntfyHelpTriggerRef} className="workspace-settings-help-row" type="button" aria-haspopup="dialog" onClick={() => setNtfyHelpOpen(true)}><span className="workspace-settings-row-icon"><BellRing size={18} /></span><span><strong>配置 ntfy 客户端</strong><small>查看安装、服务器和个人订阅信息</small></span><ChevronRight size={17} aria-hidden="true" /></button>
+          </>}
+        </section>
+      )}
     </div>
     {ntfyHelpOpen && ntfy && createPortal(
       <div className="workspace-ntfy-dialog-backdrop" onMouseDown={(event) => {
@@ -10150,17 +10175,17 @@ function WorkspaceAccountSettings({
             <p><strong>不要分享 topic。</strong>知道该字符串的人可能订阅你的通知。怀疑泄露时，请回到此页刷新 topic。</p>
           </div>
           {ntfyRotateConfirm ? (
-            <div className="workspace-ntfy-rotate-confirm" role="group" aria-label="确认刷新 topic">
-              <p>刷新后旧 topic 立即失效，现有客户端需要重新订阅。</p>
+            <div className="workspace-ntfy-rotate-confirm" role="group" aria-label="确认重新生成推送凭据">
+              <p><strong>所有已订阅设备将停止接收。</strong>重新生成后，需要在每台设备上重新配置订阅。</p>
               <button className="secondary compact" type="button" disabled={ntfySaving} onClick={() => setNtfyRotateConfirm(false)}>取消</button>
               <button className="secondary compact danger-action" type="button" disabled={ntfySaving} onClick={() => void rotateNtfyTopic()}>
-                {ntfySaving ? "刷新中" : "确认刷新"}
+                {ntfySaving ? "正在生成" : "确认重新生成"}
               </button>
             </div>
           ) : (
-            <button className="workspace-ntfy-rotate" type="button" onClick={() => setNtfyRotateConfirm(true)}>
+            <button className="workspace-ntfy-rotate danger-action" type="button" onClick={() => setNtfyRotateConfirm(true)}>
               <RefreshCw size={15} />
-              刷新我的 topic 字符串
+              重新生成推送凭据
             </button>
           )}
           <div className="workspace-ntfy-downloads">

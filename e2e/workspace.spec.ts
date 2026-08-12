@@ -79,8 +79,16 @@ test("workspace semantic routes survive OAuth, refresh, history, and invalid res
   await page.locator(".workspace-user-trigger").click();
   await page.locator(".workspace-user-menu").getByRole("menuitem", { name: "个人设置", exact: true }).click();
   await expect(page).toHaveURL(/\/workspace\/account$/);
-  await page.reload();
-  await expect(page.getByRole("heading", { name: "个人设置" })).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "个人设置" })).toBeVisible();
+    await page.getByRole("button", { name: /通知/ }).click();
+    await expect(page).toHaveURL(/\/workspace\/account\/notifications$/);
+    await page.getByRole("button", { name: /邮件通知/ }).click();
+    await expect(page).toHaveURL(/\/workspace\/account\/notifications\/email$/);
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "邮件通知", level: 2 })).toBeVisible();
+    await page.getByRole("button", { name: "返回通知" }).click();
+    await page.getByRole("button", { name: "返回个人设置" }).click();
 
   await page.goto("/workspace/files/not-a-real-file");
   await expect(page.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
@@ -1041,11 +1049,15 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await memberPage.locator(".workspace-user-trigger").click();
     await memberPage.getByRole("menuitem", { name: "个人设置" }).click();
     await expect(memberPage.getByRole("heading", { name: "个人设置" })).toBeVisible();
+    await memberPage.getByRole("button", { name: /通知/ }).click();
+    await memberPage.getByRole("button", { name: /邮件通知/ }).click();
     await expect(memberPage.getByRole("switch", { name: /接受邮件通知/ })).toHaveAttribute("aria-checked", "true");
     await expect(memberPage.getByRole("switch", { name: /每条消息都通知我/ })).toHaveAttribute("aria-checked", "false");
     await expect(memberPage.getByRole("switch", { name: /超过 2 小时仍未读时通知我/ })).toHaveAttribute("aria-checked", "true");
-    await expect(memberPage.getByRole("switch", { name: /接受 ntfy 通知/ })).toHaveAttribute("aria-checked", "true");
-    const ntfyHelpTrigger = memberPage.getByRole("button", { name: "使用说明", exact: true });
+    await memberPage.getByRole("button", { name: "返回通知" }).click();
+    await memberPage.getByRole("button", { name: /移动推送/ }).click();
+    await expect(memberPage.getByRole("switch", { name: /接受移动推送/ })).toHaveAttribute("aria-checked", "true");
+    const ntfyHelpTrigger = memberPage.getByRole("button", { name: /配置 ntfy 客户端/ });
     await ntfyHelpTrigger.click();
     const ntfyDialog = memberPage.getByRole("dialog", { name: "订阅 ntfy 通知" });
     await expect(ntfyDialog).toBeVisible();
@@ -1059,17 +1071,20 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     const ntfyTopic = ntfyDialog.locator(".workspace-ntfy-copy-list > div").filter({ hasText: "我的 topic" }).locator("code");
     const originalNtfyTopic = await ntfyTopic.textContent();
     expect(originalNtfyTopic).toMatch(new RegExp(`^duallane-duallane-e2e-${memberSuffix}-[A-Za-z0-9]{6}$`));
-    await ntfyDialog.getByRole("button", { name: "刷新我的 topic 字符串" }).click();
+    await ntfyDialog.getByRole("button", { name: "重新生成推送凭据" }).click();
     const rotateResponse = memberPage.waitForResponse((response) =>
       response.url().endsWith("/api/workspace/me/ntfy/rotate") && response.request().method() === "POST"
     );
-    await ntfyDialog.getByRole("button", { name: "确认刷新" }).click();
+    await ntfyDialog.getByRole("button", { name: "确认重新生成" }).click();
     expect((await rotateResponse).status()).toBe(200);
     await expect(ntfyTopic).not.toHaveText(originalNtfyTopic!);
-    await expect(memberPage.getByText(/旧 topic 已失效，请在 ntfy 中重新订阅/)).toBeVisible();
+    await expect(memberPage.getByText(/所有设备需要重新配置/)).toBeVisible();
     await memberPage.keyboard.press("Escape");
     await expect(ntfyDialog).toHaveCount(0);
     await expect(ntfyHelpTrigger).toBeFocused();
+    await memberPage.getByRole("button", { name: "返回通知" }).click();
+    await memberPage.getByRole("button", { name: "返回个人设置" }).click();
+    await memberPage.getByRole("button", { name: /账户与资料/ }).click();
 
     await memberPage.locator('input[type="file"][accept="image/jpeg,image/png,image/webp"]').setInputFiles({
       name: "workspace-avatar.png",
@@ -1108,6 +1123,8 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     );
     await memberPage.getByRole("textbox", { name: "公开昵称", exact: true }).fill(publicNickname);
     expect((await nicknameResponse).status()).toBe(200);
+    await memberPage.getByRole("button", { name: "返回个人设置" }).click();
+    await memberPage.getByRole("button", { name: /隐私与发现/ }).click();
     const discoverabilityToggle = memberPage.getByRole("switch", { name: /允许其他成员搜索到我/ });
     await expect(discoverabilityToggle).toHaveAttribute("aria-checked", "false");
     const discoverabilityResponse = memberPage.waitForResponse((response) =>
@@ -1151,7 +1168,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(outsiderPage.getByRole("region", { name: publicNickname })).toBeVisible();
 
     await memberPage.setViewportSize({ width: 390, height: 844 });
-    await expect(memberPage.getByRole("heading", { name: "个人设置" })).toBeVisible();
+    await expect(memberPage.getByRole("heading", { name: "隐私与发现" })).toBeVisible();
     expect(await memberPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     await ownerPage.setViewportSize({ width: 1280, height: 720 });
@@ -1211,7 +1228,8 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
 
     await memberPage.goto("/workspace/account");
     await expect(memberPage.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
-    const emoteSettingsSection = memberPage.locator("section.workspace-preference-section").filter({
+    await memberPage.getByRole("button", { name: /聊天与表情/ }).click();
+    const emoteSettingsSection = memberPage.locator("section.workspace-settings-detail").filter({
       has: memberPage.getByRole("heading", { name: "表情面板", exact: true })
     });
     const emojiPackToggle = emoteSettingsSection.getByRole("button", { name: "Emoji", exact: true });

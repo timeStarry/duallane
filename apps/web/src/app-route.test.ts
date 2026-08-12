@@ -10,6 +10,12 @@ describe("application routes", () => {
     expect(parseAppRoute("/workspace/files/file-1").route).toMatchObject({ view: "files", fileId: "file-1" });
     expect(parseAppRoute("/workspace/members/user-1").route).toMatchObject({ view: "members", memberId: "user-1" });
     expect(parseAppRoute("/workspace/account").route).toMatchObject({ view: "account" });
+    expect(parseAppRoute("/workspace/account/profile").route).toMatchObject({ view: "account", accountSection: "profile" });
+    expect(parseAppRoute("/workspace/account/privacy").route).toMatchObject({ view: "account", accountSection: "privacy" });
+    expect(parseAppRoute("/workspace/account/chat").route).toMatchObject({ view: "account", accountSection: "chat" });
+    expect(parseAppRoute("/workspace/account/notifications").route).toMatchObject({ view: "account", accountSection: "notifications" });
+    expect(parseAppRoute("/workspace/account/notifications/email").route).toMatchObject({ view: "account", accountSection: "email" });
+    expect(parseAppRoute("/workspace/account/notifications/push").route).toMatchObject({ view: "account", accountSection: "push" });
     expect(parseAppRoute("/workspace/account/emotes").route).toMatchObject({ view: "account", accountSection: "emotes" });
     expect(parseAppRoute("/workspace/emotes/shared/share-1").route).toMatchObject({
       view: "account",
@@ -41,6 +47,10 @@ describe("application routes", () => {
     expect(getAppRouteUrl(workspaceRoute({ view: "space", spaceTab: "roles" }))).toBe("/workspace/space/permissions");
     expect(getAppRouteUrl(workspaceRoute({ view: "files", fileId: "file-1" }))).toBe("/workspace/files/file-1");
     expect(getAppRouteUrl(workspaceRoute({ view: "account", accountSection: "emotes" }))).toBe("/workspace/account/emotes");
+    expect(getAppRouteUrl(workspaceRoute({ view: "account", accountSection: "profile" }))).toBe("/workspace/account/profile");
+    expect(getAppRouteUrl(workspaceRoute({ view: "account", accountSection: "notifications" }))).toBe("/workspace/account/notifications");
+    expect(getAppRouteUrl(workspaceRoute({ view: "account", accountSection: "email" }))).toBe("/workspace/account/notifications/email");
+    expect(getAppRouteUrl(workspaceRoute({ view: "account", accountSection: "push" }))).toBe("/workspace/account/notifications/push");
     expect(getAppRouteUrl(workspaceRoute({ view: "account", sharedEmoteCollectionId: "share-1" }))).toBe("/workspace/emotes/shared/share-1");
   });
 

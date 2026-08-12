@@ -1,7 +1,15 @@
 export type WorkspaceRouteView = "chat" | "files" | "members" | "account" | "space" | "new";
 export type WorkspaceRouteSpaceTab = "overview" | "invites" | "roles" | "visibility" | "email";
 export type WorkspaceRouteCreateMode = "" | "direct" | "group";
-export type WorkspaceRouteAccountSection = "" | "emotes";
+export type WorkspaceRouteAccountSection =
+  | ""
+  | "profile"
+  | "privacy"
+  | "chat"
+  | "notifications"
+  | "email"
+  | "push"
+  | "emotes";
 
 export type AppRoute =
   | { kind: "entry" }
@@ -88,10 +96,11 @@ export function parseAppRoute(pathname: string, search = "", hash = ""): ParsedA
       segments.length > 3 || (segments.length === 3 && !memberId) || hasUnexpectedParams(params, ["invite"])
     );
   }
-  if (segments[1] === "account" && (segments.length === 2 || (segments.length === 3 && segments[2] === "emotes"))) {
+  if (segments[1] === "account") {
+    const accountSection = parseAccountSection(segments.slice(2));
     return finish(
-      workspaceRoute({ ...base, view: "account", accountSection: segments[2] === "emotes" ? "emotes" : "" }),
-      hasUnexpectedParams(params, ["invite"])
+      workspaceRoute({ ...base, view: "account", accountSection }),
+      (segments.length > 2 && !accountSection) || segments.length > accountSectionSegmentCount(accountSection) + 2 || hasUnexpectedParams(params, ["invite"])
     );
   }
   if (segments[1] === "emotes" && segments[2] === "shared") {
@@ -130,7 +139,7 @@ export function getAppRouteUrl(route: AppRoute) {
   if (route.view === "files") pathname = route.fileId ? `/workspace/files/${encodeURIComponent(route.fileId)}` : "/workspace/files";
   if (route.view === "members") pathname = route.memberId ? `/workspace/members/${encodeURIComponent(route.memberId)}` : "/workspace/members";
   if (route.sharedEmoteCollectionId) pathname = `/workspace/emotes/shared/${encodeURIComponent(route.sharedEmoteCollectionId)}`;
-  else if (route.view === "account") pathname = route.accountSection === "emotes" ? "/workspace/account/emotes" : "/workspace/account";
+  else if (route.view === "account") pathname = accountSectionPath(route.accountSection);
   if (route.view === "new" && route.createMode) pathname = `/workspace/new/${route.createMode}`;
   if (route.view === "space") pathname = route.spaceTab === "overview" ? "/workspace/space" : `/workspace/space/${spaceTabPath(route.spaceTab)}`;
 
@@ -226,4 +235,24 @@ function isSpaceTabPath(value: string) {
 
 function spaceTabPath(tab: WorkspaceRouteSpaceTab) {
   return tab === "roles" ? "permissions" : tab;
+}
+
+function parseAccountSection(segments: string[]): WorkspaceRouteAccountSection {
+  if (segments.length === 0) return "";
+  if (segments.length === 1 && ["profile", "privacy", "chat", "notifications", "emotes"].includes(segments[0])) {
+    return segments[0] as WorkspaceRouteAccountSection;
+  }
+  if (segments.length === 2 && segments[0] === "notifications" && segments[1] === "email") return "email";
+  if (segments.length === 2 && segments[0] === "notifications" && segments[1] === "push") return "push";
+  return "";
+}
+
+function accountSectionSegmentCount(section: WorkspaceRouteAccountSection) {
+  return section === "email" || section === "push" ? 2 : section ? 1 : 0;
+}
+
+function accountSectionPath(section: WorkspaceRouteAccountSection) {
+  if (section === "email") return "/workspace/account/notifications/email";
+  if (section === "push") return "/workspace/account/notifications/push";
+  return section ? `/workspace/account/${section}` : "/workspace/account";
 }

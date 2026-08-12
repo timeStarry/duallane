@@ -1013,8 +1013,8 @@ describe("workspace UI permission boundaries", () => {
 
     expect(accountSource).toContain('workspaceJson<{ ntfy: WorkspaceNtfyPreferences }>("/api/workspace/me/ntfy")');
     expect(accountSource).toContain('"/api/workspace/me/ntfy/rotate"');
-    expect(accountSource).toContain("刷新我的 topic 字符串");
-    expect(accountSource).toContain("旧 topic 立即失效");
+    expect(accountSource).toContain("重新生成推送凭据");
+    expect(accountSource).toContain("所有已订阅设备将停止接收");
     expect(accountSource).toContain('role="dialog"');
     expect(accountSource).toContain('aria-modal="true"');
     expect(accountSource).toContain("不要分享 topic");

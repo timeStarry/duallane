@@ -5805,7 +5805,14 @@ html[data-theme="dark"] .workspace-mode {
 }
 
 .workspace-account-panel > .workspace-panel-header {
-  padding-bottom: 8px;
+  min-height: 68px;
+  justify-content: flex-start;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+}
+
+.workspace-account-panel > .workspace-panel-header .workspace-auto-save-state {
+  margin-left: auto;
 }
 
 .workspace-avatar-editor-row {
@@ -5853,7 +5860,7 @@ html[data-theme="dark"] .workspace-mode {
 
 .workspace-emote-pack-settings {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
   gap: 8px;
 }
 
@@ -5974,6 +5981,223 @@ html[data-theme="dark"] .workspace-mode {
   gap: 16px;
   border-top: 1px solid var(--line);
   padding: 22px 0 18px;
+}
+
+.workspace-settings-index,
+.workspace-settings-detail-stack {
+  display: grid;
+  gap: 24px;
+  padding: 22px 0 32px;
+}
+
+.workspace-settings-group,
+.workspace-settings-detail {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.workspace-settings-group > h3,
+.workspace-settings-detail h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+
+.workspace-settings-group > h3 {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.workspace-settings-list {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.workspace-settings-row,
+.workspace-settings-command,
+.workspace-settings-help-row {
+  width: 100%;
+  min-width: 0;
+  min-height: 72px;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) minmax(0, auto) 18px;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  padding: 11px 14px;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--motion-fast) var(--motion-ease);
+}
+
+.workspace-settings-row + .workspace-settings-row {
+  border-top: 1px solid var(--line);
+}
+
+.workspace-settings-row:hover,
+.workspace-settings-command:hover,
+.workspace-settings-help-row:hover {
+  background: var(--surface-tint);
+}
+
+.workspace-settings-row:active,
+.workspace-settings-command:active,
+.workspace-settings-help-row:active {
+  background: var(--accent-soft);
+}
+
+.workspace-settings-row-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--relay-dark);
+  background: var(--surface-tint);
+}
+
+.workspace-settings-row-copy,
+.workspace-settings-command > span:last-child,
+.workspace-settings-help-row > span:nth-child(2) {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.workspace-settings-row strong,
+.workspace-settings-row small,
+.workspace-settings-command strong,
+.workspace-settings-command small,
+.workspace-settings-help-row strong,
+.workspace-settings-help-row small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-settings-row strong,
+.workspace-settings-command strong,
+.workspace-settings-help-row strong {
+  color: var(--ink);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+
+.workspace-settings-row small,
+.workspace-settings-command small,
+.workspace-settings-help-row small,
+.workspace-settings-row-value {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+}
+
+.workspace-settings-row-value {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-settings-row-chevron {
+  color: var(--muted);
+}
+
+.workspace-settings-command {
+  grid-template-columns: 36px minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.workspace-settings-command.danger-action .workspace-settings-row-icon {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+
+.workspace-settings-detail,
+.workspace-settings-detail-stack {
+  animation: workspace-panel-enter var(--motion-base) var(--motion-ease);
+}
+
+.workspace-settings-detail {
+  padding: 22px 0 32px;
+}
+
+.workspace-settings-detail-stack {
+  padding-top: 0;
+}
+
+.workspace-settings-detail-stack > .workspace-settings-detail + .workspace-settings-detail {
+  border-top: 1px solid var(--line);
+}
+
+.workspace-settings-detail-intro {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.workspace-settings-detail-intro p,
+.workspace-settings-footnote {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--line-body);
+}
+
+.workspace-settings-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.workspace-settings-fields label,
+.workspace-settings-field {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.workspace-settings-fields input,
+.workspace-settings-field input {
+  width: 100%;
+  min-width: 0;
+}
+
+.workspace-settings-fields small,
+.workspace-settings-field small {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+  line-height: var(--line-body);
+}
+
+.workspace-settings-detail > .workspace-setting-list,
+.workspace-settings-detail .workspace-settings-list.single-row {
+  border-block: 1px solid var(--line);
+}
+
+.workspace-settings-detail .workspace-settings-list.single-row {
+  margin-top: 6px;
+}
+
+.workspace-settings-help-row {
+  grid-template-columns: 36px minmax(0, 1fr) 18px;
+  border-block: 1px solid var(--line);
 }
 
 .workspace-preference-section:first-of-type {
@@ -7242,8 +7466,9 @@ small,
 
 @media (max-width: 760px) {
   .p2p-mode {
-    padding: 0;
-  }
+  padding: 0;
+  color: var(--danger);
+}
 
   .p2p-shell {
     width: 100%;
@@ -7308,8 +7533,44 @@ small,
 
   .workspace-settings-grid,
   .workspace-settings-grid.three-columns,
-  .workspace-inline-form {
+  .workspace-inline-form,
+  .workspace-settings-fields {
     grid-template-columns: 1fr;
+  }
+
+  .workspace-settings-index,
+  .workspace-settings-detail,
+  .workspace-settings-detail-stack {
+    padding-top: 16px;
+  }
+
+  .workspace-settings-row,
+  .workspace-settings-command,
+  .workspace-settings-help-row {
+    min-height: 68px;
+    grid-template-columns: 34px minmax(0, 1fr) 18px;
+    gap: 10px;
+    padding-inline: 10px;
+  }
+
+  .workspace-settings-command {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .workspace-settings-row-value {
+    grid-column: 2;
+    grid-row: 2;
+    max-width: 100%;
+    margin-top: -2px;
+  }
+
+  .workspace-settings-row-chevron {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+
+  .workspace-settings-row-copy small {
+    white-space: normal;
   }
 
   .workspace-recall-input {
