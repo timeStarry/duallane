@@ -3968,26 +3968,6 @@ html[data-theme="dark"] .workspace-mode {
   height: 44px;
 }
 
-.emote-grid .emote-custom-remove {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  width: 20px;
-  height: 20px;
-  border-color: var(--line);
-  border-radius: 50%;
-  padding: 0;
-  color: var(--muted);
-  background: var(--panel);
-  opacity: 0;
-}
-
-.emote-custom-tile:hover .emote-custom-remove,
-.emote-library-item:hover .emote-custom-remove,
-.emote-custom-remove:focus-visible {
-  opacity: 1;
-}
-
 .emote-picker-empty,
 .emote-picker-error {
   margin: 0;
@@ -7461,7 +7441,6 @@ small,
 .emote-custom-grid .emote-upload-tile, .emote-custom-grid .emote-library-item, .emote-custom-grid .emote-library-emote, .emote-custom-grid .emote-collection-tile { height: 62px; }
 .emote-library-item { min-width: 0; position: relative; display: grid; }
 .emote-library-item .emote-library-emote { width: 100%; }
-.emote-library-item .emote-custom-remove { top: 2px; right: 2px; }
 .emote-library-emote img { width: 44px; height: 44px; object-fit: contain; }
 .emote-collection-tile { min-width: 0; display: grid; grid-template-rows: 42px auto; gap: 2px; align-content: center; padding: 4px; border: 1px solid transparent; border-radius: 8px; color: var(--ink); background: var(--surface); cursor: pointer; font-size: .68rem; font-weight: var(--weight-medium); }
 .emote-collection-tile > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -7740,26 +7719,6 @@ small,
     height: 56px;
   }
 
-  .emote-grid .emote-custom-remove {
-    top: -8px;
-    right: -8px;
-    min-width: 44px;
-    width: 44px;
-    height: 44px;
-    border: 0;
-    background: transparent;
-    opacity: 1;
-  }
-
-  .emote-grid .emote-custom-remove svg {
-    box-sizing: content-box;
-    width: 14px;
-    height: 14px;
-    border: 1px solid var(--line);
-    border-radius: 50%;
-    padding: 3px;
-    background: var(--panel);
-  }
 }
 
 /* Durable pages and restrained state motion. */

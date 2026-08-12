@@ -123,6 +123,11 @@ import { userFacingErrorMessage } from "./user-facing-error";
 import { installWorkspaceUnreadFavicon } from "./workspace-unread-favicon";
 import { isServerVersionNewer } from "./app-version";
 import { groupHiddenWorkspaceMessages } from "./workspace-hidden-messages";
+import {
+  getPreferredEmotePickerPack,
+  rememberPreferredEmotePickerPack,
+  type EmotePickerPreferenceScope
+} from "./emote-picker-preference";
 
 type Lane = "entry" | "about" | "p2p" | "workspace-dev";
 type P2pStep = "name" | "waiting" | "chat" | "ended" | "invalid-room";
@@ -10438,6 +10443,19 @@ function WorkspaceEmoteManagerDialog({
     catch (err) { setError(userFacingErrorMessage(err, "合集删除失败")); }
     finally { setBusy(false); }
   }
+  async function deleteEmote(emote: WorkspaceCustomEmote) {
+    if (!window.confirm(`从“我的表情”中删除“${emote.label}”？`)) return;
+    setBusy(true); setError("");
+    try {
+      await workspaceJson(`/api/workspace/me/emotes/${encodeURIComponent(emote.id)}`, { method: "DELETE" });
+      await reloadAfterMutation();
+      onNotice("success", "表情已删除");
+    } catch (err) {
+      setError(userFacingErrorMessage(err, "表情删除失败"));
+    } finally {
+      setBusy(false);
+    }
+  }
   async function moveEntry(index: number, delta: number) {
     if (!library) return;
     const next = [...library.entries]; const target = index + delta;
@@ -10667,6 +10685,8 @@ function WorkspaceEmoteManagerDialog({
                     onDrop={() => { void moveEntryTo(draggedEntryId, entry.id); setDraggedEntryId(""); }}
                     onDragEnd={() => setDraggedEntryId("")}
                     onMove={(delta) => void moveEntry(index, delta)}
+                    onRemove={() => void deleteEmote(entry.emote)}
+                    removeLabel={`删除表情 ${entry.emote.label}`}
                   /> : (
                     <article
                       className={draggedEntryId === entry.id ? "workspace-emote-manage-row collection dragging" : "workspace-emote-manage-row collection"}
@@ -10705,8 +10725,9 @@ function WorkspaceEmoteManagerDialog({
   );
 }
 
-function EmoteManageRow({ label, src, index, total, draggable = false, dragging = false, onMove, onRemove, onDragStart, onDrop, onDragEnd }: { label: string; src: string; index: number; total: number; draggable?: boolean; dragging?: boolean; onMove: (delta: number) => void; onRemove?: () => void; onDragStart?: () => void; onDrop?: () => void; onDragEnd?: () => void }) {
-  return <article className={dragging ? "workspace-emote-manage-row dragging" : "workspace-emote-manage-row"} onDragOver={(event) => { if (draggable) event.preventDefault(); }} onDrop={onDrop}><span className="workspace-emote-drag-handle" draggable={draggable} onDragStart={onDragStart} onDragEnd={onDragEnd} title={draggable ? "拖拽排序" : undefined}><GripVertical size={17} aria-hidden="true" /></span><img src={src} alt="" /><span className="workspace-emote-manage-copy"><strong>{label}</strong><small>个人表情</small></span><span className="workspace-emote-row-actions">{onRemove && <button className="icon-button danger-action" type="button" title="移出合集" aria-label={`将 ${label} 移出合集`} onClick={onRemove}><Trash2 size={15} /></button>}<button className="icon-button" type="button" title="前移" aria-label={`前移 ${label}`} disabled={index === 0} onClick={() => onMove(-1)}><ChevronUp size={16} /></button><button className="icon-button" type="button" title="后移" aria-label={`后移 ${label}`} disabled={index === total - 1} onClick={() => onMove(1)}><ChevronDown size={16} /></button></span></article>;
+function EmoteManageRow({ label, src, index, total, draggable = false, dragging = false, onMove, onRemove, removeLabel, onDragStart, onDrop, onDragEnd }: { label: string; src: string; index: number; total: number; draggable?: boolean; dragging?: boolean; onMove: (delta: number) => void; onRemove?: () => void; removeLabel?: string; onDragStart?: () => void; onDrop?: () => void; onDragEnd?: () => void }) {
+  const resolvedRemoveLabel = removeLabel || `将 ${label} 移出合集`;
+  return <article className={dragging ? "workspace-emote-manage-row dragging" : "workspace-emote-manage-row"} onDragOver={(event) => { if (draggable) event.preventDefault(); }} onDrop={onDrop}><span className="workspace-emote-drag-handle" draggable={draggable} onDragStart={onDragStart} onDragEnd={onDragEnd} title={draggable ? "拖拽排序" : undefined}><GripVertical size={17} aria-hidden="true" /></span><img src={src} alt="" /><span className="workspace-emote-manage-copy"><strong>{label}</strong><small>个人表情</small></span><span className="workspace-emote-row-actions">{onRemove && <button className="icon-button danger-action" type="button" title={resolvedRemoveLabel} aria-label={resolvedRemoveLabel} onClick={onRemove}><Trash2 size={15} /></button>}<button className="icon-button" type="button" title="前移" aria-label={`前移 ${label}`} disabled={index === 0} onClick={() => onMove(-1)}><ChevronUp size={16} /></button><button className="icon-button" type="button" title="后移" aria-label={`后移 ${label}`} disabled={index === total - 1} onClick={() => onMove(1)}><ChevronDown size={16} /></button></span></article>;
 }
 
 function WorkspaceMemberDetail({
@@ -13405,8 +13426,17 @@ function EmotePicker({
   workspaceFeatures?: "composer" | "reaction";
   onManageEmotes?: () => void;
 }) {
-  const [activePackId, setActivePackId] = useState<EmotePack["id"]>(
-    workspaceFeatures === "composer" ? "custom" : visibleEmotePacks[0]?.id ?? "emoji"
+  const initialPackIds = workspaceFeatures === "composer"
+    ? ["custom" as const, ...visibleEmotePacks.map((pack) => pack.id)]
+    : visibleEmotePacks.map((pack) => pack.id);
+  const fallbackPackId = workspaceFeatures === "composer" ? "custom" : visibleEmotePacks[0]?.id ?? "emoji";
+  const preferenceScope: EmotePickerPreferenceScope = workspaceFeatures === "composer"
+    ? "workspace-composer"
+    : workspaceFeatures === "reaction"
+      ? "workspace-reaction"
+      : "p2p";
+  const [activePackId, setActivePackId] = useState<EmotePack["id"]>(() =>
+    getPreferredEmotePickerPack(preferenceScope, initialPackIds, fallbackPackId)
   );
   const [settings, setSettings] = useState<WorkspaceEmoteSettings | null>(null);
   const [library, setLibrary] = useState<WorkspaceEmoteLibrary | null>(null);
@@ -13508,20 +13538,6 @@ function EmotePicker({
     }
   }
 
-  async function removeCustomEmote(emoteId: string) {
-    setCustomBusy(true);
-    setCustomError("");
-    try {
-      await workspaceJson(`/api/workspace/me/emotes/${encodeURIComponent(emoteId)}`, { method: "DELETE" });
-      await reloadLibrary();
-      notifyWorkspaceEmoteLibraryChanged();
-    } catch (error) {
-      setCustomError(userFacingErrorMessage(error, "收藏表情删除失败"));
-    } finally {
-      setCustomBusy(false);
-    }
-  }
-
   function selectCustomEmote(emote: WorkspaceCustomEmote) {
     onSelect(workspaceCustomEmoteToItem(emote), "custom");
   }
@@ -13561,6 +13577,7 @@ function EmotePicker({
             aria-selected={pack.id === activePackId}
             onClick={() => {
               setActivePackId(pack.id);
+              rememberPreferredEmotePickerPack(preferenceScope, pack.id);
               if (pack.id !== "custom") setActiveCollectionId("");
             }}
             tabIndex={pack.id === activePackId ? 0 : -1}
@@ -13610,9 +13627,6 @@ function EmotePicker({
               <span className="emote-library-item" key={entry.id}>
                 <button className="emote-library-emote" type="button" title={entry.emote.label} aria-label={entry.emote.label} onClick={() => selectCustomEmote(entry.emote)}>
                   <img alt="" decoding="async" draggable={false} src={entry.emote.src} />
-                </button>
-                <button className="emote-custom-remove" type="button" title="删除收藏表情" aria-label={`删除收藏表情 ${entry.emote.label}`} disabled={customBusy} onClick={() => void removeCustomEmote(entry.emote.id)}>
-                  <X size={12} />
                 </button>
               </span>
             ) : (
