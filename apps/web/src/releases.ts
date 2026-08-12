@@ -13,6 +13,16 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.13.1",
+    releasedAt: "2026-08-13",
+    title: "更顺手的表情浏览",
+    summary: "修复侧栏搜索和表情详情布局，并让聊天中的表情合集就地打开。",
+    categories: [
+      { title: "表情", items: ["表情合集详情可以正常滚动，上传入口改为清晰稳定的图标按钮", "群聊中的表情合集会在当前聊天中预览，不再跳离会话或引起画面闪动"] },
+      { title: "布局", items: ["会话搜索框恢复与侧栏一致的留白和宽度"] }
+    ]
+  },
+  {
     version: "0.13.0",
     releasedAt: "2026-08-12",
     title: "更清楚的侧栏与表情管理",

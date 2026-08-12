@@ -85,7 +85,14 @@ describe("workspace UI permission boundaries", () => {
     expect(source).toContain("短名称");
     expect(source).toContain('method: "PATCH"');
     expect(source).toContain("只用于识别、搜索和无障碍说明，不会显示在表情网格中。");
+    expect(source).toContain('aria-label="上传表情"');
+    expect(source).not.toContain('<span>上传表情</span>');
+    expect(source).toContain("onPreviewEmoteCollection={setWorkspaceEmoteCollectionPreviewId}");
+    expect(source).toContain('aria-label="表情合集预览"');
     expect(source).not.toContain('className="workspace-emote-manage-row');
+    expect(styles).toContain(".workspace-rail-content.chat > .workspace-search");
+    expect(styles).toContain("height: min(820px, calc(100dvh - 48px));");
+    expect(styles).toContain(".workspace-shared-emote-body");
     expect(styles).toContain(".workspace-emote-library-grid.organizing");
     expect(styles).not.toContain(".workspace-emote-manage-row");
   });

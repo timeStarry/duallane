@@ -2480,6 +2480,7 @@ export function App() {
   const [workspaceHistoryTargetId, setWorkspaceHistoryTargetId] = useState("");
   const [workspaceReturningToLatestConversationId, setWorkspaceReturningToLatestConversationId] = useState("");
   const [workspaceImagePreview, setWorkspaceImagePreview] = useState<WorkspaceAttachment | null>(null);
+  const [workspaceEmoteCollectionPreviewId, setWorkspaceEmoteCollectionPreviewId] = useState("");
   const [documentVisible, setDocumentVisible] = useState(() => typeof document === "undefined" || document.visibilityState === "visible");
   const [workspaceHistoryLoadingByConversation, setWorkspaceHistoryLoadingByConversation] = useState<Record<string, boolean>>({});
   const [workspaceHistoryExhaustedByConversation, setWorkspaceHistoryExhaustedByConversation] = useState<Record<string, boolean>>({});
@@ -7130,6 +7131,7 @@ export function App() {
   }
 
   function applyAppRouteState(route: AppRoute) {
+    setWorkspaceEmoteCollectionPreviewId("");
     if (route.kind === "entry" || route.kind === "about") {
       setLane(route.kind);
       setWorkspaceCreateMenuOpen(false);
@@ -8111,6 +8113,7 @@ export function App() {
                         onCancelReply={() => setWorkspaceConversationReplyToMessageId(workspaceSelectedConversation.id, "")}
                         onOpenAttachment={openWorkspaceAttachmentFile}
                         onPreviewImage={setWorkspaceImagePreview}
+                        onPreviewEmoteCollection={setWorkspaceEmoteCollectionPreviewId}
                         onCopyMessage={(message) => {
                           void copyText(serializeWorkspaceMessageForCopy(message)).then((copied) =>
                             showWorkspaceNotice(copied ? "success" : "warning", copied ? "消息已复制" : "消息复制失败")
@@ -9379,6 +9382,14 @@ export function App() {
                   />
                 </div>
               )}
+              {workspaceEmoteCollectionPreviewId && (
+                <WorkspaceSharedEmoteCollectionDialog
+                  key={workspaceEmoteCollectionPreviewId}
+                  shareId={workspaceEmoteCollectionPreviewId}
+                  onClose={() => setWorkspaceEmoteCollectionPreviewId("")}
+                  onNotice={showWorkspaceNotice}
+                />
+              )}
             </>
           )}
         </section>
@@ -10277,11 +10288,15 @@ function WorkspaceAccountSettings({
 function WorkspaceSharedEmoteCollectionPage({
   shareId,
   onBack,
-  onNotice
+  onNotice,
+  presentation = "page",
+  closeButtonRef
 }: {
   shareId: string;
   onBack: () => void;
   onNotice: (tone: WorkspaceNotice["tone"], text: string) => void;
+  presentation?: "page" | "dialog";
+  closeButtonRef?: RefObject<HTMLButtonElement | null>;
 }) {
   const [share, setShare] = useState<WorkspaceEmoteCollectionShare | null>(null);
   const [loading, setLoading] = useState(true);
@@ -10318,15 +10333,25 @@ function WorkspaceSharedEmoteCollectionPage({
   }
 
   return (
-    <div className="workspace-content-panel workspace-shared-emote-page">
+    <div className={presentation === "dialog" ? "workspace-shared-emote-page dialog" : "workspace-content-panel workspace-shared-emote-page"}>
       <div className="workspace-panel-header">
-        <button className="icon-button" type="button" title="返回个人设置" aria-label="返回个人设置" onClick={onBack}><ArrowLeft size={17} /></button>
+        <button
+          ref={closeButtonRef}
+          className="icon-button"
+          type="button"
+          title={presentation === "dialog" ? "关闭预览" : "返回个人设置"}
+          aria-label={presentation === "dialog" ? "关闭表情合集预览" : "返回个人设置"}
+          onClick={onBack}
+        >
+          {presentation === "dialog" ? <X size={17} /> : <ArrowLeft size={17} />}
+        </button>
         <div><p className="eyebrow">表情合集</p><h2>{loading ? "正在读取..." : share?.name || "合集分享"}</h2></div>
       </div>
-      {share?.revokedAt ? (
-        <div className="workspace-empty-state"><Images size={28} /><strong>合集已停止分享</strong><p>分享者已撤销该链接，已导入的表情不受影响。</p></div>
-      ) : share ? (
-        <>
+      <div className="workspace-shared-emote-body">
+        {share?.revokedAt ? (
+          <div className="workspace-empty-state"><Images size={28} /><strong>合集已停止分享</strong><p>分享者已撤销该链接，已导入的表情不受影响。</p></div>
+        ) : share ? (
+          <>
           <div className="workspace-shared-emote-meta">
             <span>{share.itemCount} 张表情</span>
             <span>{share.originalCreator.displayName} 创建</span>
@@ -10343,9 +10368,93 @@ function WorkspaceSharedEmoteCollectionPage({
           <div className="workspace-section-actions">
             <button className="primary" type="button" disabled={busy} onClick={() => void importShare()}>添加整套</button>
           </div>
-        </>
-      ) : !loading && <div className="workspace-empty-state"><Images size={28} /><strong>找不到这个合集</strong></div>}
+          </>
+        ) : !loading ? (
+          <div className="workspace-empty-state"><Images size={28} /><strong>找不到这个合集</strong></div>
+        ) : (
+          <WorkspaceSkeletonRows variant="setting" count={4} />
+        )}
+      </div>
     </div>
+  );
+}
+
+function WorkspaceSharedEmoteCollectionDialog({
+  shareId,
+  onClose,
+  onNotice
+}: {
+  shareId: string;
+  onClose: () => void;
+  onNotice: (tone: WorkspaceNotice["tone"], text: string) => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const frame = window.requestAnimationFrame(() => closeButtonRef.current?.focus());
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = getFocusableElements(dialog);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, []);
+
+  return createPortal(
+    <div
+      className="workspace-shared-emote-dialog-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        ref={dialogRef}
+        className="workspace-shared-emote-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="表情合集预览"
+        tabIndex={-1}
+      >
+        <WorkspaceSharedEmoteCollectionPage
+          shareId={shareId}
+          onBack={onClose}
+          onNotice={onNotice}
+          presentation="dialog"
+          closeButtonRef={closeButtonRef}
+        />
+      </div>
+    </div>,
+    document.body
   );
 }
 
@@ -10706,7 +10815,7 @@ function WorkspaceEmoteManagerDialog({
               <span className="workspace-emote-manager-actions">
                 <button className={organizing ? "secondary compact active" : "secondary compact"} type="button" onClick={() => setOrganizing((value) => !value)}>{organizing ? <Check size={16} /> : <GripVertical size={16} />}{organizing ? "完成" : "整理"}</button>
                 <button className="secondary compact" type="button" onClick={() => setNewCollectionOpen((value) => !value)}><Images size={16} />新建合集</button>
-                <label className="primary compact file-button" title="批量上传表情"><FileUp size={16} /><span>上传表情</span><input ref={uploadRef} type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,image/bmp" disabled={busy} onChange={(event) => void uploadFiles(event.currentTarget.files)} /></label>
+                <label className={busy ? "icon-button workspace-emote-upload-button disabled" : "icon-button workspace-emote-upload-button"} title="上传表情" aria-label="上传表情" aria-disabled={busy}><FileUp size={17} /><input ref={uploadRef} type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,image/bmp" disabled={busy} onChange={(event) => void uploadFiles(event.currentTarget.files)} /></label>
               </span>
             </div>
             {newCollectionOpen && <form className="workspace-emote-create-collection" onSubmit={(event) => { event.preventDefault(); void createCollection(); }}><label><span>合集名称</span><input value={newCollectionName} maxLength={32} autoFocus onChange={(event) => setNewCollectionName(event.target.value)} placeholder="例如：猫猫日常" /></label><button className="primary compact" type="submit" disabled={busy || !newCollectionName.trim()}>创建</button><button className="secondary compact" type="button" onClick={() => setNewCollectionOpen(false)}>取消</button></form>}
@@ -11757,11 +11866,13 @@ export function WorkspaceStructuredMessage({
   message,
   onOpenAttachment,
   onPreviewImage,
+  onPreviewEmoteCollection,
   mentionMembers
 }: {
   message: Message;
   onOpenAttachment?: (attachment: WorkspaceAttachment) => void;
   onPreviewImage?: (attachment: WorkspaceAttachment) => void;
+  onPreviewEmoteCollection?: (shareId: string) => void;
   mentionMembers?: WorkspaceUser[];
 }) {
   const [textExpanded, setTextExpanded] = useState(false);
@@ -11849,7 +11960,7 @@ export function WorkspaceStructuredMessage({
               ) : <span key={`${index}-emoji`}>{renderMessageParts(block.shortcode)}</span>;
             }
             if (block.type === "emote_collection") {
-              return <WorkspaceEmoteCollectionMessageCard key={`${index}-emote-collection`} block={block} />;
+              return <WorkspaceEmoteCollectionMessageCard key={`${index}-emote-collection`} block={block} onOpen={onPreviewEmoteCollection} />;
             }
             return <span key={`${index}-fallback`}>{renderMessageParts(message.body)}</span>;
           })}
@@ -11944,9 +12055,11 @@ function isKnownWorkspaceMessageBlock(block: WorkspaceContentBlock) {
 }
 
 function WorkspaceEmoteCollectionMessageCard({
-  block
+  block,
+  onOpen
 }: {
   block: Extract<WorkspaceContentBlock, { type: "emote_collection" }>;
+  onOpen?: (shareId: string) => void;
 }) {
   const share = block.share;
   if (!share || share.revokedAt) {
@@ -11958,7 +12071,7 @@ function WorkspaceEmoteCollectionMessageCard({
     );
   }
   return (
-    <a className="workspace-emote-share-card" href={share.sharePath}>
+    <button className="workspace-emote-share-card" type="button" onClick={() => onOpen?.(share.id)}>
       <span className="workspace-emote-share-cover" aria-hidden="true">
         {(share.covers ?? []).slice(0, 4).map((item) => <img key={item.id} src={item.src} alt="" />)}
         {(share.covers?.length ?? 0) === 0 && <Images size={24} />}
@@ -11969,7 +12082,7 @@ function WorkspaceEmoteCollectionMessageCard({
         <em>{share.sharedBy.displayName} 分享</em>
       </span>
       <ChevronDown size={16} className="workspace-emote-share-open" />
-    </a>
+    </button>
   );
 }
 
@@ -12191,6 +12304,7 @@ function WorkspaceChatPanel({
   onCancelReply,
   onOpenAttachment,
   onPreviewImage,
+  onPreviewEmoteCollection,
   onCopyMessage,
   onToggleReaction,
   onFavoriteEmote,
@@ -12239,6 +12353,7 @@ function WorkspaceChatPanel({
   onCancelReply: () => void;
   onOpenAttachment: (attachment: WorkspaceAttachment) => void;
   onPreviewImage: (attachment: WorkspaceAttachment) => void;
+  onPreviewEmoteCollection: (shareId: string) => void;
   onCopyMessage: (message: Message) => void;
   onToggleReaction: (messageId: string, emoteKey: string) => void;
   onFavoriteEmote: (message: Message) => void;
@@ -12702,6 +12817,7 @@ function WorkspaceChatPanel({
                         message={message}
                         onOpenAttachment={onOpenAttachment}
                         onPreviewImage={onPreviewImage}
+                        onPreviewEmoteCollection={onPreviewEmoteCollection}
                         mentionMembers={mentionMembers}
                       />
                     )}

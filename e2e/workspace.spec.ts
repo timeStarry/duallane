@@ -26,7 +26,7 @@ test("public about page exposes the current release and accessible history", asy
   await page.getByRole("button", { name: "关于 DualLane 与版本更新" }).click();
   await expect(page).toHaveURL(/\/about$/);
   await expect(page.getByRole("heading", { name: "两种边界，一处沟通。" })).toBeVisible();
-  await expect(page.locator(".latest-release").getByText("v0.13.0", { exact: true })).toBeVisible();
+  await expect(page.locator(".latest-release").getByText("v0.13.1", { exact: true })).toBeVisible();
 
   const history = page.locator(".release-history");
   await expect(history).not.toHaveAttribute("open", "");
@@ -40,7 +40,7 @@ test("public about page exposes the current release and accessible history", asy
   await page.goForward();
   await expect(page).toHaveURL(/\/about$/);
   await page.reload();
-  await expect(page.locator(".latest-release").getByText("v0.13.0", { exact: true })).toBeVisible();
+  await expect(page.locator(".latest-release").getByText("v0.13.1", { exact: true })).toBeVisible();
 });
 
 test("workspace semantic routes survive OAuth, refresh, history, and invalid resources", async ({ page }) => {
@@ -105,6 +105,150 @@ test("workspace semantic routes survive OAuth, refresh, history, and invalid res
   await page.goto("/?lane=workspace");
   await expect(page.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
   await expect(page).not.toHaveURL(/lane=workspace/);
+});
+
+test("workspace emote surfaces keep their layout, scroll, and chat context", async ({ page }, testInfo) => {
+  await enterWorkspaceAsSeededOwner(page);
+
+  const conversationSearch = page.getByLabel("查找会话");
+  const rail = page.getByLabel("共享空间导航");
+  const [searchBox, railBox] = await Promise.all([conversationSearch.boundingBox(), rail.boundingBox()]);
+  expect(searchBox).toBeTruthy();
+  expect(railBox).toBeTruthy();
+  expect(searchBox!.x - railBox!.x).toBeGreaterThanOrEqual(10);
+  expect(railBox!.x + railBox!.width - searchBox!.x - searchBox!.width).toBeGreaterThanOrEqual(10);
+
+  const fixtureEmotes = Array.from({ length: 48 }, (_, index) => ({
+    id: `fixture-emote-${index}`,
+    kind: "custom" as const,
+    label: `表情 ${index + 1}`,
+    token: `custom:fixture-emote-${index}`,
+    src: "/icon-512.png",
+    animated: false,
+    byteSize: 1024,
+    width: 128,
+    height: 128,
+    sourceType: "upload" as const,
+    originalFileName: `emote-${index + 1}.png`,
+    originalMimeType: "image/png",
+    createdAt: "2026-08-13T00:00:00.000Z"
+  }));
+  const fixtureCollection = {
+    id: "fixture-collection",
+    name: "可滚动合集",
+    originalCreator: { id: "usr_owner", displayName: "timeStarry" },
+    items: fixtureEmotes,
+    itemCount: fixtureEmotes.length,
+    createdAt: "2026-08-13T00:00:00.000Z",
+    updatedAt: "2026-08-13T00:00:00.000Z"
+  };
+  await page.route("**/api/workspace/me/emote-library", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        entries: [{ id: fixtureCollection.id, type: "collection", collection: fixtureCollection }],
+        emotes: fixtureEmotes,
+        collections: [fixtureCollection],
+        usage: { itemCount: fixtureEmotes.length, totalBytes: fixtureEmotes.length * 1024, collectionCount: 1 },
+        limits: {
+          maxItems: 500,
+          maxTotalBytes: 100 * 1024 * 1024,
+          maxInputBytes: 10 * 1024 * 1024,
+          maxCollections: 20,
+          maxCollectionItems: 100,
+          maxBatchItems: 50
+        }
+      })
+    });
+  });
+  await page.goto("/workspace/account/emotes");
+  await expect(page.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
+  const manager = page.getByRole("dialog", { name: "我的表情" });
+  await manager.getByRole("button", { name: "打开合集 可滚动合集", exact: true }).click();
+  const managerBody = manager.locator(".workspace-emote-manager-body");
+  await expect.poll(() => managerBody.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  await managerBody.hover();
+  await page.mouse.wheel(0, 720);
+  await expect.poll(() => managerBody.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  const uploadButton = manager.getByLabel("上传表情", { exact: true });
+  await expect(uploadButton).toBeVisible();
+  await expect(uploadButton.locator("span")).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("emote-manager-desktop.png") });
+  await manager.getByRole("button", { name: "关闭我的表情管理", exact: true }).click();
+  await page.unroute("**/api/workspace/me/emote-library");
+
+  const bootstrapResponse = await page.request.get("/api/workspace/bootstrap");
+  expect(bootstrapResponse.ok()).toBe(true);
+  const bootstrap = await bootstrapResponse.json() as { members: Array<{ id: string; kind: string }> };
+  const beacon = bootstrap.members.find((member) => member.kind === "bot");
+  expect(beacon).toBeTruthy();
+  const conversationResponse = await page.request.post("/api/workspace/conversations", {
+    data: { type: "direct", targetUserId: beacon!.id }
+  });
+  expect(conversationResponse.ok()).toBe(true);
+  const conversationPayload = await conversationResponse.json() as { conversation: { id: string; displayTitle?: string; title?: string } };
+  const conversation = conversationPayload.conversation;
+  const emoteBytes = await readFile("apps/web/public/favicon-32x32.png");
+  const emoteResponse = await page.request.post("/api/workspace/me/emotes", {
+    headers: {
+      "content-type": "image/png",
+      "x-duallane-file-name": encodeURIComponent("preview.png")
+    },
+    data: emoteBytes
+  });
+  expect(emoteResponse.ok()).toBe(true);
+  const emote = await emoteResponse.json() as { emote: { id: string } };
+  const collectionResponse = await page.request.post("/api/workspace/me/emote-collections", {
+    data: { name: "聊天内预览", emoteIds: [emote.emote.id] }
+  });
+  expect(collectionResponse.ok()).toBe(true);
+  const collection = await collectionResponse.json() as { collection: { id: string } };
+  const shareResponse = await page.request.post(`/api/workspace/me/emote-collections/${collection.collection.id}/shares`);
+  expect(shareResponse.ok()).toBe(true);
+  const share = await shareResponse.json() as { share: { id: string; name: string } };
+  const messageResponse = await page.request.post("/api/workspace/messages", {
+    data: {
+      conversationId: conversation.id,
+      clientMessageId: `emote-preview-${randomUUID()}`,
+      content: {
+        format: "duallane.message+json;v=1",
+        plainText: `[表情合集] ${share.share.name}`,
+        blocks: [{ type: "emote_collection", shareId: share.share.id }]
+      }
+    }
+  });
+  expect(messageResponse.ok()).toBe(true);
+
+  await page.goto(`/workspace/chat/${conversation.id}`);
+  const chatRegion = page.getByRole("region", { name: conversation.displayTitle || "信标" });
+  await expect(chatRegion).toBeVisible();
+  const shareCard = chatRegion.locator("button.workspace-emote-share-card").filter({ hasText: share.share.name });
+  await expect(shareCard).toBeVisible();
+  const chatUrl = page.url();
+  await shareCard.click();
+  const previewDialog = page.getByRole("dialog", { name: "表情合集预览" });
+  await expect(previewDialog).toBeVisible();
+  await expect(previewDialog.getByRole("heading", { name: share.share.name })).toBeVisible();
+  expect(page.url()).toBe(chatUrl);
+  await expect(chatRegion).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("emote-preview-desktop.png") });
+  await previewDialog.getByRole("button", { name: "关闭表情合集预览" }).click();
+  await expect(previewDialog).toHaveCount(0);
+  expect(page.url()).toBe(chatUrl);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await shareCard.click();
+  await expect(previewDialog).toBeVisible();
+  const previewBox = await previewDialog.boundingBox();
+  expect(previewBox).toBeTruthy();
+  expect(previewBox!.x).toBe(0);
+  expect(previewBox!.y).toBe(0);
+  expect(previewBox!.width).toBe(390);
+  expect(previewBox!.height).toBe(844);
+  await page.screenshot({ path: testInfo.outputPath("emote-preview-mobile.png") });
+  await previewDialog.getByRole("button", { name: "关闭表情合集预览" }).click();
+  await expect(previewDialog).toHaveCount(0);
+  expect(page.url()).toBe(chatUrl);
 });
 
 async function openWorkspaceCreateMenu(page: Page, action: "发起私聊" | "创建群聊") {

@@ -292,6 +292,42 @@ describe("workspace message presentation helpers", () => {
     expect(html).not.toContain("message-file-card image");
   });
 
+  it("renders emote collection shares as in-place preview buttons", () => {
+    const html = renderToStaticMarkup(
+      <WorkspaceStructuredMessage
+        message={{
+          id: "message-emote-collection",
+          author: "当前用户",
+          body: "[表情合集] 猫猫",
+          lane: "workspace",
+          at: "15:04",
+          content: {
+            blocks: [{
+              type: "emote_collection",
+              shareId: "share-1",
+              share: {
+                id: "share-1",
+                name: "猫猫",
+                itemCount: 3,
+                sharePath: "/workspace/emotes/shared/share-1",
+                createdAt: "2026-08-13T00:00:00.000Z",
+                originalCreator: { id: "user-1", displayName: "Alice" },
+                sharedBy: { id: "user-2", displayName: "Bob" },
+                canRevoke: false,
+                revokedAt: null,
+                covers: []
+              }
+            }]
+          },
+          attachments: []
+        }}
+      />
+    );
+
+    expect(html).toContain('<button class="workspace-emote-share-card" type="button">');
+    expect(html).not.toContain('href="/workspace/emotes/shared/share-1"');
+  });
+
   it("optimistically adds, merges and removes current-user reactions", () => {
     const currentUser = {
       id: "usr_current",
