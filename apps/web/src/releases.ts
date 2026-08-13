@@ -13,6 +13,16 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.15.0",
+    releasedAt: "2026-08-13",
+    title: "更清晰的共享空间互动",
+    summary: "共享空间加入官方回声入口，并让暂不支持的互动消息仍能以清晰摘要显示。",
+    categories: [
+      { title: "回声", items: ["空间成员可以看到官方回声入口并发起独立私聊", "回声使用稳定的 BOT 标识，不能作为普通账号登录或加入群聊"] },
+      { title: "消息", items: ["暂不支持的互动消息会保留可读摘要，不会显示为空白或打断消息列表"] }
+    ]
+  },
+  {
     version: "0.14.0",
     releasedAt: "2026-08-13",
     title: "更丰富的小表情",

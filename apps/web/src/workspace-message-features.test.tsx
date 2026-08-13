@@ -226,6 +226,7 @@ describe("workspace message presentation helpers", () => {
           lane: "workspace",
           author: "回声",
           body: "旧客户端摘要",
+          at: "刚刚",
           content: { blocks: [{ type: "card", cardId: "card-1", cardType: "future.poll", schemaVersion: 9, fallbackText: "新的投票" }] },
           attachments: [],
           reactions: []
