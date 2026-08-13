@@ -167,9 +167,15 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
     return publicBot(bot);
   }
 
-  async function getOwnedBot(actorUserId, spaceId) {
+  async function getOwnedBot(actorUserId, spaceId, botId = null) {
     const actor = await requireActiveHumanMember(actorUserId, spaceId);
-    const bot = await readBotByOwner(actor.spaceId, actor.id);
+    const bot = botId
+      ? await readBot(botId)
+      : await readBotByOwner(actor.spaceId, actor.id);
+    if (bot && (bot.spaceId !== actor.spaceId || bot.ownerUserId !== actor.id)) {
+      await auditRejection(actor, "bot.read", "agent_bot", bot.id, "permission.denied");
+      throw new WorkspaceAgentBotError("permission.denied", "无权操作该 Bot", 403);
+    }
     if (!bot) throw new WorkspaceAgentBotError("bot.not_found", "Bot 不存在", 404);
     return publicBot(bot);
   }
@@ -411,6 +417,9 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
       FROM workspace_agent_bots b
       INNER JOIN users u ON u.id = b.bot_user_id
       WHERE b.space_id = ? AND b.owner_user_id = ?
+      ORDER BY CASE WHEN b.status <> 'deleted' THEN 0 ELSE 1 END,
+               b.updated_at DESC, b.created_at DESC
+      LIMIT 1
     `).get(spaceId, ownerUserId);
   }
 
@@ -423,10 +432,14 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
       throw new WorkspaceAgentBotError("bot.invalid_transition", "Bot 当前状态不允许执行该操作");
     }
     const updatedAt = now().toISOString();
-    await db.prepare(`
+    const result = await db.prepare(`
       UPDATE workspace_agent_bots SET status = ?, updated_at = ?
       WHERE id = ? AND owner_user_id = ? AND space_id = ? AND status IN (${fromStatuses.map(() => "?").join(", ")})
     `).run(targetStatus, updatedAt, bot.id, actor.id, actor.spaceId, ...fromStatuses);
+    if (!result.changes) {
+      await auditRejection(actor, action, "agent_bot", bot.id, "bot.invalid_transition");
+      throw new WorkspaceAgentBotError("bot.invalid_transition", "Bot 当前状态不允许执行该操作");
+    }
     const updated = await readBot(bot.id);
     await writeBotAudit({ actor, spaceId: actor.spaceId, action, targetType: "agent_bot", targetId: bot.id, result: "success" });
     return publicBot(updated);
