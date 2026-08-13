@@ -143,6 +143,60 @@ describe("workspace custom Agent Bot security foundation", () => {
     await expect(service.finalizeDeleteBot("usr_owner", bot.id, SPACE_ID)).resolves.toMatchObject({ status: BOT_STATUS.DELETED });
   });
 
+  it("checks active status after the lifecycle lock and never inserts a token for a Bot paused in the race window", async () => {
+    const { service, db } = await fixture();
+    const bot = await service.createBot("usr_owner", { spaceId: SPACE_ID, name: "Race-safe token" });
+    const originalLock = db.lock;
+    let lifecycleLockSeen = false;
+    db.lock = async (key) => {
+      if (!lifecycleLockSeen && String(key).includes(`:lifecycle:${SPACE_ID}:${bot.id}`)) {
+        lifecycleLockSeen = true;
+        // Simulate a concurrent pause winning immediately before the token
+        // transaction reads the Bot. The mutation is in the same SQLite test
+        // transaction and is rolled back when issuance rejects.
+        db.prepare(`
+          UPDATE workspace_agent_bots SET status = ? WHERE id = ?
+        `).run(BOT_STATUS.PAUSED, bot.id);
+      }
+      return originalLock?.(key);
+    };
+
+    await expect(service.issueToken("usr_owner", bot.id, { spaceId: SPACE_ID }))
+      .rejects.toMatchObject({ code: "bot.not_active" });
+    expect(lifecycleLockSeen).toBe(true);
+    expect(db.prepare("SELECT status FROM workspace_agent_bots WHERE id = ?").get(bot.id).status)
+      .toBe(BOT_STATUS.ACTIVE);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_agent_bot_tokens WHERE bot_id = ?").get(bot.id).count)
+      .toBe(0);
+    db.lock = originalLock;
+  });
+
+  it("uses the same lifecycle lock for pause and delete transitions and rejects a stale transition", async () => {
+    const { service, db } = await fixture();
+    const bot = await service.createBot("usr_owner", { spaceId: SPACE_ID, name: "Race-safe lifecycle" });
+    const originalLock = db.lock;
+    const lockKeys = [];
+    db.lock = async (key) => {
+      lockKeys.push(String(key));
+      return originalLock?.(key);
+    };
+
+    await expect(service.pauseBot("usr_owner", bot.id, SPACE_ID)).resolves.toMatchObject({ status: BOT_STATUS.PAUSED });
+    await expect(service.beginDeleteBot("usr_owner", bot.id, SPACE_ID)).resolves.toMatchObject({ status: BOT_STATUS.DELETING });
+    expect(lockKeys.filter((key) => key === `workspace-agent-bot:lifecycle:${SPACE_ID}:${bot.id}`)).toHaveLength(2);
+
+    db.lock = async (key) => {
+      if (String(key) === `workspace-agent-bot:lifecycle:${SPACE_ID}:${bot.id}`) {
+        db.prepare("UPDATE workspace_agent_bots SET status = ? WHERE id = ?").run(BOT_STATUS.DELETED, bot.id);
+      }
+      return originalLock?.(key);
+    };
+    await expect(service.resumeBot("usr_owner", bot.id, SPACE_ID)).rejects.toMatchObject({ code: "bot.invalid_transition" });
+    expect(db.prepare("SELECT status FROM workspace_agent_bots WHERE id = ?").get(bot.id).status)
+      .toBe(BOT_STATUS.DELETING);
+    db.lock = originalLock;
+  });
+
   it("audits owner-facing rejection paths without recording request payloads", async () => {
     const { service, db } = await fixture();
     await service.createBot("usr_owner", { spaceId: SPACE_ID, name: "Audit rejection" });

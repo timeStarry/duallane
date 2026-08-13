@@ -190,100 +190,150 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
 
   async function beginDeleteBot(actorUserId, botId, spaceId) {
     const actor = await requireActiveHumanMember(actorUserId, spaceId);
-    const bot = await requireOwnedBotWithAudit(actor, botId, "bot.delete.requested", "agent_bot");
-    if (bot.status === BOT_STATUS.DELETED) return publicBot(bot);
-    if (bot.status === BOT_STATUS.DELETING) return publicBot(bot);
-    if (![BOT_STATUS.ACTIVE, BOT_STATUS.PAUSED].includes(bot.status)) {
-      await auditRejection(actor, "bot.delete.requested", "agent_bot", bot.id, "bot.invalid_transition");
-      throw new WorkspaceAgentBotError("bot.invalid_transition", "Bot 当前状态不允许删除");
-    }
     const updatedAt = now().toISOString();
-    await db.transaction(async () => {
-      await db.prepare(`
-        UPDATE workspace_agent_bots
-        SET status = ?, deleting_at = ?, updated_at = ?
-        WHERE id = ? AND owner_user_id = ? AND space_id = ?
-      `).run(BOT_STATUS.DELETING, updatedAt, updatedAt, bot.id, actor.id, actor.spaceId);
-      await db.prepare(`
-        UPDATE workspace_agent_bot_tokens SET revoked_at = COALESCE(revoked_at, ?)
-        WHERE bot_id = ?
-      `).run(updatedAt, bot.id);
-    });
-    const updated = await readBot(bot.id);
-    await writeBotAudit({ actor, spaceId: actor.spaceId, action: "bot.delete.requested", targetType: "agent_bot", targetId: bot.id, result: "success" });
+    let transition;
+    try {
+      transition = await db.transaction(async () => {
+        await db.lock?.(botLifecycleLockKey(actor.spaceId, botId));
+        const bot = await requireOwnedBot(actor, botId);
+        if (bot.status === BOT_STATUS.DELETED || bot.status === BOT_STATUS.DELETING) {
+          return { bot, changed: false };
+        }
+        if (![BOT_STATUS.ACTIVE, BOT_STATUS.PAUSED].includes(bot.status)) {
+          throw new WorkspaceAgentBotError("bot.invalid_transition", "Bot 当前状态不允许删除");
+        }
+        const result = await db.prepare(`
+          UPDATE workspace_agent_bots
+          SET status = ?, deleting_at = ?, updated_at = ?
+          WHERE id = ? AND owner_user_id = ? AND space_id = ?
+            AND status IN (?, ?)
+        `).run(
+          BOT_STATUS.DELETING,
+          updatedAt,
+          updatedAt,
+          bot.id,
+          actor.id,
+          actor.spaceId,
+          BOT_STATUS.ACTIVE,
+          BOT_STATUS.PAUSED
+        );
+        if (!result.changes) {
+          throw new WorkspaceAgentBotError("bot.invalid_transition", "Bot 当前状态不允许删除");
+        }
+        await db.prepare(`
+          UPDATE workspace_agent_bot_tokens SET revoked_at = COALESCE(revoked_at, ?)
+          WHERE bot_id = ?
+        `).run(updatedAt, bot.id);
+        return { bot: await readBot(bot.id), changed: true };
+      });
+    } catch (error) {
+      if (error instanceof WorkspaceAgentBotError) {
+        await auditRejection(actor, "bot.delete.requested", "agent_bot", botId, error.code);
+      }
+      throw error;
+    }
+    const updated = transition.bot;
+    if (!transition.changed) return publicBot(updated);
+    await writeBotAudit({ actor, spaceId: actor.spaceId, action: "bot.delete.requested", targetType: "agent_bot", targetId: updated.id, result: "success" });
     return publicBot(updated);
   }
 
   async function finalizeDeleteBot(actorUserId, botId, spaceId) {
     const actor = await requireActiveHumanMember(actorUserId, spaceId);
-    const bot = await requireOwnedBotWithAudit(actor, botId, "bot.delete.completed", "agent_bot");
-    if (bot.status === BOT_STATUS.DELETED) return publicBot(bot);
-    if (bot.status !== BOT_STATUS.DELETING) {
-      await auditRejection(actor, "bot.delete.completed", "agent_bot", bot.id, "bot.invalid_transition");
-      throw new WorkspaceAgentBotError("bot.invalid_transition", "Bot 必须先进入待删除状态");
-    }
     const deletedAt = now().toISOString();
-    await db.transaction(async () => {
-      await db.prepare(`
-        UPDATE workspace_agent_bots SET status = ?, deleted_at = ?, updated_at = ?
-        WHERE id = ? AND owner_user_id = ? AND space_id = ? AND status = ?
-      `).run(BOT_STATUS.DELETED, deletedAt, deletedAt, bot.id, actor.id, actor.spaceId, BOT_STATUS.DELETING);
-      await db.prepare(`
-        UPDATE workspace_agent_bot_tokens SET revoked_at = COALESCE(revoked_at, ?)
-        WHERE bot_id = ?
-      `).run(deletedAt, bot.id);
-      await db.prepare(`
-        UPDATE space_members SET removed_at = ?
-        WHERE space_id = ? AND user_id = ? AND removed_at IS NULL
-      `).run(deletedAt, actor.spaceId, bot.botUserId);
-    });
-    const updated = await readBot(bot.id);
-    await writeBotAudit({ actor, spaceId: actor.spaceId, action: "bot.delete.completed", targetType: "agent_bot", targetId: bot.id, result: "success" });
+    let transition;
+    try {
+      transition = await db.transaction(async () => {
+        await db.lock?.(botLifecycleLockKey(actor.spaceId, botId));
+        const bot = await requireOwnedBot(actor, botId);
+        if (bot.status === BOT_STATUS.DELETED) return { bot, changed: false };
+        if (bot.status !== BOT_STATUS.DELETING) {
+          throw new WorkspaceAgentBotError("bot.invalid_transition", "Bot 必须先进入待删除状态");
+        }
+        const result = await db.prepare(`
+          UPDATE workspace_agent_bots SET status = ?, deleted_at = ?, updated_at = ?
+          WHERE id = ? AND owner_user_id = ? AND space_id = ? AND status = ?
+        `).run(BOT_STATUS.DELETED, deletedAt, deletedAt, bot.id, actor.id, actor.spaceId, BOT_STATUS.DELETING);
+        if (!result.changes) {
+          throw new WorkspaceAgentBotError("bot.invalid_transition", "Bot 必须先进入待删除状态");
+        }
+        await db.prepare(`
+          UPDATE workspace_agent_bot_tokens SET revoked_at = COALESCE(revoked_at, ?)
+          WHERE bot_id = ?
+        `).run(deletedAt, bot.id);
+        await db.prepare(`
+          UPDATE space_members SET removed_at = ?
+          WHERE space_id = ? AND user_id = ? AND removed_at IS NULL
+        `).run(deletedAt, actor.spaceId, bot.botUserId);
+        return { bot: await readBot(bot.id), changed: true };
+      });
+    } catch (error) {
+      if (error instanceof WorkspaceAgentBotError) {
+        await auditRejection(actor, "bot.delete.completed", "agent_bot", botId, error.code);
+      }
+      throw error;
+    }
+    const updated = transition.bot;
+    if (!transition.changed) return publicBot(updated);
+    await writeBotAudit({ actor, spaceId: actor.spaceId, action: "bot.delete.completed", targetType: "agent_bot", targetId: updated.id, result: "success" });
     return publicBot(updated);
   }
 
   async function issueToken(actorUserId, botId, input = {}) {
     const actor = await requireActiveHumanMember(actorUserId, input.spaceId);
-    const bot = await requireOwnedBotWithAudit(actor, botId, "bot.token.issue", "agent_bot");
-    if (bot.status !== BOT_STATUS.ACTIVE) {
-      await auditRejection(actor, "bot.token.issue", "agent_bot", bot.id, "bot.not_active");
-      throw new WorkspaceAgentBotError("bot.not_active", "仅启用中的 Bot 可以生成 Token");
-    }
+    // Resolve ownership before validating caller-controlled scope input. This
+    // preserves the stable permission boundary (a missing/foreign Bot never
+    // reveals whether its requested scopes would be valid), while the same
+    // ownership and active-status checks are repeated under the lifecycle lock
+    // immediately before insertion below.
+    const targetBot = await requireOwnedBotWithAudit(actor, botId, "bot.token.issue", "agent_bot");
     let scopes;
     try {
       scopes = validateBotScopes(input.scopes);
     } catch (error) {
-      await auditRejection(actor, "bot.token.issue", "agent_bot", bot.id, error.code ?? "bot.invalid_scope");
+      await auditRejection(actor, "bot.token.issue", "agent_bot", targetBot.id, error.code ?? "bot.invalid_scope");
       throw error;
     }
     let expiresAt;
     try {
       expiresAt = normalizeExpiry(input.expiresAt, now());
     } catch (error) {
-      await auditRejection(actor, "bot.token.issue", "agent_bot", bot.id, error.code ?? "bot.invalid_expiry");
+      await auditRejection(actor, "bot.token.issue", "agent_bot", targetBot.id, error.code ?? "bot.invalid_expiry");
       throw error;
     }
     const token = `${BOT_TOKEN_PREFIX}${randomBytes(BOT_TOKEN_BYTES).toString("base64url")}`;
     const tokenHash = hashBotToken(token);
     const tokenId = `btk_${idFactory()}`;
     const createdAt = now().toISOString();
+    let issued;
     try {
-      await db.prepare(`
-        INSERT INTO workspace_agent_bot_tokens (
-          id, bot_id, space_id, token_hash, scopes_json, expires_at, revoked_at, last_used_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)
-      `).run(tokenId, bot.id, actor.spaceId, tokenHash, JSON.stringify(scopes), expiresAt, createdAt);
+      issued = await db.transaction(async () => {
+        await db.lock?.(botLifecycleLockKey(actor.spaceId, botId));
+        const bot = await requireOwnedBot(actor, botId);
+        if (bot.status !== BOT_STATUS.ACTIVE) {
+          throw new WorkspaceAgentBotError("bot.not_active", "仅启用中的 Bot 可以生成 Token");
+        }
+        await db.prepare(`
+          INSERT INTO workspace_agent_bot_tokens (
+            id, bot_id, space_id, token_hash, scopes_json, expires_at, revoked_at, last_used_at, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+        `).run(tokenId, bot.id, actor.spaceId, tokenHash, JSON.stringify(scopes), expiresAt, createdAt);
+        return { bot };
+      });
     } catch (error) {
       if (isUniqueConstraintError(error)) {
-        await auditRejection(actor, "bot.token.issue", "agent_bot", bot.id, "bot.token_issue_failed");
+        await auditRejection(actor, "bot.token.issue", "agent_bot", botId, "bot.token_issue_failed");
         throw new WorkspaceAgentBotError("bot.token_issue_failed", "暂时无法生成 Bot Token，请重试", 503);
+      }
+      if (error instanceof WorkspaceAgentBotError) {
+        await auditRejection(actor, "bot.token.issue", "agent_bot", botId, error.code);
       }
       throw error;
     }
-    await writeBotAudit({ actor, spaceId: actor.spaceId, action: "bot.token.issue", targetType: "agent_bot", targetId: bot.id, result: "success" });
+    await writeBotAudit({ actor, spaceId: actor.spaceId, action: "bot.token.issue", targetType: "agent_bot", targetId: issued.bot.id, result: "success" });
     return {
       id: tokenId,
-      botId: bot.id,
+      botId: issued.bot.id,
       scopes,
       expiresAt,
       revokedAt: null,
@@ -425,24 +475,34 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
 
   async function transitionBot(actorUserId, botId, spaceId, targetStatus, fromStatuses, action) {
     const actor = await requireActiveHumanMember(actorUserId, spaceId);
-    const bot = await requireOwnedBotWithAudit(actor, botId, action, "agent_bot");
-    if (bot.status === targetStatus) return publicBot(bot);
-    if (!fromStatuses.includes(bot.status)) {
-      await auditRejection(actor, action, "agent_bot", bot.id, "bot.invalid_transition");
-      throw new WorkspaceAgentBotError("bot.invalid_transition", "Bot 当前状态不允许执行该操作");
-    }
     const updatedAt = now().toISOString();
-    const result = await db.prepare(`
-      UPDATE workspace_agent_bots SET status = ?, updated_at = ?
-      WHERE id = ? AND owner_user_id = ? AND space_id = ? AND status IN (${fromStatuses.map(() => "?").join(", ")})
-    `).run(targetStatus, updatedAt, bot.id, actor.id, actor.spaceId, ...fromStatuses);
-    if (!result.changes) {
-      await auditRejection(actor, action, "agent_bot", bot.id, "bot.invalid_transition");
-      throw new WorkspaceAgentBotError("bot.invalid_transition", "Bot 当前状态不允许执行该操作");
+    let transition;
+    try {
+      transition = await db.transaction(async () => {
+        await db.lock?.(botLifecycleLockKey(actor.spaceId, botId));
+        const bot = await requireOwnedBot(actor, botId);
+        if (bot.status === targetStatus) return { bot, changed: false };
+        if (!fromStatuses.includes(bot.status)) {
+          throw new WorkspaceAgentBotError("bot.invalid_transition", "Bot 当前状态不允许执行该操作");
+        }
+        const result = await db.prepare(`
+          UPDATE workspace_agent_bots SET status = ?, updated_at = ?
+          WHERE id = ? AND owner_user_id = ? AND space_id = ? AND status IN (${fromStatuses.map(() => "?").join(", ")})
+        `).run(targetStatus, updatedAt, bot.id, actor.id, actor.spaceId, ...fromStatuses);
+        if (!result.changes) {
+          throw new WorkspaceAgentBotError("bot.invalid_transition", "Bot 当前状态不允许执行该操作");
+        }
+        return { bot: await readBot(bot.id), changed: true };
+      });
+    } catch (error) {
+      if (error instanceof WorkspaceAgentBotError) {
+        await auditRejection(actor, action, "agent_bot", botId, error.code);
+      }
+      throw error;
     }
-    const updated = await readBot(bot.id);
-    await writeBotAudit({ actor, spaceId: actor.spaceId, action, targetType: "agent_bot", targetId: bot.id, result: "success" });
-    return publicBot(updated);
+    if (!transition.changed) return publicBot(transition.bot);
+    await writeBotAudit({ actor, spaceId: actor.spaceId, action, targetType: "agent_bot", targetId: transition.bot.id, result: "success" });
+    return publicBot(transition.bot);
   }
 
   async function requireOwnedBot(actor, botId) {
@@ -633,6 +693,10 @@ function normalizeSpaceId(value) {
     throw new WorkspaceAgentBotError("space.invalid", "Workspace 空间无效");
   }
   return value;
+}
+
+function botLifecycleLockKey(spaceId, botId) {
+  return `workspace-agent-bot:lifecycle:${spaceId}:${botId}`;
 }
 
 function normalizeBotRow(row) {
