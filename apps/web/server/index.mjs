@@ -90,6 +90,10 @@ import {
   createWorkspaceCustomEmoteService,
   CUSTOM_EMOTE_MAX_INPUT_BYTES
 } from "./services/workspace-custom-emotes.mjs";
+import { createWorkspaceAgentBotService } from "./services/workspace-agent-bots.mjs";
+import { registerWorkspaceAgentBotRoutes } from "./routes/workspace-bots.mjs";
+import { registerWorkspaceEchoRequirementRoutes } from "./routes/workspace-echo.mjs";
+import { registerWorkspaceTopicRoutes } from "./routes/workspace-topics.mjs";
 
 const APP_VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -142,6 +146,7 @@ export async function createApp(options = {}) {
     dataDir,
     now: options.now
   }) : null;
+  const workspaceAgentBots = db ? createWorkspaceAgentBotService({ db, now: options.now }) : null;
   await workspaceChunkUploads?.cleanupInactive();
   const workspacePresence = createWorkspacePresence();
   const workspaceEmail = db ? createWorkspaceEmailService({
@@ -254,6 +259,26 @@ app.addContentTypeParser("application/octet-stream", (_request, payload, done) =
 });
 app.addContentTypeParser(["image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp"], (_request, payload, done) => {
   done(null, payload);
+});
+
+registerWorkspaceAgentBotRoutes({
+  app,
+  service: workspaceAgentBots,
+  getActorId: getWorkspaceUserId,
+  getSpaceId: () => DEFAULT_SPACE_ID,
+  workspaceEnabled,
+  blockDisabled: (reply) => blockWorkspace(reply)
+});
+registerWorkspaceEchoRequirementRoutes(app, {
+  db,
+  enabled: workspaceEnabled,
+  getActorId: getWorkspaceUserId,
+  now: options.now
+});
+registerWorkspaceTopicRoutes(app, {
+  db,
+  enabled: workspaceEnabled,
+  getActorId: getWorkspaceUserId
 });
 
 app.get("/api/health", async () => ({
