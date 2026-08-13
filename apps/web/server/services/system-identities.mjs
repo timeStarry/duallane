@@ -1,3 +1,7 @@
+import { ECHO_IDENTITY } from "./echo-identity.mjs";
+
+export { ECHO_IDENTITY } from "./echo-identity.mjs";
+
 export const SYSTEM_IDENTITY_CONVERSATION_POLICIES = Object.freeze({
   DIRECT_ONLY: "direct-only",
   GROUP_CAPABLE: "group-capable"
@@ -22,7 +26,8 @@ export const BEACON_IDENTITY = Object.freeze({
 });
 
 const SYSTEM_IDENTITIES = new Map([
-  [BEACON_IDENTITY.id, BEACON_IDENTITY]
+  [BEACON_IDENTITY.id, BEACON_IDENTITY],
+  [ECHO_IDENTITY.id, ECHO_IDENTITY]
 ]);
 
 const CONVERSATION_POLICY_CAPABILITIES = Object.freeze({
