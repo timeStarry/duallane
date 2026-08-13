@@ -13,6 +13,7 @@ import { writeAudit } from "./audit.mjs";
 import { sanitizeGitHubAvatarUrl, sanitizeWorkspaceAvatarUrl } from "./avatar.mjs";
 import { getReactionEmote, isVisibleReactionEmoteKey } from "./emote-catalog.mjs";
 import { markdownToPlainText } from "./markdown.mjs";
+import { CardValidationError, normalizeCardBlock } from "./workspace-cards.mjs";
 import {
   getSystemIdentityConversationCapabilities,
   getSystemIdentityDefinition,
@@ -49,7 +50,7 @@ const ROLE_LABELS = {
 };
 
 const PRIVILEGED_INVITE_ROLES = new Set(["owner", "admin", "auditor"]);
-const MESSAGE_BLOCK_TYPES = new Set(["text", "mention", "link", "emoji", "attachment", "emote_collection"]);
+const MESSAGE_BLOCK_TYPES = new Set(["text", "mention", "link", "emoji", "attachment", "emote_collection", "card"]);
 const ATTACHMENT_VISIBILITIES = new Set(["private_staging", "conversation", "space"]);
 
 async function runWorkspaceTransaction(db, callback) {
@@ -3530,6 +3531,16 @@ async function normalizeBlock(db, actor, conversationId, block, options = {}) {
   if (!block || typeof block !== "object" || !MESSAGE_BLOCK_TYPES.has(block.type)) {
     throw new WorkspaceValidationError("message.invalid_block", "消息块格式无效");
   }
+  if (block.type === "card") {
+    try {
+      return normalizeCardBlock(block);
+    } catch (error) {
+      if (error instanceof CardValidationError) {
+        throw new WorkspaceValidationError(error.code, error.message);
+      }
+      throw error;
+    }
+  }
   if (block.type === "text") {
     const text = normalizeTextBlock(block.text);
     if (!text) {
@@ -3593,6 +3604,7 @@ function buildPlainText(blocks) {
     if (block.type === "emoji") return block.shortcode.startsWith("custom:") ? "[表情]" : `:${block.shortcode}:`;
     if (block.type === "attachment") return "[文件]";
     if (block.type === "emote_collection") return "[表情合集]";
+    if (block.type === "card") return block.fallbackText;
     return "";
   }).join("");
 }
@@ -3903,6 +3915,14 @@ function publicMessageBlock(block, emoteCollectionShares = null) {
       ? emoteCollectionShares.get(shareId)
       : block.share && typeof block.share === "object" ? block.share : null;
     return { type: "emote_collection", shareId, share: share || undefined };
+  }
+  if (block.type === "card") {
+    try {
+      return normalizeCardBlock(block);
+    } catch {
+      const fallbackText = publicString(block.fallbackText).trim();
+      return fallbackText ? { type: "text", text: fallbackText } : null;
+    }
   }
   return null;
 }

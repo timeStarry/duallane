@@ -2068,6 +2068,64 @@ describe("workspace service", () => {
     ).rejects.toThrow(WorkspaceValidationError);
   });
 
+  it("persists card references and uses fallbackText for summaries and public projection", async () => {
+    const conversation = await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "group",
+      title: "Card messages"
+    });
+    const card = {
+      type: "card",
+      cardId: "card_unknown_1",
+      cardType: "future.poll",
+      schemaVersion: 99,
+      fallbackText: "未来投票卡片"
+    };
+    const message = await createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      clientMessageId: "card-reference-1",
+      content: {
+        format: MESSAGE_CONTENT_FORMAT,
+        plainText: "客户端摘要会被覆盖",
+        blocks: [card]
+      }
+    });
+
+    expect(message.content).toEqual({
+      format: MESSAGE_CONTENT_FORMAT,
+      plainText: "未来投票卡片",
+      blocks: [card]
+    });
+    expect(message.plainText).toBe("未来投票卡片");
+    const row = db.prepare("SELECT content_json AS contentJson FROM messages WHERE id = ?").get(message.id);
+    expect(JSON.parse(row.contentJson).blocks).toEqual([card]);
+  });
+
+  it("rejects malformed card references without requiring a registered card type", async () => {
+    const conversation = await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "group",
+      title: "Invalid cards"
+    });
+
+    await expect(createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      clientMessageId: "invalid-card-reference",
+      content: {
+        format: MESSAGE_CONTENT_FORMAT,
+        blocks: [{
+          type: "card",
+          cardId: "bad id",
+          cardType: "future.poll",
+          schemaVersion: 1,
+          fallbackText: "不可用"
+        }]
+      }
+    })).rejects.toMatchObject({ code: "card.invalid_id" });
+  });
+
   it("lets group members start a direct conversation without making them globally visible", async () => {
     const firstInvite = await createInvite(db, request, { actorId: "usr_owner", code: "GROUP-DIRECT-A" });
     const firstMember = await acceptInvite(db, request, {
