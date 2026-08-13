@@ -784,6 +784,12 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await ownerGroupRegion.getByLabel("输入消息").fill(groupOwnerMessage);
     await sendWorkspaceComposer(ownerGroupRegion);
     await expect(memberGroupRegion.getByText(groupOwnerMessage, { exact: true })).toBeVisible();
+    const ownerAuthorMention = memberGroupRegion.getByRole("button", { name: "提及 timeStarry", exact: true }).last();
+    await ownerAuthorMention.click();
+    await expect(memberGroupRegion.getByLabel("输入消息")).toBeFocused();
+    await expect(memberGroupRegion.locator(".workspace-editor-token.mention")).toHaveText("@timeStarry");
+    await memberGroupRegion.getByLabel("输入消息").press("Control+A");
+    await memberGroupRegion.getByLabel("输入消息").press("Backspace");
     await expect(memberGroupConversation.locator(".unread-badge")).toHaveCount(0);
     await expect.poll(() => workspaceConversationUnreadCount(memberPage, groupId)).toBe(0);
 
@@ -802,6 +808,28 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(mentionPicker).toHaveCount(0);
     await expect(ownerGroupRegion.locator(".workspace-editor-token.mention")).toHaveCount(1);
     await expect(ownerGroupRegion.locator(".workspace-message-list").getByText("原子草稿", { exact: true })).toHaveCount(0);
+
+    const replyTargetId = await ownerGroupRegion.locator("article.workspace-message")
+      .filter({ hasText: groupMemberMessage })
+      .getAttribute("data-message-id");
+    expect(replyTargetId).toBeTruthy();
+    const replyJumpText = `workspace-e2e-reply-jump-${memberSuffix}`;
+    const replyJumpResponse = await ownerPage.request.post("/api/workspace/messages", {
+      data: {
+        conversationId: groupId,
+        clientMessageId: `workspace-e2e-reply-jump-${memberSuffix}`,
+        replyToMessageId: replyTargetId,
+        content: {
+          format: "duallane.message+json;v=1",
+          plainText: replyJumpText,
+          blocks: [{ type: "text", text: replyJumpText }]
+        }
+      }
+    });
+    expect(replyJumpResponse.status()).toBe(201);
+    const replyJumpMessage = ownerGroupRegion.locator("article.workspace-message").filter({ hasText: replyJumpText });
+    await replyJumpMessage.getByRole("button", { name: /跳转到.*的原消息/ }).click();
+    await expect(ownerGroupRegion.locator(`article.workspace-message[data-message-id="${replyTargetId}"]`)).toHaveClass(/message-locate/);
 
     await ownerGroupRegion.getByTitle("插入表情").click();
     const composerEmotePicker = ownerPage.getByRole("dialog", { name: "选择表情" });
@@ -1091,7 +1119,16 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     const imageCloseButton = imageViewer.getByTitle("关闭预览");
     await expect(imageCloseButton).toBeFocused();
     await memberPage.keyboard.press("Tab");
-    await expect(imageViewer.getByTitle("下载图片")).toBeFocused();
+    const zoomOutButton = imageViewer.getByRole("button", { name: "缩小图片", exact: true });
+    const zoomInButton = imageViewer.getByRole("button", { name: "放大图片", exact: true });
+    await expect(zoomOutButton).toBeDisabled();
+    await expect(imageViewer.getByRole("button", { name: "100%", exact: true })).toBeFocused();
+    await zoomInButton.click();
+    const zoomValueButton = imageViewer.getByRole("button", { name: "125%", exact: true });
+    await expect(zoomValueButton).toBeVisible();
+    await zoomValueButton.click();
+    await expect(imageViewer.getByRole("button", { name: "100%", exact: true })).toBeVisible();
+    await imageViewer.getByRole("button", { name: "100%", exact: true }).focus();
     await memberPage.keyboard.press("Shift+Tab");
     await expect(imageCloseButton).toBeFocused();
     await memberPage.keyboard.press("Escape");
@@ -1452,6 +1489,14 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       }
     }
     await expect(emojiPackToggle).toBeDisabled();
+    const imageEmoteDirectSend = emoteSettingsSection.getByRole("switch", { name: /点击图片表情直接发送/ });
+    await expect(imageEmoteDirectSend).toHaveAttribute("aria-checked", "false");
+    const directSendUpdate = memberPage.waitForResponse((response) =>
+      response.url().endsWith("/api/workspace/me/emote-settings") && response.request().method() === "PUT"
+    );
+    await imageEmoteDirectSend.click();
+    expect((await directSendUpdate).status()).toBe(200);
+    await expect(imageEmoteDirectSend).toHaveAttribute("aria-checked", "true");
 
     await memberPage.getByRole("button", { name: "聊天", exact: true }).click();
     await memberPage.getByLabel("共享空间导航").locator("button.conversation").filter({ hasText: groupTitle }).first().click();
@@ -1474,14 +1519,12 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     const uploadedCustomEmote = await customEmoteUploadResponse;
     expect(uploadedCustomEmote.status()).toBe(201);
     const uploadedCustomEmotePayload = await uploadedCustomEmote.json() as { emote: { id: string; label: string } };
-    await memberComposerEmotePicker.getByRole("button", { name: uploadedCustomEmotePayload.emote.label, exact: true }).click();
-    await expect(memberGroupRegion.locator(".workspace-editor-token.emote img")).toBeVisible();
-
     const memberCustomMessageResponse = memberPage.waitForResponse((response) =>
       response.url().endsWith("/api/workspace/messages") && response.request().method() === "POST"
     );
-    await sendWorkspaceComposer(memberGroupRegion);
+    await memberComposerEmotePicker.getByRole("button", { name: uploadedCustomEmotePayload.emote.label, exact: true }).click();
     const memberCustomMessagePayload = await (await memberCustomMessageResponse).json() as { message: { id: string } };
+    await expect(memberGroupRegion.locator(".workspace-editor-token.emote img")).toHaveCount(0);
     const ownerCustomMessage = ownerGroupRegion.locator(
       `article.workspace-message[data-message-id="${memberCustomMessagePayload.message.id}"]`
     );
@@ -1593,10 +1636,14 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     const pinnedOverview = ownerPage.getByRole("region", { name: "常驻消息" });
     await expect(pinnedOverview.getByText(groupHistoryPinMessage, { exact: true })).toBeVisible();
     await pinnedOverview.getByRole("button").filter({ hasText: groupHistoryPinMessage }).click();
-    await expect(ownerGroupRegion.getByText("正在查看常驻消息上下文", { exact: true })).toBeVisible();
-    await expect(ownerPinnedMessage).toHaveClass(/history-target/);
-    await ownerGroupRegion.getByRole("button", { name: "返回最新消息", exact: true }).click();
-    await expect(ownerGroupRegion.getByText("正在查看常驻消息上下文", { exact: true })).toHaveCount(0);
+    await expect(ownerPinnedMessage).toHaveClass(/message-locate/);
+    const historyWindowReturn = ownerGroupRegion.getByRole("button", { name: "返回最新消息", exact: true });
+    if (await historyWindowReturn.isVisible()) {
+      await historyWindowReturn.click();
+    } else {
+      await ownerGroupRegion.getByRole("button", { name: "回到最新消息", exact: true }).click();
+    }
+    await expect(historyWindowReturn).toHaveCount(0);
     await expect.poll(() => ownerGroupMessageList.evaluate((list) =>
       list.scrollHeight - list.scrollTop - list.clientHeight
     )).toBeLessThanOrEqual(80);

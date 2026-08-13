@@ -26,11 +26,22 @@ describe("workspace custom emotes", () => {
       "tieba"
     ]));
     expect(defaults.enabledPackIds).toEqual(["emoji", "bili", "wechat", "feishu"]);
+    expect(defaults.clickImageEmoteToSend).toBe(false);
     await expect(service.updateSettings("usr_owner", [])).rejects.toMatchObject({ code: "emote.pack_required" });
 
     const updated = await service.updateSettings("usr_owner", ["emoji", "xiaohongshu"]);
     expect(updated.enabledPackIds).toEqual(["emoji", "xiaohongshu"]);
-    expect((await service.getSettings("usr_owner")).enabledPackIds).toEqual(["emoji", "xiaohongshu"]);
+    const directSend = await service.updateSettings("usr_owner", { clickImageEmoteToSend: true });
+    expect(directSend).toMatchObject({
+      enabledPackIds: ["emoji", "xiaohongshu"],
+      clickImageEmoteToSend: true
+    });
+    expect(await service.getSettings("usr_owner")).toMatchObject({
+      enabledPackIds: ["emoji", "xiaohongshu"],
+      clickImageEmoteToSend: true
+    });
+    await expect(service.updateSettings("usr_owner", { clickImageEmoteToSend: "yes" }))
+      .rejects.toMatchObject({ code: "emote.invalid_settings" });
   });
 
   it("normalizes uploaded images to WebP, deduplicates them, and removes the owned copy", async () => {

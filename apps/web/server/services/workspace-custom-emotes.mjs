@@ -171,39 +171,61 @@ export function createWorkspaceCustomEmoteService({ db, objectStore, dataDir, no
     }));
   };
 
+  const readSettings = async (actorId) => {
+    const availablePacks = listVisibleEmotePacks();
+    const row = await db.prepare(`
+      SELECT
+        enabled_pack_ids_json AS enabledPackIdsJson,
+        click_image_emote_to_send AS clickImageEmoteToSend
+      FROM workspace_emote_preferences WHERE user_id = ?
+    `).get(actorId);
+    return {
+      availablePacks,
+      enabledPackIds: normalizeEnabledPackIds(row?.enabledPackIdsJson, availablePacks),
+      clickImageEmoteToSend: Boolean(row?.clickImageEmoteToSend),
+      minimumEnabled: 1
+    };
+  };
+
   return {
     async getSettings(actorId) {
       await requireHumanActor(db, actorId);
-      const availablePacks = listVisibleEmotePacks();
-      const row = await db.prepare(`
-        SELECT enabled_pack_ids_json AS enabledPackIdsJson
-        FROM workspace_emote_preferences WHERE user_id = ?
-      `).get(actorId);
-      return {
-        availablePacks,
-        enabledPackIds: normalizeEnabledPackIds(row?.enabledPackIdsJson, availablePacks),
-        minimumEnabled: 1
-      };
+      return await readSettings(actorId);
     },
 
-    async updateSettings(actorId, enabledPackIds) {
+    async updateSettings(actorId, input) {
       await requireHumanActor(db, actorId);
       const availablePacks = listVisibleEmotePacks();
+      const current = await readSettings(actorId);
+      const settings = Array.isArray(input) ? { enabledPackIds: input } : input ?? {};
+      const updatesEnabledPacks = Object.prototype.hasOwnProperty.call(settings, "enabledPackIds");
+      const updatesDirectSend = Object.prototype.hasOwnProperty.call(settings, "clickImageEmoteToSend");
       const allowed = new Set(availablePacks.map((pack) => pack.id));
-      const normalized = [...new Set(Array.isArray(enabledPackIds) ? enabledPackIds.map(String) : [])]
-        .filter((id) => allowed.has(id));
-      if (normalized.length < 1 || normalized.length !== new Set(Array.isArray(enabledPackIds) ? enabledPackIds.map(String) : []).size) {
-        throw new WorkspaceValidationError("emote.pack_required", "至少保留一个表情包");
+      let normalized = current.enabledPackIds;
+      if (updatesEnabledPacks) {
+        const requestedPackIds = Array.isArray(settings.enabledPackIds) ? settings.enabledPackIds.map(String) : [];
+        normalized = [...new Set(requestedPackIds)].filter((id) => allowed.has(id));
+        if (normalized.length < 1 || normalized.length !== new Set(requestedPackIds).size) {
+          throw new WorkspaceValidationError("emote.pack_required", "至少保留一个表情包");
+        }
       }
+      if (updatesDirectSend && typeof settings.clickImageEmoteToSend !== "boolean") {
+        throw new WorkspaceValidationError("emote.invalid_settings", "图片表情发送设置无效");
+      }
+      const clickImageEmoteToSend = updatesDirectSend
+        ? settings.clickImageEmoteToSend
+        : current.clickImageEmoteToSend;
       const updatedAt = now().toISOString();
       await db.prepare(`
-        INSERT INTO workspace_emote_preferences (user_id, enabled_pack_ids_json, updated_at)
-        VALUES (?, ?, ?)
+        INSERT INTO workspace_emote_preferences (
+          user_id, enabled_pack_ids_json, click_image_emote_to_send, updated_at
+        ) VALUES (?, ?, ?, ?)
         ON CONFLICT (user_id) DO UPDATE SET
           enabled_pack_ids_json = excluded.enabled_pack_ids_json,
+          click_image_emote_to_send = excluded.click_image_emote_to_send,
           updated_at = excluded.updated_at
-      `).run(actorId, JSON.stringify(normalized), updatedAt);
-      return { availablePacks, enabledPackIds: normalized, minimumEnabled: 1 };
+      `).run(actorId, JSON.stringify(normalized), clickImageEmoteToSend ? 1 : 0, updatedAt);
+      return { availablePacks, enabledPackIds: normalized, clickImageEmoteToSend, minimumEnabled: 1 };
     },
 
     async list(actorId) {

@@ -60,7 +60,9 @@ import {
   Undo2,
   UserRound,
   UsersRound,
-  X
+  X,
+  ZoomIn,
+  ZoomOut
 } from "lucide-react";
 import { Fragment, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from "react";
@@ -207,6 +209,7 @@ type Message = {
   recallReason?: string | null;
   hiddenByCurrentUser?: boolean;
   replyTo?: {
+    messageId?: string;
     author: string;
     body: string;
   };
@@ -463,6 +466,7 @@ type WorkspaceNtfyPreferences = {
 type WorkspaceEmoteSettings = {
   availablePacks: Array<{ id: Exclude<EmotePack["id"], "custom">; label: string; defaultEnabled: boolean }>;
   enabledPackIds: Array<Exclude<EmotePack["id"], "custom">>;
+  clickImageEmoteToSend: boolean;
   minimumEnabled: number;
 };
 type WorkspaceCustomEmote = {
@@ -1494,16 +1498,33 @@ export function workspaceConversationPreview(conversation: WorkspaceConversation
 }
 
 export function workspaceReplyPreview(
-  reply?: Pick<WorkspaceMessage, "authorName" | "authorGithubLogin" | "plainText" | "hiddenByCurrentUser">
+  reply?: Pick<WorkspaceMessage, "authorName" | "authorGithubLogin" | "plainText" | "hiddenByCurrentUser"> & { id?: string },
+  replyToMessageId = ""
 ) {
-  if (!reply) return undefined;
-  if (reply.hiddenByCurrentUser) {
-    return { author: "", body: "已隐藏的消息" };
+  if (!reply) {
+    return replyToMessageId
+      ? { messageId: replyToMessageId, author: "", body: "查看引用消息" }
+      : undefined;
   }
-  return {
+  const messageId = reply.id || replyToMessageId;
+  if (reply.hiddenByCurrentUser) {
+    return messageId
+      ? { messageId, author: "", body: "已隐藏的消息" }
+      : { author: "", body: "已隐藏的消息" };
+  }
+  const preview = {
     author: reply.authorName || reply.authorGithubLogin || "成员",
     body: reply.plainText
   };
+  return messageId ? { messageId, ...preview } : preview;
+}
+
+export function shouldDirectSendWorkspaceEmote(item: EmoteItem, enabled: boolean) {
+  return enabled && item.kind === "image";
+}
+
+export function clampWorkspaceImageZoom(value: number) {
+  return Math.min(4, Math.max(1, Math.round(value * 4) / 4));
 }
 
 function workspaceConversationTime(conversation: WorkspaceConversation) {
@@ -2478,8 +2499,10 @@ export function App() {
   const [workspacePinsByConversation, setWorkspacePinsByConversation] = useState<Record<string, WorkspacePinnedMessage[]>>({});
   const [workspacePinsExpandedByConversation, setWorkspacePinsExpandedByConversation] = useState<Record<string, boolean>>({});
   const [workspaceHistoryTargetId, setWorkspaceHistoryTargetId] = useState("");
+  const [workspaceMessageLocateTarget, setWorkspaceMessageLocateTarget] = useState<{ messageId: string; sequence: number } | null>(null);
   const [workspaceReturningToLatestConversationId, setWorkspaceReturningToLatestConversationId] = useState("");
   const [workspaceImagePreview, setWorkspaceImagePreview] = useState<WorkspaceAttachment | null>(null);
+  const [workspaceImageZoom, setWorkspaceImageZoom] = useState(1);
   const [workspaceEmoteCollectionPreviewId, setWorkspaceEmoteCollectionPreviewId] = useState("");
   const [documentVisible, setDocumentVisible] = useState(() => typeof document === "undefined" || document.visibilityState === "visible");
   const [workspaceHistoryLoadingByConversation, setWorkspaceHistoryLoadingByConversation] = useState<Record<string, boolean>>({});
@@ -2828,7 +2851,7 @@ export function App() {
           recalledAt: message.recalledAt,
           recallReason: message.recallReason,
           hiddenByCurrentUser: message.hiddenByCurrentUser,
-          replyTo: workspaceReplyPreview(reply)
+          replyTo: workspaceReplyPreview(reply, message.replyToMessageId ?? "")
         };
       });
       const localMessages = workspaceLocalMessages
@@ -2857,7 +2880,7 @@ export function App() {
             },
             attachments: message.attachments ?? [],
             reactions: [],
-            replyTo: workspaceReplyPreview(reply)
+            replyTo: workspaceReplyPreview(reply, message.replyToMessageId ?? "")
           };
         });
       return [...serverMessages, ...localMessages].sort(
@@ -3003,6 +3026,7 @@ export function App() {
     if (!workspaceImagePreview || !workspaceImageViewerRef.current) {
       return;
     }
+    setWorkspaceImageZoom(1);
     const dialog = workspaceImageViewerRef.current;
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const previousOverflow = document.body.style.overflow;
@@ -3022,6 +3046,21 @@ export function App() {
       if (event.key === "Escape") {
         event.preventDefault();
         setWorkspaceImagePreview(null);
+        return;
+      }
+      if (event.key === "+" || event.key === "=") {
+        event.preventDefault();
+        setWorkspaceImageZoom((zoom) => clampWorkspaceImageZoom(zoom + 0.25));
+        return;
+      }
+      if (event.key === "-") {
+        event.preventDefault();
+        setWorkspaceImageZoom((zoom) => clampWorkspaceImageZoom(zoom - 0.25));
+        return;
+      }
+      if (event.key === "0") {
+        event.preventDefault();
+        setWorkspaceImageZoom(1);
         return;
       }
       if (event.key !== "Tab") {
@@ -3156,14 +3195,19 @@ export function App() {
   ]);
 
   useEffect(() => {
-    if (!workspaceHistoryTargetId || workspaceView !== "chat") return;
+    if (!workspaceMessageLocateTarget || workspaceView !== "chat") return;
     workspaceStickToBottomRef.current = false;
+    let removeTimer = 0;
     const frame = window.requestAnimationFrame(() => {
       const target = document.querySelector<HTMLElement>(
-        `[data-message-id="${CSS.escape(workspaceHistoryTargetId)}"]`
+        `[data-message-id="${CSS.escape(workspaceMessageLocateTarget.messageId)}"]`
       );
       target?.scrollIntoView({ block: "center", behavior: "auto" });
       if (target && workspaceMessageListRef.current) {
+        target.classList.remove("message-locate");
+        void target.offsetWidth;
+        target.classList.add("message-locate");
+        removeTimer = window.setTimeout(() => target.classList.remove("message-locate"), 1900);
         workspaceScrollPositionsRef.current.set(
           workspaceSelectedConversationId,
           workspaceMessageListRef.current.scrollTop
@@ -3171,8 +3215,11 @@ export function App() {
         workspaceStickToBottomByConversationRef.current.set(workspaceSelectedConversationId, false);
       }
     });
-    return () => window.cancelAnimationFrame(frame);
-  }, [workspaceHistoryTargetId, workspaceMessages.length, workspaceSelectedConversationId, workspaceView]);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(removeTimer);
+    };
+  }, [workspaceMessageLocateTarget, workspaceSelectedConversationId, workspaceView]);
 
   useEffect(() => {
     const list = workspaceMessageListRef.current;
@@ -4278,6 +4325,8 @@ export function App() {
         return rest;
       });
     }
+    setWorkspaceHistoryTargetId("");
+    setWorkspaceMessageLocateTarget(null);
     workspaceStickToBottomRef.current = true;
     setWorkspaceSelectedConversationId(conversationId);
     setWorkspaceView("chat");
@@ -4404,6 +4453,7 @@ export function App() {
     setWorkspacePinsByConversation({});
     setWorkspacePinsExpandedByConversation({});
     setWorkspaceHistoryTargetId("");
+    setWorkspaceMessageLocateTarget(null);
     setWorkspaceReturningToLatestConversationId("");
     setWorkspaceUnreadAnchorByConversation({});
     setWorkspaceNewMessageCountByConversation({});
@@ -4593,26 +4643,37 @@ export function App() {
     }
   }
 
-  async function openWorkspacePinnedMessage(messageId: string) {
+  async function jumpToWorkspaceMessage(messageId: string) {
     if (!workspaceSelectedConversation) return;
     const conversationId = workspaceSelectedConversation.id;
     workspaceStickToBottomRef.current = false;
     workspaceStickToBottomByConversationRef.current.set(conversationId, false);
-    const data = await workspaceJson<{ messages: WorkspaceMessage[] }>(
-      `/api/workspace/conversations/${encodeURIComponent(conversationId)}/messages?around=${encodeURIComponent(messageId)}&limit=41`
-    );
-    if (workspaceSelectedConversationIdRef.current !== conversationId) return;
-    setWorkspaceHistoryExhaustedByConversation((current) => {
-      if (!(conversationId in current)) return current;
-      const { [conversationId]: _removed, ...rest } = current;
-      return rest;
-    });
-    setWorkspaceHistoryTargetId(messageId);
-    setWorkspaceConversations((conversations) => conversations.map((conversation) => conversation.id === conversationId
-      ? { ...conversation, latestMessages: data.messages }
-      : conversation));
-    setWorkspaceContextCollapsed(true);
-    setWorkspaceMobilePane("main");
+    try {
+      const alreadyLoaded = workspaceSelectedConversation.latestMessages.some((message) => message.id === messageId);
+      if (!alreadyLoaded) {
+        const data = await workspaceJson<{ messages: WorkspaceMessage[] }>(
+          `/api/workspace/conversations/${encodeURIComponent(conversationId)}/messages?around=${encodeURIComponent(messageId)}&limit=41`
+        );
+        if (workspaceSelectedConversationIdRef.current !== conversationId) return;
+        setWorkspaceHistoryExhaustedByConversation((current) => {
+          if (!(conversationId in current)) return current;
+          const { [conversationId]: _removed, ...rest } = current;
+          return rest;
+        });
+        setWorkspaceHistoryTargetId(messageId);
+        setWorkspaceConversations((conversations) => conversations.map((conversation) => conversation.id === conversationId
+          ? { ...conversation, latestMessages: data.messages }
+          : conversation));
+      }
+      setWorkspaceMessageLocateTarget((current) => ({
+        messageId,
+        sequence: (current?.sequence ?? 0) + 1
+      }));
+      setWorkspaceContextCollapsed(true);
+      setWorkspaceMobilePane("main");
+    } catch (error) {
+      showWorkspaceNotice("warning", userFacingErrorMessage(error, "无法定位这条消息"));
+    }
   }
 
   async function returnWorkspaceToLatest() {
@@ -4630,6 +4691,7 @@ export function App() {
       workspaceStickToBottomByConversationRef.current.set(conversationId, true);
       workspaceScrollPositionsRef.current.delete(conversationId);
       setWorkspaceHistoryTargetId("");
+      setWorkspaceMessageLocateTarget(null);
       setWorkspaceAwayFromLatestByConversation((current) => {
         if (!current[conversationId]) return current;
         const { [conversationId]: _removed, ...rest } = current;
@@ -5291,6 +5353,11 @@ export function App() {
     }
     workspaceStickToBottomRef.current = true;
     workspaceStickToBottomByConversationRef.current.set(conversationId, true);
+    setWorkspaceHistoryExhaustedByConversation((current) => {
+      if (!(conversationId in current)) return current;
+      const { [conversationId]: _removed, ...rest } = current;
+      return rest;
+    });
     list.scrollTo({ top: list.scrollHeight, behavior: "auto" });
     handleWorkspaceMessageListScroll(list);
   }
@@ -5860,6 +5927,57 @@ export function App() {
             )
           : messages;
       });
+      showWorkspaceNotice("warning", message);
+    } finally {
+      workspaceSendingRef.current = false;
+      setWorkspaceSending(false);
+    }
+  }
+
+  async function sendWorkspaceImageEmote(item: EmoteItem) {
+    if (item.kind !== "image" || !workspaceSelectedConversation || workspaceSendingRef.current) return;
+    const conversation = workspaceSelectedConversation;
+    const token = getEmoteInsertText(item);
+    const blocks = workspaceComposerDocumentToContentBlocks({
+      source: token,
+      blocks: [{ type: "emote", token, item }]
+    });
+    const clientMessageId = makeId("wm");
+    const localMessageId = makeId("wlm");
+    const replyToMessageId = workspaceReplyToMessageId || null;
+    workspaceSendingRef.current = true;
+    setWorkspaceSending(true);
+    clearWorkspaceNotice();
+    setWorkspaceLocalMessages((messages) => [
+      ...messages,
+      {
+        id: localMessageId,
+        clientMessageId,
+        conversationId: conversation.id,
+        body: token,
+        blocks,
+        attachments: [],
+        replyToMessageId,
+        createdAt: new Date().toISOString(),
+        state: "sending"
+      }
+    ]);
+    try {
+      await submitWorkspaceMessage({
+        conversationId: conversation.id,
+        clientMessageId,
+        replyToMessageId,
+        body: token,
+        blocks
+      });
+      setWorkspaceConversationReplyToMessageId(conversation.id, "");
+    } catch (error) {
+      const message = userFacingErrorMessage(error, "表情发送失败");
+      setWorkspaceLocalMessages((messages) => messages.map((localMessage) =>
+        localMessage.id === localMessageId
+          ? { ...localMessage, state: "failed", failureReason: message }
+          : localMessage
+      ));
       showWorkspaceNotice("warning", message);
     } finally {
       workspaceSendingRef.current = false;
@@ -8102,6 +8220,7 @@ export function App() {
                         draftDocument={workspaceDraftDocument}
                         onDraft={(document) => setWorkspaceConversationDraft(workspaceSelectedConversation.id, document)}
                         onSend={sendWorkspaceMessage}
+                        onSendImageEmote={(item) => void sendWorkspaceImageEmote(item)}
                         stagedAttachments={workspaceComposerAttachments}
                         onStageFiles={stageWorkspaceAttachments}
                         onRemoveStagedAttachment={(attachmentId) =>
@@ -8125,6 +8244,7 @@ export function App() {
                         currentUserId={workspaceBootstrap.auth.currentUser.id}
                         conversationType={workspaceSelectedConversation.type}
                         historyTargetId={workspaceHistoryTargetId}
+                        onJumpToMessage={(messageId) => void jumpToWorkspaceMessage(messageId)}
                         onReturnToLatest={() => void returnWorkspaceToLatest()}
                         onTogglePin={(message) => void toggleWorkspacePin(message)}
                         onRecall={(message) => void recallWorkspaceMessage(message)}
@@ -9068,7 +9188,7 @@ export function App() {
                                 <div className="workspace-pinned-list">
                                   {(workspacePinnedMessagesExpanded ? workspacePinnedMessages : workspacePinnedMessages.slice(0, 3)).map((pin) => (
                                     <article key={pin.messageId}>
-                                      <button type="button" onClick={() => void openWorkspacePinnedMessage(pin.messageId)}>
+                                      <button type="button" onClick={() => void jumpToWorkspaceMessage(pin.messageId)}>
                                         <strong>{pin.message.authorName || pin.message.authorGithubLogin || "成员"}</strong>
                                         <span>{pin.message.plainText || "附件消息"}</span>
                                         <small>{formatWorkspaceTime(pin.pinnedAt)}</small>
@@ -9337,11 +9457,41 @@ export function App() {
                   }}
                 >
                   <p className="sr-only" id="workspace-image-viewer-description">
-                    图片预览，可下载图片或打开文件详情。
+                    图片预览，可缩放、下载图片或打开文件详情。
                   </p>
                   <div className="workspace-image-viewer-toolbar">
                     <strong id="workspace-image-viewer-title">{workspaceImagePreview.fileName}</strong>
                     <div>
+                      <span className="workspace-image-zoom-controls" role="group" aria-label="图片缩放">
+                        <button
+                          className="icon-button"
+                          type="button"
+                          title="缩小图片"
+                          aria-label="缩小图片"
+                          disabled={workspaceImageZoom <= 1}
+                          onClick={() => setWorkspaceImageZoom((zoom) => clampWorkspaceImageZoom(zoom - 0.25))}
+                        >
+                          <ZoomOut size={17} />
+                        </button>
+                        <button
+                          className="workspace-image-zoom-value"
+                          type="button"
+                          title="恢复 100%"
+                          onClick={() => setWorkspaceImageZoom(1)}
+                        >
+                          {Math.round(workspaceImageZoom * 100)}%
+                        </button>
+                        <button
+                          className="icon-button"
+                          type="button"
+                          title="放大图片"
+                          aria-label="放大图片"
+                          disabled={workspaceImageZoom >= 4}
+                          onClick={() => setWorkspaceImageZoom((zoom) => clampWorkspaceImageZoom(zoom + 0.25))}
+                        >
+                          <ZoomIn size={17} />
+                        </button>
+                      </span>
                       {workspaceImagePreviewFile && (
                         <>
                           <button
@@ -9376,10 +9526,21 @@ export function App() {
                       </button>
                     </div>
                   </div>
-                  <img
-                    src={`/api/workspace/files/${encodeURIComponent(workspaceImagePreview.id)}/preview`}
-                    alt={workspaceImagePreview.fileName}
-                  />
+                  <div className="workspace-image-viewer-stage">
+                    <div
+                      className="workspace-image-viewer-canvas"
+                      style={{
+                        width: `${workspaceImageZoom * 100}%`,
+                        height: `${workspaceImageZoom * 100}%`
+                      }}
+                    >
+                      <img
+                        src={`/api/workspace/files/${encodeURIComponent(workspaceImagePreview.id)}/preview`}
+                        alt={workspaceImagePreview.fileName}
+                        onDoubleClick={() => setWorkspaceImageZoom((zoom) => zoom === 1 ? 2 : 1)}
+                      />
+                    </div>
+                  </div>
                 </div>
               )}
               {workspaceEmoteCollectionPreviewId && (
@@ -9933,6 +10094,25 @@ function WorkspaceAccountSettings({
     }
   }
 
+  async function updateImageEmoteDirectSend(enabled: boolean) {
+    if (!emoteSettings) return;
+    const previous = emoteSettings;
+    setEmoteSettings({ ...emoteSettings, clickImageEmoteToSend: enabled });
+    setEmoteSettingsSaving(true);
+    try {
+      const data = await workspaceJson<{ settings: WorkspaceEmoteSettings }>("/api/workspace/me/emote-settings", {
+        method: "PUT",
+        body: JSON.stringify({ clickImageEmoteToSend: enabled })
+      });
+      setEmoteSettings(data.settings);
+    } catch (error) {
+      setEmoteSettings(previous);
+      onNotice("warning", userFacingErrorMessage(error, "表情发送方式保存失败"));
+    } finally {
+      setEmoteSettingsSaving(false);
+    }
+  }
+
   async function sendEmailChallenge(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setEmailBusy(true);
@@ -10150,13 +10330,24 @@ function WorkspaceAccountSettings({
           <section className="workspace-settings-detail" aria-labelledby="workspace-emote-panel-title" aria-busy={emoteSettingsLoading}>
             <div className="workspace-settings-detail-intro"><h3 id="workspace-emote-panel-title">表情面板</h3><p>选择聊天时显示的内置表情包，至少保留一个。</p></div>
             {emoteSettingsLoading || !emoteSettings ? <WorkspaceSkeletonRows variant="setting" count={3} /> : (
-              <div className="workspace-emote-pack-settings">
-                {emoteSettings.availablePacks.map((pack) => {
-                  const checked = emoteSettings.enabledPackIds.includes(pack.id);
-                  const onlyEnabled = checked && emoteSettings.enabledPackIds.length <= emoteSettings.minimumEnabled;
-                  return <button key={pack.id} type="button" aria-pressed={checked} disabled={emoteSettingsSaving || onlyEnabled} onClick={() => void updateEmoteSettings(pack.id, !checked)}><span className="workspace-emote-pack-check" aria-hidden="true">{checked && <Check size={14} />}</span><span>{pack.label}</span></button>;
-                })}
-              </div>
+              <>
+                <div className="workspace-emote-pack-settings">
+                  {emoteSettings.availablePacks.map((pack) => {
+                    const checked = emoteSettings.enabledPackIds.includes(pack.id);
+                    const onlyEnabled = checked && emoteSettings.enabledPackIds.length <= emoteSettings.minimumEnabled;
+                    return <button key={pack.id} type="button" aria-pressed={checked} disabled={emoteSettingsSaving || onlyEnabled} onClick={() => void updateEmoteSettings(pack.id, !checked)}><span className="workspace-emote-pack-check" aria-hidden="true">{checked && <Check size={14} />}</span><span>{pack.label}</span></button>;
+                  })}
+                </div>
+                <div className="workspace-setting-list compact-list workspace-emote-behavior-settings">
+                  <WorkspaceSwitch
+                    checked={emoteSettings.clickImageEmoteToSend}
+                    disabled={emoteSettingsSaving}
+                    label="点击图片表情直接发送"
+                    description="开启后，选择图片表情会立即发送；Emoji 仍会插入输入框。"
+                    onChange={(checked) => void updateImageEmoteDirectSend(checked)}
+                  />
+                </div>
+              </>
             )}
             <div className="workspace-settings-list single-row">
               <WorkspaceSettingsRow icon={<Images size={18} />} title="我的表情" description="上传、排序、管理合集与分享" value={emoteLibrarySummary ? `${emoteLibrarySummary.usage.itemCount} 张` : "读取中"} onClick={onManageEmotes} />
@@ -12323,6 +12514,7 @@ function WorkspaceChatPanel({
   draftDocument,
   onDraft,
   onSend,
+  onSendImageEmote,
   stagedAttachments,
   onStageFiles,
   onRemoveStagedAttachment,
@@ -12340,6 +12532,7 @@ function WorkspaceChatPanel({
   currentUserId,
   conversationType,
   historyTargetId,
+  onJumpToMessage,
   onReturnToLatest,
   onTogglePin,
   onRecall,
@@ -12372,6 +12565,7 @@ function WorkspaceChatPanel({
   draftDocument: WorkspaceComposerDocument;
   onDraft: (value: WorkspaceComposerDocument) => void;
   onSend: (event: FormEvent<HTMLFormElement>) => void;
+  onSendImageEmote: (item: EmoteItem) => void;
   stagedAttachments: WorkspaceComposerAttachment[];
   onStageFiles: (files: File[]) => void;
   onRemoveStagedAttachment: (attachmentId: string) => void;
@@ -12389,6 +12583,7 @@ function WorkspaceChatPanel({
   currentUserId: string;
   conversationType: WorkspaceConversation["type"];
   historyTargetId: string;
+  onJumpToMessage: (messageId: string) => void;
   onReturnToLatest: () => void;
   onTogglePin: (message: Message) => void;
   onRecall: (message: Message) => void;
@@ -12408,6 +12603,7 @@ function WorkspaceChatPanel({
   const [dragActive, setDragActive] = useState(false);
   const [formatToolbarOpen, setFormatToolbarOpen] = useState(false);
   const [composerExpanded, setComposerExpanded] = useState(false);
+  const [clickImageEmoteToSend, setClickImageEmoteToSend] = useState(false);
   const composerFormRef = useRef<HTMLFormElement | null>(null);
   const editorRef = useRef<WorkspaceComposerEditorHandle | null>(null);
   const emoteTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -12445,6 +12641,16 @@ function WorkspaceChatPanel({
   }, [messages, unreadAnchorCount, unreadAnchorMessageId]);
 
   useEffect(() => {
+    let cancelled = false;
+    void workspaceJson<{ settings: WorkspaceEmoteSettings }>("/api/workspace/me/emote-settings")
+      .then((data) => {
+        if (!cancelled) setClickImageEmoteToSend(data.settings.clickImageEmoteToSend);
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
     const sentinel = historySentinelRef.current;
     const root = messageListRef.current;
     if (!sentinel || !root || !olderMessagesAvailable || olderMessagesLoading) {
@@ -12480,9 +12686,19 @@ function WorkspaceChatPanel({
   };
 
   const insertEmote = (item: EmoteItem) => {
+    if (shouldDirectSendWorkspaceEmote(item, clickImageEmoteToSend)) {
+      onSendImageEmote(item);
+      setEmotePanelOpen(false);
+      window.requestAnimationFrame(() => editorRef.current?.focus());
+      return;
+    }
     const insertText = getEmoteInsertText(item);
     editorRef.current?.insertEmote(item, insertText);
     setEmotePanelOpen(false);
+    window.requestAnimationFrame(() => editorRef.current?.focus());
+  };
+  const insertAuthorMention = (member: WorkspaceUser) => {
+    editorRef.current?.insertMention(member.id, member.displayName, 0);
     window.requestAnimationFrame(() => editorRef.current?.focus());
   };
   const insertMention = (member: WorkspaceUser) => {
@@ -12697,7 +12913,7 @@ function WorkspaceChatPanel({
       >
         {historyTargetId && (
           <div className="workspace-history-window-banner" role="status">
-            <span><Pin size={14} />正在查看常驻消息上下文</span>
+            <span><History size={14} />正在查看历史消息上下文</span>
             <button type="button" onClick={onReturnToLatest}>返回最新消息</button>
           </div>
         )}
@@ -12744,6 +12960,9 @@ function WorkspaceChatPanel({
               );
             }
             const message = displayItem.message;
+            const authorMentionMember = conversationType === "group" && !message.self
+              ? mentionMembers.find((member) => member.id === message.authorId)
+              : undefined;
             const previous = messages[index - 1]?.hiddenByCurrentUser ? undefined : messages[index - 1];
             const dayKey = getMessageDayKey(message.createdAt);
             const previousDayKey = getMessageDayKey(previous?.createdAt);
@@ -12806,7 +13025,7 @@ function WorkspaceChatPanel({
                   <div className="workspace-unread-divider" role="separator"><span>以下为未读消息</span></div>
                 )}
                 <article
-                  className={`workspace-message${message.self ? " self" : ""}${groupedWithPrevious ? " grouped" : ""}${historyTargetId === message.id ? " history-target" : ""}`}
+                  className={`workspace-message${message.self ? " self" : ""}${groupedWithPrevious ? " grouped" : ""}`}
                   data-message-id={message.id}
                   data-testid={`workspace-message-${message.id}`}
                   tabIndex={-1}
@@ -12825,15 +13044,33 @@ function WorkspaceChatPanel({
                   <div className="workspace-message-content">
                     {!groupedWithPrevious && (
                       <div className="workspace-message-meta">
-                        <strong><WorkspaceIdentityName name={message.author} kind={message.authorKind} /></strong>
+                        {authorMentionMember ? (
+                          <button
+                            className="workspace-message-author-mention"
+                            type="button"
+                            aria-label={`提及 ${authorMentionMember.displayName}`}
+                            title={`提及 ${authorMentionMember.displayName}`}
+                            onClick={() => insertAuthorMention(authorMentionMember)}
+                          >
+                            <AtSign size={12} aria-hidden="true" />
+                            <WorkspaceIdentityName name={message.author} kind={message.authorKind} />
+                          </button>
+                        ) : (
+                          <strong><WorkspaceIdentityName name={message.author} kind={message.authorKind} /></strong>
+                        )}
                         <time>{message.at}</time>
                       </div>
                     )}
-                    {!message.recalledAt && message.replyTo && (
-                      <div className="reply-preview">
+                    {!message.recalledAt && message.replyTo?.messageId && (
+                      <button
+                        className="reply-preview workspace-reply-jump"
+                        type="button"
+                        aria-label={`跳转到 ${message.replyTo.author || "成员"} 的原消息`}
+                        onClick={() => onJumpToMessage(message.replyTo!.messageId!)}
+                      >
                         <strong>{message.replyTo.author}</strong>
                         <span>{message.replyTo.body}</span>
-                      </div>
+                      </button>
                     )}
                     {message.recalledAt ? (
                       <div className="workspace-recalled-message" role="status">

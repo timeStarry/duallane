@@ -743,7 +743,7 @@ app.put("/api/workspace/me/emote-settings", async (request, reply) => {
     return {
       settings: await workspaceCustomEmotes.updateSettings(
         await getWorkspaceUserId(request),
-        request.body?.enabledPackIds
+        request.body
       )
     };
   } catch (error) {

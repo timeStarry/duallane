@@ -4378,6 +4378,19 @@ describe("workspace routes", () => {
     });
     expect(defaults.statusCode).toBe(200);
     expect(defaults.json().settings.enabledPackIds.length).toBeGreaterThan(0);
+    expect(defaults.json().settings.clickImageEmoteToSend).toBe(false);
+
+    const directSend = await app.inject({
+      method: "PUT",
+      url: "/api/workspace/me/emote-settings",
+      headers: { "content-type": "application/json", "x-workspace-user-id": "usr_owner" },
+      payload: { clickImageEmoteToSend: true }
+    });
+    expect(directSend.statusCode).toBe(200);
+    expect(directSend.json().settings).toMatchObject({
+      enabledPackIds: defaults.json().settings.enabledPackIds,
+      clickImageEmoteToSend: true
+    });
 
     const invalid = await app.inject({
       method: "PUT",
