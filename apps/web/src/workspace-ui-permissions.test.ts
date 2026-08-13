@@ -111,6 +111,31 @@ describe("workspace UI permission boundaries", () => {
     expect(styles).toContain("background: var(--surface-tint);");
   });
 
+  it("uses a project-styled conversation selector in the emote share dialog", () => {
+    const source = readSource();
+    const styles = readStyles();
+
+    expect(source).toContain('className="workspace-emote-share-dialog workspace-emote-share-panel"');
+    expect(source).toContain('className="workspace-emote-share-select"');
+    expect(source).toContain('<ChevronDown size={17} aria-hidden="true" />');
+    expect(source).toContain('<label htmlFor="workspace-emote-share-conversation">发送到会话</label>');
+    expect(styles).toMatch(/\.workspace-emote-share-select select\s*\{[^}]*appearance:\s*none;[^}]*height:\s*42px;/s);
+    expect(styles).toMatch(/\.workspace-emote-share-body\s*\{[^}]*gap:\s*16px;[^}]*margin-top:\s*18px;/s);
+    expect(styles).toContain(".workspace-emote-share-select option");
+  });
+
+  it("checks the health version on an interval and when the page becomes active", () => {
+    const source = readSource();
+
+    expect(source).toContain('fetch("/api/health", { cache: "no-store", signal: controller.signal })');
+    expect(source).toContain("VERSION_CHECK_INTERVAL_MS = 60 * 1000");
+    expect(source).toContain("VERSION_CHECK_TIMEOUT_MS = 8 * 1000");
+    expect(source).toContain('window.addEventListener("focus", handleFocus)');
+    expect(source).toContain('document.addEventListener("visibilitychange", handleVisibility)');
+    expect(source).toContain("VERSION_UPDATE_DISMISSED_STORAGE_PREFIX");
+    expect(source).toContain('aria-label="关闭新版本提示"');
+  });
+
   it("keeps workspace surfaces warm and reserves teal for interaction accents", () => {
     const styles = readStyles();
 

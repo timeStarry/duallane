@@ -8,6 +8,7 @@ import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { forwardRef, useEffect, useImperativeHandle, useRef, type ClipboardEvent, type KeyboardEvent, type ReactNode } from "react";
 import { renderMessageParts, type EmoteItem } from "./emotes";
+import { CachedEmoteImage } from "./emote-image-cache";
 
 export type WorkspaceComposerBlock =
   | { type: "text"; text: string }
@@ -77,7 +78,7 @@ class EmoteNode extends DecoratorNode<ReactNode> {
     return (
       <span className="workspace-editor-token emote" contentEditable={false}>
         {this.__item.kind === "image" ? (
-          <img alt={this.__item.label} decoding="async" draggable={false} src={this.__item.src} />
+          <CachedEmoteImage alt={this.__item.label} decoding="async" draggable={false} src={this.__item.src} />
         ) : renderMessageParts(this.__token)}
       </span>
     );
@@ -187,7 +188,10 @@ function WorkspaceComposerBridge({
   }, [editor, value]);
 
   useImperativeHandle(editorRef, () => ({
-    focus: () => editor.focus(),
+    focus: () => {
+      editor.getRootElement()?.focus();
+      editor.focus();
+    },
     insertText: (text) => editor.update(() => {
       const selection = $getSelection();
       if ($isRangeSelection(selection)) selection.insertText(text);

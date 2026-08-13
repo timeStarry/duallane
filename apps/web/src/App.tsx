@@ -74,6 +74,7 @@ import {
   findFirstImageEmoteKey,
   getReactionEmote,
   getReactionEmoteKey,
+  isSingleImageEmoteText,
   renderMessageParts,
   visibleEmotePacks,
   type EmoteItem,
@@ -127,10 +128,12 @@ import { isServerVersionNewer } from "./app-version";
 import { groupHiddenWorkspaceMessages } from "./workspace-hidden-messages";
 import {
   getPreferredEmotePickerPack,
+  rememberEmotePickerPackOnClose,
   rememberPreferredEmotePickerPack,
   type EmotePickerPreferenceScope
 } from "./emote-picker-preference";
 import { getRecentEmojiIds, recordRecentEmojiUse } from "./recent-emojis";
+import { CachedEmoteImage } from "./emote-image-cache";
 
 type Lane = "entry" | "about" | "p2p" | "workspace-dev";
 type P2pStep = "name" | "waiting" | "chat" | "ended" | "invalid-room";
@@ -142,6 +145,9 @@ type CopyState = "idle" | "copied" | "failed";
 type ThemeMode = "system" | "light" | "dark";
 type ResolvedTheme = "light" | "dark";
 const WORKSPACE_EMOTE_LIBRARY_CHANGED_EVENT = "duallane:workspace-emote-library-changed";
+const VERSION_UPDATE_DISMISSED_STORAGE_PREFIX = "duallane-version-update-dismissed:";
+const VERSION_CHECK_INTERVAL_MS = 60 * 1000;
+const VERSION_CHECK_TIMEOUT_MS = 8 * 1000;
 
 function notifyWorkspaceEmoteLibraryChanged() {
   window.dispatchEvent(new Event(WORKSPACE_EMOTE_LIBRARY_CHANGED_EVENT));
@@ -1520,8 +1526,8 @@ export function workspaceReplyPreview(
   return messageId ? { messageId, ...preview } : preview;
 }
 
-export function shouldDirectSendWorkspaceEmote(item: EmoteItem, enabled: boolean) {
-  return enabled && item.kind === "image";
+export function shouldDirectSendWorkspaceEmote(item: EmoteItem, packId: EmotePack["id"], enabled: boolean) {
+  return enabled && packId === "custom" && item.kind === "image";
 }
 
 export function clampWorkspaceImageZoom(value: number) {
@@ -2505,6 +2511,8 @@ export function App() {
   const [workspaceImagePreview, setWorkspaceImagePreview] = useState<WorkspaceAttachment | null>(null);
   const [workspaceImageZoom, setWorkspaceImageZoom] = useState(1);
   const [workspaceEmoteCollectionPreviewId, setWorkspaceEmoteCollectionPreviewId] = useState("");
+  const [serverAppVersion, setServerAppVersion] = useState("");
+  const [versionUpdateDismissed, setVersionUpdateDismissed] = useState(false);
   const [documentVisible, setDocumentVisible] = useState(() => typeof document === "undefined" || document.visibilityState === "visible");
   const [workspaceHistoryLoadingByConversation, setWorkspaceHistoryLoadingByConversation] = useState<Record<string, boolean>>({});
   const [workspaceHistoryExhaustedByConversation, setWorkspaceHistoryExhaustedByConversation] = useState<Record<string, boolean>>({});
@@ -2518,6 +2526,8 @@ export function App() {
   const workspaceSendingRef = useRef(false);
   const workspaceReactionLocksRef = useRef<Set<string>>(new Set());
   const workspaceReactionEventSeqRef = useRef<Map<string, number>>(new Map());
+  const versionCheckInFlightRef = useRef(false);
+  const versionCheckAbortControllerRef = useRef<AbortController | null>(null);
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
   const secureKeysRef = useRef<SecureKeys | null>(null);
   const peerIdRef = useRef("");
@@ -2927,10 +2937,17 @@ export function App() {
     }
     return `已用 ${formatBytes(used)} / ${formatBytes(limit)}`;
   }, [workspaceBootstrap?.policy.dailyQuotaBytes, workspaceBootstrap?.policy.usedTodayBytes]);
-  const workspaceUpdateAvailable = isServerVersionNewer(
-    __DUALLANE_APP_VERSION__,
-    workspaceBootstrap?.appVersion
-  );
+  const workspaceUpdateAvailable = isServerVersionNewer(__DUALLANE_APP_VERSION__, serverAppVersion) && !versionUpdateDismissed;
+  const dismissVersionUpdate = () => {
+    setVersionUpdateDismissed(true);
+    if (serverAppVersion) {
+      try {
+        localStorage.setItem(`${VERSION_UPDATE_DISMISSED_STORAGE_PREFIX}${serverAppVersion}`, "true");
+      } catch {
+        // Storage may be unavailable in restricted browsing contexts.
+      }
+    }
+  };
   const workspaceSelectedFileQuotaWarning = useMemo(
     () =>
       workspaceSelectedFile
@@ -3101,6 +3118,55 @@ export function App() {
     const updateVisibility = () => setDocumentVisible(document.visibilityState === "visible");
     document.addEventListener("visibilitychange", updateVisibility);
     return () => document.removeEventListener("visibilitychange", updateVisibility);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const checkVersion = async () => {
+      if (cancelled || versionCheckInFlightRef.current) return;
+      versionCheckInFlightRef.current = true;
+      const controller = new AbortController();
+      versionCheckAbortControllerRef.current = controller;
+      const timeout = window.setTimeout(() => controller.abort(), VERSION_CHECK_TIMEOUT_MS);
+      try {
+        const response = await fetch("/api/health", { cache: "no-store", signal: controller.signal });
+        if (!response.ok) return;
+        const payload = await response.json() as { appVersion?: string };
+        const nextVersion = typeof payload.appVersion === "string" ? payload.appVersion : "";
+        if (!nextVersion || cancelled) return;
+        setServerAppVersion(nextVersion);
+        try {
+          setVersionUpdateDismissed(localStorage.getItem(`${VERSION_UPDATE_DISMISSED_STORAGE_PREFIX}${nextVersion}`) === "true");
+        } catch {
+          setVersionUpdateDismissed(false);
+        }
+      } catch {
+        // A transient health check failure must not interrupt the current session.
+      } finally {
+        window.clearTimeout(timeout);
+        if (versionCheckAbortControllerRef.current === controller) {
+          versionCheckAbortControllerRef.current = null;
+          versionCheckInFlightRef.current = false;
+        }
+      }
+    };
+    void checkVersion();
+    const interval = window.setInterval(() => void checkVersion(), VERSION_CHECK_INTERVAL_MS);
+    const handleFocus = () => void checkVersion();
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") void checkVersion();
+    };
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      cancelled = true;
+      versionCheckAbortControllerRef.current?.abort();
+      versionCheckAbortControllerRef.current = null;
+      versionCheckInFlightRef.current = false;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, []);
 
   useEffect(() => installWorkspaceUnreadFavicon({
@@ -5947,7 +6013,6 @@ export function App() {
     const localMessageId = makeId("wlm");
     const replyToMessageId = workspaceReplyToMessageId || null;
     workspaceSendingRef.current = true;
-    setWorkspaceSending(true);
     clearWorkspaceNotice();
     setWorkspaceLocalMessages((messages) => [
       ...messages,
@@ -5982,7 +6047,6 @@ export function App() {
       showWorkspaceNotice("warning", message);
     } finally {
       workspaceSendingRef.current = false;
-      setWorkspaceSending(false);
     }
   }
 
@@ -7460,6 +7524,16 @@ export function App() {
       {(lane !== "workspace-dev" || workspaceStatus !== "ready" || !workspaceBootstrap) && (
         <ThemeSwitch mode={themeMode} resolvedTheme={resolvedTheme} onModeChange={setThemeMode} />
       )}
+      {workspaceUpdateAvailable && (
+        <div className="app-version-update" role="status">
+          <RefreshCw size={15} aria-hidden="true" />
+          <span>发现新版本，请刷新页面</span>
+          <button type="button" onClick={() => window.location.reload()}>刷新</button>
+          <button className="app-version-update-close" type="button" aria-label="关闭新版本提示" title="关闭提示" onClick={dismissVersionUpdate}>
+            <X size={15} />
+          </button>
+        </div>
+      )}
       {lane === "entry" && (
         <section className="entry page-enter" aria-labelledby="entry-title">
           <div className="entry-heading">
@@ -7947,12 +8021,6 @@ export function App() {
                   ) : <div className="workspace-rail-section-empty"><Settings size={22} /><span>设置将在主区域中打开</span></div>}
                   </div>
                   <div className="workspace-rail-footer">
-                    {workspaceUpdateAvailable && (
-                      <button className="workspace-version-update" type="button" onClick={() => window.location.reload()}>
-                        <RefreshCw size={14} />
-                        <span>发现新版本，刷新页面</span>
-                      </button>
-                    )}
                     {workspaceRealtimeState !== "connected" && (
                       <div className={`workspace-connection-state ${workspaceRealtimeState}`} role="status">
                         <Radio size={14} />
@@ -8042,12 +8110,6 @@ export function App() {
                 </aside>
 
                 <section className="workspace-main" id="workspace-main-panel" aria-label="共享空间主视图">
-                  {workspaceUpdateAvailable && (
-                    <button className="workspace-version-update workspace-version-update-mobile" type="button" onClick={() => window.location.reload()}>
-                      <RefreshCw size={14} />
-                      <span>新版本已就绪，点击刷新</span>
-                    </button>
-                  )}
                   {workspaceCreateMode && (
                     <div
                       className="workspace-task-panel"
@@ -8221,7 +8283,7 @@ export function App() {
                         draftDocument={workspaceDraftDocument}
                         onDraft={(document) => setWorkspaceConversationDraft(workspaceSelectedConversation.id, document)}
                         onSend={sendWorkspaceMessage}
-                        onSendImageEmote={(item) => void sendWorkspaceImageEmote(item)}
+                        onSendImageEmote={sendWorkspaceImageEmote}
                         stagedAttachments={workspaceComposerAttachments}
                         onStageFiles={stageWorkspaceAttachments}
                         onRemoveStagedAttachment={(attachmentId) =>
@@ -11085,7 +11147,44 @@ function WorkspaceEmoteManagerDialog({
         )}
         {selectedEmote && <div className="workspace-emote-detail" role="dialog" aria-label="表情详情"><header><strong>表情详情</strong><button ref={emoteDetailCloseRef} className="icon-button" type="button" title="关闭详情" aria-label="关闭表情详情" onClick={() => setSelectedEmoteId("")}><X size={17} /></button></header><div className="workspace-emote-detail-preview"><img src={selectedEmote.src} alt={selectedEmote.label} /></div><form onSubmit={(event) => { event.preventDefault(); void renameEmote(selectedEmote); }}><label><span>短名称</span><input value={selectedEmoteLabel} maxLength={16} onChange={(event) => setSelectedEmoteLabel(event.target.value)} /><small>只用于识别、搜索和无障碍说明，不会显示在表情网格中。</small></label><button className="primary compact" type="submit" disabled={busy || !selectedEmoteLabel.trim() || selectedEmoteLabel.trim() === selectedEmote.label}>保存名称</button></form><dl><div><dt>类型</dt><dd>{selectedEmote.animated ? "动态表情" : "静态表情"}</dd></div>{selectedEmote.width && selectedEmote.height && <div><dt>尺寸</dt><dd>{selectedEmote.width} × {selectedEmote.height}</dd></div>}{selectedEmote.byteSize && <div><dt>大小</dt><dd>{formatBytes(selectedEmote.byteSize)}</dd></div>}<div><dt>来源</dt><dd title={selectedEmote.originalFileName}>{selectedEmote.originalFileName || (selectedEmote.sourceType === "builtin" ? "内置表情" : "从聊天收藏")}</dd></div></dl><div className="workspace-emote-detail-actions">{selectedCollection && <button className="secondary" type="button" disabled={busy} onClick={() => void removeCollectionItem(selectedCollection, selectedEmote)}>移出当前合集</button>}<button className="secondary danger-action" type="button" disabled={busy} onClick={() => void deleteEmote(selectedEmote)}>从我的表情删除</button></div></div>}
         {addExistingOpen && selectedCollection && <div className="workspace-emote-share-dialog workspace-emote-existing-dialog" role="dialog" aria-label={`添加表情到 ${selectedCollection.name}`}><h3>添加已有表情</h3><p>可一次选择多张，原表情仍保留在表情库中。</p><div className="workspace-emote-existing-grid">{availableExistingEmotes.map((emote) => <label key={emote.id} title={emote.label} aria-label={emote.label} className={selectedExistingIds.includes(emote.id) ? "selected" : ""}><input type="checkbox" checked={selectedExistingIds.includes(emote.id)} onChange={(event) => setSelectedExistingIds((current) => event.target.checked ? [...current, emote.id] : current.filter((id) => id !== emote.id))} /><img src={emote.src} alt="" />{selectedExistingIds.includes(emote.id) && <span className="workspace-emote-selected-mark"><Check size={15} /></span>}</label>)}</div><div className="workspace-section-actions"><button className="secondary" type="button" onClick={() => setAddExistingOpen(false)}>取消</button><button className="primary" type="button" disabled={busy || selectedExistingIds.length === 0} onClick={() => void addExistingToCollection(selectedCollection)}>添加 {selectedExistingIds.length || ""} 张</button></div></div>}
-        {share && <div className="workspace-emote-share-dialog" role="dialog" aria-label="分享表情合集"><h3>分享“{share.name}”</h3>{share.revokedAt ? <p>该分享已撤销，历史卡片会显示为不可用。</p> : <><p>复制登录后链接，或发送到空间内会话。</p><div className="workspace-inline-form"><input readOnly value={`${window.location.origin}${share.sharePath}`} /><button className="secondary compact" type="button" onClick={() => void copyText(`${window.location.origin}${share.sharePath}`)}>复制链接</button></div><label><span>发送到会话</span><select value={shareConversationId} onChange={(event) => setShareConversationId(event.target.value)}><option value="">选择会话</option>{conversations.map((conversation) => <option key={conversation.id} value={conversation.id}>{conversation.displayTitle || conversation.title}</option>)}</select></label><div className="workspace-section-actions"><button className="primary" type="button" disabled={!shareConversationId || busy} onClick={() => void onSendShare(shareConversationId, share)}>发送分享卡片</button>{share.canRevoke && <button className="secondary danger-action" type="button" disabled={busy} onClick={() => void revokeShare()}>撤销分享</button>}</div></>}<button className="icon-button" type="button" title="关闭分享" onClick={() => setShare(null)}><X size={16} /></button></div>}
+        {share && (
+          <div className="workspace-emote-share-dialog workspace-emote-share-panel" role="dialog" aria-label="分享表情合集">
+            <div className="workspace-emote-share-heading">
+              <div>
+                <h3>分享“{share.name}”</h3>
+                {!share.revokedAt && <p>复制登录后链接，或发送到空间内会话。</p>}
+              </div>
+              <button className="icon-button" type="button" title="关闭分享" aria-label="关闭分享" onClick={() => setShare(null)}><X size={16} /></button>
+            </div>
+            {share.revokedAt ? (
+              <p className="workspace-emote-share-revoked">该分享已撤销，历史卡片会显示为不可用。</p>
+            ) : (
+              <div className="workspace-emote-share-body">
+                <div className="workspace-emote-share-field">
+                  <label htmlFor="workspace-emote-share-link">登录后链接</label>
+                  <span className="workspace-inline-form">
+                    <input id="workspace-emote-share-link" readOnly value={`${window.location.origin}${share.sharePath}`} />
+                    <button className="secondary" type="button" onClick={() => void copyText(`${window.location.origin}${share.sharePath}`)}><Copy size={16} />复制链接</button>
+                  </span>
+                </div>
+                <div className="workspace-emote-share-field">
+                  <label htmlFor="workspace-emote-share-conversation">发送到会话</label>
+                  <span className="workspace-emote-share-select">
+                    <select id="workspace-emote-share-conversation" value={shareConversationId} onChange={(event) => setShareConversationId(event.target.value)}>
+                      <option value="">选择会话</option>
+                      {conversations.map((conversation) => <option key={conversation.id} value={conversation.id}>{conversation.displayTitle || conversation.title}</option>)}
+                    </select>
+                    <ChevronDown size={17} aria-hidden="true" />
+                  </span>
+                </div>
+                <div className="workspace-section-actions workspace-emote-share-actions">
+                  <button className="primary" type="button" disabled={!shareConversationId || busy} onClick={() => void onSendShare(shareConversationId, share)}><Send size={16} />发送分享卡片</button>
+                  {share.canRevoke && <button className="secondary danger-action" type="button" disabled={busy} onClick={() => void revokeShare()}>撤销分享</button>}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>,
     document.body
@@ -12128,6 +12227,10 @@ export function WorkspaceStructuredMessage({
   }
 
   const contentBlocks = blocks.filter((block) => block.type !== "attachment");
+  const singleImageEmote = contentBlocks.length === 1 && (
+    (contentBlocks[0]?.type === "text" && isSingleImageEmoteText(contentBlocks[0].text)) ||
+    (contentBlocks[0]?.type === "emoji" && /^custom:[a-f0-9-]{36}$/i.test(contentBlocks[0].shortcode))
+  );
   const attachmentBlocks = blocks.flatMap((block, index) => block.type === "attachment"
     ? [{ index, attachment: attachmentsById.get(block.attachmentId) }]
     : []);
@@ -12145,7 +12248,7 @@ export function WorkspaceStructuredMessage({
     <div className="message-body structured-message">
       {contentBlocks.length > 0 && (
         <div
-          className={collapsible && !textExpanded ? "message-content-flow workspace-message-text collapsed" : "message-content-flow workspace-message-text"}
+          className={`${collapsible && !textExpanded ? "message-content-flow workspace-message-text collapsed" : "message-content-flow workspace-message-text"}${singleImageEmote ? " emote-only" : ""}`}
           id={contentId}
         >
           {contentBlocks.map((block, index) => {
@@ -12576,7 +12679,7 @@ function WorkspaceChatPanel({
   draftDocument: WorkspaceComposerDocument;
   onDraft: (value: WorkspaceComposerDocument) => void;
   onSend: (event: FormEvent<HTMLFormElement>) => void;
-  onSendImageEmote: (item: EmoteItem) => void;
+  onSendImageEmote: (item: EmoteItem) => Promise<void> | void;
   stagedAttachments: WorkspaceComposerAttachment[];
   onStageFiles: (files: File[]) => void;
   onRemoveStagedAttachment: (attachmentId: string) => void;
@@ -12696,11 +12799,13 @@ function WorkspaceChatPanel({
     window.requestAnimationFrame(() => editorRef.current?.focus());
   };
 
-  const insertEmote = (item: EmoteItem) => {
-    if (shouldDirectSendWorkspaceEmote(item, clickImageEmoteToSend)) {
-      onSendImageEmote(item);
-      setEmotePanelOpen(false);
+  const insertEmote = (item: EmoteItem, packId: EmotePack["id"]) => {
+    if (shouldDirectSendWorkspaceEmote(item, packId, clickImageEmoteToSend)) {
       window.requestAnimationFrame(() => editorRef.current?.focus());
+      void Promise.resolve(onSendImageEmote(item)).finally(() => {
+        window.requestAnimationFrame(() => editorRef.current?.focus());
+      });
+      setEmotePanelOpen(false);
       return;
     }
     const insertText = getEmoteInsertText(item);
@@ -13955,6 +14060,7 @@ function EmotePicker({
   const customInputRef = useRef<HTMLInputElement>(null);
   const customScrollRef = useRef<HTMLDivElement>(null);
   const customHomeScrollRef = useRef(0);
+  const activePackIdRef = useRef(activePackId);
   const enabledPackIds = settings?.enabledPackIds ?? visibleEmotePacks.filter((pack) => pack.defaultEnabled !== false).map((pack) => pack.id);
   const enabledPacks = visibleEmotePacks.filter((pack) => enabledPackIds.includes(pack.id as Exclude<EmotePack["id"], "custom">));
   const packs = workspaceFeatures === "composer"
@@ -14008,9 +14114,18 @@ function EmotePicker({
   }, [workspaceFeatures]);
 
   useEffect(() => {
+    if (workspaceFeatures && !settings) return;
     if (packs.some((pack) => pack.id === activePackId)) return;
     setActivePackId(packs[0]?.id ?? "emoji");
-  }, [activePackId, packs]);
+  }, [activePackId, packs, settings, workspaceFeatures]);
+
+  useEffect(() => {
+    activePackIdRef.current = activePackId;
+  }, [activePackId]);
+
+  useEffect(() => () => {
+    rememberEmotePickerPackOnClose(preferenceScope, activePackIdRef.current);
+  }, [preferenceScope]);
 
   async function reloadLibrary() {
     setLibrary(await workspaceJson<WorkspaceEmoteLibrary>("/api/workspace/me/emote-library"));
@@ -14142,20 +14257,20 @@ function EmotePicker({
             {(activeCollection ? activeCollection.items : []).map((emote) => (
               <span className="emote-library-item" key={emote.id}>
                 <button className="emote-library-emote" type="button" title={emote.label} aria-label={emote.label} onClick={() => selectCustomEmote(emote)}>
-                  <img alt="" decoding="async" draggable={false} src={emote.src} />
+                  <CachedEmoteImage alt="" decoding="async" draggable={false} src={emote.src} />
                 </button>
               </span>
             ))}
             {!activeCollection && library?.entries.map((entry) => entry.type === "emote" ? (
               <span className="emote-library-item" key={entry.id}>
                 <button className="emote-library-emote" type="button" title={entry.emote.label} aria-label={entry.emote.label} onClick={() => selectCustomEmote(entry.emote)}>
-                  <img alt="" decoding="async" draggable={false} src={entry.emote.src} />
+                  <CachedEmoteImage alt="" decoding="async" draggable={false} src={entry.emote.src} />
                 </button>
               </span>
             ) : (
               <button className="emote-collection-tile" type="button" key={entry.id} title={`打开合集 ${entry.collection.name}`} onClick={() => openCollection(entry.collection.id)}>
                 <span className="emote-collection-cover" aria-hidden="true">
-                  {entry.collection.items.slice(0, 4).map((emote) => <img key={emote.id} alt="" src={emote.src} />)}
+                  {entry.collection.items.slice(0, 4).map((emote) => <CachedEmoteImage key={emote.id} alt="" src={emote.src} />)}
                   {entry.collection.items.length === 0 && <Images size={22} />}
                 </span>
                 <span>{entry.collection.name}</span>
@@ -14181,7 +14296,7 @@ function EmotePicker({
                 {item.kind === "unicode" ? (
                   <span className="unicode-emote">{item.value}</span>
                 ) : (
-                  <img alt="" decoding="async" draggable={false} src={item.src} />
+                  <CachedEmoteImage alt="" decoding="async" draggable={false} src={item.src} />
                 )}
               </button>
             ))}

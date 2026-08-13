@@ -81,6 +81,8 @@ describe("workspace configuration docs", () => {
     expect(nginx).toContain('"$request_method $uri $server_protocol"');
     expect(nginx).not.toContain("$request_uri");
     expect(nginx).not.toContain("$http_referer");
+    expect(nginx).toContain("location /emotes/ {");
+    expect(nginx).toContain("expires 7d;");
   });
 
   it("preflights production candidates and waits for health before each service replacement", async () => {
