@@ -74,6 +74,7 @@ import {
   findFirstImageEmoteKey,
   getReactionEmote,
   getReactionEmoteKey,
+  isSingleImageEmoteText,
   renderMessageParts,
   visibleEmotePacks,
   type EmoteItem,
@@ -1519,8 +1520,8 @@ export function workspaceReplyPreview(
   return messageId ? { messageId, ...preview } : preview;
 }
 
-export function shouldDirectSendWorkspaceEmote(item: EmoteItem, enabled: boolean) {
-  return enabled && item.kind === "image";
+export function shouldDirectSendWorkspaceEmote(item: EmoteItem, packId: EmotePack["id"], enabled: boolean) {
+  return enabled && packId === "custom" && item.kind === "image";
 }
 
 export function clampWorkspaceImageZoom(value: number) {
@@ -8220,7 +8221,7 @@ export function App() {
                         draftDocument={workspaceDraftDocument}
                         onDraft={(document) => setWorkspaceConversationDraft(workspaceSelectedConversation.id, document)}
                         onSend={sendWorkspaceMessage}
-                        onSendImageEmote={(item) => void sendWorkspaceImageEmote(item)}
+                        onSendImageEmote={sendWorkspaceImageEmote}
                         stagedAttachments={workspaceComposerAttachments}
                         onStageFiles={stageWorkspaceAttachments}
                         onRemoveStagedAttachment={(attachmentId) =>
@@ -12127,6 +12128,10 @@ export function WorkspaceStructuredMessage({
   }
 
   const contentBlocks = blocks.filter((block) => block.type !== "attachment");
+  const singleImageEmote = contentBlocks.length === 1 && (
+    (contentBlocks[0]?.type === "text" && isSingleImageEmoteText(contentBlocks[0].text)) ||
+    (contentBlocks[0]?.type === "emoji" && /^custom:[a-f0-9-]{36}$/i.test(contentBlocks[0].shortcode))
+  );
   const attachmentBlocks = blocks.flatMap((block, index) => block.type === "attachment"
     ? [{ index, attachment: attachmentsById.get(block.attachmentId) }]
     : []);
@@ -12144,7 +12149,7 @@ export function WorkspaceStructuredMessage({
     <div className="message-body structured-message">
       {contentBlocks.length > 0 && (
         <div
-          className={collapsible && !textExpanded ? "message-content-flow workspace-message-text collapsed" : "message-content-flow workspace-message-text"}
+          className={`${collapsible && !textExpanded ? "message-content-flow workspace-message-text collapsed" : "message-content-flow workspace-message-text"}${singleImageEmote ? " emote-only" : ""}`}
           id={contentId}
         >
           {contentBlocks.map((block, index) => {
@@ -12565,7 +12570,7 @@ function WorkspaceChatPanel({
   draftDocument: WorkspaceComposerDocument;
   onDraft: (value: WorkspaceComposerDocument) => void;
   onSend: (event: FormEvent<HTMLFormElement>) => void;
-  onSendImageEmote: (item: EmoteItem) => void;
+  onSendImageEmote: (item: EmoteItem) => Promise<void> | void;
   stagedAttachments: WorkspaceComposerAttachment[];
   onStageFiles: (files: File[]) => void;
   onRemoveStagedAttachment: (attachmentId: string) => void;
@@ -12685,11 +12690,13 @@ function WorkspaceChatPanel({
     window.requestAnimationFrame(() => editorRef.current?.focus());
   };
 
-  const insertEmote = (item: EmoteItem) => {
-    if (shouldDirectSendWorkspaceEmote(item, clickImageEmoteToSend)) {
-      onSendImageEmote(item);
-      setEmotePanelOpen(false);
+  const insertEmote = (item: EmoteItem, packId: EmotePack["id"]) => {
+    if (shouldDirectSendWorkspaceEmote(item, packId, clickImageEmoteToSend)) {
       window.requestAnimationFrame(() => editorRef.current?.focus());
+      void Promise.resolve(onSendImageEmote(item)).finally(() => {
+        window.requestAnimationFrame(() => editorRef.current?.focus());
+      });
+      setEmotePanelOpen(false);
       return;
     }
     const insertText = getEmoteInsertText(item);

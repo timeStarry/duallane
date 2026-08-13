@@ -292,6 +292,26 @@ describe("workspace message presentation helpers", () => {
     expect(html).not.toContain("message-file-card image");
   });
 
+  it("marks a single image emote message for enlarged rendering", () => {
+    const html = renderToStaticMarkup(
+      <WorkspaceStructuredMessage
+        message={{
+          id: "message-single-emote",
+          author: "当前用户",
+          body: "[bili:like]",
+          lane: "workspace",
+          at: "15:04",
+          content: {
+            blocks: [{ type: "text", text: "[bili:like]" }]
+          }
+        }}
+      />
+    );
+
+    expect(html).toContain("message-content-flow workspace-message-text emote-only");
+    expect(html).toContain("message-emote-image");
+  });
+
   it("renders emote collection shares as in-place preview buttons", () => {
     const html = renderToStaticMarkup(
       <WorkspaceStructuredMessage

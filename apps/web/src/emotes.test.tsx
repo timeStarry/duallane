@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { emotePacks, getEmoteInsertText, renderMessageParts, visibleEmotePacks, type EmoteItem } from "./emotes";
+import { emotePacks, getEmoteInsertText, isSingleImageEmoteText, renderMessageParts, visibleEmotePacks, type EmoteItem } from "./emotes";
 
 function findItem(packId: string, itemId: string): EmoteItem {
   const item = emotePacks.find((pack) => pack.id === packId)?.items.find((entry) => entry.id === itemId);
@@ -46,6 +46,13 @@ describe("emote rendering", () => {
     expect(parts[13]).toHaveProperty("props.token", "[heybox:11]");
     expect(parts[15]).toHaveProperty("props.token", "[tieba:1]");
     expect(renderMessageParts("未知 [bili:nope]")).toBe("未知 [bili:nope]");
+  });
+
+  it("recognizes exactly one image emote token", () => {
+    expect(isSingleImageEmoteText("[bili:like]")).toBe(true);
+    expect(isSingleImageEmoteText("  [wechat:微笑]  ")).toBe(true);
+    expect(isSingleImageEmoteText("[bili:like] [wechat:微笑]")).toBe(false);
+    expect(isSingleImageEmoteText("普通文字 [bili:like]")).toBe(false);
   });
 
   it("keeps expanded pack sizes usable for chat", () => {

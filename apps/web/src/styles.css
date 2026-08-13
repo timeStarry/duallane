@@ -1510,6 +1510,13 @@ button:disabled {
   vertical-align: -8px;
 }
 
+.message-content-flow.emote-only .message-emote-image:not(.workspace-custom-emote-image) {
+  width: 60px;
+  height: 60px;
+  margin: 0;
+  vertical-align: middle;
+}
+
 .message-emote-fallback {
   color: var(--relay-dark);
   font-weight: 600;

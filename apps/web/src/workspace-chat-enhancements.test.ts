@@ -14,12 +14,13 @@ describe("workspace chat enhancements", () => {
     });
   });
 
-  it("direct-sends only image emotes when the preference is enabled", () => {
+  it("direct-sends only custom image emotes when the preference is enabled", () => {
     const image = { kind: "image" as const, id: "wave", label: "挥手", token: "[bili:wave]", src: "/wave.webp" };
     const unicode = { kind: "unicode" as const, id: "smile", label: "微笑", value: "🙂" };
-    expect(shouldDirectSendWorkspaceEmote(image, true)).toBe(true);
-    expect(shouldDirectSendWorkspaceEmote(image, false)).toBe(false);
-    expect(shouldDirectSendWorkspaceEmote(unicode, true)).toBe(false);
+    expect(shouldDirectSendWorkspaceEmote({ ...image, customId: "custom-wave" }, "custom", true)).toBe(true);
+    expect(shouldDirectSendWorkspaceEmote(image, "bili", true)).toBe(false);
+    expect(shouldDirectSendWorkspaceEmote(image, "custom", false)).toBe(false);
+    expect(shouldDirectSendWorkspaceEmote(unicode, "custom", true)).toBe(false);
   });
 
   it("clamps image viewer zoom to quarter steps between 100% and 400%", () => {

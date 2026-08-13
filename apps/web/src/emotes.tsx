@@ -137,6 +137,13 @@ export function renderMessageParts(body: string): ReactNode {
   return parts;
 }
 
+export function isSingleImageEmoteText(value: string) {
+  const text = value.trim();
+  if (!text) return false;
+  const matches = text.match(imageEmoteTokenPattern);
+  return matches?.length === 1 && matches[0] === text && imageEmoteByToken.has(text);
+}
+
 function MessageEmoteImage({ emote, token }: { emote: ImageEmoteItem; token: string }) {
   const [failed, setFailed] = useState(false);
 

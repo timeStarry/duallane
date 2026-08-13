@@ -13,6 +13,16 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.14.1",
+    releasedAt: "2026-08-13",
+    title: "更顺手的图片表情发送",
+    summary: "收藏表情支持直接发送，单个小表情更醒目，发送后可继续输入。",
+    categories: [
+      { title: "表情", items: ["点击图片直发仅对收藏页签生效，各渠道小表情继续插入输入框", "单条消息只有一个小表情时自动放大显示"] },
+      { title: "输入", items: ["图片表情发送完成后自动回到聊天输入框"] }
+    ]
+  },
+  {
     version: "0.14.0",
     releasedAt: "2026-08-13",
     title: "更丰富的小表情",
