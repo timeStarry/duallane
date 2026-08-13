@@ -247,8 +247,14 @@ export function parseWorkspaceTopicIntent(input) {
 }
 
 export async function joinTopic(db, request, input = {}) {
-  const topic = await getRawTopic(db, input.topicId);
   const actor = await requireTopicActor(db, input.actorId, undefined, { requireConversation: false });
+  let topic;
+  try {
+    topic = await getRawTopic(db, input.topicId);
+  } catch (error) {
+    await auditTopic(db, request, actor, "topic.join", auditTargetId(input.topicId), "rejected", error.code ?? "topic.invalid_id");
+    throw error;
+  }
   if (!topic) {
     await auditTopic(db, request, actor, "topic.join", normalizeString(input.topicId) || "unknown", "rejected", "topic.not_found");
     throw topicNotFound();
@@ -300,8 +306,14 @@ export async function joinTopic(db, request, input = {}) {
 }
 
 export async function leaveTopic(db, request, input = {}) {
-  const topic = await getRawTopic(db, input.topicId);
   const actor = await requireTopicActor(db, input.actorId, undefined, { requireConversation: false });
+  let topic;
+  try {
+    topic = await getRawTopic(db, input.topicId);
+  } catch (error) {
+    await auditTopic(db, request, actor, "topic.leave", auditTargetId(input.topicId), "rejected", error.code ?? "topic.invalid_id");
+    throw error;
+  }
   if (!topic) {
     await auditTopic(db, request, actor, "topic.leave", normalizeString(input.topicId) || "unknown", "rejected", "topic.not_found");
     throw topicNotFound();
@@ -407,8 +419,14 @@ export async function buildTopicEvent(db, input = {}) {
 }
 
 async function transitionTopic(db, request, input, targetStatus) {
-  const topic = await getRawTopic(db, input.topicId);
   const actor = await requireTopicActor(db, input.actorId, undefined, { requireConversation: false });
+  let topic;
+  try {
+    topic = await getRawTopic(db, input.topicId);
+  } catch (error) {
+    await auditTopic(db, request, actor, `topic.${targetStatus}`, auditTargetId(input.topicId), "rejected", error.code ?? "topic.invalid_id");
+    throw error;
+  }
   if (!topic) {
     await auditTopic(db, request, actor, `topic.${targetStatus}`, normalizeString(input.topicId) || "unknown", "rejected", "topic.not_found");
     throw topicNotFound();
@@ -643,6 +661,11 @@ function isUniqueViolation(error) {
 
 function topicNotFound() {
   return new TopicNotFoundError("topic.not_found", "话题不存在");
+}
+
+function auditTargetId(value) {
+  const normalized = normalizeString(value);
+  return isValidReferenceId(normalized) ? normalized : "invalid";
 }
 
 export class TopicError extends Error {
