@@ -1122,7 +1122,7 @@ describe("workspace routes", () => {
       headers: { "x-workspace-user-id": visibleUserId }
     });
     expect(initial.statusCode).toBe(200);
-    expect(initial.json().members.map((member) => member.id)).toEqual([visibleUserId, "usr_system_beacon"]);
+    expect(initial.json().members.map((member) => member.id)).toEqual([visibleUserId, "usr_system_beacon", "usr_system_echo"]);
 
     expect((await app.inject({
       method: "POST",
