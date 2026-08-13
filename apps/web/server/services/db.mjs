@@ -4,7 +4,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
-import { BEACON_IDENTITY } from "./system-identities.mjs";
+import { BEACON_IDENTITY, ECHO_IDENTITY } from "./system-identities.mjs";
 
 const { Pool, types } = pg;
 
@@ -220,6 +220,28 @@ async function seedWorkspace(db) {
     );
 
     await db.prepare(`
+      INSERT INTO users (
+        id, github_id, github_login, email, display_name, avatar_url, kind, created_at, last_login_at
+      )
+      VALUES (?, NULL, ?, NULL, ?, ?, ?, ?, NULL)
+      ON CONFLICT (id) DO UPDATE SET
+        github_id = NULL,
+        github_login = excluded.github_login,
+        email = NULL,
+        display_name = excluded.display_name,
+        avatar_url = excluded.avatar_url,
+        kind = excluded.kind,
+        last_login_at = NULL
+    `).run(
+      ECHO_IDENTITY.id,
+      ECHO_IDENTITY.githubLogin,
+      ECHO_IDENTITY.displayName,
+      ECHO_IDENTITY.avatarUrl,
+      ECHO_IDENTITY.kind,
+      now
+    );
+
+    await db.prepare(`
       INSERT INTO spaces (id, name, slug, created_by, created_at)
       VALUES (?, '默认空间', 'default', ?, ?)
       ON CONFLICT DO NOTHING
@@ -238,6 +260,14 @@ async function seedWorkspace(db) {
         role = excluded.role,
         removed_at = NULL
     `).run(DEFAULT_SPACE_ID, BEACON_IDENTITY.id, BEACON_IDENTITY.role, now);
+
+    await db.prepare(`
+      INSERT INTO space_members (space_id, user_id, role, joined_at, removed_at)
+      VALUES (?, ?, ?, ?, NULL)
+      ON CONFLICT (space_id, user_id) DO UPDATE SET
+        role = excluded.role,
+        removed_at = NULL
+    `).run(DEFAULT_SPACE_ID, ECHO_IDENTITY.id, ECHO_IDENTITY.role, now);
 
     await db.prepare(`
       INSERT INTO workspace_events (

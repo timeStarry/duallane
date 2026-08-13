@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_SPACE_ID, SEEDED_OWNER_EMAIL, SEEDED_OWNER_GITHUB_LOGIN } from "./db.mjs";
 import { openTestDatabase } from "./test-database.mjs";
 import { DAILY_QUOTA_BYTES } from "./quota.mjs";
-import { BEACON_IDENTITY, BEACON_USER_ID } from "./system-identities.mjs";
+import { BEACON_IDENTITY, BEACON_USER_ID, ECHO_IDENTITY } from "./system-identities.mjs";
 import {
   acceptInvite,
   addConversationMember,
@@ -906,8 +906,8 @@ describe("workspace service", () => {
       displayName: "Visibility Unrelated"
     });
 
-    expect((await listMembers(db, admin.id)).map((item) => item.id)).toEqual([admin.id, BEACON_USER_ID]);
-    expect((await listMembers(db, member.id)).map((item) => item.id)).toEqual([member.id, BEACON_USER_ID]);
+    expect((await listMembers(db, admin.id)).map((item) => item.id)).toEqual([admin.id, BEACON_USER_ID, ECHO_IDENTITY.id]);
+    expect((await listMembers(db, member.id)).map((item) => item.id)).toEqual([member.id, BEACON_USER_ID, ECHO_IDENTITY.id]);
 
     await expect(async () =>
       await createConversation(db, request, {
@@ -964,7 +964,7 @@ describe("workspace service", () => {
       actorId: "usr_owner",
       userId: member.id
     })).toMatchObject({
-      automaticUserIds: ["usr_owner", BEACON_USER_ID],
+      automaticUserIds: ["usr_owner", BEACON_USER_ID, ECHO_IDENTITY.id],
       grantedUserIds: [unrelated.id]
     });
 
