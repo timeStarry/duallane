@@ -4450,28 +4450,59 @@ html[data-theme="dark"] .workspace-mode {
 .workspace-rail-member > svg { color: var(--muted); }
 .workspace-rail-section-empty { min-height: 0; display: grid; place-items: center; align-content: center; gap: 8px; padding: 20px; color: var(--muted); font-size: var(--text-sm); text-align: center; }
 
-.workspace-version-update {
-  min-height: 34px;
-  display: flex;
+.app-version-update {
+  position: fixed;
+  z-index: 180;
+  top: max(12px, env(safe-area-inset-top));
+  left: 50%;
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
-  justify-content: flex-start;
-  gap: 7px;
-  padding: 0 8px;
+  gap: 8px;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  padding: 6px 7px 6px 11px;
   border: 1px solid color-mix(in srgb, var(--relay) 42%, var(--line));
   border-radius: 6px;
   color: var(--relay-dark);
-  background: var(--surface-tint);
-  font-size: 0.75rem;
+  background: var(--panel);
+  box-shadow: 0 10px 28px rgb(18 28 25 / 18%);
+  transform: translateX(-50%);
+  font-size: 0.78rem;
   font-weight: 600;
+}
+
+.app-version-update > button:not(.app-version-update-close) {
+  min-height: 28px;
+  padding: 0 9px;
+  border-radius: 5px;
+  color: white;
+  background: var(--relay);
+  cursor: pointer;
+  font: inherit;
+}
+
+.app-version-update > button:not(.app-version-update-close):hover {
+  background: var(--accent-soft);
+  color: var(--relay-dark);
+}
+
+.app-version-update-close {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 5px;
+  color: var(--muted);
+  background: transparent;
   cursor: pointer;
 }
 
-.workspace-version-update:hover {
-  background: var(--accent-soft);
-}
-
-.workspace-version-update-mobile {
-  display: none;
+.app-version-update-close:hover {
+  color: var(--ink);
+  background: var(--surface-soft);
 }
 
 .workspace-user-trigger {
@@ -7632,6 +7663,25 @@ small,
 .workspace-empty-state p { margin: 0; }
 .workspace-emote-share-dialog { position: absolute; inset: auto 20px 20px; z-index: 3; display: grid; gap: 10px; max-width: 520px; margin-inline: auto; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: var(--shadow); }
 .workspace-emote-share-dialog h3, .workspace-emote-share-dialog p { margin: 0; }
+.workspace-emote-share-panel { gap: 0; padding: 18px; }
+.workspace-emote-share-heading { min-width: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.workspace-emote-share-heading > div { min-width: 0; display: grid; gap: 5px; }
+.workspace-emote-share-heading h3 { overflow-wrap: anywhere; font-size: 1.05rem; line-height: var(--line-compact); }
+.workspace-emote-share-heading p, .workspace-emote-share-revoked { color: var(--muted); font-size: var(--text-sm); line-height: var(--line-body); }
+.workspace-emote-share-heading .icon-button { width: 36px; height: 36px; }
+.workspace-emote-share-body { display: grid; gap: 16px; margin-top: 18px; }
+.workspace-emote-share-field { min-width: 0; display: grid; gap: 7px; }
+.workspace-emote-share-field > label { color: var(--muted); font-size: var(--text-sm); font-weight: var(--weight-medium); }
+.workspace-emote-share-field input, .workspace-emote-share-field select { color: var(--ink); font-size: var(--text-md); font-weight: var(--weight-regular); }
+.workspace-emote-share-field .workspace-inline-form { align-items: center; }
+.workspace-emote-share-select { position: relative; min-width: 0; display: block; }
+.workspace-emote-share-select select { appearance: none; width: 100%; min-width: 0; height: 42px; border: 1px solid var(--line); border-radius: 8px; padding: 0 42px 0 12px; background: var(--surface); cursor: pointer; }
+.workspace-emote-share-select select:hover { border-color: var(--hover-line); background: var(--surface-soft); }
+.workspace-emote-share-select select:focus-visible { border-color: var(--relay); }
+.workspace-emote-share-select option { color: var(--ink); background: var(--panel); font-size: var(--text-md); }
+.workspace-emote-share-select svg { position: absolute; top: 50%; right: 12px; color: var(--muted); pointer-events: none; transform: translateY(-50%); }
+.workspace-emote-share-actions { padding-top: 2px; }
+.workspace-emote-share-revoked { margin-top: 14px !important; }
 .workspace-emote-existing-dialog { max-height: min(580px, calc(100dvh - 72px)); }
 .workspace-emote-existing-grid { display: grid; grid-template-columns: repeat(5, minmax(72px, 1fr)); gap: 7px; overflow: auto; max-height: 330px; }
 .workspace-emote-existing-grid label { min-width: 0; position: relative; aspect-ratio: 1; display: grid; place-items: center; padding: 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); cursor: pointer; }
@@ -7673,6 +7723,9 @@ small,
   .workspace-emote-upload-item { grid-template-columns: minmax(0, 1fr) auto; }
   .workspace-emote-upload-item .workspace-upload-progress { grid-column: 1 / -1; }
   .workspace-emote-share-dialog { inset: auto 12px max(12px, env(safe-area-inset-bottom)); }
+  .workspace-emote-share-panel { padding: 16px; }
+  .workspace-emote-share-body { gap: 14px; margin-top: 16px; }
+  .workspace-emote-share-actions { display: grid; grid-template-columns: 1fr; }
   .workspace-shared-emote-dialog-backdrop { place-items: stretch; padding: 0; }
   .workspace-shared-emote-dialog { width: 100%; height: 100dvh; border: 0; border-radius: 0; padding: max(14px, env(safe-area-inset-top)) 14px max(18px, env(safe-area-inset-bottom)); }
   .workspace-shared-emote-header { display: flex; align-items: center; }
@@ -8566,16 +8619,9 @@ small,
     padding: 14px;
   }
 
-  .workspace-version-update-mobile {
-    position: absolute;
-    z-index: 12;
-    top: 8px;
-    left: 50%;
-    width: max-content;
-    max-width: calc(100% - 20px);
-    display: flex;
-    transform: translateX(-50%);
-    box-shadow: 0 8px 24px rgb(20 31 28 / 14%);
+  .app-version-update {
+    top: max(8px, env(safe-area-inset-top));
+    max-width: calc(100vw - 16px);
   }
 
   .about-header {

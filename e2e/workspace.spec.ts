@@ -26,7 +26,7 @@ test("public about page exposes the current release and accessible history", asy
   await page.getByRole("button", { name: "关于 DualLane 与版本更新" }).click();
   await expect(page).toHaveURL(/\/about$/);
   await expect(page.getByRole("heading", { name: "两种边界，一处沟通。" })).toBeVisible();
-  await expect(page.locator(".latest-release").getByText("v0.14.0", { exact: true })).toBeVisible();
+  await expect(page.locator(".latest-release").getByText("v0.14.2", { exact: true })).toBeVisible();
 
   const history = page.locator(".release-history");
   await expect(history).not.toHaveAttribute("open", "");
@@ -40,7 +40,7 @@ test("public about page exposes the current release and accessible history", asy
   await page.goForward();
   await expect(page).toHaveURL(/\/about$/);
   await page.reload();
-  await expect(page.locator(".latest-release").getByText("v0.14.0", { exact: true })).toBeVisible();
+  await expect(page.locator(".latest-release").getByText("v0.14.2", { exact: true })).toBeVisible();
 });
 
 test("workspace semantic routes survive OAuth, refresh, history, and invalid resources", async ({ page }) => {
@@ -174,6 +174,33 @@ test("workspace emote surfaces keep their layout, scroll, and chat context", asy
   await expect(uploadButton).toBeVisible();
   await expect(uploadButton.locator("span")).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("emote-manager-desktop.png") });
+  await page.route("**/api/workspace/me/emote-collections/fixture-collection/shares", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        share: {
+          id: "fixture-share",
+          name: fixtureCollection.name,
+          sharePath: "/workspace/emotes/share/fixture-share",
+          itemCount: fixtureCollection.itemCount,
+          revokedAt: null,
+          canRevoke: true
+        }
+      })
+    });
+  });
+  await manager.getByRole("button", { name: "分享合集", exact: true }).click();
+  const shareDialog = page.getByRole("dialog", { name: "分享表情合集" });
+  await expect(shareDialog).toBeVisible();
+  const shareSelect = shareDialog.getByLabel("发送到会话");
+  await expect(shareSelect).toHaveCSS("height", "42px");
+  await expect(shareDialog.getByLabel("登录后链接")).toHaveValue(/\/workspace\/emotes\/share\/fixture-share$/);
+  await page.screenshot({ path: testInfo.outputPath("emote-share-dialog-desktop.png") });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: testInfo.outputPath("emote-share-dialog-mobile.png") });
+  await shareDialog.getByRole("button", { name: "关闭分享", exact: true }).click();
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.unroute("**/api/workspace/me/emote-collections/fixture-collection/shares");
   await manager.getByRole("button", { name: "关闭我的表情管理", exact: true }).click();
   await page.unroute("**/api/workspace/me/emote-library");
 

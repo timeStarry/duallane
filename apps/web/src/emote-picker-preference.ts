@@ -37,6 +37,14 @@ export function getEmotePickerPackStorageKey(scope: EmotePickerPreferenceScope) 
   return getStorageKey(scope);
 }
 
+export function rememberEmotePickerPackOnClose(
+  scope: EmotePickerPreferenceScope,
+  packId: EmotePickerPackId,
+  storage: EmotePickerStorage | null = getBrowserStorage()
+) {
+  rememberPreferredEmotePickerPack(scope, packId, storage);
+}
+
 function getStorageKey(scope: EmotePickerPreferenceScope) {
   return `${EMOTE_PICKER_PACK_STORAGE_KEY}:${scope}`;
 }

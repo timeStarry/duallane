@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getEmotePickerPackStorageKey,
   getPreferredEmotePickerPack,
+  rememberEmotePickerPackOnClose,
   rememberPreferredEmotePickerPack
 } from "./emote-picker-preference";
 
@@ -33,6 +34,12 @@ describe("emote picker pack preference", () => {
     rememberPreferredEmotePickerPack("workspace-reaction", "wechat", storage);
     expect(getPreferredEmotePickerPack("workspace-composer", ["custom", "emoji"], "custom", storage)).toBe("custom");
     expect(getPreferredEmotePickerPack("workspace-reaction", ["emoji", "wechat"], "emoji", storage)).toBe("wechat");
+  });
+
+  it("persists the selected pack when the picker closes", () => {
+    const storage = createStorage();
+    rememberEmotePickerPackOnClose("workspace-composer", "tieba", storage);
+    expect(getPreferredEmotePickerPack("workspace-composer", ["custom", "tieba"], "custom", storage)).toBe("tieba");
   });
 
   it("tolerates unavailable browser storage", () => {

@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { emotePacks } from "./emotePacks";
+import { CachedEmoteImage } from "./emote-image-cache";
 
 export type UnicodeEmoteItem = {
   kind: "unicode";
@@ -152,7 +153,7 @@ function MessageEmoteImage({ emote, token }: { emote: ImageEmoteItem; token: str
   }
 
   return (
-    <img
+    <CachedEmoteImage
       alt={emote.label}
       className="message-emote-image"
       decoding="async"

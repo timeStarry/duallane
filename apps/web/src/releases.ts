@@ -13,6 +13,16 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.14.2",
+    releasedAt: "2026-08-13",
+    title: "更顺手的表情分享与更新提醒",
+    summary: "分享合集的选择和间距更清楚，表情加载更快，页面更新也会及时提示。",
+    categories: [
+      { title: "表情", items: ["分享合集支持更清晰的会话选择和操作布局", "收藏表情会优先保留常用页签，重复打开更快找到内容", "图片表情发送后自动回到输入框，可以继续打字"] },
+      { title: "体验", items: ["常用表情会在浏览器中暂存，版本更新后自动刷新资源", "页面恢复可见或重新获得焦点时会检查更新", "新版本提示会一直保留，直到手动刷新或关闭"] }
+    ]
+  },
+  {
     version: "0.14.1",
     releasedAt: "2026-08-13",
     title: "更顺手的图片表情发送",
