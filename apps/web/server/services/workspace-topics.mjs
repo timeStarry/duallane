@@ -205,6 +205,13 @@ export async function listTopics(db, input = {}) {
     where.push("t.status = ?");
     params.push(status);
   }
+  if (input.mine === true) {
+    // "Mine" is a history view: a topic remains discoverable after a member
+    // leaves because topic_members is the durable participation record.
+    where.push("(t.created_by = ? OR EXISTS (SELECT 1 FROM topic_members mine_tm WHERE mine_tm.topic_id = t.id AND mine_tm.user_id = ?))");
+    params.push(actor.id);
+    params.push(actor.id);
+  }
   const rows = await db.prepare(`
     SELECT
       t.id, t.space_id AS spaceId, t.conversation_id AS conversationId,
