@@ -13,6 +13,15 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.14.0",
+    releasedAt: "2026-08-13",
+    title: "更丰富的小表情",
+    summary: "扩充常用平台小表情，并让表情面板拥有更多可选风格。",
+    categories: [
+      { title: "表情", items: ["B站小表情扩充至更完整的常用目录", "新增小红书、小黑盒和贴吧表情包，可在个人设置中按需开启", "飞书表情补齐并改善部分图片的白色背景"] }
+    ]
+  },
+  {
     version: "0.13.2",
     releasedAt: "2026-08-13",
     title: "更紧凑的表情添加体验",

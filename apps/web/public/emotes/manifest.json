@@ -293,6 +293,7 @@
           "value": "🚀"
         }
       ],
+      "defaultEnabled": true,
       "source": "unicode"
     },
     {
@@ -306,6 +307,7 @@
           "token": "[bili:doge]",
           "src": "/emotes/bili/doge.png",
           "aliases": [
+            "[doge]",
             "doge"
           ]
         },
@@ -316,6 +318,7 @@
           "token": "[bili:smile]",
           "src": "/emotes/bili/smile.png",
           "aliases": [
+            "[微笑]",
             "微笑"
           ]
         },
@@ -326,6 +329,7 @@
           "token": "[bili:joy]",
           "src": "/emotes/bili/joy.png",
           "aliases": [
+            "[笑哭]",
             "笑哭"
           ]
         },
@@ -336,6 +340,7 @@
           "token": "[bili:melon]",
           "src": "/emotes/bili/melon.png",
           "aliases": [
+            "[吃瓜]",
             "吃瓜"
           ]
         },
@@ -346,6 +351,7 @@
           "token": "[bili:call]",
           "src": "/emotes/bili/call.png",
           "aliases": [
+            "[打call]",
             "打call"
           ]
         },
@@ -356,6 +362,7 @@
           "token": "[bili:ok]",
           "src": "/emotes/bili/ok.png",
           "aliases": [
+            "[OK]",
             "OK"
           ]
         },
@@ -366,6 +373,7 @@
           "token": "[bili:sob]",
           "src": "/emotes/bili/sob.png",
           "aliases": [
+            "[大哭]",
             "大哭"
           ]
         },
@@ -376,6 +384,7 @@
           "token": "[bili:spicy-eyes]",
           "src": "/emotes/bili/spicy-eyes.png",
           "aliases": [
+            "[辣眼睛]",
             "辣眼睛"
           ]
         },
@@ -386,6 +395,7 @@
           "token": "[bili:funny]",
           "src": "/emotes/bili/funny.png",
           "aliases": [
+            "[滑稽]",
             "滑稽"
           ]
         },
@@ -396,6 +406,7 @@
           "token": "[bili:joyful-tears]",
           "src": "/emotes/bili/joyful-tears.png",
           "aliases": [
+            "[喜极而泣]",
             "喜极而泣"
           ]
         },
@@ -406,6 +417,7 @@
           "token": "[bili:grin]",
           "src": "/emotes/bili/grin.png",
           "aliases": [
+            "[呲牙]",
             "呲牙"
           ]
         },
@@ -416,6 +428,7 @@
           "token": "[bili:wow]",
           "src": "/emotes/bili/wow.png",
           "aliases": [
+            "[妙啊]",
             "妙啊"
           ]
         },
@@ -426,6 +439,7 @@
           "token": "[bili:heart]",
           "src": "/emotes/bili/heart.png",
           "aliases": [
+            "[给心心]",
             "给心心"
           ]
         },
@@ -436,6 +450,7 @@
           "token": "[bili:blush]",
           "src": "/emotes/bili/blush.png",
           "aliases": [
+            "[脸红]",
             "脸红"
           ]
         },
@@ -446,6 +461,7 @@
           "token": "[bili:oh]",
           "src": "/emotes/bili/oh.png",
           "aliases": [
+            "[哦呼]",
             "哦呼"
           ]
         },
@@ -456,8 +472,9 @@
           "token": "[bili:love]",
           "src": "/emotes/bili/love.png",
           "aliases": [
-            "喜欢",
-            "love"
+            "love",
+            "[喜欢]",
+            "喜欢"
           ]
         },
         {
@@ -467,6 +484,7 @@
           "token": "[bili:sour]",
           "src": "/emotes/bili/sour.png",
           "aliases": [
+            "[酸了]",
             "酸了"
           ]
         },
@@ -477,6 +495,7 @@
           "token": "[bili:shy]",
           "src": "/emotes/bili/shy.png",
           "aliases": [
+            "[害羞]",
             "害羞"
           ]
         },
@@ -487,6 +506,7 @@
           "token": "[bili:dislike]",
           "src": "/emotes/bili/dislike.png",
           "aliases": [
+            "[嫌弃]",
             "嫌弃"
           ]
         },
@@ -497,6 +517,7 @@
           "token": "[bili:confused]",
           "src": "/emotes/bili/confused.png",
           "aliases": [
+            "[疑惑]",
             "疑惑"
           ]
         },
@@ -507,6 +528,7 @@
           "token": "[bili:snicker]",
           "src": "/emotes/bili/snicker.png",
           "aliases": [
+            "[偷笑]",
             "偷笑"
           ]
         },
@@ -517,6 +539,7 @@
           "token": "[bili:surprised]",
           "src": "/emotes/bili/surprised.png",
           "aliases": [
+            "[惊讶]",
             "惊讶"
           ]
         },
@@ -527,6 +550,7 @@
           "token": "[bili:cover]",
           "src": "/emotes/bili/cover.png",
           "aliases": [
+            "[捂脸]",
             "捂脸"
           ]
         },
@@ -537,6 +561,7 @@
           "token": "[bili:sinister]",
           "src": "/emotes/bili/sinister.png",
           "aliases": [
+            "[阴险]",
             "阴险"
           ]
         },
@@ -547,6 +572,7 @@
           "token": "[bili:blank]",
           "src": "/emotes/bili/blank.png",
           "aliases": [
+            "[呆]",
             "呆"
           ]
         },
@@ -557,6 +583,7 @@
           "token": "[bili:nose-pick]",
           "src": "/emotes/bili/nose-pick.png",
           "aliases": [
+            "[抠鼻]",
             "抠鼻"
           ]
         },
@@ -567,6 +594,7 @@
           "token": "[bili:laugh]",
           "src": "/emotes/bili/laugh.png",
           "aliases": [
+            "[大笑]",
             "大笑"
           ]
         },
@@ -577,6 +605,7 @@
           "token": "[bili:amazed]",
           "src": "/emotes/bili/amazed.png",
           "aliases": [
+            "[惊喜]",
             "惊喜"
           ]
         },
@@ -587,9 +616,10 @@
           "token": "[bili:like]",
           "src": "/emotes/bili/like.png",
           "aliases": [
-            "点赞",
             "thumbs-up",
-            "赞"
+            "赞",
+            "[点赞]",
+            "点赞"
           ]
         },
         {
@@ -599,6 +629,7 @@
           "token": "[bili:speechless]",
           "src": "/emotes/bili/speechless.png",
           "aliases": [
+            "[无语]",
             "无语"
           ]
         },
@@ -609,6 +640,7 @@
           "token": "[bili:clap]",
           "src": "/emotes/bili/clap.png",
           "aliases": [
+            "[鼓掌]",
             "鼓掌"
           ]
         },
@@ -619,6 +651,7 @@
           "token": "[bili:awkward]",
           "src": "/emotes/bili/awkward.png",
           "aliases": [
+            "[尴尬]",
             "尴尬"
           ]
         },
@@ -629,6 +662,7 @@
           "token": "[bili:wronged]",
           "src": "/emotes/bili/wronged.png",
           "aliases": [
+            "[委屈]",
             "委屈"
           ]
         },
@@ -639,6 +673,7 @@
           "token": "[bili:angry]",
           "src": "/emotes/bili/angry.png",
           "aliases": [
+            "[生气]",
             "生气"
           ]
         },
@@ -649,6 +684,7 @@
           "token": "[bili:thinking]",
           "src": "/emotes/bili/thinking.png",
           "aliases": [
+            "[思考]",
             "思考"
           ]
         },
@@ -659,378 +695,2168 @@
           "token": "[bili:bye]",
           "src": "/emotes/bili/bye.png",
           "aliases": [
+            "[再见]",
             "再见"
           ]
-        }
-      ],
-      "source": "https://api.bilibili.com/x/emote/package?business=reply&ids=1"
-    },
-    {
-      "id": "douyin",
-      "label": "抖音",
-      "items": [
+        },
         {
           "kind": "image",
-          "id": "smile",
-          "label": "微笑",
-          "token": "[douyin:smile]",
-          "src": "/emotes/douyin/laugh.svg",
+          "id": "id-83964",
+          "label": "doge_金箍",
+          "token": "[bili:id-83964]",
+          "src": "/emotes/bili/id-83964.png",
           "aliases": [
-            "微笑"
+            "[doge_金箍]",
+            "金箍",
+            "doge_金箍"
           ]
         },
         {
           "kind": "image",
-          "id": "happy",
-          "label": "开心",
-          "token": "[douyin:happy]",
-          "src": "/emotes/douyin/cover.svg",
+          "id": "id-91170",
+          "label": "蹲蹲",
+          "token": "[bili:id-91170]",
+          "src": "/emotes/bili/id-91170.png",
           "aliases": [
-            "开心"
+            "[蹲蹲]",
+            "蹲蹲"
           ]
         },
         {
           "kind": "image",
-          "id": "angry",
-          "label": "生气",
-          "token": "[douyin:angry]",
-          "src": "/emotes/douyin/laugh.svg",
+          "id": "id-20043",
+          "label": "星星眼",
+          "token": "[bili:id-20043]",
+          "src": "/emotes/bili/id-20043.png",
           "aliases": [
-            "生气"
+            "[以闪亮之名_星星眼]",
+            "星星眼",
+            "以闪亮之名_星星眼",
+            "[星星眼]"
           ]
         },
         {
           "kind": "image",
-          "id": "cry",
-          "label": "哭哭",
-          "token": "[douyin:cry]",
-          "src": "/emotes/douyin/cover.svg",
+          "id": "id-2373",
+          "label": "歪嘴",
+          "token": "[bili:id-2373]",
+          "src": "/emotes/bili/id-2373.png",
           "aliases": [
-            "哭哭"
+            "[歪嘴]",
+            "歪嘴"
           ]
         },
         {
           "kind": "image",
-          "id": "embarrassed",
-          "label": "尴尬",
-          "token": "[douyin:embarrassed]",
-          "src": "/emotes/douyin/laugh.svg",
+          "id": "id-1128",
+          "label": "调皮",
+          "token": "[bili:id-1128]",
+          "src": "/emotes/bili/id-1128.png",
           "aliases": [
-            "尴尬"
+            "[调皮]",
+            "调皮"
           ]
         },
         {
           "kind": "image",
-          "id": "surprised",
-          "label": "惊讶",
-          "token": "[douyin:surprised]",
-          "src": "/emotes/douyin/cover.svg",
+          "id": "id-3223",
+          "label": "嗑瓜子",
+          "token": "[bili:id-3223]",
+          "src": "/emotes/bili/id-3223.png",
           "aliases": [
-            "惊讶"
+            "[嗑瓜子]",
+            "嗑瓜子"
           ]
         },
         {
           "kind": "image",
-          "id": "wronged",
-          "label": "委屈",
-          "token": "[douyin:wronged]",
-          "src": "/emotes/douyin/laugh.svg",
+          "id": "id-4000",
+          "label": "藏狐",
+          "token": "[bili:id-4000]",
+          "src": "/emotes/bili/id-4000.png",
           "aliases": [
-            "委屈"
+            "[藏狐]",
+            "藏狐"
           ]
         },
         {
           "kind": "image",
-          "id": "shout",
-          "label": "喊",
-          "token": "[douyin:shout]",
-          "src": "/emotes/douyin/cover.svg",
+          "id": "id-3301",
+          "label": "脱单doge",
+          "token": "[bili:id-3301]",
+          "src": "/emotes/bili/id-3301.png",
           "aliases": [
-            "喊"
+            "[脱单doge]",
+            "脱单doge"
           ]
         },
         {
           "kind": "image",
-          "id": "flushed",
-          "label": "脸红",
-          "token": "[douyin:flushed]",
-          "src": "/emotes/douyin/laugh.svg",
+          "id": "id-143792",
+          "label": "笑",
+          "token": "[bili:id-143792]",
+          "src": "/emotes/bili/id-143792.png",
           "aliases": [
-            "脸红"
+            "[明日方舟终末地_笑]",
+            "笑",
+            "明日方舟终末地_笑",
+            "[笑]"
           ]
         },
         {
           "kind": "image",
-          "id": "yummy",
-          "label": "馋",
-          "token": "[douyin:yummy]",
-          "src": "/emotes/douyin/cover.svg",
+          "id": "id-3303",
+          "label": "嘟嘟",
+          "token": "[bili:id-3303]",
+          "src": "/emotes/bili/id-3303.png",
           "aliases": [
-            "馋"
+            "[嘟嘟]",
+            "嘟嘟"
           ]
         },
         {
           "kind": "image",
-          "id": "complacent",
-          "label": "得意",
-          "token": "[douyin:complacent]",
-          "src": "/emotes/douyin/laugh.svg",
+          "id": "id-16",
+          "label": "灵魂出窍",
+          "token": "[bili:id-16]",
+          "src": "/emotes/bili/id-16.png",
           "aliases": [
-            "得意"
+            "[灵魂出窍]",
+            "灵魂出窍"
           ]
         },
         {
           "kind": "image",
-          "id": "drool",
-          "label": "流口水",
-          "token": "[douyin:drool]",
-          "src": "/emotes/douyin/cover.svg",
+          "id": "id-25043",
+          "label": "傲娇",
+          "token": "[bili:id-25043]",
+          "src": "/emotes/bili/id-25043.png",
           "aliases": [
-            "流口水"
+            "[桃源_傲娇]",
+            "傲娇",
+            "桃源_傲娇",
+            "[傲娇]"
           ]
         },
         {
           "kind": "image",
-          "id": "scream",
-          "label": "尖叫",
-          "token": "[douyin:scream]",
-          "src": "/emotes/douyin/laugh.svg",
+          "id": "id-21",
+          "label": "疼",
+          "token": "[bili:id-21]",
+          "src": "/emotes/bili/id-21.png",
           "aliases": [
-            "尖叫"
+            "[疼]",
+            "疼"
           ]
         },
         {
           "kind": "image",
-          "id": "weep",
-          "label": "流泪",
-          "token": "[douyin:weep]",
-          "src": "/emotes/douyin/cover.svg",
+          "id": "id-1450",
+          "label": "冷",
+          "token": "[bili:id-1450]",
+          "src": "/emotes/bili/id-1450.png",
           "aliases": [
-            "流泪"
+            "[冷]",
+            "冷"
           ]
         },
         {
           "kind": "image",
-          "id": "speechless",
-          "label": "无语",
-          "token": "[douyin:speechless]",
-          "src": "/emotes/douyin/laugh.svg",
+          "id": "id-7647",
+          "label": "热",
+          "token": "[bili:id-7647]",
+          "src": "/emotes/bili/id-7647.png",
           "aliases": [
-            "无语"
+            "[热]",
+            "热"
           ]
         },
         {
           "kind": "image",
-          "id": "funnyface",
-          "label": "鬼脸",
-          "token": "[douyin:funnyface]",
-          "src": "/emotes/douyin/cover.svg",
+          "id": "id-29",
+          "label": "生病",
+          "token": "[bili:id-29]",
+          "src": "/emotes/bili/id-29.png",
           "aliases": [
-            "鬼脸"
+            "[生病]",
+            "生病"
           ]
         },
         {
           "kind": "image",
-          "id": "laughwithtears",
-          "label": "笑哭",
-          "token": "[douyin:laughwithtears]",
-          "src": "/emotes/douyin/laugh.svg",
+          "id": "id-1939",
+          "label": "捂眼",
+          "token": "[bili:id-1939]",
+          "src": "/emotes/bili/id-1939.png",
           "aliases": [
-            "笑哭"
+            "[捂眼]",
+            "捂眼"
           ]
         },
         {
           "kind": "image",
-          "id": "wicked",
-          "label": "坏笑",
-          "token": "[douyin:wicked]",
-          "src": "/emotes/douyin/cover.svg",
+          "id": "id-31",
+          "label": "嘘声",
+          "token": "[bili:id-31]",
+          "src": "/emotes/bili/id-31.png",
           "aliases": [
-            "坏笑"
+            "[嘘声]",
+            "嘘声"
           ]
         },
         {
           "kind": "image",
-          "id": "facewithrollingeyes",
+          "id": "id-1943",
           "label": "翻白眼",
-          "token": "[douyin:facewithrollingeyes]",
-          "src": "/emotes/douyin/laugh.svg",
+          "token": "[bili:id-1943]",
+          "src": "/emotes/bili/id-1943.png",
           "aliases": [
+            "[翻白眼]",
             "翻白眼"
           ]
         },
         {
           "kind": "image",
-          "id": "sulk",
-          "label": "郁闷",
-          "token": "[douyin:sulk]",
-          "src": "/emotes/douyin/cover.svg",
+          "id": "id-1957",
+          "label": "抓狂",
+          "token": "[bili:id-1957]",
+          "src": "/emotes/bili/id-1957.png",
           "aliases": [
-            "郁闷"
+            "[抓狂]",
+            "抓狂"
           ]
         },
         {
           "kind": "image",
-          "id": "thinking",
-          "label": "思考",
-          "token": "[douyin:thinking]",
-          "src": "/emotes/douyin/laugh.svg",
+          "id": "id-143788",
+          "label": "哈欠",
+          "token": "[bili:id-143788]",
+          "src": "/emotes/bili/id-143788.png",
           "aliases": [
-            "思考"
+            "[明日方舟终末地_哈欠]",
+            "哈欠",
+            "明日方舟终末地_哈欠",
+            "[哈欠]"
           ]
         },
         {
           "kind": "image",
-          "id": "lovely",
-          "label": "可爱",
-          "token": "[douyin:lovely]",
-          "src": "/emotes/douyin/cover.svg",
+          "id": "id-1952",
+          "label": "奋斗",
+          "token": "[bili:id-1952]",
+          "src": "/emotes/bili/id-1952.png",
           "aliases": [
-            "可爱"
+            "[奋斗]",
+            "奋斗"
           ]
         },
         {
           "kind": "image",
-          "id": "greedy",
-          "label": "贪心",
-          "token": "[douyin:greedy]",
-          "src": "/emotes/douyin/laugh.svg",
+          "id": "id-1953",
+          "label": "墨镜",
+          "token": "[bili:id-1953]",
+          "src": "/emotes/bili/id-1953.png",
           "aliases": [
-            "贪心"
+            "[墨镜]",
+            "墨镜"
           ]
         },
         {
           "kind": "image",
-          "id": "wow",
-          "label": "哇",
-          "token": "[douyin:wow]",
-          "src": "/emotes/douyin/cover.svg",
+          "id": "id-1954",
+          "label": "难过",
+          "token": "[bili:id-1954]",
+          "src": "/emotes/bili/id-1954.png",
           "aliases": [
-            "哇"
+            "[难过]",
+            "难过"
           ]
         },
         {
           "kind": "image",
-          "id": "joyful",
-          "label": "喜悦",
-          "token": "[douyin:joyful]",
-          "src": "/emotes/douyin/laugh.svg",
+          "id": "id-1906",
+          "label": "口罩",
+          "token": "[bili:id-1906]",
+          "src": "/emotes/bili/id-1906.png",
           "aliases": [
-            "喜悦"
+            "[口罩]",
+            "口罩"
           ]
         },
         {
           "kind": "image",
-          "id": "hehe",
-          "label": "呵呵",
-          "token": "[douyin:hehe]",
-          "src": "/emotes/douyin/cover.svg",
+          "id": "id-1955",
+          "label": "撇嘴",
+          "token": "[bili:id-1955]",
+          "src": "/emotes/bili/id-1955.png",
           "aliases": [
-            "呵呵"
+            "[撇嘴]",
+            "撇嘴"
           ]
         },
         {
           "kind": "image",
-          "id": "slap",
-          "label": "拍脸",
-          "token": "[douyin:slap]",
-          "src": "/emotes/douyin/laugh.svg",
+          "id": "id-83965",
+          "label": "黑眼圈_金箍",
+          "token": "[bili:id-83965]",
+          "src": "/emotes/bili/id-83965.png",
           "aliases": [
-            "拍脸"
+            "[黑眼圈_金箍]",
+            "金箍",
+            "黑眼圈_金箍"
           ]
         },
         {
           "kind": "image",
-          "id": "tears",
-          "label": "泪目",
-          "token": "[douyin:tears]",
-          "src": "/emotes/douyin/cover.svg",
+          "id": "id-83966",
+          "label": "猴哥",
+          "token": "[bili:id-83966]",
+          "src": "/emotes/bili/id-83966.png",
           "aliases": [
-            "泪目"
+            "[猴哥]",
+            "猴哥"
           ]
         },
         {
           "kind": "image",
-          "id": "stun",
-          "label": "发愣",
-          "token": "[douyin:stun]",
-          "src": "/emotes/douyin/laugh.svg",
+          "id": "id-124985",
+          "label": "鸭科夫_流汗鸭",
+          "token": "[bili:id-124985]",
+          "src": "/emotes/bili/id-124985.png",
           "aliases": [
-            "发愣"
+            "[鸭科夫_流汗鸭]",
+            "流汗鸭",
+            "鸭科夫_流汗鸭"
           ]
         },
         {
           "kind": "image",
-          "id": "cute",
-          "label": "卖萌",
-          "token": "[douyin:cute]",
-          "src": "/emotes/douyin/cover.svg",
+          "id": "id-124986",
+          "label": "鸭科夫_干嘛鸭",
+          "token": "[bili:id-124986]",
+          "src": "/emotes/bili/id-124986.png",
           "aliases": [
-            "卖萌"
+            "[鸭科夫_干嘛鸭]",
+            "干嘛鸭",
+            "鸭科夫_干嘛鸭"
           ]
         },
         {
           "kind": "image",
-          "id": "blink",
-          "label": "眨眼",
-          "token": "[douyin:blink]",
-          "src": "/emotes/douyin/laugh.svg",
+          "id": "id-124987",
+          "label": "鸭科夫_红温鸭",
+          "token": "[bili:id-124987]",
+          "src": "/emotes/bili/id-124987.png",
           "aliases": [
-            "眨眼"
+            "[鸭科夫_红温鸭]",
+            "红温鸭",
+            "鸭科夫_红温鸭"
           ]
         },
         {
           "kind": "image",
-          "id": "disdain",
-          "label": "不屑",
-          "token": "[douyin:disdain]",
-          "src": "/emotes/douyin/cover.svg",
+          "id": "id-114237",
+          "label": "黑猫",
+          "token": "[bili:id-114237]",
+          "src": "/emotes/bili/id-114237.png",
           "aliases": [
-            "不屑"
+            "[黑猫]",
+            "黑猫"
           ]
         },
         {
           "kind": "image",
-          "id": "astonish",
-          "label": "震惊",
-          "token": "[douyin:astonish]",
-          "src": "/emotes/douyin/laugh.svg",
+          "id": "id-114238",
+          "label": "三花猫",
+          "token": "[bili:id-114238]",
+          "src": "/emotes/bili/id-114238.png",
           "aliases": [
-            "震惊"
+            "[三花猫]",
+            "三花猫"
           ]
         },
         {
           "kind": "image",
-          "id": "rage",
-          "label": "暴怒",
-          "token": "[douyin:rage]",
-          "src": "/emotes/douyin/cover.svg",
+          "id": "id-114239",
+          "label": "折耳猫",
+          "token": "[bili:id-114239]",
+          "src": "/emotes/bili/id-114239.png",
           "aliases": [
-            "暴怒"
+            "[折耳猫]",
+            "折耳猫"
           ]
         },
         {
           "kind": "image",
-          "id": "cool",
-          "label": "酷",
-          "token": "[douyin:cool]",
-          "src": "/emotes/douyin/laugh.svg",
+          "id": "id-122984",
+          "label": "银魂_justaway",
+          "token": "[bili:id-122984]",
+          "src": "/emotes/bili/id-122984.png",
           "aliases": [
-            "酷"
+            "[银魂_justaway]",
+            "justaway",
+            "银魂_justaway"
           ]
         },
         {
           "kind": "image",
-          "id": "excited",
-          "label": "兴奋",
-          "token": "[douyin:excited]",
-          "src": "/emotes/douyin/cover.svg",
+          "id": "id-105515",
+          "label": "我独自升级_疑惑",
+          "token": "[bili:id-105515]",
+          "src": "/emotes/bili/id-105515.png",
           "aliases": [
-            "兴奋"
+            "[我独自升级_疑惑]",
+            "疑惑",
+            "我独自升级_疑惑"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-117447",
+          "label": "怪兽8号_奇可露",
+          "token": "[bili:id-117447]",
+          "src": "/emotes/bili/id-117447.png",
+          "aliases": [
+            "[怪兽8号_奇可露]",
+            "奇可露",
+            "怪兽8号_奇可露"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-105211",
+          "label": "颂乐人偶_眯眼笑",
+          "token": "[bili:id-105211]",
+          "src": "/emotes/bili/id-105211.png",
+          "aliases": [
+            "[颂乐人偶_眯眼笑]",
+            "眯眼笑",
+            "颂乐人偶_眯眼笑"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-100781",
+          "label": "坂本_佛系",
+          "token": "[bili:id-100781]",
+          "src": "/emotes/bili/id-100781.png",
+          "aliases": [
+            "[坂本_佛系]",
+            "佛系",
+            "坂本_佛系"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-83967",
+          "label": "生气_金箍",
+          "token": "[bili:id-83967]",
+          "src": "/emotes/bili/id-83967.png",
+          "aliases": [
+            "[生气_金箍]",
+            "金箍",
+            "生气_金箍"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-64201",
+          "label": "龙年",
+          "token": "[bili:id-64201]",
+          "src": "/emotes/bili/id-64201.png",
+          "aliases": [
+            "[龙年]",
+            "龙年"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-5774",
+          "label": "豹富",
+          "token": "[bili:id-5774]",
+          "src": "/emotes/bili/id-5774.png",
+          "aliases": [
+            "[豹富]",
+            "豹富"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-97385",
+          "label": "兔兔岛_开心",
+          "token": "[bili:id-97385]",
+          "src": "/emotes/bili/id-97385.png",
+          "aliases": [
+            "[兔兔岛_开心]",
+            "开心",
+            "兔兔岛_开心"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-97384",
+          "label": "兔兔岛_吃面",
+          "token": "[bili:id-97384]",
+          "src": "/emotes/bili/id-97384.png",
+          "aliases": [
+            "[兔兔岛_吃面]",
+            "吃面",
+            "兔兔岛_吃面"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-97386",
+          "label": "兔兔岛_睡觉",
+          "token": "[bili:id-97386]",
+          "src": "/emotes/bili/id-97386.png",
+          "aliases": [
+            "[兔兔岛_睡觉]",
+            "睡觉",
+            "兔兔岛_睡觉"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-102632",
+          "label": "重返未来1999_喂",
+          "token": "[bili:id-102632]",
+          "src": "/emotes/bili/id-102632.png",
+          "aliases": [
+            "[重返未来1999_喂]",
+            "喂",
+            "重返未来1999_喂"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-102633",
+          "label": "重返未来1999_赞",
+          "token": "[bili:id-102633]",
+          "src": "/emotes/bili/id-102633.png",
+          "aliases": [
+            "[重返未来1999_赞]",
+            "赞",
+            "重返未来1999_赞"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-102634",
+          "label": "重返未来1999_谢谢老板",
+          "token": "[bili:id-102634]",
+          "src": "/emotes/bili/id-102634.png",
+          "aliases": [
+            "[重返未来1999_谢谢老板]",
+            "谢谢老板",
+            "重返未来1999_谢谢老板"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-102631",
+          "label": "重返未来1999_什么",
+          "token": "[bili:id-102631]",
+          "src": "/emotes/bili/id-102631.png",
+          "aliases": [
+            "[重返未来1999_什么]",
+            "什么",
+            "重返未来1999_什么"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-87214",
+          "label": "胆大党_微笑",
+          "token": "[bili:id-87214]",
+          "src": "/emotes/bili/id-87214.png",
+          "aliases": [
+            "[胆大党_微笑]",
+            "微笑",
+            "胆大党_微笑"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-3827",
+          "label": "水稻",
+          "token": "[bili:id-3827]",
+          "src": "/emotes/bili/id-3827.png",
+          "aliases": [
+            "[水稻]",
+            "水稻"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-7180",
+          "label": "奶茶干杯",
+          "token": "[bili:id-7180]",
+          "src": "/emotes/bili/id-7180.png",
+          "aliases": [
+            "[奶茶干杯]",
+            "奶茶干杯"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-5936",
+          "label": "汤圆",
+          "token": "[bili:id-5936]",
+          "src": "/emotes/bili/id-5936.png",
+          "aliases": [
+            "[汤圆]",
+            "汤圆"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-1866",
+          "label": "锦鲤",
+          "token": "[bili:id-1866]",
+          "src": "/emotes/bili/id-1866.png",
+          "aliases": [
+            "[锦鲤]",
+            "锦鲤"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-1886",
+          "label": "福到了",
+          "token": "[bili:id-1886]",
+          "src": "/emotes/bili/id-1886.png",
+          "aliases": [
+            "[福到了]",
+            "福到了"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-1905",
+          "label": "鸡腿",
+          "token": "[bili:id-1905]",
+          "src": "/emotes/bili/id-1905.png",
+          "aliases": [
+            "[鸡腿]",
+            "鸡腿"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-2979",
+          "label": "雪花",
+          "token": "[bili:id-2979]",
+          "src": "/emotes/bili/id-2979.png",
+          "aliases": [
+            "[雪花]",
+            "雪花"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-2126",
+          "label": "视频卫星",
+          "token": "[bili:id-2126]",
+          "src": "/emotes/bili/id-2126.png",
+          "aliases": [
+            "[视频卫星]",
+            "视频卫星"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-1949",
+          "label": "干杯",
+          "token": "[bili:id-1949]",
+          "src": "/emotes/bili/id-1949.png",
+          "aliases": [
+            "[干杯]",
+            "干杯"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-32",
+          "label": "黑洞",
+          "token": "[bili:id-32]",
+          "src": "/emotes/bili/id-32.png",
+          "aliases": [
+            "[黑洞]",
+            "黑洞"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-550",
+          "label": "爱心",
+          "token": "[bili:id-550]",
+          "src": "/emotes/bili/id-550.png",
+          "aliases": [
+            "[爱心]",
+            "爱心"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-2010",
+          "label": "胜利",
+          "token": "[bili:id-2010]",
+          "src": "/emotes/bili/id-2010.png",
+          "aliases": [
+            "[胜利]",
+            "胜利"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-143794",
+          "label": "加油",
+          "token": "[bili:id-143794]",
+          "src": "/emotes/bili/id-143794.png",
+          "aliases": [
+            "[泡姆泡姆_加油]",
+            "加油",
+            "泡姆泡姆_加油",
+            "[加油]"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-1904",
+          "label": "抱拳",
+          "token": "[bili:id-1904]",
+          "src": "/emotes/bili/id-1904.png",
+          "aliases": [
+            "[抱拳]",
+            "抱拳"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-30",
+          "label": "响指",
+          "token": "[bili:id-30]",
+          "src": "/emotes/bili/id-30.png",
+          "aliases": [
+            "[响指]",
+            "响指"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-1903",
+          "label": "保佑",
+          "token": "[bili:id-1903]",
+          "src": "/emotes/bili/id-1903.png",
+          "aliases": [
+            "[保佑]",
+            "保佑"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-1887",
+          "label": "福",
+          "token": "[bili:id-1887]",
+          "src": "/emotes/bili/id-1887.png",
+          "aliases": [
+            "[福]",
+            "福"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-434",
+          "label": "支持",
+          "token": "[bili:id-434]",
+          "src": "/emotes/bili/id-434.png",
+          "aliases": [
+            "[支持]",
+            "支持"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-1944",
+          "label": "拥抱",
+          "token": "[bili:id-1944]",
+          "src": "/emotes/bili/id-1944.png",
+          "aliases": [
+            "[拥抱]",
+            "拥抱"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-1945",
+          "label": "跪了",
+          "token": "[bili:id-1945]",
+          "src": "/emotes/bili/id-1945.png",
+          "aliases": [
+            "[跪了]",
+            "跪了"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-1946",
+          "label": "怪我咯",
+          "token": "[bili:id-1946]",
+          "src": "/emotes/bili/id-1946.png",
+          "aliases": [
+            "[怪我咯]",
+            "怪我咯"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-51611",
+          "label": "香格里拉边境",
+          "token": "[bili:id-51611]",
+          "src": "/emotes/bili/id-51611.png",
+          "aliases": [
+            "[香格里拉边境]",
+            "香格里拉边境"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-1900",
+          "label": "老鼠",
+          "token": "[bili:id-1900]",
+          "src": "/emotes/bili/id-1900.png",
+          "aliases": [
+            "[老鼠]",
+            "老鼠"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-3146",
+          "label": "牛年",
+          "token": "[bili:id-3146]",
+          "src": "/emotes/bili/id-3146.png",
+          "aliases": [
+            "[牛年]",
+            "牛年"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-14476",
+          "label": "兔年",
+          "token": "[bili:id-14476]",
+          "src": "/emotes/bili/id-14476.png",
+          "aliases": [
+            "[兔年]",
+            "兔年"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-9781",
+          "label": "三星堆",
+          "token": "[bili:id-9781]",
+          "src": "/emotes/bili/id-9781.png",
+          "aliases": [
+            "[三星堆]",
+            "三星堆"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-25041",
+          "label": "桃源_给花花",
+          "token": "[bili:id-25041]",
+          "src": "/emotes/bili/id-25041.png",
+          "aliases": [
+            "[桃源_给花花]",
+            "给花花",
+            "桃源_给花花"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-25042",
+          "label": "桃源_缘分",
+          "token": "[bili:id-25042]",
+          "src": "/emotes/bili/id-25042.png",
+          "aliases": [
+            "[桃源_缘分]",
+            "缘分",
+            "桃源_缘分"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-25044",
+          "label": "桃源_欢呼",
+          "token": "[bili:id-25044]",
+          "src": "/emotes/bili/id-25044.png",
+          "aliases": [
+            "[桃源_欢呼]",
+            "欢呼",
+            "桃源_欢呼"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-25045",
+          "label": "桃源_乖巧",
+          "token": "[bili:id-25045]",
+          "src": "/emotes/bili/id-25045.png",
+          "aliases": [
+            "[桃源_乖巧]",
+            "乖巧",
+            "桃源_乖巧"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-100297",
+          "label": "鸣潮_好呀",
+          "token": "[bili:id-100297]",
+          "src": "/emotes/bili/id-100297.png",
+          "aliases": [
+            "[鸣潮_好呀]",
+            "好呀",
+            "鸣潮_好呀"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-100298",
+          "label": "鸣潮_唉",
+          "token": "[bili:id-100298]",
+          "src": "/emotes/bili/id-100298.png",
+          "aliases": [
+            "[鸣潮_唉]",
+            "唉",
+            "鸣潮_唉"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-100299",
+          "label": "鸣潮_咦",
+          "token": "[bili:id-100299]",
+          "src": "/emotes/bili/id-100299.png",
+          "aliases": [
+            "[鸣潮_咦]",
+            "咦",
+            "鸣潮_咦"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-100341",
+          "label": "鸣潮_嘿",
+          "token": "[bili:id-100341]",
+          "src": "/emotes/bili/id-100341.png",
+          "aliases": [
+            "[鸣潮_嘿]",
+            "嘿",
+            "鸣潮_嘿"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-100300",
+          "label": "鸣潮_哇",
+          "token": "[bili:id-100300]",
+          "src": "/emotes/bili/id-100300.png",
+          "aliases": [
+            "[鸣潮_哇]",
+            "哇",
+            "鸣潮_哇"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-77659",
+          "label": "鸣潮_嗯",
+          "token": "[bili:id-77659]",
+          "src": "/emotes/bili/id-77659.png",
+          "aliases": [
+            "[鸣潮_嗯]",
+            "嗯",
+            "鸣潮_嗯"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-77660",
+          "label": "鸣潮_嗨",
+          "token": "[bili:id-77660]",
+          "src": "/emotes/bili/id-77660.png",
+          "aliases": [
+            "[鸣潮_嗨]",
+            "嗨",
+            "鸣潮_嗨"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-77661",
+          "label": "鸣潮_祈愿",
+          "token": "[bili:id-77661]",
+          "src": "/emotes/bili/id-77661.png",
+          "aliases": [
+            "[鸣潮_祈愿]",
+            "祈愿",
+            "鸣潮_祈愿"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-77662",
+          "label": "鸣潮_你好",
+          "token": "[bili:id-77662]",
+          "src": "/emotes/bili/id-77662.png",
+          "aliases": [
+            "[鸣潮_你好]",
+            "你好",
+            "鸣潮_你好"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-77663",
+          "label": "鸣潮_嘿嘿",
+          "token": "[bili:id-77663]",
+          "src": "/emotes/bili/id-77663.png",
+          "aliases": [
+            "[鸣潮_嘿嘿]",
+            "嘿嘿",
+            "鸣潮_嘿嘿"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-7256",
+          "label": "洛天依",
+          "token": "[bili:id-7256]",
+          "src": "/emotes/bili/id-7256.png",
+          "aliases": [
+            "[洛天依]",
+            "洛天依"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-72802",
+          "label": "少女乐团派对_派对",
+          "token": "[bili:id-72802]",
+          "src": "/emotes/bili/id-72802.png",
+          "aliases": [
+            "[少女乐团派对_派对]",
+            "派对",
+            "少女乐团派对_派对"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-72803",
+          "label": "少女乐团派对_等一下",
+          "token": "[bili:id-72803]",
+          "src": "/emotes/bili/id-72803.png",
+          "aliases": [
+            "[少女乐团派对_等一下]",
+            "等一下",
+            "少女乐团派对_等一下"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-72804",
+          "label": "少女乐团派对_期待",
+          "token": "[bili:id-72804]",
+          "src": "/emotes/bili/id-72804.png",
+          "aliases": [
+            "[少女乐团派对_期待]",
+            "期待",
+            "少女乐团派对_期待"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-72805",
+          "label": "少女乐团派对_感想",
+          "token": "[bili:id-72805]",
+          "src": "/emotes/bili/id-72805.png",
+          "aliases": [
+            "[少女乐团派对_感想]",
+            "感想",
+            "少女乐团派对_感想"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-72806",
+          "label": "少女乐团派对_开心",
+          "token": "[bili:id-72806]",
+          "src": "/emotes/bili/id-72806.png",
+          "aliases": [
+            "[少女乐团派对_开心]",
+            "开心",
+            "少女乐团派对_开心"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-111927",
+          "label": "少女乐团派对_哇哦",
+          "token": "[bili:id-111927]",
+          "src": "/emotes/bili/id-111927.png",
+          "aliases": [
+            "[少女乐团派对_哇哦]",
+            "哇哦",
+            "少女乐团派对_哇哦"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-138553",
+          "label": "少女乐团派对_害羞",
+          "token": "[bili:id-138553]",
+          "src": "/emotes/bili/id-138553.png",
+          "aliases": [
+            "[少女乐团派对_害羞]",
+            "害羞",
+            "少女乐团派对_害羞"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-138554",
+          "label": "少女乐团派对_流汗",
+          "token": "[bili:id-138554]",
+          "src": "/emotes/bili/id-138554.png",
+          "aliases": [
+            "[少女乐团派对_流汗]",
+            "流汗",
+            "少女乐团派对_流汗"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-69967",
+          "label": "怪兽8号_开心",
+          "token": "[bili:id-69967]",
+          "src": "/emotes/bili/id-69967.png",
+          "aliases": [
+            "[怪兽8号_开心]",
+            "开心",
+            "怪兽8号_开心"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-67763",
+          "label": "白荆回廊_欢呼",
+          "token": "[bili:id-67763]",
+          "src": "/emotes/bili/id-67763.png",
+          "aliases": [
+            "[白荆回廊_欢呼]",
+            "欢呼",
+            "白荆回廊_欢呼"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-67764",
+          "label": "白荆回廊_期待",
+          "token": "[bili:id-67764]",
+          "src": "/emotes/bili/id-67764.png",
+          "aliases": [
+            "[白荆回廊_期待]",
+            "期待",
+            "白荆回廊_期待"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-67765",
+          "label": "白荆回廊_啊？",
+          "token": "[bili:id-67765]",
+          "src": "/emotes/bili/id-67765.png",
+          "aliases": [
+            "[白荆回廊_啊？]",
+            "啊？",
+            "白荆回廊_啊？"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-67766",
+          "label": "白荆回廊_好好好",
+          "token": "[bili:id-67766]",
+          "src": "/emotes/bili/id-67766.png",
+          "aliases": [
+            "[白荆回廊_好好好]",
+            "好好好",
+            "白荆回廊_好好好"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-67767",
+          "label": "白荆回廊_无语",
+          "token": "[bili:id-67767]",
+          "src": "/emotes/bili/id-67767.png",
+          "aliases": [
+            "[白荆回廊_无语]",
+            "无语",
+            "白荆回廊_无语"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-67768",
+          "label": "白荆回廊_尴尬",
+          "token": "[bili:id-67768]",
+          "src": "/emotes/bili/id-67768.png",
+          "aliases": [
+            "[白荆回廊_尴尬]",
+            "尴尬",
+            "白荆回廊_尴尬"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-4367",
+          "label": "坎公骑冠剑_吃鸡",
+          "token": "[bili:id-4367]",
+          "src": "/emotes/bili/id-4367.png",
+          "aliases": [
+            "[坎公骑冠剑_吃鸡]",
+            "吃鸡",
+            "坎公骑冠剑_吃鸡"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-4368",
+          "label": "坎公骑冠剑_钻石",
+          "token": "[bili:id-4368]",
+          "src": "/emotes/bili/id-4368.png",
+          "aliases": [
+            "[坎公骑冠剑_钻石]",
+            "钻石",
+            "坎公骑冠剑_钻石"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-4369",
+          "label": "坎公骑冠剑_无语",
+          "token": "[bili:id-4369]",
+          "src": "/emotes/bili/id-4369.png",
+          "aliases": [
+            "[坎公骑冠剑_无语]",
+            "无语",
+            "坎公骑冠剑_无语"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-3987",
+          "label": "来古-疑问",
+          "token": "[bili:id-3987]",
+          "src": "/emotes/bili/id-3987.png",
+          "aliases": [
+            "[来古-疑问]",
+            "来古-疑问"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-3985",
+          "label": "来古-沉思",
+          "token": "[bili:id-3985]",
+          "src": "/emotes/bili/id-3985.png",
+          "aliases": [
+            "[来古-沉思]",
+            "来古-沉思"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-3986",
+          "label": "来古-呆滞",
+          "token": "[bili:id-3986]",
+          "src": "/emotes/bili/id-3986.png",
+          "aliases": [
+            "[来古-呆滞]",
+            "来古-呆滞"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-3988",
+          "label": "来古-震撼",
+          "token": "[bili:id-3988]",
+          "src": "/emotes/bili/id-3988.png",
+          "aliases": [
+            "[来古-震撼]",
+            "来古-震撼"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-3989",
+          "label": "来古-注意",
+          "token": "[bili:id-3989]",
+          "src": "/emotes/bili/id-3989.png",
+          "aliases": [
+            "[来古-注意]",
+            "来古-注意"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-142678",
+          "label": "FGO_尴尬",
+          "token": "[bili:id-142678]",
+          "src": "/emotes/bili/id-142678.png",
+          "aliases": [
+            "[FGO_尴尬]",
+            "尴尬",
+            "FGO_尴尬"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-142679",
+          "label": "FGO_跪",
+          "token": "[bili:id-142679]",
+          "src": "/emotes/bili/id-142679.png",
+          "aliases": [
+            "[FGO_跪]",
+            "跪",
+            "FGO_跪"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-142680",
+          "label": "FGO_好耶",
+          "token": "[bili:id-142680]",
+          "src": "/emotes/bili/id-142680.png",
+          "aliases": [
+            "[FGO_好耶]",
+            "好耶",
+            "FGO_好耶"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-142681",
+          "label": "FGO_好棒",
+          "token": "[bili:id-142681]",
+          "src": "/emotes/bili/id-142681.png",
+          "aliases": [
+            "[FGO_好棒]",
+            "好棒",
+            "FGO_好棒"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-142682",
+          "label": "FGO_礼物",
+          "token": "[bili:id-142682]",
+          "src": "/emotes/bili/id-142682.png",
+          "aliases": [
+            "[FGO_礼物]",
+            "礼物",
+            "FGO_礼物"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-142683",
+          "label": "FGO_无语",
+          "token": "[bili:id-142683]",
+          "src": "/emotes/bili/id-142683.png",
+          "aliases": [
+            "[FGO_无语]",
+            "无语",
+            "FGO_无语"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-39534",
+          "label": "FGO_耶",
+          "token": "[bili:id-39534]",
+          "src": "/emotes/bili/id-39534.png",
+          "aliases": [
+            "[FGO_耶]",
+            "耶",
+            "FGO_耶"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-39535",
+          "label": "FGO_开心",
+          "token": "[bili:id-39535]",
+          "src": "/emotes/bili/id-39535.png",
+          "aliases": [
+            "[FGO_开心]",
+            "开心",
+            "FGO_开心"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-39536",
+          "label": "FGO_汗",
+          "token": "[bili:id-39536]",
+          "src": "/emotes/bili/id-39536.png",
+          "aliases": [
+            "[FGO_汗]",
+            "汗",
+            "FGO_汗"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-39537",
+          "label": "FGO_怒",
+          "token": "[bili:id-39537]",
+          "src": "/emotes/bili/id-39537.png",
+          "aliases": [
+            "[FGO_怒]",
+            "怒",
+            "FGO_怒"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-39538",
+          "label": "FGO_偷看",
+          "token": "[bili:id-39538]",
+          "src": "/emotes/bili/id-39538.png",
+          "aliases": [
+            "[FGO_偷看]",
+            "偷看",
+            "FGO_偷看"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-10844",
+          "label": "初音未来_大笑",
+          "token": "[bili:id-10844]",
+          "src": "/emotes/bili/id-10844.png",
+          "aliases": [
+            "[初音未来_大笑]",
+            "大笑",
+            "初音未来_大笑"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-4259",
+          "label": "原神_哇",
+          "token": "[bili:id-4259]",
+          "src": "/emotes/bili/id-4259.png",
+          "aliases": [
+            "[原神_哇]",
+            "哇",
+            "原神_哇"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-4260",
+          "label": "原神_哼",
+          "token": "[bili:id-4260]",
+          "src": "/emotes/bili/id-4260.png",
+          "aliases": [
+            "[原神_哼]",
+            "哼",
+            "原神_哼"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-4261",
+          "label": "原神_嗯",
+          "token": "[bili:id-4261]",
+          "src": "/emotes/bili/id-4261.png",
+          "aliases": [
+            "[原神_嗯]",
+            "嗯",
+            "原神_嗯"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-4262",
+          "label": "原神_欸嘿",
+          "token": "[bili:id-4262]",
+          "src": "/emotes/bili/id-4262.png",
+          "aliases": [
+            "[原神_欸嘿]",
+            "欸嘿",
+            "原神_欸嘿"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-4263",
+          "label": "原神_喝茶",
+          "token": "[bili:id-4263]",
+          "src": "/emotes/bili/id-4263.png",
+          "aliases": [
+            "[原神_喝茶]",
+            "喝茶",
+            "原神_喝茶"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-4264",
+          "label": "原神_生气",
+          "token": "[bili:id-4264]",
+          "src": "/emotes/bili/id-4264.png",
+          "aliases": [
+            "[原神_生气]",
+            "生气",
+            "原神_生气"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-4943",
+          "label": "保卫萝卜_白眼",
+          "token": "[bili:id-4943]",
+          "src": "/emotes/bili/id-4943.png",
+          "aliases": [
+            "[保卫萝卜_白眼]",
+            "白眼",
+            "保卫萝卜_白眼"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-4944",
+          "label": "保卫萝卜_笔芯",
+          "token": "[bili:id-4944]",
+          "src": "/emotes/bili/id-4944.png",
+          "aliases": [
+            "[保卫萝卜_笔芯]",
+            "笔芯",
+            "保卫萝卜_笔芯"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-4945",
+          "label": "保卫萝卜_哭哭",
+          "token": "[bili:id-4945]",
+          "src": "/emotes/bili/id-4945.png",
+          "aliases": [
+            "[保卫萝卜_哭哭]",
+            "哭哭",
+            "保卫萝卜_哭哭"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-4946",
+          "label": "保卫萝卜_哇",
+          "token": "[bili:id-4946]",
+          "src": "/emotes/bili/id-4946.png",
+          "aliases": [
+            "[保卫萝卜_哇]",
+            "哇",
+            "保卫萝卜_哇"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-4947",
+          "label": "保卫萝卜_问号",
+          "token": "[bili:id-4947]",
+          "src": "/emotes/bili/id-4947.png",
+          "aliases": [
+            "[保卫萝卜_问号]",
+            "问号",
+            "保卫萝卜_问号"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-6326",
+          "label": "无悔华夏_不愧是你",
+          "token": "[bili:id-6326]",
+          "src": "/emotes/bili/id-6326.png",
+          "aliases": [
+            "[无悔华夏_不愧是你]",
+            "不愧是你",
+            "无悔华夏_不愧是你"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-6327",
+          "label": "无悔华夏_吃瓜",
+          "token": "[bili:id-6327]",
+          "src": "/emotes/bili/id-6327.png",
+          "aliases": [
+            "[无悔华夏_吃瓜]",
+            "吃瓜",
+            "无悔华夏_吃瓜"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-6328",
+          "label": "无悔华夏_达咩",
+          "token": "[bili:id-6328]",
+          "src": "/emotes/bili/id-6328.png",
+          "aliases": [
+            "[无悔华夏_达咩]",
+            "达咩",
+            "无悔华夏_达咩"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-6329",
+          "label": "无悔华夏_点赞",
+          "token": "[bili:id-6329]",
+          "src": "/emotes/bili/id-6329.png",
+          "aliases": [
+            "[无悔华夏_点赞]",
+            "点赞",
+            "无悔华夏_点赞"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-6330",
+          "label": "无悔华夏_好耶",
+          "token": "[bili:id-6330]",
+          "src": "/emotes/bili/id-6330.png",
+          "aliases": [
+            "[无悔华夏_好耶]",
+            "好耶",
+            "无悔华夏_好耶"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-7094",
+          "label": "奥比岛_搬砖",
+          "token": "[bili:id-7094]",
+          "src": "/emotes/bili/id-7094.png",
+          "aliases": [
+            "[奥比岛_搬砖]",
+            "搬砖",
+            "奥比岛_搬砖"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-7095",
+          "label": "奥比岛_点赞",
+          "token": "[bili:id-7095]",
+          "src": "/emotes/bili/id-7095.png",
+          "aliases": [
+            "[奥比岛_点赞]",
+            "点赞",
+            "奥比岛_点赞"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-7096",
+          "label": "奥比岛_击爪",
+          "token": "[bili:id-7096]",
+          "src": "/emotes/bili/id-7096.png",
+          "aliases": [
+            "[奥比岛_击爪]",
+            "击爪",
+            "奥比岛_击爪"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-7097",
+          "label": "奥比岛_委屈",
+          "token": "[bili:id-7097]",
+          "src": "/emotes/bili/id-7097.png",
+          "aliases": [
+            "[奥比岛_委屈]",
+            "委屈",
+            "奥比岛_委屈"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-7098",
+          "label": "奥比岛_喜欢",
+          "token": "[bili:id-7098]",
+          "src": "/emotes/bili/id-7098.png",
+          "aliases": [
+            "[奥比岛_喜欢]",
+            "喜欢",
+            "奥比岛_喜欢"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-15717",
+          "label": "黎明觉醒_怒了鸦",
+          "token": "[bili:id-15717]",
+          "src": "/emotes/bili/id-15717.png",
+          "aliases": [
+            "[黎明觉醒_怒了鸦]",
+            "怒了鸦",
+            "黎明觉醒_怒了鸦"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-15718",
+          "label": "黎明觉醒_石化鸦",
+          "token": "[bili:id-15718]",
+          "src": "/emotes/bili/id-15718.png",
+          "aliases": [
+            "[黎明觉醒_石化鸦]",
+            "石化鸦",
+            "黎明觉醒_石化鸦"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-15719",
+          "label": "黎明觉醒_摊手鸦",
+          "token": "[bili:id-15719]",
+          "src": "/emotes/bili/id-15719.png",
+          "aliases": [
+            "[黎明觉醒_摊手鸦]",
+            "摊手鸦",
+            "黎明觉醒_摊手鸦"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-15720",
+          "label": "黎明觉醒_比心鸦",
+          "token": "[bili:id-15720]",
+          "src": "/emotes/bili/id-15720.png",
+          "aliases": [
+            "[黎明觉醒_比心鸦]",
+            "比心鸦",
+            "黎明觉醒_比心鸦"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-15721",
+          "label": "黎明觉醒_哼白眼鸦",
+          "token": "[bili:id-15721]",
+          "src": "/emotes/bili/id-15721.png",
+          "aliases": [
+            "[黎明觉醒_哼白眼鸦]",
+            "哼白眼鸦",
+            "黎明觉醒_哼白眼鸦"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-20039",
+          "label": "以闪亮之名_哎？！",
+          "token": "[bili:id-20039]",
+          "src": "/emotes/bili/id-20039.png",
+          "aliases": [
+            "[以闪亮之名_哎？！]",
+            "哎？！",
+            "以闪亮之名_哎？！"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-20040",
+          "label": "以闪亮之名_爱你哦",
+          "token": "[bili:id-20040]",
+          "src": "/emotes/bili/id-20040.png",
+          "aliases": [
+            "[以闪亮之名_爱你哦]",
+            "爱你哦",
+            "以闪亮之名_爱你哦"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-20041",
+          "label": "以闪亮之名_吃瓜",
+          "token": "[bili:id-20041]",
+          "src": "/emotes/bili/id-20041.png",
+          "aliases": [
+            "[以闪亮之名_吃瓜]",
+            "吃瓜",
+            "以闪亮之名_吃瓜"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-20042",
+          "label": "以闪亮之名_好耶!",
+          "token": "[bili:id-20042]",
+          "src": "/emotes/bili/id-20042.png",
+          "aliases": [
+            "[以闪亮之名_好耶!]",
+            "好耶!",
+            "以闪亮之名_好耶!"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-20044",
+          "label": "以闪亮之名_针不戳",
+          "token": "[bili:id-20044]",
+          "src": "/emotes/bili/id-20044.png",
+          "aliases": [
+            "[以闪亮之名_针不戳]",
+            "针不戳",
+            "以闪亮之名_针不戳"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-62062",
+          "label": "元梦_爱你",
+          "token": "[bili:id-62062]",
+          "src": "/emotes/bili/id-62062.png",
+          "aliases": [
+            "[元梦_爱你]",
+            "爱你",
+            "元梦_爱你"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-62063",
+          "label": "元梦_打call",
+          "token": "[bili:id-62063]",
+          "src": "/emotes/bili/id-62063.png",
+          "aliases": [
+            "[元梦_打call]",
+            "打call",
+            "元梦_打call"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-62064",
+          "label": "元梦_大哭",
+          "token": "[bili:id-62064]",
+          "src": "/emotes/bili/id-62064.png",
+          "aliases": [
+            "[元梦_大哭]",
+            "大哭",
+            "元梦_大哭"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-62065",
+          "label": "元梦_点赞",
+          "token": "[bili:id-62065]",
+          "src": "/emotes/bili/id-62065.png",
+          "aliases": [
+            "[元梦_点赞]",
+            "点赞",
+            "元梦_点赞"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-62066",
+          "label": "元梦_哭哭",
+          "token": "[bili:id-62066]",
+          "src": "/emotes/bili/id-62066.png",
+          "aliases": [
+            "[元梦_哭哭]",
+            "哭哭",
+            "元梦_哭哭"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-87164",
+          "label": "无限暖暖_暖暖",
+          "token": "[bili:id-87164]",
+          "src": "/emotes/bili/id-87164.png",
+          "aliases": [
+            "[无限暖暖_暖暖]",
+            "暖暖",
+            "无限暖暖_暖暖"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-87165",
+          "label": "无限暖暖_大喵",
+          "token": "[bili:id-87165]",
+          "src": "/emotes/bili/id-87165.png",
+          "aliases": [
+            "[无限暖暖_大喵]",
+            "大喵",
+            "无限暖暖_大喵"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-87166",
+          "label": "无限暖暖_单品灵",
+          "token": "[bili:id-87166]",
+          "src": "/emotes/bili/id-87166.png",
+          "aliases": [
+            "[无限暖暖_单品灵]",
+            "单品灵",
+            "无限暖暖_单品灵"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-87167",
+          "label": "无限暖暖_心愿精灵",
+          "token": "[bili:id-87167]",
+          "src": "/emotes/bili/id-87167.png",
+          "aliases": [
+            "[无限暖暖_心愿精灵]",
+            "心愿精灵",
+            "无限暖暖_心愿精灵"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-87168",
+          "label": "无限暖暖_美食家蜜蜂",
+          "token": "[bili:id-87168]",
+          "src": "/emotes/bili/id-87168.png",
+          "aliases": [
+            "[无限暖暖_美食家蜜蜂]",
+            "美食家蜜蜂",
+            "无限暖暖_美食家蜜蜂"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-87169",
+          "label": "无限暖暖_袜袜羊",
+          "token": "[bili:id-87169]",
+          "src": "/emotes/bili/id-87169.png",
+          "aliases": [
+            "[无限暖暖_袜袜羊]",
+            "袜袜羊",
+            "无限暖暖_袜袜羊"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-87170",
+          "label": "无限暖暖_围兜狸猫",
+          "token": "[bili:id-87170]",
+          "src": "/emotes/bili/id-87170.png",
+          "aliases": [
+            "[无限暖暖_围兜狸猫]",
+            "围兜狸猫",
+            "无限暖暖_围兜狸猫"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-87171",
+          "label": "无限暖暖_毛线汪汪",
+          "token": "[bili:id-87171]",
+          "src": "/emotes/bili/id-87171.png",
+          "aliases": [
+            "[无限暖暖_毛线汪汪]",
+            "毛线汪汪",
+            "无限暖暖_毛线汪汪"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-143780",
+          "label": "明日方舟_沉默",
+          "token": "[bili:id-143780]",
+          "src": "/emotes/bili/id-143780.png",
+          "aliases": [
+            "[明日方舟_沉默]",
+            "沉默",
+            "明日方舟_沉默"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-143781",
+          "label": "明日方舟_打call",
+          "token": "[bili:id-143781]",
+          "src": "/emotes/bili/id-143781.png",
+          "aliases": [
+            "[明日方舟_打call]",
+            "打call",
+            "明日方舟_打call"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-143782",
+          "label": "明日方舟_扶额",
+          "token": "[bili:id-143782]",
+          "src": "/emotes/bili/id-143782.png",
+          "aliases": [
+            "[明日方舟_扶额]",
+            "扶额",
+            "明日方舟_扶额"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-143783",
+          "label": "明日方舟_惊",
+          "token": "[bili:id-143783]",
+          "src": "/emotes/bili/id-143783.png",
+          "aliases": [
+            "[明日方舟_惊]",
+            "惊",
+            "明日方舟_惊"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-143784",
+          "label": "明日方舟_敬礼",
+          "token": "[bili:id-143784]",
+          "src": "/emotes/bili/id-143784.png",
+          "aliases": [
+            "[明日方舟_敬礼]",
+            "敬礼",
+            "明日方舟_敬礼"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-143785",
+          "label": "明日方舟_哭哭",
+          "token": "[bili:id-143785]",
+          "src": "/emotes/bili/id-143785.png",
+          "aliases": [
+            "[明日方舟_哭哭]",
+            "哭哭",
+            "明日方舟_哭哭"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-143786",
+          "label": "明日方舟_装傻",
+          "token": "[bili:id-143786]",
+          "src": "/emotes/bili/id-143786.png",
+          "aliases": [
+            "[明日方舟_装傻]",
+            "装傻",
+            "明日方舟_装傻"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-143787",
+          "label": "明日方舟终末地_比心",
+          "token": "[bili:id-143787]",
+          "src": "/emotes/bili/id-143787.png",
+          "aliases": [
+            "[明日方舟终末地_比心]",
+            "比心",
+            "明日方舟终末地_比心"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-143789",
+          "label": "明日方舟终末地_喝茶",
+          "token": "[bili:id-143789]",
+          "src": "/emotes/bili/id-143789.png",
+          "aliases": [
+            "[明日方舟终末地_喝茶]",
+            "喝茶",
+            "明日方舟终末地_喝茶"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-143790",
+          "label": "明日方舟终末地_愣住",
+          "token": "[bili:id-143790]",
+          "src": "/emotes/bili/id-143790.png",
+          "aliases": [
+            "[明日方舟终末地_愣住]",
+            "愣住",
+            "明日方舟终末地_愣住"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-143791",
+          "label": "明日方舟终末地_什么",
+          "token": "[bili:id-143791]",
+          "src": "/emotes/bili/id-143791.png",
+          "aliases": [
+            "[明日方舟终末地_什么]",
+            "什么",
+            "明日方舟终末地_什么"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-143778",
+          "label": "来自星尘_盯",
+          "token": "[bili:id-143778]",
+          "src": "/emotes/bili/id-143778.png",
+          "aliases": [
+            "[来自星尘_盯]",
+            "盯",
+            "来自星尘_盯"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-143779",
+          "label": "来自星尘_wink",
+          "token": "[bili:id-143779]",
+          "src": "/emotes/bili/id-143779.png",
+          "aliases": [
+            "[来自星尘_wink]",
+            "wink",
+            "来自星尘_wink"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "id-143793",
+          "label": "泡姆泡姆_棒",
+          "token": "[bili:id-143793]",
+          "src": "/emotes/bili/id-143793.png",
+          "aliases": [
+            "[泡姆泡姆_棒]",
+            "棒",
+            "泡姆泡姆_棒"
           ]
         }
       ],
-      "source": "local-replaceable-pack; public Douyin web entry did not expose a stable asset manifest"
+      "defaultEnabled": true,
+      "source": "https://api.bilibili.com/x/emote/package?business=reply&ids=1"
     },
     {
       "id": "wechat",
@@ -2127,564 +3953,8 @@
           ]
         }
       ],
+      "defaultEnabled": true,
       "source": "https://github.com/xxk8/wechat-emojis"
-    },
-    {
-      "id": "qq",
-      "label": "QQ",
-      "items": [
-        {
-          "kind": "image",
-          "id": "smile",
-          "label": "微笑",
-          "token": "[qq:smile]",
-          "src": "/emotes/qq/smile.gif",
-          "aliases": [
-            "微笑",
-            "e100"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "curl-lip",
-          "label": "撇嘴",
-          "token": "[qq:curl-lip]",
-          "src": "/emotes/qq/curl-lip.gif",
-          "aliases": [
-            "撇嘴",
-            "e101"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "color",
-          "label": "色",
-          "token": "[qq:color]",
-          "src": "/emotes/qq/color.gif",
-          "aliases": [
-            "色",
-            "e102"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "daze",
-          "label": "发呆",
-          "token": "[qq:daze]",
-          "src": "/emotes/qq/daze.gif",
-          "aliases": [
-            "发呆",
-            "e103"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "proud",
-          "label": "得意",
-          "token": "[qq:proud]",
-          "src": "/emotes/qq/proud.gif",
-          "aliases": [
-            "得意",
-            "e104"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "cry",
-          "label": "流泪",
-          "token": "[qq:cry]",
-          "src": "/emotes/qq/cry.gif",
-          "aliases": [
-            "流泪",
-            "e105"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "shy",
-          "label": "害羞",
-          "token": "[qq:shy]",
-          "src": "/emotes/qq/shy.gif",
-          "aliases": [
-            "害羞",
-            "e106"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "silent",
-          "label": "闭嘴",
-          "token": "[qq:silent]",
-          "src": "/emotes/qq/silent.gif",
-          "aliases": [
-            "闭嘴",
-            "e107"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "sleep",
-          "label": "睡",
-          "token": "[qq:sleep]",
-          "src": "/emotes/qq/sleep.gif",
-          "aliases": [
-            "睡",
-            "e108"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "sob",
-          "label": "大哭",
-          "token": "[qq:sob]",
-          "src": "/emotes/qq/sob.gif",
-          "aliases": [
-            "大哭",
-            "e109"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "awkward",
-          "label": "尴尬",
-          "token": "[qq:awkward]",
-          "src": "/emotes/qq/awkward.gif",
-          "aliases": [
-            "尴尬",
-            "e110"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "angry",
-          "label": "发怒",
-          "token": "[qq:angry]",
-          "src": "/emotes/qq/angry.gif",
-          "aliases": [
-            "发怒",
-            "e111"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "naughty",
-          "label": "调皮",
-          "token": "[qq:naughty]",
-          "src": "/emotes/qq/naughty.gif",
-          "aliases": [
-            "调皮",
-            "e112"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "grin",
-          "label": "呲牙",
-          "token": "[qq:grin]",
-          "src": "/emotes/qq/grin.gif",
-          "aliases": [
-            "呲牙",
-            "e113"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "surprise",
-          "label": "惊讶",
-          "token": "[qq:surprise]",
-          "src": "/emotes/qq/surprise.gif",
-          "aliases": [
-            "惊讶",
-            "e114"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "sad",
-          "label": "难过",
-          "token": "[qq:sad]",
-          "src": "/emotes/qq/sad.gif",
-          "aliases": [
-            "难过",
-            "e115"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "cool",
-          "label": "酷",
-          "token": "[qq:cool]",
-          "src": "/emotes/qq/cool.gif",
-          "aliases": [
-            "酷",
-            "e116"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "cold-sweat",
-          "label": "冷汗",
-          "token": "[qq:cold-sweat]",
-          "src": "/emotes/qq/cold-sweat.gif",
-          "aliases": [
-            "冷汗",
-            "e117"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "crazy",
-          "label": "抓狂",
-          "token": "[qq:crazy]",
-          "src": "/emotes/qq/crazy.gif",
-          "aliases": [
-            "抓狂",
-            "e118"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "vomit",
-          "label": "吐",
-          "token": "[qq:vomit]",
-          "src": "/emotes/qq/vomit.gif",
-          "aliases": [
-            "吐",
-            "e119"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "snicker",
-          "label": "偷笑",
-          "token": "[qq:snicker]",
-          "src": "/emotes/qq/snicker.gif",
-          "aliases": [
-            "偷笑",
-            "e120"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "cute",
-          "label": "可爱",
-          "token": "[qq:cute]",
-          "src": "/emotes/qq/cute.gif",
-          "aliases": [
-            "可爱",
-            "e121"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "roll-eyes",
-          "label": "白眼",
-          "token": "[qq:roll-eyes]",
-          "src": "/emotes/qq/roll-eyes.gif",
-          "aliases": [
-            "白眼",
-            "e122"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "arrogant",
-          "label": "傲慢",
-          "token": "[qq:arrogant]",
-          "src": "/emotes/qq/arrogant.gif",
-          "aliases": [
-            "傲慢",
-            "e123"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "hungry",
-          "label": "饥饿",
-          "token": "[qq:hungry]",
-          "src": "/emotes/qq/hungry.gif",
-          "aliases": [
-            "饥饿",
-            "e124"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "sleepy",
-          "label": "困",
-          "token": "[qq:sleepy]",
-          "src": "/emotes/qq/sleepy.gif",
-          "aliases": [
-            "困",
-            "e125"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "panic",
-          "label": "惊恐",
-          "token": "[qq:panic]",
-          "src": "/emotes/qq/panic.gif",
-          "aliases": [
-            "惊恐",
-            "e126"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "sweat",
-          "label": "流汗",
-          "token": "[qq:sweat]",
-          "src": "/emotes/qq/sweat.gif",
-          "aliases": [
-            "流汗",
-            "e127"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "smirk",
-          "label": "憨笑",
-          "token": "[qq:smirk]",
-          "src": "/emotes/qq/smirk.gif",
-          "aliases": [
-            "憨笑",
-            "e128"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "soldier",
-          "label": "大兵",
-          "token": "[qq:soldier]",
-          "src": "/emotes/qq/soldier.gif",
-          "aliases": [
-            "大兵",
-            "e129"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "struggle",
-          "label": "奋斗",
-          "token": "[qq:struggle]",
-          "src": "/emotes/qq/struggle.gif",
-          "aliases": [
-            "奋斗",
-            "e130"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "curse",
-          "label": "咒骂",
-          "token": "[qq:curse]",
-          "src": "/emotes/qq/curse.gif",
-          "aliases": [
-            "咒骂",
-            "e131"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "question",
-          "label": "疑问",
-          "token": "[qq:question]",
-          "src": "/emotes/qq/question.gif",
-          "aliases": [
-            "疑问",
-            "e132"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "hush",
-          "label": "嘘",
-          "token": "[qq:hush]",
-          "src": "/emotes/qq/hush.gif",
-          "aliases": [
-            "嘘",
-            "e133"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "dizzy",
-          "label": "晕",
-          "token": "[qq:dizzy]",
-          "src": "/emotes/qq/dizzy.gif",
-          "aliases": [
-            "晕",
-            "e134"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "torture",
-          "label": "折磨",
-          "token": "[qq:torture]",
-          "src": "/emotes/qq/torture.gif",
-          "aliases": [
-            "折磨",
-            "e135"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "decline",
-          "label": "衰",
-          "token": "[qq:decline]",
-          "src": "/emotes/qq/decline.gif",
-          "aliases": [
-            "衰",
-            "e136"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "skull",
-          "label": "骷髅",
-          "token": "[qq:skull]",
-          "src": "/emotes/qq/skull.gif",
-          "aliases": [
-            "骷髅",
-            "e137"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "knock",
-          "label": "敲打",
-          "token": "[qq:knock]",
-          "src": "/emotes/qq/knock.gif",
-          "aliases": [
-            "敲打",
-            "e138"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "bye",
-          "label": "再见",
-          "token": "[qq:bye]",
-          "src": "/emotes/qq/bye.gif",
-          "aliases": [
-            "再见",
-            "e139"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "wipe-sweat",
-          "label": "擦汗",
-          "token": "[qq:wipe-sweat]",
-          "src": "/emotes/qq/wipe-sweat.gif",
-          "aliases": [
-            "擦汗",
-            "e140"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "pick-nose",
-          "label": "抠鼻",
-          "token": "[qq:pick-nose]",
-          "src": "/emotes/qq/pick-nose.gif",
-          "aliases": [
-            "抠鼻",
-            "e141"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "clap",
-          "label": "鼓掌",
-          "token": "[qq:clap]",
-          "src": "/emotes/qq/clap.gif",
-          "aliases": [
-            "鼓掌",
-            "e142"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "bad-laugh",
-          "label": "坏笑",
-          "token": "[qq:bad-laugh]",
-          "src": "/emotes/qq/bad-laugh.gif",
-          "aliases": [
-            "坏笑",
-            "e144"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "left-hum",
-          "label": "左哼哼",
-          "token": "[qq:left-hum]",
-          "src": "/emotes/qq/left-hum.gif",
-          "aliases": [
-            "左哼哼",
-            "e145"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "right-hum",
-          "label": "右哼哼",
-          "token": "[qq:right-hum]",
-          "src": "/emotes/qq/right-hum.gif",
-          "aliases": [
-            "右哼哼",
-            "e146"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "yawn",
-          "label": "哈欠",
-          "token": "[qq:yawn]",
-          "src": "/emotes/qq/yawn.gif",
-          "aliases": [
-            "哈欠",
-            "e147"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "despise",
-          "label": "鄙视",
-          "token": "[qq:despise]",
-          "src": "/emotes/qq/despise.gif",
-          "aliases": [
-            "鄙视",
-            "e148"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "wronged",
-          "label": "委屈",
-          "token": "[qq:wronged]",
-          "src": "/emotes/qq/wronged.gif",
-          "aliases": [
-            "委屈",
-            "e149"
-          ]
-        },
-        {
-          "kind": "image",
-          "id": "about-cry",
-          "label": "快哭了",
-          "token": "[qq:about-cry]",
-          "src": "/emotes/qq/about-cry.gif",
-          "aliases": [
-            "快哭了",
-            "e150"
-          ]
-        }
-      ],
-      "source": "https://qzonestyle.gtimg.cn/qzone/em/e{code}.gif"
     },
     {
       "id": "feishu",
@@ -3397,7 +4667,8 @@
           "token": "[feishu:hammer]",
           "src": "/emotes/feishu/hammer.png",
           "aliases": [
-            "HAMMER"
+            "HAMMER",
+            "HAMMER.png"
           ]
         },
         {
@@ -3607,7 +4878,8 @@
           "token": "[feishu:on-it]",
           "src": "/emotes/feishu/on-it.png",
           "aliases": [
-            "OnIt"
+            "OnIt",
+            "OnIt.png"
           ]
         },
         {
@@ -4096,7 +5368,9 @@
           "label": "2022",
           "token": "[feishu:2022]",
           "src": "/emotes/feishu/2022.png",
-          "aliases": []
+          "aliases": [
+            "2022"
+          ]
         },
         {
           "kind": "image",
@@ -4195,7 +5469,8 @@
           "token": "[feishu:cleaver]",
           "src": "/emotes/feishu/cleaver.png",
           "aliases": [
-            "CLEAVER"
+            "CLEAVER",
+            "CLEAVER.png"
           ]
         },
         {
@@ -4509,7 +5784,3221 @@
           ]
         }
       ],
-      "source": "https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce"
+      "defaultEnabled": true,
+      "source": "https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce.md"
+    },
+    {
+      "id": "xiaohongshu",
+      "label": "小红书",
+      "items": [
+        {
+          "kind": "image",
+          "id": "01",
+          "label": "微笑",
+          "token": "[xiaohongshu:01]",
+          "src": "/emotes/xiaohongshu/01.png",
+          "aliases": [
+            "[微笑R]",
+            "微笑"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "02",
+          "label": "害羞",
+          "token": "[xiaohongshu:02]",
+          "src": "/emotes/xiaohongshu/02.png",
+          "aliases": [
+            "[害羞R]",
+            "害羞"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "03",
+          "label": "失望",
+          "token": "[xiaohongshu:03]",
+          "src": "/emotes/xiaohongshu/03.png",
+          "aliases": [
+            "[失望R]",
+            "失望"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "04",
+          "label": "汗颜",
+          "token": "[xiaohongshu:04]",
+          "src": "/emotes/xiaohongshu/04.png",
+          "aliases": [
+            "[汗颜R]",
+            "汗颜"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "05",
+          "label": "哇",
+          "token": "[xiaohongshu:05]",
+          "src": "/emotes/xiaohongshu/05.png",
+          "aliases": [
+            "[哇R]",
+            "哇"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "06",
+          "label": "喝奶茶",
+          "token": "[xiaohongshu:06]",
+          "src": "/emotes/xiaohongshu/06.png",
+          "aliases": [
+            "[喝奶茶R]",
+            "喝奶茶"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "07",
+          "label": "自拍",
+          "token": "[xiaohongshu:07]",
+          "src": "/emotes/xiaohongshu/07.png",
+          "aliases": [
+            "[自拍R]",
+            "自拍"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "08",
+          "label": "偷笑",
+          "token": "[xiaohongshu:08]",
+          "src": "/emotes/xiaohongshu/08.png",
+          "aliases": [
+            "[偷笑R]",
+            "偷笑"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "09",
+          "label": "飞吻",
+          "token": "[xiaohongshu:09]",
+          "src": "/emotes/xiaohongshu/09.png",
+          "aliases": [
+            "[飞吻R]",
+            "飞吻"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "10",
+          "label": "石化",
+          "token": "[xiaohongshu:10]",
+          "src": "/emotes/xiaohongshu/10.png",
+          "aliases": [
+            "[石化R]",
+            "石化"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "11",
+          "label": "笑哭",
+          "token": "[xiaohongshu:11]",
+          "src": "/emotes/xiaohongshu/11.png",
+          "aliases": [
+            "[笑哭R]",
+            "笑哭"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "12",
+          "label": "赞",
+          "token": "[xiaohongshu:12]",
+          "src": "/emotes/xiaohongshu/12.png",
+          "aliases": [
+            "[赞R]",
+            "赞"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "13",
+          "label": "暗中观察",
+          "token": "[xiaohongshu:13]",
+          "src": "/emotes/xiaohongshu/13.png",
+          "aliases": [
+            "[暗中观察R]",
+            "暗中观察"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "14",
+          "label": "买爆",
+          "token": "[xiaohongshu:14]",
+          "src": "/emotes/xiaohongshu/14.png",
+          "aliases": [
+            "[买爆R]",
+            "买爆"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "15",
+          "label": "大笑",
+          "token": "[xiaohongshu:15]",
+          "src": "/emotes/xiaohongshu/15.png",
+          "aliases": [
+            "[大笑R]",
+            "大笑"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "16",
+          "label": "色色",
+          "token": "[xiaohongshu:16]",
+          "src": "/emotes/xiaohongshu/16.png",
+          "aliases": [
+            "[色色R]",
+            "色色"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "17",
+          "label": "生气",
+          "token": "[xiaohongshu:17]",
+          "src": "/emotes/xiaohongshu/17.png",
+          "aliases": [
+            "[生气R]",
+            "生气"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "18",
+          "label": "哭惹",
+          "token": "[xiaohongshu:18]",
+          "src": "/emotes/xiaohongshu/18.png",
+          "aliases": [
+            "[哭惹R]",
+            "哭惹"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "19",
+          "label": "萌萌哒",
+          "token": "[xiaohongshu:19]",
+          "src": "/emotes/xiaohongshu/19.png",
+          "aliases": [
+            "[萌萌哒R]",
+            "萌萌哒"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "20",
+          "label": "斜眼",
+          "token": "[xiaohongshu:20]",
+          "src": "/emotes/xiaohongshu/20.png",
+          "aliases": [
+            "[斜眼R]",
+            "斜眼"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "21",
+          "label": "可怜",
+          "token": "[xiaohongshu:21]",
+          "src": "/emotes/xiaohongshu/21.png",
+          "aliases": [
+            "[可怜R]",
+            "可怜"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "22",
+          "label": "鄙视",
+          "token": "[xiaohongshu:22]",
+          "src": "/emotes/xiaohongshu/22.png",
+          "aliases": [
+            "[鄙视R]",
+            "鄙视"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "23",
+          "label": "皱眉",
+          "token": "[xiaohongshu:23]",
+          "src": "/emotes/xiaohongshu/23.png",
+          "aliases": [
+            "[皱眉R]",
+            "皱眉"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "24",
+          "label": "抓狂",
+          "token": "[xiaohongshu:24]",
+          "src": "/emotes/xiaohongshu/24.png",
+          "aliases": [
+            "[抓狂R]",
+            "抓狂"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "25",
+          "label": "捂脸",
+          "token": "[xiaohongshu:25]",
+          "src": "/emotes/xiaohongshu/25.png",
+          "aliases": [
+            "[捂脸R]",
+            "捂脸"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "26",
+          "label": "派对",
+          "token": "[xiaohongshu:26]",
+          "src": "/emotes/xiaohongshu/26.png",
+          "aliases": [
+            "[派对R]",
+            "派对"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "27",
+          "label": "吧唧",
+          "token": "[xiaohongshu:27]",
+          "src": "/emotes/xiaohongshu/27.png",
+          "aliases": [
+            "[吧唧R]",
+            "吧唧"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "28",
+          "label": "惊恐",
+          "token": "[xiaohongshu:28]",
+          "src": "/emotes/xiaohongshu/28.png",
+          "aliases": [
+            "[惊恐R]",
+            "惊恐"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "29",
+          "label": "抠鼻",
+          "token": "[xiaohongshu:29]",
+          "src": "/emotes/xiaohongshu/29.png",
+          "aliases": [
+            "[抠鼻R]",
+            "抠鼻"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "30",
+          "label": "再见",
+          "token": "[xiaohongshu:30]",
+          "src": "/emotes/xiaohongshu/30.png",
+          "aliases": [
+            "[再见R]",
+            "再见"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "31",
+          "label": "叹气",
+          "token": "[xiaohongshu:31]",
+          "src": "/emotes/xiaohongshu/31.png",
+          "aliases": [
+            "[叹气R]",
+            "叹气"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "32",
+          "label": "睡觉",
+          "token": "[xiaohongshu:32]",
+          "src": "/emotes/xiaohongshu/32.png",
+          "aliases": [
+            "[睡觉R]",
+            "睡觉"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "33",
+          "label": "得意",
+          "token": "[xiaohongshu:33]",
+          "src": "/emotes/xiaohongshu/33.png",
+          "aliases": [
+            "[得意R]",
+            "得意"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "34",
+          "label": "吃瓜",
+          "token": "[xiaohongshu:34]",
+          "src": "/emotes/xiaohongshu/34.png",
+          "aliases": [
+            "[吃瓜R]",
+            "吃瓜"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "35",
+          "label": "扶墙",
+          "token": "[xiaohongshu:35]",
+          "src": "/emotes/xiaohongshu/35.png",
+          "aliases": [
+            "[扶墙R]",
+            "扶墙"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "36",
+          "label": "黑薯问号",
+          "token": "[xiaohongshu:36]",
+          "src": "/emotes/xiaohongshu/36.png",
+          "aliases": [
+            "[黑薯问号R]",
+            "黑薯问号"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "37",
+          "label": "黄金薯",
+          "token": "[xiaohongshu:37]",
+          "src": "/emotes/xiaohongshu/37.png",
+          "aliases": [
+            "[黄金薯R]",
+            "黄金薯"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "38",
+          "label": "吐舌头",
+          "token": "[xiaohongshu:38]",
+          "src": "/emotes/xiaohongshu/38.png",
+          "aliases": [
+            "[吐舌头R]",
+            "吐舌头"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "39",
+          "label": "扯脸",
+          "token": "[xiaohongshu:39]",
+          "src": "/emotes/xiaohongshu/39.png",
+          "aliases": [
+            "[扯脸R]",
+            "扯脸"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "40",
+          "label": "dog",
+          "token": "[xiaohongshu:40]",
+          "src": "/emotes/xiaohongshu/40.png",
+          "aliases": [
+            "[dogR]",
+            "dog"
+          ]
+        }
+      ],
+      "defaultEnabled": false,
+      "source": "https://github.com/HuangxupingSDSC/xhs-emoji"
+    },
+    {
+      "id": "heybox",
+      "label": "小黑盒",
+      "items": [
+        {
+          "kind": "image",
+          "id": "11",
+          "label": "哭泣",
+          "token": "[heybox:11]",
+          "src": "/emotes/heybox/11.png",
+          "aliases": [
+            "[cube_哭泣]",
+            "哭泣"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "12",
+          "label": "酷",
+          "token": "[heybox:12]",
+          "src": "/emotes/heybox/12.png",
+          "aliases": [
+            "[cube_酷]",
+            "酷"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "13",
+          "label": "doge",
+          "token": "[heybox:13]",
+          "src": "/emotes/heybox/13.png",
+          "aliases": [
+            "[cube_doge]",
+            "doge"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "14",
+          "label": "喜欢",
+          "token": "[heybox:14]",
+          "src": "/emotes/heybox/14.png",
+          "aliases": [
+            "[cube_喜欢]",
+            "喜欢"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "15",
+          "label": "黑人问号",
+          "token": "[heybox:15]",
+          "src": "/emotes/heybox/15.png",
+          "aliases": [
+            "[cube_黑人问号]",
+            "黑人问号"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "16",
+          "label": "惊讶",
+          "token": "[heybox:16]",
+          "src": "/emotes/heybox/16.png",
+          "aliases": [
+            "[cube_惊讶]",
+            "惊讶"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "21",
+          "label": "开心",
+          "token": "[heybox:21]",
+          "src": "/emotes/heybox/21.png",
+          "aliases": [
+            "[cube_开心]",
+            "开心"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "22",
+          "label": "捂脸哭",
+          "token": "[heybox:22]",
+          "src": "/emotes/heybox/22.png",
+          "aliases": [
+            "[cube_捂脸哭]",
+            "捂脸哭"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "23",
+          "label": "晕",
+          "token": "[heybox:23]",
+          "src": "/emotes/heybox/23.png",
+          "aliases": [
+            "[cube_晕]",
+            "晕"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "24",
+          "label": "感动",
+          "token": "[heybox:24]",
+          "src": "/emotes/heybox/24.png",
+          "aliases": [
+            "[cube_感动]",
+            "感动"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "25",
+          "label": "委屈",
+          "token": "[heybox:25]",
+          "src": "/emotes/heybox/25.png",
+          "aliases": [
+            "[cube_委屈]",
+            "委屈"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "26",
+          "label": "并不简单",
+          "token": "[heybox:26]",
+          "src": "/emotes/heybox/26.png",
+          "aliases": [
+            "[cube_并不简单]",
+            "并不简单"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "31",
+          "label": "乖",
+          "token": "[heybox:31]",
+          "src": "/emotes/heybox/31.png",
+          "aliases": [
+            "[cube_乖]",
+            "乖"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "32",
+          "label": "笑cry",
+          "token": "[heybox:32]",
+          "src": "/emotes/heybox/32.png",
+          "aliases": [
+            "[cube_笑cry]",
+            "笑cry"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "33",
+          "label": "怒",
+          "token": "[heybox:33]",
+          "src": "/emotes/heybox/33.png",
+          "aliases": [
+            "[cube_怒]",
+            "怒"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "34",
+          "label": "滑稽",
+          "token": "[heybox:34]",
+          "src": "/emotes/heybox/34.png",
+          "aliases": [
+            "[cube_滑稽]",
+            "滑稽"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "35",
+          "label": "沧桑",
+          "token": "[heybox:35]",
+          "src": "/emotes/heybox/35.png",
+          "aliases": [
+            "[cube_沧桑]",
+            "沧桑"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "36",
+          "label": "凄凉",
+          "token": "[heybox:36]",
+          "src": "/emotes/heybox/36.png",
+          "aliases": [
+            "[cube_凄凉]",
+            "凄凉"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "41",
+          "label": "赞",
+          "token": "[heybox:41]",
+          "src": "/emotes/heybox/41.png",
+          "aliases": [
+            "[cube_赞]",
+            "赞"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "42",
+          "label": "学习",
+          "token": "[heybox:42]",
+          "src": "/emotes/heybox/42.png",
+          "aliases": [
+            "[cube_学习]",
+            "学习"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "43",
+          "label": "叹气",
+          "token": "[heybox:43]",
+          "src": "/emotes/heybox/43.png",
+          "aliases": [
+            "[cube_叹气]",
+            "叹气"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "44",
+          "label": "加油",
+          "token": "[heybox:44]",
+          "src": "/emotes/heybox/44.png",
+          "aliases": [
+            "[cube_加油]",
+            "加油"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "45",
+          "label": "摊手",
+          "token": "[heybox:45]",
+          "src": "/emotes/heybox/45.png",
+          "aliases": [
+            "[cube_摊手]",
+            "摊手"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "46",
+          "label": "喷水",
+          "token": "[heybox:46]",
+          "src": "/emotes/heybox/46.png",
+          "aliases": [
+            "[cube_喷水]",
+            "喷水"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "51",
+          "label": "打脸",
+          "token": "[heybox:51]",
+          "src": "/emotes/heybox/51.png",
+          "aliases": [
+            "[cube_打脸]",
+            "打脸"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "52",
+          "label": "H币",
+          "token": "[heybox:52]",
+          "src": "/emotes/heybox/52.png",
+          "aliases": [
+            "[cube_H币]",
+            "H币"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "53",
+          "label": "生气",
+          "token": "[heybox:53]",
+          "src": "/emotes/heybox/53.png",
+          "aliases": [
+            "[cube_生气]",
+            "生气"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "54",
+          "label": "困",
+          "token": "[heybox:54]",
+          "src": "/emotes/heybox/54.png",
+          "aliases": [
+            "[cube_困]",
+            "困"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "55",
+          "label": "闭嘴",
+          "token": "[heybox:55]",
+          "src": "/emotes/heybox/55.png",
+          "aliases": [
+            "[cube_闭嘴]",
+            "闭嘴"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "56",
+          "label": "吐",
+          "token": "[heybox:56]",
+          "src": "/emotes/heybox/56.png",
+          "aliases": [
+            "[cube_吐]",
+            "吐"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "61",
+          "label": "咕咕",
+          "token": "[heybox:61]",
+          "src": "/emotes/heybox/61.png",
+          "aliases": [
+            "[cube_咕咕]",
+            "咕咕"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "62",
+          "label": "微笑",
+          "token": "[heybox:62]",
+          "src": "/emotes/heybox/62.png",
+          "aliases": [
+            "[cube_微笑]",
+            "微笑"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "63",
+          "label": "哇",
+          "token": "[heybox:63]",
+          "src": "/emotes/heybox/63.png",
+          "aliases": [
+            "[cube_哇]",
+            "哇"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "64",
+          "label": "汗",
+          "token": "[heybox:64]",
+          "src": "/emotes/heybox/64.png",
+          "aliases": [
+            "[cube_汗]",
+            "汗"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "65",
+          "label": "吓",
+          "token": "[heybox:65]",
+          "src": "/emotes/heybox/65.png",
+          "aliases": [
+            "[cube_吓]",
+            "吓"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "66",
+          "label": "睡觉",
+          "token": "[heybox:66]",
+          "src": "/emotes/heybox/66.png",
+          "aliases": [
+            "[cube_睡觉]",
+            "睡觉"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "71",
+          "label": "2023",
+          "token": "[heybox:71]",
+          "src": "/emotes/heybox/71.png",
+          "aliases": [
+            "[cube_2023]",
+            "2023"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "72",
+          "label": "圣诞树",
+          "token": "[heybox:72]",
+          "src": "/emotes/heybox/72.png",
+          "aliases": [
+            "[cube_圣诞树]",
+            "圣诞树"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "73",
+          "label": "庆祝",
+          "token": "[heybox:73]",
+          "src": "/emotes/heybox/73.png",
+          "aliases": [
+            "[cube_庆祝]",
+            "庆祝"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "74",
+          "label": "庆祝-圣诞",
+          "token": "[heybox:74]",
+          "src": "/emotes/heybox/74.png",
+          "aliases": [
+            "[cube_庆祝-圣诞]",
+            "庆祝-圣诞"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "75",
+          "label": "你懂我",
+          "token": "[heybox:75]",
+          "src": "/emotes/heybox/75.png",
+          "aliases": [
+            "[cube_你懂我]",
+            "你懂我"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "76",
+          "label": "我懂你",
+          "token": "[heybox:76]",
+          "src": "/emotes/heybox/76.png",
+          "aliases": [
+            "[cube_我懂你]",
+            "我懂你"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "81",
+          "label": "阳",
+          "token": "[heybox:81]",
+          "src": "/emotes/heybox/81.png",
+          "aliases": [
+            "[cube_阳]",
+            "阳"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "82",
+          "label": "比心",
+          "token": "[heybox:82]",
+          "src": "/emotes/heybox/82.png",
+          "aliases": [
+            "[cube_比心]",
+            "比心"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "83",
+          "label": "wota",
+          "token": "[heybox:83]",
+          "src": "/emotes/heybox/83.png",
+          "aliases": [
+            "[cube_wota]",
+            "wota"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "84",
+          "label": "鹅",
+          "token": "[heybox:84]",
+          "src": "/emotes/heybox/84.png",
+          "aliases": [
+            "[cube_鹅]",
+            "鹅"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "85",
+          "label": "握草",
+          "token": "[heybox:85]",
+          "src": "/emotes/heybox/85.png",
+          "aliases": [
+            "[cube_握草]",
+            "握草"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "86",
+          "label": "这是什么鸟",
+          "token": "[heybox:86]",
+          "src": "/emotes/heybox/86.png",
+          "aliases": [
+            "[cube_这是什么鸟]",
+            "这是什么鸟"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "91",
+          "label": "上学-乐",
+          "token": "[heybox:91]",
+          "src": "/emotes/heybox/91.png",
+          "aliases": [
+            "[cube_上学-乐]",
+            "上学-乐"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "92",
+          "label": "上学-丧",
+          "token": "[heybox:92]",
+          "src": "/emotes/heybox/92.png",
+          "aliases": [
+            "[cube_上学-丧]",
+            "上学-丧"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "93",
+          "label": "打咩",
+          "token": "[heybox:93]",
+          "src": "/emotes/heybox/93.png",
+          "aliases": [
+            "[cube_打咩]",
+            "打咩"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "94",
+          "label": "超人",
+          "token": "[heybox:94]",
+          "src": "/emotes/heybox/94.png",
+          "aliases": [
+            "[cube_超人]",
+            "超人"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "95",
+          "label": "僵尸",
+          "token": "[heybox:95]",
+          "src": "/emotes/heybox/95.png",
+          "aliases": [
+            "[cube_僵尸]",
+            "僵尸"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "96",
+          "label": "窝囊",
+          "token": "[heybox:96]",
+          "src": "/emotes/heybox/96.png",
+          "aliases": [
+            "[cube_窝囊]",
+            "窝囊"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "101",
+          "label": "小鸡",
+          "token": "[heybox:101]",
+          "src": "/emotes/heybox/101.png",
+          "aliases": [
+            "[cube_小鸡]",
+            "小鸡"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "102",
+          "label": "摸摸头",
+          "token": "[heybox:102]",
+          "src": "/emotes/heybox/102.png",
+          "aliases": [
+            "[cube_摸摸头]",
+            "摸摸头"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "103",
+          "label": "电牛",
+          "token": "[heybox:103]",
+          "src": "/emotes/heybox/103.png",
+          "aliases": [
+            "[cube_电牛]",
+            "电牛"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "104",
+          "label": "摘墨镜",
+          "token": "[heybox:104]",
+          "src": "/emotes/heybox/104.png",
+          "aliases": [
+            "[cube_摘墨镜]",
+            "摘墨镜"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "105",
+          "label": "悟空",
+          "token": "[heybox:105]",
+          "src": "/emotes/heybox/105.png",
+          "aliases": [
+            "[cube_悟空]",
+            "悟空"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "106",
+          "label": "2024",
+          "token": "[heybox:106]",
+          "src": "/emotes/heybox/106.png",
+          "aliases": [
+            "[cube_2024]",
+            "2024"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "111",
+          "label": "良民",
+          "token": "[heybox:111]",
+          "src": "/emotes/heybox/111.png",
+          "aliases": [
+            "[cube_良民]",
+            "良民"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "112",
+          "label": "嬉水女王",
+          "token": "[heybox:112]",
+          "src": "/emotes/heybox/112.png",
+          "aliases": [
+            "[cube_嬉水女王]",
+            "嬉水女王"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "113",
+          "label": "2025",
+          "token": "[heybox:113]",
+          "src": "/emotes/heybox/113.png",
+          "aliases": [
+            "[cube_2025]",
+            "2025"
+          ]
+        }
+      ],
+      "defaultEnabled": false,
+      "source": "https://static.max-c.com/heybox_web/emoji/cube/cube_emoji_v9.png"
+    },
+    {
+      "id": "tieba",
+      "label": "贴吧",
+      "items": [
+        {
+          "kind": "image",
+          "id": "1",
+          "label": "呵呵",
+          "token": "[tieba:1]",
+          "src": "/emotes/tieba/1.png",
+          "aliases": [
+            "呵呵"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "2",
+          "label": "哈哈",
+          "token": "[tieba:2]",
+          "src": "/emotes/tieba/2.png",
+          "aliases": [
+            "哈哈"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "3",
+          "label": "吐舌",
+          "token": "[tieba:3]",
+          "src": "/emotes/tieba/3.png",
+          "aliases": [
+            "吐舌"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "4",
+          "label": "啊",
+          "token": "[tieba:4]",
+          "src": "/emotes/tieba/4.png",
+          "aliases": [
+            "啊"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "5",
+          "label": "酷",
+          "token": "[tieba:5]",
+          "src": "/emotes/tieba/5.png",
+          "aliases": [
+            "酷"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "6",
+          "label": "怒",
+          "token": "[tieba:6]",
+          "src": "/emotes/tieba/6.png",
+          "aliases": [
+            "怒"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "7",
+          "label": "开心",
+          "token": "[tieba:7]",
+          "src": "/emotes/tieba/7.png",
+          "aliases": [
+            "开心"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "8",
+          "label": "汗",
+          "token": "[tieba:8]",
+          "src": "/emotes/tieba/8.png",
+          "aliases": [
+            "汗"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "9",
+          "label": "泪",
+          "token": "[tieba:9]",
+          "src": "/emotes/tieba/9.png",
+          "aliases": [
+            "泪"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "10",
+          "label": "黑线",
+          "token": "[tieba:10]",
+          "src": "/emotes/tieba/10.png",
+          "aliases": [
+            "黑线"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "11",
+          "label": "鄙视",
+          "token": "[tieba:11]",
+          "src": "/emotes/tieba/11.png",
+          "aliases": [
+            "鄙视"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "12",
+          "label": "不高兴",
+          "token": "[tieba:12]",
+          "src": "/emotes/tieba/12.png",
+          "aliases": [
+            "不高兴"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "13",
+          "label": "真棒",
+          "token": "[tieba:13]",
+          "src": "/emotes/tieba/13.png",
+          "aliases": [
+            "真棒"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "14",
+          "label": "钱",
+          "token": "[tieba:14]",
+          "src": "/emotes/tieba/14.png",
+          "aliases": [
+            "钱"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "15",
+          "label": "疑问",
+          "token": "[tieba:15]",
+          "src": "/emotes/tieba/15.png",
+          "aliases": [
+            "疑问"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "16",
+          "label": "阴险",
+          "token": "[tieba:16]",
+          "src": "/emotes/tieba/16.png",
+          "aliases": [
+            "阴险"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "17",
+          "label": "吐",
+          "token": "[tieba:17]",
+          "src": "/emotes/tieba/17.png",
+          "aliases": [
+            "吐"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "18",
+          "label": "咦",
+          "token": "[tieba:18]",
+          "src": "/emotes/tieba/18.png",
+          "aliases": [
+            "咦"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "19",
+          "label": "委屈",
+          "token": "[tieba:19]",
+          "src": "/emotes/tieba/19.png",
+          "aliases": [
+            "委屈"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "20",
+          "label": "花心",
+          "token": "[tieba:20]",
+          "src": "/emotes/tieba/20.png",
+          "aliases": [
+            "花心"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "21",
+          "label": "呼",
+          "token": "[tieba:21]",
+          "src": "/emotes/tieba/21.png",
+          "aliases": [
+            "呼"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "22",
+          "label": "笑眼",
+          "token": "[tieba:22]",
+          "src": "/emotes/tieba/22.png",
+          "aliases": [
+            "笑眼"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "23",
+          "label": "冷",
+          "token": "[tieba:23]",
+          "src": "/emotes/tieba/23.png",
+          "aliases": [
+            "冷"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "24",
+          "label": "太开心",
+          "token": "[tieba:24]",
+          "src": "/emotes/tieba/24.png",
+          "aliases": [
+            "太开心"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "25",
+          "label": "滑稽",
+          "token": "[tieba:25]",
+          "src": "/emotes/tieba/25.png",
+          "aliases": [
+            "滑稽"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "26",
+          "label": "勉强",
+          "token": "[tieba:26]",
+          "src": "/emotes/tieba/26.png",
+          "aliases": [
+            "勉强"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "27",
+          "label": "狂汗",
+          "token": "[tieba:27]",
+          "src": "/emotes/tieba/27.png",
+          "aliases": [
+            "狂汗"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "28",
+          "label": "乖",
+          "token": "[tieba:28]",
+          "src": "/emotes/tieba/28.png",
+          "aliases": [
+            "乖"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "29",
+          "label": "睡觉",
+          "token": "[tieba:29]",
+          "src": "/emotes/tieba/29.png",
+          "aliases": [
+            "睡觉"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "30",
+          "label": "惊哭",
+          "token": "[tieba:30]",
+          "src": "/emotes/tieba/30.png",
+          "aliases": [
+            "惊哭"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "31",
+          "label": "生气",
+          "token": "[tieba:31]",
+          "src": "/emotes/tieba/31.png",
+          "aliases": [
+            "生气"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "32",
+          "label": "惊讶",
+          "token": "[tieba:32]",
+          "src": "/emotes/tieba/32.png",
+          "aliases": [
+            "惊讶"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "33",
+          "label": "喷",
+          "token": "[tieba:33]",
+          "src": "/emotes/tieba/33.png",
+          "aliases": [
+            "喷"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "34",
+          "label": "爱心",
+          "token": "[tieba:34]",
+          "src": "/emotes/tieba/34.png",
+          "aliases": [
+            "爱心"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "35",
+          "label": "心碎",
+          "token": "[tieba:35]",
+          "src": "/emotes/tieba/35.png",
+          "aliases": [
+            "心碎"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "36",
+          "label": "玫瑰",
+          "token": "[tieba:36]",
+          "src": "/emotes/tieba/36.png",
+          "aliases": [
+            "玫瑰"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "37",
+          "label": "礼物",
+          "token": "[tieba:37]",
+          "src": "/emotes/tieba/37.png",
+          "aliases": [
+            "礼物"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "38",
+          "label": "彩虹",
+          "token": "[tieba:38]",
+          "src": "/emotes/tieba/38.png",
+          "aliases": [
+            "彩虹"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "39",
+          "label": "星星月亮",
+          "token": "[tieba:39]",
+          "src": "/emotes/tieba/39.png",
+          "aliases": [
+            "星星月亮"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "40",
+          "label": "太阳",
+          "token": "[tieba:40]",
+          "src": "/emotes/tieba/40.png",
+          "aliases": [
+            "太阳"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "41",
+          "label": "钱币",
+          "token": "[tieba:41]",
+          "src": "/emotes/tieba/41.png",
+          "aliases": [
+            "钱币"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "42",
+          "label": "灯泡",
+          "token": "[tieba:42]",
+          "src": "/emotes/tieba/42.png",
+          "aliases": [
+            "灯泡"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "43",
+          "label": "茶杯",
+          "token": "[tieba:43]",
+          "src": "/emotes/tieba/43.png",
+          "aliases": [
+            "茶杯"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "44",
+          "label": "蛋糕",
+          "token": "[tieba:44]",
+          "src": "/emotes/tieba/44.png",
+          "aliases": [
+            "蛋糕"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "45",
+          "label": "音乐",
+          "token": "[tieba:45]",
+          "src": "/emotes/tieba/45.png",
+          "aliases": [
+            "音乐"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "46",
+          "label": "haha",
+          "token": "[tieba:46]",
+          "src": "/emotes/tieba/46.png",
+          "aliases": [
+            "haha"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "47",
+          "label": "胜利",
+          "token": "[tieba:47]",
+          "src": "/emotes/tieba/47.png",
+          "aliases": [
+            "胜利"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "48",
+          "label": "大拇指",
+          "token": "[tieba:48]",
+          "src": "/emotes/tieba/48.png",
+          "aliases": [
+            "大拇指"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "49",
+          "label": "弱",
+          "token": "[tieba:49]",
+          "src": "/emotes/tieba/49.png",
+          "aliases": [
+            "弱"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "50",
+          "label": "OK",
+          "token": "[tieba:50]",
+          "src": "/emotes/tieba/50.png",
+          "aliases": [
+            "OK"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "62",
+          "label": "贴吧表情 62",
+          "token": "[tieba:62]",
+          "src": "/emotes/tieba/62.png",
+          "aliases": [
+            "贴吧表情 62"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "63",
+          "label": "贴吧表情 63",
+          "token": "[tieba:63]",
+          "src": "/emotes/tieba/63.png",
+          "aliases": [
+            "贴吧表情 63"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "64",
+          "label": "贴吧表情 64",
+          "token": "[tieba:64]",
+          "src": "/emotes/tieba/64.png",
+          "aliases": [
+            "贴吧表情 64"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "65",
+          "label": "贴吧表情 65",
+          "token": "[tieba:65]",
+          "src": "/emotes/tieba/65.png",
+          "aliases": [
+            "贴吧表情 65"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "66",
+          "label": "贴吧表情 66",
+          "token": "[tieba:66]",
+          "src": "/emotes/tieba/66.png",
+          "aliases": [
+            "贴吧表情 66"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "67",
+          "label": "贴吧表情 67",
+          "token": "[tieba:67]",
+          "src": "/emotes/tieba/67.png",
+          "aliases": [
+            "贴吧表情 67"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "68",
+          "label": "贴吧表情 68",
+          "token": "[tieba:68]",
+          "src": "/emotes/tieba/68.png",
+          "aliases": [
+            "贴吧表情 68"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "69",
+          "label": "贴吧表情 69",
+          "token": "[tieba:69]",
+          "src": "/emotes/tieba/69.png",
+          "aliases": [
+            "贴吧表情 69"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "70",
+          "label": "贴吧表情 70",
+          "token": "[tieba:70]",
+          "src": "/emotes/tieba/70.png",
+          "aliases": [
+            "贴吧表情 70"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "71",
+          "label": "贴吧表情 71",
+          "token": "[tieba:71]",
+          "src": "/emotes/tieba/71.png",
+          "aliases": [
+            "贴吧表情 71"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "72",
+          "label": "贴吧表情 72",
+          "token": "[tieba:72]",
+          "src": "/emotes/tieba/72.png",
+          "aliases": [
+            "贴吧表情 72"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "73",
+          "label": "贴吧表情 73",
+          "token": "[tieba:73]",
+          "src": "/emotes/tieba/73.png",
+          "aliases": [
+            "贴吧表情 73"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "74",
+          "label": "贴吧表情 74",
+          "token": "[tieba:74]",
+          "src": "/emotes/tieba/74.png",
+          "aliases": [
+            "贴吧表情 74"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "75",
+          "label": "贴吧表情 75",
+          "token": "[tieba:75]",
+          "src": "/emotes/tieba/75.png",
+          "aliases": [
+            "贴吧表情 75"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "76",
+          "label": "贴吧表情 76",
+          "token": "[tieba:76]",
+          "src": "/emotes/tieba/76.png",
+          "aliases": [
+            "贴吧表情 76"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "77",
+          "label": "贴吧表情 77",
+          "token": "[tieba:77]",
+          "src": "/emotes/tieba/77.png",
+          "aliases": [
+            "贴吧表情 77"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "78",
+          "label": "贴吧表情 78",
+          "token": "[tieba:78]",
+          "src": "/emotes/tieba/78.png",
+          "aliases": [
+            "贴吧表情 78"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "79",
+          "label": "贴吧表情 79",
+          "token": "[tieba:79]",
+          "src": "/emotes/tieba/79.png",
+          "aliases": [
+            "贴吧表情 79"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "80",
+          "label": "贴吧表情 80",
+          "token": "[tieba:80]",
+          "src": "/emotes/tieba/80.png",
+          "aliases": [
+            "贴吧表情 80"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "81",
+          "label": "贴吧表情 81",
+          "token": "[tieba:81]",
+          "src": "/emotes/tieba/81.png",
+          "aliases": [
+            "贴吧表情 81"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "82",
+          "label": "贴吧表情 82",
+          "token": "[tieba:82]",
+          "src": "/emotes/tieba/82.png",
+          "aliases": [
+            "贴吧表情 82"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "83",
+          "label": "贴吧表情 83",
+          "token": "[tieba:83]",
+          "src": "/emotes/tieba/83.png",
+          "aliases": [
+            "贴吧表情 83"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "84",
+          "label": "贴吧表情 84",
+          "token": "[tieba:84]",
+          "src": "/emotes/tieba/84.png",
+          "aliases": [
+            "贴吧表情 84"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "85",
+          "label": "贴吧表情 85",
+          "token": "[tieba:85]",
+          "src": "/emotes/tieba/85.png",
+          "aliases": [
+            "贴吧表情 85"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "86",
+          "label": "贴吧表情 86",
+          "token": "[tieba:86]",
+          "src": "/emotes/tieba/86.png",
+          "aliases": [
+            "贴吧表情 86"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "87",
+          "label": "贴吧表情 87",
+          "token": "[tieba:87]",
+          "src": "/emotes/tieba/87.png",
+          "aliases": [
+            "贴吧表情 87"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "88",
+          "label": "贴吧表情 88",
+          "token": "[tieba:88]",
+          "src": "/emotes/tieba/88.png",
+          "aliases": [
+            "贴吧表情 88"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "89",
+          "label": "贴吧表情 89",
+          "token": "[tieba:89]",
+          "src": "/emotes/tieba/89.png",
+          "aliases": [
+            "贴吧表情 89"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "90",
+          "label": "贴吧表情 90",
+          "token": "[tieba:90]",
+          "src": "/emotes/tieba/90.png",
+          "aliases": [
+            "贴吧表情 90"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "91",
+          "label": "贴吧表情 91",
+          "token": "[tieba:91]",
+          "src": "/emotes/tieba/91.png",
+          "aliases": [
+            "贴吧表情 91"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "92",
+          "label": "贴吧表情 92",
+          "token": "[tieba:92]",
+          "src": "/emotes/tieba/92.png",
+          "aliases": [
+            "贴吧表情 92"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "93",
+          "label": "贴吧表情 93",
+          "token": "[tieba:93]",
+          "src": "/emotes/tieba/93.png",
+          "aliases": [
+            "贴吧表情 93"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "94",
+          "label": "贴吧表情 94",
+          "token": "[tieba:94]",
+          "src": "/emotes/tieba/94.png",
+          "aliases": [
+            "贴吧表情 94"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "95",
+          "label": "贴吧表情 95",
+          "token": "[tieba:95]",
+          "src": "/emotes/tieba/95.png",
+          "aliases": [
+            "贴吧表情 95"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "96",
+          "label": "贴吧表情 96",
+          "token": "[tieba:96]",
+          "src": "/emotes/tieba/96.png",
+          "aliases": [
+            "贴吧表情 96"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "97",
+          "label": "贴吧表情 97",
+          "token": "[tieba:97]",
+          "src": "/emotes/tieba/97.png",
+          "aliases": [
+            "贴吧表情 97"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "98",
+          "label": "贴吧表情 98",
+          "token": "[tieba:98]",
+          "src": "/emotes/tieba/98.png",
+          "aliases": [
+            "贴吧表情 98"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "99",
+          "label": "贴吧表情 99",
+          "token": "[tieba:99]",
+          "src": "/emotes/tieba/99.png",
+          "aliases": [
+            "贴吧表情 99"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "100",
+          "label": "贴吧表情 100",
+          "token": "[tieba:100]",
+          "src": "/emotes/tieba/100.png",
+          "aliases": [
+            "贴吧表情 100"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "101",
+          "label": "贴吧表情 101",
+          "token": "[tieba:101]",
+          "src": "/emotes/tieba/101.png",
+          "aliases": [
+            "贴吧表情 101"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "102",
+          "label": "贴吧表情 102",
+          "token": "[tieba:102]",
+          "src": "/emotes/tieba/102.png",
+          "aliases": [
+            "贴吧表情 102"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "103",
+          "label": "贴吧表情 103",
+          "token": "[tieba:103]",
+          "src": "/emotes/tieba/103.png",
+          "aliases": [
+            "贴吧表情 103"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "104",
+          "label": "贴吧表情 104",
+          "token": "[tieba:104]",
+          "src": "/emotes/tieba/104.png",
+          "aliases": [
+            "贴吧表情 104"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "105",
+          "label": "贴吧表情 105",
+          "token": "[tieba:105]",
+          "src": "/emotes/tieba/105.png",
+          "aliases": [
+            "贴吧表情 105"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "106",
+          "label": "贴吧表情 106",
+          "token": "[tieba:106]",
+          "src": "/emotes/tieba/106.png",
+          "aliases": [
+            "贴吧表情 106"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "107",
+          "label": "贴吧表情 107",
+          "token": "[tieba:107]",
+          "src": "/emotes/tieba/107.png",
+          "aliases": [
+            "贴吧表情 107"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "108",
+          "label": "贴吧表情 108",
+          "token": "[tieba:108]",
+          "src": "/emotes/tieba/108.png",
+          "aliases": [
+            "贴吧表情 108"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "109",
+          "label": "贴吧表情 109",
+          "token": "[tieba:109]",
+          "src": "/emotes/tieba/109.png",
+          "aliases": [
+            "贴吧表情 109"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "110",
+          "label": "贴吧表情 110",
+          "token": "[tieba:110]",
+          "src": "/emotes/tieba/110.png",
+          "aliases": [
+            "贴吧表情 110"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "111",
+          "label": "贴吧表情 111",
+          "token": "[tieba:111]",
+          "src": "/emotes/tieba/111.png",
+          "aliases": [
+            "贴吧表情 111"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "112",
+          "label": "贴吧表情 112",
+          "token": "[tieba:112]",
+          "src": "/emotes/tieba/112.png",
+          "aliases": [
+            "贴吧表情 112"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "113",
+          "label": "贴吧表情 113",
+          "token": "[tieba:113]",
+          "src": "/emotes/tieba/113.png",
+          "aliases": [
+            "贴吧表情 113"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "114",
+          "label": "贴吧表情 114",
+          "token": "[tieba:114]",
+          "src": "/emotes/tieba/114.png",
+          "aliases": [
+            "贴吧表情 114"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "115",
+          "label": "贴吧表情 115",
+          "token": "[tieba:115]",
+          "src": "/emotes/tieba/115.png",
+          "aliases": [
+            "贴吧表情 115"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "116",
+          "label": "贴吧表情 116",
+          "token": "[tieba:116]",
+          "src": "/emotes/tieba/116.png",
+          "aliases": [
+            "贴吧表情 116"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "117",
+          "label": "贴吧表情 117",
+          "token": "[tieba:117]",
+          "src": "/emotes/tieba/117.png",
+          "aliases": [
+            "贴吧表情 117"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "118",
+          "label": "贴吧表情 118",
+          "token": "[tieba:118]",
+          "src": "/emotes/tieba/118.png",
+          "aliases": [
+            "贴吧表情 118"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "119",
+          "label": "贴吧表情 119",
+          "token": "[tieba:119]",
+          "src": "/emotes/tieba/119.png",
+          "aliases": [
+            "贴吧表情 119"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "120",
+          "label": "贴吧表情 120",
+          "token": "[tieba:120]",
+          "src": "/emotes/tieba/120.png",
+          "aliases": [
+            "贴吧表情 120"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "121",
+          "label": "贴吧表情 121",
+          "token": "[tieba:121]",
+          "src": "/emotes/tieba/121.png",
+          "aliases": [
+            "贴吧表情 121"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "122",
+          "label": "贴吧表情 122",
+          "token": "[tieba:122]",
+          "src": "/emotes/tieba/122.png",
+          "aliases": [
+            "贴吧表情 122"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "123",
+          "label": "贴吧表情 123",
+          "token": "[tieba:123]",
+          "src": "/emotes/tieba/123.png",
+          "aliases": [
+            "贴吧表情 123"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "124",
+          "label": "贴吧表情 124",
+          "token": "[tieba:124]",
+          "src": "/emotes/tieba/124.png",
+          "aliases": [
+            "贴吧表情 124"
+          ]
+        }
+      ],
+      "defaultEnabled": false,
+      "source": "https://github.com/microlong666/Tieba_mobile_emotions"
+    },
+    {
+      "id": "douyin",
+      "label": "抖音",
+      "items": [
+        {
+          "kind": "image",
+          "id": "smile",
+          "label": "微笑",
+          "token": "[douyin:smile]",
+          "src": "/emotes/douyin/laugh.svg",
+          "aliases": [
+            "微笑"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "happy",
+          "label": "开心",
+          "token": "[douyin:happy]",
+          "src": "/emotes/douyin/cover.svg",
+          "aliases": [
+            "开心"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "angry",
+          "label": "生气",
+          "token": "[douyin:angry]",
+          "src": "/emotes/douyin/laugh.svg",
+          "aliases": [
+            "生气"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "cry",
+          "label": "哭哭",
+          "token": "[douyin:cry]",
+          "src": "/emotes/douyin/cover.svg",
+          "aliases": [
+            "哭哭"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "embarrassed",
+          "label": "尴尬",
+          "token": "[douyin:embarrassed]",
+          "src": "/emotes/douyin/laugh.svg",
+          "aliases": [
+            "尴尬"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "surprised",
+          "label": "惊讶",
+          "token": "[douyin:surprised]",
+          "src": "/emotes/douyin/cover.svg",
+          "aliases": [
+            "惊讶"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "wronged",
+          "label": "委屈",
+          "token": "[douyin:wronged]",
+          "src": "/emotes/douyin/laugh.svg",
+          "aliases": [
+            "委屈"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "shout",
+          "label": "喊",
+          "token": "[douyin:shout]",
+          "src": "/emotes/douyin/cover.svg",
+          "aliases": [
+            "喊"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "flushed",
+          "label": "脸红",
+          "token": "[douyin:flushed]",
+          "src": "/emotes/douyin/laugh.svg",
+          "aliases": [
+            "脸红"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "yummy",
+          "label": "馋",
+          "token": "[douyin:yummy]",
+          "src": "/emotes/douyin/cover.svg",
+          "aliases": [
+            "馋"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "complacent",
+          "label": "得意",
+          "token": "[douyin:complacent]",
+          "src": "/emotes/douyin/laugh.svg",
+          "aliases": [
+            "得意"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "drool",
+          "label": "流口水",
+          "token": "[douyin:drool]",
+          "src": "/emotes/douyin/cover.svg",
+          "aliases": [
+            "流口水"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "scream",
+          "label": "尖叫",
+          "token": "[douyin:scream]",
+          "src": "/emotes/douyin/laugh.svg",
+          "aliases": [
+            "尖叫"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "weep",
+          "label": "流泪",
+          "token": "[douyin:weep]",
+          "src": "/emotes/douyin/cover.svg",
+          "aliases": [
+            "流泪"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "speechless",
+          "label": "无语",
+          "token": "[douyin:speechless]",
+          "src": "/emotes/douyin/laugh.svg",
+          "aliases": [
+            "无语"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "funnyface",
+          "label": "鬼脸",
+          "token": "[douyin:funnyface]",
+          "src": "/emotes/douyin/cover.svg",
+          "aliases": [
+            "鬼脸"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "laughwithtears",
+          "label": "笑哭",
+          "token": "[douyin:laughwithtears]",
+          "src": "/emotes/douyin/laugh.svg",
+          "aliases": [
+            "笑哭"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "wicked",
+          "label": "坏笑",
+          "token": "[douyin:wicked]",
+          "src": "/emotes/douyin/cover.svg",
+          "aliases": [
+            "坏笑"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "facewithrollingeyes",
+          "label": "翻白眼",
+          "token": "[douyin:facewithrollingeyes]",
+          "src": "/emotes/douyin/laugh.svg",
+          "aliases": [
+            "翻白眼"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "sulk",
+          "label": "郁闷",
+          "token": "[douyin:sulk]",
+          "src": "/emotes/douyin/cover.svg",
+          "aliases": [
+            "郁闷"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "thinking",
+          "label": "思考",
+          "token": "[douyin:thinking]",
+          "src": "/emotes/douyin/laugh.svg",
+          "aliases": [
+            "思考"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "lovely",
+          "label": "可爱",
+          "token": "[douyin:lovely]",
+          "src": "/emotes/douyin/cover.svg",
+          "aliases": [
+            "可爱"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "greedy",
+          "label": "贪心",
+          "token": "[douyin:greedy]",
+          "src": "/emotes/douyin/laugh.svg",
+          "aliases": [
+            "贪心"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "wow",
+          "label": "哇",
+          "token": "[douyin:wow]",
+          "src": "/emotes/douyin/cover.svg",
+          "aliases": [
+            "哇"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "joyful",
+          "label": "喜悦",
+          "token": "[douyin:joyful]",
+          "src": "/emotes/douyin/laugh.svg",
+          "aliases": [
+            "喜悦"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "hehe",
+          "label": "呵呵",
+          "token": "[douyin:hehe]",
+          "src": "/emotes/douyin/cover.svg",
+          "aliases": [
+            "呵呵"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "slap",
+          "label": "拍脸",
+          "token": "[douyin:slap]",
+          "src": "/emotes/douyin/laugh.svg",
+          "aliases": [
+            "拍脸"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "tears",
+          "label": "泪目",
+          "token": "[douyin:tears]",
+          "src": "/emotes/douyin/cover.svg",
+          "aliases": [
+            "泪目"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "stun",
+          "label": "发愣",
+          "token": "[douyin:stun]",
+          "src": "/emotes/douyin/laugh.svg",
+          "aliases": [
+            "发愣"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "cute",
+          "label": "卖萌",
+          "token": "[douyin:cute]",
+          "src": "/emotes/douyin/cover.svg",
+          "aliases": [
+            "卖萌"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "blink",
+          "label": "眨眼",
+          "token": "[douyin:blink]",
+          "src": "/emotes/douyin/laugh.svg",
+          "aliases": [
+            "眨眼"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "disdain",
+          "label": "不屑",
+          "token": "[douyin:disdain]",
+          "src": "/emotes/douyin/cover.svg",
+          "aliases": [
+            "不屑"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "astonish",
+          "label": "震惊",
+          "token": "[douyin:astonish]",
+          "src": "/emotes/douyin/laugh.svg",
+          "aliases": [
+            "震惊"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "rage",
+          "label": "暴怒",
+          "token": "[douyin:rage]",
+          "src": "/emotes/douyin/cover.svg",
+          "aliases": [
+            "暴怒"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "cool",
+          "label": "酷",
+          "token": "[douyin:cool]",
+          "src": "/emotes/douyin/laugh.svg",
+          "aliases": [
+            "酷"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "excited",
+          "label": "兴奋",
+          "token": "[douyin:excited]",
+          "src": "/emotes/douyin/cover.svg",
+          "aliases": [
+            "兴奋"
+          ]
+        }
+      ],
+      "defaultEnabled": false,
+      "source": "local-replaceable-pack; public Douyin web entry did not expose a stable asset manifest"
+    },
+    {
+      "id": "qq",
+      "label": "QQ",
+      "items": [
+        {
+          "kind": "image",
+          "id": "smile",
+          "label": "微笑",
+          "token": "[qq:smile]",
+          "src": "/emotes/qq/smile.gif",
+          "aliases": [
+            "微笑",
+            "e100"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "curl-lip",
+          "label": "撇嘴",
+          "token": "[qq:curl-lip]",
+          "src": "/emotes/qq/curl-lip.gif",
+          "aliases": [
+            "撇嘴",
+            "e101"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "color",
+          "label": "色",
+          "token": "[qq:color]",
+          "src": "/emotes/qq/color.gif",
+          "aliases": [
+            "色",
+            "e102"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "daze",
+          "label": "发呆",
+          "token": "[qq:daze]",
+          "src": "/emotes/qq/daze.gif",
+          "aliases": [
+            "发呆",
+            "e103"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "proud",
+          "label": "得意",
+          "token": "[qq:proud]",
+          "src": "/emotes/qq/proud.gif",
+          "aliases": [
+            "得意",
+            "e104"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "cry",
+          "label": "流泪",
+          "token": "[qq:cry]",
+          "src": "/emotes/qq/cry.gif",
+          "aliases": [
+            "流泪",
+            "e105"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "shy",
+          "label": "害羞",
+          "token": "[qq:shy]",
+          "src": "/emotes/qq/shy.gif",
+          "aliases": [
+            "害羞",
+            "e106"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "silent",
+          "label": "闭嘴",
+          "token": "[qq:silent]",
+          "src": "/emotes/qq/silent.gif",
+          "aliases": [
+            "闭嘴",
+            "e107"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "sleep",
+          "label": "睡",
+          "token": "[qq:sleep]",
+          "src": "/emotes/qq/sleep.gif",
+          "aliases": [
+            "睡",
+            "e108"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "sob",
+          "label": "大哭",
+          "token": "[qq:sob]",
+          "src": "/emotes/qq/sob.gif",
+          "aliases": [
+            "大哭",
+            "e109"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "awkward",
+          "label": "尴尬",
+          "token": "[qq:awkward]",
+          "src": "/emotes/qq/awkward.gif",
+          "aliases": [
+            "尴尬",
+            "e110"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "angry",
+          "label": "发怒",
+          "token": "[qq:angry]",
+          "src": "/emotes/qq/angry.gif",
+          "aliases": [
+            "发怒",
+            "e111"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "naughty",
+          "label": "调皮",
+          "token": "[qq:naughty]",
+          "src": "/emotes/qq/naughty.gif",
+          "aliases": [
+            "调皮",
+            "e112"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "grin",
+          "label": "呲牙",
+          "token": "[qq:grin]",
+          "src": "/emotes/qq/grin.gif",
+          "aliases": [
+            "呲牙",
+            "e113"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "surprise",
+          "label": "惊讶",
+          "token": "[qq:surprise]",
+          "src": "/emotes/qq/surprise.gif",
+          "aliases": [
+            "惊讶",
+            "e114"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "sad",
+          "label": "难过",
+          "token": "[qq:sad]",
+          "src": "/emotes/qq/sad.gif",
+          "aliases": [
+            "难过",
+            "e115"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "cool",
+          "label": "酷",
+          "token": "[qq:cool]",
+          "src": "/emotes/qq/cool.gif",
+          "aliases": [
+            "酷",
+            "e116"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "cold-sweat",
+          "label": "冷汗",
+          "token": "[qq:cold-sweat]",
+          "src": "/emotes/qq/cold-sweat.gif",
+          "aliases": [
+            "冷汗",
+            "e117"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "crazy",
+          "label": "抓狂",
+          "token": "[qq:crazy]",
+          "src": "/emotes/qq/crazy.gif",
+          "aliases": [
+            "抓狂",
+            "e118"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "vomit",
+          "label": "吐",
+          "token": "[qq:vomit]",
+          "src": "/emotes/qq/vomit.gif",
+          "aliases": [
+            "吐",
+            "e119"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "snicker",
+          "label": "偷笑",
+          "token": "[qq:snicker]",
+          "src": "/emotes/qq/snicker.gif",
+          "aliases": [
+            "偷笑",
+            "e120"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "cute",
+          "label": "可爱",
+          "token": "[qq:cute]",
+          "src": "/emotes/qq/cute.gif",
+          "aliases": [
+            "可爱",
+            "e121"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "roll-eyes",
+          "label": "白眼",
+          "token": "[qq:roll-eyes]",
+          "src": "/emotes/qq/roll-eyes.gif",
+          "aliases": [
+            "白眼",
+            "e122"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "arrogant",
+          "label": "傲慢",
+          "token": "[qq:arrogant]",
+          "src": "/emotes/qq/arrogant.gif",
+          "aliases": [
+            "傲慢",
+            "e123"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "hungry",
+          "label": "饥饿",
+          "token": "[qq:hungry]",
+          "src": "/emotes/qq/hungry.gif",
+          "aliases": [
+            "饥饿",
+            "e124"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "sleepy",
+          "label": "困",
+          "token": "[qq:sleepy]",
+          "src": "/emotes/qq/sleepy.gif",
+          "aliases": [
+            "困",
+            "e125"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "panic",
+          "label": "惊恐",
+          "token": "[qq:panic]",
+          "src": "/emotes/qq/panic.gif",
+          "aliases": [
+            "惊恐",
+            "e126"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "sweat",
+          "label": "流汗",
+          "token": "[qq:sweat]",
+          "src": "/emotes/qq/sweat.gif",
+          "aliases": [
+            "流汗",
+            "e127"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "smirk",
+          "label": "憨笑",
+          "token": "[qq:smirk]",
+          "src": "/emotes/qq/smirk.gif",
+          "aliases": [
+            "憨笑",
+            "e128"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "soldier",
+          "label": "大兵",
+          "token": "[qq:soldier]",
+          "src": "/emotes/qq/soldier.gif",
+          "aliases": [
+            "大兵",
+            "e129"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "struggle",
+          "label": "奋斗",
+          "token": "[qq:struggle]",
+          "src": "/emotes/qq/struggle.gif",
+          "aliases": [
+            "奋斗",
+            "e130"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "curse",
+          "label": "咒骂",
+          "token": "[qq:curse]",
+          "src": "/emotes/qq/curse.gif",
+          "aliases": [
+            "咒骂",
+            "e131"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "question",
+          "label": "疑问",
+          "token": "[qq:question]",
+          "src": "/emotes/qq/question.gif",
+          "aliases": [
+            "疑问",
+            "e132"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "hush",
+          "label": "嘘",
+          "token": "[qq:hush]",
+          "src": "/emotes/qq/hush.gif",
+          "aliases": [
+            "嘘",
+            "e133"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "dizzy",
+          "label": "晕",
+          "token": "[qq:dizzy]",
+          "src": "/emotes/qq/dizzy.gif",
+          "aliases": [
+            "晕",
+            "e134"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "torture",
+          "label": "折磨",
+          "token": "[qq:torture]",
+          "src": "/emotes/qq/torture.gif",
+          "aliases": [
+            "折磨",
+            "e135"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "decline",
+          "label": "衰",
+          "token": "[qq:decline]",
+          "src": "/emotes/qq/decline.gif",
+          "aliases": [
+            "衰",
+            "e136"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "skull",
+          "label": "骷髅",
+          "token": "[qq:skull]",
+          "src": "/emotes/qq/skull.gif",
+          "aliases": [
+            "骷髅",
+            "e137"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "knock",
+          "label": "敲打",
+          "token": "[qq:knock]",
+          "src": "/emotes/qq/knock.gif",
+          "aliases": [
+            "敲打",
+            "e138"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "bye",
+          "label": "再见",
+          "token": "[qq:bye]",
+          "src": "/emotes/qq/bye.gif",
+          "aliases": [
+            "再见",
+            "e139"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "wipe-sweat",
+          "label": "擦汗",
+          "token": "[qq:wipe-sweat]",
+          "src": "/emotes/qq/wipe-sweat.gif",
+          "aliases": [
+            "擦汗",
+            "e140"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "pick-nose",
+          "label": "抠鼻",
+          "token": "[qq:pick-nose]",
+          "src": "/emotes/qq/pick-nose.gif",
+          "aliases": [
+            "抠鼻",
+            "e141"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "clap",
+          "label": "鼓掌",
+          "token": "[qq:clap]",
+          "src": "/emotes/qq/clap.gif",
+          "aliases": [
+            "鼓掌",
+            "e142"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "bad-laugh",
+          "label": "坏笑",
+          "token": "[qq:bad-laugh]",
+          "src": "/emotes/qq/bad-laugh.gif",
+          "aliases": [
+            "坏笑",
+            "e144"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "left-hum",
+          "label": "左哼哼",
+          "token": "[qq:left-hum]",
+          "src": "/emotes/qq/left-hum.gif",
+          "aliases": [
+            "左哼哼",
+            "e145"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "right-hum",
+          "label": "右哼哼",
+          "token": "[qq:right-hum]",
+          "src": "/emotes/qq/right-hum.gif",
+          "aliases": [
+            "右哼哼",
+            "e146"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "yawn",
+          "label": "哈欠",
+          "token": "[qq:yawn]",
+          "src": "/emotes/qq/yawn.gif",
+          "aliases": [
+            "哈欠",
+            "e147"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "despise",
+          "label": "鄙视",
+          "token": "[qq:despise]",
+          "src": "/emotes/qq/despise.gif",
+          "aliases": [
+            "鄙视",
+            "e148"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "wronged",
+          "label": "委屈",
+          "token": "[qq:wronged]",
+          "src": "/emotes/qq/wronged.gif",
+          "aliases": [
+            "委屈",
+            "e149"
+          ]
+        },
+        {
+          "kind": "image",
+          "id": "about-cry",
+          "label": "快哭了",
+          "token": "[qq:about-cry]",
+          "src": "/emotes/qq/about-cry.gif",
+          "aliases": [
+            "快哭了",
+            "e150"
+          ]
+        }
+      ],
+      "defaultEnabled": false,
+      "source": "https://qzonestyle.gtimg.cn/qzone/em/e{code}.gif"
     }
   ]
 }

@@ -1131,10 +1131,10 @@ function toObjectStoreEmote(row) {
 }
 
 function normalizeEnabledPackIds(value, availablePacks) {
-  const fallback = availablePacks.map((pack) => pack.id);
+  const fallback = availablePacks.filter((pack) => pack.defaultEnabled !== false).map((pack) => pack.id);
   try {
     const parsed = JSON.parse(value ?? "null");
-    const allowed = new Set(fallback);
+    const allowed = new Set(availablePacks.map((pack) => pack.id));
     const normalized = [...new Set(Array.isArray(parsed) ? parsed.map(String) : [])].filter((id) => allowed.has(id));
     return normalized.length > 0 ? normalized : fallback;
   } catch {

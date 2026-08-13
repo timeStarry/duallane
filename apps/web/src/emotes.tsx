@@ -22,9 +22,10 @@ export type ImageEmoteItem = {
 export type EmoteItem = UnicodeEmoteItem | ImageEmoteItem;
 
 export type EmotePack = {
-  id: "emoji" | "bili" | "douyin" | "wechat" | "qq" | "feishu" | "custom";
+  id: "emoji" | "bili" | "douyin" | "wechat" | "qq" | "feishu" | "xiaohongshu" | "heybox" | "tieba" | "custom";
   label: string;
   items: EmoteItem[];
+  defaultEnabled?: boolean;
 };
 
 export { emotePacks };
@@ -95,7 +96,8 @@ for (const pack of emotePacks) {
   }
 }
 
-const imageEmoteTokenPattern = /\[(bili|douyin|wechat|qq|feishu):([^\]\s:]+)\]/g;
+const imagePackIds = emotePacks.filter((pack) => pack.id !== "emoji" && pack.id !== "custom").map((pack) => pack.id);
+const imageEmoteTokenPattern = new RegExp(`\\[(${imagePackIds.map(escapeRegExp).join("|")}):([^\\]\\s:]+)\\]`, "g");
 
 export function getEmoteInsertText(item: EmoteItem) {
   return item.kind === "unicode" ? item.value : item.token;
@@ -154,4 +156,8 @@ function MessageEmoteImage({ emote, token }: { emote: ImageEmoteItem; token: str
       title={emote.label}
     />
   );
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

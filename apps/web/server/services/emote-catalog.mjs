@@ -48,5 +48,5 @@ export function listVisibleReactionKeys() {
 export function listVisibleEmotePacks() {
   return catalog
     .filter((pack) => !hiddenPackIds.has(pack.id))
-    .map((pack) => ({ id: pack.id, label: pack.label }));
+    .map((pack) => ({ id: pack.id, label: pack.label, defaultEnabled: pack.defaultEnabled !== false }));
 }

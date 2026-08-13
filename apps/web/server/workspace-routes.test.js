@@ -397,7 +397,7 @@ describe("workspace routes", () => {
       ok: true,
       service: "duallane",
       lane: "ready",
-      appVersion: "0.13.2"
+      appVersion: "0.14.0"
     });
   });
 

@@ -1,4 +1,4 @@
-export type EmotePickerPackId = "emoji" | "bili" | "douyin" | "wechat" | "qq" | "feishu" | "custom";
+export type EmotePickerPackId = "emoji" | "bili" | "douyin" | "wechat" | "qq" | "feishu" | "xiaohongshu" | "heybox" | "tieba" | "custom";
 export type EmotePickerPreferenceScope = "p2p" | "workspace-composer" | "workspace-reaction";
 
 export const EMOTE_PICKER_PACK_STORAGE_KEY = "duallane-emote-picker-pack";

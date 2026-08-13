@@ -461,7 +461,7 @@ type WorkspaceNtfyPreferences = {
   updatedAt: string;
 };
 type WorkspaceEmoteSettings = {
-  availablePacks: Array<{ id: Exclude<EmotePack["id"], "custom">; label: string }>;
+  availablePacks: Array<{ id: Exclude<EmotePack["id"], "custom">; label: string; defaultEnabled: boolean }>;
   enabledPackIds: Array<Exclude<EmotePack["id"], "custom">>;
   minimumEnabled: number;
 };
@@ -13707,7 +13707,7 @@ function EmotePicker({
   const customInputRef = useRef<HTMLInputElement>(null);
   const customScrollRef = useRef<HTMLDivElement>(null);
   const customHomeScrollRef = useRef(0);
-  const enabledPackIds = settings?.enabledPackIds ?? visibleEmotePacks.map((pack) => pack.id);
+  const enabledPackIds = settings?.enabledPackIds ?? visibleEmotePacks.filter((pack) => pack.defaultEnabled !== false).map((pack) => pack.id);
   const enabledPacks = visibleEmotePacks.filter((pack) => enabledPackIds.includes(pack.id as Exclude<EmotePack["id"], "custom">));
   const packs = workspaceFeatures === "composer"
     ? [{ id: "custom" as const, label: "收藏" }, ...enabledPacks.map(({ id, label }) => ({ id, label }))]

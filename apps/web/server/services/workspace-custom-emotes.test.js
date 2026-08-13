@@ -20,12 +20,17 @@ describe("workspace custom emotes", () => {
   it("keeps at least one visible built-in pack", async () => {
     const { service } = await fixture();
     const defaults = await service.getSettings("usr_owner");
-    expect(defaults.enabledPackIds.length).toBeGreaterThan(0);
+    expect(defaults.availablePacks.map((pack) => pack.id)).toEqual(expect.arrayContaining([
+      "xiaohongshu",
+      "heybox",
+      "tieba"
+    ]));
+    expect(defaults.enabledPackIds).toEqual(["emoji", "bili", "wechat", "feishu"]);
     await expect(service.updateSettings("usr_owner", [])).rejects.toMatchObject({ code: "emote.pack_required" });
 
-    const updated = await service.updateSettings("usr_owner", ["emoji"]);
-    expect(updated.enabledPackIds).toEqual(["emoji"]);
-    expect((await service.getSettings("usr_owner")).enabledPackIds).toEqual(["emoji"]);
+    const updated = await service.updateSettings("usr_owner", ["emoji", "xiaohongshu"]);
+    expect(updated.enabledPackIds).toEqual(["emoji", "xiaohongshu"]);
+    expect((await service.getSettings("usr_owner")).enabledPackIds).toEqual(["emoji", "xiaohongshu"]);
   });
 
   it("normalizes uploaded images to WebP, deduplicates them, and removes the owned copy", async () => {
