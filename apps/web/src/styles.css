@@ -7528,6 +7528,8 @@ small,
 .workspace-emote-share-card > span:not(.workspace-emote-share-cover) { min-width: 0; display: grid; gap: 2px; }
 .workspace-emote-share-card strong, .workspace-emote-share-card small, .workspace-emote-share-card em { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-emote-share-card small, .workspace-emote-share-card em { color: var(--muted); font-size: var(--text-xs); font-style: normal; }
+.workspace-card-fallback { display: grid; gap: 3px; max-width: 360px; padding: 10px 12px; border-left: 2px solid var(--relay); background: var(--surface-soft); color: var(--ink); }
+.workspace-card-fallback small { color: var(--muted); font-size: var(--text-xs); }
 .workspace-emote-share-cover { width: 56px; height: 56px; display: grid; grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(2, 1fr); place-items: center; overflow: hidden; border-radius: 7px; background: var(--panel); }
 .workspace-emote-share-cover img { width: 26px; height: 26px; object-fit: contain; }
 .workspace-emote-share-open { transform: rotate(-90deg); color: var(--muted); }

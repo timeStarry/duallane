@@ -218,6 +218,25 @@ describe("workspace message presentation helpers", () => {
     expect(isWorkspaceTextOverAttachmentLimit("短消息")).toBe(false);
   });
 
+  it("renders an unknown card through its safe fallback without executing payloads", () => {
+    const html = renderToStaticMarkup(
+      <WorkspaceStructuredMessage
+        message={{
+          id: "card-fallback",
+          lane: "workspace",
+          author: "回声",
+          body: "旧客户端摘要",
+          content: { blocks: [{ type: "card", cardId: "card-1", cardType: "future.poll", schemaVersion: 9, fallbackText: "新的投票" }] },
+          attachments: [],
+          reactions: []
+        }}
+      />
+    );
+    expect(html).toContain("新的投票");
+    expect(html).toContain("此卡片暂不支持交互");
+    expect(html).not.toContain("future.poll");
+  });
+
   it("prefixes group previews with the projected author only for user messages", () => {
     const message = {
       authorName: "Alice",
