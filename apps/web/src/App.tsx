@@ -324,7 +324,8 @@ type WorkspaceContentBlock =
   | { type: "link"; url: string; label?: string }
   | { type: "emoji"; shortcode: string }
   | { type: "attachment"; attachmentId: string }
-  | { type: "emote_collection"; shareId: string; share?: WorkspaceEmoteCollectionShareSummary };
+  | { type: "emote_collection"; shareId: string; share?: WorkspaceEmoteCollectionShareSummary }
+  | { type: "card"; cardId: string; cardType: string; schemaVersion: number; fallbackText: string };
 type WorkspaceAttachment = {
   id: string;
   fileName: string;
@@ -12181,6 +12182,14 @@ export function WorkspaceStructuredMessage({
             if (block.type === "emote_collection") {
               return <WorkspaceEmoteCollectionMessageCard key={`${index}-emote-collection`} block={block} onOpen={onPreviewEmoteCollection} />;
             }
+            if (block.type === "card") {
+              return (
+                <div className="workspace-card-fallback" key={`${index}-card`} role="status">
+                  <strong>{block.fallbackText}</strong>
+                  <small>此卡片暂不支持交互</small>
+                </div>
+              );
+            }
             return <span key={`${index}-fallback`}>{renderMessageParts(message.body)}</span>;
           })}
         </div>
@@ -12260,6 +12269,7 @@ export function shouldCollapseWorkspaceMessageText(blocks: WorkspaceContentBlock
     if (block.type === "link") return block.label || block.url;
     if (block.type === "emoji") return block.shortcode.startsWith("custom:") ? "[表情]" : `:${block.shortcode}:`;
     if (block.type === "emote_collection") return `[表情合集] ${block.share?.name || ""}`;
+    if (block.type === "card") return block.fallbackText;
     return "";
   }).join("");
   return Array.from(visible).length > 700 || visible.split(/\r?\n/).length > 10;
@@ -12270,7 +12280,8 @@ function isKnownWorkspaceMessageBlock(block: WorkspaceContentBlock) {
     block.type === "link" ||
     block.type === "emoji" ||
     block.type === "attachment" ||
-    block.type === "emote_collection";
+    block.type === "emote_collection" ||
+    block.type === "card";
 }
 
 function WorkspaceEmoteCollectionMessageCard({

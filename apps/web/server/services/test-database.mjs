@@ -9,7 +9,7 @@ import {
   SEEDED_OWNER_GITHUB_LOGIN,
   SEEDED_OWNER_ID
 } from "./db.mjs";
-import { BEACON_IDENTITY } from "./system-identities.mjs";
+import { BEACON_IDENTITY, ECHO_IDENTITY } from "./system-identities.mjs";
 
 const migrationsDir = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -69,14 +69,36 @@ function seedTestWorkspace(db) {
       avatar_url = excluded.avatar_url,
       kind = excluded.kind,
       last_login_at = NULL
-  `).run(
-    BEACON_IDENTITY.id,
-    BEACON_IDENTITY.githubLogin,
+    `).run(
+      BEACON_IDENTITY.id,
+      BEACON_IDENTITY.githubLogin,
     BEACON_IDENTITY.displayName,
     BEACON_IDENTITY.avatarUrl,
-    BEACON_IDENTITY.kind,
-    now
-  );
+      BEACON_IDENTITY.kind,
+      now
+    );
+
+    db.prepare(`
+      INSERT INTO users (
+        id, github_id, github_login, email, display_name, avatar_url, kind, created_at, last_login_at
+      )
+      VALUES (?, NULL, ?, NULL, ?, ?, ?, ?, NULL)
+      ON CONFLICT (id) DO UPDATE SET
+        github_id = NULL,
+        github_login = excluded.github_login,
+        email = NULL,
+        display_name = excluded.display_name,
+        avatar_url = excluded.avatar_url,
+        kind = excluded.kind,
+        last_login_at = NULL
+    `).run(
+      ECHO_IDENTITY.id,
+      ECHO_IDENTITY.githubLogin,
+      ECHO_IDENTITY.displayName,
+      ECHO_IDENTITY.avatarUrl,
+      ECHO_IDENTITY.kind,
+      now
+    );
 
   db.prepare(`
     INSERT INTO spaces (id, name, slug, created_by, created_at)
@@ -97,6 +119,13 @@ function seedTestWorkspace(db) {
       role = excluded.role,
       removed_at = NULL
   `).run(DEFAULT_SPACE_ID, BEACON_IDENTITY.id, BEACON_IDENTITY.role, now);
+  db.prepare(`
+    INSERT INTO space_members (space_id, user_id, role, joined_at, removed_at)
+    VALUES (?, ?, ?, ?, NULL)
+    ON CONFLICT (space_id, user_id) DO UPDATE SET
+      role = excluded.role,
+      removed_at = NULL
+  `).run(DEFAULT_SPACE_ID, ECHO_IDENTITY.id, ECHO_IDENTITY.role, now);
 
   db.prepare(`
     INSERT INTO workspace_events (
