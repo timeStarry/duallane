@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   ECHO_IDENTITY,
@@ -11,6 +13,10 @@ import {
 } from "./system-identities.mjs";
 
 describe("registered Echo system identity", () => {
+  it("ships the server-owned avatar referenced by the projection", () => {
+    expect(existsSync(fileURLToPath(new URL("../../public/assets/echo-avatar.svg", import.meta.url)))).toBe(true);
+  });
+
   it("resolves the stable Echo identity through the shared registry", () => {
     expect(getSystemIdentityDefinition(ECHO_IDENTITY.id)).toBe(ECHO_IDENTITY);
     expect(getSystemIdentityDefinition({ id: ECHO_IDENTITY.id })).toBe(ECHO_IDENTITY);
@@ -22,7 +28,8 @@ describe("registered Echo system identity", () => {
       alwaysVisible: true,
       authenticationAllowed: false,
       memberManaged: false,
-      contentAccess: "participants-only"
+      contentAccess: "participants-only",
+      avatarUrl: "/assets/echo-avatar.svg"
     });
   });
 

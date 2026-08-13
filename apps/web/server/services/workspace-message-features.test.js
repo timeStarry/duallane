@@ -32,6 +32,7 @@ describe("GitHub avatar projection", () => {
 
   it("allows only controlled same-origin Workspace asset paths", () => {
     expect(sanitizeWorkspaceAvatarUrl("/assets/beacon-avatar.png")).toBe("/assets/beacon-avatar.png");
+    expect(sanitizeWorkspaceAvatarUrl("/assets/echo-avatar.svg")).toBe("/assets/echo-avatar.svg");
     expect(sanitizeWorkspaceAvatarUrl("/api/workspace/avatars/usr_owner/version-1"))
       .toBe("/api/workspace/avatars/usr_owner/version-1");
     expect(sanitizeWorkspaceAvatarUrl("/assets/../secret.png")).toBe("");

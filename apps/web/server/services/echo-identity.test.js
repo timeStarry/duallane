@@ -19,7 +19,7 @@ describe("Echo identity contract", () => {
       githubLogin: ECHO_GITHUB_LOGIN,
       displayName: "回声",
       description: "需求与反馈助手",
-      avatarUrl: "/assets/echo-avatar.png",
+      avatarUrl: "/assets/echo-avatar.svg",
       kind: "bot",
       role: "member",
       conversationPolicy: ECHO_CONVERSATION_POLICY.DIRECT_ONLY,
@@ -37,7 +37,7 @@ describe("Echo identity contract", () => {
       id: ECHO_USER_ID,
       displayName: "回声",
       description: "需求与反馈助手",
-      avatarUrl: "/assets/echo-avatar.png",
+      avatarUrl: "/assets/echo-avatar.svg",
       kind: "bot",
       role: "member",
       capabilities: {

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Echo</title>
+  <desc id="desc">DualLane Echo system bot avatar</desc>
+  <rect width="256" height="256" rx="44" fill="#f5efe3"/>
+  <circle cx="128" cy="128" r="78" fill="#0e6974"/>
+  <circle cx="128" cy="128" r="66" fill="#f8f5ed"/>
+  <path d="M86 137c9-31 31-47 42-47s33 16 42 47" fill="none" stroke="#0e6974" stroke-linecap="round" stroke-width="12"/>
+  <circle cx="103" cy="126" r="8" fill="#0e6974"/>
+  <circle cx="153" cy="126" r="8" fill="#0e6974"/>
+  <path d="M104 154c15 12 33 12 48 0" fill="none" stroke="#0e6974" stroke-linecap="round" stroke-width="8"/>
+  <path d="M128 50V30M118 30h20" fill="none" stroke="#0e6974" stroke-linecap="round" stroke-width="8"/>
+  <path d="M62 186h132" stroke="#56b6b3" stroke-linecap="round" stroke-width="6"/>
+</svg>
