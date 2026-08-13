@@ -682,7 +682,11 @@ function normalizeListLimit(value) {
 function normalizeRequiredIdentifier(value, code) {
   const normalized = typeof value === "string" ? value.trim() : "";
   if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(normalized)) {
-    throw new EchoRequirementError(code, "标识无效", code === "auth.required" ? 401 : 400);
+    throw new EchoRequirementError(
+      code,
+      code === "auth.required" ? "请先登录共享空间" : "标识无效",
+      code === "auth.required" ? 401 : 400
+    );
   }
   return normalized;
 }
