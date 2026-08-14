@@ -10,7 +10,8 @@ import {
   listTopicMessages,
   markTopicRead,
   syncTopicMessage,
-  unsyncTopicMessage
+  unsyncTopicMessage,
+  getTopicUnread
 } from "./workspace-topic-messages.mjs";
 
 const request = { id: "topic-message-test", ip: "127.0.0.1", headers: { "user-agent": "vitest" } };
@@ -98,7 +99,8 @@ describe("Workspace topic messages", () => {
       clientMessageId: "topic-message-unread",
       content: textContent("新消息")
     });
-    expect(created.unread).toBe(2);
+    expect(created.unread).toBe(0);
+    await expect(getTopicUnread(db, topic.id, "usr_topic_message_bob")).resolves.toBe(2);
     const read = await markTopicRead(db, request, {
       actorId: "usr_topic_message_bob",
       topicId: topic.id,
@@ -111,6 +113,35 @@ describe("Workspace topic messages", () => {
       notificationLevel: "muted"
     });
     expect(updated.notificationLevel).toBe("muted");
+  });
+
+  it("only allows mentions of active topic members and rejects cross-stream replies", async () => {
+    const { db } = await fixture();
+    const topic = await createTopic(db, request, {
+      actorId: "usr_topic_message_alice",
+      conversationId: "conv_topic_message_group",
+      title: "边界",
+      description: "正文"
+    });
+    await joinTopic(db, request, { actorId: "usr_topic_message_bob", topicId: topic.id });
+    await expect(createTopicMessage(db, request, {
+      actorId: "usr_topic_message_alice",
+      topicId: topic.id,
+      clientMessageId: "topic-message-invalid-mention",
+      content: {
+        ...textContent("提及群外成员"),
+        blocks: [{ type: "mention", userId: "usr_topic_message_outsider", label: "群外成员" }]
+      }
+    })).rejects.toMatchObject({ code: "topic.invalid_mention" });
+
+    const ordinary = db.prepare("SELECT id FROM messages WHERE topic_id IS NULL ORDER BY created_at DESC, id DESC LIMIT 1").get();
+    await expect(createTopicMessage(db, request, {
+      actorId: "usr_topic_message_alice",
+      topicId: topic.id,
+      clientMessageId: "topic-message-cross-reply",
+      replyToMessageId: ordinary.id,
+      content: textContent("不能回复普通群消息")
+    })).rejects.toMatchObject({ code: "topic.invalid_reply" });
   });
 
   it("requires the topic-level sync policy and keeps sync idempotent", async () => {
