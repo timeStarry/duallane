@@ -54,6 +54,9 @@ The system-level boundary remains in [DualLane Design Document](../DESIGN.md).
 | [WORKSPACE_NOTIFICATION_UNREAD_DESIGN.md](WORKSPACE_NOTIFICATION_UNREAD_DESIGN.md) | Local notices, unread state, mentions, and notification preferences | Browser push implementation details |
 | [WORKSPACE_MOBILE_ACCESSIBILITY_DESIGN.md](WORKSPACE_MOBILE_ACCESSIBILITY_DESIGN.md) | Mobile pane model, responsive behavior, keyboard/focus/accessibility | Backend schema |
 | [WORKSPACE_MESSAGE_PROTOCOL.md](WORKSPACE_MESSAGE_PROTOCOL.md) | Structured messages, blocks, idempotency, bot compatibility | Visual layout |
+| [WORKSPACE_ECHO_BOT_DESIGN.md](WORKSPACE_ECHO_BOT_DESIGN.md) | Echo bot product behavior, reusable cards, commands, guided workflows, voting, and requirement processing | Core message transport or unrelated bot behavior |
+| [WORKSPACE_AGENT_BOT_PLATFORM_REQUIREMENTS.md](WORKSPACE_AGENT_BOT_PLATFORM_REQUIREMENTS.md) | User Agent Bot Gateway, external runtime adapters, Feishu-compatible cards, secure commands, tokens, scopes, and API authorization | Echo-specific solicitation domain details |
+| [WORKSPACE_GROUP_TOPIC_DESIGN.md](WORKSPACE_GROUP_TOPIC_DESIGN.md) | Group topic syntax, child message streams, topic cards, group sync projections, navigation, permissions, and Markdown image compatibility | General group membership or unrelated card domains |
 | [WORKSPACE_REALTIME_EVENT_DESIGN.md](WORKSPACE_REALTIME_EVENT_DESIGN.md) | Event envelope, replay, projection, visibility filtering | Normal HTTP API payloads |
 | [WORKSPACE_PRODUCTIZATION_ROADMAP.md](WORKSPACE_PRODUCTIZATION_ROADMAP.md) | P0/P1/P2 implementation order, gates, and productization acceptance | Detailed protocol or schema definitions |
 | [WORKSPACE_PRODUCT_ACCEPTANCE_MATRIX.md](WORKSPACE_PRODUCT_ACCEPTANCE_MATRIX.md) | Persona, screen, backend, realtime, quota, disclosure, and manual release acceptance | New feature design exploration |
@@ -87,6 +90,9 @@ The system-level boundary remains in [DualLane Design Document](../DESIGN.md).
 | Realtime events and reconnect | Realtime Event | Client Data View Model, UI Interaction, Message Protocol |
 | Local notices and unread model | Notification Unread | Realtime Event, Client Data View Model, State Feedback |
 | AI bot compatibility | Message Protocol | Realtime Event, Product Design |
+| Echo bot and interactive cards | Echo Bot Design | Message Protocol, Realtime Event, Member Permission, API Contract |
+| User Agent Bot and external runtime integration | Agent Bot Platform Requirements | Message Protocol, Realtime Event, Member Permission, API Contract, Auth Invite |
+| Group topics and topic message sync | Group Topic Design | Message Protocol, Conversation Group, Realtime Event, Client Data View Model, UI Interaction |
 | Search and discovery | Search Discovery | Client Data View Model, Conversation Group, File Quota |
 | Mobile layout | UI Interaction | Information Architecture |
 | Mobile accessibility and focus | Mobile Accessibility | Screen Component Spec, UI Interaction, State Feedback |

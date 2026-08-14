@@ -1727,6 +1727,37 @@ button:disabled {
   background: var(--surface-soft);
 }
 
+.workspace-markdown-image-frame {
+  width: min(420px, 100%);
+  min-height: 96px;
+  max-height: 320px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  margin: 8px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.workspace-markdown-image-frame img {
+  width: 100%;
+  max-height: 320px;
+  display: block;
+  object-fit: contain;
+}
+
+.workspace-markdown-image-fallback {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  margin: 6px 0;
+  border-left: 2px solid var(--line-strong);
+  padding: 4px 10px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
 .mention-row strong,
 .mention-row small {
   display: block;

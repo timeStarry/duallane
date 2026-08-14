@@ -138,20 +138,33 @@ describe("restricted workspace Markdown", () => {
     expect(html).toContain("<ul>");
   });
 
-  it("shows unsupported Markdown as literal source and removes unsafe links", () => {
+  it("renders safe images without changing normal links and removes unsafe URLs", () => {
     const html = renderToStaticMarkup(
       <WorkspaceMarkdown>
-        {"![图片](https://example.test/a.png)\n\n<script>alert(1)</script>\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n[安全](https://example.test/path) [危险](javascript:alert(1))"}
+        {"![图片](https://example.test/a.png)\n\n[安全](https://example.test/path) [危险](javascript:alert(1))"}
       </WorkspaceMarkdown>
     );
-    expect(html).not.toContain('<img src="https://example.test/a.png"');
+    expect(html).toContain('<img src="https://example.test/a.png"');
+    expect(html).toContain('alt="图片"');
+    expect(html).toContain('loading="lazy"');
+    expect(html).toContain('referrerPolicy="no-referrer"');
+    expect(html).toContain('href="https://example.test/path"');
+    expect(html).toContain('target="_blank"');
+    expect(html).not.toContain("<script");
+    expect(html).not.toContain('href="javascript:');
+    expect(html).not.toContain('src="javascript:');
+  });
+
+  it("keeps unsupported HTML and tables literal", () => {
+    const html = renderToStaticMarkup(
+      <WorkspaceMarkdown>
+        {"<script>alert(1)</script>\n\n| A | B |\n| - | - |\n| 1 | 2 |"}
+      </WorkspaceMarkdown>
+    );
     expect(html).not.toContain("<script");
     expect(html).not.toContain("<table");
-    expect(html).not.toContain('href="javascript:');
-    expect(html).toContain("![图片](https://example.test/a.png)");
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     expect(html).toContain("| A | B |");
-    expect(html).toContain("[安全](https://example.test/path)");
   });
 
   it("keeps indented text literal and falls back for an unclosed fence", () => {
