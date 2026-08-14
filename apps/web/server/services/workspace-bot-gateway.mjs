@@ -22,12 +22,15 @@ export class WorkspaceBotGatewayError extends Error {
 export function createWorkspaceBotGatewayService({
   db,
   botService,
+  cardService = null,
+  workspaceCards = null,
   now = () => new Date(),
   idFactory = randomUUID,
   replayLimit = BOT_GATEWAY_REPLAY_LIMIT,
   replayWindowMs = BOT_GATEWAY_REPLAY_WINDOW_MS
 } = {}) {
   if (!db || !botService) throw new TypeError("Bot Gateway requires a database and Bot service");
+  const cards = cardService ?? workspaceCards;
   const connections = new Map();
 
   async function authenticate(rawToken, options = {}) {
@@ -144,6 +147,7 @@ export function createWorkspaceBotGatewayService({
   async function sendCard(auth, input = {}) {
     requireScope(auth, "cards:write");
     rejectForgedFields(input);
+    rejectOpaqueCardCreateFields(input);
     const conversationId = normalizeId(input.conversationId, "conversation.invalid");
     const clientMessageId = normalizeId(input.clientMessageId || input.idempotencyKey, "message.invalid");
     await requireConversation(auth, conversationId);
@@ -152,40 +156,62 @@ export function createWorkspaceBotGatewayService({
     const fallbackText = normalizeFallback(input.fallbackText);
     const payload = normalizeCardPayload(input.payload ?? {});
     const key = normalizeId(input.idempotencyKey || clientMessageId, "idempotency.invalid");
+    if (!cards?.createCustomBotCard || !cards?.validateMessageCardReference) {
+      throw new WorkspaceBotGatewayError("card.unavailable", "卡片服务暂不可用", 503);
+    }
     return withIdempotency(db, auth, "card.send", key, { conversationId, cardType, schemaVersion, fallbackText, payload }, async () => {
-      const cardId = `card_${idFactory()}`;
-      const timestamp = now().toISOString();
-      await db.prepare(`INSERT INTO workspace_agent_bot_cards
-        (id, bot_id, space_id, conversation_id, card_type, schema_version, payload_json, fallback_text, revision, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'active', ?, ?)`)
-        .run(cardId, auth.botId, auth.spaceId, conversationId, cardType, schemaVersion, JSON.stringify(payload), fallbackText, timestamp, timestamp);
+      const card = await cards.createCustomBotCard({
+        botId: auth.botId,
+        botUserId: auth.userId,
+        spaceId: auth.spaceId,
+        conversationId,
+        // This source key is deterministic for retries but does not disclose
+        // the caller-controlled idempotency value in the card row.
+        sourceId: opaqueCardSourceId(auth.botId, key),
+        cardType,
+        schemaVersion,
+        fallbackText,
+        payload
+      });
       const message = await createBotStructuredMessage(db, { botGateway: true }, {
         actorId: auth.userId,
         conversationId,
         clientMessageId,
-        content: { format: MESSAGE_CONTENT_FORMAT, plainText: fallbackText, blocks: [{ type: "card", cardId, cardType, schemaVersion, fallbackText }] }
+        content: { format: MESSAGE_CONTENT_FORMAT, plainText: fallbackText, blocks: [card.block] },
+        validateCardReference: (actorId, targetConversationId, block) => cards.validateMessageCardReference(actorId, targetConversationId, block, { allowBot: true })
       });
-      return { card: projectCard({ id: cardId, botId: auth.botId, spaceId: auth.spaceId, conversationId, cardType, schemaVersion, payloadJson: JSON.stringify(payload), fallbackText, revision: 1, status: "active", createdAt: timestamp, updatedAt: timestamp }), message: projectCreatedMessage(message) };
+      return { card: projectCard(card, auth.botId), message: projectCreatedMessage(message) };
     });
   }
 
   async function updateCard(auth, cardId, input = {}) {
     requireScope(auth, "cards:write");
     rejectForgedFields(input);
-    const card = await db.prepare(`SELECT id, bot_id AS botId, space_id AS spaceId, conversation_id AS conversationId,
-      card_type AS cardType, schema_version AS schemaVersion, payload_json AS payloadJson, fallback_text AS fallbackText,
-      revision, status, created_at AS createdAt, updated_at AS updatedAt FROM workspace_agent_bot_cards
-      WHERE id = ? AND bot_id = ? AND space_id = ?`).get(normalizeId(cardId, "card.invalid_id"), auth.botId, auth.spaceId);
-    if (!card || card.status !== "active") throw new WorkspaceBotGatewayError("card.not_found", "卡片不存在", 404);
-    if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision !== Number(card.revision)) throw new WorkspaceBotGatewayError("card.revision_conflict", "卡片版本已变化", 409);
-    const fallbackText = input.fallbackText === undefined ? card.fallbackText : normalizeFallback(input.fallbackText);
-    const payload = input.payload === undefined ? JSON.parse(card.payloadJson) : normalizeCardPayload(input.payload);
-    const timestamp = now().toISOString();
-    const result = await db.prepare(`UPDATE workspace_agent_bot_cards SET payload_json = ?, fallback_text = ?, revision = revision + 1, updated_at = ?
-      WHERE id = ? AND bot_id = ? AND space_id = ? AND status = 'active' AND revision = ?`)
-      .run(JSON.stringify(payload), fallbackText, timestamp, card.id, auth.botId, auth.spaceId, input.expectedRevision);
-    if (!result.changes) throw new WorkspaceBotGatewayError("card.revision_conflict", "卡片版本已变化", 409);
-    return { card: projectCard({ ...card, payloadJson: JSON.stringify(payload), fallbackText, revision: input.expectedRevision + 1, updatedAt: timestamp }) };
+    rejectImmutableCardFields(input);
+    if (!cards?.updateCustomBotCard || !cards?.invalidateCustomBotCard) {
+      throw new WorkspaceBotGatewayError("card.unavailable", "卡片服务暂不可用", 503);
+    }
+    if (input.status !== undefined && input.status !== "active") {
+      const card = await cards.invalidateCustomBotCard({
+        cardId: normalizeId(cardId, "card.invalid_id"),
+        botId: auth.botId,
+        botUserId: auth.userId,
+        spaceId: auth.spaceId,
+        expectedRevision: input.expectedRevision,
+        status: input.status
+      });
+      return { card: projectCard(card, auth.botId) };
+    }
+    const card = await cards.updateCustomBotCard({
+      cardId: normalizeId(cardId, "card.invalid_id"),
+      botId: auth.botId,
+      botUserId: auth.userId,
+      spaceId: auth.spaceId,
+      expectedRevision: input.expectedRevision,
+      payload: input.payload,
+      fallbackText: input.fallbackText
+    });
+    return { card: projectCard(card, auth.botId) };
   }
 
   async function getAttachment(auth, attachmentId) {
@@ -448,24 +474,53 @@ function normalizeBotContent(value) {
 }
 
 async function withIdempotency(db, auth, operation, key, input, callback) {
-  const requestHash = createHash("sha256").update(JSON.stringify(input), "utf8").digest("hex");
-  const existing = await db.prepare(`SELECT request_hash AS requestHash, response_json AS responseJson
-    FROM workspace_agent_bot_idempotency WHERE bot_id = ? AND operation = ? AND idempotency_key = ? AND expires_at > ?`)
-    .get(auth.botId, operation, key, new Date().toISOString());
-  if (existing) {
-    if (existing.requestHash !== requestHash) throw new WorkspaceBotGatewayError("idempotency.conflict", "幂等键对应的请求不一致", 409);
-    return JSON.parse(existing.responseJson);
-  }
-  const result = await callback();
-  const timestamp = new Date();
-  await db.prepare(`INSERT INTO workspace_agent_bot_idempotency
-    (id, bot_id, token_id, space_id, operation, idempotency_key, request_hash, response_status, response_json, created_at, expires_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 200, ?, ?, ?)
-    ON CONFLICT (bot_id, operation, idempotency_key) DO NOTHING`).run(
-    `bid_${randomUUID()}`, auth.botId, auth.tokenId, auth.spaceId, operation, key, requestHash,
-    JSON.stringify(result), timestamp.toISOString(), new Date(timestamp.getTime() + 86_400_000).toISOString()
-  );
-  return result;
+  return db.transaction(async () => {
+    await db.lock?.(`workspace-bot-idempotency:${auth.botId}:${operation}:${key}`);
+    const requestHash = createHash("sha256").update(JSON.stringify(input), "utf8").digest("hex");
+    const existing = await db.prepare(`SELECT request_hash AS requestHash, response_json AS responseJson
+      FROM workspace_agent_bot_idempotency WHERE bot_id = ? AND operation = ? AND idempotency_key = ? AND expires_at > ?`)
+      .get(auth.botId, operation, key, new Date().toISOString());
+    if (existing) {
+      if (existing.requestHash !== requestHash) throw new WorkspaceBotGatewayError("idempotency.conflict", "幂等键对应的请求不一致", 409);
+      return JSON.parse(existing.responseJson);
+    }
+    const result = await callback();
+    const timestamp = new Date();
+    await db.prepare(`INSERT INTO workspace_agent_bot_idempotency
+      (id, bot_id, token_id, space_id, operation, idempotency_key, request_hash, response_status, response_json, created_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 200, ?, ?, ?)
+      ON CONFLICT (bot_id, operation, idempotency_key) DO NOTHING`).run(
+      `bid_${randomUUID()}`, auth.botId, auth.tokenId, auth.spaceId, operation, key, requestHash,
+      JSON.stringify(result), timestamp.toISOString(), new Date(timestamp.getTime() + 86_400_000).toISOString()
+    );
+    return result;
+  });
+}
+
+function rejectImmutableCardFields(input) {
+  const immutable = [
+    "cardType",
+    "schemaVersion",
+    "spaceId",
+    "conversationId",
+    "sourceKind",
+    "sourceId",
+    "visibilityScope",
+    "resourceType",
+    "resourceId",
+    "createdByUserId",
+    "ownerUserId",
+    "botUserId",
+    "botId"
+  ];
+  const field = immutable.find((key) => Object.prototype.hasOwnProperty.call(input, key));
+  if (field) throw new WorkspaceBotGatewayError("card.immutable_field", "卡片来源或范围不可修改", 400);
+}
+
+function rejectOpaqueCardCreateFields(input) {
+  const forbidden = ["cardId", "sourceKind", "sourceId", "visibilityScope", "resourceType", "resourceId", "createdByUserId", "ownerUserId", "botUserId", "botId", "spaceId"];
+  const field = forbidden.find((key) => Object.prototype.hasOwnProperty.call(input, key));
+  if (field) throw new WorkspaceBotGatewayError("card.immutable_field", "卡片来源或范围由服务端决定", 400);
 }
 
 function projectCreatedMessage(message) {
@@ -503,10 +558,30 @@ function normalizeFallback(value) {
   return normalized;
 }
 
-function projectCard(row) {
-  let payload;
-  try { payload = JSON.parse(row.payloadJson); } catch { payload = {}; }
-  return { id: row.id, botId: row.botId, spaceId: row.spaceId, conversationId: row.conversationId, cardType: row.cardType, schemaVersion: Number(row.schemaVersion), payload, fallbackText: row.fallbackText, revision: Number(row.revision), status: row.status, createdAt: row.createdAt, updatedAt: row.updatedAt };
+function projectCard(row, botId = null) {
+  const block = row?.block ?? {};
+  let payload = row?.payload;
+  if (payload === undefined) {
+    try { payload = JSON.parse(row?.payloadJson); } catch { payload = {}; }
+  }
+  return {
+    id: row?.id ?? block.cardId,
+    botId: row?.botId ?? botId,
+    spaceId: row?.spaceId ?? null,
+    conversationId: row?.conversationId ?? null,
+    cardType: row?.cardType ?? block.cardType,
+    schemaVersion: Number(row?.schemaVersion ?? block.schemaVersion),
+    payload,
+    fallbackText: row?.fallbackText ?? block.fallbackText,
+    revision: Number(row?.revision ?? 1),
+    status: row?.status ?? "active",
+    createdAt: row?.createdAt ?? null,
+    updatedAt: row?.updatedAt ?? null
+  };
+}
+
+function opaqueCardSourceId(botId, idempotencyKey) {
+  return `botkey_${createHash("sha256").update(`${botId}:${idempotencyKey}`, "utf8").digest("hex").slice(0, 48)}`;
 }
 
 function normalizeSequence(value, allowZero = false) {

@@ -167,7 +167,12 @@ export async function createApp(options = {}) {
     ...workspaceInteractionRegistries,
     now: options.now
   }) : null;
-  const workspaceBotGateway = db ? createWorkspaceBotGatewayService({ db, botService: workspaceAgentBots, now: options.now }) : null;
+  const workspaceBotGateway = db ? createWorkspaceBotGatewayService({
+    db,
+    botService: workspaceAgentBots,
+    cardService: workspaceCards,
+    now: options.now
+  }) : null;
   await workspaceChunkUploads?.cleanupInactive();
   const workspacePresence = createWorkspacePresence();
   const workspaceEmail = db ? createWorkspaceEmailService({

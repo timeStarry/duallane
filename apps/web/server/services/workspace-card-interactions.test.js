@@ -113,6 +113,25 @@ describe("workspace card interaction service", () => {
     });
   });
 
+  it("checks conversation scope before returning an unknown-version fallback", async () => {
+    const { db, service } = await fixture();
+    const timestamp = new Date("2026-08-14T00:00:00.000Z").toISOString();
+    db.prepare(`INSERT INTO workspace_cards (
+      id, space_id, conversation_id, card_type, schema_version, payload_json, fallback_text,
+      source_kind, source_id, resource_type, resource_id, visibility_scope,
+      created_by_user_id, status, revision, expires_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'custom_bot', ?, NULL, NULL, 'conversation', ?, 'active', 1, NULL, ?, ?)`)
+      .run("card_unknown_scope", DEFAULT_SPACE_ID, "conv_card_test", "future.poll", 9, JSON.stringify({ secret: "hidden" }), "未来卡片", "opaque", "usr_owner", timestamp, timestamp);
+    await expect(service.resolveCard("usr_card_member", "card_unknown_scope")).resolves.toMatchObject({
+      type: "card_fallback",
+      fallbackText: "未来卡片"
+    });
+    await expect(service.resolveCard("usr_card_outsider", "card_unknown_scope")).rejects.toMatchObject({
+      code: "card.not_found",
+      statusCode: 404
+    });
+  });
+
   it("replays identical actions without executing twice and rejects idempotency conflicts", async () => {
     const { service, db } = await fixture();
     const created = await createCounter(service);

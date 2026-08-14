@@ -2,7 +2,7 @@ import Fastify from "fastify";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { openTestDatabase } from "../services/test-database.mjs";
 import { createWorkspaceAgentBotService } from "../services/workspace-agent-bots.mjs";
 import { createWorkspaceBotGatewayService } from "../services/workspace-bot-gateway.mjs";
@@ -48,5 +48,24 @@ describe("Bot Gateway routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().bot.githubLogin).toBeUndefined();
     expect(response.json().bot.ownerUserId).toBeUndefined();
+  });
+
+  it("passes card sends through the authenticated Gateway boundary", async () => {
+    const gateway = {
+      authenticate: vi.fn(async () => ({ botId: "bot_route", spaceId: SPACE_ID })),
+      sendCard: vi.fn(async (_auth, body) => ({ card: { id: "card_route" }, message: { id: body.clientMessageId } }))
+    };
+    const app = Fastify({ logger: false });
+    registerWorkspaceBotGatewayRoutes({ app, gateway, workspaceEnabled: true });
+    const directory = await mkdtemp(path.join(tmpdir(), "duallane-bot-gateway-route-card-"));
+    fixtures.push({ app, db: { close() {} }, directory });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/bot-gateway/v1/cards",
+      headers: { authorization: `Bearer dl_bot_${"x".repeat(32)}` },
+      payload: { conversationId: "conv_route", clientMessageId: "message_route", cardType: "future.poll", schemaVersion: 1, fallbackText: "fallback", payload: {} }
+    });
+    expect(response.statusCode).toBe(201);
+    expect(gateway.sendCard).toHaveBeenCalledWith({ botId: "bot_route", spaceId: SPACE_ID }, expect.objectContaining({ clientMessageId: "message_route" }));
   });
 });
