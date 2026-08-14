@@ -23,6 +23,15 @@ export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
     ]
   },
   {
+    version: "0.14.3",
+    releasedAt: "2026-08-14",
+    title: "更可靠的版本更新",
+    summary: "页面更新时会核对版本是否一致，减少刷新后仍停留在旧内容的情况。",
+    categories: [
+      { title: "更新", items: ["每次更新都会确认网页与运行版本一致后再完成切换", "更新未完成时会保留上一版本，避免影响继续使用"] }
+    ]
+  },
+  {
     version: "0.14.2",
     releasedAt: "2026-08-13",
     title: "更顺手的表情分享与更新提醒",

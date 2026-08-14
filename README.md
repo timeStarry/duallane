@@ -105,18 +105,38 @@ an untracked recovery override or a project-generated default volume. For a
 first installation:
 
 ```bash
+cd "${HOME}/duallane"
 cp .env.example .env
 docker volume create duallane-postgres-production
-# Set POSTGRES_VOLUME_NAME=duallane-postgres-production and all other secrets in .env.
+# Set DUALLANE_PRODUCTION_DIR, POSTGRES_VOLUME_NAME, and all secrets in .env.
 bash deploy/production/deploy.sh --bootstrap --expected-commit "$(git rev-parse HEAD)"
 ```
+
+On this host, development happens in `/home/timestarry/projects/duallane` and
+the only production checkout is `/home/timestarry/duallane`. Deployment uses
+the local Docker daemon; do not SSH to another host or run the production script
+from the development checkout. Other installations may set a different
+absolute `DUALLANE_PRODUCTION_DIR`; when it is empty, the script defaults to
+`${HOME}/duallane` and verifies the physical path before touching Docker.
 
 Routine upgrades use the same guarded entry point:
 
 ```bash
+cd "${HOME}/duallane"
 git pull --ff-only
-bash deploy/production/deploy.sh --expected-commit "$(git rev-parse HEAD)"
+release_commit="$(git rev-parse origin/main)"
+test "$(git rev-parse HEAD)" = "${release_commit}"
+bash deploy/production/deploy.sh --expected-commit "${release_commit}"
 ```
+
+Before pushing a release, increment the root and Web package versions together,
+add the matching user-facing release entry, and run `pnpm test`, `pnpm lint`,
+and `pnpm build`. Push the validated commit to `origin/main`, then update the
+production checkout with `git pull --ff-only`. The deployment entry point
+requires a clean `main` worktree whose HEAD exactly matches the fetched
+`origin/main`; it also requires a full `--expected-commit` and rejects a new
+commit unless its semantic version is greater than the running version. Passing
+the same commit again is an idempotent redeployment.
 
 Do not use a bare `docker compose up` for an existing production deployment.
 The deployment script validates that the configured PostgreSQL volume matches
@@ -139,8 +159,13 @@ network. The web container serves the built frontend through Nginx and forwards
 headers.
 
 The script provisions `DUALLANE_BUILDX_BUILDER` on first use with the configured
-`DUALLANE_BUILDKIT_IMAGE`. Production services use `restart: always`, so a
-daemon restart does not leave the database, proxy, API, or web gateway stopped.
+`DUALLANE_BUILDKIT_IMAGE`. It starts that builder only for the image build,
+constrains retained cache to `DUALLANE_BUILDX_CACHE_MAX` after a successful
+release, and stops the builder on every exit path so it does not retain memory
+between releases. Production services use `restart: always`, so a daemon restart
+does not leave the database, proxy, API, or web gateway stopped. Their Docker
+JSON logs rotate at `DUALLANE_LOG_MAX_SIZE` and retain at most
+`DUALLANE_LOG_MAX_FILE` files per service.
 Public HTTPS smoke checks should run from an external client; the application
 host may not support hairpin access through the public gateway.
 

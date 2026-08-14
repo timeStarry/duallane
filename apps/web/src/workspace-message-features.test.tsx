@@ -7,6 +7,7 @@ import {
   applyWorkspaceMarkdownFormat,
   applyWorkspaceReactionOptimistic,
   buildWorkspaceMessageBlocks,
+  getWorkspacePendingAttachmentProgress,
   getWorkspaceSingleImageAttachment,
   isWorkspaceTextOverAttachmentLimit,
   serializeWorkspaceMessageForCopy,
@@ -200,6 +201,14 @@ describe("workspace message presentation helpers", () => {
       [{ type: "attachment", attachmentId: image.id }],
       [{ ...image, status: "failed" }]
     )).toBeNull();
+  });
+
+  it("reports byte-weighted progress for background attachment messages", () => {
+    expect(getWorkspacePendingAttachmentProgress([])).toBe(0);
+    expect(getWorkspacePendingAttachmentProgress([
+      { id: "small", file: { size: 100 } as File, state: "uploaded", progress: 100 },
+      { id: "large", file: { size: 300 } as File, state: "uploading", progress: 0 }
+    ])).toBe(25);
   });
 
   it("copies raw blocks and applies long-message thresholds without dropping Markdown", () => {

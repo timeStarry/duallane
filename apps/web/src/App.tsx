@@ -202,13 +202,14 @@ type Message = {
   at: string;
   createdAt?: string;
   self?: boolean;
-  localState?: "sending" | "delivered" | "failed";
+  localState?: "uploading" | "sending" | "delivered" | "failed";
   failureReason?: string;
   fileName?: string;
   content?: {
     blocks: WorkspaceContentBlock[];
   };
   attachments?: WorkspaceAttachment[];
+  pendingAttachments?: WorkspaceComposerAttachment[];
   reactions?: WorkspaceReactionGroup[];
   pin?: WorkspaceMessagePin;
   recalledAt?: string | null;
@@ -607,9 +608,10 @@ type WorkspaceLocalMessage = {
   body: string;
   blocks: WorkspaceContentBlock[];
   attachments?: WorkspaceAttachment[];
+  pendingAttachments?: WorkspaceComposerAttachment[];
   replyToMessageId?: string | null;
   createdAt: string;
-  state: "sending" | "failed";
+  state: "uploading" | "sending" | "failed";
   failureReason?: string;
 };
 type WorkspaceComposerAttachment = {
@@ -2452,7 +2454,6 @@ export function App() {
   const [workspaceNewMessageCountByConversation, setWorkspaceNewMessageCountByConversation] = useState<Record<string, number>>({});
   const [workspaceAwayFromLatestByConversation, setWorkspaceAwayFromLatestByConversation] = useState<Record<string, boolean>>({});
   const [workspaceScrollToLatestRequest, setWorkspaceScrollToLatestRequest] = useState(0);
-  const [workspaceSending, setWorkspaceSending] = useState(false);
   const [workspaceLocalMessages, setWorkspaceLocalMessages] = useState<WorkspaceLocalMessage[]>([]);
   const [workspaceStatus, setWorkspaceStatus] = useState<"idle" | "loading" | "ready" | "disabled" | "auth" | "error">("idle");
   const [workspaceError, setWorkspaceError] = useState("");
@@ -2565,6 +2566,8 @@ export function App() {
   const workspaceHandledScrollToLatestRequestRef = useRef(0);
   const workspaceUploadControllersRef = useRef<Map<string, AbortController>>(new Map());
   const workspaceComposerAttachmentsRef = useRef<Record<string, WorkspaceComposerAttachment[]>>({});
+  const workspaceLocalMessagesRef = useRef<WorkspaceLocalMessage[]>([]);
+  const workspaceCancelledLocalMessageIdsRef = useRef<Set<string>>(new Set());
   const workspaceMarkReadInFlightRef = useRef<Set<string>>(new Set());
   const workspaceSelectedConversationIdRef = useRef("");
   const workspaceCurrentUserIdRef = useRef("");
@@ -2890,6 +2893,7 @@ export function App() {
               blocks: message.blocks
             },
             attachments: message.attachments ?? [],
+            pendingAttachments: message.pendingAttachments,
             reactions: [],
             replyTo: workspaceReplyPreview(reply, message.replyToMessageId ?? "")
           };
@@ -2977,12 +2981,23 @@ export function App() {
           }
         }
       }
+      for (const message of workspaceLocalMessagesRef.current) {
+        for (const attachment of message.pendingAttachments ?? []) {
+          if (attachment.previewUrl) {
+            URL.revokeObjectURL(attachment.previewUrl);
+          }
+        }
+      }
     };
   }, []);
 
   useEffect(() => {
     workspaceComposerAttachmentsRef.current = workspaceComposerAttachmentsByConversation;
   }, [workspaceComposerAttachmentsByConversation]);
+
+  useEffect(() => {
+    workspaceLocalMessagesRef.current = workspaceLocalMessages;
+  }, [workspaceLocalMessages]);
 
   useEffect(() => {
     workspaceSelectedConversationIdRef.current = workspaceSelectedConversationId;
@@ -4499,6 +4514,14 @@ export function App() {
         }
       }
     }
+    for (const message of workspaceLocalMessagesRef.current) {
+      workspaceCancelledLocalMessageIdsRef.current.add(message.id);
+      for (const attachment of message.pendingAttachments ?? []) {
+        if (attachment.previewUrl) {
+          URL.revokeObjectURL(attachment.previewUrl);
+        }
+      }
+    }
     workspaceWsRef.current?.close();
     workspaceWsRef.current = null;
     workspaceRealtimeSeqRef.current = 0;
@@ -4527,7 +4550,6 @@ export function App() {
     setWorkspaceAwayFromLatestByConversation({});
     setWorkspaceScrollToLatestRequest(0);
     workspaceHandledScrollToLatestRequestRef.current = 0;
-    setWorkspaceSending(false);
     setWorkspaceLocalMessages([]);
     setWorkspaceError("");
     setWorkspaceNotice(null);
@@ -5080,6 +5102,10 @@ export function App() {
       )
     );
     if (removedCurrentUser) {
+      const outgoingMessages = workspaceLocalMessagesRef.current.filter((message) => message.conversationId === conversationId);
+      for (const message of outgoingMessages) {
+        void cancelWorkspaceLocalMessage(message.id);
+      }
       setWorkspaceDraftByConversation((drafts) => {
         const { [conversationId]: _removed, ...rest } = drafts;
         return rest;
@@ -5893,7 +5919,7 @@ export function App() {
 
   async function sendWorkspaceMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!workspaceSelectedConversation || workspaceSendingRef.current) {
+    if (!workspaceSelectedConversation) {
       return;
     }
     const body = workspaceDraft;
@@ -5903,16 +5929,6 @@ export function App() {
     );
     let stagedAttachments = workspaceComposerAttachmentsByConversation[workspaceSelectedConversationId] ?? [];
     const shouldConvertLongMessage = isWorkspaceTextOverAttachmentLimit(body);
-    const staleGeneratedAttachments = stagedAttachments.filter(
-      (attachment) => attachment.generatedFromLongMessage && (!shouldConvertLongMessage || attachment.generatedSource !== body)
-    );
-    if (staleGeneratedAttachments.length > 0) {
-      await Promise.all(staleGeneratedAttachments.map((attachment) =>
-        removeWorkspaceComposerAttachment(workspaceSelectedConversationId, attachment.id)
-      ));
-      const staleIds = new Set(staleGeneratedAttachments.map((attachment) => attachment.id));
-      stagedAttachments = stagedAttachments.filter((attachment) => !staleIds.has(attachment.id));
-    }
     if (shouldConvertLongMessage && !stagedAttachments.some(
       (attachment) => attachment.generatedFromLongMessage && attachment.generatedSource === body
     )) {
@@ -5928,77 +5944,41 @@ export function App() {
       return;
     }
     const conversation = workspaceSelectedConversation;
-    workspaceSendingRef.current = true;
-    setWorkspaceSending(true);
-    clearWorkspaceNotice();
-    try {
-      const uploadedAttachments = stagedAttachments.length > 0
-        ? await uploadWorkspaceComposerAttachments(conversation.id, stagedAttachments)
-        : [];
-      if (uploadedAttachments.length !== stagedAttachments.length) {
-        showWorkspaceNotice("warning", "部分文件上传失败，请重试或移除后再发送");
-        return;
-      }
-      const clientMessageId = makeId("wm");
-      const replyToMessageId = workspaceReplyToMessageId || null;
-      const localMessageId = makeId("wlm");
-      const textBlocks = !shouldConvertLongMessage && hasStructuredBody
-        ? workspaceComposerDocumentToContentBlocks(workspaceDraftDocument)
-        : [];
-      const blocks: WorkspaceContentBlock[] = [
-        ...textBlocks,
-        ...uploadedAttachments.map((attachment) => ({
-          type: "attachment" as const,
-          attachmentId: attachment.id
-        }))
-      ];
-      const generatedAttachmentIndex = stagedAttachments.findIndex(
-        (attachment) => attachment.generatedFromLongMessage && attachment.generatedSource === body
-      );
-      const messageBody = shouldConvertLongMessage
-        ? `[长消息] ${uploadedAttachments[generatedAttachmentIndex]?.fileName ?? "长消息.txt"}`
-        : hasBody ? body : `[文件] ${uploadedAttachments.map((attachment) => attachment.fileName).join("、")}`;
-      setWorkspaceLocalMessages((messages) => [
-        ...messages.filter((message) => message.clientMessageId !== clientMessageId),
-        {
-          id: localMessageId,
-          clientMessageId,
-          conversationId: conversation.id,
-          body: messageBody,
-          blocks,
-          attachments: uploadedAttachments,
-          replyToMessageId,
-          createdAt: new Date().toISOString(),
-          state: "sending"
-        }
-      ]);
-      await submitWorkspaceMessage({
-        conversationId: conversation.id,
-        clientMessageId,
-        replyToMessageId,
-        body: messageBody,
-        blocks
-      });
-      setWorkspaceConversationDraft(conversation.id, "");
-      setWorkspaceConversationReplyToMessageId(conversation.id, "");
-      clearWorkspaceComposerAttachments(conversation.id);
-    } catch (error) {
-      const message = userFacingErrorMessage(error, "消息发送失败");
-      setWorkspaceLocalMessages((messages) => {
-        const sendingMessage = [...messages].reverse().find(
-          (item) => item.conversationId === conversation.id && item.state === "sending"
-        );
-        return sendingMessage
-          ? messages.map((item) =>
-              item.id === sendingMessage.id ? { ...item, state: "failed", failureReason: message } : item
-            )
-          : messages;
-      });
-      showWorkspaceNotice("warning", message);
-    } finally {
-      workspaceSendingRef.current = false;
-      setWorkspaceSending(false);
+    const clientMessageId = makeId("wm");
+    const localMessageId = makeId("wlm");
+    const replyToMessageId = workspaceReplyToMessageId || null;
+    const textBlocks = !shouldConvertLongMessage && hasStructuredBody
+      ? workspaceComposerDocumentToContentBlocks(workspaceDraftDocument)
+      : [];
+    const generatedAttachmentIndex = stagedAttachments.findIndex(
+      (attachment) => attachment.generatedFromLongMessage && attachment.generatedSource === body
+    );
+    const messageBody = shouldConvertLongMessage
+      ? `[长消息] ${stagedAttachments[generatedAttachmentIndex]?.file.name ?? "长消息.txt"}`
+      : hasBody ? body : `[文件] ${stagedAttachments.map((attachment) => attachment.file.name).join("、")}`;
+    const localMessage: WorkspaceLocalMessage = {
+      id: localMessageId,
+      clientMessageId,
+      conversationId: conversation.id,
+      body: messageBody,
+      blocks: textBlocks,
+      pendingAttachments: stagedAttachments.length > 0 ? stagedAttachments : undefined,
+      replyToMessageId,
+      createdAt: new Date().toISOString(),
+      state: stagedAttachments.length > 0 ? "uploading" : "sending"
+    };
+
+    setWorkspaceLocalMessages((messages) => [
+      ...messages.filter((message) => message.clientMessageId !== clientMessageId),
+      localMessage
+    ]);
+    setWorkspaceConversationDraft(conversation.id, "");
+    setWorkspaceConversationReplyToMessageId(conversation.id, "");
+    if (stagedAttachments.length > 0) {
+      updateWorkspaceComposerAttachments(conversation.id, () => []);
     }
+    clearWorkspaceNotice();
+    void deliverWorkspaceLocalMessage(localMessage);
   }
 
   async function sendWorkspaceImageEmote(item: EmoteItem) {
@@ -6050,19 +6030,30 @@ export function App() {
     }
   }
 
-  function clearWorkspaceComposerAttachments(conversationId: string) {
-    const attachments = workspaceComposerAttachmentsRef.current[conversationId] ?? [];
-    for (const attachment of attachments) {
-      if (attachment.previewUrl) {
-        URL.revokeObjectURL(attachment.previewUrl);
-      }
-    }
-    updateWorkspaceComposerAttachments(conversationId, () => []);
+  function updateWorkspaceLocalMessageAttachment(
+    messageId: string,
+    attachmentId: string,
+    updater: (attachment: WorkspaceComposerAttachment) => WorkspaceComposerAttachment
+  ) {
+    setWorkspaceLocalMessages((messages) => messages.map((message) =>
+      message.id === messageId
+        ? {
+            ...message,
+            pendingAttachments: message.pendingAttachments?.map((attachment) =>
+              attachment.id === attachmentId ? updater(attachment) : attachment
+            )
+          }
+        : message
+    ));
   }
 
   async function uploadWorkspaceComposerAttachments(
     conversationId: string,
-    stagedAttachments: WorkspaceComposerAttachment[]
+    stagedAttachments: WorkspaceComposerAttachment[],
+    onUpdate: (
+      attachmentId: string,
+      updater: (attachment: WorkspaceComposerAttachment) => WorkspaceComposerAttachment
+    ) => void
   ) {
     const results = new Array<WorkspaceAttachment | null>(stagedAttachments.length).fill(null);
     let cursor = 0;
@@ -6073,7 +6064,11 @@ export function App() {
           const index = cursor;
           cursor += 1;
           try {
-            results[index] = await uploadWorkspaceComposerAttachment(conversationId, stagedAttachments[index]);
+            results[index] = await uploadWorkspaceComposerAttachment(
+              conversationId,
+              stagedAttachments[index],
+              onUpdate
+            );
           } catch {
             results[index] = null;
           }
@@ -6082,26 +6077,27 @@ export function App() {
     );
     await Promise.all(workers);
     if (results.every(Boolean)) {
-      await refreshWorkspaceBootstrap();
+      void refreshWorkspaceBootstrap().catch(() => undefined);
     }
     return results.filter((attachment): attachment is WorkspaceAttachment => Boolean(attachment));
   }
 
   async function uploadWorkspaceComposerAttachment(
     conversationId: string,
-    stagedAttachment: WorkspaceComposerAttachment
+    stagedAttachment: WorkspaceComposerAttachment,
+    onUpdate: (
+      attachmentId: string,
+      updater: (attachment: WorkspaceComposerAttachment) => WorkspaceComposerAttachment
+    ) => void
   ): Promise<WorkspaceAttachment> {
     if (stagedAttachment.state === "uploaded" && stagedAttachment.attachment) {
       return stagedAttachment.attachment;
     }
     const controller = new AbortController();
     workspaceUploadControllersRef.current.set(stagedAttachment.id, controller);
-    updateWorkspaceComposerAttachments(conversationId, (attachments) =>
-      attachments.map((attachment) =>
-        attachment.id === stagedAttachment.id
-          ? { ...attachment, state: "uploading", progress: 3, failureReason: undefined }
-          : attachment
-      )
+    onUpdate(
+      stagedAttachment.id,
+      (attachment) => ({ ...attachment, state: "uploading", progress: 3, failureReason: undefined })
     );
     let uploadId = "";
     try {
@@ -6121,33 +6117,20 @@ export function App() {
         })
       });
       uploadId = reserve.id;
-      updateWorkspaceComposerAttachments(conversationId, (attachments) =>
-        attachments.map((attachment) =>
-          attachment.id === stagedAttachment.id
-            ? { ...attachment, uploadId, progress: 7 }
-            : attachment
-        )
-      );
+      onUpdate(stagedAttachment.id, (attachment) => ({ ...attachment, uploadId, progress: 7 }));
       const completed = await uploadWorkspaceFileContent(
         uploadId,
         stagedAttachment.file,
         (progress) => {
-          updateWorkspaceComposerAttachments(conversationId, (attachments) =>
-            attachments.map((attachment) =>
-              attachment.id === stagedAttachment.id ? { ...attachment, progress } : attachment
-            )
-          );
+          onUpdate(stagedAttachment.id, (attachment) => ({ ...attachment, progress }));
         },
         controller.signal,
         reserve.upload
       );
       const uploaded = completed.attachment;
-      updateWorkspaceComposerAttachments(conversationId, (attachments) =>
-        attachments.map((attachment) =>
-          attachment.id === stagedAttachment.id
-            ? { ...attachment, state: "uploaded", progress: 100, attachment: uploaded, uploadId }
-            : attachment
-        )
+      onUpdate(
+        stagedAttachment.id,
+        (attachment) => ({ ...attachment, state: "uploaded", progress: 100, attachment: uploaded, uploadId })
       );
       if (workspaceBootstrap) {
         upsertWorkspaceFile({
@@ -6169,43 +6152,136 @@ export function App() {
             : error instanceof Error ? error.message : "upload failed"
         );
       }
-      if (!(error instanceof DOMException && error.name === "AbortError")) {
-        const message = userFacingErrorMessage(error, "文件上传失败");
-        updateWorkspaceComposerAttachments(conversationId, (attachments) =>
-          attachments.map((attachment) =>
-            attachment.id === stagedAttachment.id
-              ? { ...attachment, state: "failed", failureReason: message, progress: 0, uploadId: undefined }
-              : attachment
-          )
-        );
-      }
+      const cancelled = error instanceof DOMException && error.name === "AbortError";
+      const message = cancelled ? "上传已取消" : userFacingErrorMessage(error, "文件上传失败");
+      onUpdate(
+        stagedAttachment.id,
+        (attachment) => ({ ...attachment, state: "failed", failureReason: message, progress: 0, uploadId: undefined })
+      );
       throw error;
     } finally {
       workspaceUploadControllersRef.current.delete(stagedAttachment.id);
     }
   }
 
+  async function removeWorkspaceUploadedAttachments(attachments: WorkspaceAttachment[]) {
+    let cleanupFailed = false;
+    await Promise.all(attachments.map((attachment) =>
+      workspaceJson(`/api/workspace/files/${encodeURIComponent(attachment.id)}`, { method: "DELETE" })
+        .then(() => removeWorkspaceFileFromClient(attachment.id))
+        .catch(() => { cleanupFailed = true; })
+    ));
+    return !cleanupFailed;
+  }
+
+  async function deliverWorkspaceLocalMessage(localMessage: WorkspaceLocalMessage) {
+    try {
+      let readyMessage = localMessage;
+      const pendingAttachments = localMessage.pendingAttachments ?? [];
+      if (pendingAttachments.length > 0) {
+        const uploadedAttachments = await uploadWorkspaceComposerAttachments(
+          localMessage.conversationId,
+          pendingAttachments,
+          (attachmentId, updater) => updateWorkspaceLocalMessageAttachment(localMessage.id, attachmentId, updater)
+        );
+        if (workspaceCancelledLocalMessageIdsRef.current.has(localMessage.id)) {
+          const cleaned = await removeWorkspaceUploadedAttachments(uploadedAttachments);
+          if (!cleaned && workspaceSelectedConversationIdRef.current === localMessage.conversationId) {
+            showWorkspaceNotice("warning", "消息已取消，部分已上传文件请在文件页中处理");
+          }
+          return;
+        }
+        if (uploadedAttachments.length !== pendingAttachments.length) {
+          setWorkspaceLocalMessages((messages) => messages.map((message) =>
+            message.id === localMessage.id
+              ? { ...message, state: "failed", failureReason: "文件上传失败，消息尚未发送" }
+              : message
+          ));
+          return;
+        }
+        const blocks: WorkspaceContentBlock[] = [
+          ...localMessage.blocks.filter((block) => block.type !== "attachment"),
+          ...uploadedAttachments.map((attachment) => ({
+            type: "attachment" as const,
+            attachmentId: attachment.id
+          }))
+        ];
+        readyMessage = {
+          ...localMessage,
+          blocks,
+          attachments: uploadedAttachments,
+          pendingAttachments: undefined,
+          state: "sending",
+          failureReason: undefined
+        };
+        setWorkspaceLocalMessages((messages) => messages.map((message) =>
+          message.id === localMessage.id ? readyMessage : message
+        ));
+        for (const attachment of pendingAttachments) {
+          if (attachment.previewUrl) {
+            URL.revokeObjectURL(attachment.previewUrl);
+          }
+        }
+      }
+      await submitWorkspaceMessage(readyMessage);
+    } catch (error) {
+      if (workspaceCancelledLocalMessageIdsRef.current.has(localMessage.id)) {
+        return;
+      }
+      const message = userFacingErrorMessage(error, "消息发送失败");
+      setWorkspaceLocalMessages((messages) => messages.map((item) =>
+        item.id === localMessage.id ? { ...item, state: "failed", failureReason: message } : item
+      ));
+      if (workspaceSelectedConversationIdRef.current === localMessage.conversationId) {
+        showWorkspaceNotice("warning", message);
+      }
+    } finally {
+      workspaceCancelledLocalMessageIdsRef.current.delete(localMessage.id);
+    }
+  }
+
   async function retryWorkspaceMessage(messageId: string) {
-    const localMessage = workspaceLocalMessages.find((message) => message.id === messageId);
-    if (!localMessage || localMessage.state === "sending") {
+    const localMessage = workspaceLocalMessagesRef.current.find((message) => message.id === messageId);
+    if (!localMessage || localMessage.state === "uploading" || localMessage.state === "sending") {
       return;
     }
     clearWorkspaceNotice();
+    const retryingMessage: WorkspaceLocalMessage = {
+      ...localMessage,
+      state: localMessage.pendingAttachments?.length ? "uploading" : "sending",
+      failureReason: undefined
+    };
     setWorkspaceLocalMessages((messages) =>
       messages.map((message) =>
-        message.id === messageId ? { ...message, state: "sending", failureReason: undefined } : message
+        message.id === messageId ? retryingMessage : message
       )
     );
-    try {
-      await submitWorkspaceMessage(localMessage);
-    } catch (error) {
-      const message = userFacingErrorMessage(error, "消息发送失败");
-      setWorkspaceLocalMessages((messages) =>
-        messages.map((item) =>
-          item.id === messageId ? { ...item, state: "failed", failureReason: message } : item
-        )
-      );
-      showWorkspaceNotice("warning", message);
+    await deliverWorkspaceLocalMessage(retryingMessage);
+  }
+
+  async function cancelWorkspaceLocalMessage(messageId: string) {
+    const localMessage = workspaceLocalMessagesRef.current.find((message) => message.id === messageId);
+    if (!localMessage || !localMessage.pendingAttachments?.length) {
+      return;
+    }
+    const wasUploading = localMessage.state === "uploading";
+    workspaceCancelledLocalMessageIdsRef.current.add(messageId);
+    for (const attachment of localMessage.pendingAttachments) {
+      workspaceUploadControllersRef.current.get(attachment.id)?.abort();
+      if (attachment.previewUrl) {
+        URL.revokeObjectURL(attachment.previewUrl);
+      }
+    }
+    setWorkspaceLocalMessages((messages) => messages.filter((message) => message.id !== messageId));
+
+    const cleanupSucceeded = wasUploading || await removeWorkspaceUploadedAttachments(
+      localMessage.pendingAttachments.flatMap((attachment) => attachment.attachment ? [attachment.attachment] : [])
+    );
+    if (!wasUploading) {
+      workspaceCancelledLocalMessageIdsRef.current.delete(messageId);
+    }
+    if (!cleanupSucceeded) {
+      showWorkspaceNotice("warning", "消息已移除，部分已上传文件请在文件页中处理");
     }
   }
 
@@ -8291,6 +8367,7 @@ export function App() {
                         }
                         onReply={(messageId) => setWorkspaceConversationReplyToMessageId(workspaceSelectedConversation.id, messageId)}
                         onRetryMessage={(messageId) => void retryWorkspaceMessage(messageId)}
+                        onCancelMessage={(messageId) => void cancelWorkspaceLocalMessage(messageId)}
                         replyTarget={workspaceReplyTarget}
                         onCancelReply={() => setWorkspaceConversationReplyToMessageId(workspaceSelectedConversation.id, "")}
                         onOpenAttachment={openWorkspaceAttachmentFile}
@@ -8319,7 +8396,6 @@ export function App() {
                           )
                           : []}
                         fileInputDisabled={!workspaceBootstrap.permissions.canUpload}
-                        sending={workspaceSending}
                         onManageEmotes={openWorkspaceEmoteManager}
                       />
                     ) : (
@@ -12181,6 +12257,55 @@ function WorkspaceFileThumbnail({
   );
 }
 
+export function getWorkspacePendingAttachmentProgress(attachments: WorkspaceComposerAttachment[]) {
+  if (attachments.length === 0) return 0;
+  const totalBytes = attachments.reduce((total, attachment) => total + Math.max(attachment.file.size, 1), 0);
+  const uploadedBytes = attachments.reduce(
+    (total, attachment) => total + Math.max(attachment.file.size, 1) * Math.min(100, Math.max(0, attachment.progress)) / 100,
+    0
+  );
+  return Math.round(uploadedBytes / totalBytes * 100);
+}
+
+function WorkspacePendingAttachmentList({ attachments }: { attachments: WorkspaceComposerAttachment[] }) {
+  return (
+    <div className="workspace-pending-attachment-list" aria-label="后台上传附件">
+      {attachments.map((attachment) => (
+        <div className={`workspace-pending-attachment ${attachment.state}`} key={attachment.id}>
+          {attachment.previewUrl ? (
+            <img src={attachment.previewUrl} alt="" />
+          ) : (
+            <span className="workspace-pending-attachment-icon" aria-hidden="true">
+              <FileUp size={17} />
+            </span>
+          )}
+          <span className="workspace-pending-attachment-copy">
+            <strong>{attachment.file.name}</strong>
+            <small>
+              {formatBytes(attachment.file.size)} · {
+                attachment.state === "queued"
+                  ? "等待上传"
+                  : attachment.state === "uploading"
+                    ? `上传中 ${attachment.progress}%`
+                    : attachment.state === "uploaded"
+                      ? "上传完成，等待发送"
+                      : attachment.failureReason || "上传失败"
+              }
+            </small>
+            {(attachment.state === "queued" || attachment.state === "uploading") && (
+              <span className="workspace-upload-progress" aria-hidden="true">
+                <i style={{ width: `${attachment.progress}%` }} />
+              </span>
+            )}
+          </span>
+          {attachment.state === "uploaded" && <Check size={16} className="workspace-pending-attachment-check" aria-hidden="true" />}
+          {attachment.state === "failed" && <AlertCircle size={16} className="workspace-pending-attachment-error" aria-hidden="true" />}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function WorkspaceStructuredMessage({
   message,
   onOpenAttachment,
@@ -12197,6 +12322,9 @@ export function WorkspaceStructuredMessage({
   const [textExpanded, setTextExpanded] = useState(false);
   const blocks = message.content?.blocks ?? [];
   const hasUnknownBlock = blocks.some((block) => !isKnownWorkspaceMessageBlock(block));
+  if (message.lane === "workspace" && blocks.length === 0 && message.pendingAttachments?.length) {
+    return <></>;
+  }
   if (message.lane !== "workspace" || blocks.length === 0 || hasUnknownBlock) {
     return <MessageBody body={message.body} />;
   }
@@ -12634,6 +12762,7 @@ function WorkspaceChatPanel({
   onRemoveStagedAttachment,
   onReply,
   onRetryMessage,
+  onCancelMessage,
   replyTarget,
   onCancelReply,
   onOpenAttachment,
@@ -12654,7 +12783,6 @@ function WorkspaceChatPanel({
   onRestoreHiddenMessages,
   mentionMembers,
   fileInputDisabled,
-  sending,
   onManageEmotes
 }: {
   title: string;
@@ -12685,6 +12813,7 @@ function WorkspaceChatPanel({
   onRemoveStagedAttachment: (attachmentId: string) => void;
   onReply: (messageId: string) => void;
   onRetryMessage: (messageId: string) => void;
+  onCancelMessage: (messageId: string) => void;
   replyTarget?: Message | null;
   onCancelReply: () => void;
   onOpenAttachment: (attachment: WorkspaceAttachment) => void;
@@ -12705,7 +12834,6 @@ function WorkspaceChatPanel({
   onRestoreHiddenMessages: (messageIds: string[]) => void;
   mentionMembers: WorkspaceUser[];
   fileInputDisabled: boolean;
-  sending: boolean;
   onManageEmotes: () => void;
 }) {
   const [emotePanelOpen, setEmotePanelOpen] = useState(false);
@@ -12740,7 +12868,7 @@ function WorkspaceChatPanel({
     formatToolbarOpen && "formatting-open",
     composerExpanded && "expanded"
   ].filter(Boolean).join(" ");
-  const sendDisabled = sending || (!draft.trim() && stagedAttachments.length === 0);
+  const sendDisabled = !draft.trim() && stagedAttachments.length === 0;
   const messageDisplayItems = useMemo(() => groupHiddenWorkspaceMessages(messages), [messages]);
   const unreadIndex = useMemo(() => {
     if (unreadAnchorCount <= 0 || messages.length === 0) {
@@ -12961,7 +13089,7 @@ function WorkspaceChatPanel({
     }
   };
   const handleDraftPaste = (event: React.ClipboardEvent<HTMLDivElement>) => {
-    if (fileInputDisabled || sending) {
+    if (fileInputDisabled) {
       return;
     }
     const files = renamePastedImageFiles(Array.from(event.clipboardData.files));
@@ -12978,7 +13106,7 @@ function WorkspaceChatPanel({
   const handleDrop = (event: React.DragEvent<HTMLElement>) => {
     event.preventDefault();
     setDragActive(false);
-    if (fileInputDisabled || sending) {
+    if (fileInputDisabled) {
       return;
     }
     const files = Array.from(event.dataTransfer.files);
@@ -13202,6 +13330,9 @@ function WorkspaceChatPanel({
                         mentionMembers={mentionMembers}
                       />
                     )}
+                    {message.pendingAttachments && message.pendingAttachments.length > 0 && (
+                      <WorkspacePendingAttachmentList attachments={message.pendingAttachments} />
+                    )}
                     {!message.recalledAt && message.pin && (
                       <div className="workspace-message-pin-indicator" title="群常驻消息">
                         <Pin size={12} aria-hidden="true" />
@@ -13219,9 +13350,14 @@ function WorkspaceChatPanel({
                     )}
                     {message.localState && (
                       <div className={`message-local-state ${message.localState}`}>
+                        {(message.localState === "uploading" || message.localState === "sending") && (
+                          <RefreshCw className="workspace-message-state-spinner" size={13} aria-hidden="true" />
+                        )}
                         <span>
-                          {message.localState === "sending"
-                            ? "发送中"
+                          {message.localState === "uploading"
+                            ? `后台上传 ${getWorkspacePendingAttachmentProgress(message.pendingAttachments ?? [])}% · 完成后自动发送`
+                            : message.localState === "sending"
+                              ? message.attachments?.length ? "文件已上传 · 正在发送消息" : "发送中"
                             : message.localState === "delivered"
                               ? "已送达"
                               : message.failureReason || "发送失败"}
@@ -13229,9 +13365,15 @@ function WorkspaceChatPanel({
                         {message.localState === "failed" && (
                           <button type="button" onClick={() => onRetryMessage(message.id)}>
                             <RefreshCw size={14} />
-                            重试
+                            {message.pendingAttachments?.length ? "重试上传" : "重试发送"}
                           </button>
                         )}
+                        {message.pendingAttachments?.length && (message.localState === "uploading" || message.localState === "failed") ? (
+                          <button className="message-local-cancel" type="button" onClick={() => onCancelMessage(message.id)}>
+                            <X size={14} />
+                            {message.localState === "uploading" ? "取消" : "移除"}
+                          </button>
+                        ) : null}
                       </div>
                     )}
                   </div>
@@ -13425,7 +13567,7 @@ function WorkspaceChatPanel({
                 type="file"
                 multiple
                 aria-label="添加附件"
-                disabled={fileInputDisabled || sending}
+                disabled={fileInputDisabled}
                 onChange={(event) => {
                   const files = Array.from(event.currentTarget.files ?? []);
                   if (files.length > 0) onStageFiles(files);
@@ -13533,7 +13675,7 @@ function WorkspaceChatPanel({
             onKeyDown={handleDraftKeyDown}
             onPaste={handleDraftPaste}
             expanded={composerExpanded}
-            readOnly={sending}
+            readOnly={false}
           />
           <div className="workspace-composer-actions">
             <button
@@ -13546,8 +13688,8 @@ function WorkspaceChatPanel({
             >
               {composerExpanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
             </button>
-            <button className="workspace-send-button" type="submit" disabled={sendDisabled} title={sending ? "发送中" : "发送消息"}>
-              {sending ? <RefreshCw size={18} /> : <Send size={18} />}
+            <button className="workspace-send-button" type="submit" disabled={sendDisabled} title="发送消息">
+              <Send size={18} />
             </button>
           </div>
           {emotePanelOpen && (

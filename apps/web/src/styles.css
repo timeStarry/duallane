@@ -1483,6 +1483,19 @@ button:disabled {
   color: var(--danger-fg);
 }
 
+.message-local-state.uploading {
+  color: var(--relay-dark);
+}
+
+.workspace-message-state-spinner {
+  flex: 0 0 auto;
+  animation: workspace-message-state-spin 0.8s linear infinite;
+}
+
+@keyframes workspace-message-state-spin {
+  to { transform: rotate(360deg); }
+}
+
 .message-local-state button {
   min-height: 28px;
   display: inline-flex;
@@ -1499,6 +1512,17 @@ button:disabled {
 
 .message-local-state button:hover {
   border-color: color-mix(in srgb, var(--red) 55%, var(--line));
+}
+
+.message-local-state .message-local-cancel {
+  border-color: var(--line);
+  color: var(--muted);
+  background: var(--surface-soft);
+}
+
+.message-local-state .message-local-cancel:hover {
+  border-color: color-mix(in srgb, var(--ink) 24%, var(--line));
+  color: var(--ink);
 }
 
 .message-emote-image {
@@ -4988,6 +5012,76 @@ html[data-theme="dark"] .workspace-mode {
 .workspace-staged-file > button:hover {
   color: var(--ink);
   background: var(--surface-soft);
+}
+
+.workspace-pending-attachment-list {
+  width: min(360px, 100%);
+  display: grid;
+  margin-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.workspace-pending-attachment {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 0;
+}
+
+.workspace-pending-attachment + .workspace-pending-attachment {
+  border-top: 1px solid var(--line);
+}
+
+.workspace-pending-attachment > img,
+.workspace-pending-attachment-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 5px;
+  background: var(--surface-soft);
+}
+
+.workspace-pending-attachment > img {
+  object-fit: cover;
+}
+
+.workspace-pending-attachment-icon {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.workspace-pending-attachment-copy {
+  min-width: 0;
+}
+
+.workspace-pending-attachment-copy strong,
+.workspace-pending-attachment-copy small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-pending-attachment-copy strong {
+  color: var(--ink);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.workspace-pending-attachment-copy small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.workspace-pending-attachment-check {
+  color: var(--relay-dark);
+}
+
+.workspace-pending-attachment-error {
+  color: var(--danger-fg);
 }
 
 .workspace-upload-progress {

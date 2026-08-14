@@ -16,6 +16,15 @@
 - Tests: `pnpm test`
 - Build: `pnpm build`
 
+## Local Production Deployment
+- Use `/home/timestarry/projects/duallane` only for development, validation, commits, and pushes.
+- Deploy production only from the local checkout at `/home/timestarry/duallane`.
+- Do not use SSH or SCP for this host's DualLane deployment; operate on the local Docker daemon.
+- Validate, commit, and push from the development checkout first. Then run `git pull --ff-only` in `/home/timestarry/duallane` and deploy the exact resulting `origin/main` commit through `deploy/production/deploy.sh`.
+- Never run the production deployment script from `/home/timestarry/projects/duallane` and never use a bare `docker compose up` for an existing production deployment.
+- Keep `DUALLANE_PRODUCTION_DIR=/home/timestarry/duallane` in the production `.env`; the deployment script must refuse any different checkout.
+- Replace API and Web only after their new candidate containers are healthy. If Docker must restart, record and restore every application container that was running before the restart.
+
 ## Required Validation
 - For frontend-only changes, run `pnpm lint` and `pnpm build`.
 - For service logic changes, run `pnpm test` and `pnpm lint`.
