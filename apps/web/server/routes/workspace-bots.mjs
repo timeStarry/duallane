@@ -104,8 +104,35 @@ export function registerWorkspaceAgentBotRoutes({
     return reply.code(201).send({ bot });
   }));
 
+  app.get("/api/workspace/bots", call(async (request) => ({
+    bots: await service.listOwnedBots(await actor(request), await space(request))
+  })));
+
   app.get("/api/workspace/bots/:botId", call(async (request) => ({
     bot: await service.getOwnedBot(await actor(request), await space(request), request.params.botId)
+  })));
+
+  app.get("/api/workspace/bots/:botId/settings", call(async (request) => ({
+    settings: await service.getSettings(await actor(request), request.params.botId, await space(request))
+  })));
+
+  app.patch("/api/workspace/bots/:botId/settings", call(async (request) => ({
+    settings: await service.updateSettings(await actor(request), request.params.botId, {
+      ...(request.body || {}),
+      spaceId: await space(request)
+    })
+  })));
+
+  app.get("/api/workspace/bots/:botId/group-policies", call(async (request) => ({
+    policies: await service.listGroupPolicies(await actor(request), request.params.botId, await space(request))
+  })));
+
+  app.patch("/api/workspace/bots/:botId/group-policies/:conversationId", call(async (request) => ({
+    policy: await service.updateGroupPolicy(await actor(request), request.params.botId, {
+      ...(request.body || {}),
+      conversationId: request.params.conversationId,
+      spaceId: await space(request)
+    })
   })));
 
   app.post("/api/workspace/bots/:botId/tokens", {
@@ -132,6 +159,15 @@ export function registerWorkspaceAgentBotRoutes({
     return reply.code(201).send({ token, tokenRecord });
   }));
 
+  app.post("/api/workspace/bots/:botId/tokens/rotate", call(async (request, reply) => {
+    const issued = await service.rotateToken(await actor(request), request.params.botId, {
+      ...(request.body || {}),
+      spaceId: await space(request)
+    });
+    const { token, ...tokenRecord } = issued;
+    return reply.code(201).send({ token, tokenRecord });
+  }));
+
   app.get("/api/workspace/bots/:botId/tokens", call(async (request) => ({
     tokens: await service.listTokens(await actor(request), request.params.botId, await space(request))
   })));
@@ -151,6 +187,14 @@ export function registerWorkspaceAgentBotRoutes({
 
   app.post("/api/workspace/bots/:botId/resume", call(async (request) => ({
     bot: await service.resumeBot(await actor(request), request.params.botId, await space(request))
+  })));
+
+  app.get("/api/workspace/bots/:botId/connection", call(async (request) => ({
+    connection: await service.getConnectionStatus(await actor(request), request.params.botId, await space(request))
+  })));
+
+  app.post("/api/workspace/bots/:botId/connection/test", call(async (request) => ({
+    connection: await service.testConnection(await actor(request), request.params.botId, await space(request))
   })));
 
   app.delete("/api/workspace/bots/:botId", call(async (request) => ({

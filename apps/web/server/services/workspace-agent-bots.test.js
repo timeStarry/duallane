@@ -242,6 +242,25 @@ describe("workspace custom Agent Bot security foundation", () => {
     expect(serialized).not.toContain("content");
   });
 
+  it("gates group participation through an owner-managed policy and context grant", async () => {
+    const { service, db } = await fixture();
+    const bot = await service.createBot("usr_owner", { spaceId: SPACE_ID, name: "Group policy" });
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO conversations (id, space_id, type, title, direct_key, retention_count, created_by, created_at)
+      VALUES ('conv_group_policy', ?, 'group', 'Policy group', NULL, 10000, 'usr_owner', ?)`).run(SPACE_ID, now);
+    db.prepare(`INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at) VALUES ('conv_group_policy', 'usr_owner', ?, NULL)`).run(now);
+    await expect(service.updateGroupPolicy("usr_owner", bot.id, { spaceId: SPACE_ID, conversationId: "conv_group_policy", allowContext: true, maxMessages: 25 })).resolves.toMatchObject({
+      conversationId: "conv_group_policy",
+      status: "active",
+      allowTrigger: true,
+      allowContext: true,
+      grantId: expect.stringMatching(/^grant_/u)
+    });
+    const firstGrant = db.prepare("SELECT grant_id AS grantId FROM workspace_agent_bot_context_grants WHERE bot_id = ? AND conversation_id = 'conv_group_policy'").get(bot.id).grantId;
+    await expect(service.updateGroupPolicy("usr_owner", bot.id, { spaceId: SPACE_ID, conversationId: "conv_group_policy", allowContext: false })).resolves.toMatchObject({ grantId: firstGrant, allowContext: false });
+    expect(db.prepare("SELECT user_id AS userId FROM conversation_members WHERE conversation_id = 'conv_group_policy' AND user_id = ?").get(bot.botUserId)).toEqual({ userId: bot.botUserId });
+  });
+
   async function fixture() {
     const directory = await mkdtemp(path.join(tmpdir(), "duallane-agent-bot-test-"));
     const db = openTestDatabase(directory);

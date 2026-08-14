@@ -221,6 +221,33 @@ describe("workspace Agent Bot management routes", () => {
     });
   });
 
+  it("manages policy settings, rotates tokens, and reports connection state", async () => {
+    const fixture = await makeFixture();
+    const created = await fixture.app.inject({
+      method: "POST",
+      url: "/api/workspace/bots",
+      headers: { "x-user": "usr_owner" },
+      payload: { name: "Settings Bot" }
+    });
+    const botId = created.json().bot.id;
+    const settings = await fixture.app.inject({
+      method: "PATCH",
+      url: `/api/workspace/bots/${botId}/settings`,
+      headers: { "x-user": "usr_owner" },
+      payload: { visibilityPolicy: "space_members", allowGroup: true, maxContextMessages: 80 }
+    });
+    expect(settings.statusCode).toBe(200);
+    expect(settings.json().settings).toMatchObject({ visibilityPolicy: "space_members", allowGroup: true, context: { maxMessages: 80 } });
+    const issued = await fixture.app.inject({ method: "POST", url: `/api/workspace/bots/${botId}/tokens`, headers: { "x-user": "usr_owner" }, payload: {} });
+    const rotated = await fixture.app.inject({ method: "POST", url: `/api/workspace/bots/${botId}/tokens/rotate`, headers: { "x-user": "usr_owner" }, payload: {} });
+    expect(rotated.statusCode).toBe(201);
+    await expect(fixture.service.authenticateToken(issued.json().token)).rejects.toMatchObject({ code: "bot.invalid_token" });
+    await expect(fixture.service.authenticateToken(rotated.json().token)).resolves.toMatchObject({ botId });
+    const connection = await fixture.app.inject({ method: "GET", url: `/api/workspace/bots/${botId}/connection`, headers: { "x-user": "usr_owner" } });
+    expect(connection.statusCode).toBe(200);
+    expect(connection.json().connection.status).toBe("disconnected");
+  });
+
   async function makeFixture() {
     const directory = await mkdtemp(path.join(tmpdir(), "duallane-bot-route-"));
     const db = openTestDatabase(directory);

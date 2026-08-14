@@ -1895,7 +1895,7 @@ export async function updateConversationNotificationLevel(db, request, input) {
 }
 
 export async function listMessages(db, userId, conversationId, options = {}) {
-  const actor = await requireActor(db, userId);
+  const actor = await requireActor(db, userId, { allowBot: options.request?.botGateway === true });
   await requireCapability(db, options.request ?? null, actor, "conversation.read", {
     targetType: "conversation",
     targetId: conversationId
@@ -2378,7 +2378,7 @@ export async function removeMessageReaction(db, request, input) {
   });
 }
 export async function createStructuredMessage(db, request, input) {
-  const actor = await requireActor(db, input.actorId);
+  const actor = await requireActor(db, input.actorId, { allowBot: request?.botGateway === true });
   const conversationId = normalizeString(input.conversationId);
   const clientMessageId = normalizeString(input.clientMessageId);
   if (!conversationId || !clientMessageId) {
@@ -2412,7 +2412,7 @@ export async function createStructuredMessage(db, request, input) {
       if (existing.contentJson !== JSON.stringify(normalizedContent)) {
         throw new WorkspaceValidationError("message.idempotency_conflict", "重复消息 ID 对应的内容不一致");
       }
-      return (await listMessages(db, actor.id, conversationId, { limit: 200 })).find((message) => message.id === existing.id);
+      return (await listMessages(db, actor.id, conversationId, { limit: 200, request })).find((message) => message.id === existing.id);
     }
 
     replyToMessageId = normalizeString(input.replyToMessageId) || null;
@@ -2467,7 +2467,7 @@ export async function createStructuredMessage(db, request, input) {
       if (!winner || winner.contentJson !== JSON.stringify(normalizedContent)) {
         return { idempotencyConflict: true };
       }
-      return (await listMessages(db, actor.id, conversationId, { limit: 200 }))
+      return (await listMessages(db, actor.id, conversationId, { limit: 200, request }))
         .find((message) => message.id === winner.id);
     }
 
@@ -2501,8 +2501,8 @@ export async function createStructuredMessage(db, request, input) {
     }
 
     await enforceRetention(db, conversationId);
-    const createdMessage = (await listMessages(db, actor.id, conversationId, { limit: 200 })).find((message) => message.id === id);
-    const updatedConversation = await getConversation(db, actor.id, conversationId);
+    const createdMessage = (await listMessages(db, actor.id, conversationId, { limit: 200, request })).find((message) => message.id === id);
+    const updatedConversation = await getConversation(db, actor.id, conversationId, { request, actor });
     const messageEvent = await writeEvent(db, {
       type: "message.created",
       actorId: actor.id,
@@ -2553,6 +2553,17 @@ export async function createStructuredMessage(db, request, input) {
     throw error;
   }
   return transactionResult;
+}
+
+// The Gateway uses the same content normalization, membership, idempotency and
+// Workspace event path as human messages. The explicit request marker is set
+// only by the Bot Gateway route, so ordinary Session/OAuth callers cannot opt
+// into bot identity handling through request payload fields.
+export async function createBotStructuredMessage(db, request, input) {
+  if (request?.botGateway !== true) {
+    throw new WorkspacePermissionError("permission.denied", "Bot Gateway 身份无效");
+  }
+  return createStructuredMessage(db, request, input);
 }
 
 async function createSystemMessage(db, { actor, conversationId, plainText }) {
@@ -2608,7 +2619,7 @@ async function getConversationEventViewer(db, conversationId) {
 }
 
 export async function reserveUpload(db, request, input) {
-  const actor = await requireActor(db, input.actorId);
+  const actor = await requireActor(db, input.actorId, { allowBot: request?.botGateway === true });
   await requireCapability(db, request, actor, "file.upload", {
     targetType: "attachment",
     targetId: "new"
@@ -3233,7 +3244,7 @@ async function getConversation(db, userId, conversationId, context = {}) {
     viewerId: actor.id,
     viewerRole: actor.role,
     members: await listConversationMembers(db, conversationId, actor.id),
-    latestMessages: await listMessages(db, actor.id, conversationId, { limit: 20 })
+    latestMessages: await listMessages(db, actor.id, conversationId, { limit: 20, request: context.request })
   }, actor);
 }
 
@@ -4608,13 +4619,19 @@ function removeUndefinedValues(value) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
 }
 
-async function requireActor(db, userId) {
+async function requireActor(db, userId, options = {}) {
   const actor = await getUserWithRole(db, normalizeString(userId));
   if (!actor) {
     throw new WorkspaceAuthError("auth.required", "请先登录共享空间");
   }
-  if (!isAuthenticationAllowedIdentity(actor)) {
+  if (!isAuthenticationAllowedIdentity(actor) && !(options.allowBot === true && actor.kind === "bot")) {
     throw new WorkspaceAuthError("auth.identity_forbidden", "该系统身份不能执行用户操作");
+  }
+  if (options.allowBot === true && actor.kind === "bot") {
+    const customBot = await db.prepare(`SELECT 1 FROM workspace_agent_bots WHERE bot_user_id = ? AND status = 'active'`).get(actor.id);
+    if (!customBot) {
+      throw new WorkspaceAuthError("auth.identity_forbidden", "该系统身份不能执行用户操作");
+    }
   }
   return actor;
 }

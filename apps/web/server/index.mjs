@@ -97,6 +97,8 @@ import { createWorkspaceInteractionRegistries } from "./services/workspace-inter
 import { createWorkspaceInteractionService } from "./services/workspace-interactions.mjs";
 import { registerWorkspaceAgentBotRoutes } from "./routes/workspace-bots.mjs";
 import { registerWorkspaceCardRoutes } from "./routes/workspace-cards.mjs";
+import { createWorkspaceBotGatewayService } from "./services/workspace-bot-gateway.mjs";
+import { registerWorkspaceBotGatewayRoutes } from "./routes/workspace-bot-gateway.mjs";
 import { registerWorkspaceEchoRequirementRoutes } from "./routes/workspace-echo.mjs";
 import { registerWorkspaceInteractionRoutes } from "./routes/workspace-interactions.mjs";
 import { registerWorkspaceTopicRoutes } from "./routes/workspace-topics.mjs";
@@ -165,6 +167,7 @@ export async function createApp(options = {}) {
     ...workspaceInteractionRegistries,
     now: options.now
   }) : null;
+  const workspaceBotGateway = db ? createWorkspaceBotGatewayService({ db, botService: workspaceAgentBots, now: options.now }) : null;
   await workspaceChunkUploads?.cleanupInactive();
   const workspacePresence = createWorkspacePresence();
   const workspaceEmail = db ? createWorkspaceEmailService({
@@ -297,6 +300,17 @@ registerWorkspaceInteractionRoutes(app, {
   enabled: workspaceEnabled,
   getActorId: getWorkspaceUserId
 });
+registerWorkspaceBotGatewayRoutes({
+  app,
+  gateway: workspaceBotGateway,
+  workspaceEnabled,
+  getSpaceId: () => DEFAULT_SPACE_ID,
+  blockDisabled: (reply) => blockWorkspace(reply)
+});
+const workspaceBotGatewayUnsubscribe = workspaceBotGateway
+  ? subscribeWorkspaceEvents((writtenEvent) => workspaceBotGateway.dispatchWorkspaceEvent(writtenEvent))
+  : () => {};
+app.addHook("onClose", async () => workspaceBotGatewayUnsubscribe());
 registerWorkspaceEchoRequirementRoutes(app, {
   db,
   enabled: workspaceEnabled,

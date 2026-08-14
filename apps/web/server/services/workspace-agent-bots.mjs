@@ -144,6 +144,7 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
           ON CONFLICT (space_id, user_id) DO UPDATE SET
             role = 'member', removed_at = NULL
         `).run(actor.spaceId, botUserId, createdAt);
+        await ensureBotConfiguration(db, botId, actor.spaceId, createdAt);
         return readBot(botId);
       });
     } catch (error) {
@@ -178,6 +179,190 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
     }
     if (!bot) throw new WorkspaceAgentBotError("bot.not_found", "Bot 不存在", 404);
     return publicBot(bot);
+  }
+
+  async function listOwnedBots(actorUserId, spaceId) {
+    const actor = await requireActiveHumanMember(actorUserId, spaceId);
+    const rows = await db.prepare(`
+      SELECT b.id
+      FROM workspace_agent_bots b
+      WHERE b.space_id = ? AND b.owner_user_id = ? AND b.status <> 'deleted'
+      ORDER BY b.created_at DESC
+    `).all(actor.spaceId, actor.id);
+    return Promise.all(rows.map(async ({ id }) => publicBot(await readBot(id))));
+  }
+
+  async function getSettings(actorUserId, botId, spaceId) {
+    const actor = await requireActiveHumanMember(actorUserId, spaceId);
+    const bot = await requireOwnedBotWithAudit(actor, botId, "bot.settings.read", "agent_bot");
+    await ensureBotConfiguration(db, bot.id, bot.spaceId, bot.updatedAt ?? now().toISOString());
+    return publicBotSettings(await readSettings(db, bot.id), bot);
+  }
+
+  async function updateSettings(actorUserId, botId, input = {}) {
+    const actor = await requireActiveHumanMember(actorUserId, input.spaceId);
+    const bot = await requireOwnedBotWithAudit(actor, botId, "bot.settings.update", "agent_bot");
+    const patch = normalizeSettingsPatch(input);
+    const updatedAt = now().toISOString();
+    let settings;
+    try {
+      settings = await db.transaction(async () => {
+        await db.lock?.(botLifecycleLockKey(actor.spaceId, bot.id));
+        const currentBot = await requireOwnedBot(actor, bot.id);
+        if (currentBot.status !== BOT_STATUS.ACTIVE && currentBot.status !== BOT_STATUS.PAUSED) {
+          throw new WorkspaceAgentBotError("bot.not_active", "当前状态不允许修改 Bot 设置", 409);
+        }
+        await ensureBotConfiguration(db, currentBot.id, currentBot.spaceId, updatedAt);
+        if (Object.hasOwn(patch, "visibilityPolicy")) {
+          await db.prepare(`UPDATE workspace_agent_bots SET visibility_policy = ?, updated_at = ? WHERE id = ?`)
+            .run(patch.visibilityPolicy, updatedAt, currentBot.id);
+          await db.prepare(`UPDATE workspace_agent_bot_settings SET visibility_policy = ?, updated_at = ? WHERE bot_id = ? AND space_id = ?`)
+            .run(patch.visibilityPolicy, updatedAt, currentBot.id, currentBot.spaceId);
+        }
+        const columns = Object.keys(patch).filter((key) => key !== "visibilityPolicy");
+        if (columns.length > 0) {
+          const assignments = columns.map((key) => `${SETTINGS_COLUMNS[key]} = ?`).join(", ");
+          await db.prepare(`UPDATE workspace_agent_bot_settings SET ${assignments}, updated_at = ? WHERE bot_id = ? AND space_id = ?`)
+            .run(...columns.map((key) => patch[key]), updatedAt, currentBot.id, currentBot.spaceId);
+        } else {
+          await db.prepare(`UPDATE workspace_agent_bot_settings SET updated_at = ? WHERE bot_id = ? AND space_id = ?`)
+            .run(updatedAt, currentBot.id, currentBot.spaceId);
+        }
+        if (Object.hasOwn(patch, "allowedMemberIds")) {
+          await db.prepare("DELETE FROM workspace_agent_bot_visibility_members WHERE bot_id = ? AND space_id = ?")
+            .run(currentBot.id, currentBot.spaceId);
+          for (const userId of patch.allowedMemberIds) {
+            await db.prepare(`INSERT INTO workspace_agent_bot_visibility_members (bot_id, space_id, user_id, created_at) VALUES (?, ?, ?, ?)`)
+              .run(currentBot.id, currentBot.spaceId, userId, updatedAt);
+          }
+        }
+        return await readSettings(db, currentBot.id);
+      });
+    } catch (error) {
+      if (error instanceof WorkspaceAgentBotError) {
+        await auditRejection(actor, "bot.settings.update", "agent_bot", bot.id, error.code);
+      }
+      throw error;
+    }
+    await writeBotAudit({ actor, spaceId: actor.spaceId, action: "bot.settings.update", targetType: "agent_bot", targetId: bot.id, result: "success" });
+    return publicBotSettings(settings, await readBot(bot.id));
+  }
+
+  async function rotateToken(actorUserId, botId, input = {}) {
+    const actor = await requireActiveHumanMember(actorUserId, input.spaceId);
+    const bot = await requireOwnedBotWithAudit(actor, botId, "bot.token.rotate", "agent_bot");
+    const rotated = await db.transaction(async () => {
+      await db.lock?.(botLifecycleLockKey(actor.spaceId, bot.id));
+      const current = await requireOwnedBot(actor, bot.id);
+      await db.prepare("UPDATE workspace_agent_bot_tokens SET revoked_at = COALESCE(revoked_at, ?) WHERE bot_id = ? AND revoked_at IS NULL")
+        .run(now().toISOString(), current.id);
+      return current;
+    });
+    const issued = await issueToken(actor.id, rotated.id, { ...input, spaceId: actor.spaceId });
+    await writeBotAudit({ actor, spaceId: actor.spaceId, action: "bot.token.rotate", targetType: "agent_bot", targetId: bot.id, result: "success" });
+    return issued;
+  }
+
+  async function listGroupPolicies(actorUserId, botId, spaceId) {
+    const actor = await requireActiveHumanMember(actorUserId, spaceId);
+    const bot = await requireOwnedBotWithAudit(actor, botId, "bot.group_policy.read", "agent_bot");
+    const rows = await db.prepare(`SELECT gp.conversation_id AS conversationId, gp.status, gp.invited_by AS invitedBy,
+      gp.approved_by AS approvedBy, gp.max_context_messages AS maxContextMessages, gp.created_at AS createdAt, gp.updated_at AS updatedAt,
+      cg.grant_id AS grantId, cg.allow_trigger AS allowTrigger, cg.allow_context AS allowContext, cg.max_messages AS contextMaxMessages
+      FROM workspace_agent_bot_group_policies gp
+      LEFT JOIN workspace_agent_bot_context_grants cg ON cg.bot_id = gp.bot_id AND cg.space_id = gp.space_id AND cg.conversation_id = gp.conversation_id
+      WHERE gp.bot_id = ? AND gp.space_id = ? ORDER BY gp.updated_at DESC`).all(bot.id, bot.spaceId);
+    return rows.map((row) => ({ ...row, allowTrigger: Boolean(row.allowTrigger), allowContext: Boolean(row.allowContext) }));
+  }
+
+  async function updateGroupPolicy(actorUserId, botId, input = {}) {
+    const actor = await requireActiveHumanMember(actorUserId, input.spaceId);
+    const bot = await requireOwnedBotWithAudit(actor, botId, "bot.group_policy.update", "agent_bot");
+    const conversationId = typeof input.conversationId === "string" ? input.conversationId.trim() : "";
+    if (!conversationId) throw new WorkspaceAgentBotError("bot.invalid_group_policy", "群聊会话无效");
+    const conversation = await db.prepare("SELECT id, type FROM conversations WHERE id = ? AND space_id = ?").get(conversationId, bot.spaceId);
+    if (!conversation || conversation.type !== "group") throw new WorkspaceAgentBotError("bot.invalid_group_policy", "请选择群聊会话");
+    const status = input.status ?? "active";
+    if (!["pending", "active", "rejected", "removed"].includes(status)) throw new WorkspaceAgentBotError("bot.invalid_group_policy", "群聊策略状态无效");
+    const allowTrigger = input.allowTrigger === undefined ? status === "active" : input.allowTrigger;
+    const allowContext = input.allowContext === undefined ? false : input.allowContext;
+    if (typeof allowTrigger !== "boolean" || typeof allowContext !== "boolean") throw new WorkspaceAgentBotError("bot.invalid_group_policy", "群聊策略开关无效");
+    const maxMessages = input.maxMessages === undefined || input.maxMessages === null ? null : input.maxMessages;
+    if (maxMessages !== null && (!Number.isSafeInteger(maxMessages) || maxMessages < 1 || maxMessages > 200)) throw new WorkspaceAgentBotError("bot.invalid_group_policy", "群聊上下文限制无效");
+    const timestamp = now().toISOString();
+    const grantId = `grant_${idFactory()}`;
+    await db.transaction(async () => {
+      await db.lock?.(botLifecycleLockKey(bot.spaceId, bot.id));
+      await db.prepare(`INSERT INTO workspace_agent_bot_group_policies
+        (bot_id, space_id, conversation_id, status, invited_by, approved_by, max_context_messages, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (bot_id, conversation_id) DO UPDATE SET status = excluded.status, approved_by = excluded.approved_by,
+          max_context_messages = excluded.max_context_messages, updated_at = excluded.updated_at`)
+        .run(bot.id, bot.spaceId, conversationId, status, actor.id, status === "active" ? actor.id : null, maxMessages, timestamp, timestamp);
+      await db.prepare(`INSERT INTO workspace_agent_bot_context_grants
+        (grant_id, bot_id, space_id, conversation_id, allow_trigger, allow_context, max_messages, granted_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (bot_id, conversation_id) DO UPDATE SET allow_trigger = excluded.allow_trigger, allow_context = excluded.allow_context,
+          max_messages = excluded.max_messages, granted_by = excluded.granted_by, updated_at = excluded.updated_at`)
+        .run(grantId, bot.id, bot.spaceId, conversationId, allowTrigger ? 1 : 0, allowContext ? 1 : 0, maxMessages, actor.id, timestamp, timestamp);
+      if (status === "active") {
+        await db.prepare(`INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at)
+          VALUES (?, ?, ?, NULL) ON CONFLICT (conversation_id, user_id) DO UPDATE SET removed_at = NULL`).run(conversationId, bot.botUserId, timestamp);
+      } else if (status === "removed" || status === "rejected") {
+        await db.prepare(`UPDATE conversation_members SET removed_at = ? WHERE conversation_id = ? AND user_id = ? AND removed_at IS NULL`)
+          .run(timestamp, conversationId, bot.botUserId);
+      }
+    });
+    await writeBotAudit({ actor, spaceId: bot.spaceId, action: "bot.group_policy.update", targetType: "agent_bot", targetId: bot.id, result: "success" });
+    return (await listGroupPolicies(actor.id, bot.id, bot.spaceId)).find((policy) => policy.conversationId === conversationId);
+  }
+
+  async function getConnectionStatus(actorUserId, botId, spaceId) {
+    const actor = await requireActiveHumanMember(actorUserId, spaceId);
+    const bot = await requireOwnedBotWithAudit(actor, botId, "bot.connection.read", "agent_bot");
+    await ensureBotConfiguration(db, bot.id, bot.spaceId, now().toISOString());
+    const row = await db.prepare(`SELECT id, bot_id AS botId, space_id AS spaceId, status, adapter_version AS adapterVersion,
+      connected_at AS connectedAt, disconnected_at AS disconnectedAt, last_heartbeat_at AS lastHeartbeatAt,
+      last_processed_at AS lastProcessedAt, last_error_code AS lastErrorCode, last_error_at AS lastErrorAt, updated_at AS updatedAt
+      FROM workspace_agent_bot_connections WHERE bot_id = ? AND space_id = ?`).get(bot.id, bot.spaceId);
+    return publicConnection(row);
+  }
+
+  async function testConnection(actorUserId, botId, spaceId) {
+    const actor = await requireActiveHumanMember(actorUserId, spaceId);
+    const bot = await requireOwnedBotWithAudit(actor, botId, "bot.connection.test", "agent_bot");
+    const timestamp = now().toISOString();
+    await ensureBotConfiguration(db, bot.id, bot.spaceId, timestamp);
+    await db.prepare(`UPDATE workspace_agent_bot_connections SET last_error_code = NULL, last_error_at = NULL, updated_at = ? WHERE bot_id = ? AND space_id = ?`)
+      .run(timestamp, bot.id, bot.spaceId);
+    await writeBotAudit({ actor, spaceId: actor.spaceId, action: "bot.connection.test", targetType: "agent_bot", targetId: bot.id, result: "success" });
+    return { ...(await getConnectionStatus(actor.id, bot.id, actor.spaceId)), testedAt: timestamp };
+  }
+
+  async function updateConnection(botId, spaceId, patch = {}) {
+    const timestamp = now().toISOString();
+    await ensureBotConfiguration(db, botId, spaceId, timestamp);
+    const updates = {
+      status: patch.status,
+      adapterVersion: patch.adapterVersion,
+      connectionNonce: patch.connectionNonce,
+      connectedAt: patch.connectedAt,
+      disconnectedAt: patch.disconnectedAt,
+      lastHeartbeatAt: patch.lastHeartbeatAt,
+      lastProcessedAt: patch.lastProcessedAt,
+      lastErrorCode: patch.lastErrorCode,
+      lastErrorAt: patch.lastErrorAt
+    };
+    const columns = Object.entries(updates).filter(([, value]) => value !== undefined);
+    if (columns.length === 0) return getConnectionByBot(db, botId, spaceId);
+    const names = {
+      adapterVersion: "adapter_version", connectionNonce: "connection_nonce", connectedAt: "connected_at",
+      disconnectedAt: "disconnected_at", lastHeartbeatAt: "last_heartbeat_at", lastProcessedAt: "last_processed_at",
+      lastErrorCode: "last_error_code", lastErrorAt: "last_error_at", status: "status"
+    };
+    await db.prepare(`UPDATE workspace_agent_bot_connections SET ${columns.map(([key]) => `${names[key]} = ?`).join(", ")}, updated_at = ? WHERE bot_id = ? AND space_id = ?`)
+      .run(...columns.map(([, value]) => value), timestamp, botId, spaceId);
+    return getConnectionByBot(db, botId, spaceId);
   }
 
   async function pauseBot(actorUserId, botId, spaceId) {
@@ -407,7 +592,7 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
       FROM workspace_agent_bot_tokens t
       INNER JOIN workspace_agent_bots b ON b.id = t.bot_id
       INNER JOIN users u ON u.id = b.bot_user_id AND u.kind = 'bot'
-      WHERE t.token_hash = ?
+      WHERE t.token_hash = ? AND t.space_id = b.space_id
     `).get(tokenHash);
     if (!row || row.revokedAt || row.status !== BOT_STATUS.ACTIVE || isExpired(row.expiresAt, now())) {
       throw invalidBotToken();
@@ -566,7 +751,12 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
 
   return Object.freeze({
     createBot,
+    listOwnedBots,
     getOwnedBot,
+    getSettings,
+    updateSettings,
+    listGroupPolicies,
+    updateGroupPolicy,
     pauseBot,
     resumeBot,
     beginDeleteBot,
@@ -574,8 +764,12 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
     issueToken,
     listTokens,
     revokeToken,
+    rotateToken,
     authenticateToken,
-    readBot
+    readBot,
+    getConnectionStatus,
+    testConnection,
+    updateConnection
   });
 }
 
@@ -722,13 +916,168 @@ function normalizeBotRow(row) {
 
 function publicBot(row) {
   const normalized = normalizeBotRow(row);
+  const { githubLogin: _internalLogin, ...safe } = normalized;
   return {
-    ...normalized,
+    ...safe,
     kind: "bot",
     authenticationAllowed: false,
     canJoinGroups: normalized.conversationPolicy === BOT_CONVERSATION_POLICIES.GROUP_CAPABLE,
     tokenPolicy: "hashed-one-time"
   };
+}
+
+const SETTINGS_COLUMNS = Object.freeze({
+  allowDirect: "allow_direct",
+  allowGroup: "allow_group",
+  groupInviterPolicy: "group_inviter_policy",
+  requireOwnerApproval: "require_owner_approval",
+  proactiveEnabled: "proactive_enabled",
+  triggerPolicy: "trigger_policy",
+  welcomeMessage: "welcome_message",
+  description: "description",
+  avatarUrl: "avatar_url",
+  showCreator: "show_creator",
+  maxContextMessages: "max_context_messages",
+  maxContextChars: "max_context_chars",
+  maxContextTokens: "max_context_tokens",
+  contextWindowSeconds: "context_window_seconds",
+  includeReplies: "include_replies",
+  includeSystemEvents: "include_system_events",
+  includeAttachmentMetadata: "include_attachment_metadata",
+  allowAttachmentPreview: "allow_attachment_preview",
+  longTermSummaryEnabled: "long_term_summary_enabled"
+});
+
+async function ensureBotConfiguration(database, botId, spaceId, timestamp) {
+  const existing = await database.prepare("SELECT bot_id AS botId FROM workspace_agent_bot_settings WHERE bot_id = ? AND space_id = ?").get(botId, spaceId);
+  if (!existing) {
+    await database.prepare(`INSERT INTO workspace_agent_bot_settings (bot_id, space_id, created_at, updated_at) VALUES (?, ?, ?, ?)`)
+      .run(botId, spaceId, timestamp, timestamp);
+  }
+  const limits = await database.prepare("SELECT bot_id AS botId FROM workspace_agent_bot_limits WHERE bot_id = ? AND space_id = ?").get(botId, spaceId);
+  if (!limits) {
+    await database.prepare(`INSERT INTO workspace_agent_bot_limits (bot_id, space_id, created_at, updated_at) VALUES (?, ?, ?, ?)`)
+      .run(botId, spaceId, timestamp, timestamp);
+  }
+  const connection = await database.prepare("SELECT bot_id AS botId FROM workspace_agent_bot_connections WHERE bot_id = ? AND space_id = ?").get(botId, spaceId);
+  if (!connection) {
+    await database.prepare(`INSERT INTO workspace_agent_bot_connections (id, bot_id, space_id, status, updated_at) VALUES (?, ?, ?, 'disconnected', ?)`)
+      .run(`bcon_${randomUUID()}`, botId, spaceId, timestamp);
+  }
+}
+
+async function readSettings(database, botId) {
+  const settings = await database.prepare(`SELECT bot_id AS botId, space_id AS spaceId, visibility_policy AS visibilityPolicy,
+    allow_direct AS allowDirect, allow_group AS allowGroup, group_inviter_policy AS groupInviterPolicy,
+    require_owner_approval AS requireOwnerApproval, proactive_enabled AS proactiveEnabled, trigger_policy AS triggerPolicy,
+    welcome_message AS welcomeMessage, description, avatar_url AS avatarUrl, show_creator AS showCreator,
+    max_context_messages AS maxContextMessages, max_context_chars AS maxContextChars, max_context_tokens AS maxContextTokens,
+    context_window_seconds AS contextWindowSeconds, include_replies AS includeReplies, include_system_events AS includeSystemEvents,
+    include_attachment_metadata AS includeAttachmentMetadata, allow_attachment_preview AS allowAttachmentPreview,
+    long_term_summary_enabled AS longTermSummaryEnabled, created_at AS createdAt, updated_at AS updatedAt
+    FROM workspace_agent_bot_settings WHERE bot_id = ?`).get(botId);
+  if (!settings) return null;
+  const allowed = await database.prepare(`SELECT user_id AS userId FROM workspace_agent_bot_visibility_members WHERE bot_id = ? ORDER BY user_id`).all(botId);
+  const limits = await database.prepare(`SELECT requests_per_minute AS requestsPerMinute, member_daily_requests AS memberDailyRequests,
+    input_token_limit AS inputTokenLimit, output_token_limit AS outputTokenLimit, max_concurrency AS maxConcurrency,
+    event_backlog_limit AS eventBacklogLimit FROM workspace_agent_bot_limits WHERE bot_id = ?`).get(botId);
+  return { ...settings, allowedMemberIds: allowed.map(({ userId }) => userId), limits: limits ?? null };
+}
+
+function publicBotSettings(row, bot) {
+  if (!row) return null;
+  return {
+    botId: bot.id,
+    spaceId: bot.spaceId,
+    visibilityPolicy: row.visibilityPolicy,
+    allowDirect: Boolean(row.allowDirect),
+    allowGroup: Boolean(row.allowGroup),
+    groupInviterPolicy: row.groupInviterPolicy,
+    requireOwnerApproval: Boolean(row.requireOwnerApproval),
+    proactiveEnabled: Boolean(row.proactiveEnabled),
+    triggerPolicy: row.triggerPolicy,
+    welcomeMessage: row.welcomeMessage ?? null,
+    description: row.description ?? null,
+    avatarUrl: row.avatarUrl ?? null,
+    showCreator: Boolean(row.showCreator),
+    allowedMemberIds: row.allowedMemberIds,
+    context: {
+      maxMessages: row.maxContextMessages,
+      maxChars: row.maxContextChars,
+      maxTokens: row.maxContextTokens,
+      windowSeconds: row.contextWindowSeconds,
+      includeReplies: Boolean(row.includeReplies),
+      includeSystemEvents: Boolean(row.includeSystemEvents),
+      includeAttachmentMetadata: Boolean(row.includeAttachmentMetadata),
+      allowAttachmentPreview: Boolean(row.allowAttachmentPreview),
+      longTermSummaryEnabled: Boolean(row.longTermSummaryEnabled)
+    },
+    limits: row.limits,
+    updatedAt: row.updatedAt
+  };
+}
+
+function publicConnection(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    botId: row.botId,
+    spaceId: row.spaceId,
+    status: row.status,
+    adapterVersion: row.adapterVersion ?? null,
+    connectedAt: row.connectedAt ?? null,
+    disconnectedAt: row.disconnectedAt ?? null,
+    lastHeartbeatAt: row.lastHeartbeatAt ?? null,
+    lastProcessedAt: row.lastProcessedAt ?? null,
+    lastErrorCode: row.lastErrorCode ?? null,
+    lastErrorAt: row.lastErrorAt ?? null,
+    updatedAt: row.updatedAt
+  };
+}
+
+async function getConnectionByBot(database, botId, spaceId) {
+  const row = await database.prepare(`SELECT id, bot_id AS botId, space_id AS spaceId, status, adapter_version AS adapterVersion,
+    connected_at AS connectedAt, disconnected_at AS disconnectedAt, last_heartbeat_at AS lastHeartbeatAt,
+    last_processed_at AS lastProcessedAt, last_error_code AS lastErrorCode, last_error_at AS lastErrorAt, updated_at AS updatedAt
+    FROM workspace_agent_bot_connections WHERE bot_id = ? AND space_id = ?`).get(botId, spaceId);
+  return publicConnection(row);
+}
+
+function normalizeSettingsPatch(input) {
+  const patch = {};
+  if (Object.hasOwn(input, "visibilityPolicy")) {
+    if (!Object.values(BOT_VISIBILITY_POLICIES).includes(input.visibilityPolicy)) throw new WorkspaceAgentBotError("bot.invalid_settings", "Bot 可见范围无效");
+    patch.visibilityPolicy = input.visibilityPolicy;
+  }
+  if (Object.hasOwn(input, "allowedMemberIds")) {
+    if (!Array.isArray(input.allowedMemberIds) || input.allowedMemberIds.length > 200 || input.allowedMemberIds.some((id) => typeof id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(id))) {
+      throw new WorkspaceAgentBotError("bot.invalid_settings", "Bot 成员名单无效");
+    }
+    patch.allowedMemberIds = [...new Set(input.allowedMemberIds)];
+  }
+  for (const [key, column] of Object.entries(SETTINGS_COLUMNS)) {
+    if (!Object.hasOwn(input, key)) continue;
+    let value = input[key];
+    if (["allowDirect", "allowGroup", "requireOwnerApproval", "proactiveEnabled", "showCreator", "includeReplies", "includeSystemEvents", "includeAttachmentMetadata", "allowAttachmentPreview", "longTermSummaryEnabled"].includes(key)) {
+      if (typeof value !== "boolean") throw new WorkspaceAgentBotError("bot.invalid_settings", "Bot 开关设置无效");
+      value = value ? 1 : 0;
+    } else if (["maxContextMessages", "maxContextChars", "maxContextTokens", "contextWindowSeconds"].includes(key)) {
+      if (!Number.isSafeInteger(value) || value <= 0) throw new WorkspaceAgentBotError("bot.invalid_settings", "Bot 上下文限制无效");
+    } else if (["groupInviterPolicy"].includes(key)) {
+      if (!["owner", "group_admin", "any_member"].includes(value)) throw new WorkspaceAgentBotError("bot.invalid_settings", "Bot 群聊策略无效");
+    } else if (["triggerPolicy"].includes(key)) {
+      if (value !== BOT_TRIGGER_POLICIES.MENTION_OR_COMMAND) throw new WorkspaceAgentBotError("bot.invalid_settings", "Bot 触发策略无效");
+    } else if (["welcomeMessage", "description"].includes(key)) {
+      if (value !== null && (typeof value !== "string" || value.length > 4000)) throw new WorkspaceAgentBotError("bot.invalid_settings", "Bot 文本设置无效");
+    } else if (["avatarUrl"].includes(key)) {
+      if (value !== null && (typeof value !== "string" || value.length > 2048 || !/^\/(?:api|assets)\//u.test(value))) throw new WorkspaceAgentBotError("bot.invalid_settings", "Bot 头像地址无效");
+    }
+    patch[key] = value;
+  }
+  const known = new Set(["spaceId", "visibilityPolicy", "allowedMemberIds", ...Object.keys(SETTINGS_COLUMNS)]);
+  const unknown = Object.keys(input).filter((key) => !known.has(key));
+  if (unknown.length > 0) throw new WorkspaceAgentBotError("bot.invalid_settings", "Bot 设置包含未知字段");
+  return patch;
 }
 
 function isUniqueConstraintError(error) {
