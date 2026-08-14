@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { DEFAULT_SPACE_ID } from "./db.mjs";
 import { writeAudit } from "./audit.mjs";
 import {
   parseWorkspaceTopicSyntax,
@@ -7,6 +8,7 @@ import {
   WORKSPACE_TOPIC_TITLE_MAX_CODE_POINTS
 } from "./workspace-topic-parser.mjs";
 import { CardValidationError, normalizeCardPayload } from "./workspace-cards.mjs";
+import { createTopicCreationBundle, getTopicUnread, writeTopicDomainEvent } from "./workspace-topic-messages.mjs";
 
 export const TOPIC_STATUSES = Object.freeze(["open", "closed", "archived"]);
 export const TOPIC_NOTIFICATION_LEVELS = Object.freeze(["all", "mentions", "muted"]);
@@ -76,17 +78,21 @@ function validateTopicCardPayload(payload) {
  * responsibilities of the Workspace application service.
  */
 export async function createTopic(db, request, input = {}) {
-  const actor = await requireTopicActor(db, input.actorId, undefined, { requireConversation: false });
-  if (actor.role === "auditor") {
-    await auditTopic(db, request, actor, "topic.create", "new", "rejected", "permission.denied");
-    throw new TopicPermissionError("permission.denied", "审计角色不能创建话题");
-  }
   let conversation;
   try {
     conversation = await getGroupConversation(db, input.conversationId);
   } catch (error) {
+    const actor = await requireTopicActor(db, input.actorId, undefined, { requireConversation: false });
     await auditTopic(db, request, actor, "topic.create", "new", "rejected", error.code ?? "topic.group_only");
     throw error;
+  }
+  const actor = await requireTopicActor(db, input.actorId, undefined, {
+    requireConversation: false,
+    spaceId: conversation.spaceId
+  });
+  if (actor.role === "auditor") {
+    await auditTopic(db, request, actor, "topic.create", "new", "rejected", "permission.denied");
+    throw new TopicPermissionError("permission.denied", "审计角色不能创建话题");
   }
   if (!await isActiveGroupMember(db, conversation.id, actor.id)) {
     await auditTopic(db, request, actor, "topic.create", "new", "rejected", "topic.not_found");
@@ -162,6 +168,11 @@ export async function createTopic(db, request, input = {}) {
         INSERT INTO topic_members (topic_id, user_id, joined_at, left_at, notification_level)
         VALUES (?, ?, ?, NULL, 'all')
       `).run(id, actor.id, now);
+      await createTopicCreationBundle(db, {
+        topicId: id,
+        actorId: actor.id,
+        request
+      });
     });
   } catch (error) {
     if (isUniqueViolation(error) && idempotencyKey) {
@@ -189,14 +200,24 @@ export async function createTopic(db, request, input = {}) {
 }
 
 export async function listTopics(db, input = {}) {
-  const actor = await requireTopicActor(db, input.actorId, input.conversationId, { requireConversation: false });
+  const actor = await requireTopicActor(db, input.actorId, input.conversationId, {
+    requireConversation: false,
+    spaceId: input.spaceId
+  });
   const conversationId = normalizeString(input.conversationId);
   const statusInput = normalizeString(input.status);
   const status = normalizeStatus(statusInput);
   if (statusInput && !status) throw new TopicValidationError("topic.invalid_status", "话题状态筛选无效");
   if (conversationId && !isValidReferenceId(conversationId)) throw new TopicValidationError("topic.invalid_conversation", "群聊 ID 无效");
-  const params = [actor.id, actor.spaceId, actor.id];
-  const where = ["t.space_id = ?", "EXISTS (SELECT 1 FROM conversation_members actor_cm WHERE actor_cm.conversation_id = t.conversation_id AND actor_cm.user_id = ? AND actor_cm.removed_at IS NULL)"];
+  const limit = normalizeTopicListLimit(input.limit);
+  // SQL placeholders are bound in textual order: the joined projection in the
+  // SELECT clause comes before the membership predicates in WHERE.
+  const params = [actor.id, actor.spaceId, actor.id, actor.id];
+  const where = [
+    "t.space_id = ?",
+    "EXISTS (SELECT 1 FROM conversation_members actor_cm WHERE actor_cm.conversation_id = t.conversation_id AND actor_cm.user_id = ? AND actor_cm.removed_at IS NULL)",
+    "EXISTS (SELECT 1 FROM space_members actor_sm WHERE actor_sm.space_id = t.space_id AND actor_sm.user_id = ? AND actor_sm.removed_at IS NULL)"
+  ];
   if (conversationId) {
     where.push("t.conversation_id = ?");
     params.push(conversationId);
@@ -204,6 +225,10 @@ export async function listTopics(db, input = {}) {
   if (status) {
     where.push("t.status = ?");
     params.push(status);
+  } else {
+    // Archived topics remain available through an explicit archive filter, but
+    // never appear in the default discovery or global list.
+    where.push("t.status <> 'archived'");
   }
   if (input.mine === true) {
     // "Mine" is a history view: a topic remains discoverable after a member
@@ -227,8 +252,9 @@ export async function listTopics(db, input = {}) {
     INNER JOIN users u ON u.id = t.created_by
     WHERE ${where.join(" AND ")}
     ORDER BY CASE t.status WHEN 'open' THEN 1 WHEN 'closed' THEN 2 ELSE 3 END, t.updated_at DESC, t.id DESC
-  `).all(...params);
-  return rows.map((row) => projectTopicRow(row, { full: Boolean(row.joined), viewerId: actor.id }));
+    LIMIT ?
+  `).all(...params, limit);
+  return await Promise.all(rows.map(async (row) => await projectTopicWithViewerState(db, row, actor.id)));
 }
 
 export async function getTopic(db, input = {}) {
@@ -236,13 +262,21 @@ export async function getTopic(db, input = {}) {
 }
 
 export async function getTopicSummary(db, input = {}) {
-  const actor = await requireTopicActor(db, input.actorId, undefined, { requireConversation: false });
+  const topic = await getRawTopic(db, input.topicId);
+  if (!topic) throw topicNotFound();
+  const actor = await requireTopicActor(db, input.actorId, undefined, {
+    requireConversation: false,
+    spaceId: topic.space_id
+  });
   return await projectTopicForActor(db, actor.id, input.topicId, { allowSummary: true });
 }
 
 export async function getTopicDetails(db, input = {}) {
-  const actor = await requireTopicActor(db, input.actorId, undefined, { requireConversation: false });
   const topic = await getRawTopic(db, input.topicId);
+  const actor = await requireTopicActor(db, input.actorId, undefined, {
+    requireConversation: false,
+    spaceId: topic?.space_id
+  });
   if (!topic || !await isActiveGroupMember(db, topic.conversation_id, actor.id) || !await isActiveTopicMember(db, topic.id, actor.id)) {
     throw topicNotFound();
   }
@@ -254,18 +288,24 @@ export function parseWorkspaceTopicIntent(input) {
 }
 
 export async function joinTopic(db, request, input = {}) {
-  const actor = await requireTopicActor(db, input.actorId, undefined, { requireConversation: false });
+  let actor;
   let topic;
   try {
     topic = await getRawTopic(db, input.topicId);
   } catch (error) {
+    actor = await requireTopicActor(db, input.actorId, undefined, { requireConversation: false });
     await auditTopic(db, request, actor, "topic.join", auditTargetId(input.topicId), "rejected", error.code ?? "topic.invalid_id");
     throw error;
   }
   if (!topic) {
+    actor = await requireTopicActor(db, input.actorId, undefined, { requireConversation: false });
     await auditTopic(db, request, actor, "topic.join", normalizeString(input.topicId) || "unknown", "rejected", "topic.not_found");
     throw topicNotFound();
   }
+  actor = await requireTopicActor(db, input.actorId, undefined, {
+    requireConversation: false,
+    spaceId: topic.space_id
+  });
   if (!await isActiveGroupMember(db, topic.conversation_id, actor.id)) {
     await auditTopic(db, request, actor, "topic.join", topic.id, "rejected", "topic.not_found");
     throw topicNotFound();
@@ -309,22 +349,36 @@ export async function joinTopic(db, request, input = {}) {
     }
   }
   await auditTopic(db, request, actor, "topic.join", topic.id, "success");
+  await writeTopicDomainEvent(db, {
+    type: "topic.joined",
+    actorId: actor.id,
+    conversationId: topic.conversation_id,
+    targetType: "topic",
+    targetId: topic.id,
+    payload: { topicId: topic.id, userId: actor.id }
+  });
   return await projectTopicForActor(db, actor.id, topic.id);
 }
 
 export async function leaveTopic(db, request, input = {}) {
-  const actor = await requireTopicActor(db, input.actorId, undefined, { requireConversation: false });
+  let actor;
   let topic;
   try {
     topic = await getRawTopic(db, input.topicId);
   } catch (error) {
+    actor = await requireTopicActor(db, input.actorId, undefined, { requireConversation: false });
     await auditTopic(db, request, actor, "topic.leave", auditTargetId(input.topicId), "rejected", error.code ?? "topic.invalid_id");
     throw error;
   }
   if (!topic) {
+    actor = await requireTopicActor(db, input.actorId, undefined, { requireConversation: false });
     await auditTopic(db, request, actor, "topic.leave", normalizeString(input.topicId) || "unknown", "rejected", "topic.not_found");
     throw topicNotFound();
   }
+  actor = await requireTopicActor(db, input.actorId, undefined, {
+    requireConversation: false,
+    spaceId: topic.space_id
+  });
   if (!await isActiveGroupMember(db, topic.conversation_id, actor.id)) {
     await auditTopic(db, request, actor, "topic.leave", topic.id, "rejected", "topic.not_found");
     throw topicNotFound();
@@ -342,6 +396,14 @@ export async function leaveTopic(db, request, input = {}) {
     await db.prepare("UPDATE topic_members SET left_at = ? WHERE topic_id = ? AND user_id = ?").run(new Date().toISOString(), topic.id, actor.id);
   }
   await auditTopic(db, request, actor, "topic.leave", topic.id, "success");
+  await writeTopicDomainEvent(db, {
+    type: "topic.left",
+    actorId: actor.id,
+    conversationId: topic.conversation_id,
+    targetType: "topic",
+    targetId: topic.id,
+    payload: { topicId: topic.id, userId: actor.id }
+  });
   return await projectTopicForActor(db, actor.id, topic.id, { allowSummary: true });
 }
 
@@ -355,7 +417,10 @@ export async function archiveTopic(db, request, input = {}) {
 
 export async function listTopicMembers(db, input = {}) {
   const topic = await getRawTopic(db, input.topicId);
-  const actor = await requireTopicActor(db, input.actorId, undefined, { requireConversation: false });
+  const actor = await requireTopicActor(db, input.actorId, undefined, {
+    requireConversation: false,
+    spaceId: topic?.space_id
+  });
   if (!topic) throw topicNotFound();
   if (!await isActiveGroupMember(db, topic.conversation_id, actor.id)) throw topicNotFound();
   const active = await isActiveTopicMember(db, topic.id, actor.id);
@@ -373,9 +438,16 @@ export async function listTopicMembers(db, input = {}) {
 
 export async function updateTopicNotificationLevel(db, request, input = {}) {
   const topic = await getRawTopic(db, input.topicId);
-  const actor = await requireTopicActor(db, input.actorId, undefined, { requireConversation: false });
+  const actor = await requireTopicActor(db, input.actorId, undefined, {
+    requireConversation: false,
+    spaceId: topic?.space_id
+  });
   if (!topic) throw topicNotFound();
   if (!await isActiveGroupMember(db, topic.conversation_id, actor.id)) throw topicNotFound();
+  if (actor.role === "auditor") {
+    await auditTopic(db, request, actor, "topic.notification.update", topic.id, "rejected", "permission.denied");
+    throw new TopicPermissionError("permission.denied", "审计角色不能修改话题提醒");
+  }
   if (!TOPIC_NOTIFICATION_LEVELS.includes(normalizeString(input.notificationLevel))) {
     await auditTopic(db, request, actor, "topic.notification.update", topic.id, "rejected", "topic.notification_invalid");
     throw new TopicValidationError("topic.notification_invalid", "话题提醒方式无效");
@@ -387,6 +459,14 @@ export async function updateTopicNotificationLevel(db, request, input = {}) {
   await db.prepare("UPDATE topic_members SET notification_level = ? WHERE topic_id = ? AND user_id = ? AND left_at IS NULL")
     .run(normalizeString(input.notificationLevel), topic.id, actor.id);
   await auditTopic(db, request, actor, "topic.notification.update", topic.id, "success");
+  await writeTopicDomainEvent(db, {
+    type: "topic.notification.updated",
+    actorId: actor.id,
+    conversationId: topic.conversation_id,
+    targetType: "topic",
+    targetId: topic.id,
+    payload: { topicId: topic.id, userId: actor.id, notificationLevel: normalizeString(input.notificationLevel) }
+  });
   return await projectTopicForActor(db, actor.id, topic.id);
 }
 
@@ -395,9 +475,12 @@ export async function projectTopicEvent(db, input = {}) {
   if (!event || typeof event !== "object") return null;
   const topicId = normalizeString(event.topicId ?? event.targetId);
   if (!topicId) return null;
-  const actor = await requireTopicActor(db, input.actorId, undefined, { requireConversation: false });
   const topic = await getRawTopic(db, topicId);
   if (!topic) return null;
+  const actor = await requireTopicActor(db, input.actorId, undefined, {
+    requireConversation: false,
+    spaceId: topic.space_id
+  });
   const groupMember = await isActiveGroupMember(db, topic.conversation_id, actor.id);
   if (!groupMember) return null;
   const joined = await isActiveTopicMember(db, topic.id, actor.id);
@@ -426,18 +509,24 @@ export async function buildTopicEvent(db, input = {}) {
 }
 
 async function transitionTopic(db, request, input, targetStatus) {
-  const actor = await requireTopicActor(db, input.actorId, undefined, { requireConversation: false });
+  let actor;
   let topic;
   try {
     topic = await getRawTopic(db, input.topicId);
   } catch (error) {
+    actor = await requireTopicActor(db, input.actorId, undefined, { requireConversation: false });
     await auditTopic(db, request, actor, `topic.${targetStatus}`, auditTargetId(input.topicId), "rejected", error.code ?? "topic.invalid_id");
     throw error;
   }
   if (!topic) {
+    actor = await requireTopicActor(db, input.actorId, undefined, { requireConversation: false });
     await auditTopic(db, request, actor, `topic.${targetStatus}`, normalizeString(input.topicId) || "unknown", "rejected", "topic.not_found");
     throw topicNotFound();
   }
+  actor = await requireTopicActor(db, input.actorId, undefined, {
+    requireConversation: false,
+    spaceId: topic.space_id
+  });
   if (!await isActiveGroupMember(db, topic.conversation_id, actor.id)) {
     await auditTopic(db, request, actor, `topic.${targetStatus}`, topic.id, "rejected", "topic.not_found");
     throw topicNotFound();
@@ -475,15 +564,27 @@ async function transitionTopic(db, request, input, targetStatus) {
   }
   const updated = await getRawTopic(db, topic.id);
   await auditTopic(db, request, actor, `topic.${targetStatus}`, topic.id, "success");
+  await writeTopicDomainEvent(db, {
+    type: targetStatus === "closed" ? "topic.closed" : "topic.archived",
+    actorId: actor.id,
+    conversationId: topic.conversation_id,
+    targetType: "topic",
+    targetId: topic.id,
+    payload: { topicId: topic.id, status: targetStatus }
+  });
   return await projectTopicForActor(db, actor.id, updated.id, { allowSummary: true });
 }
 
 function parseTopicIntent(input) {
-  const parsed = typeof input.source === "string" ? parseWorkspaceTopicSyntax(input.source) : null;
-  const candidate = parsed ?? (input.intent && typeof input.intent === "object" ? input.intent : {
-    title: input.title,
-    description: input.description
-  });
+  const hasExplicitFields = input && (Object.hasOwn(input, "title") || Object.hasOwn(input, "description"));
+  const sourceObject = input?.source && typeof input.source === "object" && !Array.isArray(input.source)
+    ? input.source
+    : null;
+  const parsed = typeof input?.source === "string" ? parseWorkspaceTopicSyntax(input.source) : null;
+  const candidate = parsed
+    ?? (input.intent && typeof input.intent === "object" && !Array.isArray(input.intent) ? input.intent : null)
+    ?? (sourceObject && (sourceObject.title !== undefined || sourceObject.description !== undefined) ? sourceObject : null)
+    ?? (hasExplicitFields ? { title: input.title, description: input.description } : null);
   const title = normalizeTopicTitle(candidate?.title);
   const description = normalizeTopicDescription(candidate?.description);
   return { title, description };
@@ -493,13 +594,16 @@ async function requireTopicActor(db, userId, conversationId, options = {}) {
   const normalizedUserId = normalizeString(userId);
   const user = await db.prepare("SELECT id, kind FROM users WHERE id = ?").get(normalizedUserId);
   if (!user || user.kind !== "human") throw new TopicAuthError("auth.required", "请先登录共享空间");
+  const requestedSpaceId = normalizeString(options.spaceId);
   const actor = await db.prepare(`
     SELECT u.id, u.kind, u.display_name AS displayName, u.nickname, u.github_login AS githubLogin,
       sm.space_id AS spaceId, sm.role
     FROM users u INNER JOIN space_members sm ON sm.user_id = u.id
     WHERE u.id = ? AND u.kind = 'human' AND sm.removed_at IS NULL
-    ORDER BY sm.joined_at DESC LIMIT 1
-  `).get(normalizedUserId);
+      AND (? = '' OR sm.space_id = ?)
+    ORDER BY CASE WHEN sm.space_id = ? THEN 0 ELSE 1 END, sm.joined_at DESC
+    LIMIT 1
+  `).get(normalizedUserId, requestedSpaceId, requestedSpaceId, requestedSpaceId || DEFAULT_SPACE_ID);
   if (!actor) throw topicNotFound();
   if (conversationId && options.requireConversation !== false && !await isActiveGroupMember(db, conversationId, actor.id)) {
     throw topicNotFound();
@@ -522,12 +626,31 @@ async function getRawTopic(db, topicId) {
 async function projectTopicForActor(db, actorId, topicId, { allowSummary = false } = {}) {
   const topic = await getRawTopic(db, topicId);
   if (!topic) throw topicNotFound();
-  const actor = await requireTopicActor(db, actorId, topic.conversation_id, { requireConversation: false });
+  const actor = await requireTopicActor(db, actorId, topic.conversation_id, {
+    requireConversation: false,
+    spaceId: topic.space_id
+  });
   if (!await isActiveGroupMember(db, topic.conversation_id, actor.id)) throw topicNotFound();
   const row = await loadTopicRow(db, topic.id, actor.id);
   const joined = await isActiveTopicMember(db, topic.id, actor.id);
   if (!joined && !allowSummary) throw topicNotFound();
-  return projectTopicRow(row, { full: joined, viewerId: actor.id });
+  return await projectTopicWithViewerState(db, row, actor.id, { full: joined });
+}
+
+async function projectTopicWithViewerState(db, row, viewerId, options = {}) {
+  const full = options.full ?? Boolean(row?.joined);
+  const projected = projectTopicRow(row, { full, viewerId });
+  if (!projected) return projected;
+  const member = await db.prepare(`
+    SELECT last_read_message_id AS lastReadMessageId,
+      last_read_seq AS lastReadSeq, notification_level AS notificationLevel
+    FROM topic_members WHERE topic_id = ? AND user_id = ? AND left_at IS NULL
+  `).get(projected.id, viewerId);
+  projected.lastReadMessageId = member?.lastReadMessageId ?? null;
+  projected.lastReadSeq = Number(member?.lastReadSeq) || 0;
+  projected.notificationLevel = member?.notificationLevel || "all";
+  projected.unreadCount = await getTopicUnread(db, projected.id, viewerId);
+  return projected;
 }
 
 async function loadTopicRow(db, topicId, viewerId) {
@@ -639,6 +762,15 @@ function normalizeTopicId(value) {
 
 function isValidReferenceId(value) {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
+}
+
+function normalizeTopicListLimit(value) {
+  if (value === undefined || value === null || value === "") return 50;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new TopicValidationError("topic.invalid_limit", "话题列表长度无效");
+  }
+  return Math.min(parsed, 200);
 }
 
 function normalizeStatus(value) {

@@ -4,12 +4,22 @@ import {
   closeTopic,
   createTopic,
   getTopicSummary,
+  listTopicMembers,
   joinTopic,
   leaveTopic,
   listTopics,
+  updateTopicNotificationLevel,
   TopicError,
   TopicValidationError
 } from "../services/workspace-topics.mjs";
+import {
+  createTopicMessage,
+  listTopicMessages,
+  markTopicRead,
+  syncTopicMessage,
+  unsyncTopicMessage,
+  listTopicProjections
+} from "../services/workspace-topic-messages.mjs";
 
 /**
  * Register the topic/member domain routes. The topic service owns all
@@ -22,7 +32,7 @@ import {
  * to the monolithic application.
  */
 export function registerWorkspaceTopicRoutes(app, options = {}) {
-  if (!app || typeof app.post !== "function" || typeof app.get !== "function") {
+  if (!app || typeof app.post !== "function" || typeof app.get !== "function" || typeof app.patch !== "function" || typeof app.delete !== "function") {
     throw new TypeError("Topic routes require a Fastify application");
   }
   const staticallyDisabled = options.enabled === false || options.ensureWorkspaceEnabled === false;
@@ -114,6 +124,83 @@ export function registerWorkspaceTopicRoutes(app, options = {}) {
     };
   }, { statusCode: 201 }));
 
+  app.get("/api/workspace/topics/:topicId/messages", handle(async ({ request, actorId, spaceId }) => ({
+    messages: await service.listMessages({
+      ...asObject(request.query),
+      actorId,
+      spaceId,
+      topicId: request.params?.topicId,
+      request
+    })
+  })));
+
+  app.post("/api/workspace/topics/:topicId/messages", handle(async ({ request, actorId, spaceId }) => {
+    const body = requireObjectBody(request.body);
+    const result = await service.createMessage({
+      ...body,
+      actorId,
+      spaceId,
+      topicId: request.params?.topicId,
+      request
+    });
+    return { message: result.message, unread: result.unread };
+  }, { statusCode: 201 }));
+
+  app.post("/api/workspace/topics/:topicId/read", handle(async ({ request, actorId, spaceId }) => ({
+    read: await service.markRead({
+      ...asObject(request.body),
+      actorId,
+      spaceId,
+      topicId: request.params?.topicId,
+      request
+    })
+  })));
+
+  app.get("/api/workspace/topics/:topicId/members", handle(async ({ request, actorId, spaceId }) => ({
+    members: await service.listMembers({ actorId, spaceId, topicId: request.params?.topicId, request })
+  })));
+
+  app.patch("/api/workspace/topics/:topicId/notification", handle(async ({ request, actorId, spaceId }) => ({
+    topic: await service.updateNotification({
+      ...requireObjectBody(request.body),
+      actorId,
+      spaceId,
+      topicId: request.params?.topicId,
+      request
+    })
+  })));
+
+  app.post("/api/workspace/topics/:topicId/messages/:messageId/sync", handle(async ({ request, actorId, spaceId }) => ({
+    projection: (await service.syncMessage({
+      ...asObject(request.body),
+      actorId,
+      spaceId,
+      topicId: request.params?.topicId,
+      messageId: request.params?.messageId,
+      request
+    })).projection
+  }), { statusCode: 201 }));
+
+  app.delete("/api/workspace/topics/:topicId/messages/:messageId/sync", handle(async ({ request, actorId, spaceId }) => ({
+    projection: (await service.unsyncMessage({
+      actorId,
+      spaceId,
+      topicId: request.params?.topicId,
+      messageId: request.params?.messageId,
+      request
+    })).projection
+  })));
+
+  app.get("/api/workspace/topics/:topicId/projections", handle(async ({ request, actorId, spaceId }) => ({
+    projections: await service.listProjections({
+      ...asObject(request.query),
+      actorId,
+      spaceId,
+      topicId: request.params?.topicId,
+      request
+    })
+  })));
+
   app.get("/api/workspace/topics/:topicId", handle(async ({ request, actorId, spaceId }) => ({
     topic: await service.getSummary({
       actorId,
@@ -175,6 +262,14 @@ function createDatabaseTopicService(db) {
     leave: ({ request, ...input }) => leaveTopic(db, request, input),
     close: ({ request, ...input }) => closeTopic(db, request, input),
     archive: ({ request, ...input }) => archiveTopic(db, request, input)
+    ,listMessages: ({ request: _request, ...input }) => listTopicMessages(db, input)
+    ,createMessage: ({ request, ...input }) => createTopicMessage(db, request, input)
+    ,markRead: ({ request, ...input }) => markTopicRead(db, request, input)
+    ,listMembers: ({ request: _request, ...input }) => listTopicMembers(db, input)
+    ,updateNotification: ({ request, ...input }) => updateTopicNotificationLevel(db, request, input)
+    ,syncMessage: ({ request, ...input }) => syncTopicMessage(db, request, input)
+    ,unsyncMessage: ({ request, ...input }) => unsyncTopicMessage(db, request, input)
+    ,listProjections: ({ request: _request, ...input }) => listTopicProjections(db, input)
   };
 }
 
