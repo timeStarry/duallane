@@ -90,6 +90,7 @@ import {
   createWorkspaceCustomEmoteService,
   CUSTOM_EMOTE_MAX_INPUT_BYTES
 } from "./services/workspace-custom-emotes.mjs";
+import { registerWorkspaceTopicRoutes } from "./routes/workspace-topics.mjs";
 
 const APP_VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1758,6 +1759,16 @@ app.get("/ws/workspace", { websocket: true }, (socket, request) => {
     }
   });
 });
+
+if (db) {
+  registerWorkspaceTopicRoutes(app, {
+    db,
+    enabled: workspaceEnabled,
+    getActorId: getWorkspaceUserId,
+    scheduleEmailNotifications: workspaceEmail?.scheduleMessage,
+    scheduleNtfyNotifications: workspaceNtfy?.scheduleMessage
+  });
+}
 
 if (env.NODE_ENV === "production" && serveStatic) {
   const distDir = path.resolve(rootDir, "dist");

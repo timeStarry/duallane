@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { DEFAULT_SPACE_ID } from "./db.mjs";
 import { writeAudit } from "./audit.mjs";
-import { MESSAGE_CONTENT_FORMAT } from "./workspace.mjs";
+import {
+  MESSAGE_CONTENT_FORMAT,
+  runWorkspaceTransaction,
+  writeWorkspaceEvent
+} from "./workspace.mjs";
+import { sanitizeWorkspaceAvatarUrl } from "./avatar.mjs";
 import { normalizeCardBlock } from "./workspace-cards.mjs";
 
 export const TOPIC_MESSAGE_MAX_CODE_POINTS = 30_000;
@@ -31,6 +36,7 @@ export async function createTopicCreationBundle(db, input = {}) {
 
   await writeTopicEvent(db, {
     type: "topic.created",
+    spaceId: topic.spaceId,
     actorId: input.actorId,
     conversationId: topic.conversationId,
     targetType: "topic",
@@ -93,6 +99,7 @@ export async function createTopicMessage(db, request, input = {}) {
   const content = normalizeContent(input.content ?? (typeof input.body === "string"
     ? { format: MESSAGE_CONTENT_FORMAT, blocks: [{ type: "text", text: input.body }] }
     : null));
+  await validateTopicMentions(db, context.topic, content);
   const replyToMessageId = normalizeId(input.replyToMessageId) || null;
   if (replyToMessageId) {
     const reply = await db.prepare(`
@@ -101,7 +108,10 @@ export async function createTopicMessage(db, request, input = {}) {
     if (!reply) throw new TopicMessageError("topic.invalid_reply", "回复的话题消息不存在");
   }
 
-  return await db.transaction(async () => {
+  return await runWorkspaceTransaction(db, async () => {
+    if (typeof db.lock === "function") {
+      await db.lock(`workspace:topic:message:${context.topic.id}:${context.actor.id}:${clientMessageId}`);
+    }
     const result = await insertTopicMessageRow(db, {
       topic: context.topic,
       actorId: context.actor.id,
@@ -116,6 +126,28 @@ export async function createTopicMessage(db, request, input = {}) {
         context,
         messageId: result.id,
         actorId: context.actor.id
+      });
+    }
+    if (!result.duplicate && result.eventSeq) {
+      await input.scheduleEmailNotifications?.({
+        authorId: context.actor.id,
+        spaceId: context.topic.spaceId,
+        conversationId: context.topic.conversationId,
+        topicId: context.topic.id,
+        messageId: result.id,
+        eventSeq: result.eventSeq,
+        content,
+        createdAt: result.createdAt
+      });
+      await input.scheduleNtfyNotifications?.({
+        authorId: context.actor.id,
+        spaceId: context.topic.spaceId,
+        conversationId: context.topic.conversationId,
+        topicId: context.topic.id,
+        messageId: result.id,
+        eventSeq: result.eventSeq,
+        content,
+        createdAt: result.createdAt
       });
     }
     return {
@@ -145,8 +177,8 @@ export async function listTopicMessages(db, input = {}) {
       : "AND (m.created_at > ? OR (m.created_at = ? AND m.id > ?))"
     : "";
   const params = cursor
-    ? [context.topic.id, cursor.createdAt, cursor.createdAt, cursor.id, limit]
-    : [context.topic.id, limit];
+    ? [context.actor.id, context.topic.id, cursor.createdAt, cursor.createdAt, cursor.id, limit]
+    : [context.actor.id, context.topic.id, limit];
   const rows = await db.prepare(`
     SELECT m.id, m.space_id AS spaceId, m.conversation_id AS conversationId,
       m.topic_id AS topicId, m.author_id AS authorId, m.author_kind AS authorKind,
@@ -154,15 +186,17 @@ export async function listTopicMessages(db, input = {}) {
       m.content_format AS contentFormat, m.content_json AS contentJson,
       m.plain_text AS plainText, m.reply_to_message_id AS replyToMessageId,
       m.created_at AS createdAt, m.edited_at AS editedAt, m.deleted_at AS deletedAt,
-      u.display_name AS authorDisplayName, u.nickname AS authorNickname,
-      u.github_login AS authorGithubLogin
+       u.display_name AS authorDisplayName, u.nickname AS authorNickname,
+       u.github_login AS authorGithubLogin, u.avatar_url AS authorAvatarUrl,
+       ur.remark AS authorRemark
     FROM messages m
     LEFT JOIN users u ON u.id = m.author_id
+    LEFT JOIN user_remarks ur ON ur.owner_user_id = ? AND ur.target_user_id = u.id
     WHERE m.topic_id = ? AND m.deleted_at IS NULL ${filter}
     ORDER BY m.created_at ${after ? "ASC" : "DESC"}, m.id ${after ? "ASC" : "DESC"}
     LIMIT ?
   `).all(...params);
-  const messages = await Promise.all(rows.map((row) => projectTopicMessageRow(row)));
+  const messages = await Promise.all(rows.map((row) => projectTopicMessageRow(row, context.actor.id)));
   return after ? messages : messages.reverse();
 }
 
@@ -184,10 +218,10 @@ export async function markTopicRead(db, request, input = {}) {
     ? await db.prepare(`
       SELECT COALESCE(MAX(seq), 0) AS seq
       FROM workspace_events
-      WHERE type = 'topic.message.created' AND target_id = ?
+      WHERE type IN ('topic.message.created', 'message.created') AND target_id = ?
     `).get(marker.id)
     : { seq: 0 };
-  await db.transaction(async () => {
+  await runWorkspaceTransaction(db, async () => {
     await db.prepare(`
       UPDATE topic_members
       SET last_read_message_id = ?, last_read_seq = ?,
@@ -212,19 +246,20 @@ export async function getTopicUnread(db, topicId, actorId) {
   `).get(topicId, actorId);
   if (!member) return 0;
   if (!member.lastReadMessageId) {
-    const row = await db.prepare("SELECT COUNT(*) AS count FROM messages WHERE topic_id = ? AND deleted_at IS NULL").get(topicId);
+    const row = await db.prepare("SELECT COUNT(*) AS count FROM messages WHERE topic_id = ? AND deleted_at IS NULL AND (author_id IS NULL OR author_id <> ?)").get(topicId, actorId);
     return Number(row?.count) || 0;
   }
   const marker = await db.prepare("SELECT created_at AS createdAt, id FROM messages WHERE id = ? AND topic_id = ?").get(member.lastReadMessageId, topicId);
   if (!marker) {
-    const row = await db.prepare("SELECT COUNT(*) AS count FROM messages WHERE topic_id = ? AND deleted_at IS NULL").get(topicId);
+    const row = await db.prepare("SELECT COUNT(*) AS count FROM messages WHERE topic_id = ? AND deleted_at IS NULL AND (author_id IS NULL OR author_id <> ?)").get(topicId, actorId);
     return Number(row?.count) || 0;
   }
   const row = await db.prepare(`
     SELECT COUNT(*) AS count FROM messages
     WHERE topic_id = ? AND deleted_at IS NULL
+      AND (author_id IS NULL OR author_id <> ?)
       AND (created_at > ? OR (created_at = ? AND id > ?))
-  `).get(topicId, marker.createdAt, marker.createdAt, marker.id);
+  `).get(topicId, actorId, marker.createdAt, marker.createdAt, marker.id);
   return Number(row?.count) || 0;
 }
 
@@ -233,7 +268,10 @@ export async function syncTopicMessage(db, request, input = {}) {
   consumeRateLimit(context.actor.id, "sync");
   const messageId = normalizeId(input.messageId);
   if (!messageId) throw new TopicMessageError("topic.message_required", "话题消息不能为空");
-  return await db.transaction(async () => {
+  return await runWorkspaceTransaction(db, async () => {
+    if (typeof db.lock === "function") {
+      await db.lock(`workspace:topic:sync:${context.topic.id}:${messageId}`);
+    }
     const projection = await syncTopicMessageRow(db, request, {
       context,
       messageId,
@@ -247,7 +285,10 @@ export async function unsyncTopicMessage(db, request, input = {}) {
   const context = await requireTopicMember(db, input, "topic.sync_to_group");
   const messageId = normalizeId(input.messageId);
   if (!messageId) throw new TopicMessageError("topic.message_required", "话题消息不能为空");
-  return await db.transaction(async () => {
+  return await runWorkspaceTransaction(db, async () => {
+    if (typeof db.lock === "function") {
+      await db.lock(`workspace:topic:sync:${context.topic.id}:${messageId}`);
+    }
     const projection = await db.prepare(`
       SELECT id, group_message_id AS groupMessageId
       FROM topic_group_projections
@@ -261,11 +302,21 @@ export async function unsyncTopicMessage(db, request, input = {}) {
       .run(now, projection.groupMessageId);
     await writeTopicEvent(db, {
       type: "topic.message.unsynced",
+      spaceId: context.topic.spaceId,
       actorId: context.actor.id,
       conversationId: context.topic.conversationId,
       targetType: "topic_message",
       targetId: messageId,
       payload: { topicId: context.topic.id, topicMessageId: messageId, projectionId: projection.id }
+    });
+    await writeTopicEvent(db, {
+      type: "message.recalled",
+      spaceId: context.topic.spaceId,
+      actorId: context.actor.id,
+      conversationId: context.topic.conversationId,
+      targetType: "message",
+      targetId: projection.groupMessageId,
+      payload: { messageId: projection.groupMessageId, conversationId: context.topic.conversationId }
     });
     await writeAudit(db, auditEvent(request, context.actor, "topic.message.unsync", messageId, "success"));
     return { projection: { ...projection, removedAt: now }, removed: true };
@@ -325,12 +376,14 @@ async function syncTopicMessageRow(db, request, { context, messageId, actorId })
       }
     ]
   });
-  await db.prepare(`
+  const inserted = await db.prepare(`
     INSERT INTO messages (
       id, space_id, conversation_id, topic_id, author_id, author_kind, kind,
       client_message_id, content_format, content_json, plain_text,
       reply_to_message_id, created_at, edited_at, deleted_at
     ) VALUES (?, ?, ?, NULL, ?, 'human', 'user', ?, ?, ?, ?, NULL, ?, NULL, NULL)
+    ON CONFLICT DO NOTHING
+    RETURNING id
   `).run(
     groupMessageId,
     context.topic.spaceId,
@@ -342,6 +395,9 @@ async function syncTopicMessageRow(db, request, { context, messageId, actorId })
     content.plainText,
     now
   );
+  if (inserted.changes === 0) {
+    throw new TopicMessageError("topic.sync_conflict", "话题消息同步冲突，请重试", 409);
+  }
   if (existing?.removedAt) {
     await db.prepare(`
       UPDATE topic_group_projections
@@ -359,11 +415,21 @@ async function syncTopicMessageRow(db, request, { context, messageId, actorId })
   const activeProjectionId = existing?.removedAt ? existing.id : projectionId;
   await writeTopicEvent(db, {
     type: "topic.message.synced",
+    spaceId: context.topic.spaceId,
     actorId,
     conversationId: context.topic.conversationId,
     targetType: "topic_message",
     targetId: message.id,
     payload: { topicId: context.topic.id, topicMessageId: message.id, projectionId: activeProjectionId }
+  });
+  await writeTopicEvent(db, {
+    type: "message.created",
+    spaceId: context.topic.spaceId,
+    actorId,
+    conversationId: context.topic.conversationId,
+    targetType: "message",
+    targetId: groupMessageId,
+    payload: { messageId: groupMessageId, conversationId: context.topic.conversationId }
   });
   await writeAudit(db, auditEvent(request, context.actor, "topic.message.sync", message.id, "success"));
   return {
@@ -400,6 +466,8 @@ async function insertTopicMessageRow(db, { topic, actorId, clientMessageId, cont
       client_message_id, content_format, content_json, plain_text,
       reply_to_message_id, created_at, edited_at, deleted_at
     ) VALUES (?, ?, ?, ?, ?, 'human', 'user', ?, ?, ?, ?, ?, ?, NULL, NULL)
+    ON CONFLICT DO NOTHING
+    RETURNING id
   `).run(
     id,
     topic.spaceId,
@@ -413,20 +481,88 @@ async function insertTopicMessageRow(db, { topic, actorId, clientMessageId, cont
     replyToMessageId,
     now
   );
-  if (inserted.changes === 0) return { id, duplicate: false };
+  if (inserted.changes === 0) {
+    const winner = await db.prepare(`
+      SELECT id, content_json AS contentJson
+      FROM messages
+      WHERE topic_id = ? AND author_id = ? AND client_message_id = ?
+    `).get(topic.id, actorId, clientMessageId);
+    if (!winner || winner.contentJson !== serialized) {
+      throw new TopicMessageError("topic.idempotency_conflict", "重复消息 ID 对应的内容不一致", 409);
+    }
+    return { id: winner.id, duplicate: true };
+  }
   await db.prepare("UPDATE topics SET updated_at = ? WHERE id = ?").run(now, topic.id);
   if (emitEvent) {
-    await writeTopicEvent(db, {
+    const topicEvent = await writeTopicEvent(db, {
       type: "topic.message.created",
+      spaceId: topic.spaceId,
       actorId,
       conversationId: topic.conversationId,
       targetType: "topic_message",
       targetId: id,
       payload: { topicId: topic.id, topicMessageId: id }
     });
+    await enforceTopicRetention(db, topic);
+    await writeAudit(db, auditEvent(request, { id: actorId, spaceId: topic.spaceId }, "topic.message.create", id, "success"));
+    return { id, duplicate: false, eventSeq: topicEvent.seq, topicEventSeq: topicEvent.seq, createdAt: now };
   }
   await writeAudit(db, auditEvent(request, { id: actorId, spaceId: topic.spaceId }, "topic.message.create", id, "success"));
   return { id, duplicate: false };
+}
+
+async function enforceTopicRetention(db, topic) {
+  const conversation = await db.prepare(
+    "SELECT retention_count AS retentionCount FROM conversations WHERE id = ? AND space_id = ?"
+  ).get(topic.conversationId, topic.spaceId);
+  const retentionCount = Number(conversation?.retentionCount);
+  if (!Number.isSafeInteger(retentionCount) || retentionCount < 1) return;
+  const stale = await db.prepare(`
+    SELECT id
+    FROM messages
+    WHERE topic_id = ? AND deleted_at IS NULL
+      AND id NOT IN (
+        SELECT recent.id
+        FROM messages recent
+        WHERE recent.topic_id = ? AND recent.deleted_at IS NULL
+        ORDER BY recent.created_at DESC, recent.id DESC
+        LIMIT ?
+      )
+  `).all(topic.id, topic.id, retentionCount);
+  if (stale.length === 0) return;
+  const deletedAt = new Date().toISOString();
+  for (const row of stale) {
+    await db.prepare("UPDATE messages SET deleted_at = COALESCE(deleted_at, ?) WHERE id = ?").run(deletedAt, row.id);
+    const projection = await db.prepare(`
+      SELECT id, group_message_id AS groupMessageId
+      FROM topic_group_projections
+      WHERE topic_message_id = ? AND removed_at IS NULL
+    `).get(row.id);
+    if (projection) {
+      await db.prepare("UPDATE topic_group_projections SET removed_at = ?, updated_at = ? WHERE id = ? AND removed_at IS NULL")
+        .run(deletedAt, deletedAt, projection.id);
+      await db.prepare("UPDATE messages SET deleted_at = COALESCE(deleted_at, ?) WHERE id = ? AND topic_id IS NULL")
+        .run(deletedAt, projection.groupMessageId);
+      await writeTopicEvent(db, {
+        type: "topic.message.unsynced",
+        spaceId: topic.spaceId,
+        actorId: null,
+        conversationId: topic.conversationId,
+        targetType: "topic_message",
+        targetId: row.id,
+        payload: { topicId: topic.id, topicMessageId: row.id, projectionId: projection.id, reason: "retention" }
+      });
+      await writeTopicEvent(db, {
+        type: "message.recalled",
+        spaceId: topic.spaceId,
+        actorId: null,
+        conversationId: topic.conversationId,
+        targetType: "message",
+        targetId: projection.groupMessageId,
+        payload: { messageId: projection.groupMessageId, conversationId: topic.conversationId, reason: "topic.retention" }
+      });
+    }
+  }
 }
 
 async function insertConversationCardRow(db, { spaceId, conversationId, actorId, clientMessageId, content, topicId, request }) {
@@ -438,15 +574,26 @@ async function insertConversationCardRow(db, { spaceId, conversationId, actorId,
   if (existing) return { id: existing.id, duplicate: true };
   const id = randomUUID();
   const now = new Date().toISOString();
-  await db.prepare(`
+  const inserted = await db.prepare(`
     INSERT INTO messages (
       id, space_id, conversation_id, topic_id, author_id, author_kind, kind,
       client_message_id, content_format, content_json, plain_text,
       reply_to_message_id, created_at, edited_at, deleted_at
     ) VALUES (?, ?, ?, NULL, ?, 'human', 'user', ?, ?, ?, ?, NULL, ?, NULL, NULL)
+    ON CONFLICT DO NOTHING
+    RETURNING id
   `).run(id, spaceId, conversationId, actorId, clientMessageId, MESSAGE_CONTENT_FORMAT, serialized, content.plainText, now);
+  if (inserted.changes === 0) {
+    const winner = await db.prepare(`
+      SELECT id, content_json AS contentJson
+      FROM messages
+      WHERE space_id = ? AND conversation_id = ? AND author_id = ? AND client_message_id = ? AND topic_id IS NULL
+    `).get(spaceId, conversationId, actorId, clientMessageId);
+    if (winner) return { id: winner.id, duplicate: true };
+  }
   await writeTopicEvent(db, {
     type: "message.created",
+    spaceId,
     actorId,
     conversationId,
     targetType: "message",
@@ -465,11 +612,14 @@ async function projectTopicMessage(db, id, actorId) {
       m.content_json AS contentJson, m.plain_text AS plainText,
       m.reply_to_message_id AS replyToMessageId, m.created_at AS createdAt,
       m.edited_at AS editedAt, m.deleted_at AS deletedAt,
-      u.display_name AS authorDisplayName, u.nickname AS authorNickname,
-      u.github_login AS authorGithubLogin
-    FROM messages m LEFT JOIN users u ON u.id = m.author_id
+       u.display_name AS authorDisplayName, u.nickname AS authorNickname,
+       u.github_login AS authorGithubLogin, u.avatar_url AS authorAvatarUrl,
+       ur.remark AS authorRemark
+    FROM messages m
+    LEFT JOIN users u ON u.id = m.author_id
+    LEFT JOIN user_remarks ur ON ur.owner_user_id = ? AND ur.target_user_id = u.id
     WHERE m.id = ? AND m.topic_id IS NOT NULL AND m.deleted_at IS NULL
-  `).get(id);
+  `).get(actorId, id);
   return row ? projectTopicMessageRow(row, actorId) : null;
 }
 
@@ -480,7 +630,7 @@ async function projectTopicMessageRow(row, _actorId) {
   } catch {
     content = { format: row.contentFormat, plainText: row.plainText, blocks: [{ type: "text", text: row.plainText }] };
   }
-  const authorName = row.authorNickname || row.authorDisplayName || row.authorGithubLogin || "成员";
+  const authorName = row.authorRemark || row.authorNickname || row.authorGithubLogin || row.authorDisplayName || "成员";
   return {
     id: row.id,
     spaceId: row.spaceId,
@@ -497,7 +647,14 @@ async function projectTopicMessageRow(row, _actorId) {
     createdAt: row.createdAt,
     editedAt: row.editedAt,
     deletedAt: row.deletedAt,
-    author: { id: row.authorId, displayName: authorName, githubLogin: row.authorGithubLogin }
+    author: {
+      id: row.authorId,
+      displayName: authorName,
+      nickname: row.authorNickname || null,
+      remark: row.authorRemark || null,
+      githubLogin: row.authorGithubLogin,
+      avatarUrl: sanitizeWorkspaceAvatarUrl(row.authorAvatarUrl) || null
+    }
   };
 }
 
@@ -585,33 +742,32 @@ function normalizeContent(input) {
   return { format: MESSAGE_CONTENT_FORMAT, plainText, blocks: normalizedBlocks };
 }
 
+async function validateTopicMentions(db, topic, content) {
+  const mentionedIds = [...new Set((content.blocks ?? [])
+    .filter((block) => block?.type === "mention")
+    .map((block) => block.userId)
+    .filter(Boolean))];
+  if (mentionedIds.length === 0) return;
+  const placeholders = mentionedIds.map(() => "?").join(", ");
+  const rows = await db.prepare(`
+    SELECT tm.user_id AS userId
+    FROM topic_members tm
+    INNER JOIN users u ON u.id = tm.user_id AND u.kind = 'human'
+    INNER JOIN conversation_members cm
+      ON cm.conversation_id = ? AND cm.user_id = tm.user_id AND cm.removed_at IS NULL
+    WHERE tm.topic_id = ? AND tm.left_at IS NULL AND tm.user_id IN (${placeholders})
+  `).all(topic.conversationId, topic.id, ...mentionedIds);
+  const allowed = new Set(rows.map((row) => row.userId));
+  if (mentionedIds.some((userId) => !allowed.has(userId))) {
+    throw new TopicMessageError("topic.invalid_mention", "只能提及当前话题成员");
+  }
+}
+
 async function writeTopicEvent(db, event) {
-  const seqRow = await db.prepare(`
-    INSERT INTO workspace_event_cursors (space_id, next_seq)
-    VALUES (?, 2)
-    ON CONFLICT (space_id) DO UPDATE SET next_seq = workspace_event_cursors.next_seq + 1
-    RETURNING next_seq - 1 AS nextSeq
-  `).get(event.spaceId ?? DEFAULT_SPACE_ID);
-  const id = event.id || randomUUID();
-  const now = new Date().toISOString();
-  await db.prepare(`
-    INSERT INTO workspace_events (
-      id, space_id, seq, type, actor_user_id, conversation_id,
-      target_type, target_id, payload_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id,
-    event.spaceId ?? DEFAULT_SPACE_ID,
-    seqRow.nextSeq,
-    event.type,
-    event.actorId ?? null,
-    event.conversationId ?? null,
-    event.targetType ?? null,
-    event.targetId ?? null,
-    JSON.stringify(event.payload ?? {}),
-    now
-  );
-  return { id, seq: seqRow.nextSeq };
+  return await writeWorkspaceEvent(db, {
+    ...event,
+    spaceId: event.spaceId ?? DEFAULT_SPACE_ID
+  });
 }
 
 export async function writeTopicDomainEvent(db, event) {

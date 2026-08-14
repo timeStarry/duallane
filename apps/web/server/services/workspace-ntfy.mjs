@@ -77,20 +77,30 @@ export function createWorkspaceNtfyService({
     return publicPreferences(await readPreferences(actor.id));
   }
 
-  async function scheduleMessage({ authorId, conversationId, messageId, eventSeq, content, createdAt }) {
+  async function scheduleMessage({ authorId, spaceId, conversationId, topicId, messageId, eventSeq, content, createdAt }) {
     const mentionedUserIds = new Set(
       (content?.blocks ?? [])
         .filter((block) => block?.type === "mention")
         .map((block) => normalizeText(block.userId))
         .filter(Boolean)
     );
-    const recipients = await db.prepare(`
+    const notificationSpaceId = normalizeText(spaceId) || DEFAULT_SPACE_ID;
+    const recipients = topicId
+      ? await db.prepare(`
+      SELECT u.id, tm.notification_level AS notificationLevel
+      FROM topic_members tm
+      INNER JOIN users u ON u.id = tm.user_id AND u.kind = 'human'
+      INNER JOIN conversation_members cm ON cm.conversation_id = ? AND cm.user_id = tm.user_id AND cm.removed_at IS NULL
+      INNER JOIN space_members sm ON sm.user_id = u.id AND sm.space_id = ? AND sm.removed_at IS NULL
+      WHERE tm.topic_id = ? AND tm.left_at IS NULL AND u.id <> ?
+    `).all(conversationId, notificationSpaceId, topicId, authorId)
+      : await db.prepare(`
       SELECT u.id, u.github_login AS githubLogin, cm.notification_level AS notificationLevel
       FROM conversation_members cm
       INNER JOIN users u ON u.id = cm.user_id AND u.kind = 'human'
       INNER JOIN space_members sm ON sm.user_id = u.id AND sm.space_id = ? AND sm.removed_at IS NULL
       WHERE cm.conversation_id = ? AND cm.removed_at IS NULL AND u.id <> ?
-    `).all(DEFAULT_SPACE_ID, conversationId, authorId);
+      `).all(notificationSpaceId, conversationId, authorId);
     const availableAt = new Date(Date.parse(createdAt) + DELIVERY_DELAY_MS).toISOString();
     for (const recipient of recipients) {
       const isMentioned = mentionedUserIds.has(recipient.id);
@@ -207,8 +217,9 @@ export function createWorkspaceNtfyService({
         j.id, j.user_id AS userId, j.conversation_id AS conversationId,
         j.event_seq AS eventSeq, j.attempt_count AS attemptCount,
         p.topic, p.enabled AS preferenceEnabled,
-        cm.notification_level AS notificationLevel, cm.last_read_seq AS lastReadSeq,
-        cm.last_read_at AS lastReadAt,
+        COALESCE(tm.notification_level, cm.notification_level) AS notificationLevel,
+        COALESCE(tm.last_read_seq, cm.last_read_seq) AS lastReadSeq,
+        COALESCE(tm.last_read_at, cm.last_read_at) AS lastReadAt,
         m.created_at AS messageCreatedAt, m.content_json AS contentJson,
         c.type AS conversationType, c.title AS conversationTitle,
         COALESCE(ur.remark, author.nickname, author.github_login, author.display_name) AS senderName
@@ -219,10 +230,13 @@ export function createWorkspaceNtfyService({
       INNER JOIN conversations c ON c.id = j.conversation_id
       INNER JOIN conversation_members cm
         ON cm.conversation_id = j.conversation_id AND cm.user_id = j.user_id AND cm.removed_at IS NULL
+      LEFT JOIN topic_members tm
+        ON tm.topic_id = m.topic_id AND tm.user_id = j.user_id AND tm.left_at IS NULL
       INNER JOIN space_members sm
         ON sm.user_id = j.user_id AND sm.space_id = ? AND sm.removed_at IS NULL
       LEFT JOIN user_remarks ur ON ur.owner_user_id = j.user_id AND ur.target_user_id = author.id
       WHERE j.id = ?
+        AND (m.topic_id IS NULL OR tm.user_id IS NOT NULL)
     `).get(DEFAULT_SPACE_ID, id);
   }
 

@@ -53,7 +53,7 @@ const PRIVILEGED_INVITE_ROLES = new Set(["owner", "admin", "auditor"]);
 const MESSAGE_BLOCK_TYPES = new Set(["text", "mention", "link", "emoji", "attachment", "emote_collection", "card"]);
 const ATTACHMENT_VISIBILITIES = new Set(["private_staging", "conversation", "space"]);
 
-async function runWorkspaceTransaction(db, callback) {
+export async function runWorkspaceTransaction(db, callback) {
   const parentPendingEvents = workspaceTransactionEvents.getStore();
   const pendingEvents = [];
   const result = await db.transaction(() => workspaceTransactionEvents.run(pendingEvents, callback));
@@ -1287,7 +1287,9 @@ export async function listConversations(db, userId = "usr_owner", request = null
       COALESCE((
         SELECT MAX(m.created_at)
         FROM messages m
-        WHERE m.conversation_id = c.id AND m.deleted_at IS NULL
+        WHERE m.conversation_id = c.id
+          AND m.topic_id IS NULL
+          AND m.deleted_at IS NULL
       ), c.created_at) AS lastActivityAt,
       cm.last_read_message_id AS lastReadMessageId,
       cm.last_read_at AS lastReadAt,
@@ -1296,12 +1298,15 @@ export async function listConversations(db, userId = "usr_owner", request = null
       (
         SELECT COUNT(*)
         FROM messages m
-        WHERE m.conversation_id = c.id AND m.deleted_at IS NULL
+        WHERE m.conversation_id = c.id
+          AND m.topic_id IS NULL
+          AND m.deleted_at IS NULL
       ) AS messageCount,
       (
         SELECT COUNT(*)
         FROM messages m
         WHERE m.conversation_id = c.id
+          AND m.topic_id IS NULL
           AND m.deleted_at IS NULL
           AND (m.author_id IS NULL OR m.author_id != ?)
           AND (
@@ -2417,7 +2422,7 @@ export async function createStructuredMessage(db, request, input) {
 
     replyToMessageId = normalizeString(input.replyToMessageId) || null;
     if (replyToMessageId) {
-      const reply = await db.prepare("SELECT 1 FROM messages WHERE id = ? AND conversation_id = ?").get(replyToMessageId, conversationId);
+      const reply = await db.prepare("SELECT 1 FROM messages WHERE id = ? AND conversation_id = ? AND topic_id IS NULL").get(replyToMessageId, conversationId);
       if (!reply) {
         throw new WorkspaceValidationError("message.invalid_reply", "回复的消息不存在");
       }
@@ -3190,7 +3195,9 @@ async function getConversation(db, userId, conversationId, context = {}) {
       COALESCE((
         SELECT MAX(m.created_at)
         FROM messages m
-        WHERE m.conversation_id = conversations.id AND m.deleted_at IS NULL
+        WHERE m.conversation_id = conversations.id
+          AND m.topic_id IS NULL
+          AND m.deleted_at IS NULL
       ), created_at) AS lastActivityAt,
       cm.last_read_message_id AS lastReadMessageId,
       cm.last_read_at AS lastReadAt,
@@ -3199,12 +3206,15 @@ async function getConversation(db, userId, conversationId, context = {}) {
       (
         SELECT COUNT(*)
         FROM messages m
-        WHERE m.conversation_id = conversations.id AND m.deleted_at IS NULL
+        WHERE m.conversation_id = conversations.id
+          AND m.topic_id IS NULL
+          AND m.deleted_at IS NULL
       ) AS messageCount,
       (
         SELECT COUNT(*)
         FROM messages m
         WHERE m.conversation_id = conversations.id
+          AND m.topic_id IS NULL
           AND m.deleted_at IS NULL
           AND (m.author_id IS NULL OR m.author_id != ?)
           AND (
@@ -4112,6 +4122,7 @@ async function writeRejectedTransfer(db, request, actor, transferId, direction, 
 }
 
 async function writeEvent(db, event) {
+  const spaceId = event.spaceId ?? DEFAULT_SPACE_ID;
   const now = new Date().toISOString();
   const seqRow = await db.prepare(`
     INSERT INTO workspace_event_cursors (space_id, next_seq)
@@ -4119,7 +4130,7 @@ async function writeEvent(db, event) {
     ON CONFLICT (space_id) DO UPDATE
     SET next_seq = workspace_event_cursors.next_seq + 1
     RETURNING next_seq - 1 AS nextSeq
-  `).get(DEFAULT_SPACE_ID);
+  `).get(spaceId);
   const id = event.id || crypto.randomUUID();
   await db.prepare(`
     INSERT INTO workspace_events (
@@ -4128,7 +4139,7 @@ async function writeEvent(db, event) {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
-    DEFAULT_SPACE_ID,
+    spaceId,
     seqRow.nextSeq,
     event.type,
     event.actorId ?? null,
@@ -4138,7 +4149,7 @@ async function writeEvent(db, event) {
     JSON.stringify(event.payload ?? {}),
     now
   );
-  const writtenEvent = { id, seq: seqRow.nextSeq, spaceId: DEFAULT_SPACE_ID };
+  const writtenEvent = { id, seq: seqRow.nextSeq, spaceId };
   const pendingEvents = workspaceTransactionEvents.getStore();
   if (pendingEvents) {
     pendingEvents.push(writtenEvent);
@@ -4146,6 +4157,10 @@ async function writeEvent(db, event) {
     notifyWorkspaceEventSubscribers(writtenEvent);
   }
   return writtenEvent;
+}
+
+export async function writeWorkspaceEvent(db, event) {
+  return await writeEvent(db, event);
 }
 
 export function subscribeWorkspaceEvents(listener) {
@@ -4265,13 +4280,13 @@ async function canSeeEvent(db, actor, event) {
       SELECT id, conversation_id AS conversationId, space_id AS spaceId
       FROM topics WHERE id = ?
     `).get(topicId);
-    if (!topic || topic.spaceId !== DEFAULT_SPACE_ID) return false;
+    if (!topic || topic.spaceId !== event.spaceId) return false;
     const groupMember = Boolean(await db.prepare(`
       SELECT 1 FROM conversation_members
       WHERE conversation_id = ? AND user_id = ? AND removed_at IS NULL
     `).get(topic.conversationId, actor.id));
     if (!groupMember || actor.role === "auditor") return false;
-    if (event.type.startsWith("topic.message.")) {
+    if (event.type.startsWith("topic.message.") || (event.type === "message.created" && eventPayload.topicCard !== true)) {
       return Boolean(await db.prepare(`
         SELECT 1 FROM topic_members
         WHERE topic_id = ? AND user_id = ? AND left_at IS NULL

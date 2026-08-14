@@ -45,6 +45,8 @@ export function registerWorkspaceTopicRoutes(app, options = {}) {
   const getActorId = options.getActorId ?? defaultActorId;
   const enabled = options.ensureWorkspaceEnabled ?? options.enabled ?? true;
   const errorHandler = options.sendError ?? sendTopicError;
+  const scheduleEmailNotifications = options.scheduleEmailNotifications;
+  const scheduleNtfyNotifications = options.scheduleNtfyNotifications;
 
   const handle = (operation, { statusCode = 200 } = {}) => async (request, reply) => {
     try {
@@ -263,7 +265,11 @@ function createDatabaseTopicService(db) {
     close: ({ request, ...input }) => closeTopic(db, request, input),
     archive: ({ request, ...input }) => archiveTopic(db, request, input)
     ,listMessages: ({ request: _request, ...input }) => listTopicMessages(db, input)
-    ,createMessage: ({ request, ...input }) => createTopicMessage(db, request, input)
+    ,createMessage: ({ request, ...input }) => createTopicMessage(db, request, {
+      ...input,
+      scheduleEmailNotifications,
+      scheduleNtfyNotifications
+    })
     ,markRead: ({ request, ...input }) => markTopicRead(db, request, input)
     ,listMembers: ({ request: _request, ...input }) => listTopicMembers(db, input)
     ,updateNotification: ({ request, ...input }) => updateTopicNotificationLevel(db, request, input)
