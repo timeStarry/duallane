@@ -4314,6 +4314,25 @@ async function canSeeEvent(db, actor, event) {
     }
     return true;
   }
+  if (event.type === "card.created" || event.type === "card.updated" || event.type === "card.invalidated") {
+    const cardId = normalizeString(eventPayload?.cardId || event.targetId);
+    const card = cardId
+      ? await db.prepare(`
+        SELECT space_id AS spaceId, conversation_id AS conversationId,
+          visibility_scope AS visibilityScope
+        FROM workspace_cards WHERE id = ?
+      `).get(cardId)
+      : null;
+    if (!card || card.spaceId !== event.spaceId) return false;
+    if (card.visibilityScope === "space") return actor.role !== "auditor";
+    if (card.visibilityScope === "conversation" && card.conversationId) {
+      return Boolean(await db.prepare(`
+        SELECT 1 FROM conversation_members
+        WHERE conversation_id = ? AND user_id = ? AND removed_at IS NULL
+      `).get(card.conversationId, actor.id));
+    }
+    return false;
+  }
   if (event.type === "transfer.rejected") {
     return event.actorId === actor.id;
   }
@@ -4499,6 +4518,14 @@ async function publicWorkspaceEventPayload(db, actor, type, payload) {
       userId: normalizeString(payload.userId),
       notificationLevel: normalizeString(payload.notificationLevel),
       conversation: await publicConversationPayloadForActor(db, actor, payload.conversation || payload.conversationId)
+    });
+  }
+  if (type === "card.created" || type === "card.updated" || type === "card.invalidated") {
+    return removeUndefinedValues({
+      cardId: normalizeString(payload.cardId),
+      cardType: normalizeString(payload.cardType),
+      revision: Number.isSafeInteger(Number(payload.revision)) ? Number(payload.revision) : undefined,
+      status: normalizeString(payload.status)
     });
   }
   if (type === "message.created" || type === "message.recalled") {

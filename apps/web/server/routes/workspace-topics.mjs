@@ -40,13 +40,15 @@ export function registerWorkspaceTopicRoutes(app, options = {}) {
     throw new TypeError("Topic routes require a database or service");
   }
 
-  const service = options.service ?? (options.db ? createDatabaseTopicService(options.db) : null);
   const spaceId = options.spaceId ?? DEFAULT_SPACE_ID;
   const getActorId = options.getActorId ?? defaultActorId;
   const enabled = options.ensureWorkspaceEnabled ?? options.enabled ?? true;
   const errorHandler = options.sendError ?? sendTopicError;
   const scheduleEmailNotifications = options.scheduleEmailNotifications;
   const scheduleNtfyNotifications = options.scheduleNtfyNotifications;
+  const service = options.service ?? (options.db
+    ? createDatabaseTopicService(options.db, { scheduleEmailNotifications, scheduleNtfyNotifications })
+    : null);
 
   const handle = (operation, { statusCode = 200 } = {}) => async (request, reply) => {
     try {
@@ -255,7 +257,7 @@ export function registerWorkspaceTopicRoutes(app, options = {}) {
   return service;
 }
 
-function createDatabaseTopicService(db) {
+function createDatabaseTopicService(db, { scheduleEmailNotifications, scheduleNtfyNotifications } = {}) {
   return {
     create: ({ request, ...input }) => createTopic(db, request, input),
     list: ({ request: _request, ...input }) => listTopics(db, input),
