@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { DEFAULT_SPACE_ID } from "./db.mjs";
 import { writeAudit } from "./audit.mjs";
+import { sanitizeWorkspaceAvatarUrl } from "./avatar.mjs";
 import {
   parseWorkspaceTopicSyntax,
   WORKSPACE_TOPIC_BODY_MAX_BYTES,
@@ -9,6 +10,7 @@ import {
 } from "./workspace-topic-parser.mjs";
 import { CardValidationError, normalizeCardPayload } from "./workspace-cards.mjs";
 import { createTopicCreationBundle, getTopicUnread, writeTopicDomainEvent } from "./workspace-topic-messages.mjs";
+import { runWorkspaceTransaction } from "./workspace.mjs";
 
 export const TOPIC_STATUSES = Object.freeze(["open", "closed", "archived"]);
 export const TOPIC_NOTIFICATION_LEVELS = Object.freeze(["all", "mentions", "muted"]);
@@ -141,7 +143,7 @@ export async function createTopic(db, request, input = {}) {
   const id = `top_${randomUUID()}`;
   const allowSyncToGroup = input.allowSyncToGroup === true;
   try {
-    await db.transaction(async () => {
+    await runWorkspaceTransaction(db, async () => {
       if (typeof db.lock === "function") {
         await db.lock(`workspace:topic:create:${actor.id}`);
       }
@@ -211,8 +213,8 @@ export async function listTopics(db, input = {}) {
   if (conversationId && !isValidReferenceId(conversationId)) throw new TopicValidationError("topic.invalid_conversation", "群聊 ID 无效");
   const limit = normalizeTopicListLimit(input.limit);
   // SQL placeholders are bound in textual order: the joined projection in the
-  // SELECT clause comes before the membership predicates in WHERE.
-  const params = [actor.id, actor.spaceId, actor.id, actor.id];
+  // SELECT clause and viewer remark join precede the membership predicates.
+  const params = [actor.id, actor.id, actor.spaceId, actor.id, actor.id];
   const where = [
     "t.space_id = ?",
     "EXISTS (SELECT 1 FROM conversation_members actor_cm WHERE actor_cm.conversation_id = t.conversation_id AND actor_cm.user_id = ? AND actor_cm.removed_at IS NULL)",
@@ -245,11 +247,13 @@ export async function listTopics(db, input = {}) {
       t.created_at AS createdAt, t.updated_at AS updatedAt,
       t.closed_at AS closedAt, t.archived_at AS archivedAt,
       u.display_name AS creatorDisplayName, u.nickname AS creatorNickname,
-      u.github_login AS creatorGithubLogin,
+      u.github_login AS creatorGithubLogin, u.avatar_url AS creatorAvatarUrl,
+      ur.remark AS creatorRemark,
       (SELECT COUNT(*) FROM topic_members tm WHERE tm.topic_id = t.id AND tm.left_at IS NULL) AS participantCount,
       EXISTS (SELECT 1 FROM topic_members tm WHERE tm.topic_id = t.id AND tm.user_id = ? AND tm.left_at IS NULL) AS joined
     FROM topics t
     INNER JOIN users u ON u.id = t.created_by
+    LEFT JOIN user_remarks ur ON ur.owner_user_id = ? AND ur.target_user_id = t.created_by
     WHERE ${where.join(" AND ")}
     ORDER BY CASE t.status WHEN 'open' THEN 1 WHEN 'closed' THEN 2 ELSE 3 END, t.updated_at DESC, t.id DESC
     LIMIT ?
@@ -324,7 +328,7 @@ export async function joinTopic(db, request, input = {}) {
   }
   const now = new Date().toISOString();
   let changed = 0;
-  await db.transaction(async () => {
+  await runWorkspaceTransaction(db, async () => {
     if (existing?.left_at) {
       changed = (await db.prepare(`
         UPDATE topic_members SET joined_at = ?, left_at = NULL
@@ -339,6 +343,18 @@ export async function joinTopic(db, request, input = {}) {
         ON CONFLICT (topic_id, user_id) DO NOTHING
       `).run(topic.id, actor.id, now, topic.id)).changes;
     }
+    if (changed > 0) {
+      await writeTopicDomainEvent(db, {
+        type: "topic.joined",
+        spaceId: topic.space_id,
+        actorId: actor.id,
+        conversationId: topic.conversation_id,
+        targetType: "topic",
+        targetId: topic.id,
+        payload: { topicId: topic.id, userId: actor.id }
+      });
+      await auditTopic(db, request, actor, "topic.join", topic.id, "success");
+    }
   });
   if (changed === 0) {
     const current = await getRawTopic(db, topic.id);
@@ -348,15 +364,6 @@ export async function joinTopic(db, request, input = {}) {
       throw new TopicValidationError("topic.not_open", "话题已关闭");
     }
   }
-  await auditTopic(db, request, actor, "topic.join", topic.id, "success");
-  await writeTopicDomainEvent(db, {
-    type: "topic.joined",
-    actorId: actor.id,
-    conversationId: topic.conversation_id,
-    targetType: "topic",
-    targetId: topic.id,
-    payload: { topicId: topic.id, userId: actor.id }
-  });
   return await projectTopicForActor(db, actor.id, topic.id);
 }
 
@@ -392,17 +399,23 @@ export async function leaveTopic(db, request, input = {}) {
     throw new TopicValidationError("topic.creator_required", "创建者需先关闭话题才能退出");
   }
   const existing = await db.prepare("SELECT left_at FROM topic_members WHERE topic_id = ? AND user_id = ?").get(topic.id, actor.id);
-  if (existing && !existing.left_at) {
-    await db.prepare("UPDATE topic_members SET left_at = ? WHERE topic_id = ? AND user_id = ?").run(new Date().toISOString(), topic.id, actor.id);
-  }
-  await auditTopic(db, request, actor, "topic.leave", topic.id, "success");
-  await writeTopicDomainEvent(db, {
-    type: "topic.left",
-    actorId: actor.id,
-    conversationId: topic.conversation_id,
-    targetType: "topic",
-    targetId: topic.id,
-    payload: { topicId: topic.id, userId: actor.id }
+  await runWorkspaceTransaction(db, async () => {
+    const changed = existing && !existing.left_at
+      ? (await db.prepare("UPDATE topic_members SET left_at = ? WHERE topic_id = ? AND user_id = ? AND left_at IS NULL")
+        .run(new Date().toISOString(), topic.id, actor.id)).changes
+      : 0;
+    if (changed > 0) {
+      await auditTopic(db, request, actor, "topic.leave", topic.id, "success");
+      await writeTopicDomainEvent(db, {
+        type: "topic.left",
+        spaceId: topic.space_id,
+        actorId: actor.id,
+        conversationId: topic.conversation_id,
+        targetType: "topic",
+        targetId: topic.id,
+        payload: { topicId: topic.id, userId: actor.id }
+      });
+    }
   });
   return await projectTopicForActor(db, actor.id, topic.id, { allowSummary: true });
 }
@@ -425,15 +438,22 @@ export async function listTopicMembers(db, input = {}) {
   if (!await isActiveGroupMember(db, topic.conversation_id, actor.id)) throw topicNotFound();
   const active = await isActiveTopicMember(db, topic.id, actor.id);
   if (!active) throw topicNotFound();
-  return await db.prepare(`
+  const rows = await db.prepare(`
     SELECT tm.user_id AS userId, tm.joined_at AS joinedAt,
       tm.notification_level AS notificationLevel,
       u.display_name AS displayName, u.nickname, u.github_login AS githubLogin,
-      u.avatar_url AS avatarUrl
+      u.avatar_url AS avatarUrl, u.kind,
+      ur.remark
     FROM topic_members tm INNER JOIN users u ON u.id = tm.user_id
+    LEFT JOIN user_remarks ur ON ur.owner_user_id = ? AND ur.target_user_id = u.id
     WHERE tm.topic_id = ? AND tm.left_at IS NULL
     ORDER BY tm.joined_at ASC, tm.user_id ASC
-  `).all(topic.id);
+  `).all(actor.id, topic.id);
+  return rows.map((row) => ({
+    ...row,
+    displayName: row.remark || row.nickname || row.githubLogin || row.displayName,
+    avatarUrl: sanitizeWorkspaceAvatarUrl(row.avatarUrl) || null
+  }));
 }
 
 export async function updateTopicNotificationLevel(db, request, input = {}) {
@@ -456,16 +476,20 @@ export async function updateTopicNotificationLevel(db, request, input = {}) {
     await auditTopic(db, request, actor, "topic.notification.update", topic.id, "rejected", "topic.not_member");
     throw topicNotFound();
   }
-  await db.prepare("UPDATE topic_members SET notification_level = ? WHERE topic_id = ? AND user_id = ? AND left_at IS NULL")
-    .run(normalizeString(input.notificationLevel), topic.id, actor.id);
-  await auditTopic(db, request, actor, "topic.notification.update", topic.id, "success");
-  await writeTopicDomainEvent(db, {
-    type: "topic.notification.updated",
-    actorId: actor.id,
-    conversationId: topic.conversation_id,
-    targetType: "topic",
-    targetId: topic.id,
-    payload: { topicId: topic.id, userId: actor.id, notificationLevel: normalizeString(input.notificationLevel) }
+  const notificationLevel = normalizeString(input.notificationLevel);
+  await runWorkspaceTransaction(db, async () => {
+    await db.prepare("UPDATE topic_members SET notification_level = ? WHERE topic_id = ? AND user_id = ? AND left_at IS NULL")
+      .run(notificationLevel, topic.id, actor.id);
+    await auditTopic(db, request, actor, "topic.notification.update", topic.id, "success");
+    await writeTopicDomainEvent(db, {
+      type: "topic.notification.updated",
+      spaceId: topic.space_id,
+      actorId: actor.id,
+      conversationId: topic.conversation_id,
+      targetType: "topic",
+      targetId: topic.id,
+      payload: { topicId: topic.id, userId: actor.id, notificationLevel }
+    });
   });
   return await projectTopicForActor(db, actor.id, topic.id);
 }
@@ -473,7 +497,7 @@ export async function updateTopicNotificationLevel(db, request, input = {}) {
 export async function projectTopicEvent(db, input = {}) {
   const event = input.event;
   if (!event || typeof event !== "object") return null;
-  const topicId = normalizeString(event.topicId ?? event.targetId);
+  const topicId = normalizeString(event.topicId ?? event.payload?.topicId ?? event.targetId);
   if (!topicId) return null;
   const topic = await getRawTopic(db, topicId);
   if (!topic) return null;
@@ -552,25 +576,32 @@ async function transitionTopic(db, request, input, targetStatus) {
     throw new TopicConflictError("topic.invalid_transition", "话题状态不能转换");
   }
   const now = new Date().toISOString();
-  const updateResult = await db.prepare(`
-    UPDATE topics SET status = ?, revision = revision + 1, updated_at = ?,
-      closed_at = CASE WHEN ? = 'closed' THEN COALESCE(closed_at, ?) ELSE closed_at END,
-      archived_at = CASE WHEN ? = 'archived' THEN COALESCE(archived_at, ?) ELSE archived_at END
-    WHERE id = ? AND revision = ?
-  `).run(targetStatus, now, targetStatus, now, targetStatus, now, topic.id, expectedRevision);
-  if (updateResult.changes !== 1) {
-    await auditTopic(db, request, actor, `topic.${targetStatus}`, topic.id, "rejected", "topic.revision_conflict");
-    throw new TopicConflictError("topic.revision_conflict", "话题版本已变化，请刷新后重试");
-  }
-  const updated = await getRawTopic(db, topic.id);
-  await auditTopic(db, request, actor, `topic.${targetStatus}`, topic.id, "success");
-  await writeTopicDomainEvent(db, {
-    type: targetStatus === "closed" ? "topic.closed" : "topic.archived",
-    actorId: actor.id,
-    conversationId: topic.conversation_id,
-    targetType: "topic",
-    targetId: topic.id,
-    payload: { topicId: topic.id, status: targetStatus }
+  const updated = await runWorkspaceTransaction(db, async () => {
+    if (typeof db.lock === "function") {
+      await db.lock(`workspace:topic:transition:${topic.id}`);
+    }
+    const updateResult = await db.prepare(`
+      UPDATE topics SET status = ?, revision = revision + 1, updated_at = ?,
+        closed_at = CASE WHEN ? = 'closed' THEN COALESCE(closed_at, ?) ELSE closed_at END,
+        archived_at = CASE WHEN ? = 'archived' THEN COALESCE(archived_at, ?) ELSE archived_at END
+      WHERE id = ? AND revision = ?
+    `).run(targetStatus, now, targetStatus, now, targetStatus, now, topic.id, expectedRevision);
+    if (updateResult.changes !== 1) {
+      await auditTopic(db, request, actor, `topic.${targetStatus}`, topic.id, "rejected", "topic.revision_conflict");
+      throw new TopicConflictError("topic.revision_conflict", "话题版本已变化，请刷新后重试");
+    }
+    const current = await getRawTopic(db, topic.id);
+    await auditTopic(db, request, actor, `topic.${targetStatus}`, topic.id, "success");
+    await writeTopicDomainEvent(db, {
+      type: targetStatus === "closed" ? "topic.closed" : "topic.archived",
+      spaceId: topic.space_id,
+      actorId: actor.id,
+      conversationId: topic.conversation_id,
+      targetType: "topic",
+      targetId: topic.id,
+      payload: { topicId: topic.id, status: targetStatus }
+    });
+    return current;
   });
   return await projectTopicForActor(db, actor.id, updated.id, { allowSummary: true });
 }
@@ -661,17 +692,20 @@ async function loadTopicRow(db, topicId, viewerId) {
       t.created_at AS createdAt, t.updated_at AS updatedAt,
       t.closed_at AS closedAt, t.archived_at AS archivedAt,
       u.display_name AS creatorDisplayName, u.nickname AS creatorNickname,
-      u.github_login AS creatorGithubLogin,
+      u.github_login AS creatorGithubLogin, u.avatar_url AS creatorAvatarUrl,
+      ur.remark AS creatorRemark,
       (SELECT COUNT(*) FROM topic_members tm WHERE tm.topic_id = t.id AND tm.left_at IS NULL) AS participantCount,
       EXISTS (SELECT 1 FROM topic_members tm WHERE tm.topic_id = t.id AND tm.user_id = ? AND tm.left_at IS NULL) AS joined
-    FROM topics t INNER JOIN users u ON u.id = t.created_by
+    FROM topics t
+    INNER JOIN users u ON u.id = t.created_by
+    LEFT JOIN user_remarks ur ON ur.owner_user_id = ? AND ur.target_user_id = t.created_by
     WHERE t.id = ?
-  `).get(viewerId, topicId);
+  `).get(viewerId, viewerId, topicId);
 }
 
 function projectTopicRow(row, { full, viewerId }) {
   if (!row) return null;
-  const creatorName = row.creatorNickname || row.creatorDisplayName || row.creatorGithubLogin;
+  const creatorName = row.creatorRemark || row.creatorNickname || row.creatorGithubLogin || row.creatorDisplayName || "成员";
   return {
     id: row.id,
     spaceId: row.spaceId ?? row.space_id,
@@ -683,7 +717,10 @@ function projectTopicRow(row, { full, viewerId }) {
     creator: {
       id: row.createdBy ?? row.created_by,
       displayName: creatorName,
-      githubLogin: row.creatorGithubLogin
+      nickname: row.creatorNickname || null,
+      remark: row.creatorRemark || null,
+      githubLogin: row.creatorGithubLogin,
+      avatarUrl: sanitizeWorkspaceAvatarUrl(row.creatorAvatarUrl) || null
     },
     status: row.status,
     allowSyncToGroup: Boolean(row.allowSyncToGroup ?? row.allow_sync_to_group),
@@ -780,7 +817,17 @@ function normalizeStatus(value) {
 
 function normalizeTopicEventType(value) {
   const normalized = normalizeString(value);
-  return ["topic.created", "topic.joined", "topic.left", "topic.closed", "topic.archived"].includes(normalized)
+  return [
+    "topic.created",
+    "topic.joined",
+    "topic.left",
+    "topic.closed",
+    "topic.archived",
+    "topic.notification.updated",
+    "topic.message.created",
+    "topic.message.synced",
+    "topic.message.unsynced"
+  ].includes(normalized)
     ? normalized
     : "topic.updated";
 }

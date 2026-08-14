@@ -287,7 +287,7 @@ export function createWorkspaceEmailService({ db, env = process.env, baseUrl, se
     }
   }
 
-  async function scheduleMessage({ authorId, conversationId, messageId, eventSeq, content, createdAt }) {
+  async function scheduleMessage({ authorId, spaceId, conversationId, topicId, messageId, eventSeq, content, createdAt }) {
     const smtp = await readStoredSmtpSettings();
     if (!smtp?.enabled || !smtp.activeFrom || Date.parse(createdAt) < Date.parse(smtp.activeFrom)) {
       return;
@@ -298,7 +298,25 @@ export function createWorkspaceEmailService({ db, env = process.env, baseUrl, se
         .map((block) => normalizeText(block.userId))
         .filter(Boolean)
     );
-    const recipients = await db.prepare(`
+    const notificationSpaceId = normalizeText(spaceId) || DEFAULT_SPACE_ID;
+    const recipients = topicId
+      ? await db.prepare(`
+      SELECT
+        u.id,
+        tm.notification_level AS notificationLevel,
+        p.enabled,
+        p.immediate_enabled AS immediateEnabled,
+        p.digest_enabled AS digestEnabled,
+        p.email,
+        p.email_verified_at AS emailVerifiedAt
+      FROM topic_members tm
+      INNER JOIN users u ON u.id = tm.user_id AND u.kind = 'human'
+      INNER JOIN conversation_members cm ON cm.conversation_id = ? AND cm.user_id = tm.user_id AND cm.removed_at IS NULL
+      INNER JOIN space_members sm ON sm.user_id = u.id AND sm.space_id = ? AND sm.removed_at IS NULL
+      INNER JOIN user_notification_preferences p ON p.user_id = u.id
+      WHERE tm.topic_id = ? AND tm.left_at IS NULL AND u.id <> ?
+    `).all(conversationId, notificationSpaceId, topicId, authorId)
+      : await db.prepare(`
       SELECT
         u.id,
         cm.notification_level AS notificationLevel,
@@ -312,7 +330,7 @@ export function createWorkspaceEmailService({ db, env = process.env, baseUrl, se
       INNER JOIN space_members sm ON sm.user_id = u.id AND sm.space_id = ? AND sm.removed_at IS NULL
       INNER JOIN user_notification_preferences p ON p.user_id = u.id
       WHERE cm.conversation_id = ? AND cm.removed_at IS NULL AND u.id <> ?
-    `).all(DEFAULT_SPACE_ID, conversationId, authorId);
+      `).all(notificationSpaceId, conversationId, authorId);
     const availableAt = new Date(Date.parse(createdAt) + IMMEDIATE_DELAY_MS).toISOString();
     for (const recipient of recipients) {
       if (!recipient.enabled || !recipient.email || !recipient.emailVerifiedAt) continue;
@@ -491,24 +509,28 @@ export function createWorkspaceEmailService({ db, env = process.env, baseUrl, se
         m.author_id AS authorId,
         m.created_at AS createdAt,
         m.content_json AS contentJson,
-        cm.notification_level AS notificationLevel,
-        cm.last_read_seq AS lastReadSeq,
-        cm.last_read_at AS lastReadAt,
+        COALESCE(tm.notification_level, cm.notification_level) AS notificationLevel,
+        COALESCE(tm.last_read_seq, cm.last_read_seq) AS lastReadSeq,
+        COALESCE(tm.last_read_at, cm.last_read_at) AS lastReadAt,
         we.seq AS eventSeq
       FROM messages m
       INNER JOIN conversation_members cm
         ON cm.conversation_id = m.conversation_id AND cm.user_id = ? AND cm.removed_at IS NULL
+      LEFT JOIN topic_members tm
+        ON tm.topic_id = m.topic_id AND tm.user_id = ? AND tm.left_at IS NULL
       INNER JOIN conversations c ON c.id = m.conversation_id AND c.space_id = ?
       INNER JOIN space_members sm ON sm.user_id = ? AND sm.space_id = ? AND sm.removed_at IS NULL
       LEFT JOIN workspace_events we
-        ON we.type = 'message.created' AND we.target_id = m.id AND we.conversation_id = m.conversation_id
+        ON we.type IN ('message.created', 'topic.message.created')
+          AND we.target_id = m.id AND we.conversation_id = m.conversation_id
       WHERE m.created_at >= ?
         AND m.deleted_at IS NULL
         AND m.recalled_at IS NULL
         AND m.kind IN ('user', 'bot')
         AND (m.author_id IS NULL OR m.author_id <> ?)
+        AND (m.topic_id IS NULL OR tm.user_id IS NOT NULL)
       ORDER BY m.created_at ASC, m.id ASC
-    `).all(userId, DEFAULT_SPACE_ID, userId, DEFAULT_SPACE_ID, startedAt, userId);
+    `).all(userId, userId, DEFAULT_SPACE_ID, userId, DEFAULT_SPACE_ID, startedAt, userId);
     return rows.filter((row) => {
       const unread = row.lastReadSeq !== null && row.lastReadSeq !== undefined
         ? Number(row.eventSeq) > Number(row.lastReadSeq)
@@ -524,16 +546,21 @@ export function createWorkspaceEmailService({ db, env = process.env, baseUrl, se
         j.id, j.user_id AS userId, j.event_seq AS eventSeq, j.attempt_count AS attemptCount,
         p.email, p.email_verified_at AS emailVerifiedAt, p.enabled AS preferenceEnabled,
         p.immediate_enabled AS immediateEnabled,
-        cm.notification_level AS notificationLevel, cm.last_read_seq AS lastReadSeq,
-        cm.last_read_at AS lastReadAt, m.created_at AS messageCreatedAt, m.content_json AS contentJson
+        COALESCE(tm.notification_level, cm.notification_level) AS notificationLevel,
+        COALESCE(tm.last_read_seq, cm.last_read_seq) AS lastReadSeq,
+        COALESCE(tm.last_read_at, cm.last_read_at) AS lastReadAt,
+        m.created_at AS messageCreatedAt, m.content_json AS contentJson
       FROM workspace_email_jobs j
       INNER JOIN user_notification_preferences p ON p.user_id = j.user_id
       INNER JOIN messages m ON m.id = j.message_id AND m.deleted_at IS NULL AND m.recalled_at IS NULL
       INNER JOIN conversation_members cm
         ON cm.conversation_id = j.conversation_id AND cm.user_id = j.user_id AND cm.removed_at IS NULL
+      LEFT JOIN topic_members tm
+        ON tm.topic_id = m.topic_id AND tm.user_id = j.user_id AND tm.left_at IS NULL
       INNER JOIN space_members sm
         ON sm.user_id = j.user_id AND sm.space_id = ? AND sm.removed_at IS NULL
       WHERE j.id = ?
+        AND (m.topic_id IS NULL OR tm.user_id IS NOT NULL)
     `).get(DEFAULT_SPACE_ID, id);
   }
 

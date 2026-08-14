@@ -317,12 +317,6 @@ registerWorkspaceEchoRequirementRoutes(app, {
   getActorId: getWorkspaceUserId,
   now: options.now
 });
-registerWorkspaceTopicRoutes(app, {
-  db,
-  enabled: workspaceEnabled,
-  getActorId: getWorkspaceUserId
-});
-
 app.get("/api/health", async () => ({
   ok: true,
   service: "duallane",
@@ -1825,6 +1819,16 @@ app.get("/ws/workspace", { websocket: true }, (socket, request) => {
     }
   });
 });
+
+if (db) {
+  registerWorkspaceTopicRoutes(app, {
+    db,
+    enabled: workspaceEnabled,
+    getActorId: getWorkspaceUserId,
+    scheduleEmailNotifications: workspaceEmail?.scheduleMessage,
+    scheduleNtfyNotifications: workspaceNtfy?.scheduleMessage
+  });
+}
 
 if (env.NODE_ENV === "production" && serveStatic) {
   const distDir = path.resolve(rootDir, "dist");
