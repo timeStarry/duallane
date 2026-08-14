@@ -91,8 +91,14 @@ import {
   CUSTOM_EMOTE_MAX_INPUT_BYTES
 } from "./services/workspace-custom-emotes.mjs";
 import { createWorkspaceAgentBotService } from "./services/workspace-agent-bots.mjs";
+import { createWorkspaceCardInteractionService } from "./services/workspace-card-interactions.mjs";
+import { createWorkspaceCardRegistry } from "./services/workspace-card-registry.mjs";
+import { createWorkspaceInteractionRegistries } from "./services/workspace-interaction-registry.mjs";
+import { createWorkspaceInteractionService } from "./services/workspace-interactions.mjs";
 import { registerWorkspaceAgentBotRoutes } from "./routes/workspace-bots.mjs";
+import { registerWorkspaceCardRoutes } from "./routes/workspace-cards.mjs";
 import { registerWorkspaceEchoRequirementRoutes } from "./routes/workspace-echo.mjs";
+import { registerWorkspaceInteractionRoutes } from "./routes/workspace-interactions.mjs";
 import { registerWorkspaceTopicRoutes } from "./routes/workspace-topics.mjs";
 
 const APP_VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
@@ -147,6 +153,18 @@ export async function createApp(options = {}) {
     now: options.now
   }) : null;
   const workspaceAgentBots = db ? createWorkspaceAgentBotService({ db, now: options.now }) : null;
+  const workspaceCardRegistry = createWorkspaceCardRegistry();
+  const workspaceCards = db ? createWorkspaceCardInteractionService({
+    db,
+    registry: workspaceCardRegistry,
+    now: options.now
+  }) : null;
+  const workspaceInteractionRegistries = createWorkspaceInteractionRegistries();
+  const workspaceInteractions = db ? createWorkspaceInteractionService({
+    db,
+    ...workspaceInteractionRegistries,
+    now: options.now
+  }) : null;
   await workspaceChunkUploads?.cleanupInactive();
   const workspacePresence = createWorkspacePresence();
   const workspaceEmail = db ? createWorkspaceEmailService({
@@ -268,6 +286,16 @@ registerWorkspaceAgentBotRoutes({
   getSpaceId: () => DEFAULT_SPACE_ID,
   workspaceEnabled,
   blockDisabled: (reply) => blockWorkspace(reply)
+});
+registerWorkspaceCardRoutes(app, {
+  service: workspaceCards,
+  enabled: workspaceEnabled,
+  getActorId: getWorkspaceUserId
+});
+registerWorkspaceInteractionRoutes(app, {
+  service: workspaceInteractions,
+  enabled: workspaceEnabled,
+  getActorId: getWorkspaceUserId
 });
 registerWorkspaceEchoRequirementRoutes(app, {
   db,

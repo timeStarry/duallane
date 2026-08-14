@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SPACE_ID, SEEDED_OWNER_EMAIL, SEEDED_OWNER_GITHUB_LOGIN } from "./db.mjs";
 import { openTestDatabase } from "./test-database.mjs";
 import { DAILY_QUOTA_BYTES } from "./quota.mjs";
@@ -2068,7 +2068,7 @@ describe("workspace service", () => {
     ).rejects.toThrow(WorkspaceValidationError);
   });
 
-  it("persists card references and uses fallbackText for summaries and public projection", async () => {
+  it("persists only server-validated card references and keeps fallback summaries", async () => {
     const conversation = await createConversation(db, request, {
       actorId: "usr_owner",
       type: "group",
@@ -2081,7 +2081,7 @@ describe("workspace service", () => {
       schemaVersion: 99,
       fallbackText: "未来投票卡片"
     };
-    const message = await createStructuredMessage(db, request, {
+    const input = {
       actorId: "usr_owner",
       conversationId: conversation.id,
       clientMessageId: "card-reference-1",
@@ -2090,7 +2090,11 @@ describe("workspace service", () => {
         plainText: "客户端摘要会被覆盖",
         blocks: [card]
       }
-    });
+    };
+    await expect(createStructuredMessage(db, request, input)).rejects.toMatchObject({ code: "card.server_owned" });
+    const validateCardReference = vi.fn(async () => card);
+    const message = await createStructuredMessage(db, request, { ...input, validateCardReference });
+    expect(validateCardReference).toHaveBeenCalledWith("usr_owner", conversation.id, card);
 
     expect(message.content).toEqual({
       format: MESSAGE_CONTENT_FORMAT,

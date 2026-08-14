@@ -60,7 +60,7 @@ describe("Workspace card blocks", () => {
 
 describe("Workspace card payload safety", () => {
   it("accepts bounded JSON and returns a detached normalized value", () => {
-    const payload = { header: { title: "需求征集" }, actions: [{ id: "vote", label: "投票" }] };
+    const payload = { header: { title: "需求征集" }, actions: [{ id: "vote", label: "投票" }], status: "pong:hello" };
     const normalized = normalizeCardPayload(payload);
     expect(normalized).toEqual(payload);
     expect(normalized).not.toBe(payload);

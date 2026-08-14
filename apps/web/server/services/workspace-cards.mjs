@@ -83,6 +83,12 @@ export class CardRegistry {
     return this.#definitions.get(cardKey(normalizeCardType(cardType), normalizeSchemaVersion(schemaVersion))) ?? null;
   }
 
+  getAction(cardType, schemaVersion, actionId) {
+    const definition = this.get(cardType, schemaVersion);
+    if (!definition) return null;
+    return definition.actions[actionKey(actionId)] ?? null;
+  }
+
   normalizeBlock(block) {
     return normalizeCardBlock(block);
   }
@@ -122,6 +128,23 @@ export class CardRegistry {
       : safePayload;
     return { type: "card", block: normalizedBlock, definition, payload: projected };
   }
+
+  validateActionInput(block, actionId, input, options = {}) {
+    const normalizedBlock = normalizeCardBlock(block);
+    const definition = this.#definitions.get(cardKey(normalizedBlock.cardType, normalizedBlock.schemaVersion));
+    if (!definition) {
+      throw new CardValidationError("card.unknown_version", "卡片版本暂不支持");
+    }
+    const action = definition.actions[actionKey(actionId)];
+    if (!action) {
+      throw new CardValidationError("card.unknown_action", "卡片操作暂不支持");
+    }
+    const safeInput = normalizeCardPayload(input ?? {}, {
+      limits: { ...action.limits, ...(options.limits ?? {}) },
+      allowPublicUrls: false
+    });
+    return action.validateInput ? action.validateInput(safeInput) : safeInput;
+  }
 }
 
 export function createCardRegistry(definitions = []) {
@@ -137,13 +160,56 @@ function normalizeDefinition(definition) {
   if (definition.validatePayload !== undefined && typeof definition.validatePayload !== "function") {
     throw new CardValidationError("card.invalid_definition", "卡片校验器无效");
   }
+  if (definition.projectPayload !== undefined && typeof definition.projectPayload !== "function") {
+    throw new CardValidationError("card.invalid_definition", "卡片投影器无效");
+  }
+  if (definition.authorize !== undefined && typeof definition.authorize !== "function") {
+    throw new CardValidationError("card.invalid_definition", "卡片授权器无效");
+  }
   return Object.freeze({
     cardType,
     schemaVersion,
     validatePayload: definition.validatePayload,
+    projectPayload: definition.projectPayload,
+    authorize: definition.authorize,
+    actions: normalizeActions(definition.actions),
     allowPublicUrls: definition.allowPublicUrls === true,
     limits: Object.freeze({ ...DEFAULT_CARD_LIMITS, ...(definition.limits ?? {}) })
   });
+}
+
+function normalizeActions(actions) {
+  if (actions === undefined) return Object.freeze({});
+  if (!isPlainObject(actions)) {
+    throw new CardValidationError("card.invalid_definition", "卡片操作定义无效");
+  }
+  const normalized = {};
+  for (const [id, action] of Object.entries(actions)) {
+    const key = actionKey(id);
+    if (!isPlainObject(action) || typeof action.execute !== "function") {
+      throw new CardValidationError("card.invalid_definition", "卡片操作处理器无效");
+    }
+    if (action.validateInput !== undefined && typeof action.validateInput !== "function") {
+      throw new CardValidationError("card.invalid_definition", "卡片操作校验器无效");
+    }
+    if (action.authorize !== undefined && typeof action.authorize !== "function") {
+      throw new CardValidationError("card.invalid_definition", "卡片操作授权器无效");
+    }
+    normalized[key] = Object.freeze({
+      id: key,
+      validateInput: action.validateInput,
+      authorize: action.authorize,
+      execute: action.execute,
+      limits: Object.freeze({
+        maxPayloadBytes: 16 * 1024,
+        maxDepth: 6,
+        maxNodes: 100,
+        maxTextBytes: 8 * 1024,
+        ...(action.limits ?? {})
+      })
+    });
+  }
+  return Object.freeze(normalized);
 }
 
 function visitPayload(value, state, limits, allowPublicUrls, path) {
@@ -227,7 +293,7 @@ function assertSafeUrl(value, allowPublicUrls) {
 }
 
 function looksLikeUrl(value) {
-  return /^(?:[a-z][a-z0-9+.-]*:|\/\/|https?:\/\/)/i.test(value.trim());
+  return /^(?:(?:https?|ftp|file|data|javascript|vbscript):|\/\/)/i.test(value.trim());
 }
 
 function normalizeIdentifier(value, code, message) {
@@ -263,6 +329,10 @@ function normalizeFallbackText(value) {
 
 function cardKey(cardType, schemaVersion) {
   return `${cardType}@${schemaVersion}`;
+}
+
+function actionKey(value) {
+  return normalizeIdentifier(value, "card.invalid_action", "卡片操作 ID 无效");
 }
 
 function isPlainObject(value) {

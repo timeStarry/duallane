@@ -2405,7 +2405,8 @@ export async function createStructuredMessage(db, request, input) {
 
     normalizedContent = await normalizeMessageContent(db, actor, conversationId, input.content, {
       validateCustomEmote: input.validateCustomEmote,
-      validateCollectionShare: input.validateCollectionShare
+      validateCollectionShare: input.validateCollectionShare,
+      validateCardReference: input.validateCardReference
     });
     if (existing) {
       if (existing.contentJson !== JSON.stringify(normalizedContent)) {
@@ -3533,9 +3534,17 @@ async function normalizeBlock(db, actor, conversationId, block, options = {}) {
   }
   if (block.type === "card") {
     try {
-      return normalizeCardBlock(block);
+      const normalized = normalizeCardBlock(block);
+      if (typeof options.validateCardReference !== "function") {
+        throw new WorkspaceValidationError("card.server_owned", "卡片只能由受信任的服务创建");
+      }
+      await options.validateCardReference(actor.id, conversationId, normalized);
+      return normalized;
     } catch (error) {
       if (error instanceof CardValidationError) {
+        throw new WorkspaceValidationError(error.code, error.message);
+      }
+      if (error?.code && error?.message && !(error instanceof WorkspaceError)) {
         throw new WorkspaceValidationError(error.code, error.message);
       }
       throw error;
