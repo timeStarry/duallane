@@ -195,8 +195,11 @@ async function transitionSolicitation(db, input, operation, targetStatus) {
         : operation === "close"
           ? "status = 'closed', closed_at = ?"
           : "status = 'withdrawn', withdrawn_at = ?";
-      await db.prepare(`UPDATE echo_solicitations SET ${fields}, revision = ?, updated_at = ? WHERE id = ? AND revision = ?`)
+      const updated = await db.prepare(`UPDATE echo_solicitations SET ${fields}, revision = ?, updated_at = ? WHERE id = ? AND revision = ?`)
         .run(timestamp, revision, timestamp, row.id, row.revision);
+      if (!updated.changes) {
+        throw reject(new EchoSolicitationConflictError("echo.revision_conflict", "征集版本已变化，请刷新后重试"), "echo.revision_conflict");
+      }
       if (operation === "publish" && row.deliveryPolicy !== "none") await createDeliveryRows(db, row, timestamp);
       await db.prepare(`
         INSERT INTO echo_solicitation_idempotency (
@@ -255,8 +258,11 @@ export async function voteSolicitation(db, input) {
           VALUES (?, ?, ?, ?, 1, ?, ?)
         `).run(`echo_sol_vote_${randomUUID()}`, current.id, actor.id, JSON.stringify(optionIds), timestamp, timestamp);
       }
-      await db.prepare(`UPDATE echo_solicitations SET revision = ?, updated_at = ? WHERE id = ? AND revision = ?`)
+      const updated = await db.prepare(`UPDATE echo_solicitations SET revision = ?, updated_at = ? WHERE id = ? AND revision = ?`)
         .run(Number(current.revision) + 1, timestamp, current.id, current.revision);
+      if (!updated.changes) {
+        throw reject(new EchoSolicitationConflictError("echo.revision_conflict", "征集版本已变化，请刷新后重试"), "echo.revision_conflict");
+      }
       await db.prepare(`
         INSERT INTO echo_solicitation_idempotency (
           space_id, actor_user_id, operation, idempotency_key, request_hash,
@@ -384,11 +390,51 @@ export const ECHO_SOLICITATION_CARD_DEFINITION = Object.freeze({
   schemaVersion: ECHO_SOLICITATION_CARD_SCHEMA_VERSION,
   allowPublicUrls: false,
   limits: Object.freeze({ maxPayloadBytes: 20 * 1024, maxTextBytes: 14 * 1024 }),
-  validatePayload: validateSolicitationCardPayload
+  validatePayload: validateSolicitationCardPayload,
+  actions: createSolicitationCardActions()
 });
 
-export function createEchoSolicitationCardRegistry() {
-  return createCardRegistry([ECHO_SOLICITATION_CARD_DEFINITION]);
+function createSolicitationCardActions(solicitations = null) {
+  return {
+    vote: {
+      validateInput: validateSolicitationVoteActionInput,
+      authorize: ({ actor }) => actor.kind === "human" && actor.role !== "auditor",
+      async execute({ db, actor, card, payload, input, request }) {
+        const idempotencyKey = normalizeActionIdempotencyKey(input.idempotencyKey);
+        const service = solicitations ?? createEchoSolicitationService({ db, spaceId: card.spaceId });
+        const result = await service.vote({
+          spaceId: card.spaceId,
+          actorId: actor.id,
+          publicId: payload.publicId,
+          optionIds: input.optionIds,
+          expectedRevision: card.revision,
+          idempotencyKey,
+          request
+        });
+        const projection = await service.projectCard({
+          spaceId: card.spaceId,
+          actorId: actor.id,
+          publicId: result.publicId,
+          request
+        });
+        return {
+          cardPayload: projection.payload,
+          result: safeSolicitationActionResult(result)
+        };
+      }
+    }
+  };
+}
+
+export function createEchoSolicitationCardRegistry(options = {}) {
+  const definition = options.solicitations
+    ? { ...ECHO_SOLICITATION_CARD_DEFINITION, actions: createSolicitationCardActions(options.solicitations) }
+    : ECHO_SOLICITATION_CARD_DEFINITION;
+  return createCardRegistry([definition]);
+}
+
+export function createEchoSolicitationCardActions(solicitations = null) {
+  return createSolicitationCardActions(solicitations);
 }
 
 async function projectSolicitation(db, { actor, spaceId, publicId, now, request }) {
@@ -672,6 +718,34 @@ function validateSolicitationCardPayload(payload) {
   if (!payload || typeof payload !== "object" || !/^SOL-\d{4}-\d{4}$/.test(payload.publicId ?? "") || !ECHO_SOLICITATION_STATUSES.includes(payload.status) || !Array.isArray(payload.options) || payload.options.length < 2 || payload.options.length > ECHO_SOLICITATION_LIMITS.maxOptions) throw new CardValidationError("card.domain_invalid", "征集卡片数据无效");
   if (!Number.isSafeInteger(payload.revision) || payload.revision < 1) throw new CardValidationError("card.domain_invalid", "征集卡片版本无效");
   return payload;
+}
+
+function validateSolicitationVoteActionInput(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new CardValidationError("card.action_input_invalid", "投票参数无效");
+  }
+  const optionIds = normalizeOptionIds(input.optionIds ?? input.selectedOptionIds);
+  const idempotencyKey = normalizeActionIdempotencyKey(input.idempotencyKey);
+  return { optionIds, idempotencyKey };
+}
+
+function normalizeActionIdempotencyKey(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized || Buffer.byteLength(normalized, "utf8") > ECHO_SOLICITATION_LIMITS.idempotencyKeyBytes || !/^[A-Za-z0-9._:-]+$/.test(normalized)) {
+    throw new CardValidationError("card.action_input_invalid", "操作幂等键无效");
+  }
+  return normalized;
+}
+
+function safeSolicitationActionResult(result) {
+  return {
+    publicId: result.publicId,
+    status: result.status,
+    revision: result.revision,
+    selectedOptionIds: result.selectedOptionIds,
+    counts: result.counts,
+    voteCount: result.voteCount
+  };
 }
 
 function reject(error, reason, action = null) {

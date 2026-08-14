@@ -171,6 +171,38 @@ describe("Workspace topic messages", () => {
       topicId: enabled.id,
       messageId: first.id
     });
+    const syncCardId = `topic_projection_${synced.projection.id}`;
+    const syncCard = db.prepare(`
+      SELECT id, card_type AS cardType, source_kind AS sourceKind,
+        source_id AS sourceId, payload_json AS payloadJson, fallback_text AS fallbackText,
+        revision, status
+      FROM workspace_cards WHERE id = ?
+    `).get(syncCardId);
+    expect(syncCard).toMatchObject({
+      id: syncCardId,
+      cardType: "workspace.topic-message-synced",
+      sourceKind: "topic",
+      sourceId: `topic-message:${enabled.id}:${first.id}`,
+      revision: 1,
+      status: "active"
+    });
+    const syncPayload = JSON.parse(syncCard.payloadJson);
+    expect(syncPayload).toMatchObject({
+      topicId: enabled.id,
+      topicMessageId: first.id,
+      projectionId: synced.projection.id,
+      projectionType: "group_sync",
+      title: "同步",
+      status: "open"
+    });
+    expect(Object.keys(syncPayload).sort()).toEqual([
+      "messagePreview", "projectionId", "projectionType", "status", "title", "topicId", "topicMessageId"
+    ]);
+    const syncedMessageContent = JSON.parse(db.prepare("SELECT content_json AS contentJson FROM messages WHERE id = ?").get(synced.projection.groupMessageId).contentJson);
+    expect(syncedMessageContent.blocks.find((block) => block.type === "card")).toMatchObject({
+      cardId: syncCardId,
+      fallbackText: syncCard.fallbackText
+    });
     const replay = await syncTopicMessage(db, request, {
       actorId: "usr_topic_message_alice",
       topicId: enabled.id,
@@ -184,11 +216,20 @@ describe("Workspace topic messages", () => {
       messageId: first.id
     });
     expect(removed.removed).toBe(true);
+    expect(db.prepare("SELECT status, revision FROM workspace_cards WHERE id = ?").get(syncCardId))
+      .toMatchObject({ status: "invalidated", revision: 2 });
     const resynced = await syncTopicMessage(db, request, {
       actorId: "usr_topic_message_alice",
       topicId: enabled.id,
       messageId: first.id
     });
     expect(resynced.projection.id).toBe(synced.projection.id);
+    expect(db.prepare("SELECT status, revision FROM workspace_cards WHERE id = ?").get(syncCardId))
+      .toMatchObject({ status: "active", revision: 3 });
+    const resyncedMessageContent = JSON.parse(db.prepare("SELECT content_json AS contentJson FROM messages WHERE id = ?").get(resynced.projection.groupMessageId).contentJson);
+    expect(resyncedMessageContent.blocks.find((block) => block.type === "card")).toMatchObject({
+      cardId: syncCardId,
+      fallbackText: syncCard.fallbackText
+    });
   });
 });

@@ -34,6 +34,11 @@ export const STALE_UPLOAD_RESERVATION_MS = 1000 * 60 * 30;
 
 const workspaceEventSubscribers = new Set();
 const workspaceTransactionEvents = new AsyncLocalStorage();
+// This capability is intentionally a module-private Symbol. JSON request
+// bodies cannot carry it, so ordinary HTTP callers can never opt into the
+// official system-identity writer. Trusted server services obtain it through
+// createSystemBotMessageWriter below.
+const SYSTEM_BOT_WRITE_CAPABILITY = Symbol("duallane.system-bot-write");
 
 const ROLE_ORDER = {
   owner: 1,
@@ -1900,7 +1905,10 @@ export async function updateConversationNotificationLevel(db, request, input) {
 }
 
 export async function listMessages(db, userId, conversationId, options = {}) {
-  const actor = await requireActor(db, userId, { allowBot: options.request?.botGateway === true });
+  const actor = await requireActor(db, userId, {
+    allowBot: options.request?.botGateway === true,
+    systemBotCapability: options.request?.[SYSTEM_BOT_WRITE_CAPABILITY]
+  });
   await requireCapability(db, options.request ?? null, actor, "conversation.read", {
     targetType: "conversation",
     targetId: conversationId
@@ -2384,7 +2392,10 @@ export async function removeMessageReaction(db, request, input) {
   });
 }
 export async function createStructuredMessage(db, request, input) {
-  const actor = await requireActor(db, input.actorId, { allowBot: request?.botGateway === true });
+  const actor = await requireActor(db, input.actorId, {
+    allowBot: request?.botGateway === true,
+    systemBotCapability: request?.[SYSTEM_BOT_WRITE_CAPABILITY]
+  });
   const conversationId = normalizeString(input.conversationId);
   const clientMessageId = normalizeString(input.clientMessageId);
   if (!conversationId || !clientMessageId) {
@@ -2448,7 +2459,7 @@ export async function createStructuredMessage(db, request, input) {
         id, space_id, conversation_id, author_id, author_kind, kind, client_message_id,
         content_format, content_json, plain_text, reply_to_message_id, created_at, edited_at, deleted_at
       )
-      VALUES (?, ?, ?, ?, ?, 'user', ?, ?, ?, ?, ?, ?, NULL, NULL)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
       ON CONFLICT (space_id, conversation_id, author_id, client_message_id) DO NOTHING
       RETURNING id
     `).run(
@@ -2457,6 +2468,7 @@ export async function createStructuredMessage(db, request, input) {
       conversationId,
       actor.id,
       actor.kind,
+      actor.kind === "bot" ? "bot" : "user",
       clientMessageId,
       MESSAGE_CONTENT_FORMAT,
       JSON.stringify(normalizedContent),
@@ -2570,6 +2582,51 @@ export async function createBotStructuredMessage(db, request, input) {
     throw new WorkspacePermissionError("permission.denied", "Bot Gateway 身份无效");
   }
   return createStructuredMessage(db, request, input);
+}
+
+/**
+ * Persist a message authored by an official, server-owned system identity.
+ *
+ * This boundary is deliberately separate from the custom Bot Gateway. The
+ * caller must use the writer returned by createSystemBotMessageWriter, which
+ * attaches a module-private Symbol capability. A normal request body cannot
+ * reproduce that marker, and custom workspace_agent_bots are rejected even if
+ * they use a bot-shaped user row.
+ */
+export async function createSystemBotStructuredMessage(db, request, input = {}) {
+  const capability = request?.[SYSTEM_BOT_WRITE_CAPABILITY];
+  const systemBotId = normalizeString(input.actorId);
+  const identity = getSystemIdentityDefinition(systemBotId);
+  if (!capability || capability.systemBotId !== systemBotId || !identity || identity.kind !== "bot") {
+    throw new WorkspacePermissionError("permission.denied", "系统 Bot 写入边界无效");
+  }
+  return createStructuredMessage(db, request, input);
+}
+
+/**
+ * Build the only supported writer for official system Bot messages. The
+ * identity is fixed when the service is wired; callers cannot choose an
+ * arbitrary author per message or override it through content/body fields.
+ */
+export function createSystemBotMessageWriter(db, systemBotId) {
+  const normalizedSystemBotId = normalizeString(systemBotId);
+  const identity = getSystemIdentityDefinition(normalizedSystemBotId);
+  if (!identity || identity.kind !== "bot") {
+    throw new WorkspaceValidationError("auth.identity_forbidden", "系统 Bot 身份无效");
+  }
+  const capability = Object.freeze({ systemBotId: normalizedSystemBotId });
+  return async function writeSystemBotMessage(input = {}) {
+    if (input.actorId !== undefined && normalizeString(input.actorId) !== normalizedSystemBotId) {
+      throw new WorkspacePermissionError("permission.denied", "系统 Bot 身份不匹配");
+    }
+    return createSystemBotStructuredMessage(db, {
+      ...(input.request && typeof input.request === "object" ? input.request : {}),
+      [SYSTEM_BOT_WRITE_CAPABILITY]: capability
+    }, {
+      ...input,
+      actorId: normalizedSystemBotId
+    });
+  };
 }
 
 async function createSystemMessage(db, { actor, conversationId, plainText }) {
@@ -4705,10 +4762,17 @@ async function requireActor(db, userId, options = {}) {
   if (!actor) {
     throw new WorkspaceAuthError("auth.required", "请先登录共享空间");
   }
-  if (!isAuthenticationAllowedIdentity(actor) && !(options.allowBot === true && actor.kind === "bot")) {
+  const systemBotCapability = options.systemBotCapability;
+  const isTrustedSystemBot = Boolean(
+    systemBotCapability &&
+    systemBotCapability.systemBotId === actor.id &&
+    actor.kind === "bot" &&
+    getSystemIdentityDefinition(actor)?.kind === "bot"
+  );
+  if (!isAuthenticationAllowedIdentity(actor) && !(options.allowBot === true && actor.kind === "bot") && !isTrustedSystemBot) {
     throw new WorkspaceAuthError("auth.identity_forbidden", "该系统身份不能执行用户操作");
   }
-  if (options.allowBot === true && actor.kind === "bot") {
+  if (options.allowBot === true && actor.kind === "bot" && !isTrustedSystemBot) {
     const customBot = await db.prepare(`SELECT 1 FROM workspace_agent_bots WHERE bot_user_id = ? AND status = 'active'`).get(actor.id);
     if (!customBot) {
       throw new WorkspaceAuthError("auth.identity_forbidden", "该系统身份不能执行用户操作");

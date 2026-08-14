@@ -7,19 +7,209 @@ import {
   writeWorkspaceEvent
 } from "./workspace.mjs";
 import { sanitizeWorkspaceAvatarUrl } from "./avatar.mjs";
-import { normalizeCardBlock } from "./workspace-cards.mjs";
+import {
+  CardValidationError,
+  normalizeCardBlock,
+  normalizeCardPayload
+} from "./workspace-cards.mjs";
 
 export const TOPIC_MESSAGE_MAX_CODE_POINTS = 30_000;
 export const TOPIC_MESSAGE_MAX_BYTES = 100 * 1024;
 export const TOPIC_MESSAGE_DEFAULT_LIMIT = 80;
 export const TOPIC_MESSAGE_MAX_LIMIT = 200;
 export const TOPIC_SYNC_CARD_TYPE = "workspace.topic-message-synced";
+export const TOPIC_SYNC_CARD_SCHEMA_VERSION = 1;
+
+const TOPIC_CARD_TYPE = "workspace.topic-created";
+const TOPIC_CARD_SCHEMA_VERSION = 1;
+const TOPIC_CARD_STATUSES = new Set(["open", "closed", "archived"]);
+const TOPIC_REFERENCE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const TOPIC_CARD_LIMITS = Object.freeze({ maxPayloadBytes: 16 * 1024, maxTextBytes: 8 * 1024 });
+
+export const TOPIC_SYNC_CARD_DEFINITION = Object.freeze({
+  cardType: TOPIC_SYNC_CARD_TYPE,
+  schemaVersion: TOPIC_SYNC_CARD_SCHEMA_VERSION,
+  validatePayload: validateTopicSyncCardPayload,
+  limits: TOPIC_CARD_LIMITS,
+  allowPublicUrls: false
+});
 
 const RATE_LIMITS = Object.freeze({
   create: { limit: 60, windowMs: 60_000 },
   sync: { limit: 30, windowMs: 60_000 }
 });
 const rateBuckets = new Map();
+
+/** Build the safe, non-content card projection for a synced topic message. */
+export function projectTopicMessageSyncedCard(input = {}) {
+  const topicId = normalizeTopicReference(input.topicId);
+  const topicMessageId = normalizeTopicReference(input.topicMessageId);
+  const projectionId = normalizeTopicReference(input.projectionId);
+  const title = normalizeTopicCardTitle(input.title);
+  const projectionType = normalizeTopicProjectionType(input.projectionType);
+  const status = normalizeTopicCardStatus(input.status);
+  if (!topicId || !topicMessageId || !projectionId || !title || !projectionType || !status) {
+    throw new CardValidationError("card.domain_invalid", "话题同步卡片数据无效");
+  }
+  const messagePreview = summarize(input.messagePreview);
+  const payload = normalizeCardPayload({
+    topicId,
+    topicMessageId,
+    projectionId,
+    projectionType,
+    title,
+    messagePreview,
+    status
+  }, { limits: TOPIC_CARD_LIMITS });
+  return {
+    block: {
+      type: "card",
+      cardId: `topic_projection_${projectionId}`,
+      cardType: TOPIC_SYNC_CARD_TYPE,
+      schemaVersion: TOPIC_SYNC_CARD_SCHEMA_VERSION,
+      fallbackText: `${messagePreview || "话题消息"} · #${title}`
+    },
+    payload: validateTopicSyncCardPayload(payload)
+  };
+}
+
+/** Persist the topic-created card in the same transaction as its message. */
+export async function persistTopicCreatedCard(db, input = {}) {
+  const topic = input.topic ?? await loadTopicCardTopic(db, input.topicId);
+  if (!topic) throw new TopicMessageError("topic.not_found", "话题不存在", 404);
+  const participantCount = Number(topic.participantCount ?? await countTopicParticipants(db, topic.id));
+  const topicId = normalizeTopicReference(topic.id);
+  const title = normalizeTopicCardTitle(topic.title);
+  const descriptionPreview = summarize(topic.description ?? topic.descriptionPreview);
+  const status = normalizeTopicCardStatus(topic.status ?? "open");
+  if (!topicId || !title || !status) throw new TopicMessageError("topic.invalid_card", "话题卡片数据无效");
+  const payload = normalizeCardPayload({
+    topicId,
+    title,
+    descriptionPreview,
+    participantCount: Number.isSafeInteger(participantCount) && participantCount >= 0 ? participantCount : 0,
+    status,
+    allowSyncToGroup: topic.allowSyncToGroup === true || Boolean(topic.allow_sync_to_group)
+  }, { limits: TOPIC_CARD_LIMITS });
+  const block = {
+    type: "card",
+    cardId: `topic_${topicId}`,
+    cardType: TOPIC_CARD_TYPE,
+    schemaVersion: TOPIC_CARD_SCHEMA_VERSION,
+    fallbackText: `#${title}`
+  };
+  return await upsertTopicCard(db, {
+    topic,
+    block,
+    payload,
+    sourceId: topicId,
+    actorId: input.actorId,
+    cardStatus: "active"
+  });
+}
+
+/** Persist or restore the authoritative card for a group projection. */
+export async function persistTopicMessageSyncedCard(db, input = {}) {
+  const topic = input.topic ?? await loadTopicCardTopic(db, input.topicId);
+  const message = input.message ?? await db.prepare(`
+    SELECT id, plain_text AS plainText FROM messages WHERE id = ? AND topic_id = ?
+  `).get(input.topicMessageId, input.topicId);
+  const projection = input.projection;
+  if (!topic || !message || !projection) {
+    throw new TopicMessageError("topic.message_not_found", "话题消息不存在", 404);
+  }
+  const card = projectTopicMessageSyncedCard({
+    topicId: topic.id,
+    topicMessageId: message.id,
+    projectionId: projection.id,
+    projectionType: projection.projectionType ?? "group_sync",
+    title: topic.title,
+    messagePreview: message.plainText,
+    status: topic.status
+  });
+  return await upsertTopicCard(db, {
+    topic,
+    block: card.block,
+    payload: card.payload,
+    sourceId: `topic-message:${topic.id}:${message.id}`,
+    actorId: input.actorId,
+    cardStatus: "active"
+  });
+}
+
+/** Invalidate a synced card when a projection is unsynced or retained away. */
+export async function invalidateTopicMessageCard(db, input = {}) {
+  const projectionId = normalizeTopicReference(input.projectionId);
+  if (!projectionId) return null;
+  const cardId = `topic_projection_${projectionId}`;
+  const row = await db.prepare(`
+    SELECT id, space_id AS spaceId, conversation_id AS conversationId,
+      card_type AS cardType, revision, status
+    FROM workspace_cards WHERE id = ?
+  `).get(cardId);
+  if (!row || row.status !== "active") return row ?? null;
+  const updatedAt = new Date().toISOString();
+  const result = await db.prepare(`
+    UPDATE workspace_cards
+    SET status = 'invalidated', revision = revision + 1, updated_at = ?
+    WHERE id = ? AND status = 'active'
+  `).run(updatedAt, cardId);
+  if (result.changes !== 1) return await db.prepare("SELECT id, revision, status FROM workspace_cards WHERE id = ?").get(cardId);
+  const current = await db.prepare("SELECT revision FROM workspace_cards WHERE id = ?").get(cardId);
+  await writeTopicCardEvent(db, {
+    type: "card.invalidated",
+    spaceId: row.spaceId,
+    conversationId: row.conversationId,
+    actorId: input.actorId,
+    cardId,
+    cardType: row.cardType,
+    revision: Number(current?.revision) || Number(row.revision) + 1,
+    status: "invalidated"
+  });
+  return { ...row, revision: Number(current?.revision) || Number(row.revision) + 1, status: "invalidated" };
+}
+
+/** Refresh participant count/status for all cards belonging to a topic. */
+export async function refreshTopicCards(db, input = {}) {
+  const topic = await loadTopicCardTopic(db, input.topicId);
+  if (!topic) return [];
+  const participantCount = await countTopicParticipants(db, topic.id);
+  const rows = await db.prepare(`
+    SELECT id, space_id AS spaceId, conversation_id AS conversationId,
+      card_type AS cardType, payload_json AS payloadJson, fallback_text AS fallbackText,
+      source_kind AS sourceKind, source_id AS sourceId, resource_type AS resourceType,
+      resource_id AS resourceId, visibility_scope AS visibilityScope,
+      created_by_user_id AS createdByUserId, status, revision,
+      expires_at AS expiresAt, created_at AS createdAt, updated_at AS updatedAt
+    FROM workspace_cards
+    WHERE space_id = ? AND source_kind = 'topic' AND resource_type = 'topic' AND resource_id = ?
+      AND status IN ('active', 'invalidated')
+    ORDER BY created_at ASC, id ASC
+  `).all(topic.spaceId, topic.id);
+  const updated = [];
+  for (const row of rows) {
+    const current = parseJsonObject(row.payloadJson);
+    if (!current) continue;
+    const payload = row.cardType === TOPIC_CARD_TYPE
+      ? {
+        ...current,
+        participantCount,
+        status: normalizeTopicCardStatus(topic.status),
+        allowSyncToGroup: topic.allowSyncToGroup === true || Boolean(topic.allow_sync_to_group)
+      }
+      : row.cardType === TOPIC_SYNC_CARD_TYPE
+        ? { ...current, status: normalizeTopicCardStatus(topic.status) }
+        : null;
+    if (!payload) continue;
+    const normalized = row.cardType === TOPIC_CARD_TYPE
+      ? normalizeTopicCreatedCardPayload(payload)
+      : validateTopicSyncCardPayload(normalizeCardPayload(payload, { limits: TOPIC_CARD_LIMITS }));
+    if (JSON.stringify(normalized) === JSON.stringify(current)) continue;
+    const next = await updateTopicCardRow(db, row, normalized, row.status, input.actorId);
+    updated.push(next);
+  }
+  return updated;
+}
 
 /**
  * Create the initial topic message and the group creation card inside the
@@ -29,7 +219,8 @@ const rateBuckets = new Map();
 export async function createTopicCreationBundle(db, input = {}) {
   const topic = await db.prepare(`
     SELECT id, space_id AS spaceId, conversation_id AS conversationId,
-      title, description, allow_sync_to_group AS allowSyncToGroup
+      title, description, status, allow_sync_to_group AS allowSyncToGroup,
+      (SELECT COUNT(*) FROM topic_members WHERE topic_id = topics.id AND left_at IS NULL) AS participantCount
     FROM topics WHERE id = ?
   `).get(input.topicId);
   if (!topic) throw new TopicMessageError("topic.not_found", "话题不存在", 404);
@@ -83,6 +274,12 @@ export async function createTopicCreationBundle(db, input = {}) {
     clientMessageId: `topic-card:${topic.id}`,
     content: cardContent,
     topicId: topic.id,
+    request: input.request
+  });
+
+  await persistTopicCreatedCard(db, {
+    topic,
+    actorId: input.actorId,
     request: input.request
   });
 
@@ -300,6 +497,10 @@ export async function unsyncTopicMessage(db, request, input = {}) {
       .run(now, now, projection.id);
     await db.prepare("UPDATE messages SET deleted_at = COALESCE(deleted_at, ?) WHERE id = ? AND topic_id IS NULL")
       .run(now, projection.groupMessageId);
+    await invalidateTopicMessageCard(db, {
+      projectionId: projection.id,
+      actorId: context.actor.id
+    });
     await writeTopicEvent(db, {
       type: "topic.message.unsynced",
       spaceId: context.topic.spaceId,
@@ -356,9 +557,17 @@ async function syncTopicMessageRow(db, request, { context, messageId, actorId })
     ORDER BY created_at DESC, id DESC
     LIMIT 1
   `).get(message.id);
-  if (existing && !existing.removedAt) return existing;
+  if (existing && !existing.removedAt) {
+    await persistTopicMessageSyncedCard(db, {
+      topic: context.topic,
+      message,
+      projection: existing,
+      actorId
+    });
+    return existing;
+  }
 
-  const projectionId = `tgp_${randomUUID()}`;
+  const projectionId = existing?.removedAt ? existing.id : `tgp_${randomUUID()}`;
   const groupMessageId = randomUUID();
   const now = new Date().toISOString();
   const summary = summarize(message.plainText);
@@ -372,7 +581,7 @@ async function syncTopicMessageRow(db, request, { context, messageId, actorId })
         cardId: `topic_projection_${projectionId}`,
         cardType: TOPIC_SYNC_CARD_TYPE,
         schemaVersion: 1,
-        fallbackText: `#${context.topic.title}`
+        fallbackText
       }
     ]
   });
@@ -389,7 +598,7 @@ async function syncTopicMessageRow(db, request, { context, messageId, actorId })
     context.topic.spaceId,
     context.topic.conversationId,
     actorId,
-    `topic-sync:${context.topic.id}:${message.id}:${projectionId}`,
+    `topic-sync:${context.topic.id}:${message.id}:${groupMessageId}`,
     MESSAGE_CONTENT_FORMAT,
     JSON.stringify(content),
     content.plainText,
@@ -412,7 +621,7 @@ async function syncTopicMessageRow(db, request, { context, messageId, actorId })
       ) VALUES (?, ?, ?, ?, ?, 'group_sync', ?, ?, NULL)
     `).run(projectionId, context.topic.id, message.id, context.topic.conversationId, groupMessageId, now, now);
   }
-  const activeProjectionId = existing?.removedAt ? existing.id : projectionId;
+  const activeProjectionId = projectionId;
   await writeTopicEvent(db, {
     type: "topic.message.synced",
     spaceId: context.topic.spaceId,
@@ -432,7 +641,7 @@ async function syncTopicMessageRow(db, request, { context, messageId, actorId })
     payload: { messageId: groupMessageId, conversationId: context.topic.conversationId }
   });
   await writeAudit(db, auditEvent(request, context.actor, "topic.message.sync", message.id, "success"));
-  return {
+  const projection = {
     id: activeProjectionId,
     topicId: context.topic.id,
     topicMessageId: message.id,
@@ -443,6 +652,13 @@ async function syncTopicMessageRow(db, request, { context, messageId, actorId })
     updatedAt: now,
     removedAt: null
   };
+  await persistTopicMessageSyncedCard(db, {
+    topic: context.topic,
+    message,
+    projection,
+    actorId
+  });
+  return projection;
 }
 
 async function insertTopicMessageRow(db, { topic, actorId, clientMessageId, content, replyToMessageId = null, request, emitEvent }) {
@@ -538,11 +754,15 @@ async function enforceTopicRetention(db, topic) {
       FROM topic_group_projections
       WHERE topic_message_id = ? AND removed_at IS NULL
     `).get(row.id);
-    if (projection) {
+      if (projection) {
       await db.prepare("UPDATE topic_group_projections SET removed_at = ?, updated_at = ? WHERE id = ? AND removed_at IS NULL")
         .run(deletedAt, deletedAt, projection.id);
-      await db.prepare("UPDATE messages SET deleted_at = COALESCE(deleted_at, ?) WHERE id = ? AND topic_id IS NULL")
-        .run(deletedAt, projection.groupMessageId);
+        await db.prepare("UPDATE messages SET deleted_at = COALESCE(deleted_at, ?) WHERE id = ? AND topic_id IS NULL")
+          .run(deletedAt, projection.groupMessageId);
+        await invalidateTopicMessageCard(db, {
+          projectionId: projection.id,
+          actorId: null
+        });
       await writeTopicEvent(db, {
         type: "topic.message.unsynced",
         spaceId: topic.spaceId,
@@ -760,6 +980,233 @@ async function validateTopicMentions(db, topic, content) {
   const allowed = new Set(rows.map((row) => row.userId));
   if (mentionedIds.some((userId) => !allowed.has(userId))) {
     throw new TopicMessageError("topic.invalid_mention", "只能提及当前话题成员");
+  }
+}
+
+function validateTopicSyncCardPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new CardValidationError("card.domain_invalid", "话题同步卡片数据无效");
+  }
+  const topicId = normalizeTopicReference(payload.topicId);
+  const topicMessageId = normalizeTopicReference(payload.topicMessageId);
+  const projectionId = normalizeTopicReference(payload.projectionId);
+  const projectionType = normalizeTopicProjectionType(payload.projectionType);
+  const title = normalizeTopicCardTitle(payload.title);
+  const messagePreview = summarize(payload.messagePreview);
+  const status = normalizeTopicCardStatus(payload.status);
+  if (!topicId || !topicMessageId || !projectionId || !projectionType || !title || !status) {
+    throw new CardValidationError("card.domain_invalid", "话题同步卡片数据无效");
+  }
+  return {
+    topicId,
+    topicMessageId,
+    projectionId,
+    projectionType,
+    title,
+    messagePreview,
+    status
+  };
+}
+
+function normalizeTopicCreatedCardPayload(payload) {
+  const topicId = normalizeTopicReference(payload?.topicId);
+  const title = normalizeTopicCardTitle(payload?.title);
+  const descriptionPreview = summarize(payload?.descriptionPreview);
+  const participantCount = Number(payload?.participantCount);
+  const status = normalizeTopicCardStatus(payload?.status);
+  if (!topicId || !title || !status || !Number.isSafeInteger(participantCount) || participantCount < 0) {
+    throw new CardValidationError("card.domain_invalid", "话题卡片数据无效");
+  }
+  return {
+    topicId,
+    title,
+    descriptionPreview,
+    participantCount,
+    status,
+    allowSyncToGroup: payload?.allowSyncToGroup === true
+  };
+}
+
+function normalizeTopicReference(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return TOPIC_REFERENCE_PATTERN.test(normalized) ? normalized : "";
+}
+
+function normalizeTopicCardTitle(value) {
+  const normalized = stripControls(typeof value === "string" ? value : "").trim();
+  const length = Array.from(normalized).length;
+  return length > 0 && length <= 128 && !/[\[\]\r\n]/u.test(normalized) ? normalized : "";
+}
+
+function normalizeTopicProjectionType(value) {
+  return value === "group_sync" ? value : "";
+}
+
+function normalizeTopicCardStatus(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return TOPIC_CARD_STATUSES.has(normalized) ? normalized : "";
+}
+
+async function loadTopicCardTopic(db, topicId) {
+  const normalized = normalizeTopicReference(topicId);
+  if (!normalized) return null;
+  return await db.prepare(`
+    SELECT t.id, t.space_id AS spaceId, t.conversation_id AS conversationId,
+      t.title, t.description, t.status,
+      t.allow_sync_to_group AS allowSyncToGroup,
+      (SELECT COUNT(*) FROM topic_members tm WHERE tm.topic_id = t.id AND tm.left_at IS NULL) AS participantCount
+    FROM topics t WHERE t.id = ?
+  `).get(normalized);
+}
+
+async function countTopicParticipants(db, topicId) {
+  const row = await db.prepare("SELECT COUNT(*) AS count FROM topic_members WHERE topic_id = ? AND left_at IS NULL").get(topicId);
+  return Number(row?.count) || 0;
+}
+
+async function upsertTopicCard(db, { topic, block, payload, sourceId, actorId, cardStatus }) {
+  const existing = await db.prepare(`
+    SELECT id, space_id AS spaceId, conversation_id AS conversationId,
+      card_type AS cardType, schema_version AS schemaVersion, payload_json AS payloadJson,
+      fallback_text AS fallbackText, source_kind AS sourceKind, source_id AS sourceId,
+      resource_type AS resourceType, resource_id AS resourceId, visibility_scope AS visibilityScope,
+      created_by_user_id AS createdByUserId, status, revision,
+      expires_at AS expiresAt, created_at AS createdAt, updated_at AS updatedAt
+    FROM workspace_cards
+    WHERE space_id = ? AND source_kind = 'topic' AND source_id = ? AND card_type = ?
+  `).get(topic.spaceId, sourceId, block.cardType);
+  if (existing) {
+    const currentPayload = parseJsonObject(existing.payloadJson);
+    if (existing.status === cardStatus && JSON.stringify(currentPayload) === JSON.stringify(payload)) {
+      return existing;
+    }
+    return await updateTopicCardRow(db, existing, payload, cardStatus, actorId);
+  }
+
+  const now = new Date().toISOString();
+  const inserted = await db.prepare(`
+    INSERT INTO workspace_cards (
+      id, space_id, conversation_id, card_type, schema_version, payload_json, fallback_text,
+      source_kind, source_id, resource_type, resource_id, visibility_scope,
+      created_by_user_id, status, revision, expires_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'topic', ?, 'topic', ?, 'conversation', ?, ?, 1, NULL, ?, ?)
+    ON CONFLICT DO NOTHING
+  `).run(
+    block.cardId,
+    topic.spaceId,
+    topic.conversationId,
+    block.cardType,
+    block.schemaVersion,
+    JSON.stringify(payload),
+    block.fallbackText,
+    sourceId,
+    topic.id,
+    actorId ?? null,
+    cardStatus,
+    now,
+    now
+  );
+  if (inserted.changes === 0) {
+    const winner = await db.prepare(`
+      SELECT id, space_id AS spaceId, conversation_id AS conversationId,
+        card_type AS cardType, schema_version AS schemaVersion, payload_json AS payloadJson,
+        fallback_text AS fallbackText, source_kind AS sourceKind, source_id AS sourceId,
+        resource_type AS resourceType, resource_id AS resourceId, visibility_scope AS visibilityScope,
+        created_by_user_id AS createdByUserId, status, revision,
+        expires_at AS expiresAt, created_at AS createdAt, updated_at AS updatedAt
+      FROM workspace_cards WHERE id = ?
+    `).get(block.cardId);
+    if (winner) return winner;
+  }
+  await writeTopicCardEvent(db, {
+    type: "card.created",
+    spaceId: topic.spaceId,
+    conversationId: topic.conversationId,
+    actorId,
+    cardId: block.cardId,
+    cardType: block.cardType,
+    revision: 1,
+    status: cardStatus
+  });
+  return {
+    id: block.cardId,
+    spaceId: topic.spaceId,
+    conversationId: topic.conversationId,
+    cardType: block.cardType,
+    schemaVersion: block.schemaVersion,
+    payloadJson: JSON.stringify(payload),
+    fallbackText: block.fallbackText,
+    sourceKind: "topic",
+    sourceId,
+    resourceType: "topic",
+    resourceId: topic.id,
+    visibilityScope: "conversation",
+    createdByUserId: actorId ?? null,
+    status: cardStatus,
+    revision: 1,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+async function updateTopicCardRow(db, row, payload, cardStatus, actorId) {
+  const updatedAt = new Date().toISOString();
+  const result = await db.prepare(`
+    UPDATE workspace_cards
+    SET payload_json = ?, status = ?, revision = revision + 1, updated_at = ?
+    WHERE id = ? AND revision = ?
+  `).run(JSON.stringify(payload), cardStatus, updatedAt, row.id, row.revision);
+  if (result.changes !== 1) {
+    return await db.prepare(`
+      SELECT id, space_id AS spaceId, conversation_id AS conversationId,
+        card_type AS cardType, schema_version AS schemaVersion, payload_json AS payloadJson,
+        fallback_text AS fallbackText, source_kind AS sourceKind, source_id AS sourceId,
+        resource_type AS resourceType, resource_id AS resourceId, visibility_scope AS visibilityScope,
+        created_by_user_id AS createdByUserId, status, revision,
+        expires_at AS expiresAt, created_at AS createdAt, updated_at AS updatedAt
+      FROM workspace_cards WHERE id = ?
+    `).get(row.id);
+  }
+  const current = await db.prepare(`
+    SELECT id, space_id AS spaceId, conversation_id AS conversationId,
+      card_type AS cardType, schema_version AS schemaVersion, payload_json AS payloadJson,
+      fallback_text AS fallbackText, source_kind AS sourceKind, source_id AS sourceId,
+      resource_type AS resourceType, resource_id AS resourceId, visibility_scope AS visibilityScope,
+      created_by_user_id AS createdByUserId, status, revision,
+      expires_at AS expiresAt, created_at AS createdAt, updated_at AS updatedAt
+    FROM workspace_cards WHERE id = ?
+  `).get(row.id);
+  await writeTopicCardEvent(db, {
+    type: "card.updated",
+    spaceId: current.spaceId,
+    conversationId: current.conversationId,
+    actorId,
+    cardId: current.id,
+    cardType: current.cardType,
+    revision: Number(current.revision),
+    status: current.status
+  });
+  return current;
+}
+
+async function writeTopicCardEvent(db, { type, spaceId, conversationId, actorId, cardId, cardType, revision, status }) {
+  return await writeWorkspaceEvent(db, {
+    type,
+    spaceId,
+    actorId: actorId ?? null,
+    conversationId: conversationId ?? null,
+    targetType: "workspace.card",
+    targetId: cardId,
+    payload: { cardId, cardType, revision, status }
+  });
+}
+
+function parseJsonObject(value) {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
   }
 }
 

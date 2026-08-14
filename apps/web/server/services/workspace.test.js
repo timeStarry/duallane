@@ -15,6 +15,8 @@ import {
   createConversation as createWorkspaceConversation,
   createInvite,
   createStructuredMessage,
+  createSystemBotMessageWriter,
+  createSystemBotStructuredMessage,
   createWorkspaceSession,
   failUpload,
   getConversationDetails,
@@ -374,6 +376,50 @@ describe("workspace service", () => {
       SELECT 1 FROM conversation_members
       WHERE conversation_id = ? AND user_id = ? AND removed_at IS NULL
     `).get(group.id, BEACON_USER_ID)).toBeUndefined();
+  });
+
+  it("only allows official system Bot messages through the server-only writer boundary", async () => {
+    const conversation = await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "direct",
+      targetUserId: ECHO_IDENTITY.id
+    });
+
+    await expect(createSystemBotStructuredMessage(db, request, {
+      actorId: ECHO_IDENTITY.id,
+      conversationId: conversation.id,
+      clientMessageId: "echo-raw-request",
+      content: textContent("raw request must be rejected")
+    })).rejects.toMatchObject({ code: "permission.denied" });
+
+    const writeEchoMessage = createSystemBotMessageWriter(db, ECHO_IDENTITY.id);
+    const message = await writeEchoMessage({
+      request,
+      conversationId: conversation.id,
+      clientMessageId: "echo-server-message",
+      content: textContent("official Echo message")
+    });
+    expect(message).toMatchObject({
+      authorId: ECHO_IDENTITY.id,
+      authorKind: "bot",
+      content: { blocks: [{ type: "text", text: "official Echo message" }] }
+    });
+    expect(db.prepare(`
+      SELECT author_id AS authorId, author_kind AS authorKind, kind
+      FROM messages WHERE id = ?
+    `).get(message.id)).toEqual({
+      authorId: ECHO_IDENTITY.id,
+      authorKind: "bot",
+      kind: "bot"
+    });
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM workspace_events
+      WHERE type = 'message.created' AND target_id = ?
+    `).get(message.id).count).toBe(1);
+
+    expect(() => createSystemBotMessageWriter(db, "usr_custom_bot")).toThrowError(
+      expect.objectContaining({ code: "auth.identity_forbidden" })
+    );
   });
 
   it("prevents owners and other members from reading Beacon messages or known attachment ids", async () => {

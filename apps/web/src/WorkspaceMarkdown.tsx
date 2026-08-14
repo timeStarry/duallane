@@ -1,10 +1,10 @@
-import { Children, Fragment, isValidElement, type ReactNode } from "react";
+import { Children, Fragment, isValidElement, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Plugin } from "unified";
 import { renderMessageParts } from "./emotes";
 
-const disallowedElements = ["img", "table", "thead", "tbody", "tr", "th", "td"];
+const disallowedElements = ["table", "thead", "tbody", "tr", "th", "td"];
 const disableIndentedCode: Plugin = function () {
   const data = this.data() as ReturnType<typeof this.data> & { micromarkExtensions?: unknown[] };
   const extensions = (data.micromarkExtensions ??= []);
@@ -30,6 +30,26 @@ function safeLinkUrl(value: string) {
   } catch {
     return "";
   }
+}
+
+function WorkspaceMarkdownImage({ alt, src }: { alt?: string; src?: string }) {
+  const [failed, setFailed] = useState(false);
+  const label = alt?.trim() || "图片";
+  if (!src || failed) {
+    return <span className="workspace-markdown-image-fallback">{label}</span>;
+  }
+  return (
+    <span className="workspace-markdown-image-frame">
+      <img
+        src={src}
+        alt={label}
+        loading="lazy"
+        decoding="async"
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+      />
+    </span>
+  );
 }
 
 export function WorkspaceMarkdown({ children }: { children: string }) {
@@ -62,6 +82,7 @@ export function WorkspaceMarkdown({ children }: { children: string }) {
         h5: ({ children: content }) => <h4>{renderMarkdownChildren(content)}</h4>,
         h6: ({ children: content }) => <h4>{renderMarkdownChildren(content)}</h4>,
         hr: () => <hr className="workspace-markdown-divider" />,
+        img: ({ alt, src }) => <WorkspaceMarkdownImage alt={alt} src={src} />,
         li: ({ children: content }) => <li>{renderMarkdownChildren(content)}</li>,
         ol: ({ children: content }) => <ol>{renderMarkdownChildren(content)}</ol>,
         p: ({ children: content }) => <p>{renderMarkdownChildren(content)}</p>,
@@ -92,7 +113,6 @@ export function prepareWorkspaceMarkdown(source: string) {
   }
   const escaped = lines.map((line, index) => {
     let value = tableLines.has(index) ? line.replace(/\|/g, "\\|") : line;
-    value = value.replace(/!\[([^\]\n]*)\]\(([^)\n]*)\)/g, (_match, alt, url) => `!\\[${alt}\\]\\(${url}\\)`);
     value = value.replace(/<(?=\/?[A-Za-z][^>]*>)/g, "\\<");
     return value;
   }).join("\n");
@@ -115,7 +135,6 @@ function renderPlainSource(source: string) {
 }
 
 function containsUnsupportedMarkdown(source: string) {
-  return /!\[[^\]\n]*\]\([^)\n]*\)/.test(source) ||
-    /<\/?[A-Za-z][^>]*>/.test(source) ||
+  return /<\/?[A-Za-z][^>]*>/.test(source) ||
     /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/m.test(source);
 }

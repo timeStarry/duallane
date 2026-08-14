@@ -145,4 +145,65 @@ describe("Echo v0.15 completion contract", () => {
     expect((await service.listVotes({ actorId: "usr_owner", publicId: draft.publicId })).length).toBe(1);
     expect((await service.listDeliveries({ actorId: "usr_owner", publicId: draft.publicId })).length).toBeGreaterThanOrEqual(3);
   });
+
+  it("rejects solicitation transitions when the compare-and-swap update loses", async () => {
+    const { db } = await createFixture();
+    const service = createEchoSolicitationService({ db, now: () => new Date("2026-08-14T00:00:00.000Z") });
+    const draft = await service.create({
+      actorId: "usr_owner",
+      title: "并发发布",
+      description: "验证发布状态不会误报成功",
+      question: "是否发布？",
+      options: ["是", "否"],
+      idempotencyKey: "sol-cas-create"
+    });
+    db.exec(`
+      CREATE TRIGGER echo_solicitation_ignore_status_update
+      BEFORE UPDATE OF status ON echo_solicitations
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END
+    `);
+
+    await expect(service.publish({
+      actorId: "usr_owner",
+      publicId: draft.publicId,
+      idempotencyKey: "sol-cas-publish"
+    })).rejects.toMatchObject({ code: "echo.revision_conflict" });
+    expect(db.prepare("SELECT status, revision FROM echo_solicitations WHERE public_id = ?").get(draft.publicId))
+      .toEqual({ status: "draft", revision: 1 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM echo_solicitation_idempotency WHERE idempotency_key = 'sol-cas-publish'").get().count).toBe(0);
+  });
+
+  it("rolls back a vote when the solicitation revision compare-and-swap loses", async () => {
+    const { db } = await createFixture();
+    const service = createEchoSolicitationService({ db, now: () => new Date("2026-08-14T00:00:00.000Z") });
+    const draft = await service.create({
+      actorId: "usr_owner",
+      title: "并发投票",
+      description: "验证投票不会与征集版本脱节",
+      question: "选择哪项？",
+      options: ["A", "B"],
+      idempotencyKey: "sol-vote-cas-create"
+    });
+    const open = await service.publish({ actorId: "usr_owner", publicId: draft.publicId, idempotencyKey: "sol-vote-cas-publish" });
+    db.exec(`
+      CREATE TRIGGER echo_solicitation_ignore_revision_only_update
+      BEFORE UPDATE OF revision ON echo_solicitations
+      WHEN NEW.status = OLD.status
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END
+    `);
+
+    await expect(service.vote({
+      actorId: "usr_member",
+      publicId: open.publicId,
+      optionIds: [open.options[0].id],
+      expectedRevision: open.revision,
+      idempotencyKey: "sol-vote-cas"
+    })).rejects.toMatchObject({ code: "echo.revision_conflict" });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM echo_solicitation_votes").get().count).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM echo_solicitation_idempotency WHERE idempotency_key = 'sol-vote-cas'").get().count).toBe(0);
+  });
 });

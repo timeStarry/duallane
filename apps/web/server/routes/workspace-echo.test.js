@@ -8,13 +8,14 @@ import { openTestDatabase } from "../services/test-database.mjs";
 
 const fixtures = [];
 
-async function createFixture() {
+async function createFixture(options = {}) {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "duallane-echo-route-"));
   const db = openTestDatabase(dataDir);
   const app = Fastify({ logger: false });
   registerWorkspaceEchoRequirementRoutes(app, {
     db,
-    getActorId: (request) => request.headers["x-workspace-user-id"] ?? null
+    getActorId: (request) => request.headers["x-workspace-user-id"] ?? null,
+    ...options
   });
   const now = new Date().toISOString();
   for (const [id, login, role] of [
@@ -297,5 +298,58 @@ describe("Workspace Echo requirement routes", () => {
       pageInfo: { offset: 0, limit: 1, hasNext: true, nextOffset: 1 }
     });
     expect(paged.json().requirements.map((item) => item.publicId)).toContain(second.publicId);
+  });
+
+  it("syncs committed Echo changes and retries deliveries without rolling domain state back", async () => {
+    const calls = [];
+    const deliveryService = {
+      async syncRequirement(input) {
+        calls.push(["requirement", input]);
+        return { status: "sent" };
+      },
+      async syncSolicitation(input) {
+        calls.push(["solicitation", input]);
+        return { status: "sent" };
+      }
+    };
+    const { app } = await createFixture({ deliveryService });
+    const requirement = (await app.inject({
+      method: "POST",
+      url: "/api/workspace/echo/requirements",
+      headers: asMember("usr_echo_submitter"),
+      payload: { ...submission, idempotencyKey: "route-delivery-requirement" }
+    })).json().requirement;
+    expect(calls).toContainEqual(["requirement", { publicId: requirement.publicId }]);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/workspace/echo/solicitations",
+      headers: asMember("usr_owner"),
+      payload: {
+        title: "本周优先项",
+        description: "选择最需要先处理的方向。",
+        question: "优先处理哪一项？",
+        options: ["移动体验", "消息检索"],
+        idempotencyKey: "route-delivery-solicitation"
+      }
+    });
+    expect(created.statusCode).toBe(201);
+    const publicId = created.json().solicitation.publicId;
+    const published = await app.inject({
+      method: "POST",
+      url: `/api/workspace/echo/solicitations/${publicId}/publish`,
+      headers: asMember("usr_owner"),
+      payload: { idempotencyKey: "route-delivery-publish" }
+    });
+    expect(published.statusCode).toBe(200);
+    expect(calls).toContainEqual(["solicitation", { publicId }]);
+
+    const retried = await app.inject({
+      method: "POST",
+      url: `/api/workspace/echo/solicitations/${publicId}/deliveries/retry`,
+      headers: asMember("usr_owner")
+    });
+    expect(retried.statusCode).toBe(200);
+    expect(calls).toContainEqual(["solicitation", { publicId, force: true }]);
   });
 });

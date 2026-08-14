@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   BellRing,
   BellOff,
+  Bot,
   Bold,
   ChevronDown,
   ChevronRight,
@@ -24,6 +25,7 @@ import {
   Github,
   GripVertical,
   Heart,
+  Hash,
   History,
   Images,
   Italic,
@@ -88,6 +90,7 @@ import {
   type WorkspaceComposerEditorHandle
 } from "./WorkspaceComposerEditor";
 import { WorkspaceMarkdown } from "./WorkspaceMarkdown";
+import { WorkspaceInteractiveCard, supportsWorkspaceInteractiveCard } from "./WorkspaceInteractiveCard";
 import {
   P2P_FILE_CHUNK_SIZE,
   P2P_MAX_CHAT_BYTES,
@@ -134,6 +137,16 @@ import {
 } from "./emote-picker-preference";
 import { getRecentEmojiIds, recordRecentEmojiUse } from "./recent-emojis";
 import { CachedEmoteImage } from "./emote-image-cache";
+import {
+  WorkspaceConversationTopicsSection,
+  WorkspaceTopicPage,
+  WorkspaceTopicRail,
+  advanceWorkspaceTopicRefreshSignal,
+  workspaceTopicMobilePane,
+  type WorkspaceTopicRefreshSignal
+} from "./WorkspaceTopics";
+import { WorkspaceEchoRequirements } from "./WorkspaceEchoRequirements";
+import { WorkspaceBotSettings } from "./WorkspaceBotSettings";
 
 type Lane = "entry" | "about" | "p2p" | "workspace-dev";
 type P2pStep = "name" | "waiting" | "chat" | "ended" | "invalid-room";
@@ -358,6 +371,7 @@ type WorkspaceMessage = {
   };
   plainText: string;
   replyToMessageId?: string | null;
+  topicId?: string | null;
   createdAt: string;
   editedAt?: string | null;
   deletedAt?: string | null;
@@ -428,12 +442,12 @@ type WorkspaceFile = WorkspaceAttachment & {
     failureReason?: string;
   };
 };
-type WorkspaceView = "chat" | "files" | "members" | "space" | "account";
+type WorkspaceView = "chat" | "topics" | "files" | "members" | "space" | "account";
 type WorkspaceMobilePane = "list" | "main" | "details";
 type WorkspaceCreateMode = "" | "direct" | "group";
 type WorkspaceContextMode = "conversation" | "file" | "member";
-type WorkspaceContextTab = "overview" | "members" | "files" | "settings";
-type WorkspaceSpaceTab = "overview" | "invites" | "roles" | "visibility" | "email";
+type WorkspaceContextTab = "overview" | "topics" | "members" | "files" | "settings";
+type WorkspaceSpaceTab = "overview" | "invites" | "roles" | "visibility" | "email" | "requirements";
 type WorkspaceFileFilter = "all" | "conversation" | "standalone" | "mine";
 type WorkspaceMemberRoleFilter = "all" | WorkspaceUser["role"];
 type WorkspaceMemberKindFilter = "all" | WorkspaceUser["kind"];
@@ -600,6 +614,14 @@ type WorkspaceEventPayload = {
   status?: WorkspaceAttachment["status"];
   direction?: "upload" | "download";
   reason?: string;
+  topicId?: string;
+  topicCard?: boolean;
+  cardId?: string;
+  revision?: number;
+  card?: {
+    cardId?: string;
+    revision?: number;
+  } | null;
 };
 type WorkspaceLocalMessage = {
   id: string;
@@ -2443,6 +2465,14 @@ export function App() {
   const [workspaceLibraryFiles, setWorkspaceLibraryFiles] = useState<WorkspaceFile[]>([]);
   const [workspaceDirectoryMembers, setWorkspaceDirectoryMembers] = useState<WorkspaceUser[]>([]);
   const [workspaceSelectedConversationId, setWorkspaceSelectedConversationId] = useState(initialWorkspaceRoute?.conversationId ?? "");
+  const [workspaceSelectedTopicId, setWorkspaceSelectedTopicId] = useState(initialWorkspaceRoute?.topicId ?? "");
+  const [workspaceTopicRefreshSignal, setWorkspaceTopicRefreshSignal] = useState<WorkspaceTopicRefreshSignal>({
+    version: 0,
+    listVersion: 0,
+    topicVersions: {},
+    conversationVersions: {}
+  });
+  const [workspaceCardRevisionById, setWorkspaceCardRevisionById] = useState<Record<string, number>>({});
   const [workspaceDraftByConversation, setWorkspaceDraftByConversation] = useState<Record<string, WorkspaceComposerDocument>>({});
   const [workspaceReplyToMessageIdByConversation, setWorkspaceReplyToMessageIdByConversation] = useState<Record<string, string>>({});
   const [workspaceComposerAttachmentsByConversation, setWorkspaceComposerAttachmentsByConversation] = useState<
@@ -2673,6 +2703,7 @@ export function App() {
     () =>
       ([
         { id: "overview" as const, label: "概览", visible: true },
+        { id: "topics" as const, label: "话题", visible: workspaceSelectedConversation?.type === "group" },
         { id: "members" as const, label: "成员", visible: workspaceSelectedConversation?.type === "group" },
         { id: "files" as const, label: "文件", visible: true },
         { id: "settings" as const, label: "设置", visible: workspaceSelectedConversation?.type === "group" }
@@ -3479,7 +3510,8 @@ export function App() {
       (workspaceSpaceTab === "invites" && !workspaceBootstrap?.permissions.canCreateMemberInvite) ||
       (workspaceSpaceTab === "roles" && !workspaceBootstrap?.permissions.canCreatePrivilegedInvite) ||
       (workspaceSpaceTab === "visibility" && !workspaceBootstrap?.permissions.canManageMemberVisibility) ||
-      (workspaceSpaceTab === "email" && !workspaceBootstrap?.permissions.canManageEmailSettings)
+      (workspaceSpaceTab === "email" && !workspaceBootstrap?.permissions.canManageEmailSettings) ||
+      (workspaceSpaceTab === "requirements" && workspaceBootstrap?.auth.currentUser.role !== "owner")
     ) {
       setWorkspaceSpaceTab("overview");
       replaceWorkspaceRoute(workspaceRoute({ inviteCode: workspacePendingInviteCode, view: "space", spaceTab: "overview" }));
@@ -3490,6 +3522,7 @@ export function App() {
     workspaceBootstrap?.permissions.canCreatePrivilegedInvite,
     workspaceBootstrap?.permissions.canManageEmailSettings,
     workspaceBootstrap?.permissions.canManageMemberVisibility,
+    workspaceBootstrap?.auth.currentUser.role,
     workspacePendingInviteCode,
     workspaceStatus,
     workspaceSpaceTab
@@ -4845,6 +4878,38 @@ export function App() {
         continue;
       }
 
+      if (event.type.startsWith("topic.")) {
+        const topicId = payload.topicId || (event.targetType === "topic" ? event.targetId : "") || "";
+        const conversationId = payload.conversationId || event.conversationId || "";
+        const affectsList = event.type !== "topic.notification.updated" &&
+          event.type !== "topic.message.synced" &&
+          event.type !== "topic.message.unsynced";
+        setWorkspaceTopicRefreshSignal((current) => advanceWorkspaceTopicRefreshSignal(current, {
+          topicId,
+          conversationId,
+          affectsList
+        }));
+        if (event.type === "topic.created" || event.type === "topic.message.synced" || event.type === "topic.message.unsynced") {
+          needsConversations = true;
+        }
+        continue;
+      }
+
+      if (event.type === "card.created" || event.type === "card.updated" || event.type === "card.invalidated") {
+        const cardId = payload.cardId || payload.card?.cardId || event.targetId || "";
+        const revision = Number(payload.revision ?? payload.card?.revision ?? 0);
+        if (cardId) {
+          setWorkspaceCardRevisionById((current) => {
+            const previous = current[cardId] ?? 0;
+            if (revision <= previous && event.type !== "card.invalidated") return current;
+            return { ...current, [cardId]: Math.max(previous + (event.type === "card.invalidated" && revision <= previous ? 1 : 0), revision) };
+          });
+        }
+        // A card mutation changes only its projection. Keep the message list
+        // stable and let the card component refetch the actor-scoped payload.
+        continue;
+      }
+
       if (event.type === "workspace.member_visibility_updated") {
         const viewerUserId = payload.userId || event.targetId || "";
         if (viewerUserId === workspaceCurrentUserIdRef.current) {
@@ -4919,6 +4984,20 @@ export function App() {
       }
 
       if (event.type === "message.created" || event.type === "message.recalled") {
+        const topicMessage = Boolean(
+          payload.topicId ||
+          (payload.message && (payload.message as WorkspaceMessage).topicId) ||
+          (payload.topicCard === false)
+        );
+        if (topicMessage && !payload.topicCard) {
+          const topicId = payload.topicId || (payload.message && (payload.message as WorkspaceMessage).topicId) || "";
+          setWorkspaceTopicRefreshSignal((current) => advanceWorkspaceTopicRefreshSignal(current, {
+            topicId,
+            conversationId: payload.conversationId || event.conversationId || "",
+            affectsList: true
+          }));
+          continue;
+        }
         if (payload.message) {
           upsertWorkspaceMessage(payload.message, payload.conversation);
         } else if (payload.conversationId && payload.conversationId === workspaceSelectedConversationIdRef.current) {
@@ -7421,6 +7500,7 @@ export function App() {
     if (route.view === "chat") {
       setWorkspaceSelectedConversationId(route.conversationId);
     }
+    setWorkspaceSelectedTopicId(route.topicId);
     setWorkspaceSelectedFileId(route.fileId);
     setWorkspaceSelectedMemberId(route.memberId);
     setWorkspaceSpaceTab(route.spaceTab);
@@ -7441,6 +7521,8 @@ export function App() {
     } else if (route.view === "chat") {
       setWorkspaceContextMode("conversation");
       setWorkspaceMobilePane(route.conversationId ? "main" : "list");
+    } else if (route.view === "topics") {
+      setWorkspaceMobilePane(workspaceTopicMobilePane(route.topicId));
     } else {
       setWorkspaceMobilePane("main");
     }
@@ -7470,9 +7552,21 @@ export function App() {
       inviteCode: workspacePendingInviteCode,
       view,
       conversationId: view === "chat" ? workspaceSelectedConversationId : "",
+      topicId: view === "topics" ? workspaceSelectedTopicId : "",
       spaceTab
     });
     navigateAppRoute(route);
+  }
+
+  function openWorkspaceTopic(topicId: string) {
+    setWorkspaceSelectedTopicId(topicId);
+    navigateAppRoute(workspaceRoute({
+      inviteCode: workspacePendingInviteCode,
+      view: "topics",
+      topicId
+    }));
+    setWorkspaceMobilePane("main");
+    setWorkspaceCreateMode("");
   }
 
   function navigateWorkspaceSpaceTab(spaceTab: WorkspaceSpaceTab) {
@@ -8026,7 +8120,7 @@ export function App() {
                   <nav className="workspace-tabs" aria-label="共享空间视图">
                     {[
                       { id: "chat" as const, label: "聊天", icon: <MessageSquare size={16} /> },
-                      { id: "files" as const, label: "文件", icon: <FileCheck2 size={16} /> },
+                      { id: "topics" as const, label: "话题", icon: <Hash size={16} /> },
                       { id: "members" as const, label: "成员", icon: <UsersRound size={16} /> }
                     ].map((item) => (
                       <button
@@ -8064,6 +8158,19 @@ export function App() {
                         ))}
                       </div>
                     </>
+                  ) : workspaceView === "topics" ? (
+                    <WorkspaceTopicRail
+                      currentUserId={workspaceBootstrap.auth.currentUser.id}
+                      selectedTopicId={workspaceSelectedTopicId}
+                      conversations={workspaceConversations
+                        .filter((conversation) => conversation.type === "group")
+                        .map((conversation) => ({
+                          id: conversation.id,
+                          title: workspaceConversationTitle(conversation, workspaceBootstrap.auth.currentUser.id)
+                        }))}
+                      refreshSignal={workspaceTopicRefreshSignal}
+                      onOpen={openWorkspaceTopic}
+                    />
                   ) : workspaceView === "files" ? (
                     <WorkspaceFileRail
                       files={workspaceFilteredFiles}
@@ -8142,6 +8249,18 @@ export function App() {
                             <strong>{workspaceRemainingText}</strong>
                             <small>{workspaceQuotaDetailText}</small>
                           </div>
+                          <button
+                            role="menuitem"
+                            type="button"
+                            onClick={() => {
+                              navigateWorkspaceView("files");
+                              setWorkspaceMobilePane("main");
+                              setWorkspaceUserMenuOpen(false);
+                            }}
+                          >
+                            <FileCheck2 size={16} />
+                            文件
+                          </button>
                           <button
                             role="menuitem"
                             type="button"
@@ -8373,6 +8492,8 @@ export function App() {
                         onOpenAttachment={openWorkspaceAttachmentFile}
                         onPreviewImage={setWorkspaceImagePreview}
                         onPreviewEmoteCollection={setWorkspaceEmoteCollectionPreviewId}
+                        onOpenTopic={openWorkspaceTopic}
+                        cardRevisionById={workspaceCardRevisionById}
                         onCopyMessage={(message) => {
                           void copyText(serializeWorkspaceMessageForCopy(message)).then((copied) =>
                             showWorkspaceNotice(copied ? "success" : "warning", copied ? "消息已复制" : "消息复制失败")
@@ -8465,6 +8586,29 @@ export function App() {
                         </div>
                       </div>
                     )
+                  )}
+
+                  {!workspaceCreateMode && workspaceView === "topics" && (
+                    <WorkspaceTopicPage
+                      topicId={workspaceSelectedTopicId}
+                      currentUserId={workspaceBootstrap.auth.currentUser.id}
+                      currentUserRole={workspaceBootstrap.auth.currentUser.role}
+                      conversations={workspaceConversations
+                        .filter((conversation) => conversation.type === "group")
+                        .map((conversation) => ({
+                          id: conversation.id,
+                          title: workspaceConversationTitle(conversation, workspaceBootstrap.auth.currentUser.id)
+                        }))}
+                      refreshSignal={workspaceTopicRefreshSignal}
+                      documentVisible={documentVisible}
+                      onBack={() => {
+                        setWorkspaceSelectedTopicId("");
+                        navigateAppRoute(workspaceRoute({ inviteCode: workspacePendingInviteCode, view: "topics" }));
+                        setWorkspaceMobilePane("list");
+                      }}
+                      onOpenConversation={(conversationId) => selectWorkspaceConversation(conversationId)}
+                      onNotice={showWorkspaceNotice}
+                    />
                   )}
 
                   {!workspaceCreateMode && workspaceView === "files" && (
@@ -8742,6 +8886,11 @@ export function App() {
                         onBack={() => navigateAppRoute(workspaceRoute({ inviteCode: workspacePendingInviteCode, view: "account" }))}
                         onNotice={showWorkspaceNotice}
                       />
+                    ) : workspaceAccountSection === "bot" ? (
+                      <WorkspaceBotSettings
+                        onBack={() => navigateWorkspaceAccountSection("")}
+                        onNotice={showWorkspaceNotice}
+                      />
                     ) : (
                       <>
                         <WorkspaceAccountSettings
@@ -8788,7 +8937,8 @@ export function App() {
                           { id: "invites" as const, label: "邀请", visible: workspaceBootstrap.permissions.canCreateMemberInvite },
                           { id: "roles" as const, label: "权限", visible: workspaceBootstrap.permissions.canCreatePrivilegedInvite },
                           { id: "visibility" as const, label: "可见范围", visible: workspaceBootstrap.permissions.canManageMemberVisibility },
-                          { id: "email" as const, label: "邮件", visible: workspaceBootstrap.permissions.canManageEmailSettings }
+                          { id: "email" as const, label: "邮件", visible: workspaceBootstrap.permissions.canManageEmailSettings },
+                          { id: "requirements" as const, label: "需求", visible: workspaceBootstrap.auth.currentUser.role === "owner" }
                         ].filter((tab) => tab.visible).map((tab) => (
                           <button
                             className={workspaceSpaceTab === tab.id ? "active" : ""}
@@ -9087,6 +9237,14 @@ export function App() {
                           <WorkspaceEmailSettingsPanel onNotice={showWorkspaceNotice} />
                         </div>
                       )}
+                      {workspaceSpaceTab === "requirements" && workspaceBootstrap.auth.currentUser.role === "owner" && (
+                        <div className="workspace-space-tab-panel workspace-requirements-panel page-enter" id="workspace-space-panel-requirements" role="tabpanel" aria-labelledby="workspace-space-tab-requirements">
+                          <WorkspaceEchoRequirements
+                            onBack={() => navigateWorkspaceSpaceTab("overview")}
+                            onNotice={showWorkspaceNotice}
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
                 </section>
@@ -9302,6 +9460,7 @@ export function App() {
                             </div>
                           </div>
                           {workspaceSelectedConversation.type === "group" && (
+                            <>
                             <section className="workspace-pinned-overview" aria-label="常驻消息">
                               <div className="workspace-context-section-header">
                                 <span><Pin size={15} />常驻消息</span>
@@ -9342,6 +9501,12 @@ export function App() {
                                 </div>
                               )}
                             </section>
+                            <WorkspaceConversationTopicsSection
+                              conversationId={workspaceSelectedConversation.id}
+                              refreshSignal={workspaceTopicRefreshSignal}
+                              onOpen={openWorkspaceTopic}
+                            />
+                            </>
                           )}
                         </div>
                       )}
@@ -9428,6 +9593,16 @@ export function App() {
                               </div>
                             </div>
                           )}
+                        </div>
+                      )}
+                      {workspaceContextTab === "topics" && workspaceSelectedConversation.type === "group" && (
+                        <div className="workspace-context-body" key={`conversation-${workspaceSelectedConversation.id}-topics`}>
+                          <WorkspaceConversationTopicsSection
+                            conversationId={workspaceSelectedConversation.id}
+                            refreshSignal={workspaceTopicRefreshSignal}
+                            onOpen={openWorkspaceTopic}
+                          />
+                          <p className="saved-empty">在群聊消息开头输入 #[标题](正文) 发起新话题。</p>
                         </div>
                       )}
                       {workspaceContextTab === "files" && (
@@ -9558,7 +9733,7 @@ export function App() {
               <nav className="workspace-mobile-nav" aria-label="共享空间移动导航">
                 {[
                   { id: "chat" as const, label: "聊天", icon: <MessageSquare size={19} /> },
-                  { id: "files" as const, label: "文件", icon: <FileCheck2 size={19} /> },
+                  { id: "topics" as const, label: "话题", icon: <Hash size={19} /> },
                   { id: "members" as const, label: "成员", icon: <UsersRound size={19} /> },
                   { id: "space" as const, label: "空间", icon: <Settings size={19} /> }
                 ].map((item) => (
@@ -9570,7 +9745,13 @@ export function App() {
                     aria-controls="workspace-main-panel"
                     onClick={() => {
                       navigateWorkspaceView(item.id);
-                      setWorkspaceMobilePane(item.id === "chat" ? "list" : "main");
+                      setWorkspaceMobilePane(
+                        item.id === "chat"
+                          ? "list"
+                          : item.id === "topics"
+                            ? workspaceTopicMobilePane(workspaceSelectedTopicId)
+                            : "main"
+                      );
                       setWorkspaceCreateMode("");
                     }}
                   >
@@ -10354,7 +10535,8 @@ function WorkspaceAccountSettings({
     chat: "聊天与表情",
     notifications: "通知",
     email: "邮件通知",
-    push: "移动推送"
+    push: "移动推送",
+    bot: "我的 Bot"
   };
   const pageTitle = visibleSection ? sectionTitles[visibleSection] : "个人设置";
   const returnToParent = () => onNavigate(visibleSection === "email" || visibleSection === "push" ? "notifications" : "");
@@ -10415,6 +10597,13 @@ function WorkspaceAccountSettings({
                 description="邮件通知与移动推送"
                 value={notificationsLoading || ntfyLoading ? "读取中" : enabledChannelCount ? `${enabledChannelCount} 个渠道已开启` : "均已关闭"}
                 onClick={() => onNavigate("notifications")}
+              />
+              <WorkspaceSettingsRow
+                icon={<Bot size={18} />}
+                title="我的 Bot"
+                description="身份、群聊范围与连接凭据"
+                value="管理"
+                onClick={() => onNavigate("bot")}
               />
             </div>
           </section>
@@ -12311,12 +12500,16 @@ export function WorkspaceStructuredMessage({
   onOpenAttachment,
   onPreviewImage,
   onPreviewEmoteCollection,
+  onOpenTopic,
+  cardRevisionById,
   mentionMembers
 }: {
   message: Message;
   onOpenAttachment?: (attachment: WorkspaceAttachment) => void;
   onPreviewImage?: (attachment: WorkspaceAttachment) => void;
   onPreviewEmoteCollection?: (shareId: string) => void;
+  onOpenTopic?: (topicId: string) => void;
+  cardRevisionById?: Record<string, number>;
   mentionMembers?: WorkspaceUser[];
 }) {
   const [textExpanded, setTextExpanded] = useState(false);
@@ -12414,7 +12607,9 @@ export function WorkspaceStructuredMessage({
               return <WorkspaceEmoteCollectionMessageCard key={`${index}-emote-collection`} block={block} onOpen={onPreviewEmoteCollection} />;
             }
             if (block.type === "card") {
-              return (
+              return supportsWorkspaceInteractiveCard(block) ? (
+                <WorkspaceInteractiveCard key={`${index}-card`} block={block} onOpenTopic={onOpenTopic} revisionSignal={cardRevisionById?.[block.cardId] ?? 0} />
+              ) : (
                 <div className="workspace-card-fallback" key={`${index}-card`} role="status">
                   <strong>{block.fallbackText}</strong>
                   <small>此卡片暂不支持交互</small>
@@ -12768,6 +12963,8 @@ function WorkspaceChatPanel({
   onOpenAttachment,
   onPreviewImage,
   onPreviewEmoteCollection,
+  onOpenTopic,
+  cardRevisionById,
   onCopyMessage,
   onToggleReaction,
   onFavoriteEmote,
@@ -12819,6 +13016,8 @@ function WorkspaceChatPanel({
   onOpenAttachment: (attachment: WorkspaceAttachment) => void;
   onPreviewImage: (attachment: WorkspaceAttachment) => void;
   onPreviewEmoteCollection: (shareId: string) => void;
+  onOpenTopic: (topicId: string) => void;
+  cardRevisionById: Record<string, number>;
   onCopyMessage: (message: Message) => void;
   onToggleReaction: (messageId: string, emoteKey: string) => void;
   onFavoriteEmote: (message: Message) => void;
@@ -13327,6 +13526,8 @@ function WorkspaceChatPanel({
                         onOpenAttachment={onOpenAttachment}
                         onPreviewImage={onPreviewImage}
                         onPreviewEmoteCollection={onPreviewEmoteCollection}
+                        onOpenTopic={onOpenTopic}
+                        cardRevisionById={cardRevisionById}
                         mentionMembers={mentionMembers}
                       />
                     )}

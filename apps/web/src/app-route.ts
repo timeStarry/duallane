@@ -1,5 +1,5 @@
-export type WorkspaceRouteView = "chat" | "files" | "members" | "account" | "space" | "new";
-export type WorkspaceRouteSpaceTab = "overview" | "invites" | "roles" | "visibility" | "email";
+export type WorkspaceRouteView = "chat" | "topics" | "files" | "members" | "account" | "space" | "new";
+export type WorkspaceRouteSpaceTab = "overview" | "invites" | "roles" | "visibility" | "email" | "requirements";
 export type WorkspaceRouteCreateMode = "" | "direct" | "group";
 export type WorkspaceRouteAccountSection =
   | ""
@@ -9,6 +9,7 @@ export type WorkspaceRouteAccountSection =
   | "notifications"
   | "email"
   | "push"
+  | "bot"
   | "emotes";
 
 export type AppRoute =
@@ -19,6 +20,7 @@ export type AppRoute =
       kind: "workspace";
       view: WorkspaceRouteView;
       conversationId: string;
+      topicId: string;
       fileId: string;
       memberId: string;
       spaceTab: WorkspaceRouteSpaceTab;
@@ -82,6 +84,13 @@ export function parseAppRoute(pathname: string, search = "", hash = ""): ParsedA
       segments.length > 3 || (segments.length === 3 && !conversationId) || hasUnexpectedParams(params, ["invite"])
     );
   }
+  if (segments[1] === "topics") {
+    const topicId = segments.length === 3 ? normalizeRouteSegment(segments[2]) : "";
+    return finish(
+      workspaceRoute({ ...base, view: "topics", topicId }),
+      segments.length > 3 || (segments.length === 3 && !topicId) || hasUnexpectedParams(params, ["invite"])
+    );
+  }
   if (segments[1] === "files") {
     const fileId = segments.length === 3 ? normalizeRouteSegment(segments[2]) : "";
     return finish(
@@ -136,6 +145,7 @@ export function getAppRouteUrl(route: AppRoute) {
 
   let pathname = "/workspace";
   if (route.view === "chat" && route.conversationId) pathname = `/workspace/chat/${encodeURIComponent(route.conversationId)}`;
+  if (route.view === "topics") pathname = route.topicId ? `/workspace/topics/${encodeURIComponent(route.topicId)}` : "/workspace/topics";
   if (route.view === "files") pathname = route.fileId ? `/workspace/files/${encodeURIComponent(route.fileId)}` : "/workspace/files";
   if (route.view === "members") pathname = route.memberId ? `/workspace/members/${encodeURIComponent(route.memberId)}` : "/workspace/members";
   if (route.sharedEmoteCollectionId) pathname = `/workspace/emotes/shared/${encodeURIComponent(route.sharedEmoteCollectionId)}`;
@@ -153,6 +163,7 @@ export function workspaceRoute(input: Partial<Omit<Extract<AppRoute, { kind: "wo
     kind: "workspace",
     view: input.view ?? "chat",
     conversationId: input.conversationId ?? "",
+    topicId: input.topicId ?? "",
     fileId: input.fileId ?? "",
     memberId: input.memberId ?? "",
     spaceTab: input.spaceTab ?? "overview",
@@ -226,11 +237,12 @@ function parseSpaceTab(value: string | undefined): WorkspaceRouteSpaceTab {
   if (value === "permissions") return "roles";
   if (value === "visibility") return "visibility";
   if (value === "email") return "email";
+  if (value === "requirements") return "requirements";
   return "overview";
 }
 
 function isSpaceTabPath(value: string) {
-  return ["invites", "permissions", "visibility", "email"].includes(value);
+  return ["invites", "permissions", "visibility", "email", "requirements"].includes(value);
 }
 
 function spaceTabPath(tab: WorkspaceRouteSpaceTab) {
@@ -239,7 +251,7 @@ function spaceTabPath(tab: WorkspaceRouteSpaceTab) {
 
 function parseAccountSection(segments: string[]): WorkspaceRouteAccountSection {
   if (segments.length === 0) return "";
-  if (segments.length === 1 && ["profile", "privacy", "chat", "notifications", "emotes"].includes(segments[0])) {
+  if (segments.length === 1 && ["profile", "privacy", "chat", "notifications", "bot", "emotes"].includes(segments[0])) {
     return segments[0] as WorkspaceRouteAccountSection;
   }
   if (segments.length === 2 && segments[0] === "notifications" && segments[1] === "email") return "email";

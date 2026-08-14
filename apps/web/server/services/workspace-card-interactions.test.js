@@ -45,6 +45,7 @@ async function fixture() {
     `).run(userId, now);
   }
 
+  let actionContext = null;
   const registry = createCardRegistry([{
     cardType: "test.counter",
     schemaVersion: 1,
@@ -62,7 +63,9 @@ async function fixture() {
           }
           return input;
         },
-        async execute({ payload }) {
+        async execute(context) {
+          actionContext = context;
+          const { payload } = context;
           const count = payload.count + 1;
           return { cardPayload: { count }, result: { count } };
         }
@@ -76,7 +79,7 @@ async function fixture() {
     idFactory: () => `fixed_${sequence += 1}`,
     now: () => new Date("2026-08-14T00:00:00.000Z")
   });
-  return { db, service };
+  return { db, service, getActionContext: () => actionContext };
 }
 
 async function createCounter(service, overrides = {}) {
@@ -132,8 +135,41 @@ describe("workspace card interaction service", () => {
     });
   });
 
+  it("allows official system bots to reference cards without trusting arbitrary bot rows", async () => {
+    const { db, service } = await fixture();
+    const created = await createCounter(service);
+    const timestamp = new Date("2026-08-14T00:00:00.000Z").toISOString();
+    db.prepare(`
+      INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at)
+      VALUES ('conv_card_test', 'usr_system_echo', ?, NULL)
+    `).run(timestamp);
+    await expect(service.validateMessageCardReference(
+      "usr_system_echo",
+      "conv_card_test",
+      created.block
+    )).resolves.toEqual(created.block);
+
+    db.prepare(`
+      INSERT INTO users (id, github_id, github_login, email, display_name, nickname, avatar_url, kind, created_at)
+      VALUES ('usr_untrusted_bot', NULL, '__untrusted_bot__', NULL, 'Untrusted', NULL, NULL, 'bot', ?)
+    `).run(timestamp);
+    db.prepare(`
+      INSERT INTO space_members (space_id, user_id, role, joined_at, removed_at)
+      VALUES (?, 'usr_untrusted_bot', 'member', ?, NULL)
+    `).run(DEFAULT_SPACE_ID, timestamp);
+    db.prepare(`
+      INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at)
+      VALUES ('conv_card_test', 'usr_untrusted_bot', ?, NULL)
+    `).run(timestamp);
+    await expect(service.validateMessageCardReference(
+      "usr_untrusted_bot",
+      "conv_card_test",
+      created.block
+    )).rejects.toMatchObject({ code: "card.not_found", statusCode: 404 });
+  });
+
   it("replays identical actions without executing twice and rejects idempotency conflicts", async () => {
-    const { service, db } = await fixture();
+    const { service, db, getActionContext } = await fixture();
     const created = await createCounter(service);
     const request = {
       cardId: created.block.cardId,
@@ -149,12 +185,28 @@ describe("workspace card interaction service", () => {
       result: { count: 1 },
       revision: 2
     });
+    expect(getActionContext()).toMatchObject({ clientActionId: "client-action-1" });
+    const updatedEvents = db.prepare(`
+      SELECT type, target_id AS targetId, payload_json AS payloadJson
+      FROM workspace_events
+      WHERE type = 'card.updated' AND target_id = ?
+    `).all(created.block.cardId);
+    expect(updatedEvents).toHaveLength(1);
+    expect(JSON.parse(updatedEvents[0].payloadJson)).toMatchObject({
+      cardId: created.block.cardId,
+      revision: 2,
+      status: "active"
+    });
     await expect(service.executeAction("usr_card_member", request)).resolves.toEqual({
       ok: true,
       replayed: true,
       result: { count: 1 },
       revision: 2
     });
+    expect(db.prepare(`
+      SELECT COUNT(*) AS count FROM workspace_events
+      WHERE type = 'card.updated' AND target_id = ?
+    `).get(created.block.cardId).count).toBe(1);
     await expect(service.resolveCard("usr_card_member", created.block.cardId)).resolves.toMatchObject({ payload: { count: 1 }, revision: 2 });
     await expect(service.executeAction("usr_card_member", { ...request, input: { secret: "changed" } })).rejects.toMatchObject({
       code: "card.idempotency_conflict"

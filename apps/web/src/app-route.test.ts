@@ -7,6 +7,7 @@ describe("application routes", () => {
     expect(parseAppRoute("/about", "", "").route).toEqual({ kind: "about" });
     expect(parseAppRoute("/direct/room-1", "", "#k=browser-secret").route).toMatchObject({ kind: "direct", roomId: "room-1" });
     expect(parseAppRoute("/workspace/chat/conversation-1").route).toMatchObject({ view: "chat", conversationId: "conversation-1" });
+    expect(parseAppRoute("/workspace/topics/topic-1").route).toMatchObject({ view: "topics", topicId: "topic-1" });
     expect(parseAppRoute("/workspace/files/file-1").route).toMatchObject({ view: "files", fileId: "file-1" });
     expect(parseAppRoute("/workspace/members/user-1").route).toMatchObject({ view: "members", memberId: "user-1" });
     expect(parseAppRoute("/workspace/account").route).toMatchObject({ view: "account" });
@@ -16,6 +17,7 @@ describe("application routes", () => {
     expect(parseAppRoute("/workspace/account/notifications").route).toMatchObject({ view: "account", accountSection: "notifications" });
     expect(parseAppRoute("/workspace/account/notifications/email").route).toMatchObject({ view: "account", accountSection: "email" });
     expect(parseAppRoute("/workspace/account/notifications/push").route).toMatchObject({ view: "account", accountSection: "push" });
+    expect(parseAppRoute("/workspace/account/bot").route).toMatchObject({ view: "account", accountSection: "bot" });
     expect(parseAppRoute("/workspace/account/emotes").route).toMatchObject({ view: "account", accountSection: "emotes" });
     expect(parseAppRoute("/workspace/emotes/shared/share-1").route).toMatchObject({
       view: "account",
@@ -24,6 +26,7 @@ describe("application routes", () => {
     expect(parseAppRoute("/workspace/new/group").route).toMatchObject({ view: "new", createMode: "group" });
     expect(parseAppRoute("/workspace/space/permissions").route).toMatchObject({ view: "space", spaceTab: "roles" });
     expect(parseAppRoute("/workspace/space/email").route).toMatchObject({ view: "space", spaceTab: "email" });
+    expect(parseAppRoute("/workspace/space/requirements").route).toMatchObject({ view: "space", spaceTab: "requirements" });
   });
 
   it("canonicalizes legacy routes without moving the P2P secret into the query", () => {

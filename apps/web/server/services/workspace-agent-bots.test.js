@@ -245,6 +245,11 @@ describe("workspace custom Agent Bot security foundation", () => {
   it("gates group participation through an owner-managed policy and context grant", async () => {
     const { service, db } = await fixture();
     const bot = await service.createBot("usr_owner", { spaceId: SPACE_ID, name: "Group policy" });
+    await service.updateSettings("usr_owner", bot.id, {
+      spaceId: SPACE_ID,
+      allowGroup: true,
+      visibilityPolicy: BOT_VISIBILITY_POLICIES.GROUPS
+    });
     const now = new Date().toISOString();
     db.prepare(`INSERT INTO conversations (id, space_id, type, title, direct_key, retention_count, created_by, created_at)
       VALUES ('conv_group_policy', ?, 'group', 'Policy group', NULL, 10000, 'usr_owner', ?)`).run(SPACE_ID, now);
@@ -259,6 +264,38 @@ describe("workspace custom Agent Bot security foundation", () => {
     const firstGrant = db.prepare("SELECT grant_id AS grantId FROM workspace_agent_bot_context_grants WHERE bot_id = ? AND conversation_id = 'conv_group_policy'").get(bot.id).grantId;
     await expect(service.updateGroupPolicy("usr_owner", bot.id, { spaceId: SPACE_ID, conversationId: "conv_group_policy", allowContext: false })).resolves.toMatchObject({ grantId: firstGrant, allowContext: false });
     expect(db.prepare("SELECT user_id AS userId FROM conversation_members WHERE conversation_id = 'conv_group_policy' AND user_id = ?").get(bot.botUserId)).toEqual({ userId: bot.botUserId });
+  });
+
+  it("requires the Bot owner to remain a privileged member of the target group", async () => {
+    const { service, db } = await fixture();
+    const bot = await service.createBot("usr_owner", { spaceId: SPACE_ID, name: "Guarded group" });
+    await service.updateSettings("usr_owner", bot.id, {
+      spaceId: SPACE_ID,
+      allowGroup: true,
+      visibilityPolicy: BOT_VISIBILITY_POLICIES.GROUPS
+    });
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO conversations (id, space_id, type, title, direct_key, retention_count, created_by, created_at)
+      VALUES ('conv_guarded_group', ?, 'group', 'Guarded group', NULL, 10000, 'usr_owner', ?)`).run(SPACE_ID, now);
+
+    await expect(service.updateGroupPolicy("usr_owner", bot.id, {
+      spaceId: SPACE_ID,
+      conversationId: "conv_guarded_group"
+    })).rejects.toMatchObject({ code: "bot.group_policy_forbidden", statusCode: 403 });
+
+    db.prepare(`INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at)
+      VALUES ('conv_guarded_group', 'usr_owner', ?, NULL)`).run(now);
+    db.prepare("UPDATE space_members SET role = 'member' WHERE space_id = ? AND user_id = 'usr_owner'").run(SPACE_ID);
+    await expect(service.updateGroupPolicy("usr_owner", bot.id, {
+      spaceId: SPACE_ID,
+      conversationId: "conv_guarded_group"
+    })).rejects.toMatchObject({ code: "bot.group_policy_forbidden", statusCode: 403 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_agent_bot_group_policies WHERE bot_id = ?").get(bot.id).count).toBe(0);
+    expect(db.prepare("SELECT result, reason FROM audit_logs WHERE action = 'bot.group_policy.update' ORDER BY created_at").all())
+      .toEqual([
+        { result: "rejected", reason: "bot.group_policy_forbidden" },
+        { result: "rejected", reason: "bot.group_policy_forbidden" }
+      ]);
   });
 
   async function fixture() {

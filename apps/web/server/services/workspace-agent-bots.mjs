@@ -219,6 +219,14 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
           await db.prepare(`UPDATE workspace_agent_bot_settings SET visibility_policy = ?, updated_at = ? WHERE bot_id = ? AND space_id = ?`)
             .run(patch.visibilityPolicy, updatedAt, currentBot.id, currentBot.spaceId);
         }
+        if (Object.hasOwn(patch, "allowGroup")) {
+          await db.prepare(`UPDATE workspace_agent_bots SET conversation_policy = ?, updated_at = ? WHERE id = ?`)
+            .run(
+              patch.allowGroup ? BOT_CONVERSATION_POLICIES.GROUP_CAPABLE : BOT_CONVERSATION_POLICIES.DIRECT_ONLY,
+              updatedAt,
+              currentBot.id
+            );
+        }
         const columns = Object.keys(patch).filter((key) => key !== "visibilityPolicy");
         if (columns.length > 0) {
           const assignments = columns.map((key) => `${SETTINGS_COLUMNS[key]} = ?`).join(", ");
@@ -280,8 +288,6 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
     const bot = await requireOwnedBotWithAudit(actor, botId, "bot.group_policy.update", "agent_bot");
     const conversationId = typeof input.conversationId === "string" ? input.conversationId.trim() : "";
     if (!conversationId) throw new WorkspaceAgentBotError("bot.invalid_group_policy", "群聊会话无效");
-    const conversation = await db.prepare("SELECT id, type FROM conversations WHERE id = ? AND space_id = ?").get(conversationId, bot.spaceId);
-    if (!conversation || conversation.type !== "group") throw new WorkspaceAgentBotError("bot.invalid_group_policy", "请选择群聊会话");
     const status = input.status ?? "active";
     if (!["pending", "active", "rejected", "removed"].includes(status)) throw new WorkspaceAgentBotError("bot.invalid_group_policy", "群聊策略状态无效");
     const allowTrigger = input.allowTrigger === undefined ? status === "active" : input.allowTrigger;
@@ -291,28 +297,41 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
     if (maxMessages !== null && (!Number.isSafeInteger(maxMessages) || maxMessages < 1 || maxMessages > 200)) throw new WorkspaceAgentBotError("bot.invalid_group_policy", "群聊上下文限制无效");
     const timestamp = now().toISOString();
     const grantId = `grant_${idFactory()}`;
-    await db.transaction(async () => {
-      await db.lock?.(botLifecycleLockKey(bot.spaceId, bot.id));
-      await db.prepare(`INSERT INTO workspace_agent_bot_group_policies
-        (bot_id, space_id, conversation_id, status, invited_by, approved_by, max_context_messages, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (bot_id, conversation_id) DO UPDATE SET status = excluded.status, approved_by = excluded.approved_by,
-          max_context_messages = excluded.max_context_messages, updated_at = excluded.updated_at`)
-        .run(bot.id, bot.spaceId, conversationId, status, actor.id, status === "active" ? actor.id : null, maxMessages, timestamp, timestamp);
-      await db.prepare(`INSERT INTO workspace_agent_bot_context_grants
-        (grant_id, bot_id, space_id, conversation_id, allow_trigger, allow_context, max_messages, granted_by, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (bot_id, conversation_id) DO UPDATE SET allow_trigger = excluded.allow_trigger, allow_context = excluded.allow_context,
-          max_messages = excluded.max_messages, granted_by = excluded.granted_by, updated_at = excluded.updated_at`)
-        .run(grantId, bot.id, bot.spaceId, conversationId, allowTrigger ? 1 : 0, allowContext ? 1 : 0, maxMessages, actor.id, timestamp, timestamp);
-      if (status === "active") {
-        await db.prepare(`INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at)
-          VALUES (?, ?, ?, NULL) ON CONFLICT (conversation_id, user_id) DO UPDATE SET removed_at = NULL`).run(conversationId, bot.botUserId, timestamp);
-      } else if (status === "removed" || status === "rejected") {
-        await db.prepare(`UPDATE conversation_members SET removed_at = ? WHERE conversation_id = ? AND user_id = ? AND removed_at IS NULL`)
-          .run(timestamp, conversationId, bot.botUserId);
+    try {
+      await db.transaction(async () => {
+        await db.lock?.(botLifecycleLockKey(bot.spaceId, bot.id));
+        await requireGroupPolicyManager(db, actor.id, bot.spaceId, conversationId);
+        const currentBot = await requireOwnedBot(actor, bot.id);
+        const settings = await readSettings(db, currentBot.id);
+        if (status === "active" && (!Boolean(settings?.allowGroup) || settings.visibilityPolicy === BOT_VISIBILITY_POLICIES.PRIVATE)) {
+          throw new WorkspaceAgentBotError("bot.group_policy_forbidden", "Bot 当前设置不允许加入群聊", 403);
+        }
+        await db.prepare(`INSERT INTO workspace_agent_bot_group_policies
+          (bot_id, space_id, conversation_id, status, invited_by, approved_by, max_context_messages, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (bot_id, conversation_id) DO UPDATE SET status = excluded.status, approved_by = excluded.approved_by,
+            max_context_messages = excluded.max_context_messages, updated_at = excluded.updated_at`)
+          .run(currentBot.id, currentBot.spaceId, conversationId, status, actor.id, status === "active" ? actor.id : null, maxMessages, timestamp, timestamp);
+        await db.prepare(`INSERT INTO workspace_agent_bot_context_grants
+          (grant_id, bot_id, space_id, conversation_id, allow_trigger, allow_context, max_messages, granted_by, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (bot_id, conversation_id) DO UPDATE SET allow_trigger = excluded.allow_trigger, allow_context = excluded.allow_context,
+            max_messages = excluded.max_messages, granted_by = excluded.granted_by, updated_at = excluded.updated_at`)
+          .run(grantId, currentBot.id, currentBot.spaceId, conversationId, allowTrigger ? 1 : 0, allowContext ? 1 : 0, maxMessages, actor.id, timestamp, timestamp);
+        if (status === "active") {
+          await db.prepare(`INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at)
+            VALUES (?, ?, ?, NULL) ON CONFLICT (conversation_id, user_id) DO UPDATE SET removed_at = NULL`).run(conversationId, currentBot.botUserId, timestamp);
+        } else if (status === "removed" || status === "rejected") {
+          await db.prepare(`UPDATE conversation_members SET removed_at = ? WHERE conversation_id = ? AND user_id = ? AND removed_at IS NULL`)
+            .run(timestamp, conversationId, currentBot.botUserId);
+        }
+      });
+    } catch (error) {
+      if (error instanceof WorkspaceAgentBotError) {
+        await auditRejection(actor, "bot.group_policy.update", "agent_bot", bot.id, error.code);
       }
-    });
+      throw error;
+    }
     await writeBotAudit({ actor, spaceId: bot.spaceId, action: "bot.group_policy.update", targetType: "agent_bot", targetId: bot.id, result: "success" });
     return (await listGroupPolicies(actor.id, bot.id, bot.spaceId)).find((policy) => policy.conversationId === conversationId);
   }
@@ -771,6 +790,26 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
     testConnection,
     updateConnection
   });
+}
+
+async function requireGroupPolicyManager(database, actorUserId, spaceId, conversationId) {
+  const row = await database.prepare(`
+    SELECT c.id, c.type, sm.role,
+      CASE WHEN cm.user_id IS NULL THEN 0 ELSE 1 END AS is_member
+    FROM conversations c
+    INNER JOIN space_members sm
+      ON sm.space_id = c.space_id AND sm.user_id = ? AND sm.removed_at IS NULL
+    LEFT JOIN conversation_members cm
+      ON cm.conversation_id = c.id AND cm.user_id = ? AND cm.removed_at IS NULL
+    WHERE c.id = ? AND c.space_id = ?
+  `).get(actorUserId, actorUserId, conversationId, spaceId);
+  if (!row || row.type !== "group") {
+    throw new WorkspaceAgentBotError("bot.invalid_group_policy", "请选择群聊会话", 404);
+  }
+  if (!Boolean(row.is_member) || !["owner", "admin"].includes(row.role)) {
+    throw new WorkspaceAgentBotError("bot.group_policy_forbidden", "只有当前群聊管理员可以管理 Bot", 403);
+  }
+  return row;
 }
 
 export function normalizeBotName(value) {

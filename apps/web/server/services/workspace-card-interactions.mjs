@@ -5,6 +5,7 @@ import {
   normalizeCardBlock,
   normalizeCardPayload
 } from "./workspace-cards.mjs";
+import { getSystemIdentityDefinition } from "./system-identities.mjs";
 
 const CARD_STATUS = new Set(["active", "invalidated", "expired"]);
 const SOURCE_KINDS = new Set(["workspace", "system_bot", "custom_bot", "echo", "topic"]);
@@ -153,7 +154,7 @@ export function createWorkspaceCardInteractionService({ db, registry, now = () =
     const block = normalizeCardBlock(inputBlock);
     const row = await loadCard(db, block.cardId);
     if (!row) throw new WorkspaceCardInteractionError("card.not_found", "卡片不存在或不可发送", 404);
-    await requireActor(db, actorUserId, row.spaceId, { allowBot: true });
+    await requireActor(db, actorUserId, row.spaceId, { allowBot: true, allowSystemBot: true });
     if (
       row.conversationId !== conversationId
       || row.cardType !== block.cardType
@@ -235,7 +236,13 @@ export function createWorkspaceCardInteractionService({ db, registry, now = () =
         const action = registry.getAction(row.cardType, row.schemaVersion, actionId);
         if (!action) throw new WorkspaceCardInteractionError("card.unknown_action", "卡片操作暂不支持", 422);
         if (action.authorize) {
-          const allowed = await action.authorize({ db, actor, card: publicCardRow(row, status), input: normalizedInput });
+          const allowed = await action.authorize({
+            db,
+            actor,
+            card: publicCardRow(row, status),
+            input: normalizedInput,
+            clientActionId
+          });
           if (allowed === false) throw notFound();
         }
         const payload = parseJson(row.payloadJson, {});
@@ -245,6 +252,7 @@ export function createWorkspaceCardInteractionService({ db, registry, now = () =
           card: publicCardRow(row, status),
           payload,
           input: normalizedInput,
+          clientActionId,
           request: input.request
         })) ?? {};
         let resultingRevision = row.revision;
@@ -256,11 +264,24 @@ export function createWorkspaceCardInteractionService({ db, registry, now = () =
             ? status
             : normalizeEnum(executed.cardStatus, CARD_STATUS, "card.invalid_status", "卡片状态无效");
           resultingRevision += 1;
-          await db.prepare(`
+          const updated = await db.prepare(`
             UPDATE workspace_cards
             SET payload_json = ?, status = ?, revision = ?, updated_at = ?
             WHERE id = ? AND revision = ?
           `).run(JSON.stringify(nextPayload), nextStatus, resultingRevision, now().toISOString(), row.id, row.revision);
+          if (!updated.changes) {
+            throw new WorkspaceCardInteractionError("card.revision_conflict", "卡片版本已变化", 409);
+          }
+          await writeCardEvent(db, {
+            type: "card.updated",
+            spaceId: row.spaceId,
+            conversationId: row.conversationId,
+            actorId: actor.id,
+            cardId: row.id,
+            cardType: row.cardType,
+            revision: resultingRevision,
+            status: nextStatus
+          });
         }
         const safeResult = normalizeCardPayload(executed.result ?? {}, {
           limits: { maxPayloadBytes: 16 * 1024, maxDepth: 6, maxNodes: 100, maxTextBytes: 8 * 1024 }
@@ -549,7 +570,10 @@ async function requireActor(db, actorUserId, spaceId, options = {}) {
     const customBot = await db.prepare(`
       SELECT 1 FROM workspace_agent_bots WHERE bot_user_id = ? AND space_id = ? AND status = 'active'
     `).get(actor.id, spaceId);
-    if (!customBot) throw notFound();
+    const systemBot = options.allowSystemBot === true
+      ? getSystemIdentityDefinition(actor.id)
+      : null;
+    if (!customBot && systemBot?.kind !== "bot") throw notFound();
   }
   return actor;
 }

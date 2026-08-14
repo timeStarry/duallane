@@ -509,15 +509,17 @@ export function createWorkspaceEmailService({ db, env = process.env, baseUrl, se
         m.author_id AS authorId,
         m.created_at AS createdAt,
         m.content_json AS contentJson,
-        COALESCE(tm.notification_level, cm.notification_level) AS notificationLevel,
-        COALESCE(tm.last_read_seq, cm.last_read_seq) AS lastReadSeq,
-        COALESCE(tm.last_read_at, cm.last_read_at) AS lastReadAt,
+        CASE WHEN m.topic_id IS NOT NULL THEN tm.notification_level ELSE cm.notification_level END AS notificationLevel,
+        CASE WHEN m.topic_id IS NOT NULL THEN tm.last_read_seq ELSE cm.last_read_seq END AS lastReadSeq,
+        CASE WHEN m.topic_id IS NOT NULL THEN topic_read_message.created_at ELSE cm.last_read_at END AS lastReadAt,
         we.seq AS eventSeq
       FROM messages m
       INNER JOIN conversation_members cm
         ON cm.conversation_id = m.conversation_id AND cm.user_id = ? AND cm.removed_at IS NULL
       LEFT JOIN topic_members tm
         ON tm.topic_id = m.topic_id AND tm.user_id = ? AND tm.left_at IS NULL
+      LEFT JOIN messages topic_read_message
+        ON topic_read_message.id = tm.last_read_message_id AND topic_read_message.topic_id = m.topic_id
       INNER JOIN conversations c ON c.id = m.conversation_id AND c.space_id = ?
       INNER JOIN space_members sm ON sm.user_id = ? AND sm.space_id = ? AND sm.removed_at IS NULL
       LEFT JOIN workspace_events we
@@ -546,9 +548,9 @@ export function createWorkspaceEmailService({ db, env = process.env, baseUrl, se
         j.id, j.user_id AS userId, j.event_seq AS eventSeq, j.attempt_count AS attemptCount,
         p.email, p.email_verified_at AS emailVerifiedAt, p.enabled AS preferenceEnabled,
         p.immediate_enabled AS immediateEnabled,
-        COALESCE(tm.notification_level, cm.notification_level) AS notificationLevel,
-        COALESCE(tm.last_read_seq, cm.last_read_seq) AS lastReadSeq,
-        COALESCE(tm.last_read_at, cm.last_read_at) AS lastReadAt,
+        CASE WHEN m.topic_id IS NOT NULL THEN tm.notification_level ELSE cm.notification_level END AS notificationLevel,
+        CASE WHEN m.topic_id IS NOT NULL THEN tm.last_read_seq ELSE cm.last_read_seq END AS lastReadSeq,
+        CASE WHEN m.topic_id IS NOT NULL THEN topic_read_message.created_at ELSE cm.last_read_at END AS lastReadAt,
         m.created_at AS messageCreatedAt, m.content_json AS contentJson
       FROM workspace_email_jobs j
       INNER JOIN user_notification_preferences p ON p.user_id = j.user_id
@@ -557,6 +559,8 @@ export function createWorkspaceEmailService({ db, env = process.env, baseUrl, se
         ON cm.conversation_id = j.conversation_id AND cm.user_id = j.user_id AND cm.removed_at IS NULL
       LEFT JOIN topic_members tm
         ON tm.topic_id = m.topic_id AND tm.user_id = j.user_id AND tm.left_at IS NULL
+      LEFT JOIN messages topic_read_message
+        ON topic_read_message.id = tm.last_read_message_id AND topic_read_message.topic_id = m.topic_id
       INNER JOIN space_members sm
         ON sm.user_id = j.user_id AND sm.space_id = ? AND sm.removed_at IS NULL
       WHERE j.id = ?

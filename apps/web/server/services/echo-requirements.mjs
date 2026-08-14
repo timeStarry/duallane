@@ -543,13 +543,29 @@ export async function projectEchoRequirementListCard(db, input) {
 }
 
 export const ECHO_REQUIREMENT_CARD_DEFINITIONS = Object.freeze([
-  Object.freeze({ cardType: "echo.request", schemaVersion: 1, allowPublicUrls: true, validatePayload: validateEchoRequestCardPayload, limits: { maxPayloadBytes: 20 * 1024, maxTextBytes: 14 * 1024 } }),
+  Object.freeze({
+    cardType: "echo.request",
+    schemaVersion: 1,
+    allowPublicUrls: true,
+    validatePayload: validateEchoRequestCardPayload,
+    limits: { maxPayloadBytes: 20 * 1024, maxTextBytes: 14 * 1024 },
+    actions: createRequirementCardActions()
+  }),
   Object.freeze({ cardType: "echo.request-status", schemaVersion: 1, allowPublicUrls: true, validatePayload: validateEchoRequestStatusCardPayload, limits: { maxPayloadBytes: 12 * 1024, maxTextBytes: 8 * 1024 } }),
   Object.freeze({ cardType: "echo.request-list", schemaVersion: 1, validatePayload: validateEchoRequestListCardPayload, limits: { maxPayloadBytes: 16 * 1024, maxTextBytes: 8 * 1024 } })
 ]);
 
-export function createEchoRequirementCardRegistry() {
-  return createCardRegistry(ECHO_REQUIREMENT_CARD_DEFINITIONS);
+export function createEchoRequirementCardRegistry(options = {}) {
+  const definitions = options.requirements
+    ? ECHO_REQUIREMENT_CARD_DEFINITIONS.map((definition) => definition.cardType === "echo.request"
+      ? { ...definition, actions: createRequirementCardActions(options.requirements) }
+      : definition)
+    : ECHO_REQUIREMENT_CARD_DEFINITIONS;
+  return createCardRegistry(definitions);
+}
+
+export function createEchoRequirementCardActions(requirements = null) {
+  return createRequirementCardActions(requirements);
 }
 
 function validateEchoRequestCardPayload(payload) {
@@ -576,6 +592,85 @@ function validateEchoRequestListCardPayload(payload) {
     validateCardCommon(item, { requireTitle: true });
   }
   return payload;
+}
+
+function createRequirementCardActions(requirements = null) {
+  const actions = {};
+  for (const [actionId, target] of Object.entries({
+    collect: { phase: "formal", status: "planned" },
+    start: { phase: "formal", status: "in_progress" },
+    progress: { phase: "formal", status: "in_progress" },
+    implement: { phase: "formal", status: "delivered" },
+    reject: { phase: "archived", status: "archived", archiveOutcome: "rejected" },
+    duplicate: { phase: "archived", status: "archived", archiveOutcome: "duplicate" }
+  })) {
+    actions[actionId] = {
+      validateInput: (input) => validateRequirementActionInput(input, actionId),
+      authorize: ({ actor }) => actor.kind === "human" && actor.role === "owner",
+      async execute({ db, actor, card, payload, input, request }) {
+        const idempotencyKey = normalizeActionIdempotencyKey(input.idempotencyKey);
+        const service = requirements ?? createEchoRequirementService({ db, spaceId: card.spaceId });
+        const result = await service.transition({
+          actorId: actor.id,
+          publicId: payload.publicId,
+          ...target,
+          duplicateOfPublicId: input.duplicateOfPublicId ?? null,
+          response: input.response ?? null,
+          expectedRevision: card.revision,
+          idempotencyKey,
+          request
+        });
+        const projection = await service.projectCard({ actorId: actor.id, publicId: result.publicId, cardType: card.cardType, request });
+        return {
+          cardPayload: projection.payload,
+          result: safeRequirementActionResult(result)
+        };
+      }
+    };
+  }
+  return actions;
+}
+
+function validateRequirementActionInput(input, actionId) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new CardValidationError("card.action_input_invalid", "需求操作参数无效");
+  }
+  const idempotencyKey = normalizeActionIdempotencyKey(input.idempotencyKey);
+  const result = { idempotencyKey };
+  if (input.response !== undefined && input.response !== null) {
+    if (typeof input.response !== "string" || input.response.trim().length === 0 || Buffer.byteLength(input.response.trim(), "utf8") > ECHO_REQUIREMENT_LIMITS.responseBytes) {
+      throw new CardValidationError("card.action_input_invalid", "处理说明无效");
+    }
+    result.response = input.response.trim();
+  }
+  if (actionId === "duplicate") {
+    const duplicateOfPublicId = typeof input.duplicateOfPublicId === "string" ? input.duplicateOfPublicId.trim().toUpperCase() : "";
+    if (!/^REQ-\d{4}-\d{4}$/.test(duplicateOfPublicId)) {
+      throw new CardValidationError("card.action_input_invalid", "重复需求必须指定目标编号");
+    }
+    result.duplicateOfPublicId = duplicateOfPublicId;
+  }
+  return result;
+}
+
+function normalizeActionIdempotencyKey(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized || Buffer.byteLength(normalized, "utf8") > ECHO_REQUIREMENT_LIMITS.idempotencyKeyBytes || !/^[A-Za-z0-9._:-]+$/.test(normalized)) {
+    throw new CardValidationError("card.action_input_invalid", "操作幂等键无效");
+  }
+  return normalized;
+}
+
+function safeRequirementActionResult(result) {
+  return {
+    publicId: result.publicId,
+    state: result.state,
+    phase: result.phase,
+    status: result.status,
+    archiveOutcome: result.archiveOutcome,
+    duplicateOfPublicId: result.duplicateOfPublicId,
+    revision: result.revision
+  };
 }
 
 function validateCardCommon(payload, options = {}) {

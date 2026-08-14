@@ -255,7 +255,7 @@ export const WorkspaceComposerEditor = forwardRef<WorkspaceComposerEditorHandle,
     nodes: [MentionNode, EmoteNode],
     editable: !readOnly,
     editorState: () => $setDocument(value),
-    onError: (error) => { throw error; }
+    onError: (error: Error) => { throw error; }
   }}>
     <div className={expanded ? "workspace-lexical-editor expanded" : "workspace-lexical-editor"}>
       <PlainTextPlugin

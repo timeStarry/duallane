@@ -9,6 +9,13 @@ export const BOT_GATEWAY_REPLAY_WINDOW_MS = 86_400_000;
 
 const SAFE_TOKEN = /^Bearer\s+(dl_bot_[A-Za-z0-9_-]{32,})$/u;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const DELIVERY_EVENT_SCOPES = Object.freeze({
+  "message.created": "messages:read_trigger",
+  "bot.mentioned": "messages:read_trigger",
+  "command.invoked": "commands:receive"
+});
+const MAX_TRIGGER_BYTES = 100 * 1024;
+const MAX_TRIGGER_BLOCKS = 100;
 
 export class WorkspaceBotGatewayError extends Error {
   constructor(code, message, statusCode = 400) {
@@ -42,6 +49,46 @@ export function createWorkspaceBotGatewayService({
       if (error instanceof WorkspaceAgentBotError) throw invalidToken();
       throw error;
     }
+  }
+
+  async function validateAuth(auth) {
+    if (!auth?.tokenId || !auth?.botId || !auth?.spaceId) throw invalidToken();
+    const timestamp = now().toISOString();
+    const row = await db.prepare(`
+      SELECT t.id AS tokenId, t.scopes_json AS scopesJson,
+        b.id AS botId, b.space_id AS spaceId, b.owner_user_id AS ownerUserId,
+        b.bot_user_id AS botUserId, b.mode, b.name,
+        b.visibility_policy AS visibilityPolicy, b.conversation_policy AS conversationPolicy,
+        b.trigger_policy AS triggerPolicy, b.status
+      FROM workspace_agent_bot_tokens t
+      INNER JOIN workspace_agent_bots b ON b.id = t.bot_id AND b.space_id = t.space_id
+      WHERE t.id = ? AND t.bot_id = ? AND t.space_id = ?
+        AND t.revoked_at IS NULL
+        AND (t.expires_at IS NULL OR t.expires_at > ?)
+        AND b.status = 'active'
+    `).get(auth.tokenId, auth.botId, auth.spaceId, timestamp);
+    if (!row) throw invalidToken();
+    return {
+      ...auth,
+      tokenId: row.tokenId,
+      botId: row.botId,
+      userId: row.botUserId,
+      spaceId: row.spaceId,
+      ownerUserId: row.ownerUserId,
+      scopes: parseScopes(row.scopesJson),
+      bot: {
+        id: row.botId,
+        botUserId: row.botUserId,
+        ownerUserId: row.ownerUserId,
+        spaceId: row.spaceId,
+        mode: row.mode,
+        name: row.name,
+        visibilityPolicy: row.visibilityPolicy,
+        conversationPolicy: row.conversationPolicy,
+        triggerPolicy: row.triggerPolicy,
+        status: row.status
+      }
+    };
   }
 
   async function getMe(auth) {
@@ -131,13 +178,21 @@ export function createWorkspaceBotGatewayService({
     await requireConversation(auth, conversationId);
     const content = normalizeBotContent(input.content ?? input.text);
     const key = normalizeId(input.idempotencyKey || clientMessageId, "idempotency.invalid");
-    return withIdempotency(db, auth, "message.send", key, content, async () => {
+    const replyToMessageId = input.replyToMessageId === undefined || input.replyToMessageId === null
+      ? null
+      : normalizeId(input.replyToMessageId, "message.invalid_reply");
+    return withIdempotency(db, auth, "message.send", key, {
+      conversationId,
+      clientMessageId,
+      replyToMessageId,
+      content
+    }, async () => {
       const message = await createBotStructuredMessage(db, { botGateway: true }, {
         actorId: auth.userId,
         conversationId,
         clientMessageId,
         content,
-        replyToMessageId: input.replyToMessageId ?? null
+        replyToMessageId
       });
       await markProcessed(db, auth);
       return { message: projectCreatedMessage(message), clientMessageId };
@@ -246,6 +301,7 @@ export function createWorkspaceBotGatewayService({
   }
 
   async function acknowledge(auth, input = {}) {
+    auth = await validateAuth(auth);
     const sequence = normalizeSequence(input.sequence, true);
     const eventId = typeof input.eventId === "string" && input.eventId.trim() ? input.eventId.trim() : null;
     if (!eventId && sequence === 0) throw new WorkspaceBotGatewayError("gateway.invalid_ack", "事件确认无效");
@@ -257,38 +313,66 @@ export function createWorkspaceBotGatewayService({
   }
 
   async function replay(auth, lastSequence = 0) {
+    auth = await validateAuth(auth);
     const cursor = normalizeSequence(lastSequence, true);
+    await expireDeliveries(auth);
     await queueWorkspaceEvents(auth);
+    const candidates = await db.prepare(`SELECT d.id, d.sequence, d.event_id AS eventId, d.event_type AS eventType,
+      d.conversation_id AS conversationId, d.payload_json AS payloadJson, d.status, d.attempts, d.created_at AS createdAt
+      FROM workspace_agent_bot_deliveries d
+      WHERE d.bot_id = ? AND d.space_id = ? AND d.sequence > ?
+        AND d.status <> 'expired' AND d.expires_at > ?
+      ORDER BY d.sequence LIMIT ?`)
+      .all(auth.botId, auth.spaceId, cursor, now().toISOString(), replayLimit * 4 + 1);
+    const allowed = [];
+    for (const delivery of candidates) {
+      const event = await loadWorkspaceEvent(delivery.eventId, auth.spaceId);
+      if (event && await authorizeDelivery(auth, event)) {
+        allowed.push(delivery);
+      } else {
+        await db.prepare("UPDATE workspace_agent_bot_deliveries SET status = 'expired' WHERE id = ? AND status <> 'expired'").run(delivery.id);
+      }
+    }
     const oldest = await db.prepare(`SELECT MIN(sequence) AS sequence FROM workspace_agent_bot_deliveries
-      WHERE bot_id = ? AND space_id = ? AND status <> 'expired'`).get(auth.botId, auth.spaceId);
+      WHERE bot_id = ? AND space_id = ? AND status <> 'expired' AND expires_at > ?`).get(auth.botId, auth.spaceId, now().toISOString());
+    const expiredAfterCursor = await db.prepare(`SELECT 1 AS expired FROM workspace_agent_bot_deliveries
+      WHERE bot_id = ? AND space_id = ? AND sequence > ? AND (status = 'expired' OR expires_at <= ?) LIMIT 1`)
+      .get(auth.botId, auth.spaceId, cursor, now().toISOString());
     const current = await currentWorkspaceSequence(auth.spaceId);
-    if (oldest?.sequence && cursor < Number(oldest.sequence) - 1) return { events: [], currentSequence: current, syncRequired: true, reason: "replay_window_exceeded" };
-    const rows = await db.prepare(`SELECT id, sequence, event_id AS eventId, event_type AS eventType,
-      conversation_id AS conversationId, payload_json AS payloadJson, status, attempts, created_at AS createdAt
-      FROM workspace_agent_bot_deliveries WHERE bot_id = ? AND space_id = ? AND sequence > ? ORDER BY sequence LIMIT ?`)
-      .all(auth.botId, auth.spaceId, cursor, replayLimit + 1);
-    const hasMore = rows.length > replayLimit;
-    const events = rows.slice(0, replayLimit).map(projectDelivery);
+    if (expiredAfterCursor || (oldest?.sequence && cursor < Number(oldest.sequence) - 1)) {
+      return { events: [], currentSequence: current, syncRequired: true, reason: "replay_window_exceeded" };
+    }
+    const hasMore = allowed.length > replayLimit;
+    const rows = allowed.slice(0, replayLimit);
+    if (rows.length > 0) {
+      const timestamp = now().toISOString();
+      for (const row of rows) {
+        await db.prepare(`UPDATE workspace_agent_bot_deliveries
+          SET status = CASE WHEN status = 'queued' THEN 'delivered' ELSE status END,
+            delivered_at = COALESCE(delivered_at, ?), attempts = attempts + 1
+          WHERE id = ? AND status <> 'expired'`).run(timestamp, row.id);
+      }
+    }
+    const events = rows.map(projectDelivery);
     return { events, currentSequence: current, syncRequired: false, hasMore };
   }
 
   async function queueWorkspaceEvents(auth) {
     // Delivery rows intentionally contain metadata only. Agents must use the
     // explicitly authorized REST context endpoint to obtain message content.
-    const rows = await db.prepare(`SELECT we.id, we.seq AS sequence, we.type AS eventType, we.conversation_id AS conversationId,
+    const rows = await db.prepare(`SELECT we.id, we.seq AS sequence, we.type AS eventType,
+      we.actor_user_id AS actorUserId, we.conversation_id AS conversationId,
+      we.target_type AS targetType, we.target_id AS targetId, we.payload_json AS eventPayloadJson,
       we.created_at AS createdAt FROM workspace_events we
-      INNER JOIN conversation_members cm ON cm.conversation_id = we.conversation_id AND cm.user_id = ? AND cm.removed_at IS NULL
-      WHERE we.space_id = ? ORDER BY we.seq DESC LIMIT ?`).all(auth.userId, auth.spaceId, replayLimit * 2);
+      WHERE we.space_id = ? ORDER BY we.seq DESC LIMIT ?`).all(auth.spaceId, replayLimit * 4);
     for (const row of rows.reverse()) {
-      const grant = await db.prepare(`SELECT allow_trigger AS allowTrigger FROM workspace_agent_bot_context_grants
-        WHERE bot_id = ? AND space_id = ? AND conversation_id = ?`).get(auth.botId, auth.spaceId, row.conversationId);
-      if (grant && Boolean(grant.allowTrigger)) await enqueueDelivery(auth, row);
+      await authorizeAndEnqueue(auth, row);
     }
   }
 
   async function enqueueDelivery(auth, event) {
     const timestamp = now().toISOString();
-    await db.prepare(`INSERT INTO workspace_agent_bot_deliveries
+    return await db.prepare(`INSERT INTO workspace_agent_bot_deliveries
       (id, bot_id, space_id, sequence, event_id, event_type, conversation_id, payload_json, status, attempts, created_at, expires_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 'queued', 0, ?, ?) ON CONFLICT (bot_id, sequence) DO NOTHING`)
       .run(`bdl_${idFactory()}`, auth.botId, auth.spaceId, event.sequence, event.id, event.eventType, event.conversationId, timestamp, new Date(new Date(timestamp).getTime() + replayWindowMs).toISOString());
@@ -296,29 +380,67 @@ export function createWorkspaceBotGatewayService({
 
   async function dispatchWorkspaceEvent(writtenEvent) {
     if (!writtenEvent?.id) return;
-    const bots = await db.prepare(`SELECT b.id AS botId, b.space_id AS spaceId, b.bot_user_id AS botUserId
-      FROM workspace_agent_bots b WHERE b.status = 'active'`).all();
-    for (const candidate of bots) {
-      const event = await db.prepare(`SELECT id, seq AS sequence, type AS eventType, conversation_id AS conversationId, created_at AS createdAt
-        FROM workspace_events WHERE id = ? AND space_id = ?`).get(writtenEvent.id, candidate.spaceId);
-      if (!event) continue;
-      const grant = await db.prepare(`SELECT allow_trigger AS allowTrigger FROM workspace_agent_bot_context_grants
-        WHERE bot_id = ? AND space_id = ? AND conversation_id = ?`).get(candidate.botId, candidate.spaceId, event.conversationId);
-      if (!grant || !Boolean(grant.allowTrigger)) continue;
-      const auth = { botId: candidate.botId, userId: candidate.botUserId, spaceId: candidate.spaceId };
-      await enqueueDelivery(auth, event);
+    const event = await loadWorkspaceEvent(writtenEvent.id, writtenEvent.spaceId);
+    if (!event) return;
+    for (const set of connections.values()) {
+      for (const record of [...set]) {
+        try {
+          record.auth = await validateAuth(record.auth);
+        } catch (error) {
+          if (error?.code === "bot.invalid_token") await rejectConnection(record, "bot token revoked");
+          else throw error;
+        }
+      }
+    }
+    const tokens = await db.prepare(`SELECT t.id AS tokenId, t.bot_id AS botId, t.space_id AS spaceId
+      FROM workspace_agent_bot_tokens t
+      INNER JOIN workspace_agent_bots b ON b.id = t.bot_id AND b.space_id = t.space_id
+      WHERE t.space_id = ? AND t.revoked_at IS NULL
+        AND (t.expires_at IS NULL OR t.expires_at > ?) AND b.status = 'active'
+      ORDER BY t.bot_id, t.created_at DESC`).all(event.spaceId, now().toISOString());
+    const authorizedByBot = new Map();
+    for (const candidate of tokens) {
+      if (authorizedByBot.has(candidate.botId)) continue;
+      try {
+        const decision = await authorizeDelivery(candidate, event);
+        if (decision) authorizedByBot.set(candidate.botId, decision.auth);
+      } catch (error) {
+        if (error?.code !== "bot.invalid_token") throw error;
+      }
+    }
+    for (const [botId, auth] of authorizedByBot) {
+      const queued = await authorizeAndEnqueue(auth, event);
+      if (!queued) continue;
       const delivery = await db.prepare(`SELECT id, sequence, event_id AS eventId, event_type AS eventType, conversation_id AS conversationId,
         payload_json AS payloadJson, status, attempts, created_at AS createdAt FROM workspace_agent_bot_deliveries WHERE bot_id = ? AND sequence = ?`)
-        .get(candidate.botId, event.sequence);
-      for (const connection of connections.get(candidate.botId) ?? []) {
-        try { connection.send(JSON.stringify({ version: BOT_GATEWAY_VERSION, type: "event", event: projectDelivery(delivery) })); } catch { /* reconnect replays */ }
+        .get(botId, event.sequence);
+      let delivered = false;
+      for (const record of [...(connections.get(botId) ?? [])]) {
+        try {
+          const decision = await authorizeDelivery(record.auth, event);
+          if (!decision) continue;
+          record.auth = decision.auth;
+          if (!delivered) {
+            const timestamp = now().toISOString();
+            await db.prepare(`UPDATE workspace_agent_bot_deliveries SET status = 'delivered', delivered_at = ?, attempts = attempts + 1
+              WHERE id = ? AND status <> 'expired'`).run(timestamp, delivery.id);
+            delivered = true;
+          }
+          record.connection.send(JSON.stringify({ version: BOT_GATEWAY_VERSION, type: "event", event: projectDelivery(delivery) }));
+        } catch (error) {
+          if (error?.code === "bot.invalid_token") {
+            await rejectConnection(record, "bot token revoked");
+          }
+        }
       }
     }
   }
 
   async function registerConnection(auth, connection) {
+    auth = await validateAuth(auth);
     const set = connections.get(auth.botId) ?? new Set();
-    set.add(connection);
+    const record = { auth, connection };
+    set.add(record);
     connections.set(auth.botId, set);
     const timestamp = now().toISOString();
     await botService.updateConnection(auth.botId, auth.spaceId, {
@@ -332,7 +454,7 @@ export function createWorkspaceBotGatewayService({
       lastErrorAt: null
     });
     return async () => {
-      set.delete(connection);
+      set.delete(record);
       if (set.size === 0) {
         connections.delete(auth.botId);
         await botService.updateConnection(auth.botId, auth.spaceId, { status: "disconnected", disconnectedAt: now().toISOString() }).catch(() => {});
@@ -341,9 +463,132 @@ export function createWorkspaceBotGatewayService({
   }
 
   async function heartbeat(auth) {
+    auth = await validateAuth(auth);
     const timestamp = now().toISOString();
     await botService.updateConnection(auth.botId, auth.spaceId, { status: "connected", lastHeartbeatAt: timestamp });
     return { timestamp };
+  }
+
+  async function loadWorkspaceEvent(eventId, spaceId) {
+    if (!eventId || !spaceId) return null;
+    return await db.prepare(`SELECT id, space_id AS spaceId, seq AS sequence, type AS eventType,
+      actor_user_id AS actorUserId, conversation_id AS conversationId,
+      target_type AS targetType, target_id AS targetId, payload_json AS eventPayloadJson,
+      created_at AS createdAt
+      FROM workspace_events WHERE id = ? AND space_id = ?`).get(eventId, spaceId);
+  }
+
+  async function authorizeAndEnqueue(auth, event) {
+    const existing = await db.prepare(`SELECT id, status, expires_at AS expiresAt
+      FROM workspace_agent_bot_deliveries WHERE bot_id = ? AND event_id = ?`).get(auth.botId, event.id);
+    if (existing) return existing.status !== "expired" && new Date(existing.expiresAt).getTime() > now().getTime();
+    const decision = await authorizeDelivery(auth, event);
+    if (!decision || !await passesDeliveryRateLimits(decision.auth, event)) return false;
+    const inserted = await enqueueDelivery(decision.auth, event);
+    return Boolean(inserted?.changes);
+  }
+
+  async function authorizeDelivery(auth, event) {
+    const currentAuth = await validateAuth(auth);
+    const requiredScope = DELIVERY_EVENT_SCOPES[event?.eventType];
+    if (!requiredScope || !currentAuth.scopes.includes(requiredScope) || !event.conversationId) return null;
+    let conversation;
+    try {
+      conversation = await requireConversation(currentAuth, event.conversationId);
+    } catch (error) {
+      if (error instanceof WorkspaceBotGatewayError) return null;
+      throw error;
+    }
+    const grant = await db.prepare(`SELECT allow_trigger AS allowTrigger
+      FROM workspace_agent_bot_context_grants
+      WHERE bot_id = ? AND space_id = ? AND conversation_id = ?`)
+      .get(currentAuth.botId, currentAuth.spaceId, conversation.id);
+    if (!grant || !Boolean(grant.allowTrigger)) return null;
+    const sender = await db.prepare(`SELECT u.id, u.kind, sm.role
+      FROM users u
+      INNER JOIN space_members sm ON sm.user_id = u.id AND sm.space_id = ? AND sm.removed_at IS NULL
+      INNER JOIN conversation_members cm ON cm.user_id = u.id AND cm.conversation_id = ? AND cm.removed_at IS NULL
+      WHERE u.id = ?`).get(currentAuth.spaceId, conversation.id, event.actorUserId);
+    if (!sender || sender.kind !== "human" || sender.role === "auditor" || sender.id === currentAuth.userId) return null;
+    const settings = await readSettings(db, currentAuth.botId, currentAuth.spaceId);
+    if (!settings || !await isSenderVisible(currentAuth, sender.id, conversation, settings)) return null;
+    const trigger = await resolveEventTrigger(currentAuth, event, conversation);
+    if (!trigger) return null;
+    return { auth: currentAuth, conversation, sender, trigger };
+  }
+
+  async function resolveEventTrigger(auth, event, conversation) {
+    const payload = parseJsonObject(event.eventPayloadJson);
+    if (event.eventType === "message.created") {
+      const message = await db.prepare(`SELECT author_id AS authorId, content_json AS contentJson,
+        plain_text AS plainText, deleted_at AS deletedAt, recalled_at AS recalledAt
+        FROM messages WHERE id = ? AND space_id = ? AND conversation_id = ?`)
+        .get(event.targetId, auth.spaceId, conversation.id);
+      if (!message || message.deletedAt || message.recalledAt || message.authorId !== event.actorUserId) return null;
+      const content = parseJsonObject(message.contentJson);
+      if (!content || !Array.isArray(content.blocks) || content.blocks.length === 0 || content.blocks.length > MAX_TRIGGER_BLOCKS) return null;
+      const byteSize = Buffer.byteLength(typeof message.plainText === "string" ? message.plainText : "", "utf8");
+      if (byteSize === 0 || byteSize > MAX_TRIGGER_BYTES) return null;
+      if (conversation.type === "direct") return { type: "direct_message", messageId: event.targetId };
+      const mentioned = content.blocks.some((block) => block?.type === "mention" && block.userId === auth.userId);
+      return mentioned ? { type: "mention", messageId: event.targetId } : null;
+    }
+    if (event.eventType === "bot.mentioned") {
+      return eventTargetsBot(auth, event, payload) ? { type: "mention" } : null;
+    }
+    if (event.eventType === "command.invoked") {
+      if (!eventTargetsBot(auth, event, payload)) return null;
+      if (conversation.type === "group") {
+        const mentioned = Array.isArray(payload.mentionedBotIds) && payload.mentionedBotIds.includes(auth.userId);
+        if (!mentioned && payload.trigger?.type !== "mention") return null;
+      }
+      return { type: "command" };
+    }
+    return null;
+  }
+
+  function eventTargetsBot(auth, event, payload) {
+    return [event.targetId, payload.botId, payload.botUserId].includes(auth.botId) ||
+      [event.targetId, payload.botId, payload.botUserId].includes(auth.userId);
+  }
+
+  async function isSenderVisible(auth, senderId, conversation, settings) {
+    if (settings.visibilityPolicy === "private") return senderId === auth.ownerUserId;
+    if (settings.visibilityPolicy === "space_members") return true;
+    if (settings.visibilityPolicy === "groups") return conversation.type === "group";
+    if (settings.visibilityPolicy !== "specified_members") return false;
+    const allowed = await db.prepare(`SELECT 1 AS allowed FROM workspace_agent_bot_visibility_members
+      WHERE bot_id = ? AND space_id = ? AND user_id = ?`).get(auth.botId, auth.spaceId, senderId);
+    return Boolean(allowed);
+  }
+
+  async function passesDeliveryRateLimits(auth, event) {
+    const limits = await db.prepare(`SELECT requests_per_minute AS requestsPerMinute,
+      member_daily_requests AS memberDailyRequests, event_backlog_limit AS eventBacklogLimit
+      FROM workspace_agent_bot_limits WHERE bot_id = ? AND space_id = ?`).get(auth.botId, auth.spaceId);
+    if (!limits) return false;
+    const timestamp = now();
+    const minuteStart = new Date(timestamp.getTime() - 60_000).toISOString();
+    const dayStart = new Date(timestamp.getTime() - 86_400_000).toISOString();
+    const recent = await db.prepare(`SELECT COUNT(*) AS count FROM workspace_agent_bot_deliveries
+      WHERE bot_id = ? AND space_id = ? AND created_at >= ?`).get(auth.botId, auth.spaceId, minuteStart);
+    if (Number(recent?.count) >= Number(limits.requestsPerMinute)) return false;
+    const memberDaily = await db.prepare(`SELECT COUNT(*) AS count
+      FROM workspace_agent_bot_deliveries d
+      INNER JOIN workspace_events we ON we.id = d.event_id AND we.space_id = d.space_id
+      WHERE d.bot_id = ? AND d.space_id = ? AND we.actor_user_id = ? AND d.created_at >= ?`)
+      .get(auth.botId, auth.spaceId, event.actorUserId, dayStart);
+    if (Number(memberDaily?.count) >= Number(limits.memberDailyRequests)) return false;
+    const backlog = await db.prepare(`SELECT COUNT(*) AS count FROM workspace_agent_bot_deliveries
+      WHERE bot_id = ? AND space_id = ? AND status IN ('queued', 'delivered') AND expires_at > ?`)
+      .get(auth.botId, auth.spaceId, timestamp.toISOString());
+    return Number(backlog?.count) < Number(limits.eventBacklogLimit);
+  }
+
+  async function expireDeliveries(auth) {
+    await db.prepare(`UPDATE workspace_agent_bot_deliveries SET status = 'expired'
+      WHERE bot_id = ? AND space_id = ? AND status <> 'expired' AND expires_at <= ?`)
+      .run(auth.botId, auth.spaceId, now().toISOString());
   }
 
   async function currentWorkspaceSequence(spaceId) {
@@ -351,7 +596,22 @@ export function createWorkspaceBotGatewayService({
     return Math.max(0, Number(row?.sequence ?? 0));
   }
 
-  return Object.freeze({ authenticate, getMe, getContext, sendMessage, sendCard, updateCard, getAttachment, createAttachment, typing, acknowledge, replay, dispatchWorkspaceEvent, registerConnection, heartbeat, requireConversation, requireContextGrant, requireScope, extractBearerToken, safeBot });
+  async function rejectConnection(record, reason) {
+    const set = connections.get(record.auth.botId);
+    set?.delete(record);
+    try { record.connection.close?.(1008, reason); } catch { /* socket close is best effort */ }
+    if (set && set.size === 0) {
+      connections.delete(record.auth.botId);
+      await botService.updateConnection(record.auth.botId, record.auth.spaceId, {
+        status: "revoked",
+        disconnectedAt: now().toISOString(),
+        lastErrorCode: "bot.invalid_token",
+        lastErrorAt: now().toISOString()
+      }).catch(() => {});
+    }
+  }
+
+  return Object.freeze({ authenticate, validateAuth, getMe, getContext, sendMessage, sendCard, updateCard, getAttachment, createAttachment, typing, acknowledge, replay, dispatchWorkspaceEvent, registerConnection, heartbeat, requireConversation, requireContextGrant, requireScope, extractBearerToken, safeBot });
 }
 
 export function extractBearerToken(value) {
@@ -374,6 +634,24 @@ export function safeBot(bot) {
 
 function invalidToken() {
   return new WorkspaceBotGatewayError("bot.invalid_token", "Bot Token 无效或已失效", 401);
+}
+
+function parseScopes(value) {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((scope) => BOT_SCOPE_ALLOWLIST.includes(scope)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseJsonObject(value) {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 async function readSettings(db, botId, spaceId) {

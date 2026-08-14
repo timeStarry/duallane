@@ -45,9 +45,16 @@ export function registerWorkspaceBotGatewayRoutes({ app, gateway, workspaceEnabl
     let helloReceived = false;
     let closed = false;
     const heartbeat = setInterval(() => {
-      if (socket.readyState === 1) {
-        try { socket.ping(); } catch { /* close handler cleans up */ }
-      }
+      void (async () => {
+        if (socket.readyState !== 1 || !auth || closed) return;
+        try {
+          auth = await gateway.validateAuth(auth);
+          socket.ping();
+        } catch {
+          socket.close(1008, "bot token revoked");
+          await close();
+        }
+      })();
     }, 30_000);
     heartbeat.unref?.();
     const close = async () => {
@@ -65,7 +72,8 @@ export function registerWorkspaceBotGatewayRoutes({ app, gateway, workspaceEnabl
         cleanup = await gateway.registerConnection(auth, {
           adapterVersion: typeof request.headers["x-duallane-adapter-version"] === "string" ? request.headers["x-duallane-adapter-version"] : null,
           connectionNonce: crypto.randomUUID(),
-          send: (message) => socket.send(message)
+          send: (message) => socket.send(message),
+          close: (code, reason) => socket.close(code, reason)
         });
       } catch {
         socket.close(1008, "bot authentication required");
@@ -75,6 +83,7 @@ export function registerWorkspaceBotGatewayRoutes({ app, gateway, workspaceEnabl
     socket.on("message", async (raw) => {
       if (!auth || closed) return;
       try {
+        auth = await gateway.validateAuth(auth);
         const parsed = JSON.parse(raw.toString());
         if (!helloReceived) {
           if (parsed?.type !== "hello" || parsed.version !== BOT_GATEWAY_VERSION) throw new WorkspaceBotGatewayError("gateway.invalid_hello", "Gateway Hello 无效");
@@ -96,6 +105,11 @@ export function registerWorkspaceBotGatewayRoutes({ app, gateway, workspaceEnabl
           socket.send(JSON.stringify({ version: BOT_GATEWAY_VERSION, type: "error", error: { code: "gateway.invalid_message", message: "Gateway 消息无效" } }));
         }
       } catch (error) {
+        if (error?.code === "bot.invalid_token") {
+          socket.close(1008, "bot token revoked");
+          await close();
+          return;
+        }
         socket.send(JSON.stringify({ version: BOT_GATEWAY_VERSION, type: "error", error: { code: error?.code || "gateway.invalid_message", message: error?.message || "Gateway 消息无效" } }));
       }
     });

@@ -39,10 +39,26 @@ export function registerWorkspaceEchoRequirementRoutes(app, options = {}) {
       now: options.now
     })
     : null);
+  const deliveryService = options.deliveryService ?? null;
   const spaceId = options.spaceId ?? DEFAULT_SPACE_ID;
   const enabled = options.ensureWorkspaceEnabled ?? options.enabled ?? true;
   const getActorId = options.getActorId ?? defaultActorId;
   const errorHandler = options.sendError ?? sendEchoError;
+  const syncDelivery = async (kind, publicId, extra = {}) => {
+    if (!deliveryService || !publicId) return null;
+    try {
+      return kind === "solicitation"
+        ? await deliveryService.syncSolicitation?.({ publicId, ...extra })
+        : await deliveryService.syncRequirement?.({ publicId, ...extra });
+    } catch (error) {
+      options.onDeliveryError?.({
+        kind,
+        publicId,
+        code: typeof error?.code === "string" ? error.code : "echo.delivery_failed"
+      });
+      return null;
+    }
+  };
 
   const handle = (operation, serviceRef = service) => async (request, reply) => {
     try {
@@ -77,6 +93,7 @@ export function registerWorkspaceEchoRequirementRoutes(app, options = {}) {
       spaceId,
       request: requestMeta
     });
+    await syncDelivery("requirement", requirement.publicId);
     return { requirement, statusCode: 201 };
   }));
 
@@ -137,6 +154,7 @@ export function registerWorkspaceEchoRequirementRoutes(app, options = {}) {
       publicId: request.params?.publicId,
       request: requestMeta
     });
+    await syncDelivery("requirement", requirement.publicId);
     return { requirement };
   }));
 
@@ -163,29 +181,37 @@ export function registerWorkspaceEchoRequirementRoutes(app, options = {}) {
     solicitation: await solicitationService.get({ actorId, spaceId, publicId: request.params?.publicId, request: requestMeta })
   }), solicitationService));
 
-  app.post("/api/workspace/echo/solicitations/:publicId/publish", handle(async ({ request, actorId, requestMeta }) => ({
-    solicitation: await solicitationService.publish({
+  app.post("/api/workspace/echo/solicitations/:publicId/publish", handle(async ({ request, actorId, requestMeta }) => {
+    const solicitation = await solicitationService.publish({
       ...asObject(request.body), actorId, spaceId, publicId: request.params?.publicId, request: requestMeta
-    })
-  }), solicitationService));
+    });
+    await syncDelivery("solicitation", solicitation.publicId);
+    return { solicitation };
+  }, solicitationService));
 
-  app.post("/api/workspace/echo/solicitations/:publicId/close", handle(async ({ request, actorId, requestMeta }) => ({
-    solicitation: await solicitationService.close({
+  app.post("/api/workspace/echo/solicitations/:publicId/close", handle(async ({ request, actorId, requestMeta }) => {
+    const solicitation = await solicitationService.close({
       ...asObject(request.body), actorId, spaceId, publicId: request.params?.publicId, request: requestMeta
-    })
-  }), solicitationService));
+    });
+    await syncDelivery("solicitation", solicitation.publicId);
+    return { solicitation };
+  }, solicitationService));
 
-  app.post("/api/workspace/echo/solicitations/:publicId/withdraw", handle(async ({ request, actorId, requestMeta }) => ({
-    solicitation: await solicitationService.withdraw({
+  app.post("/api/workspace/echo/solicitations/:publicId/withdraw", handle(async ({ request, actorId, requestMeta }) => {
+    const solicitation = await solicitationService.withdraw({
       ...asObject(request.body), actorId, spaceId, publicId: request.params?.publicId, request: requestMeta
-    })
-  }), solicitationService));
+    });
+    await syncDelivery("solicitation", solicitation.publicId);
+    return { solicitation };
+  }, solicitationService));
 
-  app.post("/api/workspace/echo/solicitations/:publicId/vote", handle(async ({ request, actorId, requestMeta }) => ({
-    solicitation: await solicitationService.vote({
+  app.post("/api/workspace/echo/solicitations/:publicId/vote", handle(async ({ request, actorId, requestMeta }) => {
+    const solicitation = await solicitationService.vote({
       ...asObject(request.body), actorId, spaceId, publicId: request.params?.publicId, request: requestMeta
-    })
-  }), solicitationService));
+    });
+    await syncDelivery("solicitation", solicitation.publicId);
+    return { solicitation };
+  }, solicitationService));
 
   app.get("/api/workspace/echo/solicitations/:publicId/votes", handle(async ({ request, actorId, requestMeta }) => ({
     votes: await solicitationService.listVotes({ actorId, spaceId, publicId: request.params?.publicId, request: requestMeta })
@@ -194,6 +220,13 @@ export function registerWorkspaceEchoRequirementRoutes(app, options = {}) {
   app.get("/api/workspace/echo/solicitations/:publicId/deliveries", handle(async ({ request, actorId, requestMeta }) => ({
     deliveries: await solicitationService.listDeliveries({ actorId, spaceId, publicId: request.params?.publicId, request: requestMeta })
   }), solicitationService));
+
+  app.post("/api/workspace/echo/solicitations/:publicId/deliveries/retry", handle(async ({ request, actorId, requestMeta }) => {
+    const publicId = request.params?.publicId;
+    await solicitationService.listDeliveries({ actorId, spaceId, publicId, request: requestMeta });
+    const delivery = await syncDelivery("solicitation", publicId, { force: true });
+    return { delivery };
+  }, solicitationService));
 
   return service;
 }

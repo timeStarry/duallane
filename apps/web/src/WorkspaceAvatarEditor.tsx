@@ -1,10 +1,23 @@
 import { Camera, Minus, Plus, Trash2, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import Cropper, { type Area } from "react-easy-crop";
+import { useEffect, useRef, useState, type ComponentType } from "react";
+import CropperComponent, { type Area } from "react-easy-crop";
 import { WorkspaceAvatar } from "./WorkspaceAvatar";
 
 const CLIENT_MAX_BYTES = 10 * 1024 * 1024;
 const ACCEPTED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const Cropper = CropperComponent as unknown as ComponentType<{
+  image: string;
+  crop: { x: number; y: number };
+  zoom: number;
+  aspect: number;
+  cropShape: "round";
+  showGrid: boolean;
+  minZoom: number;
+  maxZoom: number;
+  onCropChange: (point: { x: number; y: number }) => void;
+  onZoomChange: (zoom: number) => void;
+  onCropComplete: (area: Area, pixels: Area) => void;
+}>;
 
 type WorkspaceAvatarEditorProps = {
   name: string;
@@ -156,7 +169,7 @@ export function WorkspaceAvatarEditor({
                 maxZoom={4}
                 onCropChange={setCrop}
                 onZoomChange={setZoom}
-                onCropComplete={(_area, pixels) => setCroppedArea(pixels)}
+                onCropComplete={(_area: Area, pixels: Area) => setCroppedArea(pixels)}
               />
             </div>
             <label className="workspace-avatar-zoom">

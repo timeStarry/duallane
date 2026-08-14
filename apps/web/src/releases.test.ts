@@ -22,7 +22,9 @@ const INTERNAL_CHANGELOG_TERMS = [
   "OAuth",
   "Fastify",
   "Nginx",
-  "Docker"
+  "Docker",
+  "Token 哈希",
+  "token hash"
 ];
 
 describe("release history", () => {
@@ -39,8 +41,24 @@ describe("release history", () => {
   });
 
   it("matches both published package versions", () => {
+    expect(rootPackage.version).toBe("0.15.0");
+    expect(webPackage.version).toBe("0.15.0");
     expect(DUAL_LANE_RELEASES[0].version).toBe(rootPackage.version);
     expect(DUAL_LANE_RELEASES[0].version).toBe(webPackage.version);
+  });
+
+  it("describes the 0.15.0 user-facing scope and release date", () => {
+    const latest = DUAL_LANE_RELEASES[0];
+    const publicCopy = JSON.stringify(latest);
+    expect(latest.version).toBe("0.15.0");
+    expect(latest.releasedAt).toBe("2026-08-14");
+    expect(publicCopy).toContain("需求征集");
+    expect(publicCopy).toContain("投票");
+    expect(publicCopy).toContain("处理");
+    expect(publicCopy).toContain("话题");
+    expect(publicCopy).toContain("同步");
+    expect(publicCopy).toContain("Agent Bot");
+    expect(publicCopy).not.toMatch(/迁移|审计|Token 哈希|token hash/);
   });
 
   it("contains only changes ordinary users can understand and observe", () => {

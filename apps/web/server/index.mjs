@@ -22,6 +22,7 @@ import {
   completeUpload,
   createConversation,
   createInvite,
+  createSystemBotMessageWriter,
   createStructuredMessage,
   createWorkspaceSession,
   failUpload,
@@ -91,10 +92,14 @@ import {
   CUSTOM_EMOTE_MAX_INPUT_BYTES
 } from "./services/workspace-custom-emotes.mjs";
 import { createWorkspaceAgentBotService } from "./services/workspace-agent-bots.mjs";
-import { createWorkspaceCardInteractionService } from "./services/workspace-card-interactions.mjs";
 import { createWorkspaceCardRegistry } from "./services/workspace-card-registry.mjs";
-import { createWorkspaceInteractionRegistries } from "./services/workspace-interaction-registry.mjs";
-import { createWorkspaceInteractionService } from "./services/workspace-interactions.mjs";
+import { createEchoRequirementService } from "./services/echo-requirements.mjs";
+import { createEchoSolicitationService } from "./services/echo-solicitations.mjs";
+import { createEchoDeliveryService } from "./services/echo-delivery.mjs";
+import { createEchoRuntime } from "./services/echo-runtime.mjs";
+import { ECHO_USER_ID } from "./services/echo-identity.mjs";
+import { TOPIC_CARD_DEFINITION } from "./services/workspace-topics.mjs";
+import { TOPIC_SYNC_CARD_DEFINITION } from "./services/workspace-topic-messages.mjs";
 import { registerWorkspaceAgentBotRoutes } from "./routes/workspace-bots.mjs";
 import { registerWorkspaceCardRoutes } from "./routes/workspace-cards.mjs";
 import { createWorkspaceBotGatewayService } from "./services/workspace-bot-gateway.mjs";
@@ -155,18 +160,33 @@ export async function createApp(options = {}) {
     now: options.now
   }) : null;
   const workspaceAgentBots = db ? createWorkspaceAgentBotService({ db, now: options.now }) : null;
-  const workspaceCardRegistry = createWorkspaceCardRegistry();
-  const workspaceCards = db ? createWorkspaceCardInteractionService({
+  const echoRequirements = db ? createEchoRequirementService({ db, now: options.now }) : null;
+  const echoSolicitations = db ? createEchoSolicitationService({ db, now: options.now }) : null;
+  let echoDelivery = null;
+  const echoDeliveryBridge = Object.freeze({
+    async syncRequirement(input) {
+      return echoDelivery?.syncRequirement(input) ?? null;
+    },
+    async syncSolicitation(input) {
+      return echoDelivery?.syncSolicitation(input) ?? null;
+    }
+  });
+  const echoRuntime = db ? createEchoRuntime({
     db,
-    registry: workspaceCardRegistry,
+    requirements: echoRequirements,
+    solicitations: echoSolicitations,
+    deliveryService: echoDeliveryBridge,
+    extraCardDefinitions: [TOPIC_CARD_DEFINITION, TOPIC_SYNC_CARD_DEFINITION],
     now: options.now
   }) : null;
-  const workspaceInteractionRegistries = createWorkspaceInteractionRegistries();
-  const workspaceInteractions = db ? createWorkspaceInteractionService({
-    db,
-    ...workspaceInteractionRegistries,
-    now: options.now
-  }) : null;
+  const workspaceCardRegistry = echoRuntime?.cardRegistry ?? createWorkspaceCardRegistry();
+  const workspaceCards = echoRuntime?.cardInteractionService ?? null;
+  const workspaceCardApi = echoRuntime && workspaceCards ? Object.freeze({
+    resolveCard: workspaceCards.resolveCard,
+    executeAction: echoRuntime.executeCardAction
+  }) : workspaceCards;
+  const workspaceInteractions = echoRuntime?.interactionService ?? null;
+  const echoSystemBotMessageWriter = db ? createSystemBotMessageWriter(db, ECHO_USER_ID) : null;
   const workspaceBotGateway = db ? createWorkspaceBotGatewayService({
     db,
     botService: workspaceAgentBots,
@@ -189,6 +209,23 @@ export async function createApp(options = {}) {
     publish: options.workspaceNtfyPublisher,
     now: options.now
   }) : null;
+  if (db && echoSystemBotMessageWriter && workspaceCards) {
+    echoDelivery = options.echoDeliveryService ?? createEchoDeliveryService({
+      db,
+      env,
+      requirementService: echoRequirements,
+      solicitationService: echoSolicitations,
+      cardService: workspaceCards,
+      cardRegistry: workspaceCardRegistry,
+      messageWriter: (input) => echoSystemBotMessageWriter({
+        ...input,
+        validateCardReference: workspaceCards.validateMessageCardReference
+      }),
+      scheduleEmailNotifications: workspaceEmail?.scheduleMessage,
+      scheduleNtfyNotifications: workspaceNtfy?.scheduleMessage,
+      now: options.now
+    });
+  }
 
   const app = Fastify({
     trustProxy,
@@ -266,6 +303,15 @@ export async function createApp(options = {}) {
   app.addHook("onClose", async () => {
     workspaceNtfyWorker?.stop();
   });
+  const echoDeliveryWorker = workspaceEnabled && echoDelivery
+    ? echoDelivery.startWorker({
+      startupDelayMs: options.workspaceEchoDeliveryWorkerStartupDelayMs,
+      intervalMs: options.workspaceEchoDeliveryWorkerIntervalMs
+    })
+    : null;
+  app.addHook("onClose", async () => {
+    echoDeliveryWorker?.stop();
+  });
 
 app.addHook("onRequest", async (_request, reply) => {
   reply.header("Referrer-Policy", "no-referrer");
@@ -296,7 +342,7 @@ registerWorkspaceAgentBotRoutes({
   blockDisabled: (reply) => blockWorkspace(reply)
 });
 registerWorkspaceCardRoutes(app, {
-  service: workspaceCards,
+  service: workspaceCardApi,
   enabled: workspaceEnabled,
   getActorId: getWorkspaceUserId
 });
@@ -316,10 +362,29 @@ const workspaceBotGatewayUnsubscribe = workspaceBotGateway
   ? subscribeWorkspaceEvents((writtenEvent) => workspaceBotGateway.dispatchWorkspaceEvent(writtenEvent))
   : () => {};
 app.addHook("onClose", async () => workspaceBotGatewayUnsubscribe());
+const echoDeliveryUnsubscribe = echoDelivery
+  ? subscribeWorkspaceEvents(async (writtenEvent) => {
+    try {
+      await echoDelivery.handleWorkspaceEvent(writtenEvent);
+    } catch (error) {
+      app.log.warn(
+        { code: String(error?.code || "echo.delivery_failed") },
+        "Echo delivery event handling failed"
+      );
+    }
+  })
+  : () => {};
+app.addHook("onClose", async () => echoDeliveryUnsubscribe());
 registerWorkspaceEchoRequirementRoutes(app, {
   db,
   enabled: workspaceEnabled,
   getActorId: getWorkspaceUserId,
+  service: echoRequirements,
+  solicitationService: echoSolicitations,
+  deliveryService: echoDelivery,
+  onDeliveryError: ({ code }) => {
+    app.log.warn({ code }, "Echo delivery request sync failed");
+  },
   now: options.now
 });
 app.get("/api/health", async () => ({
@@ -1825,15 +1890,13 @@ app.get("/ws/workspace", { websocket: true }, (socket, request) => {
   });
 });
 
-if (db) {
-  registerWorkspaceTopicRoutes(app, {
-    db,
-    enabled: workspaceEnabled,
-    getActorId: getWorkspaceUserId,
-    scheduleEmailNotifications: workspaceEmail?.scheduleMessage,
-    scheduleNtfyNotifications: workspaceNtfy?.scheduleMessage
-  });
-}
+registerWorkspaceTopicRoutes(app, {
+  db,
+  enabled: workspaceEnabled,
+  getActorId: getWorkspaceUserId,
+  scheduleEmailNotifications: workspaceEmail?.scheduleMessage,
+  scheduleNtfyNotifications: workspaceNtfy?.scheduleMessage
+});
 
 if (env.NODE_ENV === "production" && serveStatic) {
   const distDir = path.resolve(rootDir, "dist");

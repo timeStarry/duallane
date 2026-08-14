@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openTestDatabase } from "./test-database.mjs";
 import { createWorkspaceEmailService } from "./workspace-email.mjs";
+import { createTopic, joinTopic } from "./workspace-topics.mjs";
+import { createTopicMessage } from "./workspace-topic-messages.mjs";
 import {
   acceptInvite,
   createConversation,
@@ -296,6 +298,50 @@ describe("workspace email service", () => {
     expect(deliveries).toHaveLength(baseline + 2);
     expect(deliveries.at(-1).message.text).toContain("有1人给您发送了1条消息");
     worker.stop();
+  });
+
+  it("delivers unread topic mail with the topic-specific read cursor", async () => {
+    const tested = await service.testSpaceSettings(request, "usr_owner", smtpDraft);
+    await service.saveSpaceSettings(request, "usr_owner", { ...smtpDraft, testProof: tested.testProof });
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "EMAIL-TOPIC" });
+    const member = await acceptInvite(db, request, {
+      code: invite.code,
+      githubLogin: "email-topic",
+      email: "email-topic@example.test"
+    });
+    await service.syncGitHubEmail(member.id, "email-topic@example.test");
+    await service.updatePreferences(member.id, { immediateEnabled: true, digestEnabled: true });
+    const conversation = await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "group",
+      title: "邮件话题群",
+      memberIds: [member.id]
+    });
+    const topic = await createTopic(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      title: "邮件通知",
+      description: "验证话题独立未读游标",
+      idempotencyKey: "email-topic-create"
+    });
+    await joinTopic(db, request, { actorId: member.id, topicId: topic.id });
+    await createTopicMessage(db, request, {
+      actorId: "usr_owner",
+      topicId: topic.id,
+      clientMessageId: "email-topic-message",
+      body: "话题邮件正文不得进入通知",
+      scheduleEmailNotifications: service.scheduleMessage
+    });
+
+    const baseline = deliveries.length;
+    current = new Date(Date.now() + 2 * 60 * 60 * 1000 + 61_000);
+    const worker = service.startWorker({ startupDelayMs: 60_000, intervalMs: 60_000 });
+    await worker.tick();
+    worker.stop();
+
+    expect(deliveries.length).toBeGreaterThanOrEqual(baseline + 2);
+    expect(db.prepare("SELECT status FROM workspace_email_jobs").get().status).toBe("sent");
+    expect(deliveries.at(-1).message.text).not.toContain("话题邮件正文不得进入通知");
   });
 
   it("retries failed delivery after 1, 5 and 30 minutes before marking the job failed", async () => {

@@ -80,6 +80,25 @@ describe("workspace topic core", () => {
       idempotencyKey: "client-1"
     });
     expect(repeated.id).toBe(created.id);
+    const creationCard = db.prepare(`
+      SELECT id, card_type AS cardType, source_kind AS sourceKind,
+        source_id AS sourceId, payload_json AS payloadJson, revision, status
+      FROM workspace_cards WHERE id = ?
+    `).get(`topic_${created.id}`);
+    expect(creationCard).toMatchObject({
+      id: `topic_${created.id}`,
+      cardType: "workspace.topic-created",
+      sourceKind: "topic",
+      sourceId: created.id,
+      revision: 1,
+      status: "active"
+    });
+    expect(JSON.parse(creationCard.payloadJson)).toMatchObject({
+      topicId: created.id,
+      title: "设置页",
+      status: "open",
+      participantCount: 1
+    });
     await expect(createTopic(db, request, {
       actorId: "usr_topic_alice", conversationId: "conv_topic_group",
       source: "#[设置页](另一正文)", idempotencyKey: "client-1"
@@ -137,12 +156,21 @@ describe("workspace topic core", () => {
       actorId: "usr_topic_alice", conversationId: "conv_topic_group", title: "成员", description: "正文"
     });
     await expect(joinTopic(db, request, { actorId: "usr_topic_bob", topicId: created.id })).resolves.toMatchObject({ joined: true });
+    const joinedCard = db.prepare("SELECT payload_json AS payloadJson, revision FROM workspace_cards WHERE id = ?").get(`topic_${created.id}`);
+    expect(JSON.parse(joinedCard.payloadJson)).toMatchObject({ participantCount: 2, status: "open" });
+    expect(joinedCard.revision).toBe(2);
     await expect(joinTopic(db, request, { actorId: "usr_topic_bob", topicId: created.id })).resolves.toMatchObject({ joined: true });
     await expect(leaveTopic(db, request, { actorId: "usr_topic_bob", topicId: created.id })).resolves.toMatchObject({ joined: false });
+    const leftCard = db.prepare("SELECT payload_json AS payloadJson, revision FROM workspace_cards WHERE id = ?").get(`topic_${created.id}`);
+    expect(JSON.parse(leftCard.payloadJson)).toMatchObject({ participantCount: 1, status: "open" });
+    expect(leftCard.revision).toBe(3);
     await expect(leaveTopic(db, request, { actorId: "usr_topic_bob", topicId: created.id })).resolves.toMatchObject({ joined: false });
     await expect(leaveTopic(db, request, { actorId: "usr_topic_alice", topicId: created.id })).rejects.toMatchObject({ code: "topic.creator_required" });
     await expect(joinTopic(db, request, { actorId: "usr_topic_bob", topicId: created.id })).resolves.toMatchObject({ joined: true });
     await closeTopic(db, request, { actorId: "usr_topic_alice", topicId: created.id, expectedRevision: 1 });
+    const closedCard = db.prepare("SELECT payload_json AS payloadJson, revision FROM workspace_cards WHERE id = ?").get(`topic_${created.id}`);
+    expect(JSON.parse(closedCard.payloadJson)).toMatchObject({ participantCount: 2, status: "closed" });
+    expect(closedCard.revision).toBe(5);
     await expect(joinTopic(db, request, { actorId: "usr_topic_bob", topicId: created.id })).resolves.toMatchObject({ joined: true });
   });
 

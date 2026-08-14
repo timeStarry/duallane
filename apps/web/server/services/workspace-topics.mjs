@@ -9,7 +9,12 @@ import {
   WORKSPACE_TOPIC_TITLE_MAX_CODE_POINTS
 } from "./workspace-topic-parser.mjs";
 import { CardValidationError, normalizeCardPayload } from "./workspace-cards.mjs";
-import { createTopicCreationBundle, getTopicUnread, writeTopicDomainEvent } from "./workspace-topic-messages.mjs";
+import {
+  createTopicCreationBundle,
+  getTopicUnread,
+  refreshTopicCards,
+  writeTopicDomainEvent
+} from "./workspace-topic-messages.mjs";
 import { runWorkspaceTransaction } from "./workspace.mjs";
 
 export const TOPIC_STATUSES = Object.freeze(["open", "closed", "archived"]);
@@ -353,6 +358,7 @@ export async function joinTopic(db, request, input = {}) {
         targetId: topic.id,
         payload: { topicId: topic.id, userId: actor.id }
       });
+      await refreshTopicCards(db, { topicId: topic.id, actorId: actor.id });
       await auditTopic(db, request, actor, "topic.join", topic.id, "success");
     }
   });
@@ -415,6 +421,7 @@ export async function leaveTopic(db, request, input = {}) {
         targetId: topic.id,
         payload: { topicId: topic.id, userId: actor.id }
       });
+      await refreshTopicCards(db, { topicId: topic.id, actorId: actor.id });
     }
   });
   return await projectTopicForActor(db, actor.id, topic.id, { allowSummary: true });
@@ -601,6 +608,7 @@ async function transitionTopic(db, request, input, targetStatus) {
       targetId: topic.id,
       payload: { topicId: topic.id, status: targetStatus }
     });
+    await refreshTopicCards(db, { topicId: topic.id, actorId: actor.id });
     return current;
   });
   return await projectTopicForActor(db, actor.id, updated.id, { allowSummary: true });

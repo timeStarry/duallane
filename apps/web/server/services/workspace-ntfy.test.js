@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openTestDatabase } from "./test-database.mjs";
-import { createTopic, createWorkspaceNtfyService } from "./workspace-ntfy.mjs";
+import { createTopic as createNtfyTopic, createWorkspaceNtfyService } from "./workspace-ntfy.mjs";
+import { createTopic as createWorkspaceTopic, joinTopic } from "./workspace-topics.mjs";
+import { createTopicMessage, markTopicRead } from "./workspace-topic-messages.mjs";
 import {
   acceptInvite,
   createConversation,
@@ -54,7 +56,7 @@ describe("workspace ntfy service", () => {
   });
 
   it("generates a stable private topic and rotates it only on explicit request", async () => {
-    expect(createTopic("TimeStarry", () => 0)).toBe("duallane-timestarry-AAAAAA");
+    expect(createNtfyTopic("TimeStarry", () => 0)).toBe("duallane-timestarry-AAAAAA");
     const first = await service.getPreferences("usr_owner");
     const second = await service.getPreferences("usr_owner");
     expect(first.enabled).toBe(true);
@@ -178,6 +180,47 @@ describe("workspace ntfy service", () => {
     });
     await sendMessage(conversation.id, "ntfy-disabled-message", textContent("不会推送"));
     expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_ntfy_jobs").get().count).toBe(0);
+  });
+
+  it("uses topic membership and topic read state when delivering ntfy jobs", async () => {
+    const member = await createMember("ntfy-topic");
+    const conversation = await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "group",
+      title: "话题通知群",
+      memberIds: [member.id]
+    });
+    const topic = await createWorkspaceTopic(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      title: "独立话题通知",
+      description: "只使用话题自己的已读状态",
+      idempotencyKey: "ntfy-topic-create"
+    });
+    await joinTopic(db, request, { actorId: member.id, topicId: topic.id });
+    const unread = await createTopicMessage(db, request, {
+      actorId: "usr_owner",
+      topicId: topic.id,
+      clientMessageId: "ntfy-topic-unread",
+      body: "未读话题消息",
+      scheduleNtfyNotifications: service.scheduleMessage
+    });
+    await createTopicMessage(db, request, {
+      actorId: "usr_owner",
+      topicId: topic.id,
+      clientMessageId: "ntfy-topic-read",
+      body: "已读话题消息",
+      scheduleNtfyNotifications: service.scheduleMessage
+    });
+    await markTopicRead(db, request, { actorId: member.id, topicId: topic.id });
+    current = new Date(Date.now() + 6_000);
+    const worker = service.startWorker({ startupDelayMs: 60_000, intervalMs: 60_000 });
+    await worker.tick();
+    worker.stop();
+
+    expect(unread.message.topicId).toBe(topic.id);
+    expect(deliveries).toHaveLength(0);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_ntfy_jobs WHERE status = 'cancelled'").get().count).toBe(2);
   });
 
   it("leases failed deliveries and stops after the bounded retry schedule", async () => {

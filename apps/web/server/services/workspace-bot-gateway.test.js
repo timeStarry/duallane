@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { openTestDatabase } from "./test-database.mjs";
 import { createWorkspaceAgentBotService } from "./workspace-agent-bots.mjs";
 import { createWorkspaceBotGatewayService } from "./workspace-bot-gateway.mjs";
@@ -63,12 +63,17 @@ describe("Workspace Bot Gateway", () => {
     const issued = await botService.issueToken("usr_owner", bot.id, { spaceId: SPACE_ID });
     const auth = await gateway.authenticate(issued.token, { spaceId: SPACE_ID });
     const now = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    const conversationId = "conv_gateway_replay";
+    createDirectTriggerContext(db, bot, conversationId, now);
+    insertMessageEvent(db, { messageId: "msg_replay_2", eventId: "evt_replay_2", sequence: 2, conversationId, actorId: "usr_owner", text: "first" });
+    insertMessageEvent(db, { messageId: "msg_replay_3", eventId: "evt_replay_3", sequence: 3, conversationId, actorId: "usr_owner", text: "second" });
     db.prepare(`INSERT INTO workspace_agent_bot_deliveries
       (id, bot_id, space_id, sequence, event_id, event_type, conversation_id, payload_json, status, attempts, created_at, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?, NULL, '{}', 'queued', 0, ?, ?)`).run("bdl_replay_2", bot.id, SPACE_ID, 2, "evt_replay_2", "workspace.member_joined", now, now);
+      VALUES (?, ?, ?, ?, ?, 'message.created', ?, '{}', 'queued', 0, ?, ?)`).run("bdl_replay_2", bot.id, SPACE_ID, 2, "evt_replay_2", conversationId, now, expiresAt);
     db.prepare(`INSERT INTO workspace_agent_bot_deliveries
       (id, bot_id, space_id, sequence, event_id, event_type, conversation_id, payload_json, status, attempts, created_at, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?, NULL, '{}', 'queued', 0, ?, ?)`).run("bdl_replay_3", bot.id, SPACE_ID, 3, "evt_replay_3", "workspace.member_left", now, now);
+      VALUES (?, ?, ?, ?, ?, 'message.created', ?, '{}', 'queued', 0, ?, ?)`).run("bdl_replay_3", bot.id, SPACE_ID, 3, "evt_replay_3", conversationId, now, expiresAt);
 
     const stale = await gateway.replay(auth, 0);
     expect(stale).toMatchObject({ syncRequired: true, reason: "replay_window_exceeded", currentSequence: 1 });
@@ -81,6 +86,144 @@ describe("Workspace Bot Gateway", () => {
 
     await expect(gateway.acknowledge(auth, { sequence: 2 })).resolves.toMatchObject({ acknowledged: true, sequence: 2 });
     expect(db.prepare("SELECT status FROM workspace_agent_bot_deliveries WHERE id = 'bdl_replay_2'").get().status).toBe("acked");
+  });
+
+  it("expires replay rows before querying and never returns them", async () => {
+    const clock = new Date("2026-08-14T10:00:00.000Z");
+    const { db, botService, gateway } = await fixture({ now: () => clock });
+    const bot = await botService.createBot("usr_owner", { spaceId: SPACE_ID, name: "Replay expiry" });
+    const issued = await botService.issueToken("usr_owner", bot.id, { spaceId: SPACE_ID });
+    const auth = await gateway.authenticate(issued.token, { spaceId: SPACE_ID });
+    db.prepare(`INSERT INTO workspace_agent_bot_deliveries
+      (id, bot_id, space_id, sequence, event_id, event_type, conversation_id, payload_json, status, attempts, created_at, expires_at)
+      VALUES ('bdl_expired', ?, ?, 2, 'evt_expired', 'message.created', NULL, '{}', 'queued', 0, ?, ?)`)
+      .run(bot.id, SPACE_ID, "2026-08-14T08:00:00.000Z", "2026-08-14T09:00:00.000Z");
+    await expect(gateway.replay(auth, 1)).resolves.toMatchObject({ syncRequired: true, reason: "replay_window_exceeded", events: [] });
+    expect(db.prepare("SELECT status FROM workspace_agent_bot_deliveries WHERE id = 'bdl_expired'").get().status).toBe("expired");
+  });
+
+  it("binds message idempotency to conversation and reply routing", async () => {
+    const { db, botService, gateway } = await fixture();
+    const bot = await botService.createBot("usr_owner", { spaceId: SPACE_ID, name: "Routing idempotency" });
+    const issued = await botService.issueToken("usr_owner", bot.id, { spaceId: SPACE_ID });
+    const auth = await gateway.authenticate(issued.token, { spaceId: SPACE_ID });
+    const now = new Date().toISOString();
+    createDirectTriggerContext(db, bot, "conv_route_a", now);
+    createDirectTriggerContext(db, bot, "conv_route_b", now);
+    await gateway.sendMessage(auth, {
+      conversationId: "conv_route_a",
+      clientMessageId: "client_route_a",
+      idempotencyKey: "same-route-key",
+      text: "same content"
+    });
+    await expect(gateway.sendMessage(auth, {
+      conversationId: "conv_route_b",
+      clientMessageId: "client_route_b",
+      idempotencyKey: "same-route-key",
+      text: "same content"
+    })).rejects.toMatchObject({ code: "idempotency.conflict", statusCode: 409 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM messages WHERE conversation_id = 'conv_route_b'").get().count).toBe(0);
+  });
+
+  it("dispatches only explicit eligible group triggers and rejects stale membership", async () => {
+    const { db, botService, gateway } = await fixture();
+    const bot = await botService.createBot("usr_owner", { spaceId: SPACE_ID, name: "Dispatch gate" });
+    await botService.updateSettings("usr_owner", bot.id, {
+      spaceId: SPACE_ID,
+      allowGroup: true,
+      visibilityPolicy: "groups"
+    });
+    const issued = await botService.issueToken("usr_owner", bot.id, { spaceId: SPACE_ID });
+    const auth = await gateway.authenticate(issued.token, { spaceId: SPACE_ID });
+    const now = new Date().toISOString();
+    const conversationId = "conv_dispatch_group";
+    db.prepare(`INSERT INTO conversations (id, space_id, type, title, direct_key, retention_count, created_by, created_at)
+      VALUES (?, ?, 'group', 'Dispatch group', NULL, 10000, 'usr_owner', ?)`).run(conversationId, SPACE_ID, now);
+    db.prepare(`INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at)
+      VALUES (?, 'usr_owner', ?, NULL)`).run(conversationId, now);
+    await botService.updateGroupPolicy("usr_owner", bot.id, { spaceId: SPACE_ID, conversationId });
+    const sent = [];
+    await gateway.registerConnection(auth, { send: (value) => sent.push(JSON.parse(value)) });
+
+    insertMessageEvent(db, { messageId: "msg_plain_group", eventId: "evt_plain_group", sequence: 2, conversationId, actorId: "usr_owner", text: "ordinary group message" });
+    await gateway.dispatchWorkspaceEvent({ id: "evt_plain_group", spaceId: SPACE_ID });
+    expect(sent).toEqual([]);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_agent_bot_deliveries WHERE bot_id = ?").get(bot.id).count).toBe(0);
+
+    insertMessageEvent(db, { messageId: "msg_mention_group", eventId: "evt_mention_group", sequence: 3, conversationId, actorId: "usr_owner", text: "hello bot", mentionUserId: bot.botUserId });
+    await gateway.dispatchWorkspaceEvent({ id: "evt_mention_group", spaceId: SPACE_ID });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].event).toMatchObject({ eventId: "evt_mention_group", type: "message.created", payload: {} });
+
+    db.prepare("UPDATE conversation_members SET removed_at = ? WHERE conversation_id = ? AND user_id = ?").run(new Date().toISOString(), conversationId, bot.botUserId);
+    insertMessageEvent(db, { messageId: "msg_stale_group", eventId: "evt_stale_group", sequence: 4, conversationId, actorId: "usr_owner", text: "stale grant", mentionUserId: bot.botUserId });
+    await gateway.dispatchWorkspaceEvent({ id: "evt_stale_group", spaceId: SPACE_ID });
+    expect(sent).toHaveLength(1);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_agent_bot_deliveries WHERE event_id = 'evt_stale_group'").get().count).toBe(0);
+  });
+
+  it("closes a registered connection before dispatch after token rotation", async () => {
+    const { db, botService, gateway } = await fixture();
+    const bot = await botService.createBot("usr_owner", { spaceId: SPACE_ID, name: "Revoked socket" });
+    const issued = await botService.issueToken("usr_owner", bot.id, { spaceId: SPACE_ID });
+    const auth = await gateway.authenticate(issued.token, { spaceId: SPACE_ID });
+    const now = new Date().toISOString();
+    createDirectTriggerContext(db, bot, "conv_revoked_socket", now);
+    insertMessageEvent(db, { messageId: "msg_revoked_socket", eventId: "evt_revoked_socket", sequence: 2, conversationId: "conv_revoked_socket", actorId: "usr_owner", text: "do not deliver" });
+    const send = vi.fn();
+    const close = vi.fn();
+    await gateway.registerConnection(auth, { send, close });
+    await botService.rotateToken("usr_owner", bot.id, { spaceId: SPACE_ID });
+    await gateway.dispatchWorkspaceEvent({ id: "evt_revoked_socket", spaceId: SPACE_ID });
+    expect(send).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledWith(1008, "bot token revoked");
+    await expect(gateway.heartbeat(auth)).rejects.toMatchObject({ code: "bot.invalid_token", statusCode: 401 });
+  });
+
+  it("applies persistent Bot rate limits before enqueueing a trigger", async () => {
+    const { db, botService, gateway } = await fixture();
+    const bot = await botService.createBot("usr_owner", { spaceId: SPACE_ID, name: "Dispatch limit" });
+    const issued = await botService.issueToken("usr_owner", bot.id, { spaceId: SPACE_ID });
+    const auth = await gateway.authenticate(issued.token, { spaceId: SPACE_ID });
+    const now = new Date().toISOString();
+    createDirectTriggerContext(db, bot, "conv_dispatch_limit", now);
+    db.prepare("UPDATE workspace_agent_bot_limits SET requests_per_minute = 1 WHERE bot_id = ?").run(bot.id);
+    const sent = [];
+    await gateway.registerConnection(auth, { send: (value) => sent.push(JSON.parse(value)) });
+    insertMessageEvent(db, { messageId: "msg_limit_1", eventId: "evt_limit_1", sequence: 2, conversationId: "conv_dispatch_limit", actorId: "usr_owner", text: "first" });
+    insertMessageEvent(db, { messageId: "msg_limit_2", eventId: "evt_limit_2", sequence: 3, conversationId: "conv_dispatch_limit", actorId: "usr_owner", text: "second" });
+    await gateway.dispatchWorkspaceEvent({ id: "evt_limit_1", spaceId: SPACE_ID });
+    await gateway.dispatchWorkspaceEvent({ id: "evt_limit_2", spaceId: SPACE_ID });
+    expect(sent).toHaveLength(1);
+    expect(db.prepare("SELECT event_id AS eventId FROM workspace_agent_bot_deliveries WHERE bot_id = ?").all(bot.id))
+      .toEqual([{ eventId: "evt_limit_1" }]);
+  });
+
+  it("requires trigger scope and rejects ineligible senders or oversized messages", async () => {
+    const { db, botService, gateway } = await fixture();
+    const bot = await botService.createBot("usr_owner", { spaceId: SPACE_ID, name: "Dispatch risk gate" });
+    const sendOnly = await botService.issueToken("usr_owner", bot.id, { spaceId: SPACE_ID, scopes: ["messages:send"] });
+    const sendOnlyAuth = await gateway.authenticate(sendOnly.token, { spaceId: SPACE_ID });
+    const now = new Date().toISOString();
+    createDirectTriggerContext(db, bot, "conv_dispatch_risk", now);
+    insertMessageEvent(db, { messageId: "msg_scope_denied", eventId: "evt_scope_denied", sequence: 2, conversationId: "conv_dispatch_risk", actorId: "usr_owner", text: "scope denied" });
+    await gateway.dispatchWorkspaceEvent({ id: "evt_scope_denied", spaceId: SPACE_ID });
+    await expect(gateway.replay(sendOnlyAuth, 1)).resolves.toMatchObject({ events: [] });
+
+    const triggerToken = await botService.issueToken("usr_owner", bot.id, { spaceId: SPACE_ID });
+    const triggerAuth = await gateway.authenticate(triggerToken.token, { spaceId: SPACE_ID });
+    const sent = [];
+    await gateway.registerConnection(triggerAuth, { send: (value) => sent.push(JSON.parse(value)) });
+    db.prepare(`INSERT INTO users (id, github_id, github_login, email, display_name, avatar_url, kind, created_at, last_login_at)
+      VALUES ('usr_gateway_outsider', 'gateway-outsider', 'gateway-outsider', NULL, 'Gateway outsider', NULL, 'human', ?, NULL)`).run(now);
+    db.prepare(`INSERT INTO space_members (space_id, user_id, role, joined_at, removed_at)
+      VALUES (?, 'usr_gateway_outsider', 'member', ?, NULL)`).run(SPACE_ID, now);
+    insertMessageEvent(db, { messageId: "msg_outsider", eventId: "evt_outsider", sequence: 3, conversationId: "conv_dispatch_risk", actorId: "usr_gateway_outsider", text: "not a conversation member" });
+    insertMessageEvent(db, { messageId: "msg_oversized", eventId: "evt_oversized", sequence: 4, conversationId: "conv_dispatch_risk", actorId: "usr_owner", text: "x".repeat(100 * 1024 + 1) });
+    await gateway.dispatchWorkspaceEvent({ id: "evt_outsider", spaceId: SPACE_ID });
+    await gateway.dispatchWorkspaceEvent({ id: "evt_oversized", spaceId: SPACE_ID });
+    expect(sent).toEqual([]);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_agent_bot_deliveries WHERE bot_id = ?").get(bot.id).count).toBe(0);
   });
 
   it("tracks Gateway connection and heartbeat state", async () => {
@@ -176,6 +319,36 @@ describe("Workspace Bot Gateway", () => {
     expect(db.prepare("SELECT source_kind AS sourceKind, status, revision FROM workspace_cards WHERE id = ?").get("legacy_card_1"))
       .toEqual({ sourceKind: "custom_bot", status: "invalidated", revision: 3 });
   });
+
+  function createDirectTriggerContext(db, bot, conversationId, timestamp) {
+    db.prepare(`INSERT INTO conversations (id, space_id, type, title, direct_key, retention_count, created_by, created_at)
+      VALUES (?, ?, 'direct', ?, ?, 10000, 'usr_owner', ?)`)
+      .run(conversationId, SPACE_ID, conversationId, `direct-${conversationId}`, timestamp);
+    for (const userId of ["usr_owner", bot.botUserId]) {
+      db.prepare(`INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at)
+        VALUES (?, ?, ?, NULL)`).run(conversationId, userId, timestamp);
+    }
+    db.prepare(`INSERT INTO workspace_agent_bot_context_grants
+      (grant_id, bot_id, space_id, conversation_id, allow_trigger, allow_context, max_messages, granted_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 1, 0, NULL, 'usr_owner', ?, ?)`)
+      .run(`grant-${conversationId}`, bot.id, SPACE_ID, conversationId, timestamp, timestamp);
+  }
+
+  function insertMessageEvent(db, { messageId, eventId, sequence, conversationId, actorId, text, mentionUserId = null }) {
+    const timestamp = new Date().toISOString();
+    const blocks = [{ type: "text", text }];
+    if (mentionUserId) blocks.push({ type: "mention", userId: mentionUserId, label: "Bot" });
+    const content = { format: "duallane.rich.v1", plainText: text, blocks };
+    db.prepare(`INSERT INTO messages (
+      id, space_id, conversation_id, author_id, author_kind, kind, client_message_id,
+      content_format, content_json, plain_text, reply_to_message_id, created_at, edited_at, deleted_at
+    ) VALUES (?, ?, ?, ?, 'human', 'user', ?, 'duallane.rich.v1', ?, ?, NULL, ?, NULL, NULL)`)
+      .run(messageId, SPACE_ID, conversationId, actorId, `client-${messageId}`, JSON.stringify(content), text, timestamp);
+    db.prepare(`INSERT INTO workspace_events (
+      id, space_id, seq, type, actor_user_id, conversation_id, target_type, target_id, payload_json, created_at
+    ) VALUES (?, ?, ?, 'message.created', ?, ?, 'message', ?, ?, ?)`)
+      .run(eventId, SPACE_ID, sequence, actorId, conversationId, messageId, JSON.stringify({ messageId, conversationId }), timestamp);
+  }
 
   async function fixture(gatewayOptions = {}) {
     const directory = await mkdtemp(path.join(tmpdir(), "duallane-bot-gateway-test-"));
