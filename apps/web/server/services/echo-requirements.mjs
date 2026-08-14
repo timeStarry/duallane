@@ -121,6 +121,12 @@ export async function submitRequirement(db, input) {
   const spaceId = normalizeRequiredIdentifier(input.spaceId ?? DEFAULT_SPACE_ID, "echo.invalid_space");
   const actor = await requireHumanActor(db, input.actorId, spaceId);
   return await withRejectionAudit(db, input, actor, spaceId, "echo.requirement.submit", async () => {
+    if (actor.role === "auditor") {
+      throwRejected(
+        new EchoRequirementError("echo.permission_denied", "审计角色不能提交需求", 403),
+        auditDetails("echo.requirement.submit", null, "permission.denied")
+      );
+    }
     const normalized = normalizeSubmission(input);
     const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
     const requestHash = hashRequest({ spaceId, actorId: actor.id, ...normalized });

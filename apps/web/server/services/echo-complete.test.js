@@ -53,21 +53,14 @@ const requirementInput = {
 };
 
 describe("Echo v0.15 completion contract", () => {
-  it("allows auditors to submit while keeping idempotent replay at the original result", async () => {
+  it("rejects auditor submissions without persisting private requirement content", async () => {
     const { db } = await createFixture();
     const service = createEchoRequirementService({ db, now: () => new Date("2026-08-14T00:00:00.000Z") });
-    const first = await service.submit({ ...requirementInput, actorId: "usr_auditor" });
-    expect(first).toMatchObject({ phase: "proposal", status: "pending_review", state: "submitted", revision: 1 });
-    await service.transition({
-      actorId: "usr_owner",
-      publicId: first.publicId,
-      phase: "formal",
-      status: "planned",
-      expectedRevision: 1,
-      idempotencyKey: "transition-1"
-    });
-    const replay = await service.submit({ ...requirementInput, actorId: "usr_auditor" });
-    expect(replay).toMatchObject({ phase: "proposal", status: "pending_review", state: "submitted", revision: 1 });
+    await expect(service.submit({ ...requirementInput, actorId: "usr_auditor" }))
+      .rejects.toMatchObject({ code: "echo.permission_denied", statusCode: 403 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM echo_requirements").get().count).toBe(0);
+    expect(db.prepare("SELECT action, result, reason FROM audit_logs WHERE action = 'echo.requirement.submit' ORDER BY created_at DESC LIMIT 1").get())
+      .toMatchObject({ result: "rejected", reason: "permission.denied" });
   });
 
   it("scopes public IDs and duplicate proposals to one space", async () => {
