@@ -246,4 +246,56 @@ describe("Workspace Echo requirement routes", () => {
     expect(auditor.json().error.code).toBe("echo.requirement_not_found");
     expect(auditor.body).not.toContain(submission.detail);
   });
+
+  it("filters owner lists by archive outcome and creation range with page metadata", async () => {
+    const { app } = await createFixture();
+    const first = (await app.inject({
+      method: "POST",
+      url: "/api/workspace/echo/requirements",
+      headers: asMember("usr_echo_submitter"),
+      payload: { ...submission, idempotencyKey: "owner-filter-first" }
+    })).json().requirement;
+    await app.inject({
+      method: "POST",
+      url: `/api/workspace/echo/requirements/${first.publicId}/transition`,
+      headers: asMember("usr_owner"),
+      payload: {
+        phase: "archived",
+        status: "archived",
+        archiveOutcome: "rejected",
+        response: "当前范围暂不处理",
+        expectedRevision: 1,
+        idempotencyKey: "owner-filter-reject"
+      }
+    });
+    const second = (await app.inject({
+      method: "POST",
+      url: "/api/workspace/echo/requirements",
+      headers: asMember("usr_echo_submitter"),
+      payload: { ...submission, title: "第二条", idempotencyKey: "owner-filter-second" }
+    })).json().requirement;
+
+    const filtered = await app.inject({
+      method: "GET",
+      url: "/api/workspace/echo/requirements?archiveOutcome=rejected&createdFrom=2000-01-01T00%3A00%3A00.000Z&createdTo=2999-01-01T00%3A00%3A00.000Z",
+      headers: asMember("usr_owner")
+    });
+    expect(filtered.statusCode).toBe(200);
+    expect(filtered.json()).toMatchObject({
+      requirements: [expect.objectContaining({ publicId: first.publicId, archiveOutcome: "rejected" })],
+      total: 1,
+      pageInfo: { offset: 0, hasNext: false, nextOffset: null }
+    });
+
+    const paged = await app.inject({
+      method: "GET",
+      url: "/api/workspace/echo/requirements?limit=1",
+      headers: asMember("usr_owner")
+    });
+    expect(paged.json()).toMatchObject({
+      total: 2,
+      pageInfo: { offset: 0, limit: 1, hasNext: true, nextOffset: 1 }
+    });
+    expect(paged.json().requirements.map((item) => item.publicId)).toContain(second.publicId);
+  });
 });

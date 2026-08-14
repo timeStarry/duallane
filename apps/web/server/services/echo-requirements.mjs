@@ -107,6 +107,7 @@ export function createEchoRequirementService({ db, spaceId = DEFAULT_SPACE_ID, n
     submit: (input) => submitRequirement(db, { ...input, spaceId, now: now() }),
     get: (input) => getRequirement(db, { ...input, spaceId }),
     list: (input) => listRequirements(db, { ...input, spaceId }),
+    listPage: (input) => listRequirementPage(db, { ...input, spaceId }),
     stats: (input) => requirementStats(db, { ...input, spaceId }),
     history: (input) => listRequirementHistory(db, { ...input, spaceId }),
     transition: (input) => transitionRequirement(db, { ...input, spaceId, now: now() }),
@@ -201,6 +202,11 @@ export async function getRequirement(db, input) {
 }
 
 export async function listRequirements(db, input) {
+  const page = await listRequirementPage(db, input);
+  return page.items;
+}
+
+export async function listRequirementPage(db, input) {
   const spaceId = normalizeRequiredIdentifier(input.spaceId ?? DEFAULT_SPACE_ID, "echo.invalid_space");
   const actor = await requireHumanActor(db, input.actorId, spaceId);
   const state = input.state === undefined || input.state === null || input.state === ""
@@ -212,13 +218,48 @@ export async function listRequirements(db, input) {
   const status = input.status === undefined || input.status === null || input.status === ""
     ? null
     : normalizeStatus(input.status);
+  const archiveOutcome = input.archiveOutcome === undefined || input.archiveOutcome === null || input.archiveOutcome === ""
+    ? null
+    : normalizeArchiveOutcome(input.archiveOutcome);
   const limit = normalizeListLimit(input.limit);
   const type = input.type === undefined || input.type === null || input.type === ""
     ? null
     : normalizeType(input.type);
   const submitterUserId = input.submitterUserId ? normalizeRequiredIdentifier(input.submitterUserId, "echo.submitter_invalid") : null;
   const offset = normalizeOffset(input.offset);
+  const createdFrom = input.createdFrom === undefined || input.createdFrom === null || input.createdFrom === ""
+    ? null
+    : normalizeFilterTimestamp(input.createdFrom, "echo.created_from_invalid");
+  const createdTo = input.createdTo === undefined || input.createdTo === null || input.createdTo === ""
+    ? null
+    : normalizeFilterTimestamp(input.createdTo, "echo.created_to_invalid");
+  if (createdFrom && createdTo && createdFrom > createdTo) {
+    throw new EchoRequirementError("echo.created_range_invalid", "创建时间范围无效");
+  }
   const owner = actor.role === "owner";
+  const where = `
+      echo_requirements.space_id = ?
+      AND (? IS NULL OR echo_requirements.state = ?)
+      AND (? IS NULL OR echo_requirements.phase = ?)
+      AND (? IS NULL OR echo_requirements.status = ?)
+      AND (? IS NULL OR echo_requirements.archive_outcome = ?)
+      AND (? IS NULL OR echo_requirements.type = ?)
+      AND (? IS NULL OR echo_requirements.submitter_user_id = ?)
+      AND (? IS NULL OR echo_requirements.created_at >= ?)
+      AND (? IS NULL OR echo_requirements.created_at <= ?)
+      AND (? = 1 OR echo_requirements.submitter_user_id = ?)`;
+  const filterParams = [
+    spaceId,
+    state, state,
+    phase, phase,
+    status, status,
+    archiveOutcome, archiveOutcome,
+    type, type,
+    submitterUserId, submitterUserId,
+    createdFrom, createdFrom,
+    createdTo, createdTo,
+    owner ? 1 : 0, actor.id
+  ];
   const rows = await db.prepare(`
     SELECT echo_requirements.id, echo_requirements.public_id AS publicId, echo_requirements.space_id AS spaceId,
       echo_requirements.submitter_user_id AS submitterUserId, u.display_name AS submitterDisplayName,
@@ -232,17 +273,27 @@ export async function listRequirements(db, input) {
       echo_requirements.created_at AS createdAt, echo_requirements.updated_at AS updatedAt
     FROM echo_requirements
     INNER JOIN users u ON u.id = echo_requirements.submitter_user_id
-    WHERE echo_requirements.space_id = ?
-      AND (? IS NULL OR echo_requirements.state = ?)
-      AND (? IS NULL OR echo_requirements.phase = ?)
-      AND (? IS NULL OR echo_requirements.status = ?)
-      AND (? IS NULL OR echo_requirements.type = ?)
-      AND (? IS NULL OR echo_requirements.submitter_user_id = ?)
-      AND (? = 1 OR echo_requirements.submitter_user_id = ?)
+    WHERE ${where}
     ORDER BY echo_requirements.created_at DESC, echo_requirements.id DESC
     LIMIT ? OFFSET ?
-  `).all(spaceId, state, state, phase, phase, status, status, type, type, submitterUserId, submitterUserId, owner ? 1 : 0, actor.id, limit, offset);
-  return rows.map(normalizeRequirementRow);
+  `).all(...filterParams, limit, offset);
+  const totalRow = await db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM echo_requirements
+    WHERE ${where}
+  `).get(...filterParams);
+  const total = Number(totalRow?.count ?? 0);
+  const items = rows.map(normalizeRequirementRow);
+  return {
+    items,
+    total,
+    pageInfo: {
+      offset,
+      limit,
+      hasNext: offset + items.length < total,
+      nextOffset: offset + items.length < total ? offset + items.length : null
+    }
+  };
 }
 
 /** Combined domain facade for hosts that register Echo as one module. */
@@ -932,6 +983,14 @@ function normalizeOffset(value) {
     throw new EchoRequirementError("echo.offset_invalid", "列表偏移无效");
   }
   return parsed;
+}
+
+function normalizeFilterTimestamp(value, code) {
+  const timestamp = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    throw new EchoRequirementError(code, "创建时间范围无效");
+  }
+  return timestamp.toISOString();
 }
 
 function normalizeRequiredIdentifier(value, code) {

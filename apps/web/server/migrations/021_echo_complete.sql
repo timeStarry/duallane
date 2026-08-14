@@ -1,48 +1,142 @@
--- Echo v0.15 domain completion. 017 owns the base requirement tables; these
--- columns keep old state labels readable while exposing the phase/status
--- contract to new clients.
-ALTER TABLE echo_requirements
-  ADD COLUMN phase TEXT NOT NULL DEFAULT 'proposal'
-    CHECK (phase IN ('proposal', 'formal', 'archived'));
+-- Echo v0.15 domain completion. 017 was already released with a global
+-- public-id constraint and a smaller idempotency/history schema. Rebuild the
+-- three related tables so this migration upgrades both that schema and the
+-- expanded 017 schema used by fresh test databases. The copy keeps all
+-- existing rows while deriving phase/status from the legacy state labels.
+DROP INDEX IF EXISTS echo_requirements_space_state_idx;
+DROP INDEX IF EXISTS echo_requirements_submitter_idx;
+DROP INDEX IF EXISTS echo_requirement_history_requirement_idx;
+DROP INDEX IF EXISTS echo_requirement_idempotency_requirement_idx;
 
-ALTER TABLE echo_requirements
-  ADD COLUMN status TEXT NOT NULL DEFAULT 'pending_review'
-    CHECK (status IN ('pending_review', 'planned', 'in_progress', 'delivered', 'archived'));
+ALTER TABLE echo_requirements RENAME TO echo_requirements_legacy;
+ALTER TABLE echo_requirement_status_history RENAME TO echo_requirement_status_history_legacy;
+ALTER TABLE echo_requirement_idempotency RENAME TO echo_requirement_idempotency_legacy;
 
-ALTER TABLE echo_requirements
-  ADD COLUMN archive_outcome TEXT
-    CHECK (archive_outcome IS NULL OR archive_outcome IN ('implemented', 'rejected', 'duplicate', 'withdrawn', 'cancelled'));
+CREATE TABLE echo_requirements_v021 (
+  id TEXT PRIMARY KEY,
+  public_id TEXT NOT NULL,
+  space_id TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+  submitter_user_id TEXT NOT NULL REFERENCES users(id),
+  type TEXT NOT NULL CHECK (type IN ('requirement', 'suggestion', 'problem')),
+  title TEXT NOT NULL,
+  detail TEXT NOT NULL,
+  scenario TEXT NOT NULL,
+  expected_result TEXT NOT NULL,
+  related_link TEXT,
+  state TEXT NOT NULL DEFAULT 'submitted' CHECK (state IN ('submitted', 'collected', 'in_progress', 'implemented', 'rejected')),
+  phase TEXT NOT NULL DEFAULT 'proposal' CHECK (phase IN ('proposal', 'formal', 'archived')),
+  status TEXT NOT NULL DEFAULT 'pending_review' CHECK (status IN ('pending_review', 'planned', 'in_progress', 'delivered', 'archived')),
+  archive_outcome TEXT CHECK (archive_outcome IS NULL OR archive_outcome IN ('implemented', 'rejected', 'duplicate', 'withdrawn', 'cancelled')),
+  duplicate_of_public_id TEXT,
+  revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
+  response TEXT,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (space_id, public_id)
+);
 
-ALTER TABLE echo_requirements
-  ADD COLUMN duplicate_of_public_id TEXT;
+INSERT INTO echo_requirements_v021 (
+  id, public_id, space_id, submitter_user_id, type, title, detail, scenario,
+  expected_result, related_link, state, phase, status, archive_outcome,
+  duplicate_of_public_id, revision, response, created_at, updated_at
+)
+SELECT id, public_id, space_id, submitter_user_id, type, title, detail, scenario,
+  expected_result, related_link, state,
+  CASE WHEN state IN ('collected', 'in_progress', 'implemented') THEN 'formal'
+    WHEN state = 'rejected' THEN 'archived' ELSE 'proposal' END,
+  CASE WHEN state = 'collected' THEN 'planned'
+    WHEN state = 'in_progress' THEN 'in_progress'
+    WHEN state = 'implemented' THEN 'delivered'
+    WHEN state = 'rejected' THEN 'archived'
+    ELSE 'pending_review' END,
+  CASE WHEN state = 'rejected' THEN 'rejected' ELSE NULL END,
+  NULL, revision, response, created_at, updated_at
+FROM echo_requirements_legacy;
 
-UPDATE echo_requirements
-SET phase = CASE
-      WHEN state IN ('collected', 'in_progress', 'implemented') THEN 'formal'
-      WHEN state = 'rejected' THEN 'archived'
-      ELSE 'proposal'
-    END,
-    status = CASE
-      WHEN state = 'collected' THEN 'planned'
-      WHEN state = 'in_progress' THEN 'in_progress'
-      WHEN state = 'implemented' THEN 'delivered'
-      WHEN state = 'rejected' THEN 'archived'
-      ELSE 'pending_review'
-    END,
-    archive_outcome = CASE WHEN state = 'rejected' THEN 'rejected' ELSE NULL END
-WHERE phase = 'proposal' AND status = 'pending_review';
+CREATE TABLE echo_requirement_status_history_v021 (
+  id TEXT PRIMARY KEY,
+  requirement_id TEXT NOT NULL REFERENCES echo_requirements_v021(id) ON DELETE CASCADE,
+  from_state TEXT CHECK (from_state IS NULL OR from_state IN ('submitted', 'collected', 'in_progress', 'implemented', 'rejected')),
+  to_state TEXT NOT NULL CHECK (to_state IN ('submitted', 'collected', 'in_progress', 'implemented', 'rejected')),
+  from_phase TEXT,
+  from_status TEXT,
+  to_phase TEXT,
+  to_status TEXT,
+  response TEXT,
+  actor_user_id TEXT NOT NULL REFERENCES users(id),
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  idempotency_key TEXT,
+  created_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (requirement_id, revision),
+  CHECK ((revision = 1 AND from_state IS NULL) OR (revision > 1 AND from_state IS NOT NULL))
+);
 
-ALTER TABLE echo_requirement_status_history
-  ADD COLUMN from_phase TEXT;
+INSERT INTO echo_requirement_status_history_v021 (
+  id, requirement_id, from_state, to_state, from_phase, from_status,
+  to_phase, to_status, response, actor_user_id, revision, idempotency_key,
+  created_at
+)
+SELECT id, requirement_id, from_state, to_state,
+  CASE WHEN from_state IN ('collected', 'in_progress', 'implemented') THEN 'formal'
+    WHEN from_state = 'rejected' THEN 'archived' ELSE NULL END,
+  CASE WHEN from_state = 'collected' THEN 'planned'
+    WHEN from_state = 'in_progress' THEN 'in_progress'
+    WHEN from_state = 'implemented' THEN 'delivered'
+    WHEN from_state = 'rejected' THEN 'archived'
+    ELSE NULL END,
+  CASE WHEN to_state IN ('collected', 'in_progress', 'implemented') THEN 'formal'
+    WHEN to_state = 'rejected' THEN 'archived' ELSE 'proposal' END,
+  CASE WHEN to_state = 'collected' THEN 'planned'
+    WHEN to_state = 'in_progress' THEN 'in_progress'
+    WHEN to_state = 'implemented' THEN 'delivered'
+    WHEN to_state = 'rejected' THEN 'archived'
+    ELSE 'pending_review' END,
+  response, actor_user_id, revision, idempotency_key, created_at
+FROM echo_requirement_status_history_legacy;
 
-ALTER TABLE echo_requirement_status_history
-  ADD COLUMN from_status TEXT;
+CREATE TABLE echo_requirement_idempotency_v021 (
+  space_id TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+  actor_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  operation TEXT NOT NULL CHECK (operation IN ('submit', 'transition')),
+  idempotency_key TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  requirement_id TEXT NOT NULL REFERENCES echo_requirements_v021(id) ON DELETE CASCADE,
+  resulting_state TEXT NOT NULL CHECK (resulting_state IN ('submitted', 'collected', 'in_progress', 'implemented', 'rejected')),
+  resulting_revision INTEGER NOT NULL CHECK (resulting_revision > 0),
+  result_json TEXT,
+  created_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (space_id, actor_user_id, operation, idempotency_key)
+);
 
-ALTER TABLE echo_requirement_status_history
-  ADD COLUMN to_phase TEXT;
+INSERT INTO echo_requirement_idempotency_v021 (
+  space_id, actor_user_id, operation, idempotency_key, request_hash,
+  requirement_id, resulting_state, resulting_revision, result_json, created_at
+)
+SELECT r.space_id, i.actor_user_id, i.operation, i.idempotency_key,
+  i.request_hash, i.requirement_id, i.resulting_state, i.resulting_revision,
+  NULL, i.created_at
+FROM echo_requirement_idempotency_legacy i
+INNER JOIN echo_requirements_v021 r ON r.id = i.requirement_id;
 
-ALTER TABLE echo_requirement_status_history
-  ADD COLUMN to_status TEXT;
+DROP TABLE echo_requirement_status_history_legacy;
+DROP TABLE echo_requirement_idempotency_legacy;
+DROP TABLE echo_requirements_legacy;
+
+ALTER TABLE echo_requirements_v021 RENAME TO echo_requirements;
+ALTER TABLE echo_requirement_status_history_v021 RENAME TO echo_requirement_status_history;
+ALTER TABLE echo_requirement_idempotency_v021 RENAME TO echo_requirement_idempotency;
+
+CREATE INDEX echo_requirements_space_state_idx
+  ON echo_requirements (space_id, state, created_at DESC, id DESC);
+
+CREATE INDEX echo_requirements_submitter_idx
+  ON echo_requirements (space_id, submitter_user_id, created_at DESC, id DESC);
+
+CREATE INDEX echo_requirement_history_requirement_idx
+  ON echo_requirement_status_history (requirement_id, revision ASC);
+
+CREATE INDEX echo_requirement_idempotency_requirement_idx
+  ON echo_requirement_idempotency (requirement_id);
 
 CREATE INDEX echo_requirements_space_phase_status_idx
   ON echo_requirements (space_id, phase, status, updated_at DESC, id DESC);

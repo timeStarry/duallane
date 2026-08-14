@@ -82,19 +82,26 @@ export function registerWorkspaceEchoRequirementRoutes(app, options = {}) {
 
   app.get("/api/workspace/echo/requirements", handle(async ({ request, actorId, requestMeta }) => {
     const query = request.query && typeof request.query === "object" ? request.query : {};
-    const requirements = await service.list({
+    const listInput = {
       actorId,
       spaceId,
       state: query.state,
       phase: query.phase,
       status: query.status,
+      archiveOutcome: query.archiveOutcome,
       type: query.type,
       submitterUserId: query.submitterUserId,
+      createdFrom: query.createdFrom,
+      createdTo: query.createdTo,
       offset: query.offset,
       limit: query.limit,
       request: requestMeta
-    });
-    return { requirements };
+    };
+    if (typeof service.listPage === "function") {
+      const page = await service.listPage(listInput);
+      return { requirements: page.items, total: page.total, pageInfo: page.pageInfo };
+    }
+    return { requirements: await service.list(listInput) };
   }));
 
   app.get("/api/workspace/echo/requirements/stats", handle(async ({ request, actorId, requestMeta }) => ({
