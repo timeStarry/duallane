@@ -1,10 +1,13 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { openTestDatabase } from "./test-database.mjs";
 import { createWorkspaceAgentBotService } from "./workspace-agent-bots.mjs";
 import { createWorkspaceBotGatewayService } from "./workspace-bot-gateway.mjs";
+import { createWorkspaceCardInteractionService } from "./workspace-card-interactions.mjs";
+import { createWorkspaceCardRegistry } from "./workspace-card-registry.mjs";
 
 const SPACE_ID = "spc_default";
 
@@ -93,12 +96,94 @@ describe("Workspace Bot Gateway", () => {
     await expect(botService.getConnectionStatus("usr_owner", bot.id, SPACE_ID)).resolves.toMatchObject({ status: "disconnected" });
   });
 
+  it("uses one authoritative Bot card row, validates the message reference, and keeps retries atomic", async () => {
+    const { db, botService, gateway, cardService } = await fixture();
+    const bot = await botService.createBot("usr_owner", { spaceId: SPACE_ID, name: "Card Gateway" });
+    const issued = await botService.issueToken("usr_owner", bot.id, {
+      spaceId: SPACE_ID,
+      scopes: ["cards:write", "messages:send"]
+    });
+    const auth = await gateway.authenticate(issued.token, { spaceId: SPACE_ID });
+    const conversationId = "conv_gateway_card";
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO conversations (id, space_id, type, title, direct_key, retention_count, created_by, created_at)
+      VALUES (?, ?, 'direct', ?, ?, 10000, ?, ?)`).run(conversationId, SPACE_ID, "Gateway card", "gateway-card", "usr_owner", now);
+    db.prepare(`INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at) VALUES (?, ?, ?, NULL)`).run(conversationId, "usr_owner", now);
+    db.prepare(`INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at) VALUES (?, ?, ?, NULL)`).run(conversationId, bot.botUserId, now);
+
+    const input = {
+      conversationId,
+      clientMessageId: "card-message-1",
+      idempotencyKey: "card-send-1",
+      cardType: "future.poll",
+      schemaVersion: 1,
+      fallbackText: "投票卡片",
+      payload: { question: "你好吗？", options: ["好", "很好"] }
+    };
+    const sent = await gateway.sendCard(auth, input);
+    expect(sent.card).toMatchObject({ id: expect.any(String), cardType: "future.poll", revision: 1, status: "active" });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_agent_bot_cards").get().count).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_cards WHERE source_kind = 'custom_bot'").get().count).toBe(1);
+    expect(db.prepare("SELECT created_by_user_id AS createdByUserId, visibility_scope AS visibilityScope FROM workspace_cards WHERE id = ?").get(sent.card.id))
+      .toEqual({ createdByUserId: bot.botUserId, visibilityScope: "conversation" });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM messages WHERE conversation_id = ?").get(conversationId).count).toBe(1);
+    await expect(cardService.resolveCard("usr_owner", sent.card.id)).resolves.toMatchObject({
+      type: "card_fallback",
+      fallbackText: "投票卡片"
+    });
+
+    const replay = await gateway.sendCard(auth, input);
+    expect(replay.card.id).toBe(sent.card.id);
+    expect(replay.message.id).toBe(sent.message.id);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_cards WHERE source_kind = 'custom_bot'").get().count).toBe(1);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM messages WHERE conversation_id = ?").get(conversationId).count).toBe(1);
+
+    await expect(gateway.updateCard(auth, sent.card.id, {
+      expectedRevision: 1,
+      payload: { question: "新的问题", options: ["A", "B"] }
+    })).resolves.toMatchObject({ card: { id: sent.card.id, revision: 2 } });
+    expect(db.prepare("SELECT type FROM workspace_events WHERE target_id = ? ORDER BY seq").all(sent.card.id).map(({ type }) => type))
+      .toEqual(["card.created", "card.updated"]);
+    await expect(gateway.updateCard(auth, sent.card.id, {
+      expectedRevision: 1,
+      payload: { question: "冲突", options: ["A", "B"] }
+    })).rejects.toMatchObject({ code: "card.revision_conflict", statusCode: 409 });
+    await expect(gateway.updateCard(auth, sent.card.id, {
+      expectedRevision: 2,
+      status: "invalidated"
+    })).resolves.toMatchObject({ card: { id: sent.card.id, revision: 3, status: "invalidated" } });
+    expect(db.prepare("SELECT type FROM workspace_events WHERE target_id = ? ORDER BY seq").all(sent.card.id).map(({ type }) => type))
+      .toEqual(["card.created", "card.updated", "card.invalidated"]);
+  });
+
+  it("backfills deleted legacy Bot cards as invalidated shared cards idempotently", async () => {
+    const { db, botService } = await fixture();
+    const bot = await botService.createBot("usr_owner", { spaceId: SPACE_ID, name: "Legacy Card" });
+    const now = new Date().toISOString();
+    const conversationId = "conv_gateway_legacy_card";
+    db.prepare(`INSERT INTO conversations (id, space_id, type, title, direct_key, retention_count, created_by, created_at)
+      VALUES (?, ?, 'direct', ?, ?, 10000, ?, ?)`).run(conversationId, SPACE_ID, "Legacy card", "legacy-card", "usr_owner", now);
+    db.prepare(`INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at) VALUES (?, ?, ?, NULL)`).run(conversationId, "usr_owner", now);
+    db.prepare(`INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at) VALUES (?, ?, ?, NULL)`).run(conversationId, bot.botUserId, now);
+    db.prepare(`INSERT INTO workspace_agent_bot_cards
+      (id, bot_id, space_id, conversation_id, card_type, schema_version, payload_json, fallback_text, revision, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 1, ?, ?, 3, 'deleted', ?, ?)`).run(
+      "legacy_card_1", bot.id, SPACE_ID, conversationId, "future.poll", JSON.stringify({ options: ["A", "B"] }), "旧卡片", now, now
+    );
+    const migration = readFileSync(new URL("../migrations/023_workspace_unified_bot_cards.sql", import.meta.url), "utf8");
+    db.exec(migration);
+    db.exec(migration);
+    expect(db.prepare("SELECT source_kind AS sourceKind, status, revision FROM workspace_cards WHERE id = ?").get("legacy_card_1"))
+      .toEqual({ sourceKind: "custom_bot", status: "invalidated", revision: 3 });
+  });
+
   async function fixture(gatewayOptions = {}) {
     const directory = await mkdtemp(path.join(tmpdir(), "duallane-bot-gateway-test-"));
     const db = openTestDatabase(directory);
     const botService = createWorkspaceAgentBotService({ db });
-    const gateway = createWorkspaceBotGatewayService({ db, botService, ...gatewayOptions });
+    const cardService = createWorkspaceCardInteractionService({ db, registry: createWorkspaceCardRegistry() });
+    const gateway = createWorkspaceBotGatewayService({ db, botService, cardService, ...gatewayOptions });
     fixtures.push({ db, directory });
-    return { db, botService, gateway };
+    return { db, botService, gateway, cardService };
   }
 });
