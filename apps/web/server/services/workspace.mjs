@@ -1822,7 +1822,7 @@ export async function markConversationRead(db, request, input) {
           AND we.conversation_id = m.conversation_id
           AND we.type = 'message.created'
           AND we.target_id = m.id
-        WHERE m.conversation_id = ? AND m.deleted_at IS NULL
+        WHERE m.conversation_id = ? AND m.topic_id IS NULL AND m.deleted_at IS NULL
         ORDER BY m.created_at DESC, we.seq DESC, m.id DESC
         LIMIT 1
       )
@@ -1910,7 +1910,7 @@ export async function listMessages(db, userId, conversationId, options = {}) {
   if (aroundMessageId) {
     const anchor = await db.prepare(`
       SELECT id FROM messages
-      WHERE id = ? AND conversation_id = ? AND deleted_at IS NULL
+      WHERE id = ? AND conversation_id = ? AND topic_id IS NULL AND deleted_at IS NULL
     `).get(aroundMessageId, conversationId);
     if (!anchor) return [];
     const sideLimit = Math.max(1, Math.floor((limit - 1) / 2));
@@ -1928,7 +1928,7 @@ export async function listMessages(db, userId, conversationId, options = {}) {
     ? await db.prepare(`
       SELECT created_at AS createdAt, id AS messageCursorId
       FROM messages
-      WHERE id = ? AND conversation_id = ? AND deleted_at IS NULL
+      WHERE id = ? AND conversation_id = ? AND topic_id IS NULL AND deleted_at IS NULL
     `).get(cursorMessageId, conversationId)
     : null;
   if (cursorMessageId && !cursor) {
@@ -1988,6 +1988,7 @@ export async function listMessages(db, userId, conversationId, options = {}) {
         m.recall_reason AS recallReason
       FROM messages m
       WHERE m.conversation_id = ?
+        AND m.topic_id IS NULL
         AND m.deleted_at IS NULL
         ${cursorFilter}
       ORDER BY m.created_at ${innerOrder}, m.id ${innerOrder}
@@ -2041,7 +2042,7 @@ async function requireHideTarget(db, request, actor, messageIdInput) {
   const message = await db.prepare(`
     SELECT id, conversation_id AS conversationId
     FROM messages
-    WHERE id = ? AND deleted_at IS NULL
+    WHERE id = ? AND topic_id IS NULL AND deleted_at IS NULL
   `).get(messageId);
   if (!message) {
     throw new WorkspaceError("message.not_found", "消息不存在", 404);
@@ -2066,7 +2067,7 @@ export async function recallMessage(db, request, input) {
       SELECT id, conversation_id AS conversationId, author_id AS authorId,
         author_kind AS authorKind, kind, recalled_at AS recalledAt
       FROM messages
-      WHERE id = ? AND deleted_at IS NULL
+      WHERE id = ? AND topic_id IS NULL AND deleted_at IS NULL
     `).get(messageId);
     if (!target) {
       throw new WorkspaceError("message.not_found", "消息不存在", 404);
@@ -2282,7 +2283,7 @@ async function requireReactionTarget(db, request, actor, messageId, action) {
   const message = await db.prepare(`
     SELECT id, conversation_id AS conversationId, kind
     FROM messages
-    WHERE id = ? AND deleted_at IS NULL
+    WHERE id = ? AND topic_id IS NULL AND deleted_at IS NULL
   `).get(messageId);
   if (!message) {
     throw new WorkspaceError("message.not_found", "消息不存在", 404);
@@ -2400,7 +2401,7 @@ export async function createStructuredMessage(db, request, input) {
     existing = await db.prepare(`
       SELECT id, content_json AS contentJson
       FROM messages
-      WHERE space_id = ? AND conversation_id = ? AND author_id = ? AND client_message_id = ?
+      WHERE space_id = ? AND conversation_id = ? AND author_id = ? AND client_message_id = ? AND topic_id IS NULL
     `).get(DEFAULT_SPACE_ID, conversationId, actor.id, clientMessageId);
 
     normalizedContent = await normalizeMessageContent(db, actor, conversationId, input.content, {
@@ -2461,7 +2462,7 @@ export async function createStructuredMessage(db, request, input) {
       const winner = await db.prepare(`
         SELECT id, content_json AS contentJson
         FROM messages
-        WHERE space_id = ? AND conversation_id = ? AND author_id = ? AND client_message_id = ?
+        WHERE space_id = ? AND conversation_id = ? AND author_id = ? AND client_message_id = ? AND topic_id IS NULL
       `).get(DEFAULT_SPACE_ID, conversationId, actor.id, clientMessageId);
       if (!winner || winner.contentJson !== JSON.stringify(normalizedContent)) {
         return { idempotencyConflict: true };
@@ -3488,7 +3489,7 @@ async function requirePinTarget(db, actor, conversationId, messageId, request, a
   const message = await db.prepare(`
     SELECT id, conversation_id AS conversationId, author_id AS authorId, kind
     FROM messages
-    WHERE id = ? AND conversation_id = ? AND deleted_at IS NULL
+    WHERE id = ? AND conversation_id = ? AND topic_id IS NULL AND deleted_at IS NULL
   `).get(normalizeString(messageId), conversation.id);
   if (!message) throw new WorkspaceError("message.not_found", "消息不存在", 404);
   if (message.kind !== "user" || !message.authorId) {
@@ -3982,12 +3983,14 @@ async function enforceRetention(db, conversationId) {
     SELECT m.id
     FROM messages m
     WHERE m.conversation_id = ?
+      AND m.topic_id IS NULL
       AND m.deleted_at IS NULL
       AND NOT EXISTS (SELECT 1 FROM conversation_pinned_messages p WHERE p.message_id = m.id)
       AND m.id NOT IN (
         SELECT recent.id
         FROM messages recent
         WHERE recent.conversation_id = ?
+          AND recent.topic_id IS NULL
           AND recent.deleted_at IS NULL
           AND NOT EXISTS (SELECT 1 FROM conversation_pinned_messages p WHERE p.message_id = recent.id)
         ORDER BY recent.created_at DESC, recent.id DESC
@@ -4250,6 +4253,32 @@ async function auditMessageCreateRejection(db, request, actor, conversationId, e
 }
 
 async function canSeeEvent(db, actor, event) {
+  let eventPayload = null;
+  try {
+    eventPayload = JSON.parse(event.payloadJson);
+  } catch {
+    eventPayload = null;
+  }
+  const topicId = normalizeString(eventPayload?.topicId);
+  if (topicId) {
+    const topic = await db.prepare(`
+      SELECT id, conversation_id AS conversationId, space_id AS spaceId
+      FROM topics WHERE id = ?
+    `).get(topicId);
+    if (!topic || topic.spaceId !== DEFAULT_SPACE_ID) return false;
+    const groupMember = Boolean(await db.prepare(`
+      SELECT 1 FROM conversation_members
+      WHERE conversation_id = ? AND user_id = ? AND removed_at IS NULL
+    `).get(topic.conversationId, actor.id));
+    if (!groupMember || actor.role === "auditor") return false;
+    if (event.type.startsWith("topic.message.")) {
+      return Boolean(await db.prepare(`
+        SELECT 1 FROM topic_members
+        WHERE topic_id = ? AND user_id = ? AND left_at IS NULL
+      `).get(topicId, actor.id));
+    }
+    return true;
+  }
   if (event.type === "transfer.rejected") {
     return event.actorId === actor.id;
   }
@@ -4377,6 +4406,16 @@ async function publicWorkspaceEvent(db, actor, event) {
 async function publicWorkspaceEventPayload(db, actor, type, payload) {
   if (!payload || typeof payload !== "object") {
     return {};
+  }
+  if (payload.topicId && (type.startsWith("topic.") || type === "message.created")) {
+    return removeUndefinedValues({
+      topicId: normalizeString(payload.topicId),
+      topicMessageId: normalizeString(payload.topicMessageId),
+      projectionId: normalizeString(payload.projectionId),
+      messageId: normalizeString(payload.messageId),
+      conversationId: normalizeString(payload.conversationId),
+      topicCard: payload.topicCard === true ? true : undefined
+    });
   }
   if (type === "workspace.member_joined" || type === "workspace.member_updated") {
     const member = await publicMemberPayloadForActor(db, actor, payload.userId || payload.member);
@@ -4528,7 +4567,7 @@ async function publicMessagePayloadForActor(db, actor, message) {
       FROM messages m
       LEFT JOIN users u ON u.id = m.author_id
       LEFT JOIN user_remarks ur ON ur.owner_user_id = ? AND ur.target_user_id = u.id
-      WHERE m.id = ? AND m.deleted_at IS NULL
+      WHERE m.id = ? AND m.topic_id IS NULL AND m.deleted_at IS NULL
     `).get(actor.id, messageId);
     if (row) {
       const reactionsByMessageId = await listMessageReactionGroups(db, [row.id], actor);
