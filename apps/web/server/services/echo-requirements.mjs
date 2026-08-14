@@ -6,12 +6,29 @@ import {
   createCardRegistry,
   normalizeCardPayload
 } from "./workspace-cards.mjs";
+import { createEchoSolicitationService as createEchoSolicitationDomainService } from "./echo-solicitations.mjs";
 
 export const ECHO_REQUIREMENT_STATES = Object.freeze([
   "submitted",
   "collected",
+  "in_progress",
   "implemented",
   "rejected"
+]);
+export const ECHO_REQUIREMENT_PHASES = Object.freeze(["proposal", "formal", "archived"]);
+export const ECHO_REQUIREMENT_STATUSES = Object.freeze([
+  "pending_review",
+  "planned",
+  "in_progress",
+  "delivered",
+  "archived"
+]);
+export const ECHO_REQUIREMENT_ARCHIVE_OUTCOMES = Object.freeze([
+  "implemented",
+  "rejected",
+  "duplicate",
+  "withdrawn",
+  "cancelled"
 ]);
 export const ECHO_REQUIREMENT_TYPES = Object.freeze([
   "requirement",
@@ -38,7 +55,8 @@ export const ECHO_REQUIREMENT_LIMITS = Object.freeze({
 
 const TRANSITIONS = new Map([
   ["submitted", new Set(["collected", "rejected"])],
-  ["collected", new Set(["implemented", "rejected"])],
+  ["collected", new Set(["in_progress", "implemented", "rejected"])],
+  ["in_progress", new Set(["implemented", "rejected"])],
   ["implemented", new Set()],
   ["rejected", new Set()]
 ]);
@@ -89,6 +107,7 @@ export function createEchoRequirementService({ db, spaceId = DEFAULT_SPACE_ID, n
     submit: (input) => submitRequirement(db, { ...input, spaceId, now: now() }),
     get: (input) => getRequirement(db, { ...input, spaceId }),
     list: (input) => listRequirements(db, { ...input, spaceId }),
+    stats: (input) => requirementStats(db, { ...input, spaceId }),
     history: (input) => listRequirementHistory(db, { ...input, spaceId }),
     transition: (input) => transitionRequirement(db, { ...input, spaceId, now: now() }),
     projectEvent: (input) => projectEchoRequirementEvent(db, { ...input, spaceId }),
@@ -107,7 +126,7 @@ export async function submitRequirement(db, input) {
     const timestamp = asIsoTimestamp(input.now);
     return await db.transaction(async () => {
       await advisoryLock(db, `echo-requirement-sequence:${spaceId}:${timestamp.slice(0, 4)}`);
-      const existing = await getIdempotency(db, actor.id, "submit", idempotencyKey);
+      const existing = await getIdempotency(db, spaceId, actor.id, "submit", idempotencyKey);
       if (existing) {
         if (existing.requestHash !== requestHash) {
           throwRejected(
@@ -115,7 +134,7 @@ export async function submitRequirement(db, input) {
             auditDetails("echo.requirement.submit", null, "echo.idempotency_conflict")
           );
         }
-        const replay = await loadAuthorizedRequirement(db, existing.requirementId, actor, spaceId);
+        const replay = await replayRequirementResult(db, existing, actor, spaceId);
         if (replay) return replay;
     }
 
@@ -126,9 +145,10 @@ export async function submitRequirement(db, input) {
     await db.prepare(`
       INSERT INTO echo_requirements (
         id, public_id, space_id, submitter_user_id, type, title, detail,
-        scenario, expected_result, related_link, state, revision, response,
+        scenario, expected_result, related_link, state, phase, status, archive_outcome,
+        revision, response,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', 1, NULL, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', 'proposal', 'pending_review', NULL, 1, NULL, ?, ?)
     `).run(
       id,
       publicId,
@@ -145,16 +165,16 @@ export async function submitRequirement(db, input) {
     );
     await db.prepare(`
       INSERT INTO echo_requirement_status_history (
-        id, requirement_id, from_state, to_state, response, actor_user_id,
-        revision, idempotency_key, created_at
-      ) VALUES (?, ?, NULL, 'submitted', NULL, ?, 1, ?, ?)
+        id, requirement_id, from_state, to_state, from_phase, from_status,
+        to_phase, to_status, response, actor_user_id, revision, idempotency_key, created_at
+      ) VALUES (?, ?, NULL, 'submitted', NULL, NULL, 'proposal', 'pending_review', NULL, ?, 1, ?, ?)
     `).run(randomUUID(), id, actor.id, idempotencyKey, timestamp);
     await db.prepare(`
       INSERT INTO echo_requirement_idempotency (
-        actor_user_id, operation, idempotency_key, request_hash,
-        requirement_id, resulting_state, resulting_revision, created_at
-      ) VALUES (?, 'submit', ?, ?, ?, 'submitted', 1, ?)
-    `).run(actor.id, idempotencyKey, requestHash, id, timestamp);
+        space_id, actor_user_id, operation, idempotency_key, request_hash,
+        requirement_id, resulting_state, resulting_revision, result_json, created_at
+      ) VALUES (?, ?, 'submit', ?, ?, ?, 'submitted', 1, NULL, ?)
+    `).run(spaceId, actor.id, idempotencyKey, requestHash, id, timestamp);
       await writeEchoAudit(db, input.request, {
         actor,
         spaceId,
@@ -163,7 +183,12 @@ export async function submitRequirement(db, input) {
         result: "success",
         reason: "submitted"
       });
-      return await loadAuthorizedRequirement(db, id, actor, spaceId);
+      const result = await loadAuthorizedRequirement(db, id, actor, spaceId);
+      await db.prepare(`
+        UPDATE echo_requirement_idempotency SET result_json = ?
+        WHERE space_id = ? AND actor_user_id = ? AND operation = 'submit' AND idempotency_key = ?
+      `).run(JSON.stringify(result), spaceId, actor.id, idempotencyKey);
+      return result;
     });
   });
 }
@@ -181,27 +206,80 @@ export async function listRequirements(db, input) {
   const state = input.state === undefined || input.state === null || input.state === ""
     ? null
     : normalizeState(input.state);
+  const phase = input.phase === undefined || input.phase === null || input.phase === ""
+    ? null
+    : normalizePhase(input.phase);
+  const status = input.status === undefined || input.status === null || input.status === ""
+    ? null
+    : normalizeStatus(input.status);
   const limit = normalizeListLimit(input.limit);
+  const type = input.type === undefined || input.type === null || input.type === ""
+    ? null
+    : normalizeType(input.type);
+  const submitterUserId = input.submitterUserId ? normalizeRequiredIdentifier(input.submitterUserId, "echo.submitter_invalid") : null;
+  const offset = normalizeOffset(input.offset);
   const owner = actor.role === "owner";
   const rows = await db.prepare(`
-    SELECT id, public_id AS publicId, space_id AS spaceId,
-      submitter_user_id AS submitterUserId, type, title, detail, scenario,
-      expected_result AS expectedResult, related_link AS relatedLink,
-      state, revision, response, created_at AS createdAt, updated_at AS updatedAt
+    SELECT echo_requirements.id, echo_requirements.public_id AS publicId, echo_requirements.space_id AS spaceId,
+      echo_requirements.submitter_user_id AS submitterUserId, u.display_name AS submitterDisplayName,
+      u.github_login AS submitterGithubLogin, echo_requirements.type, echo_requirements.title,
+      echo_requirements.detail, echo_requirements.scenario,
+      echo_requirements.expected_result AS expectedResult, echo_requirements.related_link AS relatedLink,
+      echo_requirements.state, echo_requirements.phase, echo_requirements.status,
+      echo_requirements.archive_outcome AS archiveOutcome,
+      echo_requirements.duplicate_of_public_id AS duplicateOfPublicId,
+      echo_requirements.revision, echo_requirements.response,
+      echo_requirements.created_at AS createdAt, echo_requirements.updated_at AS updatedAt
     FROM echo_requirements
-    WHERE space_id = ?
-      AND (? IS NULL OR state = ?)
-      AND (? = 1 OR submitter_user_id = ?)
-    ORDER BY created_at DESC, id DESC
-    LIMIT ?
-  `).all(spaceId, state, state, owner ? 1 : 0, actor.id, limit);
+    INNER JOIN users u ON u.id = echo_requirements.submitter_user_id
+    WHERE echo_requirements.space_id = ?
+      AND (? IS NULL OR echo_requirements.state = ?)
+      AND (? IS NULL OR echo_requirements.phase = ?)
+      AND (? IS NULL OR echo_requirements.status = ?)
+      AND (? IS NULL OR echo_requirements.type = ?)
+      AND (? IS NULL OR echo_requirements.submitter_user_id = ?)
+      AND (? = 1 OR echo_requirements.submitter_user_id = ?)
+    ORDER BY echo_requirements.created_at DESC, echo_requirements.id DESC
+    LIMIT ? OFFSET ?
+  `).all(spaceId, state, state, phase, phase, status, status, type, type, submitterUserId, submitterUserId, owner ? 1 : 0, actor.id, limit, offset);
   return rows.map(normalizeRequirementRow);
+}
+
+/** Combined domain facade for hosts that register Echo as one module. */
+export function createEchoService(options) {
+  return Object.freeze({
+    requirements: createEchoRequirementService(options),
+    solicitations: createEchoSolicitationDomainService(options)
+  });
+}
+
+export async function requirementStats(db, input) {
+  const spaceId = normalizeRequiredIdentifier(input.spaceId ?? DEFAULT_SPACE_ID, "echo.invalid_space");
+  const actor = await requireHumanActor(db, input.actorId, spaceId);
+  const owner = actor.role === "owner";
+  const rows = await db.prepare(`
+    SELECT phase, status, COUNT(*) AS count
+    FROM echo_requirements
+    WHERE space_id = ? AND (? = 1 OR submitter_user_id = ?)
+    GROUP BY phase, status
+    ORDER BY phase ASC, status ASC
+  `).all(spaceId, owner ? 1 : 0, actor.id);
+  const totals = { total: 0, byPhase: {}, byStatus: {} };
+  for (const row of rows) {
+    const count = Number(row.count);
+    totals.total += count;
+    totals.byPhase[row.phase] = (totals.byPhase[row.phase] ?? 0) + count;
+    totals.byStatus[row.status] = count;
+  }
+  return totals;
 }
 
 export async function listRequirementHistory(db, input) {
   const requirement = await getRequirement(db, input);
   const rows = await db.prepare(`
-    SELECT id, from_state AS fromState, to_state AS toState, response,
+    SELECT id, from_state AS fromState, to_state AS toState,
+      from_phase AS fromPhase, from_status AS fromStatus,
+      to_phase AS toPhase, to_status AS toStatus, response,
       actor_user_id AS actorUserId, revision, created_at AS createdAt
     FROM echo_requirement_status_history
     WHERE requirement_id = ?
@@ -215,73 +293,91 @@ export async function transitionRequirement(db, input) {
   const actor = await requireHumanActor(db, input.actorId, spaceId);
   return await withRejectionAudit(db, input, actor, spaceId, "echo.requirement.transition", async () => {
     const publicId = normalizePublicId(input.publicId);
-    const nextState = normalizeState(input.toState ?? input.state);
+    const expected = normalizeExpectedTarget(input);
     const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
     const expectedRevision = normalizeExpectedRevision(input.expectedRevision);
     const response = input.response === undefined || input.response === null
       ? null
       : normalizeResponse(input.response);
     const timestamp = asIsoTimestamp(input.now);
-    const requestHash = hashRequest({ publicId, nextState, expectedRevision, response });
+    const requestHash = hashRequest({ spaceId, publicId, expected, expectedRevision, response, duplicateOfPublicId: input.duplicateOfPublicId ?? null });
     return await db.transaction(async () => {
-    const row = await db.prepare(`
-      SELECT id, public_id AS publicId, submitter_user_id AS submitterUserId, state, revision
-      FROM echo_requirements
-      WHERE space_id = ? AND public_id = ?
-    `).get(spaceId, publicId);
-    if (!row) {
-      throwRejected(new EchoRequirementNotFoundError(), auditDetails("echo.requirement.transition", publicId, "echo.requirement_not_found"));
-    }
-    const owner = actor.role === "owner";
-    if (!owner) {
-      throwRejected(new EchoRequirementPermissionError(), auditDetails("echo.requirement.transition", publicId, "echo.permission_denied"));
-    }
-    const existing = await getIdempotency(db, actor.id, "transition", idempotencyKey);
-    if (existing) {
-      if (existing.requestHash !== requestHash || existing.requirementId !== row.id) {
-        throwRejected(new EchoRequirementConflictError("echo.idempotency_conflict", "幂等键已用于其他处理"), auditDetails("echo.requirement.transition", publicId, "echo.idempotency_conflict"));
+      const row = await db.prepare(`
+        SELECT id, public_id AS publicId, submitter_user_id AS submitterUserId,
+          state, phase, status, archive_outcome AS archiveOutcome,
+          duplicate_of_public_id AS duplicateOfPublicId, revision
+        FROM echo_requirements
+        WHERE space_id = ? AND public_id = ?
+      `).get(spaceId, publicId);
+      if (!row) {
+        throwRejected(new EchoRequirementNotFoundError(), auditDetails("echo.requirement.transition", publicId, "echo.requirement_not_found"));
       }
-      return await loadAuthorizedRequirement(db, row.id, actor, spaceId);
-    }
-    if (row.revision !== expectedRevision) {
-      throwRejected(new EchoRequirementConflictError("echo.revision_conflict", "需求版本已变化，请刷新后重试"), auditDetails("echo.requirement.transition", publicId, "echo.revision_conflict"));
-    }
-    if (!TRANSITIONS.get(row.state)?.has(nextState)) {
-      throwRejected(new EchoRequirementConflictError("echo.invalid_transition", "需求状态不能这样变更"), auditDetails("echo.requirement.transition", publicId, "echo.invalid_transition"));
-    }
-    if (nextState === "rejected" && !response) {
-      throwRejected(new EchoRequirementError("echo.rejection_response_required", "驳回时必须填写说明"), auditDetails("echo.requirement.transition", publicId, "echo.rejection_response_required"));
-    }
-    const revision = row.revision + 1;
-    const update = await db.prepare(`
-      UPDATE echo_requirements
-      SET state = ?, revision = ?, response = ?, updated_at = ?
-      WHERE id = ? AND revision = ? AND state = ?
-    `).run(nextState, revision, response, timestamp, row.id, row.revision, row.state);
-    if (update.changes !== 1) {
-      throwRejected(new EchoRequirementConflictError("echo.revision_conflict", "需求版本已变化，请刷新后重试"), auditDetails("echo.requirement.transition", publicId, "echo.revision_conflict"));
-    }
-    await db.prepare(`
-      INSERT INTO echo_requirement_status_history (
-        id, requirement_id, from_state, to_state, response, actor_user_id,
-        revision, idempotency_key, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(randomUUID(), row.id, row.state, nextState, response, actor.id, revision, idempotencyKey, timestamp);
-    await db.prepare(`
-      INSERT INTO echo_requirement_idempotency (
-        actor_user_id, operation, idempotency_key, request_hash,
-        requirement_id, resulting_state, resulting_revision, created_at
-      ) VALUES (?, 'transition', ?, ?, ?, ?, ?, ?)
-    `).run(actor.id, idempotencyKey, requestHash, row.id, nextState, revision, timestamp);
+      if (actor.role !== "owner") {
+        throwRejected(new EchoRequirementPermissionError(), auditDetails("echo.requirement.transition", publicId, "echo.permission_denied"));
+      }
+      const existing = await getIdempotency(db, spaceId, actor.id, "transition", idempotencyKey);
+      if (existing) {
+        if (existing.requestHash !== requestHash || existing.requirementId !== row.id) {
+          throwRejected(new EchoRequirementConflictError("echo.idempotency_conflict", "幂等键已用于其他处理"), auditDetails("echo.requirement.transition", publicId, "echo.idempotency_conflict"));
+        }
+        return await replayRequirementResult(db, existing, actor, spaceId);
+      }
+      if (row.revision !== expectedRevision) {
+        throwRejected(new EchoRequirementConflictError("echo.revision_conflict", "需求版本已变化，请刷新后重试"), auditDetails("echo.requirement.transition", publicId, "echo.revision_conflict"));
+      }
+      const target = resolveRequirementTarget(row, expected, input.duplicateOfPublicId);
+      if (target.archiveOutcome === "rejected" && !response) {
+        throwRejected(new EchoRequirementError("echo.rejection_response_required", "驳回时必须填写说明"), auditDetails("echo.requirement.transition", publicId, "echo.rejection_response_required"));
+      }
+      if (target.archiveOutcome === "duplicate") {
+        if (target.duplicateOfPublicId) {
+          if (target.duplicateOfPublicId === publicId) {
+            throwRejected(new EchoRequirementError("echo.duplicate_target_invalid", "重复需求不能引用自身"), auditDetails("echo.requirement.transition", publicId, "echo.duplicate_target_invalid"));
+          }
+          const duplicate = await db.prepare(`
+            SELECT id FROM echo_requirements WHERE space_id = ? AND public_id = ?
+          `).get(spaceId, target.duplicateOfPublicId);
+          if (!duplicate) {
+            throwRejected(new EchoRequirementError("echo.duplicate_target_invalid", "重复需求引用不存在"), auditDetails("echo.requirement.transition", publicId, "echo.duplicate_target_invalid"));
+          }
+        }
+      }
+      const revision = row.revision + 1;
+      const update = await db.prepare(`
+        UPDATE echo_requirements
+        SET state = ?, phase = ?, status = ?, archive_outcome = ?, duplicate_of_public_id = ?,
+          revision = ?, response = ?, updated_at = ?
+        WHERE id = ? AND revision = ?
+      `).run(target.legacyState, target.phase, target.status, target.archiveOutcome, target.duplicateOfPublicId, revision, response, timestamp, row.id, row.revision);
+      if (update.changes !== 1) {
+        throwRejected(new EchoRequirementConflictError("echo.revision_conflict", "需求版本已变化，请刷新后重试"), auditDetails("echo.requirement.transition", publicId, "echo.revision_conflict"));
+      }
+      await db.prepare(`
+        INSERT INTO echo_requirement_status_history (
+          id, requirement_id, from_state, to_state, from_phase, from_status,
+          to_phase, to_status, response, actor_user_id, revision, idempotency_key, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(randomUUID(), row.id, row.state, target.legacyState, row.phase, row.status, target.phase, target.status, response, actor.id, revision, idempotencyKey, timestamp);
+      await db.prepare(`
+        INSERT INTO echo_requirement_idempotency (
+          space_id, actor_user_id, operation, idempotency_key, request_hash,
+          requirement_id, resulting_state, resulting_revision, result_json, created_at
+        ) VALUES (?, ?, 'transition', ?, ?, ?, ?, ?, NULL, ?)
+      `).run(spaceId, actor.id, idempotencyKey, requestHash, row.id, target.legacyState, revision, timestamp);
+      const result = await loadAuthorizedRequirement(db, row.id, actor, spaceId);
+      await db.prepare(`
+        UPDATE echo_requirement_idempotency SET result_json = ?
+        WHERE space_id = ? AND actor_user_id = ? AND operation = 'transition' AND idempotency_key = ?
+      `).run(JSON.stringify(result), spaceId, actor.id, idempotencyKey);
     await writeEchoAudit(db, input.request, {
       actor,
       spaceId,
       action: "echo.requirement.transition",
       targetId: publicId,
       result: "success",
-      reason: nextState
+      reason: target.archiveOutcome === "duplicate" ? "duplicate_proposal" : target.archiveOutcome ?? target.status
     });
-    return await loadAuthorizedRequirement(db, row.id, actor, spaceId);
+      return result;
     });
   });
 }
@@ -297,7 +393,8 @@ export async function projectEchoRequirementEvent(db, input) {
   const publicId = normalizePublicId(input.publicId ?? input.requirement?.publicId);
   const row = await db.prepare(`
     SELECT id, public_id AS publicId, submitter_user_id AS submitterUserId,
-      state, revision
+      state, phase, status, archive_outcome AS archiveOutcome,
+      duplicate_of_public_id AS duplicateOfPublicId, revision
     FROM echo_requirements
     WHERE space_id = ? AND public_id = ?
   `).get(spaceId, publicId);
@@ -311,6 +408,10 @@ export async function projectEchoRequirementEvent(db, input) {
     payload: {
       publicId: row.publicId,
       state: row.state,
+      phase: row.phase,
+      status: row.status,
+      archiveOutcome: row.archiveOutcome ?? null,
+      duplicateOfPublicId: row.duplicateOfPublicId ?? null,
       revision: Number(row.revision),
       card: {
         cardId: `echo_req_${row.publicId.toLowerCase()}`,
@@ -337,17 +438,21 @@ export async function projectEchoRequirementCard(db, input) {
   const payload = normalizeCardPayload({
     publicId: requirement.publicId,
     type: requirement.type,
-    title: requirement.title,
-    detail: requirement.detail,
-    scenario: requirement.scenario,
-    expectedResult: requirement.expectedResult,
+    title: truncateCardText(requirement.title, 120, 512),
+    detail: truncateCardText(requirement.detail, 4_000, 5_000),
+    scenario: truncateCardText(requirement.scenario, 2_000, 3_000),
+    expectedResult: truncateCardText(requirement.expectedResult, 2_000, 3_000),
     relatedLink: requirement.relatedLink,
     state: requirement.state,
+    phase: requirement.phase,
+    status: requirement.status,
+    archiveOutcome: requirement.archiveOutcome,
+    duplicateOfPublicId: requirement.duplicateOfPublicId,
     revision: requirement.revision,
-    response: requirement.response,
+    response: requirement.response ? truncateCardText(requirement.response, 2_000, 3_000) : null,
     createdAt: requirement.createdAt,
     updatedAt: requirement.updatedAt
-  }, { allowPublicUrls: true });
+  }, { allowPublicUrls: true, limits: { maxPayloadBytes: 20 * 1024, maxTextBytes: 14 * 1024 } });
   return { block: card, payload };
 }
 
@@ -356,16 +461,18 @@ export async function projectEchoRequirementListCard(db, input) {
   const actor = await requireHumanActor(db, input.actorId, spaceId);
   const requirements = await listRequirements(db, { ...input, spaceId, actorId: actor.id });
   const payload = normalizeCardPayload({
-    items: requirements.map((item) => ({
+    items: requirements.slice(0, 40).map((item) => ({
       publicId: item.publicId,
       type: item.type,
-      title: item.title,
+      title: truncateCardText(item.title, 96, 384),
       state: item.state,
+      phase: item.phase,
+      status: item.status,
       revision: item.revision,
       createdAt: item.createdAt,
       updatedAt: item.updatedAt
     }))
-  });
+  }, { limits: { maxPayloadBytes: 16 * 1024, maxTextBytes: 8 * 1024 } });
   return {
     block: {
       type: "card",
@@ -379,9 +486,9 @@ export async function projectEchoRequirementListCard(db, input) {
 }
 
 export const ECHO_REQUIREMENT_CARD_DEFINITIONS = Object.freeze([
-  Object.freeze({ cardType: "echo.request", schemaVersion: 1, allowPublicUrls: true, validatePayload: validateEchoRequestCardPayload }),
-  Object.freeze({ cardType: "echo.request-status", schemaVersion: 1, allowPublicUrls: true, validatePayload: validateEchoRequestStatusCardPayload }),
-  Object.freeze({ cardType: "echo.request-list", schemaVersion: 1, validatePayload: validateEchoRequestListCardPayload })
+  Object.freeze({ cardType: "echo.request", schemaVersion: 1, allowPublicUrls: true, validatePayload: validateEchoRequestCardPayload, limits: { maxPayloadBytes: 20 * 1024, maxTextBytes: 14 * 1024 } }),
+  Object.freeze({ cardType: "echo.request-status", schemaVersion: 1, allowPublicUrls: true, validatePayload: validateEchoRequestStatusCardPayload, limits: { maxPayloadBytes: 12 * 1024, maxTextBytes: 8 * 1024 } }),
+  Object.freeze({ cardType: "echo.request-list", schemaVersion: 1, validatePayload: validateEchoRequestListCardPayload, limits: { maxPayloadBytes: 16 * 1024, maxTextBytes: 8 * 1024 } })
 ]);
 
 export function createEchoRequirementCardRegistry() {
@@ -423,6 +530,12 @@ function validateCardCommon(payload, options = {}) {
   }
   if (!Number.isSafeInteger(payload?.revision) || payload.revision < 1) {
     throw new CardValidationError("card.domain_invalid", "需求卡片版本无效");
+  }
+  if (payload?.phase !== undefined && !ECHO_REQUIREMENT_PHASES.includes(payload.phase)) {
+    throw new CardValidationError("card.domain_invalid", "需求卡片阶段无效");
+  }
+  if (payload?.status !== undefined && !ECHO_REQUIREMENT_STATUSES.includes(payload.status)) {
+    throw new CardValidationError("card.domain_invalid", "需求卡片状态无效");
   }
 }
 
@@ -479,7 +592,9 @@ async function loadAuthorizedRequirement(db, id, actor, spaceId) {
   const row = await db.prepare(`
     SELECT id, public_id AS publicId, space_id AS spaceId, submitter_user_id AS submitterUserId,
       type, title, detail, scenario, expected_result AS expectedResult,
-      related_link AS relatedLink, state, revision, response,
+      related_link AS relatedLink, state, phase, status,
+      archive_outcome AS archiveOutcome, duplicate_of_public_id AS duplicateOfPublicId,
+      revision, response,
       created_at AS createdAt, updated_at AS updatedAt
     FROM echo_requirements
     WHERE id = ? AND space_id = ?
@@ -515,13 +630,34 @@ async function nextRequirementNumber(db, spaceId, year) {
   return number;
 }
 
-async function getIdempotency(db, actorUserId, operation, idempotencyKey) {
+async function getIdempotency(db, spaceId, actorUserId, operation, idempotencyKey) {
   return await db.prepare(`
     SELECT request_hash AS requestHash, requirement_id AS requirementId,
-      resulting_state AS resultingState, resulting_revision AS resultingRevision
+      resulting_state AS resultingState, resulting_revision AS resultingRevision,
+      result_json AS resultJson
     FROM echo_requirement_idempotency
-    WHERE actor_user_id = ? AND operation = ? AND idempotency_key = ?
-  `).get(actorUserId, operation, idempotencyKey);
+    WHERE space_id = ? AND actor_user_id = ? AND operation = ? AND idempotency_key = ?
+  `).get(spaceId, actorUserId, operation, idempotencyKey);
+}
+
+async function replayRequirementResult(db, existing, actor, spaceId) {
+  if (existing.resultJson) {
+    try {
+      const parsed = JSON.parse(existing.resultJson);
+      if (parsed && parsed.id && parsed.publicId) return parsed;
+    } catch {
+      // Fall through to a legacy reconstruction for rows written before 021.
+    }
+  }
+  const replay = await loadAuthorizedRequirement(db, existing.requirementId, actor, spaceId);
+  if (!replay) return replay;
+  return {
+    ...replay,
+    state: existing.resultingState ?? replay.state,
+    phase: legacyPhaseForState(existing.resultingState) ?? replay.phase,
+    status: legacyStatusForState(existing.resultingState) ?? replay.status,
+    revision: Number(existing.resultingRevision ?? replay.revision)
+  };
 }
 
 async function writeEchoAudit(db, request, event) {
@@ -648,6 +784,116 @@ function normalizeState(value) {
   return value;
 }
 
+function normalizePhase(value) {
+  if (!ECHO_REQUIREMENT_PHASES.includes(value)) {
+    throw new EchoRequirementError("echo.phase_invalid", "需求阶段无效");
+  }
+  return value;
+}
+
+function normalizeStatus(value) {
+  if (!ECHO_REQUIREMENT_STATUSES.includes(value)) {
+    throw new EchoRequirementError("echo.status_invalid", "需求状态无效");
+  }
+  return value;
+}
+
+function normalizeArchiveOutcome(value) {
+  if (!ECHO_REQUIREMENT_ARCHIVE_OUTCOMES.includes(value)) {
+    throw new EchoRequirementError("echo.archive_outcome_invalid", "归档结果无效");
+  }
+  return value;
+}
+
+function normalizeExpectedTarget(input) {
+  if (input.toState !== undefined || input.state !== undefined) {
+    const legacy = normalizeState(input.toState ?? input.state);
+    return legacyTarget(legacy);
+  }
+  const phase = normalizePhase(input.toPhase ?? input.phase);
+  const status = normalizeStatus(input.toStatus ?? input.status);
+  const archiveOutcome = phase === "archived"
+    ? normalizeArchiveOutcome(input.archiveOutcome)
+    : null;
+  return { phase, status, archiveOutcome };
+}
+
+function resolveRequirementTarget(row, expected, duplicateOfPublicId) {
+  const currentPhase = row.phase ?? legacyPhaseForState(row.state);
+  const currentStatus = row.status ?? legacyStatusForState(row.state);
+  if (expected.phase === "archived") {
+    if (expected.status !== "archived") {
+      throwRejected(new EchoRequirementConflictError("echo.invalid_transition", "需求状态不能这样变更"), auditDetails("echo.requirement.transition", row.publicId, "echo.invalid_transition"));
+    }
+    if (currentPhase === "archived") {
+      throwRejected(new EchoRequirementConflictError("echo.invalid_transition", "需求状态不能这样变更"), auditDetails("echo.requirement.transition", row.publicId, "echo.invalid_transition"));
+    }
+    if (expected.archiveOutcome === "implemented" && !(currentPhase === "formal" && currentStatus === "delivered")) {
+      throwRejected(new EchoRequirementConflictError("echo.invalid_transition", "只有已交付需求可以归档为已实现"), auditDetails("echo.requirement.transition", row.publicId, "echo.invalid_transition"));
+    }
+    const duplicate = expected.archiveOutcome === "duplicate"
+      ? normalizePublicId(duplicateOfPublicId)
+      : null;
+    return {
+      phase: "archived",
+      status: "archived",
+      archiveOutcome: expected.archiveOutcome,
+      duplicateOfPublicId: duplicate,
+      legacyState: expected.archiveOutcome === "implemented" ? "implemented" : "rejected"
+    };
+  }
+  if (currentPhase === "archived" || expected.phase === "proposal" && expected.status !== "pending_review") {
+    throwRejected(new EchoRequirementConflictError("echo.invalid_transition", "需求状态不能这样变更"), auditDetails("echo.requirement.transition", row.publicId, "echo.invalid_transition"));
+  }
+  const valid = currentPhase === "proposal" && currentStatus === "pending_review"
+    ? expected.phase === "formal" && expected.status === "planned"
+    : currentPhase === "formal" && currentStatus === "planned"
+      ? expected.phase === "formal" && ["in_progress", "delivered"].includes(expected.status)
+      : currentPhase === "formal" && currentStatus === "in_progress"
+        ? expected.phase === "formal" && expected.status === "delivered"
+        : false;
+  if (!valid) {
+    throwRejected(new EchoRequirementConflictError("echo.invalid_transition", "需求状态不能这样变更"), auditDetails("echo.requirement.transition", row.publicId, "echo.invalid_transition"));
+  }
+  return {
+    phase: expected.phase,
+    status: expected.status,
+    archiveOutcome: null,
+    duplicateOfPublicId: null,
+    legacyState: legacyStateForTarget(expected.phase, expected.status)
+  };
+}
+
+function legacyTarget(state) {
+  if (state === "submitted") return { phase: "proposal", status: "pending_review", archiveOutcome: null };
+  if (state === "collected") return { phase: "formal", status: "planned", archiveOutcome: null };
+  if (state === "in_progress") return { phase: "formal", status: "in_progress", archiveOutcome: null };
+  if (state === "implemented") return { phase: "formal", status: "delivered", archiveOutcome: null };
+  return { phase: "archived", status: "archived", archiveOutcome: "rejected" };
+}
+
+function legacyStateForTarget(phase, status) {
+  if (phase === "proposal") return "submitted";
+  if (phase === "formal" && status === "planned") return "collected";
+  if (phase === "formal" && status === "in_progress") return "in_progress";
+  if (phase === "formal" && status === "delivered") return "implemented";
+  return "rejected";
+}
+
+function legacyPhaseForState(state) {
+  if (state === "collected" || state === "in_progress" || state === "implemented") return "formal";
+  if (state === "rejected") return "archived";
+  return "proposal";
+}
+
+function legacyStatusForState(state) {
+  if (state === "collected") return "planned";
+  if (state === "in_progress") return "in_progress";
+  if (state === "implemented") return "delivered";
+  if (state === "rejected") return "archived";
+  return "pending_review";
+}
+
 function normalizePublicId(value) {
   const normalized = typeof value === "string" ? value.trim().toUpperCase() : "";
   if (!/^REQ-\d{4}-\d{4}$/.test(normalized)) {
@@ -679,6 +925,15 @@ function normalizeListLimit(value) {
   return Math.min(parsed, ECHO_REQUIREMENT_LIMITS.listLimit);
 }
 
+function normalizeOffset(value) {
+  if (value === undefined || value === null || value === "") return 0;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new EchoRequirementError("echo.offset_invalid", "列表偏移无效");
+  }
+  return parsed;
+}
+
 function normalizeRequiredIdentifier(value, code) {
   const normalized = typeof value === "string" ? value.trim() : "";
   if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(normalized)) {
@@ -704,6 +959,8 @@ function normalizeRequirementRow(row) {
     publicId: row.publicId,
     spaceId: row.spaceId,
     submitterUserId: row.submitterUserId,
+    submitterDisplayName: row.submitterDisplayName ?? null,
+    submitterGithubLogin: row.submitterGithubLogin ?? null,
     type: row.type,
     title: row.title,
     detail: row.detail,
@@ -711,6 +968,10 @@ function normalizeRequirementRow(row) {
     expectedResult: row.expectedResult,
     relatedLink: row.relatedLink ?? null,
     state: row.state,
+    phase: row.phase ?? legacyPhaseForState(row.state),
+    status: row.status ?? legacyStatusForState(row.state),
+    archiveOutcome: row.archiveOutcome ?? (row.state === "rejected" ? "rejected" : null),
+    duplicateOfPublicId: row.duplicateOfPublicId ?? null,
     revision: Number(row.revision),
     response: row.response ?? null,
     createdAt: normalizeTimestamp(row.createdAt),
@@ -737,3 +998,43 @@ function hashRequest(value) {
 function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
+
+function truncateCardText(value, maxCodePoints, maxBytes = Number.POSITIVE_INFINITY) {
+  const normalized = typeof value === "string" ? value : "";
+  const points = Array.from(normalized);
+  if (points.length <= maxCodePoints && Buffer.byteLength(normalized, "utf8") <= maxBytes) return normalized;
+  let result = "";
+  for (const point of points) {
+    const candidate = `${result}${point}`;
+    if (Array.from(candidate).length >= maxCodePoints || Buffer.byteLength(`${candidate}…`, "utf8") > maxBytes) break;
+    result = candidate;
+  }
+  return `${result}…`;
+}
+
+export {
+  ECHO_SOLICITATION_CARD_DEFINITION,
+  ECHO_SOLICITATION_CARD_SCHEMA_VERSION,
+  ECHO_SOLICITATION_CARD_TYPE,
+  ECHO_SOLICITATION_CHOICE_MODES,
+  ECHO_SOLICITATION_LIMITS,
+  ECHO_SOLICITATION_STATUSES,
+  EchoSolicitationConflictError,
+  EchoSolicitationError,
+  EchoSolicitationNotFoundError,
+  EchoSolicitationPermissionError,
+  createEchoSolicitationCardRegistry,
+  createEchoSolicitationService,
+  createSolicitation,
+  getSolicitation,
+  listSolicitations,
+  publishSolicitation,
+  closeSolicitation,
+  withdrawSolicitation,
+  voteSolicitation,
+  listSolicitationVotes,
+  listSolicitationDeliveries,
+  markSolicitationDelivery,
+  projectSolicitationDelivery,
+  projectSolicitationCard
+} from "./echo-solicitations.mjs";
