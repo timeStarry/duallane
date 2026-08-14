@@ -8,11 +8,16 @@ COPY apps/web/package.json apps/web/package.json
 RUN pnpm install --frozen-lockfile --prod
 
 FROM ${NODE_IMAGE} AS runtime
+ARG DUALLANE_APP_VERSION=0.0.0
+ARG DUALLANE_GIT_COMMIT=unknown
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=8787
 ENV WORKSPACE_ENABLED=false
+LABEL org.opencontainers.image.title="DualLane API" \
+      org.opencontainers.image.version="${DUALLANE_APP_VERSION}" \
+      org.opencontainers.image.revision="${DUALLANE_GIT_COMMIT}"
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/package.json

@@ -26,7 +26,7 @@ test("public about page exposes the current release and accessible history", asy
   await page.getByRole("button", { name: "关于 DualLane 与版本更新" }).click();
   await expect(page).toHaveURL(/\/about$/);
   await expect(page.getByRole("heading", { name: "两种边界，一处沟通。" })).toBeVisible();
-  await expect(page.locator(".latest-release").getByText("v0.14.2", { exact: true })).toBeVisible();
+  await expect(page.locator(".latest-release").getByText("v0.14.3", { exact: true })).toBeVisible();
 
   const history = page.locator(".release-history");
   await expect(history).not.toHaveAttribute("open", "");
@@ -40,7 +40,7 @@ test("public about page exposes the current release and accessible history", asy
   await page.goForward();
   await expect(page).toHaveURL(/\/about$/);
   await page.reload();
-  await expect(page.locator(".latest-release").getByText("v0.14.2", { exact: true })).toBeVisible();
+  await expect(page.locator(".latest-release").getByText("v0.14.3", { exact: true })).toBeVisible();
 });
 
 test("workspace semantic routes survive OAuth, refresh, history, and invalid resources", async ({ page }) => {
@@ -999,8 +999,11 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     });
     await ownerComposerInput.fill("超长" + "字".repeat(30_000));
     await sendWorkspaceComposer(ownerGroupRegion);
-    const generatedTxtStage = ownerGroupRegion.locator(".workspace-staged-file.failed").filter({ hasText: "长消息-" });
-    await expect(generatedTxtStage).toBeVisible();
+    const failedLongMessage = ownerGroupRegion.locator("article.workspace-message").filter({ hasText: "长消息-" });
+    await expect(failedLongMessage.getByText("文件上传失败，消息尚未发送", { exact: true })).toBeVisible();
+    await expect(failedLongMessage.getByRole("button", { name: "重试上传", exact: true })).toBeVisible();
+    await expect(ownerComposerInput).toBeEditable();
+    await expect(ownerComposerInput).toBeFocused();
     const editedAfterFailure = `workspace-e2e-long-message-edited-${memberSuffix}`;
     await ownerComposerInput.fill(editedAfterFailure);
     const editedMessageRequest = ownerPage.waitForRequest((request) =>
@@ -1011,8 +1014,9 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       content: { blocks: Array<{ type: string; text?: string }> };
     };
     expect(editedMessagePayload.content.blocks).toEqual([{ type: "text", text: editedAfterFailure }]);
-    await expect(ownerGroupRegion.locator(".workspace-staged-file").filter({ hasText: "长消息-" })).toHaveCount(0);
     await expect(memberGroupRegion.getByText(editedAfterFailure, { exact: true })).toBeVisible();
+    await failedLongMessage.getByRole("button", { name: "移除", exact: true }).click();
+    await expect(failedLongMessage).toHaveCount(0);
     await ownerPage.unroute("**/api/workspace/files/uploads/reserve");
 
     await memberConversation.click();
@@ -1117,9 +1121,37 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(memberGroupRegion.getByRole("button", { name: `预览图片 ${pastedImageName}` })).toHaveCount(0);
     await expect(memberGroupRegion.getByRole("button").filter({ hasText: fileName })).toHaveCount(0);
 
+    let releaseHeldUpload!: () => void;
+    let holdNextUploadContent = true;
+    const heldUploadGate = new Promise<void>((resolve) => { releaseHeldUpload = resolve; });
+    await ownerPage.route("**/api/workspace/files/uploads/*/content", async (route) => {
+      if (holdNextUploadContent) {
+        holdNextUploadContent = false;
+        await heldUploadGate;
+      }
+      await route.continue();
+    });
     await sendWorkspaceComposer(ownerGroupRegion);
-    await expect(stagedFiles.locator(".workspace-staged-file.failed")).toHaveCount(1);
-    await expect(stagedFiles.locator(".workspace-staged-file.uploaded")).toHaveCount(1);
+    await expect(stagedFiles).toHaveCount(0);
+    const backgroundUploads = ownerGroupRegion.getByLabel("后台上传附件");
+    await expect(backgroundUploads).toBeVisible();
+    await expect(ownerGroupRegion.getByText(/后台上传 \d+% · 完成后自动发送/)).toBeVisible();
+    await expect(ownerComposerInput).toBeEditable();
+    await expect(ownerComposerInput).toBeFocused();
+
+    const messageDuringUpload = `workspace-e2e-message-during-upload-${memberSuffix}`;
+    const messageDuringUploadResponse = ownerPage.waitForResponse((response) =>
+      response.url().endsWith("/api/workspace/messages") && response.request().method() === "POST"
+    );
+    await ownerComposerInput.fill(messageDuringUpload);
+    await sendWorkspaceComposer(ownerGroupRegion);
+    expect((await messageDuringUploadResponse).status()).toBe(201);
+    await expect(memberGroupRegion.getByText(messageDuringUpload, { exact: true })).toBeVisible();
+
+    releaseHeldUpload();
+    const failedAttachmentMessage = ownerGroupRegion.locator("article.workspace-message").filter({ hasText: fileName });
+    await expect(failedAttachmentMessage.getByText("文件上传失败，消息尚未发送", { exact: true })).toBeVisible();
+    await expect(failedAttachmentMessage.getByRole("button", { name: "重试上传", exact: true })).toBeVisible();
     expect(attachmentReserveCount).toBe(2);
     await expect(memberGroupRegion.getByRole("button", { name: `预览图片 ${pastedImageName}` })).toHaveCount(0);
     await expect(memberGroupRegion.getByRole("button").filter({ hasText: fileName })).toHaveCount(0);
@@ -1127,12 +1159,13 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     const attachmentMessageRequest = ownerPage.waitForRequest((request) =>
       request.url().endsWith("/api/workspace/messages") && request.method() === "POST"
     );
-    await sendWorkspaceComposer(ownerGroupRegion);
+    await failedAttachmentMessage.getByRole("button", { name: "重试上传", exact: true }).click();
     const attachmentPayload = (await attachmentMessageRequest).postDataJSON() as {
       content: { blocks: Array<{ type: string }> };
     };
     expect(attachmentPayload.content.blocks.filter((block) => block.type === "attachment")).toHaveLength(2);
     expect(attachmentReserveCount).toBe(3);
+    await ownerPage.unroute("**/api/workspace/files/uploads/*/content");
     await ownerPage.unroute("**/api/workspace/files/uploads/reserve");
 
     const pastedImageCard = memberGroupRegion.getByRole("button", { name: `预览图片 ${pastedImageName}` });

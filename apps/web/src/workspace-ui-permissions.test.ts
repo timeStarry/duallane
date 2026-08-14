@@ -905,6 +905,33 @@ describe("workspace UI permission boundaries", () => {
     expect(submitSource.indexOf("uploadCompleted = true")).toBeLessThan(submitSource.indexOf("await submitWorkspaceMessage"));
   });
 
+  it("keeps the composer available while attachment messages upload in the background", () => {
+    const source = readSource();
+    const sendStart = source.indexOf("async function sendWorkspaceMessage");
+    const sendEnd = source.indexOf("async function sendWorkspaceImageEmote", sendStart);
+    expect(sendStart).toBeGreaterThan(-1);
+    expect(sendEnd).toBeGreaterThan(sendStart);
+    const sendSource = source.slice(sendStart, sendEnd);
+
+    expect(sendSource).toContain("pendingAttachments: stagedAttachments.length > 0 ? stagedAttachments : undefined");
+    expect(sendSource).toContain('state: stagedAttachments.length > 0 ? "uploading" : "sending"');
+    expect(sendSource).toContain('setWorkspaceConversationDraft(conversation.id, "")');
+    expect(sendSource).toContain("updateWorkspaceComposerAttachments(conversation.id, () => [])");
+    expect(sendSource).toContain("void deliverWorkspaceLocalMessage(localMessage)");
+    expect(sendSource).not.toContain("setWorkspaceSending");
+
+    const chatStart = source.indexOf("function WorkspaceChatPanel");
+    const chatEnd = source.indexOf("function MentionPicker", chatStart);
+    expect(chatStart).toBeGreaterThan(-1);
+    expect(chatEnd).toBeGreaterThan(chatStart);
+    const chatSource = source.slice(chatStart, chatEnd);
+    expect(chatSource).toContain("const sendDisabled = !draft.trim() && stagedAttachments.length === 0");
+    expect(chatSource).toContain("readOnly={false}");
+    expect(source).toContain('aria-label="后台上传附件"');
+    expect(chatSource).toContain("后台上传 ${getWorkspacePendingAttachmentProgress(message.pendingAttachments ?? [])}%");
+    expect(chatSource).toContain("onCancelMessage(message.id)");
+  });
+
   it("delegates reserved downloads through the same-origin browser route without buffering file bytes", () => {
     const source = readSource();
     const downloadStart = source.indexOf("async function reserveWorkspaceDownload");

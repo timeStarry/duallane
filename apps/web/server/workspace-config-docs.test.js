@@ -96,6 +96,50 @@ describe("workspace configuration docs", () => {
     expect(deploy.indexOf("preflight_web_candidate")).toBeLessThan(deploy.lastIndexOf("compose up -d --no-deps --wait --wait-timeout 120 web"));
   });
 
+  it("gates production releases by commit and version, then releases build resources", async () => {
+    const deploy = await readFile(path.join(repoRoot, "deploy", "production", "deploy.sh"), "utf8");
+    const apiDockerfile = await readFile(path.join(repoRoot, "Dockerfile.api"), "utf8");
+    const webDockerfile = await readFile(path.join(repoRoot, "Dockerfile.web"), "utf8");
+    const envExample = await readFile(path.join(repoRoot, ".env.example"), "utf8");
+    const readme = await readFile(path.join(repoRoot, "README.md"), "utf8");
+    const agents = await readFile(path.join(repoRoot, "AGENTS.md"), "utf8");
+
+    expect(deploy).toContain("--expected-commit is required for production deployment");
+    expect(deploy).toContain("--expected-commit must be a full 40-character lowercase Git SHA");
+    expect(deploy).toContain('production_dir="${production_dir:-${HOME}/duallane}"');
+    expect(deploy).toContain('if [[ "${PROJECT_DIR}" != "${production_dir}" ]]');
+    expect(deploy).toContain('current_branch}" != "main"');
+    expect(deploy).toContain("refs/remotes/origin/main");
+    expect(deploy).toContain("version_is_greater");
+    expect(deploy).toContain('running_app_commit}" != "${current_commit}');
+    expect(deploy).toContain('wait_for_app "${health_url}" "${expected_app_version}"');
+    expect(deploy).toContain("JSON.parse(process.argv[1])");
+    expect(deploy).toContain("verify_container_release");
+    expect(deploy).toContain('prune_buildx_cache "${buildx_cache_max}"');
+    expect(deploy).toContain("trap on_exit EXIT");
+    expect(deploy).toContain("stop_buildx_builder");
+    for (const dockerfile of [apiDockerfile, webDockerfile]) {
+      expect(dockerfile).toContain("org.opencontainers.image.version");
+      expect(dockerfile).toContain("org.opencontainers.image.revision");
+    }
+    expect(envExample).toContain("DUALLANE_PRODUCTION_DIR=");
+    expect(readme).toContain("/home/timestarry/duallane");
+    expect(agents).toContain("Deploy production only from the local checkout at `/home/timestarry/duallane`");
+    expect(agents).toContain("Do not use SSH or SCP");
+  });
+
+  it("bounds production container logs", async () => {
+    const compose = await readFile(path.join(repoRoot, "docker-compose.production.yml"), "utf8");
+    const envExample = await readFile(path.join(repoRoot, ".env.example"), "utf8");
+
+    expect(compose.match(/driver: json-file/g)).toHaveLength(4);
+    expect(compose.match(/max-size:/g)).toHaveLength(4);
+    expect(compose.match(/max-file:/g)).toHaveLength(4);
+    expect(envExample).toContain("DUALLANE_LOG_MAX_SIZE=10m");
+    expect(envExample).toContain("DUALLANE_LOG_MAX_FILE=5");
+    expect(envExample).toContain("DUALLANE_BUILDX_CACHE_MAX=4gb");
+  });
+
   it("keeps private S3 storage, migration tooling, and public delivery documented and wired", async () => {
     const compose = await readFile(path.join(repoRoot, "docker-compose.yml"), "utf8");
     const envExample = await readFile(path.join(repoRoot, ".env.example"), "utf8");

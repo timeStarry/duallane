@@ -3,6 +3,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.web
+      args:
+        DUALLANE_APP_VERSION: ${DUALLANE_APP_VERSION:-0.0.0}
+        DUALLANE_GIT_COMMIT: ${DUALLANE_GIT_COMMIT:-unknown}
     ports:
       - "${DUALLANE_WEB_BIND:-127.0.0.1}:${DUALLANE_WEB_PORT:-8787}:8080"
     depends_on:
@@ -19,6 +22,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
+      args:
+        DUALLANE_APP_VERSION: ${DUALLANE_APP_VERSION:-0.0.0}
+        DUALLANE_GIT_COMMIT: ${DUALLANE_GIT_COMMIT:-unknown}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -161,6 +167,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
+      args:
+        DUALLANE_APP_VERSION: ${DUALLANE_APP_VERSION:-0.0.0}
+        DUALLANE_GIT_COMMIT: ${DUALLANE_GIT_COMMIT:-unknown}
     command: ["pnpm", "--filter", "@duallane/web", "db:migrate"]
     depends_on:
       postgres:

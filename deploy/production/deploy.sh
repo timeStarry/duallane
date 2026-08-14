@@ -5,7 +5,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-readonly PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+readonly PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd -P)"
 readonly ENV_FILE="${DUALLANE_ENV_FILE:-${PROJECT_DIR}/.env}"
 readonly BACKUP_DIR="${DUALLANE_BACKUP_DIR:-${PROJECT_DIR}/backups/production}"
 readonly LOCK_FILE="${DUALLANE_DEPLOY_LOCK_FILE:-/tmp/duallane-production-deploy.lock}"
@@ -24,15 +24,21 @@ rollback_web_id=""
 rollback_web_ref=""
 candidate_api_name=""
 candidate_web_name=""
+buildx_builder=""
+buildx_builder_ready=false
+buildx_cache_max=""
+expected_app_version=""
 
 usage() {
   cat <<'EOF'
-Usage: deploy/production/deploy.sh [--bootstrap] [--expected-commit <git-sha>]
+Usage: deploy/production/deploy.sh [--bootstrap] --expected-commit <git-sha>
 
 Deploys API and Web through the production Compose override. The script refuses
 to switch an existing PostgreSQL container to a different volume. Use
 --bootstrap only when creating the first production container for an already
-provisioned POSTGRES_VOLUME_NAME.
+provisioned POSTGRES_VOLUME_NAME. The expected commit is mandatory so an
+operator cannot accidentally deploy a different checkout. The checkout must
+also match DUALLANE_PRODUCTION_DIR, which defaults to $HOME/duallane.
 EOF
 }
 
@@ -98,7 +104,64 @@ ensure_buildx_builder() {
     echo "Buildx builder ${builder_name} must use the docker-container driver" >&2
     return 1
   fi
+  buildx_builder_ready=true
   docker buildx inspect "${builder_name}" --bootstrap >/dev/null
+}
+
+stop_buildx_builder() {
+  if [[ "${buildx_builder_ready}" != true || -z "${buildx_builder}" ]]; then
+    return 0
+  fi
+  echo "Stopping Buildx builder ${buildx_builder}"
+  if ! docker buildx stop "${buildx_builder}" >/dev/null; then
+    echo "WARNING: could not stop Buildx builder ${buildx_builder}" >&2
+  fi
+  buildx_builder_ready=false
+}
+
+prune_buildx_cache() {
+  local cache_max="$1"
+  echo "Constraining Buildx cache to ${cache_max}"
+  if ! docker buildx prune \
+    --builder "${buildx_builder}" \
+    --force \
+    --max-used-space "${cache_max}" >/dev/null; then
+    echo "WARNING: could not constrain Buildx cache for ${buildx_builder}" >&2
+  fi
+}
+
+version_is_greater() {
+  local candidate="$1"
+  local current="$2"
+  local candidate_major candidate_minor candidate_patch
+  local current_major current_minor current_patch
+  IFS=. read -r candidate_major candidate_minor candidate_patch <<<"${candidate}"
+  IFS=. read -r current_major current_minor current_patch <<<"${current}"
+  if ((10#${candidate_major} != 10#${current_major})); then
+    ((10#${candidate_major} > 10#${current_major}))
+    return
+  fi
+  if ((10#${candidate_minor} != 10#${current_minor})); then
+    ((10#${candidate_minor} > 10#${current_minor}))
+    return
+  fi
+  ((10#${candidate_patch} > 10#${current_patch}))
+}
+
+read_running_app_version() {
+  local container_id="$1"
+  local image_ref version
+  version="$(docker inspect "${container_id}" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || true)"
+  if [[ -n "${version}" ]]; then
+    printf '%s\n' "${version}"
+    return 0
+  fi
+  if [[ "$(docker inspect "${container_id}" --format '{{.State.Running}}')" == "true" ]]; then
+    docker exec "${container_id}" node -p "require('/app/apps/web/package.json').version"
+    return
+  fi
+  image_ref="$(docker inspect "${container_id}" --format '{{.Image}}')"
+  docker run --rm --entrypoint node "${image_ref}" -p "require('/app/apps/web/package.json').version"
 }
 
 container_volume() {
@@ -134,17 +197,35 @@ wait_for_postgres() {
 
 wait_for_app() {
   local url="$1"
-  local attempt
+  local expected_version="$2"
+  local attempt response
   for attempt in {1..30}; do
-    if curl --fail --silent --show-error --max-time 5 "${url}" | grep -q '"ok":true'; then
-      return 0
+    if response="$(curl --fail --silent --show-error --max-time 5 "${url}" 2>/dev/null)"; then
+      if node -e '
+        const health = JSON.parse(process.argv[1]);
+        process.exit(health.ok === true && health.appVersion === process.argv[2] ? 0 : 1);
+      ' "${response}" "${expected_version}" 2>/dev/null; then
+        return 0
+      fi
     fi
     sleep 2
   done
-  echo "Application health check failed: ${url}" >&2
+  echo "Application health/version check failed: ${url} (expected ${expected_version})" >&2
   compose ps >&2 || true
   compose logs --tail 120 api web >&2 || true
   return 1
+}
+
+verify_container_release() {
+  local container_id="$1"
+  local service_name="$2"
+  local image_version image_commit
+  image_version="$(docker inspect "${container_id}" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')"
+  image_commit="$(docker inspect "${container_id}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+  if [[ "${image_version}" != "${expected_app_version}" || "${image_commit}" != "${current_commit}" ]]; then
+    echo "${service_name} release metadata mismatch: version=${image_version}, commit=${image_commit}" >&2
+    return 1
+  fi
 }
 
 wait_for_candidate() {
@@ -187,6 +268,7 @@ preflight_api_candidate() {
     -e WORKSPACE_EMAIL_WORKER_ENABLED=false \
     -e WORKSPACE_NTFY_WORKER_ENABLED=false \
     api >/dev/null
+  verify_container_release "${candidate_api_name}" api
   wait_for_candidate "${candidate_api_name}" api
   docker rm -f "${candidate_api_name}" >/dev/null
   candidate_api_name=""
@@ -196,6 +278,7 @@ preflight_web_candidate() {
   candidate_web_name="duallane-web-candidate-${current_commit:0:12}"
   docker rm -f "${candidate_web_name}" >/dev/null 2>&1 || true
   compose run -d --no-deps --name "${candidate_web_name}" web >/dev/null
+  verify_container_release "${candidate_web_name}" web
   wait_for_candidate "${candidate_web_name}" web
   docker rm -f "${candidate_web_name}" >/dev/null
   candidate_web_name=""
@@ -271,9 +354,18 @@ on_error() {
   exit "${exit_code}"
 }
 
-trap on_error ERR
+on_exit() {
+  local exit_code=$?
+  trap - EXIT
+  cleanup_candidates || true
+  stop_buildx_builder || true
+  exit "${exit_code}"
+}
 
-for command in docker curl git grep sed sha256sum flock; do
+trap on_error ERR
+trap on_exit EXIT
+
+for command in docker curl git grep node realpath sed sha256sum flock; do
   if ! command -v "${command}" >/dev/null 2>&1; then
     echo "Required command is unavailable: ${command}" >&2
     exit 1
@@ -293,23 +385,72 @@ fi
 
 cd "${PROJECT_DIR}"
 
-if ! git diff --quiet || ! git diff --cached --quiet; then
-  echo "Tracked production worktree changes must be committed before deployment" >&2
+production_dir="${DUALLANE_PRODUCTION_DIR:-$(read_env_value DUALLANE_PRODUCTION_DIR)}"
+production_dir="${production_dir:-${HOME}/duallane}"
+if [[ "${production_dir}" != /* ]]; then
+  echo "DUALLANE_PRODUCTION_DIR must be an absolute path: ${production_dir}" >&2
+  exit 1
+fi
+if ! production_dir="$(realpath -e -- "${production_dir}" 2>/dev/null)"; then
+  echo "DUALLANE_PRODUCTION_DIR does not exist: ${production_dir}" >&2
+  exit 1
+fi
+if [[ "${PROJECT_DIR}" != "${production_dir}" ]]; then
+  echo "Refusing deployment from ${PROJECT_DIR}; production checkout is ${production_dir}" >&2
   exit 1
 fi
 
+if [[ -z "${expected_commit}" ]]; then
+  echo "--expected-commit is required for production deployment" >&2
+  exit 2
+fi
+
+if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
+  echo "Production worktree must be clean before deployment" >&2
+  exit 1
+fi
+
+readonly current_branch="$(git symbolic-ref --quiet --short HEAD || true)"
+if [[ "${current_branch}" != "main" ]]; then
+  echo "Production deployment requires the main branch, found ${current_branch:-detached HEAD}" >&2
+  exit 1
+fi
 readonly current_commit="$(git rev-parse HEAD)"
-if [[ -n "${expected_commit}" && "${current_commit}" != "${expected_commit}"* ]]; then
+requested_commit="${expected_commit}"
+if [[ ! "${requested_commit}" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "--expected-commit must be a full 40-character lowercase Git SHA" >&2
+  exit 2
+fi
+if ! expected_commit="$(git rev-parse --verify "${requested_commit}^{commit}" 2>/dev/null)"; then
+  echo "Expected commit is not a valid Git commit: ${requested_commit}" >&2
+  exit 2
+fi
+if [[ "${current_commit}" != "${expected_commit}" ]]; then
   echo "Expected commit ${expected_commit}, found ${current_commit}" >&2
   exit 1
 fi
-if git show-ref --verify --quiet refs/remotes/origin/main; then
-  readonly origin_main_commit="$(git rev-parse refs/remotes/origin/main)"
-  if [[ "${current_commit}" != "${origin_main_commit}" ]]; then
-    echo "Production HEAD ${current_commit} does not match origin/main ${origin_main_commit}" >&2
-    exit 1
-  fi
+if ! git show-ref --verify --quiet refs/remotes/origin/main; then
+  echo "Production deployment requires a fetched origin/main reference" >&2
+  exit 1
 fi
+readonly origin_main_commit="$(git rev-parse refs/remotes/origin/main)"
+if [[ "${current_commit}" != "${origin_main_commit}" ]]; then
+  echo "Production HEAD ${current_commit} does not match origin/main ${origin_main_commit}" >&2
+  exit 1
+fi
+
+root_app_version="$(node -p "require('./package.json').version")"
+expected_app_version="$(node -p "require('./apps/web/package.json').version")"
+if [[ ! "${expected_app_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Invalid application version in apps/web/package.json: ${expected_app_version}" >&2
+  exit 1
+fi
+if [[ "${root_app_version}" != "${expected_app_version}" ]]; then
+  echo "Package version mismatch: root=${root_app_version}, web=${expected_app_version}" >&2
+  exit 1
+fi
+export DUALLANE_APP_VERSION="${expected_app_version}"
+export DUALLANE_GIT_COMMIT="${current_commit}"
 
 postgres_volume="${POSTGRES_VOLUME_NAME:-$(read_env_value POSTGRES_VOLUME_NAME)}"
 if [[ ! "${postgres_volume}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]+$ ]]; then
@@ -322,8 +463,11 @@ buildx_builder="${DUALLANE_BUILDX_BUILDER:-$(read_env_value DUALLANE_BUILDX_BUIL
 buildx_builder="${buildx_builder:-duallane-production}"
 buildkit_image="${DUALLANE_BUILDKIT_IMAGE:-$(read_env_value DUALLANE_BUILDKIT_IMAGE)}"
 buildkit_image="${buildkit_image:-docker.m.daocloud.io/moby/buildkit:buildx-stable-1}"
-if [[ ! "${buildx_builder}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]+$ || -z "${buildkit_image}" ]]; then
-  echo "DUALLANE_BUILDX_BUILDER or DUALLANE_BUILDKIT_IMAGE is invalid" >&2
+buildx_cache_max="${DUALLANE_BUILDX_CACHE_MAX:-$(read_env_value DUALLANE_BUILDX_CACHE_MAX)}"
+buildx_cache_max="${buildx_cache_max:-4gb}"
+if [[ ! "${buildx_builder}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]+$ || -z "${buildkit_image}" || \
+  ! "${buildx_cache_max}" =~ ^[1-9][0-9]*([KkMmGgTt]i?[Bb])?$ ]]; then
+  echo "DUALLANE_BUILDX_BUILDER, DUALLANE_BUILDKIT_IMAGE, or DUALLANE_BUILDX_CACHE_MAX is invalid" >&2
   exit 1
 fi
 
@@ -331,7 +475,6 @@ wait_for_docker
 readonly docker_started_before="$(systemctl show docker -p ExecMainStartTimestampMonotonic --value 2>/dev/null || true)"
 docker volume inspect "${postgres_volume}" >/dev/null
 compose config --quiet
-ensure_buildx_builder "${buildx_builder}" "${buildkit_image}"
 
 postgres_container="$(compose ps -a -q postgres 2>/dev/null || true)"
 if [[ -n "${postgres_container}" ]]; then
@@ -343,6 +486,21 @@ if [[ -n "${postgres_container}" ]]; then
 elif [[ "${bootstrap}" != true ]]; then
   echo "No existing PostgreSQL container was found; rerun with --bootstrap only after verifying ${postgres_volume}" >&2
   exit 1
+fi
+
+running_api_container="$(compose ps -a -q api 2>/dev/null || true)"
+if [[ -n "${running_api_container}" ]]; then
+  running_app_version="$(read_running_app_version "${running_api_container}")"
+  running_app_commit="$(docker inspect "${running_api_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)"
+  if [[ ! "${running_app_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Cannot determine a valid version for the existing API container" >&2
+    exit 1
+  fi
+  if [[ "${running_app_commit}" != "${current_commit}" ]] && \
+    ! version_is_greater "${expected_app_version}" "${running_app_version}"; then
+    echo "Release version ${expected_app_version} must be newer than running version ${running_app_version}" >&2
+    exit 1
+  fi
 fi
 
 if [[ -z "${postgres_container}" || "$(container_health "${postgres_container}")" != "healthy" ]]; then
@@ -371,16 +529,19 @@ capture_rollback_image web
 
 export BUILDX_BUILDER="${buildx_builder}"
 export COMPOSE_PARALLEL_LIMIT="${COMPOSE_PARALLEL_LIMIT:-1}"
+ensure_buildx_builder "${buildx_builder}" "${buildkit_image}"
 compose build api web migrate
 compose run --rm --no-deps migrate
 
 preflight_api_candidate
 app_replaced=true
 compose up -d --no-deps --wait --wait-timeout 120 api
+verify_container_release "$(compose ps -q api)" api
 preflight_web_candidate
 compose up -d --no-deps --wait --wait-timeout 120 web
+verify_container_release "$(compose ps -q web)" web
 
-web_bind="$(read_env_value DUALLANE_WEB_BIND)"
+web_bind="$(read_env_value st_WEB_BIND)"
 web_bind="${web_bind:-127.0.0.1}"
 web_port="$(read_env_value DUALLANE_WEB_PORT)"
 web_port="${web_port:-8787}"
@@ -397,7 +558,7 @@ if [[ ! "${health_url}" =~ ^https?:// ]]; then
   echo "DUALLANE_DEPLOY_HEALTH_URL or PUBLIC_BASE_URL must be an HTTP(S) URL" >&2
   exit 1
 fi
-wait_for_app "${health_url}"
+wait_for_app "${health_url}" "${expected_app_version}"
 
 readonly docker_started_after="$(systemctl show docker -p ExecMainStartTimestampMonotonic --value 2>/dev/null || true)"
 if [[ -n "${docker_started_before}" && "${docker_started_before}" != "${docker_started_after}" ]]; then
@@ -406,9 +567,12 @@ fi
 
 app_replaced=false
 trap - ERR
+prune_buildx_cache "${buildx_cache_max}"
+stop_buildx_builder
 
 echo "Production deployment completed"
 echo "commit=${current_commit}"
+echo "version=${expected_app_version}"
 echo "postgres_volume=${postgres_volume}"
 echo "backup=${backup_path}"
 echo "health=${health_url}"
