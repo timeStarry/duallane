@@ -541,7 +541,7 @@ preflight_web_candidate
 compose up -d --no-deps --wait --wait-timeout 120 web
 verify_container_release "$(compose ps -q web)" web
 
-web_bind="$(read_env_value st_WEB_BIND)"
+web_bind="$(read_env_value DUALLANE_WEB_BIND)"
 web_bind="${web_bind:-127.0.0.1}"
 web_port="$(read_env_value DUALLANE_WEB_PORT)"
 web_port="${web_port:-8787}"
