@@ -1,6 +1,6 @@
 CREATE TABLE echo_requirements (
   id TEXT PRIMARY KEY,
-  public_id TEXT NOT NULL UNIQUE,
+  public_id TEXT NOT NULL,
   space_id TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
   submitter_user_id TEXT NOT NULL REFERENCES users(id),
   type TEXT NOT NULL CHECK (type IN ('requirement', 'suggestion', 'problem')),
@@ -9,11 +9,12 @@ CREATE TABLE echo_requirements (
   scenario TEXT NOT NULL,
   expected_result TEXT NOT NULL,
   related_link TEXT,
-  state TEXT NOT NULL DEFAULT 'submitted' CHECK (state IN ('submitted', 'collected', 'implemented', 'rejected')),
+  state TEXT NOT NULL DEFAULT 'submitted' CHECK (state IN ('submitted', 'collected', 'in_progress', 'implemented', 'rejected')),
   revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
   response TEXT,
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
+  ,UNIQUE (space_id, public_id)
 );
 
 CREATE INDEX echo_requirements_space_state_idx
@@ -32,8 +33,8 @@ CREATE TABLE echo_requirement_sequences (
 CREATE TABLE echo_requirement_status_history (
   id TEXT PRIMARY KEY,
   requirement_id TEXT NOT NULL REFERENCES echo_requirements(id) ON DELETE CASCADE,
-  from_state TEXT CHECK (from_state IS NULL OR from_state IN ('submitted', 'collected', 'implemented', 'rejected')),
-  to_state TEXT NOT NULL CHECK (to_state IN ('submitted', 'collected', 'implemented', 'rejected')),
+  from_state TEXT CHECK (from_state IS NULL OR from_state IN ('submitted', 'collected', 'in_progress', 'implemented', 'rejected')),
+  to_state TEXT NOT NULL CHECK (to_state IN ('submitted', 'collected', 'in_progress', 'implemented', 'rejected')),
   response TEXT,
   actor_user_id TEXT NOT NULL REFERENCES users(id),
   revision INTEGER NOT NULL CHECK (revision > 0),
@@ -47,15 +48,17 @@ CREATE INDEX echo_requirement_history_requirement_idx
   ON echo_requirement_status_history (requirement_id, revision ASC);
 
 CREATE TABLE echo_requirement_idempotency (
+  space_id TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
   actor_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   operation TEXT NOT NULL CHECK (operation IN ('submit', 'transition')),
   idempotency_key TEXT NOT NULL,
   request_hash TEXT NOT NULL,
   requirement_id TEXT NOT NULL REFERENCES echo_requirements(id) ON DELETE CASCADE,
-  resulting_state TEXT NOT NULL CHECK (resulting_state IN ('submitted', 'collected', 'implemented', 'rejected')),
+  resulting_state TEXT NOT NULL CHECK (resulting_state IN ('submitted', 'collected', 'in_progress', 'implemented', 'rejected')),
   resulting_revision INTEGER NOT NULL CHECK (resulting_revision > 0),
+  result_json TEXT,
   created_at TIMESTAMPTZ NOT NULL,
-  PRIMARY KEY (actor_user_id, operation, idempotency_key)
+  PRIMARY KEY (space_id, actor_user_id, operation, idempotency_key)
 );
 
 CREATE INDEX echo_requirement_idempotency_requirement_idx
