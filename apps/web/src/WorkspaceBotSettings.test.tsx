@@ -32,4 +32,3 @@ describe("WorkspaceBotSettings policy helpers", () => {
     ]);
   });
 });
-

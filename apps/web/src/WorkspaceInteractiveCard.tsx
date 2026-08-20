@@ -1,4 +1,4 @@
-import { AlertCircle, ArrowRight, Bot, Check, Hash, ListChecks, RefreshCw } from "lucide-react";
+import { AlertCircle, ArrowRight, Bot, Check, Hash, ListChecks, MapPin, Megaphone, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { createWorkspaceJsonHeaders } from "./workspace-http";
 
@@ -16,14 +16,15 @@ const SUPPORTED_WORKSPACE_CARD_KEYS = new Set([
   "echo.solicitation@1",
   "echo.request@1",
   "echo.request-status@1",
-  "echo.request-list@1"
+  "echo.request-list@1",
+  "echo.release@1"
 ]);
 
 export function supportsWorkspaceInteractiveCard(block: WorkspaceCardBlock) {
   return SUPPORTED_WORKSPACE_CARD_KEYS.has(`${block.cardType}@${block.schemaVersion}`);
 }
 
-type WorkspaceCardProjection = {
+export type WorkspaceCardProjection = {
   block: WorkspaceCardBlock;
   payload: Record<string, unknown>;
   status: "active" | "invalidated" | "expired";
@@ -117,6 +118,9 @@ export function WorkspaceInteractiveCard({
   if (card.block.cardType === "workspace.topic-created" || card.block.cardType === "workspace.topic-message-synced") {
     return <WorkspaceTopicCard card={card} onOpenTopic={onOpenTopic} />;
   }
+  if (card.block.cardType === "echo.release") {
+    return <WorkspaceEchoReleaseCard card={card} />;
+  }
   if (card.block.cardType.startsWith("echo.")) {
     return <WorkspaceEchoCard card={card} onRefresh={() => setReloadVersion((version) => version + 1)} />;
   }
@@ -126,6 +130,43 @@ export function WorkspaceInteractiveCard({
       <Bot size={18} aria-hidden="true" />
       <span><strong>{card.block.fallbackText}</strong><small>{card.status === "active" ? "结构化消息" : cardStatusLabel(card.status)}</small></span>
     </div>
+  );
+}
+
+export function WorkspaceEchoReleaseCard({ card }: { card: WorkspaceCardProjection }) {
+  const payload = card.payload;
+  const version = stringValue(payload.version);
+  const title = stringValue(payload.title) || card.block.fallbackText;
+  const summary = stringValue(payload.summary);
+  const sections = arrayOfObjects(payload.sections);
+  const releasedAt = formatReleaseDate(stringValue(payload.releasedAt));
+  return (
+    <article className={`workspace-interactive-card echo echo-release${card.status === "active" ? "" : " unavailable"}`} role="group" aria-label={`DualLane v${version} 版本更新 ${title}`}>
+      <header className="workspace-release-card-header">
+        <span className="workspace-card-kind-icon"><Megaphone size={18} aria-hidden="true" /></span>
+        <span className="workspace-card-copy">
+          <small>版本更新{version ? ` · v${version}` : ""}{releasedAt ? ` · ${releasedAt}` : ""}</small>
+          <strong>{title}</strong>
+          {summary && <span>{summary}</span>}
+        </span>
+      </header>
+      <div className="workspace-release-sections">
+        {sections.map((section, sectionIndex) => (
+          <section key={`${stringValue(section.title)}-${sectionIndex}`}>
+            <h4>{stringValue(section.title)}</h4>
+            <div>
+              {arrayOfObjects(section.items).map((item, itemIndex) => (
+                <div className="workspace-release-item" key={`${stringValue(item.title)}-${itemIndex}`}>
+                  <strong>{stringValue(item.title)}</strong>
+                  <p>{stringValue(item.description)}</p>
+                  <span className="workspace-release-location"><MapPin size={14} aria-hidden="true" /><span>{stringValue(item.location)}</span></span>
+                </div>
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    </article>
   );
 }
 
@@ -318,4 +359,10 @@ function echoStateLabel(state: string) {
     withdrawn: "已撤回"
   };
   return labels[state] || state || "状态已更新";
+}
+
+function formatReleaseDate(value: string) {
+  const date = new Date(`${value}T00:00:00`);
+  if (!value || Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric" }).format(date);
 }

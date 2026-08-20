@@ -49,4 +49,3 @@ describe("registered Echo system identity", () => {
     expect(getSystemIdentityDefinition({ id: "usr_human_named_echo", kind: "bot" })).toBeNull();
   });
 });
-

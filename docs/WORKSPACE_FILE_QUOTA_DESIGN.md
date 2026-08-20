@@ -30,6 +30,8 @@ and [Workspace State And Feedback Design](WORKSPACE_STATE_FEEDBACK_DESIGN.md).
 - Download must check remaining quota before issuing a stream or token.
 - Quota copy should be clear and friendly, not accounting terminology.
 - Backend quota enforcement is authoritative.
+- Content-addressed storage can deduplicate physical bytes, but visibility and
+  quota remain properties of each logical Workspace resource or transfer.
 
 ## 3. User-Facing Concepts
 
@@ -94,7 +96,8 @@ Recommended fields:
 | `mime_type` | Detected or declared MIME type. |
 | `byte_size` | Stored byte size. |
 | `sha256` | Optional content hash. |
-| `storage_key` | Internal storage path/key. |
+| `storage_object_id` | Canonical content-addressed object reference. |
+| `storage_key` | Legacy compatibility path/key. |
 | `visibility` | `private_staging`, `conversation`, or `space`. |
 | `conversation_id` | Required for conversation-visible attachments. |
 | `status` | `pending`, `available`, `failed`, `removed`. |
@@ -314,6 +317,40 @@ Important distinction:
 - `completed` counts as used.
 - `released`, `failed`, and `rejected` do not count.
 
+### Content-Addressed Storage And Logical Accounting
+
+- Attachments, profile avatars, and custom emotes can reference one canonical
+  object for the same SHA-256 digest. Only one active primary physical object is
+  retained, and it is removed after the last logical reference is released.
+- Deduplication does not grant access across resources. Every attachment,
+  avatar, or emote still applies its own owner, visibility, membership, and
+  lifecycle checks.
+- Daily transfer quota continues to count the logical bytes uploaded or
+  downloaded for each request. Reusing an existing canonical object does not
+  make an accepted transfer free, and multiple downloads count independently.
+- The registry is limited to server-retained Workspace content. P2P message and
+  file payloads are excluded and must not be persisted for deduplication.
+
+Personal emotes have a separate storage allowance rather than using the daily
+transfer ledger:
+
+```text
+local_emote_limit = 1 GiB per user
+local_emote_bytes = unique logical emote rows with local placement
+subscription_only_bytes = active subscription targets without local placement
+```
+
+- `local_emote_bytes <= 1 GiB` is allowed; `1 GiB + 1 byte` is rejected.
+- There is no total emote-item or collection-count limit. One collection remains
+  limited to 100 items.
+- Active subscription-only bytes are reported separately and do not count
+  toward `local_emote_bytes`.
+- Disabling a subscription converts its retained snapshot to local accounting,
+  so the server preflights the full post-disable byte total.
+- Source deletion must preserve a detached snapshot even when that snapshot
+  places the user over 1 GiB. Existing content remains readable, while later
+  local additions are rejected until usage is back within the limit.
+
 Transfer ledger fields:
 
 | Field | Purpose |
@@ -489,6 +526,10 @@ P0:
 - File library list.
 - Conversation/group file list.
 - User-safe quota and visibility errors.
+- Canonical content-addressed objects with logical attachment/avatar/emote
+  references and last-reference cleanup.
+- Separate 1 GiB personal-emote accounting with active subscription-only bytes
+  excluded.
 
 P1:
 
@@ -519,3 +560,6 @@ P2:
 - Normal members cannot see transfer ledger rows or operation records.
 - Message retention does not hard-delete standalone files by default.
 - Backend permission and quota checks are authoritative.
+- Physical CAS deduplication does not reduce logical transfer accounting or
+  merge resource visibility.
+- P2P file bytes are never written to the Workspace object registry.

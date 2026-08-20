@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, rm, mkdtemp } from "node:fs/promises";
+import { mkdir, readFile, rm, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import sharp from "sharp";
@@ -397,7 +397,7 @@ describe("workspace routes", () => {
       ok: true,
       service: "duallane",
       lane: "ready",
-      appVersion: "0.15.0"
+      appVersion: "0.15.1"
     });
   });
 
@@ -1182,6 +1182,89 @@ describe("workspace routes", () => {
       "route-visible-member@example.com",
       "route-hidden-member@example.com"
     ]);
+  });
+
+  it("creates an owner-only custom Bot direct chat and explicitly upgrades its context grant", async () => {
+    const app = await makeApp();
+    const createdBot = await app.inject({
+      method: "POST",
+      url: "/api/workspace/bots",
+      headers: { "content-type": "application/json", "x-workspace-user-id": "usr_owner" },
+      payload: { name: "Route Direct Bot" }
+    });
+    expect(createdBot.statusCode).toBe(201);
+    const bot = createdBot.json().bot;
+
+    const members = await app.inject({
+      method: "GET",
+      url: "/api/workspace/members",
+      headers: { "x-workspace-user-id": "usr_owner" }
+    });
+    expect(members.json().members.find((member) => member.id === bot.botUserId))
+      .toMatchObject({ kind: "bot", capabilities: { canStartDirectConversation: true } });
+
+    const outsiderId = "usr_route_bot_direct_outsider";
+    const fixtureDb = openTestDatabase(dataDir);
+    const timestamp = new Date().toISOString();
+    fixtureDb.prepare(`INSERT INTO users
+      (id, github_id, github_login, email, display_name, avatar_url, kind, created_at, last_login_at)
+      VALUES (?, NULL, ?, NULL, ?, NULL, 'human', ?, NULL)`)
+      .run(outsiderId, "route-bot-direct-outsider", "Route Bot Outsider", timestamp);
+    fixtureDb.prepare(`INSERT INTO space_members (space_id, user_id, role, joined_at, removed_at)
+      VALUES ('spc_default', ?, 'member', ?, NULL)`).run(outsiderId, timestamp);
+    fixtureDb.close();
+
+    const outsiderAttempt = await app.inject({
+      method: "POST",
+      url: "/api/workspace/conversations",
+      headers: { "content-type": "application/json", "x-workspace-user-id": outsiderId },
+      payload: { type: "direct", targetUserId: bot.botUserId }
+    });
+    expect(outsiderAttempt.statusCode).toBe(400);
+    expect(outsiderAttempt.json().error.code).toBe("conversation.invalid_target");
+
+    const direct = await app.inject({
+      method: "POST",
+      url: "/api/workspace/conversations",
+      headers: { "content-type": "application/json", "x-workspace-user-id": "usr_owner" },
+      payload: { type: "direct", targetUserId: bot.botUserId }
+    });
+    expect(direct.statusCode).toBe(201);
+    const conversationId = direct.json().conversation.id;
+    const bootstrapGrantDb = openTestDatabase(dataDir);
+    expect(bootstrapGrantDb.prepare(`SELECT allow_trigger AS allowTrigger, allow_context AS allowContext
+      FROM workspace_agent_bot_context_grants WHERE bot_id = ? AND conversation_id = ?`).get(bot.id, conversationId))
+      .toEqual({ allowTrigger: 1, allowContext: 0 });
+    bootstrapGrantDb.close();
+
+    const upgraded = await app.inject({
+      method: "PATCH",
+      url: `/api/workspace/bots/${bot.id}/context-grants/${conversationId}`,
+      headers: { "content-type": "application/json", "x-workspace-user-id": "usr_owner" },
+      payload: { allowContext: true, maxMessages: 20 }
+    });
+    expect(upgraded.statusCode).toBe(200);
+    expect(upgraded.json().grant).toMatchObject({
+      botId: bot.id,
+      conversationId,
+      allowTrigger: true,
+      allowContext: true,
+      maxMessages: 20
+    });
+
+    expect((await app.inject({
+      method: "POST",
+      url: `/api/workspace/bots/${bot.id}/pause`,
+      headers: { "x-workspace-user-id": "usr_owner" }
+    })).statusCode).toBe(200);
+    const pausedAttempt = await app.inject({
+      method: "POST",
+      url: "/api/workspace/conversations",
+      headers: { "content-type": "application/json", "x-workspace-user-id": "usr_owner" },
+      payload: { type: "direct", targetUserId: bot.botUserId }
+    });
+    expect(pausedAttempt.statusCode).toBe(400);
+    expect(pausedAttempt.json().error.code).toBe("conversation.invalid_target");
   });
 
   it("revokes invites through workspace routes", async () => {
@@ -4968,9 +5051,18 @@ describe("workspace routes", () => {
     expect(complete.json().attachment.status).toBe("available");
     expect(complete.json().attachment.storageKey).toBeUndefined();
 
-    const storageKey = getAttachmentStorageKey(upload.attachment.id);
-    expect(storageKey).toBeTruthy();
-    const stored = await readFile(path.join(dataDir, "workspace-files", storageKey));
+    const storageDb = openTestDatabase(dataDir);
+    const storage = storageDb.prepare(`
+      SELECT a.storage_key AS storageKey, so.object_key AS objectKey
+      FROM attachments a
+      INNER JOIN workspace_storage_objects so ON so.id = a.storage_object_id
+      WHERE a.id = ?
+    `).get(upload.attachment.id);
+    storageDb.close();
+    expect(storage.objectKey).toBeTruthy();
+    await expect(readFile(path.join(dataDir, "workspace-files", storage.storageKey)))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    const stored = await readFile(path.join(dataDir, "workspace-files", storage.objectKey));
     expect(stored.equals(content)).toBe(true);
 
     const downloadReserve = await app.inject({
@@ -5003,6 +5095,207 @@ describe("workspace routes", () => {
     });
     expect(after.statusCode).toBe(200);
     expect(after.json().policy.usedTodayBytes).toBe(content.byteLength * 2);
+  });
+
+  it("reuses one live content object for avatar and attachment bytes until both HTTP resources are removed", async () => {
+    const app = await makeApp();
+    const avatarInput = await sharp({
+      create: { width: 48, height: 48, channels: 3, background: "#236d78" }
+    }).png().toBuffer();
+    const avatarUpload = await app.inject({
+      method: "PUT",
+      url: "/api/workspace/me/avatar",
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(avatarInput.byteLength),
+        "x-workspace-user-id": "usr_owner"
+      },
+      payload: avatarInput
+    });
+    expect(avatarUpload.statusCode).toBe(200);
+
+    const avatarPath = getOwnerAvatarPath();
+    const avatar = await app.inject({
+      method: "GET",
+      url: avatarPath,
+      headers: { "x-workspace-user-id": "usr_owner" }
+    });
+    expect(avatar.statusCode).toBe(200);
+    expect(avatar.headers["content-type"]).toBe("image/webp");
+    const normalizedAvatar = avatar.rawPayload;
+
+    const reserve = await app.inject({
+      method: "POST",
+      url: "/api/workspace/files/uploads/reserve",
+      headers: { "content-type": "application/json", "x-workspace-user-id": "usr_owner" },
+      payload: {
+        fileName: "avatar-copy.webp",
+        mimeType: "image/webp",
+        byteSize: normalizedAvatar.byteLength,
+        visibility: "space"
+      }
+    });
+    expect(reserve.statusCode).toBe(201);
+    const upload = reserve.json();
+    const completed = await app.inject({
+      method: "PUT",
+      url: `/api/workspace/files/uploads/${upload.id}/content`,
+      headers: { "content-type": "application/octet-stream", "x-workspace-user-id": "usr_owner" },
+      payload: normalizedAvatar
+    });
+    expect(completed.statusCode).toBe(200);
+
+    const storageDb = openTestDatabase(dataDir);
+    const references = storageDb.prepare(`
+      SELECT
+        u.avatar_storage_object_id AS avatarObjectId,
+        u.avatar_storage_key AS avatarStorageKey,
+        a.storage_object_id AS attachmentObjectId,
+        a.storage_key AS attachmentStorageKey,
+        so.object_key AS objectKey,
+        so.deleted_at AS deletedAt
+      FROM users u, attachments a
+      INNER JOIN workspace_storage_objects so ON so.id = a.storage_object_id
+      WHERE u.id = 'usr_owner' AND a.id = ?
+    `).get(upload.attachment.id);
+    storageDb.close();
+    expect(references.avatarObjectId).toBe(references.attachmentObjectId);
+    expect(references.deletedAt).toBeNull();
+    await expect(readFile(path.join(dataDir, "workspace-files", references.avatarStorageKey)))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(path.join(dataDir, "workspace-files", references.attachmentStorageKey)))
+      .rejects.toMatchObject({ code: "ENOENT" });
+
+    const preview = await app.inject({
+      method: "GET",
+      url: `/api/workspace/files/${upload.attachment.id}/preview`,
+      headers: { "x-workspace-user-id": "usr_owner" }
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.rawPayload.equals(normalizedAvatar)).toBe(true);
+
+    expect((await app.inject({
+      method: "DELETE",
+      url: `/api/workspace/files/${upload.attachment.id}`,
+      headers: { "x-workspace-user-id": "usr_owner" }
+    })).statusCode).toBe(200);
+    expect((await app.inject({
+      method: "GET",
+      url: avatarPath,
+      headers: { "x-workspace-user-id": "usr_owner" }
+    })).statusCode).toBe(200);
+
+    expect((await app.inject({
+      method: "DELETE",
+      url: "/api/workspace/me/avatar",
+      headers: { "x-workspace-user-id": "usr_owner" }
+    })).statusCode).toBe(200);
+    const releasedDb = openTestDatabase(dataDir);
+    const released = releasedDb.prepare(`
+      SELECT deleted_at AS deletedAt FROM workspace_storage_objects WHERE id = ?
+    `).get(references.avatarObjectId);
+    releasedDb.close();
+    expect(released.deletedAt).toEqual(expect.any(String));
+    await expect(readFile(path.join(dataDir, "workspace-files", references.objectKey)))
+      .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("falls back to legacy attachment bytes when the referenced canonical registry row is deleted", async () => {
+    const app = await makeApp();
+    const canonical = Buffer.from("canonical", "utf8");
+    const legacy = Buffer.from("fallback!", "utf8");
+    const reserve = await app.inject({
+      method: "POST",
+      url: "/api/workspace/files/uploads/reserve",
+      headers: { "content-type": "application/json", "x-workspace-user-id": "usr_owner" },
+      payload: {
+        fileName: "fallback.png",
+        mimeType: "image/png",
+        byteSize: canonical.byteLength,
+        visibility: "space"
+      }
+    });
+    const upload = reserve.json();
+    expect((await app.inject({
+      method: "PUT",
+      url: `/api/workspace/files/uploads/${upload.id}/content`,
+      headers: { "content-type": "application/octet-stream", "x-workspace-user-id": "usr_owner" },
+      payload: canonical
+    })).statusCode).toBe(200);
+
+    const fallbackDb = openTestDatabase(dataDir);
+    const stored = fallbackDb.prepare(`
+      SELECT storage_key AS storageKey, storage_object_id AS storageObjectId
+      FROM attachments WHERE id = ?
+    `).get(upload.attachment.id);
+    fallbackDb.prepare("UPDATE workspace_storage_objects SET deleted_at = ? WHERE id = ?")
+      .run(new Date().toISOString(), stored.storageObjectId);
+    fallbackDb.close();
+    const legacyPath = path.join(dataDir, "workspace-files", stored.storageKey);
+    await mkdir(path.dirname(legacyPath), { recursive: true });
+    await writeFile(legacyPath, legacy);
+
+    const preview = await app.inject({
+      method: "GET",
+      url: `/api/workspace/files/${upload.attachment.id}/preview`,
+      headers: { "x-workspace-user-id": "usr_owner" }
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.rawPayload.equals(legacy)).toBe(true);
+  });
+
+  it("cleans an acquired canonical attachment object when upload completion rolls back", async () => {
+    const app = await makeApp();
+    const content = Buffer.from("rollback canonical upload", "utf8");
+    const sha256 = createHash("sha256").update(content).digest("hex");
+    const reserve = await app.inject({
+      method: "POST",
+      url: "/api/workspace/files/uploads/reserve",
+      headers: { "content-type": "application/json", "x-workspace-user-id": "usr_owner" },
+      payload: {
+        fileName: "rollback.txt",
+        mimeType: "text/plain",
+        byteSize: content.byteLength,
+        visibility: "space"
+      }
+    });
+    expect(reserve.statusCode).toBe(201);
+    const upload = reserve.json();
+
+    const triggerDb = openTestDatabase(dataDir);
+    triggerDb.exec(`
+      CREATE TRIGGER fail_live_upload_complete_audit
+      BEFORE INSERT ON audit_logs
+      WHEN NEW.action = 'file.upload.completed'
+      BEGIN
+        SELECT RAISE(ABORT, 'upload complete audit failed');
+      END
+    `);
+    triggerDb.close();
+
+    const failed = await app.inject({
+      method: "PUT",
+      url: `/api/workspace/files/uploads/${upload.id}/content`,
+      headers: { "content-type": "application/octet-stream", "x-workspace-user-id": "usr_owner" },
+      payload: content
+    });
+    expect(failed.statusCode).toBe(500);
+
+    const rolledBackDb = openTestDatabase(dataDir);
+    const state = rolledBackDb.prepare(`
+      SELECT a.status AS attachmentStatus, tl.status AS transferStatus,
+        (SELECT COUNT(*) FROM workspace_storage_objects WHERE sha256 = ?) AS objectCount
+      FROM attachments a
+      INNER JOIN transfer_ledger tl ON tl.attachment_id = a.id
+      WHERE a.id = ?
+    `).get(sha256, upload.attachment.id);
+    rolledBackDb.close();
+    expect(state).toEqual({ attachmentStatus: "failed", transferStatus: "failed", objectCount: 0 });
+    await expect(readFile(path.join(
+      dataDir,
+      "workspace-files",
+      `workspace/objects/sha256/${sha256.slice(0, 2)}/${sha256}`
+    ))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("previews visible images inline without consuming download quota", async () => {
@@ -5523,9 +5816,17 @@ describe("workspace routes", () => {
     expect(complete.statusCode).toBe(200);
     expect(complete.json().attachment.storageKey).toBeUndefined();
 
-    const storageKey = getAttachmentStorageKey(upload.attachment.id);
-    expect(storageKey).toBeTruthy();
-    await rm(path.join(dataDir, "workspace-files", storageKey), { force: true });
+    const missingDb = openTestDatabase(dataDir);
+    const storage = missingDb.prepare(`
+      SELECT a.storage_key AS storageKey, so.object_key AS objectKey
+      FROM attachments a
+      INNER JOIN workspace_storage_objects so ON so.id = a.storage_object_id
+      WHERE a.id = ?
+    `).get(upload.attachment.id);
+    missingDb.close();
+    expect(storage.objectKey).toBeTruthy();
+    await rm(path.join(dataDir, "workspace-files", storage.objectKey), { force: true });
+    await rm(path.join(dataDir, "workspace-files", storage.storageKey), { force: true });
 
     const downloadReserve = await app.inject({
       method: "POST",

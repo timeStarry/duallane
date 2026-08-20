@@ -4,17 +4,25 @@
 
 - Product name: `回声`
 - Internal module name: `Echo Bot`
-- Status: design proposal
+- Status: implemented in v0.15, extended in v0.15.1
 - Scope: Shared Space / Workspace audited relay lane
 - Related system bot: `信标` (personal file and content transfer assistant)
 
-This document defines the product behavior, trust boundaries, reusable interaction infrastructure, domain model, permissions, protocol direction, and acceptance criteria for the Workspace `回声` bot.
+This document records the implemented product behavior, trust boundaries, reusable interaction infrastructure, domain model, permissions, protocol contract, and acceptance criteria for the Workspace `回声` bot in v0.15.
 
-`回声` must be implemented as a consumer of reusable Workspace card, command, workflow, permission, audit, and realtime components. It must not introduce a private message format or a second authorization path that only works for this bot.
+`回声` is implemented as a consumer of reusable Workspace card, command, workflow, permission, audit, and realtime components. It does not introduce a private message format or a second authorization path that only works for this bot.
+
+### 1.1 Implementation Status
+
+The v0.15 implementation includes the protected `回声` identity, reusable direct conversations, registered slash commands, revisioned guided workflows, typed interactive cards and actions, requirement and solicitation persistence, voting, idempotent delivery, permission-filtered realtime updates, audit metadata, owner management surfaces, and the chat-composer command/workflow UI. v0.15.1 adds owner-triggered version update publication through `/release <version>`, immutable detailed usage-guide snapshots, and resumable delivery to every active human member in the current space.
+
+Echo commands are user-visible in direct conversations with `回声`. The command framework and client recognizer also enforce an addressed-mention context, but the v0.15 Echo identity remains direct-only and cannot join ordinary groups. Workflow start, continue, and cancel operations are authenticated, context-bound, rate-limited, audited, idempotent where applicable, and protected by revision compare-and-swap rules.
+
+The following remain outside the v0.15 Echo scope: AI-generated decisions, automatic prioritization, external issue-tracker synchronization, cross-space aggregation, anonymous voting, arbitrary remote card UI, Echo participation in group chats, workflow attachments, and deadline reminder scheduling. The separate custom Agent Bot platform does not change Echo's server-managed identity or deterministic behavior.
 
 ## 2. Product Positioning
 
-`回声` is a built-in Workspace bot for publishing requirement solicitations, collecting votes, receiving private requirements and feedback, and returning processing status.
+`回声` is a built-in Workspace bot for publishing requirement solicitations, collecting votes, receiving private requirements and feedback, returning processing status, and broadcasting detailed version usage guides.
 
 The aerospace communication naming family is:
 
@@ -36,6 +44,7 @@ The name `回声` represents a signal that is sent, received, and answered. The 
 - Let space owners process submissions through explicit states and responses.
 - Let owners list and filter all collected and implemented requirements.
 - Establish reusable card and command infrastructure for future Workspace features.
+- Let authorized owners broadcast a registered version guide that tells members what changed and where to use it.
 - Preserve Workspace RBAC, retention, quota, audit, event filtering, and log-redaction invariants.
 
 ## 4. Non-Goals
@@ -44,10 +53,11 @@ The first release does not include:
 
 - AI-generated requirement analysis or automatic decisions.
 - Automatic approval, rejection, prioritization, or implementation claims.
-- User-created bots or arbitrary third-party bot code.
-- Group-chat bots.
+- User-created or third-party code executing as `回声`; custom Agent Bots use a separate platform and identity model.
+- Echo participation in group chats.
 - External issue tracker, webhook, or project-management synchronization.
 - Cross-space solicitation or aggregation.
+- Cross-space or deployment-wide release broadcasts; “all members” means active human members of the current space at publication time.
 - Anonymous and operationally untraceable voting.
 - Arbitrary HTML, JavaScript, remote UI, or custom CSS cards.
 - A general low-code card layout language.
@@ -65,6 +75,7 @@ The space owner can:
 - Mark submissions as collected, implemented, or rejected.
 - Add a response when changing status.
 - List and filter all requirement records.
+- Publish a registered version update guide to every active human member with `/release <version>`.
 
 Owner-only behavior must be enforced through capabilities rather than hard-coded UI role checks.
 
@@ -115,6 +126,8 @@ Each eligible user has one reusable direct conversation with `回声`.
 - `回声` cannot be added to ordinary groups.
 
 Public solicitation does not require a shared all-member conversation. One solicitation resource is created, then a card referencing that resource is delivered into each eligible user's `回声` conversation.
+
+Version updates use the same isolated delivery model. One immutable publication snapshot and one delivery row per active human member are created atomically, then an `echo.release` card is delivered into each member's existing or newly created `回声` conversation. Members added after publication do not receive historical release broadcasts automatically.
 
 This model provides:
 
@@ -239,7 +252,7 @@ Renderers must:
 - Render `fallbackText` for unknown or unsupported card versions.
 - Never leave a blank message or crash the message list for an unknown block.
 
-The first release should use registered typed React components, not a general low-code card DSL.
+The v0.15 client uses registered typed React components, not a general low-code card DSL.
 
 ### 10.5 Mutable State And Realtime Updates
 
@@ -325,6 +338,7 @@ Echo initially registers:
 /help
 /cancel
 /publish
+/release <version>
 /need
 /feedback
 /list
@@ -341,9 +355,11 @@ The generic component handles parsing and execution mechanics. Echo handlers own
 A slash-prefixed message is recognized as a command only in:
 
 - A direct conversation with the target bot.
-- A future explicitly supported group context that addresses that bot.
+- An addressed group-mention context supported by both the bot policy and conversation membership.
 
 Slash-prefixed text in ordinary human conversations remains normal message content.
+
+For `回声` itself, v0.15 exposes only the first context because the protected Echo identity has a direct-only conversation policy. The mention rule is retained in the reusable command framework for bots that are allowed in groups.
 
 ### 12.3 Parsing Rules
 
@@ -376,6 +392,8 @@ After parsing, execution uses a typed command envelope:
 The execution component owns authentication, context validation, capability checks, idempotency, rate limiting, audit decisions, and stable error mapping before invoking a domain handler.
 
 Equivalent UI and command operations share one domain service. For example, an `已实现` card action and `/implement REQ-0012` both invoke the same requirement transition function.
+
+`/release` is owner-only. It accepts one semantic version with an optional leading `v`, and rejects versions that do not have a registered detailed usage guide. A repeated publication of the same version resolves to the original publication and retries outstanding deliveries without creating a second broadcast.
 
 ## 13. Generic Guided Workflow Component
 
@@ -473,7 +491,7 @@ Fastify log redaction remains unchanged. New command and card endpoints must not
 
 ### 15.1 Publishing
 
-An owner starts with `/publish` or `/collect`. The guided workflow collects:
+An owner starts a public solicitation with `/publish`. The guided workflow collects:
 
 - Title and description.
 - Voting question.
@@ -485,7 +503,7 @@ An owner starts with `/publish` or `/collect`. The guided workflow collects:
 - Result visibility policy.
 - Delivery policy for new members.
 
-The owner receives an `echo.solicitation` preview card and explicitly confirms publication.
+The owner reviews a confirmation summary and explicitly confirms publication. The separate owner management surface can also create a draft before publishing it.
 
 Publication creates one solicitation resource and idempotent delivery records for eligible members. Delivery failures are retryable and visible to the owner without duplicating successful deliveries.
 
@@ -528,33 +546,36 @@ Members start with:
 /feedback
 ```
 
-An initial summary may follow the command. The guided workflow collects:
+The guided workflow collects:
 
 - Type: requirement, suggestion, or problem feedback.
 - Title.
 - Detailed description.
 - Usage scenario.
 - Expected result.
-- Optional attachment or related link.
+- Optional related link.
 
-Before submission, `回声` displays a confirmation card. Confirmation creates a stable identifier such as `REQ-2026-0012` and delivers an owner-facing `echo.request` card.
+Before submission, `回声` displays a confirmation step. Confirmation creates a stable identifier such as `REQ-2026-0012` and delivers an owner-facing `echo.request` card. Workflow attachments remain a later enhancement; a command with staged message attachments is rejected by the client without discarding either the command draft or the attachments.
 
 ### 16.2 Requirement State Machine
 
 ```text
-submitted -> collected -> implemented
-submitted -> rejected
-collected -> rejected
+proposal/pending_review -> formal/planned -> formal/in_progress -> formal/delivered
+formal/delivered -> archived/implemented
+proposal or formal -> archived/rejected|duplicate|withdrawn|cancelled
 ```
 
 External labels:
 
 | State | Label | Meaning |
 | --- | --- | --- |
-| `submitted` | 待处理 | Submitted and awaiting owner decision |
-| `collected` | 已采集 | Entered into the requirement pool |
-| `implemented` | 已实现 | Delivery has been confirmed |
-| `rejected` | 已驳回 | Not accepted or no longer planned |
+| `proposal / pending_review` | 待审核 | Submitted and awaiting owner decision |
+| `formal / planned` | 已计划 | Entered into the formal requirement pool |
+| `formal / in_progress` | 进行中 | Explicitly marked as being processed |
+| `formal / delivered` | 已交付 | Delivery has been confirmed but remains active history |
+| `archived / implemented` | 已实现 | Delivered work has been archived as implemented |
+| `archived / rejected` | 已驳回 | Not accepted or no longer planned |
+| `archived / duplicate|withdrawn|cancelled` | 重复提案 / 已撤回 / 已取消 | Archived with the recorded terminal outcome |
 
 An owner may add a response to every transition. Rejection requires a reason. Implementation may include a version, date, or release note.
 
@@ -582,29 +603,59 @@ Terminal records are not silently deleted.
 /reject REQ-2026-0012
 ```
 
-`/list` supports authorization-aware pagination and filters. The result uses `echo.request-list` cards rather than an unbounded text response.
+`/list` supports authorization-aware pagination and filters. The command returns a bounded structured result rendered by the Echo interaction surface; `echo.request-list` remains a registered typed card for delivered list projections.
 
 Unauthorized users receive a stable permission response. Rejected sensitive attempts produce audit rows without echoing protected resource details.
 
-## 17. Notifications
+## 17. Version Update Publication
+
+### 17.1 Registered Usage Guides
+
+The homepage changelog remains a concise public summary. Echo release publication uses a separately registered guide whose version, release date, title, and summary must match the homepage release facts. Every detailed item additionally contains:
+
+- A short user-facing change title.
+- A plain-language explanation of the new feature, setting, or behavior change.
+- An explicit location path showing where to use or configure it.
+
+Operational-only changes may state that no setting is required and name the unchanged user entry points. Storage keys, hashes, internal object IDs, migration details, and other implementation metadata are never included in the card payload.
+
+### 17.2 Publication And Delivery
+
+An owner publishes a guide with:
+
+```text
+/release 0.15.1
+```
+
+Publication atomically stores an immutable guide snapshot and creates a pending delivery for every active human member in the current space. The command then attempts immediate delivery through each member's private Echo conversation. Temporary failures remain durable and are retried by the existing Echo recovery worker; successful recipients never receive a duplicate message.
+
+The unique `(space, version)` publication boundary makes a repeated command idempotent even when it uses a different command invocation ID. Changing the registered guide later does not rewrite cards that were already published. Publishing a correction requires a new version.
+
+### 17.3 Authorization And Audit
+
+Only the space owner may run `/release`. Command execution still applies the shared context, membership, rate-limit, idempotency, and request-metadata checks. Publication audit rows contain the version, actor, result, and stable reason only; they do not contain the guide body or member delivery contents.
+
+## 18. Notifications
 
 `回声` sends notifications for:
 
 - New solicitation publication.
-- Approaching deadline, when enabled.
 - Solicitation closure or withdrawal.
 - Requirement submission confirmation.
 - Requirement collection, implementation, or rejection.
+- Registered version update publication.
 
-Public solicitation notifications go to eligible active members. Requirement updates go only to the submitter and authorized owners.
+Scheduled approaching-deadline reminders are not part of v0.15.
+
+Public solicitation and release notifications go to eligible active members. Requirement updates go only to the submitter and authorized owners.
 
 Notification delivery respects conversation notification settings. Delivery IDs and event IDs prevent duplicate notifications during retry or reconnect replay.
 
-## 18. Domain Data Direction
+## 19. Domain Data Direction
 
-Exact migration design is deferred to implementation planning, but responsibilities should remain separated.
+The v0.15 schema is implemented through versioned migrations while keeping infrastructure and Echo domain responsibilities separated.
 
-Generic infrastructure records may include:
+Generic infrastructure records include:
 
 - Card instances and revisions.
 - Card action idempotency records.
@@ -612,13 +663,15 @@ Generic infrastructure records may include:
 - Guided workflow sessions.
 - Broadcast delivery records.
 
-Echo domain records may include:
+Echo domain records include:
 
 - Solicitations.
 - Solicitation options.
 - Votes and vote selections.
 - Requirements and feedback.
 - Requirement status history.
+- Version update publications with immutable guide snapshots.
+- Per-recipient version update delivery state.
 
 Generic tables contain infrastructure metadata and references. Echo tables contain validated business state. Message content contains card references and readable fallback text.
 
@@ -629,9 +682,9 @@ Retention behavior must be explicit:
 - Audit retention remains independent.
 - Attachment lifecycle follows existing Workspace attachment rules.
 
-## 19. API Direction
+## 20. API Contract
 
-Final routes should follow existing Fastify and Workspace service patterns. The logical contract includes:
+The implemented routes follow the existing Fastify and Workspace service patterns. Their contract provides:
 
 - Resolve cards visible to the current actor.
 - Execute a registered card action.
@@ -641,7 +694,7 @@ Final routes should follow existing Fastify and Workspace service patterns. The 
 
 Handlers validate request shape and delegate. Authorization, transitions, idempotency, broadcast decisions, and audit behavior belong in services, not route handlers or React components.
 
-Stable error codes should distinguish:
+Stable error codes distinguish:
 
 - Unsupported card or command version.
 - Unknown card type or command.
@@ -653,10 +706,11 @@ Stable error codes should distinguish:
 - Idempotency conflict.
 - Workflow expired or conflicted.
 - Rate limit exceeded.
+- Version guide unavailable for publication.
 
 Errors must not reveal the existence or contents of private resources to unauthorized actors.
 
-## 20. Frontend Requirements
+## 21. Frontend Requirements
 
 - Render cards through the common card registry and frame.
 - Keep card dimensions stable during loading and action submission.
@@ -668,10 +722,11 @@ Errors must not reveal the existence or contents of private resources to unautho
 - Keep long titles, option labels, statuses, and error text within mobile and desktop bounds.
 - Do not place nested decorative cards inside card messages.
 - Do not expose internal terms such as RBAC, event sequence, or audit log to regular users.
+- Render `echo.release` as a readable single-column guide with version, date, grouped changes, and a location for every item.
 
 The frontend must not contain authoritative role checks, state transitions, vote totals, or card visibility rules.
 
-## 21. Operational Requirements
+## 22. Operational Requirements
 
 - Workspace remains disabled unless `WORKSPACE_ENABLED=true`.
 - Echo initialization is idempotent and safe on repeated deployment.
@@ -681,8 +736,9 @@ The frontend must not contain authoritative role checks, state transitions, vote
 - Logs must use IDs and stable codes rather than private text.
 - Rollback must be able to disable Echo interactions without disabling ordinary Workspace messaging.
 - Unknown Echo cards remain readable through fallback summaries after rollback.
+- A release guide must be registered and checked against the homepage release facts before its version can be published.
 
-## 22. Acceptance Criteria
+## 23. Acceptance Criteria
 
 ### Identity And Visibility
 
@@ -706,25 +762,33 @@ The frontend must not contain authoritative role checks, state transitions, vote
 12. Card actions and equivalent commands produce identical transition and permission behavior.
 13. Submitters receive status cards with complete status history and owner responses.
 
+### Version Updates
+
+14. Only an authorized owner can publish a registered version guide with `/release <version>`.
+15. Publication snapshots the guide and targets every active human member in the current space.
+16. Every change item describes where the member can use or configure it.
+17. Repeating the same version does not duplicate publication, delivery rows, cards, messages, or notifications.
+18. Failed deliveries can recover without changing the published guide or duplicating successful deliveries.
+
 ### Generic Infrastructure
 
-14. Unknown card types or versions render readable fallback text.
-15. Cards cannot inject HTML, scripts, remote UI, arbitrary styles, or unregistered actions.
-16. Commands are recognized only in allowed bot contexts and never execute shell, SQL, or dynamic code.
-17. Card actions, commands, and workflow steps are authenticated, authorized, idempotent, rate-limited, and revision-safe.
-18. Ordinary message creation cannot forge bot authorship or authoritative card state.
-19. Existing reactions continue to work independently and are not used as business votes.
+19. Unknown card types or versions render readable fallback text.
+20. Cards cannot inject HTML, scripts, remote UI, arbitrary styles, or unregistered actions.
+21. Commands are recognized only in allowed bot contexts and never execute shell, SQL, or dynamic code.
+22. Card actions, commands, and workflow steps are authenticated, authorized, idempotent, rate-limited, and revision-safe.
+23. Ordinary message creation cannot forge bot authorship or authoritative card state.
+24. Existing reactions continue to work independently and are not used as business votes.
 
 ### Trust And Operations
 
-20. Private requirements do not appear in unauthorized APIs, events, notifications, audit bodies, or logs.
-21. P2P plaintext never reaches Workspace card, command, workflow, message, audit, or log persistence.
-22. Existing Workspace RBAC, quota, retention, security headers, and log redaction remain effective.
-23. Full project tests, lint, build, migration review, and responsive browser verification pass before release.
+25. Private requirements do not appear in unauthorized APIs, events, notifications, audit bodies, or logs.
+26. P2P plaintext never reaches Workspace card, command, workflow, message, audit, or log persistence.
+27. Existing Workspace RBAC, quota, retention, security headers, and log redaction remain effective.
+28. Full project tests, lint, build, migration review, and responsive browser verification pass before release.
 
-## 23. Implementation Impact Based On Current Code
+## 24. Implementation Structure
 
-The current Workspace already provides:
+The v0.15 Workspace integration provides:
 
 - Versioned structured message content using `duallane.message+json;v=1`.
 - Server canonicalization and readable `plainText` summaries.
@@ -734,12 +798,18 @@ The current Workspace already provides:
 - Permission-filtered realtime events.
 - Reactions as separate records and actions.
 - Workspace audit and Fastify log-redaction foundations.
+- Typed card reference blocks, a registered card projector/action pipeline, and readable fallback behavior.
+- Registered command execution and revisioned workflow sessions with persistent idempotency and rate-limit records.
+- Echo requirement, status-history, solicitation, option, vote, idempotency, and delivery records.
+- Echo version publication snapshots and per-member resumable delivery records.
+- Protected Echo identity initialization, reusable direct-conversation delivery, and permission-filtered card refresh events.
+- React renderers for Echo cards including detailed release guides, owner management views, and composer-level command/workflow interaction states.
 
-The current implementation accepts only `text`, `mention`, `link`, `emoji`, and `attachment` blocks, and the React renderer branches directly on those types. It does not yet provide card references, a card registry, business actions, command registration, guided bot workflows, solicitation records, voting records, requirement states, or broadcast delivery tracking.
+Structured messages now accept registered `card` references alongside text, mention, link, emoji, attachment, and emote-collection blocks. Immutable messages retain a readable summary while mutable card and domain state is projected through the card registry at its current revision.
 
-Therefore `回声` is not a small bot-only change. It should be delivered in two coherent layers:
+The implementation is kept in two coherent layers:
 
 1. Reusable Workspace interactive-message infrastructure with focused compatibility and security tests.
 2. Echo domain services, card registrations, commands, workflows, permissions, and product UI.
 
-This separation is required so later card-based messages can reuse the same protocol and safety boundary without depending on Echo domain code.
+This separation allows later card-based messages to reuse the same protocol and safety boundary without depending on Echo domain code.

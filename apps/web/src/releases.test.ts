@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import rootPackage from "../../../package.json";
 import webPackage from "../package.json";
 import { DUAL_LANE_RELEASES } from "./releases";
+import echoReleaseGuides from "../shared/echo-release-guides.json";
 
 const INTERNAL_CHANGELOG_TERMS = [
   "PostgreSQL",
@@ -30,7 +31,7 @@ const INTERNAL_CHANGELOG_TERMS = [
 describe("release history", () => {
   it("is unique, complete, and sorted newest first", () => {
     expect(new Set(DUAL_LANE_RELEASES.map((release) => release.version)).size).toBe(DUAL_LANE_RELEASES.length);
-    expect(DUAL_LANE_RELEASES.map((release) => release.version)).toEqual(["0.15.0", "0.14.3", "0.14.2", "0.14.1", "0.14.0", "0.13.2", "0.13.1", "0.13.0", "0.12.0", "0.11.0", "0.10.0", "0.9.0", "0.8.0", "0.7.0", "0.6.0", "0.5.0", "0.4.0", "0.3.0", "0.2.0", "0.1.0"]);
+    expect(DUAL_LANE_RELEASES.map((release) => release.version)).toEqual(["0.15.1", "0.15.0", "0.14.3", "0.14.2", "0.14.1", "0.14.0", "0.13.2", "0.13.1", "0.13.0", "0.12.0", "0.11.0", "0.10.0", "0.9.0", "0.8.0", "0.7.0", "0.6.0", "0.5.0", "0.4.0", "0.3.0", "0.2.0", "0.1.0"]);
     for (const release of DUAL_LANE_RELEASES) {
       expect(release.releasedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       expect(release.title.trim()).not.toBe("");
@@ -41,23 +42,22 @@ describe("release history", () => {
   });
 
   it("matches both published package versions", () => {
-    expect(rootPackage.version).toBe("0.15.0");
-    expect(webPackage.version).toBe("0.15.0");
+    expect(rootPackage.version).toBe("0.15.1");
+    expect(webPackage.version).toBe("0.15.1");
     expect(DUAL_LANE_RELEASES[0].version).toBe(rootPackage.version);
     expect(DUAL_LANE_RELEASES[0].version).toBe(webPackage.version);
   });
 
-  it("describes the 0.15.0 user-facing scope and release date", () => {
+  it("describes the 0.15.1 user-facing scope and release date", () => {
     const latest = DUAL_LANE_RELEASES[0];
     const publicCopy = JSON.stringify(latest);
-    expect(latest.version).toBe("0.15.0");
-    expect(latest.releasedAt).toBe("2026-08-14");
-    expect(publicCopy).toContain("需求征集");
-    expect(publicCopy).toContain("投票");
-    expect(publicCopy).toContain("处理");
-    expect(publicCopy).toContain("话题");
+    expect(latest.version).toBe("0.15.1");
+    expect(latest.releasedAt).toBe("2026-08-20");
+    expect(publicCopy).toContain("表情合集");
+    expect(publicCopy).toContain("1 GiB");
+    expect(publicCopy).toContain("订阅");
     expect(publicCopy).toContain("同步");
-    expect(publicCopy).toContain("Agent Bot");
+    expect(publicCopy).toContain("重复");
     expect(publicCopy).not.toMatch(/迁移|审计|Token 哈希|token hash/);
   });
 
@@ -65,6 +65,20 @@ describe("release history", () => {
     const publicCopy = JSON.stringify(DUAL_LANE_RELEASES);
     for (const internalTerm of INTERNAL_CHANGELOG_TERMS) {
       expect(publicCopy).not.toContain(internalTerm);
+    }
+  });
+
+  it("keeps every Echo usage guide aligned with the public release facts", () => {
+    const releases = new Map(DUAL_LANE_RELEASES.map((release) => [release.version, release]));
+    for (const guide of echoReleaseGuides) {
+      const release = releases.get(guide.version);
+      expect(release).toMatchObject({
+        version: guide.version,
+        releasedAt: guide.releasedAt,
+        title: guide.title,
+        summary: guide.summary
+      });
+      expect(guide.sections.every((section) => section.items.every((item) => item.location.trim()))).toBe(true);
     }
   });
 });

@@ -1,6 +1,6 @@
 {
   "name": "duallane",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "private": true,
   "description": "DualLane self-hosted split-lane communication tool.",
   "type": "module",
@@ -8,9 +8,10 @@
     "dev": "pnpm --filter @duallane/web dev",
     "build": "pnpm --filter @duallane/web build",
     "start": "pnpm --filter @duallane/web start",
-    "test": "pnpm --filter @duallane/web test",
+    "storage:dedupe": "pnpm --filter @duallane/web storage:dedupe",
+    "test": "pnpm --filter @duallane/agent-sdk test && pnpm --filter @duallane/web test",
     "test:e2e": "playwright test",
-    "lint": "pnpm --filter @duallane/web lint"
+    "lint": "pnpm --filter @duallane/agent-sdk lint && pnpm --filter @duallane/web lint"
   },
   "packageManager": "pnpm@10.30.3",
   "devDependencies": {

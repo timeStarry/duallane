@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
@@ -84,7 +84,13 @@ export async function saveProfileAvatar(dataDir, { stream, mimeType, contentLeng
     await rm(temporaryPath, { force: true });
     throw new ProfileAvatarError("avatar.storage_failed", "头像保存失败", 500);
   }
-  return { storageKey, version, byteSize: output.byteLength, path: targetPath };
+  return {
+    storageKey,
+    version,
+    byteSize: output.byteLength,
+    sha256: createHash("sha256").update(output).digest("hex"),
+    path: targetPath
+  };
 }
 
 export async function removeProfileAvatar(dataDir, storageKey) {

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_SPACE_ID } from "./db.mjs";
 import { openTestDatabase } from "./test-database.mjs";
+import { listWorkspaceEvents, writeWorkspaceEvent } from "./workspace.mjs";
 import { createTopic, joinTopic, updateTopicNotificationLevel } from "./workspace-topics.mjs";
 import {
   createTopicMessage,
@@ -218,6 +219,13 @@ describe("Workspace topic messages", () => {
     expect(removed.removed).toBe(true);
     expect(db.prepare("SELECT status, revision FROM workspace_cards WHERE id = ?").get(syncCardId))
       .toMatchObject({ status: "invalidated", revision: 2 });
+    const recalledEvent = (await listWorkspaceEvents(db, "usr_topic_message_alice", 0))
+      .findLast((event) => event.type === "message.recalled" && event.targetId === synced.projection.groupMessageId);
+    expect(recalledEvent.payload).toMatchObject({
+      messageId: synced.projection.groupMessageId,
+      conversationId: enabled.conversationId,
+      message: null
+    });
     const resynced = await syncTopicMessage(db, request, {
       actorId: "usr_topic_message_alice",
       topicId: enabled.id,
@@ -230,6 +238,46 @@ describe("Workspace topic messages", () => {
     expect(resyncedMessageContent.blocks.find((block) => block.type === "card")).toMatchObject({
       cardId: syncCardId,
       fallbackText: syncCard.fallbackText
+    });
+  });
+
+  it("retains a complete event message fallback when its database row is unavailable", async () => {
+    const { db } = await fixture();
+    const recalledAt = new Date().toISOString();
+    await writeWorkspaceEvent(db, {
+      type: "message.recalled",
+      actorId: "usr_topic_message_alice",
+      conversationId: "conv_topic_message_group",
+      targetType: "message",
+      targetId: "message_event_fallback",
+      payload: {
+        messageId: "message_event_fallback",
+        conversationId: "conv_topic_message_group",
+        message: {
+          id: "message_event_fallback",
+          conversationId: "conv_topic_message_group",
+          authorId: "usr_topic_message_alice",
+          authorName: "topic-message-alice",
+          authorKind: "human",
+          kind: "user",
+          clientMessageId: "message-event-fallback-client",
+          content: textContent("不会从数据库读取"),
+          plainText: "不会从数据库读取",
+          createdAt: recalledAt,
+          recalledAt,
+          recallReason: "事件兼容"
+        }
+      }
+    });
+
+    const event = (await listWorkspaceEvents(db, "usr_topic_message_alice", 0))
+      .findLast((candidate) => candidate.targetId === "message_event_fallback");
+    expect(event.payload.message).toMatchObject({
+      id: "message_event_fallback",
+      conversationId: "conv_topic_message_group",
+      authorId: "usr_topic_message_alice",
+      recalledAt,
+      recallReason: "事件兼容"
     });
   });
 });

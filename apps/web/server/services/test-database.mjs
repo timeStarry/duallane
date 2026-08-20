@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -29,7 +30,9 @@ export function openTestDatabase(dataDir) {
   }
   seedTestWorkspace(db);
 
-  db.transaction = async (callback) => {
+  const transactionContext = new AsyncLocalStorage();
+  let transactionQueue = Promise.resolve();
+  const runSavepoint = async (callback) => {
     const savepoint = `test_tx_${randomBytes(8).toString("hex")}`;
     db.exec(`SAVEPOINT ${savepoint}`);
     try {
@@ -40,6 +43,18 @@ export function openTestDatabase(dataDir) {
       db.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`);
       db.exec(`RELEASE SAVEPOINT ${savepoint}`);
       throw error;
+    }
+  };
+  db.transaction = async (callback) => {
+    if (transactionContext.getStore()) return runSavepoint(callback);
+    const previous = transactionQueue;
+    let release;
+    transactionQueue = new Promise((resolve) => { release = resolve; });
+    await previous;
+    try {
+      return await transactionContext.run(true, () => runSavepoint(callback));
+    } finally {
+      release();
     }
   };
   db.lock = async () => {};

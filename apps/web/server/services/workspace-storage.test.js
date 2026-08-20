@@ -1,12 +1,18 @@
+import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readFile, rm, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  ensureContentAddressedStream,
+  readContentAddressedBytes,
+  removeContentAddressedObject,
   resolveWorkspaceStoragePath,
   saveUploadStream,
-  statStoredAttachment
+  statStoredAttachment,
+  workspaceContentObjectKey
 } from "./workspace-storage.mjs";
 
 describe("workspace storage service", () => {
@@ -56,5 +62,26 @@ describe("workspace storage service", () => {
 
     const targetPath = resolveWorkspaceStoragePath(dataDir, "workspace/spc_default/att-2/source.txt");
     await expect(readFile(targetPath)).rejects.toThrow();
+  });
+
+  it("concurrently ensures one immutable SHA-256 object and deletes it idempotently", async () => {
+    const content = Buffer.from("shared canonical bytes");
+    const sha256 = createHash("sha256").update(content).digest("hex");
+    const [first, second] = await Promise.all([
+      ensureContentAddressedStream(dataDir, { sha256, byteSize: content.byteLength, stream: Readable.from(content) }),
+      ensureContentAddressedStream(dataDir, { sha256, byteSize: content.byteLength, stream: Readable.from(content) })
+    ]);
+    expect([first.created, second.created].sort()).toEqual([false, true]);
+    expect(first.storageKey).toBe(`workspace/objects/sha256/${sha256.slice(0, 2)}/${sha256}`);
+    const object = { sha256, byteSize: content.byteLength, objectKey: first.storageKey };
+    await expect(readContentAddressedBytes(dataDir, object)).resolves.toEqual(content);
+    expect(() => workspaceContentObjectKey("../escape")).toThrow("存储对象摘要无效");
+    await expect(readContentAddressedBytes(dataDir, {
+      ...object,
+      objectKey: `workspace/objects/sha256/ff/${sha256}`
+    })).rejects.toMatchObject({ code: "storage.object_invalid_key" });
+    await removeContentAddressedObject(dataDir, object);
+    await removeContentAddressedObject(dataDir, object);
+    await expect(readContentAddressedBytes(dataDir, object)).rejects.toMatchObject({ code: "file.storage_missing" });
   });
 });

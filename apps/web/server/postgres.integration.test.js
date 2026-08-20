@@ -1,4 +1,5 @@
 import pg from "pg";
+import { readdir } from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DAILY_QUOTA_BYTES } from "./services/quota.mjs";
 import { migrateDatabase, openDatabase } from "./services/db.mjs";
@@ -38,11 +39,13 @@ postgresDescribe("postgres workspace integration", () => {
     await migrateDatabase(db);
     const bootstrap = await getWorkspaceBootstrap(db);
     const migrationCount = await db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get();
+    const migrationFiles = (await readdir(new URL("./migrations/", import.meta.url)))
+      .filter((name) => name.endsWith(".sql"));
     const seedEventCount = await db.prepare("SELECT COUNT(*) AS count FROM workspace_events WHERE id = 'evt_seed_owner'").get();
 
     expect(bootstrap.space.id).toBe("spc_default");
     expect(bootstrap.auth.currentUser.id).toBe("usr_owner");
-    expect(migrationCount.count).toBe(1);
+    expect(migrationCount.count).toBe(migrationFiles.length);
     expect(seedEventCount.count).toBe(1);
   });
 

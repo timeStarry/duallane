@@ -50,8 +50,10 @@ export function registerWorkspaceInteractionRoutes(app, options = {}) {
         botUserId: body.botUserId,
         type: body.type,
         version: body.version,
+        clientInvocationId: body.clientInvocationId,
         input: body.input,
-        ttlMs: body.ttlMs
+        ttlMs: body.ttlMs,
+        request: requestMetadata(request)
       })
     };
   }));
@@ -64,19 +66,31 @@ export function registerWorkspaceInteractionRoutes(app, options = {}) {
     const body = requireObject(request.body);
     return service.continueWorkflow(actorId, {
       workflowId: request.params?.workflowId,
+      spaceId,
       expectedRevision: body.expectedRevision,
-      input: body.input
+      input: body.input,
+      request: requestMetadata(request)
     });
   }));
 
   app.post("/api/workspace/workflows/:workflowId/cancel", handle(async ({ request, actorId }) => ({
-    workflow: await service.cancelWorkflow(actorId, request.params?.workflowId)
+    workflow: await service.cancelWorkflow(actorId, {
+      workflowId: request.params?.workflowId,
+      spaceId,
+      request: requestMetadata(request)
+    })
   })));
 }
 
 export function sendWorkspaceInteractionError(reply, _request, error) {
   if (error instanceof WorkspaceInteractionError || error?.name === "WorkspaceInteractionError") {
-    return reply.code(error.statusCode ?? 400).send({ error: { code: error.code, message: error.message } });
+    return reply.code(error.statusCode ?? 400).send({
+      error: {
+        code: error.code,
+        message: error.message,
+        ...(error.details ? { details: error.details } : {})
+      }
+    });
   }
   return reply.code(500).send({ error: { code: "internal.error", message: "服务暂时不可用" } });
 }

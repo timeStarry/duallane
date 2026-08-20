@@ -42,6 +42,7 @@ Product details:
 - [Workspace MVP Development Contract](docs/WORKSPACE_MVP_DEVELOPMENT_CONTRACT.md)
 - [Workspace Productization Roadmap](docs/WORKSPACE_PRODUCTIZATION_ROADMAP.md)
 - [Workspace Product Acceptance Matrix](docs/WORKSPACE_PRODUCT_ACCEPTANCE_MATRIX.md)
+- [Workspace Content-Addressed Storage Runbook](docs/WORKSPACE_CONTENT_ADDRESSED_STORAGE.md)
 
 ## Local Development
 
@@ -63,6 +64,20 @@ pnpm test:e2e
 The E2E suite starts isolated local services and uses a temporary SQLite test
 double for Workspace, so it does not require PostgreSQL. Keep PostgreSQL
 integration coverage separate through `TEST_DATABASE_URL` and `test:postgres`.
+
+Agent Bot runtimes use the versioned JavaScript client in
+`packages/agent-sdk`. A running deployment publishes reviewed, secret-free
+integration instructions at `/integrations/duallane-channel.md`, with the
+immutable protocol-v1 content and SHA-256 manifest under `/integrations/v1/`.
+OpenClaw and Hermes entry documents are available below their matching
+`/integrations/openclaw/` and `/integrations/hermes/` paths. Bot tokens belong
+only in the runtime's `Authorization` header; they must not be added to these
+URLs, source files, or logs.
+
+Creating a direct conversation with an owned custom Bot enables trigger
+delivery only. The owner can explicitly grant bounded context for that
+conversation through `PATCH /api/workspace/bots/{botId}/context-grants/{conversationId}`;
+the external Bot token cannot change this policy.
 
 When testing Workspace locally, set `WORKSPACE_FRONTEND_URL=http://127.0.0.1:5173`
 so the GitHub login fallback returns to the frontend dev server. Use the same
@@ -231,6 +246,29 @@ read fallback after the verified cutover, retain mirror writes for seven days,
 and keep the source volume and backup for at least thirty days. Switching the
 driver back to `local` is the rollback path; the database storage keys do not
 change.
+
+Migration 025 adds a shared SHA-256 object namespace for Workspace attachments,
+profile avatars, and personal emotes. Both local and S3 storage drivers support
+the maintenance flow. Use one stable run ID and run `backfill`, `verify`, then
+`finalize` in that order:
+
+```bash
+WORKSPACE_STORAGE_DEDUPE_RUN_ID=dedupe-YYYYMMDD \
+WORKSPACE_STORAGE_DEDUPE_MODE=backfill \
+  docker compose -f docker-compose.yml -f docker-compose.production.yml \
+  --profile storage-dedupe run --rm storage-dedupe
+```
+
+Repeat the command with `WORKSPACE_STORAGE_DEDUPE_MODE=verify`, validate the
+private `0600` report and deployment health, then repeat it with
+`WORKSPACE_STORAGE_DEDUPE_MODE=finalize`. Backfill creates canonical objects and
+binds references while retaining legacy bytes. Verify reads and hashes complete
+canonical objects without depending on legacy bytes. Finalize first verifies
+the entire inventory and only then deletes legacy objects. Keep database and
+storage backups through the compatibility window; rerunning the same phase with
+the same run ID is the recovery path. The
+[content-addressed storage runbook](docs/WORKSPACE_CONTENT_ADDRESSED_STORAGE.md)
+contains the full cutover and rollback procedure.
 
 `SERVE_STATIC=false` is set for the API container in compose so static assets are
 served only by the web gateway. Running `pnpm start` directly still supports the

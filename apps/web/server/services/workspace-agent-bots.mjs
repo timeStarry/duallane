@@ -227,7 +227,7 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
               currentBot.id
             );
         }
-        const columns = Object.keys(patch).filter((key) => key !== "visibilityPolicy");
+        const columns = Object.keys(patch).filter((key) => Object.hasOwn(SETTINGS_COLUMNS, key));
         if (columns.length > 0) {
           const assignments = columns.map((key) => `${SETTINGS_COLUMNS[key]} = ?`).join(", ");
           await db.prepare(`UPDATE workspace_agent_bot_settings SET ${assignments}, updated_at = ? WHERE bot_id = ? AND space_id = ?`)
@@ -334,6 +334,82 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
     }
     await writeBotAudit({ actor, spaceId: bot.spaceId, action: "bot.group_policy.update", targetType: "agent_bot", targetId: bot.id, result: "success" });
     return (await listGroupPolicies(actor.id, bot.id, bot.spaceId)).find((policy) => policy.conversationId === conversationId);
+  }
+
+  async function updateContextGrant(actorUserId, botId, input = {}) {
+    const actor = await requireActiveHumanMember(actorUserId, input.spaceId);
+    const bot = await requireOwnedBotWithAudit(actor, botId, "bot.context_grant.update", "agent_bot");
+    const conversationId = typeof input.conversationId === "string" ? input.conversationId.trim() : "";
+    const unknown = Object.keys(input).find((key) => !new Set([
+      "spaceId", "conversationId", "allowTrigger", "allowContext", "maxMessages"
+    ]).has(key));
+    try {
+      if (!conversationId || unknown) {
+        throw new WorkspaceAgentBotError("bot.invalid_context_grant", "私聊上下文授权无效");
+      }
+      const timestamp = now().toISOString();
+      const grant = await db.transaction(async () => {
+        await db.lock?.(botLifecycleLockKey(bot.spaceId, bot.id));
+        const currentBot = await requireOwnedBot(actor, bot.id);
+        if (currentBot.status !== BOT_STATUS.ACTIVE) {
+          throw new WorkspaceAgentBotError("bot.not_active", "仅运行中的 Bot 可以修改私聊授权", 409);
+        }
+        const settings = await readSettings(db, currentBot.id);
+        if (!Boolean(settings?.allowDirect)) {
+          throw new WorkspaceAgentBotError("bot.context_grant_forbidden", "Bot 当前设置不允许私聊", 403);
+        }
+        const direct = await db.prepare(`SELECT c.id
+          FROM conversations c
+          INNER JOIN conversation_members owner_cm
+            ON owner_cm.conversation_id = c.id AND owner_cm.user_id = ? AND owner_cm.removed_at IS NULL
+          INNER JOIN conversation_members bot_cm
+            ON bot_cm.conversation_id = c.id AND bot_cm.user_id = ? AND bot_cm.removed_at IS NULL
+          WHERE c.id = ? AND c.space_id = ? AND c.type = 'direct'
+            AND (SELECT COUNT(*) FROM conversation_members active_cm
+              WHERE active_cm.conversation_id = c.id AND active_cm.removed_at IS NULL) = 2`)
+          .get(actor.id, currentBot.botUserId, conversationId, currentBot.spaceId);
+        if (!direct) {
+          throw new WorkspaceAgentBotError("bot.context_grant_forbidden", "只能配置与当前 Bot 的所有者私聊", 403);
+        }
+        const existing = await db.prepare(`SELECT grant_id AS grantId, allow_trigger AS allowTrigger,
+          allow_context AS allowContext, max_messages AS maxMessages
+          FROM workspace_agent_bot_context_grants
+          WHERE bot_id = ? AND space_id = ? AND conversation_id = ?`)
+          .get(currentBot.id, currentBot.spaceId, conversationId);
+        const allowTrigger = input.allowTrigger === undefined ? Boolean(existing?.allowTrigger ?? true) : input.allowTrigger;
+        const allowContext = input.allowContext === undefined ? Boolean(existing?.allowContext ?? false) : input.allowContext;
+        const maxMessages = input.maxMessages === undefined ? existing?.maxMessages ?? null : input.maxMessages;
+        if (typeof allowTrigger !== "boolean" || typeof allowContext !== "boolean") {
+          throw new WorkspaceAgentBotError("bot.invalid_context_grant", "私聊授权开关无效");
+        }
+        if (maxMessages !== null && (!Number.isSafeInteger(maxMessages) || maxMessages < 1 || maxMessages > 200)) {
+          throw new WorkspaceAgentBotError("bot.invalid_context_grant", "私聊上下文条数无效");
+        }
+        const grantId = existing?.grantId ?? `grant_${idFactory()}`;
+        await db.prepare(`INSERT INTO workspace_agent_bot_context_grants
+          (grant_id, bot_id, space_id, conversation_id, allow_trigger, allow_context, max_messages, granted_by, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (bot_id, conversation_id) DO UPDATE SET allow_trigger = excluded.allow_trigger,
+            allow_context = excluded.allow_context, max_messages = excluded.max_messages,
+            granted_by = excluded.granted_by, updated_at = excluded.updated_at`)
+          .run(grantId, currentBot.id, currentBot.spaceId, conversationId, allowTrigger ? 1 : 0, allowContext ? 1 : 0, maxMessages, actor.id, timestamp, timestamp);
+        return { grantId, botId: currentBot.id, conversationId, allowTrigger, allowContext, maxMessages, updatedAt: timestamp };
+      });
+      await writeBotAudit({
+        actor,
+        spaceId: actor.spaceId,
+        action: "bot.context_grant.update",
+        targetType: "conversation",
+        targetId: conversationId,
+        result: "success"
+      });
+      return grant;
+    } catch (error) {
+      if (error instanceof WorkspaceAgentBotError) {
+        await auditRejection(actor, "bot.context_grant.update", "conversation", conversationId || null, error.code);
+      }
+      throw error;
+    }
   }
 
   async function getConnectionStatus(actorUserId, botId, spaceId) {
@@ -776,6 +852,7 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
     updateSettings,
     listGroupPolicies,
     updateGroupPolicy,
+    updateContextGrant,
     pauseBot,
     resumeBot,
     beginDeleteBot,

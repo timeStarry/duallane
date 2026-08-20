@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -35,6 +36,7 @@ describe("profile avatar storage", () => {
     expect(metadata).toMatchObject({ format: "webp", width: 256, height: 256 });
     expect(metadata.exif).toBeUndefined();
     expect(stored.storageKey).toMatch(/^profile-avatars\/usr_test\/[a-f0-9-]+\.webp$/);
+    expect(stored.sha256).toBe(createHash("sha256").update(output).digest("hex"));
 
     await removeProfileAvatar(dataDir, stored.storageKey);
     await expect(readFile(stored.path)).rejects.toMatchObject({ code: "ENOENT" });

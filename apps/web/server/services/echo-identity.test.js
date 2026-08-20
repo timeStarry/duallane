@@ -70,4 +70,3 @@ describe("Echo identity contract", () => {
     expect(ECHO_IDENTITY.memberManaged).toBe(false);
   });
 });
-

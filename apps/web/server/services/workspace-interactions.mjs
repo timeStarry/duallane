@@ -6,13 +6,21 @@ const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const WORKFLOW_STATUS = new Set(["active", "completed", "cancelled", "expired", "conflicted"]);
 const DEFAULT_WORKFLOW_TTL_MS = 30 * 60 * 1000;
 const MAX_WORKFLOW_TTL_MS = 24 * 60 * 60 * 1000;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const DEFAULT_RATE_LIMITS = Object.freeze({
+  command: 60,
+  workflowStart: 20,
+  workflowContinue: 120,
+  workflowCancel: 30
+});
 
 export class WorkspaceInteractionError extends Error {
-  constructor(code, message, statusCode = 400) {
+  constructor(code, message, statusCode = 400, details = null) {
     super(message);
     this.name = "WorkspaceInteractionError";
     this.code = code;
     this.statusCode = statusCode;
+    this.details = details;
   }
 }
 
@@ -21,7 +29,8 @@ export function createWorkspaceInteractionService({
   commandRegistry,
   workflowRegistry,
   now = () => new Date(),
-  idFactory = randomUUID
+  idFactory = randomUUID,
+  rateLimits = {}
 } = {}) {
   if (!db) throw new TypeError("Workspace interaction service requires a database");
   if (!commandRegistry || typeof commandRegistry.recognize !== "function") {
@@ -30,6 +39,7 @@ export function createWorkspaceInteractionService({
   if (!workflowRegistry || typeof workflowRegistry.get !== "function") {
     throw new TypeError("Workspace interaction service requires a workflow registry");
   }
+  const limits = normalizeRateLimits(rateLimits);
 
   async function executeCommand(input = {}) {
     const spaceId = normalizeIdentifier(input.spaceId, "space.invalid", "空间 ID 无效");
@@ -41,7 +51,14 @@ export function createWorkspaceInteractionService({
       "客户端调用 ID 无效"
     );
     const actor = await requireActor(db, input.actorId, spaceId);
-    const context = await requireCommandContext(db, actor.id, botUserId, conversationId, spaceId);
+    let context;
+    try {
+      context = await requireCommandContext(db, actor.id, botUserId, conversationId, spaceId);
+    } catch (caught) {
+      const error = toInteractionError(caught, "command.invalid_context", "Bot 命令会话无效");
+      await auditInteraction(db, actor, spaceId, "command.context", "workspace.conversation", conversationId, "rejected", error.code, input.request);
+      throw error;
+    }
     const recognized = commandRegistry.recognize(input.source, {
       conversationType: context.type,
       botUserId,
@@ -78,6 +95,20 @@ export function createWorkspaceInteractionService({
       }
       const runId = `cmd_${idFactory()}`;
       const startedAt = now().toISOString();
+      try {
+        await consumeRateLimit(db, {
+          spaceId,
+          actorUserId: actor.id,
+          botUserId,
+          operationKey: `command:${definition.name}`,
+          limit: limits.command,
+          timestamp: startedAt
+        });
+      } catch (caught) {
+        const error = toInteractionError(caught, "command.rate_limited", "命令请求过于频繁");
+        await auditInteraction(db, actor, spaceId, `command.${definition.name}`, "workspace.command", runId, "rejected", error.code, input.request);
+        return failure(error);
+      }
       await db.prepare(`
         INSERT INTO workspace_command_runs (
           id, space_id, conversation_id, actor_user_id, bot_user_id, command_name, command_version,
@@ -111,19 +142,22 @@ export function createWorkspaceInteractionService({
           "command.invalid_result_card",
           "命令结果卡片无效"
         );
-        await db.prepare(`
+        const completed = await db.prepare(`
           UPDATE workspace_command_runs
           SET status = 'succeeded', result_card_id = ?, result_json = ?, completed_at = ?
-          WHERE id = ?
+          WHERE id = ? AND status = 'pending'
         `).run(resultCardId, JSON.stringify(safeResult), now().toISOString(), runId);
+        requireCasChange(completed, "command.conflicted", "命令状态已变化");
         await auditInteraction(db, actor, spaceId, `command.${definition.name}`, "workspace.command", runId, "success", null, input.request);
         return { ok: true, replayed: false, result: safeResult, resultCardId };
       } catch (caught) {
         error = toInteractionError(caught, "command.failed", "命令执行失败");
       }
-      await db.prepare(`
-        UPDATE workspace_command_runs SET status = 'failed', error_code = ?, completed_at = ? WHERE id = ?
+      const failed = await db.prepare(`
+        UPDATE workspace_command_runs SET status = 'failed', error_code = ?, completed_at = ?
+        WHERE id = ? AND status = 'pending'
       `).run(error.code, now().toISOString(), runId);
+      requireCasChange(failed, "command.conflicted", "命令状态已变化");
       await auditInteraction(db, actor, spaceId, `command.${definition.name}`, "workspace.command", runId, "rejected", error.code, input.request);
       return failure(error);
     });
@@ -138,28 +172,93 @@ export function createWorkspaceInteractionService({
     const version = Number.isSafeInteger(input.version) ? input.version : 1;
     const definition = workflowRegistry.get(type, version);
     if (!definition) throw new WorkspaceInteractionError("workflow.unknown", "引导流程不存在", 404);
-    const conversationId = normalizeOptionalIdentifier(input.conversationId, "conversation.invalid", "会话 ID 无效");
-    const botUserId = normalizeOptionalIdentifier(input.botUserId, "bot.invalid_id", "Bot ID 无效");
-    if (conversationId) await requireConversationActor(db, actor.id, conversationId, spaceId);
-    if (definition.authorize) {
-      const allowed = await definition.authorize({ db, actor, operation: "start", input: input.input ?? {} });
-      if (allowed === false) throw new WorkspaceInteractionError("permission.denied", "无权发起该流程", 403);
-    }
-    const initialized = await definition.initialize({ db, actor, input: input.input ?? {}, conversationId, botUserId }) ?? {};
-    const state = validateWorkflowState(definition, initialized.state ?? {});
-    const createdAt = now();
-    const ttlMs = normalizeTtl(input.ttlMs);
-    const workflowId = `wf_${idFactory()}`;
-    await db.prepare(`
-      INSERT INTO workspace_workflow_sessions (
-        id, space_id, conversation_id, actor_user_id, bot_user_id, workflow_type, workflow_version,
-        state_json, status, revision, expires_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 1, ?, ?, ?)
-    `).run(
-      workflowId, spaceId, conversationId, actor.id, botUserId, type, version,
-      JSON.stringify(state), new Date(createdAt.getTime() + ttlMs).toISOString(), createdAt.toISOString(), createdAt.toISOString()
+    const conversationId = normalizeIdentifier(input.conversationId, "conversation.invalid", "会话 ID 无效");
+    const botUserId = normalizeIdentifier(input.botUserId, "bot.invalid_id", "Bot ID 无效");
+    const clientInvocationId = normalizeIdentifier(
+      input.clientInvocationId,
+      "workflow.invalid_client_invocation_id",
+      "客户端调用 ID 无效"
     );
-    return projectWorkflow(definition, await loadWorkflow(db, workflowId), actor);
+    let context;
+    try {
+      context = await requireCommandContext(db, actor.id, botUserId, conversationId, spaceId);
+    } catch (caught) {
+      const error = toInteractionError(caught, "workflow.invalid_context", "引导流程会话无效");
+      await auditInteraction(db, actor, spaceId, "workflow.start", "workspace.conversation", conversationId, "rejected", error.code, input.request);
+      throw error;
+    }
+    const ttlMs = normalizeTtl(input.ttlMs);
+    const requestHash = hashRequest({ spaceId, conversationId, botUserId, type, version, input: input.input ?? {}, ttlMs });
+    const started = await db.transaction(async () => {
+      await db.lock?.(`workspace-workflow-invocation:${spaceId}:${actor.id}:${clientInvocationId}`);
+      await db.lock?.(`workspace-workflow-lane:${spaceId}:${actor.id}:${conversationId}:${botUserId}`);
+      const timestamp = now();
+      await expireActiveWorkflows(db, { actorUserId: actor.id, conversationId, botUserId, timestamp });
+
+      const existingInvocation = await loadWorkflowByInvocation(db, spaceId, actor.id, clientInvocationId);
+      if (existingInvocation) {
+        if (existingInvocation.startRequestHash !== requestHash) {
+          const error = new WorkspaceInteractionError("workflow.idempotency_conflict", "调用标识已用于其他引导流程", 409);
+          await auditInteraction(db, actor, spaceId, "workflow.start", "workspace.workflow", existingInvocation.id, "rejected", error.code, input.request);
+          return failure(error);
+        }
+        await auditInteraction(db, actor, spaceId, "workflow.start", "workspace.workflow", existingInvocation.id, "success", "replayed", input.request);
+        return { ok: true, workflow: await projectWorkflow(definition, existingInvocation, actor) };
+      }
+
+      const active = await loadActiveWorkflows(db, actor.id, conversationId, botUserId, 1);
+      if (active.length > 0) {
+        const error = activeWorkflowConflict(active[0].id);
+        await auditInteraction(db, actor, spaceId, "workflow.start", "workspace.workflow", active[0].id, "rejected", error.code, input.request);
+        return failure(error);
+      }
+
+      try {
+        await consumeRateLimit(db, {
+          spaceId,
+          actorUserId: actor.id,
+          botUserId,
+          operationKey: `workflow.start:${type}`,
+          limit: limits.workflowStart,
+          timestamp: timestamp.toISOString()
+        });
+        if (definition.authorize) {
+          const allowed = await definition.authorize({ db, actor, context, operation: "start", input: input.input ?? {} });
+          if (allowed === false) throw new WorkspaceInteractionError("permission.denied", "无权发起该流程", 403);
+        }
+        const initialized = await definition.initialize({
+          db,
+          actor,
+          context,
+          input: input.input ?? {},
+          conversationId,
+          botUserId,
+          request: input.request
+        }) ?? {};
+        const state = validateWorkflowState(definition, initialized.state ?? {});
+        const workflowId = `wf_${idFactory()}`;
+        await db.prepare(`
+          INSERT INTO workspace_workflow_sessions (
+            id, space_id, conversation_id, actor_user_id, bot_user_id, workflow_type, workflow_version,
+            state_json, status, revision, expires_at, created_at, updated_at,
+            client_invocation_id, start_request_hash
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 1, ?, ?, ?, ?, ?)
+        `).run(
+          workflowId, spaceId, conversationId, actor.id, botUserId, type, version,
+          JSON.stringify(state), new Date(timestamp.getTime() + ttlMs).toISOString(), timestamp.toISOString(), timestamp.toISOString(),
+          clientInvocationId, requestHash
+        );
+        const workflow = await loadWorkflow(db, workflowId);
+        await auditInteraction(db, actor, spaceId, "workflow.start", "workspace.workflow", workflowId, "success", null, input.request);
+        return { ok: true, workflow: await projectWorkflow(definition, workflow, actor) };
+      } catch (caught) {
+        const error = toInteractionError(caught, "workflow.failed", "引导流程创建失败");
+        await auditInteraction(db, actor, spaceId, "workflow.start", "workspace.workflow", type, "rejected", error.code, input.request);
+        return failure(error);
+      }
+    });
+    if (!started.ok) throw started.error;
+    return started.workflow;
   }
 
   async function getWorkflow(actorUserId, workflowId) {
@@ -187,16 +286,43 @@ export function createWorkspaceInteractionService({
       if (row.actorUserId !== actor.id) return failure(workflowNotFound());
       const definition = workflowRegistry.get(row.workflowType, row.workflowVersion);
       if (!definition) return failure(new WorkspaceInteractionError("workflow.unknown_version", "引导流程版本暂不支持", 422));
-      if (row.status !== "active") return failure(new WorkspaceInteractionError("workflow.not_active", "引导流程已结束", 409));
-      if (new Date(row.expiresAt).getTime() <= now().getTime()) {
-        await db.prepare("UPDATE workspace_workflow_sessions SET status = 'expired', updated_at = ? WHERE id = ?")
-          .run(now().toISOString(), workflowId);
-        return failure(new WorkspaceInteractionError("workflow.expired", "引导流程已过期", 409));
+      if (row.status !== "active") {
+        const error = new WorkspaceInteractionError("workflow.not_active", "引导流程已结束", 409);
+        await auditInteraction(db, actor, row.spaceId, "workflow.continue", "workspace.workflow", row.id, "rejected", error.code, input.request);
+        return failure(error);
       }
-      if (row.revision !== input.expectedRevision) return failure(new WorkspaceInteractionError("workflow.stale_revision", "引导流程状态已变化", 409));
+      if (new Date(row.expiresAt).getTime() <= now().getTime()) {
+        const expired = await db.prepare(`
+          UPDATE workspace_workflow_sessions
+          SET status = 'expired', revision = revision + 1, updated_at = ?
+          WHERE id = ? AND status = 'active' AND revision = ?
+        `).run(now().toISOString(), workflowId, row.revision);
+        if (changeCount(expired) !== 1) {
+          const error = workflowRaceConflict();
+          await auditInteraction(db, actor, row.spaceId, "workflow.continue", "workspace.workflow", row.id, "rejected", error.code, input.request);
+          return failure(error);
+        }
+        const error = new WorkspaceInteractionError("workflow.expired", "引导流程已过期", 409);
+        await auditInteraction(db, actor, row.spaceId, "workflow.continue", "workspace.workflow", row.id, "rejected", error.code, input.request);
+        return failure(error);
+      }
+      if (row.revision !== input.expectedRevision) {
+        const error = new WorkspaceInteractionError("workflow.stale_revision", "引导流程状态已变化", 409);
+        await auditInteraction(db, actor, row.spaceId, "workflow.continue", "workspace.workflow", row.id, "rejected", error.code, input.request);
+        return failure(error);
+      }
       try {
+        const context = await requireCommandContext(db, actor.id, row.botUserId, row.conversationId, row.spaceId);
+        await consumeRateLimit(db, {
+          spaceId: row.spaceId,
+          actorUserId: actor.id,
+          botUserId: row.botUserId,
+          operationKey: `workflow.continue:${row.workflowType}`,
+          limit: limits.workflowContinue,
+          timestamp: now().toISOString()
+        });
         if (definition.authorize) {
-          const allowed = await definition.authorize({ db, actor, operation: "continue", workflow: publicWorkflow(row), input: input.input ?? {} });
+          const allowed = await definition.authorize({ db, actor, context, operation: "continue", workflow: publicWorkflow(row), input: input.input ?? {} });
           if (allowed === false) throw workflowNotFound();
         }
         const currentState = parseJson(row.stateJson, {});
@@ -205,34 +331,103 @@ export function createWorkspaceInteractionService({
           actor,
           workflow: publicWorkflow(row),
           state: currentState,
-          input: input.input ?? {}
+          input: input.input ?? {},
+          request: input.request
         })) ?? {};
         const nextState = validateWorkflowState(definition, continued.state ?? currentState);
         const status = normalizeWorkflowStatus(continued.status ?? "active");
         const revision = row.revision + 1;
-        await db.prepare(`
+        const changed = await db.prepare(`
           UPDATE workspace_workflow_sessions
           SET state_json = ?, status = ?, revision = ?, updated_at = ?
-          WHERE id = ? AND revision = ?
+          WHERE id = ? AND status = 'active' AND revision = ?
         `).run(JSON.stringify(nextState), status, revision, now().toISOString(), row.id, row.revision);
+        requireCasChange(changed, "workflow.race_conflict", "引导流程已被其他请求更新");
         const updated = await loadWorkflow(db, row.id);
+        await auditInteraction(db, actor, row.spaceId, "workflow.continue", "workspace.workflow", row.id, "success", null, input.request);
         return { ok: true, workflow: await projectWorkflow(definition, updated, actor), result: continued.result ?? null };
-      } catch (error) {
-        return failure(toInteractionError(error, "workflow.failed", "引导流程处理失败"));
+      } catch (caught) {
+        const error = toInteractionError(caught, "workflow.failed", "引导流程处理失败");
+        await auditInteraction(db, actor, row.spaceId, "workflow.continue", "workspace.workflow", row.id, "rejected", error.code, input.request);
+        return failure(error);
       }
     });
     if (!outcome.ok) throw outcome.error;
     return outcome;
   }
 
-  async function cancelWorkflow(actorUserId, workflowId) {
-    const row = await requireWorkflow(db, actorUserId, workflowId);
-    if (row.status !== "active") return getWorkflow(actorUserId, row.id);
-    await db.prepare(`
-      UPDATE workspace_workflow_sessions
-      SET status = 'cancelled', revision = revision + 1, updated_at = ? WHERE id = ? AND status = 'active'
-    `).run(now().toISOString(), row.id);
-    return getWorkflow(actorUserId, row.id);
+  async function cancelWorkflow(actorUserId, workflowIdOrInput, legacyOptions = {}) {
+    const input = typeof workflowIdOrInput === "string"
+      ? { ...legacyOptions, workflowId: workflowIdOrInput }
+      : (workflowIdOrInput ?? {});
+    const workflowId = normalizeOptionalIdentifier(input.workflowId, "workflow.invalid_id", "引导流程 ID 无效");
+    let lookupRow = null;
+    let actor = null;
+
+    if (workflowId) {
+      lookupRow = await loadWorkflow(db, workflowId);
+      if (!lookupRow) throw workflowNotFound();
+      actor = await requireActor(db, actorUserId, lookupRow.spaceId);
+      if (lookupRow.actorUserId !== actor.id) throw workflowNotFound();
+    } else {
+      const spaceId = normalizeIdentifier(input.spaceId, "space.invalid", "空间 ID 无效");
+      const conversationId = normalizeIdentifier(input.conversationId, "conversation.invalid", "会话 ID 无效");
+      const botUserId = normalizeIdentifier(input.botUserId, "bot.invalid_id", "Bot ID 无效");
+      actor = await requireActor(db, actorUserId, spaceId);
+      await requireCommandContext(db, actor.id, botUserId, conversationId, spaceId);
+      await expireActiveWorkflows(db, { actorUserId: actor.id, conversationId, botUserId, timestamp: now() });
+      const active = await loadActiveWorkflows(db, actor.id, conversationId, botUserId, 2);
+      if (active.length === 0) {
+        const error = new WorkspaceInteractionError("workflow.active_not_found", "当前 Bot 会话没有进行中的引导流程", 404);
+        await auditInteraction(db, actor, spaceId, "workflow.cancel", "workspace.conversation", conversationId, "rejected", error.code, input.request);
+        throw error;
+      }
+      if (active.length > 1) {
+        const error = new WorkspaceInteractionError("workflow.active_ambiguous", "当前 Bot 会话存在多个引导流程", 409);
+        await auditInteraction(db, actor, spaceId, "workflow.cancel", "workspace.conversation", conversationId, "rejected", error.code, input.request);
+        throw error;
+      }
+      lookupRow = active[0];
+    }
+
+    const outcome = await db.transaction(async () => {
+      await db.lock?.(`workspace-workflow:${lookupRow.id}`);
+      const row = await loadWorkflow(db, lookupRow.id);
+      if (!row || row.actorUserId !== actor.id) return failure(workflowNotFound());
+      if (row.status !== "active") {
+        const error = new WorkspaceInteractionError("workflow.not_active", "引导流程已结束", 409);
+        await auditInteraction(db, actor, row.spaceId, "workflow.cancel", "workspace.workflow", row.id, "rejected", error.code, input.request);
+        return failure(error);
+      }
+      try {
+        await requireCommandContext(db, actor.id, row.botUserId, row.conversationId, row.spaceId);
+        await consumeRateLimit(db, {
+          spaceId: row.spaceId,
+          actorUserId: actor.id,
+          botUserId: row.botUserId,
+          operationKey: `workflow.cancel:${row.workflowType}`,
+          limit: limits.workflowCancel,
+          timestamp: now().toISOString()
+        });
+        const changed = await db.prepare(`
+          UPDATE workspace_workflow_sessions
+          SET status = 'cancelled', revision = revision + 1, updated_at = ?
+          WHERE id = ? AND status = 'active' AND revision = ?
+        `).run(now().toISOString(), row.id, row.revision);
+        requireCasChange(changed, "workflow.race_conflict", "引导流程已被其他请求更新");
+        const updated = await loadWorkflow(db, row.id);
+        const definition = workflowRegistry.get(updated.workflowType, updated.workflowVersion);
+        if (!definition) throw new WorkspaceInteractionError("workflow.unknown_version", "引导流程版本暂不支持", 422);
+        await auditInteraction(db, actor, row.spaceId, "workflow.cancel", "workspace.workflow", row.id, "success", null, input.request);
+        return { ok: true, workflow: await projectWorkflow(definition, updated, actor) };
+      } catch (caught) {
+        const error = toInteractionError(caught, "workflow.failed", "引导流程取消失败");
+        await auditInteraction(db, actor, row.spaceId, "workflow.cancel", "workspace.workflow", row.id, "rejected", error.code, input.request);
+        return failure(error);
+      }
+    });
+    if (!outcome.ok) throw outcome.error;
+    return outcome.workflow;
   }
 
   return { executeCommand, startWorkflow, getWorkflow, continueWorkflow, cancelWorkflow };
@@ -240,15 +435,17 @@ export function createWorkspaceInteractionService({
 
 async function requireCommandContext(db, actorId, botUserId, conversationId, spaceId) {
   const conversation = await db.prepare(`
-    SELECT id, type FROM conversations WHERE id = ? AND space_id = ?
+    SELECT id, space_id AS spaceId, type FROM conversations WHERE id = ? AND space_id = ?
   `).get(conversationId, spaceId);
   if (!conversation) throw new WorkspaceInteractionError("conversation.not_found", "会话不存在", 404);
   await requireConversationActor(db, actorId, conversationId, spaceId);
   const bot = await db.prepare(`
     SELECT u.id, u.kind
-    FROM users u JOIN conversation_members cm ON cm.user_id = u.id
+    FROM users u
+    JOIN conversation_members cm ON cm.user_id = u.id
+    JOIN space_members sm ON sm.user_id = u.id AND sm.space_id = ? AND sm.removed_at IS NULL
     WHERE u.id = ? AND cm.conversation_id = ? AND cm.removed_at IS NULL
-  `).get(botUserId, conversationId);
+  `).get(spaceId, botUserId, conversationId);
   if (!bot || !["bot", "system"].includes(bot.kind)) throw new WorkspaceInteractionError("bot.not_available", "Bot 不在当前会话中", 404);
   return conversation;
 }
@@ -287,9 +484,36 @@ async function loadWorkflow(db, id) {
     SELECT id, space_id AS spaceId, conversation_id AS conversationId, actor_user_id AS actorUserId,
       bot_user_id AS botUserId, workflow_type AS workflowType, workflow_version AS workflowVersion,
       state_json AS stateJson, status, revision, expires_at AS expiresAt,
-      created_at AS createdAt, updated_at AS updatedAt
+      created_at AS createdAt, updated_at AS updatedAt,
+      client_invocation_id AS clientInvocationId, start_request_hash AS startRequestHash
     FROM workspace_workflow_sessions WHERE id = ?
   `).get(id);
+}
+
+async function loadWorkflowByInvocation(db, spaceId, actorUserId, clientInvocationId) {
+  return db.prepare(`
+    SELECT id, space_id AS spaceId, conversation_id AS conversationId, actor_user_id AS actorUserId,
+      bot_user_id AS botUserId, workflow_type AS workflowType, workflow_version AS workflowVersion,
+      state_json AS stateJson, status, revision, expires_at AS expiresAt,
+      created_at AS createdAt, updated_at AS updatedAt,
+      client_invocation_id AS clientInvocationId, start_request_hash AS startRequestHash
+    FROM workspace_workflow_sessions
+    WHERE space_id = ? AND actor_user_id = ? AND client_invocation_id = ?
+  `).get(spaceId, actorUserId, clientInvocationId);
+}
+
+async function loadActiveWorkflows(db, actorUserId, conversationId, botUserId, limit) {
+  return db.prepare(`
+    SELECT id, space_id AS spaceId, conversation_id AS conversationId, actor_user_id AS actorUserId,
+      bot_user_id AS botUserId, workflow_type AS workflowType, workflow_version AS workflowVersion,
+      state_json AS stateJson, status, revision, expires_at AS expiresAt,
+      created_at AS createdAt, updated_at AS updatedAt,
+      client_invocation_id AS clientInvocationId, start_request_hash AS startRequestHash
+    FROM workspace_workflow_sessions
+    WHERE actor_user_id = ? AND conversation_id = ? AND bot_user_id = ? AND status = 'active'
+    ORDER BY updated_at DESC, id DESC
+    LIMIT ?
+  `).all(actorUserId, conversationId, botUserId, limit);
 }
 
 async function projectWorkflow(definition, row, actor) {
@@ -337,6 +561,64 @@ async function auditInteraction(db, actor, spaceId, action, targetType, targetId
     userAgent: request?.userAgent,
     requestId: request?.requestId
   });
+}
+
+async function expireActiveWorkflows(db, { actorUserId, conversationId, botUserId, timestamp }) {
+  await db.prepare(`
+    UPDATE workspace_workflow_sessions
+    SET status = 'expired', revision = revision + 1, updated_at = ?
+    WHERE actor_user_id = ? AND conversation_id = ? AND bot_user_id = ?
+      AND status = 'active' AND expires_at <= ?
+  `).run(timestamp.toISOString(), actorUserId, conversationId, botUserId, timestamp.toISOString());
+}
+
+async function consumeRateLimit(db, {
+  spaceId,
+  actorUserId,
+  botUserId,
+  operationKey,
+  limit,
+  timestamp
+}) {
+  const instant = new Date(timestamp);
+  const windowStartedAt = new Date(
+    Math.floor(instant.getTime() / RATE_LIMIT_WINDOW_MS) * RATE_LIMIT_WINDOW_MS
+  ).toISOString();
+  await db.lock?.(`workspace-interaction-rate:${spaceId}:${actorUserId}:${botUserId}:${operationKey}:${windowStartedAt}`);
+  const result = await db.prepare(`
+    INSERT INTO workspace_interaction_rate_limits (
+      space_id, actor_user_id, bot_user_id, operation_key, window_started_at, attempt_count, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 1, ?)
+    ON CONFLICT (space_id, actor_user_id, bot_user_id, operation_key, window_started_at)
+    DO UPDATE SET attempt_count = workspace_interaction_rate_limits.attempt_count + 1,
+      updated_at = excluded.updated_at
+    WHERE workspace_interaction_rate_limits.attempt_count < ?
+  `).run(spaceId, actorUserId, botUserId, operationKey, windowStartedAt, instant.toISOString(), limit);
+  if (changeCount(result) !== 1) {
+    throw new WorkspaceInteractionError("interaction.rate_limited", "操作过于频繁，请稍后再试", 429, {
+      retryAfterSeconds: Math.max(1, Math.ceil((new Date(windowStartedAt).getTime() + RATE_LIMIT_WINDOW_MS - instant.getTime()) / 1000))
+    });
+  }
+}
+
+function normalizeRateLimits(input) {
+  const normalized = {};
+  for (const [key, fallback] of Object.entries(DEFAULT_RATE_LIMITS)) {
+    const value = input?.[key] ?? fallback;
+    if (!Number.isSafeInteger(value) || value < 1 || value > 100_000) {
+      throw new TypeError(`Invalid Workspace interaction rate limit: ${key}`);
+    }
+    normalized[key] = value;
+  }
+  return Object.freeze(normalized);
+}
+
+function requireCasChange(result, code, message) {
+  if (changeCount(result) !== 1) throw new WorkspaceInteractionError(code, message, 409);
+}
+
+function changeCount(result) {
+  return Number(result?.changes ?? 0);
 }
 
 function normalizeIdentifier(value, code, message) {
@@ -393,6 +675,16 @@ function toInteractionError(error, fallbackCode, fallbackMessage) {
 
 function workflowNotFound() {
   return new WorkspaceInteractionError("workflow.not_found", "引导流程不存在或不可访问", 404);
+}
+
+function activeWorkflowConflict(activeWorkflowId) {
+  return new WorkspaceInteractionError("workflow.active_conflict", "当前 Bot 会话已有进行中的引导流程", 409, {
+    activeWorkflowId
+  });
+}
+
+function workflowRaceConflict() {
+  return new WorkspaceInteractionError("workflow.race_conflict", "引导流程已被其他请求更新", 409);
 }
 
 function failure(error) {

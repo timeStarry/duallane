@@ -13,6 +13,15 @@
 
 本文是需求和架构契约，不是某个 Agent 框架的插件实现说明。Workspace 负责安全的消息渠道和授权边界；Hermes、OpenClaw 或其他 Agent Runtime 负责模型、记忆、工具和 Agent 循环。
 
+### v0.15 实现状态（2026-08-20）
+
+- 已实现 Bot 生命周期、Token/Scope、WebSocket Gateway、心跳、确认、有限续传、消息发送和授权上下文读取。
+- 已实现 owner 与其 active 自定义 Bot 的私聊创建：仅 owner 且 `allowDirect=true` 可创建；默认只授权触发，正文上下文必须通过会话级 context-grant API 显式开启。
+- 已提供版本化通用 JavaScript SDK `packages/agent-sdk`，以及 `@duallane/agent-sdk/openclaw` 最小传输桥接入口。OpenClaw 的模型、会话和工具循环仍由 OpenClaw 插件运行时负责。
+- 已发布 stable 与 v1 固定 Prompt 路径，并提供 v1 SHA-256 清单；生产静态网关启用 ETag、Last-Modified 条件校验和分层缓存。
+- 已实现受控飞书 Card JSON 子集转换，并在 Bot Gateway 发送、更新入口复用现有 Scope、会话成员、卡片 revision 和审计边界；固定动作经现有卡片操作管线执行，并仅向具备 `cards:act`、会话授权和触发许可的归属 Bot 投递。当前前端对该类型使用安全 fallback，完整飞书卡片专用渲染不属于本次接入契约。
+- Hermes 本版使用通用 SDK；P2 官方 Hermes Adapter 仍未实现。
+
 ## 2. 现状与设计结论
 
 当前代码已经具备以下基础：
@@ -24,7 +33,7 @@
 - 会话成员、Capability、实时事件和 Workspace 审计链路已存在。
 - Bot 不能被当作普通用户通过 OAuth 或 Session 登录，这一约束必须延续。
 
-当前尚未具备：
+以下是本文编写时的原始基线，v0.15 的实际完成状态以上述状态块和代码测试为准。原始基线尚未具备：
 
 - 外部 Agent 长连接 Gateway。
 - Bot 专用 Token 和 Scope 管理。
@@ -221,6 +230,7 @@ Agent 必须确认接收；事件处理和回复使用独立幂等键。重复�
 POST   /api/workspace/bots
 GET    /api/workspace/bots/{botId}
 PATCH  /api/workspace/bots/{botId}/settings
+PATCH  /api/workspace/bots/{botId}/context-grants/{conversationId}
 POST   /api/workspace/bots/{botId}/tokens
 GET    /api/workspace/bots/{botId}/tokens
 POST   /api/workspace/bots/{botId}/tokens/{tokenId}/revoke
@@ -281,6 +291,15 @@ commands:receive
 https://duallane.tsio.top/integrations/hermes/duallane-channel.md
 https://duallane.tsio.top/integrations/openclaw/duallane-channel.md
 https://duallane.tsio.top/integrations/duallane-channel.md
+```
+
+v0.15 同时提供以下显式版本资源和摘要清单：
+
+```text
+https://duallane.tsio.top/integrations/v1/duallane-channel.md
+https://duallane.tsio.top/integrations/v1/openclaw/duallane-channel.md
+https://duallane.tsio.top/integrations/v1/hermes/duallane-channel.md
+https://duallane.tsio.top/integrations/v1/manifest.json
 ```
 
 地址必须由部署版本提供，并支持：

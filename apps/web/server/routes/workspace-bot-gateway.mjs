@@ -24,10 +24,9 @@ export function registerWorkspaceBotGatewayRoutes({ app, gateway, workspaceEnabl
 
   app.get("/api/bot-gateway/v1/me", authenticated(async (_request, _reply, auth) => gateway.getMe(auth)));
   app.post("/api/bot-gateway/v1/events/ack", authenticated(async (request, _reply, auth) => gateway.acknowledge(auth, request.body ?? {})));
-  // Message bodies are intentionally not exposed here until the deployment
-  // supplies an explicit per-conversation context grant and content egress
-  // policy; the Gateway service remains the single enforcement boundary.
-  app.get("/api/bot-gateway/v1/conversations/:conversationId/context", authenticated(async (_request, reply) => reply.code(403).send({ error: { code: "bot.context_forbidden", message: "Bot 未获准读取该会话上下文" } })));
+  app.get("/api/bot-gateway/v1/conversations/:conversationId/context", authenticated(async (request, _reply, auth) => (
+    gateway.getContext(auth, request.params.conversationId, request.query ?? {})
+  )));
   app.post("/api/bot-gateway/v1/messages", authenticated(async (request, reply, auth) => reply.code(201).send(await gateway.sendMessage(auth, request.body ?? {}))));
   app.post("/api/bot-gateway/v1/cards", authenticated(async (request, reply, auth) => reply.code(201).send(await gateway.sendCard(auth, request.body ?? {}))));
   app.patch("/api/bot-gateway/v1/cards/:cardId", authenticated(async (request, _reply, auth) => gateway.updateCard(auth, request.params.cardId, request.body ?? {})));

@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import fastifyCookie from "@fastify/cookie";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
+import { createHash } from "node:crypto";
 import { createReadStream, readFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -82,6 +83,7 @@ import {
 } from "./services/profile-avatar.mjs";
 import { blockWorkspace, isWorkspaceEnabled } from "./services/workspace-gate.mjs";
 import { createWorkspaceObjectStore } from "./services/workspace-object-store.mjs";
+import { createWorkspaceStorageObjectRegistry } from "./services/workspace-storage-objects.mjs";
 import {
   createWorkspaceChunkUploadService,
   WORKSPACE_UPLOAD_PART_SIZE,
@@ -97,8 +99,9 @@ import { createEchoRequirementService } from "./services/echo-requirements.mjs";
 import { createEchoSolicitationService } from "./services/echo-solicitations.mjs";
 import { createEchoDeliveryService } from "./services/echo-delivery.mjs";
 import { createEchoRuntime } from "./services/echo-runtime.mjs";
+import { createEchoReleaseService } from "./services/echo-releases.mjs";
 import { ECHO_USER_ID } from "./services/echo-identity.mjs";
-import { TOPIC_CARD_DEFINITION } from "./services/workspace-topics.mjs";
+import { createTopic, TOPIC_CARD_DEFINITION } from "./services/workspace-topics.mjs";
 import { TOPIC_SYNC_CARD_DEFINITION } from "./services/workspace-topic-messages.mjs";
 import { registerWorkspaceAgentBotRoutes } from "./routes/workspace-bots.mjs";
 import { registerWorkspaceCardRoutes } from "./routes/workspace-cards.mjs";
@@ -152,16 +155,86 @@ export async function createApp(options = {}) {
     ? options.workspaceObjectStore ?? await createWorkspaceObjectStore({ env, dataDir })
     : null;
   await workspaceObjectStore?.assertReady();
+  const workspaceStorageObjects = db && workspaceObjectStore
+    ? options.workspaceStorageObjects ?? createWorkspaceStorageObjectRegistry({
+      db,
+      objectStore: workspaceObjectStore,
+      now: options.now
+    })
+    : null;
   const workspaceChunkUploads = db ? createWorkspaceChunkUploadService({ db, dataDir, now: options.now }) : null;
-  const workspaceCustomEmotes = db ? createWorkspaceCustomEmoteService({
+
+  const acquireLegacyWorkspaceObject = async ({
+    kind,
+    resourceId,
+    record,
+    sha256,
+    byteSize,
+    contentType
+  }) => {
+    let digest = typeof sha256 === "string" ? sha256.trim().toLowerCase() : "";
+    if (!/^[a-f0-9]{64}$/.test(digest)) {
+      const opened = await workspaceObjectStore.openLegacyObject(record);
+      const hash = createHash("sha256");
+      let verifiedByteSize = 0;
+      try {
+        for await (const chunk of opened.stream) {
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          verifiedByteSize += buffer.byteLength;
+          hash.update(buffer);
+        }
+      } finally {
+        opened.stream.destroy?.();
+      }
+      if (verifiedByteSize !== Number(byteSize)) {
+        throw new WorkspaceError("file.storage_mismatch", "文件内容不可用", 500);
+      }
+      digest = hash.digest("hex");
+    }
+
+    const opened = await workspaceObjectStore.openLegacyObject(record);
+    try {
+      return await workspaceStorageObjects.acquireAndBind({
+        kind,
+        resourceId,
+        sha256: digest,
+        byteSize,
+        contentType,
+        stream: opened.stream,
+        cleanupPrevious: false
+      });
+    } finally {
+      opened.stream.destroy?.();
+    }
+  };
+
+  const cleanupStorageObjectAfterCommit = async (request, storageObjectId) => {
+    if (!storageObjectId) return;
+    try {
+      await workspaceStorageObjects.cleanupIfUnreferenced(storageObjectId);
+    } catch (error) {
+      request.log.warn({ err: error }, "workspace storage object cleanup failed");
+    }
+  };
+
+  const cleanupAcquiredStorageObjectAfterRollback = async (request, storageBinding) => {
+    if (!storageBinding?.object) return;
+    try {
+      await workspaceStorageObjects.cleanupAcquiredObject(storageBinding.object);
+    } catch (error) {
+      request.log.error({ err: error }, "rolled back workspace storage object cleanup failed");
+    }
+  };
+  const workspaceCustomEmotes = db && workspaceStorageObjects ? createWorkspaceCustomEmoteService({
     db,
     objectStore: workspaceObjectStore,
-    dataDir,
+    storageObjects: workspaceStorageObjects,
     now: options.now
   }) : null;
   const workspaceAgentBots = db ? createWorkspaceAgentBotService({ db, now: options.now }) : null;
   const echoRequirements = db ? createEchoRequirementService({ db, now: options.now }) : null;
   const echoSolicitations = db ? createEchoSolicitationService({ db, now: options.now }) : null;
+  const echoReleases = db ? createEchoReleaseService({ db, now: options.now }) : null;
   let echoDelivery = null;
   const echoDeliveryBridge = Object.freeze({
     async syncRequirement(input) {
@@ -169,12 +242,16 @@ export async function createApp(options = {}) {
     },
     async syncSolicitation(input) {
       return echoDelivery?.syncSolicitation(input) ?? null;
+    },
+    async syncRelease(input) {
+      return echoDelivery?.syncRelease(input) ?? null;
     }
   });
   const echoRuntime = db ? createEchoRuntime({
     db,
     requirements: echoRequirements,
     solicitations: echoSolicitations,
+    releases: echoReleases,
     deliveryService: echoDeliveryBridge,
     extraCardDefinitions: [TOPIC_CARD_DEFINITION, TOPIC_SYNC_CARD_DEFINITION],
     now: options.now
@@ -215,6 +292,7 @@ export async function createApp(options = {}) {
       env,
       requirementService: echoRequirements,
       solicitationService: echoSolicitations,
+      releaseService: echoReleases,
       cardService: workspaceCards,
       cardRegistry: workspaceCardRegistry,
       messageWriter: (input) => echoSystemBotMessageWriter({
@@ -790,6 +868,7 @@ app.put("/api/workspace/me/avatar", { bodyLimit: AVATAR_MAX_INPUT_BYTES }, async
     return blockWorkspace(reply);
   }
   let stored;
+  let storageBinding = null;
   try {
     const actorId = await getWorkspaceUserId(request);
     stored = await saveProfileAvatar(dataDir, {
@@ -801,17 +880,35 @@ app.put("/api/workspace/me/avatar", { bodyLimit: AVATAR_MAX_INPUT_BYTES }, async
       userId: actorId
     });
     stored = { ...stored, userId: actorId };
-    await workspaceObjectStore.persistProfileAvatar(stored);
+    stored = await workspaceObjectStore.persistProfileAvatar(stored);
     const result = await setOwnAvatar(db, request, {
       actorId,
       storageKey: stored.storageKey,
-      version: stored.version
+      version: stored.version,
+      acquireStorageObject: async () => {
+        storageBinding = await acquireLegacyWorkspaceObject({
+          kind: "avatar",
+          resourceId: actorId,
+          record: { ...stored, kind: "avatar" },
+          sha256: stored.sha256,
+          byteSize: stored.byteSize,
+          contentType: "image/webp"
+        });
+        return storageBinding;
+      }
+    });
+    await cleanupStorageObjectAfterCommit(request, storageBinding?.previousStorageObjectId);
+    await workspaceObjectStore.removeProfileAvatar(stored).catch((error) => {
+      request.log.warn({ err: error }, "workspace avatar legacy cleanup failed");
     });
     if (result.previousStorageKey && result.previousStorageKey !== stored.storageKey) {
-      await workspaceObjectStore.removeProfileAvatar({ storageKey: result.previousStorageKey }).catch(() => {});
+      await workspaceObjectStore.removeProfileAvatar({ storageKey: result.previousStorageKey }).catch((error) => {
+        request.log.warn({ err: error }, "previous workspace avatar legacy cleanup failed");
+      });
     }
     return { user: result.user };
   } catch (error) {
+    await cleanupAcquiredStorageObjectAfterRollback(request, storageBinding);
     if (stored?.storageKey) {
       await workspaceObjectStore.removeProfileAvatar(stored).catch(() => {});
     }
@@ -825,8 +922,11 @@ app.delete("/api/workspace/me/avatar", async (request, reply) => {
   }
   try {
     const result = await removeOwnAvatar(db, request, { actorId: await getWorkspaceUserId(request) });
+    await cleanupStorageObjectAfterCommit(request, result.previousStorageObjectId);
     if (result.previousStorageKey) {
-      await workspaceObjectStore.removeProfileAvatar({ storageKey: result.previousStorageKey }).catch(() => {});
+      await workspaceObjectStore.removeProfileAvatar({ storageKey: result.previousStorageKey }).catch((error) => {
+        request.log.warn({ err: error }, "workspace avatar legacy cleanup failed");
+      });
     }
     return { user: result.user };
   } catch (error) {
@@ -952,6 +1052,19 @@ app.patch("/api/workspace/me/emote-collections/:collectionId", async (request, r
         request.body
       )
     };
+  } catch (error) {
+    return sendWorkspaceError(reply, request, error);
+  }
+});
+
+app.put("/api/workspace/me/emote-collections/:collectionId/source-subscription", async (request, reply) => {
+  if (!workspaceEnabled) return blockWorkspace(reply);
+  try {
+    return await workspaceCustomEmotes.updateCollectionSourceSubscription(
+      await getWorkspaceUserId(request),
+      request.params.collectionId,
+      request.body
+    );
   } catch (error) {
     return sendWorkspaceError(reply, request, error);
   }
@@ -1414,7 +1527,8 @@ app.post("/api/workspace/messages", async (request, reply) => {
       scheduleEmailNotifications: workspaceEmail?.scheduleMessage,
       scheduleNtfyNotifications: workspaceNtfy?.scheduleMessage,
       validateCustomEmote: workspaceCustomEmotes?.validateMessageCustomEmote,
-      validateCollectionShare: workspaceCustomEmotes?.validateMessageCollectionShare
+      validateCollectionShare: workspaceCustomEmotes?.validateMessageCollectionShare,
+      createTopicFromMessage: (input) => createTopic(db, request, input)
     });
     return reply.code(201).send({ message });
   } catch (error) {
@@ -1558,18 +1672,36 @@ app.post("/api/workspace/files/uploads/:uploadId/complete", async (request, repl
   }
   const actorId = await getWorkspaceUserId(request);
   let upload;
+  let storageBinding = null;
   try {
     upload = await getReservedUpload(db, actorId, request.params.uploadId);
     const stored = request.body?.mode === "chunked"
       ? await workspaceChunkUploads.assemble({ upload, objectStore: workspaceObjectStore })
       : await workspaceObjectStore.statAttachment(upload.attachment);
-    return await completeUpload(db, request, {
+    const result = await completeUpload(db, request, {
       ...(request.body ?? {}),
       actorId,
       uploadId: request.params.uploadId,
-      storageVerifiedByteSize: stored.byteSize
+      storageVerifiedByteSize: stored.byteSize,
+      acquireStorageObject: async (attachment) => {
+        storageBinding = await acquireLegacyWorkspaceObject({
+          kind: "attachment",
+          resourceId: attachment.id,
+          record: { ...attachment, kind: "attachment" },
+          sha256: stored.sha256,
+          byteSize: stored.byteSize,
+          contentType: attachment.mimeType
+        });
+        return storageBinding;
+      }
     });
+    await cleanupStorageObjectAfterCommit(request, storageBinding?.previousStorageObjectId);
+    await workspaceObjectStore.deleteLegacyObject({ ...upload.attachment, kind: "attachment" }).catch((error) => {
+      request.log.warn({ err: error }, "workspace attachment legacy cleanup failed");
+    });
+    return result;
   } catch (error) {
+    await cleanupAcquiredStorageObjectAfterRollback(request, storageBinding);
     if (upload && error?.code !== "upload.parts_incomplete") {
       await workspaceObjectStore.removeAttachment(upload.attachment).catch(() => {});
       await workspaceChunkUploads.cleanup(request.params.uploadId).catch(() => {});
@@ -1593,15 +1725,33 @@ app.put("/api/workspace/files/uploads/:uploadId/content", { bodyLimit: WORKSPACE
   }
   const actorId = await getWorkspaceUserId(request);
   let upload;
+  let storageBinding = null;
   try {
     upload = await getReservedUpload(db, actorId, request.params.uploadId);
     const stored = await workspaceObjectStore.saveAttachment({ attachment: upload.attachment, stream: request.body });
-    return await completeUpload(db, request, {
+    const result = await completeUpload(db, request, {
       actorId,
       uploadId: request.params.uploadId,
-      storageVerifiedByteSize: stored.byteSize
+      storageVerifiedByteSize: stored.byteSize,
+      acquireStorageObject: async (attachment) => {
+        storageBinding = await acquireLegacyWorkspaceObject({
+          kind: "attachment",
+          resourceId: attachment.id,
+          record: { ...attachment, kind: "attachment" },
+          sha256: stored.sha256,
+          byteSize: stored.byteSize,
+          contentType: attachment.mimeType
+        });
+        return storageBinding;
+      }
     });
+    await cleanupStorageObjectAfterCommit(request, storageBinding?.previousStorageObjectId);
+    await workspaceObjectStore.deleteLegacyObject({ ...upload.attachment, kind: "attachment" }).catch((error) => {
+      request.log.warn({ err: error }, "workspace attachment legacy cleanup failed");
+    });
+    return result;
   } catch (error) {
+    await cleanupAcquiredStorageObjectAfterRollback(request, storageBinding);
     if (upload) {
       await workspaceObjectStore.removeAttachment(upload.attachment).catch(() => {});
       await workspaceChunkUploads.cleanup(request.params.uploadId).catch(() => {});
@@ -1658,7 +1808,13 @@ app.delete("/api/workspace/files/:attachmentId", async (request, reply) => {
   try {
     return await removeAttachment(db, request, {
       actorId: await getWorkspaceUserId(request),
-      attachmentId: request.params.attachmentId
+      attachmentId: request.params.attachmentId,
+      releaseStorageObject: async (attachment) => {
+        await cleanupStorageObjectAfterCommit(request, attachment.storageObjectId);
+        await workspaceObjectStore.deleteLegacyObject({ ...attachment, kind: "attachment" }).catch((error) => {
+          request.log.warn({ err: error }, "workspace attachment legacy cleanup failed");
+        });
+      }
     });
   } catch (error) {
     return sendWorkspaceError(reply, request, error);

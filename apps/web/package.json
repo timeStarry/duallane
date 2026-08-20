@@ -1,12 +1,13 @@
 {
   "name": "@duallane/web",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "concurrently -n api,web -c cyan,magenta \"node --watch server/index.mjs\" \"vite --host 0.0.0.0\"",
     "build": "tsc -b && vite build",
     "db:migrate": "node server/migrate.mjs",
+    "storage:dedupe": "node server/storage-dedupe.mjs",
     "storage:migrate": "node server/storage-migrate.mjs",
     "storage:provision": "node server/storage-provision.mjs",
     "start": "NODE_ENV=production node server/index.mjs",

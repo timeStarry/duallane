@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10,6 +11,7 @@ import {
   workspaceArchiveObjectKey,
   workspaceAttachmentObjectKey,
   workspaceAvatarObjectKey,
+  workspaceContentObjectKey,
   workspaceCustomEmoteObjectKey
 } from "./workspace-object-store.mjs";
 import { resolveWorkspaceStoragePath } from "./workspace-storage.mjs";
@@ -47,6 +49,135 @@ describe("workspace object store", () => {
 
     await writeFile(credentialsPath, "not-json");
     await expect(loadWorkspaceS3Config(s3Env(credentialsPath))).rejects.toThrow("WORKSPACE_S3_CREDENTIALS_FILE cannot be read");
+  });
+
+  it("concurrently ensures, reads, and deletes canonical S3 objects by the stored object key", async () => {
+    const directory = await makeDirectory();
+    const credentialsPath = path.join(directory, "credentials.json");
+    await writeFile(credentialsPath, JSON.stringify({ accessKey: "test-access", secretKey: "test-secret" }));
+    const objects = new Map();
+    const observedKeys = [];
+    const client = {
+      async send(command) {
+        const name = command.constructor.name;
+        const key = command.input.Key;
+        if (key) observedKeys.push(key);
+        if (name === "HeadObjectCommand") {
+          const object = objects.get(key);
+          if (!object) throw missingS3Object();
+          return { ContentLength: object.body.byteLength, Metadata: object.metadata };
+        }
+        if (name === "GetObjectCommand") {
+          const object = objects.get(key);
+          if (!object) throw missingS3Object();
+          return { Body: Readable.from(object.body) };
+        }
+        if (name === "DeleteObjectCommand") {
+          objects.delete(key);
+          return {};
+        }
+        return {};
+      },
+      destroy() {}
+    };
+    const store = await createWorkspaceObjectStore({
+      dataDir: directory,
+      env: s3Env(credentialsPath),
+      s3Client: client,
+      publicS3Client: client,
+      presign: async (_client, command) => `https://fs.tsio.top/duallane/${command.input.Key}`,
+      uploadFactory: ({ params }) => ({
+        async done() {
+          const chunks = [];
+          for await (const chunk of params.Body) chunks.push(Buffer.from(chunk));
+          objects.set(params.Key, { body: Buffer.concat(chunks), metadata: params.Metadata });
+        }
+      })
+    });
+    const content = Buffer.from("canonical minio bytes");
+    const sha256 = createHash("sha256").update(content).digest("hex");
+    await Promise.all([
+      store.ensureObject({ sha256, byteSize: content.byteLength, stream: Readable.from(content) }),
+      store.ensureObject({ sha256, byteSize: content.byteLength, stream: Readable.from(content) })
+    ]);
+    expect([...objects.keys()]).toEqual([workspaceContentObjectKey(sha256)]);
+    await expect(store.ensureObject({ sha256, byteSize: content.byteLength })).resolves.toMatchObject({ created: false });
+    const row = { sha256, byteSize: content.byteLength, objectKey: workspaceContentObjectKey(sha256) };
+    await expect(store.readObject(row)).resolves.toEqual(content);
+    expect(observedKeys.at(-2)).toBe(row.objectKey);
+    await expect(store.readObject({ ...row, objectKey: `workspace/objects/sha256/ff/${sha256}` }))
+      .rejects.toMatchObject({ code: "storage.object_invalid_key" });
+    const legacyAttachment = {
+      id: "att-dual-read",
+      spaceId: "spc_default",
+      storageKey: "workspace/spc_default/att-dual-read/legacy.bin",
+      mimeType: "application/octet-stream",
+      byteSize: content.byteLength,
+      storageObject: row
+    };
+    const legacyKey = workspaceAttachmentObjectKey(legacyAttachment);
+    objects.set(legacyKey, { body: Buffer.from("legacy attachment data"), metadata: {} });
+    await expect(store.getAttachmentDelivery(legacyAttachment)).resolves.toMatchObject({
+      kind: "redirect",
+      url: `https://fs.tsio.top/duallane/${row.objectKey}`
+    });
+    await store.deleteObject(row);
+    legacyAttachment.byteSize = Buffer.byteLength("legacy attachment data");
+    await expect(store.getAttachmentDelivery(legacyAttachment)).resolves.toMatchObject({
+      kind: "redirect",
+      url: `https://fs.tsio.top/duallane/${legacyKey}`
+    });
+    await store.deleteObject(row);
+    expect([...objects.keys()]).toEqual([legacyKey]);
+  });
+
+  it("prefers canonical local bytes and falls back to the retained legacy path only when missing", async () => {
+    const directory = await makeDirectory();
+    const store = await createWorkspaceObjectStore({ dataDir: directory, env: { WORKSPACE_STORAGE_DRIVER: "local" } });
+    const canonical = Buffer.from("canonical bytes");
+    const legacy = Buffer.from("legacy bytes");
+    const sha256 = createHash("sha256").update(canonical).digest("hex");
+    const ensured = await store.ensureObject({
+      sha256,
+      byteSize: canonical.byteLength,
+      stream: Readable.from(canonical)
+    });
+    const legacyKey = "workspace/spc_default/att-local-dual/legacy.bin";
+    const avatarLegacyKey = "profile-avatars/usr-local-dual/legacy.webp";
+    const emoteLegacyKey = "custom-emotes/usr-local-dual/emote-local-dual/content.webp";
+    const legacyPath = resolveWorkspaceStoragePath(directory, legacyKey);
+    await Promise.all([legacyKey, avatarLegacyKey, emoteLegacyKey].map(async (storageKey) => {
+      const target = resolveWorkspaceStoragePath(directory, storageKey);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, legacy);
+    }));
+    const attachment = {
+      id: "att-local-dual",
+      storageKey: legacyKey,
+      byteSize: legacy.byteLength,
+      storageObject: { ...ensured, byteSize: canonical.byteLength }
+    };
+    const canonicalDelivery = await store.getAttachmentDelivery(attachment);
+    await expect(readFile(canonicalDelivery.path)).resolves.toEqual(canonical);
+    const avatar = {
+      storageKey: avatarLegacyKey,
+      storageObject: attachment.storageObject
+    };
+    const emote = {
+      storageKey: emoteLegacyKey,
+      byteSize: legacy.byteLength,
+      storageObject: attachment.storageObject
+    };
+    await expect(store.getProfileAvatarDelivery(avatar)).resolves.toMatchObject({ path: canonicalDelivery.path });
+    await expect(store.readCustomEmoteBytes(emote, 100)).resolves.toEqual(canonical);
+    await store.deleteObject(attachment.storageObject);
+    const fallbackDelivery = await store.getAttachmentDelivery(attachment);
+    expect(fallbackDelivery.path).toBe(legacyPath);
+    await expect(readFile(fallbackDelivery.path)).resolves.toEqual(legacy);
+    await expect(store.getProfileAvatarDelivery(avatar)).resolves.toMatchObject({
+      path: resolveWorkspaceStoragePath(directory, avatarLegacyKey)
+    });
+    await expect(store.readCustomEmoteBytes(emote, 100)).resolves.toEqual(legacy);
   });
 
   it("uploads verified attachments to S3 and returns a short public signed URL", async () => {
@@ -347,4 +478,11 @@ function s3Env(credentialsPath) {
     WORKSPACE_STORAGE_LOCAL_READ_FALLBACK: "false",
     WORKSPACE_STORAGE_LOCAL_MIRROR_WRITE: "false"
   };
+}
+
+function missingS3Object() {
+  const error = new Error("missing");
+  error.name = "NoSuchKey";
+  error.$metadata = { httpStatusCode: 404 };
+  return error;
 }

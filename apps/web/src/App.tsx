@@ -146,6 +146,15 @@ import {
   type WorkspaceTopicRefreshSignal
 } from "./WorkspaceTopics";
 import { WorkspaceEchoRequirements } from "./WorkspaceEchoRequirements";
+import {
+  ECHO_BOT_USER_ID,
+  WorkspaceEchoInteraction,
+  clearStoredWorkspaceEchoWorkflowDrafts,
+  recognizeWorkspaceEchoCommand,
+  reusableWorkspaceEchoCommandRequest,
+  type WorkspaceEchoCommandRequest,
+  type WorkspaceEchoInteractionSlot
+} from "./WorkspaceEchoInteraction";
 import { WorkspaceBotSettings } from "./WorkspaceBotSettings";
 
 type Lane = "entry" | "about" | "p2p" | "workspace-dev";
@@ -512,6 +521,15 @@ type WorkspaceEmoteCollection = {
   name: string;
   sourceCollectionId?: string | null;
   originalCreator: { id: string; displayName: string };
+  sourceSubscription: {
+    eligible: boolean;
+    enabled: boolean;
+    status: "off" | "synced" | "detached";
+    sourceCollectionId: string | null;
+    sourceRevision: number | null;
+    lastSyncedAt: string | null;
+    readOnly: boolean;
+  };
   items: WorkspaceCustomEmote[];
   itemCount: number;
   createdAt: string;
@@ -524,12 +542,20 @@ type WorkspaceEmoteLibrary = {
   entries: WorkspaceEmoteLibraryEntry[];
   emotes: WorkspaceCustomEmote[];
   collections: WorkspaceEmoteCollection[];
-  usage: { itemCount: number; totalBytes: number; collectionCount: number };
+  usage: {
+    itemCount: number;
+    totalBytes: number;
+    subscribedItemCount: number;
+    subscribedTotalBytes: number;
+    collectionCount: number;
+    subscribedCollectionCount: number;
+    overLimit: boolean;
+  };
   limits: {
-    maxItems: number;
+    maxItems: number | null;
     maxTotalBytes: number;
     maxInputBytes: number;
-    maxCollections: number;
+    maxCollections: number | null;
     maxCollectionItems: number;
     maxBatchItems: number;
   };
@@ -542,6 +568,7 @@ type WorkspaceEmoteCollectionShareSummary = {
   revokedAt: string | null;
   sharedBy: { id: string; displayName: string };
   originalCreator: { id: string; displayName: string };
+  canSubscribeToSourceChanges?: boolean;
   canRevoke: boolean;
   covers?: Array<Pick<WorkspaceCustomEmote, "id" | "label" | "src" | "animated">>;
   sharePath: string;
@@ -699,15 +726,17 @@ const WORKSPACE_ERROR_COPY: Record<string, string> = {
   "emote.invalid_format": "收藏表情仅支持 JPEG、PNG、WebP、GIF 或 BMP。",
   "emote.input_too_large": "收藏表情原图不能超过 10 MiB。",
   "emote.animation_too_complex": "动图帧数或时长超出限制。",
-  "emote.limit_reached": "收藏表情已达到 500 个上限。",
-  "emote.storage_limit_reached": "收藏表情空间已满。",
+  "emote.storage_limit_reached": "本地表情容量已达到上限，请删除部分本地表情后重试。",
   "emote.collection_not_found": "表情合集不存在或已被删除。",
   "emote.collection_limit_reached": "每个合集最多保存 100 张表情。",
-  "emote.collection_count_reached": "最多创建 20 个表情合集。",
   "emote.invalid_collection_name": "合集名称应为 1 至 32 个有效字符。",
   "emote.collection_empty": "空合集不能分享。",
   "emote.share_not_found": "表情合集分享不存在。",
   "emote.share_revoked": "这个表情合集已停止分享。",
+  "emote.subscription_read_only": "订阅中的合集为只读，请先关闭订阅再修改。",
+  "emote.subscription_source_unavailable": "原合集已不可用，当前快照会继续保留。",
+  "emote.subscription_requires_collection": "只能为完整导入的合集开启订阅。",
+  "emote.invalid_subscription": "订阅设置无效，请刷新后重试。",
   "message.invalid_emote_collection": "表情合集分享已不可用。"
 };
 class WorkspaceClientError extends Error {
@@ -2048,6 +2077,25 @@ function formatBytes(bytes: number) {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GiB`;
 }
 
+export function isWorkspaceEmoteCollectionReadOnly(
+  collection: { sourceSubscription?: { readOnly?: boolean } | null } | null | undefined
+) {
+  return collection?.sourceSubscription?.readOnly === true;
+}
+
+export function shouldShowWorkspaceEmoteSourceSubscription(
+  subscription: { eligible: boolean; status: "off" | "synced" | "detached" } | null | undefined
+) {
+  return Boolean(subscription && (subscription.eligible || subscription.status === "detached"));
+}
+
+export function workspaceEmoteLibraryTotalItemCount(usage: {
+  itemCount: number;
+  subscribedItemCount?: number;
+}) {
+  return usage.itemCount + (usage.subscribedItemCount ?? 0);
+}
+
 function getWorkspaceTransferQuotaWarning(
   byteSize: number,
   direction: WorkspaceTransferDirection,
@@ -2474,6 +2522,10 @@ export function App() {
   });
   const [workspaceCardRevisionById, setWorkspaceCardRevisionById] = useState<Record<string, number>>({});
   const [workspaceDraftByConversation, setWorkspaceDraftByConversation] = useState<Record<string, WorkspaceComposerDocument>>({});
+  const [workspaceEchoInteractionByConversation, setWorkspaceEchoInteractionByConversation] = useState<
+    Record<string, WorkspaceEchoInteractionSlot>
+  >({});
+  const workspaceEchoInteractionByConversationRef = useRef<Record<string, WorkspaceEchoInteractionSlot>>({});
   const [workspaceReplyToMessageIdByConversation, setWorkspaceReplyToMessageIdByConversation] = useState<Record<string, string>>({});
   const [workspaceComposerAttachmentsByConversation, setWorkspaceComposerAttachmentsByConversation] = useState<
     Record<string, WorkspaceComposerAttachment[]>
@@ -4536,6 +4588,7 @@ export function App() {
   }
 
   function clearWorkspaceClientState() {
+    clearStoredWorkspaceEchoWorkflowDrafts();
     for (const controller of workspaceUploadControllersRef.current.values()) {
       controller.abort();
     }
@@ -4571,6 +4624,8 @@ export function App() {
     setWorkspaceDirectoryMembers([]);
     setWorkspaceSelectedConversationId("");
     setWorkspaceDraftByConversation({});
+    workspaceEchoInteractionByConversationRef.current = {};
+    setWorkspaceEchoInteractionByConversation({});
     setWorkspaceReplyToMessageIdByConversation({});
     setWorkspaceComposerAttachmentsByConversation({});
     setWorkspacePinsByConversation({});
@@ -4863,6 +4918,14 @@ export function App() {
 
     for (const event of events) {
       const payload = getWorkspaceEventPayload(event);
+      if (event.type === "emote.library.updated") {
+        const affectedUserId = payload.userId || (event.targetType === "user" ? event.targetId : "") || "";
+        if (affectedUserId === workspaceCurrentUserIdRef.current) {
+          notifyWorkspaceEmoteLibraryChanged();
+        }
+        continue;
+      }
+
       if (event.type === "workspace.member_joined" || event.type === "workspace.member_updated") {
         if (payload.member) {
           upsertWorkspaceMember(payload.member);
@@ -5996,6 +6059,46 @@ export function App() {
     }
   }
 
+  function updateWorkspaceEchoInteractions(
+    updater: (current: Record<string, WorkspaceEchoInteractionSlot>) => Record<string, WorkspaceEchoInteractionSlot>
+  ) {
+    const next = updater(workspaceEchoInteractionByConversationRef.current);
+    workspaceEchoInteractionByConversationRef.current = next;
+    setWorkspaceEchoInteractionByConversation(next);
+  }
+
+  function acceptWorkspaceEchoCommand(request: WorkspaceEchoCommandRequest) {
+    setWorkspaceDraftByConversation((drafts) => {
+      const current = drafts[request.conversationId];
+      if (!current || JSON.stringify(current.blocks) !== request.draftSignature) return drafts;
+      const { [request.conversationId]: _removed, ...rest } = drafts;
+      return rest;
+    });
+    setWorkspaceConversationReplyToMessageId(request.conversationId, "");
+    updateWorkspaceEchoInteractions((interactions) => {
+      const current = interactions[request.conversationId];
+      if (!current || current.request.clientInvocationId !== request.clientInvocationId) return interactions;
+      return { ...interactions, [request.conversationId]: { ...current, accepted: true } };
+    });
+  }
+
+  function setWorkspaceEchoWorkflowId(conversationId: string, workflowId: string | null) {
+    updateWorkspaceEchoInteractions((interactions) => {
+      const current = interactions[conversationId];
+      if (!current) return interactions;
+      if (workflowId) return { ...interactions, [conversationId]: { ...current, activeWorkflowId: workflowId } };
+      const { activeWorkflowId: _removed, ...withoutWorkflow } = current;
+      return { ...interactions, [conversationId]: withoutWorkflow };
+    });
+  }
+
+  function dismissWorkspaceEchoInteraction(conversationId: string) {
+    updateWorkspaceEchoInteractions((interactions) => {
+      const { [conversationId]: _removed, ...rest } = interactions;
+      return rest;
+    });
+  }
+
   async function sendWorkspaceMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!workspaceSelectedConversation) {
@@ -6007,6 +6110,41 @@ export function App() {
       (block) => block.type === "mention" || block.type === "emote"
     );
     let stagedAttachments = workspaceComposerAttachmentsByConversation[workspaceSelectedConversationId] ?? [];
+    const echoCommand = recognizeWorkspaceEchoCommand({
+      conversationType: workspaceSelectedConversation.type,
+      echoIsParticipant: workspaceSelectedConversation.members.some(
+        (member) => member.id === ECHO_BOT_USER_ID && member.kind === "bot"
+      ),
+      source: workspaceDraftDocument.source,
+      blocks: workspaceDraftDocument.blocks
+    });
+    if (echoCommand) {
+      if (stagedAttachments.length > 0) {
+        showWorkspaceNotice("warning", "回声命令不能同时发送附件。附件和命令草稿已保留，请移除附件或改为普通消息后重试。");
+        return;
+      }
+      const draftSignature = JSON.stringify(workspaceDraftDocument.blocks);
+      const previous = workspaceEchoInteractionByConversationRef.current[workspaceSelectedConversation.id];
+      const reusableRequest = reusableWorkspaceEchoCommandRequest(previous, draftSignature);
+      const request = reusableRequest
+        ? reusableRequest
+        : {
+            ...echoCommand,
+            conversationId: workspaceSelectedConversation.id,
+            botUserId: ECHO_BOT_USER_ID,
+            clientInvocationId: makeId("echo-command"),
+            draftSignature
+          };
+      updateWorkspaceEchoInteractions((interactions) => ({
+        ...interactions,
+        [workspaceSelectedConversation.id]: {
+          request,
+          ...(previous?.activeWorkflowId ? { activeWorkflowId: previous.activeWorkflowId } : {})
+        }
+      }));
+      clearWorkspaceNotice();
+      return;
+    }
     const shouldConvertLongMessage = isWorkspaceTextOverAttachmentLimit(body);
     if (shouldConvertLongMessage && !stagedAttachments.some(
       (attachment) => attachment.generatedFromLongMessage && attachment.generatedSource === body
@@ -8516,6 +8654,10 @@ export function App() {
                             (member) => member.id !== workspaceBootstrap.auth.currentUser.id
                           )
                           : []}
+                        echoInteractionSlot={workspaceEchoInteractionByConversation[workspaceSelectedConversation.id]}
+                        onEchoCommandAccepted={acceptWorkspaceEchoCommand}
+                        onEchoWorkflowIdChange={(workflowId) => setWorkspaceEchoWorkflowId(workspaceSelectedConversation.id, workflowId)}
+                        onDismissEchoInteraction={() => dismissWorkspaceEchoInteraction(workspaceSelectedConversation.id)}
                         fileInputDisabled={!workspaceBootstrap.permissions.canUpload}
                         onManageEmotes={openWorkspaceEmoteManager}
                       />
@@ -10678,7 +10820,7 @@ function WorkspaceAccountSettings({
               </>
             )}
             <div className="workspace-settings-list single-row">
-              <WorkspaceSettingsRow icon={<Images size={18} />} title="我的表情" description="上传、排序、管理合集与分享" value={emoteLibrarySummary ? `${emoteLibrarySummary.usage.itemCount} 张` : "读取中"} onClick={onManageEmotes} />
+              <WorkspaceSettingsRow icon={<Images size={18} />} title="我的表情" description="上传、排序、管理合集与分享" value={emoteLibrarySummary ? `${workspaceEmoteLibraryTotalItemCount(emoteLibrarySummary.usage)} 张` : "读取中"} onClick={onManageEmotes} />
             </div>
           </section>
         </div>
@@ -10821,8 +10963,13 @@ function WorkspaceSharedEmoteCollectionPage({
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState<"collection" | string | null>(null);
   const [importedEmoteIds, setImportedEmoteIds] = useState<string[]>([]);
+  const [subscribeToSourceChanges, setSubscribeToSourceChanges] = useState(false);
   useEffect(() => {
     let cancelled = false;
+    setShare(null);
+    setLoading(true);
+    setImportedEmoteIds([]);
+    setSubscribeToSourceChanges(false);
     void workspaceJson<{ share: WorkspaceEmoteCollectionShare }>(
       `/api/workspace/emote-collection-shares/${encodeURIComponent(shareId)}`
     ).then((data) => {
@@ -10842,7 +10989,9 @@ function WorkspaceSharedEmoteCollectionPage({
     try {
       await workspaceJson(`/api/workspace/emote-collection-shares/${encodeURIComponent(share.id)}/import`, {
         method: "POST",
-        body: JSON.stringify(emoteIds ? { emoteIds, asCollection: false } : { asCollection: true })
+        body: JSON.stringify(emoteIds
+          ? { emoteIds, asCollection: false }
+          : { asCollection: true, subscribeToSourceChanges })
       });
       notifyWorkspaceEmoteLibraryChanged();
       onNotice("success", emoteIds ? "表情已添加到我的收藏" : "表情合集已添加到我的表情");
@@ -10888,10 +11037,21 @@ function WorkspaceSharedEmoteCollectionPage({
           <div className="workspace-empty-state"><Images size={28} /><strong>合集已停止分享</strong><p>分享者已撤销该链接，已导入的表情不受影响。</p></div>
         ) : share ? (
           <>
-          <div className="workspace-shared-emote-meta">
-            <span>{share.itemCount} 张表情</span>
-            <span>{share.originalCreator.displayName} 创建</span>
-            <span>{share.sharedBy.displayName} 分享</span>
+          <div className="workspace-shared-emote-import-options">
+            <div className="workspace-shared-emote-meta">
+              <span>{share.itemCount} 张表情</span>
+              <span>{share.originalCreator.displayName} 创建</span>
+              <span>{share.sharedBy.displayName} 分享</span>
+            </div>
+            {share.canSubscribeToSourceChanges === true && (
+              <WorkspaceSwitch
+                checked={subscribeToSourceChanges}
+                disabled={importing !== null}
+                label="订阅原作者更新"
+                description="添加整套后自动同步合集名称、表情、顺序和短名称"
+                onChange={setSubscribeToSourceChanges}
+              />
+            )}
           </div>
           <div className="workspace-shared-emote-grid">
             {share.items.map((emote) => {
@@ -11112,6 +11272,24 @@ function WorkspaceEmoteManagerDialog({
     };
   }, [selectedEmoteId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const refreshLibrary = () => {
+      void workspaceJson<WorkspaceEmoteLibrary>("/api/workspace/me/emote-library")
+        .then((next) => {
+          if (!cancelled) setLibrary(next);
+        })
+        .catch((err) => {
+          if (!cancelled) setError(userFacingErrorMessage(err, "我的表情暂时无法刷新"));
+        });
+    };
+    window.addEventListener(WORKSPACE_EMOTE_LIBRARY_CHANGED_EVENT, refreshLibrary);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(WORKSPACE_EMOTE_LIBRARY_CHANGED_EVENT, refreshLibrary);
+    };
+  }, []);
+
   async function reload() {
     const next = await workspaceJson<WorkspaceEmoteLibrary>("/api/workspace/me/emote-library");
     setLibrary(next);
@@ -11122,6 +11300,11 @@ function WorkspaceEmoteManagerDialog({
     notifyWorkspaceEmoteLibraryChanged();
     return next;
   }
+  function contentEditingBlocked(collection: WorkspaceEmoteCollection | null | undefined) {
+    if (!isWorkspaceEmoteCollectionReadOnly(collection)) return false;
+    setError("该合集正在订阅原作者更新。关闭订阅后才能修改合集内容。");
+    return true;
+  }
   async function createCollection() {
     const name = newCollectionName.trim();
     if (!name) return;
@@ -11131,6 +11314,7 @@ function WorkspaceEmoteManagerDialog({
     finally { setBusy(false); }
   }
   async function renameCollection(id: string) {
+    if (contentEditingBlocked(library?.collections.find((collection) => collection.id === id))) return;
     if (!editingName.trim()) return;
     setBusy(true);
     try { await workspaceJson(`/api/workspace/me/emote-collections/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ name: editingName.trim() }) }); setEditingCollectionId(""); await reloadAfterMutation(); }
@@ -11145,6 +11329,7 @@ function WorkspaceEmoteManagerDialog({
     finally { setBusy(false); }
   }
   async function deleteEmote(emote: WorkspaceCustomEmote) {
+    if (contentEditingBlocked(selectedCollection)) return;
     if (!window.confirm(`从“我的表情”中删除“${emote.label}”？`)) return;
     setBusy(true); setError("");
     try {
@@ -11159,6 +11344,7 @@ function WorkspaceEmoteManagerDialog({
     }
   }
   async function renameEmote(emote: WorkspaceCustomEmote) {
+    if (contentEditingBlocked(selectedCollection)) return;
     const label = selectedEmoteLabel.trim();
     if (!label || label === emote.label) return;
     setBusy(true); setError("");
@@ -11206,6 +11392,7 @@ function WorkspaceEmoteManagerDialog({
     }
   }
   async function moveCollectionItem(collection: WorkspaceEmoteCollection, index: number, delta: number) {
+    if (contentEditingBlocked(collection)) return;
     const next = [...collection.items]; const target = index + delta;
     if (target < 0 || target >= next.length) return;
     [next[index], next[target]] = [next[target], next[index]];
@@ -11214,6 +11401,7 @@ function WorkspaceEmoteManagerDialog({
     catch (err) { await reload(); setError(userFacingErrorMessage(err, "合集排序保存失败")); }
   }
   async function moveCollectionItemTo(collection: WorkspaceEmoteCollection, emoteId: string, targetEmoteId: string) {
+    if (contentEditingBlocked(collection)) return;
     if (emoteId === targetEmoteId) return;
     const from = collection.items.findIndex((item) => item.id === emoteId);
     const to = collection.items.findIndex((item) => item.id === targetEmoteId);
@@ -11240,6 +11428,13 @@ function WorkspaceEmoteManagerDialog({
     }
   }
   async function uploadFiles(files: FileList | null) {
+    const targetCollection = collectionId
+      ? library?.collections.find((collection) => collection.id === collectionId)
+      : null;
+    if (contentEditingBlocked(targetCollection)) {
+      if (uploadRef.current) uploadRef.current.value = "";
+      return;
+    }
     const selected = Array.from(files ?? []).slice(0, library?.limits.maxBatchItems ?? 50);
     if (selected.length === 0) return;
     const targetCollectionId = collectionId;
@@ -11283,6 +11478,10 @@ function WorkspaceEmoteManagerDialog({
     }
   }
   async function retryUpload(item: WorkspaceEmoteUploadItem) {
+    const targetCollection = item.collectionId
+      ? library?.collections.find((collection) => collection.id === item.collectionId)
+      : null;
+    if (contentEditingBlocked(targetCollection)) return;
     setBusy(true);
     try {
       await uploadEmoteItem(item);
@@ -11292,6 +11491,7 @@ function WorkspaceEmoteManagerDialog({
     }
   }
   async function addExistingToCollection(collection: WorkspaceEmoteCollection) {
+    if (contentEditingBlocked(collection)) return;
     if (selectedExistingIds.length === 0) return;
     const selectedCount = selectedExistingIds.length;
     setBusy(true); setError("");
@@ -11311,6 +11511,7 @@ function WorkspaceEmoteManagerDialog({
     }
   }
   async function removeCollectionItem(collection: WorkspaceEmoteCollection, emote: WorkspaceCustomEmote) {
+    if (contentEditingBlocked(collection)) return;
     setBusy(true); setError("");
     try {
       await workspaceJson(`/api/workspace/me/emote-collections/${encodeURIComponent(collection.id)}/items/${encodeURIComponent(emote.id)}`, { method: "DELETE" });
@@ -11329,6 +11530,25 @@ function WorkspaceEmoteManagerDialog({
     } catch (err) { setError(userFacingErrorMessage(err, "合集分享创建失败")); }
     finally { setBusy(false); }
   }
+  async function updateSourceSubscription(collection: WorkspaceEmoteCollection, enabled: boolean) {
+    const subscription = collection.sourceSubscription;
+    if (!subscription.eligible || subscription.status === "detached" || subscription.enabled === enabled) return;
+    setBusy(true); setError("");
+    try {
+      await workspaceJson<{ collection: WorkspaceEmoteCollection }>(
+        `/api/workspace/me/emote-collections/${encodeURIComponent(collection.id)}/source-subscription`,
+        { method: "PUT", body: JSON.stringify({ enabled }) }
+      );
+      setEditingCollectionId("");
+      setAddExistingOpen(false);
+      await reloadAfterMutation();
+      onNotice("success", enabled ? "已订阅原作者更新" : "已关闭订阅并保留当前内容");
+    } catch (err) {
+      setError(userFacingErrorMessage(err, enabled ? "订阅开启失败" : "订阅关闭失败"));
+    } finally {
+      setBusy(false);
+    }
+  }
   async function revokeShare() {
     if (!share?.canRevoke || share.revokedAt) return;
     setBusy(true); setError("");
@@ -11345,6 +11565,8 @@ function WorkspaceEmoteManagerDialog({
 
   const selectedCollection = library?.collections.find((item) => item.id === collectionId) ?? null;
   const selectedEmote = library?.emotes.find((item) => item.id === selectedEmoteId) ?? null;
+  const selectedCollectionReadOnly = isWorkspaceEmoteCollectionReadOnly(selectedCollection);
+  const selectedSourceSubscription = selectedCollection?.sourceSubscription;
   const selectedCollectionIds = new Set(selectedCollection?.items.map((item) => item.id) ?? []);
   const availableExistingEmotes = library?.emotes.filter((emote) => !selectedCollectionIds.has(emote.id)) ?? [];
   const visibleUploadItems = uploadItems.filter((item) => item.state !== "complete");
@@ -11358,13 +11580,18 @@ function WorkspaceEmoteManagerDialog({
         {loading ? <WorkspaceSkeletonRows variant="setting" count={5} /> : !library ? <p className="workspace-form-status">{error || "暂无数据"}</p> : (
           <div className="workspace-emote-manager-body">
             <div className="workspace-emote-manager-toolbar">
-              <div><strong>{library.usage.itemCount} 张表情</strong><small>{library.usage.collectionCount} 个合集 · {formatBytes(library.usage.totalBytes)}</small></div>
+              <div>
+                <strong>{workspaceEmoteLibraryTotalItemCount(library.usage)} 张表情</strong>
+                <small>本地 {library.usage.itemCount} 张 · {formatBytes(library.usage.totalBytes)} / {formatBytes(library.limits.maxTotalBytes)}</small>
+                <small>订阅 {library.usage.subscribedItemCount ?? 0} 张 · {formatBytes(library.usage.subscribedTotalBytes ?? 0)} · {library.usage.subscribedCollectionCount ?? 0} 个合集</small>
+              </div>
               <span className="workspace-emote-manager-actions">
                 <button className={organizing ? "secondary compact active" : "secondary compact"} type="button" onClick={() => setOrganizing((value) => !value)}>{organizing ? <Check size={16} /> : <GripVertical size={16} />}{organizing ? "完成" : "整理"}</button>
                 <button className="secondary compact" type="button" onClick={() => setNewCollectionOpen((value) => !value)}><Images size={16} />新建合集</button>
-                <label className={busy ? "icon-button workspace-emote-upload-button disabled" : "icon-button workspace-emote-upload-button"} title="上传表情" aria-label="上传表情" aria-disabled={busy}><FileUp size={17} /><input ref={uploadRef} type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,image/bmp" disabled={busy} onChange={(event) => void uploadFiles(event.currentTarget.files)} /></label>
+                <label className={busy || selectedCollectionReadOnly ? "icon-button workspace-emote-upload-button disabled" : "icon-button workspace-emote-upload-button"} title={selectedCollectionReadOnly ? "关闭订阅后才能向合集上传" : "上传表情"} aria-label="上传表情" aria-disabled={busy || selectedCollectionReadOnly}><FileUp size={17} /><input ref={uploadRef} type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,image/bmp" disabled={busy || selectedCollectionReadOnly} onChange={(event) => void uploadFiles(event.currentTarget.files)} /></label>
               </span>
             </div>
+            {library.usage.overLimit && <p className="workspace-emote-limit-warning" role="alert"><AlertCircle size={16} />本地表情容量已超过上限，请先删除部分本地表情再上传。</p>}
             {newCollectionOpen && <form className="workspace-emote-create-collection" onSubmit={(event) => { event.preventDefault(); void createCollection(); }}><label><span>合集名称</span><input value={newCollectionName} maxLength={32} autoFocus onChange={(event) => setNewCollectionName(event.target.value)} placeholder="例如：猫猫日常" /></label><button className="primary compact" type="submit" disabled={busy || !newCollectionName.trim()}>创建</button><button className="secondary compact" type="button" onClick={() => setNewCollectionOpen(false)}>取消</button></form>}
             {error && <p className="emote-picker-error" role="status">{error}</p>}
             {selectedCollection ? (
@@ -11372,19 +11599,49 @@ function WorkspaceEmoteManagerDialog({
                 <div className="workspace-emote-manager-section-head">
                   <button className="workspace-emote-manager-back" type="button" onClick={() => { setCollectionId(""); setSelectedEmoteId(""); }}><ArrowLeft size={17} /><span><strong>{selectedCollection.name}</strong><small>{selectedCollection.items.length} / {library.limits.maxCollectionItems} 张</small></span></button>
                   <div className="workspace-emote-manager-actions">
-                    <button className="secondary compact" type="button" disabled={busy || availableExistingEmotes.length === 0} onClick={() => { setSelectedExistingIds([]); setAddExistingOpen(true); }}><Plus size={15} /> 添加已有</button>
+                    <button className="secondary compact" type="button" disabled={busy || selectedCollectionReadOnly || availableExistingEmotes.length === 0} title={selectedCollectionReadOnly ? "关闭订阅后才能添加已有表情" : undefined} onClick={() => { setSelectedExistingIds([]); setAddExistingOpen(true); }}><Plus size={15} /> 添加已有</button>
                     <button className="secondary compact" type="button" disabled={busy} onClick={() => void createShare(selectedCollection)}><Share2 size={15} /> 分享合集</button>
-                    <button className="icon-button" type="button" title="重命名合集" aria-label={`重命名 ${selectedCollection.name}`} onClick={() => { setEditingCollectionId(selectedCollection.id); setEditingName(selectedCollection.name); }}><Type size={16} /></button>
+                    <button className="icon-button" type="button" disabled={busy || selectedCollectionReadOnly} title={selectedCollectionReadOnly ? "关闭订阅后才能重命名合集" : "重命名合集"} aria-label={selectedCollectionReadOnly ? `${selectedCollection.name} 正在订阅，不能重命名` : `重命名 ${selectedCollection.name}`} onClick={() => { setEditingCollectionId(selectedCollection.id); setEditingName(selectedCollection.name); }}><Type size={16} /></button>
                   </div>
                 </div>
-                {editingCollectionId === selectedCollection.id && <form className="workspace-emote-rename-collection" onSubmit={(event) => { event.preventDefault(); void renameCollection(selectedCollection.id); }}><input value={editingName} maxLength={32} onChange={(event) => setEditingName(event.target.value)} autoFocus /><button className="primary compact" type="submit">保存</button><button className="secondary compact" type="button" onClick={() => setEditingCollectionId("")}>取消</button></form>}
-                <div className={organizing ? "workspace-emote-library-grid organizing" : "workspace-emote-library-grid"}>
+                {shouldShowWorkspaceEmoteSourceSubscription(selectedSourceSubscription) && selectedSourceSubscription && (
+                  <section className={`workspace-emote-subscription-panel ${selectedSourceSubscription.status}`} aria-label="合集来源订阅">
+                    <div className="workspace-emote-subscription-summary">
+                      <span className="workspace-emote-subscription-status">
+                        {selectedSourceSubscription.status === "synced" ? "已同步" : selectedSourceSubscription.status === "detached" ? "已断开" : "未订阅"}
+                      </span>
+                      <span>
+                        <strong>原作者 {selectedCollection.originalCreator.displayName}</strong>
+                        <small>
+                          {selectedSourceSubscription.status === "detached"
+                            ? "原合集已删除，当前内容作为快照保留。"
+                            : selectedSourceSubscription.status === "synced"
+                              ? `跟随原合集${selectedSourceSubscription.sourceRevision === null ? "" : ` · 版本 ${selectedSourceSubscription.sourceRevision}`}${selectedSourceSubscription.lastSyncedAt ? ` · ${formatWorkspaceTime(selectedSourceSubscription.lastSyncedAt)}` : ""}`
+                              : "当前内容独立保存，开启后会跟随原合集更新。"}
+                        </small>
+                      </span>
+                    </div>
+                    <WorkspaceSwitch
+                      checked={selectedSourceSubscription.enabled}
+                      disabled={busy || selectedSourceSubscription.status === "detached"}
+                      label="订阅原作者更新"
+                      description={selectedSourceSubscription.status === "detached"
+                        ? "原合集已不可用，无法继续订阅；保留的快照仍可使用。"
+                        : selectedSourceSubscription.enabled
+                          ? "同步期间合集内容只读；关闭后会保留当前内容。"
+                          : "自动同步名称、表情增删、顺序和短名称。"}
+                      onChange={(enabled) => void updateSourceSubscription(selectedCollection, enabled)}
+                    />
+                  </section>
+                )}
+                {editingCollectionId === selectedCollection.id && !selectedCollectionReadOnly && <form className="workspace-emote-rename-collection" onSubmit={(event) => { event.preventDefault(); void renameCollection(selectedCollection.id); }}><input value={editingName} maxLength={32} onChange={(event) => setEditingName(event.target.value)} autoFocus /><button className="primary compact" type="submit">保存</button><button className="secondary compact" type="button" onClick={() => setEditingCollectionId("")}>取消</button></form>}
+                <div className={organizing && !selectedCollectionReadOnly ? "workspace-emote-library-grid organizing" : "workspace-emote-library-grid"}>
                   {selectedCollection.items.map((emote, index) => <EmoteLibraryTile
-                    key={emote.id} emote={emote} index={index} total={selectedCollection.items.length} organizing={organizing} dragging={draggedEmoteId === emote.id}
+                    key={emote.id} emote={emote} index={index} total={selectedCollection.items.length} organizing={organizing && !selectedCollectionReadOnly} dragging={draggedEmoteId === emote.id}
                     onOpen={() => { setSelectedEmoteId(emote.id); setSelectedEmoteLabel(emote.label); }} onDragStart={() => setDraggedEmoteId(emote.id)} onDragEnd={() => setDraggedEmoteId("")}
                     onDrop={() => { void moveCollectionItemTo(selectedCollection, draggedEmoteId, emote.id); setDraggedEmoteId(""); }} onMove={(delta) => void moveCollectionItem(selectedCollection, index, delta)} onRemove={() => void removeCollectionItem(selectedCollection, emote)}
                   />)}
-                  {selectedCollection.items.length === 0 && <p className="saved-empty">合集还没有表情，可使用上方上传按钮添加。</p>}
+                  {selectedCollection.items.length === 0 && <p className="saved-empty">{selectedCollectionReadOnly ? "原合集当前没有表情。" : "合集还没有表情，可使用上方上传按钮添加。"}</p>}
                 </div>
               </section>
             ) : (
@@ -11397,7 +11654,7 @@ function WorkspaceEmoteManagerDialog({
                     onDrop={() => { void moveEntryTo(draggedEntryId, entry.id); setDraggedEntryId(""); }} onMove={(delta) => void moveEntry(index, delta)} onRemove={() => void deleteEmote(entry.emote)}
                   /> : <EmoteCollectionTile key={entry.id} collection={entry.collection} index={index} total={library.entries.length} organizing={organizing} dragging={draggedEntryId === entry.id}
                     onOpen={() => { setCollectionId(entry.collection.id); setSelectedEmoteId(""); }} onDragStart={() => setDraggedEntryId(entry.id)} onDragEnd={() => setDraggedEntryId("")}
-                    onDrop={() => { void moveEntryTo(draggedEntryId, entry.id); setDraggedEntryId(""); }} onMove={(delta) => void moveEntry(index, delta)} onRename={() => { setEditingCollectionId(entry.collection.id); setEditingName(entry.collection.name); setCollectionId(entry.collection.id); }} onRemove={() => void deleteCollection(entry.collection)} />)}
+                    onDrop={() => { void moveEntryTo(draggedEntryId, entry.id); setDraggedEntryId(""); }} onMove={(delta) => void moveEntry(index, delta)} onRename={isWorkspaceEmoteCollectionReadOnly(entry.collection) ? undefined : () => { setEditingCollectionId(entry.collection.id); setEditingName(entry.collection.name); setCollectionId(entry.collection.id); }} onRemove={() => void deleteCollection(entry.collection)} />)}
                   {library.entries.length === 0 && <p className="saved-empty">还没有收藏表情。使用上传按钮开始建立个人表情库。</p>}
                 </div>
               </section>
@@ -11410,8 +11667,26 @@ function WorkspaceEmoteManagerDialog({
             )}
           </div>
         )}
-        {selectedEmote && <div className="workspace-emote-detail" role="dialog" aria-label="表情详情"><header><strong>表情详情</strong><button ref={emoteDetailCloseRef} className="icon-button" type="button" title="关闭详情" aria-label="关闭表情详情" onClick={() => setSelectedEmoteId("")}><X size={17} /></button></header><div className="workspace-emote-detail-preview"><img src={selectedEmote.src} alt={selectedEmote.label} /></div><form onSubmit={(event) => { event.preventDefault(); void renameEmote(selectedEmote); }}><label><span>短名称</span><input value={selectedEmoteLabel} maxLength={16} onChange={(event) => setSelectedEmoteLabel(event.target.value)} /><small>只用于识别、搜索和无障碍说明，不会显示在表情网格中。</small></label><button className="primary compact" type="submit" disabled={busy || !selectedEmoteLabel.trim() || selectedEmoteLabel.trim() === selectedEmote.label}>保存名称</button></form><dl><div><dt>类型</dt><dd>{selectedEmote.animated ? "动态表情" : "静态表情"}</dd></div>{selectedEmote.width && selectedEmote.height && <div><dt>尺寸</dt><dd>{selectedEmote.width} × {selectedEmote.height}</dd></div>}{selectedEmote.byteSize && <div><dt>大小</dt><dd>{formatBytes(selectedEmote.byteSize)}</dd></div>}<div><dt>来源</dt><dd title={selectedEmote.originalFileName}>{selectedEmote.originalFileName || (selectedEmote.sourceType === "builtin" ? "内置表情" : "从聊天收藏")}</dd></div></dl><div className="workspace-emote-detail-actions">{selectedCollection && <button className="secondary" type="button" disabled={busy} onClick={() => void removeCollectionItem(selectedCollection, selectedEmote)}>移出当前合集</button>}<button className="secondary danger-action" type="button" disabled={busy} onClick={() => void deleteEmote(selectedEmote)}>从我的表情删除</button></div></div>}
-        {addExistingOpen && selectedCollection && <div className="workspace-emote-share-dialog workspace-emote-existing-dialog" role="dialog" aria-label={`添加表情到 ${selectedCollection.name}`}><h3>添加已有表情</h3><p>可一次选择多张，原表情仍保留在表情库中。</p><div className="workspace-emote-existing-grid">{availableExistingEmotes.map((emote) => <label key={emote.id} title={emote.label} aria-label={emote.label} className={selectedExistingIds.includes(emote.id) ? "selected" : ""}><input type="checkbox" checked={selectedExistingIds.includes(emote.id)} onChange={(event) => setSelectedExistingIds((current) => event.target.checked ? [...current, emote.id] : current.filter((id) => id !== emote.id))} /><img src={emote.src} alt="" />{selectedExistingIds.includes(emote.id) && <span className="workspace-emote-selected-mark"><Check size={15} /></span>}</label>)}</div><div className="workspace-section-actions"><button className="secondary" type="button" onClick={() => setAddExistingOpen(false)}>取消</button><button className="primary" type="button" disabled={busy || selectedExistingIds.length === 0} onClick={() => void addExistingToCollection(selectedCollection)}>添加 {selectedExistingIds.length || ""} 张</button></div></div>}
+        {selectedEmote && (
+          <div className="workspace-emote-detail" role="dialog" aria-label="表情详情">
+            <header><strong>表情详情</strong><button ref={emoteDetailCloseRef} className="icon-button" type="button" title="关闭详情" aria-label="关闭表情详情" onClick={() => setSelectedEmoteId("")}><X size={17} /></button></header>
+            <div className="workspace-emote-detail-preview"><img src={selectedEmote.src} alt={selectedEmote.label} /></div>
+            {selectedCollectionReadOnly ? (
+              <p className="workspace-emote-readonly-note"><LockKeyhole size={16} />短名称由原作者同步。关闭合集订阅后可编辑。</p>
+            ) : (
+              <form onSubmit={(event) => { event.preventDefault(); void renameEmote(selectedEmote); }}>
+                <label><span>短名称</span><input value={selectedEmoteLabel} maxLength={16} onChange={(event) => setSelectedEmoteLabel(event.target.value)} /><small>只用于识别、搜索和无障碍说明，不会显示在表情网格中。</small></label>
+                <button className="primary compact" type="submit" disabled={busy || !selectedEmoteLabel.trim() || selectedEmoteLabel.trim() === selectedEmote.label}>保存名称</button>
+              </form>
+            )}
+            <dl><div><dt>类型</dt><dd>{selectedEmote.animated ? "动态表情" : "静态表情"}</dd></div>{selectedEmote.width && selectedEmote.height && <div><dt>尺寸</dt><dd>{selectedEmote.width} × {selectedEmote.height}</dd></div>}{selectedEmote.byteSize && <div><dt>大小</dt><dd>{formatBytes(selectedEmote.byteSize)}</dd></div>}<div><dt>来源</dt><dd title={selectedEmote.originalFileName}>{selectedEmote.originalFileName || (selectedEmote.sourceType === "builtin" ? "内置表情" : "从聊天收藏")}</dd></div></dl>
+            <div className="workspace-emote-detail-actions">
+              {selectedCollection && <button className="secondary" type="button" disabled={busy || selectedCollectionReadOnly} title={selectedCollectionReadOnly ? "关闭订阅后才能移出表情" : undefined} onClick={() => void removeCollectionItem(selectedCollection, selectedEmote)}>移出当前合集</button>}
+              <button className="secondary danger-action" type="button" disabled={busy || selectedCollectionReadOnly} title={selectedCollectionReadOnly ? "关闭订阅后才能删除表情" : undefined} onClick={() => void deleteEmote(selectedEmote)}>从我的表情删除</button>
+            </div>
+          </div>
+        )}
+        {addExistingOpen && selectedCollection && !selectedCollectionReadOnly && <div className="workspace-emote-share-dialog workspace-emote-existing-dialog" role="dialog" aria-label={`添加表情到 ${selectedCollection.name}`}><h3>添加已有表情</h3><p>可一次选择多张，原表情仍保留在表情库中。</p><div className="workspace-emote-existing-grid">{availableExistingEmotes.map((emote) => <label key={emote.id} title={emote.label} aria-label={emote.label} className={selectedExistingIds.includes(emote.id) ? "selected" : ""}><input type="checkbox" checked={selectedExistingIds.includes(emote.id)} onChange={(event) => setSelectedExistingIds((current) => event.target.checked ? [...current, emote.id] : current.filter((id) => id !== emote.id))} /><img src={emote.src} alt="" />{selectedExistingIds.includes(emote.id) && <span className="workspace-emote-selected-mark"><Check size={15} /></span>}</label>)}</div><div className="workspace-section-actions"><button className="secondary" type="button" onClick={() => setAddExistingOpen(false)}>取消</button><button className="primary" type="button" disabled={busy || selectedExistingIds.length === 0} onClick={() => void addExistingToCollection(selectedCollection)}>添加 {selectedExistingIds.length || ""} 张</button></div></div>}
         {share && (
           <div className="workspace-emote-share-dialog workspace-emote-share-panel" role="dialog" aria-label="分享表情合集">
             <div className="workspace-emote-share-heading">
@@ -11460,8 +11735,16 @@ function EmoteLibraryTile({ emote, index, total, organizing, dragging, onOpen, o
   return <article className={dragging ? "workspace-emote-library-tile emote dragging" : "workspace-emote-library-tile emote"} onDragOver={(event) => { if (organizing) event.preventDefault(); }} onDrop={onDrop}><button className="workspace-emote-library-preview" type="button" title={emote.label} aria-label={`查看表情 ${emote.label}`} onClick={onOpen}><img src={emote.src} alt="" loading="lazy" decoding="async" />{emote.animated && <span>GIF</span>}</button>{organizing && <EmoteTileControls label={emote.label} index={index} total={total} onMove={onMove} onRemove={onRemove} draggable onDragStart={onDragStart} onDragEnd={onDragEnd} />}</article>;
 }
 
-function EmoteCollectionTile({ collection, index, total, organizing, dragging, onOpen, onDragStart, onDrop, onDragEnd, onMove, onRename, onRemove }: { collection: WorkspaceEmoteCollection; index: number; total: number; organizing: boolean; dragging: boolean; onOpen: () => void; onDragStart: () => void; onDrop: () => void; onDragEnd: () => void; onMove: (delta: number) => void; onRename: () => void; onRemove: () => void }) {
-  return <article className={dragging ? "workspace-emote-library-tile collection dragging" : "workspace-emote-library-tile collection"} onDragOver={(event) => { if (organizing) event.preventDefault(); }} onDrop={onDrop}><button className="workspace-emote-collection-preview" type="button" onClick={onOpen} aria-label={`打开合集 ${collection.name}`}><span className="workspace-emote-collection-cover">{collection.items.slice(0, 4).map((emote) => <img key={emote.id} src={emote.src} alt="" loading="lazy" decoding="async" />)}{collection.items.length === 0 && <Images size={28} />}</span><span><strong>{collection.name}</strong><small>{collection.items.length} 张</small></span></button>{organizing && <EmoteTileControls label={collection.name} index={index} total={total} onMove={onMove} onRemove={onRemove} onRename={onRename} draggable onDragStart={onDragStart} onDragEnd={onDragEnd} />}</article>;
+function EmoteCollectionTile({ collection, index, total, organizing, dragging, onOpen, onDragStart, onDrop, onDragEnd, onMove, onRename, onRemove }: { collection: WorkspaceEmoteCollection; index: number; total: number; organizing: boolean; dragging: boolean; onOpen: () => void; onDragStart: () => void; onDrop: () => void; onDragEnd: () => void; onMove: (delta: number) => void; onRename?: () => void; onRemove: () => void }) {
+  const subscription = collection.sourceSubscription;
+  const subscriptionLabel = shouldShowWorkspaceEmoteSourceSubscription(subscription)
+    ? subscription.status === "synced"
+      ? "订阅中"
+      : subscription.status === "detached"
+        ? "快照保留"
+        : "未订阅"
+    : "";
+  return <article className={dragging ? "workspace-emote-library-tile collection dragging" : "workspace-emote-library-tile collection"} onDragOver={(event) => { if (organizing) event.preventDefault(); }} onDrop={onDrop}><button className="workspace-emote-collection-preview" type="button" onClick={onOpen} aria-label={`打开合集 ${collection.name}`}><span className="workspace-emote-collection-cover">{collection.items.slice(0, 4).map((emote) => <img key={emote.id} src={emote.src} alt="" loading="lazy" decoding="async" />)}{collection.items.length === 0 && <Images size={28} />}</span><span><strong>{collection.name}</strong><small>{collection.items.length} 张{subscriptionLabel ? ` · ${subscriptionLabel} · ${collection.originalCreator.displayName}` : ""}</small></span></button>{organizing && <EmoteTileControls label={collection.name} index={index} total={total} onMove={onMove} onRemove={onRemove} onRename={onRename} draggable onDragStart={onDragStart} onDragEnd={onDragEnd} />}</article>;
 }
 
 function EmoteTileControls({ label, index, total, draggable, onMove, onRemove, onRename, onDragStart, onDragEnd }: { label: string; index: number; total: number; draggable: boolean; onMove: (delta: number) => void; onRemove: () => void; onRename?: () => void; onDragStart: () => void; onDragEnd: () => void }) {
@@ -12979,6 +13262,10 @@ function WorkspaceChatPanel({
   onHideMessage,
   onRestoreHiddenMessages,
   mentionMembers,
+  echoInteractionSlot,
+  onEchoCommandAccepted,
+  onEchoWorkflowIdChange,
+  onDismissEchoInteraction,
   fileInputDisabled,
   onManageEmotes
 }: {
@@ -13032,6 +13319,10 @@ function WorkspaceChatPanel({
   onHideMessage: (messageId: string) => void;
   onRestoreHiddenMessages: (messageIds: string[]) => void;
   mentionMembers: WorkspaceUser[];
+  echoInteractionSlot?: WorkspaceEchoInteractionSlot;
+  onEchoCommandAccepted: (request: WorkspaceEchoCommandRequest) => void;
+  onEchoWorkflowIdChange: (workflowId: string | null) => void;
+  onDismissEchoInteraction: () => void;
   fileInputDisabled: boolean;
   onManageEmotes: () => void;
 }) {
@@ -13705,6 +13996,15 @@ function WorkspaceChatPanel({
               <X size={15} />
             </button>
           </div>
+        )}
+        {echoInteractionSlot && (
+          <WorkspaceEchoInteraction
+            slot={echoInteractionSlot}
+            onCommandAccepted={onEchoCommandAccepted}
+            onWorkflowIdChange={onEchoWorkflowIdChange}
+            onDismiss={onDismissEchoInteraction}
+            onRestoreFocus={() => window.requestAnimationFrame(() => editorRef.current?.focus())}
+          />
         )}
         {stagedAttachments.length > 0 && (
           <div className="workspace-staged-files" aria-label="待发送附件">
@@ -14411,6 +14711,7 @@ function EmotePicker({
     : enabledPacks.map(({ id, label }) => ({ id, label }));
   const activePack = enabledPacks.find((pack) => pack.id === activePackId) ?? enabledPacks[0];
   const activeCollection = library?.collections.find((collection) => collection.id === activeCollectionId) ?? null;
+  const activeCollectionReadOnly = isWorkspaceEmoteCollectionReadOnly(activeCollection);
   const unicodeEmojiItems = visibleEmotePacks.find((pack) => pack.id === "emoji")?.items.filter((item) => item.kind === "unicode") ?? [];
   const unicodeEmojiIds = unicodeEmojiItems.map((item) => item.id);
   const [recentEmojiIds, setRecentEmojiIds] = useState(() => getRecentEmojiIds(unicodeEmojiIds));
@@ -14475,6 +14776,11 @@ function EmotePicker({
   }
 
   async function uploadCustomEmotes(files: File[]) {
+    if (activeCollectionReadOnly) {
+      setCustomError("该合集正在订阅原作者更新。关闭订阅后才能上传表情。");
+      if (customInputRef.current) customInputRef.current.value = "";
+      return;
+    }
     const limit = library?.limits.maxBatchItems ?? 50;
     const selected = files.slice(0, limit);
     if (selected.length === 0) return;
@@ -14584,7 +14890,7 @@ function EmotePicker({
             )}
           </div>
           <div className="emote-grid emote-custom-grid" ref={customScrollRef}>
-            <label className={customBusy ? "emote-upload-tile busy" : "emote-upload-tile"} title="批量上传收藏表情">
+            <label className={customBusy || activeCollectionReadOnly ? "emote-upload-tile busy" : "emote-upload-tile"} title={activeCollectionReadOnly ? "关闭订阅后才能向合集上传表情" : "批量上传收藏表情"} aria-disabled={customBusy || activeCollectionReadOnly}>
               <Plus size={22} />
               <span>添加</span>
               <input
@@ -14593,7 +14899,7 @@ function EmotePicker({
                 multiple
                 accept="image/jpeg,image/png,image/webp,image/gif,image/bmp"
                 aria-label={activeCollection ? `向 ${activeCollection.name} 批量上传表情` : "批量上传收藏表情"}
-                disabled={customBusy}
+                disabled={customBusy || activeCollectionReadOnly}
                 onChange={(event) => void uploadCustomEmotes(Array.from(event.currentTarget.files ?? []))}
               />
             </label>
@@ -14621,7 +14927,7 @@ function EmotePicker({
             ))}
           </div>
           {!customBusy && (activeCollection ? activeCollection.items.length === 0 : library?.entries.length === 0) && !customError && (
-            <p className="emote-picker-empty">{activeCollection ? "合集还没有表情。" : "收藏表情为空，可批量上传或从消息中收藏。"}</p>
+            <p className="emote-picker-empty">{activeCollection ? activeCollectionReadOnly ? "原合集当前没有表情。" : "合集还没有表情。" : "收藏表情为空，可批量上传或从消息中收藏。"}</p>
           )}
           {customError && <p className="emote-picker-error" role="status">{customError}</p>}
         </div>

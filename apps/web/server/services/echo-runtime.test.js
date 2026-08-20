@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { openTestDatabase } from "./test-database.mjs";
 import {
   ECHO_COMMAND_NAMES,
+  createEchoCommandDefinitions,
   createEchoRuntime
 } from "./echo-runtime.mjs";
 
@@ -69,6 +70,8 @@ describe("Echo runtime registration", () => {
     const runtime = createEchoRuntime({ createInteractionService: false, createCardInteractionService: false });
     expect(ECHO_COMMAND_NAMES.every((name) => runtime.commandRegistry.get(name))).toBe(true);
     expect(runtime.commandRegistry.get("feedback").name).toBe("feedback");
+    expect(runtime.commandRegistry.recognize("/release v0.15.1", { conversationType: "direct" }).arguments)
+      .toEqual({ version: "0.15.1" });
     expect(runtime.commandRegistry.recognize("/feedback", { conversationType: "direct" }).arguments)
       .toMatchObject({ type: "problem" });
     expect(runtime.workflowRegistry.get("echo.publish", 1)).toBeTruthy();
@@ -82,6 +85,78 @@ describe("Echo runtime registration", () => {
       reject: expect.any(Object),
       duplicate: expect.any(Object)
     });
+    expect(runtime.cardRegistry.get("echo.release", 1)).toBeTruthy();
+  });
+
+  it("publishes a registered release through the owner-only command and reports delivery progress", async () => {
+    const calls = [];
+    const definitions = createEchoCommandDefinitions({
+      releases: {
+        async publish(input) {
+          calls.push({ type: "publish", input });
+          return { version: "0.15.1", title: "更新", recipientCount: 3, sentCount: 0, failedCount: 0, skippedCount: 0, replayed: false };
+        }
+      },
+      deliveryService: {
+        async syncRelease(input) {
+          calls.push({ type: "deliver", input });
+          return { sent: 2, failed: 1, skipped: 0 };
+        }
+      }
+    });
+    const release = definitions.find((definition) => definition.name === "release");
+    expect(release.authorize({ actor: { role: "owner" } })).toBe(true);
+    expect(release.authorize({ actor: { role: "member" } })).toBe(false);
+    await expect(release.execute({
+      actor: { id: "usr_owner", role: "owner" },
+      arguments: { version: "0.15.1" },
+      request: { requestId: "req-release-command" }
+    })).resolves.toEqual({
+      result: {
+        type: "release-published",
+        version: "0.15.1",
+        title: "更新",
+        recipientCount: 3,
+        sentCount: 2,
+        failedCount: 1,
+        skippedCount: 0,
+        pendingCount: 0,
+        replayed: false
+      }
+    });
+    expect(calls).toHaveLength(2);
+  });
+
+  it("resolves /cancel against the current Bot conversation when no workflow ID is provided", async () => {
+    const calls = [];
+    const definitions = createEchoCommandDefinitions({
+      getInteractionService: () => ({
+        async cancelWorkflow(actorId, input) {
+          calls.push({ actorId, input });
+          return { id: "wf_current", status: "cancelled", revision: 2 };
+        }
+      })
+    });
+    const cancel = definitions.find((definition) => definition.name === "cancel");
+    await expect(cancel.execute({
+      actor: { id: "usr_runtime_member" },
+      context: { id: "conv_echo", spaceId: "spc_default", type: "direct" },
+      botUserId: "usr_system_echo",
+      arguments: { workflowId: null },
+      request: { requestId: "req-echo-cancel" }
+    })).resolves.toMatchObject({
+      result: { type: "workflow.cancelled", workflowId: "wf_current", cancelled: true }
+    });
+    expect(calls).toEqual([{
+      actorId: "usr_runtime_member",
+      input: {
+        workflowId: null,
+        spaceId: "spc_default",
+        conversationId: "conv_echo",
+        botUserId: "usr_system_echo",
+        request: { requestId: "req-echo-cancel" }
+      }
+    }]);
   });
 });
 

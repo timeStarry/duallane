@@ -112,6 +112,12 @@ importers:
         specifier: ^4.0.15
         version: 4.1.8(@types/node@24.13.1)(vite@7.3.5(@types/node@24.13.1))
 
+  packages/agent-sdk:
+    dependencies:
+      ws:
+        specifier: ^8.21.0
+        version: 8.21.0
+
 packages:
 
   '@aws-sdk/checksums@3.1000.26':

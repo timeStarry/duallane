@@ -46,6 +46,14 @@ erDiagram
   MESSAGES ||--o{ MESSAGE_ATTACHMENTS : references
   ATTACHMENTS ||--o{ MESSAGE_ATTACHMENTS : linked
   SPACES ||--o{ ATTACHMENTS : stores
+  WORKSPACE_STORAGE_OBJECTS ||--o{ ATTACHMENTS : backs
+  WORKSPACE_STORAGE_OBJECTS ||--o{ WORKSPACE_CUSTOM_EMOTES : backs
+  USERS ||--o{ WORKSPACE_CUSTOM_EMOTES : owns
+  USERS ||--o{ WORKSPACE_EMOTE_COLLECTIONS : owns
+  WORKSPACE_EMOTE_COLLECTIONS ||--o{ WORKSPACE_EMOTE_COLLECTION_SUBSCRIPTIONS : sources
+  SPACES ||--o{ ECHO_RELEASE_PUBLICATIONS : publishes
+  ECHO_RELEASE_PUBLICATIONS ||--o{ ECHO_RELEASE_DELIVERIES : targets
+  USERS ||--o{ ECHO_RELEASE_DELIVERIES : receives
   ATTACHMENTS ||--o{ TRANSFER_LEDGER : accounts
   SPACES ||--o{ WORKSPACE_EVENTS : sequences
   SPACES ||--o{ AUDIT_LOGS : records
@@ -70,6 +78,9 @@ Recommended ID prefixes:
 | Message | `msg_` |
 | Attachment | `att_` |
 | Upload | `upl_` |
+| Workspace storage object | `wso_` |
+| Echo release publication | `echo_release_` |
+| Echo release delivery | `echo_release_delivery_` |
 | Transfer ledger | `trn_` |
 | Event | `evt_` |
 | Operation record | `aud_` |
@@ -332,7 +343,8 @@ Fields:
 | `mime_type` | Declared/detected type. |
 | `byte_size` | Stored size. |
 | `sha256` | Optional content hash. |
-| `storage_key` | Internal storage key, never returned to normal clients. |
+| `storage_object_id` | Canonical content-addressed object reference. |
+| `storage_key` | Legacy compatibility key, never returned to normal clients. |
 | `visibility` | `private_staging`, `conversation`, `space`. |
 | `conversation_id` | Required for conversation visibility. |
 | `status` | `pending`, `available`, `failed`, `removed`. |
@@ -347,6 +359,84 @@ Rules:
 - `private_staging` is uploader-visible during upload.
 - Conversation-visible files require active conversation membership.
 - Space-visible files require active space membership.
+
+### workspace_storage_objects
+
+Registers canonical Workspace byte objects shared by attachments, profile
+avatars, and custom emotes.
+
+| Field | Notes |
+| --- | --- |
+| `id` | Stable registry ID derived from the digest. |
+| `sha256` | Unique 64-character content digest. |
+| `object_key` | Unique canonical object-store key derived from `sha256`. |
+| `byte_size` | Verified physical object size. |
+| `content_type` | Stored content type when known. |
+| `created_at` | First registry creation time. |
+| `verified_at` | Optional verification time. |
+| `deleted_at` | Physical deletion marker; reacquisition clears it. |
+
+CAS rules:
+
+- One digest has one active primary registry row and one canonical physical
+  object. Many authorized logical resources may reference it.
+- `attachments.storage_object_id`, `users.avatar_storage_object_id`, and
+  `workspace_custom_emotes.storage_object_id` are independent logical
+  references. Sharing bytes does not share visibility or authorization.
+- Live writes acquire and bind through the digest-locked registry. Resource
+  deletion clears or deletes its logical reference first; physical bytes are
+  deleted only after the last logical reference is gone.
+- Reads prefer the canonical object. `storage_key` and custom-emote source
+  chains remain fallback-only during the compatibility window.
+- CAS is a Workspace relay-storage feature. P2P payloads, file bytes, invite
+  fragments, and plaintext are excluded from this registry.
+
+### workspace_custom_emotes and collection subscriptions
+
+`workspace_custom_emotes` stores a user's logical emote resources. Cross-user
+favorites, share imports, and active subscription targets may each have their
+own row while referencing the same `workspace_storage_objects` row.
+
+Collection tables:
+
+| Table | Purpose |
+| --- | --- |
+| `workspace_emote_collections` | Owned collection, canonical source link, original creator, and monotonically increasing `revision`. |
+| `workspace_emote_collection_items` | Ordered logical emote rows in one collection. |
+| `workspace_emote_collection_subscriptions` | Subscriber collection, canonical source/owner, source revision, sync timestamps, and `active`/`off`/`detached` state. |
+| `workspace_emote_collection_subscription_items` | Independent source-emote to target-emote mapping and source order. |
+| `workspace_emote_collection_shares` | Immutable share metadata and snapshot identity. |
+| `workspace_emote_collection_share_items` | Ordered immutable snapshot references. |
+
+Subscription rules:
+
+- `active` is projected to API status `synced`; its collection and target rows
+  are read-only. `off` is editable and eligible for re-enable. `detached` means
+  the canonical source was deleted and cannot be re-enabled.
+- Source name, membership, order, and per-item labels synchronize by source
+  revision. The source mutation, revision update, and all subscriber projections
+  commit in one database transaction.
+- Manual disable retains the last projection as a locally metered snapshot and
+  must pass the 1 GiB preflight. Source deletion changes both `active` and `off`
+  subscriptions to `detached` while retaining their snapshot.
+- Share revocation does not affect an existing subscription. A share can remain
+  a usable immutable snapshot even when its canonical source no longer exists.
+- Subscription-only target rows use independent logical IDs and direct
+  `storage_object_id` references. They do not mutate or merge with a user's
+  locally placed row that has the same digest.
+
+### Echo release publication tables
+
+| Table | Purpose |
+| --- | --- |
+| `echo_release_publications` | One immutable registered usage-guide snapshot per `(space_id, version)`, including its SHA-256 guide hash, publisher, and publication time. |
+| `echo_release_deliveries` | One resumable delivery state per publication and active human recipient selected at publication time. |
+
+The publication snapshot contains only client-safe release content: version,
+date, title, summary, grouped changes, and a user-facing location for every
+change. It does not contain internal storage identifiers or delivery details.
+Delivery states are `pending`, `sent`, `failed`, or `skipped`; stable source and
+client-message keys make retries idempotent.
 
 ### transfer_ledger
 
@@ -512,6 +602,11 @@ Recommended indexes:
 - `messages(space_id, conversation_id, author_id, client_message_id)`
 - `attachments(space_id, visibility, status, created_at)`
 - `attachments(conversation_id, status, created_at)`
+- `workspace_storage_objects(sha256)` unique
+- `workspace_storage_objects(object_key)` unique
+- `workspace_custom_emotes(storage_object_id)`
+- `workspace_emote_collection_subscriptions(source_collection_id, status)`
+- `workspace_emote_collection_subscriptions(subscriber_user_id, status)`
 - `transfer_ledger(space_id, user_id, created_at, status)`
 - `workspace_events(space_id, seq)`
 - `audit_logs(space_id, created_at)`
@@ -550,6 +645,13 @@ Event retention:
 Operation-record retention:
 
 - Permanent in self-hosted MVP unless a later setting is added.
+
+Version publication retention:
+
+- A published guide remains immutable even if the registered source guide is
+  edited later; corrections use a new version.
+- Conversation message retention may remove a card reference, but does not
+  silently rewrite or delete the publication and delivery evidence.
 
 ## 9. Data Boundaries
 
@@ -609,6 +711,8 @@ Rules:
   prototypes.
 - Replace with structured message fields.
 - Keep P2P signaling tables and Workspace message/file tables separated.
+- Keep P2P payloads outside `workspace_storage_objects`; CAS never authorizes
+  server persistence of P2P plaintext or file content.
 - Add focused tests for schema-backed behavior: owner seed, invite acceptance,
   direct uniqueness, message idempotency, quota ledger, attachment independence,
   event sequence, and operation-record writes.
@@ -623,6 +727,12 @@ Rules:
   loss for removed members.
 - Messages use structured content and idempotency fields.
 - Attachments can exist without messages.
+- One canonical storage object can serve multiple independently authorized
+  Workspace logical resources and is deleted only after the last reference.
+- Active emote subscriptions are revision-synchronized and read-only; source
+  deletion preserves a detached snapshot.
+- Echo release versions are unique per space and retain an immutable detailed
+  usage-guide snapshot with idempotent per-recipient delivery state.
 - Transfer ledger prevents concurrent quota bypass.
 - Failed uploads release quota.
 - Workspace events have monotonic per-space `seq`.

@@ -13,6 +13,16 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.15.1",
+    releasedAt: "2026-08-20",
+    title: "更灵活的表情合集",
+    summary: "表情合集不再受数量限制，可选择跟随原作者更新，并让重复文件复用同一份存储内容。",
+    categories: [
+      { title: "表情", items: ["表情合集与个人表情张数不再设总数上限，个人表情容量提升至 1 GiB", "添加他人创建的合集时可订阅原作者变更，也可随时关闭并保留当前内容", "订阅合集会同步名称、表情增删、顺序和短名称，原合集删除不会影响已添加内容"] },
+      { title: "存储", items: ["共享空间中的重复附件、头像和自定义表情会复用同一份活动存储内容"] }
+    ]
+  },
+  {
     version: "0.15.0",
     releasedAt: "2026-08-14",
     title: "更有序的共享空间协作",

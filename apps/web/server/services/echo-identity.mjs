@@ -91,4 +91,3 @@ export function canEchoJoinConversationType(type) {
 export function getEchoConversationCapabilities() {
   return { ...ECHO_CAPABILITIES };
 }
-

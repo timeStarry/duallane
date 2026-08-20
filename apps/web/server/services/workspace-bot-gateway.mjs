@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
+import { writeAudit } from "./audit.mjs";
 import { canBotParticipateInConversation, BOT_SCOPE_ALLOWLIST, BOT_STATUS, WorkspaceAgentBotError } from "./workspace-agent-bots.mjs";
 import { createBotStructuredMessage, MESSAGE_CONTENT_FORMAT, reserveUpload } from "./workspace.mjs";
-import { normalizeCardPayload } from "./workspace-cards.mjs";
+import { CardValidationError, normalizeCardPayload } from "./workspace-cards.mjs";
+import { FEISHU_CARD_SCHEMA_VERSION, FEISHU_CARD_TYPE, convertFeishuCard } from "./workspace-feishu-card-converter.mjs";
 
 export const BOT_GATEWAY_VERSION = 1;
 export const BOT_GATEWAY_REPLAY_LIMIT = 200;
@@ -12,7 +14,8 @@ const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const DELIVERY_EVENT_SCOPES = Object.freeze({
   "message.created": "messages:read_trigger",
   "bot.mentioned": "messages:read_trigger",
-  "command.invoked": "commands:receive"
+  "command.invoked": "commands:receive",
+  "card.action": "cards:act"
 });
 const MAX_TRIGGER_BYTES = 100 * 1024;
 const MAX_TRIGGER_BLOCKS = 100;
@@ -158,15 +161,27 @@ export function createWorkspaceBotGatewayService({
     const settings = await readSettings(db, auth.botId, auth.spaceId);
     const configuredLimit = Math.min(Number(settings?.maxContextMessages ?? 50), Number(grant.maxMessages ?? 200) || 200);
     const limit = Math.min(Math.max(1, Number(options.limit) || configuredLimit), configuredLimit, 200);
+    const maxChars = Number(settings?.maxContextChars ?? 20000);
+    const maxTokens = Number(settings?.maxContextTokens ?? 8000);
+    const windowSeconds = Number(settings?.contextWindowSeconds ?? 86400);
+    const cutoff = new Date(now().getTime() - windowSeconds * 1000).toISOString();
+    const filters = [
+      "m.space_id = ?",
+      "m.conversation_id = ?",
+      "m.deleted_at IS NULL",
+      "m.created_at >= ?"
+    ];
+    if (!Boolean(settings?.includeReplies)) filters.push("m.reply_to_message_id IS NULL");
+    if (!Boolean(settings?.includeSystemEvents)) filters.push("m.kind <> 'system' AND m.author_kind <> 'system'");
     const rows = await db.prepare(`SELECT m.id, m.conversation_id AS conversationId, m.author_id AS authorId,
       m.author_kind AS authorKind, m.kind, m.content_format AS contentFormat, m.content_json AS contentJson,
       m.plain_text AS plainText, m.reply_to_message_id AS replyToMessageId, m.created_at AS createdAt
-      FROM messages m WHERE m.space_id = ? AND m.conversation_id = ? AND m.deleted_at IS NULL
-      ORDER BY m.created_at DESC, m.id DESC LIMIT ?`).all(auth.spaceId, conversation.id, limit);
+      FROM messages m WHERE ${filters.join(" AND ")}
+      ORDER BY m.created_at DESC, m.id DESC LIMIT ?`).all(auth.spaceId, conversation.id, cutoff, limit);
     return {
       conversation: projectConversation(conversation),
-      messages: rows.reverse().map((row) => projectMessage(row, settings)),
-      limits: { maxMessages: configuredLimit, maxChars: Number(settings?.maxContextChars ?? 20000), maxTokens: Number(settings?.maxContextTokens ?? 8000), windowSeconds: Number(settings?.contextWindowSeconds ?? 86400) }
+      messages: applyContextBudgets(rows.map((row) => projectMessage(row, settings)), { maxChars, maxTokens }),
+      limits: { maxMessages: configuredLimit, maxChars, maxTokens, windowSeconds }
     };
   }
 
@@ -206,10 +221,17 @@ export function createWorkspaceBotGatewayService({
     const conversationId = normalizeId(input.conversationId, "conversation.invalid");
     const clientMessageId = normalizeId(input.clientMessageId || input.idempotencyKey, "message.invalid");
     await requireConversation(auth, conversationId);
-    const cardType = normalizeCardType(input.cardType);
-    const schemaVersion = normalizeVersion(input.schemaVersion);
-    const fallbackText = normalizeFallback(input.fallbackText);
-    const payload = normalizeCardPayload(input.payload ?? {});
+    let converted;
+    try {
+      converted = convertGatewayCard(input);
+    } catch (error) {
+      await auditGatewayCardRejection(auth, "bot.gateway.card.send", auth.botId, error);
+      throw error;
+    }
+    const cardType = normalizeCardType(converted.cardType);
+    const schemaVersion = normalizeVersion(converted.schemaVersion);
+    const fallbackText = normalizeFallback(converted.fallbackText);
+    const payload = converted.payload;
     const key = normalizeId(input.idempotencyKey || clientMessageId, "idempotency.invalid");
     if (!cards?.createCustomBotCard || !cards?.validateMessageCardReference) {
       throw new WorkspaceBotGatewayError("card.unavailable", "卡片服务暂不可用", 503);
@@ -246,9 +268,10 @@ export function createWorkspaceBotGatewayService({
     if (!cards?.updateCustomBotCard || !cards?.invalidateCustomBotCard) {
       throw new WorkspaceBotGatewayError("card.unavailable", "卡片服务暂不可用", 503);
     }
+    const normalizedCardId = normalizeId(cardId, "card.invalid_id");
     if (input.status !== undefined && input.status !== "active") {
       const card = await cards.invalidateCustomBotCard({
-        cardId: normalizeId(cardId, "card.invalid_id"),
+        cardId: normalizedCardId,
         botId: auth.botId,
         botUserId: auth.userId,
         spaceId: auth.spaceId,
@@ -257,14 +280,39 @@ export function createWorkspaceBotGatewayService({
       });
       return { card: projectCard(card, auth.botId) };
     }
+    let payload = input.payload;
+    let fallbackText = input.fallbackText;
+    if (input.feishuCard !== undefined || input.format === "feishu-card") {
+      try {
+        await requireFeishuCardOwner(auth, normalizedCardId);
+        const converted = convertGatewayCard({
+          cardType: FEISHU_CARD_TYPE,
+          schemaVersion: FEISHU_CARD_SCHEMA_VERSION,
+          fallbackText,
+          feishuCard: input.feishuCard ?? input.payload
+        });
+        payload = converted.payload;
+        fallbackText = converted.fallbackText;
+      } catch (error) {
+        await auditGatewayCardRejection(auth, "bot.gateway.card.update", normalizedCardId, error);
+        throw error;
+      }
+    } else if (payload !== undefined) {
+      try {
+        payload = normalizeGatewayCardPayload(payload);
+      } catch (error) {
+        await auditGatewayCardRejection(auth, "bot.gateway.card.update", normalizedCardId, error);
+        throw error;
+      }
+    }
     const card = await cards.updateCustomBotCard({
-      cardId: normalizeId(cardId, "card.invalid_id"),
+      cardId: normalizedCardId,
       botId: auth.botId,
       botUserId: auth.userId,
       spaceId: auth.spaceId,
       expectedRevision: input.expectedRevision,
-      payload: input.payload,
-      fallbackText: input.fallbackText
+      payload,
+      fallbackText
     });
     return { card: projectCard(card, auth.botId) };
   }
@@ -374,8 +422,8 @@ export function createWorkspaceBotGatewayService({
     const timestamp = now().toISOString();
     return await db.prepare(`INSERT INTO workspace_agent_bot_deliveries
       (id, bot_id, space_id, sequence, event_id, event_type, conversation_id, payload_json, status, attempts, created_at, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, '{}', 'queued', 0, ?, ?) ON CONFLICT (bot_id, sequence) DO NOTHING`)
-      .run(`bdl_${idFactory()}`, auth.botId, auth.spaceId, event.sequence, event.id, event.eventType, event.conversationId, timestamp, new Date(new Date(timestamp).getTime() + replayWindowMs).toISOString());
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?) ON CONFLICT (bot_id, sequence) DO NOTHING`)
+      .run(`bdl_${idFactory()}`, auth.botId, auth.spaceId, event.sequence, event.id, event.eventType, event.conversationId, JSON.stringify(deliveryPayload(event)), timestamp, new Date(new Date(timestamp).getTime() + replayWindowMs).toISOString());
   }
 
   async function dispatchWorkspaceEvent(writtenEvent) {
@@ -469,6 +517,29 @@ export function createWorkspaceBotGatewayService({
     return { timestamp };
   }
 
+  async function requireFeishuCardOwner(auth, cardId) {
+    const row = await db.prepare(`SELECT card_type AS cardType, schema_version AS schemaVersion
+      FROM workspace_cards
+      WHERE id = ? AND space_id = ? AND source_kind = 'custom_bot' AND created_by_user_id = ?`)
+      .get(cardId, auth.spaceId, auth.userId);
+    if (!row) throw new WorkspaceBotGatewayError("card.not_found", "卡片不存在", 404);
+    if (row.cardType !== FEISHU_CARD_TYPE || Number(row.schemaVersion) !== FEISHU_CARD_SCHEMA_VERSION) {
+      throw new WorkspaceBotGatewayError("card.type_mismatch", "卡片格式与更新内容不一致", 409);
+    }
+  }
+
+  async function auditGatewayCardRejection(auth, action, targetId, error) {
+    await writeAudit(db, {
+      spaceId: auth.spaceId,
+      actorUserId: auth.userId,
+      action,
+      targetType: "workspace.card",
+      targetId,
+      result: "rejected",
+      reason: error?.code ?? "card.invalid_payload"
+    }).catch(() => {});
+  }
+
   async function loadWorkspaceEvent(eventId, spaceId) {
     if (!eventId || !spaceId) return null;
     return await db.prepare(`SELECT id, space_id AS spaceId, seq AS sequence, type AS eventType,
@@ -543,6 +614,9 @@ export function createWorkspaceBotGatewayService({
         if (!mentioned && payload.trigger?.type !== "mention") return null;
       }
       return { type: "command" };
+    }
+    if (event.eventType === "card.action") {
+      return eventTargetsBot(auth, event, payload) ? { type: "card_action" } : null;
     }
     return null;
   }
@@ -732,6 +806,23 @@ function projectMessage(row, settings) {
   };
 }
 
+function applyContextBudgets(messagesNewestFirst, limits) {
+  const accepted = [];
+  let charCount = 2;
+  let tokenUpperBound = 2;
+  for (const message of messagesNewestFirst) {
+    const serialized = JSON.stringify(message);
+    const separatorSize = accepted.length > 0 ? 1 : 0;
+    const nextChars = serialized.length + separatorSize;
+    const nextTokenUpperBound = Buffer.byteLength(serialized, "utf8") + separatorSize;
+    if (charCount + nextChars > limits.maxChars || tokenUpperBound + nextTokenUpperBound > limits.maxTokens) break;
+    accepted.push(message);
+    charCount += nextChars;
+    tokenUpperBound += nextTokenUpperBound;
+  }
+  return accepted.reverse();
+}
+
 function rejectForgedFields(input) {
   const forged = Object.keys(input).find((key) => new Set(["actorId", "ownerId", "ownerUserId", "role", "kind", "capability", "authorId", "authorKind"]).has(key));
   if (forged) throw new WorkspaceBotGatewayError("gateway.actor_forbidden", "Bot 请求不得提交身份字段");
@@ -836,6 +927,47 @@ function normalizeFallback(value) {
   return normalized;
 }
 
+function convertGatewayCard(input) {
+  try {
+    if (input.feishuCard !== undefined || input.format === "feishu-card") {
+      if (input.cardType !== undefined && normalizeCardType(input.cardType) !== FEISHU_CARD_TYPE) {
+        throw new WorkspaceBotGatewayError("card.type_mismatch", "飞书卡片类型无效");
+      }
+      if (input.schemaVersion !== undefined && normalizeVersion(input.schemaVersion) !== FEISHU_CARD_SCHEMA_VERSION) {
+        throw new WorkspaceBotGatewayError("card.type_mismatch", "飞书卡片版本无效");
+      }
+      const converted = convertFeishuCard(input.feishuCard ?? input.payload);
+      return {
+        ...converted,
+        fallbackText: input.fallbackText === undefined ? converted.fallbackText : normalizeFallback(input.fallbackText)
+      };
+    }
+    return {
+      cardType: input.cardType,
+      schemaVersion: input.schemaVersion,
+      fallbackText: input.fallbackText,
+      payload: normalizeGatewayCardPayload(input.payload ?? {})
+    };
+  } catch (error) {
+    if (error instanceof WorkspaceBotGatewayError) throw error;
+    if (error instanceof CardValidationError || error?.name === "CardValidationError") {
+      throw new WorkspaceBotGatewayError(error.code || "card.invalid_payload", error.message || "卡片内容无效", 422);
+    }
+    throw error;
+  }
+}
+
+function normalizeGatewayCardPayload(payload) {
+  try {
+    return normalizeCardPayload(payload);
+  } catch (error) {
+    if (error instanceof CardValidationError || error?.name === "CardValidationError") {
+      throw new WorkspaceBotGatewayError(error.code || "card.invalid_payload", error.message || "卡片内容无效", 422);
+    }
+    throw error;
+  }
+}
+
 function projectCard(row, botId = null) {
   const block = row?.block ?? {};
   let payload = row?.payload;
@@ -875,8 +1007,26 @@ function projectDelivery(row) {
     sequence: Number(row.sequence),
     type: row.eventType,
     conversationId: row.conversationId,
-    payload: {},
+    payload: parseJsonObject(row.payloadJson),
     status: row.status,
     createdAt: row.createdAt
   };
+}
+
+function deliveryPayload(event) {
+  if (event?.eventType !== "card.action") return {};
+  const payload = parseJsonObject(event.eventPayloadJson);
+  const safe = {};
+  for (const key of ["botId", "botUserId", "cardId", "actionId", "clientActionId"]) {
+    if (typeof payload[key] === "string" && SAFE_ID.test(payload[key])) safe[key] = payload[key];
+  }
+  if (event.actorUserId && SAFE_ID.test(event.actorUserId)) safe.actorUserId = event.actorUserId;
+  try {
+    safe.data = normalizeCardPayload(payload.data ?? {}, {
+      limits: { maxPayloadBytes: 4 * 1024, maxDepth: 3, maxNodes: 30, maxTextBytes: 2 * 1024 }
+    });
+  } catch {
+    safe.data = {};
+  }
+  return safe;
 }

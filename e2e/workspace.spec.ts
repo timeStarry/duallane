@@ -21,12 +21,19 @@ async function chooseMessageAction(page: Page, message: Locator, actionName: str
   await menu.getByRole("menuitem", { name: actionName, exact: true }).click();
 }
 
+async function openWorkspaceFiles(page: Page) {
+  await page.locator(".workspace-user-trigger").click();
+  await page.getByRole("menu", { name: "账号菜单" }).getByRole("menuitem", { name: "文件", exact: true }).click();
+  await expect(page).toHaveURL(/\/workspace\/files$/);
+  await expect(page.getByRole("heading", { name: "共享文件" })).toBeVisible();
+}
+
 test("public about page exposes the current release and accessible history", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "关于 DualLane 与版本更新" }).click();
   await expect(page).toHaveURL(/\/about$/);
   await expect(page.getByRole("heading", { name: "两种边界，一处沟通。" })).toBeVisible();
-  await expect(page.locator(".latest-release").getByText("v0.14.3", { exact: true })).toBeVisible();
+  await expect(page.locator(".latest-release").getByText("v0.15.0", { exact: true })).toBeVisible();
 
   const history = page.locator(".release-history");
   await expect(history).not.toHaveAttribute("open", "");
@@ -40,7 +47,7 @@ test("public about page exposes the current release and accessible history", asy
   await page.goForward();
   await expect(page).toHaveURL(/\/about$/);
   await page.reload();
-  await expect(page.locator(".latest-release").getByText("v0.14.3", { exact: true })).toBeVisible();
+  await expect(page.locator(".latest-release").getByText("v0.15.0", { exact: true })).toBeVisible();
 });
 
 test("workspace semantic routes survive OAuth, refresh, history, and invalid resources", async ({ page }) => {
@@ -70,7 +77,8 @@ test("workspace semantic routes survive OAuth, refresh, history, and invalid res
   await page.reload();
   await expect(page).toHaveURL(new RegExp(`/workspace/chat/${conversation.conversation.id}$`));
 
-  await page.getByRole("navigation", { name: "共享空间视图" }).getByRole("button", { name: "文件", exact: true }).click();
+  await page.locator(".workspace-user-trigger").click();
+  await page.getByRole("menu", { name: "账号菜单" }).getByRole("menuitem", { name: "文件", exact: true }).click();
   await expect(page).toHaveURL(/\/workspace\/files$/);
   await page.reload();
   await expect(page.getByRole("heading", { name: "共享文件" })).toBeVisible();
@@ -469,7 +477,7 @@ test("workspace loading, navigation and menu focus semantics are stable", async 
   const userTrigger = page.locator(".workspace-user-trigger");
   await userTrigger.click();
   const userMenu = page.getByRole("menu", { name: "账号菜单" });
-  await expect(userMenu.getByRole("menuitem", { name: "个人设置" })).toBeFocused();
+  await expect(userMenu.getByRole("menuitem", { name: "文件", exact: true })).toBeFocused();
   await page.keyboard.press("End");
   await expect(userMenu.getByRole("menuitem", { name: "退出共享空间" })).toBeFocused();
   await page.keyboard.press("Escape");
@@ -555,10 +563,22 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
         capabilities?: { canStartDirectConversation?: boolean; canJoinGroups?: boolean };
       }>;
     }).members;
-    expect(initialMembers.map((member) => member.id)).toEqual([acceptedMember.id, "usr_system_beacon"]);
+    expect(initialMembers.map((member) => member.id)).toEqual([
+      acceptedMember.id,
+      "usr_system_beacon",
+      "usr_system_echo"
+    ]);
     expect(initialMembers.find((member) => member.id === "usr_system_beacon")).toMatchObject({
       displayName: "信标",
       description: "文件传输助手",
+      kind: "bot",
+      capabilities: {
+        canStartDirectConversation: true,
+        canJoinGroups: false
+      }
+    });
+    expect(initialMembers.find((member) => member.id === "usr_system_echo")).toMatchObject({
+      displayName: "回声",
       kind: "bot",
       capabilities: {
         canStartDirectConversation: true,
@@ -784,12 +804,15 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect.poll(() => ownerPage.evaluate(() => localStorage.getItem("duallane.workspace.context-open"))).toBe("true");
     const detailTabs = ownerPage.getByRole("tablist", { name: "会话详情" });
     const overviewTab = detailTabs.getByRole("tab", { name: "概览" });
+    const topicsTab = detailTabs.getByRole("tab", { name: "话题" });
     const membersTab = detailTabs.getByRole("tab", { name: "成员" });
     const selectedDetailTab = detailTabs.locator('[role="tab"][aria-selected="true"]');
     await selectedDetailTab.focus();
     await selectedDetailTab.press("Home");
     await expect(overviewTab).toHaveAttribute("aria-selected", "true");
     await overviewTab.press("ArrowRight");
+    await expect(topicsTab).toHaveAttribute("aria-selected", "true");
+    await topicsTab.press("ArrowRight");
     await expect(membersTab).toHaveAttribute("aria-selected", "true");
     await expect(ownerPage.getByLabel("当前会话详情").getByText(memberDisplayName, { exact: true })).toBeVisible();
 
@@ -1060,7 +1083,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await memberGroupConversation.click();
 
     const workspaceViewNavigation = memberPage.getByRole("navigation", { name: "共享空间视图" });
-    await workspaceViewNavigation.getByRole("button", { name: "文件", exact: true }).click();
+    await openWorkspaceFiles(memberPage);
     const messageOutsideChatView = "workspace-e2e-message-while-files-view-is-open";
     const hiddenViewMessageResponse = ownerPage.waitForResponse((response) =>
       response.url().endsWith("/api/workspace/messages") && response.request().method() === "POST"
@@ -1196,7 +1219,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(pastedImageCard).toBeFocused();
 
     const memberNavigation = memberPage.getByRole("navigation", { name: "共享空间视图" });
-    await memberNavigation.getByRole("button", { name: "文件", exact: true }).click();
+    await openWorkspaceFiles(memberPage);
     const fileCategoryTabs = memberPage.getByLabel("文件类型筛选", { exact: true });
     await fileCategoryTabs.getByRole("button", { name: "图片", exact: true }).click();
     const imageLibraryRow = memberPage.locator(".workspace-file-row").filter({ hasText: pastedImageName });

@@ -6,6 +6,7 @@ import {
   normalizeCardPayload
 } from "./workspace-cards.mjs";
 import { getSystemIdentityDefinition } from "./system-identities.mjs";
+import { runWorkspaceTransaction } from "./workspace.mjs";
 
 const CARD_STATUS = new Set(["active", "invalidated", "expired"]);
 const SOURCE_KINDS = new Set(["workspace", "system_bot", "custom_bot", "echo", "topic"]);
@@ -178,7 +179,7 @@ export function createWorkspaceCardInteractionService({ db, registry, now = () =
     if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) {
       throw new WorkspaceCardInteractionError("card.invalid_revision", "卡片版本无效");
     }
-    const outcome = await db.transaction(async () => {
+    const outcome = await runWorkspaceTransaction(db, async () => {
       await db.lock?.(`workspace-card:action:${cardId}`);
       const row = await loadCard(db, cardId);
       if (!row) return failure(notFound());

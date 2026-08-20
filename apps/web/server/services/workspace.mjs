@@ -14,6 +14,7 @@ import { sanitizeGitHubAvatarUrl, sanitizeWorkspaceAvatarUrl } from "./avatar.mj
 import { getReactionEmote, isVisibleReactionEmoteKey } from "./emote-catalog.mjs";
 import { markdownToPlainText } from "./markdown.mjs";
 import { CardValidationError, normalizeCardBlock } from "./workspace-cards.mjs";
+import { parseWorkspaceTopicSyntax } from "./workspace-topic-parser.mjs";
 import {
   getSystemIdentityConversationCapabilities,
   getSystemIdentityDefinition,
@@ -334,14 +335,30 @@ export async function setOwnAvatar(db, request, input) {
   if (storageKey !== `profile-avatars/${actor.id}/${version}.webp` || !/^[a-z0-9-]+$/i.test(version)) {
     throw new WorkspaceValidationError("avatar.invalid", "头像数据无效");
   }
-  const previous = await db.prepare("SELECT avatar_storage_key AS storageKey FROM users WHERE id = ?").get(actor.id);
+  let previous = null;
   const now = new Date().toISOString();
   await runWorkspaceTransaction(db, async () => {
+    previous = await db.prepare(`
+      SELECT avatar_storage_key AS storageKey, avatar_storage_object_id AS storageObjectId
+      FROM users
+      WHERE id = ?
+    `).get(actor.id);
+    const storageBinding = typeof input.acquireStorageObject === "function"
+      ? await input.acquireStorageObject({ actor, storageKey, version })
+      : null;
     await db.prepare(`
       UPDATE users
-      SET avatar_storage_key = ?, avatar_version = ?, avatar_updated_at = ?, avatar_url = ?
+      SET avatar_storage_key = ?, avatar_version = ?, avatar_updated_at = ?, avatar_url = ?,
+          avatar_storage_object_id = ?
       WHERE id = ? AND kind = 'human'
-    `).run(storageKey, version, now, `/api/workspace/avatars/${actor.id}/${version}`, actor.id);
+    `).run(
+      storageKey,
+      version,
+      now,
+      `/api/workspace/avatars/${actor.id}/${version}`,
+      storageBinding?.object?.id ?? null,
+      actor.id
+    );
     await writeEvent(db, {
       type: "workspace.member_updated",
       actorId: actor.id,
@@ -360,17 +377,24 @@ export async function setOwnAvatar(db, request, input) {
   });
   return {
     user: await publicMemberPayloadForActor(db, actor, actor.id),
-    previousStorageKey: previous?.storageKey || null
+    previousStorageKey: previous?.storageKey || null,
+    previousStorageObjectId: previous?.storageObjectId || null
   };
 }
 
 export async function removeOwnAvatar(db, request, input) {
   const actor = await requireActor(db, input.actorId);
-  const previous = await db.prepare("SELECT avatar_storage_key AS storageKey FROM users WHERE id = ?").get(actor.id);
+  let previous = null;
   await runWorkspaceTransaction(db, async () => {
+    previous = await db.prepare(`
+      SELECT avatar_storage_key AS storageKey, avatar_storage_object_id AS storageObjectId
+      FROM users
+      WHERE id = ?
+    `).get(actor.id);
     await db.prepare(`
       UPDATE users
-      SET avatar_storage_key = NULL, avatar_version = NULL, avatar_updated_at = NULL, avatar_url = github_avatar_url
+      SET avatar_storage_key = NULL, avatar_version = NULL, avatar_updated_at = NULL,
+          avatar_url = github_avatar_url, avatar_storage_object_id = NULL
       WHERE id = ? AND kind = 'human'
     `).run(actor.id);
     await writeEvent(db, {
@@ -391,7 +415,8 @@ export async function removeOwnAvatar(db, request, input) {
   });
   return {
     user: await publicMemberPayloadForActor(db, actor, actor.id),
-    previousStorageKey: previous?.storageKey || null
+    previousStorageKey: previous?.storageKey || null,
+    previousStorageObjectId: previous?.storageObjectId || null
   };
 }
 
@@ -399,9 +424,20 @@ export async function getProfileAvatar(db, actorId, userId, version) {
   const actor = await requireActor(db, actorId);
   const visibleIds = await listVisibleMemberIds(db, { spaceId: DEFAULT_SPACE_ID, actor });
   const avatar = await db.prepare(`
-    SELECT u.avatar_storage_key AS storageKey, u.search_discoverable AS searchDiscoverable
+    SELECT
+      u.avatar_storage_key AS storageKey,
+      u.search_discoverable AS searchDiscoverable,
+      u.avatar_storage_object_id AS storageObjectId,
+      so.sha256 AS storageObjectSha256,
+      so.object_key AS storageObjectKey,
+      so.byte_size AS storageObjectByteSize,
+      so.content_type AS storageObjectContentType,
+      so.created_at AS storageObjectCreatedAt,
+      so.verified_at AS storageObjectVerifiedAt
     FROM users u
     INNER JOIN space_members sm ON sm.user_id = u.id
+    LEFT JOIN workspace_storage_objects so
+      ON so.id = u.avatar_storage_object_id AND so.deleted_at IS NULL
     WHERE u.id = ? AND u.kind = 'human' AND u.avatar_version = ?
       AND u.avatar_storage_key IS NOT NULL
       AND sm.space_id = ? AND sm.removed_at IS NULL
@@ -412,7 +448,7 @@ export async function getProfileAvatar(db, actorId, userId, version) {
   if (!visibleIds.has(normalizeString(userId)) && !avatar.searchDiscoverable) {
     throw new WorkspaceError("avatar.not_found", "头像不存在", 404);
   }
-  return avatar;
+  return withNestedStorageObject(avatar);
 }
 
 export async function updateMemberRemark(db, input) {
@@ -1376,7 +1412,7 @@ export async function createConversation(db, request, input) {
       await writeConversationCreateRejection(db, request, actor, "target not visible");
       throw new WorkspaceValidationError("conversation.invalid_target", "成员不存在或当前不可见");
     }
-    if (!canStartDirectConversationWith(target)) {
+    if (!canStartDirectConversationWith(target, actor)) {
       await writeConversationCreateRejection(db, request, actor, "invalid target");
       throw new WorkspaceValidationError("conversation.invalid_target", "请选择可聊天的空间成员");
     }
@@ -2432,6 +2468,16 @@ export async function createStructuredMessage(db, request, input) {
       return (await listMessages(db, actor.id, conversationId, { limit: 200, request })).find((message) => message.id === existing.id);
     }
 
+    const topicCardMessage = await createTopicFromGroupMessage(db, request, {
+      actor,
+      conversationId,
+      clientMessageId,
+      content: normalizedContent,
+      replyToMessageId: input.replyToMessageId,
+      createTopicFromMessage: input.createTopicFromMessage
+    });
+    if (topicCardMessage) return topicCardMessage;
+
     replyToMessageId = normalizeString(input.replyToMessageId) || null;
     if (replyToMessageId) {
       const reply = await db.prepare("SELECT 1 FROM messages WHERE id = ? AND conversation_id = ? AND topic_id IS NULL").get(replyToMessageId, conversationId);
@@ -2571,6 +2617,69 @@ export async function createStructuredMessage(db, request, input) {
     throw error;
   }
   return transactionResult;
+}
+
+async function createTopicFromGroupMessage(db, request, input) {
+  if (input.actor.kind !== "human") return null;
+  const conversation = await db.prepare(`
+    SELECT type FROM conversations WHERE id = ? AND space_id = ?
+  `).get(input.conversationId, DEFAULT_SPACE_ID);
+  if (conversation?.type !== "group") return null;
+
+  const existingTopic = await db.prepare(`
+    SELECT id, conversation_id AS conversationId
+    FROM topics
+    WHERE space_id = ? AND created_by = ? AND idempotency_key = ?
+  `).get(DEFAULT_SPACE_ID, input.actor.id, input.clientMessageId);
+  const blocks = Array.isArray(input.content?.blocks) ? input.content.blocks : [];
+  const eligible = !normalizeString(input.replyToMessageId) && blocks.length > 0 && blocks.every((block) => block.type === "text");
+  const source = eligible ? blocks.map((block) => block.text).join("") : "";
+  const intent = eligible ? parseWorkspaceTopicSyntax(source) : null;
+  if (!intent) {
+    if (existingTopic?.conversationId === input.conversationId) {
+      throw new WorkspaceValidationError("message.idempotency_conflict", "重复消息 ID 对应的内容不一致");
+    }
+    return null;
+  }
+  if (typeof input.createTopicFromMessage !== "function") {
+    throw new WorkspaceError("topic.unavailable", "话题服务暂不可用", 503);
+  }
+
+  let topic;
+  try {
+    topic = await input.createTopicFromMessage({
+      actorId: input.actor.id,
+      conversationId: input.conversationId,
+      source,
+      idempotencyKey: input.clientMessageId,
+      allowSyncToGroup: true
+    });
+  } catch (error) {
+    if (error instanceof WorkspaceError) throw error;
+    if (typeof error?.code === "string" && Number.isInteger(error?.statusCode)) {
+      throw new WorkspaceError(error.code, error.message || "话题创建失败", error.statusCode);
+    }
+    throw error;
+  }
+
+  const cardMessage = await db.prepare(`
+    SELECT id FROM messages
+    WHERE space_id = ? AND conversation_id = ? AND author_id = ?
+      AND client_message_id = ? AND topic_id IS NULL AND deleted_at IS NULL
+  `).get(
+    DEFAULT_SPACE_ID,
+    input.conversationId,
+    input.actor.id,
+    `topic-card:${topic.id}`
+  );
+  const projected = cardMessage
+    ? await publicMessagePayloadForActor(db, input.actor, cardMessage.id)
+    : null;
+  if (!projected) throw new WorkspaceError("topic.card_missing", "话题创建卡片不可用", 500);
+  // Echo the caller's id only in this HTTP result so the optimistic source
+  // message is replaced by the server-owned card. Persisted rows and events
+  // keep their deterministic topic-card idempotency key.
+  return { ...projected, clientMessageId: input.clientMessageId };
 }
 
 // The Gateway uses the same content normalization, membership, idempotency and
@@ -2783,6 +2892,9 @@ export async function completeUpload(db, request, input) {
 
   return await runWorkspaceTransaction(db, async () => {
     const now = new Date().toISOString();
+    if (typeof input.acquireStorageObject === "function") {
+      await input.acquireStorageObject(attachment);
+    }
     await db.prepare("UPDATE transfer_ledger SET status = 'completed', completed_at = ? WHERE id = ?").run(now, uploadId);
     await db.prepare("UPDATE attachments SET status = 'available', completed_at = ? WHERE id = ?").run(now, attachment.id);
 
@@ -3076,8 +3188,8 @@ export async function removeAttachment(db, request, input) {
     throw new WorkspacePermissionError("permission.denied", "你没有移除此文件的权限");
   }
 
-  return await runWorkspaceTransaction(db, async () => {
-    await db.prepare("UPDATE attachments SET status = 'removed' WHERE id = ?").run(attachment.id);
+  const result = await runWorkspaceTransaction(db, async () => {
+    await db.prepare("UPDATE attachments SET status = 'removed', storage_object_id = NULL WHERE id = ?").run(attachment.id);
     await writeEvent(db, {
       type: "attachment.removed",
       actorId: actor.id,
@@ -3096,6 +3208,10 @@ export async function removeAttachment(db, request, input) {
     });
     return { ok: true, attachmentId: attachment.id };
   });
+  if (typeof input.releaseStorageObject === "function") {
+    await input.releaseStorageObject(attachment);
+  }
+  return result;
 }
 
 export async function getDownloadableAttachment(db, request, actorId, attachmentId) {
@@ -3198,7 +3314,10 @@ async function createOrGetDirectConversation(db, request, actor, target) {
     WHERE space_id = ? AND direct_key = ?
   `).get(DEFAULT_SPACE_ID, directKey);
   if (existing) {
-    return await getConversation(db, actor.id, existing.id);
+    return await runWorkspaceTransaction(db, async () => {
+      await ensureCustomBotDirectGrant(db, request, actor, target, existing.id, new Date().toISOString());
+      return await getConversation(db, actor.id, existing.id);
+    });
   }
 
   return await runWorkspaceTransaction(db, async () => {
@@ -3222,6 +3341,7 @@ async function createOrGetDirectConversation(db, request, actor, target) {
     `);
     await insertMember.run(id, actor.id, now);
     await insertMember.run(id, target.id, now);
+    await ensureCustomBotDirectGrant(db, request, actor, target, id, now);
     const createdConversation = await getConversation(db, actor.id, id);
 
     await writeEvent(db, {
@@ -3241,6 +3361,24 @@ async function createOrGetDirectConversation(db, request, actor, target) {
       result: "success"
     });
     return createdConversation;
+  });
+}
+
+async function ensureCustomBotDirectGrant(db, request, actor, target, conversationId, timestamp) {
+  if (!target.customBotId) return;
+  const inserted = await db.prepare(`INSERT INTO workspace_agent_bot_context_grants
+    (grant_id, bot_id, space_id, conversation_id, allow_trigger, allow_context, max_messages, granted_by, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 1, 0, NULL, ?, ?, ?)
+    ON CONFLICT (bot_id, conversation_id) DO NOTHING`)
+    .run(`grant_${crypto.randomUUID()}`, target.customBotId, DEFAULT_SPACE_ID, conversationId, actor.id, timestamp, timestamp);
+  if (!inserted.changes) return;
+  await writeWorkspaceAudit(db, request, {
+    actorUserId: actor.id,
+    actorGithubLogin: actor.githubLogin,
+    action: "bot.context_grant.bootstrap",
+    targetType: "conversation",
+    targetId: conversationId,
+    result: "success"
   });
 }
 
@@ -3335,10 +3473,16 @@ async function listSpaceMembers(db, viewerUserId = "") {
       u.search_discoverable AS searchDiscoverable,
       u.kind,
       sm.role,
+      custom_bot.id AS customBotId,
+      custom_bot.owner_user_id AS customBotOwnerUserId,
+      custom_bot.status AS customBotStatus,
+      custom_bot_settings.allow_direct AS customBotAllowDirect,
       sm.joined_at AS joinedAt
     FROM space_members sm
     INNER JOIN users u ON u.id = sm.user_id
     LEFT JOIN user_remarks ur ON ur.owner_user_id = ? AND ur.target_user_id = u.id
+    LEFT JOIN workspace_agent_bots custom_bot ON custom_bot.bot_user_id = u.id AND custom_bot.space_id = sm.space_id
+    LEFT JOIN workspace_agent_bot_settings custom_bot_settings ON custom_bot_settings.bot_id = custom_bot.id AND custom_bot_settings.space_id = sm.space_id
     WHERE sm.space_id = ? AND sm.removed_at IS NULL
     ORDER BY
       CASE sm.role WHEN 'owner' THEN 1 WHEN 'admin' THEN 2 WHEN 'auditor' THEN 3 ELSE 4 END,
@@ -3377,11 +3521,17 @@ async function listConversationMembers(db, conversationId, viewerUserId = "") {
       u.avatar_url AS avatarUrl,
       u.kind,
       sm.role,
+      custom_bot.id AS customBotId,
+      custom_bot.owner_user_id AS customBotOwnerUserId,
+      custom_bot.status AS customBotStatus,
+      custom_bot_settings.allow_direct AS customBotAllowDirect,
       cm.joined_at AS joinedAt
     FROM conversation_members cm
     INNER JOIN users u ON u.id = cm.user_id
     INNER JOIN space_members sm ON sm.user_id = u.id AND sm.space_id = ?
     LEFT JOIN user_remarks ur ON ur.owner_user_id = ? AND ur.target_user_id = u.id
+    LEFT JOIN workspace_agent_bots custom_bot ON custom_bot.bot_user_id = u.id AND custom_bot.space_id = sm.space_id
+    LEFT JOIN workspace_agent_bot_settings custom_bot_settings ON custom_bot_settings.bot_id = custom_bot.id AND custom_bot_settings.space_id = sm.space_id
     WHERE cm.conversation_id = ? AND cm.removed_at IS NULL
     ORDER BY u.display_name
   `).all(DEFAULT_SPACE_ID, viewerUserId, conversationId);
@@ -3808,7 +3958,7 @@ async function getDownloadableAttachmentForActor(db, request, actor, attachmentI
 
 async function getAttachment(db, attachmentId) {
   if (!attachmentId) return null;
-  return await db.prepare(`
+  const attachment = await db.prepare(`
     SELECT
       a.id,
       a.space_id AS spaceId,
@@ -3821,13 +3971,48 @@ async function getAttachment(db, attachmentId) {
       a.mime_type AS mimeType,
       a.byte_size AS byteSize,
       a.storage_key AS storageKey,
+      a.storage_object_id AS storageObjectId,
+      so.sha256 AS storageObjectSha256,
+      so.object_key AS storageObjectKey,
+      so.byte_size AS storageObjectByteSize,
+      so.content_type AS storageObjectContentType,
+      so.created_at AS storageObjectCreatedAt,
+      so.verified_at AS storageObjectVerifiedAt,
       a.upload_transfer_id AS uploadTransferId,
       a.created_at AS createdAt,
       a.completed_at AS completedAt
     FROM attachments a
     INNER JOIN users u ON u.id = a.uploader_id
+    LEFT JOIN workspace_storage_objects so
+      ON so.id = a.storage_object_id AND so.deleted_at IS NULL
     WHERE a.id = ?
   `).get(attachmentId);
+  return withNestedStorageObject(attachment);
+}
+
+function withNestedStorageObject(record) {
+  const storageObjectByteSize = Number(record?.storageObjectByteSize);
+  if (
+    !record?.storageObjectId ||
+    !/^[a-f0-9]{64}$/.test(publicString(record.storageObjectSha256)) ||
+    !publicString(record.storageObjectKey) ||
+    !Number.isSafeInteger(storageObjectByteSize) ||
+    storageObjectByteSize < 0
+  ) {
+    return record;
+  }
+  return {
+    ...record,
+    storageObject: {
+      id: record.storageObjectId,
+      sha256: record.storageObjectSha256,
+      objectKey: record.storageObjectKey,
+      byteSize: storageObjectByteSize,
+      contentType: record.storageObjectContentType,
+      createdAt: record.storageObjectCreatedAt,
+      verifiedAt: record.storageObjectVerifiedAt
+    }
+  };
 }
 
 function publicMember(member, actor = null) {
@@ -3838,11 +4023,13 @@ function publicMember(member, actor = null) {
   const remark = actor?.id && actor.id !== member.id && member.kind === "human"
     ? publicString(member.remark)
     : "";
-  const displayName = systemIdentity?.displayName ?? (remark || nickname || publicString(member.githubLogin) || "成员");
+  const displayName = systemIdentity?.displayName ?? (member.kind === "human"
+    ? remark || nickname || publicString(member.githubLogin) || "成员"
+    : publicString(member.displayName) || "Bot");
   const canStartDirectConversation = Boolean(
     actor &&
     actor.id !== member.id &&
-    canStartDirectConversationWith(member) &&
+    canStartDirectConversationWith(member, actor) &&
     hasCapability(actor.role, "conversation.create_direct")
   );
   return {
@@ -4434,6 +4621,9 @@ async function canSeeEvent(db, actor, event) {
   if (event.type === "conversation.notification_updated") {
     return event.targetType === "user" && event.targetId === actor.id;
   }
+  if (event.type === "emote.library.updated") {
+    return event.targetType === "user" && event.targetId === actor.id;
+  }
   if (event.targetType === "attachment" && event.targetId) {
     return await canSeeAttachmentEvent(db, actor, event);
   }
@@ -4577,6 +4767,16 @@ async function publicWorkspaceEventPayload(db, actor, type, payload) {
       conversation: await publicConversationPayloadForActor(db, actor, payload.conversation || payload.conversationId)
     });
   }
+  if (type === "emote.library.updated") {
+    return removeUndefinedValues({
+      userId: normalizeString(payload.userId),
+      collectionId: normalizeString(payload.collectionId),
+      sourceRevision: Number.isSafeInteger(Number(payload.sourceRevision))
+        ? Number(payload.sourceRevision)
+        : undefined,
+      status: normalizeString(payload.status)
+    });
+  }
   if (type === "card.created" || type === "card.updated" || type === "card.invalidated") {
     return removeUndefinedValues({
       cardId: normalizeString(payload.cardId),
@@ -4703,6 +4903,7 @@ async function publicMessagePayloadForActor(db, actor, message) {
         hiddenByCurrentUser: hiddenMessageIds.has(row.id)
       }, actor, db);
     }
+    if (typeof message === "string") return null;
   }
   return await publicMessage(message, actor, db);
 }
@@ -4745,9 +4946,15 @@ async function getMemberForViewer(db, userId, viewerUserId) {
       u.search_discoverable AS searchDiscoverable,
       u.kind,
       sm.role,
+      custom_bot.id AS customBotId,
+      custom_bot.owner_user_id AS customBotOwnerUserId,
+      custom_bot.status AS customBotStatus,
+      custom_bot_settings.allow_direct AS customBotAllowDirect,
       sm.joined_at AS joinedAt
     FROM users u
     INNER JOIN space_members sm ON sm.user_id = u.id
+    LEFT JOIN workspace_agent_bots custom_bot ON custom_bot.bot_user_id = u.id AND custom_bot.space_id = sm.space_id
+    LEFT JOIN workspace_agent_bot_settings custom_bot_settings ON custom_bot_settings.bot_id = custom_bot.id AND custom_bot_settings.space_id = sm.space_id
     LEFT JOIN user_remarks ur ON ur.owner_user_id = ? AND ur.target_user_id = u.id
     WHERE u.id = ? AND sm.space_id = ? AND sm.removed_at IS NULL
   `).get(viewerUserId, userId, DEFAULT_SPACE_ID);
@@ -4796,9 +5003,15 @@ async function getUserWithRole(db, userId) {
       u.search_discoverable AS searchDiscoverable,
       u.kind,
       sm.role,
+      custom_bot.id AS customBotId,
+      custom_bot.owner_user_id AS customBotOwnerUserId,
+      custom_bot.status AS customBotStatus,
+      custom_bot_settings.allow_direct AS customBotAllowDirect,
       sm.joined_at AS joinedAt
     FROM users u
     INNER JOIN space_members sm ON sm.user_id = u.id
+    LEFT JOIN workspace_agent_bots custom_bot ON custom_bot.bot_user_id = u.id AND custom_bot.space_id = sm.space_id
+    LEFT JOIN workspace_agent_bot_settings custom_bot_settings ON custom_bot_settings.bot_id = custom_bot.id AND custom_bot_settings.space_id = sm.space_id
     WHERE u.id = ? AND sm.space_id = ? AND sm.removed_at IS NULL
   `).get(userId, DEFAULT_SPACE_ID);
 }
@@ -4834,10 +5047,18 @@ async function ensureGroupParticipantMember(db, userId) {
   return user;
 }
 
-function canStartDirectConversationWith(member) {
+function canStartDirectConversationWith(member, actor = null) {
   const systemIdentity = getSystemIdentityDefinition(member);
   if (systemIdentity) {
     return getSystemIdentityConversationCapabilities(systemIdentity).canStartDirectConversation;
+  }
+  if (member?.kind === "bot") {
+    return Boolean(
+      actor?.id &&
+      member.customBotOwnerUserId === actor.id &&
+      member.customBotStatus === "active" &&
+      member.customBotAllowDirect
+    );
   }
   return member?.kind === "human" && member.role !== "auditor";
 }

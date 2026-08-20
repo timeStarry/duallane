@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_SPACE_ID } from "./db.mjs";
 import { openTestDatabase } from "./test-database.mjs";
+import { createStructuredMessage } from "./workspace.mjs";
 import {
   archiveTopic,
   closeTopic,
@@ -107,6 +108,58 @@ describe("workspace topic core", () => {
       actorId: "usr_topic_alice", conversationId: "conv_topic_group",
       source: "#[设置页](先讨论资料页，再讨论通知页。)", idempotencyKey: "client-1", allowSyncToGroup: true
     })).rejects.toMatchObject({ code: "topic.idempotency_conflict" });
+  });
+
+  it("atomically converts valid group-message syntax into a topic creation card", async () => {
+    const { db } = await fixture();
+    const input = {
+      actorId: "usr_topic_alice",
+      conversationId: "conv_topic_group",
+      clientMessageId: "message-topic-create-1",
+      content: {
+        format: "duallane.message+json;v=1",
+        plainText: "#[设置页优化](希望拆分资料和通知设置。)",
+        blocks: [{ type: "text", text: "#[设置页优化](希望拆分资料和通知设置。)" }]
+      },
+      createTopicFromMessage: (topicInput) => createTopic(db, request, topicInput)
+    };
+    const first = await createStructuredMessage(db, request, input);
+    const replay = await createStructuredMessage(db, request, input);
+    expect(replay.id).toBe(first.id);
+    expect(first.clientMessageId).toBe(input.clientMessageId);
+    expect(first.content.blocks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "card", cardType: "workspace.topic-created" })
+    ]));
+    expect(db.prepare("SELECT COUNT(*) AS count FROM topics").get().count).toBe(1);
+    expect(db.prepare("SELECT allow_sync_to_group AS allowSyncToGroup FROM topics").get())
+      .toEqual({ allowSyncToGroup: 1 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM messages WHERE topic_id IS NULL").get().count).toBe(1);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM messages WHERE topic_id IS NOT NULL").get().count).toBe(1);
+    expect(db.prepare("SELECT content_json AS contentJson FROM messages WHERE topic_id IS NULL").get().contentJson)
+      .not.toContain("#[设置页优化](希望拆分资料和通知设置。)");
+
+    await expect(createStructuredMessage(db, request, {
+      ...input,
+      content: {
+        ...input.content,
+        plainText: "#[设置页优化](另一段正文)",
+        blocks: [{ type: "text", text: "#[设置页优化](另一段正文)" }]
+      }
+    })).rejects.toMatchObject({ code: "topic.idempotency_conflict" });
+
+    const malformed = await createStructuredMessage(db, request, {
+      ...input,
+      clientMessageId: "message-topic-malformed",
+      content: {
+        ...input.content,
+        plainText: "#[未闭合](按普通消息保留",
+        blocks: [{ type: "text", text: "#[未闭合](按普通消息保留" }]
+      }
+    });
+    expect(malformed.plainText).toBe("#[未闭合](按普通消息保留");
+    expect(db.prepare("SELECT COUNT(*) AS count FROM topics").get().count).toBe(1);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'topic.create' AND result = 'success'").get().count)
+      .toBe(1);
   });
 
   it("rejects direct conversations and parser failures without storing partial content", async () => {

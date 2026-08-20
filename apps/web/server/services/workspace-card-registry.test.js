@@ -12,5 +12,11 @@ describe("workspace card registry", () => {
       cardType: "workspace.topic-message-synced",
       schemaVersion: 1
     });
+    expect(registry.get("feishu.adaptive.v1", 1)).toMatchObject({
+      cardType: "feishu.adaptive.v1",
+      schemaVersion: 1,
+      allowPublicUrls: true
+    });
+    expect(registry.getAction("feishu.adaptive.v1", 1, "confirm")).toMatchObject({ id: "confirm" });
   });
 });

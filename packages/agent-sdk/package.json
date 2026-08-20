@@ -1,0 +1,21 @@
+{
+  "name": "@duallane/agent-sdk",
+  "version": "0.15.0",
+  "description": "Versioned JavaScript client for the DualLane Agent Bot Gateway v1.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.js",
+    "./openclaw": "./src/openclaw.js"
+  },
+  "scripts": {
+    "lint": "node --check src/index.js && node --check src/openclaw.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
+  }
+}

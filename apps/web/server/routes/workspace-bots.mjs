@@ -135,6 +135,14 @@ export function registerWorkspaceAgentBotRoutes({
     })
   })));
 
+  app.patch("/api/workspace/bots/:botId/context-grants/:conversationId", call(async (request) => ({
+    grant: await service.updateContextGrant(await actor(request), request.params.botId, {
+      ...(request.body || {}),
+      conversationId: request.params.conversationId,
+      spaceId: await space(request)
+    })
+  })));
+
   app.post("/api/workspace/bots/:botId/tokens", {
     attachValidation: true,
     schema: {

@@ -1,9 +1,12 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SPACE_ID, SEEDED_OWNER_EMAIL, SEEDED_OWNER_GITHUB_LOGIN } from "./db.mjs";
 import { openTestDatabase } from "./test-database.mjs";
+import { createWorkspaceAgentBotService } from "./workspace-agent-bots.mjs";
 import { DAILY_QUOTA_BYTES } from "./quota.mjs";
 import { BEACON_IDENTITY, BEACON_USER_ID, ECHO_IDENTITY } from "./system-identities.mjs";
 import {
@@ -20,6 +23,7 @@ import {
   createWorkspaceSession,
   failUpload,
   getConversationDetails,
+  getDownloadableAttachment,
   getManagedMemberVisibility,
   getProfileAvatar,
   getSessionUserId,
@@ -62,6 +66,8 @@ import {
   WorkspacePermissionError,
   WorkspaceValidationError
 } from "./workspace.mjs";
+import { createWorkspaceObjectStore } from "./workspace-object-store.mjs";
+import { createWorkspaceStorageObjectRegistry } from "./workspace-storage-objects.mjs";
 
 const request = {
   id: "test-request",
@@ -293,6 +299,78 @@ describe("workspace service", () => {
       userId: BEACON_USER_ID,
       remark: "不允许"
     })).rejects.toMatchObject({ code: "member.remark_unsupported" });
+  });
+
+  it("reuses one content object across an attachment and avatar until the last service reference is released", async () => {
+    const bytes = Buffer.from("shared attachment and avatar bytes", "utf8");
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const objectStore = await createWorkspaceObjectStore({
+      dataDir,
+      env: { WORKSPACE_STORAGE_DRIVER: "local" }
+    });
+    const storageObjects = createWorkspaceStorageObjectRegistry({ db, objectStore });
+
+    await setOwnAvatar(db, request, {
+      actorId: "usr_owner",
+      storageKey: "profile-avatars/usr_owner/shared.webp",
+      version: "shared",
+      acquireStorageObject: async () => await storageObjects.acquireAndBind({
+        kind: "avatar",
+        resourceId: "usr_owner",
+        sha256,
+        byteSize: bytes.byteLength,
+        contentType: "image/webp",
+        stream: Readable.from(bytes),
+        cleanupPrevious: false
+      })
+    });
+    const upload = await reserveUpload(db, request, {
+      actorId: "usr_owner",
+      fileName: "shared.webp",
+      mimeType: "image/webp",
+      byteSize: bytes.byteLength,
+      visibility: "space"
+    });
+    await completeUpload(db, request, {
+      actorId: "usr_owner",
+      uploadId: upload.id,
+      storageVerifiedByteSize: bytes.byteLength,
+      acquireStorageObject: async (attachment) => await storageObjects.acquireAndBind({
+        kind: "attachment",
+        resourceId: attachment.id,
+        sha256,
+        byteSize: bytes.byteLength,
+        contentType: attachment.mimeType,
+        stream: Readable.from(bytes),
+        cleanupPrevious: false
+      })
+    });
+
+    const references = db.prepare(`
+      SELECT u.avatar_storage_object_id AS avatarObjectId, a.storage_object_id AS attachmentObjectId
+      FROM users u, attachments a
+      WHERE u.id = 'usr_owner' AND a.id = ?
+    `).get(upload.attachment.id);
+    expect(references.avatarObjectId).toBe(references.attachmentObjectId);
+    expect(await storageObjects.countReferences(references.avatarObjectId)).toBe(2);
+    expect((await getProfileAvatar(db, "usr_owner", "usr_owner", "shared")).storageObject)
+      .toMatchObject({ id: references.avatarObjectId, sha256, byteSize: bytes.byteLength });
+    expect((await getDownloadableAttachment(db, request, "usr_owner", upload.attachment.id)).storageObject)
+      .toMatchObject({ id: references.attachmentObjectId, sha256, byteSize: bytes.byteLength });
+
+    await removeAttachment(db, request, {
+      actorId: "usr_owner",
+      attachmentId: upload.attachment.id,
+      releaseStorageObject: async (attachment) => {
+        expect(attachment.storageObjectId).toBe(references.attachmentObjectId);
+        expect(await storageObjects.cleanupIfUnreferenced(attachment.storageObjectId))
+          .toEqual({ deleted: false, references: 1 });
+      }
+    });
+    const removedAvatar = await removeOwnAvatar(db, request, { actorId: "usr_owner" });
+    expect(removedAvatar.previousStorageObjectId).toBe(references.avatarObjectId);
+    expect(await storageObjects.cleanupIfUnreferenced(removedAvatar.previousStorageObjectId))
+      .toEqual({ deleted: true, references: 0 });
   });
 
   it("keeps Beacon visible without grants and isolates one direct conversation per user", async () => {
@@ -1813,6 +1891,47 @@ describe("workspace service", () => {
       LIMIT 1
     `).get(member.id);
     expect(audit).toEqual({ result: "rejected", reason: "insufficient permission" });
+  });
+
+  it("allows only an owner to open a direct conversation with their active custom Bot", async () => {
+    const botService = createWorkspaceAgentBotService({ db });
+    const bot = await botService.createBot("usr_owner", { spaceId: DEFAULT_SPACE_ID, name: "Direct helper" });
+    const ownerProjection = (await listMembers(db, "usr_owner")).find((member) => member.id === bot.botUserId);
+    expect(ownerProjection).toMatchObject({
+      kind: "bot",
+      displayName: "Direct helper",
+      capabilities: { canStartDirectConversation: true }
+    });
+    expect(JSON.stringify(ownerProjection)).not.toContain("__duallane_bot_");
+
+    const direct = await createWorkspaceConversation(db, request, {
+      actorId: "usr_owner",
+      type: "direct",
+      targetUserId: bot.botUserId
+    });
+    expect(direct).toMatchObject({
+      type: "direct",
+      otherMember: { id: bot.botUserId, kind: "bot", displayName: "Direct helper" }
+    });
+    expect(db.prepare(`SELECT allow_trigger AS allowTrigger, allow_context AS allowContext, granted_by AS grantedBy
+      FROM workspace_agent_bot_context_grants WHERE bot_id = ? AND conversation_id = ?`).get(bot.id, direct.id))
+      .toEqual({ allowTrigger: 1, allowContext: 0, grantedBy: "usr_owner" });
+
+    const outsider = (await ensureFixtureGroupMember(db)).id;
+    await expect(createWorkspaceConversation(db, request, {
+      actorId: outsider,
+      type: "direct",
+      targetUserId: bot.botUserId
+    })).rejects.toMatchObject({ code: "conversation.invalid_target" });
+
+    await botService.pauseBot("usr_owner", bot.id, DEFAULT_SPACE_ID);
+    await expect(createWorkspaceConversation(db, request, {
+      actorId: "usr_owner",
+      type: "direct",
+      targetUserId: bot.botUserId
+    })).rejects.toMatchObject({ code: "conversation.invalid_target" });
+    expect((await listMembers(db, "usr_owner")).find((member) => member.id === bot.botUserId))
+      .toMatchObject({ capabilities: { canStartDirectConversation: false } });
   });
 
   it("rolls back direct conversation creation when audit persistence fails", async () => {

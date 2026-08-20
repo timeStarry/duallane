@@ -20,6 +20,7 @@ export const ECHO_SOLICITATION_CARD_TYPE = "echo.solicitation";
 export const ECHO_SOLICITATION_CARD_SCHEMA_VERSION = 1;
 export const ECHO_REQUIREMENT_CARD_TYPE = "echo.request";
 export const ECHO_REQUIREMENT_STATUS_CARD_TYPE = "echo.request-status";
+export const ECHO_RELEASE_CARD_TYPE = "echo.release";
 export const ECHO_DELIVERY_SOURCE_KIND = "echo";
 
 export class EchoDeliveryError extends Error {
@@ -54,6 +55,9 @@ export function createEchoDeliveryService(options = {}) {
     ?? null;
   const requirementService = options.requirementService
     ?? options.requirements
+    ?? null;
+  const releaseService = options.releaseService
+    ?? options.releases
     ?? null;
   const cardService = options.cardService
     ?? options.cards
@@ -202,6 +206,70 @@ export function createEchoDeliveryService(options = {}) {
     return summarizeResults(results, "requirement", publicId);
   }
 
+  async function syncRelease(input = {}) {
+    const version = normalizeReleaseVersion(input.version);
+    const rows = await loadReleaseDeliveries(version, input.recipientUserId);
+    const results = [];
+    for (const row of rows) {
+      results.push(await deliverReleaseDelivery(row, input));
+    }
+    return summarizeResults(results, "release", version);
+  }
+
+  async function deliverReleaseDelivery(row, input = {}) {
+    return withKeyLock(`release:${row.deliveryId}`, async () => {
+      const current = await readReleaseDelivery(row.deliveryId);
+      if (!current) return resultSkipped(row, "echo.delivery_not_found");
+      if (!await isHumanRecipient(current.recipientUserId)) {
+        await markReleaseDelivery(current.deliveryId, "skipped", "echo.recipient_ineligible");
+        return resultSkipped(current, "echo.recipient_ineligible");
+      }
+      if (current.deliveryStatus === "sent" && !input.force) {
+        const existingCard = await findReleaseDeliveryCard(current);
+        return resultSent(current, existingCard?.cardId, existingCard?.messageId, true);
+      }
+      if (current.deliveryStatus === "failed" && !isRetryDue(current, now())) {
+        return resultFailed(current, current.lastErrorCode || "echo.delivery_retry_pending");
+      }
+      if (Number(current.attemptCount) >= maxAttempts) {
+        return resultFailed(current, current.lastErrorCode || "echo.delivery_attempts_exhausted");
+      }
+
+      const recipientId = current.recipientUserId;
+      let conversation;
+      try {
+        conversation = await ensureEchoDirectConversation(recipientId, input);
+      } catch (error) {
+        return failReleaseDelivery(current, error);
+      }
+      let projection;
+      try {
+        if (!releaseService?.projectCard) throw new EchoDeliveryError("echo.release_unavailable", "版本发布服务尚未初始化");
+        projection = await releaseService.projectCard({ actorId: recipientId, version: current.version, request: input.request });
+      } catch (error) {
+        return failReleaseDelivery(current, error);
+      }
+      try {
+        const delivered = await persistProjectionAndMessage({
+          kind: "release",
+          resourceId: current.version,
+          resourceInternalId: current.publicationId,
+          domainRevision: 1,
+          recipientId,
+          conversationId: conversation.id,
+          projection,
+          sourceKey: releaseSourceKey(current, recipientId),
+          clientMessageId: releaseClientMessageId(current, recipientId),
+          input
+        });
+        await markReleaseDelivery(current.deliveryId, "sent", null);
+        return resultSent(current, delivered.card.id, delivered.message?.id, delivered.replayed);
+      } catch (error) {
+        return failReleaseDelivery(current, error);
+      }
+    });
+  }
+
   async function deliverRequirementProjection({ requirement, recipientId, cardType, input = {} }) {
     const key = `requirement:${requirement.id}:${recipientId}:${cardType}`;
     return withKeyLock(key, async () => {
@@ -240,7 +308,7 @@ export function createEchoDeliveryService(options = {}) {
 
   async function syncMember(userId, input = {}) {
     const recipientId = normalizeIdentifier(userId);
-    if (!await isHumanRecipient(recipientId)) return { recipientId, solicitations: [], requirements: [] };
+    if (!await isHumanRecipient(recipientId)) return { recipientId, solicitations: [], requirements: [], releases: [] };
     await ensureSolicitationDeliveryRowsForMember(recipientId);
     const solicitationRows = await loadSolicitationDeliveries(null, recipientId);
     const solicitations = [];
@@ -262,11 +330,11 @@ export function createEchoDeliveryService(options = {}) {
         }
       }
     }
-    return { recipientId, solicitations, requirements };
+    return { recipientId, solicitations, requirements, releases: [] };
   }
 
   async function recover(input = {}) {
-    const summary = { solicitations: [], requirements: [] };
+    const summary = { solicitations: [], requirements: [], releases: [] };
     if (await hasTable("echo_solicitation_deliveries")) {
       const rows = await db.prepare(`
         SELECT d.id AS deliveryId
@@ -295,6 +363,19 @@ export function createEchoDeliveryService(options = {}) {
         } catch (error) {
           summary.requirements.push({ publicId: row.publicId, status: "failed", errorCode: normalizeErrorCode(error) });
         }
+      }
+    }
+    if (await hasTable("echo_release_deliveries")) {
+      const rows = await db.prepare(`
+        SELECT id AS deliveryId
+        FROM echo_release_deliveries
+        WHERE space_id = ? AND status IN ('pending', 'failed')
+        ORDER BY updated_at ASC, id ASC
+        LIMIT ?
+      `).all(spaceId, normalizeLimit(input.releaseLimit, 200));
+      for (const candidate of rows) {
+        const row = await readReleaseDelivery(candidate.deliveryId);
+        if (row) summary.releases.push(await deliverReleaseDelivery(row, input));
       }
     }
     return summary;
@@ -365,9 +446,11 @@ export function createEchoDeliveryService(options = {}) {
     deliverSolicitation: syncSolicitation,
     deliverSolicitationById: syncSolicitationById,
     deliverRequirement: syncRequirement,
+    deliverRelease: syncRelease,
     syncSolicitation,
     syncSolicitationById,
     syncRequirement,
+    syncRelease,
     syncMember,
     backfillMember: syncMember,
     recover,
@@ -886,6 +969,64 @@ export function createEchoDeliveryService(options = {}) {
     return rows.map(normalizeSolicitationDelivery);
   }
 
+  async function loadReleaseDeliveries(version = null, recipientId = null) {
+    if (!(await hasTable("echo_release_deliveries"))) return [];
+    const where = ["d.space_id = ?"];
+    const values = [spaceId];
+    if (version) { where.push("p.version = ?"); values.push(version); }
+    if (recipientId) { where.push("d.recipient_user_id = ?"); values.push(normalizeIdentifier(recipientId)); }
+    const rows = await db.prepare(`
+      SELECT d.id AS deliveryId, d.publication_id AS publicationId,
+        d.recipient_user_id AS recipientUserId, d.status AS deliveryStatus,
+        d.attempt_count AS attemptCount, d.last_error_code AS lastErrorCode,
+        d.delivered_at AS deliveredAt, d.created_at AS createdAt, d.updated_at AS updatedAt,
+        p.version, p.published_at AS publishedAt
+      FROM echo_release_deliveries d
+      INNER JOIN echo_release_publications p ON p.id = d.publication_id AND p.space_id = d.space_id
+      WHERE ${where.join(" AND ")}
+      ORDER BY d.created_at ASC, d.id ASC
+    `).all(...values);
+    return rows.map((row) => ({
+      ...row,
+      attemptCount: Number(row.attemptCount) || 0
+    }));
+  }
+
+  async function readReleaseDelivery(deliveryId) {
+    const rows = await loadReleaseDeliveries();
+    return rows.find((row) => row.deliveryId === deliveryId) ?? null;
+  }
+
+  async function markReleaseDelivery(deliveryId, status, errorCode) {
+    const timestamp = toIso(now());
+    await db.prepare(`
+      UPDATE echo_release_deliveries
+      SET status = ?, attempt_count = attempt_count + 1, last_error_code = ?,
+        delivered_at = CASE WHEN ? = 'sent' THEN COALESCE(delivered_at, ?) ELSE delivered_at END,
+        updated_at = ?
+      WHERE id = ? AND space_id = ?
+    `).run(status, errorCode ? String(errorCode).slice(0, 128) : null, status, timestamp, timestamp, deliveryId, spaceId);
+  }
+
+  async function failReleaseDelivery(row, error) {
+    const code = normalizeErrorCode(error);
+    await markReleaseDelivery(row.deliveryId, "failed", code);
+    return resultFailed(row, code);
+  }
+
+  async function findReleaseDeliveryCard(row) {
+    try {
+      return await db.prepare(`
+        SELECT id AS cardId, revision
+        FROM workspace_cards
+        WHERE space_id = ? AND source_kind = 'echo' AND source_id = ? AND card_type = ?
+      `).get(spaceId, releaseSourceKey(row, row.recipientUserId), ECHO_RELEASE_CARD_TYPE);
+    } catch (error) {
+      if (isMissingTableError(error)) return null;
+      throw error;
+    }
+  }
+
   async function readSolicitationDelivery(deliveryId) {
     const rows = await loadSolicitationDeliveries();
     return rows.find((row) => row.deliveryId === deliveryId) ?? null;
@@ -982,7 +1123,9 @@ export function createEchoDeliveryService(options = {}) {
     const block = projection.block ?? projection.card ?? projection;
     const payload = projection.payload ?? {};
     if (!block || typeof block !== "object") throw new EchoDeliveryError("echo.card_projection_invalid", "Echo 卡片引用无效", 422);
-    const defaultFallback = kind === "requirement-status"
+    const defaultFallback = kind === "release"
+      ? `DualLane v${resourceId} 版本更新`
+      : kind === "requirement-status"
       ? `回声需求 ${resourceId} 状态已更新`
       : `回声${kind === "solicitation" ? "征集" : "需求"} ${resourceId}`;
     // Requirement bodies are private. Keep their message fallback metadata
@@ -1018,6 +1161,14 @@ export function createEchoDeliveryService(options = {}) {
     return `echo:req:${requirement.id}:${recipientId}:${cardType}:r${Number(requirement.revision) || 1}`;
   }
 
+  function releaseSourceKey(row, recipientId) {
+    return `release:${row.publicationId}:${recipientId}`;
+  }
+
+  function releaseClientMessageId(row, recipientId) {
+    return `echo:release:${row.publicationId}:${recipientId}`;
+  }
+
   function directKey(userId) {
     return [ECHO_USER_ID, userId].sort().join(":");
   }
@@ -1025,6 +1176,7 @@ export function createEchoDeliveryService(options = {}) {
   function resourceTypeFor(kind) {
     if (kind === "solicitation") return "echo.solicitation";
     if (kind === "requirement" || kind === "requirement-status") return "echo.requirement";
+    if (kind === "release") return "echo.release";
     return "echo";
   }
 
@@ -1071,7 +1223,7 @@ export function createEchoDeliveryService(options = {}) {
   function summarizeResults(results, type, publicId) {
     return {
       type,
-      publicId,
+      ...(type === "release" ? { version: publicId } : { publicId }),
       results,
       sent: results.filter((item) => item.status === "sent").length,
       failed: results.filter((item) => item.status === "failed").length,
@@ -1087,6 +1239,12 @@ export function createEchoDeliveryService(options = {}) {
       attemptCount: Number(row.attemptCount) || 0,
       revision: Number(row.revision) || 1
     };
+  }
+
+  function normalizeReleaseVersion(value) {
+    const match = typeof value === "string" ? value.trim().match(/^(?:v)?(\d+\.\d+\.\d+)$/i) : null;
+    if (!match) throw new EchoDeliveryError("echo.release_version_invalid", "版本号无效", 422);
+    return match[1];
   }
 
   function isRetryDue(row, current) {

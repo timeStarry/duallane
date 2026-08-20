@@ -120,6 +120,53 @@ describe("workspace foundation route integration", () => {
       result: { type: "help", botUserId: "usr_system_echo" }
     });
 
+    const release = await fixture.app.inject({
+      method: "POST",
+      url: "/api/workspace/interactions/commands",
+      headers: { cookie },
+      payload: {
+        conversationId: deliveredMessage.conversationId,
+        botUserId: "usr_system_echo",
+        source: "/release 0.15.1",
+        mentionedBotIds: [],
+        clientInvocationId: "foundation-echo-release-1"
+      }
+    });
+    expect(release.statusCode).toBe(200);
+    expect(release.json().command).toMatchObject({
+      result: {
+        type: "release-published",
+        version: "0.15.1",
+        recipientCount: 1,
+        sentCount: 1,
+        pendingCount: 0
+      }
+    });
+    expect(fixture.db.prepare("SELECT COUNT(*) AS count FROM workspace_cards WHERE card_type = 'echo.release'").get().count).toBe(1);
+    const releaseMessage = fixture.db.prepare(`
+      SELECT plain_text AS plainText, content_json AS contentJson
+      FROM messages
+      WHERE author_id = 'usr_system_echo' AND content_json LIKE '%echo.release%'
+    `).get();
+    expect(releaseMessage.plainText).toContain("v0.15.1");
+    expect(releaseMessage.contentJson).not.toContain("guide_hash");
+
+    const repeatedRelease = await fixture.app.inject({
+      method: "POST",
+      url: "/api/workspace/interactions/commands",
+      headers: { cookie },
+      payload: {
+        conversationId: deliveredMessage.conversationId,
+        botUserId: "usr_system_echo",
+        source: "/release v0.15.1",
+        mentionedBotIds: [],
+        clientInvocationId: "foundation-echo-release-2"
+      }
+    });
+    expect(repeatedRelease.statusCode).toBe(200);
+    expect(repeatedRelease.json().command.result).toMatchObject({ replayed: true, sentCount: 1 });
+    expect(fixture.db.prepare("SELECT COUNT(*) AS count FROM messages WHERE author_id = 'usr_system_echo' AND content_json LIKE '%echo.release%'").get().count).toBe(1);
+
     const topics = await fixture.app.inject({
       method: "GET",
       url: "/api/workspace/topics",

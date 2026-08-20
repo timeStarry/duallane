@@ -230,6 +230,27 @@ describe("workspace Agent Bot management routes", () => {
       payload: { name: "Settings Bot" }
     });
     const botId = created.json().bot.id;
+    const identitySettings = await fixture.app.inject({
+      method: "PATCH",
+      url: `/api/workspace/bots/${botId}/settings`,
+      headers: { "x-user": "usr_owner" },
+      payload: {
+        description: "Release coordination",
+        welcomeMessage: "Ready to help",
+        showCreator: true,
+        visibilityPolicy: "private",
+        allowedMemberIds: []
+      }
+    });
+    expect(identitySettings.statusCode).toBe(200);
+    expect(identitySettings.json().settings).toMatchObject({
+      description: "Release coordination",
+      welcomeMessage: "Ready to help",
+      showCreator: true,
+      visibilityPolicy: "private",
+      allowedMemberIds: []
+    });
+    expect(fixture.db.prepare("SELECT COUNT(*) AS count FROM workspace_agent_bot_visibility_members WHERE bot_id = ?").get(botId).count).toBe(0);
     const settings = await fixture.app.inject({
       method: "PATCH",
       url: `/api/workspace/bots/${botId}/settings`,

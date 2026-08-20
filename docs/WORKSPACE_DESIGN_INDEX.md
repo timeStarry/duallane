@@ -169,7 +169,7 @@ Required daily-use behavior:
 
 These are explicitly not required for the first full Workspace loop:
 
-- AI bot execution.
+- DualLane 托管的模型推理和托管 Agent 执行；外部 Agent Bot Gateway 已在 v0.15 实现。
 - Full-text search.
 - Message edit/delete UI.
 - Reactions.

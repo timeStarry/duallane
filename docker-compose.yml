@@ -140,6 +140,43 @@ services:
         mode: 0600
     restart: "no"
 
+  storage-dedupe:
+    profiles: ["storage-dedupe"]
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: ["pnpm", "--filter", "@duallane/web", "storage:dedupe"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DUALLANE_DATA_DIR: /app/data
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB:-duallane}
+      PGUSER: ${POSTGRES_USER:-duallane}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-replace-this-before-production}
+      DATABASE_POOL_MAX: "2"
+      DATABASE_SSL: "false"
+      WORKSPACE_STORAGE_DRIVER: ${WORKSPACE_STORAGE_DRIVER:-local}
+      WORKSPACE_S3_ENDPOINT: ${WORKSPACE_S3_ENDPOINT:-http://100.99.0.4:9000}
+      WORKSPACE_S3_PUBLIC_ENDPOINT: ${WORKSPACE_S3_PUBLIC_ENDPOINT:-https://fs.tsio.top}
+      WORKSPACE_S3_BUCKET: ${WORKSPACE_S3_BUCKET:-duallane}
+      WORKSPACE_S3_REGION: ${WORKSPACE_S3_REGION:-us-east-1}
+      WORKSPACE_S3_CREDENTIALS_FILE: /run/secrets/workspace-s3
+      WORKSPACE_S3_SIGNED_URL_TTL_SECONDS: ${WORKSPACE_S3_SIGNED_URL_TTL_SECONDS:-300}
+      WORKSPACE_STORAGE_LOCAL_READ_FALLBACK: ${WORKSPACE_STORAGE_LOCAL_READ_FALLBACK:-true}
+      WORKSPACE_STORAGE_LOCAL_MIRROR_WRITE: ${WORKSPACE_STORAGE_LOCAL_MIRROR_WRITE:-true}
+      WORKSPACE_STORAGE_DEDUPE_RUN_ID: ${WORKSPACE_STORAGE_DEDUPE_RUN_ID:-}
+      WORKSPACE_STORAGE_DEDUPE_MODE: ${WORKSPACE_STORAGE_DEDUPE_MODE:-backfill}
+    volumes:
+      - duallane-data:/app/data
+    secrets:
+      - source: workspace-s3
+        target: workspace-s3
+        mode: 0600
+    restart: "no"
+
   v2ray-config:
     profiles: ["github-proxy-refresh"]
     image: ${NODE_IMAGE:-docker.m.daocloud.io/library/node:22-alpine}

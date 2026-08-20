@@ -15,9 +15,17 @@ import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { WorkspaceError } from "./workspace.mjs";
 import {
+  ensureContentAddressedStream,
+  normalizeWorkspaceObjectSha256,
+  readContentAddressedBytes,
+  removeContentAddressedObject,
   removeStoredAttachment,
+  resolveWorkspaceContentObjectKey,
+  resolveWorkspaceStoragePath,
   saveUploadStream,
-  statStoredAttachment
+  statContentAddressedObject,
+  statStoredAttachment,
+  workspaceContentObjectKey
 } from "./workspace-storage.mjs";
 import { removeProfileAvatar as removeLocalProfileAvatar, resolveProfileAvatar } from "./profile-avatar.mjs";
 
@@ -129,20 +137,63 @@ export function workspaceArchiveObjectKey({ runId, sha256 }) {
   return `workspace/migration-archive/${safeSegment(runId)}/${digest}`;
 }
 
+export { workspaceContentObjectKey };
+
 function createLocalWorkspaceObjectStore(dataDir) {
   return {
     driver: "local",
     signedUrlTtlSeconds: 0,
     async assertReady() {},
     async close() {},
+    async ensureObject(input) {
+      const stored = await ensureContentAddressedStream(dataDir, input);
+      return { ...stored, objectKey: stored.storageKey, backend: "local" };
+    },
+    async openObject(object) {
+      const stored = await statContentAddressedObject(dataDir, object);
+      return { stream: createReadStream(stored.path), byteSize: stored.byteSize, sha256: stored.sha256 };
+    },
+    async getObjectDelivery(object) {
+      const stored = await statContentAddressedObject(dataDir, object);
+      return { kind: "stream", path: stored.path, byteSize: stored.byteSize };
+    },
+    async readObject(object, maxBytes = Number.MAX_SAFE_INTEGER) {
+      return await readContentAddressedBytes(dataDir, object, maxBytes);
+    },
+    async deleteObject(object) {
+      const removed = await removeContentAddressedObject(dataDir, object);
+      return { objectKey: removed.storageKey };
+    },
+    async openLegacyObject(record) {
+      return await openLocalLegacyObject(dataDir, record);
+    },
+    async deleteLegacyObject(record) {
+      if (record?.storageKey) await removeStoredAttachment(dataDir, record.storageKey);
+    },
     async saveAttachment({ attachment, stream }) {
       return await saveUploadStream(dataDir, attachment.storageKey, stream, attachment.byteSize);
     },
     async statAttachment(attachment) {
+      if (attachment?.storageObject) {
+        try {
+          const stored = await statContentAddressedObject(dataDir, attachment.storageObject);
+          return { ...stored, objectKey: attachment.storageObject.objectKey, backend: "local" };
+        } catch (error) {
+          if (!isStorageMissing(error)) throw error;
+        }
+      }
       const stored = await statStoredAttachment(dataDir, attachment.storageKey, attachment.byteSize);
       return { ...stored, backend: "local" };
     },
     async getAttachmentDelivery(attachment) {
+      if (attachment?.storageObject) {
+        try {
+          const stored = await statContentAddressedObject(dataDir, attachment.storageObject);
+          return { kind: "stream", path: stored.path, byteSize: stored.byteSize };
+        } catch (error) {
+          if (!isStorageMissing(error)) throw error;
+        }
+      }
       const stored = await statStoredAttachment(dataDir, attachment.storageKey, attachment.byteSize);
       return { kind: "stream", path: stored.path, byteSize: stored.byteSize };
     },
@@ -150,6 +201,13 @@ function createLocalWorkspaceObjectStore(dataDir) {
       await removeStoredAttachment(dataDir, attachment.storageKey);
     },
     async readAttachmentBytes(attachment, maxBytes) {
+      if (attachment?.storageObject) {
+        try {
+          return await readContentAddressedBytes(dataDir, attachment.storageObject, maxBytes);
+        } catch (error) {
+          if (!isStorageMissing(error)) throw error;
+        }
+      }
       const stored = await statStoredAttachment(dataDir, attachment.storageKey, attachment.byteSize);
       assertReadableSize(stored.byteSize, maxBytes);
       return await readFile(stored.path);
@@ -158,6 +216,14 @@ function createLocalWorkspaceObjectStore(dataDir) {
       return stored;
     },
     async getProfileAvatarDelivery(avatar) {
+      if (avatar?.storageObject) {
+        try {
+          const stored = await statContentAddressedObject(dataDir, avatar.storageObject);
+          return { kind: "stream", path: stored.path, byteSize: stored.byteSize };
+        } catch (error) {
+          if (!isStorageMissing(error)) throw error;
+        }
+      }
       const targetPath = resolveProfileAvatar(dataDir, avatar.storageKey);
       const fileStat = await statProfileAvatar(targetPath);
       return { kind: "stream", path: targetPath, byteSize: fileStat.size };
@@ -175,11 +241,26 @@ function createLocalWorkspaceObjectStore(dataDir) {
       return { ...stored, ...result, backend: "local" };
     },
     async readCustomEmoteBytes(emote, maxBytes) {
+      if (emote?.storageObject) {
+        try {
+          return await readContentAddressedBytes(dataDir, emote.storageObject, maxBytes);
+        } catch (error) {
+          if (!isStorageMissing(error)) throw error;
+        }
+      }
       const stored = await statStoredAttachment(dataDir, emote.storageKey, emote.byteSize);
       assertReadableSize(stored.byteSize, maxBytes);
       return await readFile(stored.path);
     },
     async getCustomEmoteDelivery(emote) {
+      if (emote?.storageObject) {
+        try {
+          const stored = await statContentAddressedObject(dataDir, emote.storageObject);
+          return { kind: "stream", path: stored.path, byteSize: stored.byteSize };
+        } catch (error) {
+          if (!isStorageMissing(error)) throw error;
+        }
+      }
       const stored = await statStoredAttachment(dataDir, emote.storageKey, emote.byteSize);
       return { kind: "stream", path: stored.path, byteSize: stored.byteSize };
     },
@@ -248,6 +329,29 @@ function createS3WorkspaceObjectStore({ dataDir, config, internalClient, deliver
     };
   };
 
+  const contentObjectDelivery = async (object, options = {}) => {
+    const sha256 = normalizeWorkspaceObjectSha256(object?.sha256);
+    const byteSize = normalizeCanonicalByteSize(object?.byteSize);
+    const key = resolveWorkspaceContentObjectKey({ ...object, sha256 });
+    try {
+      const head = await internalClient.send(new HeadObjectCommand({ Bucket: config.bucket, Key: key }));
+      validateCanonicalHead({ sha256, byteSize }, head);
+      return await signedDelivery({
+        key,
+        contentType: options.contentType,
+        contentDisposition: options.contentDisposition
+      });
+    } catch (error) {
+      if (isNotFoundError(error) && config.localReadFallback) {
+        const stored = await statContentAddressedObject(dataDir, { ...object, sha256, byteSize });
+        return { kind: "stream", path: stored.path, byteSize: stored.byteSize };
+      }
+      if (error instanceof WorkspaceError) throw error;
+      if (isNotFoundError(error)) throw new WorkspaceError("file.storage_missing", "文件内容不可用", 404);
+      throw storageUnavailable(error, "文件链接生成失败");
+    }
+  };
+
   const attachmentHeadOrFallback = async (attachment) => {
     const key = workspaceAttachmentObjectKey(attachment);
     try {
@@ -268,6 +372,98 @@ function createS3WorkspaceObjectStore({ dataDir, config, internalClient, deliver
     bucket: config.bucket,
     signedUrlTtlSeconds: config.ttlSeconds,
     client: internalClient,
+    async ensureObject(input) {
+      const sha256 = normalizeWorkspaceObjectSha256(input?.sha256);
+      const byteSize = normalizeCanonicalByteSize(input?.byteSize);
+      const objectKey = workspaceContentObjectKey(sha256);
+      try {
+        const head = await internalClient.send(new HeadObjectCommand({ Bucket: config.bucket, Key: objectKey }));
+        validateCanonicalHead({ sha256, byteSize }, head);
+        return { objectKey, sha256, byteSize, backend: "s3", created: false };
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          if (error instanceof WorkspaceError) throw error;
+          throw storageUnavailable(error, "文件内容不可用");
+        }
+      }
+      if (!input?.stream || typeof input.stream.pipe !== "function") {
+        throw new WorkspaceError("storage.object_source_required", "存储对象来源不可用", 500);
+      }
+      const stagingKey = `.content-object-staging/${crypto.randomUUID()}`;
+      const staged = await saveUploadStream(dataDir, stagingKey, input.stream, byteSize);
+      try {
+        if (staged.sha256 !== sha256) {
+          throw new WorkspaceError("storage.object_digest_mismatch", "存储对象校验失败", 500);
+        }
+        await uploadFile({
+          key: objectKey,
+          path: staged.path,
+          byteSize,
+          sha256,
+          contentType: input.contentType || "application/octet-stream",
+          kind: "content-object",
+          id: sha256
+        });
+        if (config.localMirrorWrite) {
+          await ensureContentAddressedStream(dataDir, {
+            sha256,
+            byteSize,
+            stream: createReadStream(staged.path)
+          });
+        }
+        return { objectKey, sha256, byteSize, backend: "s3", created: true };
+      } finally {
+        await removeStoredAttachment(dataDir, stagingKey).catch(() => {});
+      }
+    },
+    async openObject(object) {
+      return await openS3ContentObject({ dataDir, config, client: internalClient, object });
+    },
+    async getObjectDelivery(object, options = {}) {
+      return await contentObjectDelivery(object, options);
+    },
+    async readObject(object, maxBytes = Number.MAX_SAFE_INTEGER) {
+      return await readS3ContentObject({ dataDir, config, client: internalClient, object, maxBytes });
+    },
+    async deleteObject(object) {
+      const objectKey = resolveWorkspaceContentObjectKey(object);
+      await Promise.all([
+        internalClient.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: objectKey })).catch((error) => {
+          throw storageUnavailable(error, "文件清理失败");
+        }),
+        removeContentAddressedObject(dataDir, object).catch(() => {})
+      ]);
+      return { objectKey };
+    },
+    async openLegacyObject(record) {
+      const objectKey = legacyWorkspaceObjectKey(record);
+      try {
+        const head = await internalClient.send(new HeadObjectCommand({ Bucket: config.bucket, Key: objectKey }));
+        const byteSize = Number(head.ContentLength);
+        validateLegacyByteSize(record, byteSize);
+        const result = await internalClient.send(new GetObjectCommand({ Bucket: config.bucket, Key: objectKey }));
+        if (!result.Body) throw new WorkspaceError("file.storage_missing", "文件内容不可用", 404);
+        return { stream: result.Body, byteSize };
+      } catch (error) {
+        if (isNotFoundError(error) && config.localReadFallback) return await openLocalLegacyObject(dataDir, record);
+        if (error instanceof WorkspaceError) throw error;
+        if (isNotFoundError(error)) throw new WorkspaceError("file.storage_missing", "文件内容不可用", 404);
+        throw storageUnavailable(error, "文件内容不可用");
+      }
+    },
+    async deleteLegacyObject(record) {
+      await Promise.all([
+        internalClient.send(new DeleteObjectCommand({
+          Bucket: config.bucket,
+          Key: legacyWorkspaceObjectKey(record)
+        })).catch((error) => {
+          throw storageUnavailable(error, "文件清理失败");
+        }),
+        record?.storageKey
+          ? removeStoredAttachment(dataDir, record.storageKey).catch(() => {})
+          : Promise.resolve()
+      ]);
+    },
     async assertReady() {
       try {
         await internalClient.send(new HeadBucketCommand({ Bucket: config.bucket }));
@@ -309,9 +505,29 @@ function createS3WorkspaceObjectStore({ dataDir, config, internalClient, deliver
       }
     },
     async statAttachment(attachment) {
+      if (attachment?.storageObject) {
+        try {
+          const delivery = await contentObjectDelivery(attachment.storageObject);
+          return delivery.kind === "stream"
+            ? { backend: "local", path: delivery.path, byteSize: delivery.byteSize, objectKey: attachment.storageObject.objectKey }
+            : { backend: "s3", key: attachment.storageObject.objectKey, byteSize: attachment.storageObject.byteSize };
+        } catch (error) {
+          if (!isStorageMissing(error)) throw error;
+        }
+      }
       return await attachmentHeadOrFallback(attachment);
     },
     async getAttachmentDelivery(attachment, options = {}) {
+      if (attachment?.storageObject) {
+        try {
+          return await contentObjectDelivery(attachment.storageObject, {
+            contentType: options.contentType ?? attachment.mimeType,
+            contentDisposition: options.contentDisposition
+          });
+        } catch (error) {
+          if (!isStorageMissing(error)) throw error;
+        }
+      }
       const stored = await attachmentHeadOrFallback(attachment);
       if (stored.backend === "local") {
         return { kind: "stream", path: stored.path, byteSize: stored.byteSize };
@@ -338,6 +554,19 @@ function createS3WorkspaceObjectStore({ dataDir, config, internalClient, deliver
       ]);
     },
     async readAttachmentBytes(attachment, maxBytes) {
+      if (attachment?.storageObject) {
+        try {
+          return await readS3ContentObject({
+            dataDir,
+            config,
+            client: internalClient,
+            object: attachment.storageObject,
+            maxBytes
+          });
+        } catch (error) {
+          if (!isStorageMissing(error)) throw error;
+        }
+      }
       try {
         return await readS3Bytes({
           client: internalClient,
@@ -370,6 +599,16 @@ function createS3WorkspaceObjectStore({ dataDir, config, internalClient, deliver
       return { ...stored, sha256, backend: "s3" };
     },
     async getProfileAvatarDelivery(avatar, options = {}) {
+      if (avatar?.storageObject) {
+        try {
+          return await contentObjectDelivery(avatar.storageObject, {
+            contentType: "image/webp",
+            contentDisposition: options.contentDisposition
+          });
+        } catch (error) {
+          if (!isStorageMissing(error)) throw error;
+        }
+      }
       const key = workspaceAvatarObjectKey(avatar);
       try {
         await internalClient.send(new HeadObjectCommand({ Bucket: config.bucket, Key: key }));
@@ -434,6 +673,19 @@ function createS3WorkspaceObjectStore({ dataDir, config, internalClient, deliver
       }
     },
     async readCustomEmoteBytes(emote, maxBytes) {
+      if (emote?.storageObject) {
+        try {
+          return await readS3ContentObject({
+            dataDir,
+            config,
+            client: internalClient,
+            object: emote.storageObject,
+            maxBytes
+          });
+        } catch (error) {
+          if (!isStorageMissing(error)) throw error;
+        }
+      }
       try {
         return await readS3Bytes({
           client: internalClient,
@@ -450,6 +702,20 @@ function createS3WorkspaceObjectStore({ dataDir, config, internalClient, deliver
       }
     },
     async getCustomEmoteDelivery(emote) {
+      if (emote?.storageObject) {
+        try {
+          const buffer = await readS3ContentObject({
+            dataDir,
+            config,
+            client: internalClient,
+            object: emote.storageObject,
+            maxBytes: Number(emote.storageObject.byteSize)
+          });
+          return { kind: "buffer", buffer, byteSize: buffer.byteLength };
+        } catch (error) {
+          if (!isStorageMissing(error)) throw error;
+        }
+      }
       const key = workspaceCustomEmoteObjectKey(emote);
       try {
         const head = await internalClient.send(new HeadObjectCommand({ Bucket: config.bucket, Key: key }));
@@ -508,6 +774,118 @@ async function readS3Bytes({ client, bucket, key, maxBytes }) {
 function assertReadableSize(byteSize, maxBytes) {
   if (!Number.isSafeInteger(Number(byteSize)) || Number(byteSize) < 1 || Number(byteSize) > maxBytes) {
     throw new WorkspaceError("emote.source_too_large", "图片过大，无法收藏为表情", 413);
+  }
+}
+
+async function openS3ContentObject({ dataDir, config, client, object }) {
+  const sha256 = normalizeWorkspaceObjectSha256(object?.sha256);
+  const byteSize = normalizeCanonicalByteSize(object?.byteSize);
+  const objectKey = resolveWorkspaceContentObjectKey({ ...object, sha256 });
+  try {
+    const head = await client.send(new HeadObjectCommand({ Bucket: config.bucket, Key: objectKey }));
+    validateCanonicalHead({ sha256, byteSize }, head);
+    const result = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: objectKey }));
+    if (!result.Body) throw new WorkspaceError("file.storage_missing", "文件内容不可用", 404);
+    return { stream: result.Body, byteSize, sha256 };
+  } catch (error) {
+    if (isNotFoundError(error) && config.localReadFallback) {
+      const stored = await statContentAddressedObject(dataDir, { ...object, sha256, byteSize });
+      return { stream: createReadStream(stored.path), byteSize, sha256 };
+    }
+    if (error instanceof WorkspaceError) throw error;
+    if (isNotFoundError(error)) throw new WorkspaceError("file.storage_missing", "文件内容不可用", 404);
+    throw storageUnavailable(error, "文件内容不可用");
+  }
+}
+
+async function readS3ContentObject({
+  dataDir,
+  config,
+  client,
+  object,
+  maxBytes = Number.MAX_SAFE_INTEGER
+}) {
+  const sha256 = normalizeWorkspaceObjectSha256(object?.sha256);
+  const byteSize = normalizeCanonicalByteSize(object?.byteSize);
+  assertCanonicalReadableSize(byteSize, maxBytes);
+  const opened = await openS3ContentObject({
+    dataDir,
+    config,
+    client,
+    object: { ...object, sha256, byteSize }
+  });
+  const chunks = [];
+  const hash = createHash("sha256");
+  let readByteSize = 0;
+  for await (const chunk of opened.stream) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    readByteSize += buffer.byteLength;
+    if (readByteSize > byteSize) throw new WorkspaceError("file.storage_mismatch", "文件内容不可用", 500);
+    hash.update(buffer);
+    chunks.push(buffer);
+  }
+  if (readByteSize !== byteSize || hash.digest("hex") !== sha256) {
+    throw new WorkspaceError("file.storage_mismatch", "文件内容不可用", 500);
+  }
+  return Buffer.concat(chunks);
+}
+
+async function openLocalLegacyObject(dataDir, record) {
+  const storageKey = String(record?.storageKey ?? "").trim();
+  if (!storageKey) throw new WorkspaceError("file.storage_missing", "文件内容不可用", 404);
+  const targetPath = resolveWorkspaceStoragePath(dataDir, storageKey);
+  let fileStat;
+  try {
+    fileStat = await stat(targetPath);
+  } catch (error) {
+    if (error?.code === "ENOENT") throw new WorkspaceError("file.storage_missing", "文件内容不可用", 404);
+    throw error;
+  }
+  if (!fileStat.isFile()) throw new WorkspaceError("file.storage_mismatch", "文件内容不可用", 500);
+  validateLegacyByteSize(record, fileStat.size);
+  return { stream: createReadStream(targetPath), byteSize: fileStat.size };
+}
+
+function legacyWorkspaceObjectKey(record) {
+  if (record?.kind === "attachment") return workspaceAttachmentObjectKey(record);
+  if (record?.kind === "avatar") return workspaceAvatarObjectKey(record);
+  if (record?.kind === "customEmote") return workspaceCustomEmoteObjectKey(record);
+  throw new WorkspaceError("storage.object_invalid_kind", "存储对象类型无效", 500);
+}
+
+function validateLegacyByteSize(record, actualByteSize) {
+  const size = normalizeCanonicalByteSize(actualByteSize);
+  if (record?.byteSize !== null && record?.byteSize !== undefined && Number(record.byteSize) !== size) {
+    throw new WorkspaceError("file.storage_mismatch", "文件内容不可用", 500);
+  }
+  return size;
+}
+
+function normalizeCanonicalByteSize(value) {
+  const byteSize = Number(value);
+  if (!Number.isSafeInteger(byteSize) || byteSize < 0) {
+    throw new WorkspaceError("storage.object_invalid_size", "存储对象大小无效", 500);
+  }
+  return byteSize;
+}
+
+function validateCanonicalHead(object, head) {
+  const byteSize = Number(head?.ContentLength);
+  const metadataSize = Number(head?.Metadata?.["duallane-size"]);
+  const metadataSha256 = String(head?.Metadata?.["duallane-sha256"] ?? "").toLowerCase();
+  if (
+    byteSize !== object.byteSize ||
+    metadataSize !== object.byteSize ||
+    metadataSha256 !== object.sha256
+  ) {
+    throw new WorkspaceError("file.storage_mismatch", "文件内容不可用", 500);
+  }
+}
+
+function assertCanonicalReadableSize(byteSize, maxBytes) {
+  const maximum = Number(maxBytes);
+  if (!Number.isSafeInteger(maximum) || maximum < byteSize) {
+    throw new WorkspaceError("file.storage_too_large", "文件内容过大", 413);
   }
 }
 
@@ -649,6 +1027,10 @@ function clampPositiveInteger(value, fallback, maximum) {
 
 function isNotFoundError(error) {
   return error?.$metadata?.httpStatusCode === 404 || ["NotFound", "NoSuchKey", "NoSuchBucket"].includes(error?.name);
+}
+
+function isStorageMissing(error) {
+  return error?.code === "file.storage_missing" || isNotFoundError(error);
 }
 
 function storageUnavailable(error, message) {

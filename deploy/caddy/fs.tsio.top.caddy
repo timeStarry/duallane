@@ -5,7 +5,7 @@ fs.tsio.top {
 
   @preflight {
     method OPTIONS
-    path /duallane/workspace/attachments/* /duallane/workspace/profile-avatars/* /duallane/workspace/custom-emotes/*
+    path /duallane/workspace/attachments/* /duallane/workspace/profile-avatars/* /duallane/workspace/custom-emotes/* /duallane/workspace/objects/sha256/*
   }
   handle @preflight {
     header Access-Control-Allow-Origin "https://duallane.tsio.top"
@@ -17,7 +17,7 @@ fs.tsio.top {
 
   @workspaceObjects {
     method GET HEAD
-    path /duallane/workspace/attachments/* /duallane/workspace/profile-avatars/* /duallane/workspace/custom-emotes/*
+    path /duallane/workspace/attachments/* /duallane/workspace/profile-avatars/* /duallane/workspace/custom-emotes/* /duallane/workspace/objects/sha256/*
   }
   handle @workspaceObjects {
     reverse_proxy 100.99.0.4:9000 {

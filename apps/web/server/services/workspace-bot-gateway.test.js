@@ -57,6 +57,52 @@ describe("Workspace Bot Gateway", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM messages WHERE conversation_id = ?").get(conversationId).count).toBe(1);
   });
 
+  it("enforces context time, reply, system-event, character, and conservative token budgets", async () => {
+    const clock = new Date("2026-08-20T12:00:00.000Z");
+    const { db, botService, gateway } = await fixture({ now: () => clock });
+    const bot = await botService.createBot("usr_owner", { spaceId: SPACE_ID, name: "Context policy" });
+    const issued = await botService.issueToken("usr_owner", bot.id, { spaceId: SPACE_ID, scopes: ["messages:read_context"] });
+    const auth = await gateway.authenticate(issued.token, { spaceId: SPACE_ID });
+    const conversationId = "conv_gateway_context_policy";
+    const createdAt = new Date(clock.getTime() - 3_600_000).toISOString();
+    db.prepare(`INSERT INTO conversations (id, space_id, type, title, direct_key, retention_count, created_by, created_at)
+      VALUES (?, ?, 'direct', ?, ?, 10000, ?, ?)`).run(conversationId, SPACE_ID, "Context policy", "gateway-context-policy", "usr_owner", createdAt);
+    db.prepare("INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at) VALUES (?, ?, ?, NULL)").run(conversationId, "usr_owner", createdAt);
+    db.prepare("INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at) VALUES (?, ?, ?, NULL)").run(conversationId, bot.botUserId, createdAt);
+    db.prepare(`INSERT INTO workspace_agent_bot_context_grants
+      (grant_id, bot_id, space_id, conversation_id, allow_trigger, allow_context, max_messages, granted_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 0, 1, 20, ?, ?, ?)`).run("grant_gateway_context_policy", bot.id, SPACE_ID, conversationId, "usr_owner", createdAt, createdAt);
+
+    const insertMessage = ({ id, text, timestamp, authorId = "usr_owner", authorKind = "human", kind = "user", replyTo = null }) => {
+      const content = { format: "duallane.rich.v1", plainText: text, blocks: [{ type: "text", text }] };
+      db.prepare(`INSERT INTO messages (
+        id, space_id, conversation_id, author_id, author_kind, kind, client_message_id,
+        content_format, content_json, plain_text, reply_to_message_id, created_at, edited_at, deleted_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'duallane.rich.v1', ?, ?, ?, ?, NULL, NULL)`)
+        .run(id, SPACE_ID, conversationId, authorId, authorKind, kind, `client-${id}`, JSON.stringify(content), text, replyTo, timestamp);
+    };
+    insertMessage({ id: "msg_context_old", text: "old", timestamp: new Date(clock.getTime() - 120_000).toISOString() });
+    insertMessage({ id: "msg_context_reply", text: "reply", timestamp: new Date(clock.getTime() - 30_000).toISOString(), replyTo: "msg_context_old" });
+    insertMessage({ id: "msg_context_system", text: "system", timestamp: new Date(clock.getTime() - 20_000).toISOString(), authorId: "usr_system_beacon", authorKind: "system", kind: "system" });
+    insertMessage({ id: "msg_context_kept", text: "kept", timestamp: new Date(clock.getTime() - 10_000).toISOString() });
+    db.prepare(`UPDATE workspace_agent_bot_settings SET context_window_seconds = 60,
+      include_replies = 0, include_system_events = 0, max_context_chars = 100000,
+      max_context_tokens = 100000 WHERE bot_id = ?`).run(bot.id);
+
+    const filtered = await gateway.getContext(auth, conversationId);
+    expect(filtered.messages.map((message) => message.plainText)).toEqual(["kept"]);
+
+    db.prepare(`UPDATE workspace_agent_bot_settings SET context_window_seconds = 3600,
+      include_replies = 1, include_system_events = 1, max_context_chars = 500,
+      max_context_tokens = 500 WHERE bot_id = ?`).run(bot.id);
+    const bounded = await gateway.getContext(auth, conversationId);
+    const serializedMessages = JSON.stringify(bounded.messages);
+    expect(bounded.messages.length).toBeGreaterThan(0);
+    expect(bounded.messages.at(-1).plainText).toBe("kept");
+    expect(serializedMessages.length).toBeLessThanOrEqual(500);
+    expect(Buffer.byteLength(serializedMessages, "utf8")).toBeLessThanOrEqual(500);
+  });
+
   it("replays metadata-only deliveries, reports stale cursors, and acknowledges events", async () => {
     const { db, botService, gateway } = await fixture({ replayLimit: 1 });
     const bot = await botService.createBot("usr_owner", { spaceId: SPACE_ID, name: "Replay test" });
@@ -283,10 +329,30 @@ describe("Workspace Bot Gateway", () => {
 
     await expect(gateway.updateCard(auth, sent.card.id, {
       expectedRevision: 1,
+      fallbackText: "新投票卡片",
       payload: { question: "新的问题", options: ["A", "B"] }
-    })).resolves.toMatchObject({ card: { id: sent.card.id, revision: 2 } });
+    })).resolves.toMatchObject({
+      card: { id: sent.card.id, revision: 2, fallbackText: "新投票卡片" }
+    });
+    await expect(cardService.resolveCard("usr_owner", sent.card.id)).resolves.toMatchObject({
+      type: "card_fallback",
+      revision: 2,
+      fallbackText: "新投票卡片"
+    });
+    const storedMessage = db.prepare(`SELECT content_json AS contentJson, plain_text AS plainText
+      FROM messages WHERE id = ?`).get(sent.message.id);
+    expect(storedMessage.plainText).toBe("投票卡片");
+    expect(JSON.parse(storedMessage.contentJson).blocks).toContainEqual(expect.objectContaining({
+      cardId: sent.card.id,
+      fallbackText: "投票卡片"
+    }));
     expect(db.prepare("SELECT type FROM workspace_events WHERE target_id = ? ORDER BY seq").all(sent.card.id).map(({ type }) => type))
       .toEqual(["card.created", "card.updated"]);
+    expect(JSON.parse(db.prepare(`SELECT payload_json AS payloadJson FROM workspace_events
+      WHERE target_id = ? AND type = 'card.updated'`).get(sent.card.id).payloadJson)).toMatchObject({
+      cardId: sent.card.id,
+      revision: 2
+    });
     await expect(gateway.updateCard(auth, sent.card.id, {
       expectedRevision: 1,
       payload: { question: "冲突", options: ["A", "B"] }

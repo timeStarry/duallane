@@ -613,28 +613,105 @@ Rules:
 GET    /api/workspace/me/emote-settings
 PUT    /api/workspace/me/emote-settings
 GET    /api/workspace/me/emotes
+GET    /api/workspace/me/emote-library
 POST   /api/workspace/me/emotes
 POST   /api/workspace/me/emotes/favorite
+PUT    /api/workspace/me/emote-library/order
 PUT    /api/workspace/me/emotes/order
 DELETE /api/workspace/me/emotes/:emoteId
 GET    /api/workspace/emotes/:emoteId/content
+POST   /api/workspace/me/emote-collections
+PATCH  /api/workspace/me/emote-collections/:collectionId
+DELETE /api/workspace/me/emote-collections/:collectionId
+POST   /api/workspace/me/emote-collections/:collectionId/items
+DELETE /api/workspace/me/emote-collections/:collectionId/items/:emoteId
+PUT    /api/workspace/me/emote-collections/:collectionId/order
+PUT    /api/workspace/me/emote-collections/:collectionId/source-subscription
+POST   /api/workspace/me/emote-collections/:collectionId/shares
+DELETE /api/workspace/me/emote-collection-shares/:shareId
+GET    /api/workspace/emote-collection-shares/:shareId
+POST   /api/workspace/emote-collection-shares/:shareId/import
 ```
 
 Rules:
 
 - At least one built-in pack must remain enabled. The personal favorites pack
   remains available even when empty.
-- Source uploads accept JPEG, PNG, WebP, and GIF up to 10 MiB. The API decodes,
+- Source uploads accept JPEG, PNG, WebP, GIF, and BMP up to 10 MiB. The API decodes,
   strips metadata, bounds dimensions/frames/duration, and stores normalized
   WebP content under the caller's private collection.
-- A user may keep up to 100 items and 50 MiB of normalized personal emotes.
-  These bytes do not consume the chat transfer quota.
+- There is no total item or collection-count limit. Each collection remains
+  limited to 100 items. Locally owned or snapshot content has a 1 GiB logical
+  byte limit per user; active subscription-only content is excluded.
+- Personal-emote bytes do not consume the daily chat transfer quota. The
+  response reports this separate allowance through `usage` and `limits`.
 - Favoriting a message image requires active membership in that message's
   conversation. Stored copies remain independent from later message or
   attachment removal.
 - Custom content is available to its owner and to members of conversations
   containing a message that references that custom emote. Object keys and S3
   credentials are never returned by these APIs.
+
+Library responses include:
+
+```json
+{
+  "usage": {
+    "itemCount": 12,
+    "totalBytes": 7340032,
+    "subscribedItemCount": 40,
+    "subscribedTotalBytes": 18874368,
+    "totalItemCount": 52,
+    "allTotalBytes": 26214400,
+    "collectionCount": 4,
+    "subscribedCollectionCount": 1,
+    "overLimit": false
+  },
+  "limits": {
+    "maxItems": null,
+    "maxCollections": null,
+    "maxTotalBytes": 1073741824,
+    "maxCollectionItems": 100
+  }
+}
+```
+
+Imported collection subscription contract:
+
+- `POST .../:shareId/import` accepts optional boolean
+  `subscribeToSourceChanges`; omission and `false` create an editable snapshot.
+- `true` is valid only for a complete collection whose canonical original
+  source still exists. The imported collection is read-only while subscribed.
+- `PUT .../:collectionId/source-subscription` accepts `{ "enabled": true }` or
+  `{ "enabled": false }` and returns `{ "collection": ..., "library": ... }`.
+- Disabling is preflighted against the 1 GiB local allowance because the
+  retained snapshot becomes locally metered. Exactly 1 GiB is allowed; an
+  additional byte is rejected with `emote.storage_limit_reached`.
+- Source deletion retains the subscriber's last synchronized snapshot and
+  changes the subscription to `detached`. Share revocation does not detach a
+  subscription while its canonical source still exists.
+
+Each collection projects:
+
+```json
+{
+  "sourceSubscription": {
+    "eligible": true,
+    "enabled": true,
+    "status": "synced",
+    "sourceCollectionId": "collection_source",
+    "sourceRevision": 7,
+    "lastSyncedAt": "2026-08-20T10:00:00.000Z",
+    "readOnly": true
+  }
+}
+```
+
+`status` is `off`, `synced`, or `detached`. Manual disable produces `off` with
+`eligible: true`; only loss of the canonical source produces `detached` with
+`eligible: false`. `readOnly` is true only while `status` is `synced`.
+Share projections expose `canSubscribeToSourceChanges`; a retained share
+snapshot can remain importable even when this field is false.
 
 List files:
 
@@ -757,6 +834,9 @@ Rules:
 - `hasMore` tells the client to immediately send another `hello` after applying
   the current replay batch, instead of waiting for the normal polling interval.
 - `transfer.rejected` is actor-local.
+- `emote.library.updated` is visible only to its target user. Its payload is
+  `{ userId, collectionId, sourceRevision, status }`; clients refetch the emote
+  library rather than receiving private item content in the event.
 - Normal members never receive operation-record payloads.
 - If replay cannot be satisfied, or the client cursor is ahead of the current
   server sequence, server sends `sync.required`; client refetches bootstrap or

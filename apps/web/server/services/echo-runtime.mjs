@@ -10,6 +10,10 @@ import {
   createEchoSolicitationService
 } from "./echo-solicitations.mjs";
 import {
+  ECHO_RELEASE_CARD_DEFINITION,
+  createEchoReleaseService
+} from "./echo-releases.mjs";
+import {
   createWorkspaceCommandRegistry,
   createWorkspaceWorkflowRegistry
 } from "./workspace-command-registry.mjs";
@@ -24,6 +28,7 @@ export const ECHO_COMMAND_NAMES = Object.freeze([
   "help",
   "cancel",
   "publish",
+  "release",
   "need",
   "feedback",
   "list",
@@ -58,6 +63,8 @@ export class EchoRuntimeError extends Error {
 export function createEchoCommandDefinitions(options = {}) {
   const requirements = options.requirements ?? options.requirementService ?? null;
   const solicitations = options.solicitations ?? options.solicitationService ?? null;
+  const releases = options.releases ?? options.releaseService ?? null;
+  const delivery = options.deliveryService ?? options.delivery ?? null;
   const getInteractionService = typeof options.getInteractionService === "function"
     ? options.getInteractionService
     : () => options.interactionService ?? null;
@@ -84,13 +91,18 @@ export function createEchoCommandDefinitions(options = {}) {
     version: ECHO_COMMAND_VERSION,
     contexts: ["direct", "mention"],
     parseArguments: parseWorkflowIdArguments,
-    async execute({ actor, arguments: args }) {
-      if (!args.workflowId) return { result: { type: "cancel", cancelled: false, reason: "workflow_id_required" } };
+    async execute({ actor, context, botUserId, arguments: args, request }) {
       const interaction = getInteractionService();
       if (!interaction || typeof interaction.cancelWorkflow !== "function") {
         return { result: { type: "cancel", cancelled: false, workflowId: args.workflowId } };
       }
-      const workflow = await interaction.cancelWorkflow(actor.id, args.workflowId);
+      const workflow = await interaction.cancelWorkflow(actor.id, {
+        workflowId: args.workflowId,
+        spaceId: context.spaceId,
+        conversationId: context.id,
+        botUserId,
+        request
+      });
       return { result: safeWorkflowResult(workflow, true) };
     }
   });
@@ -108,6 +120,46 @@ export function createEchoCommandDefinitions(options = {}) {
           workflowType: ECHO_WORKFLOW_TYPES.publish,
           version: ECHO_WORKFLOW_VERSION,
           input: args
+        }
+      };
+    }
+  });
+
+  commands.push({
+    name: "release",
+    version: ECHO_COMMAND_VERSION,
+    contexts: ["direct", "mention"],
+    parseArguments: parseReleaseArguments,
+    authorize: ({ actor }) => actor.role === "owner",
+    async execute({ actor, arguments: args, request }) {
+      requireDomain(releases, "版本发布服务尚未初始化");
+      const publication = await releases.publish({
+        actorId: actor.id,
+        version: args.version,
+        request
+      });
+      let deliveryResult = null;
+      try {
+        if (typeof delivery?.syncRelease === "function") {
+          deliveryResult = await delivery.syncRelease({ version: publication.version, request });
+        }
+      } catch {
+        // The durable delivery rows are recovered by the Echo worker.
+      }
+      const sentCount = Number(deliveryResult?.sent ?? publication.sentCount) || 0;
+      const failedCount = Number(deliveryResult?.failed ?? publication.failedCount) || 0;
+      const skippedCount = Number(deliveryResult?.skipped ?? publication.skippedCount) || 0;
+      return {
+        result: {
+          type: "release-published",
+          version: publication.version,
+          title: publication.title,
+          recipientCount: publication.recipientCount,
+          sentCount,
+          failedCount,
+          skippedCount,
+          pendingCount: Math.max(0, publication.recipientCount - sentCount - failedCount - skippedCount),
+          replayed: publication.replayed
         }
       };
     }
@@ -219,7 +271,8 @@ export function createEchoCardDefinitions(options = {}) {
     : ECHO_SOLICITATION_CARD_DEFINITION;
   return Object.freeze([
     ...requirementDefinitions,
-    solicitationDefinition
+    solicitationDefinition,
+    ECHO_RELEASE_CARD_DEFINITION
   ]);
 }
 
@@ -272,6 +325,9 @@ export function createEchoRuntime(options = {}) {
   const rawSolicitations = options.solicitations
     ?? options.solicitationService
     ?? (db ? createEchoSolicitationService({ db, spaceId: options.spaceId, now: options.now, idFactory: options.idFactory }) : null);
+  const releases = options.releases
+    ?? options.releaseService
+    ?? (db ? createEchoReleaseService({ db, spaceId: options.spaceId, now: options.now, idFactory: options.idFactory }) : null);
   const requirements = withDeliveryHooks(rawRequirements, options.deliveryService, "requirement");
   const solicitations = withDeliveryHooks(rawSolicitations, options.deliveryService, "solicitation");
 
@@ -279,6 +335,8 @@ export function createEchoRuntime(options = {}) {
   const commandDefinitions = createEchoCommandDefinitions({
     requirements,
     solicitations,
+    releases,
+    deliveryService: options.deliveryService,
     getInteractionService: () => interactionService
   });
   const workflowDefinitions = createEchoWorkflowDefinitions({ requirements, solicitations });
@@ -311,6 +369,7 @@ export function createEchoRuntime(options = {}) {
     botUserId: ECHO_USER_ID,
     requirements,
     solicitations,
+    releases,
     commandDefinitions,
     workflowDefinitions,
     cardDefinitions: createEchoCardDefinitions({ requirements: rawRequirements, solicitations: rawSolicitations }),
@@ -492,6 +551,13 @@ function parsePublishArguments(raw) {
   const tokens = tokenize(raw);
   if (tokens.length > 0) throw new EchoRuntimeError("command.arguments_invalid", "请通过引导流程填写征集内容");
   return {};
+}
+
+function parseReleaseArguments(raw) {
+  const tokens = tokenize(raw);
+  const match = tokens.length === 1 ? tokens[0].match(/^(?:v)?(\d+\.\d+\.\d+)$/i) : null;
+  if (!match) throw new EchoRuntimeError("command.arguments_invalid", "需要版本号，例如 /release 0.15.1");
+  return { version: match[1] };
 }
 
 function parseRequirementWorkflowArguments(raw) {

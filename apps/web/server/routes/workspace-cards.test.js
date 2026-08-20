@@ -41,6 +41,38 @@ describe("Workspace card routes", () => {
     expect(response.json().error.code).toBe("auth.required");
   });
 
+  it("returns the latest actor-scoped card registry projection", async () => {
+    const projection = {
+      type: "card_fallback",
+      block: {
+        type: "card",
+        cardId: "card_1",
+        cardType: "future.poll",
+        schemaVersion: 1,
+        fallbackText: "新投票卡片"
+      },
+      fallbackText: "新投票卡片",
+      revision: 2,
+      status: "active"
+    };
+    const service = {
+      resolveCard: vi.fn(async () => projection),
+      executeAction: vi.fn()
+    };
+    const { app } = fixture({ service });
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/workspace/cards/card_1",
+      headers: { "x-workspace-user-id": "usr_member", "user-agent": "vitest" }
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ card: projection });
+    expect(service.resolveCard).toHaveBeenCalledWith("usr_member", "card_1", expect.objectContaining({
+      requestId: expect.any(String),
+      userAgent: "vitest"
+    }));
+  });
+
   it("forwards stable action contracts without trusting actor fields from the body", async () => {
     const { app, service } = fixture();
     const response = await app.inject({
