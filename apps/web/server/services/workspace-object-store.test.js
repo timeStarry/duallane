@@ -51,6 +51,36 @@ describe("workspace object store", () => {
     await expect(loadWorkspaceS3Config(s3Env(credentialsPath))).rejects.toThrow("WORKSPACE_S3_CREDENTIALS_FILE cannot be read");
   });
 
+  it("does not add the optional GetObject checksum query to public signed URLs", async () => {
+    const directory = await makeDirectory();
+    const credentialsPath = path.join(directory, "credentials.json");
+    await writeFile(credentialsPath, JSON.stringify({ accessKey: "test-access", secretKey: "test-secret" }));
+    const client = {
+      async send(command) {
+        if (command.constructor.name === "HeadObjectCommand") {
+          return { ContentLength: 4, Metadata: {} };
+        }
+        return {};
+      },
+      destroy() {}
+    };
+    const store = await createWorkspaceObjectStore({
+      dataDir: directory,
+      env: s3Env(credentialsPath),
+      s3Client: client
+    });
+    const delivery = await store.getAttachmentDelivery({
+      id: "att-signed-checksum",
+      spaceId: "spc_default",
+      storageKey: "workspace/spc_default/att-signed-checksum/image.jpg",
+      mimeType: "image/jpeg",
+      byteSize: 4
+    });
+    expect(delivery.kind).toBe("redirect");
+    expect(delivery.url).not.toMatch(/x-amz-checksum-/u);
+    await store.close();
+  });
+
   it("concurrently ensures, reads, and deletes canonical S3 objects by the stored object key", async () => {
     const directory = await makeDirectory();
     const credentialsPath = path.join(directory, "credentials.json");

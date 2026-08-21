@@ -8875,6 +8875,7 @@ export function App() {
                     <WorkspaceTopicPage
                       topicId={workspaceSelectedTopicId}
                       currentUserId={workspaceBootstrap.auth.currentUser.id}
+                      currentUserDisplayName={workspaceBootstrap.auth.currentUser.displayName}
                       currentUserRole={workspaceBootstrap.auth.currentUser.role}
                       conversations={workspaceConversations
                         .filter((conversation) => conversation.type === "group")

@@ -99,6 +99,8 @@ test("two members create, join, sync, close, and archive a group topic", async (
     );
     await memberTopic.getByTitle("发送话题消息").click();
     expect((await topicMessageResponse).status()).toBe(201);
+    await expect(topicEditor).toHaveText("");
+    await expect(topicEditor).toBeFocused();
     const memberMessage = memberTopic.locator("article.workspace-topic-message").filter({ hasText: topicMessageText });
     await expect(memberMessage).toBeVisible();
     await expect(memberMessage.getByRole("button", { name: "已同步", exact: true })).toHaveAttribute("aria-pressed", "true");

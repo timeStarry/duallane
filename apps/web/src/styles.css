@@ -9791,11 +9791,11 @@ small,
 .workspace-topic-message {
   min-width: 0;
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
-  gap: 9px;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
   border-radius: 6px;
-  padding: 8px 6px;
-  transition: background-color var(--motion-base) var(--motion-ease);
+  padding: 7px 8px;
 }
 
 .workspace-topic-message .workspace-message-avatar-slot {
@@ -9808,7 +9808,10 @@ small,
   height: 32px;
 }
 
-.workspace-topic-message > div:last-child {
+.workspace-topic-message .workspace-message-content {
+  min-width: 0;
+  max-width: 760px;
+  padding-top: 1px;
   overflow-wrap: anywhere;
 }
 
@@ -9823,7 +9826,7 @@ small,
 }
 
 .workspace-topic-message > div,
-.workspace-topic-message header,
+.workspace-topic-message .workspace-message-meta,
 .workspace-topic-message-body {
   min-width: 0;
 }
@@ -9952,27 +9955,6 @@ small,
   font-size: var(--text-xs);
 }
 
-.workspace-topic-message header {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.workspace-topic-message header strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-}
-
-.workspace-topic-message header time {
-  flex: 0 0 auto;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  font-variant-numeric: tabular-nums;
-}
-
 .workspace-topic-message-body {
   margin-top: 4px;
   color: var(--ink);
@@ -9981,23 +9963,24 @@ small,
   overflow-wrap: anywhere;
 }
 
-.workspace-topic-message footer {
-  min-height: 28px;
+.workspace-topic-message-actions {
+  min-width: 0;
+  min-height: 30px;
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-top: 3px;
+  gap: 2px;
   opacity: 0;
   transition: opacity var(--motion-fast) var(--motion-ease);
 }
 
-.workspace-topic-message:hover footer,
-.workspace-topic-message:focus-within footer {
+.workspace-topic-message:hover .workspace-topic-message-actions,
+.workspace-topic-message:focus-within .workspace-topic-message-actions {
   opacity: 1;
 }
 
-.workspace-topic-message footer button {
-  padding: 3px 0;
+.workspace-topic-message-actions button {
+  min-height: 30px;
+  padding: 3px 6px;
   color: var(--muted);
   background: transparent;
   cursor: pointer;
@@ -10005,8 +9988,8 @@ small,
   font-weight: var(--weight-medium);
 }
 
-.workspace-topic-message footer button:hover,
-.workspace-topic-message footer button[aria-pressed="true"] {
+.workspace-topic-message-actions button:hover,
+.workspace-topic-message-actions button[aria-pressed="true"] {
   color: var(--relay-dark);
 }
 
@@ -10015,8 +9998,8 @@ small,
   display: grid;
   gap: 6px;
   border-top: 1px solid var(--line);
-  padding: 8px 12px max(8px, env(safe-area-inset-bottom));
-  background: var(--panel);
+  padding: 8px 14px 12px;
+  background: var(--panel-2);
 }
 
 .workspace-topic-composer {
@@ -10025,7 +10008,16 @@ small,
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
-  gap: 6px;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px;
+  background: var(--panel);
+}
+
+.workspace-topic-composer:focus-within {
+  border-color: var(--relay);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .workspace-topic-composer > .workspace-lexical-editor {
@@ -11642,7 +11634,7 @@ small,
 }
 
 @media (hover: none) {
-  .workspace-topic-message footer {
+  .workspace-topic-message-actions {
     opacity: 1;
   }
 }
@@ -11789,6 +11781,16 @@ small,
     grid-template-columns: 30px minmax(0, 1fr);
     gap: 7px;
     padding: 7px 4px;
+  }
+
+  .workspace-topic-message-actions {
+    grid-column: 2;
+    min-height: 34px;
+    opacity: 1;
+  }
+
+  .workspace-topic-message-actions button {
+    min-height: 34px;
   }
 
   .workspace-topic-composer-dock {
@@ -11989,7 +11991,7 @@ small,
   .workspace-space-panel > .space-tabs button::after,
   .release-history > summary svg,
   .workspace-topic-message,
-  .workspace-topic-message footer {
+  .workspace-topic-message-actions {
     transition: none;
   }
 

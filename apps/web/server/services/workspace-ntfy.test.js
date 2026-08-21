@@ -223,6 +223,48 @@ describe("workspace ntfy service", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_ntfy_jobs WHERE status = 'cancelled'").get().count).toBe(2);
   });
 
+  it("publishes topic notifications with a topic label and topic deep link", async () => {
+    const member = await createMember("ntfy-topic-link");
+    const conversation = await createConversation(db, request, {
+      actorId: "usr_owner",
+      type: "group",
+      title: "话题通知群",
+      memberIds: [member.id]
+    });
+    const topic = await createWorkspaceTopic(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      title: "独立话题通知",
+      description: "话题深链",
+      idempotencyKey: "ntfy-topic-link-create"
+    });
+    await joinTopic(db, request, { actorId: member.id, topicId: topic.id });
+    await createTopicMessage(db, request, {
+      actorId: "usr_owner",
+      topicId: topic.id,
+      clientMessageId: "ntfy-topic-link-message",
+      content: {
+        format: MESSAGE_CONTENT_FORMAT,
+        plainText: "@ntfy-topic-link",
+        blocks: [{ type: "mention", userId: member.id, label: "ntfy-topic-link" }]
+      },
+      scheduleNtfyNotifications: service.scheduleMessage
+    });
+
+    current = new Date(Date.now() + 6_000);
+    const worker = service.startWorker({ startupDelayMs: 60_000, intervalMs: 60_000 });
+    await worker.tick();
+    worker.stop();
+
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]).toMatchObject({
+      title: "话题 · 独立话题通知",
+      message: "有人在「独立话题通知」话题中 @你",
+      clickUrl: `https://duallane.example.test/workspace/topics/${topic.id}`
+    });
+    expect(deliveries[0].clickUrl).not.toContain(`/workspace/chat/${conversation.id}`);
+  });
+
   it("leases failed deliveries and stops after the bounded retry schedule", async () => {
     const member = await createMember("ntfy-retry");
     const retryService = createWorkspaceNtfyService({

@@ -56,6 +56,7 @@ export type WorkspaceTopicMessageBlock =
 
 export type WorkspaceTopicMessage = {
   id: string;
+  clientMessageId?: string;
   topicId: string;
   authorId: string;
   authorKind: "human" | "bot" | "system";
@@ -64,6 +65,8 @@ export type WorkspaceTopicMessage = {
   plainText: string;
   replyToMessageId?: string | null;
   createdAt: string;
+  localState?: "sending" | "failed";
+  failureReason?: string;
 };
 
 export type WorkspaceTopicMember = {
@@ -148,6 +151,35 @@ export function isTopicMessageListNearBottom(
 ) {
   if (!element) return true;
   return element.scrollHeight - element.scrollTop - element.clientHeight <= threshold;
+}
+
+function topicMessageKey(message: Pick<WorkspaceTopicMessage, "id" | "clientMessageId">) {
+  return message.clientMessageId || message.id;
+}
+
+/**
+ * Reconcile a server snapshot without replacing the list object when nothing
+ * changed. This keeps the message viewport and composer focus stable while a
+ * realtime event causes a background refresh.
+ */
+export function mergeWorkspaceTopicMessages(
+  current: WorkspaceTopicMessage[],
+  incoming: WorkspaceTopicMessage[]
+) {
+  const byKey = new Map(incoming.map((message) => [topicMessageKey(message), message]));
+  const next = current.map((message) => byKey.get(topicMessageKey(message)) ?? message);
+  const currentKeys = new Set(current.map(topicMessageKey));
+  incoming.forEach((message) => {
+    if (!currentKeys.has(topicMessageKey(message))) next.push(message);
+  });
+  next.sort((left, right) => {
+    const leftTime = Date.parse(left.createdAt);
+    const rightTime = Date.parse(right.createdAt);
+    if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) return leftTime - rightTime;
+    return left.id.localeCompare(right.id);
+  });
+  if (next.length === current.length && next.every((message, index) => message === current[index])) return current;
+  return next;
 }
 
 type TopicProjection = {
@@ -350,6 +382,7 @@ export function WorkspaceConversationTopicsSection({
 export function WorkspaceTopicPage({
   topicId,
   currentUserId,
+  currentUserDisplayName,
   currentUserRole,
   conversations,
   refreshSignal,
@@ -360,6 +393,7 @@ export function WorkspaceTopicPage({
 }: {
   topicId: string;
   currentUserId: string;
+  currentUserDisplayName: string;
   currentUserRole: "owner" | "admin" | "member" | "auditor";
   conversations: WorkspaceTopicConversation[];
   refreshSignal: WorkspaceTopicRefreshSignal;
@@ -370,6 +404,7 @@ export function WorkspaceTopicPage({
 }) {
   const [topic, setTopic] = useState<WorkspaceTopic | null>(null);
   const [messages, setMessages] = useState<WorkspaceTopicMessage[]>([]);
+  const [pendingMessages, setPendingMessages] = useState<Record<string, WorkspaceTopicMessage>>({});
   const [members, setMembers] = useState<WorkspaceTopicMember[]>([]);
   const [projections, setProjections] = useState<TopicProjection[]>([]);
   const [draft, setDraft] = useState<WorkspaceComposerDocument>(emptyComposerDocument());
@@ -381,11 +416,15 @@ export function WorkspaceTopicPage({
   const [sending, setSending] = useState(false);
   const [busyAction, setBusyAction] = useState("");
   const [error, setError] = useState("");
-  const [localRefreshVersion, setLocalRefreshVersion] = useState(0);
   const editorRef = useRef<WorkspaceComposerEditorHandle | null>(null);
   const mentionMenuRef = useRef<HTMLDivElement | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
-  const loadedTopicIdRef = useRef("");
+  const snapshotReadyRef = useRef(false);
+  const loadGenerationRef = useRef(0);
+  const refreshInFlightRef = useRef(false);
+  const refreshQueuedRef = useRef(false);
+  const sendingRef = useRef(false);
+  const stickToBottomRef = useRef(true);
   const documentVisibleRef = useRef(documentVisible);
   documentVisibleRef.current = documentVisible;
   const refreshVersion = topicRefreshVersionForTopic(refreshSignal, topicId);
@@ -397,72 +436,114 @@ export function WorkspaceTopicPage({
       .filter(Boolean)
       .some((value) => value!.toLocaleLowerCase().includes(query))));
   }, [currentUserId, members, mentionQuery]);
-  const replyTarget = messages.find((message) => message.id === replyToMessageId) ?? null;
+  const displayMessages = useMemo(
+    () => mergeWorkspaceTopicMessages(messages, Object.values(pendingMessages)),
+    [messages, pendingMessages]
+  );
+  const replyTarget = displayMessages.find((message) => message.id === replyToMessageId) ?? null;
   const projectedMessageIds = useMemo(
     () => new Set(projections.filter((projection) => !projection.removedAt).map((projection) => projection.topicMessageId)),
     [projections]
   );
 
-  useEffect(() => {
-    if (!topicId) {
-      setTopic(null);
-      setMessages([]);
-      setMembers([]);
-      setLoading(false);
-      loadedTopicIdRef.current = "";
+  async function loadTopicSnapshot(generation: number, initialLoad: boolean) {
+    if (!topicId) return;
+    try {
+      const result = await topicJson<{ topic: WorkspaceTopic }>(`/api/workspace/topics/${encodeURIComponent(topicId)}`);
+      if (generation !== loadGenerationRef.current) return;
+      setTopic((current) => sameWorkspaceTopic(current, result.topic) ? current : result.topic);
+      if (!result.topic.joined) {
+        setMessages([]);
+        setPendingMessages({});
+        setMembers([]);
+        setProjections([]);
+        snapshotReadyRef.current = true;
+        return;
+      }
+      const [messageResult, memberResult, projectionResult] = await Promise.all([
+        topicJson<{ messages: WorkspaceTopicMessage[] }>(`/api/workspace/topics/${encodeURIComponent(topicId)}/messages?limit=100`),
+        topicJson<{ members: WorkspaceTopicMember[] }>(`/api/workspace/topics/${encodeURIComponent(topicId)}/members`),
+        topicJson<{ projections: TopicProjection[] }>(`/api/workspace/topics/${encodeURIComponent(topicId)}/projections`).catch(() => ({ projections: [] }))
+      ]);
+      if (generation !== loadGenerationRef.current) return;
+      const shouldAcknowledge = shouldAcknowledgeTopicMessages({
+        initialLoad,
+        documentVisible: documentVisibleRef.current,
+        nearBottom: isTopicMessageListNearBottom(messageListRef.current)
+      });
+      setMessages((current) => initialLoad ? mergeWorkspaceTopicMessages([], messageResult.messages) : mergeWorkspaceTopicMessages(current, messageResult.messages));
+      setMembers((current) => sameTopicMembers(current, memberResult.members) ? current : memberResult.members);
+      setProjections((current) => sameTopicProjections(current, projectionResult.projections) ? current : projectionResult.projections);
+      snapshotReadyRef.current = true;
+      const latest = shouldAcknowledge ? messageResult.messages.at(-1) : null;
+      if (latest) {
+        void topicJson(`/api/workspace/topics/${encodeURIComponent(topicId)}/read`, {
+          method: "POST",
+          body: JSON.stringify({ messageId: latest.id })
+        }).catch(() => undefined);
+      }
+      if (shouldAcknowledge || stickToBottomRef.current) scrollTopicMessagesToBottom();
+    } catch (caught) {
+      if (initialLoad && generation === loadGenerationRef.current) setError(topicErrorMessage(caught));
+    } finally {
+      if (initialLoad && generation === loadGenerationRef.current) setLoading(false);
+    }
+  }
+
+  async function refreshTopicSnapshot() {
+    if (!topicId || !snapshotReadyRef.current) return;
+    const generation = loadGenerationRef.current;
+    if (sendingRef.current || refreshInFlightRef.current) {
+      refreshQueuedRef.current = true;
       return;
     }
-    let cancelled = false;
-    const initialLoad = loadedTopicIdRef.current !== topicId;
-    if (initialLoad) setLoading(true);
+    refreshInFlightRef.current = true;
+    try {
+      await loadTopicSnapshot(generation, false);
+    } finally {
+      refreshInFlightRef.current = false;
+      if (generation !== loadGenerationRef.current) {
+        refreshQueuedRef.current = false;
+        return;
+      }
+      if (refreshQueuedRef.current && !sendingRef.current) {
+        refreshQueuedRef.current = false;
+        void refreshTopicSnapshot();
+      }
+    }
+  }
+
+  function scrollTopicMessagesToBottom() {
+    window.requestAnimationFrame(() => {
+      if (messageListRef.current) messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
+    });
+  }
+
+  useEffect(() => {
+    const generation = loadGenerationRef.current + 1;
+    loadGenerationRef.current = generation;
+    snapshotReadyRef.current = false;
     setError("");
-    void topicJson<{ topic: WorkspaceTopic }>(`/api/workspace/topics/${encodeURIComponent(topicId)}`)
-      .then(async (result) => {
-        if (cancelled) return;
-        setTopic(result.topic);
-        if (!result.topic.joined) {
-          setMessages([]);
-          setMembers([]);
-          setProjections([]);
-          loadedTopicIdRef.current = topicId;
-          return;
-        }
-        const [messageResult, memberResult, projectionResult] = await Promise.all([
-          topicJson<{ messages: WorkspaceTopicMessage[] }>(`/api/workspace/topics/${encodeURIComponent(topicId)}/messages?limit=100`),
-          topicJson<{ members: WorkspaceTopicMember[] }>(`/api/workspace/topics/${encodeURIComponent(topicId)}/members`),
-          topicJson<{ projections: TopicProjection[] }>(`/api/workspace/topics/${encodeURIComponent(topicId)}/projections`).catch(() => ({ projections: [] }))
-        ]);
-        if (cancelled) return;
-        const shouldAcknowledge = shouldAcknowledgeTopicMessages({
-          initialLoad,
-          documentVisible: documentVisibleRef.current,
-          nearBottom: isTopicMessageListNearBottom(messageListRef.current)
-        });
-        setMessages(messageResult.messages);
-        setMembers(memberResult.members);
-        setProjections(projectionResult.projections);
-        loadedTopicIdRef.current = topicId;
-        const latest = shouldAcknowledge ? messageResult.messages.at(-1) : null;
-        if (latest) {
-          void topicJson(`/api/workspace/topics/${encodeURIComponent(topicId)}/read`, {
-            method: "POST",
-            body: JSON.stringify({ messageId: latest.id })
-          }).catch(() => undefined);
-        }
-        if (shouldAcknowledge) {
-          window.requestAnimationFrame(() => {
-            if (messageListRef.current) messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
-          });
-        }
-      })
-      .catch((caught) => {
-        if (!cancelled) setError(topicErrorMessage(caught));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [localRefreshVersion, refreshVersion, topicId]);
+    setTopic(null);
+    setMessages([]);
+    setPendingMessages({});
+    setMembers([]);
+    setProjections([]);
+    sendingRef.current = false;
+    refreshQueuedRef.current = false;
+    setSending(false);
+    if (!topicId) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    void loadTopicSnapshot(generation, true);
+  }, [topicId]);
+
+  useEffect(() => {
+    if (!topicId || !snapshotReadyRef.current) return;
+    void refreshTopicSnapshot();
+  }, [refreshVersion, topicId]);
 
   useEffect(() => {
     if (mentionQuery === null) return;
@@ -483,7 +564,8 @@ export function WorkspaceTopicPage({
         body: JSON.stringify({})
       });
       setTopic(result.topic);
-      setLocalRefreshVersion((version) => version + 1);
+      snapshotReadyRef.current = true;
+      void refreshTopicSnapshot();
       onNotice("success", "已加入话题");
     } catch (caught) {
       onNotice("warning", topicErrorMessage(caught));
@@ -502,6 +584,7 @@ export function WorkspaceTopicPage({
       });
       setTopic(result.topic);
       setMessages([]);
+      setPendingMessages({});
       setMembers([]);
       onNotice("success", "已退出话题");
     } catch (caught) {
@@ -544,32 +627,60 @@ export function WorkspaceTopicPage({
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!topic || sending || !hasTopicDraftContent(draft)) return;
+    const clientMessageId = topicClientId();
+    const sendGeneration = loadGenerationRef.current;
+    const contentBlocks = topicComposerDocumentToBlocks(draft);
+    const optimisticMessage = optimisticTopicMessage({
+      topic,
+      currentUserId,
+      currentUserDisplayName,
+      clientMessageId,
+      blocks: contentBlocks,
+      replyToMessageId: replyToMessageId || null
+    });
+    const shouldScroll = stickToBottomRef.current;
     setSending(true);
+    sendingRef.current = true;
+    setPendingMessages((current) => ({ ...current, [clientMessageId]: optimisticMessage }));
+    setDraft(emptyComposerDocument());
+    setReplyToMessageId("");
+    setSyncToGroup(false);
+    if (shouldScroll) scrollTopicMessagesToBottom();
     try {
-      const contentBlocks = topicComposerDocumentToBlocks(draft);
       const result = await topicJson<{ message: WorkspaceTopicMessage }>(`/api/workspace/topics/${encodeURIComponent(topic.id)}/messages`, {
         method: "POST",
         body: JSON.stringify({
-          clientMessageId: topicClientId(),
+          clientMessageId,
           content: { format: "duallane.message+json;v=1", blocks: contentBlocks },
           replyToMessageId: replyToMessageId || undefined,
           syncToGroup
         })
       });
-      setMessages((current) => current.some((message) => message.id === result.message.id)
-        ? current
-        : [...current, result.message]);
-      setDraft(emptyComposerDocument());
-      setReplyToMessageId("");
-      setSyncToGroup(false);
-      window.requestAnimationFrame(() => {
-        editorRef.current?.focus();
-        if (messageListRef.current) messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
-      });
+      if (sendGeneration === loadGenerationRef.current) {
+        setMessages((current) => mergeWorkspaceTopicMessages(current, [{ ...result.message, clientMessageId }]));
+        setPendingMessages((current) => {
+          const { [clientMessageId]: _sent, ...rest } = current;
+          return rest;
+        });
+        window.requestAnimationFrame(() => editorRef.current?.focus());
+      }
     } catch (caught) {
-      onNotice("warning", topicErrorMessage(caught));
+      if (sendGeneration === loadGenerationRef.current) {
+        setPendingMessages((current) => ({
+          ...current,
+          [clientMessageId]: { ...optimisticMessage, localState: "failed", failureReason: topicErrorMessage(caught) }
+        }));
+        onNotice("warning", topicErrorMessage(caught));
+      }
     } finally {
-      setSending(false);
+      if (sendGeneration === loadGenerationRef.current) {
+        setSending(false);
+        sendingRef.current = false;
+        if (refreshQueuedRef.current) {
+          refreshQueuedRef.current = false;
+          void refreshTopicSnapshot();
+        }
+      }
     }
   }
 
@@ -682,31 +793,38 @@ export function WorkspaceTopicPage({
         <div className="workspace-topic-join-state"><Hash size={25} /><strong>加入后参与讨论</strong><span>未加入成员只能查看话题摘要。</span></div>
       ) : (
         <>
-          <div className="workspace-topic-message-list" ref={messageListRef} aria-live="polite" aria-label="话题消息">
-            {messages.length === 0 ? <p className="saved-empty">还没有话题消息。</p> : messages.map((message) => {
-              const reply = message.replyToMessageId ? messages.find((candidate) => candidate.id === message.replyToMessageId) : null;
+          <div
+            className="workspace-topic-message-list"
+            ref={messageListRef}
+            onScroll={() => { stickToBottomRef.current = isTopicMessageListNearBottom(messageListRef.current); }}
+            aria-live="polite"
+            aria-label="话题消息"
+          >
+            {displayMessages.length === 0 ? <p className="saved-empty">还没有话题消息。</p> : displayMessages.map((message) => {
+              const reply = message.replyToMessageId ? displayMessages.find((candidate) => candidate.id === message.replyToMessageId) : null;
               const synced = projectedMessageIds.has(message.id);
               return (
-                <article className={message.authorId === currentUserId ? "workspace-message workspace-topic-message self" : "workspace-message workspace-topic-message"} key={message.id} data-topic-message-id={message.id} tabIndex={-1}>
+                <article className={`workspace-message workspace-topic-message${message.authorId === currentUserId ? " self" : ""}`} key={topicMessageKey(message)} data-topic-message-id={message.id} tabIndex={-1}>
                   <div className="workspace-message-avatar-slot">
                     <WorkspaceAvatar name={message.author.displayName} avatarUrl={message.author.avatarUrl ?? undefined} className="workspace-message-avatar" decorative />
                   </div>
-                  <div>
-                    <header><strong>{message.author.displayName}</strong><time>{formatTopicMessageTime(message.createdAt)}</time></header>
+                  <div className="workspace-message-content">
+                    <div className="workspace-message-meta"><strong>{message.author.displayName}</strong><time>{formatTopicMessageTime(message.createdAt)}</time></div>
                     {reply && <button className="reply-preview workspace-reply-jump" type="button" onClick={() => jumpToMessage(reply.id)}><strong>{reply.author.displayName}</strong><span>{reply.plainText}</span></button>}
                     <TopicMessageBody message={message} />
-                    <footer>
-                      <button type="button" onClick={() => { setReplyToMessageId(message.id); window.requestAnimationFrame(() => editorRef.current?.focus()); }}>回复</button>
-                      {topic.allowSyncToGroup && <button type="button" disabled={busyAction === `sync:${message.id}`} aria-pressed={synced} onClick={() => void toggleProjection(message.id)}>{synced ? "已同步" : "同步到群聊"}</button>}
-                    </footer>
+                    {message.localState && <div className={`message-local-state ${message.localState}`} role="status"><span>{message.localState === "sending" ? "发送中" : message.failureReason || "发送失败"}</span></div>}
+                  </div>
+                  <div className="workspace-message-actions workspace-topic-message-actions">
+                    {!message.localState && <button type="button" onClick={() => { setReplyToMessageId(message.id); window.requestAnimationFrame(() => editorRef.current?.focus()); }}>回复</button>}
+                    {topic.allowSyncToGroup && !message.localState && <button type="button" disabled={busyAction === `sync:${message.id}`} aria-pressed={synced} onClick={() => void toggleProjection(message.id)}>{synced ? "已同步" : "同步到群聊"}</button>}
                   </div>
                 </article>
               );
             })}
           </div>
-          <div className="workspace-topic-composer-dock">
+          <div className="workspace-composer-dock workspace-topic-composer-dock">
             {replyTarget && <div className="composer-reply"><span>回复 <strong>{replyTarget.author.displayName}</strong>：{replyTarget.plainText}</span><button className="icon-button" type="button" title="取消回复" onClick={() => setReplyToMessageId("")}><X size={15} /></button></div>}
-            <form className="workspace-topic-composer" onSubmit={(event) => void sendMessage(event)}>
+            <form className="workspace-composer workspace-topic-composer" aria-busy={sending} onSubmit={(event) => void sendMessage(event)}>
               <WorkspaceComposerEditor
                 ref={editorRef}
                 value={draft}
@@ -715,7 +833,7 @@ export function WorkspaceTopicPage({
                 onKeyDown={handleComposerKeyDown}
                 onPaste={() => undefined}
                 expanded={false}
-                readOnly={sending || topic.status !== "open"}
+                readOnly={topic.status !== "open"}
               />
               {mentionQuery !== null && filteredMentionMembers.length > 0 && (
                 <div className="workspace-topic-mention-menu" ref={mentionMenuRef} role="listbox" aria-label="选择要提及的成员">
@@ -791,6 +909,62 @@ function topicComposerDocumentToBlocks(document: WorkspaceComposerDocument): Wor
     if (block.type === "emote") return { type: "text", text: block.token };
     return { type: "text", text: block.text };
   }).filter((block) => block.type !== "text" || block.text.length > 0);
+}
+
+function sameWorkspaceTopic(left: WorkspaceTopic | null, right: WorkspaceTopic) {
+  if (!left) return false;
+  return left.id === right.id && left.revision === right.revision && left.status === right.status &&
+    left.title === right.title && left.description === right.description &&
+    left.participantCount === right.participantCount && left.joined === right.joined &&
+    left.notificationLevel === right.notificationLevel && left.updatedAt === right.updatedAt;
+}
+
+function sameTopicMembers(left: WorkspaceTopicMember[], right: WorkspaceTopicMember[]) {
+  if (left.length !== right.length) return false;
+  return left.every((member, index) => {
+    const next = right[index];
+    return Boolean(next) && member.userId === next.userId && member.displayName === next.displayName && member.avatarUrl === next.avatarUrl;
+  });
+}
+
+function sameTopicProjections(left: TopicProjection[], right: TopicProjection[]) {
+  if (left.length !== right.length) return false;
+  return left.every((projection, index) => {
+    const next = right[index];
+    return Boolean(next) && projection.id === next.id && projection.topicMessageId === next.topicMessageId && projection.removedAt === next.removedAt;
+  });
+}
+
+function optimisticTopicMessage({
+  topic,
+  currentUserId,
+  currentUserDisplayName,
+  clientMessageId,
+  blocks,
+  replyToMessageId
+}: {
+  topic: WorkspaceTopic;
+  currentUserId: string;
+  currentUserDisplayName: string;
+  clientMessageId: string;
+  blocks: WorkspaceTopicMessageBlock[];
+  replyToMessageId: string | null;
+}): WorkspaceTopicMessage {
+  const now = new Date().toISOString();
+  const plainText = blocks.map((block) => block.type === "text" ? block.text : block.type === "mention" ? `@${block.label}` : block.type === "link" ? block.label || block.url : `:${block.shortcode}:`).join("");
+  return {
+    id: `pending:${clientMessageId}`,
+    clientMessageId,
+    topicId: topic.id,
+    authorId: currentUserId,
+    authorKind: "human",
+    author: { id: currentUserId, displayName: currentUserDisplayName || "你" },
+    content: { format: "duallane.message+json;v=1", plainText, blocks },
+    plainText,
+    replyToMessageId,
+    createdAt: now,
+    localState: "sending"
+  };
 }
 
 async function topicJson<T = Record<string, unknown>>(path: string, options: RequestInit = {}): Promise<T> {

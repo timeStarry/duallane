@@ -58,13 +58,18 @@ export async function createWorkspaceObjectStore({
     endpoint: config.endpoint,
     region: config.region,
     forcePathStyle: true,
-    credentials
+    credentials,
+    // Older S3-compatible gateways reject the optional GetObject checksum query.
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED"
   });
   const deliveryClient = publicS3Client ?? new S3Client({
     endpoint: config.publicEndpoint,
     region: config.region,
     forcePathStyle: true,
-    credentials
+    credentials,
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED"
   });
 
   return createS3WorkspaceObjectStore({

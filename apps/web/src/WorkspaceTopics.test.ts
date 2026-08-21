@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   advanceWorkspaceTopicRefreshSignal,
   isTopicMessageListNearBottom,
+  mergeWorkspaceTopicMessages,
   shouldAcknowledgeTopicMessages,
   topicRefreshVersionForConversation,
   topicRefreshVersionForList,
@@ -19,6 +20,23 @@ const refreshSignal: WorkspaceTopicRefreshSignal = {
 };
 
 describe("workspace topic UI behavior", () => {
+  it("merges background snapshots without replacing unchanged message rows", () => {
+    const first = {
+      id: "message-1",
+      topicId: "topic-1",
+      authorId: "user-1",
+      authorKind: "human" as const,
+      author: { id: "user-1", displayName: "成员" },
+      content: { format: "duallane.message+json;v=1", plainText: "第一条", blocks: [{ type: "text" as const, text: "第一条" }] },
+      plainText: "第一条",
+      createdAt: "2026-08-21T00:00:00.000Z"
+    };
+    const second = { ...first, id: "message-2", plainText: "第二条", content: { ...first.content, plainText: "第二条", blocks: [{ type: "text" as const, text: "第二条" }] }, createdAt: "2026-08-21T00:01:00.000Z" };
+    const current = [first];
+    expect(mergeWorkspaceTopicMessages(current, [first])).toBe(current);
+    expect(mergeWorkspaceTopicMessages(current, [first, second])).toEqual([first, second]);
+  });
+
   it("shows the mobile rail until a topic is selected", () => {
     expect(workspaceTopicMobilePane("")).toBe("list");
     expect(workspaceTopicMobilePane("topic-1")).toBe("main");

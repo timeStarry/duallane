@@ -195,9 +195,9 @@ export function createWorkspaceNtfyService({
         await publisher({
           serverUrl,
           topic: job.topic,
-          title: "DualLane",
+          title: buildNotificationTitle(job),
           message: buildNotificationText(job, mentioned),
-          clickUrl: `${frontendUrl}/workspace/chat/${encodeURIComponent(job.conversationId)}`,
+          clickUrl: buildNotificationClickUrl(frontendUrl, job),
           timeoutMs: REQUEST_TIMEOUT_MS
         });
         await db.prepare(`
@@ -220,6 +220,7 @@ export function createWorkspaceNtfyService({
         CASE WHEN m.topic_id IS NOT NULL THEN tm.notification_level ELSE cm.notification_level END AS notificationLevel,
         CASE WHEN m.topic_id IS NOT NULL THEN tm.last_read_seq ELSE cm.last_read_seq END AS lastReadSeq,
         CASE WHEN m.topic_id IS NOT NULL THEN topic_read_message.created_at ELSE cm.last_read_at END AS lastReadAt,
+        m.topic_id AS topicId, topic.title AS topicTitle,
         m.created_at AS messageCreatedAt, m.content_json AS contentJson,
         c.type AS conversationType, c.title AS conversationTitle,
         COALESCE(ur.remark, author.nickname, author.github_login, author.display_name) AS senderName
@@ -228,6 +229,7 @@ export function createWorkspaceNtfyService({
       INNER JOIN messages m ON m.id = j.message_id AND m.deleted_at IS NULL AND m.recalled_at IS NULL
       INNER JOIN users author ON author.id = m.author_id
       INNER JOIN conversations c ON c.id = j.conversation_id
+      LEFT JOIN topics topic ON topic.id = m.topic_id
       INNER JOIN conversation_members cm
         ON cm.conversation_id = j.conversation_id AND cm.user_id = j.user_id AND cm.removed_at IS NULL
       LEFT JOIN topic_members tm
@@ -350,6 +352,11 @@ export function createTopic(githubLogin, randomIndex = (max) => randomInt(max)) 
 }
 
 function buildNotificationText(job, mentioned) {
+  if (job.topicId) {
+    const topicTitle = job.topicTitle || "未命名话题";
+    if (mentioned) return `有人在「${topicTitle}」话题中 @你`;
+    return `${job.senderName} 在「${topicTitle}」话题中发来新消息`;
+  }
   if (job.conversationType === "group" && mentioned) {
     return `有人在「${job.conversationTitle}」群聊中 @你`;
   }
@@ -357,6 +364,16 @@ function buildNotificationText(job, mentioned) {
     return `${job.senderName} 通过「${job.conversationTitle}」群聊给你发送了消息`;
   }
   return `${job.senderName} 通过私聊给你发送了消息`;
+}
+
+function buildNotificationTitle(job) {
+  return job.topicId ? `话题 · ${job.topicTitle || "未命名话题"}` : "DualLane";
+}
+
+function buildNotificationClickUrl(frontendUrl, job) {
+  return job.topicId
+    ? `${frontendUrl}/workspace/topics/${encodeURIComponent(job.topicId)}`
+    : `${frontendUrl}/workspace/chat/${encodeURIComponent(job.conversationId)}`;
 }
 
 function messageMentions(contentJson, userId) {
