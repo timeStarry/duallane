@@ -59,7 +59,7 @@ export type WorkspaceTopicMessage = {
   topicId: string;
   authorId: string;
   authorKind: "human" | "bot" | "system";
-  author: { id: string; displayName: string; githubLogin?: string };
+  author: { id: string; displayName: string; githubLogin?: string; avatarUrl?: string | null };
   content: { format: string; plainText: string; blocks: WorkspaceTopicMessageBlock[] };
   plainText: string;
   replyToMessageId?: string | null;
@@ -546,11 +546,7 @@ export function WorkspaceTopicPage({
     if (!topic || sending || !hasTopicDraftContent(draft)) return;
     setSending(true);
     try {
-      const contentBlocks = draft.blocks.map((block): WorkspaceTopicMessageBlock => {
-        if (block.type === "mention") return { type: "mention", userId: block.userId, label: block.label };
-        if (block.type === "emote") return { type: "text", text: block.token };
-        return { type: "text", text: block.text };
-      });
+      const contentBlocks = topicComposerDocumentToBlocks(draft);
       const result = await topicJson<{ message: WorkspaceTopicMessage }>(`/api/workspace/topics/${encodeURIComponent(topic.id)}/messages`, {
         method: "POST",
         body: JSON.stringify({
@@ -691,8 +687,10 @@ export function WorkspaceTopicPage({
               const reply = message.replyToMessageId ? messages.find((candidate) => candidate.id === message.replyToMessageId) : null;
               const synced = projectedMessageIds.has(message.id);
               return (
-                <article className={message.authorId === currentUserId ? "workspace-topic-message self" : "workspace-topic-message"} key={message.id} data-topic-message-id={message.id} tabIndex={-1}>
-                  <WorkspaceAvatar name={message.author.displayName} className="small" decorative />
+                <article className={message.authorId === currentUserId ? "workspace-message workspace-topic-message self" : "workspace-message workspace-topic-message"} key={message.id} data-topic-message-id={message.id} tabIndex={-1}>
+                  <div className="workspace-message-avatar-slot">
+                    <WorkspaceAvatar name={message.author.displayName} avatarUrl={message.author.avatarUrl ?? undefined} className="workspace-message-avatar" decorative />
+                  </div>
                   <div>
                     <header><strong>{message.author.displayName}</strong><time>{formatTopicMessageTime(message.createdAt)}</time></header>
                     {reply && <button className="reply-preview workspace-reply-jump" type="button" onClick={() => jumpToMessage(reply.id)}><strong>{reply.author.displayName}</strong><span>{reply.plainText}</span></button>}
@@ -747,9 +745,14 @@ export function WorkspaceTopicPage({
 }
 
 function TopicMessageBody({ message }: { message: WorkspaceTopicMessage }) {
+  const blocks = message.content.blocks.length > 0
+    ? message.content.blocks
+    : message.plainText.trim()
+      ? [{ type: "text" as const, text: message.plainText }]
+      : [];
   return (
     <div className="workspace-topic-message-body">
-      {message.content.blocks.map((block, index) => {
+      {blocks.map((block, index) => {
         if (block.type === "text") return <WorkspaceMarkdown key={`${index}-text`}>{block.text}</WorkspaceMarkdown>;
         if (block.type === "mention") return <span className="message-mention" key={`${index}-mention`}>@{block.label}</span>;
         if (block.type === "link") return <a className="message-link" key={`${index}-link`} href={block.url} target="_blank" rel="noopener noreferrer">{block.label || block.url}</a>;
@@ -772,10 +775,22 @@ function emptyComposerDocument(): WorkspaceComposerDocument {
 }
 
 function hasTopicDraftContent(document: WorkspaceComposerDocument) {
+  if (document.source.trim()) return true;
   return document.blocks.some((block) => {
     if (block.type === "mention" || block.type === "emote") return true;
     return block.text.trim().length > 0;
   });
+}
+
+function topicComposerDocumentToBlocks(document: WorkspaceComposerDocument): WorkspaceTopicMessageBlock[] {
+  if (document.blocks.length === 0 && document.source.trim()) {
+    return [{ type: "text", text: document.source }];
+  }
+  return document.blocks.map((block): WorkspaceTopicMessageBlock => {
+    if (block.type === "mention") return { type: "mention", userId: block.userId, label: block.label };
+    if (block.type === "emote") return { type: "text", text: block.token };
+    return { type: "text", text: block.text };
+  }).filter((block) => block.type !== "text" || block.text.length > 0);
 }
 
 async function topicJson<T = Record<string, unknown>>(path: string, options: RequestInit = {}): Promise<T> {

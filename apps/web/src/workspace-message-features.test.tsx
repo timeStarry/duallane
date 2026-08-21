@@ -334,6 +334,28 @@ describe("workspace message presentation helpers", () => {
     expect(html).not.toContain("message-file-card image");
   });
 
+  it("renders an existing topic reference as a compact navigable tag", () => {
+    const html = renderToStaticMarkup(
+      <WorkspaceStructuredMessage
+        message={{
+          id: "message-topic-reference",
+          author: "当前用户",
+          body: "#需求讨论 补充说明",
+          lane: "workspace",
+          at: "15:04",
+          content: { blocks: [
+            { type: "topic_reference", topicId: "topic-1", title: "需求讨论" },
+            { type: "text", text: " 补充说明" }
+          ] },
+          attachments: []
+        }}
+        onOpenTopic={() => undefined}
+      />
+    );
+    expect(html).toContain("workspace-topic-reference");
+    expect(html).toContain("#需求讨论");
+  });
+
   it("marks a single image emote message for enlarged rendering", () => {
     const html = renderToStaticMarkup(
       <WorkspaceStructuredMessage

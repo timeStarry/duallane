@@ -56,7 +56,7 @@ const ROLE_LABELS = {
 };
 
 const PRIVILEGED_INVITE_ROLES = new Set(["owner", "admin", "auditor"]);
-const MESSAGE_BLOCK_TYPES = new Set(["text", "mention", "link", "emoji", "attachment", "emote_collection", "card"]);
+const MESSAGE_BLOCK_TYPES = new Set(["text", "mention", "link", "emoji", "attachment", "emote_collection", "topic_reference", "card"]);
 const ATTACHMENT_VISIBILITIES = new Set(["private_staging", "conversation", "space"]);
 
 export async function runWorkspaceTransaction(db, callback) {
@@ -3826,6 +3826,22 @@ async function normalizeBlock(db, actor, conversationId, block, options = {}) {
     await options.validateCollectionShare(actor.id, shareId);
     return { type: "emote_collection", shareId };
   }
+  if (block.type === "topic_reference") {
+    const topicId = normalizeString(block.topicId);
+    if (!topicId) {
+      throw new WorkspaceValidationError("message.invalid_topic", "话题标签无效");
+    }
+    const topic = await db.prepare(`
+      SELECT t.id, t.title
+      FROM topics t
+      INNER JOIN topic_members tm ON tm.topic_id = t.id AND tm.user_id = ? AND tm.left_at IS NULL
+      WHERE t.id = ? AND t.space_id = ? AND t.conversation_id = ?
+    `).get(actor.id, topicId, DEFAULT_SPACE_ID, conversationId);
+    if (!topic) {
+      throw new WorkspaceValidationError("message.invalid_topic", "话题不可用或你尚未加入该话题");
+    }
+    return { type: "topic_reference", topicId: topic.id, title: publicString(topic.title) };
+  }
   const attachmentId = normalizeString(block.attachmentId);
   await validateAttachmentForMessage(db, actor, conversationId, attachmentId);
   return { type: "attachment", attachmentId };
@@ -3842,6 +3858,7 @@ function buildPlainText(blocks) {
     if (block.type === "emoji") return block.shortcode.startsWith("custom:") ? "[表情]" : `:${block.shortcode}:`;
     if (block.type === "attachment") return "[文件]";
     if (block.type === "emote_collection") return "[表情合集]";
+    if (block.type === "topic_reference") return `#${block.title}`;
     if (block.type === "card") return block.fallbackText;
     return "";
   }).join("");
@@ -4190,6 +4207,9 @@ function publicMessageBlock(block, emoteCollectionShares = null) {
       ? emoteCollectionShares.get(shareId)
       : block.share && typeof block.share === "object" ? block.share : null;
     return { type: "emote_collection", shareId, share: share || undefined };
+  }
+  if (block.type === "topic_reference") {
+    return { type: "topic_reference", topicId: publicString(block.topicId), title: publicString(block.title) };
   }
   if (block.type === "card") {
     try {

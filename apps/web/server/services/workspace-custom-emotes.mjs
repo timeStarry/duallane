@@ -208,13 +208,15 @@ export function createWorkspaceCustomEmoteService({ db, objectStore, storageObje
     const row = await db.prepare(`
       SELECT
         enabled_pack_ids_json AS enabledPackIdsJson,
-        click_image_emote_to_send AS clickImageEmoteToSend
+        click_image_emote_to_send AS clickImageEmoteToSend,
+        reply_auto_mention AS replyAutoMention
       FROM workspace_emote_preferences WHERE user_id = ?
     `).get(actorId);
     return {
       availablePacks,
       enabledPackIds: normalizeEnabledPackIds(row?.enabledPackIdsJson, availablePacks),
       clickImageEmoteToSend: Boolean(row?.clickImageEmoteToSend),
+      replyAutoMention: Boolean(row?.replyAutoMention),
       minimumEnabled: 1
     };
   };
@@ -232,6 +234,7 @@ export function createWorkspaceCustomEmoteService({ db, objectStore, storageObje
       const settings = Array.isArray(input) ? { enabledPackIds: input } : input ?? {};
       const updatesEnabledPacks = Object.prototype.hasOwnProperty.call(settings, "enabledPackIds");
       const updatesDirectSend = Object.prototype.hasOwnProperty.call(settings, "clickImageEmoteToSend");
+      const updatesReplyAutoMention = Object.prototype.hasOwnProperty.call(settings, "replyAutoMention");
       const allowed = new Set(availablePacks.map((pack) => pack.id));
       let normalized = current.enabledPackIds;
       if (updatesEnabledPacks) {
@@ -244,27 +247,31 @@ export function createWorkspaceCustomEmoteService({ db, objectStore, storageObje
       if (updatesDirectSend && typeof settings.clickImageEmoteToSend !== "boolean") {
         throw new WorkspaceValidationError("emote.invalid_settings", "图片表情发送设置无效");
       }
+      if (updatesReplyAutoMention && typeof settings.replyAutoMention !== "boolean") {
+        throw new WorkspaceValidationError("emote.invalid_settings", "回复提及设置无效");
+      }
       const clickImageEmoteToSend = updatesDirectSend
         ? settings.clickImageEmoteToSend
         : current.clickImageEmoteToSend;
+      const replyAutoMention = updatesReplyAutoMention
+        ? settings.replyAutoMention
+        : current.replyAutoMention;
       const updatedAt = now().toISOString();
       await db.prepare(`
         INSERT INTO workspace_emote_preferences (
-          user_id, enabled_pack_ids_json, click_image_emote_to_send, updated_at
-        ) VALUES (?, ?, ?, ?)
+          user_id, enabled_pack_ids_json, click_image_emote_to_send, reply_auto_mention, updated_at
+        ) VALUES (?, ?, ?, ?, ?)
         ON CONFLICT (user_id) DO UPDATE SET
           enabled_pack_ids_json = excluded.enabled_pack_ids_json,
           click_image_emote_to_send = excluded.click_image_emote_to_send,
+          reply_auto_mention = excluded.reply_auto_mention,
           updated_at = excluded.updated_at
-      `).run(actorId, JSON.stringify(normalized), clickImageEmoteToSend ? 1 : 0, updatedAt);
-      return { availablePacks, enabledPackIds: normalized, clickImageEmoteToSend, minimumEnabled: 1 };
+      `).run(actorId, JSON.stringify(normalized), clickImageEmoteToSend ? 1 : 0, replyAutoMention ? 1 : 0, updatedAt);
+      return { availablePacks, enabledPackIds: normalized, clickImageEmoteToSend, replyAutoMention, minimumEnabled: 1 };
     },
 
     async list(actorId) {
       await requireHumanActor(db, actorId);
-      const retired = [];
-      await syncActorSubscriptions(db, actorId, now, retired);
-      await cleanupRetiredEmotes(retired);
       const rows = await db.prepare(`
         SELECT * FROM workspace_custom_emotes
         WHERE user_id = ? AND removed_at IS NULL
@@ -280,9 +287,6 @@ export function createWorkspaceCustomEmoteService({ db, objectStore, storageObje
 
     async getLibrary(actorId) {
       await requireHumanActor(db, actorId);
-      const retired = [];
-      await syncActorSubscriptions(db, actorId, now, retired);
-      await cleanupRetiredEmotes(retired);
       return await buildLibrary(db, actorId);
     },
 

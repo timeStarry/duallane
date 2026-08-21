@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -226,6 +226,8 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
   const [groupPolicyMode, setGroupPolicyMode] = useState<BotGroupPolicyMode>("direct_only");
   const [savingSettings, setSavingSettings] = useState(false);
   const [savingGroupPolicy, setSavingGroupPolicy] = useState(false);
+  const [identitySaveState, setIdentitySaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [groupSaveState, setGroupSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [connectionBusy, setConnectionBusy] = useState(false);
   const [tokenBusy, setTokenBusy] = useState(false);
   const [revealedToken, setRevealedToken] = useState<string | null>(null);
@@ -233,6 +235,8 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createBusy, setCreateBusy] = useState(false);
+  const savedIdentitySignatureRef = useRef("");
+  const savedGroupPolicyRef = useRef<BotGroupPolicyMode | null>(null);
 
   const loadBot = useCallback(async (preferredBotId?: string) => {
     setLoading(true);
@@ -271,6 +275,16 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
       setVisibilityPolicy(nextSettings.visibilityPolicy);
       setMemberIds(nextSettings.allowedMemberIds.join("\n"));
       setGroupPolicyMode(resolveBotGroupPolicyMode(nextSettings));
+      savedIdentitySignatureRef.current = JSON.stringify({
+        description: nextSettings.description ?? "",
+        welcomeMessage: nextSettings.welcomeMessage ?? "",
+        showCreator: Boolean(nextSettings.showCreator),
+        visibilityPolicy: nextSettings.visibilityPolicy,
+        allowedMemberIds: nextSettings.allowedMemberIds
+      });
+      savedGroupPolicyRef.current = resolveBotGroupPolicyMode(nextSettings);
+      setIdentitySaveState("idle");
+      setGroupSaveState("idle");
       setTokens(Array.isArray(tokensResult.tokens) ? tokensResult.tokens : []);
       setConnection(connectionResult.connection ?? null);
       setGroupPolicies(Array.isArray(groupsResult.policies) ? groupsResult.policies : []);
@@ -314,11 +328,12 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
     }
   }
 
-  async function saveIdentityAndDiscovery(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function saveIdentityAndDiscovery() {
     if (!bot || !settings) return;
     setSavingSettings(true);
+    setIdentitySaveState("saving");
     try {
+      const allowedMemberIds = parseBotMemberIds(memberIds);
       const next = await requestJson<{ settings: BotSettings }>(fetchImpl, `/api/workspace/bots/${encodeURIComponent(bot.id)}/settings`, {
         method: "PATCH",
         body: JSON.stringify({
@@ -326,14 +341,22 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
           welcomeMessage: welcomeMessage.trim() || null,
           showCreator,
           visibilityPolicy,
-          allowedMemberIds: parseBotMemberIds(memberIds)
+          allowedMemberIds
         })
       });
       setSettings(next.settings);
       setVisibilityPolicy(next.settings.visibilityPolicy);
       setMemberIds(next.settings.allowedMemberIds.join("\n"));
-      onNotice("success", "Bot 身份与发现设置已保存");
+      savedIdentitySignatureRef.current = JSON.stringify({
+        description: next.settings.description ?? "",
+        welcomeMessage: next.settings.welcomeMessage ?? "",
+        showCreator: Boolean(next.settings.showCreator),
+        visibilityPolicy: next.settings.visibilityPolicy,
+        allowedMemberIds: next.settings.allowedMemberIds
+      });
+      setIdentitySaveState("saved");
     } catch (saveError) {
+      setIdentitySaveState("error");
       onNotice("warning", operationError(saveError, "Bot 设置保存失败"));
     } finally {
       setSavingSettings(false);
@@ -343,6 +366,7 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
   async function saveGroupPolicy() {
     if (!bot || !settings) return;
     setSavingGroupPolicy(true);
+    setGroupSaveState("saving");
     try {
       const patch = buildBotGroupPolicyPatch(groupPolicyMode);
       const next = await requestJson<{ settings: BotSettings }>(fetchImpl, `/api/workspace/bots/${encodeURIComponent(bot.id)}/settings`, {
@@ -351,13 +375,36 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
       });
       setSettings(next.settings);
       setGroupPolicyMode(resolveBotGroupPolicyMode(next.settings));
-      onNotice("success", "群聊策略已保存");
+      savedGroupPolicyRef.current = resolveBotGroupPolicyMode(next.settings);
+      setGroupSaveState("saved");
     } catch (saveError) {
+      setGroupSaveState("error");
       onNotice("warning", operationError(saveError, "群聊策略保存失败"));
     } finally {
       setSavingGroupPolicy(false);
     }
   }
+
+  useEffect(() => {
+    if (!bot || !settings || (bot.status !== "active" && bot.status !== "paused")) return;
+    const signature = JSON.stringify({
+      description: description.trim(),
+      welcomeMessage: welcomeMessage.trim(),
+      showCreator,
+      visibilityPolicy,
+      allowedMemberIds: parseBotMemberIds(memberIds)
+    });
+    if (!savedIdentitySignatureRef.current || signature === savedIdentitySignatureRef.current) return;
+    const timer = window.setTimeout(() => { void saveIdentityAndDiscovery(); }, 650);
+    return () => window.clearTimeout(timer);
+  }, [bot, settings, description, welcomeMessage, showCreator, visibilityPolicy, memberIds]);
+
+  useEffect(() => {
+    if (!bot || !settings || (bot.status !== "active" && bot.status !== "paused")) return;
+    if (savedGroupPolicyRef.current === null || groupPolicyMode === savedGroupPolicyRef.current) return;
+    const timer = window.setTimeout(() => { void saveGroupPolicy(); }, 500);
+    return () => window.clearTimeout(timer);
+  }, [bot, settings, groupPolicyMode]);
 
   async function testConnection() {
     if (!bot) return;
@@ -420,25 +467,21 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
     }
   }
 
-  async function requestDisable() {
+  function requestDisable() {
     if (!bot) return;
-    setDeleteBusy(true);
-    try {
-      const result = await requestJson<{ bot: WorkspaceBot }>(fetchImpl, `/api/workspace/bots/${encodeURIComponent(bot.id)}`, { method: "DELETE" });
-      setBot(result.bot);
-      setDeleteConfirm(true);
-      onNotice("info", "Bot 已进入待停用状态，请确认完成停用");
-    } catch (deleteError) {
-      onNotice("warning", operationError(deleteError, "Bot 停用请求失败"));
-    } finally {
-      setDeleteBusy(false);
-    }
+    setDeleteConfirm(true);
   }
 
   async function confirmDisable() {
     if (!bot) return;
     setDeleteBusy(true);
     try {
+      let nextBot = bot;
+      if (bot.status !== "deleting") {
+        const pending = await requestJson<{ bot: WorkspaceBot }>(fetchImpl, `/api/workspace/bots/${encodeURIComponent(bot.id)}`, { method: "DELETE" });
+        nextBot = pending.bot;
+        setBot(nextBot);
+      }
       const result = await requestJson<{ bot: WorkspaceBot }>(fetchImpl, `/api/workspace/bots/${encodeURIComponent(bot.id)}/delete/confirm`, { method: "POST" });
       setBot(result.bot);
       setDeleteConfirm(false);
@@ -446,7 +489,7 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
       setRevealedToken(null);
       onNotice("success", "Bot 已停用");
     } catch (deleteError) {
-      onNotice("warning", operationError(deleteError, "Bot 停用确认失败"));
+      onNotice("warning", operationError(deleteError, "Bot 停用失败"));
     } finally {
       setDeleteBusy(false);
     }
@@ -525,14 +568,14 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
         </div>
       </header>
 
-      {isDeleting && <div className="workspace-bot-confirm workspace-bot-confirm-danger" role="alert"><AlertTriangle size={18} /><div><strong>Bot 即将停用</strong><p>停用会撤销所有 Token 并移除 Bot 的空间成员身份。</p></div>{deleteConfirm ? <><button className="secondary compact" type="button" disabled={deleteBusy} onClick={() => setDeleteConfirm(false)}><X size={15} />取消</button><button className="danger compact" type="button" disabled={deleteBusy} onClick={() => void confirmDisable()}><Check size={15} />确认停用</button></> : <button className="danger compact" type="button" disabled={deleteBusy} onClick={() => setDeleteConfirm(true)}>继续停用</button>}</div>}
+      {(isDeleting || deleteConfirm) && <div className="workspace-bot-confirm workspace-bot-confirm-danger" role="alert"><AlertTriangle size={18} /><div><strong>{isDeleting ? "Bot 即将停用" : "确认停用 Bot"}</strong><p>停用会撤销所有 Token，并移除 Bot 的空间成员身份。此操作不可恢复。</p></div><button className="secondary compact" type="button" disabled={deleteBusy} onClick={() => setDeleteConfirm(false)}><X size={15} />取消</button><button className="danger compact" type="button" disabled={deleteBusy} onClick={() => void confirmDisable()}><Check size={15} />确认停用</button></div>}
       {isDeleted && <div className="workspace-bot-confirm workspace-bot-confirm-muted" role="status"><ShieldCheck size={18} /><span>此 Bot 已停用，设置与凭据均不可再使用。</span></div>}
 
       {!isDeleted && settings && (
         <div className="workspace-bot-sections">
           <section className="workspace-bot-section" aria-labelledby="workspace-bot-identity-title">
             <div className="workspace-bot-section-intro"><h3 id="workspace-bot-identity-title">身份与发现</h3><p>控制 Bot 的公开资料、触发入口和可见范围。</p></div>
-            <form className="workspace-bot-form" onSubmit={saveIdentityAndDiscovery}>
+            <form className="workspace-bot-form" onSubmit={(event) => { event.preventDefault(); void saveIdentityAndDiscovery(); }}>
               <div className="workspace-bot-form-grid">
                 <div className="workspace-bot-readonly"><span>Bot 名称</span><strong>{botName}</strong></div>
                 <div className="workspace-bot-readonly"><span>Bot ID</span><code>{bot.id}</code></div>
@@ -542,7 +585,11 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
               <label className="workspace-bot-select-field"><span>成员发现</span><select value={visibilityPolicy} disabled={!isActive && !isPaused} onChange={(event) => setVisibilityPolicy(event.target.value as BotSettings["visibilityPolicy"])}><option value="private">仅自己可发现</option><option value="specified_members">指定成员</option><option value="space_members">空间成员</option><option value="groups">已授权群聊</option></select><small>{visibilityLabel(visibilityPolicy)}</small></label>
               {visibilityPolicy === "specified_members" && <label><span>指定成员 ID</span><textarea value={memberIds} maxLength={4000} rows={2} disabled={!isActive && !isPaused} onChange={(event) => setMemberIds(event.target.value)} placeholder="每行一个成员 ID" /><small>仅保存成员 ID，不会读取或显示成员消息。</small></label>}
               <label className="workspace-bot-switch"><input type="checkbox" checked={showCreator} disabled={!isActive && !isPaused} onChange={(event) => setShowCreator(event.target.checked)} /><span><strong>显示创建者</strong><small>在 Bot 资料中显示你的空间身份。</small></span></label>
-              <div className="workspace-bot-form-actions"><button className="primary" type="submit" disabled={savingSettings || (!isActive && !isPaused)}>{savingSettings ? <RefreshCw size={16} className="workspace-bot-spin" /> : <Check size={16} />}保存身份设置</button></div>
+              <div className="workspace-bot-auto-save-row" role="status" aria-live="polite">
+                {identitySaveState === "saving" ? <RefreshCw size={14} className="workspace-bot-spin" /> : identitySaveState === "saved" ? <Check size={14} /> : <ShieldCheck size={14} />}
+                <span>{identitySaveState === "saving" ? "正在保存" : identitySaveState === "saved" ? "已自动保存" : identitySaveState === "error" ? "保存失败，请继续修改后重试" : "修改后自动保存"}</span>
+                {identitySaveState === "error" && <button className="text-button" type="submit" disabled={savingSettings}>重试</button>}
+              </div>
             </form>
           </section>
 
@@ -553,7 +600,11 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
               {BOT_GROUP_POLICY_OPTIONS.map((option) => <label key={option.value} className={groupPolicyMode === option.value ? "workspace-bot-policy-option is-selected" : "workspace-bot-policy-option"}><input type="radio" name="workspace-bot-group-policy" value={option.value} checked={groupPolicyMode === option.value} onChange={() => setGroupPolicyMode(option.value)} /><span><strong>{option.label}</strong><small>{option.description}</small></span></label>)}
             </fieldset>
             <div className="workspace-bot-policy-meta"><span>已授权群聊</span><strong>{visibleGroupPolicyCount} 个</strong><span>邀请策略</span><strong>{settings.groupInviterPolicy === "group_admin" ? "群管理员" : settings.groupInviterPolicy === "any_member" ? "任意成员" : "Bot 所有者"}</strong></div>
-            <div className="workspace-bot-form-actions"><button className="primary" type="button" disabled={savingGroupPolicy || (!isActive && !isPaused)} onClick={() => void saveGroupPolicy()}>{savingGroupPolicy ? <RefreshCw size={16} className="workspace-bot-spin" /> : <ShieldCheck size={16} />}保存群聊策略</button></div>
+            <div className="workspace-bot-auto-save-row" role="status" aria-live="polite">
+              {groupSaveState === "saving" ? <RefreshCw size={14} className="workspace-bot-spin" /> : groupSaveState === "saved" ? <Check size={14} /> : <ShieldCheck size={14} />}
+              <span>{groupSaveState === "saving" ? "正在保存" : groupSaveState === "saved" ? "已自动保存" : groupSaveState === "error" ? "保存失败，请重试" : "选择后自动保存"}</span>
+              {groupSaveState === "error" && <button className="text-button" type="button" disabled={savingGroupPolicy} onClick={() => void saveGroupPolicy()}>重试</button>}
+            </div>
           </section>
 
           <section className="workspace-bot-section" aria-labelledby="workspace-bot-quota-title">
@@ -576,7 +627,7 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
 
           <section className="workspace-bot-section workspace-bot-danger-section" aria-labelledby="workspace-bot-danger-title">
             <div className="workspace-bot-section-intro"><h3 id="workspace-bot-danger-title">停用 Bot</h3><p>停用会撤销所有 Token，并移除 Bot 的空间成员身份。此操作不可恢复。</p></div>
-            <button className="danger" type="button" disabled={deleteBusy || isDeleting || !isActive && !isPaused} onClick={() => void requestDisable()}><Trash2 size={16} />停用 Bot</button>
+            {!isDeleting && !deleteConfirm && <button className="danger" type="button" disabled={deleteBusy || !isActive && !isPaused} onClick={requestDisable}><Trash2 size={16} />停用 Bot</button>}
           </section>
         </div>
       )}

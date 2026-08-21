@@ -30,6 +30,7 @@ describe("workspace custom emotes", () => {
     ]));
     expect(defaults.enabledPackIds).toEqual(["emoji", "bili", "wechat", "feishu"]);
     expect(defaults.clickImageEmoteToSend).toBe(false);
+    expect(defaults.replyAutoMention).toBe(false);
     await expect(service.updateSettings("usr_owner", [])).rejects.toMatchObject({ code: "emote.pack_required" });
 
     const updated = await service.updateSettings("usr_owner", ["emoji", "xiaohongshu"]);
@@ -39,11 +40,16 @@ describe("workspace custom emotes", () => {
       enabledPackIds: ["emoji", "xiaohongshu"],
       clickImageEmoteToSend: true
     });
+    const replyMention = await service.updateSettings("usr_owner", { replyAutoMention: true });
+    expect(replyMention.replyAutoMention).toBe(true);
     expect(await service.getSettings("usr_owner")).toMatchObject({
       enabledPackIds: ["emoji", "xiaohongshu"],
-      clickImageEmoteToSend: true
+      clickImageEmoteToSend: true,
+      replyAutoMention: true
     });
     await expect(service.updateSettings("usr_owner", { clickImageEmoteToSend: "yes" }))
+      .rejects.toMatchObject({ code: "emote.invalid_settings" });
+    await expect(service.updateSettings("usr_owner", { replyAutoMention: "yes" }))
       .rejects.toMatchObject({ code: "emote.invalid_settings" });
   });
 

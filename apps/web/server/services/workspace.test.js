@@ -68,6 +68,7 @@ import {
 } from "./workspace.mjs";
 import { createWorkspaceObjectStore } from "./workspace-object-store.mjs";
 import { createWorkspaceStorageObjectRegistry } from "./workspace-storage-objects.mjs";
+import { createTopic } from "./workspace-topics.mjs";
 
 const request = {
   id: "test-request",
@@ -2393,6 +2394,45 @@ describe("workspace service", () => {
         blocks: [{ type: "text", text: " \n\t " }]
       }
     })).rejects.toMatchObject({ code: "message.empty" });
+  });
+
+  it("normalizes existing topic references as interactive tags", async () => {
+    const invite = await createInvite(db, request, { actorId: "usr_owner", code: "TOPIC-REFERENCE-MEMBER" });
+    const member = await acceptInvite(db, request, {
+      code: invite.code,
+      githubLogin: "topic-reference-member",
+      email: "topic-reference-member@example.com",
+      displayName: "Topic Member"
+    });
+    const conversation = await createWorkspaceConversation(db, request, {
+      actorId: "usr_owner",
+      type: "group",
+      title: "Topic reference",
+      memberIds: [member.id]
+    });
+    const topic = await createTopic(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      source: "#[Existing topic](正文)",
+      idempotencyKey: "topic-reference"
+    });
+    const message = await createStructuredMessage(db, request, {
+      actorId: "usr_owner",
+      conversationId: conversation.id,
+      clientMessageId: "topic-reference-message",
+      content: {
+        format: MESSAGE_CONTENT_FORMAT,
+        blocks: [
+          { type: "topic_reference", topicId: topic.id, title: "spoofed" },
+          { type: "text", text: "补充说明" }
+        ]
+      }
+    });
+    expect(message.content.blocks).toEqual([
+      { type: "topic_reference", topicId: topic.id, title: "Existing topic" },
+      { type: "text", text: "补充说明" }
+    ]);
+    expect(message.plainText).toBe("#Existing topic补充说明");
   });
 
   it("rejects mentions for space members outside the current conversation", async () => {

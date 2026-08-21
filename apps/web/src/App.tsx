@@ -143,6 +143,7 @@ import {
   WorkspaceTopicRail,
   advanceWorkspaceTopicRefreshSignal,
   workspaceTopicMobilePane,
+  type WorkspaceTopic,
   type WorkspaceTopicRefreshSignal
 } from "./WorkspaceTopics";
 import { WorkspaceEchoRequirements } from "./WorkspaceEchoRequirements";
@@ -170,9 +171,17 @@ const WORKSPACE_EMOTE_LIBRARY_CHANGED_EVENT = "duallane:workspace-emote-library-
 const VERSION_UPDATE_DISMISSED_STORAGE_PREFIX = "duallane-version-update-dismissed:";
 const VERSION_CHECK_INTERVAL_MS = 60 * 1000;
 const VERSION_CHECK_TIMEOUT_MS = 8 * 1000;
+let workspaceEmoteLibraryCache: WorkspaceEmoteLibrary | null = null;
+let workspaceEmoteLibraryRequest: Promise<WorkspaceEmoteLibrary> | null = null;
 
 function notifyWorkspaceEmoteLibraryChanged() {
+  workspaceEmoteLibraryCache = null;
   window.dispatchEvent(new Event(WORKSPACE_EMOTE_LIBRARY_CHANGED_EVENT));
+}
+
+function clearWorkspaceEmoteLibraryCache() {
+  workspaceEmoteLibraryCache = null;
+  workspaceEmoteLibraryRequest = null;
 }
 
 type SecureChannel = "signal" | "ws-chat" | "profile";
@@ -354,6 +363,7 @@ type WorkspaceContentBlock =
   | { type: "emoji"; shortcode: string }
   | { type: "attachment"; attachmentId: string }
   | { type: "emote_collection"; shareId: string; share?: WorkspaceEmoteCollectionShareSummary }
+  | { type: "topic_reference"; topicId: string; title: string }
   | { type: "card"; cardId: string; cardType: string; schemaVersion: number; fallbackText: string };
 type WorkspaceAttachment = {
   id: string;
@@ -498,6 +508,7 @@ type WorkspaceEmoteSettings = {
   availablePacks: Array<{ id: Exclude<EmotePack["id"], "custom">; label: string; defaultEnabled: boolean }>;
   enabledPackIds: Array<Exclude<EmotePack["id"], "custom">>;
   clickImageEmoteToSend: boolean;
+  replyAutoMention: boolean;
   minimumEnabled: number;
 };
 type WorkspaceCustomEmote = {
@@ -1031,6 +1042,20 @@ async function workspaceJson<T>(path: string, options: RequestInit = {}): Promis
     throw createWorkspaceClientError(response, payload);
   }
   return (await response.json()) as T;
+}
+
+async function loadWorkspaceEmoteLibrary(force = false) {
+  if (!force && workspaceEmoteLibraryCache) return workspaceEmoteLibraryCache;
+  if (!force && workspaceEmoteLibraryRequest) return workspaceEmoteLibraryRequest;
+  const request = workspaceJson<WorkspaceEmoteLibrary>("/api/workspace/me/emote-library");
+  workspaceEmoteLibraryRequest = request;
+  try {
+    const library = await request;
+    workspaceEmoteLibraryCache = library;
+    return library;
+  } finally {
+    if (workspaceEmoteLibraryRequest === request) workspaceEmoteLibraryRequest = null;
+  }
 }
 
 async function workspaceFetch(path: string, options: RequestInit = {}) {
@@ -2505,6 +2530,7 @@ export function App() {
   const [copyState, setCopyState] = useState<CopyState>("idle");
   const [roomDetailsOpen, setRoomDetailsOpen] = useState(false);
   const [workspaceBootstrap, setWorkspaceBootstrap] = useState<WorkspaceBootstrap | null>(null);
+  const [workspaceReplyAutoMention, setWorkspaceReplyAutoMention] = useState(false);
   const [workspaceStatistics, setWorkspaceStatistics] = useState<WorkspaceStatistics | null>(null);
   const [workspaceStatisticsLoading, setWorkspaceStatisticsLoading] = useState(false);
   const [workspaceStatisticsError, setWorkspaceStatisticsError] = useState("");
@@ -2520,6 +2546,8 @@ export function App() {
     topicVersions: {},
     conversationVersions: {}
   });
+  const [workspaceConversationTopicsById, setWorkspaceConversationTopicsById] = useState<Record<string, Array<Pick<WorkspaceTopic, "id" | "title" | "status">>>>({});
+  const [workspaceComposerTopicByConversation, setWorkspaceComposerTopicByConversation] = useState<Record<string, Pick<WorkspaceTopic, "id" | "title" | "status">>>({});
   const [workspaceCardRevisionById, setWorkspaceCardRevisionById] = useState<Record<string, number>>({});
   const [workspaceDraftByConversation, setWorkspaceDraftByConversation] = useState<Record<string, WorkspaceComposerDocument>>({});
   const [workspaceEchoInteractionByConversation, setWorkspaceEchoInteractionByConversation] = useState<
@@ -2718,6 +2746,43 @@ export function App() {
   const workspaceSelectedConversation = workspaceConversations.find(
     (conversation) => conversation.id === workspaceSelectedConversationId
   );
+
+  useEffect(() => {
+    const userId = workspaceBootstrap?.auth.currentUser.id;
+    if (!userId) {
+      setWorkspaceReplyAutoMention(false);
+      return;
+    }
+    let cancelled = false;
+    void workspaceJson<{ settings: WorkspaceEmoteSettings }>("/api/workspace/me/emote-settings")
+      .then((data) => { if (!cancelled) setWorkspaceReplyAutoMention(Boolean(data.settings.replyAutoMention)); })
+      .catch(() => { if (!cancelled) setWorkspaceReplyAutoMention(false); });
+    return () => { cancelled = true; };
+  }, [workspaceBootstrap?.auth.currentUser.id]);
+  useEffect(() => {
+    const conversation = workspaceSelectedConversation;
+    if (!conversation || conversation.type !== "group") {
+      return;
+    }
+    let cancelled = false;
+    void workspaceJson<{ topics: WorkspaceTopic[] }>(
+      `/api/workspace/conversations/${encodeURIComponent(conversation.id)}/topics?status=open`
+    ).then((data) => {
+      if (cancelled) return;
+      const topics = data.topics.map(({ id, title, status }) => ({ id, title, status }));
+      setWorkspaceConversationTopicsById((current) => ({ ...current, [conversation.id]: topics }));
+      setWorkspaceComposerTopicByConversation((current) => {
+        const selected = current[conversation.id];
+        return selected && topics.some((topic) => topic.id === selected.id)
+          ? current
+          : (() => {
+              const { [conversation.id]: _removed, ...rest } = current;
+              return rest;
+            })();
+      });
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [workspaceSelectedConversation?.id, workspaceSelectedConversation?.type, workspaceTopicRefreshSignal.conversationVersions[workspaceSelectedConversation?.id ?? ""]]);
   const workspaceTotalUnreadCount = useMemo(
     () => workspaceConversations.reduce((total, conversation) => total + Math.max(0, conversation.unreadCount ?? 0), 0),
     [workspaceConversations]
@@ -4585,10 +4650,33 @@ export function App() {
       }
       return { ...replyTargets, [conversationId]: messageId };
     });
+    if (messageId && workspaceReplyAutoMention) {
+      const conversation = workspaceConversations.find((item) => item.id === conversationId);
+      const target = conversation?.latestMessages.find((message) => message.id === messageId);
+      const author = target && conversation?.members.find((member) => member.id === target.authorId);
+      const currentUserId = workspaceBootstrap?.auth.currentUser.id;
+      if (conversation?.type === "group" && author && author.id !== currentUserId) {
+        setWorkspaceDraftByConversation((drafts) => {
+          const current = drafts[conversationId] ?? { source: "", blocks: [] };
+          if (current.blocks.some((block) => block.type === "mention" && block.userId === author.id)) return drafts;
+          const mention = { type: "mention" as const, userId: author.id, label: author.displayName };
+          const spacer = current.blocks.length > 0 ? { type: "text" as const, text: " " } : null;
+          return {
+            ...drafts,
+            [conversationId]: {
+              source: `@${author.displayName}${current.source ? ` ${current.source}` : " "}`,
+              blocks: spacer ? [mention, spacer, ...current.blocks] : [mention, { type: "text", text: " " }]
+            }
+          };
+        });
+      }
+    }
   }
 
   function clearWorkspaceClientState() {
     clearStoredWorkspaceEchoWorkflowDrafts();
+    clearWorkspaceEmoteLibraryCache();
+    setWorkspaceReplyAutoMention(false);
     for (const controller of workspaceUploadControllersRef.current.values()) {
       controller.abort();
     }
@@ -4619,6 +4707,8 @@ export function App() {
     setWorkspaceStatisticsLoading(false);
     setWorkspaceStatisticsError("");
     setWorkspaceConversations([]);
+    setWorkspaceConversationTopicsById({});
+    setWorkspaceComposerTopicByConversation({});
     setWorkspaceFiles([]);
     setWorkspaceLibraryFiles([]);
     setWorkspaceDirectoryMembers([]);
@@ -6110,6 +6200,11 @@ export function App() {
       (block) => block.type === "mention" || block.type === "emote"
     );
     let stagedAttachments = workspaceComposerAttachmentsByConversation[workspaceSelectedConversationId] ?? [];
+    const selectedTopic = workspaceComposerTopicByConversation[workspaceSelectedConversation.id];
+    if (selectedTopic && stagedAttachments.length > 0) {
+      showWorkspaceNotice("warning", "话题消息暂不支持附件，请先移除附件或发送到群聊");
+      return;
+    }
     const echoCommand = recognizeWorkspaceEchoCommand({
       conversationType: workspaceSelectedConversation.type,
       echoIsParticipant: workspaceSelectedConversation.members.some(
@@ -6119,6 +6214,10 @@ export function App() {
       blocks: workspaceDraftDocument.blocks
     });
     if (echoCommand) {
+      if (selectedTopic) {
+        showWorkspaceNotice("warning", "回声命令只能发送到群聊，不能放入话题消息");
+        return;
+      }
       if (stagedAttachments.length > 0) {
         showWorkspaceNotice("warning", "回声命令不能同时发送附件。附件和命令草稿已保留，请移除附件或改为普通消息后重试。");
         return;
@@ -6173,6 +6272,24 @@ export function App() {
     const messageBody = shouldConvertLongMessage
       ? `[长消息] ${stagedAttachments[generatedAttachmentIndex]?.file.name ?? "长消息.txt"}`
       : hasBody ? body : `[文件] ${stagedAttachments.map((attachment) => attachment.file.name).join("、")}`;
+    if (selectedTopic) {
+      setWorkspaceConversationDraft(conversation.id, "");
+      setWorkspaceConversationReplyToMessageId(conversation.id, "");
+      setWorkspaceComposerTopicByConversation((current) => {
+        const { [conversation.id]: _removed, ...rest } = current;
+        return rest;
+      });
+      clearWorkspaceNotice();
+      void submitWorkspaceMessage({
+        conversationId: conversation.id,
+        topicId: selectedTopic.id,
+        clientMessageId,
+        replyToMessageId,
+        body: messageBody,
+        blocks: textBlocks
+      }).catch((error) => showWorkspaceNotice("warning", userFacingErrorMessage(error, "话题消息发送失败")));
+      return;
+    }
     const localMessage: WorkspaceLocalMessage = {
       id: localMessageId,
       clientMessageId,
@@ -6209,38 +6326,50 @@ export function App() {
     const clientMessageId = makeId("wm");
     const localMessageId = makeId("wlm");
     const replyToMessageId = workspaceReplyToMessageId || null;
+    const selectedTopic = workspaceComposerTopicByConversation[conversation.id];
     workspaceSendingRef.current = true;
     clearWorkspaceNotice();
-    setWorkspaceLocalMessages((messages) => [
-      ...messages,
-      {
-        id: localMessageId,
-        clientMessageId,
-        conversationId: conversation.id,
-        body: token,
-        blocks,
-        attachments: [],
-        replyToMessageId,
-        createdAt: new Date().toISOString(),
-        state: "sending"
-      }
-    ]);
+    if (!selectedTopic) {
+      setWorkspaceLocalMessages((messages) => [
+        ...messages,
+        {
+          id: localMessageId,
+          clientMessageId,
+          conversationId: conversation.id,
+          body: token,
+          blocks,
+          attachments: [],
+          replyToMessageId,
+          createdAt: new Date().toISOString(),
+          state: "sending"
+        }
+      ]);
+    }
     try {
       await submitWorkspaceMessage({
         conversationId: conversation.id,
+        topicId: selectedTopic?.id,
         clientMessageId,
         replyToMessageId,
         body: token,
         blocks
       });
       setWorkspaceConversationReplyToMessageId(conversation.id, "");
+      if (selectedTopic) {
+        setWorkspaceComposerTopicByConversation((current) => {
+          const { [conversation.id]: _removed, ...rest } = current;
+          return rest;
+        });
+      }
     } catch (error) {
       const message = userFacingErrorMessage(error, "表情发送失败");
-      setWorkspaceLocalMessages((messages) => messages.map((localMessage) =>
-        localMessage.id === localMessageId
-          ? { ...localMessage, state: "failed", failureReason: message }
-          : localMessage
-      ));
+      if (!selectedTopic) {
+        setWorkspaceLocalMessages((messages) => messages.map((localMessage) =>
+          localMessage.id === localMessageId
+            ? { ...localMessage, state: "failed", failureReason: message }
+            : localMessage
+        ));
+      }
       showWorkspaceNotice("warning", message);
     } finally {
       workspaceSendingRef.current = false;
@@ -6504,15 +6633,20 @@ export function App() {
 
   async function submitWorkspaceMessage(input: {
     conversationId: string;
+    topicId?: string;
     clientMessageId: string;
     replyToMessageId?: string | null;
     body: string;
     blocks: WorkspaceContentBlock[];
   }) {
-    const data = await workspaceJson<{ message: WorkspaceMessage }>("/api/workspace/messages", {
+    const endpoint = input.topicId
+      ? `/api/workspace/topics/${encodeURIComponent(input.topicId)}/messages`
+      : "/api/workspace/messages";
+    const data = await workspaceJson<{ message: WorkspaceMessage }>(endpoint, {
       method: "POST",
       body: JSON.stringify({
         conversationId: input.conversationId,
+        ...(input.topicId ? { topicId: input.topicId } : {}),
         clientMessageId: input.clientMessageId,
         replyToMessageId: input.replyToMessageId || null,
         content: {
@@ -6522,7 +6656,7 @@ export function App() {
         }
       })
     });
-    upsertWorkspaceMessage(data.message);
+    if (!input.topicId) upsertWorkspaceMessage(data.message);
   }
 
   async function uploadWorkspaceFile(file: File, scope: "current" | "space" = "current") {
@@ -8660,6 +8794,13 @@ export function App() {
                         onDismissEchoInteraction={() => dismissWorkspaceEchoInteraction(workspaceSelectedConversation.id)}
                         fileInputDisabled={!workspaceBootstrap.permissions.canUpload}
                         onManageEmotes={openWorkspaceEmoteManager}
+                        availableTopics={workspaceConversationTopicsById[workspaceSelectedConversation.id] ?? []}
+                        selectedTopic={workspaceComposerTopicByConversation[workspaceSelectedConversation.id]}
+                        onSelectTopic={(topic) => setWorkspaceComposerTopicByConversation((current) => {
+                          if (topic) return { ...current, [workspaceSelectedConversation.id]: topic };
+                          const { [workspaceSelectedConversation.id]: _removed, ...rest } = current;
+                          return rest;
+                        })}
                       />
                     ) : (
                       <div className="workspace-home-panel">
@@ -10349,7 +10490,7 @@ function WorkspaceAccountSettings({
     setEmoteSettingsLoading(true);
     void Promise.all([
       workspaceJson<{ settings: WorkspaceEmoteSettings }>("/api/workspace/me/emote-settings"),
-      workspaceJson<WorkspaceEmoteLibrary>("/api/workspace/me/emote-library")
+      loadWorkspaceEmoteLibrary()
     ])
       .then(([data, library]) => {
         if (!cancelled) {
@@ -10369,7 +10510,7 @@ function WorkspaceAccountSettings({
   useEffect(() => {
     let cancelled = false;
     const refreshEmoteLibrarySummary = () => {
-      void workspaceJson<WorkspaceEmoteLibrary>("/api/workspace/me/emote-library")
+      void loadWorkspaceEmoteLibrary(true)
         .then((library) => {
           if (!cancelled) setEmoteLibrarySummary(library);
         })
@@ -10570,6 +10711,25 @@ function WorkspaceAccountSettings({
     } catch (error) {
       setEmoteSettings(previous);
       onNotice("warning", userFacingErrorMessage(error, "表情发送方式保存失败"));
+    } finally {
+      setEmoteSettingsSaving(false);
+    }
+  }
+
+  async function updateReplyAutoMention(enabled: boolean) {
+    if (!emoteSettings) return;
+    const previous = emoteSettings;
+    setEmoteSettings({ ...emoteSettings, replyAutoMention: enabled });
+    setEmoteSettingsSaving(true);
+    try {
+      const data = await workspaceJson<{ settings: WorkspaceEmoteSettings }>("/api/workspace/me/emote-settings", {
+        method: "PUT",
+        body: JSON.stringify({ replyAutoMention: enabled })
+      });
+      setEmoteSettings(data.settings);
+    } catch (error) {
+      setEmoteSettings(previous);
+      onNotice("warning", userFacingErrorMessage(error, "回复提及设置保存失败"));
     } finally {
       setEmoteSettingsSaving(false);
     }
@@ -10815,6 +10975,13 @@ function WorkspaceAccountSettings({
                     label="点击图片表情直接发送"
                     description="开启后，选择图片表情会立即发送；Emoji 仍会插入输入框。"
                     onChange={(checked) => void updateImageEmoteDirectSend(checked)}
+                  />
+                  <WorkspaceSwitch
+                    checked={emoteSettings.replyAutoMention}
+                    disabled={emoteSettingsSaving}
+                    label="回复群消息时自动提及对方"
+                    description="开启后，点击回复会在输入框中自动带入被回复者的提及。默认关闭。"
+                    onChange={(checked) => void updateReplyAutoMention(checked)}
                   />
                 </div>
               </>
@@ -11221,7 +11388,7 @@ function WorkspaceEmoteManagerDialog({
   useEffect(() => {
     triggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     let cancelled = false;
-    void workspaceJson<WorkspaceEmoteLibrary>("/api/workspace/me/emote-library")
+    void loadWorkspaceEmoteLibrary()
       .then((data) => { if (!cancelled) setLibrary(data); })
       .catch((err) => { if (!cancelled) setError(userFacingErrorMessage(err, "我的表情暂时无法加载")); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -11275,7 +11442,7 @@ function WorkspaceEmoteManagerDialog({
   useEffect(() => {
     let cancelled = false;
     const refreshLibrary = () => {
-      void workspaceJson<WorkspaceEmoteLibrary>("/api/workspace/me/emote-library")
+      void loadWorkspaceEmoteLibrary(true)
         .then((next) => {
           if (!cancelled) setLibrary(next);
         })
@@ -11291,7 +11458,7 @@ function WorkspaceEmoteManagerDialog({
   }, []);
 
   async function reload() {
-    const next = await workspaceJson<WorkspaceEmoteLibrary>("/api/workspace/me/emote-library");
+    const next = await loadWorkspaceEmoteLibrary(true);
     setLibrary(next);
     return next;
   }
@@ -12889,6 +13056,20 @@ export function WorkspaceStructuredMessage({
             if (block.type === "emote_collection") {
               return <WorkspaceEmoteCollectionMessageCard key={`${index}-emote-collection`} block={block} onOpen={onPreviewEmoteCollection} />;
             }
+            if (block.type === "topic_reference") {
+              return (
+                <button
+                  className="workspace-topic-reference"
+                  key={`${index}-topic-reference`}
+                  type="button"
+                  onClick={() => onOpenTopic?.(block.topicId)}
+                >
+                  <Hash size={14} aria-hidden="true" />
+                  <span>#{block.title}</span>
+                  <ChevronRight size={14} aria-hidden="true" />
+                </button>
+              );
+            }
             if (block.type === "card") {
               return supportsWorkspaceInteractiveCard(block) ? (
                 <WorkspaceInteractiveCard key={`${index}-card`} block={block} onOpenTopic={onOpenTopic} revisionSignal={cardRevisionById?.[block.cardId] ?? 0} />
@@ -12978,6 +13159,7 @@ export function shouldCollapseWorkspaceMessageText(blocks: WorkspaceContentBlock
     if (block.type === "link") return block.label || block.url;
     if (block.type === "emoji") return block.shortcode.startsWith("custom:") ? "[表情]" : `:${block.shortcode}:`;
     if (block.type === "emote_collection") return `[表情合集] ${block.share?.name || ""}`;
+    if (block.type === "topic_reference") return `#${block.title}`;
     if (block.type === "card") return block.fallbackText;
     return "";
   }).join("");
@@ -12990,6 +13172,7 @@ function isKnownWorkspaceMessageBlock(block: WorkspaceContentBlock) {
     block.type === "emoji" ||
     block.type === "attachment" ||
     block.type === "emote_collection" ||
+    block.type === "topic_reference" ||
     block.type === "card";
 }
 
@@ -13267,7 +13450,10 @@ function WorkspaceChatPanel({
   onEchoWorkflowIdChange,
   onDismissEchoInteraction,
   fileInputDisabled,
-  onManageEmotes
+  onManageEmotes,
+  availableTopics,
+  selectedTopic,
+  onSelectTopic
 }: {
   title: string;
   titleKind?: WorkspaceUser["kind"];
@@ -13325,6 +13511,9 @@ function WorkspaceChatPanel({
   onDismissEchoInteraction: () => void;
   fileInputDisabled: boolean;
   onManageEmotes: () => void;
+  availableTopics: Array<Pick<WorkspaceTopic, "id" | "title" | "status">>;
+  selectedTopic?: Pick<WorkspaceTopic, "id" | "title" | "status"> | null;
+  onSelectTopic: (topic: Pick<WorkspaceTopic, "id" | "title" | "status"> | null) => void;
 }) {
   const [emotePanelOpen, setEmotePanelOpen] = useState(false);
   const [mentionPanelOpen, setMentionPanelOpen] = useState(false);
@@ -13334,6 +13523,7 @@ function WorkspaceChatPanel({
   const [messageMenu, setMessageMenu] = useState<{ messageId: string; left: number; top: number } | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [formatToolbarOpen, setFormatToolbarOpen] = useState(false);
+  const [topicPickerOpen, setTopicPickerOpen] = useState(false);
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [clickImageEmoteToSend, setClickImageEmoteToSend] = useState(false);
   const composerFormRef = useRef<HTMLFormElement | null>(null);
@@ -13351,7 +13541,7 @@ function WorkspaceChatPanel({
       .filter(Boolean)
       .some((value) => value!.toLocaleLowerCase().includes(query)));
   }, [mentionMembers, mentionQuery]);
-  const toolPanelOpen = emotePanelOpen || mentionPanelOpen;
+  const toolPanelOpen = emotePanelOpen || mentionPanelOpen || topicPickerOpen;
   const composerClassName = [
     "workspace-composer",
     toolPanelOpen && "tool-open",
@@ -13449,6 +13639,7 @@ function WorkspaceChatPanel({
   const closeWorkspaceComposerPopover = () => {
     setEmotePanelOpen(false);
     setMentionPanelOpen(false);
+    setTopicPickerOpen(false);
     setMentionQuery(null);
     window.requestAnimationFrame(() => editorRef.current?.focus());
   };
@@ -13997,6 +14188,15 @@ function WorkspaceChatPanel({
             </button>
           </div>
         )}
+        {selectedTopic && (
+          <div className="workspace-composer-topic-selection" role="status">
+            <Hash size={14} aria-hidden="true" />
+            <span>发送到 <strong>#{selectedTopic.title}</strong></span>
+            <button className="icon-button" type="button" title="改为发送到群聊" onClick={() => onSelectTopic(null)}>
+              <X size={14} />
+            </button>
+          </div>
+        )}
         {echoInteractionSlot && (
           <WorkspaceEchoInteraction
             slot={echoInteractionSlot}
@@ -14091,6 +14291,22 @@ function WorkspaceChatPanel({
             >
               <Smile size={18} />
             </button>
+            {availableTopics.length > 0 && (
+              <button
+                className={selectedTopic ? "workspace-composer-icon active" : "workspace-composer-icon"}
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded={topicPickerOpen}
+                title={selectedTopic ? `发送到话题 ${selectedTopic.title}` : "选择话题"}
+                onClick={() => {
+                  setEmotePanelOpen(false);
+                  setMentionPanelOpen(false);
+                  setTopicPickerOpen((open) => !open);
+                }}
+              >
+                <Hash size={18} />
+              </button>
+            )}
             {canMention && (
               <button
                 ref={mentionTriggerRef}
@@ -14210,6 +14426,33 @@ function WorkspaceChatPanel({
               onSelect={insertMention}
               onEscape={closeWorkspaceComposerPopover}
             />
+          )}
+          {topicPickerOpen && (
+            <div className="workspace-topic-picker" role="listbox" aria-label="选择发送话题">
+              <button
+                className={!selectedTopic ? "active" : ""}
+                type="button"
+                role="option"
+                aria-selected={!selectedTopic}
+                onClick={() => { onSelectTopic(null); setTopicPickerOpen(false); }}
+              >
+                <MessageSquare size={15} />
+                <span><strong>群聊消息</strong><small>发送到当前群聊</small></span>
+              </button>
+              {availableTopics.map((topic) => (
+                <button
+                  className={selectedTopic?.id === topic.id ? "active" : ""}
+                  type="button"
+                  role="option"
+                  aria-selected={selectedTopic?.id === topic.id}
+                  key={topic.id}
+                  onClick={() => { onSelectTopic(topic); setTopicPickerOpen(false); window.requestAnimationFrame(() => editorRef.current?.focus()); }}
+                >
+                  <Hash size={15} />
+                  <span><strong>#{topic.title}</strong><small>发送后进入该话题</small></span>
+                </button>
+              ))}
+            </div>
           )}
         </form>
       </div>
@@ -14725,8 +14968,8 @@ function EmotePicker({
     let cancelled = false;
     void Promise.all([
       workspaceJson<{ settings: WorkspaceEmoteSettings }>("/api/workspace/me/emote-settings"),
-      workspaceFeatures === "composer"
-        ? workspaceJson<WorkspaceEmoteLibrary>("/api/workspace/me/emote-library")
+        workspaceFeatures === "composer"
+        ? loadWorkspaceEmoteLibrary()
         : Promise.resolve(null)
     ]).then(([settingsResult, libraryResult]) => {
       if (cancelled) return;
@@ -14742,7 +14985,7 @@ function EmotePicker({
     if (workspaceFeatures !== "composer") return;
     let cancelled = false;
     const refreshLibrary = () => {
-      void workspaceJson<WorkspaceEmoteLibrary>("/api/workspace/me/emote-library")
+      void loadWorkspaceEmoteLibrary(true)
         .then((next) => {
           if (!cancelled) setLibrary(next);
         })
@@ -14772,7 +15015,7 @@ function EmotePicker({
   }, [preferenceScope]);
 
   async function reloadLibrary() {
-    setLibrary(await workspaceJson<WorkspaceEmoteLibrary>("/api/workspace/me/emote-library"));
+    setLibrary(await loadWorkspaceEmoteLibrary(true));
   }
 
   async function uploadCustomEmotes(files: File[]) {

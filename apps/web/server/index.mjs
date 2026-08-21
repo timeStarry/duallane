@@ -102,7 +102,7 @@ import { createEchoRuntime } from "./services/echo-runtime.mjs";
 import { createEchoReleaseService } from "./services/echo-releases.mjs";
 import { ECHO_USER_ID } from "./services/echo-identity.mjs";
 import { createTopic, TOPIC_CARD_DEFINITION } from "./services/workspace-topics.mjs";
-import { TOPIC_SYNC_CARD_DEFINITION } from "./services/workspace-topic-messages.mjs";
+import { createTopicMessage, TOPIC_SYNC_CARD_DEFINITION } from "./services/workspace-topic-messages.mjs";
 import { registerWorkspaceAgentBotRoutes } from "./routes/workspace-bots.mjs";
 import { registerWorkspaceCardRoutes } from "./routes/workspace-cards.mjs";
 import { createWorkspaceBotGatewayService } from "./services/workspace-bot-gateway.mjs";
@@ -1521,9 +1521,23 @@ app.post("/api/workspace/messages", async (request, reply) => {
     return blockWorkspace(reply);
   }
   try {
+    const body = request.body && typeof request.body === "object" && !Array.isArray(request.body)
+      ? request.body
+      : {};
+    const actorId = await getWorkspaceUserId(request);
+    if (typeof body.topicId === "string" && body.topicId.trim()) {
+      const result = await createTopicMessage(db, request, {
+        ...body,
+        actorId,
+        topicId: body.topicId.trim(),
+        scheduleEmailNotifications: workspaceEmail?.scheduleMessage,
+        scheduleNtfyNotifications: workspaceNtfy?.scheduleMessage
+      });
+      return reply.code(201).send({ message: result.message });
+    }
     const message = await createStructuredMessage(db, request, {
-      ...(request.body ?? {}),
-      actorId: await getWorkspaceUserId(request),
+      ...body,
+      actorId,
       scheduleEmailNotifications: workspaceEmail?.scheduleMessage,
       scheduleNtfyNotifications: workspaceNtfy?.scheduleMessage,
       validateCustomEmote: workspaceCustomEmotes?.validateMessageCustomEmote,
