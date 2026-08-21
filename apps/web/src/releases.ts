@@ -13,6 +13,16 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.15.3",
+    releasedAt: "2026-08-21",
+    title: "更清楚的群聊通知与媒体加载",
+    summary: "话题通知会直接打开对应话题，图片预览兼容性得到改善，话题内的输入体验继续保持稳定。",
+    categories: [
+      { title: "群聊话题", items: ["话题消息通知会明确标记话题名称，点击后直接进入对应话题，不再误打开普通群聊", "话题内发送消息后输入区保持稳定，消息列表和普通聊天使用一致的布局"] },
+      { title: "图片与文件", items: ["图片消息的预览链接兼容性得到改善，上传后的图片可以正常打开和查看", "移动端图片消息继续按原比例显示，点击后可以查看完整内容"] }
+    ]
+  },
+  {
     version: "0.15.2",
     releasedAt: "2026-08-21",
     title: "更顺手的空间聊天",
