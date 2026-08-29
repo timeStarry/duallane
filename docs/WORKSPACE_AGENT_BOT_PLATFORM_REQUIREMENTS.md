@@ -59,7 +59,8 @@
 - 所有者可以将 Bot 开放给指定成员、全部空间成员，或允许经批准加入群聊。
 - 外部 Agent 通过 WebSocket 长连接优先，Webhook 作为后续可选方式。
 - 支持文本、回复、有限上下文、卡片发送/更新和按 Scope 授权的附件操作。
-- 公开提供 Hermes/OpenClaw 一键安装所需的固定 Prompt 和接入说明。
+- 公开提供运行时无关的 DualLane Agent Skill 和接入说明；Hermes/OpenClaw 地址仅作为兼容别名保留。
+- 个人 Bot 连接页提供统一的 DualLane Agent Skill 和一次性配置会话；用户不需要选择 Hermes、Codex、OpenClaw 等运行时。配置会话默认 10 分钟有效，用户在网页确认权限和会话范围后，Agent 只能交换一次 Bot Token。
 
 ### 3.2 非目标
 
@@ -152,10 +153,10 @@
 
 1. 用户创建 `external_agent` Bot。
 2. 设置身份、可见性、群聊和上下文策略。
-3. 生成一次性 Bot 接入 Token。
-4. 安装 Hermes/OpenClaw Adapter。
-5. 填写 DualLane 地址和 Token。
-6. Adapter 建立 WebSocket、完成鉴权和能力协商。
+3. 从 Bot 页面复制统一的 DualLane Agent Skill 和配置指令。
+4. Agent 读取 Skill，以用户语言说明权限并请求一次性配置会话。
+5. 用户在 DualLane 授权页确认权限和会话范围；配置会话默认 10 分钟有效且授权码只能交换一次。
+6. Agent 交换一次 Bot Token，将凭据写入自身受控配置，然后建立 WebSocket、完成能力协商。
 7. 用户在允许范围内与 Bot 私聊或将 Bot 加入群聊。
 
 接入配置目标：
@@ -312,16 +313,31 @@ https://duallane.tsio.top/integrations/v1/manifest.json
 
 ### 8.3 Prompt 内容
 
-静态 Prompt 只能描述：
+静态 Skill 只能描述：
 
-- 如何安装或启用 Channel Adapter。
-- 如何配置 DualLane URL 和 Bot Token。
+- DualLane Gateway 协议、版本协商、事件确认、重连和幂等。
+- 如何通过用户交互式授权请求权限和会话范围，并用一次性授权码交换凭据。
+- 如何安装或启用 Agent 自己的连接器；不得要求用户在普通聊天中粘贴 Token。
 - 事件、回复、卡片和错误协议。
 - 默认 Scope 与隐私边界。
 - 不得读取未授权上下文、文件或其他会话。
 - 断线重连、事件确认和幂等要求。
 
-Prompt 不是授权材料，也不能赋予 Agent 新 Scope。用户 Token 必须由 DualLane 管理页面生成，不能写入静态 Prompt 或仓库。
+Skill 不是授权材料，也不能赋予 Agent 新 Scope。用户 Token 必须由 DualLane 配置会话一次性交换，不能写入静态 Skill、复制指令、普通聊天或仓库。
+
+配置会话接口为：
+
+```text
+POST /api/workspace/bots/{botId}/setup-sessions
+GET  /api/workspace/bot-setup/{sessionId}
+POST /api/workspace/bot-setup/{sessionId}/approve
+POST /api/workspace/bot-setup/{sessionId}/deny
+POST /api/bot-gateway/v1/setup/request
+GET  /api/bot-gateway/v1/setup/status
+POST /api/bot-gateway/v1/setup/exchange
+```
+
+配置会话状态为 `created`、`awaiting_user`、`approved`、`exchanged`、`denied`、`expired` 或 `revoked`。静态 Skill 只描述平台接入要求，不按 Agent 的 `clientName` 决定权限。
 
 ### 8.4 一键安装安全
 

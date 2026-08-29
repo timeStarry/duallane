@@ -348,6 +348,18 @@ export function createWorkspaceBotGatewayService({
     return { accepted: true, expiresInMs: 5000 };
   }
 
+  async function requestSetup(setupSessionId, input = {}) {
+    return botService.requestSetup(setupSessionId, input);
+  }
+
+  async function getSetupStatus(setupSessionId) {
+    return botService.getSetupStatus(setupSessionId);
+  }
+
+  async function exchangeSetupSession(setupSessionId, input = {}) {
+    return botService.exchangeSetupSession(setupSessionId, input);
+  }
+
   async function acknowledge(auth, input = {}) {
     auth = await validateAuth(auth);
     const sequence = normalizeSequence(input.sequence, true);
@@ -685,7 +697,7 @@ export function createWorkspaceBotGatewayService({
     }
   }
 
-  return Object.freeze({ authenticate, validateAuth, getMe, getContext, sendMessage, sendCard, updateCard, getAttachment, createAttachment, typing, acknowledge, replay, dispatchWorkspaceEvent, registerConnection, heartbeat, requireConversation, requireContextGrant, requireScope, extractBearerToken, safeBot });
+  return Object.freeze({ authenticate, validateAuth, getMe, getContext, sendMessage, sendCard, updateCard, getAttachment, createAttachment, typing, requestSetup, getSetupStatus, exchangeSetupSession, acknowledge, replay, dispatchWorkspaceEvent, registerConnection, heartbeat, requireConversation, requireContextGrant, requireScope, extractBearerToken, safeBot });
 }
 
 export function extractBearerToken(value) {

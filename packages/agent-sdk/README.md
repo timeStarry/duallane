@@ -30,6 +30,28 @@ await client.connect({
 });
 ```
 
+For the user-approved bootstrap flow, use `DualLaneAgentSetupClient` before
+constructing the authenticated client:
+
+```js
+import { DualLaneAgentSetupClient } from "@duallane/agent-sdk";
+
+const setup = new DualLaneAgentSetupClient({ url: process.env.DUALLANE_URL });
+await setup.request(process.env.DUALLANE_SETUP_SESSION, {
+  requestedScopes: ["messages:read_trigger", "messages:send", "commands:receive"],
+  clientName: "my-agent/1.0.0",
+  protocolVersion: "v1",
+  capabilities: ["poll_setup", "write_config"]
+});
+await waitUntilApproved(() => setup.status(process.env.DUALLANE_SETUP_SESSION));
+const { token } = await setup.exchange(process.env.DUALLANE_SETUP_SESSION, {
+  clientName: "my-agent/1.0.0"
+});
+```
+
+The setup session is short-lived and one-time. Store the returned token only
+in the Agent runtime's secret store; never include it in a URL or model prompt.
+
 The SDK handles Gateway `hello`, heartbeat, ordered event consumption,
 acknowledgement, bounded reconnect backoff, and replay from the last
 acknowledged sequence. An event is acknowledged only after `onEvent` resolves.

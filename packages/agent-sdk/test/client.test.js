@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import { DualLaneAgentClient } from "../src/index.js";
+import { DualLaneAgentClient, DualLaneAgentSetupClient } from "../src/index.js";
 import { createOpenClawDualLaneAdapter } from "../src/openclaw.js";
 
 const TOKEN = `dl_bot_${"a".repeat(32)}`;
@@ -22,6 +22,25 @@ test("REST requests keep the Bot token in Authorization and never in URLs", asyn
   assert.equal(calls[1].url, "https://duallane.example.com/api/bot-gateway/v1/conversations/conv_1/context?limit=12");
   assert.equal(calls[0].init.headers.authorization, `Bearer ${TOKEN}`);
   assert.equal(calls.some(({ url }) => url.includes(TOKEN)), false);
+});
+
+test("setup client negotiates capabilities without sending a Bot token", async () => {
+  const calls = [];
+  const client = new DualLaneAgentSetupClient({
+    url: "https://duallane.example.com",
+    fetch: async (url, init) => {
+      calls.push({ url: url.toString(), init });
+      return jsonResponse({ setup: { status: "approved" }, token: "dl_bot_should_only_be_returned" });
+    }
+  });
+  await client.request(`setup_${"a".repeat(32)}`, { requestedScopes: ["messages:send"], protocolVersion: "v1", capabilities: ["poll_setup"] });
+  await client.status(`setup_${"a".repeat(32)}`);
+  await client.exchange(`setup_${"a".repeat(32)}`);
+  assert.equal(calls[0].url, "https://duallane.example.com/api/bot-gateway/v1/setup/request");
+  assert.equal(calls[1].url, "https://duallane.example.com/api/bot-gateway/v1/setup/status?setupSessionId=setup_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  assert.equal(calls[2].url, "https://duallane.example.com/api/bot-gateway/v1/setup/exchange");
+  assert.equal(JSON.parse(calls[0].init.body).protocolVersion, "v1");
+  assert.equal(calls.every(({ init }) => !Object.hasOwn(init.headers, "authorization")), true);
 });
 
 test("WebSocket hello, replay event handling, acknowledgement, and resume are ordered", async () => {

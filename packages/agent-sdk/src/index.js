@@ -16,6 +16,65 @@ export class DualLaneAgentError extends Error {
   }
 }
 
+export class DualLaneAgentSetupClient {
+  #origin;
+  #fetch;
+
+  constructor(options = {}) {
+    this.#origin = normalizeOrigin(options.url);
+    this.#fetch = options.fetch ?? globalThis.fetch;
+    if (typeof this.#fetch !== "function") throw new TypeError("DualLane Agent setup client requires fetch");
+  }
+
+  async request(setupSessionId, input = {}) {
+    return this.#request("POST", "/api/bot-gateway/v1/setup/request", {
+      setupSessionId: normalizeSetupSessionId(setupSessionId),
+      requestedScopes: input.requestedScopes,
+      conversationIds: input.conversationIds,
+      clientName: input.clientName,
+      clientVersion: input.clientVersion,
+      protocolVersion: input.protocolVersion,
+      capabilities: input.capabilities
+    });
+  }
+
+  async status(setupSessionId) {
+    const id = encodeURIComponent(normalizeSetupSessionId(setupSessionId));
+    return this.#request("GET", `/api/bot-gateway/v1/setup/status?setupSessionId=${id}`);
+  }
+
+  async exchange(setupSessionId, input = {}) {
+    return this.#request("POST", "/api/bot-gateway/v1/setup/exchange", {
+      setupSessionId: normalizeSetupSessionId(setupSessionId),
+      clientName: input.clientName,
+      clientVersion: input.clientVersion,
+      protocolVersion: input.protocolVersion
+    });
+  }
+
+  async #request(method, path, body) {
+    let response;
+    try {
+      response = await this.#fetch(new URL(path, this.#origin), {
+        method,
+        headers: compact({ accept: "application/json", "content-type": body === undefined ? undefined : "application/json" }),
+        body: body === undefined ? undefined : JSON.stringify(compact(body))
+      });
+    } catch (cause) {
+      throw new DualLaneAgentError("network.unavailable", "DualLane Agent setup endpoint is unavailable", { cause, retryable: true });
+    }
+    const payload = await readJson(response);
+    if (!response.ok) {
+      throw new DualLaneAgentError(
+        safeErrorCode(payload?.error?.code, "gateway.setup_failed"),
+        safeErrorText(payload?.error?.message, "DualLane Agent setup request failed"),
+        { statusCode: response.status, retryable: response.status === 429 || response.status >= 500 }
+      );
+    }
+    return payload;
+  }
+}
+
 export class DualLaneAgentClient {
   #origin;
   #token;
@@ -420,6 +479,12 @@ function normalizeAdapterVersion(value) {
 function normalizeId(value, label) {
   const id = typeof value === "string" ? value.trim() : "";
   if (!SAFE_ID.test(id)) throw new TypeError(`${label} is invalid`);
+  return id;
+}
+
+function normalizeSetupSessionId(value) {
+  const id = typeof value === "string" ? value.trim() : "";
+  if (!/^setup_[A-Za-z0-9_-]{16,}$/u.test(id)) throw new TypeError("setupSessionId is invalid");
   return id;
 }
 

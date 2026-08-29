@@ -21,6 +21,16 @@ export function registerWorkspaceBotGatewayRoutes({ app, gateway, workspaceEnabl
       return fail(request, reply, error);
     }
   };
+  const publicSetup = (handler) => async (request, reply) => {
+    if (!workspaceEnabled) return disabled(request, reply);
+    reply.header("cache-control", "no-store");
+    try {
+      if (request.validationError) throw new WorkspaceBotGatewayError("gateway.invalid_request", "请求参数无效", 400);
+      return await handler(request, reply);
+    } catch (error) {
+      return fail(request, reply, error);
+    }
+  };
 
   app.get("/api/bot-gateway/v1/me", authenticated(async (_request, _reply, auth) => gateway.getMe(auth)));
   app.post("/api/bot-gateway/v1/events/ack", authenticated(async (request, _reply, auth) => gateway.acknowledge(auth, request.body ?? {})));
@@ -33,6 +43,49 @@ export function registerWorkspaceBotGatewayRoutes({ app, gateway, workspaceEnabl
   app.get("/api/bot-gateway/v1/attachments/:attachmentId", authenticated(async (request, _reply, auth) => gateway.getAttachment(auth, request.params.attachmentId)));
   app.post("/api/bot-gateway/v1/attachments", authenticated(async (request, reply, auth) => reply.code(201).send(await gateway.createAttachment(auth, request.body ?? {}))));
   app.post("/api/bot-gateway/v1/typing", authenticated(async (request, _reply, auth) => gateway.typing(auth, request.body ?? {})));
+
+  app.post("/api/bot-gateway/v1/setup/request", {
+    attachValidation: true,
+    schema: {
+      body: {
+        type: "object",
+        additionalProperties: false,
+        required: ["setupSessionId"],
+        properties: {
+          setupSessionId: { type: "string" },
+          requestedScopes: { type: "array", items: { type: "string" }, maxItems: 10 },
+          conversationIds: { type: "array", items: { type: "string" }, maxItems: 200 },
+          clientName: { type: "string", maxLength: 128 },
+          clientVersion: { type: "string", maxLength: 128 },
+          protocolVersion: { type: "string", maxLength: 16 },
+          capabilities: { type: "array", items: { type: "string" }, maxItems: 32 }
+        }
+      }
+    }
+  }, publicSetup(async (request) => ({
+    setup: await gateway.requestSetup(request.body?.setupSessionId, request.body ?? {})
+  })));
+
+  app.get("/api/bot-gateway/v1/setup/status", publicSetup(async (request) => ({
+    setup: await gateway.getSetupStatus(request.query?.setupSessionId)
+  })));
+
+  app.post("/api/bot-gateway/v1/setup/exchange", {
+    attachValidation: true,
+    schema: {
+      body: {
+        type: "object",
+        additionalProperties: false,
+        required: ["setupSessionId"],
+        properties: {
+          setupSessionId: { type: "string" },
+          clientName: { type: "string", maxLength: 128 },
+          clientVersion: { type: "string", maxLength: 128 },
+          protocolVersion: { type: "string", maxLength: 16 }
+        }
+      }
+    }
+  }, publicSetup(async (request, reply) => reply.code(201).send(await gateway.exchangeSetupSession(request.body?.setupSessionId, request.body ?? {}))));
 
   app.get("/ws/bot-gateway", { websocket: true }, (socket, request) => {
     if (!workspaceEnabled) {

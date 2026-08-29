@@ -8,6 +8,15 @@ export const BOT_STATUS = Object.freeze({
   DELETING: "deleting",
   DELETED: "deleted"
 });
+export const BOT_SETUP_STATUS = Object.freeze({
+  CREATED: "created",
+  AWAITING_USER: "awaiting_user",
+  APPROVED: "approved",
+  EXCHANGED: "exchanged",
+  DENIED: "denied",
+  EXPIRED: "expired",
+  REVOKED: "revoked"
+});
 export const BOT_VISIBILITY_POLICIES = Object.freeze({
   PRIVATE: "private",
   SPECIFIED_MEMBERS: "specified_members",
@@ -53,6 +62,10 @@ const BOT_TOKEN_PREFIX = "dl_bot_";
 const BOT_TOKEN_BYTES = 32;
 const MAX_BOT_NAME_CODE_POINTS = 64;
 const MAX_TOKEN_EXPIRY_MS = 366 * 24 * 60 * 60 * 1000;
+const BOT_SETUP_TTL_MS = 10 * 60 * 1000;
+const BOT_SETUP_PROTOCOL_VERSION = "v1";
+const SETUP_ID_PATTERN = /^setup_[A-Za-z0-9_-]{16,}$/u;
+const SETUP_CLIENT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/+ -]{0,127}$/u;
 
 // These names include public labels and server-only identifiers. Comparison is
 // Unicode-normalized and case-insensitive so a custom Bot cannot claim an
@@ -504,7 +517,8 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
           UPDATE workspace_agent_bot_tokens SET revoked_at = COALESCE(revoked_at, ?)
           WHERE bot_id = ?
         `).run(updatedAt, bot.id);
-        return { bot: await readBot(bot.id), changed: true };
+        const revokedSetupCount = await revokePendingSetupSessions(bot.id, updatedAt);
+        return { bot: await readBot(bot.id), changed: true, revokedSetupCount };
       });
     } catch (error) {
       if (error instanceof WorkspaceAgentBotError) {
@@ -515,6 +529,9 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
     const updated = transition.bot;
     if (!transition.changed) return publicBot(updated);
     await writeBotAudit({ actor, spaceId: actor.spaceId, action: "bot.delete.requested", targetType: "agent_bot", targetId: updated.id, result: "success" });
+    if (transition.revokedSetupCount > 0) {
+      await writeBotAudit({ actor, spaceId: actor.spaceId, action: "bot.setup.revoke", targetType: "agent_bot_setup", targetId: updated.id, result: "success" });
+    }
     return publicBot(updated);
   }
 
@@ -541,11 +558,12 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
           UPDATE workspace_agent_bot_tokens SET revoked_at = COALESCE(revoked_at, ?)
           WHERE bot_id = ?
         `).run(deletedAt, bot.id);
+        const revokedSetupCount = await revokePendingSetupSessions(bot.id, deletedAt);
         await db.prepare(`
           UPDATE space_members SET removed_at = ?
           WHERE space_id = ? AND user_id = ? AND removed_at IS NULL
         `).run(deletedAt, actor.spaceId, bot.botUserId);
-        return { bot: await readBot(bot.id), changed: true };
+        return { bot: await readBot(bot.id), changed: true, revokedSetupCount };
       });
     } catch (error) {
       if (error instanceof WorkspaceAgentBotError) {
@@ -556,6 +574,9 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
     const updated = transition.bot;
     if (!transition.changed) return publicBot(updated);
     await writeBotAudit({ actor, spaceId: actor.spaceId, action: "bot.delete.completed", targetType: "agent_bot", targetId: updated.id, result: "success" });
+    if (transition.revokedSetupCount > 0) {
+      await writeBotAudit({ actor, spaceId: actor.spaceId, action: "bot.setup.revoke", targetType: "agent_bot_setup", targetId: updated.id, result: "success" });
+    }
     return publicBot(updated);
   }
 
@@ -641,6 +662,189 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
       createdAt: row.createdAt,
       token: maskBotToken()
     }));
+  }
+
+  async function createSetupSession(actorUserId, botId, input = {}) {
+    const actor = await requireActiveHumanMember(actorUserId, input.spaceId);
+    const bot = await requireOwnedBotWithAudit(actor, botId, "bot.setup.create", "agent_bot");
+    if (bot.status !== BOT_STATUS.ACTIVE) {
+      throw new WorkspaceAgentBotError("bot.not_active", "仅运行中的 Bot 可以创建配置会话", 409);
+    }
+    let requestedScopes;
+    let requestedConversations;
+    try {
+      requestedScopes = validateBotScopes(input.requestedScopes);
+      requestedConversations = normalizeSetupConversationIds(input.conversationIds);
+    } catch (error) {
+      await auditRejection(actor, "bot.setup.create", "agent_bot", bot.id, error.code ?? "bot.setup_invalid");
+      throw error;
+    }
+    const setupId = `setup_${idFactory()}`;
+    const createdAt = now();
+    const expiresAt = new Date(createdAt.getTime() + BOT_SETUP_TTL_MS).toISOString();
+    await db.transaction(async () => {
+      await db.lock?.(botLifecycleLockKey(actor.spaceId, bot.id));
+      const current = await requireOwnedBot(actor, bot.id);
+      if (current.status !== BOT_STATUS.ACTIVE) throw new WorkspaceAgentBotError("bot.not_active", "仅运行中的 Bot 可以创建配置会话", 409);
+      await db.prepare(`INSERT INTO workspace_agent_bot_setup_sessions
+        (id, bot_id, space_id, owner_user_id, status, requested_scopes_json, approved_scopes_json,
+         requested_conversations_json, approved_conversations_json, client_name, client_version,
+         protocol_version, capabilities_json, expires_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, '[]', ?, '[]', NULL, NULL, ?, '[]', ?, ?, ?)`)
+        .run(setupId, current.id, current.spaceId, actor.id, BOT_SETUP_STATUS.CREATED,
+          JSON.stringify(requestedScopes), JSON.stringify(requestedConversations), BOT_SETUP_PROTOCOL_VERSION, expiresAt,
+          createdAt.toISOString(), createdAt.toISOString());
+    });
+    await writeBotAudit({ actor, spaceId: actor.spaceId, action: "bot.setup.create", targetType: "agent_bot_setup", targetId: setupId, result: "success" });
+    return publicSetupSession(await readSetupSession(setupId));
+  }
+
+  async function getSetupSession(actorUserId, setupId, spaceId) {
+    const actor = await requireActiveHumanMember(actorUserId, spaceId);
+    const session = await readSetupSession(normalizeSetupId(setupId));
+    if (!session || session.spaceId !== actor.spaceId || session.ownerUserId !== actor.id) {
+      await auditRejection(actor, "bot.setup.read", "agent_bot_setup", setupId, "permission.denied");
+      throw new WorkspaceAgentBotError("bot.setup_not_found", "配置会话不存在", 404);
+    }
+    const current = await expireSetupIfNeeded(session);
+    return publicSetupSession(current);
+  }
+
+  async function requestSetup(setupId, input = {}) {
+    const session = await loadSetupForAgent(setupId);
+    try {
+      if (![BOT_SETUP_STATUS.CREATED, BOT_SETUP_STATUS.AWAITING_USER].includes(session.status)) {
+        throw new WorkspaceAgentBotError("bot.setup_not_requestable", "配置会话当前不能继续请求", 409);
+      }
+      const requestedScopes = validateBotScopes(input.requestedScopes ?? session.requestedScopes);
+      const requestedConversations = input.conversationIds === undefined
+        ? session.requestedConversations
+        : normalizeSetupConversationIds(input.conversationIds);
+      const clientName = normalizeSetupClientName(input.clientName);
+      const clientVersion = normalizeSetupClientName(input.clientVersion);
+      const protocolVersion = normalizeSetupProtocolVersion(input.protocolVersion);
+      const capabilities = normalizeSetupCapabilities(input.capabilities);
+      const timestamp = now().toISOString();
+      const result = await db.prepare(`UPDATE workspace_agent_bot_setup_sessions
+        SET status = ?, requested_scopes_json = ?, requested_conversations_json = ?,
+            client_name = COALESCE(?, client_name), client_version = COALESCE(?, client_version), protocol_version = ?,
+            capabilities_json = ?, updated_at = ?
+        WHERE id = ? AND status IN (?, ?) AND expires_at > ?`)
+        .run(BOT_SETUP_STATUS.AWAITING_USER, JSON.stringify(requestedScopes), JSON.stringify(requestedConversations),
+          clientName, clientVersion, protocolVersion, JSON.stringify(capabilities), timestamp, session.id,
+          BOT_SETUP_STATUS.CREATED, BOT_SETUP_STATUS.AWAITING_USER, timestamp);
+      if (!result.changes) throw new WorkspaceAgentBotError("bot.setup_conflict", "配置会话已被其他操作更新", 409);
+      await writeBotAudit({ actor: null, spaceId: session.spaceId, action: "bot.setup.request", targetType: "agent_bot_setup", targetId: session.id, result: "success" });
+      return publicSetupSession(await readSetupSession(session.id));
+    } catch (error) {
+      await writeBotAudit({ actor: null, spaceId: session.spaceId, action: "bot.setup.request", targetType: "agent_bot_setup", targetId: session.id, result: "rejected", reason: error.code ?? "bot.setup_invalid" });
+      throw error;
+    }
+  }
+
+  async function getSetupStatus(setupId) {
+    const session = await loadSetupForAgent(setupId);
+    return publicSetupSession(session);
+  }
+
+  async function approveSetupSession(actorUserId, setupId, input = {}) {
+    const actor = await requireActiveHumanMember(actorUserId, input.spaceId);
+    const id = normalizeSetupId(setupId);
+    const preflight = await readSetupSession(id);
+    if (preflight) await expireSetupIfNeeded(preflight);
+    let approved;
+    try {
+      approved = await db.transaction(async () => {
+        const session = await readSetupSession(id);
+        if (!session || session.spaceId !== actor.spaceId || session.ownerUserId !== actor.id) {
+          throw new WorkspaceAgentBotError("bot.setup_not_found", "配置会话不存在", 404);
+        }
+        const current = await expireSetupIfNeeded(session);
+        if (![BOT_SETUP_STATUS.CREATED, BOT_SETUP_STATUS.AWAITING_USER].includes(current.status)) {
+          throw new WorkspaceAgentBotError("bot.setup_not_approvable", "配置会话当前不能确认", 409);
+        }
+        const bot = await requireOwnedBot(actor, current.botId);
+        if (bot.status !== BOT_STATUS.ACTIVE) throw new WorkspaceAgentBotError("bot.not_active", "Bot 当前未运行", 409);
+        const approvedScopes = validateSetupApprovalScopes(input.scopes, current.requestedScopes);
+        const approvedConversations = validateSetupApprovalConversations(input.conversationIds, current.requestedConversations);
+        const timestamp = now().toISOString();
+        const result = await db.prepare(`UPDATE workspace_agent_bot_setup_sessions
+          SET status = ?, approved_scopes_json = ?, approved_conversations_json = ?, approved_at = ?, updated_at = ?
+          WHERE id = ? AND status IN (?, ?) AND expires_at > ?`)
+          .run(BOT_SETUP_STATUS.APPROVED, JSON.stringify(approvedScopes), JSON.stringify(approvedConversations), timestamp, timestamp,
+            id, BOT_SETUP_STATUS.CREATED, BOT_SETUP_STATUS.AWAITING_USER, timestamp);
+        if (!result.changes) throw new WorkspaceAgentBotError("bot.setup_conflict", "配置会话已被其他操作更新", 409);
+        return await readSetupSession(id);
+      });
+    } catch (error) {
+      if (error instanceof WorkspaceAgentBotError) await auditRejection(actor, "bot.setup.approve", "agent_bot_setup", id, error.code);
+      throw error;
+    }
+    await writeBotAudit({ actor, spaceId: actor.spaceId, action: "bot.setup.approve", targetType: "agent_bot_setup", targetId: id, result: "success" });
+    return publicSetupSession(approved);
+  }
+
+  async function denySetupSession(actorUserId, setupId, spaceId) {
+    const actor = await requireActiveHumanMember(actorUserId, spaceId);
+    const id = normalizeSetupId(setupId);
+    const session = await readSetupSession(id);
+    if (!session || session.spaceId !== actor.spaceId || session.ownerUserId !== actor.id) {
+      await auditRejection(actor, "bot.setup.deny", "agent_bot_setup", id, "permission.denied");
+      throw new WorkspaceAgentBotError("bot.setup_not_found", "配置会话不存在", 404);
+    }
+    const current = await expireSetupIfNeeded(session);
+    if (![BOT_SETUP_STATUS.CREATED, BOT_SETUP_STATUS.AWAITING_USER].includes(current.status)) {
+      throw new WorkspaceAgentBotError("bot.setup_not_deniable", "配置会话当前不能拒绝", 409);
+    }
+    const timestamp = now().toISOString();
+    const result = await db.prepare(`UPDATE workspace_agent_bot_setup_sessions
+      SET status = ?, denied_at = ?, updated_at = ?
+      WHERE id = ? AND status IN (?, ?) AND expires_at > ?`)
+      .run(BOT_SETUP_STATUS.DENIED, timestamp, timestamp, id, BOT_SETUP_STATUS.CREATED, BOT_SETUP_STATUS.AWAITING_USER, timestamp);
+    if (!result.changes) throw new WorkspaceAgentBotError("bot.setup_conflict", "配置会话已被其他操作更新", 409);
+    await writeBotAudit({ actor, spaceId: actor.spaceId, action: "bot.setup.deny", targetType: "agent_bot_setup", targetId: id, result: "success" });
+    return publicSetupSession(await readSetupSession(id));
+  }
+
+  async function exchangeSetupSession(setupId, input = {}) {
+    const id = normalizeSetupId(setupId);
+    const preflight = await readSetupSession(id);
+    if (preflight) await expireSetupIfNeeded(preflight);
+    let issued;
+    let actor;
+    try {
+      issued = await db.transaction(async () => {
+        const session = await readSetupSession(id);
+        if (!session) throw new WorkspaceAgentBotError("bot.setup_not_found", "配置会话不存在", 404);
+        const current = await expireSetupIfNeeded(session);
+        if (current.status !== BOT_SETUP_STATUS.APPROVED) throw new WorkspaceAgentBotError("bot.setup_not_approved", "配置会话尚未获得确认", 409);
+        actor = await requireActiveHumanMember(current.ownerUserId, current.spaceId);
+        await db.lock?.(botLifecycleLockKey(current.spaceId, current.botId));
+        const bot = await requireOwnedBot(actor, current.botId);
+        if (bot.status !== BOT_STATUS.ACTIVE) throw new WorkspaceAgentBotError("bot.not_active", "Bot 当前未运行", 409);
+        const freshSession = await readSetupSession(id);
+        if (freshSession.status !== BOT_SETUP_STATUS.APPROVED) throw new WorkspaceAgentBotError("bot.setup_conflict", "配置会话已被其他操作更新", 409);
+        const protocolVersion = normalizeSetupProtocolVersion(input.protocolVersion ?? freshSession.protocolVersion);
+        const issuedToken = await issueToken(actor.id, bot.id, { spaceId: bot.spaceId, scopes: freshSession.approvedScopes });
+        const timestamp = now().toISOString();
+        const result = await db.prepare(`UPDATE workspace_agent_bot_setup_sessions
+          SET status = ?, client_name = COALESCE(?, client_name), client_version = COALESCE(?, client_version), protocol_version = ?,
+          exchanged_at = ?, updated_at = ?
+          WHERE id = ? AND status = ?`)
+          .run(BOT_SETUP_STATUS.EXCHANGED, normalizeSetupClientName(input.clientName), normalizeSetupClientName(input.clientVersion), protocolVersion, timestamp, timestamp, id, BOT_SETUP_STATUS.APPROVED);
+        if (!result.changes) throw new WorkspaceAgentBotError("bot.setup_conflict", "配置会话已被其他操作更新", 409);
+        return { token: issuedToken, session: await readSetupSession(id) };
+      });
+    } catch (error) {
+      if (actor && error instanceof WorkspaceAgentBotError) await auditRejection(actor, "bot.setup.exchange", "agent_bot_setup", id, error.code);
+      if (!actor && error instanceof WorkspaceAgentBotError) {
+        const failedSession = await readSetupSession(id);
+        if (failedSession) await writeBotAudit({ actor: null, spaceId: failedSession.spaceId, action: "bot.setup.exchange", targetType: "agent_bot_setup", targetId: id, result: "rejected", reason: error.code });
+      }
+      throw error;
+    }
+    await writeBotAudit({ actor, spaceId: actor.spaceId, action: "bot.setup.exchange", targetType: "agent_bot_setup", targetId: id, result: "success" });
+    return { token: issued.token.token, tokenRecord: issued.token, session: await publicSetupSession(issued.session) };
   }
 
   async function revokeToken(actorUserId, botId, tokenId, spaceId) {
@@ -772,7 +976,10 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
         if (!result.changes) {
           throw new WorkspaceAgentBotError("bot.invalid_transition", "Bot 当前状态不允许执行该操作");
         }
-        return { bot: await readBot(bot.id), changed: true };
+        const revokedSetupCount = targetStatus === BOT_STATUS.PAUSED
+          ? await revokePendingSetupSessions(bot.id, updatedAt)
+          : 0;
+        return { bot: await readBot(bot.id), changed: true, revokedSetupCount };
       });
     } catch (error) {
       if (error instanceof WorkspaceAgentBotError) {
@@ -782,6 +989,9 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
     }
     if (!transition.changed) return publicBot(transition.bot);
     await writeBotAudit({ actor, spaceId: actor.spaceId, action, targetType: "agent_bot", targetId: transition.bot.id, result: "success" });
+    if (transition.revokedSetupCount > 0) {
+      await writeBotAudit({ actor, spaceId: actor.spaceId, action: "bot.setup.revoke", targetType: "agent_bot_setup", targetId: transition.bot.id, result: "success" });
+    }
     return publicBot(transition.bot);
   }
 
@@ -844,6 +1054,91 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
     return actor;
   }
 
+  async function readSetupSession(setupId) {
+    const row = await db.prepare(`SELECT id, bot_id AS botId, space_id AS spaceId, owner_user_id AS ownerUserId,
+      status, requested_scopes_json AS requestedScopesJson, approved_scopes_json AS approvedScopesJson,
+      requested_conversations_json AS requestedConversationsJson, approved_conversations_json AS approvedConversationsJson,
+      client_name AS clientName, client_version AS clientVersion, protocol_version AS protocolVersion, capabilities_json AS capabilitiesJson,
+      expires_at AS expiresAt, approved_at AS approvedAt, exchanged_at AS exchangedAt, denied_at AS deniedAt,
+      created_at AS createdAt, updated_at AS updatedAt
+      FROM workspace_agent_bot_setup_sessions WHERE id = ?`).get(setupId);
+    if (!row) return null;
+    return {
+      id: row.id,
+      botId: row.botId,
+      spaceId: row.spaceId,
+      ownerUserId: row.ownerUserId,
+      status: row.status,
+      requestedScopes: parseStoredSetupArray(row.requestedScopesJson),
+      approvedScopes: parseStoredSetupArray(row.approvedScopesJson),
+      requestedConversations: parseStoredSetupArray(row.requestedConversationsJson),
+      approvedConversations: parseStoredSetupArray(row.approvedConversationsJson),
+      clientName: row.clientName ?? null,
+      clientVersion: row.clientVersion ?? null,
+      protocolVersion: row.protocolVersion ?? BOT_SETUP_PROTOCOL_VERSION,
+      capabilities: parseStoredSetupArray(row.capabilitiesJson),
+      expiresAt: row.expiresAt,
+      approvedAt: row.approvedAt ?? null,
+      exchangedAt: row.exchangedAt ?? null,
+      deniedAt: row.deniedAt ?? null,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt
+    };
+  }
+
+  async function expireSetupIfNeeded(session) {
+    if (!session || [BOT_SETUP_STATUS.EXCHANGED, BOT_SETUP_STATUS.DENIED, BOT_SETUP_STATUS.EXPIRED, BOT_SETUP_STATUS.REVOKED].includes(session.status)) return session;
+    if (new Date(session.expiresAt).getTime() > now().getTime()) return session;
+    const timestamp = now().toISOString();
+    const result = await db.prepare(`UPDATE workspace_agent_bot_setup_sessions SET status = ?, updated_at = ?
+      WHERE id = ? AND status IN (?, ?) AND expires_at <= ?`)
+      .run(BOT_SETUP_STATUS.EXPIRED, timestamp, session.id, BOT_SETUP_STATUS.CREATED, BOT_SETUP_STATUS.AWAITING_USER, timestamp);
+    if (result.changes) {
+      await writeBotAudit({ actor: null, spaceId: session.spaceId, action: "bot.setup.expire", targetType: "agent_bot_setup", targetId: session.id, result: "success" });
+    }
+    return (await readSetupSession(session.id)) ?? { ...session, status: BOT_SETUP_STATUS.EXPIRED, updatedAt: timestamp };
+  }
+
+  async function revokePendingSetupSessions(botId, timestamp) {
+    const result = await db.prepare(`UPDATE workspace_agent_bot_setup_sessions
+      SET status = ?, updated_at = ?
+      WHERE bot_id = ? AND status IN (?, ?, ?)`)
+      .run(BOT_SETUP_STATUS.REVOKED, timestamp, botId,
+        BOT_SETUP_STATUS.CREATED, BOT_SETUP_STATUS.AWAITING_USER, BOT_SETUP_STATUS.APPROVED);
+    return result.changes ?? 0;
+  }
+
+  async function loadSetupForAgent(setupId) {
+    const id = normalizeSetupId(setupId);
+    const session = await readSetupSession(id);
+    if (!session) throw new WorkspaceAgentBotError("bot.setup_not_found", "配置会话不存在", 404);
+    return expireSetupIfNeeded(session);
+  }
+
+  async function publicSetupSession(session) {
+    if (!session) return null;
+    const bot = await readBot(session.botId);
+    return {
+      id: session.id,
+      bot: bot ? { id: bot.id, name: bot.name, status: bot.status } : null,
+      status: session.status,
+      requestedScopes: [...session.requestedScopes],
+      approvedScopes: [...session.approvedScopes],
+      requestedConversations: [...session.requestedConversations],
+      approvedConversations: [...session.approvedConversations],
+      clientName: session.clientName,
+      clientVersion: session.clientVersion,
+      protocolVersion: session.protocolVersion,
+      capabilities: [...session.capabilities],
+      expiresAt: session.expiresAt,
+      approvedAt: session.approvedAt,
+      exchangedAt: session.exchangedAt,
+      deniedAt: session.deniedAt,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt
+    };
+  }
+
   return Object.freeze({
     createBot,
     listOwnedBots,
@@ -859,6 +1154,13 @@ export function createWorkspaceAgentBotService({ db, now = () => new Date(), idF
     finalizeDeleteBot,
     issueToken,
     listTokens,
+    createSetupSession,
+    getSetupSession,
+    requestSetup,
+    getSetupStatus,
+    approveSetupSession,
+    denySetupSession,
+    exchangeSetupSession,
     revokeToken,
     rotateToken,
     authenticateToken,
@@ -985,6 +1287,15 @@ function normalizeExpiry(value, current) {
 function parseScopes(value) {
   try {
     return validateBotScopes(JSON.parse(value));
+  } catch {
+    return [];
+  }
+}
+
+function parseStoredSetupArray(value) {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
@@ -1198,4 +1509,60 @@ function normalizeSettingsPatch(input) {
 
 function isUniqueConstraintError(error) {
   return Boolean(error && (error.code === "SQLITE_CONSTRAINT_UNIQUE" || error.code === "23505" || /unique constraint|duplicate key/i.test(error.message ?? "")));
+}
+
+function normalizeSetupId(value) {
+  const id = typeof value === "string" ? value.trim() : "";
+  if (!SETUP_ID_PATTERN.test(id)) throw new WorkspaceAgentBotError("bot.setup_invalid", "配置会话无效");
+  return id;
+}
+
+function normalizeSetupConversationIds(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 200 || value.some((id) => typeof id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(id))) {
+    throw new WorkspaceAgentBotError("bot.setup_invalid", "配置会话的会话范围无效");
+  }
+  return [...new Set(value.map((id) => id.trim()))];
+}
+
+function normalizeSetupClientName(value) {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string" || !SETUP_CLIENT_NAME_PATTERN.test(value.trim())) {
+    throw new WorkspaceAgentBotError("bot.setup_invalid", "Agent 客户端标识无效");
+  }
+  return value.trim();
+}
+
+function normalizeSetupProtocolVersion(value) {
+  if (value === undefined || value === null || value === "") return BOT_SETUP_PROTOCOL_VERSION;
+  if (value !== BOT_SETUP_PROTOCOL_VERSION) {
+    throw new WorkspaceAgentBotError("bot.setup_protocol_unsupported", "当前只支持 DualLane Gateway v1", 409);
+  }
+  return BOT_SETUP_PROTOCOL_VERSION;
+}
+
+function normalizeSetupCapabilities(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 32 || value.some((item) => typeof item !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/u.test(item))) {
+    throw new WorkspaceAgentBotError("bot.setup_invalid", "Agent 能力声明无效");
+  }
+  return [...new Set(value.map((item) => item.trim()))];
+}
+
+function validateSetupApprovalScopes(value, requested) {
+  const approved = value === undefined ? [...requested] : validateBotScopes(value);
+  const allowed = new Set(requested);
+  if (approved.some((scope) => !allowed.has(scope))) {
+    throw new WorkspaceAgentBotError("bot.setup_scope_not_requested", "不能确认 Agent 未请求的权限", 403);
+  }
+  return approved;
+}
+
+function validateSetupApprovalConversations(value, requested) {
+  const approved = value === undefined ? [...requested] : normalizeSetupConversationIds(value);
+  const allowed = new Set(requested);
+  if (approved.some((conversationId) => !allowed.has(conversationId))) {
+    throw new WorkspaceAgentBotError("bot.setup_conversation_not_requested", "不能确认 Agent 未请求的会话", 403);
+  }
+  return approved;
 }

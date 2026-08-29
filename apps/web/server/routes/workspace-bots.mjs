@@ -76,6 +76,7 @@ export function registerWorkspaceAgentBotRoutes({
 
   const call = (handler) => async (request, reply) => {
     if (!workspaceEnabled) return disabled(request, reply);
+    reply.header("cache-control", "no-store");
     try {
       if (request.validationError) {
         throw new WorkspaceAgentBotError("bot.invalid_request", "请求参数无效", 400);
@@ -166,6 +167,58 @@ export function registerWorkspaceAgentBotRoutes({
     const { token, ...tokenRecord } = issued;
     return reply.code(201).send({ token, tokenRecord });
   }));
+
+  app.post("/api/workspace/bots/:botId/setup-sessions", {
+    attachValidation: true,
+    schema: {
+      body: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          requestedScopes: { type: "array", items: { type: "string" }, maxItems: 10 },
+          conversationIds: { type: "array", items: { type: "string" }, maxItems: 200 }
+        }
+      }
+    }
+  }, call(async (request, reply) => {
+    const session = await service.createSetupSession(await actor(request), request.params.botId, {
+      ...(request.body || {}),
+      spaceId: await space(request)
+    });
+    return reply.code(201).send({
+      session,
+      // Resolve the relative handle in the trusted browser origin. Never use
+      // a client-controlled Origin header to construct an authorization host.
+      setupUrl: `/workspace/account/bot?setup=${encodeURIComponent(session.id)}`
+    });
+  }));
+
+  app.get("/api/workspace/bot-setup/:sessionId", call(async (request) => ({
+    session: await service.getSetupSession(await actor(request), request.params.sessionId, await space(request))
+  })));
+
+  app.post("/api/workspace/bot-setup/:sessionId/approve", {
+    attachValidation: true,
+    schema: {
+      body: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          scopes: { type: "array", items: { type: "string" }, maxItems: 10 },
+          conversationIds: { type: "array", items: { type: "string" }, maxItems: 200 }
+        }
+      }
+    }
+  }, call(async (request) => ({
+    session: await service.approveSetupSession(await actor(request), request.params.sessionId, {
+      ...(request.body || {}),
+      spaceId: await space(request)
+    })
+  })));
+
+  app.post("/api/workspace/bot-setup/:sessionId/deny", call(async (request) => ({
+    session: await service.denySetupSession(await actor(request), request.params.sessionId, await space(request))
+  })));
 
   app.post("/api/workspace/bots/:botId/tokens/rotate", call(async (request, reply) => {
     const issued = await service.rotateToken(await actor(request), request.params.botId, {

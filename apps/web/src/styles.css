@@ -6303,6 +6303,26 @@ html[data-theme="dark"] .workspace-mode {
   font-weight: var(--weight-medium);
 }
 
+.workspace-bot-confirm label {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.workspace-bot-confirm label span {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.workspace-bot-confirm label input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--line-strong);
+  padding: 9px 10px;
+  color: var(--ink);
+  background: var(--surface);
+}
+
 .workspace-bot-confirm-danger > svg {
   color: var(--danger-fg);
 }
@@ -6338,6 +6358,217 @@ html[data-theme="dark"] .workspace-mode {
   color: var(--muted);
   font-size: var(--text-sm);
   line-height: var(--line-body);
+}
+
+.workspace-bot-connect-section {
+  background: color-mix(in srgb, var(--surface-tint) 42%, transparent);
+}
+
+.workspace-bot-skill-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border-block: 1px solid var(--line);
+  padding: 11px 2px;
+}
+
+.workspace-bot-skill-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.workspace-bot-skill-row span,
+.workspace-bot-security-note {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.workspace-bot-skill-row code {
+  overflow-wrap: anywhere;
+  color: var(--relay-dark);
+  font-size: var(--text-sm);
+}
+
+.workspace-bot-connect-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-bot-setup-status {
+  min-height: 30px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.workspace-bot-setup-status small {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+}
+
+.workspace-bot-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+
+.workspace-bot-status-dot-approved,
+.workspace-bot-status-dot-exchanged {
+  background: var(--green);
+}
+
+.workspace-bot-status-dot-awaiting_user {
+  background: var(--yellow);
+}
+
+.workspace-bot-status-dot-denied,
+.workspace-bot-status-dot-expired,
+.workspace-bot-status-dot-revoked {
+  background: var(--danger-fg);
+}
+
+.workspace-bot-security-note {
+  line-height: var(--line-body);
+}
+
+.workspace-bot-setup-section {
+  max-width: 720px !important;
+}
+
+.workspace-bot-setup-summary {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.workspace-bot-setup-summary > svg {
+  flex: 0 0 auto;
+  color: var(--relay-dark);
+}
+
+.workspace-bot-setup-summary strong {
+  color: var(--ink);
+  font-weight: var(--weight-medium);
+}
+
+.workspace-bot-scope-list {
+  display: grid;
+  border-block: 1px solid var(--line);
+}
+
+.workspace-bot-scope-option {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 12px 2px;
+  cursor: pointer;
+}
+
+.workspace-bot-scope-option + .workspace-bot-scope-option {
+  border-top: 1px solid var(--line);
+}
+
+.workspace-bot-scope-option input {
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  accent-color: var(--relay);
+}
+
+.workspace-bot-scope-option > span {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.workspace-bot-scope-option strong {
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.workspace-bot-scope-option small,
+.workspace-bot-setup-conversations small {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-body);
+}
+
+.workspace-bot-setup-conversations {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  border-bottom: 1px solid var(--line);
+  padding: 11px 2px;
+}
+
+.workspace-bot-setup-conversations > div {
+  display: grid;
+  gap: 4px;
+}
+
+.workspace-bot-setup-conversations strong {
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.workspace-bot-setup-conversations code {
+  overflow-wrap: anywhere;
+  color: var(--relay-dark);
+  font-size: var(--text-xs);
+}
+
+.workspace-bot-conversation-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 0;
+  color: var(--ink);
+}
+
+.workspace-bot-conversation-option input {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  accent-color: var(--relay);
+}
+
+.workspace-bot-setup-awaiting {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.workspace-bot-setup-awaiting > svg {
+  color: var(--relay-dark);
+  flex: 0 0 auto;
+}
+
+.workspace-bot-setup-actions {
+  justify-content: flex-end;
 }
 
 .workspace-bot-form {
@@ -11663,7 +11894,9 @@ small,
 
   .workspace-bot-create-form > button,
   .workspace-bot-form-actions > button,
-  .workspace-bot-token-actions > button {
+  .workspace-bot-token-actions > button,
+  .workspace-bot-connect-actions > button,
+  .workspace-bot-setup-actions > button {
     min-height: 44px;
   }
 
@@ -11672,6 +11905,18 @@ small,
   }
 
   .workspace-bot-form-actions > button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .workspace-bot-connect-actions,
+  .workspace-bot-setup-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace-bot-connect-actions > button,
+  .workspace-bot-setup-actions > button {
     width: 100%;
     justify-content: center;
   }

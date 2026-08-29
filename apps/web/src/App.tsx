@@ -2585,6 +2585,7 @@ export function App() {
   const [workspaceSpaceTab, setWorkspaceSpaceTab] = useState<WorkspaceSpaceTab>(initialWorkspaceRoute?.spaceTab ?? "overview");
   const [workspaceCreateMode, setWorkspaceCreateMode] = useState<WorkspaceCreateMode>(initialWorkspaceRoute?.createMode ?? "");
   const [workspaceAccountSection, setWorkspaceAccountSection] = useState(initialWorkspaceRoute?.accountSection ?? "");
+  const [workspaceSetupSessionId, setWorkspaceSetupSessionId] = useState(initialWorkspaceRoute?.setupSessionId ?? "");
   const [workspaceSharedEmoteCollectionId, setWorkspaceSharedEmoteCollectionId] = useState(
     initialWorkspaceRoute?.sharedEmoteCollectionId ?? ""
   );
@@ -7778,6 +7779,7 @@ export function App() {
     setWorkspaceSpaceTab(route.spaceTab);
     setWorkspaceCreateMode(route.createMode);
     setWorkspaceAccountSection(route.accountSection);
+    setWorkspaceSetupSessionId(route.setupSessionId);
     setWorkspaceSharedEmoteCollectionId(route.sharedEmoteCollectionId);
     setWorkspaceCreateMenuOpen(false);
     setWorkspaceUserMenuOpen(false);
@@ -9174,6 +9176,7 @@ export function App() {
                       <WorkspaceBotSettings
                         onBack={() => navigateWorkspaceAccountSection("")}
                         onNotice={showWorkspaceNotice}
+                        setupSessionId={workspaceSetupSessionId}
                       />
                     ) : (
                       <>

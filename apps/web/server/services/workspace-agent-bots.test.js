@@ -102,6 +102,57 @@ describe("workspace custom Agent Bot security foundation", () => {
     }
   });
 
+  it("supports an owner-approved setup session and one-time token exchange", async () => {
+    const { service, db } = await fixture();
+    const bot = await service.createBot("usr_owner", { spaceId: SPACE_ID, name: "Setup Flow" });
+    const created = await service.createSetupSession("usr_owner", bot.id, { spaceId: SPACE_ID });
+    expect(created).toMatchObject({
+      id: expect.stringMatching(/^setup_/u),
+      status: "created",
+      requestedScopes: BOT_DEFAULT_SCOPES,
+      approvedScopes: [],
+      bot: { id: bot.id, name: "Setup Flow", status: "active" }
+    });
+    const requested = await service.requestSetup(created.id, {
+      requestedScopes: ["messages:read_trigger", "messages:send", "messages:read_context"],
+      clientName: "test-agent/1.0.0",
+      protocolVersion: "v1",
+      capabilities: ["poll_setup", "write_config"]
+    });
+    expect(requested).toMatchObject({ status: "awaiting_user", clientName: "test-agent/1.0.0", protocolVersion: "v1" });
+    await expect(service.requestSetup(created.id, { protocolVersion: "v2" })).rejects.toMatchObject({ code: "bot.setup_protocol_unsupported", statusCode: 409 });
+    const approved = await service.approveSetupSession("usr_owner", created.id, {
+      spaceId: SPACE_ID,
+      scopes: ["messages:read_trigger", "messages:send"]
+    });
+    expect(approved).toMatchObject({ status: "approved", approvedScopes: ["messages:read_trigger", "messages:send"] });
+    const exchanged = await service.exchangeSetupSession(created.id, { clientName: "test-agent/1.0.0" });
+    expect(exchanged.token).toMatch(/^dl_bot_/u);
+    expect(exchanged.session.status).toBe("exchanged");
+    await expect(service.exchangeSetupSession(created.id)).rejects.toMatchObject({ code: "bot.setup_not_approved", statusCode: 409 });
+    await expect(service.authenticateToken(exchanged.token)).resolves.toMatchObject({ botId: bot.id, scopes: ["messages:read_trigger", "messages:send"] });
+    expect(db.prepare("SELECT token_hash AS tokenHash FROM workspace_agent_bot_tokens WHERE bot_id = ?").get(bot.id).tokenHash).not.toContain(exchanged.token);
+  });
+
+  it("expires and denies setup sessions without exposing owner or token data", async () => {
+    let current = new Date("2026-08-29T00:00:00.000Z");
+    const { service, db } = await fixture();
+    const timed = createWorkspaceAgentBotService({ db, now: () => new Date(current) });
+    const bot = await timed.createBot("usr_owner", { spaceId: SPACE_ID, name: "Timed Setup" });
+    const session = await timed.createSetupSession("usr_owner", bot.id, { spaceId: SPACE_ID });
+    current = new Date(current.getTime() + 10 * 60 * 1000 + 1);
+    expect((await timed.getSetupStatus(session.id)).status).toBe("expired");
+    await expect(timed.requestSetup(session.id)).rejects.toMatchObject({ code: "bot.setup_not_requestable", statusCode: 409 });
+    const exchangeSession = await timed.createSetupSession("usr_owner", bot.id, { spaceId: SPACE_ID });
+    current = new Date(current.getTime() + 10 * 60 * 1000 + 1);
+    await expect(timed.exchangeSetupSession(exchangeSession.id)).rejects.toMatchObject({ code: "bot.setup_not_approved", statusCode: 409 });
+    expect(db.prepare("SELECT status FROM workspace_agent_bot_setup_sessions WHERE id = ?").get(exchangeSession.id).status).toBe("expired");
+    const denied = await timed.createSetupSession("usr_owner", bot.id, { spaceId: SPACE_ID });
+    expect((await timed.denySetupSession("usr_owner", denied.id, SPACE_ID)).status).toBe("denied");
+    const auditText = JSON.stringify(db.prepare("SELECT action, target_id AS targetId, reason FROM audit_logs WHERE action LIKE 'bot.setup.%'").all());
+    expect(auditText).not.toContain("usr_owner");
+  });
+
   it("issues a one-time token, persists only its SHA-256 hash, masks future projections, and authenticates by binding", async () => {
     const { service, db } = await fixture();
     const bot = await service.createBot("usr_owner", { spaceId: SPACE_ID, name: "Gateway" });
@@ -124,6 +175,7 @@ describe("workspace custom Agent Bot security foundation", () => {
     const { db } = await fixture();
     const service = createWorkspaceAgentBotService({ db, now: () => new Date(current) });
     const bot = await service.createBot("usr_owner", { spaceId: SPACE_ID, name: "Lifecycle" });
+    const setup = await service.createSetupSession("usr_owner", bot.id, { spaceId: SPACE_ID });
     const token = await service.issueToken("usr_owner", bot.id, { spaceId: SPACE_ID, expiresAt: new Date(current.getTime() + 60_000).toISOString() });
     current = new Date(current.getTime() + 61_000);
     await expect(service.authenticateToken(token.token)).rejects.toMatchObject({ code: "bot.invalid_token" });
@@ -131,6 +183,7 @@ describe("workspace custom Agent Bot security foundation", () => {
     await expect(service.revokeToken("usr_owner", bot.id, fresh.id, SPACE_ID)).resolves.toMatchObject({ token: maskBotToken() });
     await expect(service.authenticateToken(fresh.token)).rejects.toMatchObject({ code: "bot.invalid_token" });
     expect((await service.pauseBot("usr_owner", bot.id, SPACE_ID)).status).toBe(BOT_STATUS.PAUSED);
+    expect(db.prepare("SELECT status FROM workspace_agent_bot_setup_sessions WHERE id = ?").get(setup.id).status).toBe("revoked");
     await expect(service.issueToken("usr_owner", bot.id, { spaceId: SPACE_ID })).rejects.toMatchObject({ code: "bot.not_active" });
     expect((await service.resumeBot("usr_owner", bot.id, SPACE_ID)).status).toBe(BOT_STATUS.ACTIVE);
     expect((await service.beginDeleteBot("usr_owner", bot.id, SPACE_ID)).status).toBe(BOT_STATUS.DELETING);

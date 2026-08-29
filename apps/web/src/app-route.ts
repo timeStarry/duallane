@@ -26,6 +26,7 @@ export type AppRoute =
       spaceTab: WorkspaceRouteSpaceTab;
       createMode: WorkspaceRouteCreateMode;
       accountSection: WorkspaceRouteAccountSection;
+      setupSessionId: string;
       sharedEmoteCollectionId: string;
       inviteCode: string;
     };
@@ -107,9 +108,10 @@ export function parseAppRoute(pathname: string, search = "", hash = ""): ParsedA
   }
   if (segments[1] === "account") {
     const accountSection = parseAccountSection(segments.slice(2));
+    const setupSessionId = accountSection === "bot" ? normalizePublicParam(params.get("setup")) : "";
     return finish(
-      workspaceRoute({ ...base, view: "account", accountSection }),
-      (segments.length > 2 && !accountSection) || segments.length > accountSectionSegmentCount(accountSection) + 2 || hasUnexpectedParams(params, ["invite"])
+      workspaceRoute({ ...base, view: "account", accountSection, setupSessionId }),
+      (segments.length > 2 && !accountSection) || segments.length > accountSectionSegmentCount(accountSection) + 2 || hasUnexpectedParams(params, accountSection === "bot" ? ["invite", "setup"] : ["invite"])
     );
   }
   if (segments[1] === "emotes" && segments[2] === "shared") {
@@ -155,6 +157,7 @@ export function getAppRouteUrl(route: AppRoute) {
 
   const params = new URLSearchParams();
   if (route.inviteCode) params.set("invite", route.inviteCode);
+  if (route.view === "account" && route.accountSection === "bot" && route.setupSessionId) params.set("setup", route.setupSessionId);
   return params.size ? `${pathname}?${params.toString()}` : pathname;
 }
 
@@ -169,6 +172,7 @@ export function workspaceRoute(input: Partial<Omit<Extract<AppRoute, { kind: "wo
     spaceTab: input.spaceTab ?? "overview",
     createMode: input.createMode ?? "",
     accountSection: input.accountSection ?? "",
+    setupSessionId: input.setupSessionId ?? "",
     sharedEmoteCollectionId: input.sharedEmoteCollectionId ?? "",
     inviteCode: input.inviteCode ?? ""
   };

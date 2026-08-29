@@ -5,7 +5,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { openTestDatabase } from "../services/test-database.mjs";
 import { createWorkspaceAgentBotService } from "../services/workspace-agent-bots.mjs";
+import { createWorkspaceBotGatewayService } from "../services/workspace-bot-gateway.mjs";
 import { registerWorkspaceAgentBotRoutes } from "./workspace-bots.mjs";
+import { registerWorkspaceBotGatewayRoutes } from "./workspace-bot-gateway.mjs";
 
 const SPACE_ID = "spc_default";
 
@@ -269,6 +271,38 @@ describe("workspace Agent Bot management routes", () => {
     expect(connection.json().connection.status).toBe("disconnected");
   });
 
+  it("creates and approves a setup session without returning a Bot token", async () => {
+    const fixture = await makeFixture();
+    const created = await fixture.app.inject({ method: "POST", url: "/api/workspace/bots", headers: { "x-user": "usr_owner" }, payload: { name: "Setup Route" } });
+    const botId = created.json().bot.id;
+    const start = await fixture.app.inject({ method: "POST", url: `/api/workspace/bots/${botId}/setup-sessions`, headers: { "x-user": "usr_owner" }, payload: {} });
+    expect(start.statusCode).toBe(201);
+    expect(start.json().session.status).toBe("created");
+    expect(start.json().setupUrl).toContain(`/workspace/account/bot?setup=${start.json().session.id}`);
+    expect(JSON.stringify(start.json())).not.toMatch(/dl_bot_/u);
+    const requested = await fixture.app.inject({
+      method: "POST",
+      url: "/api/bot-gateway/v1/setup/request",
+      payload: { setupSessionId: start.json().session.id, requestedScopes: ["messages:read_trigger", "messages:send"], clientName: "route-agent/1" }
+    });
+    expect(requested.statusCode).toBe(200);
+    expect(requested.json().setup.status).toBe("awaiting_user");
+    const approved = await fixture.app.inject({
+      method: "POST",
+      url: `/api/workspace/bot-setup/${start.json().session.id}/approve`,
+      headers: { "x-user": "usr_owner" },
+      payload: { scopes: ["messages:send"] }
+    });
+    expect(approved.statusCode).toBe(200);
+    expect(approved.json().session).toMatchObject({ status: "approved", approvedScopes: ["messages:send"] });
+    const exchanged = await fixture.app.inject({ method: "POST", url: "/api/bot-gateway/v1/setup/exchange", payload: { setupSessionId: start.json().session.id } });
+    expect(exchanged.statusCode).toBe(201);
+    expect(exchanged.json().token).toMatch(/^dl_bot_/u);
+    const replay = await fixture.app.inject({ method: "POST", url: "/api/bot-gateway/v1/setup/exchange", payload: { setupSessionId: start.json().session.id } });
+    expect(replay.statusCode).toBe(409);
+    expect(replay.json().error.code).toBe("bot.setup_not_approved");
+  });
+
   async function makeFixture() {
     const directory = await mkdtemp(path.join(tmpdir(), "duallane-bot-route-"));
     const db = openTestDatabase(directory);
@@ -281,6 +315,7 @@ describe("workspace Agent Bot management routes", () => {
       getSpaceId: () => SPACE_ID,
       workspaceEnabled: true
     });
+    registerWorkspaceBotGatewayRoutes({ app, gateway: createWorkspaceBotGatewayService({ db, botService: service }), getSpaceId: () => SPACE_ID, workspaceEnabled: true });
     const fixture = { app, db, service, directory };
     fixtures.push(fixture);
     return fixture;

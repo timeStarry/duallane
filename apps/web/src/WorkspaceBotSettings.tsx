@@ -5,6 +5,7 @@ import {
   Bot as BotIcon,
   Check,
   Clipboard,
+  ExternalLink,
   KeyRound,
   Pause,
   Play,
@@ -23,6 +24,7 @@ export type WorkspaceBotSettingsProps = {
   onBack: () => void;
   onNotice: (tone: WorkspaceBotNoticeTone, text: string) => void;
   botId?: string;
+  setupSessionId?: string;
   fetchImpl?: typeof fetch;
 };
 
@@ -124,7 +126,27 @@ type BotGroupPolicy = {
   updatedAt?: string;
 };
 
+type BotSetupSession = {
+  id: string;
+  bot?: { id: string; name: string; status: string } | null;
+  status: "created" | "awaiting_user" | "approved" | "exchanged" | "denied" | "expired" | "revoked" | string;
+  requestedScopes: string[];
+  approvedScopes: string[];
+  requestedConversations: string[];
+  approvedConversations: string[];
+  clientName?: string | null;
+  clientVersion?: string | null;
+  protocolVersion?: string;
+  capabilities?: string[];
+  expiresAt?: string;
+  approvedAt?: string | null;
+  exchangedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 const DEFAULT_TOKEN_SCOPES = ["messages:read_trigger", "messages:send", "commands:receive"];
+export const DUALLANE_AGENT_SKILL_URL = "https://duallane.tsio.top/integrations/duallane-channel.md";
 
 export function resolveBotGroupPolicyMode(settings: Pick<BotSettings, "allowGroup" | "requireOwnerApproval">): BotGroupPolicyMode {
   if (!settings.allowGroup) return "direct_only";
@@ -163,6 +185,30 @@ function statusLabel(status?: string) {
     default: return status || "未知";
   }
 }
+
+function setupStatusLabel(status?: string) {
+  switch (status) {
+    case "created": return "等待 Agent 读取 Skill";
+    case "awaiting_user": return "等待你的确认";
+    case "approved": return "已授权，等待 Agent 完成配置";
+    case "exchanged": return "已完成配置";
+    case "denied": return "已拒绝";
+    case "expired": return "配置链接已过期";
+    case "revoked": return "授权已撤销";
+    default: return status || "未开始";
+  }
+}
+
+const SETUP_SCOPE_OPTIONS: ReadonlyArray<{ value: string; label: string; description: string }> = [
+  { value: "messages:read_trigger", label: "接收触发消息", description: "接收提及和命令，不读取未授权历史。" },
+  { value: "messages:send", label: "发送回复", description: "允许 Agent 在已授权会话中回复消息。" },
+  { value: "commands:receive", label: "接收命令", description: "允许 Agent 响应注册的 Bot 命令。" },
+  { value: "messages:read_context", label: "读取会话上下文", description: "仅在明确授权的会话中读取历史消息。" },
+  { value: "cards:write", label: "发送消息卡片", description: "允许 Agent 创建和更新受支持的卡片。" },
+  { value: "files:read_preview", label: "查看文件预览", description: "允许读取已授权附件的预览信息。" },
+  { value: "files:read_content", label: "读取文件内容", description: "允许读取已授权附件的完整内容。" },
+  { value: "files:write", label: "上传文件", description: "允许 Agent 上传文件到已授权会话。" }
+];
 
 function visibilityLabel(value?: string) {
   switch (value) {
@@ -209,7 +255,7 @@ function operationError(error: unknown, fallback: string) {
   return fallback;
 }
 
-export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, fetchImpl = fetch }: WorkspaceBotSettingsProps) {
+export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, setupSessionId, fetchImpl = fetch }: WorkspaceBotSettingsProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [bot, setBot] = useState<WorkspaceBot | null>(null);
@@ -232,9 +278,14 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
   const [tokenBusy, setTokenBusy] = useState(false);
   const [revealedToken, setRevealedToken] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [deleteConfirmationName, setDeleteConfirmationName] = useState("");
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createBusy, setCreateBusy] = useState(false);
+  const [setup, setSetup] = useState<BotSetupSession | null>(null);
+  const [setupBusy, setSetupBusy] = useState(false);
+  const [setupScopes, setSetupScopes] = useState<string[]>(DEFAULT_TOKEN_SCOPES);
+  const [setupConversations, setSetupConversations] = useState<string[]>([]);
   const savedIdentitySignatureRef = useRef("");
   const savedGroupPolicyRef = useRef<BotGroupPolicyMode | null>(null);
 
@@ -255,6 +306,7 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
         setTokens([]);
         setConnection(null);
         setGroupPolicies([]);
+        setSetup(null);
         return;
       }
 
@@ -266,6 +318,9 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
         requestJson<{ policies: BotGroupPolicy[] }>(fetchImpl, `/api/workspace/bots/${id}/group-policies`)
       ]);
       const nextSettings = settingsResult.settings;
+      const setupResult = setupSessionId
+        ? await requestJson<{ session: BotSetupSession }>(fetchImpl, `/api/workspace/bot-setup/${encodeURIComponent(setupSessionId)}`)
+        : null;
       setBot(nextBot);
       setBotName(nextBot.name);
       setSettings(nextSettings);
@@ -288,13 +343,26 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
       setTokens(Array.isArray(tokensResult.tokens) ? tokensResult.tokens : []);
       setConnection(connectionResult.connection ?? null);
       setGroupPolicies(Array.isArray(groupsResult.policies) ? groupsResult.policies : []);
+      setSetup(setupResult?.session ?? null);
+      if (setupResult?.session) {
+        const hasOwnerDecision = ["approved", "exchanged"].includes(setupResult.session.status);
+        setSetupScopes(hasOwnerDecision && setupResult.session.approvedScopes.length > 0
+          ? setupResult.session.approvedScopes
+          : setupResult.session.requestedScopes);
+        setSetupConversations(hasOwnerDecision
+          ? setupResult.session.approvedConversations
+          : setupResult.session.requestedConversations);
+      } else {
+        setSetupScopes(DEFAULT_TOKEN_SCOPES);
+        setSetupConversations([]);
+      }
       setRevealedToken(null);
     } catch (loadError) {
       setError(operationError(loadError, "Bot 设置暂时无法加载"));
     } finally {
       setLoading(false);
     }
-  }, [fetchImpl]);
+  }, [fetchImpl, setupSessionId]);
 
   useEffect(() => {
     void loadBot(requestedBotId);
@@ -469,11 +537,16 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
 
   function requestDisable() {
     if (!bot) return;
+    setDeleteConfirmationName("");
     setDeleteConfirm(true);
   }
 
   async function confirmDisable() {
     if (!bot) return;
+    if (deleteConfirmationName.trim() !== bot.name) {
+      onNotice("warning", "请输入完全匹配的 Bot 名称");
+      return;
+    }
     setDeleteBusy(true);
     try {
       let nextBot = bot;
@@ -485,6 +558,7 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
       const result = await requestJson<{ bot: WorkspaceBot }>(fetchImpl, `/api/workspace/bots/${encodeURIComponent(bot.id)}/delete/confirm`, { method: "POST" });
       setBot(result.bot);
       setDeleteConfirm(false);
+      setDeleteConfirmationName("");
       setTokens([]);
       setRevealedToken(null);
       onNotice("success", "Bot 已停用");
@@ -507,6 +581,97 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
       onNotice("warning", "Token 复制失败，请手动保存");
     }
   }
+
+  function setupUrlFor(session: BotSetupSession) {
+    return `${window.location.origin}/workspace/account/bot?setup=${encodeURIComponent(session.id)}`;
+  }
+
+  function buildSetupPrompt(session: BotSetupSession) {
+    return `请读取并执行 DualLane Agent Skill：\n${DUALLANE_AGENT_SKILL_URL}\n\n帮我配置我的 DualLane Bot「${session.bot?.name || bot?.name || "个人 Bot"}」。\n请先询问我需要允许哪些会话和权限；需要登录或授权时，只发送 DualLane 的确认链接让我操作。\n不要索要、回显或写入任何 Token。\n配置完成后报告连接状态和授权范围。\n\n配置入口：${setupUrlFor(session)}`;
+  }
+
+  async function copySetupText(value: string, label: string) {
+    if (!navigator.clipboard) {
+      onNotice("warning", "当前浏览器不支持复制，请手动复制");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(value);
+      onNotice("success", `${label}已复制`);
+    } catch {
+      onNotice("warning", `${label}复制失败，请手动复制`);
+    }
+  }
+
+  async function createSetupSession() {
+    if (!bot || !isActive || setupBusy) return null;
+    setSetupBusy(true);
+    try {
+      const result = await requestJson<{ session: BotSetupSession; setupUrl?: string }>(fetchImpl, `/api/workspace/bots/${encodeURIComponent(bot.id)}/setup-sessions`, {
+        method: "POST",
+        body: JSON.stringify({ requestedScopes: DEFAULT_TOKEN_SCOPES })
+      });
+      setSetup(result.session);
+      setSetupScopes(result.session.requestedScopes);
+      setSetupConversations(result.session.requestedConversations);
+      return { session: result.session, setupUrl: result.setupUrl || setupUrlFor(result.session) };
+    } catch (setupError) {
+      onNotice("warning", operationError(setupError, "配置入口创建失败"));
+      return null;
+    } finally {
+      setSetupBusy(false);
+    }
+  }
+
+  async function copyAgentSetup() {
+    const result = setup ?? await createSetupSession();
+    if (!result) return;
+    const session = "session" in result ? result.session : result;
+    await copySetupText(buildSetupPrompt(session), "配置指令");
+  }
+
+  async function approveSetup() {
+    if (!setup || setupBusy) return;
+    setSetupBusy(true);
+    try {
+      const result = await requestJson<{ session: BotSetupSession }>(fetchImpl, `/api/workspace/bot-setup/${encodeURIComponent(setup.id)}/approve`, {
+        method: "POST",
+        body: JSON.stringify({ scopes: setupScopes, conversationIds: setupConversations })
+      });
+      setSetup(result.session);
+      onNotice("success", "授权已确认，等待 Agent 完成配置");
+    } catch (setupError) {
+      onNotice("warning", operationError(setupError, "授权确认失败"));
+    } finally {
+      setSetupBusy(false);
+    }
+  }
+
+  async function denySetup() {
+    if (!setup || setupBusy) return;
+    setSetupBusy(true);
+    try {
+      const result = await requestJson<{ session: BotSetupSession }>(fetchImpl, `/api/workspace/bot-setup/${encodeURIComponent(setup.id)}/deny`, { method: "POST" });
+      setSetup(result.session);
+      onNotice("info", "已拒绝本次 Agent 授权");
+    } catch (setupError) {
+      onNotice("warning", operationError(setupError, "授权拒绝失败"));
+    } finally {
+      setSetupBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!setupSessionId || !setup || ["exchanged", "denied", "expired", "revoked"].includes(setup.status)) return;
+    const timer = window.setInterval(() => {
+      void requestJson<{ session: BotSetupSession }>(fetchImpl, `/api/workspace/bot-setup/${encodeURIComponent(setupSessionId)}`).then((result) => {
+        setSetup(result.session);
+      }).catch(() => {
+        // Keep the last known state while a short polling request is unavailable.
+      });
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [fetchImpl, setup?.status, setupSessionId]);
 
   if (loading) {
     return (
@@ -557,6 +722,53 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
   const isDeleting = bot.status === "deleting";
   const isDeleted = bot.status === "deleted";
 
+  if (setupSessionId && setup && setup.bot?.id === bot.id) {
+    const canApprove = setup.status === "created" || setup.status === "awaiting_user";
+    const requestedScopes = setup.requestedScopes.length > 0 ? setup.requestedScopes : DEFAULT_TOKEN_SCOPES;
+    const requestedConversations = setup.requestedConversations;
+    return (
+      <section className="workspace-bot-settings workspace-content-panel" aria-busy={setupBusy}>
+        <header className="workspace-bot-header">
+          <button className="icon-button" type="button" aria-label="返回 Bot 设置" title="返回" onClick={onBack}><ArrowLeft size={17} /></button>
+          <div className="workspace-bot-title"><p className="eyebrow">连接 Agent</p><h2>{bot.name}</h2><span className="workspace-bot-status"><span aria-hidden="true" />{setupStatusLabel(setup.status)}</span></div>
+        </header>
+        <section className="workspace-bot-section workspace-bot-setup-section" aria-labelledby="workspace-bot-setup-title">
+          <div className="workspace-bot-section-intro"><h3 id="workspace-bot-setup-title">确认 Agent 权限</h3><p>静态 Skill 只描述 DualLane 协议，不会授予权限。请确认 Agent 需要的能力后再继续。</p></div>
+          <div className="workspace-bot-setup-summary" role="status"><ShieldCheck size={18} /><span>目标 Bot：<strong>{bot.name}</strong></span><span>有效期至 {formatDate(setup.expiresAt)}</span></div>
+          <div className="workspace-bot-scope-list">
+            {SETUP_SCOPE_OPTIONS.filter((option) => requestedScopes.includes(option.value)).map((option) => (
+              <label className="workspace-bot-scope-option" key={option.value}>
+                <input type="checkbox" checked={setupScopes.includes(option.value)} disabled={!canApprove || setupBusy} onChange={(event) => setSetupScopes((current) => event.target.checked ? [...new Set([...current, option.value])] : current.filter((scope) => scope !== option.value))} />
+                <span><strong>{option.label}</strong><small>{option.description}</small></span>
+              </label>
+            ))}
+          </div>
+          <div className="workspace-bot-setup-conversations">
+            <div><strong>会话范围</strong><small>{requestedConversations.length > 0 ? "选择 Agent 可以使用的会话；未勾选的会话不会授予配置权限。" : "Agent 尚未指定额外会话；仍会受 Bot 的私聊和群聊策略限制。"}</small></div>
+            {requestedConversations.length > 0 && requestedConversations.map((conversationId) => (
+              <label className="workspace-bot-conversation-option" key={conversationId}>
+                <input
+                  type="checkbox"
+                  checked={setupConversations.includes(conversationId)}
+                  disabled={!canApprove || setupBusy}
+                  onChange={(event) => setSetupConversations((current) => event.target.checked
+                    ? [...new Set([...current, conversationId])]
+                    : current.filter((value) => value !== conversationId))}
+                />
+                <code>{conversationId}</code>
+              </label>
+            ))}
+          </div>
+          {setup.status === "approved" && <div className="workspace-bot-setup-awaiting" role="status"><RefreshCw size={16} className="workspace-bot-spin" />已授权，等待 Agent 完成一次性交换。</div>}
+          {setup.status === "exchanged" && <div className="workspace-bot-setup-awaiting" role="status"><Check size={16} />Agent 已完成配置，可以返回检查连接状态。</div>}
+          {setup.status === "denied" && <div className="workspace-bot-setup-awaiting" role="status"><X size={16} />本次授权已拒绝。</div>}
+          {(setup.status === "expired" || setup.status === "revoked") && <div className="workspace-bot-setup-awaiting" role="alert"><AlertTriangle size={16} />配置入口已失效，请返回重新生成。</div>}
+          {canApprove && <div className="workspace-bot-form-actions workspace-bot-setup-actions"><button className="secondary" type="button" disabled={setupBusy} onClick={() => void denySetup()}><X size={16} />拒绝</button><button className="primary" type="button" disabled={setupBusy || setupScopes.length === 0} onClick={() => void approveSetup()}>{setupBusy ? <RefreshCw size={16} className="workspace-bot-spin" /> : <Check size={16} />}确认授权</button></div>}
+        </section>
+      </section>
+    );
+  }
+
   return (
     <section className="workspace-bot-settings workspace-content-panel" aria-busy={savingSettings || savingGroupPolicy || tokenBusy || connectionBusy || deleteBusy}>
       <header className="workspace-bot-header">
@@ -568,11 +780,19 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
         </div>
       </header>
 
-      {(isDeleting || deleteConfirm) && <div className="workspace-bot-confirm workspace-bot-confirm-danger" role="alert"><AlertTriangle size={18} /><div><strong>{isDeleting ? "Bot 即将停用" : "确认停用 Bot"}</strong><p>停用会撤销所有 Token，并移除 Bot 的空间成员身份。此操作不可恢复。</p></div><button className="secondary compact" type="button" disabled={deleteBusy} onClick={() => setDeleteConfirm(false)}><X size={15} />取消</button><button className="danger compact" type="button" disabled={deleteBusy} onClick={() => void confirmDisable()}><Check size={15} />确认停用</button></div>}
+      {(isDeleting || deleteConfirm) && <div className="workspace-bot-confirm workspace-bot-confirm-danger" role="alert"><AlertTriangle size={18} /><div><strong>{isDeleting ? "Bot 即将停用" : "确认停用 Bot"}</strong><p>停用会撤销所有 Token，并移除 Bot 的空间成员身份。此操作不可恢复。</p><label><span>输入 Bot 名称确认</span><input value={deleteConfirmationName} autoComplete="off" disabled={deleteBusy} onChange={(event) => setDeleteConfirmationName(event.target.value)} placeholder={bot.name} /></label></div><button className="secondary compact" type="button" disabled={deleteBusy} onClick={() => { setDeleteConfirm(false); setDeleteConfirmationName(""); }}><X size={15} />取消</button><button className="danger compact" type="button" disabled={deleteBusy || deleteConfirmationName.trim() !== bot.name} onClick={() => void confirmDisable()}><Check size={15} />确认停用</button></div>}
       {isDeleted && <div className="workspace-bot-confirm workspace-bot-confirm-muted" role="status"><ShieldCheck size={18} /><span>此 Bot 已停用，设置与凭据均不可再使用。</span></div>}
 
       {!isDeleted && settings && (
         <div className="workspace-bot-sections">
+          <section className="workspace-bot-section workspace-bot-connect-section" aria-labelledby="workspace-bot-connect-title">
+            <div className="workspace-bot-section-intro"><h3 id="workspace-bot-connect-title">连接 Agent</h3><p>把下面的配置指令发送给任意 Agent。它会读取通用 Skill，并在需要选择或授权时引导你打开 DualLane 页面。</p></div>
+            <div className="workspace-bot-skill-row"><div><span>DualLane Agent Skill</span><code>{DUALLANE_AGENT_SKILL_URL}</code></div><button className="icon-button" type="button" title="复制 Skill 链接" aria-label="复制 DualLane Agent Skill 链接" onClick={() => void copySetupText(DUALLANE_AGENT_SKILL_URL, "Skill 链接")}><Clipboard size={16} /></button></div>
+            <div className="workspace-bot-connect-actions"><button className="primary" type="button" disabled={setupBusy || !isActive} onClick={() => void copyAgentSetup()}>{setupBusy ? <RefreshCw size={16} className="workspace-bot-spin" /> : <Clipboard size={16} />}复制配置指令</button>{setup && !["exchanged", "denied", "expired", "revoked"].includes(setup.status) && <button className="secondary" type="button" disabled={setupBusy} onClick={() => void copySetupText(setup.id, "一次性配置码")}><KeyRound size={16} />复制一次性配置码</button>}{setup && <button className="secondary" type="button" disabled={setupBusy} onClick={() => window.location.assign(setupUrlFor(setup))}><ExternalLink size={16} />打开授权配置</button>}</div>
+            <div className="workspace-bot-setup-status" role="status"><span className={`workspace-bot-status-dot workspace-bot-status-dot-${setup?.status || "idle"}`} aria-hidden="true" /><span>{setup ? setupStatusLabel(setup.status) : "尚未开始配置"}</span>{setup?.expiresAt && <small>有效期至 {formatDate(setup.expiresAt)}</small>}</div>
+            <small className="workspace-bot-security-note">配置链接不包含 Bot Token。Token 只会在用户确认后由 Agent 通过一次性交换获得。</small>
+          </section>
+
           <section className="workspace-bot-section" aria-labelledby="workspace-bot-identity-title">
             <div className="workspace-bot-section-intro"><h3 id="workspace-bot-identity-title">身份与发现</h3><p>控制 Bot 的公开资料、触发入口和可见范围。</p></div>
             <form className="workspace-bot-form" onSubmit={(event) => { event.preventDefault(); void saveIdentityAndDiscovery(); }}>
