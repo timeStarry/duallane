@@ -1,5 +1,43 @@
 [
   {
+    "version": "0.15.4",
+    "releasedAt": "2026-08-29",
+    "title": "更容易连接个人 Agent",
+    "summary": "个人 Bot 提供统一接入入口，Agent 可在你的确认下完成连接，权限范围更清楚。",
+    "sections": [
+      {
+        "title": "个人 Bot",
+        "items": [
+          {
+            "title": "连接 Agent",
+            "description": "在个人 Bot 页面复制统一的 Skill 链接和说明文字，发送给任意 Agent 即可开始连接。",
+            "location": "个人设置 -> Agent Bot -> 连接 Agent"
+          },
+          {
+            "title": "确认能力和会话范围",
+            "description": "Agent 会先说明需要的能力，你可以逐项确认私聊、群聊、上下文和文件范围。",
+            "location": "个人设置 -> Agent Bot -> 连接 Agent -> 打开授权配置"
+          },
+          {
+            "title": "查看连接状态",
+            "description": "完成确认后，Bot 页面会显示连接状态和最近心跳；短时连接入口完成或失效后不能重复使用。",
+            "location": "个人设置 -> Agent Bot -> 连接状态"
+          }
+        ]
+      },
+      {
+        "title": "安全",
+        "items": [
+          {
+            "title": "连接内容不包含完整凭据",
+            "description": "复制的说明文字和连接链接不会携带完整凭据，只有用户确认后 Agent 才能完成一次交换。",
+            "location": "个人设置 -> Agent Bot -> 连接 Agent"
+          }
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.15.3",
     "releasedAt": "2026-08-21",
     "title": "更清楚的群聊通知与媒体加载",

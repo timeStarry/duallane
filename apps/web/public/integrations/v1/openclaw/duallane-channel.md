@@ -13,7 +13,7 @@ import { createOpenClawDualLaneAdapter } from "@duallane/agent-sdk/openclaw";
 const client = new DualLaneAgentClient({
   url: process.env.DUALLANE_URL,
   token: process.env.DUALLANE_BOT_TOKEN,
-  adapterVersion: "openclaw-duallane/0.15.0"
+  adapterVersion: "openclaw-duallane/0.15.1"
 });
 
 export const transport = createOpenClawDualLaneAdapter({

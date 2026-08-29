@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "sdkVersion": "0.15.0",
+  "sdkVersion": "0.15.1",
   "algorithm": "sha256",
   "files": {
     "duallane-channel.md": "82c3e443e8ed7597fb04008af5923c77c3c64bc41d98bf3313941231bbc71378",
     "hermes/duallane-channel.md": "16a90f5ef6cf84a048adedd4524a72df775f6954847a6760a43a68de7cc04410",
-    "openclaw/duallane-channel.md": "df386e91da1260123bdee010ba2c95f4952f29a4f2b41d5d07752a1e23316a3d"
+    "openclaw/duallane-channel.md": "fdd32e1486af338cd7e312db23aabd55c083710306812313a754dda63ac89699"
   }
 }

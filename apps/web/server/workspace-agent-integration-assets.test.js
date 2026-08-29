@@ -27,7 +27,7 @@ describe("versioned Agent integration assets", () => {
 
   it("keeps the v1 SHA-256 manifest synchronized with immutable Prompt bytes", async () => {
     const manifest = JSON.parse(await readFile(path.join(publicRoot, "v1", "manifest.json"), "utf8"));
-    expect(manifest).toMatchObject({ version: 1, sdkVersion: "0.15.0", algorithm: "sha256" });
+    expect(manifest).toMatchObject({ version: 1, sdkVersion: "0.15.1", algorithm: "sha256" });
     for (const [relativePath, expectedHash] of Object.entries(manifest.files)) {
       const content = await readFile(path.join(publicRoot, "v1", relativePath));
       expect(createHash("sha256").update(content).digest("hex")).toBe(expectedHash);

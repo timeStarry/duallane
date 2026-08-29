@@ -1,6 +1,6 @@
 {
   "name": "duallane",
-  "version": "0.15.3",
+  "version": "0.15.4",
   "private": true,
   "description": "DualLane self-hosted split-lane communication tool.",
   "type": "module",

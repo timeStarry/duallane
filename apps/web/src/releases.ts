@@ -13,6 +13,16 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.15.4",
+    releasedAt: "2026-08-29",
+    title: "更容易连接个人 Agent",
+    summary: "个人 Bot 提供统一接入入口，Agent 可在你的确认下完成连接，权限范围更清楚。",
+    categories: [
+      { title: "个人 Bot", items: ["Bot 页面新增连接 Agent 入口，可复制一段说明发送给任意 Agent。", "连接过程中会先列出需要的能力，再由你确认私聊、群聊、上下文和文件范围。", "连接入口有效时间有限，完成后页面显示最近连接和活动状态。"] },
+      { title: "安全", items: ["完整凭据不会出现在复制内容或连接链接中。", "停用 Bot 时，未完成的连接请求会同时失效。"] }
+    ]
+  },
+  {
     version: "0.15.3",
     releasedAt: "2026-08-21",
     title: "更清楚的群聊通知与媒体加载",

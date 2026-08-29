@@ -1,6 +1,6 @@
 import WebSocket from "ws";
 
-export const DUALLANE_AGENT_SDK_VERSION = "0.15.0";
+export const DUALLANE_AGENT_SDK_VERSION = "0.15.1";
 export const DUALLANE_GATEWAY_VERSION = 1;
 
 const OPEN = 1;

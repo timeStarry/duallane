@@ -1,6 +1,6 @@
 {
   "name": "@duallane/agent-sdk",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "description": "Versioned JavaScript client for the DualLane Agent Bot Gateway v1.",
   "type": "module",
   "private": true,

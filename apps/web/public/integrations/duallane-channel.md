@@ -1,6 +1,6 @@
 # DualLane Agent Channel
 
-Stable channel instructions currently target protocol v1 and SDK 0.15.0.
+Stable channel instructions currently target protocol v1 and SDK 0.15.1.
 
 Canonical stable Skill URL:
 

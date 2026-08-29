@@ -1,7 +1,7 @@
 # DualLane Channel for Hermes
 
 Stable Hermes instructions currently target DualLane Bot Gateway protocol v1
-and SDK 0.15.0.
+and SDK 0.15.1.
 
 Canonical versioned prompt:
 
