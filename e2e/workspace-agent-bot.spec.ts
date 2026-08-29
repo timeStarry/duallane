@@ -60,30 +60,30 @@ test("owner configures an Agent Bot and its Gateway REST authorization boundarie
     expect(bot).toMatchObject({ name: botName });
     await expect(page.getByRole("heading", { name: botName, level: 2 })).toBeVisible();
 
-    await page.getByRole("combobox", { name: /^成员发现/u }).selectOption("space_members");
-    await page.getByLabel("简介", { exact: true }).fill("用于验证受控私聊、群聊和卡片 Gateway。 ");
     const identityResponsePromise = page.waitForResponse((response) =>
       response.url().endsWith(`/api/workspace/bots/${bot!.id}/settings`) &&
       response.request().method() === "PATCH"
     );
-    await page.getByRole("button", { name: "保存身份设置", exact: true }).click();
+    await page.getByRole("combobox", { name: /^成员发现/u }).selectOption("space_members");
+    await page.getByLabel("简介", { exact: true }).fill("用于验证受控私聊、群聊和卡片 Gateway。 ");
     const identityResponse = await identityResponsePromise;
     expect(identityResponse.status()).toBe(200);
     expect(await identityResponse.json()).toMatchObject({
       settings: { visibilityPolicy: "space_members", allowDirect: true }
     });
+    await expect(page.locator(".workspace-bot-auto-save-row").filter({ hasText: "已自动保存" })).toHaveCount(1);
 
-    await page.getByRole("radio", { name: /允许群聊/u }).check();
     const groupSettingsResponsePromise = page.waitForResponse((response) =>
       response.url().endsWith(`/api/workspace/bots/${bot!.id}/settings`) &&
       response.request().method() === "PATCH"
     );
-    await page.getByRole("button", { name: "保存群聊策略", exact: true }).click();
+    await page.getByRole("radio", { name: /允许群聊/u }).check();
     const groupSettingsResponse = await groupSettingsResponsePromise;
     expect(groupSettingsResponse.status()).toBe(200);
     expect(await groupSettingsResponse.json()).toMatchObject({
       settings: { allowDirect: true, allowGroup: true, requireOwnerApproval: false }
     });
+    await expect(page.locator(".workspace-bot-auto-save-row").filter({ hasText: "已自动保存" })).toHaveCount(2);
 
     const limitedTokenResponsePromise = page.waitForResponse((response) =>
       response.url().endsWith(`/api/workspace/bots/${bot!.id}/tokens`) &&

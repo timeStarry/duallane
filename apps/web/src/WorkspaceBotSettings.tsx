@@ -676,7 +676,7 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
   if (loading) {
     return (
       <section className="workspace-bot-settings workspace-content-panel" aria-busy="true">
-        <header className="workspace-bot-header">
+        <header className="workspace-bot-header workspace-panel-header">
           <button className="icon-button" type="button" aria-label="返回个人设置" title="返回" onClick={onBack}><ArrowLeft size={17} /></button>
           <div><p className="eyebrow">个人 · Bot</p><h2>我的 Bot</h2></div>
         </header>
@@ -688,7 +688,7 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
   if (error) {
     return (
       <section className="workspace-bot-settings workspace-content-panel" aria-live="polite">
-        <header className="workspace-bot-header">
+        <header className="workspace-bot-header workspace-panel-header">
           <button className="icon-button" type="button" aria-label="返回个人设置" title="返回" onClick={onBack}><ArrowLeft size={17} /></button>
           <div><p className="eyebrow">个人 · Bot</p><h2>我的 Bot</h2></div>
         </header>
@@ -700,7 +700,7 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
   if (!bot) {
     return (
       <section className="workspace-bot-settings workspace-content-panel">
-        <header className="workspace-bot-header">
+        <header className="workspace-bot-header workspace-panel-header">
           <button className="icon-button" type="button" aria-label="返回个人设置" title="返回" onClick={onBack}><ArrowLeft size={17} /></button>
           <div><p className="eyebrow">个人 · Bot</p><h2>我的 Bot</h2></div>
         </header>
@@ -728,7 +728,7 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
     const requestedConversations = setup.requestedConversations;
     return (
       <section className="workspace-bot-settings workspace-content-panel" aria-busy={setupBusy}>
-        <header className="workspace-bot-header">
+        <header className="workspace-bot-header workspace-panel-header">
           <button className="icon-button" type="button" aria-label="返回 Bot 设置" title="返回" onClick={onBack}><ArrowLeft size={17} /></button>
           <div className="workspace-bot-title"><p className="eyebrow">连接 Agent</p><h2>{bot.name}</h2><span className="workspace-bot-status"><span aria-hidden="true" />{setupStatusLabel(setup.status)}</span></div>
         </header>
@@ -771,12 +771,25 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
 
   return (
     <section className="workspace-bot-settings workspace-content-panel" aria-busy={savingSettings || savingGroupPolicy || tokenBusy || connectionBusy || deleteBusy}>
-      <header className="workspace-bot-header">
+      <header className="workspace-bot-header workspace-panel-header">
         <button className="icon-button" type="button" aria-label="返回个人设置" title="返回" onClick={onBack}><ArrowLeft size={17} /></button>
-        <div className="workspace-bot-title"><p className="eyebrow">个人 · Bot</p><h2>{bot.name}</h2><span className={`workspace-bot-status workspace-bot-status-${bot.status}`}><span aria-hidden="true" />{statusLabel(bot.status)}</span></div>
-        <div className="workspace-bot-header-actions">
-          {isActive && <button className="secondary compact" type="button" disabled={deleteBusy} onClick={() => void changeLifecycle("pause")}><Pause size={15} />暂停</button>}
-          {isPaused && <button className="secondary compact" type="button" disabled={deleteBusy} onClick={() => void changeLifecycle("resume")}><Play size={15} />恢复</button>}
+        <div className="workspace-bot-title">
+          <p className="eyebrow">个人 · Bot</p>
+          <div className="workspace-bot-heading-line">
+            <h2>{bot.name}</h2>
+            <span className={`workspace-bot-status workspace-bot-status-${bot.status}`}><span aria-hidden="true" />{statusLabel(bot.status)}</span>
+          </div>
+        </div>
+        <div className="workspace-bot-header-side">
+          <div className="workspace-bot-header-connection" aria-label="Bot 连接摘要">
+            <span className={`workspace-bot-connection-dot workspace-bot-connection-dot-${connection?.status || "disconnected"}`} aria-hidden="true" />
+            <span>{statusLabel(connection?.status || "disconnected")}</span>
+            <small>{connection?.lastHeartbeatAt ? `最近心跳 ${formatDate(connection.lastHeartbeatAt)}` : "尚未报告心跳"}</small>
+          </div>
+          <div className="workspace-bot-header-actions">
+            {isActive && <button className="secondary compact" type="button" disabled={deleteBusy} onClick={() => void changeLifecycle("pause")}><Pause size={15} />暂停</button>}
+            {isPaused && <button className="secondary compact" type="button" disabled={deleteBusy} onClick={() => void changeLifecycle("resume")}><Play size={15} />恢复</button>}
+          </div>
         </div>
       </header>
 
