@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { CURRENT_RELEASE } from "../apps/web/src/releases";
 
 test.describe.configure({ timeout: 240_000 });
 
@@ -33,7 +34,7 @@ test("public about page exposes the current release and accessible history", asy
   await page.getByRole("button", { name: "关于 DualLane 与版本更新" }).click();
   await expect(page).toHaveURL(/\/about$/);
   await expect(page.getByRole("heading", { name: "两种边界，一处沟通。" })).toBeVisible();
-  await expect(page.locator(".latest-release").getByText("v0.15.0", { exact: true })).toBeVisible();
+  await expect(page.locator(".latest-release").getByText(`v${CURRENT_RELEASE.version}`, { exact: true })).toBeVisible();
 
   const history = page.locator(".release-history");
   await expect(history).not.toHaveAttribute("open", "");
@@ -47,7 +48,7 @@ test("public about page exposes the current release and accessible history", asy
   await page.goForward();
   await expect(page).toHaveURL(/\/about$/);
   await page.reload();
-  await expect(page.locator(".latest-release").getByText("v0.15.0", { exact: true })).toBeVisible();
+  await expect(page.locator(".latest-release").getByText(`v${CURRENT_RELEASE.version}`, { exact: true })).toBeVisible();
 });
 
 test("workspace semantic routes survive OAuth, refresh, history, and invalid resources", async ({ page }) => {
