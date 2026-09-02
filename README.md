@@ -14,40 +14,56 @@ The user-facing product has two lanes:
   requires login and invite-only access, and content is saved so members can
   access it later.
 
-Product details:
+## Start Developing
 
-- [Workspace Design Index](docs/WORKSPACE_DESIGN_INDEX.md)
-- [O2O Private Direct Product Design](docs/O2O_PRODUCT_DESIGN.md)
-- [Shared Space Workspace Product Design](docs/WORKSPACE_PRODUCT_DESIGN.md)
-- [Workspace Core User Flow Design](docs/WORKSPACE_USER_FLOW_DESIGN.md)
-- [Workspace IM Product Design](docs/WORKSPACE_IM_PRODUCT_DESIGN.md)
-- [Workspace Information Architecture](docs/WORKSPACE_INFORMATION_ARCHITECTURE.md)
-- [Workspace UI Interaction Design](docs/WORKSPACE_UI_INTERACTION_DESIGN.md)
-- [Workspace Screen And Component Specification](docs/WORKSPACE_SCREEN_COMPONENT_SPEC.md)
-- [Workspace Visual System Design](docs/WORKSPACE_VISUAL_SYSTEM_DESIGN.md)
-- [Workspace State And Feedback Design](docs/WORKSPACE_STATE_FEEDBACK_DESIGN.md)
-- [Workspace Client Data And View Model Design](docs/WORKSPACE_CLIENT_DATA_VIEW_MODEL.md)
-- [Workspace API Contract](docs/WORKSPACE_API_CONTRACT.md)
-- [Workspace Data Model Design](docs/WORKSPACE_DATA_MODEL_DESIGN.md)
-- [Workspace Authentication And Invite Design](docs/WORKSPACE_AUTH_INVITE_DESIGN.md)
-- [Workspace Conversation And Group Design](docs/WORKSPACE_CONVERSATION_GROUP_DESIGN.md)
-- [Workspace Member And Permission Design](docs/WORKSPACE_MEMBER_PERMISSION_DESIGN.md)
-- [Workspace File And Quota Design](docs/WORKSPACE_FILE_QUOTA_DESIGN.md)
-- [Workspace Space Settings Design](docs/WORKSPACE_SPACE_SETTINGS_DESIGN.md)
-- [Workspace Search And Discovery Design](docs/WORKSPACE_SEARCH_DISCOVERY_DESIGN.md)
-- [Workspace Notification And Unread Design](docs/WORKSPACE_NOTIFICATION_UNREAD_DESIGN.md)
-- [Workspace Mobile And Accessibility Design](docs/WORKSPACE_MOBILE_ACCESSIBILITY_DESIGN.md)
-- [Workspace Message Protocol](docs/WORKSPACE_MESSAGE_PROTOCOL.md)
-- [Workspace Realtime Event Design](docs/WORKSPACE_REALTIME_EVENT_DESIGN.md)
-- [Workspace MVP Development Contract](docs/WORKSPACE_MVP_DEVELOPMENT_CONTRACT.md)
-- [Workspace Productization Roadmap](docs/WORKSPACE_PRODUCTIZATION_ROADMAP.md)
-- [Workspace Product Acceptance Matrix](docs/WORKSPACE_PRODUCT_ACCEPTANCE_MATRIX.md)
-- [Workspace Content-Addressed Storage Runbook](docs/WORKSPACE_CONTENT_ADDRESSED_STORAGE.md)
-
-## Local Development
+Prerequisites are Node.js 22, Corepack/pnpm 10, and Git. Create a short-lived
+branch from current `origin/main`, then install and start:
 
 ```bash
-pnpm install
+git fetch origin
+git switch -c feat/topic-notifications origin/main
+corepack enable
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+Replace the example topic with the scope of the change. Codex-created branches
+use `codex/<short-topic>`. The frontend runs at
+`http://127.0.0.1:5173` and proxies API/WebSocket traffic to
+`http://127.0.0.1:8787`. Workspace is disabled by default, so this starts the
+P2P-only path without a database.
+
+Before opening a pull request, run the gate required for the affected code. The
+common full checks are:
+
+```bash
+pnpm lint
+pnpm test
+pnpm build
+```
+
+[`AGENTS.md`](AGENTS.md) is the mandatory contributor and coding-agent entry
+point. It links progressively to the detailed
+[development guide](docs/development/README.md), covering workflow and PR rules,
+architecture, code, UI/UX, security/data, testing, release, and deployment. Only
+GitHub user **`timestarry`** may perform the final merge into `main`.
+
+Product behavior is defined separately in [`DESIGN.md`](DESIGN.md), the
+[Workspace design index](docs/WORKSPACE_DESIGN_INDEX.md), and the
+[P2P product design](docs/O2O_PRODUCT_DESIGN.md). Read the smallest relevant
+contract before changing behavior.
+
+## Product Documentation
+
+- [System and trust-lane design](DESIGN.md)
+- [Workspace Design Index](docs/WORKSPACE_DESIGN_INDEX.md)
+- [O2O Private Direct Product Design](docs/O2O_PRODUCT_DESIGN.md)
+- [Workspace Content-Addressed Storage Runbook](docs/WORKSPACE_CONTENT_ADDRESSED_STORAGE.md)
+
+## Local Runtime Details
+
+```bash
+pnpm install --frozen-lockfile
 pnpm dev
 ```
 
