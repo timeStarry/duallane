@@ -12,8 +12,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/conversations"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/gate"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/invites"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/members"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 )
 
 const MaxJSONBodyBytes int64 = 1 << 20
@@ -27,6 +30,42 @@ type InviteService interface {
 	Revoke(context.Context, invites.RevokeInput) (invites.RevokedInvite, error)
 }
 
+type MemberService interface {
+	List(context.Context, members.ListInput) ([]members.Member, error)
+	UpdateOwnProfile(context.Context, members.UpdateOwnProfileInput) (members.Member, error)
+	UpdateMemberRemark(context.Context, members.RemarkInput) (members.Member, error)
+	RemoveMemberRemark(context.Context, members.RemarkInput) (members.Member, error)
+	GetVisibility(context.Context, members.VisibilityReadInput) (members.VisibilityRule, error)
+	UpdateVisibility(context.Context, members.VisibilityInput) (members.VisibilityRule, error)
+	UpdateMemberRole(context.Context, members.RoleInput) (members.Member, error)
+	RemoveMember(context.Context, members.RemoveInput) (members.RemoveResult, error)
+}
+
+type ConversationService interface {
+	ListConversations(context.Context, string, auth.RequestMeta) ([]conversations.Conversation, error)
+	GetConversation(context.Context, conversations.ConversationInput) (conversations.Conversation, error)
+	CreateConversation(context.Context, conversations.CreateConversationInput) (conversations.Conversation, error)
+	AddMember(context.Context, conversations.ConversationMemberInput) (conversations.Conversation, error)
+	RemoveMember(context.Context, conversations.ConversationMemberInput) (conversations.Conversation, error)
+	UpdateGroup(context.Context, conversations.UpdateGroupInput) (conversations.Conversation, error)
+	Leave(context.Context, conversations.ConversationInput) (conversations.LeaveResult, error)
+	MarkRead(context.Context, conversations.ConversationInput) (conversations.Conversation, error)
+	UpdateNotification(context.Context, conversations.NotificationInput) (conversations.Conversation, error)
+	ListPins(context.Context, conversations.ConversationInput) ([]conversations.PinListItem, error)
+	Pin(context.Context, conversations.PinInput) (conversations.PinListItem, error)
+	Unpin(context.Context, conversations.PinInput) (conversations.UnpinResult, error)
+}
+
+type MessageService interface {
+	List(context.Context, messages.ListOptions) ([]messages.Message, error)
+	Create(context.Context, messages.CreateInput) (messages.Message, error)
+	Recall(context.Context, messages.RecallInput) (messages.Message, error)
+	Hide(context.Context, messages.HideInput) (messages.HideResult, error)
+	Unhide(context.Context, messages.HideInput) (messages.HideResult, error)
+	AddReaction(context.Context, messages.ReactionInput) (messages.ReactionResult, error)
+	RemoveReaction(context.Context, messages.ReactionInput) (messages.ReactionResult, error)
+}
+
 type RouterOptions struct {
 	Gate          gate.Gate
 	Health        http.Handler
@@ -34,6 +73,9 @@ type RouterOptions struct {
 	AuthRoutes    *auth.HTTPHandler
 	ActorResolver ActorResolver
 	Invites       InviteService
+	Members       MemberService
+	Conversations ConversationService
+	Messages      MessageService
 	FrontendURL   string
 	PublicBaseURL string
 	TrustProxy    bool
@@ -56,6 +98,7 @@ func NewRouter(options RouterOptions) http.Handler {
 		workspace.Use(options.Gate.Middleware)
 		workspace.Post("/invites", createInviteHandler(options))
 		workspace.Post("/invites/{inviteId}/revoke", revokeInviteHandler(options))
+		registerCoreRoutes(workspace, options)
 	})
 	return router
 }
@@ -214,12 +257,21 @@ func writeError(response http.ResponseWriter, err error) {
 	value := internalError()
 	var authError *auth.Error
 	var inviteError *invites.Error
+	var memberError *members.Error
+	var conversationError *conversations.Error
+	var messageError *messages.Error
 	var transportError *publicError
 	switch {
 	case errors.As(err, &authError):
 		value = &publicError{Code: authError.Code, Message: authError.Message, StatusCode: authError.StatusCode}
 	case errors.As(err, &inviteError):
 		value = &publicError{Code: inviteError.Code, Message: inviteError.Message, StatusCode: inviteError.StatusCode}
+	case errors.As(err, &memberError):
+		value = &publicError{Code: memberError.Code, Message: memberError.Message, StatusCode: memberError.StatusCode}
+	case errors.As(err, &conversationError):
+		value = &publicError{Code: conversationError.Code, Message: conversationError.Message, StatusCode: conversationError.StatusCode}
+	case errors.As(err, &messageError):
+		value = &publicError{Code: messageError.Code, Message: messageError.Message, StatusCode: messageError.StatusCode}
 	case errors.As(err, &transportError):
 		value = transportError
 	}

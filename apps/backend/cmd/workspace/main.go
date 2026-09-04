@@ -14,9 +14,12 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/platform/logging"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/conversations"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/gate"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/httpapi"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/invites"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/members"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 )
 
 const serviceName = "workspace"
@@ -62,6 +65,9 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig) (
 	var pool *pgxpool.Pool
 	var authHandler *auth.HTTPHandler
 	var inviteService *invites.Service
+	var memberService *members.Service
+	var conversationService *conversations.Service
+	var messageService *messages.Service
 	if runtimeConfig.Enabled {
 		var err error
 		pool, err = postgres.OpenPoolFromEnv(ctx)
@@ -84,6 +90,9 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig) (
 			TrustProxy: runtimeConfig.TrustProxy, WorkspaceEnabled: workspaceGate.Enabled,
 		})
 		inviteService = invites.NewService(invites.ServiceOptions{Repository: invites.NewPGRepository(pool)})
+		memberService = members.NewService(members.ServiceOptions{Repository: members.NewPGRepository(pool)})
+		conversationService = conversations.NewService(conversations.ServiceOptions{Repository: conversations.NewPGRepository(pool)})
+		messageService = messages.NewService(messages.ServiceOptions{Repository: messages.NewPGRepository(pool)})
 	} else {
 		authHandler = auth.NewHTTPHandler(auth.HTTPHandler{
 			Environment: runtimeConfig.Environment, PublicBaseURL: runtimeConfig.PublicBaseURL,
@@ -103,6 +112,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig) (
 		handler: httpapi.NewRouter(httpapi.RouterOptions{
 			Gate: workspaceGate, Health: gate.HealthHandler(healthInput), Readiness: gate.ReadinessHandler(healthInput),
 			AuthRoutes: authHandler, ActorResolver: authHandler, Invites: inviteService,
+			Members: memberService, Conversations: conversationService, Messages: messageService,
 			FrontendURL: runtimeConfig.FrontendURL, PublicBaseURL: runtimeConfig.PublicBaseURL,
 			TrustProxy: runtimeConfig.TrustProxy,
 		}),
