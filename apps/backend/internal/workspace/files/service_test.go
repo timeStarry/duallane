@@ -593,6 +593,16 @@ func TestUploadDownloadRemovalReusesAndCleansCASObject(t *testing.T) {
 	if object == nil || object.DeletedAt != nil {
 		t.Fatalf("CAS object registry = %#v", object)
 	}
+	transferCount := len(repo.state.transfers)
+	preview, err := service.OpenAttachmentContent(context.Background(), OpenAttachmentInput{ActorID: "usr_owner", AttachmentID: firstAttachment.ID, MaxBytes: 7})
+	if err != nil {
+		t.Fatalf("open attachment preview: %v", err)
+	}
+	previewBytes, err := io.ReadAll(preview.Body)
+	_ = preview.Body.Close()
+	if err != nil || string(previewBytes) != "content" || len(repo.state.transfers) != transferCount {
+		t.Fatalf("preview bytes = %q, transfers=%d want=%d, err=%v", previewBytes, len(repo.state.transfers), transferCount, err)
+	}
 
 	download, err := service.ReserveDownload(context.Background(), ReserveDownloadInput{ActorID: "usr_owner", AttachmentID: firstAttachment.ID})
 	if err != nil {
@@ -606,6 +616,12 @@ func TestUploadDownloadRemovalReusesAndCleansCASObject(t *testing.T) {
 	_ = opened.Body.Close()
 	if err != nil || string(got) != "content" {
 		t.Fatalf("download bytes = %q, err = %v", got, err)
+	}
+	service.now = func() time.Time {
+		return time.Unix(1700000000, 0).UTC().Add(DefaultDownloadGrantTTL + time.Millisecond)
+	}
+	if _, err := service.GetCompletedDownload(context.Background(), CompletedDownloadInput{ActorID: "usr_owner", AttachmentID: firstAttachment.ID, TransferID: download.ID}); errorCode(err) != CodeDownloadExpired {
+		t.Fatalf("expired download code = %q, err=%v", errorCode(err), err)
 	}
 	if _, err := service.RemoveAttachment(context.Background(), RemoveAttachmentInput{ActorID: "usr_owner", AttachmentID: firstAttachment.ID}); err != nil {
 		t.Fatalf("remove first: %v", err)

@@ -14,6 +14,8 @@ const (
 	DefaultListLimit                = 200
 	MaximumListLimit                = 500
 	DefaultStaleUploadAge           = 30 * time.Minute
+	DefaultDownloadGrantTTL         = 5 * time.Minute
+	MaximumDownloadGrantTTL         = 15 * time.Minute
 	MaximumFileNameBytes            = 255
 	MaximumMIMETypeBytes            = 255
 	MaximumFailureReasonBytes       = 256

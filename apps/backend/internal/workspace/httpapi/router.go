@@ -14,6 +14,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bootstrap"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/conversations"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/files"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/gate"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/invites"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/members"
@@ -88,6 +89,7 @@ type RouterOptions struct {
 	Messages      MessageService
 	Overview      OverviewService
 	Bootstrap     BootstrapService
+	Files         fileService
 	Realtime      http.Handler
 	FrontendURL   string
 	PublicBaseURL string
@@ -123,6 +125,7 @@ func NewRouter(options RouterOptions) http.Handler {
 			})
 		}
 		registerCoreRoutes(workspace, options)
+		registerFileRoutes(workspace, options)
 	})
 	return router
 }
@@ -285,6 +288,7 @@ func writeError(response http.ResponseWriter, err error) {
 	var conversationError *conversations.Error
 	var messageError *messages.Error
 	var overviewError *overview.Error
+	var fileError *files.Error
 	var transportError *publicError
 	switch {
 	case errors.As(err, &authError):
@@ -299,6 +303,8 @@ func writeError(response http.ResponseWriter, err error) {
 		value = &publicError{Code: messageError.Code, Message: messageError.Message, StatusCode: messageError.StatusCode}
 	case errors.As(err, &overviewError):
 		value = &publicError{Code: overviewError.Code, Message: overviewError.Message, StatusCode: overviewError.StatusCode}
+	case errors.As(err, &fileError):
+		value = &publicError{Code: fileError.Code, Message: fileError.Message, StatusCode: fileError.StatusCode}
 	case errors.As(err, &transportError):
 		value = transportError
 	}

@@ -80,6 +80,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	var messageService *messages.Service
 	var overviewService *overview.Service
 	var bootstrapService *bootstrap.Service
+	var fileService *files.Service
 	var realtimeHandler http.Handler
 	if runtimeConfig.Enabled {
 		var err error
@@ -112,7 +113,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			pool.Close()
 			return nil, err
 		}
-		fileService := files.NewService(files.ServiceOptions{Repository: files.NewPGRepository(pool), BlobStore: blobStore})
+		fileService = files.NewService(files.ServiceOptions{Repository: files.NewPGRepository(pool), BlobStore: blobStore})
 		eventHub := realtime.NewHub()
 		eventService := events.NewService(events.ServiceOptions{Repository: events.NewPGRepository(pool)})
 		bootstrapService = bootstrap.NewService(bootstrap.ServiceOptions{
@@ -151,6 +152,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			Members: memberService, Conversations: conversationService, Messages: messageService,
 			Overview:    overviewService,
 			Bootstrap:   bootstrapService,
+			Files:       fileService,
 			Realtime:    realtimeHandler,
 			FrontendURL: runtimeConfig.FrontendURL, PublicBaseURL: runtimeConfig.PublicBaseURL,
 			TrustProxy: runtimeConfig.TrustProxy,

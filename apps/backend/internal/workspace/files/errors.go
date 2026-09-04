@@ -146,3 +146,7 @@ func uploadInvalidError() *Error {
 func downloadInvalidError() *Error {
 	return NewError(CodeDownloadInvalid, MessageDownloadInvalid, 400)
 }
+
+func downloadExpiredError() *Error {
+	return NewError(CodeDownloadExpired, MessageDownloadExpired, 400)
+}

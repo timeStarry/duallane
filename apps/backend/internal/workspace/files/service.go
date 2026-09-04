@@ -28,23 +28,25 @@ type Clock func() time.Time
 type IDFactory func() (string, error)
 
 type ServiceOptions struct {
-	Repository      Repository
-	BlobStore       platformstorage.BlobStore
-	SpaceID         string
-	Now             Clock
-	IDFactory       IDFactory
-	DailyQuotaBytes int64
-	StaleUploadAge  time.Duration
+	Repository       Repository
+	BlobStore        platformstorage.BlobStore
+	SpaceID          string
+	Now              Clock
+	IDFactory        IDFactory
+	DailyQuotaBytes  int64
+	StaleUploadAge   time.Duration
+	DownloadGrantTTL time.Duration
 }
 
 type Service struct {
-	repo            Repository
-	blobStore       platformstorage.BlobStore
-	spaceID         string
-	now             Clock
-	idFactory       IDFactory
-	dailyQuotaBytes int64
-	staleUploadAge  time.Duration
+	repo             Repository
+	blobStore        platformstorage.BlobStore
+	spaceID          string
+	now              Clock
+	idFactory        IDFactory
+	dailyQuotaBytes  int64
+	staleUploadAge   time.Duration
+	downloadGrantTTL time.Duration
 }
 
 type ReserveUploadInput struct {
@@ -114,6 +116,13 @@ type CompletedDownloadInput struct {
 	Meta         auth.RequestMeta
 }
 
+type OpenAttachmentInput struct {
+	ActorID      string
+	AttachmentID string
+	MaxBytes     int64
+	Meta         auth.RequestMeta
+}
+
 type RemoveAttachmentInput struct {
 	ActorID      string
 	AttachmentID string
@@ -159,14 +168,22 @@ func NewService(options ServiceOptions) *Service {
 	if staleAge <= 0 {
 		staleAge = DefaultStaleUploadAge
 	}
+	downloadGrantTTL := options.DownloadGrantTTL
+	if downloadGrantTTL <= 0 {
+		downloadGrantTTL = DefaultDownloadGrantTTL
+	}
+	if downloadGrantTTL > MaximumDownloadGrantTTL {
+		downloadGrantTTL = MaximumDownloadGrantTTL
+	}
 	return &Service{
-		repo:            options.Repository,
-		blobStore:       options.BlobStore,
-		spaceID:         spaceID,
-		now:             now,
-		idFactory:       idFactory,
-		dailyQuotaBytes: quota,
-		staleUploadAge:  staleAge,
+		repo:             options.Repository,
+		blobStore:        options.BlobStore,
+		spaceID:          spaceID,
+		now:              now,
+		idFactory:        idFactory,
+		dailyQuotaBytes:  quota,
+		staleUploadAge:   staleAge,
+		downloadGrantTTL: downloadGrantTTL,
 	}
 }
 
@@ -1670,7 +1687,40 @@ func (s *Service) GetCompletedDownload(ctx context.Context, input CompletedDownl
 	if transfer == nil || transfer.Status != string(TransferCompleted) || transfer.AttachmentID == nil || *transfer.AttachmentID != record.ID {
 		return DownloadGrant{}, downloadInvalidError()
 	}
+	if transfer.CreatedAt.IsZero() || s.nowUTC().Sub(transfer.CreatedAt.UTC()) > s.downloadGrantTTL {
+		return DownloadGrant{}, downloadExpiredError()
+	}
 	return DownloadGrant{Transfer: *transfer, Attachment: *record}, nil
+}
+
+// OpenAttachmentContent reads an authorized attachment without creating a
+// transfer-ledger entry. Inline previews do not consume daily download quota.
+func (s *Service) OpenAttachmentContent(ctx context.Context, input OpenAttachmentInput) (platformstorage.OpenedObject, error) {
+	if _, err := s.GetDownloadableAttachment(ctx, input.ActorID, input.AttachmentID, input.Meta); err != nil {
+		return platformstorage.OpenedObject{}, err
+	}
+	record, err := s.repo.GetAttachment(ctx, s.space(), strings.TrimSpace(input.AttachmentID))
+	if err != nil {
+		return platformstorage.OpenedObject{}, normalizeRepositoryError(err)
+	}
+	if record == nil || record.Status != string(AttachmentAvailable) || record.StorageObject == nil {
+		return platformstorage.OpenedObject{}, fileNotFoundError()
+	}
+	if s.blobStore == nil {
+		return platformstorage.OpenedObject{}, internalError("open workspace attachment", errors.New("blob store is required"))
+	}
+	opened, err := s.blobStore.Open(ctx, record.StorageObject.BlobObject(), input.MaxBytes)
+	if err != nil {
+		mapped := normalizeStorageError(err)
+		if isCode(mapped, "file.storage_too_large") {
+			return platformstorage.OpenedObject{}, NewError(CodeFileStorageTooLarge, MessageFileStorageTooLarge, 413)
+		}
+		if isCode(mapped, "file.storage_missing") || isCode(mapped, "file.storage_mismatch") {
+			return platformstorage.OpenedObject{}, NewError(CodeFileStorageMissing, MessageFileStorageMissing, 404)
+		}
+		return platformstorage.OpenedObject{}, mapped
+	}
+	return opened, nil
 }
 
 // OpenDownload verifies the short-lived logical grant before opening bytes.
