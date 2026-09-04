@@ -1,0 +1,37 @@
+ARG GO_IMAGE=docker.m.daocloud.io/library/golang:1.26-bookworm
+ARG RUNTIME_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim
+
+FROM ${GO_IMAGE} AS build
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libvips-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src/apps/backend
+COPY apps/backend/go.mod apps/backend/go.sum ./
+RUN go mod download
+COPY apps/backend ./
+RUN CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/workspace ./cmd/workspace \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate
+
+FROM ${RUNTIME_IMAGE} AS runtime
+ARG DUALLANE_APP_VERSION=0.0.0
+ARG DUALLANE_GIT_COMMIT=unknown
+LABEL org.opencontainers.image.title="DualLane Workspace" \
+      org.opencontainers.image.version="${DUALLANE_APP_VERSION}" \
+      org.opencontainers.image.revision="${DUALLANE_GIT_COMMIT}"
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libvips42 tzdata \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /app/data \
+    && chown 65532:65532 /app/data
+WORKDIR /app
+COPY --from=build /out/workspace /usr/local/bin/duallane-workspace
+COPY --from=build /out/worker /usr/local/bin/duallane-worker
+COPY --from=build /out/migrate /usr/local/bin/duallane-migrate
+COPY apps/web/server/migrations /app/migrations
+COPY apps/web/shared/emote-packs.json /app/assets/emote-packs.json
+ENV DUALLANE_MIGRATIONS_DIR=/app/migrations \
+    DUALLANE_EMOTE_CATALOG_PATH=/app/assets/emote-packs.json
+USER 65532:65532
+EXPOSE 8787
+ENTRYPOINT ["/usr/local/bin/duallane-workspace"]

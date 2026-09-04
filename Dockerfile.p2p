@@ -1,0 +1,23 @@
+ARG GO_IMAGE=docker.m.daocloud.io/library/golang:1.26-bookworm
+ARG RUNTIME_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim
+
+FROM ${GO_IMAGE} AS build
+WORKDIR /src/apps/backend
+COPY apps/backend/go.mod apps/backend/go.sum ./
+RUN go mod download
+COPY apps/backend ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/p2p ./cmd/p2p
+
+FROM ${RUNTIME_IMAGE} AS runtime
+ARG DUALLANE_APP_VERSION=0.0.0
+ARG DUALLANE_GIT_COMMIT=unknown
+LABEL org.opencontainers.image.title="DualLane P2P" \
+      org.opencontainers.image.version="${DUALLANE_APP_VERSION}" \
+      org.opencontainers.image.revision="${DUALLANE_GIT_COMMIT}"
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /out/p2p /usr/local/bin/duallane-p2p
+USER 65532:65532
+EXPOSE 8787
+ENTRYPOINT ["/usr/local/bin/duallane-p2p"]
