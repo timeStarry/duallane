@@ -13,9 +13,12 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/platform/httpserver"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/logging"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
+	platformstorage "github.com/timestarry/duallane/apps/backend/internal/platform/storage"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/bootstrap"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/conversations"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/events"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/files"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/gate"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/httpapi"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/invites"
@@ -76,6 +79,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	var conversationService *conversations.Service
 	var messageService *messages.Service
 	var overviewService *overview.Service
+	var bootstrapService *bootstrap.Service
 	var realtimeHandler http.Handler
 	if runtimeConfig.Enabled {
 		var err error
@@ -103,8 +107,19 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		conversationService = conversations.NewService(conversations.ServiceOptions{Repository: conversations.NewPGRepository(pool)})
 		messageService = messages.NewService(messages.ServiceOptions{Repository: messages.NewPGRepository(pool)})
 		overviewService = overview.NewService(overview.ServiceOptions{Repository: overview.NewPGRepository(pool)})
+		blobStore, err := platformstorage.NewLocalBlobStore(runtimeConfig.DataDir)
+		if err != nil {
+			pool.Close()
+			return nil, err
+		}
+		fileService := files.NewService(files.ServiceOptions{Repository: files.NewPGRepository(pool), BlobStore: blobStore})
 		eventHub := realtime.NewHub()
 		eventService := events.NewService(events.ServiceOptions{Repository: events.NewPGRepository(pool)})
+		bootstrapService = bootstrap.NewService(bootstrap.ServiceOptions{
+			Repository: bootstrap.NewPGRepository(pool), Members: memberService,
+			Conversations: conversationService, Files: fileService, Events: eventService,
+			AppVersion: runtimeConfig.AppVersion,
+		})
 		realtimeHandler = realtime.NewHandler(realtime.HandlerOptions{
 			RootContext: ctx, ActorResolver: authHandler, Events: eventService, Hub: eventHub,
 		})
@@ -135,6 +150,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			AuthRoutes: authHandler, ActorResolver: authHandler, Invites: inviteService,
 			Members: memberService, Conversations: conversationService, Messages: messageService,
 			Overview:    overviewService,
+			Bootstrap:   bootstrapService,
 			Realtime:    realtimeHandler,
 			FrontendURL: runtimeConfig.FrontendURL, PublicBaseURL: runtimeConfig.PublicBaseURL,
 			TrustProxy: runtimeConfig.TrustProxy,

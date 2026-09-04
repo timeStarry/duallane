@@ -38,11 +38,12 @@ func TestLoadWorkspacePreservesRuntimeCompatibility(t *testing.T) {
 		"GITHUB_CLIENT_SECRET":        "secret",
 		"GITHUB_PROXY_URL":            "socks5://proxy:1080",
 		GitHubOAuthTimeoutEnvironment: "25000",
+		WorkspaceDataDirEnvironment:   "/srv/duallane-data",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.ListenAddress() != "127.0.0.1:9010" || config.Environment != "production" || config.AppVersion != "0.16.0" || config.Commit != "abc123" {
+	if config.ListenAddress() != "127.0.0.1:9010" || config.Environment != "production" || config.AppVersion != "0.16.0" || config.Commit != "abc123" || config.DataDir != "/srv/duallane-data" {
 		t.Fatalf("runtime config = %#v", config)
 	}
 	if !config.TrustProxy || config.GitHubOAuthTimeout != 25*time.Second || config.GitHubClientID != "client" || config.GitHubClientSecret != "secret" {
@@ -64,6 +65,9 @@ func TestLoadWorkspaceBoundsOAuthTimeoutAndRejectsInvalidPort(t *testing.T) {
 	}
 	if _, err := LoadWorkspaceFrom(configLookup(map[string]string{"PORT": "0"})); err == nil {
 		t.Fatal("invalid Workspace port was accepted")
+	}
+	if config.DataDir != DefaultWorkspaceDataDir {
+		t.Fatalf("default data dir = %q", config.DataDir)
 	}
 }
 

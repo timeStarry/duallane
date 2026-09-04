@@ -16,6 +16,8 @@ const (
 	WorkspaceEnabledEnvironment   = "WORKSPACE_ENABLED"
 	WorkspaceFrontendEnvironment  = "WORKSPACE_FRONTEND_URL"
 	GitHubOAuthTimeoutEnvironment = "GITHUB_OAUTH_TIMEOUT_MS"
+	WorkspaceDataDirEnvironment   = "DUALLANE_DATA_DIR"
+	DefaultWorkspaceDataDir       = "../../data"
 )
 
 // WorkspaceConfig contains request-serving configuration for the retained,
@@ -35,6 +37,7 @@ type WorkspaceConfig struct {
 	GitHubClientSecret string
 	GitHubProxyURL     string
 	GitHubOAuthTimeout time.Duration
+	DataDir            string
 }
 
 func LoadWorkspace() (WorkspaceConfig, error) {
@@ -64,6 +67,7 @@ func LoadWorkspaceFrom(lookup func(string) (string, bool)) (WorkspaceConfig, err
 		GitHubClientSecret: strings.TrimSpace(valueOr(lookup, "GITHUB_CLIENT_SECRET", "")),
 		GitHubProxyURL:     strings.TrimSpace(valueOr(lookup, "GITHUB_PROXY_URL", "")),
 		GitHubOAuthTimeout: DefaultGitHubOAuthTimeout,
+		DataDir:            strings.TrimSpace(valueOr(lookup, WorkspaceDataDirEnvironment, DefaultWorkspaceDataDir)),
 	}
 	if raw, ok := lookup("PORT"); ok && strings.TrimSpace(raw) != "" {
 		port, err := strconv.Atoi(strings.TrimSpace(raw))
@@ -100,6 +104,9 @@ func (config WorkspaceConfig) Validate() error {
 	}
 	if config.GitHubOAuthTimeout <= 0 || config.GitHubOAuthTimeout > MaximumGitHubOAuthTimeout {
 		return fmt.Errorf("GitHub OAuth timeout must be between 1ms and %s", MaximumGitHubOAuthTimeout)
+	}
+	if config.Enabled && strings.TrimSpace(config.DataDir) == "" {
+		return errors.New("DUALLANE_DATA_DIR must not be empty when Workspace is enabled")
 	}
 	return nil
 }

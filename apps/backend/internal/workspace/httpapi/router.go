@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/bootstrap"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/conversations"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/gate"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/invites"
@@ -71,6 +72,10 @@ type OverviewService interface {
 	GetStatistics(context.Context, string, auth.RequestMeta) (overview.Statistics, error)
 }
 
+type BootstrapService interface {
+	Get(context.Context, string, auth.RequestMeta) (bootstrap.Bootstrap, error)
+}
+
 type RouterOptions struct {
 	Gate          gate.Gate
 	Health        http.Handler
@@ -82,6 +87,7 @@ type RouterOptions struct {
 	Conversations ConversationService
 	Messages      MessageService
 	Overview      OverviewService
+	Bootstrap     BootstrapService
 	Realtime      http.Handler
 	FrontendURL   string
 	PublicBaseURL string
@@ -108,8 +114,14 @@ func NewRouter(options RouterOptions) http.Handler {
 	router.With(options.Gate.Middleware).Handle("/ws/workspace", realtimeHandler)
 	router.Route("/api/workspace", func(workspace chi.Router) {
 		workspace.Use(options.Gate.Middleware)
+		workspace.Get("/bootstrap", bootstrapHandler(options))
 		workspace.Post("/invites", createInviteHandler(options))
 		workspace.Post("/invites/{inviteId}/revoke", revokeInviteHandler(options))
+		if options.AuthRoutes != nil {
+			workspace.Post("/invites/{code}/accept", func(response http.ResponseWriter, request *http.Request) {
+				options.AuthRoutes.HandleDevelopmentInviteAccept(response, request, chi.URLParam(request, "code"))
+			})
+		}
 		registerCoreRoutes(workspace, options)
 	})
 	return router
