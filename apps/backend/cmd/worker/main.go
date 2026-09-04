@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/config"
+	"github.com/timestarry/duallane/apps/backend/internal/platform/httpserver"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/logging"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
@@ -60,7 +63,20 @@ func main() {
 	if app.pool != nil {
 		defer app.pool.Close()
 	}
-	app.run(ctx)
+	workerCtx, cancelWorker := context.WithCancel(ctx)
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		app.run(workerCtx)
+	}()
+	server := httpserver.New(runtimeConfig.ListenAddress(), httpserver.SecurityHeaders(app.healthHandler(runtimeConfig)))
+	serveErr := httpserver.Serve(workerCtx, server, logger, httpserver.DefaultShutdownTimeout)
+	cancelWorker()
+	<-workerDone
+	if serveErr != nil {
+		logger.Error("worker health server stopped with error", slog.String("error_code", "server_failed"))
+		os.Exit(1)
+	}
 }
 
 func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, logger *slog.Logger) (*application, error) {
@@ -132,6 +148,39 @@ func (app *application) run(ctx context.Context) {
 		}()
 	}
 	wait.Wait()
+}
+
+type healthResponse struct {
+	OK      bool   `json:"ok"`
+	Service string `json:"service"`
+	State   string `json:"state"`
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+}
+
+func (app *application) healthHandler(runtimeConfig config.WorkspaceConfig) http.Handler {
+	router := http.NewServeMux()
+	router.HandleFunc("GET /healthz", func(response http.ResponseWriter, _ *http.Request) {
+		writeHealth(response, http.StatusOK, healthResponse{OK: true, Service: serviceName, State: "live", Version: runtimeConfig.AppVersion, Commit: runtimeConfig.Commit})
+	})
+	router.HandleFunc("GET /readyz", func(response http.ResponseWriter, _ *http.Request) {
+		ready := app != nil && (app.pool != nil || len(app.processors) == 0)
+		status := http.StatusOK
+		state := "ready"
+		if !ready {
+			status = http.StatusServiceUnavailable
+			state = "not_ready"
+		}
+		writeHealth(response, status, healthResponse{OK: ready, Service: serviceName, State: state, Version: runtimeConfig.AppVersion, Commit: runtimeConfig.Commit})
+	})
+	return router
+}
+
+func writeHealth(response http.ResponseWriter, status int, payload healthResponse) {
+	response.Header().Set("Content-Type", "application/json; charset=utf-8")
+	response.Header().Set("Cache-Control", "no-store")
+	response.WriteHeader(status)
+	_ = json.NewEncoder(response).Encode(payload)
 }
 
 func (app *application) runProcessor(ctx context.Context, processor workerProcessor) {
