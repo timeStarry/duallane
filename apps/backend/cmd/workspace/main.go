@@ -16,6 +16,7 @@ import (
 	platformstorage "github.com/timestarry/duallane/apps/backend/internal/platform/storage"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bootstrap"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/bots"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/conversations"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
@@ -91,6 +92,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	var interactionService *interactions.Service
 	var overviewService *overview.Service
 	var bootstrapService *bootstrap.Service
+	var botService *bots.Service
 	var fileService *files.Service
 	var topicService *topics.Service
 	var ntfyService *ntfy.Service
@@ -118,6 +120,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			TrustProxy: runtimeConfig.TrustProxy, WorkspaceEnabled: workspaceGate.Enabled,
 		})
 		inviteService = invites.NewService(invites.ServiceOptions{Repository: invites.NewPGRepository(pool)})
+		botService = bots.NewService(bots.ServiceOptions{Repository: bots.NewPGRepository(pool)})
 		memberService = members.NewService(members.ServiceOptions{Repository: members.NewPGRepository(pool)})
 		conversationService = conversations.NewService(conversations.ServiceOptions{Repository: conversations.NewPGRepository(pool)})
 		blobStore, err := newBlobStore(ctx, runtimeConfig)
@@ -223,6 +226,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			Topics:      topicService,
 			Ntfy:        ntfyService,
 			Email:       emailService,
+			Bots:        botService,
 			Realtime:    realtimeHandler,
 			FrontendURL: runtimeConfig.FrontendURL, PublicBaseURL: runtimeConfig.PublicBaseURL,
 			TrustProxy: runtimeConfig.TrustProxy,
