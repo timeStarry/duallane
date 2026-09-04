@@ -20,6 +20,15 @@ and workspace package manifests. Do not introduce a parallel framework, state
 library, database abstraction, UI kit, or build system without an architecture
 decision and maintainer approval.
 
+### Approved Go Backend Target
+
+The [backend architecture index](../backend/README.md) defines the approved Go
+target, durable service/data/operations rules, and the Node-to-Go migration
+process. The Node/Fastify topology above remains the current implementation for
+each capability until the linked [capability ledger](../backend/EVOLUTION.md)
+and production route agree that ownership has moved. Backend tasks must read
+that ledger before choosing an implementation target.
+
 ## 2. Repository Map
 
 | Path | Responsibility |
@@ -35,6 +44,7 @@ decision and maintainer approval.
 | `docs` | Product, protocol, data, visual, operations, and development contracts |
 | `deploy` | Guarded production deployment and operator checks |
 | `apps/web/public/integrations` | Reviewed, secret-free Agent integration instructions and version manifests |
+| `docs/backend` | Approved Go backend architecture and live capability migration ownership |
 
 Keep new code with the component that owns the behavior. A route is not a domain
 service, a React component is not a persistence layer, and product documentation
@@ -144,6 +154,8 @@ Add or update a design document before implementation when a change introduces:
 
 Record context, decision, alternatives, trade-offs, data migration, rollout,
 observability, and rollback. Keep small local implementation choices in the PR.
+Backend topology and foundational dependency decisions also update
+[Evolution and migration](../backend/EVOLUTION.md).
 
 ## 8. Known Scaling Boundary
 

@@ -48,6 +48,7 @@ notifications, audit, logs, or deployment configuration.
 | --- | --- |
 | Branches, bugs, commits, reviews, or pull requests | [Workflow](docs/development/WORKFLOW.md) |
 | Module ownership, dependencies, API boundaries, migrations | [Architecture](docs/development/ARCHITECTURE.md) |
+| Go backend architecture, capability migration, services, or containers | [Backend architecture index](docs/backend/README.md) |
 | TypeScript, React, Fastify, SQL, events, CSS, tests | [Code standards](docs/development/CODE_STANDARDS.md) |
 | Layout, components, copy, responsive behavior, accessibility | [UI/UX standards](docs/development/UI_UX_STANDARDS.md) and the linked Workspace visual specifications |
 | Validation, versions, release notes, Docker, production | [Testing and release](docs/development/TESTING_AND_RELEASE.md) |
@@ -78,6 +79,9 @@ The complete lifecycle and PR contract are in
   refactors in the same change.
 - Preserve public API and persisted-data compatibility unless the change includes
   a documented migration or version transition.
+- During the backend transition, use the capability ledger to identify the
+  current owner. Never enable duplicate production writers, job claimers, or
+  migration runners.
 - Keep routes thin, domain rules in services, and persistence details behind the
   database or storage boundary. Validate and authorize on the server.
 - Treat retries, duplicate delivery, concurrent writes, stale revisions, aborted

@@ -1,0 +1,215 @@
+# Backend Runtime And Operations
+
+## 1. Runtime Status
+
+The commands and Compose services in this document are the approved target.
+The checked-in Compose files remain the executable source of truth until a
+migration PR adds each service and updates
+[Evolution and migration](EVOLUTION.md).
+
+Production deployment remains single-host Docker Compose through the guarded
+script in `deploy/production`. This architecture does not authorize direct
+production deployment from the development checkout.
+
+## 2. Target Containers
+
+| Compose service | Command/image role | Public exposure |
+| --- | --- | --- |
+| `web` | Nginx static frontend and edge gateway | The only published application port |
+| `p2p` | Go `p2p` command | Docker network only |
+| `workspace` | Go `workspace` command | Docker network only |
+| `worker` | Go `worker` command | Docker network only; private health/metrics only |
+| `migrate` | Go `migrate` one-shot command | None |
+| `postgres` | Authoritative PostgreSQL | Docker network only |
+| Storage maintenance profiles | Provision, backfill, dedupe, or verification commands | None |
+| Optional GitHub proxy | Existing explicit profile | Docker network only |
+
+During migration, the existing Node `api` service may coexist with target
+services. Nginx routes only the capabilities identified in `EVOLUTION.md` to a
+Go service. Removing `api` is a final cutover action, not an initial rename.
+
+## 3. Images
+
+Use one Go module and two runtime image families:
+
+- **P2P image:** CGO disabled, contains only the P2P binary and runtime material
+  needed for certificates/time zones, runs as a non-root user, and has no data
+  volume or Workspace credentials.
+- **Workspace image:** contains the Workspace, worker, migration, and explicitly
+  retained storage-maintenance commands. It uses a pinned minimal Debian-family
+  runtime because govips requires libvips/CGO after the media gate passes.
+
+Workspace, worker, and migrate use the same immutable image digest for one
+release. Compose selects the command. Images carry the product version and full
+Git commit labels required by the deployment verifier.
+
+Build stages pin the Go toolchain, OS packages, and base-image digest according
+to repository policy. No compiler, package manager cache, source tree, test
+fixture, or secret belongs in the final runtime layer.
+
+## 4. Ports And Routing
+
+The external Web binding and port remain controlled by the existing
+`DUALLANE_WEB_BIND` and `DUALLANE_WEB_PORT` contract. Internal ports are private
+Compose details and become canonical only when declared in Compose and `.env`
+documentation.
+
+The final edge routes are:
+
+| Public path | Upstream |
+| --- | --- |
+| `/api/p2p/*`, `/ws/p2p/*` | P2P service |
+| `/api/auth/*`, `/api/workspace/*`, `/api/bot-gateway/*` | Workspace service |
+| `/ws/workspace`, `/ws/bot-gateway` | Workspace service |
+| `/api/health` | Release health projection defined by the active gateway configuration |
+| `/integrations/*`, frontend assets, application routes | Web container filesystem |
+
+The OAuth callback keeps a dedicated safe error-log policy so codes and state do
+not appear in gateway errors. WebSocket timeouts, upgrade headers, upload part
+limits, avatar/emote limits, CSP, referrer policy, and MIME protections remain
+at least as strict as the current Nginx configuration.
+
+## 5. Configuration And Secrets
+
+Existing environment names and defaults remain compatible unless a separately
+documented transition changes them. Go configuration is typed and validated at
+startup. Boolean behavior does not use permissive parsing when the current
+contract requires an exact value; in particular, Workspace is disabled unless
+`WORKSPACE_ENABLED=true` exactly.
+
+Pass each service only what it owns:
+
+| Service | Allowed configuration classes |
+| --- | --- |
+| P2P | Host/port, public base URL, room expiry/grace, ICE/TURN settings, safe logging/metrics |
+| Workspace | Database, sessions/OAuth, Workspace gate, object storage, public/frontend URLs, request limits |
+| Worker | Database, enabled delivery adapters, encrypted SMTP key, ntfy/Bot endpoints, job timings, optional storage cleanup |
+| Migrate | Database and explicit seed/migration controls only |
+| Web | Upstream names, public binding, request/security policy, static build metadata |
+
+P2P never receives database, S3, SMTP, OAuth-client-secret, Bot-token, or
+Workspace encryption credentials. Secrets remain in environment variables only
+where already required or in Compose-mounted `0600` files; they are never build
+arguments, image layers, command-line flags, health output, or logs.
+
+## 6. Startup And Readiness
+
+Target dependency order:
+
+1. PostgreSQL becomes healthy.
+2. The one-shot migration service applies compatible migrations and exits zero.
+3. Workspace and worker start from the same release image and verify the
+   required schema.
+4. P2P starts independently of PostgreSQL and Workspace.
+5. Candidate health checks pass before Nginx begins routing a newly migrated
+   capability.
+
+Every long-running Go command exposes private liveness and readiness checks.
+The implementation may choose the final internal path/port, but must distinguish:
+
+- **Liveness:** process event loop and HTTP health server respond without
+  depending on external providers.
+- **Readiness:** required configuration is valid and owned dependencies are
+  usable. Workspace includes PostgreSQL and the selected object-store readiness
+  when enabled. Worker includes schema/lease capability, not the availability of
+  every optional provider. P2P has no Workspace dependency.
+
+Health responses contain only status, service, version, commit, and safe
+dependency categories. They never include connection strings, hosts requiring
+secrecy, bucket keys, tokens, provider responses, or stack traces.
+
+## 7. Graceful Shutdown
+
+On `SIGTERM` or deployment replacement, a Go service:
+
+1. Marks readiness false and stops accepting new work.
+2. Cancels root context and bounded background loops.
+3. Drains HTTP requests for the configured grace period.
+4. Closes WebSockets with a reconnect-safe status when possible.
+5. Stops taking worker jobs; active leases either complete safely or expire for
+   reclaim.
+6. Closes listener, database pool, object clients, and metrics server.
+
+The initial single-replica P2P service cannot transfer in-memory rooms during an
+upgrade. Its replacement interrupts active direct sessions, as the current
+single-process topology does. Zero-disruption P2P deployment requires the
+separate scale-out/room-ownership design; it must not be implied by candidate
+health checks.
+
+## 8. Observability
+
+Each service emits JSON logs to stdout/stderr using the safe-field policy in
+[Contracts and data](CONTRACTS_AND_DATA.md). Docker log rotation remains
+mandatory.
+
+Private metrics cover at least:
+
+- HTTP request count/duration by method, route template, status class, and
+  service;
+- active/rejected P2P rooms and sockets without room/user identifiers;
+- Workspace WebSocket connections, replay count/lag, and sync-required count;
+- PostgreSQL pool use/wait time and query error class without SQL values;
+- worker eligible/claimed/completed/failed counts, backlog age, and lease expiry;
+- object operations, bytes, failures, and cleanup backlog by safe operation
+  class;
+- process/runtime health.
+
+Metrics endpoints are never proxied publicly by Nginx. Alerts and dashboards are
+optional deployment integrations; their absence does not remove the need to
+expose the bounded metrics.
+
+## 9. Release Order
+
+Before any Go production cutover, `deploy/production/deploy.sh` must be extended
+and tested to understand every live application service. The target release
+sequence is:
+
+1. Verify clean `main`, exact `origin/main` commit, semantic version, production
+   path, authoritative PostgreSQL volume, and required tools.
+2. Capture a private logical database backup and checksum.
+3. Capture rollback image IDs for Web and every active backend/worker service.
+4. Build all affected images from the exact commit.
+5. Run migrations once.
+6. Start unpublished candidates for affected request-serving services and wait
+   for readiness.
+7. Replace/start backend services before changing edge routes.
+8. Start the worker only after its compatible schema and owning API are ready.
+9. Replace the Web/Nginx gateway last, then verify direct gateway and public
+   smoke paths.
+10. Retain previous images until the rollback window closes.
+
+Do not use a bare `docker compose up` to replace an existing production
+deployment. Do not run production deployment from the development checkout.
+
+## 10. Rolling Compatibility And Rollback
+
+Schema and contracts use expand-contract evolution. The new migration must be
+safe for every Node/Go version that can run during rollout or automatic
+application rollback. Destructive cleanup occurs only after the old owner is
+removed, the migration is `complete`, backups are verified, and rollback no
+longer needs the old shape.
+
+Rollback order restores the gateway route first when needed, then known-good
+backend/worker images. Before rolling application code backward, verify schema,
+stored-data, object, and job compatibility. Database restoration is a separate
+operator decision and is never an automatic response to an application failure.
+
+If Docker restarts during a failed deployment, record and restore all previously
+running DualLane application containers, not only Web and one API container.
+
+## 11. Scaling And Capacity
+
+- Keep one P2P replica until room ownership and non-persistent cross-instance
+  relay are designed and tested.
+- Keep one Workspace replica until persisted wake-up, replay, presence, and
+  aggregate connection-pool budgets pass multi-instance tests.
+- Worker replicas may scale first after lease and ambiguous-provider-failure
+  tests pass.
+- Set an aggregate PostgreSQL pool budget across Workspace, worker, migration,
+  maintenance, and temporary candidates. Per-process defaults must not multiply
+  beyond the server limit during deployment.
+- Add resource limits from measured memory/CPU/file-descriptor behavior,
+  especially WebSockets and libvips concurrency.
+
+No scale change weakens authorization, quota serialization, event ordering,
+audit completeness, object locking, or the P2P no-persistence promise.

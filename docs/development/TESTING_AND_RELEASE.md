@@ -10,6 +10,7 @@ part of the change.
 | Documentation only | `git diff --check`; validate local links and executable examples |
 | Frontend behavior or styling | focused Vitest/Playwright coverage, `pnpm lint`, `pnpm build`, desktop and 390×844 visual review |
 | Service or API logic | focused regression tests, `pnpm test`, `pnpm lint` |
+| Go backend or Node-to-Go migration slice | The applicable current gate plus [backend validation](../backend/VALIDATION.md); run repository-pinned Go gates once the module exists |
 | P2P, Workspace, auth, quota, audit, database, storage, realtime, or deployment | `pnpm test`, `pnpm lint`, `pnpm build`, plus focused failure/concurrency coverage |
 | PostgreSQL-sensitive behavior | the above plus `pnpm --filter @duallane/web test:postgres` with a disposable `TEST_DATABASE_URL` |
 | Docker, Nginx, Caddy, or Compose | the above plus `docker compose config` for affected profiles and build the affected image |

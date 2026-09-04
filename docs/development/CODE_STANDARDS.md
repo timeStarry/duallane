@@ -15,6 +15,12 @@
 - Prefer ASCII in source and identifiers. User-facing Chinese copy and documents
   may use their established character set.
 
+Go backend code follows the [backend agent guide](../backend/AGENT_GUIDE.md) and
+[technology decisions](../backend/TECHNOLOGY.md). During the transition, read the
+[capability ledger](../backend/EVOLUTION.md) before selecting Node or Go as the
+edit target. The language-specific sections below remain authoritative for the
+current frontend and Node implementation.
+
 ## 2. TypeScript And React
 
 - Preserve strict TypeScript. Do not use `any`, broad type assertions,
