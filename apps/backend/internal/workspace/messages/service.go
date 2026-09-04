@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -13,6 +14,8 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messagejobs"
 )
+
+var customEmoteShortcodePattern = regexp.MustCompile(`(?i)^custom:([a-f0-9-]{36})$`)
 
 const (
 	conversationReadCapability = "conversation.read"
@@ -508,6 +511,16 @@ func (s *Service) CreateMessage(ctx context.Context, input CreateInput) (Message
 				return nil, nil, err
 			}
 		}
+		for _, customEmoteID := range extractCustomEmoteIDs(normalized) {
+			if err := tx.LinkMessageCustomEmote(ctx, id, actor.ID, customEmoteID); err != nil {
+				return nil, nil, err
+			}
+		}
+		for _, shareID := range extractEmoteCollectionShareIDs(normalized) {
+			if err := tx.LinkMessageEmoteCollectionShare(ctx, id, shareID); err != nil {
+				return nil, nil, err
+			}
+		}
 		if err := tx.EnforceRetention(ctx, s.space(), conversation.ID, conversation.RetentionCount, now); err != nil {
 			return nil, nil, err
 		}
@@ -945,6 +958,21 @@ func (s *Service) normalizeBlock(ctx context.Context, repo ReadRepository, actor
 		return candidate, "", nil
 	case "emoji":
 		shortcode := normalizeString(block.Shortcode)
+		if match := customEmoteShortcodePattern.FindStringSubmatch(shortcode); len(match) == 2 {
+			if s.advancedBlockValidator == nil {
+				return Block{}, "", validationError(CodeMessageInvalidEmoji, MessageInvalidEmoji)
+			}
+			candidate, err := s.advancedBlockValidator.ValidateBlock(ctx, actor, conversationID, Block{
+				Type: "emoji", Shortcode: "custom:" + strings.ToLower(match[1]),
+			})
+			if err != nil {
+				return Block{}, "", err
+			}
+			if candidate.Type != "emoji" || customEmoteShortcodePattern.FindStringSubmatch(candidate.Shortcode) == nil {
+				return Block{}, "", validationError(CodeMessageInvalidEmoji, MessageInvalidEmoji)
+			}
+			return candidate, "", nil
+		}
 		if !validEmojiShortcode(shortcode) {
 			return Block{}, "", validationError(CodeMessageInvalidEmoji, MessageInvalidEmoji)
 		}
@@ -972,6 +1000,47 @@ func (s *Service) normalizeBlock(ctx context.Context, repo ReadRepository, actor
 		}
 		return normalized, "", nil
 	}
+}
+
+func extractCustomEmoteIDs(content Content) []string {
+	values := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, block := range content.Blocks {
+		if block.Type != "emoji" {
+			continue
+		}
+		match := customEmoteShortcodePattern.FindStringSubmatch(block.Shortcode)
+		if len(match) != 2 {
+			continue
+		}
+		value := strings.ToLower(match[1])
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	return values
+}
+
+func extractEmoteCollectionShareIDs(content Content) []string {
+	values := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, block := range content.Blocks {
+		if block.Type != "emote_collection" {
+			continue
+		}
+		value := strings.ToLower(normalizeString(block.ShareID))
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	return values
 }
 
 func (s *Service) validateAttachment(ctx context.Context, repo ReadRepository, actor *auth.Actor, conversationID string, attachment *AttachmentRecord) error {

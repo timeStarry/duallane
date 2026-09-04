@@ -898,6 +898,26 @@ func TestServiceStoreReadAndRemoveCleansLastCASReference(t *testing.T) {
 	}
 }
 
+func TestValidateMessageCustomEmoteRequiresOwnedAvailableMedia(t *testing.T) {
+	repo := newFakeRepo()
+	seedFakeActor(repo, "usr-owner", "owner")
+	seedFakeActor(repo, "usr-other", "member")
+	service := testService(t, repo, newFakeBlobStore())
+	emote := mustUpload(t, service, "usr-owner", "message.png", "message")
+	if err := service.ValidateMessageCustomEmote(context.Background(), "usr-owner", emote.ID); err != nil {
+		t.Fatalf("validate owned emote: %v", err)
+	}
+	if err := service.ValidateMessageCustomEmote(context.Background(), "usr-other", emote.ID); !isCode(err, "message.invalid_emoji") {
+		t.Fatalf("validate another user's emote = %v", err)
+	}
+	if _, err := service.Remove(context.Background(), "usr-owner", emote.ID, auth.RequestMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ValidateMessageCustomEmote(context.Background(), "usr-owner", emote.ID); !isCode(err, "message.invalid_emoji") {
+		t.Fatalf("validate removed emote = %v", err)
+	}
+}
+
 func TestServiceCollectionsSharesAndSettingsAreStable(t *testing.T) {
 	repo := newFakeRepo()
 	seedFakeActor(repo, "usr-owner", "owner")

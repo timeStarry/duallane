@@ -23,26 +23,34 @@ type fakeReaction struct {
 	createdAt time.Time
 }
 
+type advancedBlockValidatorFunc func(context.Context, *auth.Actor, string, Block) (Block, error)
+
+func (fn advancedBlockValidatorFunc) ValidateBlock(ctx context.Context, actor *auth.Actor, conversationID string, block Block) (Block, error) {
+	return fn(ctx, actor, conversationID, block)
+}
+
 type fakeRepo struct {
 	mu sync.Mutex
 
-	actors        map[string]*auth.Actor
-	conversations map[string]*ConversationRecord
-	members       map[string]map[string]bool
-	messages      map[string]*MessageRecord
-	byClient      map[string]string
-	attachments   map[string]*AttachmentRecord
-	messageFiles  map[string][]string
-	mentions      map[string]map[string]*MentionMember
-	reactions     []fakeReaction
-	hidden        map[string]bool
-	pins          map[string]bool
-	customEmotes  map[string]bool
-	shares        map[string]bool
-	events        []EventInput
-	audits        []AuditInput
-	nextSeq       int64
-	messageJobs   []messagejobs.Input
+	actors         map[string]*auth.Actor
+	conversations  map[string]*ConversationRecord
+	members        map[string]map[string]bool
+	messages       map[string]*MessageRecord
+	byClient       map[string]string
+	attachments    map[string]*AttachmentRecord
+	messageFiles   map[string][]string
+	mentions       map[string]map[string]*MentionMember
+	reactions      []fakeReaction
+	hidden         map[string]bool
+	pins           map[string]bool
+	customEmotes   map[string]bool
+	shares         map[string]bool
+	customEmoteIDs map[string][]string
+	shareIDs       map[string][]string
+	events         []EventInput
+	audits         []AuditInput
+	nextSeq        int64
+	messageJobs    []messagejobs.Input
 
 	failEvent bool
 	failJobs  bool
@@ -50,18 +58,20 @@ type fakeRepo struct {
 
 func newFakeRepo() *fakeRepo {
 	return &fakeRepo{
-		actors:        make(map[string]*auth.Actor),
-		conversations: make(map[string]*ConversationRecord),
-		members:       make(map[string]map[string]bool),
-		messages:      make(map[string]*MessageRecord),
-		byClient:      make(map[string]string),
-		attachments:   make(map[string]*AttachmentRecord),
-		messageFiles:  make(map[string][]string),
-		mentions:      make(map[string]map[string]*MentionMember),
-		hidden:        make(map[string]bool),
-		pins:          make(map[string]bool),
-		customEmotes:  make(map[string]bool),
-		shares:        make(map[string]bool),
+		actors:         make(map[string]*auth.Actor),
+		conversations:  make(map[string]*ConversationRecord),
+		members:        make(map[string]map[string]bool),
+		messages:       make(map[string]*MessageRecord),
+		byClient:       make(map[string]string),
+		attachments:    make(map[string]*AttachmentRecord),
+		messageFiles:   make(map[string][]string),
+		mentions:       make(map[string]map[string]*MentionMember),
+		hidden:         make(map[string]bool),
+		pins:           make(map[string]bool),
+		customEmotes:   make(map[string]bool),
+		shares:         make(map[string]bool),
+		customEmoteIDs: make(map[string][]string),
+		shareIDs:       make(map[string][]string),
 	}
 }
 
@@ -339,6 +349,16 @@ func (t *fakeTx) LinkMessageAttachment(_ context.Context, _, messageID, attachme
 	t.repo.messageFiles[messageID] = append(t.repo.messageFiles[messageID], attachmentID)
 	return nil
 }
+func (t *fakeTx) LinkMessageCustomEmote(_ context.Context, messageID, _ string, customEmoteID string) error {
+	t.repo.customEmotes[messageID] = true
+	t.repo.customEmoteIDs[messageID] = append(t.repo.customEmoteIDs[messageID], customEmoteID)
+	return nil
+}
+func (t *fakeTx) LinkMessageEmoteCollectionShare(_ context.Context, messageID, shareID string) error {
+	t.repo.shares[messageID] = true
+	t.repo.shareIDs[messageID] = append(t.repo.shareIDs[messageID], shareID)
+	return nil
+}
 func (t *fakeTx) EnforceRetention(context.Context, string, string, int64, time.Time) error {
 	return nil
 }
@@ -367,10 +387,12 @@ func (t *fakeTx) DeleteMessageReactions(_ context.Context, _, messageID string) 
 }
 func (t *fakeTx) DeleteMessageCustomEmotes(_ context.Context, _, messageID string) error {
 	delete(t.repo.customEmotes, messageID)
+	delete(t.repo.customEmoteIDs, messageID)
 	return nil
 }
 func (t *fakeTx) DeleteMessageEmoteCollectionShares(_ context.Context, _, messageID string) error {
 	delete(t.repo.shares, messageID)
+	delete(t.repo.shareIDs, messageID)
 	return nil
 }
 func (t *fakeTx) DeleteMessagePins(_ context.Context, _, messageID string) error {
@@ -552,6 +574,63 @@ func TestCreateMessageCanonicalIdempotencyUsesContent(t *testing.T) {
 	var conflict *Error
 	if !errors.As(err, &conflict) || conflict.Code != CodeMessageIdempotency || conflict.StatusCode != 409 {
 		t.Fatalf("content conflict = %#v, want %s/409", conflict, CodeMessageIdempotency)
+	}
+}
+
+func TestCreateMessagePersistsAdvancedBlockReferences(t *testing.T) {
+	repo := newFakeRepo()
+	seedConversation(repo, "usr-alice")
+	validator := advancedBlockValidatorFunc(func(_ context.Context, actor *auth.Actor, conversationID string, block Block) (Block, error) {
+		if actor.ID != "usr-alice" || conversationID != "conv-1" {
+			t.Fatalf("validator scope = actor:%#v conversation:%q", actor, conversationID)
+		}
+		switch block.Type {
+		case "emoji", "emote_collection", "card":
+			return block, nil
+		case "topic_reference":
+			return Block{Type: "topic_reference", TopicID: block.TopicID, Title: "发布"}, nil
+		default:
+			return Block{}, NewError(CodeMessageInvalidBlock, MessageInvalidBlock, 400)
+		}
+	})
+	service := NewService(ServiceOptions{
+		Repository: repo, AdvancedBlockValidator: validator,
+		Now:       func() time.Time { return time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC) },
+		IDFactory: func() (string, error) { return "msg-advanced", nil },
+	})
+	customID := "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
+	shareID := "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"
+	input := CreateInput{
+		ActorID: "usr-alice", ConversationID: "conv-1", ClientMessageID: "client-advanced",
+		Content: Content{Format: MessageContentFormat, Blocks: []Block{
+			{Type: "emoji", Shortcode: "custom:" + customID},
+			{Type: "emote_collection", ShareID: shareID},
+			{Type: "topic_reference", TopicID: "topic-1", Title: "client title"},
+			{Type: "card", CardID: "card-1", CardType: "echo.answer", SchemaVersion: 1, FallbackText: "回答"},
+		}},
+	}
+	created, err := service.CreateMessage(context.Background(), input)
+	if err != nil {
+		t.Fatalf("create advanced message: %v", err)
+	}
+	wantCustom := strings.ToLower(customID)
+	wantShare := strings.ToLower(shareID)
+	if got := repo.customEmoteIDs[created.ID]; len(got) != 1 || got[0] != wantCustom {
+		t.Fatalf("custom emote links = %#v", got)
+	}
+	if got := repo.shareIDs[created.ID]; len(got) != 1 || got[0] != wantShare {
+		t.Fatalf("share links = %#v", got)
+	}
+	if created.PlainText != "[表情][表情合集]#发布回答" || created.Content.Blocks[2].Title != "发布" {
+		t.Fatalf("advanced projection = %#v", created)
+	}
+
+	replayed, err := service.CreateMessage(context.Background(), input)
+	if err != nil || replayed.ID != created.ID {
+		t.Fatalf("advanced replay = %#v, %v", replayed, err)
+	}
+	if len(repo.customEmoteIDs[created.ID]) != 1 || len(repo.shareIDs[created.ID]) != 1 {
+		t.Fatalf("replay duplicated links: custom=%#v shares=%#v", repo.customEmoteIDs, repo.shareIDs)
 	}
 }
 
@@ -827,6 +906,12 @@ func (f *fakeRepo) cloneLocked() *fakeRepo {
 	for key, value := range f.shares {
 		copyRepo.shares[key] = value
 	}
+	for key, values := range f.customEmoteIDs {
+		copyRepo.customEmoteIDs[key] = append([]string(nil), values...)
+	}
+	for key, values := range f.shareIDs {
+		copyRepo.shareIDs[key] = append([]string(nil), values...)
+	}
 	copyRepo.events = append([]EventInput(nil), f.events...)
 	copyRepo.audits = append([]AuditInput(nil), f.audits...)
 	copyRepo.nextSeq = f.nextSeq
@@ -850,6 +935,8 @@ func (f *fakeRepo) restoreLocked(snapshot *fakeRepo) {
 	f.pins = snapshot.pins
 	f.customEmotes = snapshot.customEmotes
 	f.shares = snapshot.shares
+	f.customEmoteIDs = snapshot.customEmoteIDs
+	f.shareIDs = snapshot.shareIDs
 	f.events = snapshot.events
 	f.audits = snapshot.audits
 	f.nextSeq = snapshot.nextSeq

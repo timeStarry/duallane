@@ -36,16 +36,23 @@ type Content struct {
 	Blocks    []Block `json:"blocks"`
 }
 
-// Block covers the five P0 protocol blocks. Fields outside the selected block
-// type are omitted when the server canonicalizes the content.
+// Block covers the Workspace v1 protocol blocks. Fields outside the selected
+// block type are omitted when the server canonicalizes the content.
 type Block struct {
-	Type         string `json:"type"`
-	Text         string `json:"text,omitempty"`
-	UserID       string `json:"userId,omitempty"`
-	Label        string `json:"label,omitempty"`
-	URL          string `json:"url,omitempty"`
-	Shortcode    string `json:"shortcode,omitempty"`
-	AttachmentID string `json:"attachmentId,omitempty"`
+	Type          string `json:"type"`
+	Text          string `json:"text,omitempty"`
+	UserID        string `json:"userId,omitempty"`
+	Label         string `json:"label,omitempty"`
+	URL           string `json:"url,omitempty"`
+	Shortcode     string `json:"shortcode,omitempty"`
+	AttachmentID  string `json:"attachmentId,omitempty"`
+	ShareID       string `json:"shareId,omitempty"`
+	TopicID       string `json:"topicId,omitempty"`
+	Title         string `json:"title,omitempty"`
+	CardID        string `json:"cardId,omitempty"`
+	CardType      string `json:"cardType,omitempty"`
+	SchemaVersion int    `json:"schemaVersion,omitempty"`
+	FallbackText  string `json:"fallbackText,omitempty"`
 }
 
 type MentionMember struct {
@@ -385,6 +392,15 @@ func projectBlock(block Block) (Block, bool) {
 		return Block{Type: "emoji", Shortcode: block.Shortcode}, true
 	case "attachment":
 		return Block{Type: "attachment", AttachmentID: block.AttachmentID}, true
+	case "emote_collection":
+		return Block{Type: "emote_collection", ShareID: block.ShareID}, true
+	case "topic_reference":
+		return Block{Type: "topic_reference", TopicID: block.TopicID, Title: block.Title}, true
+	case "card":
+		return Block{
+			Type: "card", CardID: block.CardID, CardType: block.CardType,
+			SchemaVersion: block.SchemaVersion, FallbackText: block.FallbackText,
+		}, true
 	default:
 		return Block{}, false
 	}
@@ -469,9 +485,19 @@ func buildPlainText(blocks []Block) string {
 		case "link":
 			part = firstNonEmpty(block.Label, block.URL)
 		case "emoji":
-			part = ":" + normalizeString(block.Shortcode) + ":"
+			if strings.HasPrefix(strings.ToLower(normalizeString(block.Shortcode)), "custom:") {
+				part = "[表情]"
+			} else {
+				part = ":" + normalizeString(block.Shortcode) + ":"
+			}
 		case "attachment":
 			part = "[文件]"
+		case "emote_collection":
+			part = "[表情合集]"
+		case "topic_reference":
+			part = "#" + normalizeString(block.Title)
+		case "card":
+			part = normalizeString(block.FallbackText)
 		}
 		parts = append(parts, part)
 	}

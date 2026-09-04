@@ -2081,6 +2081,30 @@ func (s *Service) ValidateShare(ctx context.Context, actorID, shareID string) er
 	return nil
 }
 
+// ValidateMessageCustomEmote mirrors the message protocol's owner-only send
+// rule and verifies that the referenced emote still resolves to stored media.
+func (s *Service) ValidateMessageCustomEmote(ctx context.Context, actorID, customEmoteID string) error {
+	actor, err := s.readActor(ctx, actorID)
+	if err != nil {
+		return err
+	}
+	row, err := s.repo.GetCustomEmote(ctx, strings.TrimSpace(customEmoteID))
+	if err != nil {
+		return normalizeError(err)
+	}
+	if row == nil || row.UserID != actor.ID || row.RemovedAt != nil {
+		return validationError("message.invalid_emoji", "收藏表情不可用")
+	}
+	if _, err := s.resolveResource(ctx, row); err != nil {
+		var domainErr *Error
+		if errors.As(err, &domainErr) && domainErr.Code == CodeInternal {
+			return domainErr
+		}
+		return validationError("message.invalid_emoji", "收藏表情不可用")
+	}
+	return nil
+}
+
 func (s *Service) UpdateCollectionSourceSubscription(context.Context, string, string, bool, auth.RequestMeta) error {
 	return NewError(CodeEmoteSubscriptionUnsupported, MessageEmoteSubscriptionUnsupported, 501)
 }

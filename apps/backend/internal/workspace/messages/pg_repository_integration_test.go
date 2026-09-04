@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/migrations"
 	platformpostgres "github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 )
 
 type pgMessageIntegrationFixture struct {
@@ -465,6 +466,65 @@ func seedPGMessageRecallRelations(t *testing.T, fixture *pgMessageIntegrationFix
 		INSERT INTO conversation_pin_counters (conversation_id, user_id, pin_count)
 		VALUES ('conv-messages', 'usr-bob', 1)
 	`)
+}
+
+func TestPGMessageAdvancedReferencesCommitAndRejectStaleRows(t *testing.T) {
+	fixture := newPGMessageIntegrationFixture(t)
+	customID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	shareID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	mustExecPGMessageIntegrationPool(t, fixture, `
+		INSERT INTO workspace_custom_emotes (
+			id, user_id, source_type, label, normalized_mime_type, byte_size,
+			width, height, frame_count, duration_ms, sha256, storage_key,
+			sort_order, created_at
+		)
+		VALUES ($1, 'usr-alice', 'upload', 'Message', 'image/webp', 7,
+			1, 1, 1, 0, $2, 'objects/message.webp', 0, $3)
+	`, customID, strings.Repeat("a", 64), fixture.now)
+	mustExecPGMessageIntegrationPool(t, fixture, `
+		INSERT INTO workspace_emote_collection_shares (
+			id, collection_id, shared_by_user_id, original_creator_user_id,
+			snapshot_name, fingerprint, item_count, created_at, revoked_at
+		)
+		VALUES ($1, NULL, 'usr-bob', 'usr-bob', 'Shared', 'advanced-fingerprint', 0, $2, NULL)
+	`, shareID, fixture.now)
+
+	var sequence atomic.Int64
+	service := NewService(ServiceOptions{
+		Repository: fixture.service.Repository(), Now: func() time.Time { return fixture.now },
+		IDFactory: func() (string, error) { return fmt.Sprintf("advanced-%d", sequence.Add(1)), nil },
+		AdvancedBlockValidator: advancedBlockValidatorFunc(func(_ context.Context, _ *auth.Actor, _ string, block Block) (Block, error) {
+			return block, nil
+		}),
+	})
+	created, err := service.CreateMessage(fixture.ctx, CreateInput{
+		ActorID: "usr-alice", ConversationID: "conv-messages", ClientMessageID: "advanced-links",
+		Content: Content{Format: MessageContentFormat, Blocks: []Block{
+			{Type: "emoji", Shortcode: "custom:" + customID},
+			{Type: "emote_collection", ShareID: shareID},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create advanced message: %v", err)
+	}
+	if got := pgMessageIntegrationCount(t, fixture.ctx, fixture.pool, `SELECT COUNT(*) FROM message_custom_emotes WHERE message_id = $1 AND custom_emote_id = $2`, created.ID, customID); got != 1 {
+		t.Fatalf("custom emote links = %d, want 1", got)
+	}
+	if got := pgMessageIntegrationCount(t, fixture.ctx, fixture.pool, `SELECT COUNT(*) FROM message_emote_collection_shares WHERE message_id = $1 AND share_id = $2`, created.ID, shareID); got != 1 {
+		t.Fatalf("collection share links = %d, want 1", got)
+	}
+
+	mustExecPGMessageIntegrationPool(t, fixture, `UPDATE workspace_emote_collection_shares SET revoked_at = $2 WHERE id = $1`, shareID, fixture.now)
+	_, err = service.CreateMessage(fixture.ctx, CreateInput{
+		ActorID: "usr-alice", ConversationID: "conv-messages", ClientMessageID: "stale-share",
+		Content: Content{Format: MessageContentFormat, Blocks: []Block{{Type: "emote_collection", ShareID: shareID}}},
+	})
+	if !isMessageCode(err, CodeMessageInvalidEmoteShare) {
+		t.Fatalf("stale share error = %v", err)
+	}
+	if got := pgMessageIntegrationCount(t, fixture.ctx, fixture.pool, `SELECT COUNT(*) FROM messages WHERE client_message_id = 'stale-share'`); got != 0 {
+		t.Fatalf("stale share left %d messages", got)
+	}
 }
 
 func mustExecPGMessageIntegrationPool(t *testing.T, fixture *pgMessageIntegrationFixture, query string, args ...any) {

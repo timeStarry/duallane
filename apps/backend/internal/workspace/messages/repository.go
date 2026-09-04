@@ -63,6 +63,8 @@ type Tx interface {
 	Lock(ctx context.Context, key string) error
 	InsertMessage(ctx context.Context, record MessageInsert) (inserted bool, existing *MessageRecord, err error)
 	LinkMessageAttachment(ctx context.Context, spaceID, messageID, attachmentID string) error
+	LinkMessageCustomEmote(ctx context.Context, messageID, actorID, customEmoteID string) error
+	LinkMessageEmoteCollectionShare(ctx context.Context, messageID, shareID string) error
 	EnforceRetention(ctx context.Context, spaceID, conversationID string, retentionCount int64, now time.Time) error
 	RecallMessage(ctx context.Context, spaceID, messageID string, expectedRevision int64, contentJSON []byte, plainText string, reason string, now time.Time) (bool, error)
 	DeleteMessageReactions(ctx context.Context, spaceID, messageID string) error

@@ -351,6 +351,40 @@ func (t *pgTx) LinkMessageAttachment(ctx context.Context, spaceID, messageID, at
 	return err
 }
 
+func (t *pgTx) LinkMessageCustomEmote(ctx context.Context, messageID, actorID, customEmoteID string) error {
+	result, err := t.tx.Exec(ctx, `
+		INSERT INTO message_custom_emotes (message_id, custom_emote_id)
+		SELECT $1, e.id
+		FROM workspace_custom_emotes e
+		WHERE e.id = $2 AND e.user_id = $3 AND e.removed_at IS NULL
+		ON CONFLICT DO NOTHING
+	`, messageID, customEmoteID, actorID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return validationError(CodeMessageInvalidEmoji, MessageInvalidEmoji)
+	}
+	return nil
+}
+
+func (t *pgTx) LinkMessageEmoteCollectionShare(ctx context.Context, messageID, shareID string) error {
+	result, err := t.tx.Exec(ctx, `
+		INSERT INTO message_emote_collection_shares (message_id, share_id)
+		SELECT $1, s.id
+		FROM workspace_emote_collection_shares s
+		WHERE s.id = $2 AND s.revoked_at IS NULL
+		ON CONFLICT DO NOTHING
+	`, messageID, shareID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return validationError(CodeMessageInvalidEmoteShare, MessageInvalidEmoteShare)
+	}
+	return nil
+}
+
 func (t *pgTx) EnforceRetention(ctx context.Context, spaceID, conversationID string, retentionCount int64, now time.Time) error {
 	if retentionCount <= 0 {
 		retentionCount = DefaultRetentionCount

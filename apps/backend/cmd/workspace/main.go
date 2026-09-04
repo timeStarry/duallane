@@ -19,6 +19,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/conversations"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/emotes"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/events"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/files"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/gate"
@@ -26,6 +27,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/interactions"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/invites"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/members"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/messageblocks"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messagejobs"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/ntfy"
@@ -148,9 +150,6 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			return nil, err
 		}
 		jobScheduler := messagejobs.NewScheduler(emailService, emailRepository, ntfyService, ntfyRepository)
-		messageService = messages.NewService(messages.ServiceOptions{
-			Repository: messages.NewPGRepositoryWithMessageJobs(pool, jobScheduler), RequireMessageJobs: true,
-		})
 		topicService = topics.NewService(topics.ServiceOptions{
 			Repository: topics.NewPGRepositoryWithMessageJobs(pool, jobScheduler), RequireMessageJobs: true,
 		})
@@ -160,6 +159,13 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			return nil, err
 		}
 		cardService = cards.NewService(cards.ServiceOptions{Repository: cards.NewPGRepository(pool), Registry: cardRegistry})
+		emoteReferenceService := emotes.NewService(emotes.ServiceOptions{Repository: emotes.NewPGRepository(pool)})
+		messageService = messages.NewService(messages.ServiceOptions{
+			Repository: messages.NewPGRepositoryWithMessageJobs(pool, jobScheduler), RequireMessageJobs: true,
+			AdvancedBlockValidator: messageblocks.NewValidator(messageblocks.ValidatorOptions{
+				Cards: cardService, Emotes: emoteReferenceService, Topics: topicService,
+			}),
+		})
 		commandRegistry, err := interactions.NewCommandRegistry()
 		if err != nil {
 			pool.Close()
