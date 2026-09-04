@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/messagejobs"
 )
 
 type fakeReaction struct {
@@ -41,8 +42,10 @@ type fakeRepo struct {
 	events        []EventInput
 	audits        []AuditInput
 	nextSeq       int64
+	messageJobs   []messagejobs.Input
 
 	failEvent bool
+	failJobs  bool
 }
 
 func newFakeRepo() *fakeRepo {
@@ -426,6 +429,15 @@ func (t *fakeTx) WriteAudit(_ context.Context, input AuditInput) error {
 	return nil
 }
 
+func (t *fakeTx) ScheduleMessageJobs(_ context.Context, input messagejobs.Input) error {
+	if t.repo.failJobs {
+		return errors.New("message job scheduling failed")
+	}
+	input.ContentJSON = append([]byte(nil), input.ContentJSON...)
+	t.repo.messageJobs = append(t.repo.messageJobs, input)
+	return nil
+}
+
 func testService(repo *fakeRepo, ids ...string) *Service {
 	var index atomic.Int64
 	return NewService(ServiceOptions{
@@ -716,6 +728,40 @@ func TestCreateMessageIDFactoryFailureDoesNotPersist(t *testing.T) {
 	}
 }
 
+func TestCreateMessageSchedulesJobsWithEventAndRollsBackOnFailure(t *testing.T) {
+	repo := newFakeRepo()
+	seedConversation(repo, "usr-alice")
+	service := NewService(ServiceOptions{
+		Repository: repo, RequireMessageJobs: true,
+		Now: func() time.Time { return time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC) },
+		IDFactory: func() (string, error) {
+			if len(repo.messages) == 0 {
+				return "msg-jobs", nil
+			}
+			return "event-jobs", nil
+		},
+	})
+	created, err := service.CreateMessage(context.Background(), CreateInput{
+		ActorID: "usr-alice", ConversationID: "conv-1", ClientMessageID: "jobs-1",
+		Content: Content{Format: MessageContentFormat, Blocks: []Block{{Type: "text", Text: "hello"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.messageJobs) != 1 || repo.messageJobs[0].MessageID != created.ID || repo.messageJobs[0].EventSeq != 1 || !json.Valid(repo.messageJobs[0].ContentJSON) {
+		t.Fatalf("scheduled jobs = %#v", repo.messageJobs)
+	}
+
+	repo.failJobs = true
+	_, err = service.CreateMessage(context.Background(), CreateInput{
+		ActorID: "usr-alice", ConversationID: "conv-1", ClientMessageID: "jobs-2",
+		Content: Content{Format: MessageContentFormat, Blocks: []Block{{Type: "text", Text: "rollback"}}},
+	})
+	if !isMessageCode(err, CodeInternal) || len(repo.messages) != 1 || len(repo.events) != 1 || len(repo.messageJobs) != 1 || len(repo.audits) != 1 {
+		t.Fatalf("job failure did not roll back: err=%v messages=%d events=%d jobs=%d audits=%d", err, len(repo.messages), len(repo.events), len(repo.messageJobs), len(repo.audits))
+	}
+}
+
 func cloneMessageRecord(record *MessageRecord) *MessageRecord {
 	if record == nil {
 		return nil
@@ -785,6 +831,8 @@ func (f *fakeRepo) cloneLocked() *fakeRepo {
 	copyRepo.audits = append([]AuditInput(nil), f.audits...)
 	copyRepo.nextSeq = f.nextSeq
 	copyRepo.failEvent = f.failEvent
+	copyRepo.messageJobs = append([]messagejobs.Input(nil), f.messageJobs...)
+	copyRepo.failJobs = f.failJobs
 	return copyRepo
 }
 
@@ -806,6 +854,8 @@ func (f *fakeRepo) restoreLocked(snapshot *fakeRepo) {
 	f.audits = snapshot.audits
 	f.nextSeq = snapshot.nextSeq
 	f.failEvent = snapshot.failEvent
+	f.messageJobs = snapshot.messageJobs
+	f.failJobs = snapshot.failJobs
 }
 
 func clientKey(conversationID, actorID, clientID string) string {

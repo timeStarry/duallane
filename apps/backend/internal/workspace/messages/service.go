@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/messagejobs"
 )
 
 const (
@@ -41,6 +42,7 @@ type ServiceOptions struct {
 	ReactionEmoteValidator ReactionEmoteValidator
 	AdvancedBlockValidator AdvancedBlockValidator
 	AllowBots              bool
+	RequireMessageJobs     bool
 }
 
 type Service struct {
@@ -51,6 +53,7 @@ type Service struct {
 	reactionEmoteValidator ReactionEmoteValidator
 	advancedBlockValidator AdvancedBlockValidator
 	allowBots              bool
+	requireMessageJobs     bool
 }
 
 type rejection struct {
@@ -82,6 +85,7 @@ func NewService(options ServiceOptions) *Service {
 		reactionEmoteValidator: options.ReactionEmoteValidator,
 		advancedBlockValidator: options.AdvancedBlockValidator,
 		allowBots:              options.AllowBots,
+		requireMessageJobs:     options.RequireMessageJobs,
 	}
 }
 
@@ -526,7 +530,7 @@ func (s *Service) CreateMessage(ctx context.Context, input CreateInput) (Message
 		if err != nil {
 			return nil, nil, internalError("encode message event", err)
 		}
-		if err := s.writeEvent(ctx, tx, EventInput{
+		event, err := s.writeEventRecord(ctx, tx, EventInput{
 			SpaceID:        s.space(),
 			Type:           "message.created",
 			ActorID:        actor.ID,
@@ -535,8 +539,21 @@ func (s *Service) CreateMessage(ctx context.Context, input CreateInput) (Message
 			TargetID:       id,
 			PayloadJSON:    payload,
 			CreatedAt:      now,
-		}); err != nil {
+		})
+		if err != nil {
 			return nil, nil, err
+		}
+		if s.requireMessageJobs {
+			jobTx, ok := tx.(MessageJobTx)
+			if !ok {
+				return nil, nil, internalError("schedule message notification jobs", errors.New("transaction does not support message jobs"))
+			}
+			if err := jobTx.ScheduleMessageJobs(ctx, messagejobs.Input{
+				AuthorID: actor.ID, SpaceID: s.space(), ConversationID: conversation.ID,
+				MessageID: id, EventSeq: event.Seq, ContentJSON: contentJSON, CreatedAt: now,
+			}); err != nil {
+				return nil, nil, internalError("schedule message notification jobs", err)
+			}
 		}
 		if err := tx.WriteAudit(ctx, s.auditFor(actor, input.Meta, AuditInput{
 			Action:     "message.create",
@@ -1054,10 +1071,15 @@ func auditReason(err *Error) string {
 }
 
 func (s *Service) writeEvent(ctx context.Context, tx Tx, input EventInput) error {
+	_, err := s.writeEventRecord(ctx, tx, input)
+	return err
+}
+
+func (s *Service) writeEventRecord(ctx context.Context, tx Tx, input EventInput) (EventRecord, error) {
 	if strings.TrimSpace(input.ID) == "" {
 		id, err := s.newID("workspace event")
 		if err != nil {
-			return internalError("generate workspace event id", err)
+			return EventRecord{}, internalError("generate workspace event id", err)
 		}
 		input.ID = id
 	}
@@ -1070,6 +1092,5 @@ func (s *Service) writeEvent(ctx context.Context, tx Tx, input EventInput) error
 	if len(input.PayloadJSON) == 0 {
 		input.PayloadJSON = []byte(`{}`)
 	}
-	_, err := tx.WriteEvent(ctx, input)
-	return err
+	return tx.WriteEvent(ctx, input)
 }

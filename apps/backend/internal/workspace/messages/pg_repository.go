@@ -11,14 +11,16 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/messagejobs"
 )
 
 // PGRepository is the native PostgreSQL adapter for the message domain. It
 // exposes only the narrow methods in repository.go; callers never receive a
 // generic SQL handle and all mutation methods are transaction-scoped.
 type PGRepository struct {
-	pool      *pgxpool.Pool
-	idFactory IDFactory
+	pool         *pgxpool.Pool
+	idFactory    IDFactory
+	jobScheduler messagejobs.PGScheduler
 }
 
 func NewPGRepository(pool *pgxpool.Pool, idFactories ...IDFactory) *PGRepository {
@@ -32,6 +34,12 @@ func NewPGRepository(pool *pgxpool.Pool, idFactories ...IDFactory) *PGRepository
 		}
 	}
 	return &PGRepository{pool: pool, idFactory: idFactory}
+}
+
+func NewPGRepositoryWithMessageJobs(pool *pgxpool.Pool, scheduler messagejobs.PGScheduler, idFactories ...IDFactory) *PGRepository {
+	repository := NewPGRepository(pool, idFactories...)
+	repository.jobScheduler = scheduler
+	return repository
 }
 
 func newUUID() (string, error) {
@@ -296,6 +304,13 @@ func (t *pgTx) LookupRecallReason(ctx context.Context, spaceID, userID string) (
 func (t *pgTx) Lock(ctx context.Context, key string) error {
 	_, err := t.tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, key)
 	return err
+}
+
+func (t *pgTx) ScheduleMessageJobs(ctx context.Context, input messagejobs.Input) error {
+	if t == nil || t.tx == nil || t.repository == nil || t.repository.jobScheduler == nil {
+		return errors.New("workspace message job scheduler is required")
+	}
+	return t.repository.jobScheduler.ScheduleMessageInTx(ctx, t.tx, input)
 }
 
 func (t *pgTx) InsertMessage(ctx context.Context, record MessageInsert) (bool, *MessageRecord, error) {

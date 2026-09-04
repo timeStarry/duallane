@@ -32,17 +32,19 @@ type Clock func() time.Time
 type IDFactory func() (string, error)
 
 type ServiceOptions struct {
-	Repository Repository
-	SpaceID    string
-	Now        Clock
-	IDFactory  IDFactory
+	Repository         Repository
+	SpaceID            string
+	Now                Clock
+	IDFactory          IDFactory
+	RequireMessageJobs bool
 }
 
 type Service struct {
-	repo      Repository
-	spaceID   string
-	now       Clock
-	idFactory IDFactory
+	repo               Repository
+	spaceID            string
+	now                Clock
+	idFactory          IDFactory
+	requireMessageJobs bool
 }
 
 type rejection struct {
@@ -69,7 +71,7 @@ func NewService(options ServiceOptions) *Service {
 			return id.String(), nil
 		}
 	}
-	return &Service{repo: options.Repository, spaceID: spaceID, now: now, idFactory: idFactory}
+	return &Service{repo: options.Repository, spaceID: spaceID, now: now, idFactory: idFactory, requireMessageJobs: options.RequireMessageJobs}
 }
 
 func NewServiceForRepository(repo Repository) *Service {

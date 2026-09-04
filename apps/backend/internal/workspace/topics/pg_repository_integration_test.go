@@ -4,6 +4,7 @@ package topics
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -18,7 +19,25 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/platform/migrations"
 	platformpostgres "github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/messagejobs"
 )
+
+type topicMessageJobScheduler struct {
+	fail bool
+}
+
+func (s *topicMessageJobScheduler) ScheduleMessageInTx(ctx context.Context, tx pgx.Tx, input messagejobs.Input) error {
+	if input.TopicID == "" || input.EventSeq <= 0 || !json.Valid(input.ContentJSON) {
+		return errors.New("invalid topic message job input")
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO topic_message_job_markers (message_id, topic_id, event_seq) VALUES ($1, $2, $3)`, input.MessageID, input.TopicID, input.EventSeq); err != nil {
+		return err
+	}
+	if s.fail {
+		return errors.New("forced topic message job failure")
+	}
+	return nil
+}
 
 func TestPGTopicVerticalSliceIsTransactionalAndProjected(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -57,6 +76,9 @@ func TestPGTopicVerticalSliceIsTransactionalAndProjected(t *testing.T) {
 	}).Run(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := conn.Exec(ctx, `CREATE TABLE topic_message_job_markers (message_id TEXT PRIMARY KEY, topic_id TEXT NOT NULL, event_seq BIGINT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
 
 	now := time.Date(2026, 9, 4, 12, 34, 56, 789654321, time.UTC)
 	seedTopicPG(t, ctx, conn, now)
@@ -72,10 +94,12 @@ func TestPGTopicVerticalSliceIsTransactionalAndProjected(t *testing.T) {
 	t.Cleanup(pool.Close)
 
 	var nextID atomic.Int64
-	repository := NewPGRepository(pool)
+	jobScheduler := &topicMessageJobScheduler{}
+	repository := NewPGRepositoryWithMessageJobs(pool, jobScheduler)
 	service := NewService(ServiceOptions{
-		Repository: repository,
-		Now:        func() time.Time { return now },
+		Repository:         repository,
+		Now:                func() time.Time { return now },
+		RequireMessageJobs: true,
 		IDFactory: func() (string, error) {
 			return fmt.Sprintf("generated-%03d", nextID.Add(1)), nil
 		},
@@ -139,6 +163,28 @@ func TestPGTopicVerticalSliceIsTransactionalAndProjected(t *testing.T) {
 	}
 	if message.Message.PlainText != "成员消息" || message.EventSeq < 1 {
 		t.Fatalf("message result = %#v", message)
+	}
+	var markerCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM topic_message_job_markers WHERE message_id = $1 AND topic_id = $2 AND event_seq = $3`, message.Message.ID, topic.ID, message.EventSeq).Scan(&markerCount); err != nil {
+		t.Fatal(err)
+	}
+	if markerCount != 1 {
+		t.Fatalf("topic message job markers=%d", markerCount)
+	}
+	jobScheduler.fail = true
+	if _, err := service.CreateMessage(ctx, CreateMessageInput{ActorID: "usr_topic_owner", TopicID: topic.ID, ClientMessageID: "topic-pg-message-rollback", Body: "must rollback", Meta: meta}); err == nil {
+		t.Fatal("expected topic message job failure")
+	}
+	jobScheduler.fail = false
+	var failedMessageCount, markerCountAfterFailure int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM messages WHERE client_message_id = 'topic-pg-message-rollback'`).Scan(&failedMessageCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM topic_message_job_markers`).Scan(&markerCountAfterFailure); err != nil {
+		t.Fatal(err)
+	}
+	if failedMessageCount != 0 || markerCountAfterFailure != 1 {
+		t.Fatalf("failed topic message transaction persisted message=%d marker_count=%d", failedMessageCount, markerCountAfterFailure)
 	}
 	listed, err := service.ListMessages(ctx, MessageListInput{ActorID: "usr_topic_member", TopicID: topic.ID, Limit: 20})
 	if err != nil || len(listed) != 2 {

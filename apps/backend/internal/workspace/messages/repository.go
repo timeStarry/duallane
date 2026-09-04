@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/messagejobs"
 )
 
 // ReadRepository is the narrow storage seam owned by the message domain.
@@ -74,6 +75,12 @@ type Tx interface {
 	RemoveReaction(ctx context.Context, spaceID, messageID, userID, emoteKey string, now time.Time) (bool, error)
 	WriteEvent(ctx context.Context, input EventInput) (EventRecord, error)
 	WriteAudit(ctx context.Context, input AuditInput) error
+}
+
+// MessageJobTx is implemented by production transaction adapters that can
+// atomically add durable notification work to a successful message write.
+type MessageJobTx interface {
+	ScheduleMessageJobs(context.Context, messagejobs.Input) error
 }
 
 var _ Repository = (*PGRepository)(nil)

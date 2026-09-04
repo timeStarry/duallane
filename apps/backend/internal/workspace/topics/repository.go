@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/messagejobs"
 )
 
 // ReadRepository is the narrow storage seam for the topic vertical. All
@@ -65,6 +66,10 @@ type Tx interface {
 	MarkTopicRead(context.Context, string, string, *string, int64, time.Time) error
 	WriteEvent(context.Context, EventInput) (EventRecord, error)
 	WriteAudit(context.Context, AuditInput) error
+}
+
+type MessageJobTx interface {
+	ScheduleMessageJobs(context.Context, messagejobs.Input) error
 }
 
 type TopicInsert struct {

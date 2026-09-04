@@ -11,11 +11,13 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/messagejobs"
 )
 
 type PGRepository struct {
-	pool      *pgxpool.Pool
-	idFactory IDFactory
+	pool         *pgxpool.Pool
+	idFactory    IDFactory
+	jobScheduler messagejobs.PGScheduler
 }
 
 func NewPGRepository(pool *pgxpool.Pool, idFactories ...IDFactory) *PGRepository {
@@ -30,6 +32,12 @@ func NewPGRepository(pool *pgxpool.Pool, idFactories ...IDFactory) *PGRepository
 		idFactory = idFactories[0]
 	}
 	return &PGRepository{pool: pool, idFactory: idFactory}
+}
+
+func NewPGRepositoryWithMessageJobs(pool *pgxpool.Pool, scheduler messagejobs.PGScheduler, idFactories ...IDFactory) *PGRepository {
+	repository := NewPGRepository(pool, idFactories...)
+	repository.jobScheduler = scheduler
+	return repository
 }
 
 func (r *PGRepository) Ping(ctx context.Context) error {
@@ -59,7 +67,7 @@ func (r *PGRepository) WithTx(ctx context.Context, callback func(Tx) error) erro
 			_ = tx.Rollback(context.Background())
 		}
 	}()
-	adapter := &pgTx{tx: tx, idFactory: r.idFactory}
+	adapter := &pgTx{tx: tx, idFactory: r.idFactory, jobScheduler: r.jobScheduler}
 	if err := callback(adapter); err != nil {
 		return err
 	}
@@ -585,8 +593,9 @@ func getActiveProjection(ctx context.Context, queryer pgQueryer, spaceID, topicI
 }
 
 type pgTx struct {
-	tx        pgx.Tx
-	idFactory IDFactory
+	tx           pgx.Tx
+	idFactory    IDFactory
+	jobScheduler messagejobs.PGScheduler
 }
 
 func (t *pgTx) LookupActor(ctx context.Context, spaceID, userID string) (*auth.Actor, error) {
@@ -643,6 +652,13 @@ func (t *pgTx) Lock(ctx context.Context, key string) error {
 		return internalError("lock topic resource", err)
 	}
 	return nil
+}
+
+func (t *pgTx) ScheduleMessageJobs(ctx context.Context, input messagejobs.Input) error {
+	if t == nil || t.tx == nil || t.jobScheduler == nil {
+		return errors.New("workspace topic message job scheduler is required")
+	}
+	return t.jobScheduler.ScheduleMessageInTx(ctx, t.tx, input)
 }
 
 func (t *pgTx) CreateTopic(ctx context.Context, record TopicInsert) error {

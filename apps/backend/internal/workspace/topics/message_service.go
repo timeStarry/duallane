@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/messagejobs"
 )
 
 func (s *Service) createTopicCreationBundle(ctx context.Context, tx Tx, topic TopicRecord, actor *auth.Actor, meta auth.RequestMeta, now time.Time) error {
@@ -247,6 +248,19 @@ func (s *Service) CreateMessage(ctx context.Context, input CreateMessageInput) (
 		if input.SyncToGroup {
 			if _, err := s.syncTopicMessageTx(ctx, tx, actor, *current, messageRecord.ID, input.Meta, now); err != nil {
 				return nil, nil, err
+			}
+		}
+		if eventSeq > 0 && s.requireMessageJobs {
+			jobTx, ok := tx.(MessageJobTx)
+			if !ok {
+				return nil, nil, internalError("schedule topic message notification jobs", errors.New("transaction does not support message jobs"))
+			}
+			if err := jobTx.ScheduleMessageJobs(ctx, messagejobs.Input{
+				AuthorID: actor.ID, SpaceID: current.SpaceID, ConversationID: current.ConversationID,
+				TopicID: current.ID, MessageID: messageRecord.ID, EventSeq: eventSeq,
+				ContentJSON: contentJSON, CreatedAt: now,
+			}); err != nil {
+				return nil, nil, internalError("schedule topic message notification jobs", err)
 			}
 		}
 		if messageRecord == nil {
