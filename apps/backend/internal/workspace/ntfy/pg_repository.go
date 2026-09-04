@@ -61,7 +61,11 @@ func (r *PGRepository) WithTx(ctx context.Context, callback func(Tx) error) erro
 			_ = tx.Rollback(context.Background())
 		}
 	}()
-	if err := callback(&pgTx{tx: tx, idFactory: r.idFactory}); err != nil {
+	bound, err := r.BindTx(tx)
+	if err != nil {
+		return err
+	}
+	if err := callback(bound); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -69,6 +73,19 @@ func (r *PGRepository) WithTx(ctx context.Context, callback func(Tx) error) erro
 	}
 	committed = true
 	return nil
+}
+
+// BindTx adapts a caller-owned PostgreSQL transaction to the ntfy transaction
+// seam. It is used by message acceptance so the message, event, audit record,
+// and notification jobs either commit together or all roll back.
+func (r *PGRepository) BindTx(tx pgx.Tx) (Tx, error) {
+	if r == nil || r.idFactory == nil {
+		return nil, internalError("bind workspace ntfy transaction", errors.New("repository is required"))
+	}
+	if tx == nil {
+		return nil, internalError("bind workspace ntfy transaction", errors.New("postgres transaction is required"))
+	}
+	return &pgTx{tx: tx, idFactory: r.idFactory}, nil
 }
 
 func (r *PGRepository) LookupActor(ctx context.Context, spaceID, userID string) (*auth.Actor, error) {
