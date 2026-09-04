@@ -16,13 +16,17 @@ import (
 	platformstorage "github.com/timestarry/duallane/apps/backend/internal/platform/storage"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bootstrap"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/conversations"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/events"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/files"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/gate"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/httpapi"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/interactions"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/invites"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/members"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/messagejobs"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/ntfy"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/overview"
@@ -81,11 +85,14 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	var memberService *members.Service
 	var conversationService *conversations.Service
 	var messageService *messages.Service
+	var cardService *cards.Service
+	var interactionService *interactions.Service
 	var overviewService *overview.Service
 	var bootstrapService *bootstrap.Service
 	var fileService *files.Service
 	var topicService *topics.Service
 	var ntfyService *ntfy.Service
+	var emailService *email.Service
 	var realtimeHandler http.Handler
 	if runtimeConfig.Enabled {
 		var err error
@@ -111,8 +118,6 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		inviteService = invites.NewService(invites.ServiceOptions{Repository: invites.NewPGRepository(pool)})
 		memberService = members.NewService(members.ServiceOptions{Repository: members.NewPGRepository(pool)})
 		conversationService = conversations.NewService(conversations.ServiceOptions{Repository: conversations.NewPGRepository(pool)})
-		messageService = messages.NewService(messages.ServiceOptions{Repository: messages.NewPGRepository(pool)})
-		overviewService = overview.NewService(overview.ServiceOptions{Repository: overview.NewPGRepository(pool)})
 		blobStore, err := newBlobStore(ctx, runtimeConfig)
 		if err != nil {
 			pool.Close()
@@ -120,19 +125,55 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		}
 		objectStoreReady = true
 		fileService = files.NewService(files.ServiceOptions{Repository: files.NewPGRepository(pool), BlobStore: blobStore})
-		topicService = topics.NewService(topics.ServiceOptions{Repository: topics.NewPGRepository(pool)})
-		ntfyFrontendURL := runtimeConfig.FrontendURL
-		if ntfyFrontendURL == "" {
-			ntfyFrontendURL = runtimeConfig.PublicBaseURL
+		frontendURL := runtimeConfig.FrontendURL
+		if frontendURL == "" {
+			frontendURL = runtimeConfig.PublicBaseURL
 		}
+		ntfyRepository := ntfy.NewPGRepository(pool)
 		ntfyService, err = ntfy.NewServiceWithError(ntfy.ServiceOptions{
-			Repository: ntfy.NewPGRepository(pool), ServerURL: runtimeConfig.NtfyBaseURL,
-			FrontendURL: ntfyFrontendURL,
+			Repository: ntfyRepository, ServerURL: runtimeConfig.NtfyBaseURL,
+			FrontendURL: frontendURL,
 		})
 		if err != nil {
 			pool.Close()
 			return nil, err
 		}
+		emailRepository := email.NewPGRepository(pool)
+		emailService, err = email.NewServiceWithError(email.ServiceOptions{
+			Repository: emailRepository, FrontendURL: frontendURL,
+			EncryptionKeyB64: runtimeConfig.SMTPEncryptionKey,
+		})
+		if err != nil {
+			pool.Close()
+			return nil, err
+		}
+		jobScheduler := messagejobs.NewScheduler(emailService, emailRepository, ntfyService, ntfyRepository)
+		messageService = messages.NewService(messages.ServiceOptions{
+			Repository: messages.NewPGRepositoryWithMessageJobs(pool, jobScheduler), RequireMessageJobs: true,
+		})
+		topicService = topics.NewService(topics.ServiceOptions{
+			Repository: topics.NewPGRepositoryWithMessageJobs(pool, jobScheduler), RequireMessageJobs: true,
+		})
+		cardRegistry, err := cards.NewRegistry()
+		if err != nil {
+			pool.Close()
+			return nil, err
+		}
+		cardService = cards.NewService(cards.ServiceOptions{Repository: cards.NewPGRepository(pool), Registry: cardRegistry})
+		commandRegistry, err := interactions.NewCommandRegistry()
+		if err != nil {
+			pool.Close()
+			return nil, err
+		}
+		workflowRegistry, err := interactions.NewWorkflowRegistry()
+		if err != nil {
+			pool.Close()
+			return nil, err
+		}
+		interactionService = interactions.NewService(interactions.ServiceOptions{
+			Repository: interactions.NewPGRepository(pool), CommandRegistry: commandRegistry, WorkflowRegistry: workflowRegistry,
+		})
+		overviewService = overview.NewService(overview.ServiceOptions{Repository: overview.NewPGRepository(pool)})
 		eventHub := realtime.NewHub()
 		eventService := events.NewService(events.ServiceOptions{Repository: events.NewPGRepository(pool)})
 		bootstrapService = bootstrap.NewService(bootstrap.ServiceOptions{
@@ -169,11 +210,13 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			Gate: workspaceGate, Health: gate.HealthHandler(healthInput), Readiness: gate.ReadinessHandler(healthInput),
 			AuthRoutes: authHandler, ActorResolver: authHandler, Invites: inviteService,
 			Members: memberService, Conversations: conversationService, Messages: messageService,
+			Cards: cardService, Interactions: interactionService,
 			Overview:    overviewService,
 			Bootstrap:   bootstrapService,
 			Files:       fileService,
 			Topics:      topicService,
 			Ntfy:        ntfyService,
+			Email:       emailService,
 			Realtime:    realtimeHandler,
 			FrontendURL: runtimeConfig.FrontendURL, PublicBaseURL: runtimeConfig.PublicBaseURL,
 			TrustProxy: runtimeConfig.TrustProxy,
