@@ -12,6 +12,7 @@ import (
 
 	"github.com/timestarry/duallane/apps/backend/internal/platform/migrations"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
+	workspaceseed "github.com/timestarry/duallane/apps/backend/internal/workspace/seed"
 )
 
 const migrationDirectoryEnv = "DUALLANE_MIGRATIONS_DIR"
@@ -48,6 +49,9 @@ func run() error {
 	}
 	result, err := runner.Run(ctx)
 	if err != nil {
+		return err
+	}
+	if err := workspaceseed.Run(ctx, db); err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stdout, "Applied %d migration(s); discovered %d.\n", result.Applied, result.Discovered)
