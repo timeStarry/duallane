@@ -7,6 +7,12 @@
   "scripts": {
     "dev": "pnpm --filter @duallane/web dev",
     "build": "pnpm --filter @duallane/web build",
+    "backend:build": "make -C apps/backend build",
+    "backend:check": "make -C apps/backend verify",
+    "backend:lint": "make -C apps/backend vet staticcheck",
+    "backend:test": "make -C apps/backend test",
+    "backend:test:race": "make -C apps/backend test-race",
+    "backend:vuln": "make -C apps/backend vuln",
     "start": "pnpm --filter @duallane/web start",
     "storage:dedupe": "pnpm --filter @duallane/web storage:dedupe",
     "test": "pnpm --filter @duallane/agent-sdk test && pnpm --filter @duallane/web test",

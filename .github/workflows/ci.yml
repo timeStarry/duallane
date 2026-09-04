@@ -17,6 +17,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  go-quality-gate:
+    name: Go test, race, analysis, build, and PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: duallane
+          POSTGRES_USER: duallane
+          POSTGRES_PASSWORD: duallane-ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U duallane -d duallane"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: apps/backend/go.mod
+          cache-dependency-path: apps/backend/go.sum
+
+      - name: Run Go quality gate
+        working-directory: apps/backend
+        run: make verify
+
+      - name: Run PostgreSQL migration integration test
+        working-directory: apps/backend
+        env:
+          TEST_DATABASE_URL: postgres://duallane:duallane-ci-password@127.0.0.1:5432/duallane?sslmode=disable
+        run: make integration-postgres
+
   quality-gate:
     name: Test, lint, build, and Chromium E2E
     runs-on: ubuntu-latest
