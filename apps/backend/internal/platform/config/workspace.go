@@ -19,6 +19,8 @@ const (
 	WorkspaceDataDirEnvironment   = "DUALLANE_DATA_DIR"
 	WorkspaceNtfyBaseEnvironment  = "WORKSPACE_NTFY_BASE_URL"
 	WorkspaceNtfyWorkerEnabled    = "WORKSPACE_NTFY_WORKER_ENABLED"
+	WorkspaceEmailWorkerEnabled   = "WORKSPACE_EMAIL_WORKER_ENABLED"
+	WorkspaceSMTPEncryptionKey    = "WORKSPACE_SMTP_ENCRYPTION_KEY"
 	WorkspaceStorageDriverEnv     = "WORKSPACE_STORAGE_DRIVER"
 	WorkspaceS3EndpointEnv        = "WORKSPACE_S3_ENDPOINT"
 	WorkspaceS3BucketEnv          = "WORKSPACE_S3_BUCKET"
@@ -49,6 +51,8 @@ type WorkspaceConfig struct {
 	DataDir            string
 	NtfyBaseURL        string
 	NtfyWorkerEnabled  bool
+	EmailWorkerEnabled bool
+	SMTPEncryptionKey  string
 	StorageDriver      string
 	S3Endpoint         string
 	S3Bucket           string
@@ -88,6 +92,8 @@ func LoadWorkspaceFrom(lookup func(string) (string, bool)) (WorkspaceConfig, err
 		DataDir:            strings.TrimSpace(valueOr(lookup, WorkspaceDataDirEnvironment, DefaultWorkspaceDataDir)),
 		NtfyBaseURL:        strings.TrimSpace(valueOr(lookup, WorkspaceNtfyBaseEnvironment, "")),
 		NtfyWorkerEnabled:  valueOr(lookup, WorkspaceNtfyWorkerEnabled, "true") != "false",
+		EmailWorkerEnabled: valueOr(lookup, WorkspaceEmailWorkerEnabled, "true") != "false",
+		SMTPEncryptionKey:  strings.TrimSpace(valueOr(lookup, WorkspaceSMTPEncryptionKey, "")),
 		StorageDriver:      strings.ToLower(valueOr(lookup, WorkspaceStorageDriverEnv, "local")),
 		S3Endpoint:         strings.TrimSpace(valueOr(lookup, WorkspaceS3EndpointEnv, "")),
 		S3Bucket:           strings.TrimSpace(valueOr(lookup, WorkspaceS3BucketEnv, "")),

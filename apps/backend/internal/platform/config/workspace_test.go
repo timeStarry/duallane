@@ -41,6 +41,8 @@ func TestLoadWorkspacePreservesRuntimeCompatibility(t *testing.T) {
 		WorkspaceDataDirEnvironment:   "/srv/duallane-data",
 		WorkspaceNtfyBaseEnvironment:  "https://ntfy.example.test",
 		WorkspaceNtfyWorkerEnabled:    "false",
+		WorkspaceEmailWorkerEnabled:   "false",
+		WorkspaceSMTPEncryptionKey:    "smtp-encryption-key",
 		WorkspaceStorageDriverEnv:     "s3",
 		WorkspaceS3EndpointEnv:        "http://minio:9000",
 		WorkspaceS3BucketEnv:          "duallane",
@@ -64,6 +66,9 @@ func TestLoadWorkspacePreservesRuntimeCompatibility(t *testing.T) {
 	if config.NtfyWorkerEnabled {
 		t.Fatal("WORKSPACE_NTFY_WORKER_ENABLED=false did not disable ntfy worker")
 	}
+	if config.EmailWorkerEnabled || config.SMTPEncryptionKey != "smtp-encryption-key" {
+		t.Fatalf("email worker config = enabled:%v key:%q", config.EmailWorkerEnabled, config.SMTPEncryptionKey)
+	}
 	if config.StorageDriver != "s3" || config.S3Endpoint != "http://minio:9000" || config.S3Bucket != "duallane" || config.S3Region != "cn-test-1" || config.S3CredentialsFile != "/run/secrets/workspace-s3" {
 		t.Fatalf("storage config = %#v", config)
 	}
@@ -79,6 +84,9 @@ func TestLoadWorkspaceNtfyWorkerDefaultsEnabled(t *testing.T) {
 	}
 	if !config.NtfyWorkerEnabled {
 		t.Fatal("ntfy worker must remain enabled by default for Node compatibility")
+	}
+	if !config.EmailWorkerEnabled {
+		t.Fatal("email worker must remain enabled by default for Node compatibility")
 	}
 }
 
