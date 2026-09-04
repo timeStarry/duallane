@@ -199,6 +199,30 @@ func (s *PGStore) RecordGitHubLoginRejection(ctx context.Context, phase string, 
 	return nil
 }
 
+func (s *PGStore) RecordInviteAcceptRejection(ctx context.Context, reason string, now time.Time, meta RequestMeta) error {
+	if s == nil || s.pool == nil {
+		return wrapInternal("record invite acceptance rejection", errors.New("workspace postgres pool is required"))
+	}
+	reason = normalizeInviteRejectionReason(reason)
+	meta = meta.Safe()
+	auditID, err := s.newID()
+	if err != nil {
+		return wrapInternal("generate invite acceptance rejection audit id", err)
+	}
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO audit_logs (
+			id, space_id, actor_user_id, actor_github_login, action, target_type,
+			target_id, result, reason, ip_address, user_agent, request_id, created_at
+		)
+		VALUES ($1, $2, NULL, NULL, 'invite.accept', 'invite', NULL, 'rejected', $3,
+			NULLIF($4, ''), NULLIF($5, ''), NULLIF($6, ''), $7)
+	`, auditID, DefaultSpaceID, reason, meta.IPAddress, meta.UserAgent, meta.RequestID, normalizeTimestamp(now))
+	if err != nil {
+		return wrapInternal("record invite acceptance rejection", err)
+	}
+	return nil
+}
+
 func (s *PGStore) AuthenticateGitHub(ctx context.Context, profile GitHubProfile, inviteCodeHash string, now time.Time, meta RequestMeta) (*Actor, error) {
 	if s == nil || s.pool == nil {
 		return nil, wrapInternal("authenticate github", errors.New("workspace postgres pool is required"))

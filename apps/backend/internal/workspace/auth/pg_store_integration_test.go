@@ -102,6 +102,17 @@ func TestPGStoreAuthenticationAndSessionLifecycle(t *testing.T) {
 		IDFactory:  idFactory,
 		SessionTTL: time.Hour,
 	})
+	if err := service.RecordInviteAcceptRejection(ctx, CodeGitHubRequired, RequestMeta{RequestID: "invite-github-required", IPAddress: "203.0.113.9"}); err != nil {
+		t.Fatal(err)
+	}
+	var rejectionReason, rejectionTargetID string
+	if err := pool.QueryRow(ctx, `SELECT reason, COALESCE(target_id, '') FROM audit_logs
+		WHERE request_id = 'invite-github-required' AND action = 'invite.accept'`).Scan(&rejectionReason, &rejectionTargetID); err != nil {
+		t.Fatal(err)
+	}
+	if rejectionReason != CodeGitHubRequired || rejectionTargetID != "" {
+		t.Fatalf("production invite rejection = reason:%q target:%q", rejectionReason, rejectionTargetID)
+	}
 
 	owner, err := service.AuthenticateGitHub(ctx, GitHubProfile{
 		ID:    "1001",

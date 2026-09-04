@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -15,6 +16,7 @@ import (
 const (
 	OAuthCookieTTL        = 10 * time.Minute
 	ProductionEnvironment = "production"
+	MaxAuthJSONBodyBytes  = 1 << 20
 )
 
 // HTTPHandler owns only the authentication transport boundary. Workspace
@@ -231,6 +233,81 @@ func (h *HTTPHandler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	setCookie(w, ClearSessionCookie(secure))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+type developmentInviteRequest struct {
+	GitHubID    string `json:"githubId"`
+	GitHubLogin string `json:"githubLogin"`
+	Email       string `json:"email"`
+	DisplayName string `json:"displayName"`
+	AvatarURL   string `json:"avatarUrl"`
+}
+
+// HandleDevelopmentInviteAccept preserves the legacy development-only invite
+// endpoint. Production always requires the OAuth flow and records a
+// content-free rejection without persisting the invite code.
+func (h *HTTPHandler) HandleDevelopmentInviteAccept(w http.ResponseWriter, r *http.Request, code string) {
+	if h == nil || !h.workspaceEnabled() {
+		gate.WriteDisabled(w)
+		return
+	}
+	meta := RequestMetaFromRequest(r, h.TrustProxy)
+	if h.IsProduction() {
+		if h.Service == nil {
+			writeError(w, wrapInternal("record invite acceptance rejection", errors.New("auth service is not configured")))
+			return
+		}
+		if err := h.Service.RecordInviteAcceptRejection(r.Context(), CodeGitHubRequired, meta); err != nil {
+			writeError(w, err)
+			return
+		}
+		writeError(w, NewError(CodeGitHubRequired, MessageGitHubRequired, http.StatusUnauthorized))
+		return
+	}
+	if h.Service == nil {
+		writeError(w, wrapInternal("accept development invite", errors.New("auth service is not configured")))
+		return
+	}
+	var input developmentInviteRequest
+	if err := decodeAuthJSON(w, r, &input); err != nil {
+		writeError(w, err)
+		return
+	}
+	actor, err := h.Service.AuthenticateGitHub(r.Context(), GitHubProfile{
+		ID: input.GitHubID, Login: input.GitHubLogin, Email: input.Email,
+		Name: input.DisplayName, AvatarURL: input.AvatarURL,
+	}, code, meta)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	session, err := h.Service.CreateSession(r.Context(), actor.ID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	setCookie(w, SessionCookie(session, RequestIsSecure(r, h.TrustProxy)))
+	writeJSON(w, http.StatusCreated, map[string]any{"user": PublicActor(actor)})
+}
+
+func decodeAuthJSON(w http.ResponseWriter, r *http.Request, target any) error {
+	if r == nil || r.Body == nil {
+		return NewError("request.invalid_json", "请求内容不是有效 JSON", http.StatusBadRequest)
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, MaxAuthJSONBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(target); err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			return NewError("request.too_large", "请求内容过大", http.StatusRequestEntityTooLarge)
+		}
+		return NewError("request.invalid_json", "请求内容不是有效 JSON", http.StatusBadRequest)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return NewError("request.invalid_json", "请求内容不是有效 JSON", http.StatusBadRequest)
+	}
+	return nil
 }
 
 func (h *HTTPHandler) ResolveActor(ctx context.Context, r *http.Request) (*Actor, error) {

@@ -127,6 +127,15 @@ func (f *fakeStore) RecordGitHubLoginRejection(_ context.Context, phase string, 
 	return nil
 }
 
+func (f *fakeStore) RecordInviteAcceptRejection(_ context.Context, reason string, _ time.Time, meta RequestMeta) error {
+	f.rejections = append(f.rejections, reason)
+	f.lastMeta = meta
+	f.auditEvents = append(f.auditEvents, fakeAudit{
+		Action: "invite.accept", TargetType: "invite", Result: "rejected", Reason: reason, Meta: meta,
+	})
+	return nil
+}
+
 func TestSessionTokenAndHashContract(t *testing.T) {
 	token, err := NewSessionToken()
 	if err != nil {
@@ -218,6 +227,59 @@ func TestServiceAuthenticatesGitHubWithHashedPendingInvite(t *testing.T) {
 	}
 	if _, err := service.AuthenticateGitHub(context.Background(), GitHubProfile{}, "DL-INVITE"); !isCode(err, CodeInvalidProfile) {
 		t.Fatalf("invalid profile error = %v", err)
+	}
+}
+
+func TestDevelopmentInviteAcceptCreatesSessionWithoutLeakingCode(t *testing.T) {
+	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
+	store := newFakeStore()
+	actor := &Actor{ID: "usr_invited", GitHubLogin: "invited", DisplayName: "Invited", Kind: "human", Role: "member", JoinedAt: now}
+	store.actors[actor.ID] = actor
+	store.authenticate = func(profile GitHubProfile, inviteHash string, _ time.Time) (*Actor, error) {
+		if profile.Login != "invited" || profile.Email != "invited@example.test" || inviteHash != HashSecret("SECRET-INVITE") {
+			return nil, errors.New("unexpected invite authentication input")
+		}
+		return actor, nil
+	}
+	service := NewService(ServiceOptions{
+		Store: store, Now: func() time.Time { return now }, IDFactory: func() (string, error) { return "session-invite", nil },
+	})
+	handler := NewHTTPHandler(HTTPHandler{Service: service, Environment: "development", TrustProxy: true})
+	request := httptest.NewRequest(http.MethodPost, "/api/workspace/invites/SECRET-INVITE/accept", strings.NewReader(`{"githubLogin":"invited","email":"invited@example.test","displayName":"Invited"}`))
+	request.Header.Set("X-Request-ID", "accept-request")
+	request.Header.Set("X-Forwarded-For", "203.0.113.12")
+	request.Header.Set("X-Forwarded-Proto", "https")
+	response := httptest.NewRecorder()
+	handler.HandleDevelopmentInviteAccept(response, request, "SECRET-INVITE")
+	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), `"id":"usr_invited"`) {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "SECRET-INVITE") || store.lastMeta.RequestID != "accept-request" || store.lastMeta.IPAddress != "203.0.113.12" {
+		t.Fatalf("unsafe response/meta = %s %#v", response.Body.String(), store.lastMeta)
+	}
+	cookies := response.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != SessionCookieName || !cookies[0].HttpOnly || !cookies[0].Secure || cookies[0].SameSite != http.SameSiteLaxMode {
+		t.Fatalf("session cookies = %#v", cookies)
+	}
+}
+
+func TestProductionInviteAcceptRequiresGitHubAndAuditsWithoutCode(t *testing.T) {
+	store := newFakeStore()
+	service := NewService(ServiceOptions{Store: store})
+	handler := NewHTTPHandler(HTTPHandler{Service: service, Environment: ProductionEnvironment})
+	request := httptest.NewRequest(http.MethodPost, "/api/workspace/invites/DO-NOT-STORE/accept", strings.NewReader(`{"githubLogin":"ignored"}`))
+	request.Header.Set("X-Request-ID", "production-accept")
+	response := httptest.NewRecorder()
+	handler.HandleDevelopmentInviteAccept(response, request, "DO-NOT-STORE")
+	if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), `"code":"auth.github_required"`) {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "DO-NOT-STORE") || len(store.auditEvents) != 1 {
+		t.Fatalf("unsafe response/audits = %s %#v", response.Body.String(), store.auditEvents)
+	}
+	audit := store.auditEvents[0]
+	if audit.Action != "invite.accept" || audit.TargetType != "invite" || audit.TargetID != "" || audit.Reason != CodeGitHubRequired || audit.Meta.RequestID != "production-accept" {
+		t.Fatalf("audit = %#v", audit)
 	}
 }
 

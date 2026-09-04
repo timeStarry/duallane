@@ -14,6 +14,7 @@ const (
 	CodeInvalidState        = "auth.invalid_state"
 	CodeGitHubFailed        = "auth.github_failed"
 	CodeGitHubNotConfigured = "auth.github_not_configured"
+	CodeGitHubRequired      = "auth.github_required"
 
 	CodeInviteInvalid   = "invite.invalid"
 	CodeInviteExpired   = "invite.expired"
@@ -29,6 +30,7 @@ const (
 	MessageInvalidState        = "登录状态校验失败"
 	MessageGitHubFailed        = "GitHub 登录失败"
 	MessageGitHubNotConfigured = "GitHub 登录尚未配置"
+	MessageGitHubRequired      = "请通过 GitHub 登录接受邀请"
 
 	MessageInviteInvalid   = "邀请无效或已撤销"
 	MessageInviteExpired   = "邀请已过期"

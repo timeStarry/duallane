@@ -80,6 +80,7 @@ type Store interface {
 	RevokeSession(ctx context.Context, tokenHash string, now time.Time) (bool, error)
 	AuthenticateGitHub(ctx context.Context, profile GitHubProfile, inviteCodeHash string, now time.Time, meta RequestMeta) (*Actor, error)
 	RecordGitHubLoginRejection(ctx context.Context, phase string, now time.Time, meta RequestMeta) error
+	RecordInviteAcceptRejection(ctx context.Context, reason string, now time.Time, meta RequestMeta) error
 }
 
 // ActiveActorLookup is an optional extension used solely by the
@@ -264,6 +265,26 @@ func (s *Service) RecordGitHubLoginRejection(ctx context.Context, phase string, 
 		meta = requestMeta[0]
 	}
 	return s.store.RecordGitHubLoginRejection(ctx, safePhase, normalizedNow(s.now), meta.Safe())
+}
+
+func (s *Service) RecordInviteAcceptRejection(ctx context.Context, reason string, requestMeta ...RequestMeta) error {
+	if s == nil || s.store == nil {
+		return wrapInternal("record invite acceptance rejection", requiredError())
+	}
+	meta := RequestMeta{}
+	if len(requestMeta) > 0 {
+		meta = requestMeta[0]
+	}
+	return s.store.RecordInviteAcceptRejection(ctx, normalizeInviteRejectionReason(reason), normalizedNow(s.now), meta.Safe())
+}
+
+func normalizeInviteRejectionReason(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case CodeGitHubRequired:
+		return CodeGitHubRequired
+	default:
+		return CodeInviteInvalid
+	}
 }
 
 func NewSessionToken() (string, error) {
