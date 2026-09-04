@@ -30,6 +30,7 @@ type InviteService interface {
 type RouterOptions struct {
 	Gate          gate.Gate
 	Health        http.Handler
+	Readiness     http.Handler
 	AuthRoutes    *auth.HTTPHandler
 	ActorResolver ActorResolver
 	Invites       InviteService
@@ -42,6 +43,9 @@ func NewRouter(options RouterOptions) http.Handler {
 	router := chi.NewRouter()
 	if options.Health != nil {
 		router.Handle("/api/health", options.Health)
+	}
+	if options.Readiness != nil {
+		router.Handle("/readyz", options.Readiness)
 	}
 	if options.AuthRoutes != nil {
 		router.Get("/api/auth/github/start", options.AuthRoutes.HandleGitHubStart)
