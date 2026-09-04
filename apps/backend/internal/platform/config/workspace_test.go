@@ -40,6 +40,7 @@ func TestLoadWorkspacePreservesRuntimeCompatibility(t *testing.T) {
 		GitHubOAuthTimeoutEnvironment: "25000",
 		WorkspaceDataDirEnvironment:   "/srv/duallane-data",
 		WorkspaceNtfyBaseEnvironment:  "https://ntfy.example.test",
+		WorkspaceNtfyWorkerEnabled:    "false",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -52,6 +53,19 @@ func TestLoadWorkspacePreservesRuntimeCompatibility(t *testing.T) {
 	}
 	if config.NtfyBaseURL != "https://ntfy.example.test" {
 		t.Fatalf("ntfy base URL = %q", config.NtfyBaseURL)
+	}
+	if config.NtfyWorkerEnabled {
+		t.Fatal("WORKSPACE_NTFY_WORKER_ENABLED=false did not disable ntfy worker")
+	}
+}
+
+func TestLoadWorkspaceNtfyWorkerDefaultsEnabled(t *testing.T) {
+	config, err := LoadWorkspaceFrom(configLookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.NtfyWorkerEnabled {
+		t.Fatal("ntfy worker must remain enabled by default for Node compatibility")
 	}
 }
 
