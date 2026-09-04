@@ -45,6 +45,26 @@ Update it in every cutover or rollback PR.
 | PostgreSQL database | PostgreSQL 17 deployment | PostgreSQL deployment | `active` | Preserve authoritative volume, backup, and supported upgrade path |
 | Local/S3 content-addressed storage | Node adapters and current stores | Go Workspace adapters and same stores | `planned` | Cross-implementation object compatibility and recovery tests |
 
+### Approval Baseline
+
+The runtime baseline is repository commit `b6dd0c6`, the `origin/main` revision
+from which this migration branch was created. At that revision:
+
+- the Node backend registered 164 HTTP/WebSocket endpoints: 4 P2P, 3 browser
+  authentication, 142 Workspace, 13 Bot Gateway, and 2 health/static endpoints;
+- `apps/web/server/migrations` contained 29 immutable PostgreSQL migrations;
+- `apps/web/server` contained approximately 28,000 lines across runtime services
+  and routes, excluding tests;
+- `pnpm test` passed 8 Agent SDK tests and 697 Web tests, with 2 Web tests
+  skipped;
+- `pnpm lint` and `pnpm build` passed; the existing Vite large-chunk warning
+  remained non-blocking.
+
+These counts are coverage checks, not architecture targets. A capability is
+complete only when its behavior and invariants pass the gates in
+[Backend validation](VALIDATION.md). Update this baseline only to correct an
+error; record later scope changes in the capability ledger and their own PRs.
+
 ## 4. Migration Principles
 
 - Use a strangler transition behind the existing Nginx origin.
