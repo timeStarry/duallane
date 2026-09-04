@@ -2,6 +2,7 @@ ARG GO_IMAGE=docker.m.daocloud.io/library/golang:1.26-bookworm
 ARG RUNTIME_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim
 
 FROM ${GO_IMAGE} AS build
+ENV PATH="/usr/local/go/bin:${PATH}"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libvips-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
