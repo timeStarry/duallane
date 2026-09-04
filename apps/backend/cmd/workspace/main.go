@@ -74,6 +74,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		workspaceGate = gate.New("true")
 	}
 	databaseReady := false
+	objectStoreReady := false
 	var pool *pgxpool.Pool
 	var authHandler *auth.HTTPHandler
 	var inviteService *invites.Service
@@ -112,11 +113,12 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		conversationService = conversations.NewService(conversations.ServiceOptions{Repository: conversations.NewPGRepository(pool)})
 		messageService = messages.NewService(messages.ServiceOptions{Repository: messages.NewPGRepository(pool)})
 		overviewService = overview.NewService(overview.ServiceOptions{Repository: overview.NewPGRepository(pool)})
-		blobStore, err := platformstorage.NewLocalBlobStore(runtimeConfig.DataDir)
+		blobStore, err := newBlobStore(ctx, runtimeConfig)
 		if err != nil {
 			pool.Close()
 			return nil, err
 		}
+		objectStoreReady = true
 		fileService = files.NewService(files.ServiceOptions{Repository: files.NewPGRepository(pool), BlobStore: blobStore})
 		topicService = topics.NewService(topics.ServiceOptions{Repository: topics.NewPGRepository(pool)})
 		ntfyFrontendURL := runtimeConfig.FrontendURL
@@ -158,7 +160,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	healthInput := func() gate.HealthInput {
 		return gate.HealthInput{
 			Service: serviceName, Version: runtimeConfig.AppVersion, Commit: runtimeConfig.Commit,
-			Live: true, DatabaseReady: databaseReady, ObjectStoreReady: true, Workspace: workspaceGate,
+			Live: true, DatabaseReady: databaseReady, ObjectStoreReady: objectStoreReady || !runtimeConfig.Enabled, Workspace: workspaceGate,
 		}
 	}
 	return &application{
@@ -177,4 +179,35 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			TrustProxy: runtimeConfig.TrustProxy,
 		}),
 	}, nil
+}
+
+func newBlobStore(ctx context.Context, runtimeConfig config.WorkspaceConfig) (platformstorage.BlobStore, error) {
+	if runtimeConfig.StorageDriver != "s3" {
+		return platformstorage.NewLocalBlobStore(runtimeConfig.DataDir)
+	}
+	credentials, err := config.LoadS3Credentials(runtimeConfig.S3CredentialsFile)
+	if err != nil {
+		return nil, err
+	}
+	primary, err := platformstorage.NewS3BlobStore(platformstorage.S3Config{
+		Endpoint: runtimeConfig.S3Endpoint, Region: runtimeConfig.S3Region, Bucket: runtimeConfig.S3Bucket,
+		AccessKey: credentials.AccessKey, SecretKey: credentials.SecretKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := primary.AssertReady(ctx); err != nil {
+		return nil, err
+	}
+	if !runtimeConfig.LocalReadFallback && !runtimeConfig.LocalMirrorWrite {
+		return primary, nil
+	}
+	local, err := platformstorage.NewLocalBlobStore(runtimeConfig.DataDir)
+	if err != nil {
+		return nil, err
+	}
+	return platformstorage.NewHybridBlobStore(platformstorage.HybridBlobStoreOptions{
+		Primary: primary, Local: local, LocalReadFallback: runtimeConfig.LocalReadFallback,
+		LocalMirrorWrite: runtimeConfig.LocalMirrorWrite,
+	})
 }

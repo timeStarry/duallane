@@ -45,6 +45,18 @@ func newS3TestServer() *s3TestServer {
 }
 
 func (s *s3TestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodHead && strings.TrimSuffix(r.URL.Path, "/") == "/duallane" {
+		s.mu.Lock()
+		s.requests = append(s.requests, s3TestRequest{method: r.Method, path: r.URL.Path, authorization: r.Header.Get("Authorization")})
+		failStatus, failMessage := s.failStatus, s.failMessage
+		s.mu.Unlock()
+		if failStatus != 0 {
+			s.writeError(w, failStatus, failMessage)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	key, ok := s.objectKey(r.URL.Path)
 	if !ok {
 		s.writeError(w, http.StatusNotFound, "NoSuchKey")
@@ -235,6 +247,9 @@ func errorCode(t *testing.T, err error) string {
 func TestS3BlobStoreUsesPrivatePathStyleAndSupportsBoundedLifecycle(t *testing.T) {
 	server := newS3TestServer()
 	store := mustS3Store(t, server)
+	if err := store.AssertReady(context.Background()); err != nil {
+		t.Fatalf("assert ready: %v", err)
+	}
 	content := []byte("workspace bytes")
 	digest := digestForBytes(content)
 	key, err := CanonicalObjectKey(digest)

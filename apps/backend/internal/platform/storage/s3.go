@@ -55,6 +55,19 @@ type s3API interface {
 	HeadObject(context.Context, *s3.HeadObjectInput, ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
 	GetObject(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 	DeleteObject(context.Context, *s3.DeleteObjectInput, ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+	HeadBucket(context.Context, *s3.HeadBucketInput, ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
+}
+
+// AssertReady verifies that the configured private bucket is reachable using
+// the same authenticated client used for object operations.
+func (s *S3BlobStore) AssertReady(ctx context.Context) error {
+	if err := s.valid(); err != nil {
+		return err
+	}
+	if _, err := s.client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(s.bucket)}); err != nil {
+		return s3ProviderError("inspect bucket", err)
+	}
+	return nil
 }
 
 // NewS3BlobStore validates the Node-compatible S3 settings and creates a

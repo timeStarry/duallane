@@ -60,6 +60,16 @@ func (s *HybridBlobStore) localEnabled() bool {
 	return s != nil && (s.localReadFallback || s.localMirrorWrite)
 }
 
+func (s *HybridBlobStore) AssertReady(ctx context.Context) error {
+	if err := s.valid(); err != nil {
+		return err
+	}
+	if ready, ok := s.primary.(interface{ AssertReady(context.Context) error }); ok {
+		return ready.AssertReady(ctx)
+	}
+	return nil
+}
+
 // Put writes to the primary first. A configured local mirror is populated only
 // after the primary succeeds; because BlobStore consumes its input stream, the
 // successful primary object is reopened as a bounded stream for mirroring.

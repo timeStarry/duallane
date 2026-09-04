@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/timestarry/duallane/apps/backend/internal/platform/config"
+	platformstorage "github.com/timestarry/duallane/apps/backend/internal/platform/storage"
 )
 
 func TestDisabledApplicationDoesNotRequireWorkspaceDependencies(t *testing.T) {
@@ -39,5 +40,15 @@ func TestDisabledApplicationDoesNotRequireWorkspaceDependencies(t *testing.T) {
 	app.handler.ServeHTTP(oauth, httptest.NewRequest(http.MethodGet, "/api/auth/github/start?invite=must-not-be-read", nil))
 	if oauth.Code != http.StatusServiceUnavailable || len(oauth.Result().Cookies()) != 0 {
 		t.Fatalf("disabled OAuth = %d cookies=%#v body=%s", oauth.Code, oauth.Result().Cookies(), oauth.Body.String())
+	}
+}
+
+func TestNewBlobStoreUsesLocalDriverWithoutS3Secrets(t *testing.T) {
+	store, err := newBlobStore(context.Background(), config.WorkspaceConfig{StorageDriver: "local", DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.(*platformstorage.LocalBlobStore); !ok {
+		t.Fatalf("local store = %T", store)
 	}
 }
