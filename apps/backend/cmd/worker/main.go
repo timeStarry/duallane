@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -12,19 +13,31 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/platform/config"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/logging"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/ntfy"
 )
 
 const serviceName = "worker"
 
-type processor func(context.Context) (ntfy.ProcessResult, error)
+type processResult struct {
+	Claimed   int
+	Sent      int
+	Cancelled int
+	Retried   int
+	Failed    int
+}
+
+type workerProcessor struct {
+	name     string
+	interval time.Duration
+	process  func(context.Context) (processResult, error)
+}
 
 type application struct {
-	pool          *pgxpool.Pool
-	ntfyProcessor processor
-	logger        *slog.Logger
-	interval      time.Duration
-	startupDelay  time.Duration
+	pool         *pgxpool.Pool
+	processors   []workerProcessor
+	logger       *slog.Logger
+	startupDelay time.Duration
 }
 
 func main() {
@@ -51,8 +64,8 @@ func main() {
 }
 
 func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, logger *slog.Logger) (*application, error) {
-	app := &application{logger: logger, interval: ntfy.DefaultWorkerInterval, startupDelay: time.Minute}
-	if !runtimeConfig.Enabled || !runtimeConfig.NtfyWorkerEnabled {
+	app := &application{logger: logger, startupDelay: time.Minute}
+	if !runtimeConfig.Enabled || (!runtimeConfig.NtfyWorkerEnabled && !runtimeConfig.EmailWorkerEnabled) {
 		return app, nil
 	}
 	pool, err := postgres.OpenPoolFromEnv(ctx)
@@ -63,16 +76,41 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	if frontendURL == "" {
 		frontendURL = runtimeConfig.PublicBaseURL
 	}
-	service, err := ntfy.NewServiceWithError(ntfy.ServiceOptions{
-		Repository: ntfy.NewPGRepository(pool), ServerURL: runtimeConfig.NtfyBaseURL,
-		FrontendURL: frontendURL,
-	})
-	if err != nil {
-		pool.Close()
-		return nil, err
+	if runtimeConfig.NtfyWorkerEnabled {
+		service, err := ntfy.NewServiceWithError(ntfy.ServiceOptions{
+			Repository: ntfy.NewPGRepository(pool), ServerURL: runtimeConfig.NtfyBaseURL,
+			FrontendURL: frontendURL,
+		})
+		if err != nil {
+			pool.Close()
+			return nil, err
+		}
+		app.processors = append(app.processors, workerProcessor{
+			name: "ntfy", interval: ntfy.DefaultWorkerInterval,
+			process: func(ctx context.Context) (processResult, error) {
+				result, err := service.ProcessJobs(ctx)
+				return processResult(result), err
+			},
+		})
+	}
+	if runtimeConfig.EmailWorkerEnabled {
+		service, err := email.NewServiceWithError(email.ServiceOptions{
+			Repository: email.NewPGRepository(pool), FrontendURL: frontendURL,
+			EncryptionKeyB64: runtimeConfig.SMTPEncryptionKey,
+		})
+		if err != nil {
+			pool.Close()
+			return nil, err
+		}
+		app.processors = append(app.processors, workerProcessor{
+			name: "email", interval: email.DefaultWorkerInterval,
+			process: func(ctx context.Context) (processResult, error) {
+				result, err := service.ProcessJobs(ctx)
+				return processResult(result), err
+			},
+		})
 	}
 	app.pool = pool
-	app.ntfyProcessor = service.ProcessJobs
 	return app, nil
 }
 
@@ -80,10 +118,23 @@ func (app *application) run(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if app == nil || app.ntfyProcessor == nil {
+	if app == nil || len(app.processors) == 0 {
 		<-ctx.Done()
 		return
 	}
+	var wait sync.WaitGroup
+	for _, configured := range app.processors {
+		processor := configured
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			app.runProcessor(ctx, processor)
+		}()
+	}
+	wait.Wait()
+}
+
+func (app *application) runProcessor(ctx context.Context, processor workerProcessor) {
 	delay := app.startupDelay
 	if delay < 0 {
 		delay = 0
@@ -95,10 +146,10 @@ func (app *application) run(ctx context.Context) {
 		return
 	case <-timer.C:
 	}
-	app.tick(ctx)
-	interval := app.interval
+	app.tick(ctx, processor)
+	interval := processor.interval
 	if interval <= 0 {
-		interval = ntfy.DefaultWorkerInterval
+		interval = time.Second
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -107,21 +158,24 @@ func (app *application) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			app.tick(ctx)
+			app.tick(ctx, processor)
 		}
 	}
 }
 
-func (app *application) tick(ctx context.Context) {
-	result, err := app.ntfyProcessor(ctx)
+func (app *application) tick(ctx context.Context, processor workerProcessor) {
+	if processor.process == nil {
+		return
+	}
+	result, err := processor.process(ctx)
 	if err != nil {
 		if app.logger != nil {
-			app.logger.Error("ntfy worker cycle failed", slog.String("error_code", "ntfy_cycle_failed"))
+			app.logger.Error("worker cycle failed", slog.String("worker", processor.name), slog.String("error_code", processor.name+"_cycle_failed"))
 		}
 		return
 	}
 	if app.logger != nil && result.Claimed > 0 {
-		app.logger.Info("ntfy worker cycle completed",
+		app.logger.Info("worker cycle completed", slog.String("worker", processor.name),
 			slog.Int("claimed", result.Claimed), slog.Int("sent", result.Sent),
 			slog.Int("cancelled", result.Cancelled), slog.Int("retried", result.Retried),
 			slog.Int("failed", result.Failed))

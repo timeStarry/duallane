@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/timestarry/duallane/apps/backend/internal/platform/config"
-	"github.com/timestarry/duallane/apps/backend/internal/workspace/ntfy"
 )
 
 func TestDisabledWorkerDoesNotOpenDatabase(t *testing.T) {
@@ -14,7 +13,7 @@ func TestDisabledWorkerDoesNotOpenDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if app.pool != nil || app.ntfyProcessor != nil {
+	if app.pool != nil || len(app.processors) != 0 {
 		t.Fatalf("disabled worker dependencies = %#v", app)
 	}
 }
@@ -24,11 +23,10 @@ func TestWorkerRunsImmediatelyWhenConfiguredAndStops(t *testing.T) {
 	called := make(chan struct{}, 1)
 	app := &application{
 		startupDelay: 0,
-		interval:     time.Hour,
-		ntfyProcessor: func(context.Context) (ntfy.ProcessResult, error) {
+		processors: []workerProcessor{{name: "ntfy", interval: time.Hour, process: func(context.Context) (processResult, error) {
 			called <- struct{}{}
-			return ntfy.ProcessResult{Claimed: 1, Sent: 1}, nil
-		},
+			return processResult{Claimed: 1, Sent: 1}, nil
+		}}},
 	}
 	done := make(chan struct{})
 	go func() {
