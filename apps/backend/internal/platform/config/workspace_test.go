@@ -39,6 +39,7 @@ func TestLoadWorkspacePreservesRuntimeCompatibility(t *testing.T) {
 		"GITHUB_PROXY_URL":            "socks5://proxy:1080",
 		GitHubOAuthTimeoutEnvironment: "25000",
 		WorkspaceDataDirEnvironment:   "/srv/duallane-data",
+		WorkspaceNtfyBaseEnvironment:  "https://ntfy.example.test",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -48,6 +49,9 @@ func TestLoadWorkspacePreservesRuntimeCompatibility(t *testing.T) {
 	}
 	if !config.TrustProxy || config.GitHubOAuthTimeout != 25*time.Second || config.GitHubClientID != "client" || config.GitHubClientSecret != "secret" {
 		t.Fatalf("dependency config = %#v", config)
+	}
+	if config.NtfyBaseURL != "https://ntfy.example.test" {
+		t.Fatalf("ntfy base URL = %q", config.NtfyBaseURL)
 	}
 }
 

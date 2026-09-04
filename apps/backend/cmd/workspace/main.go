@@ -24,6 +24,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/invites"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/members"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/ntfy"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/overview"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/realtime"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/topics"
@@ -83,6 +84,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	var bootstrapService *bootstrap.Service
 	var fileService *files.Service
 	var topicService *topics.Service
+	var ntfyService *ntfy.Service
 	var realtimeHandler http.Handler
 	if runtimeConfig.Enabled {
 		var err error
@@ -117,6 +119,18 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		}
 		fileService = files.NewService(files.ServiceOptions{Repository: files.NewPGRepository(pool), BlobStore: blobStore})
 		topicService = topics.NewService(topics.ServiceOptions{Repository: topics.NewPGRepository(pool)})
+		ntfyFrontendURL := runtimeConfig.FrontendURL
+		if ntfyFrontendURL == "" {
+			ntfyFrontendURL = runtimeConfig.PublicBaseURL
+		}
+		ntfyService, err = ntfy.NewServiceWithError(ntfy.ServiceOptions{
+			Repository: ntfy.NewPGRepository(pool), ServerURL: runtimeConfig.NtfyBaseURL,
+			FrontendURL: ntfyFrontendURL,
+		})
+		if err != nil {
+			pool.Close()
+			return nil, err
+		}
 		eventHub := realtime.NewHub()
 		eventService := events.NewService(events.ServiceOptions{Repository: events.NewPGRepository(pool)})
 		bootstrapService = bootstrap.NewService(bootstrap.ServiceOptions{
@@ -157,6 +171,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			Bootstrap:   bootstrapService,
 			Files:       fileService,
 			Topics:      topicService,
+			Ntfy:        ntfyService,
 			Realtime:    realtimeHandler,
 			FrontendURL: runtimeConfig.FrontendURL, PublicBaseURL: runtimeConfig.PublicBaseURL,
 			TrustProxy: runtimeConfig.TrustProxy,

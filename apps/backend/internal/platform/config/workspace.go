@@ -17,6 +17,7 @@ const (
 	WorkspaceFrontendEnvironment  = "WORKSPACE_FRONTEND_URL"
 	GitHubOAuthTimeoutEnvironment = "GITHUB_OAUTH_TIMEOUT_MS"
 	WorkspaceDataDirEnvironment   = "DUALLANE_DATA_DIR"
+	WorkspaceNtfyBaseEnvironment  = "WORKSPACE_NTFY_BASE_URL"
 	DefaultWorkspaceDataDir       = "../../data"
 )
 
@@ -38,6 +39,7 @@ type WorkspaceConfig struct {
 	GitHubProxyURL     string
 	GitHubOAuthTimeout time.Duration
 	DataDir            string
+	NtfyBaseURL        string
 }
 
 func LoadWorkspace() (WorkspaceConfig, error) {
@@ -68,6 +70,7 @@ func LoadWorkspaceFrom(lookup func(string) (string, bool)) (WorkspaceConfig, err
 		GitHubProxyURL:     strings.TrimSpace(valueOr(lookup, "GITHUB_PROXY_URL", "")),
 		GitHubOAuthTimeout: DefaultGitHubOAuthTimeout,
 		DataDir:            strings.TrimSpace(valueOr(lookup, WorkspaceDataDirEnvironment, DefaultWorkspaceDataDir)),
+		NtfyBaseURL:        strings.TrimSpace(valueOr(lookup, WorkspaceNtfyBaseEnvironment, "")),
 	}
 	if raw, ok := lookup("PORT"); ok && strings.TrimSpace(raw) != "" {
 		port, err := strconv.Atoi(strings.TrimSpace(raw))
