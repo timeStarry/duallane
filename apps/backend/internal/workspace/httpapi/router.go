@@ -14,6 +14,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bootstrap"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/conversations"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/emotes"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/files"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/gate"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/invites"
@@ -100,6 +101,7 @@ type RouterOptions struct {
 	Files         fileService
 	Topics        topicService
 	Ntfy          NtfyService
+	Emotes        emoteService
 	Realtime      http.Handler
 	FrontendURL   string
 	PublicBaseURL string
@@ -138,6 +140,7 @@ func NewRouter(options RouterOptions) http.Handler {
 		registerFileRoutes(workspace, options)
 		registerTopicRoutes(workspace, options)
 		registerNtfyRoutes(workspace, options)
+		registerEmoteRoutes(workspace, options)
 	})
 	return router
 }
@@ -303,6 +306,7 @@ func writeError(response http.ResponseWriter, err error) {
 	var fileError *files.Error
 	var topicError *topics.Error
 	var ntfyError *ntfy.Error
+	var emoteError *emotes.Error
 	var transportError *publicError
 	switch {
 	case errors.As(err, &authError):
@@ -323,6 +327,8 @@ func writeError(response http.ResponseWriter, err error) {
 		value = &publicError{Code: topicError.Code, Message: topicError.Message, StatusCode: topicError.StatusCode}
 	case errors.As(err, &ntfyError):
 		value = &publicError{Code: ntfyError.Code, Message: ntfyError.Message, StatusCode: ntfyError.StatusCode}
+	case errors.As(err, &emoteError):
+		value = &publicError{Code: emoteError.Code, Message: emoteError.Message, StatusCode: emoteError.StatusCode}
 	case errors.As(err, &transportError):
 		value = transportError
 	}

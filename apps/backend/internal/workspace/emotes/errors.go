@@ -36,6 +36,7 @@ const (
 	CodeEmoteStorageMissing          = "emote.storage_missing"
 	CodeEmoteInvalidReference        = "emote.invalid_reference"
 	CodeEmoteSubscriptionUnsupported = "emote.subscription_unsupported"
+	CodeEmoteInvalidSubscription     = "emote.invalid_subscription"
 	CodeInternal                     = "internal.error"
 )
 
@@ -70,6 +71,7 @@ const (
 	MessageEmoteStorageMissing          = "收藏表情内容不可用"
 	MessageEmoteInvalidReference        = "表情引用无效"
 	MessageEmoteSubscriptionUnsupported = "表情合集订阅由后续迁移负责"
+	MessageEmoteInvalidSubscription     = "订阅设置无效"
 	MessageInternal                     = "服务暂时不可用"
 )
 

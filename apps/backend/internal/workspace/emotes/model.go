@@ -376,12 +376,13 @@ type ShareInput struct {
 }
 
 type ImportShareInput struct {
-	ActorID        string
-	ShareID        string
-	EmoteIDs       []string
-	AsCollection   *bool
-	CollectionName string
-	Meta           auth.RequestMeta
+	ActorID                  string
+	ShareID                  string
+	EmoteIDs                 []string
+	AsCollection             *bool
+	SubscribeToSourceChanges bool
+	CollectionName           string
+	Meta                     auth.RequestMeta
 }
 
 type ImportShareResult struct {
