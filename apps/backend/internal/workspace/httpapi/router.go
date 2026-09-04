@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bootstrap"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/bots"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/conversations"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
@@ -119,6 +120,7 @@ type RouterOptions struct {
 	Ntfy               NtfyService
 	Email              EmailService
 	Emotes             emoteService
+	Bots               BotService
 	Realtime           http.Handler
 	FrontendURL        string
 	PublicBaseURL      string
@@ -162,6 +164,7 @@ func NewRouter(options RouterOptions) http.Handler {
 		registerEmoteRoutes(workspace, options)
 		registerCardRoutes(workspace, options)
 		registerInteractionRoutes(workspace, options)
+		registerBotRoutes(workspace, options)
 	})
 	return router
 }
@@ -336,6 +339,7 @@ func writeError(response http.ResponseWriter, err error) {
 	var ntfyError *ntfy.Error
 	var emailError *email.Error
 	var emoteError *emotes.Error
+	var botError *bots.Error
 	var transportError *publicError
 	switch {
 	case errors.As(err, &authError):
@@ -364,6 +368,8 @@ func writeError(response http.ResponseWriter, err error) {
 		value = &publicError{Code: emailError.Code, Message: emailError.Message, StatusCode: emailError.StatusCode}
 	case errors.As(err, &emoteError):
 		value = &publicError{Code: emoteError.Code, Message: emoteError.Message, StatusCode: emoteError.StatusCode}
+	case errors.As(err, &botError):
+		value = &publicError{Code: botError.Code, Message: botError.Message, StatusCode: botError.StatusCode}
 	case errors.As(err, &transportError):
 		value = transportError
 	}
