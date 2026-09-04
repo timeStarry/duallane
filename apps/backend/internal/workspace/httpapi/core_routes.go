@@ -88,6 +88,7 @@ type reactionRequest struct {
 }
 
 func registerCoreRoutes(router chi.Router, options RouterOptions) {
+	router.Get("/statistics", withActor(options, getStatistics))
 	router.Get("/conversations", withActor(options, listConversations))
 	router.Get("/conversations/{conversationId}", withActor(options, getConversation))
 	router.Get("/members", withActor(options, listMembers))
@@ -115,6 +116,14 @@ func registerCoreRoutes(router chi.Router, options RouterOptions) {
 	router.Delete("/messages/{messageId}/hidden", withActor(options, unhideMessage))
 	router.Post("/messages/{messageId}/reactions", withActor(options, addReaction))
 	router.Delete("/messages/{messageId}/reactions/{emoteKey}", withActor(options, removeReaction))
+}
+
+func getStatistics(response http.ResponseWriter, request *http.Request, actor *auth.Actor, options RouterOptions) {
+	if missingService(response, options.Overview) {
+		return
+	}
+	statistics, err := options.Overview.GetStatistics(request.Context(), actor.ID, requestMeta(request, options))
+	writeResult(response, http.StatusOK, map[string]any{"statistics": statistics}, err)
 }
 
 type actorHandler func(http.ResponseWriter, *http.Request, *auth.Actor, RouterOptions)

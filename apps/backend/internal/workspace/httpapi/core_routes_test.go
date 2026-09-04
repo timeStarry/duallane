@@ -13,6 +13,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/gate"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/members"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/overview"
 )
 
 type fakeMemberService struct {
@@ -113,6 +114,19 @@ type fakeMessageService struct {
 	createInput messages.CreateInput
 	reaction    messages.ReactionResult
 	err         error
+}
+
+type fakeOverviewService struct {
+	statistics overview.Statistics
+	actorID    string
+	meta       auth.RequestMeta
+	err        error
+}
+
+func (service *fakeOverviewService) GetStatistics(_ context.Context, actorID string, meta auth.RequestMeta) (overview.Statistics, error) {
+	service.actorID = actorID
+	service.meta = meta
+	return service.statistics, service.err
 }
 
 func (service *fakeMessageService) List(context.Context, messages.ListOptions) ([]messages.Message, error) {
@@ -247,5 +261,27 @@ func TestRegisteredCoreRoutesAreNotTransportNotFound(t *testing.T) {
 		if response.Code == http.StatusNotFound || response.Code == http.StatusMethodNotAllowed {
 			t.Fatalf("%s %s was not registered: %d", check.method, check.path, response.Code)
 		}
+	}
+}
+
+func TestStatisticsRouteWrapsProjectionAndMapsOverviewErrors(t *testing.T) {
+	service := &fakeOverviewService{statistics: overview.Statistics{AsOf: "2026-09-04T00:00:00.000Z", Totals: overview.Counts{Members: 3}}}
+	router := NewRouter(RouterOptions{Gate: gate.New("true"), ActorResolver: &fakeResolver{actor: &auth.Actor{ID: "owner"}}, Overview: service, TrustProxy: true})
+	request := httptest.NewRequest(http.MethodGet, "/api/workspace/statistics", nil)
+	request.Header.Set("X-Request-ID", "statistics-request")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"statistics":{"asOf":"2026-09-04T00:00:00.000Z"`) {
+		t.Fatalf("statistics response = %d %s", response.Code, response.Body.String())
+	}
+	if service.actorID != "owner" || service.meta.RequestID != "statistics-request" {
+		t.Fatalf("statistics input = actor:%q meta:%#v", service.actorID, service.meta)
+	}
+
+	service.err = overview.NewError(overview.CodePermissionDenied, overview.MessagePermissionDenied, http.StatusForbidden)
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), `"code":"permission.denied"`) {
+		t.Fatalf("statistics error = %d %s", response.Code, response.Body.String())
 	}
 }

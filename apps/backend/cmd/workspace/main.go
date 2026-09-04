@@ -20,6 +20,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/invites"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/members"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/overview"
 )
 
 const serviceName = "workspace"
@@ -68,6 +69,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig) (
 	var memberService *members.Service
 	var conversationService *conversations.Service
 	var messageService *messages.Service
+	var overviewService *overview.Service
 	if runtimeConfig.Enabled {
 		var err error
 		pool, err = postgres.OpenPoolFromEnv(ctx)
@@ -93,6 +95,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig) (
 		memberService = members.NewService(members.ServiceOptions{Repository: members.NewPGRepository(pool)})
 		conversationService = conversations.NewService(conversations.ServiceOptions{Repository: conversations.NewPGRepository(pool)})
 		messageService = messages.NewService(messages.ServiceOptions{Repository: messages.NewPGRepository(pool)})
+		overviewService = overview.NewService(overview.ServiceOptions{Repository: overview.NewPGRepository(pool)})
 	} else {
 		authHandler = auth.NewHTTPHandler(auth.HTTPHandler{
 			Environment: runtimeConfig.Environment, PublicBaseURL: runtimeConfig.PublicBaseURL,
@@ -113,6 +116,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig) (
 			Gate: workspaceGate, Health: gate.HealthHandler(healthInput), Readiness: gate.ReadinessHandler(healthInput),
 			AuthRoutes: authHandler, ActorResolver: authHandler, Invites: inviteService,
 			Members: memberService, Conversations: conversationService, Messages: messageService,
+			Overview:    overviewService,
 			FrontendURL: runtimeConfig.FrontendURL, PublicBaseURL: runtimeConfig.PublicBaseURL,
 			TrustProxy: runtimeConfig.TrustProxy,
 		}),

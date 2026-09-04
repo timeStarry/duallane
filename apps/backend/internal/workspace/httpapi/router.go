@@ -17,6 +17,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/invites"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/members"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/overview"
 )
 
 const MaxJSONBodyBytes int64 = 1 << 20
@@ -66,6 +67,10 @@ type MessageService interface {
 	RemoveReaction(context.Context, messages.ReactionInput) (messages.ReactionResult, error)
 }
 
+type OverviewService interface {
+	GetStatistics(context.Context, string, auth.RequestMeta) (overview.Statistics, error)
+}
+
 type RouterOptions struct {
 	Gate          gate.Gate
 	Health        http.Handler
@@ -76,6 +81,7 @@ type RouterOptions struct {
 	Members       MemberService
 	Conversations ConversationService
 	Messages      MessageService
+	Overview      OverviewService
 	FrontendURL   string
 	PublicBaseURL string
 	TrustProxy    bool
@@ -260,6 +266,7 @@ func writeError(response http.ResponseWriter, err error) {
 	var memberError *members.Error
 	var conversationError *conversations.Error
 	var messageError *messages.Error
+	var overviewError *overview.Error
 	var transportError *publicError
 	switch {
 	case errors.As(err, &authError):
@@ -272,6 +279,8 @@ func writeError(response http.ResponseWriter, err error) {
 		value = &publicError{Code: conversationError.Code, Message: conversationError.Message, StatusCode: conversationError.StatusCode}
 	case errors.As(err, &messageError):
 		value = &publicError{Code: messageError.Code, Message: messageError.Message, StatusCode: messageError.StatusCode}
+	case errors.As(err, &overviewError):
+		value = &publicError{Code: overviewError.Code, Message: overviewError.Message, StatusCode: overviewError.StatusCode}
 	case errors.As(err, &transportError):
 		value = transportError
 	}
