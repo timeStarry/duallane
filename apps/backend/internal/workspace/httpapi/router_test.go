@@ -62,6 +62,21 @@ func TestWorkspaceGateRunsBeforeAuthAndDomainDependencies(t *testing.T) {
 	}
 }
 
+func TestWorkspaceGateRunsBeforeRealtimeHandler(t *testing.T) {
+	called := false
+	router := NewRouter(RouterOptions{
+		Gate: gate.New("false"),
+		Realtime: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			called = true
+		}),
+	})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ws/workspace", nil))
+	if response.Code != http.StatusServiceUnavailable || called {
+		t.Fatalf("disabled realtime = status:%d called:%t body:%s", response.Code, called, response.Body.String())
+	}
+}
+
 func TestCreateInviteResolvesActorProjectsLinkAndPassesSafeMeta(t *testing.T) {
 	resolver := &fakeResolver{actor: &auth.Actor{ID: "owner", Kind: "human", Role: "owner"}}
 	expires := "2026-09-05T12:00:00.000Z"

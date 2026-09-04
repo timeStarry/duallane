@@ -15,12 +15,14 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/conversations"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/events"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/gate"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/httpapi"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/invites"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/members"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/overview"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/realtime"
 )
 
 const serviceName = "workspace"
@@ -42,7 +44,7 @@ func main() {
 	})
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	app, err := newApplication(ctx, config)
+	app, err := newApplication(ctx, config, logger)
 	if err != nil {
 		logger.Error("workspace dependencies unavailable", slog.String("error_code", "dependency_unavailable"))
 		os.Exit(1)
@@ -57,7 +59,11 @@ func main() {
 	}
 }
 
-func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig) (*application, error) {
+func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, loggers ...*slog.Logger) (*application, error) {
+	var logger *slog.Logger
+	if len(loggers) > 0 {
+		logger = loggers[0]
+	}
 	workspaceGate := gate.New("false")
 	if runtimeConfig.Enabled {
 		workspaceGate = gate.New("true")
@@ -70,6 +76,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig) (
 	var conversationService *conversations.Service
 	var messageService *messages.Service
 	var overviewService *overview.Service
+	var realtimeHandler http.Handler
 	if runtimeConfig.Enabled {
 		var err error
 		pool, err = postgres.OpenPoolFromEnv(ctx)
@@ -96,6 +103,17 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig) (
 		conversationService = conversations.NewService(conversations.ServiceOptions{Repository: conversations.NewPGRepository(pool)})
 		messageService = messages.NewService(messages.ServiceOptions{Repository: messages.NewPGRepository(pool)})
 		overviewService = overview.NewService(overview.ServiceOptions{Repository: overview.NewPGRepository(pool)})
+		eventHub := realtime.NewHub()
+		eventService := events.NewService(events.ServiceOptions{Repository: events.NewPGRepository(pool)})
+		realtimeHandler = realtime.NewHandler(realtime.HandlerOptions{
+			RootContext: ctx, ActorResolver: authHandler, Events: eventService, Hub: eventHub,
+		})
+		listener := realtime.NewPGListener(realtime.ListenerOptions{Pool: pool, Hub: eventHub, Logger: logger})
+		go func() {
+			if err := listener.Run(ctx); err != nil && logger != nil {
+				logger.Error("workspace event listener stopped", slog.String("error_code", "listener_failed"))
+			}
+		}()
 	} else {
 		authHandler = auth.NewHTTPHandler(auth.HTTPHandler{
 			Environment: runtimeConfig.Environment, PublicBaseURL: runtimeConfig.PublicBaseURL,
@@ -117,6 +135,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig) (
 			AuthRoutes: authHandler, ActorResolver: authHandler, Invites: inviteService,
 			Members: memberService, Conversations: conversationService, Messages: messageService,
 			Overview:    overviewService,
+			Realtime:    realtimeHandler,
 			FrontendURL: runtimeConfig.FrontendURL, PublicBaseURL: runtimeConfig.PublicBaseURL,
 			TrustProxy: runtimeConfig.TrustProxy,
 		}),

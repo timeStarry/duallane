@@ -82,6 +82,7 @@ type RouterOptions struct {
 	Conversations ConversationService
 	Messages      MessageService
 	Overview      OverviewService
+	Realtime      http.Handler
 	FrontendURL   string
 	PublicBaseURL string
 	TrustProxy    bool
@@ -100,6 +101,11 @@ func NewRouter(options RouterOptions) http.Handler {
 		router.Get("/api/auth/github/callback", options.AuthRoutes.HandleGitHubCallback)
 		router.Post("/api/auth/logout", options.AuthRoutes.HandleLogout)
 	}
+	realtimeHandler := options.Realtime
+	if realtimeHandler == nil {
+		realtimeHandler = http.NotFoundHandler()
+	}
+	router.With(options.Gate.Middleware).Handle("/ws/workspace", realtimeHandler)
 	router.Route("/api/workspace", func(workspace chi.Router) {
 		workspace.Use(options.Gate.Middleware)
 		workspace.Post("/invites", createInviteHandler(options))
