@@ -19,6 +19,13 @@ const (
 	WorkspaceDataDirEnvironment   = "DUALLANE_DATA_DIR"
 	WorkspaceNtfyBaseEnvironment  = "WORKSPACE_NTFY_BASE_URL"
 	WorkspaceNtfyWorkerEnabled    = "WORKSPACE_NTFY_WORKER_ENABLED"
+	WorkspaceStorageDriverEnv     = "WORKSPACE_STORAGE_DRIVER"
+	WorkspaceS3EndpointEnv        = "WORKSPACE_S3_ENDPOINT"
+	WorkspaceS3BucketEnv          = "WORKSPACE_S3_BUCKET"
+	WorkspaceS3RegionEnv          = "WORKSPACE_S3_REGION"
+	WorkspaceS3CredentialsFileEnv = "WORKSPACE_S3_CREDENTIALS_FILE"
+	WorkspaceLocalReadFallbackEnv = "WORKSPACE_STORAGE_LOCAL_READ_FALLBACK"
+	WorkspaceLocalMirrorWriteEnv  = "WORKSPACE_STORAGE_LOCAL_MIRROR_WRITE"
 	DefaultWorkspaceDataDir       = "../../data"
 )
 
@@ -42,6 +49,13 @@ type WorkspaceConfig struct {
 	DataDir            string
 	NtfyBaseURL        string
 	NtfyWorkerEnabled  bool
+	StorageDriver      string
+	S3Endpoint         string
+	S3Bucket           string
+	S3Region           string
+	S3CredentialsFile  string
+	LocalReadFallback  bool
+	LocalMirrorWrite   bool
 }
 
 func LoadWorkspace() (WorkspaceConfig, error) {
@@ -74,6 +88,13 @@ func LoadWorkspaceFrom(lookup func(string) (string, bool)) (WorkspaceConfig, err
 		DataDir:            strings.TrimSpace(valueOr(lookup, WorkspaceDataDirEnvironment, DefaultWorkspaceDataDir)),
 		NtfyBaseURL:        strings.TrimSpace(valueOr(lookup, WorkspaceNtfyBaseEnvironment, "")),
 		NtfyWorkerEnabled:  valueOr(lookup, WorkspaceNtfyWorkerEnabled, "true") != "false",
+		StorageDriver:      strings.ToLower(valueOr(lookup, WorkspaceStorageDriverEnv, "local")),
+		S3Endpoint:         strings.TrimSpace(valueOr(lookup, WorkspaceS3EndpointEnv, "")),
+		S3Bucket:           strings.TrimSpace(valueOr(lookup, WorkspaceS3BucketEnv, "")),
+		S3Region:           strings.TrimSpace(valueOr(lookup, WorkspaceS3RegionEnv, "us-east-1")),
+		S3CredentialsFile:  strings.TrimSpace(valueOr(lookup, WorkspaceS3CredentialsFileEnv, "")),
+		LocalReadFallback:  valueOr(lookup, WorkspaceLocalReadFallbackEnv, "false") == "true",
+		LocalMirrorWrite:   valueOr(lookup, WorkspaceLocalMirrorWriteEnv, "false") == "true",
 	}
 	if raw, ok := lookup("PORT"); ok && strings.TrimSpace(raw) != "" {
 		port, err := strconv.Atoi(strings.TrimSpace(raw))
@@ -113,6 +134,14 @@ func (config WorkspaceConfig) Validate() error {
 	}
 	if config.Enabled && strings.TrimSpace(config.DataDir) == "" {
 		return errors.New("DUALLANE_DATA_DIR must not be empty when Workspace is enabled")
+	}
+	if config.StorageDriver != "local" && config.StorageDriver != "s3" {
+		return errors.New("WORKSPACE_STORAGE_DRIVER must be local or s3")
+	}
+	if config.Enabled && config.StorageDriver == "s3" {
+		if config.S3Endpoint == "" || config.S3Bucket == "" || config.S3CredentialsFile == "" {
+			return errors.New("S3 endpoint, bucket, and credentials file are required when S3 storage is enabled")
+		}
 	}
 	return nil
 }

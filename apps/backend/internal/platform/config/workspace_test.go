@@ -41,6 +41,13 @@ func TestLoadWorkspacePreservesRuntimeCompatibility(t *testing.T) {
 		WorkspaceDataDirEnvironment:   "/srv/duallane-data",
 		WorkspaceNtfyBaseEnvironment:  "https://ntfy.example.test",
 		WorkspaceNtfyWorkerEnabled:    "false",
+		WorkspaceStorageDriverEnv:     "s3",
+		WorkspaceS3EndpointEnv:        "http://minio:9000",
+		WorkspaceS3BucketEnv:          "duallane",
+		WorkspaceS3RegionEnv:          "cn-test-1",
+		WorkspaceS3CredentialsFileEnv: "/run/secrets/workspace-s3",
+		WorkspaceLocalReadFallbackEnv: "true",
+		WorkspaceLocalMirrorWriteEnv:  "true",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -56,6 +63,12 @@ func TestLoadWorkspacePreservesRuntimeCompatibility(t *testing.T) {
 	}
 	if config.NtfyWorkerEnabled {
 		t.Fatal("WORKSPACE_NTFY_WORKER_ENABLED=false did not disable ntfy worker")
+	}
+	if config.StorageDriver != "s3" || config.S3Endpoint != "http://minio:9000" || config.S3Bucket != "duallane" || config.S3Region != "cn-test-1" || config.S3CredentialsFile != "/run/secrets/workspace-s3" {
+		t.Fatalf("storage config = %#v", config)
+	}
+	if !config.LocalReadFallback || !config.LocalMirrorWrite {
+		t.Fatalf("storage compatibility flags = %#v", config)
 	}
 }
 
@@ -83,6 +96,12 @@ func TestLoadWorkspaceBoundsOAuthTimeoutAndRejectsInvalidPort(t *testing.T) {
 	}
 	if _, err := LoadWorkspaceFrom(configLookup(map[string]string{"PORT": "0"})); err == nil {
 		t.Fatal("invalid Workspace port was accepted")
+	}
+	if _, err := LoadWorkspaceFrom(configLookup(map[string]string{WorkspaceStorageDriverEnv: "ftp"})); err == nil {
+		t.Fatal("invalid storage driver was accepted")
+	}
+	if _, err := LoadWorkspaceFrom(configLookup(map[string]string{WorkspaceEnabledEnvironment: "true", WorkspaceStorageDriverEnv: "s3"})); err == nil {
+		t.Fatal("incomplete enabled S3 configuration was accepted")
 	}
 	if config.DataDir != DefaultWorkspaceDataDir {
 		t.Fatalf("default data dir = %q", config.DataDir)
