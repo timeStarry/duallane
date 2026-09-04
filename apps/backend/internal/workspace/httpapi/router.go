@@ -13,10 +13,13 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bootstrap"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/conversations"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/emotes"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/files"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/gate"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/interactions"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/invites"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/members"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
@@ -86,26 +89,41 @@ type NtfyService interface {
 	RotateTopic(context.Context, ntfy.RotateTopicInput) (ntfy.Preferences, error)
 }
 
+type EmailService interface {
+	GetPreferences(context.Context, string) (email.Preferences, error)
+	UpdatePreferences(context.Context, email.UpdatePreferencesInput) (email.Preferences, error)
+	GetSpaceSettings(context.Context, string) (email.SpaceSettings, error)
+	TestSpaceSettings(context.Context, email.TestSettingsInput) (email.SMTPTestResult, error)
+	SaveSpaceSettings(context.Context, email.SaveSettingsInput) (email.SpaceSettings, error)
+	CreateEmailChallenge(context.Context, email.CreateChallengeInput) (email.ChallengeResult, error)
+	VerifyEmailChallenge(context.Context, email.VerifyChallengeInput) (email.Preferences, error)
+	UseGitHubEmail(context.Context, email.UseGitHubEmailInput) (email.Preferences, error)
+}
+
 type RouterOptions struct {
-	Gate          gate.Gate
-	Health        http.Handler
-	Readiness     http.Handler
-	AuthRoutes    *auth.HTTPHandler
-	ActorResolver ActorResolver
-	Invites       InviteService
-	Members       MemberService
-	Conversations ConversationService
-	Messages      MessageService
-	Overview      OverviewService
-	Bootstrap     BootstrapService
-	Files         fileService
-	Topics        topicService
-	Ntfy          NtfyService
-	Emotes        emoteService
-	Realtime      http.Handler
-	FrontendURL   string
-	PublicBaseURL string
-	TrustProxy    bool
+	Gate               gate.Gate
+	Health             http.Handler
+	Readiness          http.Handler
+	AuthRoutes         *auth.HTTPHandler
+	ActorResolver      ActorResolver
+	Invites            InviteService
+	Members            MemberService
+	Conversations      ConversationService
+	Messages           MessageService
+	Cards              CardService
+	Interactions       InteractionService
+	Overview           OverviewService
+	Bootstrap          BootstrapService
+	Files              fileService
+	Topics             topicService
+	Ntfy               NtfyService
+	Email              EmailService
+	Emotes             emoteService
+	Realtime           http.Handler
+	FrontendURL        string
+	PublicBaseURL      string
+	InteractionSpaceID string
+	TrustProxy         bool
 }
 
 func NewRouter(options RouterOptions) http.Handler {
@@ -140,7 +158,10 @@ func NewRouter(options RouterOptions) http.Handler {
 		registerFileRoutes(workspace, options)
 		registerTopicRoutes(workspace, options)
 		registerNtfyRoutes(workspace, options)
+		registerEmailRoutes(workspace, options)
 		registerEmoteRoutes(workspace, options)
+		registerCardRoutes(workspace, options)
+		registerInteractionRoutes(workspace, options)
 	})
 	return router
 }
@@ -224,6 +245,10 @@ func resolveActor(response http.ResponseWriter, request *http.Request, resolver 
 		writeError(response, err)
 		return nil, false
 	}
+	if actor == nil {
+		writeError(response, auth.NewError(auth.CodeRequired, auth.MessageRequired, http.StatusUnauthorized))
+		return nil, false
+	}
 	return actor, true
 }
 
@@ -286,6 +311,7 @@ func buildInviteURL(options RouterOptions, request *http.Request, code string) (
 type publicError struct {
 	Code       string `json:"code"`
 	Message    string `json:"message"`
+	Details    any    `json:"details,omitempty"`
 	StatusCode int    `json:"-"`
 }
 
@@ -302,10 +328,13 @@ func writeError(response http.ResponseWriter, err error) {
 	var memberError *members.Error
 	var conversationError *conversations.Error
 	var messageError *messages.Error
+	var cardError *cards.Error
+	var interactionError *interactions.Error
 	var overviewError *overview.Error
 	var fileError *files.Error
 	var topicError *topics.Error
 	var ntfyError *ntfy.Error
+	var emailError *email.Error
 	var emoteError *emotes.Error
 	var transportError *publicError
 	switch {
@@ -319,6 +348,10 @@ func writeError(response http.ResponseWriter, err error) {
 		value = &publicError{Code: conversationError.Code, Message: conversationError.Message, StatusCode: conversationError.StatusCode}
 	case errors.As(err, &messageError):
 		value = &publicError{Code: messageError.Code, Message: messageError.Message, StatusCode: messageError.StatusCode}
+	case errors.As(err, &cardError):
+		value = &publicError{Code: cardError.Code, Message: cardError.Message, StatusCode: publicStatus(cardError.StatusCode)}
+	case errors.As(err, &interactionError):
+		value = &publicError{Code: interactionError.Code, Message: interactionError.Message, StatusCode: publicStatus(interactionError.StatusCode), Details: interactionError.Details}
 	case errors.As(err, &overviewError):
 		value = &publicError{Code: overviewError.Code, Message: overviewError.Message, StatusCode: overviewError.StatusCode}
 	case errors.As(err, &fileError):
@@ -327,12 +360,21 @@ func writeError(response http.ResponseWriter, err error) {
 		value = &publicError{Code: topicError.Code, Message: topicError.Message, StatusCode: topicError.StatusCode}
 	case errors.As(err, &ntfyError):
 		value = &publicError{Code: ntfyError.Code, Message: ntfyError.Message, StatusCode: ntfyError.StatusCode}
+	case errors.As(err, &emailError):
+		value = &publicError{Code: emailError.Code, Message: emailError.Message, StatusCode: emailError.StatusCode}
 	case errors.As(err, &emoteError):
 		value = &publicError{Code: emoteError.Code, Message: emoteError.Message, StatusCode: emoteError.StatusCode}
 	case errors.As(err, &transportError):
 		value = transportError
 	}
 	writeJSON(response, value.StatusCode, map[string]any{"error": value})
+}
+
+func publicStatus(status int) int {
+	if status <= 0 {
+		return http.StatusBadRequest
+	}
+	return status
 }
 
 func writeJSON(response http.ResponseWriter, status int, value any) {
