@@ -5,7 +5,6 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -18,8 +17,4 @@ func makeTURNCredential(secret string, ttl time.Duration, now time.Time) (string
 	mac := hmac.New(sha1.New, []byte(secret))
 	_, _ = mac.Write([]byte(username))
 	return username, base64.StdEncoding.EncodeToString(mac.Sum(nil))
-}
-
-func trimICEURL(value string) string {
-	return strings.TrimSpace(value)
 }
