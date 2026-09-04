@@ -26,6 +26,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/overview"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/realtime"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/topics"
 )
 
 const serviceName = "workspace"
@@ -81,6 +82,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	var overviewService *overview.Service
 	var bootstrapService *bootstrap.Service
 	var fileService *files.Service
+	var topicService *topics.Service
 	var realtimeHandler http.Handler
 	if runtimeConfig.Enabled {
 		var err error
@@ -114,6 +116,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			return nil, err
 		}
 		fileService = files.NewService(files.ServiceOptions{Repository: files.NewPGRepository(pool), BlobStore: blobStore})
+		topicService = topics.NewService(topics.ServiceOptions{Repository: topics.NewPGRepository(pool)})
 		eventHub := realtime.NewHub()
 		eventService := events.NewService(events.ServiceOptions{Repository: events.NewPGRepository(pool)})
 		bootstrapService = bootstrap.NewService(bootstrap.ServiceOptions{
@@ -153,6 +156,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			Overview:    overviewService,
 			Bootstrap:   bootstrapService,
 			Files:       fileService,
+			Topics:      topicService,
 			Realtime:    realtimeHandler,
 			FrontendURL: runtimeConfig.FrontendURL, PublicBaseURL: runtimeConfig.PublicBaseURL,
 			TrustProxy: runtimeConfig.TrustProxy,

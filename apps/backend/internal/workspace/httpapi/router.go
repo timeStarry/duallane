@@ -20,6 +20,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/members"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/overview"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/topics"
 )
 
 const MaxJSONBodyBytes int64 = 1 << 20
@@ -90,6 +91,7 @@ type RouterOptions struct {
 	Overview      OverviewService
 	Bootstrap     BootstrapService
 	Files         fileService
+	Topics        topicService
 	Realtime      http.Handler
 	FrontendURL   string
 	PublicBaseURL string
@@ -126,6 +128,7 @@ func NewRouter(options RouterOptions) http.Handler {
 		}
 		registerCoreRoutes(workspace, options)
 		registerFileRoutes(workspace, options)
+		registerTopicRoutes(workspace, options)
 	})
 	return router
 }
@@ -289,6 +292,7 @@ func writeError(response http.ResponseWriter, err error) {
 	var messageError *messages.Error
 	var overviewError *overview.Error
 	var fileError *files.Error
+	var topicError *topics.Error
 	var transportError *publicError
 	switch {
 	case errors.As(err, &authError):
@@ -305,6 +309,8 @@ func writeError(response http.ResponseWriter, err error) {
 		value = &publicError{Code: overviewError.Code, Message: overviewError.Message, StatusCode: overviewError.StatusCode}
 	case errors.As(err, &fileError):
 		value = &publicError{Code: fileError.Code, Message: fileError.Message, StatusCode: fileError.StatusCode}
+	case errors.As(err, &topicError):
+		value = &publicError{Code: topicError.Code, Message: topicError.Message, StatusCode: topicError.StatusCode}
 	case errors.As(err, &transportError):
 		value = transportError
 	}
