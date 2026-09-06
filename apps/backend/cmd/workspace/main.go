@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -41,8 +42,28 @@ import (
 const serviceName = "workspace"
 
 type application struct {
-	handler http.Handler
-	pool    *pgxpool.Pool
+	handler        http.Handler
+	pool           *pgxpool.Pool
+	cancel         context.CancelFunc
+	backgroundDone <-chan struct{}
+	closeOnce      sync.Once
+}
+
+func (app *application) Close() {
+	if app == nil {
+		return
+	}
+	app.closeOnce.Do(func() {
+		if app.cancel != nil {
+			app.cancel()
+		}
+		if app.backgroundDone != nil {
+			<-app.backgroundDone
+		}
+		if app.pool != nil {
+			app.pool.Close()
+		}
+	})
 }
 
 func main() {
@@ -62,17 +83,23 @@ func main() {
 		logger.Error("workspace dependencies unavailable", slog.String("error_code", "dependency_unavailable"))
 		os.Exit(1)
 	}
-	if app.pool != nil {
-		defer app.pool.Close()
-	}
+	defer app.Close()
 	server := httpserver.New(config.ListenAddress(), httpserver.SecurityHeaders(app.handler))
-	if err := httpserver.Serve(ctx, server, logger, httpserver.DefaultShutdownTimeout); err != nil {
+	serveErr := httpserver.Serve(ctx, server, logger, httpserver.DefaultShutdownTimeout)
+	app.Close()
+	if serveErr != nil {
 		logger.Error("workspace server stopped with error", slog.String("error_code", "server_failed"))
 		os.Exit(1)
 	}
 }
 
-func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, loggers ...*slog.Logger) (*application, error) {
+func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, loggers ...*slog.Logger) (result *application, resultErr error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer func() {
+		if result == nil {
+			cancel()
+		}
+	}()
 	var logger *slog.Logger
 	if len(loggers) > 0 {
 		logger = loggers[0]
@@ -101,6 +128,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	var emoteService *emotes.Service
 	var realtimeHandler http.Handler
 	var blobStore platformstorage.BlobStore
+	var backgroundDone chan struct{}
 	if runtimeConfig.Enabled {
 		var err error
 		catalog, err := emotes.LoadCatalogFile(runtimeConfig.EmoteCatalogPath)
@@ -209,7 +237,9 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			RootContext: ctx, ActorResolver: authHandler, Events: eventService, Hub: eventHub,
 		})
 		listener := realtime.NewPGListener(realtime.ListenerOptions{Pool: pool, Hub: eventHub, Logger: logger})
+		backgroundDone = make(chan struct{})
 		go func() {
+			defer close(backgroundDone)
 			if err := listener.Run(ctx); err != nil && logger != nil {
 				logger.Error("workspace event listener stopped", slog.String("error_code", "listener_failed"))
 			}
@@ -236,7 +266,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		}
 	}
 	return &application{
-		pool: pool,
+		pool: pool, cancel: cancel, backgroundDone: backgroundDone,
 		handler: httpapi.NewRouter(httpapi.RouterOptions{
 			Gate: workspaceGate, Health: gate.HealthHandler(healthInput), Readiness: readinessHandler(healthInput, databaseProbe, storageProbe),
 			AuthRoutes: authHandler, ActorResolver: authHandler, Invites: inviteService,

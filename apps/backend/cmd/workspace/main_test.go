@@ -21,6 +21,7 @@ func TestDisabledApplicationDoesNotRequireWorkspaceDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(app.Close)
 	if app.pool != nil {
 		t.Fatal("disabled application opened a PostgreSQL pool")
 	}
@@ -41,6 +42,23 @@ func TestDisabledApplicationDoesNotRequireWorkspaceDependencies(t *testing.T) {
 	app.handler.ServeHTTP(oauth, httptest.NewRequest(http.MethodGet, "/api/auth/github/start?invite=must-not-be-read", nil))
 	if oauth.Code != http.StatusServiceUnavailable || len(oauth.Result().Cookies()) != 0 {
 		t.Fatalf("disabled OAuth = %d cookies=%#v body=%s", oauth.Code, oauth.Result().Cookies(), oauth.Body.String())
+	}
+}
+
+func TestApplicationCloseCancelsAndJoinsBackgroundWork(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	app := &application{cancel: cancel, backgroundDone: done}
+	go func() { <-ctx.Done(); close(done) }()
+	closed := make(chan struct{})
+	go func() { app.Close(); app.Close(); close(closed) }()
+	select {
+	case <-closed:
+		if ctx.Err() != context.Canceled {
+			t.Fatal("background context was not canceled")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("background work was not joined")
 	}
 }
 

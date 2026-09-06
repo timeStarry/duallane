@@ -85,7 +85,7 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { cancel(); app.pool.Close() }()
+	defer app.Close()
 	session, err := auth.NewService(auth.ServiceOptions{Store: auth.NewPGStore(app.pool)}).CreateSession(ctx, "composition-user")
 	if err != nil {
 		t.Fatal(err)
