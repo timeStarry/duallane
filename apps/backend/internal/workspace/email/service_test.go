@@ -525,6 +525,73 @@ func TestEmailSchedulingRechecksUnreadAndDefersOnlineDelivery(t *testing.T) {
 	worker.Stop()
 }
 
+func TestEmailContextPresenceFailureDefersWithoutSending(t *testing.T) {
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	repo := newEmailFake()
+	repo.settings = &SMTPSettingsRecord{SpaceID: DefaultSpaceID, Enabled: true, SMTPHost: "smtp.example.test", SMTPPort: 587, Encryption: "none", FromAddress: "sender@example.test", FromName: "DualLane", ActiveFrom: timePtr(now.Add(-time.Hour))}
+	verified := now.Add(-time.Hour)
+	repo.delivery["job-uncertain"] = &DeliveryJob{ID: "job-uncertain", UserID: "recipient", MessageID: "message", EventSeq: 2, Email: "recipient@example.test", EmailVerifiedAt: &verified, PreferenceEnabled: true, ImmediateEnabled: true, NotificationLevel: "all", MessageCreatedAt: now}
+	repo.jobs["job-uncertain"] = JobInsert{ID: "job-uncertain", UserID: "recipient", MessageID: "message", ConversationID: "conversation", EventSeq: 2, NextAttemptAt: now}
+	repo.statuses["job-uncertain"] = JobPending
+	repo.due = []string{"job-uncertain"}
+	deliveries := 0
+	service := NewService(ServiceOptions{
+		Repository: repo, EncryptionKey: []byte(strings.Repeat("k", 32)),
+		Now: func() time.Time { return now },
+		Mailer: MailerFunc(func(context.Context, MailConfig, Message, string) error {
+			deliveries++
+			return nil
+		}),
+	})
+	worker := service.StartWorkerWithContextPresence(context.Background(), ContextPresenceFunc(func(context.Context, string) (bool, error) {
+		return false, errors.New("synthetic presence database outage")
+	}), WorkerOptions{StartupDelay: time.Hour, Interval: time.Minute, Lease: time.Minute, BatchSize: 25, PublishTimeout: time.Second})
+	defer worker.Stop()
+	result, err := worker.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Retried != 1 || deliveries != 0 {
+		t.Fatalf("uncertain presence result=%#v deliveries=%d", result, deliveries)
+	}
+	if repo.statuses["job-uncertain"] != JobPending || !repo.jobs["job-uncertain"].NextAttemptAt.After(now) {
+		t.Fatalf("uncertain job was not deferred: status=%q job=%#v", repo.statuses["job-uncertain"], repo.jobs["job-uncertain"])
+	}
+}
+
+func TestEmailContextPresenceOnlyDeliversWhenOffline(t *testing.T) {
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	repo := newEmailFake()
+	repo.settings = &SMTPSettingsRecord{SpaceID: DefaultSpaceID, Enabled: true, SMTPHost: "smtp.example.test", SMTPPort: 587, Encryption: "none", FromAddress: "sender@example.test", FromName: "DualLane", ActiveFrom: timePtr(now.Add(-time.Hour))}
+	verified := now.Add(-time.Hour)
+	repo.delivery["job-presence"] = &DeliveryJob{ID: "job-presence", UserID: "recipient", MessageID: "message", EventSeq: 3, Email: "recipient@example.test", EmailVerifiedAt: &verified, PreferenceEnabled: true, ImmediateEnabled: true, NotificationLevel: "all", MessageCreatedAt: now}
+	repo.jobs["job-presence"] = JobInsert{ID: "job-presence", UserID: "recipient", MessageID: "message", ConversationID: "conversation", EventSeq: 3, NextAttemptAt: now}
+	repo.statuses["job-presence"] = JobPending
+	repo.due = []string{"job-presence"}
+	deliveries := 0
+	service := NewService(ServiceOptions{
+		Repository: repo, EncryptionKey: []byte(strings.Repeat("k", 32)),
+		Now:    func() time.Time { return now },
+		Worker: WorkerOptions{Interval: time.Minute, Lease: time.Minute, BatchSize: 25, PublishTimeout: time.Second},
+		Mailer: MailerFunc(func(context.Context, MailConfig, Message, string) error {
+			deliveries++
+			return nil
+		}),
+	})
+	online := true
+	presence := ContextPresenceFunc(func(context.Context, string) (bool, error) { return online, nil })
+	first, err := service.ProcessJobsWithContextPresence(context.Background(), presence)
+	if err != nil || first.Retried != 0 || deliveries != 0 {
+		t.Fatalf("online result=%#v err=%v deliveries=%d", first, err, deliveries)
+	}
+	online = false
+	now = now.Add(time.Minute + time.Second)
+	second, err := service.ProcessJobsWithContextPresence(context.Background(), presence)
+	if err != nil || second.Sent != 1 || deliveries != 1 {
+		t.Fatalf("offline result=%#v err=%v deliveries=%d", second, err, deliveries)
+	}
+}
+
 func TestEmailProviderRetriesAreBoundedAndClassified(t *testing.T) {
 	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 	repo := newEmailFake()

@@ -300,6 +300,19 @@ type PresenceFunc func(string) bool
 
 func (f PresenceFunc) IsOnline(userID string) bool { return f(userID) }
 
+// ContextPresence is the worker-safe presence seam. A lookup failure is
+// distinct from offline; the worker defers the claimed job and must not send
+// real mail on an uncertain database result.
+type ContextPresence interface {
+	IsOnlineContext(context.Context, string) (bool, error)
+}
+
+type ContextPresenceFunc func(context.Context, string) (bool, error)
+
+func (f ContextPresenceFunc) IsOnlineContext(ctx context.Context, userID string) (bool, error) {
+	return f(ctx, userID)
+}
+
 type WorkerOptions struct {
 	StartupDelay   time.Duration
 	Interval       time.Duration

@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	workspaceEvents "github.com/timestarry/duallane/apps/backend/internal/workspace/events"
+	workspacePresence "github.com/timestarry/duallane/apps/backend/internal/workspace/presence"
 )
 
 type fakeResolver struct {
@@ -49,6 +50,56 @@ func (f *fakeEventService) set(lastSeq int64, result workspaceEvents.ReplayResul
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.results[lastSeq] = result
+}
+
+func (f *fakeEventService) setError(lastSeq int64, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.errors[lastSeq] = err
+}
+
+type fakePresence struct {
+	mu        sync.Mutex
+	registers []workspacePresence.RegisterInput
+	leases    []workspacePresence.Lease
+	renewals  []workspacePresence.RenewInput
+	deletes   []workspacePresence.DeleteInput
+	nextID    int
+	err       error
+	renewErr  error
+}
+
+func (f *fakePresence) Register(_ context.Context, input workspacePresence.RegisterInput) (workspacePresence.Lease, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return workspacePresence.Lease{}, f.err
+	}
+	f.nextID++
+	lease := workspacePresence.Lease{SpaceID: input.SpaceID, UserID: input.UserID, ConnectionID: "socket-" + strconv.Itoa(f.nextID), LeaseUntil: time.Now().Add(time.Minute)}
+	f.registers = append(f.registers, input)
+	f.leases = append(f.leases, lease)
+	return lease, nil
+}
+
+func (f *fakePresence) Renew(_ context.Context, input workspacePresence.RenewInput) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.renewals = append(f.renewals, input)
+	return f.renewErr
+}
+
+func (f *fakePresence) Delete(_ context.Context, input workspacePresence.DeleteInput) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deletes = append(f.deletes, input)
+	return nil
+}
+
+func (f *fakePresence) counts() (registers, renewals, deletes int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.registers), len(f.renewals), len(f.deletes)
 }
 
 func TestHandlerHelloReplayAndWakeupCatchUp(t *testing.T) {
@@ -110,6 +161,65 @@ func TestHandlerPollRecoversMissedNotification(t *testing.T) {
 	}
 }
 
+func TestHandlerPresenceRegistersAfterReplayRenewsAndDeletesOwnLease(t *testing.T) {
+	presence := &fakePresence{}
+	service := &fakeEventService{results: map[int64]workspaceEvents.ReplayResult{0: {CurrentSeq: 0, ReplayFrom: 1}}, errors: map[int64]error{}}
+	server := httptest.NewServer(NewHandler(HandlerOptions{
+		ActorResolver: &fakeResolver{actor: &auth.Actor{ID: "usr-viewer", Kind: "human", Role: "member"}},
+		Events:        service, Presence: presence, PollInterval: time.Hour, HeartbeatInterval: 20 * time.Millisecond,
+		IOTimeout: time.Second,
+	}))
+	defer server.Close()
+	connection := dial(t, server.URL, nil)
+	writeText(t, connection, `{"version":1,"type":"hello","lastSeq":0}`)
+	_ = readFrame(t, connection)
+	waitForPresence(t, func() bool {
+		registers, _, _ := presence.counts()
+		return registers == 1
+	})
+	waitForPresence(t, func() bool {
+		_, renewals, _ := presence.counts()
+		return renewals > 0
+	})
+	connection.CloseNow()
+	waitForPresence(t, func() bool {
+		_, _, deletes := presence.counts()
+		return deletes == 1
+	})
+	registers, renewals, deletes := presence.counts()
+	if registers != 1 || renewals == 0 || deletes != 1 {
+		t.Fatalf("presence lifecycle registers=%d renewals=%d deletes=%d", registers, renewals, deletes)
+	}
+}
+
+func TestHandlerPresenceIsRemovedWhenReplayLosesAuthorization(t *testing.T) {
+	presence := &fakePresence{}
+	root, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	hub := NewHub()
+	service := &fakeEventService{results: map[int64]workspaceEvents.ReplayResult{0: {CurrentSeq: 0, ReplayFrom: 1}}, errors: map[int64]error{}}
+	server := httptest.NewServer(NewHandler(HandlerOptions{
+		RootContext: root, ActorResolver: &fakeResolver{actor: &auth.Actor{ID: "usr-viewer", Kind: "human", Role: "member"}},
+		Events: service, Presence: presence, Hub: hub, PollInterval: time.Hour, HeartbeatInterval: time.Hour,
+	}))
+	defer server.Close()
+	connection := dial(t, server.URL, nil)
+	defer connection.CloseNow()
+	writeText(t, connection, `{"version":1,"type":"hello","lastSeq":0}`)
+	_ = readFrame(t, connection)
+	waitForPresence(t, func() bool { registers, _, _ := presence.counts(); return registers == 1 })
+	service.setError(0, auth.NewError(auth.CodeRequired, auth.MessageRequired, http.StatusUnauthorized))
+	hub.Notify()
+	failure := readFrame(t, connection)
+	if failure["error"].(map[string]any)["code"] != auth.CodeRequired {
+		t.Fatalf("replay authorization frame = %#v", failure)
+	}
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), time.Second)
+	_, _, _ = connection.Read(closeCtx)
+	closeCancel()
+	waitForPresence(t, func() bool { _, _, deletes := presence.counts(); return deletes == 1 })
+}
+
 func TestHandlerHasMoreAndSyncRequiredContracts(t *testing.T) {
 	service := &fakeEventService{
 		results: map[int64]workspaceEvents.ReplayResult{
@@ -163,10 +273,12 @@ func TestHandlerRejectsInvalidAndOversizedFrames(t *testing.T) {
 
 func TestHandlerEnforcesOriginAndClosesOnShutdown(t *testing.T) {
 	root, cancelRoot := context.WithCancel(context.Background())
+	presence := &fakePresence{}
 	handler := NewHandler(HandlerOptions{
 		RootContext:   root,
 		ActorResolver: &fakeResolver{actor: &auth.Actor{ID: "usr-viewer", Kind: "human", Role: "member"}},
 		Events:        &fakeEventService{results: map[int64]workspaceEvents.ReplayResult{0: {CurrentSeq: 0, ReplayFrom: 1}}, errors: map[int64]error{}},
+		Presence:      presence,
 		PollInterval:  time.Hour, HeartbeatInterval: time.Hour,
 	})
 	server := httptest.NewServer(handler)
@@ -182,6 +294,7 @@ func TestHandlerEnforcesOriginAndClosesOnShutdown(t *testing.T) {
 	connection := dial(t, server.URL, nil)
 	writeText(t, connection, `{"version":1,"type":"hello","lastSeq":0}`)
 	_ = readFrame(t, connection)
+	waitForPresence(t, func() bool { registers, _, _ := presence.counts(); return registers == 1 })
 	cancelRoot()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -189,6 +302,7 @@ func TestHandlerEnforcesOriginAndClosesOnShutdown(t *testing.T) {
 	if websocket.CloseStatus(err) != websocket.StatusServiceRestart {
 		t.Fatalf("shutdown close = %v, status=%v", err, websocket.CloseStatus(err))
 	}
+	waitForPresence(t, func() bool { _, _, deletes := presence.counts(); return deletes == 1 })
 }
 
 func TestHandlerProjectsAuthenticationFailureAndCloses(t *testing.T) {
@@ -259,4 +373,16 @@ func readFrame(t *testing.T, connection *websocket.Conn) map[string]any {
 		t.Fatal(err)
 	}
 	return value
+}
+
+func waitForPresence(t *testing.T, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("presence condition was not reached")
 }

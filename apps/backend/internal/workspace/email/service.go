@@ -891,7 +891,7 @@ func (s *Service) ProcessJobs(ctx context.Context) (ProcessResult, error) {
 	if err := s.checkReady("process workspace email jobs"); err != nil {
 		return ProcessResult{}, err
 	}
-	return s.processJobs(ctx, nil, s.worker)
+	return s.processJobs(ctx, nil, nil, s.worker)
 }
 
 // ProcessJobsWithPresence is the worker-facing variant used when the caller
@@ -902,11 +902,21 @@ func (s *Service) ProcessJobsWithPresence(ctx context.Context, presence Presence
 	if err := s.checkReady("process workspace email jobs"); err != nil {
 		return ProcessResult{}, err
 	}
-	return s.processJobs(ctx, presence, s.worker)
+	return s.processJobs(ctx, presence, nil, s.worker)
 }
 
-func (s *Service) processJobs(ctx context.Context, presence Presence, options WorkerOptions) (ProcessResult, error) {
-	result, err := s.processImmediate(ctx, presence, options)
+// ProcessJobsWithContextPresence is the cross-process worker variant. Unlike
+// the legacy bool Presence seam, it preserves lookup failures as retryable
+// deferrals instead of treating a database outage as offline.
+func (s *Service) ProcessJobsWithContextPresence(ctx context.Context, presence ContextPresence) (ProcessResult, error) {
+	if err := s.checkReady("process workspace email jobs"); err != nil {
+		return ProcessResult{}, err
+	}
+	return s.processJobs(ctx, nil, presence, s.worker)
+}
+
+func (s *Service) processJobs(ctx context.Context, presence Presence, contextPresence ContextPresence, options WorkerOptions) (ProcessResult, error) {
+	result, err := s.processImmediate(ctx, presence, contextPresence, options)
 	if err != nil {
 		return result, err
 	}
@@ -919,7 +929,7 @@ func (s *Service) processJobs(ctx context.Context, presence Presence, options Wo
 	return result, err
 }
 
-func (s *Service) processImmediate(ctx context.Context, presence Presence, options WorkerOptions) (ProcessResult, error) {
+func (s *Service) processImmediate(ctx context.Context, presence Presence, contextPresence ContextPresence, options WorkerOptions) (ProcessResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -950,7 +960,15 @@ func (s *Service) processImmediate(ctx context.Context, presence Presence, optio
 			result.Cancelled++
 			continue
 		}
-		if presence != nil && presence.IsOnline(job.UserID) {
+		online, presenceErr := lookupPresence(ctx, presence, contextPresence, job.UserID)
+		if presenceErr != nil {
+			if err := s.repo.DeferJob(ctx, id, s.nowUTC().Add(options.Interval)); err != nil {
+				return result, normalizeRepositoryError(err)
+			}
+			result.Retried++
+			continue
+		}
+		if online {
 			if err := s.repo.DeferJob(ctx, id, s.nowUTC().Add(options.Interval)); err != nil {
 				return result, normalizeRepositoryError(err)
 			}
@@ -987,6 +1005,16 @@ func (s *Service) processImmediate(ctx context.Context, presence Presence, optio
 		}
 	}
 	return result, nil
+}
+
+func lookupPresence(ctx context.Context, legacy Presence, contextual ContextPresence, userID string) (bool, error) {
+	if contextual != nil {
+		return contextual.IsOnlineContext(ctx, userID)
+	}
+	if legacy != nil {
+		return legacy.IsOnline(userID), nil
+	}
+	return false, nil
 }
 
 func (s *Service) eligibleUnreadMessages(ctx context.Context, userID string, startedAt time.Time) ([]UnreadMessage, error) {
@@ -1102,14 +1130,20 @@ func (s *Service) processDigest(ctx context.Context, options WorkerOptions) (Pro
 }
 
 func (s *Service) StartWorker(ctx context.Context, options WorkerOptions) *WorkerHandle {
-	return s.startWorker(ctx, nil, options)
+	return s.startWorker(ctx, nil, nil, options)
 }
 
 func (s *Service) StartWorkerWithPresence(ctx context.Context, presence Presence, options WorkerOptions) *WorkerHandle {
-	return s.startWorker(ctx, presence, options)
+	return s.startWorker(ctx, presence, nil, options)
 }
 
-func (s *Service) startWorker(ctx context.Context, presence Presence, options WorkerOptions) *WorkerHandle {
+// StartWorkerWithContextPresence is the long-lived worker constructor for the
+// PostgreSQL lease-backed presence adapter.
+func (s *Service) StartWorkerWithContextPresence(ctx context.Context, presence ContextPresence, options WorkerOptions) *WorkerHandle {
+	return s.startWorker(ctx, nil, presence, options)
+}
+
+func (s *Service) startWorker(ctx context.Context, presence Presence, contextPresence ContextPresence, options WorkerOptions) *WorkerHandle {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1135,7 +1169,7 @@ func (s *Service) startWorker(ctx context.Context, presence Presence, options Wo
 		if options.Disabled || child.Err() != nil {
 			return ProcessResult{}, nil
 		}
-		return s.processJobs(tickCtx, presence, options)
+		return s.processJobs(tickCtx, presence, contextPresence, options)
 	}
 	if options.Disabled {
 		return &WorkerHandle{Stop: stop, Tick: tick}

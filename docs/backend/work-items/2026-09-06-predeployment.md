@@ -348,3 +348,20 @@ or runtime composition. In particular, lossless response/payload round-tripping
 of unpaired UTF-16 surrogates is not established by the hash tests; the Go domain
 uses Unicode scalar strings. Keep that distinction in aggregate compatibility
 review rather than treating matching hashes as proof of every DTO byte.
+
+### Cross-Process Presence Foundation
+
+The additive `031_workspace_presence_leases.sql` migration stores only short-lived
+connection metadata. Authenticated human realtime connections register after
+successful replay, renew on heartbeat, and remove their own random lease on
+disconnect. Current membership and expiry are checked in PostgreSQL; another
+connection cannot be removed by an old socket's cleanup. Lookup errors defer
+immediate email jobs instead of treating an uncertain result as offline.
+
+Independent fresh PostgreSQL/race checks passed for presence, realtime, email
+and migrations (12.249 / 11.049 / 4.300 / 10.944 seconds), including a real
+pre-031 schema upgraded with existing members, concurrent connections, revocation
+and bounded expiry cleanup. Integration-tag staticcheck passed. Runtime injection
+and worker scheduling are a subsequent composition slice, not accepted by these
+domain tests. The local Node aggregate rerun failed 12 tests and is being triaged;
+it is not counted as a passing gate.

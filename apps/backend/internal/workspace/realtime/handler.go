@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	workspaceEvents "github.com/timestarry/duallane/apps/backend/internal/workspace/events"
+	workspacePresence "github.com/timestarry/duallane/apps/backend/internal/workspace/presence"
 )
 
 const (
@@ -37,6 +38,8 @@ type HandlerOptions struct {
 	ActorResolver     ActorResolver
 	Events            EventService
 	Hub               *Hub
+	Presence          workspacePresence.Lifecycle
+	SpaceID           string
 	MaxFrameBytes     int64
 	PollInterval      time.Duration
 	HeartbeatInterval time.Duration
@@ -48,6 +51,8 @@ type Handler struct {
 	actorResolver     ActorResolver
 	events            EventService
 	hub               *Hub
+	presence          workspacePresence.Lifecycle
+	spaceID           string
 	maxFrameBytes     int64
 	pollInterval      time.Duration
 	heartbeatInterval time.Duration
@@ -75,12 +80,17 @@ func NewHandler(options HandlerOptions) *Handler {
 	if ioTimeout <= 0 {
 		ioTimeout = DefaultIOTimeout
 	}
+	spaceID := options.SpaceID
+	if spaceID == "" {
+		spaceID = workspaceEvents.DefaultSpaceID
+	}
 	hub := options.Hub
 	if hub == nil {
 		hub = NewHub()
 	}
 	return &Handler{
 		rootContext: rootContext, actorResolver: options.ActorResolver, events: options.Events, hub: hub,
+		presence: options.Presence, spaceID: spaceID,
 		maxFrameBytes: maxFrameBytes, pollInterval: pollInterval,
 		heartbeatInterval: heartbeatInterval, ioTimeout: ioTimeout,
 	}
@@ -144,8 +154,10 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 	}
 	connection.SetReadLimit(h.maxFrameBytes)
 	ctx, cancel := context.WithCancel(request.Context())
+	var activePresence *workspacePresence.Lease
 	defer func() {
 		cancel()
+		h.deletePresence(activePresence)
 		_ = connection.CloseNow()
 	}()
 
@@ -208,6 +220,20 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 			if err := writer.writeEvents(ctx, result.Events); err != nil {
 				return
 			}
+			if h.presence != nil {
+				lease, presenceErr := h.registerPresence(ctx, actor.ID, actor.Kind)
+				if presenceErr != nil {
+					_ = writer.write(ctx, errorFrame{Version: ProtocolVersion, Type: "error", Error: socketError{Code: "internal.error", Message: "服务暂时不可用"}})
+					_ = writer.close(websocket.StatusInternalError, "presence unavailable")
+					return
+				}
+				previous := activePresence
+				activePresence = &lease
+				// A repeated hello is a new authenticated replay boundary. Register
+				// first, then remove only this socket's previous random lease so a
+				// concurrent connection cannot be taken offline.
+				h.deletePresenceWithContext(ctx, previous)
+			}
 			actorID = actor.ID
 			lastDeliveredSeq = deliveredCursor(message.hello.lastSeq, result)
 		case <-wakeup:
@@ -219,6 +245,15 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 				return
 			}
 		case <-heartbeat.C:
+			if h.presence != nil && activePresence != nil {
+				renewCtx, renewCancel := context.WithTimeout(ctx, h.ioTimeout)
+				renewErr := h.presence.Renew(renewCtx, workspacePresence.RenewInput{Lease: *activePresence})
+				renewCancel()
+				if renewErr != nil {
+					_ = writer.close(websocket.StatusInternalError, "presence expired")
+					return
+				}
+			}
 			pingCtx, pingCancel := context.WithTimeout(ctx, h.ioTimeout)
 			err := connection.Ping(pingCtx)
 			pingCancel()
@@ -230,6 +265,33 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 			return
 		}
 	}
+}
+
+func (h *Handler) registerPresence(ctx context.Context, userID, actorKind string) (workspacePresence.Lease, error) {
+	registerCtx, cancel := context.WithTimeout(ctx, h.ioTimeout)
+	defer cancel()
+	return h.presence.Register(registerCtx, workspacePresence.RegisterInput{
+		SpaceID: h.spaceID, UserID: userID, ActorKind: actorKind,
+	})
+}
+
+func (h *Handler) deletePresence(lease *workspacePresence.Lease) {
+	// The request/root context may already be canceled on disconnect or
+	// shutdown. The helper adds the explicit short deadline to this detached
+	// cleanup context.
+	h.deletePresenceWithContext(context.Background(), lease)
+}
+
+func (h *Handler) deletePresenceWithContext(ctx context.Context, lease *workspacePresence.Lease) {
+	if h == nil || h.presence == nil || lease == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	deleteCtx, cancel := context.WithTimeout(ctx, h.ioTimeout)
+	defer cancel()
+	_ = h.presence.Delete(deleteCtx, workspacePresence.DeleteInput{Lease: *lease})
 }
 
 func (h *Handler) readLoop(ctx context.Context, connection *websocket.Conn, output chan<- inbound) {
