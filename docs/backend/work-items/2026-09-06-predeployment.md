@@ -937,3 +937,19 @@ Fresh independent PostgreSQL/race passed cards (22.063 seconds), Gateway
 (14.815), Echo runtime (3.030) and application composition (5.357), followed by
 integration-tag staticcheck. The four initial membership/identity reproductions
 failed before the fix. No public API or production ownership changed.
+
+### Disposable Node Unit Fixture Storage
+
+CI runs `34029982272` and `34030618278` passed the Go/PostgreSQL/media and P2P
+jobs but hit the existing five-second Node unit deadline in SQLite fixtures
+with hundreds of tiny WAL commits. The two affected files passed unchanged
+locally (120 tests, 78.76 seconds). Only the Node unit step now sets
+`TMPDIR=/dev/shm`; no test timeout, assertion, SQLite transaction, retry or
+production storage setting changed. A workflow guard confines this setting to
+that single step, excluding executable Go/browser and PostgreSQL fixtures.
+
+The parent reran the complete unchanged Node unit suite with that scoped
+environment: SDK 8 passed; web 703 passed and two explicit PostgreSQL cases
+skipped, in 25.48 seconds. The three CI guards passed. These local results are
+not a claim that the new commit passed remote CI or the dedicated Node
+PostgreSQL gate.
