@@ -583,6 +583,16 @@ func safeConversation(value any, viewerID string) (map[string]any, bool) {
 		}
 		result["members"] = publicMembers
 	}
+	result["otherMember"] = nil
+	if stringField(conversation, "type") == "direct" {
+		if peer, exists := conversation["otherMember"]; exists {
+			if peer != nil {
+				if safe, ok := safeMember(peer, viewerID); ok {
+					result["otherMember"] = safe
+				}
+			}
+		}
+	}
 	if latest, ok := conversation["latestMessages"].([]any); ok {
 		publicMessages := make([]any, 0, len(latest))
 		for _, message := range latest {
@@ -662,6 +672,47 @@ func safeBlock(value any) (map[string]any, bool) {
 	result := map[string]any{"type": typeName}
 	for _, key := range []string{"text", "userId", "label", "url", "shortcode", "attachmentId", "shareId", "topicId", "title", "fallbackText"} {
 		copyStringField(result, block, key)
+	}
+	if share, ok := safeEmoteCollectionShare(block["share"]); ok {
+		result["share"] = share
+	}
+	return result, true
+}
+
+func safeEmoteCollectionShare(value any) (map[string]any, bool) {
+	share, ok := value.(map[string]any)
+	if !ok || share == nil {
+		return nil, false
+	}
+	result := stringFields(share, "id", "name", "createdAt", "sharePath")
+	if itemCount, ok := safeIntField(share["itemCount"]); ok {
+		result["itemCount"] = itemCount
+	}
+	copyNullableStringField(result, share, "revokedAt")
+	if canRevoke, ok := share["canRevoke"].(bool); ok {
+		result["canRevoke"] = canRevoke
+	}
+	for _, key := range []string{"sharedBy", "originalCreator"} {
+		person, ok := share[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		result[key] = stringFields(person, "id", "displayName")
+	}
+	if covers, ok := share["covers"].([]any); ok {
+		publicCovers := make([]any, 0, len(covers))
+		for _, value := range covers {
+			cover, ok := value.(map[string]any)
+			if !ok || cover == nil {
+				continue
+			}
+			projected := stringFields(cover, "id", "label", "src")
+			if animated, ok := cover["animated"].(bool); ok {
+				projected["animated"] = animated
+			}
+			publicCovers = append(publicCovers, projected)
+		}
+		result["covers"] = publicCovers
 	}
 	return result, true
 }

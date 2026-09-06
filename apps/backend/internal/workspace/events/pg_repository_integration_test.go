@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/migrations"
 	platformpostgres "github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 )
 
 func TestPGEventReplayVisibilityAndWindow(t *testing.T) {
@@ -69,6 +70,36 @@ func TestPGEventReplayVisibilityAndWindow(t *testing.T) {
 	t.Cleanup(pool.Close)
 
 	repository := NewPGRepository(pool)
+	beaconConversation := &auth.Actor{ID: "usr_viewer", Kind: "human", Role: "member"}
+	projectedConversation, err := repository.publicConversationPayload(ctx, DefaultSpaceID, beaconConversation, "conv-events-beacon")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projectedConversation == nil {
+		t.Fatal("beacon conversation was not projected")
+	}
+	peer, ok := projectedConversation["otherMember"].(map[string]any)
+	if !ok {
+		t.Fatalf("direct otherMember = %#v", projectedConversation["otherMember"])
+	}
+	if peer["id"] != "usr_system_beacon" || peer["kind"] != "bot" || peer["description"] != "文件传输助手" {
+		t.Fatalf("direct bot peer projection = %#v", peer)
+	}
+	if projectedConversation["displayTitle"] != "信标" {
+		t.Fatalf("direct displayTitle = %#v", projectedConversation["displayTitle"])
+	}
+	safeEventPayload := projectPayload("conversation.created", map[string]any{
+		"conversation": projectedConversation,
+	}, beaconConversation)
+	safeConversationPayload, ok := safeEventPayload["conversation"].(map[string]any)
+	if !ok {
+		t.Fatalf("safe event conversation = %#v", safeEventPayload["conversation"])
+	}
+	safePeer, ok := safeConversationPayload["otherMember"].(map[string]any)
+	if !ok || safePeer["kind"] != "bot" || safePeer["description"] != "文件传输助手" {
+		t.Fatalf("safe event bot peer projection = %#v", safeConversationPayload["otherMember"])
+	}
+
 	service := NewService(ServiceOptions{Repository: repository, BatchSize: 2, ReplayLimit: 2})
 	viewer, err := service.Replay(ctx, ReplayInput{ActorID: "usr_viewer"})
 	if err != nil {
@@ -161,6 +192,16 @@ func TestPGEventReplayVisibilityAndWindow(t *testing.T) {
 	}
 	if !ahead.SyncRequired || ahead.Reason != SyncReasonCursorAhead || ahead.CurrentSeq != 5 {
 		t.Fatalf("ahead replay = %#v", ahead)
+	}
+
+	// Syntactically valid JSON with an invalid typed sibling must never select
+	// a raw fallback that forwards client-supplied share metadata.
+	if _, err := pool.Exec(ctx, `UPDATE messages SET content_json = $1 WHERE id = 'msg-1'`,
+		`{"format":"duallane.message+json;v=1","blocks":[{"type":"text","text":123},{"type":"emote_collection","shareId":"forged","share":{"id":"forged","name":"must not leak"}}]}`); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := repository.publicMessagePayload(ctx, DefaultSpaceID, beaconConversation, "msg-1"); err == nil || result != nil {
+		t.Fatalf("invalid typed content used raw fallback: result=%#v err=%v", result, err)
 	}
 }
 
@@ -265,6 +306,24 @@ func seedEventIntegrationData(t *testing.T, ctx context.Context, conn *pgx.Conn,
 			INSERT INTO workspace_events (id, space_id, seq, type, actor_user_id, conversation_id, target_type, target_id, payload_json, created_at)
 			VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), $9, $10)
 		`, event.id, DefaultSpaceID, event.seq, event.eventType, event.actorID, event.conversationID, event.targetType, event.targetID, event.payload, now.Add(time.Duration(event.seq-1)*time.Second))
+	}
+	mustExecEventPG(t, ctx, conn, `
+		INSERT INTO users (id, github_login, email, display_name, nickname, kind, created_at, last_login_at)
+		VALUES ('usr_system_beacon', '__duallane_beacon__', 'beacon@example.test', 'Beacon', 'Beacon', 'bot', $1, $1)
+	`, now)
+	mustExecEventPG(t, ctx, conn, `
+		INSERT INTO space_members (space_id, user_id, role, joined_at)
+		VALUES ($1, 'usr_system_beacon', 'member', $2)
+	`, DefaultSpaceID, now)
+	mustExecEventPG(t, ctx, conn, `
+		INSERT INTO conversations (id, space_id, type, title, direct_key, created_by, created_at)
+		VALUES ('conv-events-beacon', $1, 'direct', 'Viewer, Beacon', 'usr_system_beacon:usr_viewer', 'usr_viewer', $2)
+	`, DefaultSpaceID, now)
+	for _, userID := range []string{"usr_viewer", "usr_system_beacon"} {
+		mustExecEventPG(t, ctx, conn, `
+			INSERT INTO conversation_members (conversation_id, user_id, joined_at)
+			VALUES ('conv-events-beacon', $1, $2)
+		`, userID, now)
 	}
 }
 

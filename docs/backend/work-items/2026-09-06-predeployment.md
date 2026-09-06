@@ -580,3 +580,27 @@ Echo HTTP/race passed (1.138 seconds), followed by integration-tag staticcheck
 for both HTTP and delivery. Six capitalization findings were corrected before
 the passing staticcheck run. Real command/router composition, actual Node/Go
 delivery effect fixtures and the full Workspace browser gate remain open.
+
+### Message Share And Bot Conversation Projection Review
+
+The message, conversation latest/pin, and realtime read paths now hydrate emote
+share previews from persisted message junctions and viewer-specific remarks.
+Client-supplied share metadata is discarded. The reader independently checks
+active Workspace and conversation membership, including uncommitted removal in
+the caller's transaction. Covers use only the trusted catalog or the authorized
+custom-emote content endpoint. Static custom covers retain Node's explicit
+`animated: false`; built-in covers omit that field. Invalid typed message JSON
+fails closed instead of falling back to untrusted raw content.
+
+Realtime direct-conversation projection now preserves `otherMember`, its Bot
+kind/description and viewer-facing title. This corrects the Beacon header
+replacement that the isolated two-user browser rerun reproduced at the missing
+BOT label, clarifying the earlier bounding-box timeout. The existing ordinary
+conversation Bot projection is also covered by a focused regression.
+
+Independent fresh PostgreSQL/race passed messages, conversations and events
+(8.031 / 2.983 / 2.931 seconds), followed by integration-tag staticcheck. These
+are read-projection gates; trusted catalog composition and the unchanged full
+Go Workspace browser suite remain separate acceptance steps. CI for the prior
+delivery commit `89b1449` passed all three existing jobs; it does not cover these
+new local changes or establish complete Go Workspace parity.

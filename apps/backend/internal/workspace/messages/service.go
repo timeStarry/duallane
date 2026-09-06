@@ -390,8 +390,16 @@ func (s *Service) projectRecords(ctx context.Context, repo ReadRepository, viewe
 	if err != nil {
 		return nil, err
 	}
+	shares := make(map[string]map[string]EmoteCollectionShare, len(records))
+	if reader, ok := repo.(MessageShareReader); ok {
+		shares, err = reader.ListMessageEmoteCollectionShares(ctx, s.space(), viewerID, ids)
+		if err != nil {
+			return nil, err
+		}
+	}
 	for _, record := range records {
 		record.HiddenByCurrentUser = hidden[record.ID]
+		record.EmoteCollectionShares = shares[record.ID]
 		projected, err := ProjectMessage(record, attachments[record.ID], reactions[record.ID])
 		if err != nil {
 			return nil, internalError("project workspace message", err)
@@ -1168,7 +1176,7 @@ func canonicalStoredContent(raw []byte, fallback string) ([]byte, error) {
 		canonical.Format = MessageContentFormat
 	}
 	for _, block := range decoded.Blocks {
-		normalized, ok := projectBlock(block)
+		normalized, ok := projectBlock(block, nil)
 		if !ok {
 			return nil, errors.New("stored message contains unsupported block")
 		}

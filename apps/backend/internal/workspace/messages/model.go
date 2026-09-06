@@ -39,20 +39,58 @@ type Content struct {
 // Block covers the Workspace v1 protocol blocks. Fields outside the selected
 // block type are omitted when the server canonicalizes the content.
 type Block struct {
-	Type          string `json:"type"`
-	Text          string `json:"text,omitempty"`
-	UserID        string `json:"userId,omitempty"`
-	Label         string `json:"label,omitempty"`
-	URL           string `json:"url,omitempty"`
-	Shortcode     string `json:"shortcode,omitempty"`
-	AttachmentID  string `json:"attachmentId,omitempty"`
-	ShareID       string `json:"shareId,omitempty"`
-	TopicID       string `json:"topicId,omitempty"`
-	Title         string `json:"title,omitempty"`
-	CardID        string `json:"cardId,omitempty"`
-	CardType      string `json:"cardType,omitempty"`
-	SchemaVersion int    `json:"schemaVersion,omitempty"`
-	FallbackText  string `json:"fallbackText,omitempty"`
+	Type         string `json:"type"`
+	Text         string `json:"text,omitempty"`
+	UserID       string `json:"userId,omitempty"`
+	Label        string `json:"label,omitempty"`
+	URL          string `json:"url,omitempty"`
+	Shortcode    string `json:"shortcode,omitempty"`
+	AttachmentID string `json:"attachmentId,omitempty"`
+	ShareID      string `json:"shareId,omitempty"`
+	// Share is a server-hydrated read projection. Message writes accept and
+	// persist only ShareID; callers must never treat this field as input.
+	Share         *EmoteCollectionShare `json:"share,omitempty"`
+	TopicID       string                `json:"topicId,omitempty"`
+	Title         string                `json:"title,omitempty"`
+	CardID        string                `json:"cardId,omitempty"`
+	CardType      string                `json:"cardType,omitempty"`
+	SchemaVersion int                   `json:"schemaVersion,omitempty"`
+	FallbackText  string                `json:"fallbackText,omitempty"`
+}
+
+// EmoteCollectionSharePerson is the viewer-specific public identity used by
+// a message's share snapshot. It deliberately contains no account metadata.
+type EmoteCollectionSharePerson struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+}
+
+// EmoteCollectionShareCover is the small cover projection shown in a message.
+// Custom covers expose only their content endpoint; storage keys and digests
+// never cross this boundary. Built-in covers are resolved from the trusted
+// process catalog by the repository adapter.
+type EmoteCollectionShareCover struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Src      string `json:"src"`
+	Animated *bool  `json:"animated,omitempty"`
+}
+
+// EmoteCollectionShare is the Node-compatible message share projection. A
+// revoked share remains visible when it is referenced by a message, but its
+// covers are empty because revocation removes share items. An unreferenced or
+// unknown share is never returned by the message projection.
+type EmoteCollectionShare struct {
+	ID              string                      `json:"id"`
+	Name            string                      `json:"name"`
+	ItemCount       int                         `json:"itemCount"`
+	CreatedAt       string                      `json:"createdAt"`
+	RevokedAt       *string                     `json:"revokedAt"`
+	SharedBy        EmoteCollectionSharePerson  `json:"sharedBy"`
+	OriginalCreator EmoteCollectionSharePerson  `json:"originalCreator"`
+	CanRevoke       bool                        `json:"canRevoke"`
+	Covers          []EmoteCollectionShareCover `json:"covers"`
+	SharePath       string                      `json:"sharePath"`
 }
 
 type MentionMember struct {
@@ -155,8 +193,11 @@ type MessageRecord struct {
 	RecalledAt          *time.Time
 	RecallReason        *string
 	HiddenByCurrentUser bool
-	EventSeq            int64
-	Revision            int64
+	// EmoteCollectionShares is populated only by an authorized read adapter.
+	// It is not persisted and is intentionally absent from write inputs.
+	EmoteCollectionShares map[string]EmoteCollectionShare
+	EventSeq              int64
+	Revision              int64
 }
 
 type ConversationRecord struct {
@@ -331,7 +372,7 @@ func ProjectMessage(record MessageRecord, attachments []AttachmentRecord, reacti
 		return message, nil
 	}
 
-	content, err := projectContent(record.ContentJSON, record.PlainText)
+	content, err := projectContent(record.ContentJSON, record.PlainText, record.EmoteCollectionShares)
 	if err != nil {
 		return Message{}, err
 	}
@@ -343,7 +384,15 @@ func ProjectMessage(record MessageRecord, attachments []AttachmentRecord, reacti
 	return message, nil
 }
 
-func projectContent(raw []byte, fallbackPlainText string) (Content, error) {
+// ProjectContent is the shared read-only content projection used by message
+// HTTP, conversation pin/latest-message, and realtime event readers. The
+// shares map must come from the message junction query; client content is not
+// a source of share metadata.
+func ProjectContent(raw []byte, fallbackPlainText string, shares map[string]EmoteCollectionShare) (Content, error) {
+	return projectContent(raw, fallbackPlainText, shares)
+}
+
+func projectContent(raw []byte, fallbackPlainText string, shares map[string]EmoteCollectionShare) (Content, error) {
 	content := Content{
 		Format:    MessageContentFormat,
 		PlainText: normalizeString(fallbackPlainText),
@@ -362,7 +411,7 @@ func projectContent(raw []byte, fallbackPlainText string) (Content, error) {
 	if decoded.Blocks != nil {
 		content.Blocks = make([]Block, 0, len(decoded.Blocks))
 		for _, block := range decoded.Blocks {
-			normalized, ok := projectBlock(block)
+			normalized, ok := projectBlock(block, shares)
 			if !ok {
 				continue
 			}
@@ -376,7 +425,7 @@ func projectContent(raw []byte, fallbackPlainText string) (Content, error) {
 	return content, nil
 }
 
-func projectBlock(block Block) (Block, bool) {
+func projectBlock(block Block, shares map[string]EmoteCollectionShare) (Block, bool) {
 	switch block.Type {
 	case "text":
 		return Block{Type: "text", Text: block.Text}, true
@@ -393,7 +442,13 @@ func projectBlock(block Block) (Block, bool) {
 	case "attachment":
 		return Block{Type: "attachment", AttachmentID: block.AttachmentID}, true
 	case "emote_collection":
-		return Block{Type: "emote_collection", ShareID: block.ShareID}, true
+		projected := Block{Type: "emote_collection", ShareID: block.ShareID}
+		shareID := normalizeString(block.ShareID)
+		if share, ok := shares[shareID]; ok {
+			copyShare := cloneEmoteCollectionShare(share)
+			projected.Share = &copyShare
+		}
+		return projected, true
 	case "topic_reference":
 		return Block{Type: "topic_reference", TopicID: block.TopicID, Title: block.Title}, true
 	case "card":
@@ -404,6 +459,23 @@ func projectBlock(block Block) (Block, bool) {
 	default:
 		return Block{}, false
 	}
+}
+
+func cloneEmoteCollectionShare(value EmoteCollectionShare) EmoteCollectionShare {
+	result := value
+	result.SharedBy = value.SharedBy
+	result.OriginalCreator = value.OriginalCreator
+	result.Covers = append([]EmoteCollectionShareCover(nil), value.Covers...)
+	for index := range result.Covers {
+		if animated := result.Covers[index].Animated; animated != nil {
+			copyAnimated := *animated
+			result.Covers[index].Animated = &copyAnimated
+		}
+	}
+	if result.Covers == nil {
+		result.Covers = make([]EmoteCollectionShareCover, 0)
+	}
+	return result
 }
 
 func projectAttachment(record AttachmentRecord) Attachment {

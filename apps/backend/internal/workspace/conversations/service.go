@@ -86,17 +86,19 @@ type Clock func() time.Time
 type IDFactory func() (string, error)
 
 type ServiceOptions struct {
-	Repository Repository
-	SpaceID    string
-	Now        Clock
-	IDFactory  IDFactory
+	Repository         Repository
+	SpaceID            string
+	Now                Clock
+	IDFactory          IDFactory
+	MessageShareReader workspaceMessages.MessageShareReader
 }
 
 type Service struct {
-	repo      Repository
-	spaceID   string
-	now       Clock
-	idFactory IDFactory
+	repo               Repository
+	spaceID            string
+	now                Clock
+	idFactory          IDFactory
+	messageShareReader workspaceMessages.MessageShareReader
 }
 
 var defaultConversationIDFactory = func() (string, error) {
@@ -120,7 +122,13 @@ func NewService(options ServiceOptions) *Service {
 	if idFactory == nil {
 		idFactory = defaultConversationIDFactory
 	}
-	return &Service{repo: options.Repository, spaceID: spaceID, now: now, idFactory: idFactory}
+	return &Service{
+		repo:               options.Repository,
+		spaceID:            spaceID,
+		now:                now,
+		idFactory:          idFactory,
+		messageShareReader: options.MessageShareReader,
+	}
 }
 
 // NewServiceForRepository is a compact constructor for composition tests and
@@ -483,26 +491,27 @@ func sanitizeAvatarURL(value string) string {
 
 func projectMessage(record MessageRecord, actor *auth.Actor) (Message, error) {
 	canonical := workspaceMessages.MessageRecord{
-		ID:                  record.ID,
-		ConversationID:      record.ConversationID,
-		AuthorID:            nullableString(record.AuthorID),
-		AuthorName:          record.AuthorName,
-		AuthorNickname:      record.AuthorNickname,
-		AuthorRemark:        record.AuthorRemark,
-		AuthorGitHubLogin:   record.AuthorGitHubLogin,
-		AuthorAvatarURL:     record.AuthorAvatarURL,
-		AuthorKind:          record.AuthorKind,
-		Kind:                record.Kind,
-		ClientMessageID:     nullableString(record.ClientMessageID),
-		ContentJSON:         record.ContentJSON,
-		PlainText:           record.PlainText,
-		ReplyToMessageID:    nullableString(record.ReplyToMessageID),
-		CreatedAt:           record.CreatedAt,
-		EditedAt:            record.EditedAt,
-		DeletedAt:           record.DeletedAt,
-		RecalledAt:          record.RecalledAt,
-		RecallReason:        nullableString(record.RecallReason),
-		HiddenByCurrentUser: record.HiddenByCurrentUser,
+		ID:                    record.ID,
+		ConversationID:        record.ConversationID,
+		AuthorID:              nullableString(record.AuthorID),
+		AuthorName:            record.AuthorName,
+		AuthorNickname:        record.AuthorNickname,
+		AuthorRemark:          record.AuthorRemark,
+		AuthorGitHubLogin:     record.AuthorGitHubLogin,
+		AuthorAvatarURL:       record.AuthorAvatarURL,
+		AuthorKind:            record.AuthorKind,
+		Kind:                  record.Kind,
+		ClientMessageID:       nullableString(record.ClientMessageID),
+		ContentJSON:           record.ContentJSON,
+		PlainText:             record.PlainText,
+		ReplyToMessageID:      nullableString(record.ReplyToMessageID),
+		CreatedAt:             record.CreatedAt,
+		EditedAt:              record.EditedAt,
+		DeletedAt:             record.DeletedAt,
+		RecalledAt:            record.RecalledAt,
+		RecallReason:          nullableString(record.RecallReason),
+		HiddenByCurrentUser:   record.HiddenByCurrentUser,
+		EmoteCollectionShares: record.EmoteCollectionShares,
 	}
 	if record.AuthorID != nil {
 		if identityName, _, identityAvatar, ok := systemIdentity(MemberRecord{ID: *record.AuthorID}); ok {
@@ -584,6 +593,9 @@ func (s *Service) projectConversation(ctx context.Context, repo ReadRepository, 
 	if err != nil {
 		return Conversation{}, normalizeRepositoryError(err)
 	}
+	if err := s.hydrateMessageShares(ctx, actor.ID, latest); err != nil {
+		return Conversation{}, err
+	}
 	projectedMembers := make([]Member, 0, len(members))
 	for _, member := range members {
 		projectedMembers = append(projectedMembers, projectMember(member, actor))
@@ -648,6 +660,29 @@ func (s *Service) projectConversation(ctx context.Context, repo ReadRepository, 
 		}
 	}
 	return conversation, nil
+}
+
+func (s *Service) hydrateMessageShares(ctx context.Context, viewerID string, records []MessageRecord) error {
+	if s == nil || s.messageShareReader == nil || len(records) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(records))
+	for _, record := range records {
+		if strings.TrimSpace(record.ID) != "" {
+			ids = append(ids, record.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	shares, err := s.messageShareReader.ListMessageEmoteCollectionShares(ctx, s.space(), viewerID, ids)
+	if err != nil {
+		return internalError("project conversation message shares", err)
+	}
+	for index := range records {
+		records[index].EmoteCollectionShares = shares[records[index].ID]
+	}
+	return nil
 }
 
 func (s *Service) readActor(ctx context.Context, actorID string) (*auth.Actor, error) {
@@ -1648,6 +1683,16 @@ func (s *Service) ListPins(ctx context.Context, input ConversationInput) ([]PinL
 	if err != nil {
 		return nil, normalizeRepositoryError(err)
 	}
+	pinMessages := make([]MessageRecord, len(pins))
+	for index := range pins {
+		pinMessages[index] = pins[index].Message
+	}
+	if err := s.hydrateMessageShares(ctx, actor.ID, pinMessages); err != nil {
+		return nil, err
+	}
+	for index := range pins {
+		pins[index].Message.EmoteCollectionShares = pinMessages[index].EmoteCollectionShares
+	}
 	items := make([]PinListItem, 0, len(pins))
 	for _, pin := range pins {
 		message, err := projectPinnedMessage(pin.Message, &pin, actor)
@@ -1744,6 +1789,11 @@ func (s *Service) Pin(ctx context.Context, input PinInput) (PinListItem, error) 
 		if existing.Message.ID == "" {
 			existing.Message = *message
 		}
+		shareRecords := []MessageRecord{existing.Message}
+		if err := s.hydrateMessageShares(ctx, actor.ID, shareRecords); err != nil {
+			return nil, nil, err
+		}
+		existing.Message.EmoteCollectionShares = shareRecords[0].EmoteCollectionShares
 		projectedMessage, err := projectPinnedMessage(existing.Message, existing, actor)
 		if err != nil {
 			return nil, nil, err

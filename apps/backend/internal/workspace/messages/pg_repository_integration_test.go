@@ -533,3 +533,163 @@ func mustExecPGMessageIntegrationPool(t *testing.T, fixture *pgMessageIntegratio
 		t.Fatal(err)
 	}
 }
+
+type testBuiltinShareSource map[string]string
+
+func (source testBuiltinShareSource) ResolveBuiltinEmote(_ context.Context, emoteKey string) (string, bool) {
+	value, ok := source[emoteKey]
+	return value, ok
+}
+
+func TestPGMessageShareProjectionIsReferenceBoundAndViewerScoped(t *testing.T) {
+	fixture := newPGMessageIntegrationFixture(t)
+	repository, ok := fixture.service.Repository().(*PGRepository)
+	if !ok {
+		t.Fatal("message repository is not PostgreSQL")
+	}
+	repository.SetBuiltinEmoteSource(testBuiltinShareSource{
+		"builtin:wave": "/assets/builtin-wave.png",
+	})
+
+	messageID := "message-share-active"
+	revokedMessageID := "message-share-revoked"
+	secretMessageID := "message-share-secret"
+	for _, item := range []struct {
+		id, conversation, clientID, shareID string
+	}{
+		{messageID, "conv-messages", "client-share-active", "share-projected"},
+		{revokedMessageID, "conv-messages", "client-share-revoked", "share-revoked"},
+	} {
+		mustExecPGMessageIntegrationPool(t, fixture, `
+			INSERT INTO messages (
+				id, space_id, conversation_id, author_id, author_kind, kind,
+				client_message_id, content_format, content_json, plain_text, created_at
+			) VALUES ($1, $2, $3, 'usr-bob', 'human', 'user', $4, $5, $6, '[表情合集]', $7)
+		`, item.id, DefaultSpaceID, item.conversation, item.clientID, MessageContentFormat,
+			fmt.Sprintf(`{"format":"duallane.message+json;v=1","plainText":"[表情合集]","blocks":[{"type":"emote_collection","shareId":"%s"}]}`, item.shareID),
+			fixture.now)
+	}
+
+	// This message is in a conversation where only Alice is a member. The
+	// low-level reader and service both require active conversation membership.
+	mustExecPGMessageIntegrationPool(t, fixture, `
+		INSERT INTO conversations (id, space_id, type, title, direct_key, retention_count, created_by, created_at)
+		VALUES ('conv-share-secret', $1, 'direct', 'Secret', 'secret-share', 10000, 'usr-alice', $2)
+	`, DefaultSpaceID, fixture.now)
+	mustExecPGMessageIntegrationPool(t, fixture, `
+		INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at)
+		VALUES ('conv-share-secret', 'usr-alice', $1, NULL)
+	`, fixture.now)
+	mustExecPGMessageIntegrationPool(t, fixture, `
+		INSERT INTO messages (
+			id, space_id, conversation_id, author_id, author_kind, kind,
+			client_message_id, content_format, content_json, plain_text, created_at
+		) VALUES ($1, $2, 'conv-share-secret', 'usr-alice', 'human', 'user', $3, $4, $5, '[表情合集]', $6)
+	`, secretMessageID, DefaultSpaceID, "client-share-secret", MessageContentFormat,
+		`{"format":"duallane.message+json;v=1","plainText":"[表情合集]","blocks":[{"type":"emote_collection","shareId":"share-projected"}]}`,
+		fixture.now)
+
+	mustExecPGMessageIntegrationPool(t, fixture, `
+		INSERT INTO workspace_custom_emotes (
+			id, user_id, source_type, source_emote_key, label, frame_count, sort_order, created_at
+		) VALUES
+			('share-builtin-cover', 'usr-alice', 'builtin', 'builtin:wave', 'Wave', 1, 0, $1),
+			('share-custom-cover', 'usr-alice', 'upload', NULL, 'Custom', 2, 1, $1)
+	`, fixture.now)
+	mustExecPGMessageIntegrationPool(t, fixture, `
+		INSERT INTO workspace_emote_collection_shares (
+			id, collection_id, shared_by_user_id, original_creator_user_id,
+			snapshot_name, fingerprint, item_count, created_at, revoked_at
+		) VALUES ('share-projected', NULL, 'usr-alice', 'usr-bob', 'Shared snapshot', 'share-projected-fp', 2, $1, NULL),
+			('share-unlinked', NULL, 'usr-alice', 'usr-bob', 'Should stay private', 'share-unlinked-fp', 1, $1, NULL),
+			('share-revoked', NULL, 'usr-alice', 'usr-bob', 'Revoked snapshot', 'share-revoked-fp', 2, $1, $1)
+	`, fixture.now)
+	mustExecPGMessageIntegrationPool(t, fixture, `
+		INSERT INTO workspace_emote_collection_share_items (share_id, emote_id, sort_order)
+		VALUES ('share-projected', 'share-builtin-cover', 0), ('share-projected', 'share-custom-cover', 1)
+	`)
+	mustExecPGMessageIntegrationPool(t, fixture, `
+		INSERT INTO message_emote_collection_shares (message_id, share_id)
+		VALUES ($1, 'share-projected'), ($2, 'share-revoked'), ($3, 'share-projected')
+	`, messageID, revokedMessageID, secretMessageID)
+	mustExecPGMessageIntegrationPool(t, fixture, `
+		INSERT INTO user_remarks (owner_user_id, target_user_id, remark, updated_at)
+		VALUES ('usr-alice', 'usr-bob', 'Bob as seen by Alice', $1),
+			('usr-bob', 'usr-alice', 'Alice as seen by Bob', $1)
+	`, fixture.now)
+
+	byMessage, err := repository.ListMessageEmoteCollectionShares(fixture.ctx, DefaultSpaceID, "usr-alice", []string{messageID, revokedMessageID, "not-a-message"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := byMessage[messageID]["share-projected"]
+	if active.ID != "share-projected" || active.Name != "Shared snapshot" || active.ItemCount != 2 {
+		t.Fatalf("active share = %#v", active)
+	}
+	if active.SharedBy.DisplayName != "Alice" || active.OriginalCreator.DisplayName != "Bob as seen by Alice" {
+		t.Fatalf("viewer-specific names = %#v", active)
+	}
+	if active.CanRevoke != true || len(active.Covers) != 2 {
+		t.Fatalf("active share capabilities/covers = %#v", active)
+	}
+	if active.Covers[0].Src != "/assets/builtin-wave.png" || active.Covers[0].Animated != nil {
+		t.Fatalf("built-in cover = %#v", active.Covers[0])
+	}
+	if active.Covers[1].Src != "/api/workspace/emotes/share-custom-cover/content" || active.Covers[1].Animated == nil || !*active.Covers[1].Animated {
+		t.Fatalf("custom cover = %#v", active.Covers[1])
+	}
+	if _, ok := byMessage[messageID]["share-unlinked"]; ok {
+		t.Fatal("unlinked share leaked into message projection")
+	}
+	revoked := byMessage[revokedMessageID]["share-revoked"]
+	if revoked.RevokedAt == nil || len(revoked.Covers) != 0 {
+		t.Fatalf("revoked share = %#v", revoked)
+	}
+	if len(byMessage["not-a-message"]) != 0 {
+		t.Fatalf("unknown message returned share metadata: %#v", byMessage["not-a-message"])
+	}
+
+	for _, item := range []struct {
+		id, wantSharedBy, wantOriginal string
+	}{
+		{messageID, "Alice", "Bob as seen by Alice"},
+	} {
+		projected := byMessage[item.id]["share-projected"]
+		if projected.SharedBy.DisplayName != item.wantSharedBy || projected.OriginalCreator.DisplayName != item.wantOriginal {
+			t.Fatalf("alice projection = %#v", projected)
+		}
+	}
+	bobView, err := repository.ListMessageEmoteCollectionShares(fixture.ctx, DefaultSpaceID, "usr-bob", []string{messageID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bobView[messageID]["share-projected"].SharedBy.DisplayName; got != "Alice as seen by Bob" {
+		t.Fatalf("bob shared-by remark = %q", got)
+	}
+	if got := bobView[messageID]["share-projected"].OriginalCreator.DisplayName; got != "Bob" {
+		t.Fatalf("bob original-creator display = %q", got)
+	}
+
+	if _, err := fixture.service.ListMessages(fixture.ctx, ListOptions{
+		ActorID: "usr-bob", ConversationID: "conv-share-secret", Limit: 20,
+	}); !isMessageCode(err, CodeConversationNotFound) {
+		t.Fatalf("cross-conversation read error = %v", err)
+	}
+	foreign, err := repository.ListMessageEmoteCollectionShares(fixture.ctx, DefaultSpaceID, "usr-bob", []string{secretMessageID})
+	if err != nil || len(foreign[secretMessageID]) != 0 {
+		t.Fatalf("low-level cross-conversation projection = %#v, %v", foreign, err)
+	}
+	transaction, err := fixture.pool.Begin(fixture.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transaction.Rollback(fixture.ctx)
+	pgTransaction := repository.NewTransaction(transaction).(*pgTx)
+	if _, err := pgTransaction.tx.Exec(fixture.ctx, `UPDATE conversation_members SET removed_at = $1 WHERE conversation_id = 'conv-messages' AND user_id = 'usr-bob'`, fixture.now); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := pgTransaction.ListMessageEmoteCollectionShares(fixture.ctx, DefaultSpaceID, "usr-bob", []string{messageID})
+	if err != nil || len(removed[messageID]) != 0 {
+		t.Fatalf("transaction-local removal projection = %#v, %v", removed, err)
+	}
+}

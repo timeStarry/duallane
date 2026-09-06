@@ -9,17 +9,27 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	workspaceMessages "github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 )
 
 // PGRepository is the durable event reader. It deliberately has no in-memory
 // subscription registry: a notification may wake a caller, but PostgreSQL's
 // workspace_events rows and sequence remain the source of truth.
 type PGRepository struct {
-	pool *pgxpool.Pool
+	pool               *pgxpool.Pool
+	builtinEmoteSource workspaceMessages.BuiltinEmoteSource
 }
 
 func NewPGRepository(pool *pgxpool.Pool) *PGRepository {
 	return &PGRepository{pool: pool}
+}
+
+// SetBuiltinEmoteSource installs the trusted process catalog before serving
+// requests, matching the HTTP message reader's cover projection.
+func (r *PGRepository) SetBuiltinEmoteSource(source workspaceMessages.BuiltinEmoteSource) {
+	if r != nil {
+		r.builtinEmoteSource = source
+	}
 }
 
 func (r *PGRepository) Ping(ctx context.Context) error {

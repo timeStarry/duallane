@@ -140,6 +140,122 @@ func TestMemberProjectionOnlyExposesSelfOnlyFieldsToThatActor(t *testing.T) {
 	}
 }
 
+func TestSafeConversationPreservesDirectBotPeerProjection(t *testing.T) {
+	conversation, ok := safeConversation(map[string]any{
+		"id":           "conv-beacon",
+		"type":         "direct",
+		"displayTitle": "信标",
+		"members": []any{
+			map[string]any{"id": "usr_viewer", "displayName": "Viewer", "kind": "human"},
+			map[string]any{
+				"id":          "usr_system_beacon",
+				"displayName": "信标",
+				"description": "文件传输助手",
+				"kind":        "bot",
+				"githubLogin": "must-not-leak",
+			},
+		},
+		"otherMember": map[string]any{
+			"id":          "usr_system_beacon",
+			"displayName": "信标",
+			"description": "文件传输助手",
+			"kind":        "bot",
+			"githubLogin": "must-not-leak",
+		},
+	}, "usr_viewer")
+	if !ok {
+		t.Fatal("safeConversation rejected direct conversation")
+	}
+	peer, ok := conversation["otherMember"].(map[string]any)
+	if !ok {
+		t.Fatalf("otherMember = %#v", conversation["otherMember"])
+	}
+	if peer["id"] != "usr_system_beacon" || peer["kind"] != "bot" || peer["description"] != "文件传输助手" {
+		t.Fatalf("bot peer projection = %#v", peer)
+	}
+	if _, leaked := peer["githubLogin"]; leaked {
+		t.Fatalf("bot peer leaked human identity: %#v", peer)
+	}
+}
+
+func TestSafeConversationKeepsNullOtherMemberShape(t *testing.T) {
+	conversation, ok := safeConversation(map[string]any{
+		"id":          "conv-empty",
+		"type":        "direct",
+		"otherMember": nil,
+	}, "usr_viewer")
+	if !ok {
+		t.Fatal("safeConversation rejected conversation")
+	}
+	if peer, exists := conversation["otherMember"]; !exists || peer != nil {
+		t.Fatalf("null otherMember shape = %#v", conversation["otherMember"])
+	}
+	group, ok := safeConversation(map[string]any{
+		"id":   "conv-group",
+		"type": "group",
+		"otherMember": map[string]any{
+			"id": "usr_system_beacon", "kind": "bot", "description": "must not be copied",
+		},
+	}, "usr_viewer")
+	if !ok || group["otherMember"] != nil {
+		t.Fatalf("group otherMember was not forced null: %#v", group["otherMember"])
+	}
+}
+
+func TestSafeBlockPreservesAuthorizedShareProjectionOnly(t *testing.T) {
+	content, ok := safeContent(map[string]any{
+		"format": "duallane.message+json;v=1",
+		"blocks": []any{map[string]any{
+			"type":    "emote_collection",
+			"shareId": "share-1",
+			"share": map[string]any{
+				"id":        "share-1",
+				"name":      "精选",
+				"itemCount": 2,
+				"createdAt": "2026-09-06T00:00:00.000Z",
+				"revokedAt": nil,
+				"sharePath": "/workspace/emotes/shared/share-1",
+				"canRevoke": true,
+				"sharedBy":  map[string]any{"id": "usr_owner", "displayName": "Owner", "email": "private@example.test"},
+				"originalCreator": map[string]any{
+					"id": "usr_creator", "displayName": "Creator", "email": "private@example.test",
+				},
+				"covers": []any{map[string]any{
+					"id": "emote-1", "label": "心", "src": "/api/workspace/emotes/emote-1/content", "animated": true,
+					"storageKey": "must-not-leak",
+				}},
+				"storageKey": "must-not-leak",
+			},
+		}},
+	})
+	if !ok {
+		t.Fatal("safeContent rejected projected share")
+	}
+	blocks, ok := content["blocks"].([]any)
+	if !ok || len(blocks) != 1 {
+		t.Fatalf("projected blocks = %#v", content["blocks"])
+	}
+	block := blocks[0]
+	projected, ok := block.(map[string]any)
+	if !ok {
+		t.Fatalf("projected block = %#v", block)
+	}
+	share, ok := projected["share"].(map[string]any)
+	if !ok || share["id"] != "share-1" || share["canRevoke"] != true {
+		t.Fatalf("projected share = %#v", projected["share"])
+	}
+	if _, leaked := share["storageKey"]; leaked {
+		t.Fatalf("share leaked storage key: %#v", share)
+	}
+	cover := share["covers"].([]any)[0].(map[string]any)
+	if _, leaked := cover["storageKey"]; leaked {
+		t.Fatalf("cover leaked storage key: %#v", cover)
+	}
+	if _, leaked := share["sharedBy"].(map[string]any)["email"]; leaked {
+		t.Fatalf("share leaked private identity: %#v", share["sharedBy"])
+	}
+}
+
 func TestReplayAppliesLimitAfterVisibilityAndUsesBoundedPages(t *testing.T) {
 	repo := &fakeRepository{
 		actor: &auth.Actor{ID: "usr_viewer", Kind: "human", Role: "member"},

@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	workspaceMessages "github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 )
 
 // ProjectEventPayload refreshes references whose public shape depends on
@@ -245,6 +246,7 @@ func (r *PGRepository) publicConversationPayload(ctx context.Context, spaceID st
 		"unreadCount":       int64(0),
 		"notificationLevel": notificationLevel,
 		"members":           []any{},
+		"otherMember":       nil,
 		"latestMessages":    []any{},
 	}
 	if avatarEmoji == nil {
@@ -278,6 +280,19 @@ func (r *PGRepository) publicConversationPayload(ctx context.Context, spaceID st
 		return nil, internalError("project workspace conversation members", err)
 	}
 	result["members"] = members
+	if typ == "direct" {
+		for _, value := range members {
+			member, ok := value.(map[string]any)
+			if !ok || stringField(member, "id") == actor.ID {
+				continue
+			}
+			result["otherMember"] = member
+			if displayName := stringField(member, "displayName"); displayName != "" {
+				result["displayTitle"] = displayName
+			}
+			break
+		}
+	}
 	return result, nil
 }
 
@@ -322,8 +337,24 @@ func (r *PGRepository) publicMessagePayload(ctx context.Context, spaceID string,
 		}
 	}
 	var content any
-	if json.Unmarshal([]byte(contentJSON), &content) != nil {
-		content = map[string]any{}
+	shareReader := workspaceMessages.NewPGRepository(r.pool)
+	shareReader.SetBuiltinEmoteSource(r.builtinEmoteSource)
+	sharesByMessage, err := shareReader.ListMessageEmoteCollectionShares(ctx, spaceID, actor.ID, []string{id})
+	if err != nil {
+		return nil, internalError("project workspace message shares", err)
+	}
+	projected, err := workspaceMessages.ProjectContent([]byte(contentJSON), plainText, sharesByMessage[id])
+	if err != nil {
+		// Invalid typed content must not fall back to raw JSON: a malformed
+		// sibling block could otherwise forward forged share metadata.
+		return nil, internalError("project workspace message content", err)
+	}
+	encoded, err := json.Marshal(projected)
+	if err != nil {
+		return nil, internalError("encode workspace message content", err)
+	}
+	if err := json.Unmarshal(encoded, &content); err != nil {
+		return nil, internalError("decode workspace message projection", err)
 	}
 	result := map[string]any{
 		"id":                  id,

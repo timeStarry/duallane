@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"strings"
 	"time"
 
@@ -18,9 +19,10 @@ import (
 // exposes only the narrow methods in repository.go; callers never receive a
 // generic SQL handle and all mutation methods are transaction-scoped.
 type PGRepository struct {
-	pool         *pgxpool.Pool
-	idFactory    IDFactory
-	jobScheduler messagejobs.PGScheduler
+	pool               *pgxpool.Pool
+	idFactory          IDFactory
+	jobScheduler       messagejobs.PGScheduler
+	builtinEmoteSource BuiltinEmoteSource
 }
 
 func NewPGRepository(pool *pgxpool.Pool, idFactories ...IDFactory) *PGRepository {
@@ -40,6 +42,15 @@ func NewPGRepositoryWithMessageJobs(pool *pgxpool.Pool, scheduler messagejobs.PG
 	repository := NewPGRepository(pool, idFactories...)
 	repository.jobScheduler = scheduler
 	return repository
+}
+
+// SetBuiltinEmoteSource installs the immutable catalog adapter used for
+// built-in share covers. Composition must call it before serving requests;
+// the message reader never accepts a source URL from message content or SQL.
+func (s *PGRepository) SetBuiltinEmoteSource(source BuiltinEmoteSource) {
+	if s != nil {
+		s.builtinEmoteSource = source
+	}
 }
 
 // NewPGTransaction wraps an already-open PostgreSQL transaction with the
@@ -184,6 +195,13 @@ func (s *PGRepository) ListHidden(ctx context.Context, spaceID, viewerID string,
 	return listHidden(ctx, s.pool, spaceID, viewerID, messageIDs)
 }
 
+func (s *PGRepository) ListMessageEmoteCollectionShares(ctx context.Context, spaceID, viewerID string, messageIDs []string) (map[string]map[string]EmoteCollectionShare, error) {
+	if s == nil || s.pool == nil {
+		return nil, errors.New("workspace messages postgres pool is required")
+	}
+	return listMessageEmoteCollectionShares(ctx, s.pool, spaceID, viewerID, messageIDs, s.builtinEmoteSource)
+}
+
 func (s *PGRepository) FindMentionMember(ctx context.Context, spaceID, conversationID, userID string) (*MentionMember, error) {
 	if s == nil || s.pool == nil {
 		return nil, errors.New("workspace messages postgres pool is required")
@@ -297,6 +315,14 @@ func (t *pgTx) ListReactions(ctx context.Context, spaceID, viewerID string, mess
 
 func (t *pgTx) ListHidden(ctx context.Context, spaceID, viewerID string, messageIDs []string) (map[string]bool, error) {
 	return listHidden(ctx, t.tx, spaceID, viewerID, messageIDs)
+}
+
+func (t *pgTx) ListMessageEmoteCollectionShares(ctx context.Context, spaceID, viewerID string, messageIDs []string) (map[string]map[string]EmoteCollectionShare, error) {
+	var source BuiltinEmoteSource
+	if t != nil && t.repository != nil {
+		source = t.repository.builtinEmoteSource
+	}
+	return listMessageEmoteCollectionShares(ctx, t.tx, spaceID, viewerID, messageIDs, source)
 }
 
 func (t *pgTx) FindMentionMember(ctx context.Context, spaceID, conversationID, userID string) (*MentionMember, error) {
@@ -1042,6 +1068,157 @@ func listHidden(ctx context.Context, queryer pgQueryer, spaceID, viewerID string
 		result[messageID] = true
 	}
 	return result, rows.Err()
+}
+
+func listMessageEmoteCollectionShares(ctx context.Context, queryer pgQueryer, spaceID, viewerID string, messageIDs []string, builtinSource BuiltinEmoteSource) (map[string]map[string]EmoteCollectionShare, error) {
+	ids := uniqueMessageIDs(messageIDs)
+	result := make(map[string]map[string]EmoteCollectionShare, len(ids))
+	for _, id := range ids {
+		result[id] = make(map[string]EmoteCollectionShare)
+	}
+	if len(ids) == 0 {
+		return result, nil
+	}
+	rows, err := queryer.Query(ctx, `
+		SELECT mes.message_id, s.id, s.snapshot_name, s.item_count, s.created_at, s.revoked_at,
+			s.shared_by_user_id,
+			COALESCE(sr.remark, su.nickname, su.github_login, su.display_name, su.id),
+			s.original_creator_user_id,
+			COALESCE(orr.remark, ou.nickname, ou.github_login, ou.display_name, ou.id)
+		FROM message_emote_collection_shares mes
+		INNER JOIN messages m ON m.id = mes.message_id
+			AND m.space_id = $1 AND m.topic_id IS NULL AND m.deleted_at IS NULL
+		INNER JOIN workspace_emote_collection_shares s ON s.id = mes.share_id
+		INNER JOIN users su ON su.id = s.shared_by_user_id
+		INNER JOIN users ou ON ou.id = s.original_creator_user_id
+		LEFT JOIN user_remarks sr ON sr.owner_user_id = $2 AND sr.target_user_id = su.id
+		LEFT JOIN user_remarks orr ON orr.owner_user_id = $2 AND orr.target_user_id = ou.id
+		WHERE mes.message_id = ANY($3::text[])
+			AND EXISTS (
+				SELECT 1 FROM conversation_members cm
+				INNER JOIN space_members sm ON sm.user_id = cm.user_id
+					AND sm.space_id = $1 AND sm.removed_at IS NULL
+				WHERE cm.conversation_id = m.conversation_id
+					AND cm.user_id = $2 AND cm.removed_at IS NULL
+			)
+		ORDER BY mes.message_id, s.created_at ASC, s.id ASC
+	`, spaceID, viewerID, ids)
+	if err != nil {
+		return nil, err
+	}
+	shareIDs := make([]string, 0)
+	seenShareIDs := make(map[string]struct{})
+	for rows.Next() {
+		var messageID, shareID, name, sharedByID, sharedByName, originalCreatorID, originalCreatorName string
+		var itemCount int
+		var createdAt time.Time
+		var revokedAt *time.Time
+		if err := rows.Scan(&messageID, &shareID, &name, &itemCount, &createdAt, &revokedAt,
+			&sharedByID, &sharedByName, &originalCreatorID, &originalCreatorName); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		projected := EmoteCollectionShare{
+			ID: shareID, Name: name, ItemCount: itemCount, CreatedAt: formatTimestamp(createdAt),
+			RevokedAt:       formatNullableTimestamp(revokedAt),
+			SharedBy:        EmoteCollectionSharePerson{ID: sharedByID, DisplayName: sharedByName},
+			OriginalCreator: EmoteCollectionSharePerson{ID: originalCreatorID, DisplayName: originalCreatorName},
+			CanRevoke:       sharedByID == strings.TrimSpace(viewerID),
+			Covers:          make([]EmoteCollectionShareCover, 0),
+			SharePath:       "/workspace/emotes/shared/" + url.PathEscape(shareID),
+		}
+		if result[messageID] == nil {
+			result[messageID] = make(map[string]EmoteCollectionShare)
+		}
+		result[messageID][shareID] = projected
+		if _, seen := seenShareIDs[shareID]; !seen {
+			seenShareIDs[shareID] = struct{}{}
+			shareIDs = append(shareIDs, shareID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(shareIDs) == 0 {
+		return result, nil
+	}
+
+	coverRows, err := queryer.Query(ctx, `
+		SELECT si.share_id, e.id, e.source_type, e.source_emote_key, e.label, e.frame_count
+		FROM workspace_emote_collection_share_items si
+		INNER JOIN workspace_custom_emotes e ON e.id = si.emote_id
+		WHERE si.share_id = ANY($1::text[]) AND si.sort_order < 4
+		ORDER BY si.share_id, si.sort_order ASC, e.id ASC
+	`, shareIDs)
+	if err != nil {
+		return nil, err
+	}
+	for coverRows.Next() {
+		var shareID, emoteID, sourceType, label string
+		var sourceEmoteKey *string
+		var frameCount *int
+		if err := coverRows.Scan(&shareID, &emoteID, &sourceType, &sourceEmoteKey, &label, &frameCount); err != nil {
+			coverRows.Close()
+			return nil, err
+		}
+		cover, ok := messageShareCover(ctx, builtinSource, emoteID, sourceType, stringValue(sourceEmoteKey), label, frameCount)
+		if !ok {
+			continue
+		}
+		for messageID, shares := range result {
+			share, exists := shares[shareID]
+			if !exists || len(share.Covers) >= 4 {
+				continue
+			}
+			share.Covers = append(share.Covers, cover)
+			shares[shareID] = share
+			result[messageID] = shares
+		}
+	}
+	if err := coverRows.Err(); err != nil {
+		coverRows.Close()
+		return nil, err
+	}
+	coverRows.Close()
+	return result, nil
+}
+
+func messageShareCover(ctx context.Context, builtinSource BuiltinEmoteSource, emoteID, sourceType, sourceEmoteKey, label string, frameCount *int) (EmoteCollectionShareCover, bool) {
+	if sourceType == "builtin" {
+		if builtinSource == nil {
+			return EmoteCollectionShareCover{}, false
+		}
+		src, ok := builtinSource.ResolveBuiltinEmote(ctx, sourceEmoteKey)
+		if !ok || strings.TrimSpace(src) == "" {
+			return EmoteCollectionShareCover{}, false
+		}
+		return EmoteCollectionShareCover{ID: emoteID, Label: label, Src: src}, true
+	}
+	animated := frameCount != nil && *frameCount > 1
+	return EmoteCollectionShareCover{
+		ID: emoteID, Label: label,
+		Src:      "/api/workspace/emotes/" + url.PathEscape(emoteID) + "/content",
+		Animated: &animated,
+	}, true
+}
+
+func uniqueMessageIDs(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func findMentionMember(ctx context.Context, queryer pgQueryer, spaceID, conversationID, userID string) (*MentionMember, error) {

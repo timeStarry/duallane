@@ -33,6 +33,23 @@ type ViewerMessageLookup interface {
 	FindMessageForViewer(ctx context.Context, spaceID, conversationID, messageID, viewerID string) (*MessageRecord, error)
 }
 
+// MessageShareReader is an optional read-only extension. It is deliberately
+// separate from ReadRepository and Tx so existing fakes and cross-domain
+// writers (including Echo delivery) do not acquire a new mutation method.
+// Implementations must scope results to message_emote_collection_shares rows;
+// a caller-provided share ID is never sufficient to return metadata.
+type MessageShareReader interface {
+	ListMessageEmoteCollectionShares(ctx context.Context, spaceID, viewerID string, messageIDs []string) (map[string]map[string]EmoteCollectionShare, error)
+}
+
+// BuiltinEmoteSource resolves only the public image source for an imported
+// built-in emote. The catalog remains owned by the emote domain; messages
+// accepts this tiny read adapter so it does not import or duplicate catalog
+// policy.
+type BuiltinEmoteSource interface {
+	ResolveBuiltinEmote(ctx context.Context, emoteKey string) (string, bool)
+}
+
 // RecallReasonLookup is optional so the auth package can remain compatible
 // with its existing Actor shape while the message service still honors the
 // current per-user recall copy when the column exists.

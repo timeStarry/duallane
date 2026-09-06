@@ -121,7 +121,10 @@ type MessageRecord struct {
 	RecalledAt          *time.Time
 	RecallReason        *string
 	HiddenByCurrentUser bool
-	Pin                 *PinRecord
+	// EmoteCollectionShares is an authorized read-only projection populated by
+	// the optional messages share reader. It is never persisted by this domain.
+	EmoteCollectionShares map[string]workspaceMessages.EmoteCollectionShare
+	Pin                   *PinRecord
 }
 
 type PinRecord struct {

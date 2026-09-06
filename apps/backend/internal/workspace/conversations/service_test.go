@@ -424,6 +424,37 @@ func TestCreateDirectIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestCreateDirectProjectsBeaconPeerMetadata(t *testing.T) {
+	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
+	actor := auth.Actor{ID: "usr_owner", GitHubLogin: "owner", DisplayName: "Owner", Kind: "human", Role: "owner", JoinedAt: now}
+	repo := newConversationFake(actor)
+	repo.state.members[actor.ID] = MemberRecord{ID: actor.ID, GitHubLogin: actor.GitHubLogin, DisplayName: actor.DisplayName, Kind: "human", Role: "owner", JoinedAt: now}
+	repo.state.members[workspaceMembers.BeaconUserID] = MemberRecord{ID: workspaceMembers.BeaconUserID, DisplayName: "forged", Kind: "system", Role: "member", JoinedAt: now}
+	service := NewService(ServiceOptions{
+		Repository: repo,
+		Now:        func() time.Time { return now },
+		IDFactory:  func() (string, error) { return "conv_beacon", nil },
+	})
+
+	conversation, err := service.CreateConversation(context.Background(), CreateConversationInput{
+		ActorID:      actor.ID,
+		Type:         string(ConversationTypeDirect),
+		TargetUserID: workspaceMembers.BeaconUserID,
+	})
+	if err != nil {
+		t.Fatalf("create Beacon direct: %v", err)
+	}
+	if conversation.OtherMember == nil {
+		t.Fatal("direct conversation omitted otherMember")
+	}
+	if conversation.OtherMember.ID != workspaceMembers.BeaconUserID || conversation.OtherMember.Kind != "bot" || conversation.OtherMember.Description != "文件传输助手" {
+		t.Fatalf("Beacon peer projection = %#v", conversation.OtherMember)
+	}
+	if conversation.DisplayTitle != "信标" {
+		t.Fatalf("Beacon direct display title = %q", conversation.DisplayTitle)
+	}
+}
+
 func TestGroupMutationsWritePublicSystemMessageEvents(t *testing.T) {
 	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
 	actor := auth.Actor{ID: "usr_owner", GitHubLogin: "owner", DisplayName: "Owner", Email: "owner@example.com", Kind: "human", Role: "owner", JoinedAt: now}
