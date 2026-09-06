@@ -15,6 +15,7 @@ type ReadRepository interface {
 	GetBot(ctx context.Context, spaceID, botID string) (*BotRecord, error)
 	GetBotAnySpace(ctx context.Context, botID string) (*BotRecord, error)
 	GetBotByOwner(ctx context.Context, spaceID, ownerUserID string) (*BotRecord, error)
+	GetConnection(ctx context.Context, botID, spaceID string) (*ConnectionRecord, error)
 	ListBots(ctx context.Context, spaceID, ownerUserID string) ([]BotRecord, error)
 	GetSettings(ctx context.Context, spaceID, botID string) (*SettingsRecord, error)
 	ListGroupPolicies(ctx context.Context, spaceID, botID string) ([]GroupPolicyRecord, error)
@@ -28,6 +29,14 @@ type ReadRepository interface {
 	GetSetupSessionByID(ctx context.Context, setupID string) (*SetupSessionRecord, error)
 }
 
+// ConnectionTransaction is the only durable connection mutation exposed to a
+// Bot connection provider. The provider receives the transaction opened by
+// the owner service, so clearing error state and writing the owner audit row
+// commit or roll back together without exposing generic SQL.
+type ConnectionTransaction interface {
+	ClearConnectionErrors(ctx context.Context, botID, spaceID string, at time.Time) (*ConnectionRecord, error)
+}
+
 type Repository interface {
 	ReadRepository
 	WithTx(ctx context.Context, callback func(Tx) error) error
@@ -37,6 +46,7 @@ type Repository interface {
 // must use one transaction and a stable lifecycle lock.
 type Tx interface {
 	ReadRepository
+	ConnectionTransaction
 	Lock(ctx context.Context, key string) error
 	CreateBot(ctx context.Context, bot BotRecord, settings SettingsRecord) error
 	UpdateSettings(ctx context.Context, spaceID, botID, visibilityPolicy, conversationPolicy string, settings SettingsRecord, at time.Time) error

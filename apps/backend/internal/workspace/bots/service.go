@@ -21,20 +21,72 @@ type Clock func() time.Time
 type IDFactory func() (string, error)
 type TokenFactory func() (string, error)
 
+// ConnectionProvider is the narrow read bridge from owner-facing Bot APIs to
+// the already-composed Bot Gateway runtime. It must not register sockets,
+// claim deliveries, authenticate callers, or expose a generic SQL boundary.
+// A nil record is not expected from the repository-backed provider: Node's
+// ensureBotConfiguration repairs a missing durable row before returning the
+// owner projection. Other runtime providers must preserve that behavior.
+type ConnectionProvider interface {
+	GetConnection(ctx context.Context, botID, spaceID string) (*ConnectionRecord, error)
+}
+
+// ConnectionTestProvider is the transactional half of ConnectionProvider.
+// TestConnectionInTx is invoked with the owner service's already-open,
+// type-limited transaction. Implementations may only use the supplied
+// ConnectionTransaction to clear the durable error projection; the service
+// performs the authorization re-check and writes the audit row in that same
+// transaction.
+type ConnectionTestProvider interface {
+	TestConnectionInTx(ctx context.Context, tx ConnectionTransaction, botID, spaceID string, at time.Time) (*ConnectionRecord, error)
+}
+
 type ServiceOptions struct {
-	Repository   Repository
-	SpaceID      string
-	Now          Clock
-	IDFactory    IDFactory
-	TokenFactory TokenFactory
+	Repository         Repository
+	SpaceID            string
+	Now                Clock
+	IDFactory          IDFactory
+	TokenFactory       TokenFactory
+	ConnectionProvider ConnectionProvider
 }
 
 type Service struct {
-	repo         Repository
-	spaceID      string
-	now          Clock
-	idFactory    IDFactory
-	tokenFactory TokenFactory
+	repo               Repository
+	spaceID            string
+	now                Clock
+	idFactory          IDFactory
+	tokenFactory       TokenFactory
+	connectionProvider ConnectionProvider
+}
+
+// RepositoryConnectionProvider adapts the existing Bot repository connection
+// projection to the owner API. It is deliberately limited to the connection
+// row and does not own WebSocket registration, nonce claiming, or lifecycle
+// cleanup. Parent composition may inject this adapter when the owner and
+// gateway services share the same PostgreSQL repository.
+type RepositoryConnectionProvider struct {
+	repository Repository
+}
+
+func NewRepositoryConnectionProvider(repository Repository) *RepositoryConnectionProvider {
+	return &RepositoryConnectionProvider{repository: repository}
+}
+
+func (p *RepositoryConnectionProvider) GetConnection(ctx context.Context, botID, spaceID string) (*ConnectionRecord, error) {
+	if p == nil || p.repository == nil {
+		return nil, internalError("read workspace agent bot connection", errors.New("repository is required"))
+	}
+	return p.repository.GetConnection(ctx, botID, spaceID)
+}
+
+func (p *RepositoryConnectionProvider) TestConnectionInTx(ctx context.Context, tx ConnectionTransaction, botID, spaceID string, at time.Time) (*ConnectionRecord, error) {
+	if p == nil || p.repository == nil {
+		return nil, internalError("test workspace agent bot connection", errors.New("repository is required"))
+	}
+	if tx == nil {
+		return nil, internalError("test workspace agent bot connection", errors.New("connection transaction is required"))
+	}
+	return tx.ClearConnectionErrors(ctx, botID, spaceID, at)
 }
 
 type mutationResult struct {
@@ -94,7 +146,10 @@ func NewService(options ServiceOptions) *Service {
 	if tokenFactory == nil {
 		tokenFactory = defaultTokenFactory
 	}
-	return &Service{repo: options.Repository, spaceID: spaceID, now: now, idFactory: idFactory, tokenFactory: tokenFactory}
+	return &Service{
+		repo: options.Repository, spaceID: spaceID, now: now, idFactory: idFactory,
+		tokenFactory: tokenFactory, connectionProvider: options.ConnectionProvider,
+	}
 }
 
 func NewServiceForRepository(repository Repository) *Service {
@@ -378,6 +433,165 @@ func (s *Service) Get(ctx context.Context, input GetInput) (Bot, error) {
 
 func (s *Service) GetOwnedBot(ctx context.Context, input GetInput) (Bot, error) {
 	return s.Get(ctx, input)
+}
+
+// connectionOwner performs the owner-facing authorization boundary shared by
+// connection reads and tests. The Node service audits ownership failures for
+// these two actions; keep that rejection evidence content-free and separate
+// from the gateway provider so a provider can never authorize a caller.
+func (s *Service) connectionOwner(ctx context.Context, actorID, requestedSpace, botID string, meta RequestMeta, evidence mutationEvidence) (string, *auth.Actor, *BotRecord, error) {
+	spaceID, domainErr := s.space(requestedSpace)
+	if domainErr != nil {
+		return "", nil, nil, domainErr
+	}
+	if s == nil || s.repo == nil {
+		return "", nil, nil, internalError("workspace agent bot connection", errors.New("repository is required"))
+	}
+	actor, err := s.lookupActor(ctx, s.repo, spaceID, actorID)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	bot, err := s.ownerBot(ctx, s.repo, actor, spaceID, botID)
+	if err == nil {
+		return spaceID, actor, bot, nil
+	}
+	if auditErr := s.writeConnectionRejection(ctx, actor, spaceID, meta, evidence, err); auditErr != nil {
+		return "", nil, nil, auditErr
+	}
+	return "", nil, nil, err
+}
+
+func (s *Service) writeConnectionRejection(ctx context.Context, actor *auth.Actor, spaceID string, meta RequestMeta, evidence mutationEvidence, cause error) error {
+	var domainErr *Error
+	if !errors.As(cause, &domainErr) || domainErr == nil {
+		return normalizeError(cause)
+	}
+	return normalizeError(s.repo.WithTx(ctx, func(tx Tx) error {
+		if tx == nil {
+			return errors.New("workspace agent bot connection transaction is required")
+		}
+		return tx.WriteAudit(ctx, s.auditInput(actor, spaceID, meta, evidence, "rejected", domainErr.Code, s.nowUTC()))
+	}))
+}
+
+func validateConnectionRecord(record *ConnectionRecord, botID, spaceID string) error {
+	if record == nil {
+		return nil
+	}
+	if strings.TrimSpace(record.ID) == "" || record.BotID != botID || record.SpaceID != spaceID || record.UpdatedAt.IsZero() {
+		return errors.New("connection provider returned an invalid scoped projection")
+	}
+	switch record.Status {
+	case ConnectionStatusDisconnected, ConnectionStatusConnected, ConnectionStatusPaused, ConnectionStatusRevoked:
+		return nil
+	default:
+		return errors.New("connection provider returned an unknown status")
+	}
+}
+
+func projectConnection(record *ConnectionRecord, botID, spaceID string) (*BotConnection, error) {
+	if record == nil {
+		return nil, nil
+	}
+	if err := validateConnectionRecord(record, botID, spaceID); err != nil {
+		return nil, internalError("read workspace agent bot connection", err)
+	}
+	value := record.Public()
+	return &value, nil
+}
+
+// GetConnectionStatus returns the durable gateway projection. It does not
+// create a socket or claim a delivery; the repository-backed provider may
+// repair the missing disconnected row required by Node's owner API.
+func (s *Service) GetConnectionStatus(ctx context.Context, input ConnectionInput) (*BotConnection, error) {
+	spaceID, _, bot, err := s.connectionOwner(ctx, input.ActorID, input.SpaceID, input.BotID, input.Meta, mutationEvidence{
+		action: "bot.connection.read", targetType: "agent_bot", targetID: strings.TrimSpace(input.BotID),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if s.connectionProvider == nil {
+		return nil, internalError("read workspace agent bot connection", errors.New("connection provider is required"))
+	}
+	record, err := s.connectionProvider.GetConnection(ctx, bot.ID, spaceID)
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	return projectConnection(record, bot.ID, spaceID)
+}
+
+// TestConnection clears only the provider-owned connection error projection.
+// Authorization, the typed provider mutation, and its owner audit share one
+// transaction. A provider or audit failure therefore cannot leave a cleared
+// error projection behind, and the owner is re-checked immediately before the
+// provider is called.
+func (s *Service) TestConnection(ctx context.Context, input ConnectionTestInput) (*BotConnection, error) {
+	spaceID, domainErr := s.space(input.SpaceID)
+	if domainErr != nil {
+		return nil, domainErr
+	}
+	if s == nil || s.repo == nil {
+		return nil, internalError("test workspace agent bot connection", errors.New("repository is required"))
+	}
+	provider, ok := s.connectionProvider.(ConnectionTestProvider)
+	if !ok || provider == nil {
+		return nil, internalError("test workspace agent bot connection", errors.New("connection provider is required"))
+	}
+	var result *BotConnection
+	var rejectedOperation *Error
+	err := s.repo.WithTx(ctx, func(tx Tx) error {
+		if tx == nil {
+			return errors.New("workspace agent bot connection transaction is required")
+		}
+		botID := strings.TrimSpace(input.BotID)
+		if err := tx.Lock(ctx, botLifecycleLockKey(spaceID, botID)); err != nil {
+			return err
+		}
+		// This lookup intentionally occurs inside the mutation transaction after
+		// the lifecycle lock. A caller revoked between the initial request and
+		// the provider write must not clear connection errors.
+		actor, err := s.lookupActor(ctx, tx, spaceID, input.ActorID)
+		if err != nil {
+			return err
+		}
+		bot, err := s.ownerBot(ctx, tx, actor, spaceID, botID)
+		if err != nil {
+			var domainError *Error
+			if !errors.As(err, &domainError) || domainError == nil {
+				return err
+			}
+			if auditErr := tx.WriteAudit(ctx, s.auditInput(actor, spaceID, input.Meta, mutationEvidence{
+				action: "bot.connection.test", targetType: "agent_bot", targetID: botID,
+			}, "rejected", domainError.Code, s.nowUTC())); auditErr != nil {
+				return auditErr
+			}
+			rejectedOperation = domainError
+			return nil
+		}
+		testedAt := s.nowUTC()
+		record, err := provider.TestConnectionInTx(ctx, tx, bot.ID, spaceID, testedAt)
+		if err != nil {
+			return err
+		}
+		result, err = projectConnection(record, bot.ID, spaceID)
+		if err != nil {
+			return err
+		}
+		if result == nil {
+			return internalError("test workspace agent bot connection", errors.New("connection provider returned no projection"))
+		}
+		result.TestedAt = formatTime(testedAt)
+		return tx.WriteAudit(ctx, s.auditInput(actor, spaceID, input.Meta, mutationEvidence{
+			action: "bot.connection.test", targetType: "agent_bot", targetID: bot.ID,
+		}, "success", "", testedAt))
+	})
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	if rejectedOperation != nil {
+		return nil, rejectedOperation
+	}
+	return result, nil
 }
 
 func defaultSettings(botID, spaceID string, at time.Time) SettingsRecord {

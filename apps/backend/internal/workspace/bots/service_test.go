@@ -21,6 +21,7 @@ type fakeState struct {
 	actors       map[string]*auth.Actor
 	bots         map[string]BotRecord
 	settings     map[string]SettingsRecord
+	connections  map[string]ConnectionRecord
 	groups       map[string][]GroupPolicyRecord
 	grants       map[string]ContextGrantRecord
 	tokens       map[string]TokenRecord
@@ -29,6 +30,7 @@ type fakeState struct {
 	groupMembers map[string]GroupConversationRecord
 	members      map[string]bool
 	audits       []AuditInput
+	auditErr     error
 }
 
 type fakeRepository struct {
@@ -46,6 +48,7 @@ func newFakeRepository() *fakeRepository {
 		},
 		bots:         map[string]BotRecord{},
 		settings:     map[string]SettingsRecord{},
+		connections:  map[string]ConnectionRecord{},
 		groups:       map[string][]GroupPolicyRecord{},
 		grants:       map[string]ContextGrantRecord{},
 		tokens:       map[string]TokenRecord{},
@@ -150,6 +153,43 @@ func (r *fakeRepository) GetBotByOwner(_ context.Context, spaceID, ownerID strin
 
 func (tx *fakeTx) GetBotByOwner(_ context.Context, spaceID, ownerID string) (*BotRecord, error) {
 	return findOwnerBot(tx.state, spaceID, ownerID), nil
+}
+
+func connectionKey(botID, spaceID string) string { return botID + "\x00" + spaceID }
+
+func (r *fakeRepository) GetConnection(_ context.Context, botID, spaceID string) (*ConnectionRecord, error) {
+	var result *ConnectionRecord
+	err := r.read(func(state *fakeState) error {
+		key := connectionKey(botID, spaceID)
+		value, ok := state.connections[key]
+		if !ok {
+			value = ConnectionRecord{ID: "bcon_" + botID, BotID: botID, SpaceID: spaceID, Status: ConnectionStatusDisconnected, UpdatedAt: time.Unix(0, 0).UTC()}
+			state.connections[key] = value
+		}
+		result = cloneConnectionRecord(&value)
+		return nil
+	})
+	return result, err
+}
+
+func (tx *fakeTx) GetConnection(_ context.Context, botID, spaceID string) (*ConnectionRecord, error) {
+	key := connectionKey(botID, spaceID)
+	value, ok := tx.state.connections[key]
+	if !ok {
+		value = ConnectionRecord{ID: "bcon_" + botID, BotID: botID, SpaceID: spaceID, Status: ConnectionStatusDisconnected, UpdatedAt: time.Unix(0, 0).UTC()}
+		tx.state.connections[key] = value
+	}
+	return cloneConnectionRecord(&value), nil
+}
+
+func (tx *fakeTx) ClearConnectionErrors(ctx context.Context, botID, spaceID string, at time.Time) (*ConnectionRecord, error) {
+	value, err := tx.GetConnection(ctx, botID, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	value.LastErrorCode, value.LastErrorAt, value.UpdatedAt = nil, nil, at
+	tx.state.connections[connectionKey(botID, spaceID)] = *value
+	return cloneConnectionRecord(value), nil
 }
 
 func findOwnerBot(state *fakeState, spaceID, ownerID string) *BotRecord {
@@ -612,12 +652,15 @@ func (tx *fakeTx) ExpireSetupSession(_ context.Context, setupID string, expected
 	return true, nil
 }
 func (tx *fakeTx) WriteAudit(_ context.Context, input AuditInput) error {
+	if tx.state.auditErr != nil {
+		return tx.state.auditErr
+	}
 	tx.state.audits = append(tx.state.audits, input)
 	return nil
 }
 
 func cloneState(source *fakeState) *fakeState {
-	result := &fakeState{actors: map[string]*auth.Actor{}, bots: map[string]BotRecord{}, settings: map[string]SettingsRecord{}, groups: map[string][]GroupPolicyRecord{}, grants: map[string]ContextGrantRecord{}, tokens: map[string]TokenRecord{}, setups: map[string]SetupSessionRecord{}, direct: map[string]bool{}, groupMembers: map[string]GroupConversationRecord{}, members: map[string]bool{}, audits: append([]AuditInput{}, source.audits...)}
+	result := &fakeState{actors: map[string]*auth.Actor{}, bots: map[string]BotRecord{}, settings: map[string]SettingsRecord{}, connections: map[string]ConnectionRecord{}, groups: map[string][]GroupPolicyRecord{}, grants: map[string]ContextGrantRecord{}, tokens: map[string]TokenRecord{}, setups: map[string]SetupSessionRecord{}, direct: map[string]bool{}, groupMembers: map[string]GroupConversationRecord{}, members: map[string]bool{}, audits: append([]AuditInput{}, source.audits...), auditErr: source.auditErr}
 	for id, actor := range source.actors {
 		copied := *actor
 		result.actors[id] = &copied
@@ -627,6 +670,9 @@ func cloneState(source *fakeState) *fakeState {
 	}
 	for id, settings := range source.settings {
 		result.settings[id] = cloneSettings(settings)
+	}
+	for id, connection := range source.connections {
+		result.connections[id] = *cloneConnectionRecord(&connection)
 	}
 	for id, rows := range source.groups {
 		result.groups[id] = cloneGroups(rows)

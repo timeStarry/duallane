@@ -15,15 +15,20 @@ import (
 
 type botServiceStub struct {
 	BotService
-	createInput     bots.CreateInput
-	issueInput      bots.IssueTokenInput
-	groupInput      bots.UpdateGroupPolicyInput
-	created         bots.Bot
-	issued          bots.IssuedToken
-	err             error
-	createCalls     int
-	issueCalls      int
-	groupPatchCalls int
+	createInput         bots.CreateInput
+	issueInput          bots.IssueTokenInput
+	groupInput          bots.UpdateGroupPolicyInput
+	connectionInput     bots.ConnectionInput
+	connectionTestInput bots.ConnectionTestInput
+	created             bots.Bot
+	issued              bots.IssuedToken
+	connection          *bots.BotConnection
+	err                 error
+	createCalls         int
+	issueCalls          int
+	groupPatchCalls     int
+	connectionCalls     int
+	connectionTestCalls int
 }
 
 func (service *botServiceStub) CreateBot(_ context.Context, input bots.CreateInput) (bots.Bot, error) {
@@ -36,6 +41,18 @@ func (service *botServiceStub) IssueToken(_ context.Context, input bots.IssueTok
 	service.issueCalls++
 	service.issueInput = input
 	return service.issued, service.err
+}
+
+func (service *botServiceStub) GetConnectionStatus(_ context.Context, input bots.ConnectionInput) (*bots.BotConnection, error) {
+	service.connectionCalls++
+	service.connectionInput = input
+	return service.connection, service.err
+}
+
+func (service *botServiceStub) TestConnection(_ context.Context, input bots.ConnectionTestInput) (*bots.BotConnection, error) {
+	service.connectionTestCalls++
+	service.connectionTestInput = input
+	return service.connection, service.err
 }
 
 func (service *botServiceStub) UpdateGroupPolicy(_ context.Context, input bots.UpdateGroupPolicyInput) (bots.GroupPolicy, error) {
@@ -150,5 +167,78 @@ func TestBotTransitionWithoutServiceReturnsSafeDependencyError(t *testing.T) {
 
 	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), `"code":"internal.error"`) {
 		t.Fatalf("missing service response = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestBotConnectionRoutesPreserveNodeProjectionAndActorBoundary(t *testing.T) {
+	adapterVersion := "gateway-v1"
+	service := &botServiceStub{connection: &bots.BotConnection{
+		ID: "bcon-1", BotID: "bot-1", SpaceID: "spc_default", Status: bots.ConnectionStatusConnected,
+		AdapterVersion: &adapterVersion, UpdatedAt: "2026-09-06T09:10:11.123Z",
+	}}
+	router := botRouter(service)
+
+	getResponse := httptest.NewRecorder()
+	router.ServeHTTP(getResponse, httptest.NewRequest(http.MethodGet, "/api/workspace/bots/bot-1/connection", nil))
+	if getResponse.Code != http.StatusOK || !strings.Contains(getResponse.Body.String(), `"connection":{"id":"bcon-1"`) {
+		t.Fatalf("get response = %d %s", getResponse.Code, getResponse.Body.String())
+	}
+	if service.connectionCalls != 1 || service.connectionInput.ActorID != "owner" || service.connectionInput.BotID != "bot-1" {
+		t.Fatalf("get input = %#v calls=%d", service.connectionInput, service.connectionCalls)
+	}
+
+	testResponse := httptest.NewRecorder()
+	testRequest := httptest.NewRequest(http.MethodPost, "/api/workspace/bots/bot-1/connection/test", strings.NewReader(`{}`))
+	testRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(testResponse, testRequest)
+	if testResponse.Code != http.StatusOK || !strings.Contains(testResponse.Body.String(), `"connection":{"id":"bcon-1"`) {
+		t.Fatalf("test response = %d %s", testResponse.Code, testResponse.Body.String())
+	}
+	if service.connectionTestCalls != 1 || service.connectionTestInput.ActorID != "owner" || service.connectionTestInput.BotID != "bot-1" {
+		t.Fatalf("test input = %#v calls=%d", service.connectionTestInput, service.connectionTestCalls)
+	}
+}
+
+func TestBotConnectionTestPreservesIgnoredBodyContract(t *testing.T) {
+	for _, testCase := range []struct {
+		name, body, contentType string
+		status                  int
+	}{
+		{"omitted", "", "", http.StatusOK},
+		{"empty-json", "", "application/json", http.StatusBadRequest},
+		{"whitespace-json", "  ", "application/json", http.StatusBadRequest},
+		{"provider-fields", `{"adapterVersion":"fake","connectionNonce":"secret"}`, "application/json", http.StatusOK},
+		{"null", "null", "application/json", http.StatusOK},
+		{"primitive", "1", "application/json", http.StatusOK},
+		{"array", "[]", "application/json", http.StatusOK},
+		{"malformed", "{", "application/json", http.StatusBadRequest},
+		{"multiple", "{} {}", "application/json", http.StatusBadRequest},
+		{"oversize", `"` + strings.Repeat("x", int(MaxJSONBodyBytes)) + `"`, "application/json", http.StatusRequestEntityTooLarge},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			service := &botServiceStub{}
+			request := httptest.NewRequest(http.MethodPost, "/api/workspace/bots/bot-1/connection/test", strings.NewReader(testCase.body))
+			if testCase.contentType != "" {
+				request.Header.Set("Content-Type", testCase.contentType)
+			}
+			response := httptest.NewRecorder()
+			botRouter(service).ServeHTTP(response, request)
+			if response.Code != testCase.status {
+				t.Fatalf("response = %d %s", response.Code, response.Body.String())
+			}
+			wantCalls := 0
+			if testCase.status == http.StatusOK {
+				wantCalls = 1
+			}
+			if service.connectionTestCalls != wantCalls {
+				t.Fatalf("domain calls = %d, want %d", service.connectionTestCalls, wantCalls)
+			}
+			if wantCalls == 1 && (service.connectionTestInput.ActorID != "owner" || service.connectionTestInput.BotID != "bot-1") {
+				t.Fatalf("typed input = %#v", service.connectionTestInput)
+			}
+			if strings.Contains(response.Body.String(), "secret") || strings.Contains(response.Body.String(), "fake") {
+				t.Fatal("ignored request fields leaked into response")
+			}
+		})
 	}
 }

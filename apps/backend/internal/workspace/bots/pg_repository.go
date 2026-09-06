@@ -168,6 +168,90 @@ func (r *PGRepository) GetBotByOwner(ctx context.Context, spaceID, ownerUserID s
 	return getBotByOwner(ctx, r.pool, spaceID, ownerUserID)
 }
 
+func (r *PGRepository) GetConnection(ctx context.Context, botID, spaceID string) (*ConnectionRecord, error) {
+	if r == nil || r.pool == nil {
+		return nil, internalError("read workspace agent bot connection", errors.New("workspace postgres pool is required"))
+	}
+	if err := ensureConnection(ctx, r.pool, botID, spaceID, time.Now().UTC().Truncate(time.Millisecond), r.idFactory); err != nil {
+		return nil, err
+	}
+	return getConnectionRecord(ctx, r.pool, botID, spaceID)
+}
+
+func ensureConnection(ctx context.Context, queryer pgQueryer, botID, spaceID string, at time.Time, idFactory IDFactory) error {
+	botID = strings.TrimSpace(botID)
+	spaceID = strings.TrimSpace(spaceID)
+	if botID == "" || spaceID == "" {
+		return internalError("ensure workspace agent bot connection", errors.New("bot and space are required"))
+	}
+	var exists bool
+	if err := queryer.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM workspace_agent_bot_connections WHERE bot_id = $1 AND space_id = $2)
+	`, botID, spaceID).Scan(&exists); err != nil {
+		return internalError("check workspace agent bot connection", err)
+	}
+	if exists {
+		return nil
+	}
+	if idFactory == nil {
+		idFactory = defaultIDFactory
+	}
+	id, err := idFactory()
+	if err != nil || strings.TrimSpace(id) == "" {
+		if err == nil {
+			err = errors.New("connection id factory returned an empty id")
+		}
+		return internalError("generate workspace agent bot connection id", err)
+	}
+	_, err = queryer.Exec(ctx, `
+		INSERT INTO workspace_agent_bot_connections (id, bot_id, space_id, status, updated_at)
+		VALUES ($1, $2, $3, 'disconnected', $4)
+		ON CONFLICT (bot_id) DO NOTHING
+	`, "bcon_"+strings.TrimSpace(id), botID, spaceID, at.UTC())
+	if err != nil {
+		return internalError("ensure workspace agent bot connection", err)
+	}
+	return nil
+}
+
+func getConnectionRecord(ctx context.Context, queryer pgQueryer, botID, spaceID string) (*ConnectionRecord, error) {
+	var record ConnectionRecord
+	var adapterVersion, errorCode *string
+	var connectedAt, disconnectedAt, heartbeatAt, processedAt, errorAt *time.Time
+	err := queryer.QueryRow(ctx, `
+		SELECT id, bot_id, space_id, status, adapter_version, connected_at, disconnected_at,
+		       last_heartbeat_at, last_processed_at, last_error_code, last_error_at, updated_at
+		FROM workspace_agent_bot_connections
+		WHERE bot_id = $1 AND space_id = $2
+	`, strings.TrimSpace(botID), strings.TrimSpace(spaceID)).Scan(
+		&record.ID, &record.BotID, &record.SpaceID, &record.Status, &adapterVersion,
+		&connectedAt, &disconnectedAt, &heartbeatAt, &processedAt, &errorCode, &errorAt, &record.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, internalError("read workspace agent bot connection", err)
+	}
+	record.AdapterVersion = adapterVersion
+	record.ConnectedAt = cloneConnectionTime(connectedAt)
+	record.DisconnectedAt = cloneConnectionTime(disconnectedAt)
+	record.LastHeartbeatAt = cloneConnectionTime(heartbeatAt)
+	record.LastProcessedAt = cloneConnectionTime(processedAt)
+	record.LastErrorCode = errorCode
+	record.LastErrorAt = cloneConnectionTime(errorAt)
+	record.UpdatedAt = record.UpdatedAt.UTC()
+	return &record, nil
+}
+
+func cloneConnectionTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	result := value.UTC()
+	return &result
+}
+
 func getBotByOwner(ctx context.Context, queryer pgQueryer, spaceID, ownerUserID string) (*BotRecord, error) {
 	return scanBot(queryer.QueryRow(ctx, botSelect+` WHERE b.space_id = $1 AND b.owner_user_id = $2 AND b.status <> 'deleted' ORDER BY b.created_at DESC, b.id DESC LIMIT 1`, spaceID, ownerUserID))
 }
@@ -587,6 +671,41 @@ func (t *pgTx) GetBotAnySpace(ctx context.Context, botID string) (*BotRecord, er
 }
 func (t *pgTx) GetBotByOwner(ctx context.Context, spaceID, ownerUserID string) (*BotRecord, error) {
 	return getBotByOwner(ctx, t.tx, spaceID, ownerUserID)
+}
+
+func (t *pgTx) GetConnection(ctx context.Context, botID, spaceID string) (*ConnectionRecord, error) {
+	if t == nil || t.tx == nil {
+		return nil, internalError("read workspace agent bot connection", errors.New("workspace transaction is required"))
+	}
+	var factory IDFactory
+	if t.repository != nil {
+		factory = t.repository.idFactory
+	}
+	if err := ensureConnection(ctx, t.tx, botID, spaceID, time.Now().UTC().Truncate(time.Millisecond), factory); err != nil {
+		return nil, err
+	}
+	return getConnectionRecord(ctx, t.tx, botID, spaceID)
+}
+
+func (t *pgTx) ClearConnectionErrors(ctx context.Context, botID, spaceID string, at time.Time) (*ConnectionRecord, error) {
+	if t == nil || t.tx == nil {
+		return nil, internalError("clear workspace agent bot connection errors", errors.New("workspace transaction is required"))
+	}
+	var factory IDFactory
+	if t.repository != nil {
+		factory = t.repository.idFactory
+	}
+	if err := ensureConnection(ctx, t.tx, botID, spaceID, at, factory); err != nil {
+		return nil, err
+	}
+	if _, err := t.tx.Exec(ctx, `
+		UPDATE workspace_agent_bot_connections
+		SET last_error_code = NULL, last_error_at = NULL, updated_at = $1
+		WHERE bot_id = $2 AND space_id = $3
+	`, at.UTC(), strings.TrimSpace(botID), strings.TrimSpace(spaceID)); err != nil {
+		return nil, internalError("clear workspace agent bot connection errors", err)
+	}
+	return getConnectionRecord(ctx, t.tx, botID, spaceID)
 }
 func (t *pgTx) ListBots(ctx context.Context, spaceID, ownerUserID string) ([]BotRecord, error) {
 	return listBots(ctx, t.tx, spaceID, ownerUserID)

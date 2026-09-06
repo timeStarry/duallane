@@ -676,3 +676,22 @@ that they already wrote the domain action event, avoiding a duplicate generic
 event; the original stored payload JSON is available to typed executors for
 order-sensitive adapters. This is the safety boundary, not evidence that all
 Echo or Feishu card definitions have been composed.
+
+### Bot Owner Connection API
+
+Owner connection reads and tests now expose a typed public projection without
+gateway nonces, credentials or socket state. Missing durable configuration is
+repaired as in the Node owner service. The test operation rechecks ownership
+inside the lifecycle transaction, clears only connection error state, and
+commits its content-free audit atomically. Audit failure preserves the previous
+error projection; removed members cannot mutate it.
+
+Parent ran the actual Node route/service fixture against disposable SQLite and
+corrected the initial Go request-body restriction: omitted or valid JSON bodies
+are ignored, including objects, null and scalars; malformed/empty declared JSON
+is rejected. Go retains its bounded JSON parser and established safe error
+envelope, not Fastify's framework-specific parser error shape. No request-body
+fields enter the typed owner operation. Fresh PostgreSQL/race passed the Bot
+package (4.170 seconds); focused HTTP/race passed (1.219 seconds), followed by
+integration-tag staticcheck. WebSocket shutdown and application composition
+remain independently validated changes.

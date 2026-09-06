@@ -40,6 +40,11 @@ const (
 	SetupSessionTTL      = 10 * time.Minute
 	BotTokenPrefix       = "dl_bot_"
 	BotTokenBytes        = 32
+
+	ConnectionStatusDisconnected = "disconnected"
+	ConnectionStatusConnected    = "connected"
+	ConnectionStatusPaused       = "paused"
+	ConnectionStatusRevoked      = "revoked"
 )
 
 var (
@@ -88,6 +93,45 @@ type Bot struct {
 	UpdatedAt             string  `json:"updatedAt"`
 	DeletingAt            *string `json:"deletingAt"`
 	DeletedAt             *string `json:"deletedAt"`
+}
+
+// BotConnection is the owner-facing connection projection. It deliberately
+// contains no connection nonce, token, socket handle, or adapter credential.
+// The optional testedAt field is populated only by the connection test
+// operation, matching the Node owner API response shape.
+type BotConnection struct {
+	ID              string  `json:"id"`
+	BotID           string  `json:"botId"`
+	SpaceID         string  `json:"spaceId"`
+	Status          string  `json:"status"`
+	AdapterVersion  *string `json:"adapterVersion"`
+	ConnectedAt     *string `json:"connectedAt"`
+	DisconnectedAt  *string `json:"disconnectedAt"`
+	LastHeartbeatAt *string `json:"lastHeartbeatAt"`
+	LastProcessedAt *string `json:"lastProcessedAt"`
+	LastErrorCode   *string `json:"lastErrorCode"`
+	LastErrorAt     *string `json:"lastErrorAt"`
+	UpdatedAt       string  `json:"updatedAt"`
+	TestedAt        string  `json:"testedAt,omitempty"`
+}
+
+// ConnectionRecord is the typed provider boundary for the existing gateway
+// connection projection. It intentionally has no nonce or secret fields; the
+// gateway runtime retains ownership of those values and of WebSocket
+// registration/cleanup.
+type ConnectionRecord struct {
+	ID              string
+	BotID           string
+	SpaceID         string
+	Status          string
+	AdapterVersion  *string
+	ConnectedAt     *time.Time
+	DisconnectedAt  *time.Time
+	LastHeartbeatAt *time.Time
+	LastProcessedAt *time.Time
+	LastErrorCode   *string
+	LastErrorAt     *time.Time
+	UpdatedAt       time.Time
 }
 
 // BotRecord is an internal storage projection. GithubLogin is only used to
@@ -366,6 +410,20 @@ type GetInput struct {
 	Meta    RequestMeta
 }
 
+type ConnectionInput struct {
+	ActorID string
+	SpaceID string
+	BotID   string
+	Meta    RequestMeta
+}
+
+type ConnectionTestInput struct {
+	ActorID string
+	SpaceID string
+	BotID   string
+	Meta    RequestMeta
+}
+
 type UpdateSettingsInput struct {
 	ActorID string
 	SpaceID string
@@ -531,6 +589,16 @@ func (r BotRecord) Public() Bot {
 		AuthenticationAllowed: false, CanJoinGroups: r.ConversationPolicy == ConversationGroupCapable,
 		TokenPolicy: "hashed-one-time", CreatedAt: formatTime(r.CreatedAt), UpdatedAt: formatTime(r.UpdatedAt),
 		DeletingAt: formatOptionalTime(r.DeletingAt), DeletedAt: formatOptionalTime(r.DeletedAt),
+	}
+}
+
+func (r ConnectionRecord) Public() BotConnection {
+	return BotConnection{
+		ID: r.ID, BotID: r.BotID, SpaceID: r.SpaceID, Status: r.Status,
+		AdapterVersion: cloneString(r.AdapterVersion), ConnectedAt: formatOptionalTime(r.ConnectedAt),
+		DisconnectedAt: formatOptionalTime(r.DisconnectedAt), LastHeartbeatAt: formatOptionalTime(r.LastHeartbeatAt),
+		LastProcessedAt: formatOptionalTime(r.LastProcessedAt), LastErrorCode: cloneString(r.LastErrorCode),
+		LastErrorAt: formatOptionalTime(r.LastErrorAt), UpdatedAt: formatTime(r.UpdatedAt),
 	}
 }
 

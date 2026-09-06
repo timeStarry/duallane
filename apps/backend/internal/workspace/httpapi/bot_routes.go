@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"mime"
 	"net/http"
 	"net/url"
 
@@ -16,6 +17,8 @@ type BotService interface {
 	CreateBot(context.Context, bots.CreateInput) (bots.Bot, error)
 	ListOwnedBots(context.Context, bots.ListInput) ([]bots.Bot, error)
 	GetOwnedBot(context.Context, bots.GetInput) (bots.Bot, error)
+	GetConnectionStatus(context.Context, bots.ConnectionInput) (*bots.BotConnection, error)
+	TestConnection(context.Context, bots.ConnectionTestInput) (*bots.BotConnection, error)
 	GetSettings(context.Context, bots.GetInput) (bots.BotSettings, error)
 	UpdateBotSettings(context.Context, bots.UpdateSettingsInput) (bots.BotSettings, error)
 	ListGroupPolicies(context.Context, bots.GroupPoliciesInput) ([]bots.GroupPolicy, error)
@@ -54,6 +57,8 @@ func registerBotRoutes(router chi.Router, options RouterOptions) {
 	router.Post("/bot-setup/{sessionId}/deny", withActor(options, denyBotSetupSession))
 	router.Post("/bots/{botId}/pause", withActor(options, pauseBot))
 	router.Post("/bots/{botId}/resume", withActor(options, resumeBot))
+	router.Get("/bots/{botId}/connection", withActor(options, getBotConnection))
+	router.Post("/bots/{botId}/connection/test", withActor(options, testBotConnection))
 	router.Delete("/bots/{botId}", withActor(options, beginDeleteBot))
 	router.Post("/bots/{botId}/delete/confirm", withActor(options, finalizeDeleteBot))
 }
@@ -85,6 +90,38 @@ func getBot(response http.ResponseWriter, request *http.Request, actor *auth.Act
 	}
 	result, err := options.Bots.GetOwnedBot(request.Context(), botGetInput(request, actor, options))
 	writeResult(response, http.StatusOK, map[string]any{"bot": result}, err)
+}
+
+func getBotConnection(response http.ResponseWriter, request *http.Request, actor *auth.Actor, options RouterOptions) {
+	if missingService(response, options.Bots) {
+		return
+	}
+	result, err := options.Bots.GetConnectionStatus(request.Context(), bots.ConnectionInput{
+		ActorID: actor.ID, BotID: chi.URLParam(request, "botId"), Meta: requestMeta(request, options),
+	})
+	writeResult(response, http.StatusOK, map[string]any{"connection": result}, err)
+}
+
+func testBotConnection(response http.ResponseWriter, request *http.Request, actor *auth.Actor, options RouterOptions) {
+	if missingService(response, options.Bots) {
+		return
+	}
+	// Node ignores this route's body after HTTP JSON parsing. Preserve that
+	// behavior without forwarding caller-supplied provider or credential data.
+	var raw json.RawMessage
+	if err := decodeJSON(response, request, &raw); err != nil {
+		writeError(response, err)
+		return
+	}
+	mediaType, _, _ := mime.ParseMediaType(request.Header.Get("Content-Type"))
+	if mediaType == "application/json" && len(bytes.TrimSpace(raw)) == 0 {
+		writeError(response, &publicError{Code: "request.invalid_json", Message: "请求内容不是有效 JSON", StatusCode: http.StatusBadRequest})
+		return
+	}
+	result, err := options.Bots.TestConnection(request.Context(), bots.ConnectionTestInput{
+		ActorID: actor.ID, BotID: chi.URLParam(request, "botId"), Meta: requestMeta(request, options),
+	})
+	writeResult(response, http.StatusOK, map[string]any{"connection": result}, err)
 }
 
 func getBotSettings(response http.ResponseWriter, request *http.Request, actor *auth.Actor, options RouterOptions) {
