@@ -1359,3 +1359,14 @@ Independent PostgreSQL/race passed Workspace (10.335 seconds), health helper
 parsing and the test's missing catalog path, worker/config (7.522/1.017).
 Tagged staticcheck passed. Full container mode proof and deployment harness
 integration are separate gates and are not claimed by these tests.
+
+### Real HTTP Writer And Dual WebSocket Regressions
+
+Two synthetic PostgreSQL tests now exercise the actual message/reaction HTTP
+services with two authenticated WebSockets and a live PostgreSQL listener.
+They verify a 28-message burst, ordered durable replay, viewer-specific
+reaction add/remove snapshots and reconnect after removal. Messages and event
+rows are created through the API, not directly inserted. Parent independently
+passed the realtime package with PostgreSQL/race (19.604 seconds). These focused
+regressions passed while the full browser visibility issue remained open; they
+are stronger writer/transport evidence, not a claim that the issue is resolved.
