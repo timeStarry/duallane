@@ -135,6 +135,9 @@ jobs:
       - name: Validate release ownership and rollback contracts
         run: node --test scripts/backend/production-deploy.test.mjs
 
+      - name: Validate bounded permission rehearsal and owned cleanup
+        run: node --test scripts/backend/runtime-permissions.test.mjs
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 

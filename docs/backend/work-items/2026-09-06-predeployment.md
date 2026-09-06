@@ -1581,3 +1581,23 @@ tests, then the full Node gate using CI's SQLite-only tmpfs setting: SDK 8/8 and
 Web 703 passed, 2 PostgreSQL tests explicitly skipped (24.36 seconds). No timeout
 or assertions were relaxed. Synthetic release ownership/rollback tests are now
 an explicit CI step rather than a local-only check.
+
+### Workspace Image And Effective Permission Rehearsal
+
+Parent built the pinned Workspace runtime with storage and permission-probe
+commands (local image ID `cdaa6cbe1805b61cfe574091831f827766051cf97ae076f84603aa7525daaec8`).
+The new image passed all six actual Docker permission cases: root-owned data
+denial, Go-owned success, root-owned secret denial, exact 2 MiB acceptance,
+over-limit rejection and symlink rejection. Both initialization and probe used
+this explicit image. Fixture mounts disable volume copy-up and explicitly set
+root/Go ownership, avoiding an image-layer ownership false positive. The probe
+runs as 65532 with read-only data/rootfs and no network or database access.
+
+Run `mtq0cbj7-8a0c8efbafed434c98632f9123a51abe` passed in 8.10 seconds and
+removed its 18 label-verified synthetic volumes; all 12 `--rm` containers were
+already absent. The optional fake-S3 Docker stage was not run. The separate
+runner gate passed 14 tests with one explicit Docker opt-in skip; probe race
+tests and the earlier aggregate Go PostgreSQL/race gate also passed. CI now runs
+the runner's ownership/cleanup tests. No existing or production volume was
+modified. This image has diagnostic labels and predates the next favorite and
+provision slices, so it is not a final release artifact.

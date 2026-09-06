@@ -1,11 +1,16 @@
-ARG GO_IMAGE=docker.m.daocloud.io/library/golang:1.26-bookworm
-ARG RUNTIME_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim
+ARG GO_IMAGE=docker.m.daocloud.io/library/golang:1.26-bookworm@sha256:9fdc884aacc3bec89b20ffc69f4bb369c78210e3e4f600387b5128b12c199f81
+ARG RUNTIME_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
+
+FROM ${GO_IMAGE} AS certificates
 
 FROM ${GO_IMAGE} AS build
 ARG GOPROXY=https://proxy.golang.org,direct
+ARG DEBIAN_MIRROR=http://deb.debian.org
 ENV PATH="/usr/local/go/bin:${PATH}"
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libvips-dev pkg-config \
+RUN case "${DEBIAN_MIRROR}" in http://deb.debian.org|https://deb.debian.org|https://mirrors.ustc.edu.cn) ;; *) exit 2 ;; esac \
+    && sed -i "s|http://deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends libvips-dev=8.14.1-3+deb12u3 pkg-config \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src/apps/backend
 COPY apps/backend/go.mod apps/backend/go.sum ./
@@ -14,24 +19,34 @@ COPY apps/backend ./
 RUN CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/workspace ./cmd/workspace \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/storage ./cmd/storage \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/permission-probe ./cmd/permission-probe \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/healthcheck ./cmd/healthcheck
 
 FROM ${RUNTIME_IMAGE} AS runtime
 ARG DUALLANE_APP_VERSION=0.0.0
 ARG DUALLANE_GIT_COMMIT=unknown
+ARG DEBIAN_MIRROR=http://deb.debian.org
 LABEL org.opencontainers.image.title="DualLane Workspace" \
       org.opencontainers.image.version="${DUALLANE_APP_VERSION}" \
       org.opencontainers.image.revision="${DUALLANE_GIT_COMMIT}"
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libvips42 tzdata \
+# The slim base does not yet contain a CA bundle. Bootstrap HTTPS APT from
+# the same trusted build image; APT still verifies Debian's signed metadata.
+COPY --from=certificates /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+RUN case "${DEBIAN_MIRROR}" in http://deb.debian.org|https://deb.debian.org|https://mirrors.ustc.edu.cn) ;; *) exit 2 ;; esac \
+    && sed -i "s|http://deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates=20250419~deb12u1 libvips42=8.14.1-3+deb12u3 tzdata=2026b-0+deb12u1 \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /app/data \
-    && chown 65532:65532 /app/data
+    && mkdir -p /app/data/workspace-files \
+    && chown 65532:65532 /app/data /app/data/workspace-files
 WORKDIR /app
 COPY --from=build /out/workspace /usr/local/bin/duallane-workspace
 COPY --from=build /out/worker /usr/local/bin/duallane-worker
 COPY --from=build /out/migrate /usr/local/bin/duallane-migrate
+COPY --from=build /out/storage /usr/local/bin/duallane-storage
 COPY --from=build /out/healthcheck /usr/local/bin/duallane-healthcheck
+COPY --from=build /out/permission-probe /usr/local/bin/duallane-permission-probe
 COPY apps/web/server/migrations /app/migrations
 COPY apps/web/shared/emote-packs.json /app/assets/emote-packs.json
 COPY apps/web/shared/echo-release-guides.json /app/assets/echo-release-guides.json

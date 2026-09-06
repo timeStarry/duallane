@@ -43,9 +43,14 @@ Workspace, worker, and migrate use the same immutable image digest for one
 release. Compose selects the command. Images carry the product version and full
 Git commit labels required by the deployment verifier.
 
-Build stages pin the Go toolchain, OS packages, and base-image digest according
-to repository policy. No compiler, package manager cache, source tree, test
-fixture, or secret belongs in the final runtime layer.
+Build stages pin Go and Debian base digests and direct libvips, certificate and
+timezone package versions. Transitive APT resolution is still repository-dependent:
+record and reuse the exact built image digest; do not assume a later rebuild is
+byte-identical. The Workspace image also carries `duallane-storage` and the
+bounded read-only `duallane-permission-probe`. Its baked-in ownership does not
+repair existing volumes; follow the [storage permission gate](STORAGE_OPERATOR.md).
+No compiler, package manager cache, source tree, test fixture, or secret belongs
+in the final runtime layer.
 
 ## 4. Ports And Routing
 
