@@ -37,6 +37,13 @@ type AdvancedBlockValidator interface {
 	ValidateBlock(ctx context.Context, actor *auth.Actor, conversationID string, block Block) (Block, error)
 }
 
+// TransactionalBlockValidator is the narrow in-transaction extension used by
+// aggregate writers. It is intentionally separate from AdvancedBlockValidator
+// so ordinary human message calls keep their existing dependency graph.
+type TransactionalBlockValidator interface {
+	ValidateBlockInTx(ctx context.Context, tx Tx, actor *auth.Actor, conversationID string, block Block) (Block, error)
+}
+
 type ServiceOptions struct {
 	Repository             Repository
 	SpaceID                string
@@ -417,171 +424,216 @@ func findMessageForViewer(ctx context.Context, repo ReadRepository, spaceID, con
 
 func (s *Service) CreateMessage(ctx context.Context, input CreateInput) (Message, error) {
 	value, err := s.withTransaction(ctx, input.ActorID, input.Meta, func(tx Tx, actor *auth.Actor, now time.Time) (any, *rejection, error) {
-		conversation, denied, err := s.authorizeConversation(ctx, tx, actor, input.ConversationID, messageCreateCapability, true)
-		if err != nil {
-			return nil, nil, err
-		}
-		if denied != nil {
-			reason := auditReason(denied)
-			if denied.Code == CodeConversationNotFound {
-				reason = "not a conversation member"
-			}
-			return nil, rejectedError(denied, "message.create", conversationTargetType, input.ConversationID, reason), nil
-		}
-
-		clientMessageID := normalizeString(input.ClientMessageID)
-		if clientMessageID == "" || strings.TrimSpace(input.ConversationID) == "" {
-			err := validationError(CodeMessageInvalid, MessageInvalid)
-			return nil, rejectedError(err, "message.create", conversationTargetType, input.ConversationID, CodeMessageInvalid), nil
-		}
-		normalized, attachmentIDs, err := s.normalizeContent(ctx, tx, actor, conversation.ID, input.Content)
-		if err != nil {
-			return nil, rejectedError(asMessageError(err), "message.create", conversationTargetType, conversation.ID, auditReason(asMessageError(err))), nil
-		}
-		contentJSON, err := canonicalContent(normalized)
-		if err != nil {
-			return nil, nil, internalError("canonicalize message content", err)
-		}
-
-		existing, err := tx.FindMessageByClientID(ctx, s.space(), conversation.ID, actor.ID, clientMessageID)
-		if err != nil {
-			return nil, nil, err
-		}
-		if existing != nil {
-			if !sameMessageContent(*existing, contentJSON) {
-				err := idempotencyConflictError()
-				return nil, rejectedError(err, "message.create", conversationTargetType, conversation.ID, CodeMessageIdempotency), nil
-			}
-			message, err := s.projectOne(ctx, tx, actor.ID, existing)
-			return message, nil, err
-		}
-
-		replyID := normalizedOptionalID(input.ReplyToMessageID)
-		if replyID != nil {
-			exists, err := tx.MessageExists(ctx, s.space(), conversation.ID, *replyID)
-			if err != nil {
-				return nil, nil, err
-			}
-			if !exists {
-				err := validationError(CodeMessageInvalidReply, MessageInvalidReply)
-				return nil, rejectedError(err, "message.create", messageTargetType, *replyID, CodeMessageInvalidReply), nil
-			}
-		}
-
-		id, err := s.newID("message")
-		if err != nil {
-			return nil, nil, internalError("generate message id", err)
-		}
-		inserted, winner, err := tx.InsertMessage(ctx, MessageInsert{
-			ID:               id,
-			SpaceID:          s.space(),
-			ConversationID:   conversation.ID,
-			AuthorID:         actor.ID,
-			AuthorKind:       actor.Kind,
-			Kind:             messageKind(actor),
-			ClientMessageID:  clientMessageID,
-			ContentFormat:    MessageContentFormat,
-			ContentJSON:      contentJSON,
-			PlainText:        normalized.PlainText,
-			ReplyToMessageID: replyID,
-			CreatedAt:        now,
-		})
-		if err != nil {
-			return nil, nil, err
-		}
-		if !inserted {
-			if winner == nil {
-				winner, err = tx.FindMessageByClientID(ctx, s.space(), conversation.ID, actor.ID, clientMessageID)
-				if err != nil {
-					return nil, nil, err
-				}
-			}
-			if winner == nil {
-				return nil, nil, internalError("read idempotency winner", errors.New("unique conflict winner is missing"))
-			}
-			if !sameMessageContent(*winner, contentJSON) {
-				err := idempotencyConflictError()
-				return nil, rejectedError(err, "message.create", conversationTargetType, conversation.ID, CodeMessageIdempotency), nil
-			}
-			message, err := s.projectOne(ctx, tx, actor.ID, winner)
-			return message, nil, err
-		}
-		for _, attachmentID := range attachmentIDs {
-			if err := tx.LinkMessageAttachment(ctx, s.space(), id, attachmentID); err != nil {
-				return nil, nil, err
-			}
-		}
-		for _, customEmoteID := range extractCustomEmoteIDs(normalized) {
-			if err := tx.LinkMessageCustomEmote(ctx, id, actor.ID, customEmoteID); err != nil {
-				return nil, nil, err
-			}
-		}
-		for _, shareID := range extractEmoteCollectionShareIDs(normalized) {
-			if err := tx.LinkMessageEmoteCollectionShare(ctx, id, shareID); err != nil {
-				return nil, nil, err
-			}
-		}
-		if err := tx.EnforceRetention(ctx, s.space(), conversation.ID, conversation.RetentionCount, now); err != nil {
-			return nil, nil, err
-		}
-		created, err := tx.FindMessage(ctx, s.space(), conversation.ID, id)
-		if err != nil {
-			return nil, nil, err
-		}
-		if created == nil {
-			return nil, nil, internalError("read created message", errors.New("inserted message is missing"))
-		}
-		message, err := s.projectOne(ctx, tx, actor.ID, created)
-		if err != nil {
-			return nil, nil, err
-		}
-		payload, err := json.Marshal(map[string]any{
-			"messageId":      id,
-			"conversationId": conversation.ID,
-			"message":        message,
-		})
-		if err != nil {
-			return nil, nil, internalError("encode message event", err)
-		}
-		event, err := s.writeEventRecord(ctx, tx, EventInput{
-			SpaceID:        s.space(),
-			Type:           "message.created",
-			ActorID:        actor.ID,
-			ConversationID: conversation.ID,
-			TargetType:     messageTargetType,
-			TargetID:       id,
-			PayloadJSON:    payload,
-			CreatedAt:      now,
-		})
-		if err != nil {
-			return nil, nil, err
-		}
-		if s.requireMessageJobs {
-			jobTx, ok := tx.(MessageJobTx)
-			if !ok {
-				return nil, nil, internalError("schedule message notification jobs", errors.New("transaction does not support message jobs"))
-			}
-			if err := jobTx.ScheduleMessageJobs(ctx, messagejobs.Input{
-				AuthorID: actor.ID, SpaceID: s.space(), ConversationID: conversation.ID,
-				MessageID: id, EventSeq: event.Seq, ContentJSON: contentJSON, CreatedAt: now,
-			}); err != nil {
-				return nil, nil, internalError("schedule message notification jobs", err)
-			}
-		}
-		if err := tx.WriteAudit(ctx, s.auditFor(actor, input.Meta, AuditInput{
-			Action:     "message.create",
-			TargetType: conversationTargetType,
-			TargetID:   conversation.ID,
-			Result:     "success",
-		}, now)); err != nil {
-			return nil, nil, err
-		}
-		return message, nil, nil
+		return s.createMessageInTransaction(ctx, tx, actor, now, input, nil)
 	})
 	if err != nil {
 		return Message{}, err
 	}
 	return value.(Message), nil
+}
+
+// CreateMessageInTx applies the complete message mutation to an already-open
+// domain transaction. The caller owns commit/rollback; all authorization,
+// idempotency, event, audit, relationship, retention, and notification-job
+// writes use the supplied Tx.
+func (s *Service) CreateMessageInTx(ctx context.Context, tx Tx, input CreateInput, validators ...TransactionalBlockValidator) (Message, error) {
+	if s == nil || s.repo == nil {
+		return Message{}, internalError("create workspace message", errors.New("repository is required"))
+	}
+	if tx == nil {
+		return Message{}, internalError("create workspace message", errors.New("transaction is required"))
+	}
+	actorID := strings.TrimSpace(input.ActorID)
+	if actorID == "" {
+		return Message{}, authRequiredError()
+	}
+	actor, err := s.lookupActor(ctx, tx, actorID)
+	if err != nil {
+		return Message{}, err
+	}
+	now := s.nowUTC()
+	var validator TransactionalBlockValidator
+	if len(validators) > 0 {
+		validator = validators[0]
+	}
+	value, rejected, err := s.createMessageInTransaction(ctx, tx, actor, now, input, validator)
+	if err != nil {
+		return Message{}, normalizeRepositoryError(err)
+	}
+	if rejected != nil {
+		if err := tx.WriteAudit(ctx, s.auditFor(actor, input.Meta, rejected.audit, now)); err != nil {
+			return Message{}, internalError("write message rejection audit", err)
+		}
+		return Message{}, rejected.err
+	}
+	message, ok := value.(Message)
+	if !ok {
+		return Message{}, internalError("project workspace message", errors.New("message result has invalid type"))
+	}
+	return message, nil
+}
+
+func (s *Service) createMessageInTransaction(ctx context.Context, tx Tx, actor *auth.Actor, now time.Time, input CreateInput, transactionalValidator TransactionalBlockValidator) (any, *rejection, error) {
+	conversation, denied, err := s.authorizeConversation(ctx, tx, actor, input.ConversationID, messageCreateCapability, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	if denied != nil {
+		reason := auditReason(denied)
+		if denied.Code == CodeConversationNotFound {
+			reason = "not a conversation member"
+		}
+		return nil, rejectedError(denied, "message.create", conversationTargetType, input.ConversationID, reason), nil
+	}
+
+	clientMessageID := normalizeString(input.ClientMessageID)
+	if clientMessageID == "" || strings.TrimSpace(input.ConversationID) == "" {
+		err := validationError(CodeMessageInvalid, MessageInvalid)
+		return nil, rejectedError(err, "message.create", conversationTargetType, input.ConversationID, CodeMessageInvalid), nil
+	}
+	normalized, attachmentIDs, err := s.normalizeContentWithValidator(ctx, tx, actor, conversation.ID, input.Content, transactionalValidator)
+	if err != nil {
+		return nil, rejectedError(asMessageError(err), "message.create", conversationTargetType, conversation.ID, auditReason(asMessageError(err))), nil
+	}
+	contentJSON, err := canonicalContent(normalized)
+	if err != nil {
+		return nil, nil, internalError("canonicalize message content", err)
+	}
+
+	existing, err := tx.FindMessageByClientID(ctx, s.space(), conversation.ID, actor.ID, clientMessageID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if existing != nil {
+		if !sameMessageContent(*existing, contentJSON) {
+			err := idempotencyConflictError()
+			return nil, rejectedError(err, "message.create", conversationTargetType, conversation.ID, CodeMessageIdempotency), nil
+		}
+		message, err := s.projectOne(ctx, tx, actor.ID, existing)
+		return message, nil, err
+	}
+
+	replyID := normalizedOptionalID(input.ReplyToMessageID)
+	if replyID != nil {
+		exists, err := tx.MessageExists(ctx, s.space(), conversation.ID, *replyID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !exists {
+			err := validationError(CodeMessageInvalidReply, MessageInvalidReply)
+			return nil, rejectedError(err, "message.create", messageTargetType, *replyID, CodeMessageInvalidReply), nil
+		}
+	}
+
+	id, err := s.newID("message")
+	if err != nil {
+		return nil, nil, internalError("generate message id", err)
+	}
+	inserted, winner, err := tx.InsertMessage(ctx, MessageInsert{
+		ID:               id,
+		SpaceID:          s.space(),
+		ConversationID:   conversation.ID,
+		AuthorID:         actor.ID,
+		AuthorKind:       actor.Kind,
+		Kind:             messageKind(actor),
+		ClientMessageID:  clientMessageID,
+		ContentFormat:    MessageContentFormat,
+		ContentJSON:      contentJSON,
+		PlainText:        normalized.PlainText,
+		ReplyToMessageID: replyID,
+		CreatedAt:        now,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if !inserted {
+		if winner == nil {
+			winner, err = tx.FindMessageByClientID(ctx, s.space(), conversation.ID, actor.ID, clientMessageID)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		if winner == nil {
+			return nil, nil, internalError("read idempotency winner", errors.New("unique conflict winner is missing"))
+		}
+		if !sameMessageContent(*winner, contentJSON) {
+			err := idempotencyConflictError()
+			return nil, rejectedError(err, "message.create", conversationTargetType, conversation.ID, CodeMessageIdempotency), nil
+		}
+		message, err := s.projectOne(ctx, tx, actor.ID, winner)
+		return message, nil, err
+	}
+	for _, attachmentID := range attachmentIDs {
+		if err := tx.LinkMessageAttachment(ctx, s.space(), id, attachmentID); err != nil {
+			return nil, nil, err
+		}
+	}
+	for _, customEmoteID := range extractCustomEmoteIDs(normalized) {
+		if err := tx.LinkMessageCustomEmote(ctx, id, actor.ID, customEmoteID); err != nil {
+			return nil, nil, err
+		}
+	}
+	for _, shareID := range extractEmoteCollectionShareIDs(normalized) {
+		if err := tx.LinkMessageEmoteCollectionShare(ctx, id, shareID); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := tx.EnforceRetention(ctx, s.space(), conversation.ID, conversation.RetentionCount, now); err != nil {
+		return nil, nil, err
+	}
+	created, err := tx.FindMessage(ctx, s.space(), conversation.ID, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	if created == nil {
+		return nil, nil, internalError("read created message", errors.New("inserted message is missing"))
+	}
+	message, err := s.projectOne(ctx, tx, actor.ID, created)
+	if err != nil {
+		return nil, nil, err
+	}
+	payload, err := json.Marshal(map[string]any{
+		"messageId":      id,
+		"conversationId": conversation.ID,
+		"message":        message,
+	})
+	if err != nil {
+		return nil, nil, internalError("encode message event", err)
+	}
+	event, err := s.writeEventRecord(ctx, tx, EventInput{
+		SpaceID:        s.space(),
+		Type:           "message.created",
+		ActorID:        actor.ID,
+		ConversationID: conversation.ID,
+		TargetType:     messageTargetType,
+		TargetID:       id,
+		PayloadJSON:    payload,
+		CreatedAt:      now,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if s.requireMessageJobs {
+		jobTx, ok := tx.(MessageJobTx)
+		if !ok {
+			return nil, nil, internalError("schedule message notification jobs", errors.New("transaction does not support message jobs"))
+		}
+		if err := jobTx.ScheduleMessageJobs(ctx, messagejobs.Input{
+			AuthorID: actor.ID, SpaceID: s.space(), ConversationID: conversation.ID,
+			MessageID: id, EventSeq: event.Seq, ContentJSON: contentJSON, CreatedAt: now,
+		}); err != nil {
+			return nil, nil, internalError("schedule message notification jobs", err)
+		}
+	}
+	if err := tx.WriteAudit(ctx, s.auditFor(actor, input.Meta, AuditInput{
+		Action:     "message.create",
+		TargetType: conversationTargetType,
+		TargetID:   conversation.ID,
+		Result:     "success",
+	}, now)); err != nil {
+		return nil, nil, err
+	}
+	return message, nil, nil
 }
 
 func (s *Service) Create(ctx context.Context, input CreateInput) (Message, error) {
@@ -880,7 +932,7 @@ func (s *Service) Remove(ctx context.Context, input ReactionInput) (ReactionResu
 	return s.RemoveReaction(ctx, input)
 }
 
-func (s *Service) normalizeContent(ctx context.Context, repo ReadRepository, actor *auth.Actor, conversationID string, input Content) (Content, []string, error) {
+func (s *Service) normalizeContentWithValidator(ctx context.Context, repo ReadRepository, actor *auth.Actor, conversationID string, input Content, transactionalValidator TransactionalBlockValidator) (Content, []string, error) {
 	if input.Format != MessageContentFormat {
 		if input.Format == "" {
 			return Content{}, nil, validationError(CodeMessageInvalidContent, MessageInvalidContent)
@@ -908,7 +960,7 @@ func (s *Service) normalizeContent(ctx context.Context, repo ReadRepository, act
 	attachmentIDs := make([]string, 0)
 	attachmentSeen := make(map[string]struct{})
 	for _, block := range input.Blocks {
-		candidate, attachmentID, err := s.normalizeBlock(ctx, repo, actor, conversationID, block)
+		candidate, attachmentID, err := s.normalizeBlockWithValidator(ctx, repo, actor, conversationID, block, transactionalValidator)
 		if err != nil {
 			return Content{}, nil, err
 		}
@@ -927,7 +979,7 @@ func (s *Service) normalizeContent(ctx context.Context, repo ReadRepository, act
 	return normalized, attachmentIDs, nil
 }
 
-func (s *Service) normalizeBlock(ctx context.Context, repo ReadRepository, actor *auth.Actor, conversationID string, block Block) (Block, string, error) {
+func (s *Service) normalizeBlockWithValidator(ctx context.Context, repo ReadRepository, actor *auth.Actor, conversationID string, block Block, transactionalValidator TransactionalBlockValidator) (Block, string, error) {
 	switch block.Type {
 	case "text":
 		normalized := normalizeTextBlock(block.Text)
@@ -988,6 +1040,20 @@ func (s *Service) normalizeBlock(ctx context.Context, repo ReadRepository, actor
 		}
 		return Block{Type: "attachment", AttachmentID: attachmentID}, attachmentID, nil
 	default:
+		if block.Type == "card" && transactionalValidator != nil {
+			transaction, ok := repo.(Tx)
+			if !ok {
+				return Block{}, "", internalError("validate message card reference", errors.New("transactional message repository is required"))
+			}
+			normalized, err := transactionalValidator.ValidateBlockInTx(ctx, transaction, actor, conversationID, block)
+			if err != nil {
+				return Block{}, "", err
+			}
+			if strings.TrimSpace(normalized.Type) == "" {
+				return Block{}, "", validationError(CodeMessageInvalidBlock, MessageInvalidBlock)
+			}
+			return normalized, "", nil
+		}
 		if s.advancedBlockValidator == nil {
 			return Block{}, "", validationError(CodeMessageInvalidBlock, MessageInvalidBlock)
 		}

@@ -42,6 +42,26 @@ func NewPGRepositoryWithMessageJobs(pool *pgxpool.Pool, scheduler messagejobs.PG
 	return repository
 }
 
+// NewPGTransaction wraps an already-open PostgreSQL transaction with the
+// message domain's typed Tx surface. The caller remains responsible for
+// commit/rollback; no pool transaction is started here.
+func NewPGTransaction(tx pgx.Tx) Tx {
+	if tx == nil {
+		return nil
+	}
+	return &pgTx{tx: tx, repository: NewPGRepository(nil)}
+}
+
+// NewTransaction reuses this repository's configured ID factory and message
+// job scheduler while wrapping an already-open transaction. The transaction
+// still belongs to the caller and is never committed here.
+func (s *PGRepository) NewTransaction(tx pgx.Tx) Tx {
+	if s == nil || tx == nil {
+		return nil
+	}
+	return &pgTx{tx: tx, repository: s}
+}
+
 func newUUID() (string, error) {
 	value, err := uuid.NewRandom()
 	if err != nil {

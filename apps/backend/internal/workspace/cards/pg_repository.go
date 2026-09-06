@@ -41,6 +41,25 @@ func NewPGRepository(pool *pgxpool.Pool, factories ...func() (string, error)) *P
 	return &PGRepository{pool: pool, idFactory: idFactory}
 }
 
+// NewPGTransaction wraps an already-open PostgreSQL transaction with the
+// cards domain's typed Tx surface. The caller owns commit/rollback; this
+// helper never starts a second pool transaction.
+func NewPGTransaction(tx pgx.Tx) Tx {
+	if tx == nil {
+		return nil
+	}
+	return &pgTx{tx: tx, repository: NewPGRepository(nil)}
+}
+
+// NewTransaction reuses this repository's configured ID factory while
+// wrapping an already-open transaction. The caller owns commit/rollback.
+func (r *PGRepository) NewTransaction(tx pgx.Tx) Tx {
+	if r == nil || tx == nil {
+		return nil
+	}
+	return &pgTx{tx: tx, repository: r}
+}
+
 func (r *PGRepository) Ping(ctx context.Context) error {
 	if r == nil || r.pool == nil {
 		return errors.New("workspace cards postgres pool is required")

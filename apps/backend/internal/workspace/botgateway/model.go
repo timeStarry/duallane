@@ -141,6 +141,18 @@ type Connection struct {
 	UpdatedAt       string  `json:"updatedAt"`
 }
 
+// ConnectionRegistration is the non-secret state associated with one active
+// gateway transport. The nonce is process-generated and is used to ensure a
+// stale socket cannot mark a newer socket as disconnected.
+type ConnectionRegistration struct {
+	AdapterVersion string
+	Nonce          string
+}
+
+type HeartbeatResult struct {
+	Timestamp string `json:"timestamp"`
+}
+
 type Me struct {
 	Version    int                 `json:"version"`
 	Bot        map[string]any      `json:"bot"`

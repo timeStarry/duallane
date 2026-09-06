@@ -11,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	workspacecards "github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
+	workspacemessages "github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 )
 
 type pgQueryer interface {
@@ -20,8 +22,19 @@ type pgQueryer interface {
 }
 
 type PGRepository struct {
-	pool      *pgxpool.Pool
-	idFactory func() (string, error)
+	pool              *pgxpool.Pool
+	idFactory         func() (string, error)
+	messageRepository *workspacemessages.PGRepository
+	cardRepository    *workspacecards.PGRepository
+}
+
+// DomainTransactionOptions supplies the already-configured domain adapters to
+// Bot Gateway's aggregate transaction. In particular, the message adapter
+// retains its notification job scheduler; only typed domain Tx values cross
+// this boundary.
+type DomainTransactionOptions struct {
+	Messages *workspacemessages.PGRepository
+	Cards    *workspacecards.PGRepository
 }
 
 func NewPGRepository(pool *pgxpool.Pool, factories ...func() (string, error)) *PGRepository {
@@ -36,6 +49,16 @@ func NewPGRepository(pool *pgxpool.Pool, factories ...func() (string, error)) *P
 		idFactory = factories[0]
 	}
 	return &PGRepository{pool: pool, idFactory: idFactory}
+}
+
+// NewPGRepositoryWithDomainTransactions is the additive constructor for
+// production composition. The ordinary constructor remains valid for gateway
+// read-only and isolated tests.
+func NewPGRepositoryWithDomainTransactions(pool *pgxpool.Pool, domains DomainTransactionOptions, factories ...func() (string, error)) *PGRepository {
+	repository := NewPGRepository(pool, factories...)
+	repository.messageRepository = domains.Messages
+	repository.cardRepository = domains.Cards
+	return repository
 }
 
 func (r *PGRepository) Ping(ctx context.Context) error {
@@ -127,7 +150,15 @@ func lookupToken(ctx context.Context, queryer pgQueryer, tokenHash string, optio
 }
 
 func lookupAuth(ctx context.Context, queryer pgQueryer, tokenID, botID, spaceID string, now time.Time) (*Auth, error) {
-	return scanAuth(queryer.QueryRow(ctx, `
+	return lookupAuthWithLock(ctx, queryer, tokenID, botID, spaceID, now, false)
+}
+
+func lookupAuthForMutation(ctx context.Context, queryer pgQueryer, tokenID, botID, spaceID string, now time.Time) (*Auth, error) {
+	return lookupAuthWithLock(ctx, queryer, tokenID, botID, spaceID, now, true)
+}
+
+func lookupAuthWithLock(ctx context.Context, queryer pgQueryer, tokenID, botID, spaceID string, now time.Time, lock bool) (*Auth, error) {
+	query := `
 		SELECT t.id, t.bot_id, t.space_id, t.scopes_json,
 		       b.owner_user_id, b.bot_user_id, b.mode, b.name,
 		       b.visibility_policy, b.conversation_policy, b.trigger_policy, b.status
@@ -138,7 +169,11 @@ func lookupAuth(ctx context.Context, queryer pgQueryer, tokenID, botID, spaceID 
 		  AND t.revoked_at IS NULL
 		  AND (t.expires_at IS NULL OR t.expires_at > $4)
 		  AND b.status = 'active'
-	`, tokenID, botID, spaceID, now.UTC()))
+	`
+	if lock {
+		query += ` FOR UPDATE OF t, b`
+	}
+	return scanAuth(queryer.QueryRow(ctx, query, tokenID, botID, spaceID, now.UTC()))
 }
 
 func scanAuth(row pgx.Row) (*Auth, error) {
@@ -209,6 +244,98 @@ func (r *PGRepository) GetConnection(ctx context.Context, botID, spaceID string)
 		return nil, internalError("read bot gateway connection", errors.New("workspace postgres pool is required"))
 	}
 	return getConnection(ctx, r.pool, botID, spaceID)
+}
+
+func (r *PGRepository) RegisterConnection(ctx context.Context, input ConnectionRegistrationRecord) error {
+	if r == nil || r.pool == nil {
+		return internalError("register bot gateway connection", errors.New("workspace postgres pool is required"))
+	}
+	id := strings.TrimSpace(input.ID)
+	if id == "" {
+		generated, err := r.idFactory()
+		if err != nil || strings.TrimSpace(generated) == "" {
+			if err == nil {
+				err = errors.New("connection id factory returned an empty id")
+			}
+			return internalError("generate bot gateway connection id", err)
+		}
+		id = generated
+	}
+	status := strings.TrimSpace(input.Status)
+	if status == "" {
+		status = "connected"
+	}
+	adapterVersion := any(nil)
+	if strings.TrimSpace(input.AdapterVersion) != "" {
+		adapterVersion = strings.TrimSpace(input.AdapterVersion)
+	}
+	updatedAt := input.UpdatedAt.UTC()
+	if updatedAt.IsZero() {
+		updatedAt = time.Now().UTC()
+	}
+	connectedAt := input.ConnectedAt.UTC()
+	heartbeatAt := input.HeartbeatAt.UTC()
+	if connectedAt.IsZero() {
+		connectedAt = updatedAt
+	}
+	if heartbeatAt.IsZero() {
+		heartbeatAt = updatedAt
+	}
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO workspace_agent_bot_connections (
+			id, bot_id, space_id, status, adapter_version, connection_nonce,
+			connected_at, disconnected_at, last_heartbeat_at, last_error_code,
+			last_error_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, $8, NULL, NULL, $9)
+		ON CONFLICT (bot_id) DO UPDATE SET
+			space_id = EXCLUDED.space_id,
+			status = EXCLUDED.status,
+			adapter_version = EXCLUDED.adapter_version,
+			connection_nonce = EXCLUDED.connection_nonce,
+			connected_at = EXCLUDED.connected_at,
+			disconnected_at = NULL,
+			last_heartbeat_at = EXCLUDED.last_heartbeat_at,
+			last_error_code = NULL,
+			last_error_at = NULL,
+			updated_at = EXCLUDED.updated_at
+	`, id, strings.TrimSpace(input.BotID), strings.TrimSpace(input.SpaceID), status, adapterVersion, strings.TrimSpace(input.Nonce), connectedAt, heartbeatAt, updatedAt)
+	if err != nil {
+		return internalError("register bot gateway connection", err)
+	}
+	return nil
+}
+
+func (r *PGRepository) HeartbeatConnection(ctx context.Context, botID, spaceID, nonce string, at time.Time) error {
+	if r == nil || r.pool == nil {
+		return internalError("heartbeat bot gateway connection", errors.New("workspace postgres pool is required"))
+	}
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE workspace_agent_bot_connections
+		SET last_heartbeat_at = $1, updated_at = $1
+		WHERE bot_id = $2 AND space_id = $3 AND connection_nonce = $4 AND status = 'connected'
+	`, at.UTC(), strings.TrimSpace(botID), strings.TrimSpace(spaceID), strings.TrimSpace(nonce))
+	if err != nil {
+		return internalError("heartbeat bot gateway connection", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return NewError(CodeInvalidRequest, MessageInvalidMessage, 400)
+	}
+	return nil
+}
+
+func (r *PGRepository) DisconnectConnection(ctx context.Context, botID, spaceID, nonce string, at time.Time) error {
+	if r == nil || r.pool == nil {
+		return internalError("disconnect bot gateway connection", errors.New("workspace postgres pool is required"))
+	}
+	_, err := r.pool.Exec(ctx, `
+		UPDATE workspace_agent_bot_connections
+		SET status = 'disconnected', disconnected_at = $1, updated_at = $1
+		WHERE bot_id = $2 AND space_id = $3 AND connection_nonce = $4
+	`, at.UTC(), strings.TrimSpace(botID), strings.TrimSpace(spaceID), strings.TrimSpace(nonce))
+	if err != nil {
+		return internalError("disconnect bot gateway connection", err)
+	}
+	return nil
 }
 
 func getConnection(ctx context.Context, queryer pgQueryer, botID, spaceID string) (*Connection, error) {
@@ -757,12 +884,45 @@ type pgTx struct {
 	repository *PGRepository
 }
 
+var (
+	_ MessageTransactionProvider  = (*pgTx)(nil)
+	_ CardTransactionProvider     = (*pgTx)(nil)
+	_ TransactionalTokenValidator = (*pgTx)(nil)
+)
+
+// MessageTransaction and CardTransaction expose only each owning domain's
+// typed Tx surface over this same PostgreSQL transaction. They deliberately do
+// not expose pgx or a generic query handle to gateway callers.
+func (t *pgTx) MessageTransaction() workspacemessages.Tx {
+	if t == nil {
+		return nil
+	}
+	if t.repository != nil && t.repository.messageRepository != nil {
+		return t.repository.messageRepository.NewTransaction(t.tx)
+	}
+	return workspacemessages.NewPGTransaction(t.tx)
+}
+
+func (t *pgTx) CardTransaction() workspacecards.Tx {
+	if t == nil {
+		return nil
+	}
+	if t.repository != nil && t.repository.cardRepository != nil {
+		return t.repository.cardRepository.NewTransaction(t.tx)
+	}
+	return workspacecards.NewPGTransaction(t.tx)
+}
+
 func (t *pgTx) LookupToken(ctx context.Context, tokenHash string, options TokenAuthOptions, now time.Time) (*Auth, error) {
 	return lookupToken(ctx, t.tx, tokenHash, options, now)
 }
 
 func (t *pgTx) ValidateToken(ctx context.Context, tokenID, botID, spaceID string, now time.Time) (*Auth, error) {
 	return lookupAuth(ctx, t.tx, tokenID, botID, spaceID, now)
+}
+
+func (t *pgTx) ValidateTokenForMutation(ctx context.Context, tokenID, botID, spaceID string, now time.Time) (*Auth, error) {
+	return lookupAuthForMutation(ctx, t.tx, tokenID, botID, spaceID, now)
 }
 
 func (t *pgTx) GetSettings(ctx context.Context, botID, spaceID string) (*Settings, error) {

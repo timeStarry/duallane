@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -55,6 +56,9 @@ type Service struct {
 	replayLimit      int
 	replayWindow     time.Duration
 	batchSize        int
+	connectionMu     sync.Mutex
+	connections      map[string]map[string]struct{}
+	connectionLatest map[string]string
 }
 
 func NewService(options ServiceOptions) *Service {
@@ -100,6 +104,8 @@ func NewService(options ServiceOptions) *Service {
 		replayLimit:      replayLimit,
 		replayWindow:     replayWindow,
 		batchSize:        batchSize,
+		connections:      make(map[string]map[string]struct{}),
+		connectionLatest: make(map[string]string),
 	}
 }
 
@@ -108,6 +114,121 @@ func (s *Service) Repository() Repository {
 		return nil
 	}
 	return s.repo
+}
+
+// RegisterConnection persists a connected transport and returns an idempotent
+// cleanup function. The nonce is part of the update predicate on heartbeat
+// and disconnect so an old socket cannot overwrite a newer socket's state.
+func (s *Service) RegisterConnection(ctx context.Context, value *Auth, registration ConnectionRegistration) (func(context.Context) error, error) {
+	current, err := s.ValidateAuth(ctx, value)
+	if err != nil {
+		return nil, err
+	}
+	persistence, ok := s.repo.(ConnectionPersistence)
+	if !ok || persistence == nil {
+		return nil, internalError("register bot gateway connection", errors.New("connection persistence is required"))
+	}
+	nonce := strings.TrimSpace(registration.Nonce)
+	if !identifierPattern.MatchString(nonce) {
+		return nil, NewError(CodeInvalidRequest, MessageInvalidMessage, 400)
+	}
+	adapterVersion := strings.TrimSpace(registration.AdapterVersion)
+	if len(adapterVersion) > 128 || strings.IndexByte(adapterVersion, 0) >= 0 {
+		return nil, NewError(CodeInvalidRequest, MessageInvalidMessage, 400)
+	}
+	now := s.nowUTC()
+	connectionID, err := s.newID("bot gateway connection")
+	if err != nil {
+		return nil, internalError("generate bot gateway connection id", err)
+	}
+	if err := persistence.RegisterConnection(ctx, ConnectionRegistrationRecord{
+		ID: connectionID, BotID: current.BotID, SpaceID: current.SpaceID, Status: "connected",
+		AdapterVersion: adapterVersion, Nonce: nonce, ConnectedAt: now, HeartbeatAt: now, UpdatedAt: now,
+	}); err != nil {
+		return nil, normalizeError(err)
+	}
+
+	key := connectionKey(current.BotID, current.SpaceID)
+	s.connectionMu.Lock()
+	if s.connections == nil {
+		s.connections = make(map[string]map[string]struct{})
+	}
+	if s.connectionLatest == nil {
+		s.connectionLatest = make(map[string]string)
+	}
+	active := s.connections[key]
+	if active == nil {
+		active = make(map[string]struct{})
+		s.connections[key] = active
+	}
+	active[nonce] = struct{}{}
+	s.connectionLatest[key] = nonce
+	s.connectionMu.Unlock()
+
+	var once sync.Once
+	return func(cleanupCtx context.Context) error {
+		var cleanupErr error
+		once.Do(func() {
+			s.connectionMu.Lock()
+			active := s.connections[key]
+			delete(active, nonce)
+			last := len(active) == 0
+			disconnectNonce := s.connectionLatest[key]
+			if last {
+				delete(s.connections, key)
+				delete(s.connectionLatest, key)
+			}
+			s.connectionMu.Unlock()
+			if !last {
+				return
+			}
+			if cleanupCtx == nil {
+				cleanupCtx = context.Background()
+			}
+			if strings.TrimSpace(disconnectNonce) == "" {
+				disconnectNonce = nonce
+			}
+			cleanupErr = persistence.DisconnectConnection(cleanupCtx, current.BotID, current.SpaceID, disconnectNonce, s.nowUTC())
+		})
+		return normalizeError(cleanupErr)
+	}, nil
+}
+
+// Heartbeat revalidates the token before touching durable connection state.
+// A nonce that is no longer active is treated as an invalid request, which
+// prevents a stale/restarted socket from extending the previous connection.
+func (s *Service) Heartbeat(ctx context.Context, value *Auth, nonce string) (HeartbeatResult, error) {
+	current, err := s.ValidateAuth(ctx, value)
+	if err != nil {
+		return HeartbeatResult{}, err
+	}
+	nonce = strings.TrimSpace(nonce)
+	if !s.connectionIsActive(current.BotID, current.SpaceID, nonce) {
+		return HeartbeatResult{}, NewError(CodeInvalidRequest, MessageInvalidMessage, 400)
+	}
+	persistence, ok := s.repo.(ConnectionPersistence)
+	if !ok || persistence == nil {
+		return HeartbeatResult{}, internalError("heartbeat bot gateway connection", errors.New("connection persistence is required"))
+	}
+	at := s.nowUTC()
+	if err := persistence.HeartbeatConnection(ctx, current.BotID, current.SpaceID, nonce, at); err != nil {
+		return HeartbeatResult{}, normalizeError(err)
+	}
+	return HeartbeatResult{Timestamp: timestamp(at)}, nil
+}
+
+func (s *Service) connectionIsActive(botID, spaceID, nonce string) bool {
+	if s == nil || strings.TrimSpace(nonce) == "" {
+		return false
+	}
+	s.connectionMu.Lock()
+	defer s.connectionMu.Unlock()
+	_, ok := s.connections[connectionKey(botID, spaceID)][nonce]
+	return ok
+}
+
+func connectionKey(botID, spaceID string) string {
+	return strings.TrimSpace(botID) + "\x00" + strings.TrimSpace(spaceID)
 }
 
 func (s *Service) nowUTC() time.Time {
@@ -537,12 +658,15 @@ func (s *Service) SendMessage(ctx context.Context, value *Auth, input SendMessag
 		return SendMessageResult{}, NewError(CodeMessageUnavailable, MessageInternal, 503)
 	}
 	request := MessageWriteRequest{ActorID: current.UserID, SpaceID: current.SpaceID, ConversationID: conversation.ID, ClientMessageID: clientMessageID, ReplyToMessageID: replyTo, Content: content, Meta: input.Meta.Safe()}
-	encodedInput := struct {
-		ConversationID   string
-		ClientMessageID  string
-		ReplyToMessageID string
-		Content          MessageContent
-	}{conversation.ID, clientMessageID, replyTo, content}
+	var hashReplyTo *string
+	if replyTo != "" {
+		reply := replyTo
+		hashReplyTo = &reply
+	}
+	encodedInput := messageIdempotencyInput{
+		ConversationID: conversation.ID, ClientMessageID: clientMessageID,
+		ReplyToMessageID: hashReplyTo, Content: content,
+	}
 	result, err := s.withIdempotency(ctx, current, "message.send", key, encodedInput, func(tx Tx) (any, error) {
 		var message GatewayMessage
 		var writeErr error
@@ -668,15 +792,16 @@ func (s *Service) SendCard(ctx context.Context, value *Auth, input SendCardInput
 	if s.cardGateway == nil || s.messageWriter == nil {
 		return SendCardResult{}, NewError(CodeCardUnavailable, MessageCardUnavailable, 503)
 	}
+	_, cardTransactional := s.cardGateway.(TransactionalCardGateway)
+	_, messageTransactional := s.messageWriter.(TransactionalMessageWriter)
+	if cardTransactional != messageTransactional {
+		return SendCardResult{}, internalError("send bot card", errors.New("card and message transactional writers must be configured together"))
+	}
 	request := CardCreateRequest{ActorID: current.UserID, BotID: current.BotID, BotUserID: current.UserID, SpaceID: current.SpaceID, ConversationID: conversation.ID, SourceID: opaqueCardSourceID(current.BotID, key), CardType: cardType, SchemaVersion: version, FallbackText: fallback, Payload: payload, Meta: input.Meta.Safe()}
-	encodedInput := struct {
-		ConversationID  string
-		ClientMessageID string
-		CardType        string
-		SchemaVersion   int
-		FallbackText    string
-		Payload         any
-	}{conversation.ID, clientMessageID, cardType, version, fallback, payload}
+	encodedInput := cardIdempotencyInput{
+		ConversationID: conversation.ID,
+		CardType:       cardType, SchemaVersion: version, FallbackText: fallback, Payload: payload,
+	}
 	result, err := s.withIdempotency(ctx, current, "card.send", key, encodedInput, func(tx Tx) (any, error) {
 		var card Card
 		var cardErr error
@@ -693,7 +818,15 @@ func (s *Service) SendCard(ctx context.Context, value *Auth, input SendCardInput
 			block = map[string]any{"type": "card", "cardId": card.ID, "cardType": card.CardType, "schemaVersion": card.SchemaVersion, "fallbackText": card.FallbackText}
 		}
 		messageRequest := MessageWriteRequest{ActorID: current.UserID, SpaceID: current.SpaceID, ConversationID: conversation.ID, ClientMessageID: clientMessageID, Content: MessageContent{Format: MessageContentFormat, PlainText: fallback, Blocks: []map[string]any{block}}, Meta: input.Meta.Safe()}
-		if err := s.cardGateway.ValidateMessageCardReference(ctx, current.UserID, conversation.ID, block); err != nil {
+		if _, transactional := s.cardGateway.(TransactionalCardGateway); transactional {
+			validator, ok := s.cardGateway.(TransactionalCardReferenceValidator)
+			if !ok {
+				return nil, internalError("validate bot card reference", errors.New("transactional card reference validator is required"))
+			}
+			if err := validator.ValidateMessageCardReferenceInTx(ctx, tx, current.UserID, conversation.ID, block); err != nil {
+				return nil, normalizeError(err)
+			}
+		} else if err := s.cardGateway.ValidateMessageCardReference(ctx, current.UserID, conversation.ID, block); err != nil {
 			return nil, normalizeError(err)
 		}
 		var message GatewayMessage
@@ -1361,15 +1494,16 @@ func (s *Service) withIdempotency(ctx context.Context, value *Auth, operation, k
 	if s == nil || s.repo == nil {
 		return nil, internalError("gateway idempotency", errors.New("repository is required"))
 	}
-	encoded, err := json.Marshal(input)
+	requestHash, err := hashGatewayRequest(input)
 	if err != nil {
 		return nil, internalError("hash gateway request", err)
 	}
-	digest := sha256.Sum256(encoded)
-	requestHash := hex.EncodeToString(digest[:])
 	var result any
 	err = s.repo.WithTx(ctx, func(tx Tx) error {
 		if err := tx.Lock(ctx, "workspace-bot-idempotency:"+value.BotID+":"+operation+":"+key); err != nil {
+			return err
+		}
+		if err := s.validateIdempotentOperationInTx(ctx, tx, value, operation, false); err != nil {
 			return err
 		}
 		existing, err := tx.GetIdempotency(ctx, value.BotID, operation, key, s.nowUTC())
@@ -1387,6 +1521,13 @@ func (s *Service) withIdempotency(ctx context.Context, value *Auth, operation, k
 		}
 		result, err = callback(tx)
 		if err != nil {
+			return err
+		}
+		// Revalidate immediately before the idempotency row is written. A token
+		// can be revoked or lose the operation scope while domain writes are in
+		// flight; returning the error here makes the outer repository roll back
+		// card/message/event/audit writes together.
+		if err := s.validateIdempotentOperationInTx(ctx, tx, value, operation, true); err != nil {
 			return err
 		}
 		responseJSON, err := json.Marshal(result)
@@ -1419,6 +1560,42 @@ func (s *Service) withIdempotency(ctx context.Context, value *Auth, operation, k
 		return nil, normalizeError(err)
 	}
 	return result, nil
+}
+
+func (s *Service) validateIdempotentOperationInTx(ctx context.Context, tx Tx, value *Auth, operation string, lockToken bool) error {
+	if tx == nil || value == nil {
+		return invalidTokenError()
+	}
+	var current *Auth
+	var err error
+	if lockToken {
+		if validator, ok := tx.(TransactionalTokenValidator); ok {
+			current, err = validator.ValidateTokenForMutation(ctx, value.TokenID, value.BotID, value.SpaceID, s.nowUTC())
+		} else {
+			current, err = tx.ValidateToken(ctx, value.TokenID, value.BotID, value.SpaceID, s.nowUTC())
+		}
+	} else {
+		current, err = tx.ValidateToken(ctx, value.TokenID, value.BotID, value.SpaceID, s.nowUTC())
+	}
+	if err != nil {
+		return err
+	}
+	if current == nil || current.TokenID != value.TokenID || current.BotID != value.BotID || current.UserID != value.UserID || current.SpaceID != value.SpaceID || current.Bot.Status != "active" {
+		return invalidTokenError()
+	}
+	scope := ""
+	switch operation {
+	case "message.send":
+		scope = ScopeMessagesSend
+	case "card.send":
+		scope = ScopeCardsWrite
+	}
+	if scope != "" {
+		if err := RequireScope(current, scope); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func firstNonEmpty(values ...string) string {

@@ -3,6 +3,9 @@ package botgateway
 import (
 	"context"
 	"time"
+
+	workspacecards "github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
+	workspacemessages "github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 )
 
 // ReadRepository is deliberately gateway-shaped. It contains only current
@@ -44,6 +47,28 @@ type Repository interface {
 	WithTx(ctx context.Context, fn func(Tx) error) error
 }
 
+// ConnectionPersistence owns the durable connection projection. It is kept
+// separate from Repository so existing read/test doubles do not accidentally
+// gain a connection writer, while the production PostgreSQL repository can
+// persist lifecycle state without exposing a generic SQL escape hatch.
+type ConnectionPersistence interface {
+	RegisterConnection(ctx context.Context, input ConnectionRegistrationRecord) error
+	HeartbeatConnection(ctx context.Context, botID, spaceID, nonce string, at time.Time) error
+	DisconnectConnection(ctx context.Context, botID, spaceID, nonce string, at time.Time) error
+}
+
+type ConnectionRegistrationRecord struct {
+	ID             string
+	BotID          string
+	SpaceID        string
+	Status         string
+	AdapterVersion string
+	Nonce          string
+	ConnectedAt    time.Time
+	HeartbeatAt    time.Time
+	UpdatedAt      time.Time
+}
+
 type Tx interface {
 	ReadRepository
 	Lock(ctx context.Context, key string) error
@@ -56,6 +81,26 @@ type Tx interface {
 	AcknowledgeDelivery(ctx context.Context, botID, spaceID, eventID string, sequence int64, now time.Time) (bool, error)
 	MarkProcessed(ctx context.Context, botID, spaceID string, now time.Time) error
 	WriteAudit(ctx context.Context, input AuditInput) error
+}
+
+// MessageTransactionProvider and CardTransactionProvider are the stable,
+// typed bridge for aggregate writers such as Echo delivery. They are kept
+// additive to Tx so existing gateway test doubles do not need to implement
+// domain-specific methods, while production PostgreSQL transactions expose
+// both adapters over the same underlying pgx transaction.
+type MessageTransactionProvider interface {
+	MessageTransaction() workspacemessages.Tx
+}
+
+type CardTransactionProvider interface {
+	CardTransaction() workspacecards.Tx
+}
+
+// TransactionalTokenValidator is used only for the final mutation check. A
+// PostgreSQL implementation locks the current token and Bot rows so a revoke
+// that wins the race is observed before the aggregate transaction commits.
+type TransactionalTokenValidator interface {
+	ValidateTokenForMutation(ctx context.Context, tokenID, botID, spaceID string, now time.Time) (*Auth, error)
 }
 
 type IdempotencyRecordInput struct {
@@ -110,6 +155,14 @@ type TransactionalCardGateway interface {
 	CreateCustomBotCardInTx(ctx context.Context, tx Tx, input CardCreateRequest) (Card, error)
 }
 
+// TransactionalCardReferenceValidator is an additive companion to
+// TransactionalCardGateway. Implementations validate a card through the same
+// transaction that created it, so an uncommitted card is never checked via a
+// second pool connection.
+type TransactionalCardReferenceValidator interface {
+	ValidateMessageCardReferenceInTx(ctx context.Context, tx Tx, actorID, conversationID string, block map[string]any) error
+}
+
 type AttachmentWriter interface {
 	ReserveAttachment(ctx context.Context, input AttachmentCreateRequest) (UploadReservation, error)
 }
@@ -126,3 +179,4 @@ type TokenAuthenticator interface {
 }
 
 var _ Repository = (*PGRepository)(nil)
+var _ ConnectionPersistence = (*PGRepository)(nil)

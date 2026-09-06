@@ -74,6 +74,21 @@ func (s *Service) Registry() *Registry {
 }
 
 func (s *Service) Create(ctx context.Context, input CreateInput) (*Card, error) {
+	return s.create(ctx, nil, input)
+}
+
+// CreateInTx applies the complete card creation mutation to an already-open
+// domain transaction. It is additive to Create so human callers retain their
+// existing transaction boundary while aggregate callers can keep card,
+// message, event, audit, and idempotency writes in one transaction.
+func (s *Service) CreateInTx(ctx context.Context, tx Tx, input CreateInput) (*Card, error) {
+	if tx == nil {
+		return nil, internalError("create workspace card", errors.New("transaction is required"))
+	}
+	return s.create(ctx, tx, input)
+}
+
+func (s *Service) create(ctx context.Context, externalTx Tx, input CreateInput) (*Card, error) {
 	if s == nil || s.repo == nil {
 		return nil, internalError("create workspace card", errors.New("repository is required"))
 	}
@@ -133,7 +148,11 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Card, error) 
 		return nil, authRequiredError()
 	}
 	allowBot := sourceKind != SourceWorkspace || input.TrustedCustomBot
-	actor, err := s.requireActor(ctx, s.repo, spaceID, actorID, allowBot)
+	actorRepository := ReadRepository(s.repo)
+	if externalTx != nil {
+		actorRepository = externalTx
+	}
+	actor, err := s.requireActor(ctx, actorRepository, spaceID, actorID, allowBot)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +164,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Card, error) 
 		return nil, NewError(CodeCardSourceForbidden, "Bot 卡片必须通过受信任网关创建", 403)
 	}
 	if sourceKind == SourceCustomBot && actor.Kind == "bot" {
-		if err := s.requireCustomBot(ctx, s.repo, spaceID, input.BotID, actor.ID); err != nil {
+		if err := s.requireCustomBot(ctx, actorRepository, spaceID, input.BotID, actor.ID); err != nil {
 			return nil, err
 		}
 	}
@@ -163,7 +182,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Card, error) 
 	now := s.nowUTC()
 	insert := CardInsert{CardRecord: CardRecord{ID: cardID, SpaceID: spaceID, ConversationID: conversationID, CardType: block.CardType, SchemaVersion: block.SchemaVersion, PayloadJSON: mustJSON(validated), FallbackText: block.FallbackText, SourceKind: sourceKind, SourceID: sourceID, ResourceType: resourceType, ResourceID: resourceID, VisibilityScope: visibility, CreatedByUserID: &createdBy, Status: StatusActive, Revision: 1, ExpiresAt: cloneTime(input.ExpiresAt), CreatedAt: now, UpdatedAt: now}}
 	var result *Card
-	err = s.repo.WithTx(ctx, func(tx Tx) error {
+	write := func(tx Tx) error {
 		if err := tx.Lock(ctx, "workspace:card:create:"+spaceID+":"+string(sourceKind)+":"+sourceKey(sourceID, cardID)+":"+block.CardType); err != nil {
 			return err
 		}
@@ -192,6 +211,11 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Card, error) 
 		}
 		if insideActor.ID != actor.ID {
 			return authRequiredError()
+		}
+		if sourceKind == SourceCustomBot && insideActor.Kind == "bot" {
+			if err := s.requireCustomBot(ctx, tx, spaceID, input.BotID, insideActor.ID); err != nil {
+				return err
+			}
 		}
 		if sourceID != nil {
 			existing, err := tx.GetCardBySource(ctx, spaceID, sourceKind, *sourceID, block.CardType)
@@ -234,7 +258,12 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Card, error) 
 		}
 		result = s.publicCard(stored, definition, validated)
 		return nil
-	})
+	}
+	if externalTx != nil {
+		err = write(externalTx)
+	} else {
+		err = s.repo.WithTx(ctx, write)
+	}
 	if err != nil {
 		return nil, normalizeError(err)
 	}
@@ -295,6 +324,24 @@ func (s *Service) ResolveCard(ctx context.Context, actorID, cardID string, reque
 }
 
 func (s *Service) ValidateMessageCardReference(ctx context.Context, actorID, conversationID string, block CardBlock) (CardBlock, error) {
+	return s.validateMessageCardReference(ctx, s.repo, actorID, conversationID, block)
+}
+
+// ValidateMessageCardReferenceInTx repeats card ownership, membership, and
+// active-status checks through the supplied transaction. This is required when
+// the card was created earlier in the same outer Bot Gateway transaction and
+// is not visible through a separate pool connection yet.
+func (s *Service) ValidateMessageCardReferenceInTx(ctx context.Context, tx Tx, actorID, conversationID string, block CardBlock) (CardBlock, error) {
+	if tx == nil {
+		return CardBlock{}, internalError("validate workspace card reference", errors.New("transaction is required"))
+	}
+	return s.validateMessageCardReference(ctx, tx, actorID, conversationID, block)
+}
+
+func (s *Service) validateMessageCardReference(ctx context.Context, repository ReadRepository, actorID, conversationID string, block CardBlock) (CardBlock, error) {
+	if s == nil || repository == nil {
+		return CardBlock{}, internalError("validate workspace card reference", errors.New("repository is required"))
+	}
 	conversationID, err := NormalizeIdentifier(conversationID, CodeCardInvalidConversation, "会话 ID 无效")
 	if err != nil {
 		return CardBlock{}, toError(err)
@@ -303,18 +350,18 @@ func (s *Service) ValidateMessageCardReference(ctx context.Context, actorID, con
 	if err != nil {
 		return CardBlock{}, toError(err)
 	}
-	row, err := s.repo.GetCard(ctx, s.spaceID, normalized.CardID)
+	row, err := repository.GetCard(ctx, s.spaceID, normalized.CardID)
 	if err != nil {
 		return CardBlock{}, normalizeError(err)
 	}
 	if row == nil {
 		return CardBlock{}, NewError(CodeCardNotFound, "卡片不存在或不可发送", 404)
 	}
-	actor, err := s.requireActor(ctx, s.repo, row.SpaceID, actorID, true)
+	actor, err := s.requireActor(ctx, repository, row.SpaceID, actorID, true)
 	if err != nil {
 		return CardBlock{}, err
 	}
-	if ok, err := s.repo.ConversationMemberActive(ctx, row.SpaceID, conversationID, actor.ID); err != nil {
+	if ok, err := repository.ConversationMemberActive(ctx, row.SpaceID, conversationID, actor.ID); err != nil {
 		return CardBlock{}, normalizeError(err)
 	} else if !ok {
 		return CardBlock{}, notFoundError()
@@ -513,6 +560,19 @@ func (s *Service) CreateCustomBotCard(ctx context.Context, input CustomBotCreate
 	input.CreateInput.CreatedByUserID = input.BotUserID
 	input.CreateInput.BotID = input.BotID
 	return s.Create(ctx, input.CreateInput)
+}
+
+// CreateCustomBotCardInTx is the transaction-scoped Bot Gateway card writer.
+// It preserves the same custom-bot authorization and card validation as the
+// human-compatible Create path while reusing the caller's transaction.
+func (s *Service) CreateCustomBotCardInTx(ctx context.Context, tx Tx, input CustomBotCreateInput) (*Card, error) {
+	input.CreateInput.SourceKind = SourceCustomBot
+	input.CreateInput.TrustedCustomBot = true
+	input.CreateInput.AllowUnknownDefinition = true
+	input.CreateInput.ActorID = input.BotUserID
+	input.CreateInput.CreatedByUserID = input.BotUserID
+	input.CreateInput.BotID = input.BotID
+	return s.CreateInTx(ctx, tx, input.CreateInput)
 }
 
 func (s *Service) UpdateCustomBotCard(ctx context.Context, input CustomBotUpdateInput) (*Card, error) {

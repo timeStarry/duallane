@@ -104,6 +104,31 @@ func TestPGBotGatewayAuthenticationContextAndReplay(t *testing.T) {
 	if me.Version != Version || me.SpaceID != DefaultSpaceID || me.Connection == nil || me.Connection.Status != "connected" || me.Connection.UpdatedAt != "2026-09-04T12:34:56.789Z" {
 		t.Fatalf("gateway me projection = %#v", me)
 	}
+	firstCleanup, err := service.RegisterConnection(ctx, authValue, ConnectionRegistration{AdapterVersion: "integration-v1", Nonce: "nonce-integration-v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondCleanup, err := service.RegisterConnection(ctx, authValue, ConnectionRegistration{AdapterVersion: "integration-v2", Nonce: "nonce-integration-v2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	heartbeat, err := service.Heartbeat(ctx, authValue, "nonce-integration-v2")
+	if err != nil || heartbeat.Timestamp != "2026-09-04T12:34:56.789Z" {
+		t.Fatalf("connection heartbeat = %#v err=%v", heartbeat, err)
+	}
+	if err := secondCleanup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstCleanup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var connectionStatus, connectionNonce, adapterVersion string
+	if err := pool.QueryRow(ctx, `SELECT status, connection_nonce, adapter_version FROM workspace_agent_bot_connections WHERE bot_id = $1`, authValue.BotID).Scan(&connectionStatus, &connectionNonce, &adapterVersion); err != nil {
+		t.Fatal(err)
+	}
+	if connectionStatus != "disconnected" || connectionNonce != "nonce-integration-v2" || adapterVersion != "integration-v2" {
+		t.Fatalf("connection lifecycle = status=%q nonce=%q adapter=%q", connectionStatus, connectionNonce, adapterVersion)
+	}
 
 	contextResult, err := service.GetContext(ctx, authValue, "conversation-botgateway", map[string]any{"limit": 10})
 	if err != nil {

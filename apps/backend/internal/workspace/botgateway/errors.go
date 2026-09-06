@@ -32,6 +32,8 @@ const (
 	CodeAttachmentUnavailable = "attachment.unavailable"
 	CodeInvalidAck            = "gateway.invalid_ack"
 	CodeInvalidSequence       = "gateway.invalid_sequence"
+	CodeInvalidHello          = "gateway.invalid_hello"
+	CodeInvalidMessage        = "gateway.invalid_message"
 	CodeInvalidRequest        = "gateway.invalid_request"
 	CodeInternal              = "internal.error"
 )
@@ -51,6 +53,8 @@ const (
 	MessageAttachmentNotFound    = "附件不存在"
 	MessageInvalidAck            = "事件确认无效"
 	MessageInvalidSequence       = "事件序号无效"
+	MessageInvalidHello          = "Gateway Hello 无效"
+	MessageInvalidMessage        = "Gateway 消息无效"
 	MessageInternal              = "服务暂时不可用"
 )
 
@@ -116,4 +120,12 @@ func scopeDeniedError() *Error {
 
 func invalidSequenceError() *Error {
 	return NewError(CodeInvalidSequence, MessageInvalidSequence, 400)
+}
+
+func invalidHelloError() *Error {
+	return NewError(CodeInvalidHello, MessageInvalidHello, 400)
+}
+
+func invalidMessageError() *Error {
+	return NewError(CodeInvalidMessage, MessageInvalidMessage, 400)
 }
