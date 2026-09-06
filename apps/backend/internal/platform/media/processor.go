@@ -16,6 +16,10 @@ func newProcessor(options Options) (*Processor, error) {
 		return nil, err
 	}
 	startupOnce.Do(func() {
+		// Native diagnostic text can include paths and attacker-controlled image
+		// metadata. Keep it off stdout/stderr; callers receive typed safe errors
+		// and the owning domain records content-free rejection audits.
+		vips.LoggingSettings(func(string, vips.LogLevel, string) {}, vips.LogLevelError)
 		startupErr = vips.Startup(&vips.Config{
 			ConcurrencyLevel: options.VipsConcurrency,
 			MaxCacheMem:      options.VipsCacheMemoryBytes,
