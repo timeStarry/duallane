@@ -19,9 +19,14 @@ type ReadRepository interface {
 	ListLibraryEntries(ctx context.Context, userID string) ([]LibraryEntryRecord, error)
 	ListCollections(ctx context.Context, userID string) ([]CollectionRecord, error)
 	GetCollection(ctx context.Context, userID, collectionID string) (*CollectionRecord, error)
+	GetCollectionByID(ctx context.Context, collectionID string) (*CollectionRecord, error)
 	ListCollectionItems(ctx context.Context, collectionID string) ([]CollectionItemRecord, error)
 	MutableCollectionIDsForEmote(ctx context.Context, userID, emoteID string) ([]string, error)
 	IsEmoteSubscriptionReadOnly(ctx context.Context, userID, emoteID string) (bool, error)
+	IsEmoteLocallyPlaced(ctx context.Context, userID, emoteID string) (bool, error)
+	GetCollectionSubscription(ctx context.Context, collectionID string) (*CollectionSubscriptionRecord, error)
+	GetCollectionSubscriptionByID(ctx context.Context, subscriptionID string) (*CollectionSubscriptionRecord, error)
+	ListSubscriptionItems(ctx context.Context, subscriptionID string) ([]CollectionSubscriptionItemRecord, error)
 	GetShare(ctx context.Context, shareID string) (*ShareRecord, error)
 	ListShareItems(ctx context.Context, shareID string) ([]ShareItemRecord, error)
 	EmoteVisibleTo(ctx context.Context, spaceID, actorID, emoteID string) (bool, error)
@@ -80,6 +85,13 @@ type Tx interface {
 	UpdateCustomEmoteLabel(ctx context.Context, userID, emoteID, label string) (bool, error)
 	DeleteUnreferencedEmote(ctx context.Context, emoteID string) (*CustomEmoteRecord, bool, error)
 	InsertCollection(ctx context.Context, record CollectionRecord) error
+	ListSubscriptionsBySource(ctx context.Context, sourceCollectionID, status string) ([]CollectionSubscriptionRecord, error)
+	UpsertCollectionSubscription(ctx context.Context, record CollectionSubscriptionRecord) (bool, error)
+	UpdateCollectionSubscription(ctx context.Context, subscriptionID, status string, sourceRevision int64, lastSyncedAt, detachedAt *time.Time, at time.Time) (bool, error)
+	DeleteCollectionItems(ctx context.Context, collectionID string) error
+	DeleteSubscriptionItems(ctx context.Context, subscriptionID string) error
+	InsertSubscriptionItem(ctx context.Context, item CollectionSubscriptionItemRecord) error
+	UpdateCollectionFromSource(ctx context.Context, userID, collectionID, name, sourceCollectionID, originalCreatorID string, at time.Time) (bool, error)
 	UpdateCollectionName(ctx context.Context, userID, collectionID, name string, at time.Time) (bool, error)
 	DeleteCollection(ctx context.Context, userID, collectionID string) (bool, error)
 	InsertCollectionItem(ctx context.Context, item CollectionItemRecord) (bool, error)

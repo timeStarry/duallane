@@ -181,6 +181,7 @@ func (s *Service) mutate(ctx context.Context, actorID string, meta auth.RequestM
 	meta = meta.Safe()
 	var result any
 	var rejected *Error
+	rejectionAbort := errors.New("emote mutation rejected")
 	err := s.repo.WithTx(ctx, func(tx Tx) error {
 		if tx == nil {
 			return errors.New("workspace emote transaction is required")
@@ -195,15 +196,27 @@ func (s *Service) mutate(ctx context.Context, actorID string, meta auth.RequestM
 			return err
 		}
 		if rejected != nil {
-			return s.writeAudit(ctx, tx, actor, meta, evidence, "rejected", rejected.Code, now)
+			// Validation can fail after tentative reference/placement writes.
+			// Roll those back before recording the content-free rejection.
+			return rejectionAbort
 		}
 		return s.writeEvidence(ctx, tx, actor, meta, evidence, "success", "", now)
 	})
+	if errors.Is(err, rejectionAbort) {
+		auditErr := s.repo.WithTx(ctx, func(tx Tx) error {
+			actor, err := s.lookupActor(ctx, tx, actorID)
+			if err != nil {
+				return err
+			}
+			return s.writeAudit(ctx, tx, actor, meta, evidence, "rejected", rejected.Code, s.nowUTC())
+		})
+		if auditErr != nil {
+			return nil, normalizeError(auditErr)
+		}
+		return nil, rejected
+	}
 	if err != nil {
 		return nil, normalizeError(err)
-	}
-	if rejected != nil {
-		return nil, rejected
 	}
 	return result, nil
 }
@@ -430,6 +443,19 @@ func containsControl(value string) bool {
 	return false
 }
 
+// CheckUploadLength rejects declared input overages without reading content,
+// while keeping authorization and the mandatory rejection audit in the domain.
+func (s *Service) CheckUploadLength(ctx context.Context, actorID string, length int64, meta auth.RequestMeta) error {
+	if _, err := s.readActor(ctx, actorID); err != nil {
+		return err
+	}
+	if length <= MaxInputBytes {
+		return nil
+	}
+	return s.recordRejected(ctx, actorID, meta, mutationEvidence{action: "emote.create", targetType: "emote"},
+		NewError(CodeEmoteInputTooLarge, MessageEmoteInputTooLarge, 413))
+}
+
 func (s *Service) PreflightUpload(ctx context.Context, source UploadSource, content io.Reader) (PreflightResult, error) {
 	source, sourceErr := normalizeUploadSource(source)
 	if sourceErr != nil {
@@ -630,24 +656,15 @@ func (s *Service) StoreProcessed(ctx context.Context, input StoreProcessedInput)
 		return nil, internalError("build emote storage key", err)
 	}
 	objectID := "wso_" + digest
-	stored, err := s.blobStore.Put(ctx, objectKey, bytes.NewReader(input.Processed.Content), input.Processed.ByteSize, digest)
-	if err != nil {
-		return nil, normalizeStorageError(err)
-	}
-	if stored.SHA256 != "" && !strings.EqualFold(stored.SHA256, digest) {
-		return nil, internalError("verify emote storage object", errors.New("storage digest mismatch"))
-	}
-	if stored.ByteSize != 0 && stored.ByteSize != input.Processed.ByteSize {
-		return nil, internalError("verify emote storage object", errors.New("storage size mismatch"))
-	}
 	physicalObject := platformstorage.Object{
 		Key: objectKey, SHA256: digest, ByteSize: input.Processed.ByteSize, ContentType: "image/webp",
 	}
 	emoteID, err := s.newID("workspace emote")
 	if err != nil {
-		_ = s.cleanupObjectIfUnreferencedWithFallback(ctx, objectID, &physicalObject)
 		return nil, internalError("generate workspace emote id", err)
 	}
+	ctx, cancelMutation := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancelMutation()
 	result, mutationErr := s.mutate(ctx, input.ActorID, input.Meta, mutationEvidence{
 		action: "emote.create", eventType: "emote.created", targetType: "emote", targetID: emoteID,
 		payload: map[string]any{"emoteId": emoteID},
@@ -657,6 +674,16 @@ func (s *Service) StoreProcessed(ctx context.Context, input StoreProcessedInput)
 		}
 		if err := tx.Lock(ctx, "workspace-storage-object:"+objectID); err != nil {
 			return nil, nil, normalizeError(err)
+		}
+		stored, err := s.blobStore.Put(ctx, objectKey, bytes.NewReader(input.Processed.Content), input.Processed.ByteSize, digest)
+		if err != nil {
+			return nil, nil, normalizeStorageError(err)
+		}
+		if stored.SHA256 != "" && !strings.EqualFold(stored.SHA256, digest) {
+			return nil, nil, internalError("verify emote storage object", errors.New("storage digest mismatch"))
+		}
+		if stored.ByteSize != 0 && stored.ByteSize != input.Processed.ByteSize {
+			return nil, nil, internalError("verify emote storage object", errors.New("storage size mismatch"))
 		}
 		object, err := tx.AcquireStorageObject(ctx, StorageObjectRecord{
 			ID: objectID, SHA256: digest, ObjectKey: objectKey,
@@ -687,11 +714,15 @@ func (s *Service) StoreProcessed(ctx context.Context, input StoreProcessedInput)
 				}
 				return nil, nil, err
 			}
+			cleanupRows := make([]CustomEmoteRecord, 0)
+			if err := s.syncSourceCollectionInTransaction(ctx, tx, input.CollectionID, now, &cleanupRows); err != nil {
+				return nil, nil, err
+			}
 			current, err := tx.GetCustomEmote(ctx, duplicate.ID)
 			if err != nil {
 				return nil, nil, normalizeError(err)
 			}
-			return current.Public(s.catalog), nil, nil
+			return mutationResult{value: current.Public(s.catalog), cleanupRows: cleanupRows}, nil, nil
 		}
 		usage, err := tx.EmoteUsage(ctx, actor.ID, "")
 		if err != nil {
@@ -722,16 +753,29 @@ func (s *Service) StoreProcessed(ctx context.Context, input StoreProcessedInput)
 			}
 			return nil, nil, err
 		}
-		return record.Public(s.catalog), nil, nil
+		cleanupRows := make([]CustomEmoteRecord, 0)
+		if err := s.syncSourceCollectionInTransaction(ctx, tx, input.CollectionID, now, &cleanupRows); err != nil {
+			return nil, nil, err
+		}
+		return mutationResult{value: record.Public(s.catalog), cleanupRows: cleanupRows}, nil, nil
 	})
 	if mutationErr != nil {
-		_ = s.cleanupObjectIfUnreferencedWithFallback(ctx, objectID, &physicalObject)
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		defer cancelCleanup()
+		_ = s.cleanupObjectIfUnreferencedWithFallback(cleanupCtx, objectID, &physicalObject)
 		return nil, mutationErr
 	}
-	public, ok := result.(*CustomEmote)
+	mutation, ok := result.(mutationResult)
+	if !ok {
+		return nil, internalError("store workspace emote", errors.New("invalid emote mutation result"))
+	}
+	public, ok := mutation.value.(*CustomEmote)
 	if !ok || public == nil {
 		_ = s.cleanupObjectIfUnreferencedWithFallback(ctx, objectID, &physicalObject)
 		return nil, internalError("project workspace emote", errors.New("invalid emote result"))
+	}
+	if err := s.cleanupRows(ctx, mutation.cleanupRows); err != nil {
+		return nil, err
 	}
 	return public, nil
 }
@@ -1049,6 +1093,12 @@ func (s *Service) UpdateCollection(ctx context.Context, input UpdateCollectionIn
 		action: "emote.collection.update", eventType: "emote.collection.updated", targetType: "collection", targetID: strings.TrimSpace(input.CollectionID),
 		payload: map[string]any{"collectionId": strings.TrimSpace(input.CollectionID)},
 	}, func(tx Tx, actor *auth.Actor, now time.Time) (any, *Error, error) {
+		if err := tx.Lock(ctx, "workspace-emote-library:"+actor.ID); err != nil {
+			return nil, nil, normalizeError(err)
+		}
+		if err := tx.Lock(ctx, "workspace-emote-source:"+strings.TrimSpace(input.CollectionID)); err != nil {
+			return nil, nil, normalizeError(err)
+		}
 		collection, err := tx.GetCollection(ctx, actor.ID, strings.TrimSpace(input.CollectionID))
 		if err != nil {
 			return nil, nil, normalizeError(err)
@@ -1069,12 +1119,23 @@ func (s *Service) UpdateCollection(ctx context.Context, input UpdateCollectionIn
 		collection.Name = name
 		collection.Revision++
 		collection.UpdatedAt = now
-		return *collection, nil, nil
+		cleanupRows := make([]CustomEmoteRecord, 0)
+		if err := s.syncSubscribersForSourceInTransaction(ctx, tx, collection.ID, now, &cleanupRows); err != nil {
+			return nil, nil, err
+		}
+		return mutationResult{value: *collection, cleanupRows: cleanupRows}, nil, nil
 	})
 	if mutationErr != nil {
 		return Collection{}, mutationErr
 	}
-	record, ok := result.(CollectionRecord)
+	mutation, ok := result.(mutationResult)
+	if !ok {
+		return Collection{}, internalError("project emote collection", errors.New("invalid collection mutation result"))
+	}
+	if err := s.cleanupRows(ctx, mutation.cleanupRows); err != nil {
+		return Collection{}, err
+	}
+	record, ok := mutation.value.(CollectionRecord)
 	if !ok {
 		return Collection{}, internalError("project emote collection", errors.New("invalid collection result"))
 	}
@@ -1165,6 +1226,12 @@ func (s *Service) AddCollectionItems(ctx context.Context, input CollectionItemsI
 		action: "emote.collection.items.add", eventType: "emote.collection.updated", targetType: "collection", targetID: strings.TrimSpace(input.CollectionID),
 		payload: map[string]any{"collectionId": strings.TrimSpace(input.CollectionID)},
 	}, func(tx Tx, actor *auth.Actor, now time.Time) (any, *Error, error) {
+		if err := tx.Lock(ctx, "workspace-emote-library:"+actor.ID); err != nil {
+			return nil, nil, normalizeError(err)
+		}
+		if err := tx.Lock(ctx, "workspace-emote-source:"+strings.TrimSpace(input.CollectionID)); err != nil {
+			return nil, nil, normalizeError(err)
+		}
 		collection, err := tx.GetCollection(ctx, actor.ID, strings.TrimSpace(input.CollectionID))
 		if err != nil {
 			return nil, nil, normalizeError(err)
@@ -1181,12 +1248,30 @@ func (s *Service) AddCollectionItems(ctx context.Context, input CollectionItemsI
 			}
 			return nil, nil, err
 		}
-		return *collection, nil, nil
+		collection, err = tx.GetCollection(ctx, actor.ID, collection.ID)
+		if err != nil {
+			return nil, nil, normalizeError(err)
+		}
+		if collection == nil {
+			return nil, notFoundError(CodeEmoteCollectionNotFound, MessageEmoteCollectionNotFound), nil
+		}
+		cleanupRows := make([]CustomEmoteRecord, 0)
+		if err := s.syncSubscribersForSourceInTransaction(ctx, tx, collection.ID, now, &cleanupRows); err != nil {
+			return nil, nil, err
+		}
+		return mutationResult{value: *collection, cleanupRows: cleanupRows}, nil, nil
 	})
 	if mutationErr != nil {
 		return Collection{}, mutationErr
 	}
-	record, ok := result.(CollectionRecord)
+	mutation, ok := result.(mutationResult)
+	if !ok {
+		return Collection{}, internalError("project workspace emote collection", errors.New("invalid collection mutation result"))
+	}
+	if err := s.cleanupRows(ctx, mutation.cleanupRows); err != nil {
+		return Collection{}, err
+	}
+	record, ok := mutation.value.(CollectionRecord)
 	if !ok {
 		return Collection{}, internalError("project emote collection", errors.New("invalid collection result"))
 	}
@@ -1198,6 +1283,12 @@ func (s *Service) RemoveCollectionItem(ctx context.Context, input RemoveCollecti
 		action: "emote.collection.items.remove", eventType: "emote.collection.updated", targetType: "collection", targetID: strings.TrimSpace(input.CollectionID),
 		payload: map[string]any{"collectionId": strings.TrimSpace(input.CollectionID), "emoteId": strings.TrimSpace(input.EmoteID)},
 	}, func(tx Tx, actor *auth.Actor, now time.Time) (any, *Error, error) {
+		if err := tx.Lock(ctx, "workspace-emote-library:"+actor.ID); err != nil {
+			return nil, nil, normalizeError(err)
+		}
+		if err := tx.Lock(ctx, "workspace-emote-source:"+strings.TrimSpace(input.CollectionID)); err != nil {
+			return nil, nil, normalizeError(err)
+		}
 		collection, err := tx.GetCollection(ctx, actor.ID, strings.TrimSpace(input.CollectionID))
 		if err != nil {
 			return nil, nil, normalizeError(err)
@@ -1220,12 +1311,23 @@ func (s *Service) RemoveCollectionItem(ctx context.Context, input RemoveCollecti
 		}
 		collection.Revision++
 		collection.UpdatedAt = now
-		return *collection, nil, nil
+		cleanupRows := make([]CustomEmoteRecord, 0)
+		if err := s.syncSubscribersForSourceInTransaction(ctx, tx, collection.ID, now, &cleanupRows); err != nil {
+			return nil, nil, err
+		}
+		return mutationResult{value: *collection, cleanupRows: cleanupRows}, nil, nil
 	})
 	if mutationErr != nil {
 		return Collection{}, mutationErr
 	}
-	record, ok := result.(CollectionRecord)
+	mutation, ok := result.(mutationResult)
+	if !ok {
+		return Collection{}, internalError("project workspace emote collection", errors.New("invalid collection mutation result"))
+	}
+	if err := s.cleanupRows(ctx, mutation.cleanupRows); err != nil {
+		return Collection{}, err
+	}
+	record, ok := mutation.value.(CollectionRecord)
 	if !ok {
 		return Collection{}, internalError("project emote collection", errors.New("invalid collection result"))
 	}
@@ -1344,6 +1446,9 @@ func (s *Service) Update(ctx context.Context, input UpdateEmoteInput) (*CustomEm
 		if readonly {
 			return nil, conflictError(CodeEmoteSubscriptionReadOnly, MessageEmoteSubscriptionReadOnly), nil
 		}
+		if err := tx.Lock(ctx, "workspace-emote-library:"+actor.ID); err != nil {
+			return nil, nil, normalizeError(err)
+		}
 		if _, err := tx.UpdateCustomEmoteLabel(ctx, actor.ID, row.ID, label); err != nil {
 			return nil, nil, normalizeError(err)
 		}
@@ -1351,18 +1456,32 @@ func (s *Service) Update(ctx context.Context, input UpdateEmoteInput) (*CustomEm
 		if err != nil {
 			return nil, nil, normalizeError(err)
 		}
+		cleanupRows := make([]CustomEmoteRecord, 0)
 		for _, collectionID := range collectionIDs {
+			if err := tx.Lock(ctx, "workspace-emote-source:"+collectionID); err != nil {
+				return nil, nil, normalizeError(err)
+			}
 			if _, err := tx.UpdateCollectionRevision(ctx, actor.ID, collectionID, now); err != nil {
 				return nil, nil, normalizeError(err)
 			}
+			if err := s.syncSubscribersForSourceInTransaction(ctx, tx, collectionID, now, &cleanupRows); err != nil {
+				return nil, nil, err
+			}
 		}
 		row.Label = label
-		return row.Public(s.catalog), nil, nil
+		return mutationResult{value: row.Public(s.catalog), cleanupRows: cleanupRows}, nil, nil
 	})
 	if mutationErr != nil {
 		return nil, mutationErr
 	}
-	public, ok := result.(*CustomEmote)
+	mutation, ok := result.(mutationResult)
+	if !ok {
+		return nil, internalError("update workspace emote", errors.New("invalid emote mutation result"))
+	}
+	if err := s.cleanupRows(ctx, mutation.cleanupRows); err != nil {
+		return nil, err
+	}
+	public, ok := mutation.value.(*CustomEmote)
 	if !ok || public == nil {
 		return nil, internalError("project workspace emote", errors.New("invalid emote result"))
 	}
@@ -1405,16 +1524,22 @@ func (s *Service) Remove(ctx context.Context, actorID, emoteID string, meta auth
 		if _, err := tx.MarkCustomEmoteRemoved(ctx, actor.ID, row.ID, now); err != nil {
 			return nil, nil, normalizeError(err)
 		}
+		cleanupRows := []CustomEmoteRecord{}
 		for _, collectionID := range collectionIDs {
+			if err := tx.Lock(ctx, "workspace-emote-source:"+collectionID); err != nil {
+				return nil, nil, normalizeError(err)
+			}
 			if _, err := tx.UpdateCollectionRevision(ctx, actor.ID, collectionID, now); err != nil {
 				return nil, nil, normalizeError(err)
+			}
+			if err := s.syncSubscribersForSourceInTransaction(ctx, tx, collectionID, now, &cleanupRows); err != nil {
+				return nil, nil, err
 			}
 		}
 		removedRow, deleted, err := tx.DeleteUnreferencedEmote(ctx, row.ID)
 		if err != nil {
 			return nil, nil, normalizeError(err)
 		}
-		cleanupRows := []CustomEmoteRecord{}
 		if deleted && removedRow != nil {
 			cleanupRows = append(cleanupRows, *removedRow)
 		}
@@ -1549,6 +1674,8 @@ func (s *Service) cleanupObjectIfUnreferencedWithFallback(ctx context.Context, o
 	if objectID == "" || s == nil || s.repo == nil || s.blobStore == nil {
 		return nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
 	return s.repo.WithTx(ctx, func(tx Tx) error {
 		if err := tx.Lock(ctx, "workspace-storage-object:"+objectID); err != nil {
 			return normalizeError(err)
@@ -1596,6 +1723,12 @@ func (s *Service) DeleteCollection(ctx context.Context, input DeleteCollectionIn
 		action: "emote.collection.remove", eventType: "emote.collection.removed", targetType: "collection", targetID: collectionID,
 		payload: map[string]any{"collectionId": collectionID, "disposition": disposition},
 	}, func(tx Tx, actor *auth.Actor, now time.Time) (any, *Error, error) {
+		if err := tx.Lock(ctx, "workspace-emote-library:"+actor.ID); err != nil {
+			return nil, nil, normalizeError(err)
+		}
+		if err := tx.Lock(ctx, "workspace-emote-source:"+collectionID); err != nil {
+			return nil, nil, normalizeError(err)
+		}
 		collection, err := tx.GetCollection(ctx, actor.ID, collectionID)
 		if err != nil {
 			return nil, nil, normalizeError(err)
@@ -1605,9 +1738,6 @@ func (s *Service) DeleteCollection(ctx context.Context, input DeleteCollectionIn
 		}
 		if collection.SubscriptionStatus == "active" {
 			return nil, conflictError(CodeEmoteSubscriptionReadOnly, MessageEmoteSubscriptionReadOnly), nil
-		}
-		if err := tx.Lock(ctx, "workspace-emote-library:"+actor.ID); err != nil {
-			return nil, nil, normalizeError(err)
 		}
 		items, err := tx.ListCollectionItems(ctx, collection.ID)
 		if err != nil {
@@ -1639,6 +1769,9 @@ func (s *Service) DeleteCollection(ctx context.Context, input DeleteCollectionIn
 					return nil, nil, normalizeError(err)
 				}
 			}
+		}
+		if err := s.detachSubscribersForDeletedSourceInTransaction(ctx, tx, collectionID, now); err != nil {
+			return nil, nil, err
 		}
 		if _, err := tx.DeleteLibraryEntry(ctx, actor.ID, "", collectionID); err != nil {
 			return nil, nil, normalizeError(err)
@@ -1678,6 +1811,12 @@ func (s *Service) ReorderCollection(ctx context.Context, input ReorderInput, col
 		action: "emote.collection.reorder", eventType: "emote.collection.updated", targetType: "collection", targetID: collectionID,
 		payload: map[string]any{"collectionId": collectionID},
 	}, func(tx Tx, actor *auth.Actor, now time.Time) (any, *Error, error) {
+		if err := tx.Lock(ctx, "workspace-emote-library:"+actor.ID); err != nil {
+			return nil, nil, normalizeError(err)
+		}
+		if err := tx.Lock(ctx, "workspace-emote-source:"+collectionID); err != nil {
+			return nil, nil, normalizeError(err)
+		}
 		collection, err := tx.GetCollection(ctx, actor.ID, collectionID)
 		if err != nil {
 			return nil, nil, normalizeError(err)
@@ -1714,12 +1853,23 @@ func (s *Service) ReorderCollection(ctx context.Context, input ReorderInput, col
 		}
 		collection.Revision++
 		collection.UpdatedAt = now
-		return *collection, nil, nil
+		cleanupRows := make([]CustomEmoteRecord, 0)
+		if err := s.syncSubscribersForSourceInTransaction(ctx, tx, collection.ID, now, &cleanupRows); err != nil {
+			return nil, nil, err
+		}
+		return mutationResult{value: *collection, cleanupRows: cleanupRows}, nil, nil
 	})
 	if mutationErr != nil {
 		return Collection{}, mutationErr
 	}
-	record, ok := result.(CollectionRecord)
+	mutation, ok := result.(mutationResult)
+	if !ok {
+		return Collection{}, internalError("project workspace emote collection", errors.New("invalid collection mutation result"))
+	}
+	if err := s.cleanupRows(ctx, mutation.cleanupRows); err != nil {
+		return Collection{}, err
+	}
+	record, ok := mutation.value.(CollectionRecord)
 	if !ok {
 		return Collection{}, internalError("project emote collection", errors.New("invalid collection order result"))
 	}
@@ -1733,6 +1883,9 @@ func (s *Service) CreateShare(ctx context.Context, input CreateShareInput) (Shar
 		payload: map[string]any{"collectionId": collectionID},
 	}, func(tx Tx, actor *auth.Actor, now time.Time) (any, *Error, error) {
 		if err := tx.Lock(ctx, "workspace-emote-library:"+actor.ID); err != nil {
+			return nil, nil, normalizeError(err)
+		}
+		if err := tx.Lock(ctx, "workspace-emote-source:"+collectionID); err != nil {
 			return nil, nil, normalizeError(err)
 		}
 		collection, err := tx.GetCollection(ctx, actor.ID, collectionID)
@@ -1913,6 +2066,12 @@ func (s *Service) ImportShare(ctx context.Context, input ImportShareInput) (Impo
 	if !asCollection && len(requested) == 0 {
 		selected = shareItems
 	}
+	if input.SubscribeToSourceChanges && (!asCollection || len(requested) > 0) {
+		err := NewError(CodeEmoteSubscriptionRequiresCollection, MessageEmoteSubscriptionRequiresCollection, 400)
+		return ImportShareResult{}, s.recordRejected(ctx, input.ActorID, input.Meta, mutationEvidence{
+			action: "emote.collection.share.import", targetType: "share", targetID: share.ID,
+		}, err)
+	}
 	collectionName := share.Name
 	if strings.TrimSpace(input.CollectionName) != "" {
 		var collectionNameErr *Error
@@ -1934,6 +2093,99 @@ func (s *Service) ImportShare(ctx context.Context, input ImportShareInput) (Impo
 	}, func(tx Tx, actor *auth.Actor, now time.Time) (any, *Error, error) {
 		if err := tx.Lock(ctx, "workspace-emote-library:"+actor.ID); err != nil {
 			return nil, nil, normalizeError(err)
+		}
+		if input.SubscribeToSourceChanges {
+			if strings.TrimSpace(share.SourceCollectionID) == "" {
+				return nil, NewError(CodeEmoteSubscriptionSourceUnavailable, MessageEmoteSubscriptionSourceUnavailable, 409), nil
+			}
+			if err := tx.Lock(ctx, "workspace-emote-source:"+strings.TrimSpace(share.SourceCollectionID)); err != nil {
+				return nil, nil, normalizeError(err)
+			}
+			source, err := s.resolveCanonicalSourceCollection(ctx, tx, share.SourceCollectionID, share.OriginalCreatorID)
+			if err != nil {
+				return nil, nil, err
+			}
+			if source == nil {
+				return nil, NewError(CodeEmoteSubscriptionSourceUnavailable, MessageEmoteSubscriptionSourceUnavailable, 409), nil
+			}
+			if err := tx.Lock(ctx, "workspace-emote-source:"+source.ID); err != nil {
+				return nil, nil, normalizeError(err)
+			}
+			source, err = s.resolveCanonicalSourceCollection(ctx, tx, source.ID, share.OriginalCreatorID)
+			if err != nil {
+				return nil, nil, err
+			}
+			if source == nil {
+				return nil, NewError(CodeEmoteSubscriptionSourceUnavailable, MessageEmoteSubscriptionSourceUnavailable, 409), nil
+			}
+			sourceItems, err := s.sourceItems(ctx, tx, source.ID)
+			if err != nil {
+				return nil, nil, err
+			}
+			if len(sourceItems) > MaxCollectionItems {
+				return nil, conflictError(CodeEmoteCollectionLimitReached, MessageEmoteCollectionLimitReached), nil
+			}
+			sourceRevision := source.Revision
+			lastSyncedAt := now
+			record := CollectionRecord{
+				ID: collectionID, UserID: actor.ID, Name: source.Name,
+				SourceCollectionID: source.ID, SubscriptionSourceCollectionID: source.ID,
+				OriginalCreatorID: source.OriginalCreatorID, OriginalCreatorName: source.OriginalCreatorName,
+				Revision: 1, CreatedAt: now, UpdatedAt: now,
+				SubscriptionStatus: "active", SubscriptionSourceRevision: &sourceRevision, SubscriptionLastSyncedAt: &lastSyncedAt,
+			}
+			if err := tx.InsertCollection(ctx, record); err != nil {
+				return nil, nil, normalizeError(err)
+			}
+			entryID, err := s.newID("workspace imported subscribed collection library entry")
+			if err != nil {
+				return nil, nil, internalError("generate workspace imported subscribed collection library entry id", err)
+			}
+			if _, err := tx.EnsureLibraryEntry(ctx, LibraryEntryRecord{ID: entryID, UserID: actor.ID, EntryType: "collection", CollectionID: collectionID, SortOrder: -1, CreatedAt: now}); err != nil {
+				return nil, nil, normalizeError(err)
+			}
+			subscriptionID, err := s.newID("workspace imported emote subscription")
+			if err != nil {
+				return nil, nil, internalError("generate workspace imported emote subscription id", err)
+			}
+			if err := tx.Lock(ctx, "workspace-emote-subscription:"+subscriptionID); err != nil {
+				return nil, nil, normalizeError(err)
+			}
+			if inserted, err := tx.UpsertCollectionSubscription(ctx, CollectionSubscriptionRecord{
+				ID: subscriptionID, CollectionID: collectionID, SubscriberUserID: actor.ID,
+				SourceCollectionID: source.ID, SourceOwnerUserID: source.UserID, Status: "active",
+				SourceRevision: source.Revision, LastSyncedAt: &lastSyncedAt, CreatedAt: now, UpdatedAt: now,
+			}); err != nil {
+				return nil, nil, normalizeError(err)
+			} else if !inserted {
+				return nil, conflictError(CodeEmoteSubscriptionConflict, MessageEmoteSubscriptionConflict), nil
+			}
+			imported := make([]CustomEmote, 0, len(sourceItems))
+			for _, sourceItem := range sourceItems {
+				target, err := s.createSubscriptionTarget(ctx, tx, actor.ID, sourceItem.Emote, now)
+				if err != nil {
+					return nil, nil, err
+				}
+				if _, err := tx.InsertCollectionItem(ctx, CollectionItemRecord{CollectionID: collectionID, EmoteID: target.ID, SortOrder: sourceItem.Item.SortOrder, AddedAt: now}); err != nil {
+					return nil, nil, normalizeError(err)
+				}
+				if err := tx.InsertSubscriptionItem(ctx, CollectionSubscriptionItemRecord{
+					SubscriptionID: subscriptionID, SourceEmoteID: sourceItem.Emote.ID, TargetEmoteID: target.ID,
+					SourceSortOrder: sourceItem.Item.SortOrder, CreatedAt: now, UpdatedAt: now,
+				}); err != nil {
+					return nil, nil, normalizeError(err)
+				}
+				if public := target.Public(s.catalog); public != nil {
+					imported = append(imported, *public)
+				}
+			}
+			if err := s.writeSubscriptionEvent(ctx, tx, actor.ID, actor.ID, collectionID, "synced", source.Revision, now); err != nil {
+				return nil, nil, err
+			}
+			return struct {
+				Collection *CollectionRecord
+				Items      []CustomEmote
+			}{Collection: &record, Items: imported}, nil, nil
 		}
 		var collection *CollectionRecord
 		if asCollection {
@@ -2105,6 +2357,486 @@ func (s *Service) ValidateMessageCustomEmote(ctx context.Context, actorID, custo
 	return nil
 }
 
-func (s *Service) UpdateCollectionSourceSubscription(context.Context, string, string, bool, auth.RequestMeta) error {
-	return NewError(CodeEmoteSubscriptionUnsupported, MessageEmoteSubscriptionUnsupported, 501)
+func (s *Service) UpdateCollectionSourceSubscription(ctx context.Context, actorID, collectionID string, enabled bool, meta auth.RequestMeta) error {
+	collectionID = strings.TrimSpace(collectionID)
+	result, mutationErr := s.mutate(ctx, actorID, meta, mutationEvidence{
+		action: "emote.collection.subscription.update", targetType: "collection", targetID: collectionID,
+		payload: map[string]any{"collectionId": collectionID, "enabled": enabled},
+	}, func(tx Tx, actor *auth.Actor, now time.Time) (any, *Error, error) {
+		if err := tx.Lock(ctx, "workspace-emote-library:"+actor.ID); err != nil {
+			return nil, nil, normalizeError(err)
+		}
+		collection, err := tx.GetCollection(ctx, actor.ID, collectionID)
+		if err != nil {
+			return nil, nil, normalizeError(err)
+		}
+		if collection == nil {
+			return nil, notFoundError(CodeEmoteCollectionNotFound, MessageEmoteCollectionNotFound), nil
+		}
+		subscription, err := tx.GetCollectionSubscription(ctx, collection.ID)
+		if err != nil {
+			return nil, nil, normalizeError(err)
+		}
+		if !enabled {
+			if subscription == nil || subscription.Status != "active" {
+				return nil, nil, nil
+			}
+			if err := tx.Lock(ctx, "workspace-emote-subscription:"+subscription.ID); err != nil {
+				return nil, nil, normalizeError(err)
+			}
+			subscription, err = tx.GetCollectionSubscription(ctx, collection.ID)
+			if err != nil {
+				return nil, nil, normalizeError(err)
+			}
+			if subscription == nil || subscription.Status != "active" {
+				return nil, nil, nil
+			}
+			usage, err := tx.EmoteUsage(ctx, actor.ID, subscription.ID)
+			if err != nil {
+				return nil, nil, normalizeError(err)
+			}
+			if usage.TotalBytes > MaxTotalBytes {
+				return nil, conflictError(CodeEmoteStorageLimitReached, MessageEmoteStorageLimitReached), nil
+			}
+			if updated, err := tx.UpdateCollectionSubscription(ctx, subscription.ID, "off", subscription.SourceRevision, subscription.LastSyncedAt, nil, now); err != nil {
+				return nil, nil, normalizeError(err)
+			} else if !updated {
+				return nil, conflictError(CodeEmoteSubscriptionConflict, MessageEmoteSubscriptionConflict), nil
+			}
+			if err := s.writeSubscriptionEvent(ctx, tx, actor.ID, actor.ID, collection.ID, "off", subscription.SourceRevision, now); err != nil {
+				return nil, nil, err
+			}
+			return nil, nil, nil
+		}
+
+		sourceID := collection.SourceCollectionID
+		if subscription != nil && strings.TrimSpace(subscription.SourceCollectionID) != "" {
+			sourceID = subscription.SourceCollectionID
+		}
+		if strings.TrimSpace(sourceID) == "" || (subscription != nil && subscription.Status == "detached") {
+			return nil, NewError(CodeEmoteSubscriptionSourceUnavailable, MessageEmoteSubscriptionSourceUnavailable, 409), nil
+		}
+		source, err := s.resolveCanonicalSourceCollection(ctx, tx, sourceID, collection.OriginalCreatorID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if source == nil || source.ID == collection.ID {
+			return nil, NewError(CodeEmoteSubscriptionSourceUnavailable, MessageEmoteSubscriptionSourceUnavailable, 409), nil
+		}
+		if err := tx.Lock(ctx, "workspace-emote-source:"+source.ID); err != nil {
+			return nil, nil, normalizeError(err)
+		}
+		source, err = s.resolveCanonicalSourceCollection(ctx, tx, source.ID, collection.OriginalCreatorID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if source == nil || source.ID == collection.ID {
+			return nil, NewError(CodeEmoteSubscriptionSourceUnavailable, MessageEmoteSubscriptionSourceUnavailable, 409), nil
+		}
+		subscription, err = tx.GetCollectionSubscription(ctx, collection.ID)
+		if err != nil {
+			return nil, nil, normalizeError(err)
+		}
+		subscriptionID := ""
+		createdAt := now
+		if subscription != nil {
+			if subscription.Status == "detached" {
+				return nil, NewError(CodeEmoteSubscriptionSourceUnavailable, MessageEmoteSubscriptionSourceUnavailable, 409), nil
+			}
+			subscriptionID = subscription.ID
+			createdAt = subscription.CreatedAt
+		}
+		if subscriptionID == "" {
+			subscriptionID, err = s.newID("workspace emote subscription")
+			if err != nil {
+				return nil, nil, internalError("generate workspace emote subscription id", err)
+			}
+		}
+		if err := tx.Lock(ctx, "workspace-emote-subscription:"+subscriptionID); err != nil {
+			return nil, nil, normalizeError(err)
+		}
+		record := CollectionSubscriptionRecord{
+			ID: subscriptionID, CollectionID: collection.ID, SubscriberUserID: actor.ID,
+			SourceCollectionID: source.ID, SourceOwnerUserID: source.UserID, Status: "active",
+			SourceRevision: 0, CreatedAt: createdAt, UpdatedAt: now,
+		}
+		if ok, err := tx.UpsertCollectionSubscription(ctx, record); err != nil {
+			return nil, nil, normalizeError(err)
+		} else if !ok {
+			return nil, conflictError(CodeEmoteSubscriptionConflict, MessageEmoteSubscriptionConflict), nil
+		}
+		cleanupRows := make([]CustomEmoteRecord, 0)
+		if err := s.syncSubscriptionInTransaction(ctx, tx, subscriptionID, now, &cleanupRows); err != nil {
+			return nil, nil, err
+		}
+		return mutationResult{value: nil, cleanupRows: cleanupRows}, nil, nil
+	})
+	if mutationErr != nil {
+		return mutationErr
+	}
+	if mutation, ok := result.(mutationResult); ok {
+		return s.cleanupRows(ctx, mutation.cleanupRows)
+	}
+	return nil
+}
+
+func (s *Service) resolveCanonicalSourceCollection(ctx context.Context, repository ReadRepository, collectionID, expectedOwnerID string) (*CollectionRecord, error) {
+	currentID := strings.TrimSpace(collectionID)
+	expectedOwnerID = strings.TrimSpace(expectedOwnerID)
+	seen := make(map[string]struct{})
+	var current *CollectionRecord
+	for currentID != "" {
+		if _, exists := seen[currentID]; exists {
+			return nil, validationError(CodeEmoteInvalidSource, MessageEmoteInvalidSource)
+		}
+		seen[currentID] = struct{}{}
+		row, err := repository.GetCollectionByID(ctx, currentID)
+		if err != nil {
+			return nil, normalizeError(err)
+		}
+		if row == nil {
+			return nil, nil
+		}
+		current = row
+		if row.SourceCollectionID == "" {
+			break
+		}
+		currentID = row.SourceCollectionID
+	}
+	if current == nil || (expectedOwnerID != "" && current.UserID != expectedOwnerID) {
+		return nil, nil
+	}
+	return current, nil
+}
+
+func (s *Service) sourceItems(ctx context.Context, repository ReadRepository, collectionID string) ([]struct {
+	Item  CollectionItemRecord
+	Emote CustomEmoteRecord
+}, error) {
+	items, err := repository.ListCollectionItems(ctx, collectionID)
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	result := make([]struct {
+		Item  CollectionItemRecord
+		Emote CustomEmoteRecord
+	}, 0, len(items))
+	for _, item := range items {
+		row, err := repository.GetCustomEmote(ctx, item.EmoteID)
+		if err != nil {
+			return nil, normalizeError(err)
+		}
+		if row == nil || row.RemovedAt != nil {
+			continue
+		}
+		result = append(result, struct {
+			Item  CollectionItemRecord
+			Emote CustomEmoteRecord
+		}{Item: item, Emote: *row})
+	}
+	return result, nil
+}
+
+func (s *Service) createSubscriptionTarget(ctx context.Context, tx Tx, actorID string, source CustomEmoteRecord, now time.Time) (*CustomEmoteRecord, error) {
+	id, err := s.newID("workspace subscribed emote")
+	if err != nil {
+		return nil, internalError("generate workspace subscribed emote id", err)
+	}
+	if source.SourceType == "builtin" {
+		if _, ok := s.catalogImage(source.SourceEmoteKey); !ok {
+			return nil, validationError(CodeEmoteInvalidSource, MessageEmoteInvalidSource)
+		}
+		record := CustomEmoteRecord{ID: id, UserID: actorID, SourceType: "builtin", SourceEmoteKey: source.SourceEmoteKey, Label: source.Label, SortOrder: 0, CreatedAt: now}
+		inserted, err := tx.InsertCustomEmote(ctx, record)
+		if err != nil {
+			return nil, normalizeError(err)
+		}
+		if !inserted {
+			return nil, conflictError(CodeEmoteInvalidReference, MessageEmoteInvalidReference)
+		}
+		return &record, nil
+	}
+	if source.SHA256 == "" || (source.StorageObjectID == "" && source.StorageKey == "") {
+		return nil, validationError(CodeEmoteInvalidSource, MessageEmoteInvalidSource)
+	}
+	record := CustomEmoteRecord{
+		ID: id, UserID: actorID, SourceType: "custom", SourceCustomEmoteID: source.ID,
+		OriginalFileName: nonEmpty(source.OriginalFileName, source.Label+".webp"),
+		OriginalMIMEType: nonEmpty(source.OriginalMIMEType, "image/webp"), Label: source.Label,
+		NormalizedMIMEType: nonEmpty(source.NormalizedMIMEType, "image/webp"), ByteSize: source.ByteSize,
+		Width: source.Width, Height: source.Height, FrameCount: source.FrameCount, DurationMS: source.DurationMS,
+		SHA256: source.SHA256, StorageKey: source.StorageKey, StorageObjectID: source.StorageObjectID,
+		SortOrder: 0, CreatedAt: now,
+	}
+	inserted, err := tx.InsertCustomEmote(ctx, record)
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	if !inserted {
+		return nil, conflictError(CodeEmoteInvalidReference, MessageEmoteInvalidReference)
+	}
+	return &record, nil
+}
+
+func (s *Service) writeSubscriptionEvent(ctx context.Context, tx Tx, actorID, subscriberUserID, collectionID, status string, sourceRevision int64, now time.Time) error {
+	payload := map[string]any{
+		"userId": subscriberUserID, "collectionId": collectionID,
+		"sourceRevision": sourceRevision, "status": status,
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return internalError("encode workspace emote subscription event", err)
+	}
+	if err := tx.WriteEvent(ctx, EventInput{
+		SpaceID: s.space(), Type: "emote.library.updated", ActorID: actorID,
+		TargetType: "user", TargetID: subscriberUserID, PayloadJSON: payloadJSON, CreatedAt: now,
+	}); err != nil {
+		return internalError("write workspace emote subscription event", err)
+	}
+	return nil
+}
+
+func (s *Service) syncSourceCollectionInTransaction(ctx context.Context, tx Tx, sourceCollectionID string, now time.Time, cleanupRows *[]CustomEmoteRecord) error {
+	sourceCollectionID = strings.TrimSpace(sourceCollectionID)
+	if sourceCollectionID == "" {
+		return nil
+	}
+	if err := tx.Lock(ctx, "workspace-emote-source:"+sourceCollectionID); err != nil {
+		return normalizeError(err)
+	}
+	return s.syncSubscribersForSourceInTransaction(ctx, tx, sourceCollectionID, now, cleanupRows)
+}
+
+func (s *Service) syncSubscribersForSourceInTransaction(ctx context.Context, tx Tx, sourceCollectionID string, now time.Time, cleanupRows *[]CustomEmoteRecord) error {
+	if strings.TrimSpace(sourceCollectionID) == "" {
+		return nil
+	}
+	rows, err := tx.ListSubscriptionsBySource(ctx, sourceCollectionID, "active")
+	if err != nil {
+		return normalizeError(err)
+	}
+	for _, subscription := range rows {
+		if err := tx.Lock(ctx, "workspace-emote-subscription:"+subscription.ID); err != nil {
+			return normalizeError(err)
+		}
+		if err := s.syncSubscriptionInTransaction(ctx, tx, subscription.ID, now, cleanupRows); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) syncSubscriptionInTransaction(ctx context.Context, tx Tx, subscriptionID string, now time.Time, cleanupRows *[]CustomEmoteRecord) error {
+	subscription, err := tx.GetCollectionSubscriptionByID(ctx, subscriptionID)
+	if err != nil {
+		return normalizeError(err)
+	}
+	if subscription == nil {
+		return nil
+	}
+	return s.syncSubscriptionRecordInTransaction(ctx, tx, *subscription, now, cleanupRows)
+}
+
+func (s *Service) syncSubscriptionRecordInTransaction(ctx context.Context, tx Tx, subscription CollectionSubscriptionRecord, now time.Time, cleanupRows *[]CustomEmoteRecord) error {
+	if subscription.Status != "active" {
+		return nil
+	}
+	source, err := tx.GetCollectionByID(ctx, subscription.SourceCollectionID)
+	if err != nil {
+		return normalizeError(err)
+	}
+	if source == nil {
+		if updated, err := tx.UpdateCollectionSubscription(ctx, subscription.ID, "detached", subscription.SourceRevision, subscription.LastSyncedAt, timePointer(now), now); err != nil {
+			return normalizeError(err)
+		} else if updated {
+			return s.writeSubscriptionEvent(ctx, tx, subscription.SourceOwnerUserID, subscription.SubscriberUserID, subscription.CollectionID, "detached", subscription.SourceRevision, now)
+		}
+		return nil
+	}
+	if subscription.SourceRevision == source.Revision {
+		return nil
+	}
+	sourceItems, err := s.sourceItems(ctx, tx, source.ID)
+	if err != nil {
+		return err
+	}
+	if len(sourceItems) > MaxCollectionItems {
+		return conflictError(CodeEmoteCollectionLimitReached, MessageEmoteCollectionLimitReached)
+	}
+	previousMappings, err := tx.ListSubscriptionItems(ctx, subscription.ID)
+	if err != nil {
+		return normalizeError(err)
+	}
+	previousCollectionItems, err := tx.ListCollectionItems(ctx, subscription.CollectionID)
+	if err != nil {
+		return normalizeError(err)
+	}
+	targetBySource := make(map[string]string, len(previousMappings))
+	previousSourceIDs := make(map[string]struct{}, len(previousMappings))
+	for _, mapping := range previousMappings {
+		targetBySource[mapping.SourceEmoteID] = mapping.TargetEmoteID
+		previousSourceIDs[mapping.SourceEmoteID] = struct{}{}
+	}
+	type desiredItem struct {
+		sourceID  string
+		targetID  string
+		sortOrder int64
+	}
+	desired := make([]desiredItem, 0, len(sourceItems))
+	for index, sourceItem := range sourceItems {
+		targetID := targetBySource[sourceItem.Emote.ID]
+		var target *CustomEmoteRecord
+		if targetID != "" {
+			target, err = tx.GetCustomEmote(ctx, targetID)
+			if err != nil {
+				return normalizeError(err)
+			}
+			if target != nil && target.UserID != subscription.SubscriberUserID {
+				target = nil
+			}
+			if target != nil {
+				local, err := tx.IsEmoteLocallyPlaced(ctx, subscription.SubscriberUserID, target.ID)
+				if err != nil {
+					return normalizeError(err)
+				}
+				if local {
+					target = nil
+				}
+			}
+		}
+		if target == nil {
+			target, err = s.createSubscriptionTarget(ctx, tx, subscription.SubscriberUserID, sourceItem.Emote, now)
+			if err != nil {
+				return err
+			}
+		} else {
+			if _, err := tx.RestoreCustomEmote(ctx, subscription.SubscriberUserID, target.ID, now); err != nil {
+				return normalizeError(err)
+			}
+			if _, err := tx.UpdateCustomEmoteLabel(ctx, subscription.SubscriberUserID, target.ID, sourceItem.Emote.Label); err != nil {
+				return normalizeError(err)
+			}
+		}
+		desired = append(desired, desiredItem{sourceID: sourceItem.Emote.ID, targetID: target.ID, sortOrder: int64(index)})
+	}
+	if err := tx.DeleteCollectionItems(ctx, subscription.CollectionID); err != nil {
+		return normalizeError(err)
+	}
+	if err := tx.DeleteSubscriptionItems(ctx, subscription.ID); err != nil {
+		return normalizeError(err)
+	}
+	for _, item := range desired {
+		if _, err := tx.InsertCollectionItem(ctx, CollectionItemRecord{CollectionID: subscription.CollectionID, EmoteID: item.targetID, SortOrder: item.sortOrder, AddedAt: now}); err != nil {
+			return normalizeError(err)
+		}
+		if err := tx.InsertSubscriptionItem(ctx, CollectionSubscriptionItemRecord{SubscriptionID: subscription.ID, SourceEmoteID: item.sourceID, TargetEmoteID: item.targetID, SourceSortOrder: item.sortOrder, CreatedAt: now, UpdatedAt: now}); err != nil {
+			return normalizeError(err)
+		}
+	}
+	desiredTargets := make(map[string]struct{}, len(desired))
+	desiredSources := make(map[string]struct{}, len(desired))
+	for _, item := range desired {
+		desiredTargets[item.targetID] = struct{}{}
+		desiredSources[item.sourceID] = struct{}{}
+	}
+	obsolete := make(map[string]struct{}, len(previousMappings)+len(previousCollectionItems))
+	for _, mapping := range previousMappings {
+		obsolete[mapping.TargetEmoteID] = struct{}{}
+	}
+	for _, item := range previousCollectionItems {
+		obsolete[item.EmoteID] = struct{}{}
+	}
+	for targetID := range obsolete {
+		if _, keep := desiredTargets[targetID]; keep {
+			continue
+		}
+		local, err := tx.IsEmoteLocallyPlaced(ctx, subscription.SubscriberUserID, targetID)
+		if err != nil {
+			return normalizeError(err)
+		}
+		readOnly, err := tx.IsEmoteSubscriptionReadOnly(ctx, subscription.SubscriberUserID, targetID)
+		if err != nil {
+			return normalizeError(err)
+		}
+		if local || readOnly {
+			continue
+		}
+		row, err := tx.GetCustomEmote(ctx, targetID)
+		if err != nil {
+			return normalizeError(err)
+		}
+		if row == nil {
+			continue
+		}
+		if _, err := tx.MarkCustomEmoteRemoved(ctx, subscription.SubscriberUserID, targetID, now); err != nil {
+			return normalizeError(err)
+		}
+		if removedRow, deleted, err := tx.DeleteUnreferencedEmote(ctx, targetID); err != nil {
+			return normalizeError(err)
+		} else if deleted && removedRow != nil && cleanupRows != nil {
+			*cleanupRows = append(*cleanupRows, *removedRow)
+		}
+	}
+	for sourceID := range previousSourceIDs {
+		if _, keep := desiredSources[sourceID]; keep {
+			continue
+		}
+		sourceRow, err := tx.GetCustomEmote(ctx, sourceID)
+		if err != nil {
+			return normalizeError(err)
+		}
+		if sourceRow == nil || sourceRow.RemovedAt == nil {
+			continue
+		}
+		if removedRow, deleted, err := tx.DeleteUnreferencedEmote(ctx, sourceID); err != nil {
+			return normalizeError(err)
+		} else if deleted && removedRow != nil && cleanupRows != nil {
+			*cleanupRows = append(*cleanupRows, *removedRow)
+		}
+	}
+	if updated, err := tx.UpdateCollectionFromSource(ctx, subscription.SubscriberUserID, subscription.CollectionID, source.Name, source.ID, source.OriginalCreatorID, now); err != nil {
+		return normalizeError(err)
+	} else if !updated {
+		return notFoundError(CodeEmoteCollectionNotFound, MessageEmoteCollectionNotFound)
+	}
+	if updated, err := tx.UpdateCollectionSubscription(ctx, subscription.ID, "active", source.Revision, timePointer(now), nil, now); err != nil {
+		return normalizeError(err)
+	} else if !updated {
+		return conflictError(CodeEmoteSubscriptionConflict, MessageEmoteSubscriptionConflict)
+	}
+	return s.writeSubscriptionEvent(ctx, tx, source.UserID, subscription.SubscriberUserID, subscription.CollectionID, "synced", source.Revision, now)
+}
+
+func (s *Service) detachSubscribersForDeletedSourceInTransaction(ctx context.Context, tx Tx, sourceCollectionID string, now time.Time) error {
+	for _, status := range []string{"active", "off"} {
+		rows, err := tx.ListSubscriptionsBySource(ctx, sourceCollectionID, status)
+		if err != nil {
+			return normalizeError(err)
+		}
+		for _, subscription := range rows {
+			if err := tx.Lock(ctx, "workspace-emote-subscription:"+subscription.ID); err != nil {
+				return normalizeError(err)
+			}
+			current, err := tx.GetCollectionSubscription(ctx, subscription.CollectionID)
+			if err != nil {
+				return normalizeError(err)
+			}
+			if current == nil || (current.Status != "active" && current.Status != "off") {
+				continue
+			}
+			if updated, err := tx.UpdateCollectionSubscription(ctx, current.ID, "detached", current.SourceRevision, current.LastSyncedAt, timePointer(now), now); err != nil {
+				return normalizeError(err)
+			} else if updated {
+				if err := s.writeSubscriptionEvent(ctx, tx, current.SourceOwnerUserID, current.SubscriberUserID, current.CollectionID, "detached", current.SourceRevision, now); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func timePointer(value time.Time) *time.Time {
+	copy := value
+	return &copy
 }

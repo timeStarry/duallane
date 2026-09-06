@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -154,6 +155,39 @@ func pgEmoteCount(t *testing.T, fixture *pgEmoteIntegrationFixture, query string
 		t.Fatal(err)
 	}
 	return count
+}
+
+type lockProbeBlobStore struct {
+	delegate    platformstorage.BlobStore
+	pool        *pgxpool.Pool
+	outsideLock atomic.Bool
+}
+
+func (store *lockProbeBlobStore) Put(ctx context.Context, key string, source io.Reader, expectedSize int64, expectedSHA256 string) (platformstorage.StoredObject, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	connection, err := store.pool.Acquire(probeCtx)
+	if err != nil {
+		return platformstorage.StoredObject{}, err
+	}
+	var lockWasAvailable bool
+	err = connection.QueryRow(probeCtx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))`, "workspace-storage-object:wso_"+expectedSHA256).Scan(&lockWasAvailable)
+	connection.Release()
+	if err != nil {
+		return platformstorage.StoredObject{}, err
+	}
+	if lockWasAvailable {
+		store.outsideLock.Store(true)
+	}
+	return store.delegate.Put(ctx, key, source, expectedSize, expectedSHA256)
+}
+
+func (store *lockProbeBlobStore) Open(ctx context.Context, object platformstorage.Object, maxBytes int64) (platformstorage.OpenedObject, error) {
+	return store.delegate.Open(ctx, object, maxBytes)
+}
+
+func (store *lockProbeBlobStore) Delete(ctx context.Context, object platformstorage.Object) error {
+	return store.delegate.Delete(ctx, object)
 }
 
 func TestPGEmoteLifecycleUsesIsolatedSchemaAndAtomicBlobCleanup(t *testing.T) {
@@ -341,5 +375,258 @@ func TestPGEmoteLifecycleUsesIsolatedSchemaAndAtomicBlobCleanup(t *testing.T) {
 	rollbackPath := filepath.Join(fixture.root, filepath.FromSlash(rollbackKey))
 	if _, err := os.Stat(rollbackPath); !os.IsNotExist(err) {
 		t.Fatalf("rolled back physical object remains: %v", err)
+	}
+}
+
+func TestPGEmoteConcurrentCASPutStaysUnderObjectLock(t *testing.T) {
+	fixture := newPGEmoteIntegrationFixture(t)
+	const overQuotaEmoteID = "emote-over-quota"
+	mustExecPGEmote(t, fixture.ctx, fixture.conn, `
+		INSERT INTO workspace_custom_emotes (
+			id, user_id, source_type, original_file_name, original_mime_type, label,
+			normalized_mime_type, byte_size, width, height, frame_count, duration_ms,
+			sort_order, created_at
+		) VALUES ($1, $2, 'upload', 'quota.webp', 'image/webp', 'quota',
+			'image/webp', $3, 1, 1, 1, 0, 0, $4)
+	`, overQuotaEmoteID, "usr_emote_member", MaxTotalBytes, fixture.now)
+
+	probeStore := &lockProbeBlobStore{delegate: fixture.store, pool: fixture.pool}
+	var idSequence atomic.Int64
+	service := NewService(ServiceOptions{
+		Repository: fixture.service.Repository(), BlobStore: probeStore, Catalog: fixture.service.Catalog(),
+		Processor: fakeProcessor{}, SpaceID: DefaultSpaceID,
+		Now:       func() time.Time { return fixture.now },
+		IDFactory: func() (string, error) { return fmt.Sprintf("cas-race-%03d", idSequence.Add(1)), nil },
+	})
+	processed := func() ProcessedUpload {
+		content := []byte("same concurrent emote")
+		return ProcessedUpload{
+			Content: content, ByteSize: int64(len(content)), Width: 2, Height: 2,
+			FrameCount: 1, DetectedMIMEType: "image/png", NormalizedMIMEType: "image/webp",
+		}
+	}
+	var wait sync.WaitGroup
+	wait.Add(2)
+	ownerResult := make(chan *CustomEmote, 1)
+	ownerError := make(chan error, 1)
+	go func() {
+		defer wait.Done()
+		result, err := service.StoreProcessed(fixture.ctx, StoreProcessedInput{
+			ActorID: "usr_emote_owner", Source: UploadSource{MIMEType: "image/png", FileName: "race.png"}, Processed: processed(), AddToLibrary: true,
+		})
+		ownerResult <- result
+		ownerError <- err
+	}()
+	memberError := make(chan error, 1)
+	go func() {
+		defer wait.Done()
+		_, err := service.StoreProcessed(fixture.ctx, StoreProcessedInput{
+			ActorID: "usr_emote_member", Source: UploadSource{MIMEType: "image/png", FileName: "race.png"}, Processed: processed(), AddToLibrary: true,
+		})
+		memberError <- err
+	}()
+	wait.Wait()
+	owner := <-ownerResult
+	if err := <-ownerError; err != nil || owner == nil {
+		t.Fatalf("owner concurrent store = %#v, %v", owner, err)
+	}
+	if err := <-memberError; !isCode(err, CodeEmoteStorageLimitReached) {
+		t.Fatalf("over-quota concurrent store = %v", err)
+	}
+	if probeStore.outsideLock.Load() {
+		t.Fatal("CAS physical Put observed without workspace-storage-object lock")
+	}
+	delivery, err := service.ReadContent(fixture.ctx, ReadContentInput{ActorID: "usr_emote_owner", EmoteID: owner.ID})
+	if err != nil {
+		t.Fatalf("read concurrently stored emote: %v", err)
+	}
+	content, readErr := io.ReadAll(delivery.Body)
+	_ = delivery.Body.Close()
+	if readErr != nil || string(content) != "same concurrent emote" {
+		t.Fatalf("concurrently stored content = %q, err=%v", content, readErr)
+	}
+	if got := pgEmoteCount(t, fixture, `SELECT COUNT(*) FROM workspace_custom_emotes WHERE id = $1`, overQuotaEmoteID); got != 1 {
+		t.Fatalf("over-quota seed row changed = %d", got)
+	}
+	if got := pgEmoteCount(t, fixture, `SELECT COUNT(*) FROM workspace_storage_objects WHERE sha256 = $1 AND deleted_at IS NULL`, canonicalDigest([]byte("same concurrent emote"))); got != 1 {
+		t.Fatalf("concurrent CAS registry rows = %d", got)
+	}
+}
+
+func TestPGEmoteCollectionSubscriptionLifecycle(t *testing.T) {
+	fixture := newPGEmoteIntegrationFixture(t)
+	owner := "usr_emote_owner"
+	member := "usr_emote_member"
+	first, err := fixture.service.Upload(fixture.ctx, UploadInput{
+		ActorID: owner, Source: UploadSource{MIMEType: "image/png", FileName: "subscription-first.png"},
+		Content: strings.NewReader("subscription first"), AddToLibrary: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := fixture.service.Upload(fixture.ctx, UploadInput{
+		ActorID: owner, Source: UploadSource{MIMEType: "image/png", FileName: "subscription-second.png"},
+		Content: strings.NewReader("subscription second"), AddToLibrary: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := fixture.service.CreateCollection(fixture.ctx, CreateCollectionInput{
+		ActorID: owner, Name: "Live source", EmoteIDs: []string{first.ID, second.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	share, err := fixture.service.CreateShare(fixture.ctx, CreateShareInput{ActorID: owner, CollectionID: source.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	asCollection := true
+	partial := []string{first.ID}
+	if _, err := fixture.service.ImportShare(fixture.ctx, ImportShareInput{
+		ActorID: member, ShareID: share.ID, EmoteIDs: partial, AsCollection: &asCollection, SubscribeToSourceChanges: true,
+	}); !isCode(err, CodeEmoteSubscriptionRequiresCollection) {
+		t.Fatalf("partial source subscription import = %v", err)
+	}
+	imported, err := fixture.service.ImportShare(fixture.ctx, ImportShareInput{
+		ActorID: member, ShareID: share.ID, AsCollection: &asCollection, SubscribeToSourceChanges: true,
+	})
+	if err != nil || imported.Collection == nil || imported.Library == nil || len(imported.Items) != 2 {
+		t.Fatalf("subscribed import = %#v, %v", imported, err)
+	}
+	if imported.Collection.SourceSubscription.Status != "synced" || !imported.Collection.SourceSubscription.ReadOnly {
+		t.Fatalf("subscription projection = %#v", imported.Collection.SourceSubscription)
+	}
+	if imported.Items[0].ID == first.ID || imported.Items[1].ID == second.ID {
+		t.Fatal("subscription reused source emote rows")
+	}
+	if got := pgEmoteCount(t, fixture, `SELECT COUNT(*) FROM workspace_emote_collection_subscriptions WHERE collection_id = $1 AND status = 'active'`, imported.Collection.ID); got != 1 {
+		t.Fatalf("active subscription rows = %d", got)
+	}
+	if got := pgEmoteCount(t, fixture, `SELECT COUNT(*) FROM workspace_emote_collection_subscription_items si INNER JOIN workspace_emote_collection_subscriptions s ON s.id = si.subscription_id WHERE s.collection_id = $1`, imported.Collection.ID); got != 2 {
+		t.Fatalf("subscription mappings = %d", got)
+	}
+	memberLibrary, err := fixture.service.GetLibrary(fixture.ctx, member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if memberLibrary.Usage.TotalBytes != 0 || memberLibrary.Usage.SubscribedItemCount != 2 {
+		t.Fatalf("active subscription usage = %#v", memberLibrary.Usage)
+	}
+	memberDelivery, err := fixture.service.ReadContent(fixture.ctx, ReadContentInput{ActorID: member, EmoteID: imported.Items[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, readErr := io.ReadAll(memberDelivery.Body)
+	_ = memberDelivery.Body.Close()
+	if readErr != nil || string(content) != "subscription first" {
+		t.Fatalf("subscribed content = %q, err=%v", content, readErr)
+	}
+	if _, err := fixture.service.Update(fixture.ctx, UpdateEmoteInput{ActorID: member, EmoteID: imported.Items[0].ID, Label: "local"}); !isCode(err, CodeEmoteSubscriptionReadOnly) {
+		t.Fatalf("read-only subscribed emote update = %v", err)
+	}
+
+	if _, err := fixture.service.Update(fixture.ctx, UpdateEmoteInput{ActorID: owner, EmoteID: first.ID, Label: "source-renamed"}); err != nil {
+		t.Fatal(err)
+	}
+	memberLibrary, err = fixture.service.GetLibrary(fixture.ctx, member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberCollection := findPublicCollection(memberLibrary.Collections, imported.Collection.ID)
+	if memberCollection == nil || memberCollection.Items[0].Label != "source-renamed" {
+		t.Fatalf("source label propagation = %#v", memberCollection)
+	}
+	if _, err := fixture.service.RevokeShare(fixture.ctx, ShareInput{ActorID: owner, ShareID: share.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.service.UpdateCollection(fixture.ctx, UpdateCollectionInput{ActorID: owner, CollectionID: source.ID, Name: "Live source v2"}); err != nil {
+		t.Fatal(err)
+	}
+	memberLibrary, err = fixture.service.GetLibrary(fixture.ctx, member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberCollection = findPublicCollection(memberLibrary.Collections, imported.Collection.ID)
+	if memberCollection == nil || memberCollection.Name != "Live source v2" {
+		t.Fatalf("active sync after share revoke = %#v", memberCollection)
+	}
+
+	if err := fixture.service.UpdateCollectionSourceSubscription(fixture.ctx, member, imported.Collection.ID, false, auth.RequestMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	memberLibrary, err = fixture.service.GetLibrary(fixture.ctx, member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberCollection = findPublicCollection(memberLibrary.Collections, imported.Collection.ID)
+	if memberCollection == nil || memberCollection.SourceSubscription.Status != "off" || memberCollection.SourceSubscription.ReadOnly {
+		t.Fatalf("disabled subscription = %#v", memberCollection)
+	}
+	if _, err := fixture.service.Update(fixture.ctx, UpdateEmoteInput{ActorID: owner, EmoteID: first.ID, Label: "paused-source"}); err != nil {
+		t.Fatal(err)
+	}
+	memberLibrary, err = fixture.service.GetLibrary(fixture.ctx, member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberCollection = findPublicCollection(memberLibrary.Collections, imported.Collection.ID)
+	if memberCollection == nil || memberCollection.Items[0].Label == "paused-source" {
+		t.Fatalf("disabled subscription propagated source mutation = %#v", memberCollection)
+	}
+	if err := fixture.service.UpdateCollectionSourceSubscription(fixture.ctx, member, imported.Collection.ID, true, auth.RequestMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	memberLibrary, err = fixture.service.GetLibrary(fixture.ctx, member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberCollection = findPublicCollection(memberLibrary.Collections, imported.Collection.ID)
+	if memberCollection == nil || memberCollection.SourceSubscription.Status != "synced" || memberCollection.Items[0].Label != "paused-source" {
+		t.Fatalf("re-enabled subscription = %#v", memberCollection)
+	}
+
+	if _, err := fixture.service.DeleteCollection(fixture.ctx, DeleteCollectionInput{ActorID: owner, CollectionID: source.ID, Disposition: "keep"}); err != nil {
+		t.Fatal(err)
+	}
+	memberLibrary, err = fixture.service.GetLibrary(fixture.ctx, member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberCollection = findPublicCollection(memberLibrary.Collections, imported.Collection.ID)
+	if memberCollection == nil || memberCollection.SourceSubscription.Status != "detached" || memberCollection.SourceSubscription.ReadOnly || len(memberCollection.Items) != 2 {
+		t.Fatalf("detached snapshot = %#v", memberCollection)
+	}
+	memberDelivery, err = fixture.service.ReadContent(fixture.ctx, ReadContentInput{ActorID: member, EmoteID: imported.Items[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, readErr = io.Copy(io.Discard, memberDelivery.Body)
+	_ = memberDelivery.Body.Close()
+	if readErr != nil {
+		t.Fatalf("detached snapshot content: %v", readErr)
+	}
+	if got := pgEmoteCount(t, fixture, `SELECT COUNT(*) FROM workspace_emote_collection_subscriptions WHERE collection_id = $1 AND status = 'detached'`, imported.Collection.ID); got != 1 {
+		t.Fatalf("detached subscription rows = %d", got)
+	}
+	if got := pgEmoteCount(t, fixture, `SELECT COUNT(*) FROM workspace_events WHERE type = 'emote.library.updated' AND target_id = $1`, member); got < 4 {
+		t.Fatalf("subscription library events = %d", got)
+	}
+	if got := pgEmoteCount(t, fixture, `SELECT COUNT(*) FROM audit_logs WHERE action = 'emote.collection.subscription.update' AND actor_user_id = $1 AND result = 'success'`, member); got < 2 {
+		t.Fatalf("subscription success audits = %d", got)
+	}
+	var detachedPayload string
+	if err := fixture.pool.QueryRow(fixture.ctx, `
+		SELECT payload_json FROM workspace_events
+		WHERE type = 'emote.library.updated' AND target_id = $1
+		ORDER BY seq DESC LIMIT 1
+	`, member).Scan(&detachedPayload); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(detachedPayload, "detached") || strings.Contains(detachedPayload, "subscription first") {
+		t.Fatalf("detached event payload = %s", detachedPayload)
+	}
+	if got := pgEmoteCount(t, fixture, `SELECT COUNT(*) FROM workspace_storage_objects WHERE deleted_at IS NULL`); got != 2 {
+		t.Fatalf("detached snapshot storage rows = %d", got)
 	}
 }

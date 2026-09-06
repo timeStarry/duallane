@@ -288,7 +288,7 @@ func (r *PGRepository) ListCollections(ctx context.Context, userID string) ([]Co
 const collectionSelect = `
 	SELECT c.id, c.user_id, c.name, c.source_collection_id, c.original_creator_user_id,
 		COALESCE(u.nickname, u.github_login, u.display_name, u.id), c.revision,
-		c.created_at, c.updated_at, s.status, s.source_revision, s.last_synced_at
+		c.created_at, c.updated_at, s.source_collection_id, s.status, s.source_revision, s.last_synced_at
 	FROM workspace_emote_collections c
 	INNER JOIN users u ON u.id = c.original_creator_user_id
 	LEFT JOIN workspace_emote_collection_subscriptions s ON s.collection_id = c.id
@@ -296,10 +296,10 @@ const collectionSelect = `
 
 func scanCollection(row pgx.Row) (*CollectionRecord, error) {
 	var record CollectionRecord
-	var sourceID, status *string
+	var sourceID, subscriptionSourceID, status *string
 	err := row.Scan(&record.ID, &record.UserID, &record.Name, &sourceID, &record.OriginalCreatorID,
 		&record.OriginalCreatorName, &record.Revision, &record.CreatedAt, &record.UpdatedAt,
-		&status, &record.SubscriptionSourceRevision, &record.SubscriptionLastSyncedAt)
+		&subscriptionSourceID, &status, &record.SubscriptionSourceRevision, &record.SubscriptionLastSyncedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -307,6 +307,7 @@ func scanCollection(row pgx.Row) (*CollectionRecord, error) {
 		return nil, err
 	}
 	record.SourceCollectionID = stringValue(sourceID)
+	record.SubscriptionSourceCollectionID = stringValue(subscriptionSourceID)
 	record.SubscriptionStatus = stringValue(status)
 	record.CreatedAt, record.UpdatedAt = record.CreatedAt.UTC(), record.UpdatedAt.UTC()
 	if record.SubscriptionLastSyncedAt != nil {
@@ -325,13 +326,14 @@ func listCollections(ctx context.Context, queryer pgQueryer, userID string) ([]C
 	result := make([]CollectionRecord, 0)
 	for rows.Next() {
 		var record CollectionRecord
-		var sourceID, status *string
+		var sourceID, subscriptionSourceID, status *string
 		if err := rows.Scan(&record.ID, &record.UserID, &record.Name, &sourceID, &record.OriginalCreatorID,
 			&record.OriginalCreatorName, &record.Revision, &record.CreatedAt, &record.UpdatedAt,
-			&status, &record.SubscriptionSourceRevision, &record.SubscriptionLastSyncedAt); err != nil {
+			&subscriptionSourceID, &status, &record.SubscriptionSourceRevision, &record.SubscriptionLastSyncedAt); err != nil {
 			return nil, err
 		}
 		record.SourceCollectionID, record.SubscriptionStatus = stringValue(sourceID), stringValue(status)
+		record.SubscriptionSourceCollectionID = stringValue(subscriptionSourceID)
 		record.CreatedAt, record.UpdatedAt = record.CreatedAt.UTC(), record.UpdatedAt.UTC()
 		if record.SubscriptionLastSyncedAt != nil {
 			value := record.SubscriptionLastSyncedAt.UTC()
@@ -352,8 +354,19 @@ func (r *PGRepository) GetCollection(ctx context.Context, userID, collectionID s
 	return getCollection(ctx, r.pool, userID, collectionID)
 }
 
+func (r *PGRepository) GetCollectionByID(ctx context.Context, collectionID string) (*CollectionRecord, error) {
+	if r == nil || r.pool == nil {
+		return nil, internalError("read workspace emote collection", errors.New("workspace postgres pool is required"))
+	}
+	return getCollectionByID(ctx, r.pool, collectionID)
+}
+
 func getCollection(ctx context.Context, queryer pgQueryer, userID, collectionID string) (*CollectionRecord, error) {
 	return scanCollection(queryer.QueryRow(ctx, collectionSelect+` WHERE c.user_id = $1 AND c.id = $2`, userID, collectionID))
+}
+
+func getCollectionByID(ctx context.Context, queryer pgQueryer, collectionID string) (*CollectionRecord, error) {
+	return scanCollection(queryer.QueryRow(ctx, collectionSelect+` WHERE c.id = $1`, strings.TrimSpace(collectionID)))
 }
 
 func (r *PGRepository) ListCollectionItems(ctx context.Context, collectionID string) ([]CollectionItemRecord, error) {
@@ -423,6 +436,13 @@ func (r *PGRepository) IsEmoteSubscriptionReadOnly(ctx context.Context, userID, 
 	return isEmoteSubscriptionReadOnly(ctx, r.pool, userID, emoteID)
 }
 
+func (r *PGRepository) IsEmoteLocallyPlaced(ctx context.Context, userID, emoteID string) (bool, error) {
+	if r == nil || r.pool == nil {
+		return false, internalError("check local emote placement", errors.New("workspace postgres pool is required"))
+	}
+	return isEmoteLocallyPlaced(ctx, r.pool, userID, emoteID)
+}
+
 func isEmoteSubscriptionReadOnly(ctx context.Context, queryer pgQueryer, userID, emoteID string) (bool, error) {
 	var result bool
 	err := queryer.QueryRow(ctx, `
@@ -433,6 +453,106 @@ func isEmoteSubscriptionReadOnly(ctx context.Context, queryer pgQueryer, userID,
 		)
 	`, emoteID, userID).Scan(&result)
 	return result, err
+}
+
+func isEmoteLocallyPlaced(ctx context.Context, queryer pgQueryer, userID, emoteID string) (bool, error) {
+	var result bool
+	err := queryer.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM workspace_emote_library_entries
+			WHERE user_id = $1 AND emote_id = $2
+			UNION ALL
+			SELECT 1
+			FROM workspace_emote_collection_items ci
+			INNER JOIN workspace_emote_collections c ON c.id = ci.collection_id AND c.user_id = $1
+			LEFT JOIN workspace_emote_collection_subscriptions s
+				ON s.collection_id = c.id AND s.status = 'active'
+			WHERE ci.emote_id = $2 AND s.id IS NULL
+		)
+	`, userID, emoteID).Scan(&result)
+	return result, err
+}
+
+func (r *PGRepository) GetCollectionSubscription(ctx context.Context, collectionID string) (*CollectionSubscriptionRecord, error) {
+	if r == nil || r.pool == nil {
+		return nil, internalError("read workspace emote collection subscription", errors.New("workspace postgres pool is required"))
+	}
+	return getCollectionSubscription(ctx, r.pool, collectionID)
+}
+
+func (r *PGRepository) GetCollectionSubscriptionByID(ctx context.Context, subscriptionID string) (*CollectionSubscriptionRecord, error) {
+	if r == nil || r.pool == nil {
+		return nil, internalError("read workspace emote collection subscription", errors.New("workspace postgres pool is required"))
+	}
+	return getCollectionSubscriptionByID(ctx, r.pool, subscriptionID)
+}
+
+func scanCollectionSubscription(row pgx.Row) (*CollectionSubscriptionRecord, error) {
+	var record CollectionSubscriptionRecord
+	err := row.Scan(&record.ID, &record.CollectionID, &record.SubscriberUserID, &record.SourceCollectionID,
+		&record.SourceOwnerUserID, &record.Status, &record.SourceRevision, &record.LastSyncedAt,
+		&record.DetachedAt, &record.CreatedAt, &record.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	record.CreatedAt, record.UpdatedAt = record.CreatedAt.UTC(), record.UpdatedAt.UTC()
+	if record.LastSyncedAt != nil {
+		value := record.LastSyncedAt.UTC()
+		record.LastSyncedAt = &value
+	}
+	if record.DetachedAt != nil {
+		value := record.DetachedAt.UTC()
+		record.DetachedAt = &value
+	}
+	return &record, nil
+}
+
+func getCollectionSubscription(ctx context.Context, queryer pgQueryer, collectionID string) (*CollectionSubscriptionRecord, error) {
+	return scanCollectionSubscription(queryer.QueryRow(ctx, `
+		SELECT id, collection_id, subscriber_user_id, source_collection_id, source_owner_user_id,
+			status, source_revision, last_synced_at, detached_at, created_at, updated_at
+		FROM workspace_emote_collection_subscriptions WHERE collection_id = $1
+	`, strings.TrimSpace(collectionID)))
+}
+
+func getCollectionSubscriptionByID(ctx context.Context, queryer pgQueryer, subscriptionID string) (*CollectionSubscriptionRecord, error) {
+	return scanCollectionSubscription(queryer.QueryRow(ctx, `
+		SELECT id, collection_id, subscriber_user_id, source_collection_id, source_owner_user_id,
+			status, source_revision, last_synced_at, detached_at, created_at, updated_at
+		FROM workspace_emote_collection_subscriptions WHERE id = $1
+	`, strings.TrimSpace(subscriptionID)))
+}
+
+func (r *PGRepository) ListSubscriptionItems(ctx context.Context, subscriptionID string) ([]CollectionSubscriptionItemRecord, error) {
+	if r == nil || r.pool == nil {
+		return nil, internalError("list workspace emote subscription items", errors.New("workspace postgres pool is required"))
+	}
+	return listSubscriptionItems(ctx, r.pool, subscriptionID)
+}
+
+func listSubscriptionItems(ctx context.Context, queryer pgQueryer, subscriptionID string) ([]CollectionSubscriptionItemRecord, error) {
+	rows, err := queryer.Query(ctx, `
+		SELECT subscription_id, source_emote_id, target_emote_id, source_sort_order, created_at, updated_at
+		FROM workspace_emote_collection_subscription_items
+		WHERE subscription_id = $1 ORDER BY source_sort_order ASC, source_emote_id ASC
+	`, strings.TrimSpace(subscriptionID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]CollectionSubscriptionItemRecord, 0)
+	for rows.Next() {
+		var item CollectionSubscriptionItemRecord
+		if err := rows.Scan(&item.SubscriptionID, &item.SourceEmoteID, &item.TargetEmoteID, &item.SourceSortOrder, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		item.CreatedAt, item.UpdatedAt = item.CreatedAt.UTC(), item.UpdatedAt.UTC()
+		result = append(result, item)
+	}
+	return result, rows.Err()
 }
 
 func (r *PGRepository) GetShare(ctx context.Context, shareID string) (*ShareRecord, error) {
@@ -680,6 +800,10 @@ func (t *pgTx) GetCollection(ctx context.Context, userID, collectionID string) (
 	return getCollection(ctx, t.tx, userID, collectionID)
 }
 
+func (t *pgTx) GetCollectionByID(ctx context.Context, collectionID string) (*CollectionRecord, error) {
+	return getCollectionByID(ctx, t.tx, collectionID)
+}
+
 func (t *pgTx) ListCollectionItems(ctx context.Context, collectionID string) ([]CollectionItemRecord, error) {
 	return listCollectionItems(ctx, t.tx, collectionID)
 }
@@ -690,6 +814,22 @@ func (t *pgTx) MutableCollectionIDsForEmote(ctx context.Context, userID, emoteID
 
 func (t *pgTx) IsEmoteSubscriptionReadOnly(ctx context.Context, userID, emoteID string) (bool, error) {
 	return isEmoteSubscriptionReadOnly(ctx, t.tx, userID, emoteID)
+}
+
+func (t *pgTx) IsEmoteLocallyPlaced(ctx context.Context, userID, emoteID string) (bool, error) {
+	return isEmoteLocallyPlaced(ctx, t.tx, userID, emoteID)
+}
+
+func (t *pgTx) GetCollectionSubscription(ctx context.Context, collectionID string) (*CollectionSubscriptionRecord, error) {
+	return getCollectionSubscription(ctx, t.tx, collectionID)
+}
+
+func (t *pgTx) GetCollectionSubscriptionByID(ctx context.Context, subscriptionID string) (*CollectionSubscriptionRecord, error) {
+	return getCollectionSubscriptionByID(ctx, t.tx, subscriptionID)
+}
+
+func (t *pgTx) ListSubscriptionItems(ctx context.Context, subscriptionID string) ([]CollectionSubscriptionItemRecord, error) {
+	return listSubscriptionItems(ctx, t.tx, subscriptionID)
 }
 
 func (t *pgTx) GetShare(ctx context.Context, shareID string) (*ShareRecord, error) {
@@ -906,6 +1046,7 @@ func customEmoteReferenced(ctx context.Context, queryer pgQueryer, emoteID strin
 			UNION ALL SELECT 1 FROM message_custom_emotes WHERE custom_emote_id = $1
 			UNION ALL SELECT 1 FROM workspace_custom_emotes WHERE source_custom_emote_id = $1
 			UNION ALL SELECT 1 FROM workspace_emote_collection_share_items WHERE emote_id = $1
+			UNION ALL SELECT 1 FROM workspace_emote_collection_subscription_items WHERE source_emote_id = $1
 		)
 	`, emoteID).Scan(&referenced)
 	return referenced, err
@@ -920,6 +1061,125 @@ func (t *pgTx) InsertCollection(ctx context.Context, record CollectionRecord) er
 	`, record.ID, record.UserID, record.Name, record.SourceCollectionID, record.OriginalCreatorID,
 		record.CreatedAt.UTC(), record.UpdatedAt.UTC(), positiveRevision(record.Revision))
 	return err
+}
+
+func (t *pgTx) ListSubscriptionsBySource(ctx context.Context, sourceCollectionID, status string) ([]CollectionSubscriptionRecord, error) {
+	status = strings.TrimSpace(status)
+	if status != "active" && status != "off" {
+		return nil, errors.New("workspace emote subscription status is invalid")
+	}
+	rows, err := t.tx.Query(ctx, `
+		SELECT id, collection_id, subscriber_user_id, source_collection_id, source_owner_user_id,
+			status, source_revision, last_synced_at, detached_at, created_at, updated_at
+		FROM workspace_emote_collection_subscriptions
+		WHERE source_collection_id = $1 AND status = $2
+		ORDER BY created_at ASC, id ASC
+	`, strings.TrimSpace(sourceCollectionID), status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]CollectionSubscriptionRecord, 0)
+	for rows.Next() {
+		var record CollectionSubscriptionRecord
+		if err := rows.Scan(&record.ID, &record.CollectionID, &record.SubscriberUserID, &record.SourceCollectionID,
+			&record.SourceOwnerUserID, &record.Status, &record.SourceRevision, &record.LastSyncedAt,
+			&record.DetachedAt, &record.CreatedAt, &record.UpdatedAt); err != nil {
+			return nil, err
+		}
+		record.CreatedAt, record.UpdatedAt = record.CreatedAt.UTC(), record.UpdatedAt.UTC()
+		if record.LastSyncedAt != nil {
+			value := record.LastSyncedAt.UTC()
+			record.LastSyncedAt = &value
+		}
+		if record.DetachedAt != nil {
+			value := record.DetachedAt.UTC()
+			record.DetachedAt = &value
+		}
+		result = append(result, record)
+	}
+	return result, rows.Err()
+}
+
+func (t *pgTx) UpsertCollectionSubscription(ctx context.Context, record CollectionSubscriptionRecord) (bool, error) {
+	if record.ID == "" || record.CollectionID == "" || record.SubscriberUserID == "" || record.SourceCollectionID == "" || record.SourceOwnerUserID == "" {
+		return false, errors.New("workspace emote subscription fields are required")
+	}
+	if record.Status != "active" && record.Status != "off" && record.Status != "detached" {
+		return false, errors.New("workspace emote subscription status is invalid")
+	}
+	if record.CreatedAt.IsZero() {
+		record.CreatedAt = record.UpdatedAt
+	}
+	if record.UpdatedAt.IsZero() {
+		record.UpdatedAt = record.CreatedAt
+	}
+	result, err := t.tx.Exec(ctx, `
+		INSERT INTO workspace_emote_collection_subscriptions (
+			id, collection_id, subscriber_user_id, source_collection_id, source_owner_user_id,
+			status, source_revision, last_synced_at, detached_at, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		ON CONFLICT (collection_id) DO UPDATE SET
+			subscriber_user_id = EXCLUDED.subscriber_user_id,
+			source_collection_id = EXCLUDED.source_collection_id,
+			source_owner_user_id = EXCLUDED.source_owner_user_id,
+			status = EXCLUDED.status,
+			source_revision = EXCLUDED.source_revision,
+			last_synced_at = EXCLUDED.last_synced_at,
+			detached_at = EXCLUDED.detached_at,
+			updated_at = EXCLUDED.updated_at
+	`, record.ID, record.CollectionID, record.SubscriberUserID, record.SourceCollectionID,
+		record.SourceOwnerUserID, record.Status, record.SourceRevision, timePointerValue(record.LastSyncedAt),
+		timePointerValue(record.DetachedAt), record.CreatedAt.UTC(), record.UpdatedAt.UTC())
+	return result.RowsAffected() == 1, err
+}
+
+func timePointerValue(value *time.Time) any {
+	if value == nil {
+		return nil
+	}
+	return value.UTC()
+}
+
+func (t *pgTx) UpdateCollectionSubscription(ctx context.Context, subscriptionID, status string, sourceRevision int64, lastSyncedAt, detachedAt *time.Time, at time.Time) (bool, error) {
+	if status != "active" && status != "off" && status != "detached" {
+		return false, errors.New("workspace emote subscription status is invalid")
+	}
+	result, err := t.tx.Exec(ctx, `
+		UPDATE workspace_emote_collection_subscriptions
+		SET status = $2, source_revision = $3, last_synced_at = $4, detached_at = $5, updated_at = $6
+		WHERE id = $1
+	`, strings.TrimSpace(subscriptionID), status, sourceRevision, timePointerValue(lastSyncedAt), timePointerValue(detachedAt), at.UTC())
+	return result.RowsAffected() == 1, err
+}
+
+func (t *pgTx) DeleteCollectionItems(ctx context.Context, collectionID string) error {
+	_, err := t.tx.Exec(ctx, `DELETE FROM workspace_emote_collection_items WHERE collection_id = $1`, strings.TrimSpace(collectionID))
+	return err
+}
+
+func (t *pgTx) DeleteSubscriptionItems(ctx context.Context, subscriptionID string) error {
+	_, err := t.tx.Exec(ctx, `DELETE FROM workspace_emote_collection_subscription_items WHERE subscription_id = $1`, strings.TrimSpace(subscriptionID))
+	return err
+}
+
+func (t *pgTx) InsertSubscriptionItem(ctx context.Context, item CollectionSubscriptionItemRecord) error {
+	_, err := t.tx.Exec(ctx, `
+		INSERT INTO workspace_emote_collection_subscription_items (
+			subscription_id, source_emote_id, target_emote_id, source_sort_order, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6)
+	`, item.SubscriptionID, item.SourceEmoteID, item.TargetEmoteID, item.SourceSortOrder, item.CreatedAt.UTC(), item.UpdatedAt.UTC())
+	return err
+}
+
+func (t *pgTx) UpdateCollectionFromSource(ctx context.Context, userID, collectionID, name, sourceCollectionID, originalCreatorID string, at time.Time) (bool, error) {
+	result, err := t.tx.Exec(ctx, `
+		UPDATE workspace_emote_collections
+		SET name = $3, source_collection_id = $4, original_creator_user_id = $5,
+			revision = revision + 1, updated_at = $6
+		WHERE id = $1 AND user_id = $2
+	`, strings.TrimSpace(collectionID), strings.TrimSpace(userID), name, strings.TrimSpace(sourceCollectionID), strings.TrimSpace(originalCreatorID), at.UTC())
+	return result.RowsAffected() == 1, err
 }
 
 func positiveRevision(value int64) int64 {

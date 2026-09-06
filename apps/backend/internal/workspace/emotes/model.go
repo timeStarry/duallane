@@ -184,18 +184,46 @@ type CollectionSubscription struct {
 }
 
 type CollectionRecord struct {
-	ID                         string
-	UserID                     string
-	Name                       string
-	SourceCollectionID         string
-	OriginalCreatorID          string
-	OriginalCreatorName        string
-	Revision                   int64
-	CreatedAt                  time.Time
-	UpdatedAt                  time.Time
-	SubscriptionStatus         string
-	SubscriptionSourceRevision *int64
-	SubscriptionLastSyncedAt   *time.Time
+	ID                             string
+	UserID                         string
+	Name                           string
+	SourceCollectionID             string
+	SubscriptionSourceCollectionID string
+	OriginalCreatorID              string
+	OriginalCreatorName            string
+	Revision                       int64
+	CreatedAt                      time.Time
+	UpdatedAt                      time.Time
+	SubscriptionStatus             string
+	SubscriptionSourceRevision     *int64
+	SubscriptionLastSyncedAt       *time.Time
+}
+
+// CollectionSubscriptionRecord is the persisted link between a subscriber's
+// collection and its canonical source. The target collection and its emote
+// rows remain ordinary logical resources; this record only controls whether
+// the source projection is live, paused, or detached.
+type CollectionSubscriptionRecord struct {
+	ID                 string
+	CollectionID       string
+	SubscriberUserID   string
+	SourceCollectionID string
+	SourceOwnerUserID  string
+	Status             string
+	SourceRevision     int64
+	LastSyncedAt       *time.Time
+	DetachedAt         *time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+type CollectionSubscriptionItemRecord struct {
+	SubscriptionID  string
+	SourceEmoteID   string
+	TargetEmoteID   string
+	SourceSortOrder int64
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type PublicPerson struct {
@@ -466,9 +494,13 @@ func (record CollectionRecord) Public(items []CustomEmote) Collection {
 	if items == nil {
 		items = []CustomEmote{}
 	}
+	sourceCollectionID := record.SubscriptionSourceCollectionID
+	if sourceCollectionID == "" {
+		sourceCollectionID = record.SourceCollectionID
+	}
 	var sourceID *string
-	if record.SourceCollectionID != "" {
-		sourceID = &record.SourceCollectionID
+	if sourceCollectionID != "" {
+		sourceID = &sourceCollectionID
 	}
 	status := record.SubscriptionStatus
 	if status == "" {

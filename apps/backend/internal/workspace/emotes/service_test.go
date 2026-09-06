@@ -21,18 +21,20 @@ import (
 )
 
 type fakeState struct {
-	actors       map[string]*auth.Actor
-	settings     map[string]SettingsRecord
-	emotes       map[string]CustomEmoteRecord
-	objects      map[string]StorageObjectRecord
-	entries      map[string]LibraryEntryRecord
-	collections  map[string]CollectionRecord
-	items        map[string][]CollectionItemRecord
-	shares       map[string]ShareRecord
-	shareItems   map[string][]ShareItemRecord
-	audits       []AuditInput
-	events       []EventInput
-	nextSequence int64
+	actors            map[string]*auth.Actor
+	settings          map[string]SettingsRecord
+	emotes            map[string]CustomEmoteRecord
+	objects           map[string]StorageObjectRecord
+	entries           map[string]LibraryEntryRecord
+	collections       map[string]CollectionRecord
+	items             map[string][]CollectionItemRecord
+	subscriptions     map[string]CollectionSubscriptionRecord
+	subscriptionItems map[string][]CollectionSubscriptionItemRecord
+	shares            map[string]ShareRecord
+	shareItems        map[string][]ShareItemRecord
+	audits            []AuditInput
+	events            []EventInput
+	nextSequence      int64
 }
 
 func newFakeState() fakeState {
@@ -40,7 +42,8 @@ func newFakeState() fakeState {
 		actors: make(map[string]*auth.Actor), settings: make(map[string]SettingsRecord),
 		emotes: make(map[string]CustomEmoteRecord), objects: make(map[string]StorageObjectRecord),
 		entries: make(map[string]LibraryEntryRecord), collections: make(map[string]CollectionRecord),
-		items: make(map[string][]CollectionItemRecord), shares: make(map[string]ShareRecord),
+		items: make(map[string][]CollectionItemRecord), subscriptions: make(map[string]CollectionSubscriptionRecord),
+		subscriptionItems: make(map[string][]CollectionSubscriptionItemRecord), shares: make(map[string]ShareRecord),
 		shareItems: make(map[string][]ShareItemRecord), nextSequence: 1,
 	}
 }
@@ -69,6 +72,12 @@ func cloneFakeState(source fakeState) fakeState {
 	for key, value := range source.items {
 		target.items[key] = append([]CollectionItemRecord(nil), value...)
 	}
+	for key, value := range source.subscriptions {
+		target.subscriptions[key] = cloneSubscriptionRecord(value)
+	}
+	for key, value := range source.subscriptionItems {
+		target.subscriptionItems[key] = append([]CollectionSubscriptionItemRecord(nil), value...)
+	}
 	for key, value := range source.shares {
 		target.shares[key] = value
 	}
@@ -78,6 +87,19 @@ func cloneFakeState(source fakeState) fakeState {
 	target.audits = append([]AuditInput(nil), source.audits...)
 	target.events = append([]EventInput(nil), source.events...)
 	target.nextSequence = source.nextSequence
+	return target
+}
+
+func cloneSubscriptionRecord(source CollectionSubscriptionRecord) CollectionSubscriptionRecord {
+	target := source
+	if source.LastSyncedAt != nil {
+		value := *source.LastSyncedAt
+		target.LastSyncedAt = &value
+	}
+	if source.DetachedAt != nil {
+		value := *source.DetachedAt
+		target.DetachedAt = &value
+	}
 	return target
 }
 
@@ -196,6 +218,12 @@ func (repo *fakeRepo) GetCollection(ctx context.Context, userID, collectionID st
 	})
 }
 
+func (repo *fakeRepo) GetCollectionByID(ctx context.Context, collectionID string) (*CollectionRecord, error) {
+	return readFake(repo, func(tx *fakeTx) (*CollectionRecord, error) {
+		return tx.GetCollectionByID(ctx, collectionID)
+	})
+}
+
 func (repo *fakeRepo) ListCollectionItems(ctx context.Context, collectionID string) ([]CollectionItemRecord, error) {
 	return readFake(repo, func(tx *fakeTx) ([]CollectionItemRecord, error) {
 		return tx.ListCollectionItems(ctx, collectionID)
@@ -211,6 +239,30 @@ func (repo *fakeRepo) MutableCollectionIDsForEmote(ctx context.Context, userID, 
 func (repo *fakeRepo) IsEmoteSubscriptionReadOnly(ctx context.Context, userID, emoteID string) (bool, error) {
 	return readFake(repo, func(tx *fakeTx) (bool, error) {
 		return tx.IsEmoteSubscriptionReadOnly(ctx, userID, emoteID)
+	})
+}
+
+func (repo *fakeRepo) IsEmoteLocallyPlaced(ctx context.Context, userID, emoteID string) (bool, error) {
+	return readFake(repo, func(tx *fakeTx) (bool, error) {
+		return tx.IsEmoteLocallyPlaced(ctx, userID, emoteID)
+	})
+}
+
+func (repo *fakeRepo) GetCollectionSubscription(ctx context.Context, collectionID string) (*CollectionSubscriptionRecord, error) {
+	return readFake(repo, func(tx *fakeTx) (*CollectionSubscriptionRecord, error) {
+		return tx.GetCollectionSubscription(ctx, collectionID)
+	})
+}
+
+func (repo *fakeRepo) GetCollectionSubscriptionByID(ctx context.Context, subscriptionID string) (*CollectionSubscriptionRecord, error) {
+	return readFake(repo, func(tx *fakeTx) (*CollectionSubscriptionRecord, error) {
+		return tx.GetCollectionSubscriptionByID(ctx, subscriptionID)
+	})
+}
+
+func (repo *fakeRepo) ListSubscriptionItems(ctx context.Context, subscriptionID string) ([]CollectionSubscriptionItemRecord, error) {
+	return readFake(repo, func(tx *fakeTx) ([]CollectionSubscriptionItemRecord, error) {
+		return tx.ListSubscriptionItems(ctx, subscriptionID)
 	})
 }
 
@@ -346,6 +398,15 @@ func (tx *fakeTx) GetCollection(_ context.Context, userID, collectionID string) 
 	return &copy, nil
 }
 
+func (tx *fakeTx) GetCollectionByID(_ context.Context, collectionID string) (*CollectionRecord, error) {
+	collection, ok := tx.state.collections[collectionID]
+	if !ok {
+		return nil, nil
+	}
+	copy := collection
+	return &copy, nil
+}
+
 func (tx *fakeTx) ListCollectionItems(_ context.Context, collectionID string) ([]CollectionItemRecord, error) {
 	result := append([]CollectionItemRecord(nil), tx.state.items[collectionID]...)
 	sort.Slice(result, func(i, j int) bool { return result[i].SortOrder < result[j].SortOrder })
@@ -369,8 +430,78 @@ func (tx *fakeTx) MutableCollectionIDsForEmote(_ context.Context, userID, emoteI
 	return result, nil
 }
 
-func (tx *fakeTx) IsEmoteSubscriptionReadOnly(_ context.Context, _, _ string) (bool, error) {
+func (tx *fakeTx) IsEmoteSubscriptionReadOnly(_ context.Context, userID, emoteID string) (bool, error) {
+	for subscriptionID, subscription := range tx.state.subscriptions {
+		if subscription.SubscriberUserID != userID || subscription.Status != "active" {
+			continue
+		}
+		for _, item := range tx.state.subscriptionItems[subscriptionID] {
+			if item.TargetEmoteID == emoteID {
+				return true, nil
+			}
+		}
+	}
 	return false, nil
+}
+
+func (tx *fakeTx) IsEmoteLocallyPlaced(_ context.Context, userID, emoteID string) (bool, error) {
+	for _, entry := range tx.state.entries {
+		if entry.UserID == userID && entry.EmoteID == emoteID {
+			return true, nil
+		}
+	}
+	for collectionID, collection := range tx.state.collections {
+		if collection.UserID != userID {
+			continue
+		}
+		subscription, hasSubscription := tx.subscriptionForCollection(collectionID)
+		if hasSubscription && subscription.Status == "active" {
+			continue
+		}
+		if !hasSubscription && collection.SubscriptionStatus == "active" {
+			continue
+		}
+		for _, item := range tx.state.items[collectionID] {
+			if item.EmoteID == emoteID {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func (tx *fakeTx) subscriptionForCollection(collectionID string) (CollectionSubscriptionRecord, bool) {
+	for _, subscription := range tx.state.subscriptions {
+		if subscription.CollectionID == collectionID {
+			return subscription, true
+		}
+	}
+	return CollectionSubscriptionRecord{}, false
+}
+
+func (tx *fakeTx) GetCollectionSubscription(_ context.Context, collectionID string) (*CollectionSubscriptionRecord, error) {
+	for _, subscription := range tx.state.subscriptions {
+		if subscription.CollectionID == collectionID {
+			copy := cloneSubscriptionRecord(subscription)
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
+
+func (tx *fakeTx) GetCollectionSubscriptionByID(_ context.Context, subscriptionID string) (*CollectionSubscriptionRecord, error) {
+	subscription, ok := tx.state.subscriptions[subscriptionID]
+	if !ok {
+		return nil, nil
+	}
+	copy := cloneSubscriptionRecord(subscription)
+	return &copy, nil
+}
+
+func (tx *fakeTx) ListSubscriptionItems(_ context.Context, subscriptionID string) ([]CollectionSubscriptionItemRecord, error) {
+	result := append([]CollectionSubscriptionItemRecord(nil), tx.state.subscriptionItems[subscriptionID]...)
+	sort.Slice(result, func(i, j int) bool { return result[i].SourceSortOrder < result[j].SourceSortOrder })
+	return result, nil
 }
 
 func (tx *fakeTx) GetShare(_ context.Context, shareID string) (*ShareRecord, error) {
@@ -388,19 +519,65 @@ func (tx *fakeTx) ListShareItems(_ context.Context, shareID string) ([]ShareItem
 
 func (tx *fakeTx) EmoteVisibleTo(_ context.Context, _, _, _ string) (bool, error) { return false, nil }
 
-func (tx *fakeTx) EmoteUsage(_ context.Context, userID, _ string) (EmoteUsage, error) {
+func (tx *fakeTx) EmoteUsage(_ context.Context, userID, ignoredSubscriptionID string) (EmoteUsage, error) {
 	var usage EmoteUsage
+	activeSubscriptionTargets := make(map[string]struct{})
+	activeSubscriptionCount := int64(0)
+	for subscriptionID, subscription := range tx.state.subscriptions {
+		if subscription.SubscriberUserID != userID || subscription.Status != "active" || subscriptionID == ignoredSubscriptionID {
+			continue
+		}
+		activeSubscriptionCount++
+		for _, item := range tx.state.subscriptionItems[subscriptionID] {
+			activeSubscriptionTargets[item.TargetEmoteID] = struct{}{}
+		}
+	}
+	localPlacements := make(map[string]struct{})
+	for _, entry := range tx.state.entries {
+		if entry.UserID == userID && entry.EmoteID != "" {
+			localPlacements[entry.EmoteID] = struct{}{}
+		}
+	}
+	for collectionID, collection := range tx.state.collections {
+		if collection.UserID != userID {
+			continue
+		}
+		subscription, hasSubscription := tx.subscriptionForCollection(collectionID)
+		active := hasSubscription && subscription.Status == "active"
+		if !hasSubscription {
+			active = collection.SubscriptionStatus == "active"
+		}
+		if active {
+			if subscription.ID == ignoredSubscriptionID {
+				active = false
+			}
+		}
+		if !active {
+			for _, item := range tx.state.items[collectionID] {
+				localPlacements[item.EmoteID] = struct{}{}
+			}
+		}
+	}
 	for _, row := range tx.state.emotes {
 		if row.UserID != userID || row.RemovedAt != nil {
 			continue
 		}
 		bytes := valueOrZero(row.ByteSize)
 		usage.ItemCount++
-		usage.TotalBytes += bytes
 		usage.AllTotalBytes += bytes
+		if _, subscribed := activeSubscriptionTargets[row.ID]; subscribed {
+			if _, local := localPlacements[row.ID]; !local {
+				usage.ItemCount--
+				usage.SubscribedItemCount++
+				usage.SubscribedTotalBytes += bytes
+				continue
+			}
+		}
+		usage.TotalBytes += bytes
 	}
-	usage.TotalItemCount = usage.ItemCount
+	usage.TotalItemCount = usage.ItemCount + usage.SubscribedItemCount
 	usage.CollectionCount = int64(len(collectionIDsForUser(tx.state.collections, userID)))
+	usage.SubscribedCollectionCount = activeSubscriptionCount
 	usage.OverLimit = usage.TotalBytes > MaxTotalBytes
 	return usage, nil
 }
@@ -576,6 +753,13 @@ func (tx *fakeTx) DeleteUnreferencedEmote(_ context.Context, emoteID string) (*C
 			}
 		}
 	}
+	for _, items := range tx.state.subscriptionItems {
+		for _, item := range items {
+			if item.SourceEmoteID == emoteID {
+				return &row, false, nil
+			}
+		}
+	}
 	delete(tx.state.emotes, emoteID)
 	return &row, true, nil
 }
@@ -583,6 +767,102 @@ func (tx *fakeTx) DeleteUnreferencedEmote(_ context.Context, emoteID string) (*C
 func (tx *fakeTx) InsertCollection(_ context.Context, record CollectionRecord) error {
 	tx.state.collections[record.ID] = record
 	return nil
+}
+
+func (tx *fakeTx) ListSubscriptionsBySource(_ context.Context, sourceCollectionID, status string) ([]CollectionSubscriptionRecord, error) {
+	result := make([]CollectionSubscriptionRecord, 0)
+	for _, subscription := range tx.state.subscriptions {
+		if subscription.SourceCollectionID == sourceCollectionID && subscription.Status == status {
+			result = append(result, cloneSubscriptionRecord(subscription))
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].ID < result[j].ID
+		}
+		return result[i].CreatedAt.Before(result[j].CreatedAt)
+	})
+	return result, nil
+}
+
+func (tx *fakeTx) UpsertCollectionSubscription(_ context.Context, record CollectionSubscriptionRecord) (bool, error) {
+	for id, existing := range tx.state.subscriptions {
+		if existing.CollectionID == record.CollectionID && id != record.ID {
+			delete(tx.state.subscriptions, id)
+		}
+	}
+	if existing, ok := tx.state.subscriptions[record.ID]; ok && record.CreatedAt.IsZero() {
+		record.CreatedAt = existing.CreatedAt
+	}
+	if record.UpdatedAt.IsZero() {
+		record.UpdatedAt = record.CreatedAt
+	}
+	tx.state.subscriptions[record.ID] = cloneSubscriptionRecord(record)
+	if collection, ok := tx.state.collections[record.CollectionID]; ok {
+		collection.SourceCollectionID = record.SourceCollectionID
+		collection.SubscriptionSourceCollectionID = record.SourceCollectionID
+		collection.SubscriptionStatus = record.Status
+		collection.SubscriptionSourceRevision = int64Pointer(record.SourceRevision)
+		collection.SubscriptionLastSyncedAt = cloneTime(record.LastSyncedAt)
+		tx.state.collections[record.CollectionID] = collection
+	}
+	return true, nil
+}
+
+func (tx *fakeTx) UpdateCollectionSubscription(_ context.Context, subscriptionID, status string, sourceRevision int64, lastSyncedAt, detachedAt *time.Time, at time.Time) (bool, error) {
+	record, ok := tx.state.subscriptions[subscriptionID]
+	if !ok {
+		return false, nil
+	}
+	record.Status, record.SourceRevision, record.LastSyncedAt, record.DetachedAt, record.UpdatedAt = status, sourceRevision, cloneTime(lastSyncedAt), cloneTime(detachedAt), at
+	tx.state.subscriptions[subscriptionID] = record
+	if collection, ok := tx.state.collections[record.CollectionID]; ok {
+		collection.SubscriptionStatus = status
+		collection.SubscriptionSourceCollectionID = record.SourceCollectionID
+		collection.SubscriptionSourceRevision = int64Pointer(sourceRevision)
+		collection.SubscriptionLastSyncedAt = cloneTime(lastSyncedAt)
+		tx.state.collections[record.CollectionID] = collection
+	}
+	return true, nil
+}
+
+func cloneTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func (tx *fakeTx) DeleteCollectionItems(_ context.Context, collectionID string) error {
+	delete(tx.state.items, collectionID)
+	return nil
+}
+
+func (tx *fakeTx) DeleteSubscriptionItems(_ context.Context, subscriptionID string) error {
+	delete(tx.state.subscriptionItems, subscriptionID)
+	return nil
+}
+
+func (tx *fakeTx) InsertSubscriptionItem(_ context.Context, item CollectionSubscriptionItemRecord) error {
+	for _, existing := range tx.state.subscriptionItems[item.SubscriptionID] {
+		if existing.SourceEmoteID == item.SourceEmoteID || existing.TargetEmoteID == item.TargetEmoteID {
+			return errors.New("subscription item already exists")
+		}
+	}
+	tx.state.subscriptionItems[item.SubscriptionID] = append(tx.state.subscriptionItems[item.SubscriptionID], item)
+	return nil
+}
+
+func (tx *fakeTx) UpdateCollectionFromSource(_ context.Context, userID, collectionID, name, sourceCollectionID, originalCreatorID string, at time.Time) (bool, error) {
+	record, ok := tx.state.collections[collectionID]
+	if !ok || record.UserID != userID {
+		return false, nil
+	}
+	record.Name, record.SourceCollectionID, record.SubscriptionSourceCollectionID = name, sourceCollectionID, sourceCollectionID
+	record.OriginalCreatorID, record.SubscriptionStatus, record.Revision, record.UpdatedAt = originalCreatorID, "active", record.Revision+1, at
+	tx.state.collections[collectionID] = record
+	return true, nil
 }
 
 func (tx *fakeTx) UpdateCollectionName(_ context.Context, userID, collectionID, name string, at time.Time) (bool, error) {
@@ -602,6 +882,10 @@ func (tx *fakeTx) DeleteCollection(_ context.Context, userID, collectionID strin
 	}
 	delete(tx.state.collections, collectionID)
 	delete(tx.state.items, collectionID)
+	if subscription, ok := tx.subscriptionForCollection(collectionID); ok {
+		delete(tx.state.subscriptions, subscription.ID)
+		delete(tx.state.subscriptionItems, subscription.ID)
+	}
 	for id, entry := range tx.state.entries {
 		if entry.CollectionID == collectionID {
 			delete(tx.state.entries, id)
@@ -967,6 +1251,166 @@ func TestServiceCollectionsSharesAndSettingsAreStable(t *testing.T) {
 	if err != nil || revoked.RevokedAt == nil || len(revoked.Items) != 0 {
 		t.Fatalf("revoked share = %#v, %v", revoked, err)
 	}
+}
+
+func TestServiceCollectionSubscriptionSyncQuotaAndDetach(t *testing.T) {
+	repo := newFakeRepo()
+	seedFakeActor(repo, "usr-owner", "owner")
+	seedFakeActor(repo, "usr-member", "member")
+	service := testService(t, repo, newFakeBlobStore())
+	first := mustUpload(t, service, "usr-owner", "first.png", "first")
+	second := mustUpload(t, service, "usr-owner", "second.png", "second")
+	source, err := service.CreateCollection(context.Background(), CreateCollectionInput{
+		ActorID: "usr-owner", Name: "Source", EmoteIDs: []string{first.ID, second.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	share, err := service.CreateShare(context.Background(), CreateShareInput{ActorID: "usr-owner", CollectionID: source.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	asCollection := true
+	imported, err := service.ImportShare(context.Background(), ImportShareInput{
+		ActorID: "usr-member", ShareID: share.ID, AsCollection: &asCollection, SubscribeToSourceChanges: true,
+	})
+	if err != nil || imported.Collection == nil || imported.Library == nil || len(imported.Items) != 2 {
+		t.Fatalf("subscribed import = %#v, %v", imported, err)
+	}
+	if imported.Collection.SourceSubscription.Status != "synced" || !imported.Collection.SourceSubscription.Enabled || !imported.Collection.SourceSubscription.ReadOnly {
+		t.Fatalf("subscription projection = %#v", imported.Collection.SourceSubscription)
+	}
+	if imported.Collection.SourceCollectionID == nil || *imported.Collection.SourceCollectionID != source.ID {
+		t.Fatalf("subscription source = %#v", imported.Collection.SourceCollectionID)
+	}
+	if imported.Items[0].ID == first.ID || imported.Items[1].ID == second.ID {
+		t.Fatal("subscription reused source emote identity")
+	}
+
+	state := repo.snapshot()
+	subscription, ok := state.subscriptions[findSubscriptionID(state, imported.Collection.ID)]
+	if !ok || subscription.Status != "active" || subscription.SourceRevision != state.collections[source.ID].Revision {
+		t.Fatalf("subscription record = %#v, ok=%v", subscription, ok)
+	}
+	for _, importedItem := range imported.Items {
+		row := state.emotes[importedItem.ID]
+		if row.StorageObjectID == "" {
+			t.Fatalf("subscription target lost CAS object: %#v", row)
+		}
+	}
+	usage, err := service.GetLibrary(context.Background(), "usr-member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Usage.TotalBytes != 0 || usage.Usage.SubscribedItemCount != 2 || usage.Usage.SubscribedTotalBytes == 0 {
+		t.Fatalf("active subscription usage = %#v", usage.Usage)
+	}
+
+	if _, err := service.Update(context.Background(), UpdateEmoteInput{ActorID: "usr-member", EmoteID: imported.Items[0].ID, Label: "local"}); !isCode(err, CodeEmoteSubscriptionReadOnly) {
+		t.Fatalf("subscription emote update = %v", err)
+	}
+	if _, err := service.UpdateCollection(context.Background(), UpdateCollectionInput{ActorID: "usr-member", CollectionID: imported.Collection.ID, Name: "local"}); !isCode(err, CodeEmoteSubscriptionReadOnly) {
+		t.Fatalf("subscription collection update = %v", err)
+	}
+
+	if _, err := service.Update(context.Background(), UpdateEmoteInput{ActorID: "usr-owner", EmoteID: first.ID, Label: "renamed"}); err != nil {
+		t.Fatal(err)
+	}
+	memberLibrary, err := service.GetLibrary(context.Background(), "usr-member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberCollection := findPublicCollection(memberLibrary.Collections, imported.Collection.ID)
+	if memberCollection == nil || memberCollection.Items[0].Label != "renamed" {
+		t.Fatalf("synced label collection = %#v", memberCollection)
+	}
+
+	// The fake repository is intentionally mutable for quota-boundary tests.
+	repo.mu.Lock()
+	for _, item := range imported.Items {
+		row := repo.state.emotes[item.ID]
+		if item.ID == imported.Items[0].ID {
+			value := MaxTotalBytes
+			row.ByteSize = &value
+		} else {
+			value := int64(0)
+			row.ByteSize = &value
+		}
+		repo.state.emotes[item.ID] = row
+	}
+	repo.mu.Unlock()
+	if err := service.UpdateCollectionSourceSubscription(context.Background(), "usr-member", imported.Collection.ID, false, auth.RequestMeta{}); err != nil {
+		t.Fatalf("disable at exact quota = %v", err)
+	}
+	memberLibrary, err = service.GetLibrary(context.Background(), "usr-member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberCollection = findPublicCollection(memberLibrary.Collections, imported.Collection.ID)
+	if memberCollection == nil || memberCollection.SourceSubscription.Status != "off" || memberCollection.SourceSubscription.ReadOnly {
+		t.Fatalf("disabled subscription = %#v", memberCollection)
+	}
+	if err := service.UpdateCollectionSourceSubscription(context.Background(), "usr-member", imported.Collection.ID, true, auth.RequestMeta{}); err != nil {
+		t.Fatalf("re-enable subscription = %v", err)
+	}
+	repo.mu.Lock()
+	row := repo.state.emotes[imported.Items[0].ID]
+	value := MaxTotalBytes + 1
+	row.ByteSize = &value
+	repo.state.emotes[imported.Items[0].ID] = row
+	repo.mu.Unlock()
+	if err := service.UpdateCollectionSourceSubscription(context.Background(), "usr-member", imported.Collection.ID, false, auth.RequestMeta{}); !isCode(err, CodeEmoteStorageLimitReached) {
+		t.Fatalf("disable over quota = %v", err)
+	}
+	state = repo.snapshot()
+	subscriptionID := findSubscriptionID(state, imported.Collection.ID)
+	if state.subscriptions[subscriptionID].Status != "active" {
+		t.Fatalf("failed disable changed subscription = %#v", state.subscriptions[subscriptionID])
+	}
+
+	if _, err := service.RevokeShare(context.Background(), ShareInput{ActorID: "usr-owner", ShareID: share.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.UpdateCollection(context.Background(), UpdateCollectionInput{ActorID: "usr-owner", CollectionID: source.ID, Name: "Source v2"}); err != nil {
+		t.Fatal(err)
+	}
+	memberLibrary, err = service.GetLibrary(context.Background(), "usr-member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberCollection = findPublicCollection(memberLibrary.Collections, imported.Collection.ID)
+	if memberCollection == nil || memberCollection.Name != "Source v2" {
+		t.Fatalf("revoked share stopped active sync = %#v", memberCollection)
+	}
+	if _, err := service.DeleteCollection(context.Background(), DeleteCollectionInput{ActorID: "usr-owner", CollectionID: source.ID, Disposition: "keep"}); err != nil {
+		t.Fatal(err)
+	}
+	memberLibrary, err = service.GetLibrary(context.Background(), "usr-member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberCollection = findPublicCollection(memberLibrary.Collections, imported.Collection.ID)
+	if memberCollection == nil || memberCollection.SourceSubscription.Status != "detached" || memberCollection.SourceSubscription.ReadOnly || len(memberCollection.Items) != 2 {
+		t.Fatalf("detached snapshot = %#v", memberCollection)
+	}
+}
+
+func findSubscriptionID(state fakeState, collectionID string) string {
+	for id, subscription := range state.subscriptions {
+		if subscription.CollectionID == collectionID {
+			return id
+		}
+	}
+	return ""
+}
+
+func findPublicCollection(collections []Collection, collectionID string) *Collection {
+	for index := range collections {
+		if collections[index].ID == collectionID {
+			return &collections[index]
+		}
+	}
+	return nil
 }
 
 func mustUpload(t *testing.T, service *Service, actorID, name, content string) *CustomEmote {
