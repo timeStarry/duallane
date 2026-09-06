@@ -969,3 +969,19 @@ Gateway (10.969 seconds) and HTTP (1.878), followed by integration-tag staticche
 and both Node hash-fixture tests. Main registry/action composition and the
 actual Node lone-surrogate fallback request-hash comparison remain separate
 gates; converter-only hash fixtures do not prove those boundaries.
+
+### Feishu Action PostgreSQL And Application Composition
+
+The Feishu action repository wraps the configured cards repository on one
+transaction and retains its ID factory and action savepoint. It derives the
+active Bot from the stored card creator/source/space, pins that Bot row through
+commit, and forwards canonical action data to the cards-owned event writer.
+Parent review added a caller-owned transaction factory and the active-Bot lock.
+
+Fresh independent PostgreSQL/race passed Feishu (7.019 seconds), covering
+successful action/replay, source/creator/space/inactive-Bot rejection with audit,
+savepoint and outer rollback, and blocked concurrent pause. Main now registers
+the definition and wrapper; its real HTTP/PG test passed (2.971 seconds) through
+Bot create, human resolution, action and replay with one canonical action event.
+Integration-tag staticcheck passed. This does not enable external Bot delivery
+or close the separate lone-surrogate request-hash compatibility gate.

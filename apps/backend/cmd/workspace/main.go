@@ -30,6 +30,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/emotes"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/events"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/feishucards"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/files"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/gate"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/httpapi"
@@ -271,13 +272,16 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		topicService = topics.NewService(topics.ServiceOptions{
 			Repository: topicRepository, RequireMessageJobs: true,
 		})
-		cardRegistry, err := cards.NewRegistry(topics.CardDefinitions()...)
+		cardDefinitions := append(topics.CardDefinitions(), feishucards.AsCardsDefinition())
+		cardRegistry, err := cards.NewRegistry(cardDefinitions...)
 		if err != nil {
 			pool.Close()
 			return nil, err
 		}
 		cardRepository := cards.NewPGRepository(pool)
-		cardService = cards.NewService(cards.ServiceOptions{Repository: cardRepository, Registry: cardRegistry})
+		cardService = cards.NewService(cards.ServiceOptions{
+			Repository: feishucards.NewPGRepository(pool, cardRepository), Registry: cardRegistry,
+		})
 		emoteService = emotes.NewService(emotes.ServiceOptions{
 			Repository: emotes.NewPGRepository(pool), BlobStore: blobStore,
 			Catalog: catalog, Processor: emoteMediaProcessor{processor: processor},

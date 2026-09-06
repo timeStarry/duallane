@@ -308,7 +308,7 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 			t.Fatalf("bot create status=%d", created.Code)
 		}
 		botID := createdBody.Bot.ID
-		tokenResponse := request(http.MethodPost, "/api/workspace/bots/"+botID+"/tokens", "application/json", []byte(`{}`))
+		tokenResponse := request(http.MethodPost, "/api/workspace/bots/"+botID+"/tokens", "application/json", []byte(`{"scopes":["messages:read_trigger","messages:send","commands:receive","cards:write"]}`))
 		var tokenBody struct {
 			Token string `json:"token"`
 		}
@@ -359,6 +359,7 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 		if err := conn.QueryRow(ctx, `SELECT author_id,author_kind FROM messages WHERE id=$1`, firstID).Scan(&storedAuthor, &storedKind); err != nil || storedAuthor != createdBody.Bot.BotUserID || storedKind != "bot" {
 			t.Fatalf("composed Bot writer persisted the wrong identity: author=%s kind=%s err=%v", storedAuthor, storedKind, err)
 		}
+		assertFeishuHTTPComposition(t, ctx, conn, app, request, tokenBody.Token, directResult.Conversation.ID)
 		humanBody, err := json.Marshal(map[string]any{"conversationId": directResult.Conversation.ID, "clientMessageId": "forged-human-fixture", "content": map[string]any{"format": messages.MessageContentFormat, "blocks": []map[string]string{{"type": "text", "text": "synthetic"}}}})
 		if err != nil {
 			t.Fatal(err)
