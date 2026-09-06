@@ -106,6 +106,9 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 		app.handler.ServeHTTP(w, r)
 		return w
 	}
+	t.Run("Echo HTTP uses the real authorized domain repositories", func(t *testing.T) {
+		assertEchoHTTPComposition(t, ctx, app, request)
+	})
 	settings := request(http.MethodGet, "/api/workspace/me/emote-settings", "", nil)
 	var settingsBody struct {
 		Settings emotes.EmoteSettings `json:"settings"`

@@ -25,6 +25,8 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bots"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/conversations"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/echo/requirements"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/echo/solicitations"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/emotes"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/events"
@@ -160,6 +162,8 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	var ntfyService *ntfy.Service
 	var emailService *email.Service
 	var emoteService *emotes.Service
+	var echoRequirements *requirements.Service
+	var echoSolicitations *solicitations.Service
 	var realtimeHandler http.Handler
 	var blobStore platformstorage.BlobStore
 	var backgroundDone chan struct{}
@@ -218,6 +222,12 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		memberService = members.NewService(members.ServiceOptions{Repository: members.NewPGRepository(pool)})
 		messageShareReader := messages.NewPGRepository(pool)
 		messageShareReader.SetBuiltinEmoteSource(builtinEmoteSource)
+		echoRequirements = requirements.NewService(requirements.ServiceOptions{Repository: requirements.NewPGRepository(pool)})
+		solicitationRepository := solicitations.NewPGRepository(pool)
+		echoSolicitations = solicitations.NewService(solicitations.ServiceOptions{
+			Repository: solicitationRepository, ConversationAccess: messageShareReader,
+			Requirements: echoRequirements,
+		})
 		conversationService = conversations.NewService(conversations.ServiceOptions{
 			Repository:         conversations.NewPGRepository(pool),
 			MessageShareReader: messageShareReader,
@@ -380,6 +390,8 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			Ntfy:                ntfyService,
 			Email:               emailService,
 			Emotes:              emoteService,
+			EchoRequirements:    echoRequirements,
+			EchoSolicitations:   echoSolicitations,
 			Bots:                botService,
 			BotGateway:          botGatewayService,
 			BotGatewaySetup:     botService,

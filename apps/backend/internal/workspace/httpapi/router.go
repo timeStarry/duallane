@@ -122,6 +122,10 @@ type RouterOptions struct {
 	Ntfy                NtfyService
 	Email               EmailService
 	Emotes              emoteService
+	EchoRequirements    EchoRequirementsService
+	EchoSolicitations   EchoSolicitationsService
+	EchoDelivery        EchoDeliveryHooks
+	EchoSpaceID         string
 	Bots                BotService
 	BotGateway          BotGatewayService
 	BotGatewaySetup     BotGatewaySetupService
@@ -182,6 +186,11 @@ func NewRouter(options RouterOptions) http.Handler {
 		registerCardRoutes(workspace, options)
 		registerInteractionRoutes(workspace, options)
 		registerBotRoutes(workspace, options)
+		RegisterEchoRoutes(workspace, EchoRouteOptions{
+			Requirements: options.EchoRequirements, Solicitations: options.EchoSolicitations,
+			Delivery: options.EchoDelivery, SpaceID: options.EchoSpaceID,
+			ActorResolver: options.ActorResolver, TrustProxy: options.TrustProxy,
+		})
 	})
 	return router
 }

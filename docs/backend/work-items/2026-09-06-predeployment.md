@@ -828,3 +828,24 @@ tests (5.077 seconds) and staticcheck. All completed successfully. ESLint is
 not a configured/installed project dependency; no ESLint pass is claimed.
 Family-by-family Go HTTP/PG replay, the remaining operations, complete security
 and response-header checks remain separate acceptance gates.
+
+### Echo HTTP Composition And Exhaustive Registration Gate
+
+All sixteen Echo requirements/solicitation HTTP declarations are now mounted
+inside the exact Workspace gate and receive the actual PostgreSQL domain
+services. Conversation checks reuse the existing message repository's read
+boundary. The Node-derived route inventory now verifies every Workspace public
+route is registered, and compares all disabled responses across five values
+that must not enable Workspace. Registration is not a response-parity claim.
+
+Fresh independent PostgreSQL/race passed application composition (4.470 seconds),
+HTTP (2.266 seconds), requirements (10.455 seconds) and solicitations (15.889
+seconds). The application test exercises unauthenticated rejection, durable
+requirement submission and replay, detail/list/history/statistics reads, and
+solicitation creation/publication with durable recipient rows. Focused
+integration-tag staticcheck passed. Card/message delivery, nonempty command and
+workflow registries, and delivery recovery remain separate composition gates.
+
+The preceding exact commit `2d5bfd4` completed all three CI jobs successfully
+in run `34029306873`, including actual Node fixture freshness checks. This does
+not extend that CI result to later commits or unaccepted worker changes.
