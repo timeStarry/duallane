@@ -255,6 +255,76 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 	if _, err := os.Stat(untouchedDataDir); !os.IsNotExist(err) {
 		t.Fatalf("refused startup touched storage: %v", err)
 	}
+
+	t.Run("application shutdown joins durable bot gateway cleanup", func(t *testing.T) {
+		created := request(http.MethodPost, "/api/workspace/bots", "application/json", []byte(`{"name":"Gateway Fixture"}`))
+		var createdBody struct {
+			Bot struct {
+				ID string `json:"id"`
+			} `json:"bot"`
+		}
+		if created.Code != http.StatusCreated || json.Unmarshal(created.Body.Bytes(), &createdBody) != nil || createdBody.Bot.ID == "" {
+			t.Fatalf("bot create status=%d", created.Code)
+		}
+		botID := createdBody.Bot.ID
+		tokenResponse := request(http.MethodPost, "/api/workspace/bots/"+botID+"/tokens", "application/json", []byte(`{}`))
+		var tokenBody struct {
+			Token string `json:"token"`
+		}
+		if tokenResponse.Code != http.StatusCreated || json.Unmarshal(tokenResponse.Body.Bytes(), &tokenBody) != nil || tokenBody.Token == "" {
+			t.Fatalf("token create status=%d", tokenResponse.Code)
+		}
+		server := httptest.NewServer(app.handler)
+		defer server.Close()
+		connection, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/ws/bot-gateway", &websocket.DialOptions{
+			HTTPHeader: http.Header{"Authorization": {"Bearer " + tokenBody.Token}},
+		})
+		if err != nil {
+			t.Fatal("composed gateway dial failed")
+		}
+		defer connection.CloseNow()
+		if err := connection.Write(ctx, websocket.MessageText, []byte(`{"version":1,"type":"hello","lastSequence":0}`)); err != nil {
+			t.Fatal(err)
+		}
+		readCtx, readCancel := context.WithTimeout(ctx, 5*time.Second)
+		defer readCancel()
+		_, raw, err := connection.Read(readCtx)
+		var frame struct {
+			Type string `json:"type"`
+		}
+		if err != nil || json.Unmarshal(raw, &frame) != nil || frame.Type != "ready" {
+			t.Fatalf("gateway handshake type=%s err=%v", frame.Type, err)
+		}
+		ownerRead := request(http.MethodGet, "/api/workspace/bots/"+botID+"/connection", "", nil)
+		if ownerRead.Code != http.StatusOK || !strings.Contains(ownerRead.Body.String(), `"status":"connected"`) {
+			t.Fatalf("owner connection status=%d", ownerRead.Code)
+		}
+		ownerTest := request(http.MethodPost, "/api/workspace/bots/"+botID+"/connection/test", "application/json", []byte(`{"ignored":"synthetic"}`))
+		if ownerTest.Code != http.StatusOK {
+			t.Fatalf("composed owner test status=%d", ownerTest.Code)
+		}
+		closed := make(chan struct{})
+		go func() { app.Close(); close(closed) }()
+		for {
+			_, _, readErr := connection.Read(readCtx)
+			if readErr != nil {
+				if websocket.CloseStatus(readErr) != websocket.StatusServiceRestart {
+					t.Fatalf("gateway close status=%v", websocket.CloseStatus(readErr))
+				}
+				break
+			}
+		}
+		select {
+		case <-closed:
+		case <-time.After(12 * time.Second):
+			t.Fatal("application shutdown did not join gateway")
+		}
+		var status string
+		// Use the independent fixture connection: app.Close has closed its pool.
+		if err := conn.QueryRow(ctx, `SELECT status FROM workspace_agent_bot_connections WHERE bot_id=$1`, botID).Scan(&status); err != nil || status != "disconnected" {
+			t.Fatalf("durable connection after app.Close = %s, err=%v", status, err)
+		}
+	})
 }
 
 type forbiddenUploadBody struct{ t *testing.T }

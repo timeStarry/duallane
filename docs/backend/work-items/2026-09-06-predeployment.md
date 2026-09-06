@@ -711,3 +711,29 @@ generated actual Node backfill/verify fixture then passed Go canonical-byte
 verification: one object, 37 bytes, zero failures and zero Go mutations.
 See [Storage operator](../STORAGE_OPERATOR.md) for the durable operating contract,
 including the distinction from Node's timestamp-writing dedupe verification.
+
+### Composed Bot Transport And Workspace Browser Gate
+
+Workspace now composes the actual Bot Gateway runtime adapters, shared card/
+message transaction bridges, owner connection provider and gated WebSocket
+transport. Trusted catalog lookup is wired into message/conversation/event
+share projections. Gateway shutdown closes admission, cancels operations and
+waits for admitted handlers plus nonce-scoped durable cleanup. Independent
+bounded cleanup contexts do not inherit the canceled application root; failures
+aggregate to a safe sentinel. The application waits before closing PostgreSQL.
+
+Parent independently ran fresh PostgreSQL/race for gateway and the actual
+application (9.003 / 3.177 seconds), followed by integration-tag staticcheck.
+The application test issues a real owner token, opens the routed Bot WebSocket,
+reads/tests its connected projection, calls application Close, then verifies the
+disconnected row through an independent connection after the pool is closed.
+The actual Node WebSocket fixture also passed its checked-in transport goldens.
+
+The unchanged full Go Workspace browser suite then completed: five of twelve
+tests passed, seven failed (2.2 minutes). Share preview, emote subscriptions,
+semantic navigation and focus checks passed. Open failures are four Echo
+command/workflow cases, gateway message creation returning 401, inline topic
+creation not producing a topic, and a durable unread count remaining two after
+the UI cleared it. The two-user test now passes the previously failing Beacon
+header and reaches the unread check. These failures are acceptance work, not
+waivers or reasons to relax browser assertions. The PR remains draft.

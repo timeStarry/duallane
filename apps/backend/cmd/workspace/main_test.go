@@ -72,6 +72,43 @@ func TestNewBlobStoreUsesLocalDriverWithoutS3Secrets(t *testing.T) {
 	}
 }
 
+func TestApplicationCloseJoinsGatewayCleanupWithIndependentDeadline(t *testing.T) {
+	root, cancel := context.WithCancel(context.Background())
+	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	app := &application{cancel: cancel, shutdownBotGateway: func(ctx context.Context) error {
+		if root.Err() != context.Canceled {
+			t.Error("application root was not canceled before gateway drain")
+		}
+		if ctx.Err() != nil {
+			t.Error("cleanup inherited canceled application root")
+		}
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("cleanup lacks deadline")
+		}
+		close(entered)
+		<-release
+		return nil
+	}}
+	go func() { app.Close(); close(done) }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("gateway cleanup was not called")
+	}
+	select {
+	case <-done:
+		t.Fatal("Close did not join gateway cleanup")
+	default:
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not complete after cleanup")
+	}
+	app.Close()
+}
+
 func TestEnabledApplicationRejectsMissingCatalogBeforeOpeningDatabase(t *testing.T) {
 	t.Setenv("DATABASE_URL", "not a connection string")
 	app, err := newApplication(context.Background(), config.WorkspaceConfig{

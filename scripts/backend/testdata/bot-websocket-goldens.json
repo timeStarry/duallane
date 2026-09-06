@@ -1,0 +1,30 @@
+{
+  "node": {
+    "rawAuthorizationClose": {
+      "code": 1008,
+      "reason": "bot authentication required"
+    },
+    "ready": {
+      "version": 1,
+      "type": "ready",
+      "currentSequence": 1,
+      "replayCount": 0,
+      "hasMore": false
+    },
+    "heartbeatId": {
+      "nested": [
+        true,
+        "x",
+        null
+      ]
+    },
+    "invalidCloseCommand": {
+      "version": 1,
+      "type": "error",
+      "error": {
+        "code": "gateway.invalid_message",
+        "message": "Gateway 消息无效"
+      }
+    }
+  }
+}

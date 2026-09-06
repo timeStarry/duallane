@@ -103,33 +103,34 @@ type EmailService interface {
 }
 
 type RouterOptions struct {
-	Gate               gate.Gate
-	Health             http.Handler
-	Readiness          http.Handler
-	AuthRoutes         *auth.HTTPHandler
-	ActorResolver      ActorResolver
-	Invites            InviteService
-	Members            MemberService
-	Avatars            AvatarService
-	Conversations      ConversationService
-	Messages           MessageService
-	Cards              CardService
-	Interactions       InteractionService
-	Overview           OverviewService
-	Bootstrap          BootstrapService
-	Files              fileService
-	Topics             topicService
-	Ntfy               NtfyService
-	Email              EmailService
-	Emotes             emoteService
-	Bots               BotService
-	BotGateway         BotGatewayService
-	BotGatewaySetup    BotGatewaySetupService
-	Realtime           http.Handler
-	FrontendURL        string
-	PublicBaseURL      string
-	InteractionSpaceID string
-	TrustProxy         bool
+	Gate                gate.Gate
+	Health              http.Handler
+	Readiness           http.Handler
+	AuthRoutes          *auth.HTTPHandler
+	ActorResolver       ActorResolver
+	Invites             InviteService
+	Members             MemberService
+	Avatars             AvatarService
+	Conversations       ConversationService
+	Messages            MessageService
+	Cards               CardService
+	Interactions        InteractionService
+	Overview            OverviewService
+	Bootstrap           BootstrapService
+	Files               fileService
+	Topics              topicService
+	Ntfy                NtfyService
+	Email               EmailService
+	Emotes              emoteService
+	Bots                BotService
+	BotGateway          BotGatewayService
+	BotGatewaySetup     BotGatewaySetupService
+	BotGatewayWebSocket http.Handler
+	Realtime            http.Handler
+	FrontendURL         string
+	PublicBaseURL       string
+	InteractionSpaceID  string
+	TrustProxy          bool
 }
 
 func NewRouter(options RouterOptions) http.Handler {
@@ -150,6 +151,11 @@ func NewRouter(options RouterOptions) http.Handler {
 		realtimeHandler = http.NotFoundHandler()
 	}
 	router.With(options.Gate.Middleware).Handle("/ws/workspace", realtimeHandler)
+	botGatewayWebSocket := options.BotGatewayWebSocket
+	if botGatewayWebSocket == nil {
+		botGatewayWebSocket = http.NotFoundHandler()
+	}
+	router.With(options.Gate.Middleware).Handle("/ws/bot-gateway", botGatewayWebSocket)
 	registerBotGatewayRoutes(router, BotGatewayRouteOptions{
 		Gateway: options.BotGateway, Setup: options.BotGatewaySetup,
 		WorkspaceEnabled: options.Gate.Enabled(), TrustProxy: options.TrustProxy,

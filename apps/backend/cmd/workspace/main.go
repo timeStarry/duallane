@@ -21,6 +21,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/avatars"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bootstrap"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/botgateway"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bots"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/conversations"
@@ -45,12 +46,29 @@ import (
 
 const serviceName = "workspace"
 
+// catalogBuiltinEmoteSource is a composition-only read adapter. The emotes
+// domain remains the owner of catalog visibility and image validation; message
+// and event projections receive only the already-public source URL.
+type catalogBuiltinEmoteSource struct {
+	catalog *emotes.Catalog
+}
+
+func (source catalogBuiltinEmoteSource) ResolveBuiltinEmote(_ context.Context, emoteKey string) (string, bool) {
+	item, ok := source.catalog.Image(emoteKey)
+	if !ok {
+		return "", false
+	}
+	return item.Src, true
+}
+
 type application struct {
-	handler        http.Handler
-	pool           *pgxpool.Pool
-	cancel         context.CancelFunc
-	backgroundDone <-chan struct{}
-	closeOnce      sync.Once
+	handler            http.Handler
+	pool               *pgxpool.Pool
+	cancel             context.CancelFunc
+	backgroundDone     <-chan struct{}
+	closeOnce          sync.Once
+	shutdownBotGateway func(context.Context) error
+	logger             *slog.Logger
 }
 
 func (app *application) Close() {
@@ -60,6 +78,15 @@ func (app *application) Close() {
 	app.closeOnce.Do(func() {
 		if app.cancel != nil {
 			app.cancel()
+		}
+		// WebSocket handlers outlive net/http Shutdown after hijacking. Their
+		// nonce-scoped durable cleanup must finish while the pool remains open.
+		if app.shutdownBotGateway != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), httpserver.DefaultShutdownTimeout)
+			if err := app.shutdownBotGateway(ctx); err != nil && app.logger != nil {
+				app.logger.Error("workspace bot gateway cleanup failed", slog.String("error_code", "gateway_shutdown_failed"))
+			}
+			cancel()
 		}
 		if app.backgroundDone != nil {
 			<-app.backgroundDone
@@ -126,6 +153,8 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	var overviewService *overview.Service
 	var bootstrapService *bootstrap.Service
 	var botService *bots.Service
+	var botGatewayService *botgateway.Service
+	var botGatewayWebSocket *botgateway.WebSocketHandler
 	var fileService *files.Service
 	var topicService *topics.Service
 	var ntfyService *ntfy.Service
@@ -180,10 +209,19 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			PublicBaseURL: runtimeConfig.PublicBaseURL, FrontendURL: runtimeConfig.FrontendURL,
 			TrustProxy: runtimeConfig.TrustProxy, WorkspaceEnabled: workspaceGate.Enabled,
 		})
+		builtinEmoteSource := catalogBuiltinEmoteSource{catalog: catalog}
 		inviteService = invites.NewService(invites.ServiceOptions{Repository: invites.NewPGRepository(pool)})
-		botService = bots.NewService(bots.ServiceOptions{Repository: bots.NewPGRepository(pool)})
+		botRepository := bots.NewPGRepository(pool)
+		botService = bots.NewService(bots.ServiceOptions{
+			Repository: botRepository, ConnectionProvider: bots.NewRepositoryConnectionProvider(botRepository),
+		})
 		memberService = members.NewService(members.ServiceOptions{Repository: members.NewPGRepository(pool)})
-		conversationService = conversations.NewService(conversations.ServiceOptions{Repository: conversations.NewPGRepository(pool)})
+		messageShareReader := messages.NewPGRepository(pool)
+		messageShareReader.SetBuiltinEmoteSource(builtinEmoteSource)
+		conversationService = conversations.NewService(conversations.ServiceOptions{
+			Repository:         conversations.NewPGRepository(pool),
+			MessageShareReader: messageShareReader,
+		})
 		blobStore, err = newBlobStore(ctx, runtimeConfig)
 		if err != nil {
 			pool.Close()
@@ -227,16 +265,36 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			pool.Close()
 			return nil, err
 		}
-		cardService = cards.NewService(cards.ServiceOptions{Repository: cards.NewPGRepository(pool), Registry: cardRegistry})
+		cardRepository := cards.NewPGRepository(pool)
+		cardService = cards.NewService(cards.ServiceOptions{Repository: cardRepository, Registry: cardRegistry})
 		emoteService = emotes.NewService(emotes.ServiceOptions{
 			Repository: emotes.NewPGRepository(pool), BlobStore: blobStore,
 			Catalog: catalog, Processor: emoteMediaProcessor{processor: processor},
 		})
+		messageRepository := messages.NewPGRepositoryWithMessageJobs(pool, jobScheduler)
+		messageRepository.SetBuiltinEmoteSource(builtinEmoteSource)
 		messageService = messages.NewService(messages.ServiceOptions{
-			Repository: messages.NewPGRepositoryWithMessageJobs(pool, jobScheduler), RequireMessageJobs: true,
+			Repository: messageRepository, RequireMessageJobs: true,
 			AdvancedBlockValidator: messageblocks.NewValidator(messageblocks.ValidatorOptions{
 				Cards: cardService, Emotes: emoteService, Topics: topicService,
 			}),
+		})
+		runtimeAdapters := botgateway.NewRuntimeAdapters(botgateway.RuntimeAdapterOptions{
+			Bots: botService, Messages: messageService, Cards: cardService, Files: fileService,
+		})
+		botGatewayRepository := botgateway.NewPGRepositoryWithDomainTransactions(pool, botgateway.DomainTransactionOptions{
+			Messages: messageRepository, Cards: cardRepository,
+		})
+		botGatewayService = botgateway.NewService(botgateway.ServiceOptions{
+			Repository:       botGatewayRepository,
+			Authenticator:    runtimeAdapters.TokenAuthenticator,
+			MessageWriter:    runtimeAdapters.MessageWriter,
+			CardGateway:      runtimeAdapters.CardGateway,
+			AttachmentWriter: runtimeAdapters.AttachmentWriter,
+			SpaceID:          botgateway.DefaultSpaceID,
+		})
+		botGatewayWebSocket = botgateway.NewWebSocketHandler(botgateway.WebSocketHandlerOptions{
+			RootContext: ctx, Gateway: botGatewayService, SpaceID: botgateway.DefaultSpaceID,
 		})
 		commandRegistry, err := interactions.NewCommandRegistry()
 		if err != nil {
@@ -253,7 +311,9 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		})
 		overviewService = overview.NewService(overview.ServiceOptions{Repository: overview.NewPGRepository(pool)})
 		eventHub := realtime.NewHub()
-		eventService := events.NewService(events.ServiceOptions{Repository: events.NewPGRepository(pool)})
+		eventRepository := events.NewPGRepository(pool)
+		eventRepository.SetBuiltinEmoteSource(builtinEmoteSource)
+		eventService := events.NewService(events.ServiceOptions{Repository: eventRepository})
 		presenceService := presence.NewService(presence.ServiceOptions{Repository: presence.NewPGRepository(pool)})
 		bootstrapService = bootstrap.NewService(bootstrap.ServiceOptions{
 			Repository: bootstrap.NewPGRepository(pool), Members: memberService,
@@ -294,22 +354,26 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	}
 	return &application{
 		pool: pool, cancel: cancel, backgroundDone: backgroundDone,
+		shutdownBotGateway: botGatewayWebSocket.Shutdown, logger: logger,
 		handler: httpapi.NewRouter(httpapi.RouterOptions{
 			Gate: workspaceGate, Health: gate.HealthHandler(healthInput), Readiness: readinessHandler(healthInput, databaseProbe, storageProbe),
 			AuthRoutes: authHandler, ActorResolver: authHandler, Invites: inviteService,
 			Members: memberService, Conversations: conversationService, Messages: messageService,
 			Avatars: avatarService,
 			Cards:   cardService, Interactions: interactionService,
-			Overview:    overviewService,
-			Bootstrap:   bootstrapService,
-			Files:       fileService,
-			Topics:      topicService,
-			Ntfy:        ntfyService,
-			Email:       emailService,
-			Emotes:      emoteService,
-			Bots:        botService,
-			Realtime:    realtimeHandler,
-			FrontendURL: runtimeConfig.FrontendURL, PublicBaseURL: runtimeConfig.PublicBaseURL,
+			Overview:            overviewService,
+			Bootstrap:           bootstrapService,
+			Files:               fileService,
+			Topics:              topicService,
+			Ntfy:                ntfyService,
+			Email:               emailService,
+			Emotes:              emoteService,
+			Bots:                botService,
+			BotGateway:          botGatewayService,
+			BotGatewaySetup:     botService,
+			BotGatewayWebSocket: botGatewayWebSocket,
+			Realtime:            realtimeHandler,
+			FrontendURL:         runtimeConfig.FrontendURL, PublicBaseURL: runtimeConfig.PublicBaseURL,
 			TrustProxy: runtimeConfig.TrustProxy,
 		}),
 	}, nil
