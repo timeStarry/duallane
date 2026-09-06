@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
@@ -81,6 +82,7 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 	app, err := newApplication(ctx, config.WorkspaceConfig{
 		Enabled: true, Environment: "test", AppVersion: "test", StorageDriver: "local", DataDir: t.TempDir(),
 		EmoteCatalogPath: filepath.Join(webDir, "shared/emote-packs.json"), GitHubOAuthTimeout: time.Second,
+		MigrationsDir: filepath.Join(webDir, "server/migrations"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -124,5 +126,32 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 	var count int
 	if err := app.pool.QueryRow(ctx, `SELECT COUNT(*) FROM audit_logs WHERE actor_user_id='composition-user' AND action='emote.create' AND result='success'`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("upload audit count=%d err=%v", count, err)
+	}
+
+	// A missing migration must fail readiness and a fresh startup before any
+	// object directory, session, seed or event-listener side effect is created.
+	if ready := request(http.MethodGet, "/readyz", "", nil); ready.Code != http.StatusOK {
+		t.Fatalf("initial readiness = %d", ready.Code)
+	}
+	if _, err := conn.Exec(ctx, `DELETE FROM schema_migrations WHERE name = (SELECT MAX(name) FROM schema_migrations)`); err != nil {
+		t.Fatal(err)
+	}
+	if ready := request(http.MethodGet, "/readyz", "", nil); ready.Code != http.StatusServiceUnavailable {
+		t.Fatalf("incompatible schema readiness = %d", ready.Code)
+	}
+	untouchedDataDir := filepath.Join(t.TempDir(), "must-not-create")
+	refused, err := newApplication(ctx, config.WorkspaceConfig{
+		Enabled: true, StorageDriver: "local", DataDir: untouchedDataDir,
+		EmoteCatalogPath: filepath.Join(webDir, "shared/emote-packs.json"),
+		MigrationsDir:    filepath.Join(webDir, "server/migrations"), GitHubOAuthTimeout: time.Second,
+	})
+	if refused != nil {
+		refused.Close()
+	}
+	if !errors.Is(err, migrations.ErrMissingMigrations) || refused != nil {
+		t.Fatalf("incompatible schema startup = %v, app present = %v", err, refused != nil)
+	}
+	if _, err := os.Stat(untouchedDataDir); !os.IsNotExist(err) {
+		t.Fatalf("refused startup touched storage: %v", err)
 	}
 }

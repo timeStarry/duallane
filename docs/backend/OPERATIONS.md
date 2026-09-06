@@ -127,6 +127,25 @@ Health responses contain only status, service, version, commit, and safe
 dependency categories. They never include connection strings, hosts requiring
 secrecy, bucket keys, tokens, provider responses, or stack traces.
 
+The Go candidate reads `DUALLANE_MIGRATIONS_DIR` (image: `/app/migrations`;
+local `apps/backend` default: `../web/server/migrations`). Enabled Workspace
+and enabled worker processors verify the exact canonical filename set and
+`schema_migrations` structure before constructing domain dependencies. Missing,
+unknown or incompatible history fails startup; the check never applies SQL or
+seeds data. Metadata queries run in read-only PostgreSQL transactions. Startup
+has a ten-second schema-check budget; private readiness rechecks the expected
+set with the existing two-second request budget. An intentionally disabled
+Workspace or idle worker does not connect to the database for this check.
+Worker cycles also check compatibility before claiming jobs; an incompatible
+schema suspends claims until a compatible state is restored.
+
+File canonical promotion (after bounded staging) and physical cleanup hold the
+shared digest advisory lock through storage I/O and registry changes. The
+server-side mutation has a two-minute ceiling, shortened by the caller's
+deadline. Failed physical deletion rolls back its tombstone, allowing a later
+maintenance retry; never treat a logical resource removal as proof that bytes
+were deleted.
+
 ### Candidate Side-Effect Isolation
 
 An unpublished port does not make a candidate passive. Startup hooks, job

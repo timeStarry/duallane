@@ -8,12 +8,14 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/config"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/httpserver"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/logging"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/media"
+	"github.com/timestarry/duallane/apps/backend/internal/platform/migrations"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
 	platformstorage "github.com/timestarry/duallane/apps/backend/internal/platform/storage"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
@@ -129,6 +131,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	var realtimeHandler http.Handler
 	var blobStore platformstorage.BlobStore
 	var backgroundDone chan struct{}
+	var databaseProbe func(context.Context) error
 	if runtimeConfig.Enabled {
 		var err error
 		catalog, err := emotes.LoadCatalogFile(runtimeConfig.EmoteCatalogPath)
@@ -143,6 +146,21 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		pool, err = postgres.OpenPoolFromEnv(ctx)
 		if err != nil {
 			return nil, err
+		}
+		checker := migrations.SchemaChecker{Queryer: postgres.NewMigrationReadOnlyQueryer(pool), Directory: runtimeConfig.MigrationsDir}
+		schemaCtx, cancelSchema := context.WithTimeout(ctx, 10*time.Second)
+		report, schemaErr := checker.Check(schemaCtx)
+		cancelSchema()
+		if schemaErr != nil {
+			pool.Close()
+			return nil, schemaErr
+		}
+		// Freeze this binary's expected set. Readiness rechecks the database,
+		// never applies migrations or rereads a mutable filesystem catalog.
+		checker.Directory, checker.RequiredNames = "", report.RequiredNames
+		databaseProbe = func(ctx context.Context) error {
+			_, err := checker.Check(ctx)
+			return err
 		}
 		databaseReady = true
 		github, err := auth.NewGitHubOAuth(auth.GitHubOAuthConfig{
@@ -258,9 +276,8 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			Live: ctx.Err() == nil, DatabaseReady: databaseReady, ObjectStoreReady: objectStoreReady || !runtimeConfig.Enabled, Workspace: workspaceGate,
 		}
 	}
-	var databaseProbe, storageProbe func(context.Context) error
+	var storageProbe func(context.Context) error
 	if runtimeConfig.Enabled {
-		databaseProbe = pool.Ping
 		if store, ok := blobStore.(interface{ AssertReady(context.Context) error }); ok {
 			storageProbe = store.AssertReady
 		}

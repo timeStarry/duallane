@@ -40,6 +40,7 @@ func TestLoadWorkspacePreservesRuntimeCompatibility(t *testing.T) {
 		GitHubOAuthTimeoutEnvironment: "25000",
 		WorkspaceDataDirEnvironment:   "/srv/duallane-data",
 		WorkspaceEmoteCatalogEnv:      "/app/assets/emote-packs.json",
+		WorkspaceMigrationsDirEnv:     "/app/migrations",
 		WorkspaceNtfyBaseEnvironment:  "https://ntfy.example.test",
 		WorkspaceNtfyWorkerEnabled:    "false",
 		WorkspaceEmailWorkerEnabled:   "false",
@@ -66,6 +67,9 @@ func TestLoadWorkspacePreservesRuntimeCompatibility(t *testing.T) {
 	}
 	if config.EmoteCatalogPath != "/app/assets/emote-packs.json" {
 		t.Fatalf("emote catalog path = %q", config.EmoteCatalogPath)
+	}
+	if config.MigrationsDir != "/app/migrations" {
+		t.Fatalf("migrations directory = %q", config.MigrationsDir)
 	}
 	if config.NtfyWorkerEnabled {
 		t.Fatal("WORKSPACE_NTFY_WORKER_ENABLED=false did not disable ntfy worker")

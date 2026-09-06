@@ -15,6 +15,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/platform/config"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/httpserver"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/logging"
+	"github.com/timestarry/duallane/apps/backend/internal/platform/migrations"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/ntfy"
@@ -42,6 +43,7 @@ type application struct {
 	processors   []workerProcessor
 	logger       *slog.Logger
 	startupDelay time.Duration
+	checkSchema  func(context.Context) error
 }
 
 func main() {
@@ -88,6 +90,19 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	pool, err := postgres.OpenPoolFromEnv(ctx)
 	if err != nil {
 		return nil, err
+	}
+	checker := migrations.SchemaChecker{Queryer: postgres.NewMigrationReadOnlyQueryer(pool), Directory: runtimeConfig.MigrationsDir}
+	schemaCtx, cancelSchema := context.WithTimeout(ctx, 10*time.Second)
+	report, schemaErr := checker.Check(schemaCtx)
+	cancelSchema()
+	if schemaErr != nil {
+		pool.Close()
+		return nil, schemaErr
+	}
+	checker.Directory, checker.RequiredNames = "", report.RequiredNames
+	app.checkSchema = func(ctx context.Context) error {
+		_, err := checker.Check(ctx)
+		return err
 	}
 	frontendURL := runtimeConfig.FrontendURL
 	if frontendURL == "" {
@@ -170,9 +185,7 @@ func (app *application) healthHandler(runtimeConfig config.WorkspaceConfig) http
 			ready = false
 		}
 		if ready && app.pool != nil {
-			ctx, cancel := context.WithTimeout(request.Context(), 2*time.Second)
-			defer cancel()
-			ready = app.pool.Ping(ctx) == nil
+			ready = app.schemaReady(request.Context())
 		}
 		status := http.StatusOK
 		state := "ready"
@@ -225,6 +238,12 @@ func (app *application) tick(ctx context.Context, processor workerProcessor) {
 	if processor.process == nil {
 		return
 	}
+	if !app.schemaReady(ctx) {
+		if app.logger != nil {
+			app.logger.Error("worker schema unavailable", slog.String("error_code", "schema_unavailable"))
+		}
+		return
+	}
 	result, err := processor.process(ctx)
 	if err != nil {
 		if app.logger != nil {
@@ -238,4 +257,16 @@ func (app *application) tick(ctx context.Context, processor workerProcessor) {
 			slog.Int("cancelled", result.Cancelled), slog.Int("retried", result.Retried),
 			slog.Int("failed", result.Failed))
 	}
+}
+
+func (app *application) schemaReady(ctx context.Context) bool {
+	if app == nil {
+		return false
+	}
+	if app.checkSchema == nil {
+		return app.pool == nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return app.checkSchema(ctx) == nil
 }

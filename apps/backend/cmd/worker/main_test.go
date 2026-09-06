@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -89,5 +90,32 @@ func TestStoppingWorkerIsNotReady(t *testing.T) {
 	app.healthHandler(config.WorkspaceConfig{}).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("stopping readiness=%d", w.Code)
+	}
+}
+
+func TestWorkerSchemaFailurePreventsClaimsAndRecovers(t *testing.T) {
+	ready := false
+	app := &application{checkSchema: func(ctx context.Context) error {
+		if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 2*time.Second {
+			t.Error("schema check is not bounded")
+		}
+		if !ready {
+			return errors.New("synthetic missing migration")
+		}
+		return nil
+	}}
+	claims := 0
+	processor := workerProcessor{process: func(context.Context) (processResult, error) {
+		claims++
+		return processResult{}, nil
+	}}
+	app.tick(context.Background(), processor)
+	if claims != 0 {
+		t.Fatal("incompatible schema allowed a worker claim")
+	}
+	ready = true
+	app.tick(context.Background(), processor)
+	if claims != 1 {
+		t.Fatalf("claims after schema recovery = %d", claims)
 	}
 }

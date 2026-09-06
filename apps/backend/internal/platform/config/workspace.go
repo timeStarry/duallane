@@ -18,6 +18,7 @@ const (
 	GitHubOAuthTimeoutEnvironment = "GITHUB_OAUTH_TIMEOUT_MS"
 	WorkspaceDataDirEnvironment   = "DUALLANE_DATA_DIR"
 	WorkspaceEmoteCatalogEnv      = "DUALLANE_EMOTE_CATALOG_PATH"
+	WorkspaceMigrationsDirEnv     = "DUALLANE_MIGRATIONS_DIR"
 	WorkspaceNtfyBaseEnvironment  = "WORKSPACE_NTFY_BASE_URL"
 	WorkspaceNtfyWorkerEnabled    = "WORKSPACE_NTFY_WORKER_ENABLED"
 	WorkspaceEmailWorkerEnabled   = "WORKSPACE_EMAIL_WORKER_ENABLED"
@@ -31,6 +32,7 @@ const (
 	WorkspaceLocalMirrorWriteEnv  = "WORKSPACE_STORAGE_LOCAL_MIRROR_WRITE"
 	DefaultWorkspaceDataDir       = "../../data"
 	DefaultWorkspaceEmoteCatalog  = "../web/shared/emote-packs.json"
+	DefaultWorkspaceMigrationsDir = "../web/server/migrations"
 )
 
 // WorkspaceConfig contains request-serving configuration for the retained,
@@ -52,6 +54,7 @@ type WorkspaceConfig struct {
 	GitHubOAuthTimeout time.Duration
 	DataDir            string
 	EmoteCatalogPath   string
+	MigrationsDir      string
 	NtfyBaseURL        string
 	NtfyWorkerEnabled  bool
 	EmailWorkerEnabled bool
@@ -94,6 +97,7 @@ func LoadWorkspaceFrom(lookup func(string) (string, bool)) (WorkspaceConfig, err
 		GitHubOAuthTimeout: DefaultGitHubOAuthTimeout,
 		DataDir:            strings.TrimSpace(valueOr(lookup, WorkspaceDataDirEnvironment, DefaultWorkspaceDataDir)),
 		EmoteCatalogPath:   strings.TrimSpace(valueOr(lookup, WorkspaceEmoteCatalogEnv, DefaultWorkspaceEmoteCatalog)),
+		MigrationsDir:      strings.TrimSpace(valueOr(lookup, WorkspaceMigrationsDirEnv, DefaultWorkspaceMigrationsDir)),
 		NtfyBaseURL:        strings.TrimSpace(valueOr(lookup, WorkspaceNtfyBaseEnvironment, "")),
 		NtfyWorkerEnabled:  valueOr(lookup, WorkspaceNtfyWorkerEnabled, "true") != "false",
 		EmailWorkerEnabled: valueOr(lookup, WorkspaceEmailWorkerEnabled, "true") != "false",
@@ -147,6 +151,9 @@ func (config WorkspaceConfig) Validate() error {
 	}
 	if config.Enabled && strings.TrimSpace(config.EmoteCatalogPath) == "" {
 		return errors.New("DUALLANE_EMOTE_CATALOG_PATH must not be empty when Workspace is enabled")
+	}
+	if config.Enabled && strings.TrimSpace(config.MigrationsDir) == "" {
+		return errors.New("DUALLANE_MIGRATIONS_DIR must not be empty when Workspace is enabled")
 	}
 	if config.StorageDriver != "local" && config.StorageDriver != "s3" {
 		return errors.New("WORKSPACE_STORAGE_DRIVER must be local or s3")
