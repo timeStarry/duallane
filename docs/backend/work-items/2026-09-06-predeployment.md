@@ -795,3 +795,18 @@ test passed end to end (12.3 seconds, 27.8-second run): create, join, notificati
 settings, sync, unsync, close and archive. It used only disposable synthetic
 data. This closes the browser failure recorded in the preceding slice, not the
 separate all-Workspace browser, complete contract or production-cutover gates.
+
+### Bot Message Service Composition Boundary
+
+The Gateway now receives a separate message service configured to accept Bot
+actors through its already authorized, shared transaction. The human HTTP
+service remains Bot-disabled; neither Bot Tokens on human routes nor inline
+topic conversion are enabled by this composition. Message jobs retain the
+same required scheduler and repository configuration.
+
+Fresh independent application PostgreSQL/race passed (3.058 seconds), including
+real token issuance, Bot send/replay, author identity and rejection of a Bot
+Token on the human message route. Integration-tag staticcheck passed. The
+unchanged Agent Bot Chromium/Go Workspace acceptance passed (9.7 seconds,
+19.2-second run), including Gateway REST authorization boundaries. Actual
+Feishu conversion/action integration is a separate remaining gate.

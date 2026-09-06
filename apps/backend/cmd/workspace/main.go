@@ -282,8 +282,17 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 				Cards: cardService, Emotes: emoteService, Topics: topicService,
 			}),
 		})
+		// Bot identities enter only through the scoped Gateway. Keep the human
+		// API's service closed to bots, and do not install inline topic creation
+		// on this separate, transaction-bound writer.
+		botMessageService := messages.NewService(messages.ServiceOptions{
+			Repository: messageRepository, RequireMessageJobs: true, AllowBots: true,
+			AdvancedBlockValidator: messageblocks.NewValidator(messageblocks.ValidatorOptions{
+				Cards: cardService, Emotes: emoteService, Topics: topicService,
+			}),
+		})
 		runtimeAdapters := botgateway.NewRuntimeAdapters(botgateway.RuntimeAdapterOptions{
-			Bots: botService, Messages: messageService, Cards: cardService, Files: fileService,
+			Bots: botService, Messages: botMessageService, Cards: cardService, Files: fileService,
 		})
 		botGatewayRepository := botgateway.NewPGRepositoryWithDomainTransactions(pool, botgateway.DomainTransactionOptions{
 			Messages: messageRepository, Cards: cardRepository,

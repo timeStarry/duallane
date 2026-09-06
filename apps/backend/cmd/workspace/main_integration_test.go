@@ -297,7 +297,8 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 		created := request(http.MethodPost, "/api/workspace/bots", "application/json", []byte(`{"name":"Gateway Fixture"}`))
 		var createdBody struct {
 			Bot struct {
-				ID string `json:"id"`
+				ID        string `json:"id"`
+				BotUserID string `json:"botUserId"`
 			} `json:"bot"`
 		}
 		if created.Code != http.StatusCreated || json.Unmarshal(created.Body.Bytes(), &createdBody) != nil || createdBody.Bot.ID == "" {
@@ -310,6 +311,58 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 		}
 		if tokenResponse.Code != http.StatusCreated || json.Unmarshal(tokenResponse.Body.Bytes(), &tokenBody) != nil || tokenBody.Token == "" {
 			t.Fatalf("token create status=%d", tokenResponse.Code)
+		}
+		directBody, err := json.Marshal(map[string]any{"type": "direct", "targetUserId": createdBody.Bot.BotUserID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		direct := request(http.MethodPost, "/api/workspace/conversations", "application/json", directBody)
+		var directResult struct {
+			Conversation struct {
+				ID string `json:"id"`
+			} `json:"conversation"`
+		}
+		if direct.Code != http.StatusCreated || json.Unmarshal(direct.Body.Bytes(), &directResult) != nil || directResult.Conversation.ID == "" {
+			t.Fatalf("bot direct create status=%d", direct.Code)
+		}
+		gatewayBody, err := json.Marshal(map[string]any{"conversationId": directResult.Conversation.ID, "clientMessageId": "gateway-main-fixture", "text": "#[Bot text](must remain ordinary)", "idempotencyKey": "gateway-main-fixture"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var firstID string
+		for attempt := 0; attempt < 2; attempt++ {
+			r := httptest.NewRequest(http.MethodPost, "/api/bot-gateway/v1/messages", bytes.NewReader(gatewayBody))
+			r.Header.Set("Content-Type", "application/json")
+			r.Header.Set("Authorization", "Bearer "+tokenBody.Token)
+			response := httptest.NewRecorder()
+			app.handler.ServeHTTP(response, r)
+			var message struct {
+				Message struct {
+					ID      string                    `json:"id"`
+					Author  struct{ ID, Kind string } `json:"author"`
+					Content messages.Content          `json:"content"`
+				} `json:"message"`
+			}
+			if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &message) != nil || message.Message.Author.ID != createdBody.Bot.BotUserID || message.Message.Author.Kind != "bot" || len(message.Message.Content.Blocks) != 1 || message.Message.Content.Blocks[0].Type != "text" {
+				t.Fatalf("composed bot send status=%d body=%s", response.Code, response.Body.String())
+			}
+			if attempt == 0 {
+				firstID = message.Message.ID
+			} else if message.Message.ID != firstID {
+				t.Fatal("composed bot replay created a second message")
+			}
+		}
+		humanBody, err := json.Marshal(map[string]any{"conversationId": directResult.Conversation.ID, "clientMessageId": "forged-human-fixture", "content": map[string]any{"format": messages.MessageContentFormat, "blocks": []map[string]string{{"type": "text", "text": "synthetic"}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		forged := httptest.NewRequest(http.MethodPost, "/api/workspace/messages", bytes.NewReader(humanBody))
+		forged.Header.Set("Content-Type", "application/json")
+		forged.Header.Set("Authorization", "Bearer "+tokenBody.Token)
+		forgedResponse := httptest.NewRecorder()
+		app.handler.ServeHTTP(forgedResponse, forged)
+		if forgedResponse.Code != http.StatusUnauthorized {
+			t.Fatalf("Bot token entered human API: %d", forgedResponse.Code)
 		}
 		server := httptest.NewServer(app.handler)
 		defer server.Close()
