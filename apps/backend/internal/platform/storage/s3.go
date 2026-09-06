@@ -13,10 +13,12 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	platformmetrics "github.com/timestarry/duallane/apps/backend/internal/platform/metrics"
 )
 
 const (
@@ -45,8 +47,16 @@ type S3Config struct {
 // It intentionally exposes no provider client, signed URL, bucket key, or
 // credential data through its public methods.
 type S3BlobStore struct {
-	bucket string
-	client s3API
+	bucket   string
+	client   s3API
+	observer *operationObserver
+}
+
+// S3BlobStoreOptions adds optional, privacy-safe operation observation while
+// keeping S3Config limited to provider connection settings.
+type S3BlobStoreOptions struct {
+	Config S3Config
+	ObservationOptions
 }
 
 var _ BlobStore = (*S3BlobStore)(nil)
@@ -78,7 +88,14 @@ func (s *S3BlobStore) AssertReady(ctx context.Context) error {
 // path-style, SigV4-authenticated client. The bucket remains private because
 // no ACL or public delivery configuration is sent by this adapter.
 func NewS3BlobStore(config S3Config) (*S3BlobStore, error) {
-	normalized, err := normalizeS3Config(config)
+	return NewS3BlobStoreWithOptions(S3BlobStoreOptions{Config: config})
+}
+
+// NewS3BlobStoreWithOptions constructs an S3 store with optional operation
+// observation. The concrete S3BlobStore continues to expose its optional
+// maintenance and legacy-reader capabilities.
+func NewS3BlobStoreWithOptions(options S3BlobStoreOptions) (*S3BlobStore, error) {
+	normalized, err := normalizeS3Config(options.Config)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +118,7 @@ func NewS3BlobStore(config S3Config) (*S3BlobStore, error) {
 		options.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 		options.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 	})
-	return &S3BlobStore{bucket: normalized.Bucket, client: client}, nil
+	return &S3BlobStore{bucket: normalized.Bucket, client: client, observer: newOperationObserver(options.ObservationOptions)}, nil
 }
 
 func normalizeS3Config(config S3Config) (S3Config, error) {
@@ -145,14 +162,34 @@ func (s *S3BlobStore) valid() error {
 	return nil
 }
 
-func (s *S3BlobStore) Put(ctx context.Context, key string, source io.Reader, expectedSize int64, expectedSHA256 string) (StoredObject, error) {
+func (s *S3BlobStore) Put(ctx context.Context, key string, source io.Reader, expectedSize int64, expectedSHA256 string) (stored StoredObject, err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	var counted *countedReader
+	if observer != nil && source != nil {
+		counted = &countedReader{source: source}
+		source = counted
+	}
+	defer func() {
+		var bytes int64
+		if counted != nil {
+			bytes = counted.bytes
+		}
+		outcome := platformmetrics.ObjectOutcomeFailure
+		if err == nil {
+			outcome = platformmetrics.ObjectOutcomeSuccess
+		}
+		observer.observe(platformmetrics.ObjectOperationPut, outcome, bytes)
+	}()
 	if err := s.valid(); err != nil {
 		return StoredObject{}, err
 	}
 	if err := validateByteSize(expectedSize, true); err != nil {
 		return StoredObject{}, err
 	}
-	expectedSHA256, err := validateExpectedHash(expectedSHA256)
+	expectedSHA256, err = validateExpectedHash(expectedSHA256)
 	if err != nil {
 		return StoredObject{}, err
 	}
@@ -220,7 +257,18 @@ func (s *S3BlobStore) resolveConditionalPut(ctx context.Context, key string, exp
 	return StoredObject{}, s3ObjectConflictError()
 }
 
-func (s *S3BlobStore) Open(ctx context.Context, object Object, maxBytes int64) (OpenedObject, error) {
+func (s *S3BlobStore) Open(ctx context.Context, object Object, maxBytes int64) (opened OpenedObject, err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	defer func() {
+		opened, err = observer.observeOpened(ctx, opened, err)
+	}()
+	return s.open(ctx, object, maxBytes)
+}
+
+func (s *S3BlobStore) open(ctx context.Context, object Object, maxBytes int64) (OpenedObject, error) {
 	if err := s.valid(); err != nil {
 		return OpenedObject{}, err
 	}
@@ -281,7 +329,22 @@ func (s *S3BlobStore) Open(ctx context.Context, object Object, maxBytes int64) (
 	}, nil
 }
 
-func (s *S3BlobStore) Delete(ctx context.Context, object Object) error {
+func (s *S3BlobStore) Delete(ctx context.Context, object Object) (err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	defer func() {
+		outcome := platformmetrics.ObjectOutcomeFailure
+		if err == nil {
+			outcome = platformmetrics.ObjectOutcomeSuccess
+		}
+		observer.observe(platformmetrics.ObjectOperationDelete, outcome, object.ByteSize)
+	}()
+	return s.delete(ctx, object)
+}
+
+func (s *S3BlobStore) delete(ctx context.Context, object Object) error {
 	if err := s.valid(); err != nil {
 		return err
 	}
@@ -301,7 +364,18 @@ func (s *S3BlobStore) Delete(ctx context.Context, object Object) error {
 // ListUploadAttemptObjects lists one request-owned prefix only. The prefix is
 // constructed from a validated upload ID rather than accepted from a caller,
 // which prevents this maintenance capability from becoming a bucket scan.
-func (s *S3BlobStore) ListUploadAttemptObjects(ctx context.Context, uploadID string, before time.Time, cursor string, limit int) (UploadAttemptObjectPage, error) {
+func (s *S3BlobStore) ListUploadAttemptObjects(ctx context.Context, uploadID string, before time.Time, cursor string, limit int) (page UploadAttemptObjectPage, err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	defer func() {
+		outcome := platformmetrics.ObjectOutcomeFailure
+		if err == nil {
+			outcome = platformmetrics.ObjectOutcomeSuccess
+		}
+		observer.observe(platformmetrics.ObjectOperationCleanup, outcome, 0)
+	}()
 	if err := s.valid(); err != nil {
 		return UploadAttemptObjectPage{}, err
 	}
@@ -318,15 +392,15 @@ func (s *S3BlobStore) ListUploadAttemptObjects(ctx context.Context, uploadID str
 	if cursor != "" {
 		input.ContinuationToken = aws.String(cursor)
 	}
-	page, err := s.client.ListObjectsV2(ctx, input)
+	providerPage, err := s.client.ListObjectsV2(ctx, input)
 	if err != nil {
 		return UploadAttemptObjectPage{}, s3ProviderError("list upload attempts", err)
 	}
-	if page == nil {
+	if providerPage == nil {
 		return UploadAttemptObjectPage{}, s3ProviderError("list upload attempts", errors.New("S3 list response is nil"))
 	}
-	result := UploadAttemptObjectPage{Objects: make([]UploadAttemptObject, 0, len(page.Contents))}
-	for _, item := range page.Contents {
+	result := UploadAttemptObjectPage{Objects: make([]UploadAttemptObject, 0, len(providerPage.Contents))}
+	for _, item := range providerPage.Contents {
 		if item.Key == nil {
 			return UploadAttemptObjectPage{}, s3ProviderError("list upload attempts", errors.New("S3 object key is missing"))
 		}
@@ -350,29 +424,51 @@ func (s *S3BlobStore) ListUploadAttemptObjects(ctx context.Context, uploadID str
 		}
 		result.Objects = append(result.Objects, UploadAttemptObject{Key: key, LastModified: modified, ByteSize: size})
 	}
-	if page.IsTruncated != nil && *page.IsTruncated {
-		if page.NextContinuationToken == nil || strings.TrimSpace(*page.NextContinuationToken) == "" {
+	if providerPage.IsTruncated != nil && *providerPage.IsTruncated {
+		if providerPage.NextContinuationToken == nil || strings.TrimSpace(*providerPage.NextContinuationToken) == "" {
 			return UploadAttemptObjectPage{}, s3ProviderError("list upload attempts", errors.New("S3 continuation token is missing"))
 		}
-		result.NextCursor = *page.NextContinuationToken
+		result.NextCursor = *providerPage.NextContinuationToken
 	}
 	return result, nil
 }
 
 // DeleteUploadAttemptObject revalidates the exact upload prefix before using
 // the normal idempotent object delete operation.
-func (s *S3BlobStore) DeleteUploadAttemptObject(ctx context.Context, uploadID, key string) error {
-	key, err := validateUploadAttemptObjectKey(uploadID, key)
+func (s *S3BlobStore) DeleteUploadAttemptObject(ctx context.Context, uploadID, key string) (err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	defer func() {
+		outcome := platformmetrics.ObjectOutcomeFailure
+		if err == nil {
+			outcome = platformmetrics.ObjectOutcomeSuccess
+		}
+		observer.observe(platformmetrics.ObjectOperationCleanup, outcome, 0)
+	}()
+	key, err = validateUploadAttemptObjectKey(uploadID, key)
 	if err != nil {
 		return err
 	}
-	return s.Delete(ctx, Object{Key: key})
+	return s.delete(ctx, Object{Key: key})
 }
 
 // AbortStaleMultipartUploads mirrors the Node cleanup contract with one
 // provider page per call. It never accepts a caller-provided generic prefix;
 // only in-progress uploads whose keys begin with workspace/ are considered.
-func (s *S3BlobStore) AbortStaleMultipartUploads(ctx context.Context, before time.Time, cursor string, limit int) (MultipartMaintenanceResult, error) {
+func (s *S3BlobStore) AbortStaleMultipartUploads(ctx context.Context, before time.Time, cursor string, limit int) (result MultipartMaintenanceResult, err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	defer func() {
+		outcome := platformmetrics.ObjectOutcomeFailure
+		if err == nil {
+			outcome = platformmetrics.ObjectOutcomeSuccess
+		}
+		observer.observe(platformmetrics.ObjectOperationMultipartAbort, outcome, 0)
+	}()
 	if err := ctx.Err(); err != nil {
 		return MultipartMaintenanceResult{NextCursor: cursor}, err
 	}
@@ -403,7 +499,7 @@ func (s *S3BlobStore) AbortStaleMultipartUploads(ctx context.Context, before tim
 	if page == nil {
 		return MultipartMaintenanceResult{}, s3ProviderError("list stale multipart uploads", errors.New("S3 multipart list response is nil"))
 	}
-	result := MultipartMaintenanceResult{Scanned: len(page.Uploads), NextCursor: cursor}
+	result = MultipartMaintenanceResult{Scanned: len(page.Uploads), NextCursor: cursor}
 	var firstErr error
 	for _, upload := range page.Uploads {
 		if err := ctx.Err(); err != nil {
@@ -635,14 +731,18 @@ func (s *s3UploadStage) cleanup() {
 }
 
 type s3VerifiedReadCloser struct {
-	ctx      context.Context
-	body     io.ReadCloser
-	expected int64
-	digest   string
-	count    int64
-	hash     hash.Hash
-	terminal error
-	closed   bool
+	readMu    sync.Mutex
+	stateMu   sync.Mutex
+	ctx       context.Context
+	body      io.ReadCloser
+	expected  int64
+	digest    string
+	count     int64
+	hash      hash.Hash
+	terminal  error
+	closed    bool
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func newS3VerifiedReadCloser(ctx context.Context, body io.ReadCloser, expected int64, digest string) io.ReadCloser {
@@ -650,53 +750,137 @@ func newS3VerifiedReadCloser(ctx context.Context, body io.ReadCloser, expected i
 }
 
 func (r *s3VerifiedReadCloser) Read(p []byte) (int, error) {
-	if r.terminal != nil {
-		return 0, r.terminal
+	if r == nil {
+		return 0, io.ErrClosedPipe
 	}
-	if err := r.ctx.Err(); err != nil {
+	r.readMu.Lock()
+	defer r.readMu.Unlock()
+
+	r.stateMu.Lock()
+	if r.terminal != nil {
+		err := r.terminal
+		r.stateMu.Unlock()
+		return 0, err
+	}
+	if r.closed {
+		r.stateMu.Unlock()
+		return 0, io.ErrClosedPipe
+	}
+	ctx := r.ctx
+	body := r.body
+	r.stateMu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
 		return 0, r.fail(s3ProviderError("read object", err))
 	}
-	n, err := r.body.Read(p)
-	if n > 0 {
+	n, err := body.Read(p)
+
+	r.stateMu.Lock()
+	allowed := n
+	overLimit := false
+	if r.terminal != nil {
+		allowed = boundedReadCount(n, r.expected-r.count)
+	} else if n > 0 {
 		remaining := r.expected - r.count
 		if remaining < int64(n) {
-			if remaining > 0 {
-				allowed := int(remaining)
-				_, _ = r.hash.Write(p[:allowed])
-				r.count += remaining
-				return allowed, r.fail(s3StorageMismatchError())
-			}
-			return 0, r.fail(s3StorageMismatchError())
+			allowed = boundedReadCount(n, remaining)
+			overLimit = true
 		}
-		_, _ = r.hash.Write(p[:n])
-		r.count += int64(n)
+		if allowed > 0 {
+			_, _ = r.hash.Write(p[:allowed])
+			r.count += int64(allowed)
+		}
+	}
+	terminal := r.terminal
+	r.stateMu.Unlock()
+
+	if terminal != nil {
+		return allowed, terminal
+	}
+	if overLimit {
+		return allowed, r.fail(s3StorageMismatchError())
 	}
 	if err == nil {
-		return n, nil
+		return allowed, nil
 	}
 	if errors.Is(err, io.EOF) {
-		if r.count != r.expected || (r.digest != "" && hex.EncodeToString(r.hash.Sum(nil)) != r.digest) {
-			return n, r.fail(s3StorageMismatchError())
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return allowed, r.fail(s3ProviderError("read object", ctxErr))
 		}
-		r.terminal = io.EOF
-		return n, io.EOF
+		r.stateMu.Lock()
+		if r.terminal != nil {
+			terminal := r.terminal
+			r.stateMu.Unlock()
+			return allowed, terminal
+		}
+		valid := r.count == r.expected && (r.digest == "" || hex.EncodeToString(r.hash.Sum(nil)) == r.digest)
+		if valid {
+			r.terminal = io.EOF
+			r.stateMu.Unlock()
+			return allowed, io.EOF
+		}
+		r.stateMu.Unlock()
+		return allowed, r.fail(s3StorageMismatchError())
 	}
-	return n, r.fail(s3ProviderError("read object", err))
+	return allowed, r.fail(s3ProviderError("read object", err))
+}
+
+func boundedReadCount(n int, remaining int64) int {
+	if n <= 0 || remaining <= 0 {
+		return 0
+	}
+	if int64(n) > remaining {
+		return int(remaining)
+	}
+	return n
+}
+
+func (r *s3VerifiedReadCloser) closeBody() error {
+	if r == nil {
+		return nil
+	}
+	r.closeOnce.Do(func() {
+		if r.body != nil {
+			r.closeErr = r.body.Close()
+		}
+	})
+	return r.closeErr
 }
 
 func (r *s3VerifiedReadCloser) fail(err error) error {
-	_ = r.body.Close()
-	r.closed = true
+	if r == nil {
+		return err
+	}
+	r.stateMu.Lock()
+	if r.terminal != nil {
+		terminal := r.terminal
+		r.stateMu.Unlock()
+		return terminal
+	}
 	r.terminal = err
+	r.closed = true
+	r.stateMu.Unlock()
+	_ = r.closeBody()
 	return err
 }
 
 func (r *s3VerifiedReadCloser) Close() error {
+	if r == nil {
+		return nil
+	}
+	r.stateMu.Lock()
 	if r.closed {
+		r.stateMu.Unlock()
 		return nil
 	}
 	r.closed = true
-	if err := r.body.Close(); err != nil {
+	if r.terminal == nil {
+		r.terminal = io.ErrClosedPipe
+	}
+	r.stateMu.Unlock()
+	if err := r.closeBody(); err != nil {
 		return s3ProviderError("close object", err)
 	}
 	return nil

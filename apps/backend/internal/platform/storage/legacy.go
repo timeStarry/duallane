@@ -35,7 +35,14 @@ func validateLegacyRead(key string, maxBytes int64) error {
 	return validateS3ObjectKey(key, "")
 }
 
-func (s *LocalBlobStore) OpenLegacy(ctx context.Context, key string, maxBytes int64) (OpenedObject, error) {
+func (s *LocalBlobStore) OpenLegacy(ctx context.Context, key string, maxBytes int64) (opened OpenedObject, err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	defer func() {
+		opened, err = observer.observeOpened(ctx, opened, err)
+	}()
 	if s == nil || s.root == "" {
 		return OpenedObject{}, internalError("open legacy object", errors.New("storage root is required"))
 	}
@@ -107,7 +114,14 @@ func (s *LocalBlobStore) OpenLegacy(ctx context.Context, key string, maxBytes in
 	}, nil
 }
 
-func (s *S3BlobStore) OpenLegacy(ctx context.Context, key string, maxBytes int64) (OpenedObject, error) {
+func (s *S3BlobStore) OpenLegacy(ctx context.Context, key string, maxBytes int64) (opened OpenedObject, err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	defer func() {
+		opened, err = observer.observeOpened(ctx, opened, err)
+	}()
 	if err := s.valid(); err != nil {
 		return OpenedObject{}, err
 	}
@@ -132,10 +146,17 @@ func (s *S3BlobStore) OpenLegacy(ctx context.Context, key string, maxBytes int64
 	}
 	// Open repeats size validation and bounds the stream, so a changed object
 	// between HEAD and GET cannot silently evade the caller's limit.
-	return s.Open(ctx, Object{Key: key, ByteSize: *head.ContentLength}, maxBytes)
+	return s.open(ctx, Object{Key: key, ByteSize: *head.ContentLength}, maxBytes)
 }
 
-func (s *HybridBlobStore) OpenLegacy(ctx context.Context, key string, maxBytes int64) (OpenedObject, error) {
+func (s *HybridBlobStore) OpenLegacy(ctx context.Context, key string, maxBytes int64) (opened OpenedObject, err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	defer func() {
+		opened, err = observer.observeOpened(ctx, opened, err)
+	}()
 	if err := s.valid(); err != nil {
 		return OpenedObject{}, err
 	}
@@ -146,7 +167,7 @@ func (s *HybridBlobStore) OpenLegacy(ctx context.Context, key string, maxBytes i
 	if !ok {
 		return OpenedObject{}, internalError("open legacy object", errors.New("primary legacy reader is required"))
 	}
-	opened, err := primary.OpenLegacy(ctx, key, maxBytes)
+	opened, err = primary.OpenLegacy(ctx, key, maxBytes)
 	if err == nil || !s.localReadFallback || !isStorageMissing(err) {
 		return opened, err
 	}

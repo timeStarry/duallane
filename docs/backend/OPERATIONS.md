@@ -285,6 +285,20 @@ Metrics endpoints are never proxied publicly by Nginx. Alerts and dashboards are
 optional deployment integrations; their absence does not remove the need to
 expose the bounded metrics.
 
+Storage observation is configured only on the outermost local, S3 or hybrid
+store. A hybrid operation must not count both its logical call and delegated
+primary/mirror calls in the same registry. The concrete adapters retain their
+legacy-reader, upload-cleanup and multipart capabilities. Labels contain only
+fixed service, operation and outcome categories, never keys or provider errors.
+An `open` success means a handle was acquired, not that its content was consumed
+or verified. `verify` describes stream completion under that adapter's available
+size/hash checks: EOF succeeds; read errors, cancellation and early close fail.
+It is not a catalog-wide verification or a proof of a higher-level domain hash
+check. Put/read byte counts describe bytes consumed, not logical quota or unique
+stored bytes; delete counts use the supplied object size, not a billing meter.
+Concurrent close must still interrupt blocked provider reads, and every returned
+read count remains bounded by the object's expected size even during close.
+
 ## 9. Release Order
 
 Before any Go production cutover, `deploy/production/deploy.sh` must be extended

@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	platformmetrics "github.com/timestarry/duallane/apps/backend/internal/platform/metrics"
 )
 
 // LocalBlobStore stores private Workspace bytes below one configured root.
@@ -17,7 +19,16 @@ import (
 // atomically renamed into place. It is suitable for the current single-host
 // deployment and intentionally exposes no HTTP or authorization behavior.
 type LocalBlobStore struct {
-	root string
+	root     string
+	observer *operationObserver
+}
+
+// LocalBlobStoreOptions configures a local store without changing the legacy
+// root-only constructor. Observation is optional and remains on the concrete
+// LocalBlobStore, preserving its LegacyReader and maintenance capabilities.
+type LocalBlobStoreOptions struct {
+	Root string
+	ObservationOptions
 }
 
 // AssertReady inspects the configured directory without creating probe files,
@@ -45,7 +56,13 @@ func (s *LocalBlobStore) AssertReady(ctx context.Context) error {
 }
 
 func NewLocalBlobStore(root string) (*LocalBlobStore, error) {
-	resolved, err := cleanRoot(root)
+	return NewLocalBlobStoreWithOptions(LocalBlobStoreOptions{Root: root})
+}
+
+// NewLocalBlobStoreWithOptions constructs a local store with optional,
+// privacy-safe operation observation.
+func NewLocalBlobStoreWithOptions(options LocalBlobStoreOptions) (*LocalBlobStore, error) {
+	resolved, err := cleanRoot(options.Root)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +75,7 @@ func NewLocalBlobStore(root string) (*LocalBlobStore, error) {
 	if err := os.Chmod(resolved, 0o700); err != nil {
 		return nil, err
 	}
-	return &LocalBlobStore{root: resolved}, nil
+	return &LocalBlobStore{root: resolved, observer: newOperationObserver(options.ObservationOptions)}, nil
 }
 
 // OpenExistingLocalBlobStore validates an existing root without provisioning or
@@ -66,25 +83,51 @@ func NewLocalBlobStore(root string) (*LocalBlobStore, error) {
 // even during dependency construction. Request admission is enforced by the
 // application; this constructor alone does not make subsequent I/O read-only.
 func OpenExistingLocalBlobStore(ctx context.Context, root string) (*LocalBlobStore, error) {
-	resolved, err := cleanRoot(root)
+	return OpenExistingLocalBlobStoreWithOptions(ctx, LocalBlobStoreOptions{Root: root})
+}
+
+// OpenExistingLocalBlobStoreWithOptions validates an existing root without
+// provisioning or chmod while retaining optional operation observation.
+func OpenExistingLocalBlobStoreWithOptions(ctx context.Context, options LocalBlobStoreOptions) (*LocalBlobStore, error) {
+	resolved, err := cleanRoot(options.Root)
 	if err != nil {
 		return nil, err
 	}
-	store := &LocalBlobStore{root: resolved}
+	store := &LocalBlobStore{root: resolved, observer: newOperationObserver(options.ObservationOptions)}
 	if err := store.AssertReady(ctx); err != nil {
 		return nil, err
 	}
 	return store, nil
 }
 
-func (s *LocalBlobStore) Put(ctx context.Context, key string, source io.Reader, expectedSize int64, expectedSHA256 string) (StoredObject, error) {
+func (s *LocalBlobStore) Put(ctx context.Context, key string, source io.Reader, expectedSize int64, expectedSHA256 string) (stored StoredObject, err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	var counted *countedReader
+	if observer != nil && source != nil {
+		counted = &countedReader{source: source}
+		source = counted
+	}
+	defer func() {
+		var bytes int64
+		if counted != nil {
+			bytes = counted.bytes
+		}
+		outcome := platformmetrics.ObjectOutcomeFailure
+		if err == nil {
+			outcome = platformmetrics.ObjectOutcomeSuccess
+		}
+		observer.observe(platformmetrics.ObjectOperationPut, outcome, bytes)
+	}()
 	if s == nil || strings.TrimSpace(s.root) == "" {
 		return StoredObject{}, internalError("put local object", errors.New("storage root is required"))
 	}
 	if err := validateByteSize(expectedSize, true); err != nil {
 		return StoredObject{}, err
 	}
-	expectedSHA256, err := validateExpectedHash(expectedSHA256)
+	expectedSHA256, err = validateExpectedHash(expectedSHA256)
 	if err != nil {
 		return StoredObject{}, err
 	}
@@ -168,7 +211,14 @@ func (s *LocalBlobStore) Put(ctx context.Context, key string, source io.Reader, 
 	return StoredObject{Object: Object{Key: key, SHA256: digest, ByteSize: written}, Reused: false}, nil
 }
 
-func (s *LocalBlobStore) Open(ctx context.Context, object Object, maxBytes int64) (OpenedObject, error) {
+func (s *LocalBlobStore) Open(ctx context.Context, object Object, maxBytes int64) (opened OpenedObject, err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	defer func() {
+		opened, err = observer.observeOpened(ctx, opened, err)
+	}()
 	if s == nil || strings.TrimSpace(s.root) == "" {
 		return OpenedObject{}, internalError("open local object", errors.New("storage root is required"))
 	}
@@ -214,7 +264,18 @@ func (s *LocalBlobStore) Open(ctx context.Context, object Object, maxBytes int64
 	return OpenedObject{Object: Object{Key: object.Key, SHA256: stored.SHA256, ByteSize: stored.ByteSize, ContentType: object.ContentType}, Body: &limitedReadCloser{reader: io.LimitReader(body, object.ByteSize), closer: body}}, nil
 }
 
-func (s *LocalBlobStore) Delete(_ context.Context, object Object) error {
+func (s *LocalBlobStore) Delete(_ context.Context, object Object) (err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	defer func() {
+		outcome := platformmetrics.ObjectOutcomeFailure
+		if err == nil {
+			outcome = platformmetrics.ObjectOutcomeSuccess
+		}
+		observer.observe(platformmetrics.ObjectOperationDelete, outcome, object.ByteSize)
+	}()
 	if s == nil || strings.TrimSpace(s.root) == "" {
 		return internalError("delete local object", errors.New("storage root is required"))
 	}
@@ -248,7 +309,18 @@ func (s *LocalBlobStore) Delete(_ context.Context, object Object) error {
 // ListUploadAttemptObjects enumerates only the flat attempts directory for
 // one validated upload. It intentionally rejects symlinks instead of
 // resolving them so a cleanup worker cannot escape the configured root.
-func (s *LocalBlobStore) ListUploadAttemptObjects(ctx context.Context, uploadID string, before time.Time, cursor string, limit int) (UploadAttemptObjectPage, error) {
+func (s *LocalBlobStore) ListUploadAttemptObjects(ctx context.Context, uploadID string, before time.Time, cursor string, limit int) (page UploadAttemptObjectPage, err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	defer func() {
+		outcome := platformmetrics.ObjectOutcomeFailure
+		if err == nil {
+			outcome = platformmetrics.ObjectOutcomeSuccess
+		}
+		observer.observe(platformmetrics.ObjectOperationCleanup, outcome, 0)
+	}()
 	if err := ctx.Err(); err != nil {
 		return UploadAttemptObjectPage{}, err
 	}
@@ -289,7 +361,7 @@ func (s *LocalBlobStore) ListUploadAttemptObjects(ctx context.Context, uploadID 
 		return UploadAttemptObjectPage{}, internalError("open local upload attempts", err)
 	}
 	defer directory.Close()
-	page := UploadAttemptObjectPage{Objects: make([]UploadAttemptObject, 0, minMaintenancePageCapacity(limit))}
+	page = UploadAttemptObjectPage{Objects: make([]UploadAttemptObject, 0, minMaintenancePageCapacity(limit))}
 	limit = normalizeMaintenanceLimit(limit)
 	// File.ReadDir returns filesystem order, not lexical order. Scan bounded
 	// chunks and retain only the smallest page after the key cursor; otherwise
@@ -354,14 +426,26 @@ func (s *LocalBlobStore) ListUploadAttemptObjects(ctx context.Context, uploadID 
 
 // DeleteUploadAttemptObject removes one object after validating that the key
 // is a single child of the requested upload's attempts directory.
-func (s *LocalBlobStore) DeleteUploadAttemptObject(ctx context.Context, uploadID, key string) error {
+func (s *LocalBlobStore) DeleteUploadAttemptObject(ctx context.Context, uploadID, key string) (err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	var bytes int64
+	defer func() {
+		outcome := platformmetrics.ObjectOutcomeFailure
+		if err == nil {
+			outcome = platformmetrics.ObjectOutcomeSuccess
+		}
+		observer.observe(platformmetrics.ObjectOperationCleanup, outcome, bytes)
+	}()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if s == nil || strings.TrimSpace(s.root) == "" {
 		return internalError("delete local upload attempt", errors.New("storage root is required"))
 	}
-	key, err := validateUploadAttemptObjectKey(uploadID, key)
+	key, err = validateUploadAttemptObjectKey(uploadID, key)
 	if err != nil {
 		return err
 	}
@@ -387,6 +471,7 @@ func (s *LocalBlobStore) DeleteUploadAttemptObject(ctx context.Context, uploadID
 	if !info.Mode().IsRegular() {
 		return newError("storage.object_conflict", "存储对象登记冲突", 409, errors.New("attempt is not a regular file"))
 	}
+	bytes = info.Size()
 	if err := root.Remove(relativeKey); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return internalError("delete local upload attempt", err)
 	}

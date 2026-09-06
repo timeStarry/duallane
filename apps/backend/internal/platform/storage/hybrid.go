@@ -6,6 +6,8 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	platformmetrics "github.com/timestarry/duallane/apps/backend/internal/platform/metrics"
 )
 
 // HybridBlobStoreOptions selects the primary store and the optional retained
@@ -16,6 +18,7 @@ type HybridBlobStoreOptions struct {
 	Local             BlobStore
 	LocalReadFallback bool
 	LocalMirrorWrite  bool
+	ObservationOptions
 }
 
 // HybridBlobStore keeps S3 as the source of truth while preserving the Node
@@ -26,6 +29,7 @@ type HybridBlobStore struct {
 	local             BlobStore
 	localReadFallback bool
 	localMirrorWrite  bool
+	observer          *operationObserver
 }
 
 var _ BlobStore = (*HybridBlobStore)(nil)
@@ -47,6 +51,7 @@ func NewHybridBlobStore(options HybridBlobStoreOptions) (*HybridBlobStore, error
 		local:             options.Local,
 		localReadFallback: options.LocalReadFallback,
 		localMirrorWrite:  options.LocalMirrorWrite,
+		observer:          newOperationObserver(options.ObservationOptions),
 	}, nil
 }
 
@@ -77,11 +82,31 @@ func (s *HybridBlobStore) AssertReady(ctx context.Context) error {
 // Put writes to the primary first. A configured local mirror is populated only
 // after the primary succeeds; because BlobStore consumes its input stream, the
 // successful primary object is reopened as a bounded stream for mirroring.
-func (s *HybridBlobStore) Put(ctx context.Context, key string, source io.Reader, expectedSize int64, expectedSHA256 string) (StoredObject, error) {
+func (s *HybridBlobStore) Put(ctx context.Context, key string, source io.Reader, expectedSize int64, expectedSHA256 string) (stored StoredObject, err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	var counted *countedReader
+	if observer != nil && source != nil {
+		counted = &countedReader{source: source}
+		source = counted
+	}
+	defer func() {
+		var bytes int64
+		if counted != nil {
+			bytes = counted.bytes
+		}
+		outcome := platformmetrics.ObjectOutcomeFailure
+		if err == nil {
+			outcome = platformmetrics.ObjectOutcomeSuccess
+		}
+		observer.observe(platformmetrics.ObjectOperationPut, outcome, bytes)
+	}()
 	if err := s.valid(); err != nil {
 		return StoredObject{}, err
 	}
-	stored, err := s.primary.Put(ctx, key, source, expectedSize, expectedSHA256)
+	stored, err = s.primary.Put(ctx, key, source, expectedSize, expectedSHA256)
 	if err != nil || !s.localMirrorWrite {
 		return stored, err
 	}
@@ -111,11 +136,18 @@ func (s *HybridBlobStore) Put(ctx context.Context, key string, source io.Reader,
 // Open consults Local only for the precise missing-object result. Provider
 // outages, size mismatches, invalid keys, and other primary errors must remain
 // visible to callers instead of being masked by a stale local copy.
-func (s *HybridBlobStore) Open(ctx context.Context, object Object, maxBytes int64) (OpenedObject, error) {
+func (s *HybridBlobStore) Open(ctx context.Context, object Object, maxBytes int64) (opened OpenedObject, err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	defer func() {
+		opened, err = observer.observeOpened(ctx, opened, err)
+	}()
 	if err := s.valid(); err != nil {
 		return OpenedObject{}, err
 	}
-	opened, err := s.primary.Open(ctx, object, maxBytes)
+	opened, err = s.primary.Open(ctx, object, maxBytes)
 	if err == nil || !s.localReadFallback || !isStorageMissing(err) {
 		return opened, err
 	}
@@ -125,7 +157,18 @@ func (s *HybridBlobStore) Open(ctx context.Context, object Object, maxBytes int6
 // Delete always attempts the primary and every enabled local endpoint. The
 // first safe domain error is retained while the other failure is attached as a
 // private cause, so public serialization cannot expose provider details.
-func (s *HybridBlobStore) Delete(ctx context.Context, object Object) error {
+func (s *HybridBlobStore) Delete(ctx context.Context, object Object) (err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	defer func() {
+		outcome := platformmetrics.ObjectOutcomeFailure
+		if err == nil {
+			outcome = platformmetrics.ObjectOutcomeSuccess
+		}
+		observer.observe(platformmetrics.ObjectOperationDelete, outcome, object.ByteSize)
+	}()
 	if err := s.valid(); err != nil {
 		return err
 	}
@@ -140,7 +183,18 @@ func (s *HybridBlobStore) Delete(ctx context.Context, object Object) error {
 // ListUploadAttemptObjects preserves the narrow prefix contract while giving
 // a hybrid store a bounded chance to reconcile an orphan in either endpoint.
 // The cursor is opaque to callers and identifies which endpoint is active.
-func (s *HybridBlobStore) ListUploadAttemptObjects(ctx context.Context, uploadID string, before time.Time, cursor string, limit int) (UploadAttemptObjectPage, error) {
+func (s *HybridBlobStore) ListUploadAttemptObjects(ctx context.Context, uploadID string, before time.Time, cursor string, limit int) (page UploadAttemptObjectPage, err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	defer func() {
+		outcome := platformmetrics.ObjectOutcomeFailure
+		if err == nil {
+			outcome = platformmetrics.ObjectOutcomeSuccess
+		}
+		observer.observe(platformmetrics.ObjectOperationCleanup, outcome, 0)
+	}()
 	if err := s.valid(); err != nil {
 		return UploadAttemptObjectPage{}, err
 	}
@@ -170,7 +224,7 @@ func (s *HybridBlobStore) ListUploadAttemptObjects(ctx context.Context, uploadID
 		}
 		return page, nil
 	}
-	page, err := local.ListUploadAttemptObjects(ctx, uploadID, before, sourceCursor, limit)
+	page, err = local.ListUploadAttemptObjects(ctx, uploadID, before, sourceCursor, limit)
 	if err != nil {
 		return UploadAttemptObjectPage{}, err
 	}
@@ -183,11 +237,22 @@ func (s *HybridBlobStore) ListUploadAttemptObjects(ctx context.Context, uploadID
 // DeleteUploadAttemptObject removes the same exact key from every enabled
 // endpoint. Deletion is idempotent and errors are safely aggregated like the
 // normal hybrid Delete path.
-func (s *HybridBlobStore) DeleteUploadAttemptObject(ctx context.Context, uploadID, key string) error {
+func (s *HybridBlobStore) DeleteUploadAttemptObject(ctx context.Context, uploadID, key string) (err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	defer func() {
+		outcome := platformmetrics.ObjectOutcomeFailure
+		if err == nil {
+			outcome = platformmetrics.ObjectOutcomeSuccess
+		}
+		observer.observe(platformmetrics.ObjectOperationCleanup, outcome, 0)
+	}()
 	if err := s.valid(); err != nil {
 		return err
 	}
-	key, err := validateUploadAttemptObjectKey(uploadID, key)
+	key, err = validateUploadAttemptObjectKey(uploadID, key)
 	if err != nil {
 		return err
 	}
@@ -233,7 +298,18 @@ func hybridMaintenanceCursor(cursor string, primaryOK, localOK bool) (string, st
 // AbortStaleMultipartUploads delegates the provider cleanup to the primary
 // store. Local storage has no multipart provider and is intentionally not
 // asked to emulate one.
-func (s *HybridBlobStore) AbortStaleMultipartUploads(ctx context.Context, before time.Time, cursor string, limit int) (MultipartMaintenanceResult, error) {
+func (s *HybridBlobStore) AbortStaleMultipartUploads(ctx context.Context, before time.Time, cursor string, limit int) (result MultipartMaintenanceResult, err error) {
+	observer := (*operationObserver)(nil)
+	if s != nil {
+		observer = s.observer
+	}
+	defer func() {
+		outcome := platformmetrics.ObjectOutcomeFailure
+		if err == nil {
+			outcome = platformmetrics.ObjectOutcomeSuccess
+		}
+		observer.observe(platformmetrics.ObjectOperationMultipartAbort, outcome, 0)
+	}()
 	if err := s.valid(); err != nil {
 		return MultipartMaintenanceResult{}, err
 	}
