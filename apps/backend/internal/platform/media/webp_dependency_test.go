@@ -34,6 +34,8 @@ func TestWebPDependencyRejectsVP8AlphaCanvasMismatchWithoutPanic(t *testing.T) {
 }
 
 func malformedVP8AlphaCanvasMismatch() []byte {
+	// Regression for GO-2026-5061 (https://pkg.go.dev/vuln/GO-2026-5061),
+	// fixed by Go CL 787681 (https://go.dev/cl/787681).
 	// This is a deterministic 2x2 VP8 keyframe payload. The surrounding
 	// VP8X canvas is deliberately 1x1 and advertises alpha, while the ALPH
 	// chunk carries exactly one canvas alpha sample.

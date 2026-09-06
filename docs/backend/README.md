@@ -80,6 +80,7 @@ a claim that every candidate capability is integrated, verified, or deployed.
 | Which versions and checks are executable? | [Go module](../../apps/backend/go.mod), [Makefile](../../apps/backend/Makefile), [root scripts](../../package.json), and [CI](../../.github/workflows/ci.yml); see [Validation](VALIDATION.md) for the required evidence |
 | Which candidate images exist? | [P2P image](../../Dockerfile.p2p) and [Workspace image](../../Dockerfile.workspace); image existence does not establish a Compose service or cutover |
 | Which contracts and migrations are present? | [Candidate API directory](../../apps/backend/api) and [canonical SQL migrations](../../apps/web/server/migrations); inspect coverage before assuming a whole API family is characterized |
+| Where is the foundation/contract slice evidence? | [2026-09-06 work record](work-items/2026-09-06-foundation-contracts.md); includes exact tested commits and excluded draft failures |
 
 The checked-in Compose and gateway still select Node `api`; the Go entry points
 are candidates. Repository configuration is not a live production inspection.
