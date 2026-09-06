@@ -259,7 +259,11 @@ describe("workspace UI permission boundaries", () => {
     expect(source).toContain("canReadConversations: boolean;");
     expect(source).toContain("bootstrap.permissions.canReadConversations\n          ? workspaceJson<{ conversations: WorkspaceConversation[] }>");
     expect(source).toContain("async function refreshWorkspaceConversations");
-    expect(source).toContain("if (!workspaceBootstrap?.permissions.canReadConversations) {");
+    expect(source).toContain("if (!workspaceCanReadConversationsRef.current) {");
+    expect(source).toContain("const workspaceAccessEpochRef = useRef(0);");
+    expect(source).toContain("isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current)");
+    expect(source).toContain("if (!workspaceCanReadConversationsRef.current) return;\n    setWorkspaceConversations((conversations) => upsertWorkspaceConversationList");
+    expect(source).toContain("if (!workspaceCanReadConversationsRef.current) return;\n    advanceWorkspaceConversationMessageRevision");
     expect(source).toContain("setWorkspaceConversations([]);");
   });
 
@@ -286,6 +290,9 @@ describe("workspace UI permission boundaries", () => {
     expect(loadSource).toContain('workspaceJson<{ files: WorkspaceFile[] }>("/api/workspace/files")');
     expect(loadSource).toContain("bootstrap.members\n          ? Promise.resolve({ members: bootstrap.members })");
     expect(loadSource).toContain('workspaceJson<{ members: WorkspaceUser[] }>("/api/workspace/members")');
+    expect(loadSource).toContain("isWorkspaceBootstrapResponseCurrent(");
+    expect(loadSource).toContain("workspaceBootstrapRequestGenerationRef.current");
+    expect(loadSource).toContain("isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current)");
     expect(loadSource).toContain("setWorkspaceBootstrap({ ...bootstrap, members: members.members })");
     expect(loadSource).toContain("setWorkspaceConversations(conversations.conversations)");
     expect(loadSource).toContain("setWorkspaceFiles(files.files)");
@@ -320,6 +327,8 @@ describe("workspace UI permission boundaries", () => {
     expect(bootstrapEnd).toBeGreaterThan(bootstrapStart);
     const bootstrapSource = source.slice(bootstrapStart, bootstrapEnd);
     expect(bootstrapSource).toContain("setWorkspaceBootstrap(data)");
+    expect(bootstrapSource).toContain("if (!data.permissions.canReadConversations)");
+    expect(bootstrapSource).toContain("clearWorkspaceConversationAccessState();");
     expect(bootstrapSource).toContain("setWorkspaceDirectoryMembers(data.members)");
     expect(bootstrapSource).toContain("return data");
 
@@ -328,7 +337,7 @@ describe("workspace UI permission boundaries", () => {
     expect(filesStart).toBeGreaterThan(-1);
     expect(filesEnd).toBeGreaterThan(filesStart);
     const filesSource = source.slice(filesStart, filesEnd);
-    expect(filesSource).toContain("if (!workspaceBootstrap?.permissions.canDownload) {");
+    expect(filesSource).toContain("if (!workspaceCanDownloadRef.current) {");
     expect(filesSource).toContain("setWorkspaceLibraryFiles([]);");
   });
 
@@ -407,7 +416,9 @@ describe("workspace UI permission boundaries", () => {
     const eventProjectorSource = source.slice(eventProjectorStart, eventProjectorEnd);
 
     expect(eventProjectorSource).toContain('if (event.type === "workspace.member_joined" || event.type === "workspace.member_updated")');
-    expect(eventProjectorSource).toContain('event.type === "workspace.member_updated" && payload.userId === workspaceCurrentUserIdRef.current');
+    expect(eventProjectorSource).toContain('const changedUserId = payload.userId || payload.member?.id || "";');
+    expect(eventProjectorSource).toContain('event.type === "workspace.member_updated" && changedUserId === workspaceCurrentUserIdRef.current');
+    expect(eventProjectorSource).toContain("advanceWorkspaceAccessEpoch();");
     expect(eventProjectorSource).toContain("needsBootstrap = true;");
     expect(eventProjectorSource).toContain("if (needsBootstrap) tasks.push(refreshWorkspaceBootstrap());");
 
@@ -428,11 +439,15 @@ describe("workspace UI permission boundaries", () => {
     expect(refreshEnd).toBeGreaterThan(refreshStart);
     const refreshSource = source.slice(refreshStart, refreshEnd);
 
-    expect(refreshSource).toContain("if (!workspaceBootstrap?.permissions.canReadConversations || !conversationId)");
+    expect(refreshSource).toContain("if (!workspaceCanReadConversationsRef.current || !conversationId)");
+    expect(refreshSource).toContain('const request = beginWorkspaceConversationMessageRequest(conversationId, "messages", true);');
     expect(refreshSource).toContain('new URLSearchParams({ limit: "40" })');
     expect(refreshSource).toContain("`/api/workspace/conversations/${encodeURIComponent(conversationId)}/messages?${params.toString()}`");
+    expect(refreshSource).toContain("if (!isCurrentWorkspaceConversationMessageRequest(conversationId, request)) return;");
     expect(refreshSource).toContain("conversation.id === conversationId");
-    expect(refreshSource).toContain("latestMessages: data.messages");
+    expect(refreshSource).toContain("latestMessages: mergeWorkspaceMessageWindow(");
+    expect(refreshSource).toContain("authoritativeWindow: true");
+    expect(refreshSource).toContain("preservePostRequestMessages: true");
 
     const eventProjectorStart = source.indexOf("async function projectWorkspaceEvents");
     const eventProjectorEnd = source.indexOf("function getWorkspaceEventPayload", eventProjectorStart);
@@ -1112,6 +1127,28 @@ describe("workspace UI permission boundaries", () => {
     expect(source).toContain("installWorkspaceUnreadFavicon");
     expect(styles).toContain(".workspace-ntfy-dialog");
     expect(styles).toContain(".workspace-setting-switch");
+  });
+
+  it("releases read and history request state after permission epochs change", () => {
+    const source = readSource();
+    for (const [startMarker, endMarker, cleanup] of [
+      ["async function markWorkspaceConversationRead", "function handleWorkspaceMessageListScroll", "workspaceMarkReadInFlightRef.current.delete(conversationId)"],
+      ["async function loadOlderWorkspaceMessages", "function clearWorkspaceNotice", "setWorkspaceHistoryLoadingByConversation"]
+    ]) {
+      const start = source.indexOf(startMarker);
+      const end = source.indexOf(endMarker, start);
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+      const requestSource = source.slice(start, end);
+      expect(requestSource).toContain("isCurrentWorkspaceConversationMessageRequest(conversationId, request)");
+      const finallyStart = requestSource.indexOf("} finally {");
+      expect(finallyStart).toBeGreaterThan(-1);
+      const cleanupSource = requestSource.slice(finallyStart);
+      expect(cleanupSource).toContain("request.sessionEpoch === workspaceSessionEpochRef.current");
+      expect(cleanupSource).toContain("request.membershipEpoch === currentWorkspaceConversationEpoch");
+      expect(cleanupSource).not.toContain("request.accessEpoch");
+      expect(cleanupSource).toContain(cleanup);
+    }
   });
 
   it("does not bind platform internals into the shared-space UI source", () => {

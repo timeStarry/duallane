@@ -116,6 +116,8 @@ import { getWorkspaceEntryUrl, getWorkspaceLoginUrl } from "./workspace-url";
 import { formatWorkspaceConversationTime } from "./workspace-conversation-time";
 import { isPreviewableImageMimeType, renamePastedImageFiles } from "./workspace-image-files";
 import {
+  isWorkspaceBootstrapResponseCurrent,
+  isWorkspaceConversationAccessCurrent,
   isWorkspaceConversationListResponseCurrent,
   mergeWorkspaceMessageWindow,
   shouldAdvanceWorkspaceConversationHistoryEpoch,
@@ -291,6 +293,20 @@ type WorkspacePermissions = {
   canDownload: boolean;
   canViewOperationRecords: boolean;
 };
+
+function workspacePermissionsChanged(previous: WorkspacePermissions, next: WorkspacePermissions) {
+  return previous.canCreateMemberInvite !== next.canCreateMemberInvite ||
+    previous.canCreatePrivilegedInvite !== next.canCreatePrivilegedInvite ||
+    previous.canManageMemberVisibility !== next.canManageMemberVisibility ||
+    previous.canManageEmailSettings !== next.canManageEmailSettings ||
+    previous.canReadConversations !== next.canReadConversations ||
+    previous.canCreateGroup !== next.canCreateGroup ||
+    previous.canCreateDirect !== next.canCreateDirect ||
+    previous.canUpload !== next.canUpload ||
+    previous.canDownload !== next.canDownload ||
+    previous.canViewOperationRecords !== next.canViewOperationRecords;
+}
+
 type WorkspacePolicy = {
   dailyQuotaBytes: number;
   usedTodayBytes?: number;
@@ -451,6 +467,7 @@ type WorkspaceConversationMessageRequest = {
   requestRevision: number;
   requestGeneration: number;
   sessionEpoch: number;
+  accessEpoch: number;
   membershipEpoch: number;
   historyEpoch: number;
 };
@@ -2667,6 +2684,10 @@ export function App() {
   const workspaceReactionLocksRef = useRef<Set<string>>(new Set());
   const workspaceReactionEventSeqRef = useRef<Map<string, number>>(new Map());
   const workspaceSessionEpochRef = useRef(0);
+  const workspaceAccessEpochRef = useRef(0);
+  const workspaceBootstrapRequestGenerationRef = useRef(0);
+  const workspaceCanReadConversationsRef = useRef(false);
+  const workspaceCanDownloadRef = useRef(false);
   const workspaceConversationsRef = useRef<WorkspaceConversation[]>([]);
   const workspaceConversationMembershipEpochRef = useRef<Map<string, number>>(new Map());
   const workspaceConversationHistoryEpochRef = useRef<Map<string, number>>(new Map());
@@ -2800,6 +2821,73 @@ export function App() {
     epochs.set(conversationId, currentWorkspaceConversationEpoch(epochs, conversationId) + 1);
   }
 
+  function advanceWorkspaceAccessEpoch() {
+    workspaceAccessEpochRef.current += 1;
+  }
+
+  function invalidateWorkspaceConversationAccess(conversationId?: string, removeConversation = true) {
+    advanceWorkspaceAccessEpoch();
+    if (conversationId) {
+      advanceWorkspaceConversationEpoch(workspaceConversationMembershipEpochRef.current, conversationId);
+      workspaceMarkReadInFlightRef.current.delete(conversationId);
+      if (removeConversation) {
+        workspaceConversationsRef.current = workspaceConversationsRef.current.filter((item) => item.id !== conversationId);
+      }
+      return;
+    }
+    for (const conversation of workspaceConversationsRef.current) {
+      advanceWorkspaceConversationEpoch(workspaceConversationMembershipEpochRef.current, conversation.id);
+    }
+    workspaceMarkReadInFlightRef.current.clear();
+    workspaceConversationsRef.current = [];
+  }
+
+  function clearWorkspaceConversationAccessState() {
+    invalidateWorkspaceConversationAccess();
+    for (const controller of workspaceUploadControllersRef.current.values()) {
+      controller.abort();
+    }
+    workspaceUploadControllersRef.current.clear();
+    for (const attachments of Object.values(workspaceComposerAttachmentsRef.current)) {
+      for (const attachment of attachments) {
+        if (attachment.previewUrl) {
+          URL.revokeObjectURL(attachment.previewUrl);
+        }
+      }
+    }
+    for (const message of workspaceLocalMessagesRef.current) {
+      workspaceCancelledLocalMessageIdsRef.current.add(message.id);
+      for (const attachment of message.pendingAttachments ?? []) {
+        if (attachment.previewUrl) {
+          URL.revokeObjectURL(attachment.previewUrl);
+        }
+      }
+    }
+    workspaceComposerAttachmentsRef.current = {};
+    workspaceLocalMessagesRef.current = [];
+    workspaceSelectedConversationIdRef.current = "";
+    setWorkspaceConversations([]);
+    setWorkspaceSelectedConversationId("");
+    setWorkspaceConversationTopicsById({});
+    setWorkspaceComposerTopicByConversation({});
+    setWorkspaceDraftByConversation({});
+    setWorkspaceReplyToMessageIdByConversation({});
+    setWorkspaceComposerAttachmentsByConversation({});
+    setWorkspacePinsByConversation({});
+    setWorkspacePinsExpandedByConversation({});
+    setWorkspaceHistoryTargetId("");
+    setWorkspaceMessageLocateTarget(null);
+    setWorkspaceReturningToLatestConversationId("");
+    setWorkspaceUnreadAnchorByConversation({});
+    setWorkspaceNewMessageCountByConversation({});
+    setWorkspaceAwayFromLatestByConversation({});
+    setWorkspaceLocalMessages([]);
+    setWorkspaceSelectedFileId("");
+    setWorkspaceImagePreview(null);
+    setWorkspaceHistoryLoadingByConversation({});
+    setWorkspaceHistoryExhaustedByConversation({});
+  }
+
   function advanceWorkspaceConversationMessageRevision(conversationId: string) {
     if (!conversationId) return;
     const revision = workspaceConversationMessageRevisionRef.current.get(conversationId) ?? 0;
@@ -2834,6 +2922,7 @@ export function App() {
       requestRevision: workspaceConversationMessageRevisionRef.current.get(conversationId) ?? 0,
       requestGeneration: generation,
       sessionEpoch: workspaceSessionEpochRef.current,
+      accessEpoch: workspaceAccessEpochRef.current,
       membershipEpoch: currentWorkspaceConversationEpoch(workspaceConversationMembershipEpochRef.current, conversationId),
       historyEpoch: currentWorkspaceConversationEpoch(workspaceConversationHistoryEpochRef.current, conversationId)
     };
@@ -2858,6 +2947,7 @@ export function App() {
     requireConversation = true
   ) {
     if (request.sessionEpoch !== workspaceSessionEpochRef.current) return false;
+    if (!isWorkspaceConversationAccessCurrent(request.accessEpoch, workspaceAccessEpochRef.current)) return false;
     if (
       request.membershipEpoch !== currentWorkspaceConversationEpoch(
         workspaceConversationMembershipEpochRef.current,
@@ -4596,6 +4686,12 @@ export function App() {
     if (workspaceLoadingRef.current) return;
     const sessionEpoch = workspaceSessionEpochRef.current + 1;
     workspaceSessionEpochRef.current = sessionEpoch;
+    const bootstrapRequestGeneration = workspaceBootstrapRequestGenerationRef.current + 1;
+    workspaceBootstrapRequestGenerationRef.current = bootstrapRequestGeneration;
+    advanceWorkspaceAccessEpoch();
+    const accessEpoch = workspaceAccessEpochRef.current;
+    workspaceCanReadConversationsRef.current = false;
+    workspaceCanDownloadRef.current = false;
     workspaceConversationMembershipEpochRef.current.clear();
     workspaceConversationHistoryEpochRef.current.clear();
     workspaceConversationMessageRevisionRef.current.clear();
@@ -4607,6 +4703,15 @@ export function App() {
     setWorkspaceNotice(null);
     try {
       const bootstrap = await workspaceJson<WorkspaceBootstrap>("/api/workspace/bootstrap");
+      if (
+        !isWorkspaceBootstrapResponseCurrent(
+          sessionEpoch,
+          workspaceSessionEpochRef.current,
+          bootstrapRequestGeneration,
+          workspaceBootstrapRequestGenerationRef.current
+        ) ||
+        !isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current)
+      ) return;
       workspaceRealtimeSeqRef.current = Math.max(0, Number(bootstrap.eventCursor) || 0);
       workspaceSeenEventIdsRef.current.clear();
       const [conversations, files, members] = await Promise.all([
@@ -4624,7 +4729,17 @@ export function App() {
           ? Promise.resolve({ members: bootstrap.members })
           : workspaceJson<{ members: WorkspaceUser[] }>("/api/workspace/members")
       ]);
-      if (sessionEpoch !== workspaceSessionEpochRef.current) return;
+      if (
+        !isWorkspaceBootstrapResponseCurrent(
+          sessionEpoch,
+          workspaceSessionEpochRef.current,
+          bootstrapRequestGeneration,
+          workspaceBootstrapRequestGenerationRef.current
+        ) ||
+        !isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current)
+      ) return;
+      workspaceCanReadConversationsRef.current = bootstrap.permissions.canReadConversations;
+      workspaceCanDownloadRef.current = bootstrap.permissions.canDownload;
       setWorkspaceBootstrap({ ...bootstrap, members: members.members });
       setWorkspaceDirectoryMembers(members.members);
       workspaceConversationsRef.current = conversations.conversations;
@@ -4635,13 +4750,23 @@ export function App() {
       setWorkspaceHistoryExhaustedByConversation({});
       setWorkspaceStatus("ready");
     } catch (error) {
-      if (sessionEpoch !== workspaceSessionEpochRef.current) return;
+      if (
+        !isWorkspaceBootstrapResponseCurrent(
+          sessionEpoch,
+          workspaceSessionEpochRef.current,
+          bootstrapRequestGeneration,
+          workspaceBootstrapRequestGenerationRef.current
+        ) ||
+        !isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current)
+      ) return;
       const message = userFacingErrorMessage(error, "共享空间暂时不可用");
       const code = error instanceof WorkspaceClientError ? error.code : "";
       setWorkspaceError(code === "auth.required" ? "" : message);
       setWorkspaceStatus(code === "workspace.disabled" ? "disabled" : code.startsWith("auth.") ? "auth" : "error");
     } finally {
-      workspaceLoadingRef.current = false;
+      if (sessionEpoch === workspaceSessionEpochRef.current) {
+        workspaceLoadingRef.current = false;
+      }
     }
   }
 
@@ -4677,7 +4802,54 @@ export function App() {
   }
 
   async function refreshWorkspaceBootstrap() {
-    const data = await workspaceJson<WorkspaceBootstrap>("/api/workspace/bootstrap");
+    const sessionEpoch = workspaceSessionEpochRef.current;
+    const accessEpoch = workspaceAccessEpochRef.current;
+    const bootstrapRequestGeneration = workspaceBootstrapRequestGenerationRef.current + 1;
+    workspaceBootstrapRequestGenerationRef.current = bootstrapRequestGeneration;
+    let data: WorkspaceBootstrap;
+    try {
+      data = await workspaceJson<WorkspaceBootstrap>("/api/workspace/bootstrap");
+    } catch (error) {
+      if (
+        !isWorkspaceBootstrapResponseCurrent(
+          sessionEpoch,
+          workspaceSessionEpochRef.current,
+          bootstrapRequestGeneration,
+          workspaceBootstrapRequestGenerationRef.current
+        ) ||
+        !isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current)
+      ) {
+        return null;
+      }
+      throw error;
+    }
+    if (!isWorkspaceBootstrapResponseCurrent(
+      sessionEpoch,
+      workspaceSessionEpochRef.current,
+      bootstrapRequestGeneration,
+      workspaceBootstrapRequestGenerationRef.current
+    ) || !isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current)) {
+      return null;
+    }
+    const previousPermissions = workspaceBootstrap?.permissions;
+    const previousRole = workspaceBootstrap?.auth.currentUser.role;
+    if (
+      previousPermissions &&
+      (workspacePermissionsChanged(previousPermissions, data.permissions) ||
+        previousRole !== data.auth.currentUser.role)
+    ) {
+      advanceWorkspaceAccessEpoch();
+    }
+    workspaceCanReadConversationsRef.current = data.permissions.canReadConversations;
+    workspaceCanDownloadRef.current = data.permissions.canDownload;
+    if (!data.permissions.canReadConversations) {
+      clearWorkspaceConversationAccessState();
+    }
+    if (!data.permissions.canDownload) {
+      setWorkspaceFiles([]);
+      setWorkspaceLibraryFiles([]);
+      setWorkspaceImagePreview(null);
+    }
     setWorkspaceBootstrap(data);
     setWorkspaceDirectoryMembers(data.members);
     return data;
@@ -4827,6 +4999,11 @@ export function App() {
 
   function clearWorkspaceClientState() {
     workspaceSessionEpochRef.current += 1;
+    advanceWorkspaceAccessEpoch();
+    workspaceBootstrapRequestGenerationRef.current += 1;
+    workspaceLoadingRef.current = false;
+    workspaceCanReadConversationsRef.current = false;
+    workspaceCanDownloadRef.current = false;
     clearStoredWorkspaceEchoWorkflowDrafts();
     clearWorkspaceEmoteLibraryCache();
     setWorkspaceReplyAutoMention(false);
@@ -4957,11 +5134,13 @@ export function App() {
   async function refreshWorkspaceConversations() {
     const listRequestToken = workspaceConversationListRequestTokenRef.current + 1;
     workspaceConversationListRequestTokenRef.current = listRequestToken;
-    if (!workspaceBootstrap?.permissions.canReadConversations) {
+    if (!workspaceCanReadConversationsRef.current) {
+      invalidateWorkspaceConversationAccess();
       setWorkspaceConversations([]);
       return;
     }
     const sessionEpoch = workspaceSessionEpochRef.current;
+    const accessEpoch = workspaceAccessEpochRef.current;
     const requests = new Map(
       workspaceConversationsRef.current.map((conversation) => [
         conversation.id,
@@ -4971,6 +5150,8 @@ export function App() {
     const data = await workspaceJson<{ conversations: WorkspaceConversation[] }>("/api/workspace/conversations");
     if (
       sessionEpoch !== workspaceSessionEpochRef.current ||
+      !isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current) ||
+      !workspaceCanReadConversationsRef.current ||
       !isWorkspaceConversationListResponseCurrent(
         listRequestToken,
         workspaceConversationListRequestTokenRef.current
@@ -5002,10 +5183,12 @@ export function App() {
   }
 
   async function refreshWorkspaceFiles() {
-    if (!workspaceBootstrap?.permissions.canDownload) {
+    if (!workspaceCanDownloadRef.current) {
       setWorkspaceLibraryFiles([]);
       return;
     }
+    const sessionEpoch = workspaceSessionEpochRef.current;
+    const accessEpoch = workspaceAccessEpochRef.current;
     const params = new URLSearchParams();
     if (workspaceFileFilter !== "all") {
       params.set("scope", workspaceFileFilter);
@@ -5015,11 +5198,16 @@ export function App() {
       params.set("q", query);
     }
     const data = await workspaceJson<{ files: WorkspaceFile[] }>(`/api/workspace/files${params.size ? `?${params.toString()}` : ""}`);
+    if (
+      sessionEpoch !== workspaceSessionEpochRef.current ||
+      !isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current) ||
+      !workspaceCanDownloadRef.current
+    ) return;
     setWorkspaceLibraryFiles(data.files);
   }
 
   async function refreshWorkspaceConversationMessages(conversationId: string) {
-    if (!workspaceBootstrap?.permissions.canReadConversations || !conversationId) {
+    if (!workspaceCanReadConversationsRef.current || !conversationId) {
       return;
     }
     const request = beginWorkspaceConversationMessageRequest(conversationId, "messages", true);
@@ -5050,9 +5238,19 @@ export function App() {
   }
 
   async function refreshWorkspacePins(conversationId: string) {
+    if (!workspaceCanReadConversationsRef.current || !conversationId) {
+      return [];
+    }
+    const sessionEpoch = workspaceSessionEpochRef.current;
+    const accessEpoch = workspaceAccessEpochRef.current;
     const data = await workspaceJson<{ pins: WorkspacePinnedMessage[] }>(
       `/api/workspace/groups/${encodeURIComponent(conversationId)}/pins?limit=100`
     );
+    if (
+      sessionEpoch !== workspaceSessionEpochRef.current ||
+      !isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current) ||
+      !workspaceCanReadConversationsRef.current
+    ) return [];
     setWorkspacePinsByConversation((current) => ({ ...current, [conversationId]: data.pins }));
     return data.pins;
   }
@@ -5216,9 +5414,12 @@ export function App() {
   }
 
   async function syncWorkspaceRealtimeState(currentSeqValue?: number) {
+    const sessionEpoch = workspaceSessionEpochRef.current;
     setWorkspaceRealtimeState("syncing");
     try {
-      const [bootstrap] = await Promise.all([refreshWorkspaceBootstrap(), refreshWorkspaceConversations(), refreshWorkspaceFiles()]);
+      const bootstrap = await refreshWorkspaceBootstrap();
+      if (!bootstrap || sessionEpoch !== workspaceSessionEpochRef.current) return;
+      await Promise.all([refreshWorkspaceConversations(), refreshWorkspaceFiles()]);
       const nextCursor = Number.isFinite(currentSeqValue) ? Number(currentSeqValue) : Number(bootstrap.eventCursor);
       if (Number.isFinite(nextCursor)) {
         workspaceRealtimeSeqRef.current = Math.max(0, nextCursor);
@@ -5248,16 +5449,15 @@ export function App() {
       }
 
       if (event.type === "workspace.member_joined" || event.type === "workspace.member_updated") {
+        const changedUserId = payload.userId || payload.member?.id || "";
+        if (event.type === "workspace.member_updated" && changedUserId === workspaceCurrentUserIdRef.current) {
+          advanceWorkspaceAccessEpoch();
+          needsBootstrap = true;
+        }
         if (payload.member) {
           upsertWorkspaceMember(payload.member);
-          if (event.type === "workspace.member_updated" && payload.userId === workspaceCurrentUserIdRef.current) {
-            needsBootstrap = true;
-          }
         } else {
           needsMembers = true;
-          if (event.type === "workspace.member_updated" && payload.userId === workspaceCurrentUserIdRef.current) {
-            needsBootstrap = true;
-          }
         }
         continue;
       }
@@ -5297,6 +5497,7 @@ export function App() {
       if (event.type === "workspace.member_visibility_updated") {
         const viewerUserId = payload.userId || event.targetId || "";
         if (viewerUserId === workspaceCurrentUserIdRef.current) {
+          advanceWorkspaceAccessEpoch();
           needsMembers = true;
           needsBootstrap = true;
         }
@@ -5313,6 +5514,9 @@ export function App() {
       if (event.type === "workspace.member_removed") {
         if (payload.userId) {
           removeWorkspaceMemberFromClient(payload.userId);
+          if (payload.userId === workspaceCurrentUserIdRef.current) {
+            needsBootstrap = true;
+          }
         } else {
           needsMembers = true;
           needsConversations = true;
@@ -5513,11 +5717,11 @@ export function App() {
   }
 
   function removeWorkspaceMemberFromClient(userId: string) {
-    if (userId === workspaceCurrentUserIdRef.current) {
-      for (const conversation of workspaceConversationsRef.current) {
-        advanceWorkspaceConversationEpoch(workspaceConversationMembershipEpochRef.current, conversation.id);
-      }
-      workspaceMarkReadInFlightRef.current.clear();
+    const removedCurrentUser = userId === workspaceCurrentUserIdRef.current;
+    if (removedCurrentUser) {
+      workspaceCanReadConversationsRef.current = false;
+      workspaceCanDownloadRef.current = false;
+      clearWorkspaceConversationAccessState();
     }
     setWorkspaceDirectoryMembers((members) => members.filter((member) => member.id !== userId));
     setWorkspaceBootstrap((current) =>
@@ -5528,25 +5732,32 @@ export function App() {
           }
         : current
     );
-    setWorkspaceConversations((conversations) =>
-      sortWorkspaceConversations(
-        conversations
-          .map((conversation) => ({
-            ...conversation,
-            members: conversation.members.filter((member) => member.id !== userId)
-          }))
-          .filter((conversation) => conversation.members.length > 0)
-      )
-    );
-    setWorkspaceFiles((files) => files.filter((file) => file.uploaderId !== userId));
-    setWorkspaceLibraryFiles((files) => files.filter((file) => file.uploaderId !== userId));
+    if (!removedCurrentUser) {
+      setWorkspaceConversations((conversations) =>
+        sortWorkspaceConversations(
+          conversations
+            .map((conversation) => ({
+              ...conversation,
+              members: conversation.members.filter((member) => member.id !== userId)
+            }))
+            .filter((conversation) => conversation.members.length > 0)
+        )
+      );
+      setWorkspaceFiles((files) => files.filter((file) => file.uploaderId !== userId));
+      setWorkspaceLibraryFiles((files) => files.filter((file) => file.uploaderId !== userId));
+    } else {
+      setWorkspaceFiles([]);
+      setWorkspaceLibraryFiles([]);
+    }
   }
 
   function upsertWorkspaceConversation(conversation: WorkspaceConversation) {
+    if (!workspaceCanReadConversationsRef.current) return;
     setWorkspaceConversations((conversations) => upsertWorkspaceConversationList(conversations, conversation));
   }
 
   function upsertWorkspaceConversationMember(conversationId: string, member: WorkspaceUser) {
+    if (!workspaceCanReadConversationsRef.current) return;
     setWorkspaceConversations((conversations) =>
       sortWorkspaceConversations(
         conversations.map((conversation) =>
@@ -5565,8 +5776,7 @@ export function App() {
     const currentUserId = workspaceCurrentUserIdRef.current;
     const removedCurrentUser = userId === currentUserId;
     if (removedCurrentUser) {
-      advanceWorkspaceConversationEpoch(workspaceConversationMembershipEpochRef.current, conversationId);
-      workspaceMarkReadInFlightRef.current.delete(conversationId);
+      invalidateWorkspaceConversationAccess(conversationId);
     }
     setWorkspaceConversations((conversations) =>
       sortWorkspaceConversations(
@@ -5613,6 +5823,7 @@ export function App() {
   }
 
   function upsertWorkspaceMessage(message: WorkspaceMessage, conversation?: WorkspaceConversation | null) {
+    if (!workspaceCanReadConversationsRef.current) return;
     advanceWorkspaceConversationMessageRevision(message.conversationId);
     if (message.clientMessageId) {
       setWorkspaceLocalMessages((messages) =>
@@ -5858,6 +6069,9 @@ export function App() {
   }
 
   async function markWorkspaceConversationRead(conversationId: string) {
+    if (!workspaceCanReadConversationsRef.current) {
+      return;
+    }
     if (workspaceMarkReadInFlightRef.current.has(conversationId)) {
       return;
     }
@@ -6361,18 +6575,29 @@ export function App() {
     if (!workspaceSelectedConversation || workspaceSelectedConversation.type !== "group") {
       return;
     }
+    const conversationId = workspaceSelectedConversation.id;
     const title = workspaceConversationTitle(workspaceSelectedConversation, workspaceBootstrap?.auth.currentUser.id);
     if (!window.confirm(`离开「${title}」后，你将无法继续查看此群聊。确定离开吗？`)) {
       return;
     }
+    invalidateWorkspaceConversationAccess(conversationId, false);
     clearWorkspaceNotice();
     try {
       await workspaceJson<{ ok: boolean; conversationId: string }>(
-        `/api/workspace/groups/${encodeURIComponent(workspaceSelectedConversation.id)}/leave`,
+        `/api/workspace/groups/${encodeURIComponent(conversationId)}/leave`,
         { method: "POST" }
       );
+      invalidateWorkspaceConversationAccess(conversationId);
+      if (workspaceSelectedConversationIdRef.current === conversationId) {
+        workspaceSelectedConversationIdRef.current = "";
+      }
+      const outgoingMessages = workspaceLocalMessagesRef.current.filter((message) => message.conversationId === conversationId);
+      for (const message of outgoingMessages) {
+        void cancelWorkspaceLocalMessage(message.id);
+      }
+      setWorkspaceLocalMessages((messages) => messages.filter((message) => message.conversationId !== conversationId));
       setWorkspaceConversations((conversations) =>
-        conversations.filter((conversation) => conversation.id !== workspaceSelectedConversation.id)
+        conversations.filter((conversation) => conversation.id !== conversationId)
       );
       setWorkspaceSelectedConversationId("");
       setWorkspaceContextMode("conversation");
@@ -7095,8 +7320,7 @@ export function App() {
           return;
         }
         try {
-          const conversations = await workspaceJson<{ conversations: WorkspaceConversation[] }>("/api/workspace/conversations");
-          setWorkspaceConversations((current) => mergeWorkspaceConversationList(current, conversations.conversations));
+          await refreshWorkspaceConversations();
         } catch {
           // Realtime replay or the next bootstrap refresh will reconcile the conversation list.
         }

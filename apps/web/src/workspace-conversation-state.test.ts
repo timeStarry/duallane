@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  isWorkspaceBootstrapResponseCurrent,
+  isWorkspaceConversationAccessCurrent,
   isWorkspaceConversationListResponseCurrent,
   mergeWorkspaceMessageWindow,
   shouldAdvanceWorkspaceConversationHistoryEpoch,
@@ -34,6 +36,17 @@ function messageIds(messages: readonly TestMessage[]) {
 }
 
 describe("workspace conversation message windows", () => {
+  it("rejects a list response after conversation access is revoked", () => {
+    expect(isWorkspaceConversationAccessCurrent(7, 7)).toBe(true);
+    expect(isWorkspaceConversationAccessCurrent(7, 8)).toBe(false);
+  });
+
+  it("accepts only the current bootstrap session and request generation", () => {
+    expect(isWorkspaceBootstrapResponseCurrent(4, 4, 9, 9)).toBe(true);
+    expect(isWorkspaceBootstrapResponseCurrent(4, 4, 8, 9)).toBe(false);
+    expect(isWorkspaceBootstrapResponseCurrent(3, 4, 9, 9)).toBe(false);
+  });
+
   it("ignores a superseded whole-list response before it can remove current conversations", () => {
     const firstRequestToken = 11;
     const latestRequestToken = 12;

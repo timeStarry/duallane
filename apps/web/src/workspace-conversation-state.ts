@@ -38,6 +38,22 @@ export function isWorkspaceConversationListResponseCurrent(
   return requestToken === latestToken;
 }
 
+export function isWorkspaceConversationAccessCurrent(
+  requestAccessEpoch: number,
+  latestAccessEpoch: number
+) {
+  return requestAccessEpoch === latestAccessEpoch;
+}
+
+export function isWorkspaceBootstrapResponseCurrent(
+  requestSessionEpoch: number,
+  latestSessionEpoch: number,
+  requestGeneration: number,
+  latestGeneration: number
+) {
+  return requestSessionEpoch === latestSessionEpoch && requestGeneration === latestGeneration;
+}
+
 export function shouldAdvanceWorkspaceConversationHistoryEpoch(
   kind: WorkspaceConversationMessageRequestKind,
   invalidatesHistory: boolean
