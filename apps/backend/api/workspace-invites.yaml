@@ -1,0 +1,319 @@
+openapi: 3.1.2
+info:
+  title: DualLane Workspace invites HTTP API
+  version: 1.0.0
+  description: >-
+    Strict pre-deployment projection of the existing Node Workspace invite
+    creation, acceptance, and revocation routes. Raw invite codes are returned
+    only by creation and are never persisted in the checked-in fixture as a
+    hash or session secret.
+servers:
+  - url: /
+paths:
+  /api/workspace/invites:
+    post:
+      operationId: workspaceCreateInvite
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InviteCreateRequest'
+      responses:
+        '201':
+          description: Created invite with its one-time-visible raw code.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InviteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/invites/{code}/accept:
+    parameters:
+      - $ref: '#/components/parameters/InviteCode'
+    post:
+      operationId: workspaceAcceptInvite
+      description: >-
+        The development/test Node route accepts synthetic GitHub identity
+        fields. Production rejects this direct route and requires the OAuth
+        callback; the response still creates the opaque Workspace session.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InviteAcceptRequest'
+      responses:
+        '201':
+          description: Joined Workspace member projection.
+          headers:
+            Set-Cookie:
+              description: HttpOnly opaque Workspace session cookie set by Node.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InviteAcceptResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/invites/{inviteId}/revoke:
+    parameters:
+      - $ref: '#/components/parameters/InviteId'
+    post:
+      operationId: workspaceRevokeInvite
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmptyObject'
+      responses:
+        '200':
+          description: Revoked invite projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InviteRevokeResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+components:
+  securitySchemes:
+    workspaceSession:
+      type: apiKey
+      in: cookie
+      name: duallane_workspace
+  parameters:
+    InviteCode:
+      name: code
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    InviteId:
+      name: inviteId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+  schemas:
+    EmptyObject:
+      type: object
+      additionalProperties: false
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/Error'
+    InviteRole:
+      type: string
+      enum: [owner, admin, member, auditor]
+    InviteCreateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+          minLength: 1
+        defaultRole:
+          $ref: '#/components/schemas/InviteRole'
+        maxUses:
+          type: integer
+          format: int32
+          minimum: 1
+        expiresInHours:
+          type: integer
+          format: int32
+          minimum: 1
+        expiresAt:
+          type: [string, 'null']
+          format: date-time
+    Invite:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - code
+        - codePreview
+        - defaultRole
+        - maxUses
+        - uses
+        - expiresAt
+        - createdAt
+        - inviteUrl
+      properties:
+        id:
+          type: string
+        code:
+          type: string
+        codePreview:
+          type: string
+        defaultRole:
+          $ref: '#/components/schemas/InviteRole'
+        maxUses:
+          type: integer
+          format: int32
+          minimum: 1
+        uses:
+          type: integer
+          format: int32
+          minimum: 0
+        expiresAt:
+          type: [string, 'null']
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        inviteUrl:
+          type: string
+          format: uri
+    InviteResponse:
+      type: object
+      additionalProperties: false
+      required: [invite]
+      properties:
+        invite:
+          $ref: '#/components/schemas/Invite'
+    InviteRevoke:
+      type: object
+      additionalProperties: false
+      required: [id, revokedAt]
+      properties:
+        id:
+          type: string
+        revokedAt:
+          type: string
+          format: date-time
+    InviteRevokeResponse:
+      type: object
+      additionalProperties: false
+      required: [invite]
+      properties:
+        invite:
+          $ref: '#/components/schemas/InviteRevoke'
+    InviteAcceptRequest:
+      type: object
+      additionalProperties: false
+      required: [githubLogin]
+      properties:
+        githubId:
+          type: [string, 'null']
+        githubLogin:
+          type: string
+          minLength: 1
+        email:
+          type: [string, 'null']
+          format: email
+        displayName:
+          type: [string, 'null']
+        avatarUrl:
+          type: [string, 'null']
+          format: uri-reference
+    AcceptedUser:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - githubLogin
+        - displayName
+        - nickname
+        - avatarUrl
+        - searchDiscoverable
+        - kind
+        - role
+        - joinedAt
+      properties:
+        id:
+          type: string
+        githubLogin:
+          type: string
+        displayName:
+          type: string
+        nickname:
+          type: [string, 'null']
+        avatarUrl:
+          type: [string, 'null']
+          format: uri-reference
+        searchDiscoverable:
+          type: boolean
+        kind:
+          const: human
+        role:
+          $ref: '#/components/schemas/InviteRole'
+        joinedAt:
+          type: string
+          format: date-time
+    InviteAcceptResponse:
+      type: object
+      additionalProperties: false
+      required: [user]
+      properties:
+        user:
+          $ref: '#/components/schemas/AcceptedUser'
+  responses:
+    BadRequest:
+      description: User-safe invite validation error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: A Workspace session or accepted OAuth identity is required.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: The authenticated member cannot manage this invite.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Invite does not exist in the default space.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    WorkspaceServiceUnavailable:
+      description: Workspace is disabled or cannot complete the operation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

@@ -1000,3 +1000,23 @@ Independent PostgreSQL/race passed events (4.173 seconds) and conversations
 Chromium scenario advanced past its earlier unread failure, then failed at
 the remote member reaction display (line 983, 32.5 seconds). That is a new
 remaining realtime projection issue, not a full browser pass.
+
+### File, Invite And Notification Contracts
+
+Strict OpenAPI 3.1.2 schemas cover 11 file, three invitation and 11 notification
+operations. Actual Node fixtures characterize 16/4/14 scenarios, including
+multipart/local-object flows, invitation acceptance/revocation, SMTP test-proof
+configuration and email verification. SMTP is an injected synthetic sender;
+background external delivery is disabled. These fixtures do not establish full
+Go response parity or exhaustive denied-resource coverage.
+
+Parent independently regenerated all three fixtures in check-only mode,
+passed combined Go/race contract tests (6.625 seconds) and staticcheck. Parent
+also added failure-path cleanup for each owned temporary database/directory
+and disabled fixture request logging; all three check-only producers passed
+again after those changes. No live credentials or external sends were used.
+
+Remote CI run `34032028949` completed all three jobs successfully on exact
+commit `5ba8a90`, including the scoped tmpfs Node unit step, Node browser,
+Go quality/PostgreSQL/media, and Go P2P browser checks. It does not cover later
+read-state, reaction, contract or unaccepted automation changes.

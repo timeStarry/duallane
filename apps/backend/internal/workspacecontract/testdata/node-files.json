@@ -1,0 +1,704 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "nodeRoutes": "apps/backend/api/node-routes.json",
+    "routeSource": "apps/web/server/index.mjs",
+    "fixtureRuntime": "apps/web/server/services/test-database.mjs"
+  },
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/workspace/files",
+      "nodePath": "/api/workspace/files",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/files/uploads/reserve",
+      "nodePath": "/api/workspace/files/uploads/reserve",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/files/uploads/{uploadId}",
+      "nodePath": "/api/workspace/files/uploads/:uploadId",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/files/uploads/{uploadId}/parts/{partNumber}",
+      "nodePath": "/api/workspace/files/uploads/:uploadId/parts/:partNumber",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/files/uploads/{uploadId}/complete",
+      "nodePath": "/api/workspace/files/uploads/:uploadId/complete",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/files/uploads/{uploadId}/content",
+      "nodePath": "/api/workspace/files/uploads/:uploadId/content",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/files/uploads/{uploadId}/fail",
+      "nodePath": "/api/workspace/files/uploads/:uploadId/fail",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/files/{attachmentId}",
+      "nodePath": "/api/workspace/files/:attachmentId",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/files/{attachmentId}/download",
+      "nodePath": "/api/workspace/files/:attachmentId/download",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/files/{attachmentId}/downloads/reserve",
+      "nodePath": "/api/workspace/files/:attachmentId/downloads/reserve",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/files/{attachmentId}/preview",
+      "nodePath": "/api/workspace/files/:attachmentId/preview",
+      "source": "apps/web/server/index.mjs"
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "files-requires-session",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/files",
+        "headers": {}
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "content-length": "71"
+        },
+        "body": {
+          "error": {
+            "code": "auth.required",
+            "message": "请先登录共享空间"
+          }
+        }
+      }
+    },
+    {
+      "name": "files-list-empty",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/files?scope=all&limit=5",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "content-length": "12"
+        },
+        "body": {
+          "files": []
+        }
+      }
+    },
+    {
+      "name": "upload-reserve",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/files/uploads/reserve",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "fileName": "fixture.png",
+          "mimeType": "image/png",
+          "byteSize": 32,
+          "visibility": "space"
+        }
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "content-length": "666"
+        },
+        "body": {
+          "status": "reserved",
+          "usedToday": 32,
+          "remainingBytes": 2147483616,
+          "dailyQuotaBytes": 2147483648,
+          "id": "generated_01",
+          "attachment": {
+            "id": "generated_02",
+            "fileName": "fixture.png",
+            "mimeType": "image/png",
+            "byteSize": 32,
+            "status": "pending",
+            "visibility": "space",
+            "uploaderId": "usr_owner",
+            "uploaderName": "timeStarry",
+            "uploader": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "conversationId": null,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "completedAt": null,
+            "availableAt": null,
+            "capabilities": {
+              "canDownload": false,
+              "canRemove": false
+            }
+          },
+          "upload": {
+            "id": "generated_01",
+            "mode": "single",
+            "partSize": 4194304,
+            "partCount": 1
+          }
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "file.upload.reserve",
+          "targetType": "attachment",
+          "result": "success"
+        }
+      }
+    },
+    {
+      "name": "upload-status-before-content",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/files/uploads/generated_01",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "content-length": "111"
+        },
+        "body": {
+          "uploadId": "generated_01",
+          "mode": "single",
+          "partSize": 4194304,
+          "partCount": 1,
+          "parts": []
+        }
+      }
+    },
+    {
+      "name": "upload-content-and-complete",
+      "request": {
+        "method": "PUT",
+        "path": "/api/workspace/files/uploads/generated_01/content",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "image/png"
+        },
+        "bodyBase64": "c3ludGhldGljLWltYWdlLWNvbnRyYWN0LXBheWxvYWQ="
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "content-length": "620"
+        },
+        "body": {
+          "transfer": {
+            "status": "completed",
+            "usedToday": 32,
+            "remainingBytes": 2147483616,
+            "dailyQuotaBytes": 2147483648,
+            "id": "generated_01"
+          },
+          "attachment": {
+            "id": "generated_02",
+            "fileName": "fixture.png",
+            "mimeType": "image/png",
+            "byteSize": 32,
+            "status": "available",
+            "visibility": "space",
+            "uploaderId": "usr_owner",
+            "uploaderName": "timeStarry",
+            "uploader": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "conversationId": null,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "completedAt": "2026-01-01T00:00:00.000Z",
+            "availableAt": "2026-01-01T00:00:00.000Z",
+            "capabilities": {
+              "canDownload": true,
+              "canRemove": true
+            }
+          }
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "file.upload.completed",
+          "targetType": "attachment",
+          "result": "success"
+        }
+      }
+    },
+    {
+      "name": "files-list-after-upload",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/files?scope=all",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "content-length": "467"
+        },
+        "body": {
+          "files": [
+            {
+              "id": "generated_02",
+              "fileName": "fixture.png",
+              "mimeType": "image/png",
+              "byteSize": 32,
+              "status": "available",
+              "visibility": "space",
+              "uploaderId": "usr_owner",
+              "uploaderName": "timeStarry",
+              "uploader": {
+                "id": "usr_owner",
+                "displayName": "timeStarry"
+              },
+              "conversationId": null,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "completedAt": "2026-01-01T00:00:00.000Z",
+              "availableAt": "2026-01-01T00:00:00.000Z",
+              "capabilities": {
+                "canDownload": true,
+                "canRemove": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "download-reserve",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/files/generated_02/downloads/reserve",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {}
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "content-length": "138"
+        },
+        "body": {
+          "status": "completed",
+          "usedToday": 64,
+          "remainingBytes": 2147483584,
+          "dailyQuotaBytes": 2147483648,
+          "id": "generated_03"
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "file.download.completed",
+          "targetType": "attachment",
+          "result": "success"
+        }
+      }
+    },
+    {
+      "name": "file-preview",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/files/generated_02/preview",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "image/png",
+          "cache-control": "private, no-store",
+          "content-disposition": "inline; filename=\"fixture.png\"",
+          "content-length": "32"
+        },
+        "bodyBase64": "c3ludGhldGljLWltYWdlLWNvbnRyYWN0LXBheWxvYWQ="
+      }
+    },
+    {
+      "name": "file-download-with-grant",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/files/generated_02/download?downloadId=generated_03",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "image/png",
+          "content-disposition": "attachment; filename=\"fixture.png\"",
+          "content-length": "32"
+        },
+        "bodyBase64": "c3ludGhldGljLWltYWdlLWNvbnRyYWN0LXBheWxvYWQ="
+      }
+    },
+    {
+      "name": "file-remove",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/workspace/files/generated_02",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "content-length": "65"
+        },
+        "body": {
+          "ok": true,
+          "attachmentId": "generated_02"
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "file.remove",
+          "targetType": "attachment",
+          "result": "success"
+        }
+      }
+    },
+    {
+      "name": "chunk-upload-reserve",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/files/uploads/reserve",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "fileName": "fixture.txt",
+          "mimeType": "text/plain",
+          "byteSize": 24,
+          "visibility": "space"
+        }
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "content-length": "667"
+        },
+        "body": {
+          "status": "reserved",
+          "usedToday": 88,
+          "remainingBytes": 2147483560,
+          "dailyQuotaBytes": 2147483648,
+          "id": "generated_04",
+          "attachment": {
+            "id": "generated_05",
+            "fileName": "fixture.txt",
+            "mimeType": "text/plain",
+            "byteSize": 24,
+            "status": "pending",
+            "visibility": "space",
+            "uploaderId": "usr_owner",
+            "uploaderName": "timeStarry",
+            "uploader": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "conversationId": null,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "completedAt": null,
+            "availableAt": null,
+            "capabilities": {
+              "canDownload": false,
+              "canRemove": false
+            }
+          },
+          "upload": {
+            "id": "generated_04",
+            "mode": "single",
+            "partSize": 4194304,
+            "partCount": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "chunk-upload-part",
+      "request": {
+        "method": "PUT",
+        "path": "/api/workspace/files/uploads/generated_04/parts/1",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/octet-stream",
+          "content-length": "24",
+          "x-duallane-part-sha256": "62773214dd087921b35c0f051a7484c1146c77332c44c421f0834a669386e407"
+        },
+        "bodyBase64": "c3ludGhldGljLWNodW5rLWNvbnRyYWN0"
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "content-length": "130"
+        },
+        "body": {
+          "part": {
+            "partNumber": 1,
+            "byteSize": 24,
+            "sha256": "62773214dd087921b35c0f051a7484c1146c77332c44c421f0834a669386e407",
+            "reused": false
+          }
+        }
+      }
+    },
+    {
+      "name": "chunk-upload-status",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/files/uploads/generated_04",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "content-length": "217"
+        },
+        "body": {
+          "uploadId": "generated_04",
+          "mode": "single",
+          "partSize": 4194304,
+          "partCount": 1,
+          "parts": [
+            {
+              "partNumber": 1,
+              "byteSize": 24,
+              "sha256": "62773214dd087921b35c0f051a7484c1146c77332c44c421f0834a669386e407"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "chunk-upload-complete",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/files/uploads/generated_04/complete",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "mode": "chunked"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "content-length": "621"
+        },
+        "body": {
+          "transfer": {
+            "status": "completed",
+            "usedToday": 88,
+            "remainingBytes": 2147483560,
+            "dailyQuotaBytes": 2147483648,
+            "id": "generated_04"
+          },
+          "attachment": {
+            "id": "generated_05",
+            "fileName": "fixture.txt",
+            "mimeType": "text/plain",
+            "byteSize": 24,
+            "status": "available",
+            "visibility": "space",
+            "uploaderId": "usr_owner",
+            "uploaderName": "timeStarry",
+            "uploader": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "conversationId": null,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "completedAt": "2026-01-01T00:00:00.000Z",
+            "availableAt": "2026-01-01T00:00:00.000Z",
+            "capabilities": {
+              "canDownload": true,
+              "canRemove": true
+            }
+          }
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "file.upload.completed",
+          "targetType": "attachment",
+          "result": "success"
+        }
+      }
+    },
+    {
+      "name": "upload-reserve-for-failure",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/files/uploads/reserve",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "fileName": "failed.txt",
+          "mimeType": "text/plain",
+          "byteSize": 4,
+          "visibility": "space"
+        }
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "content-length": "665"
+        },
+        "body": {
+          "status": "reserved",
+          "usedToday": 92,
+          "remainingBytes": 2147483556,
+          "dailyQuotaBytes": 2147483648,
+          "id": "generated_06",
+          "attachment": {
+            "id": "generated_07",
+            "fileName": "failed.txt",
+            "mimeType": "text/plain",
+            "byteSize": 4,
+            "status": "pending",
+            "visibility": "space",
+            "uploaderId": "usr_owner",
+            "uploaderName": "timeStarry",
+            "uploader": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "conversationId": null,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "completedAt": null,
+            "availableAt": null,
+            "capabilities": {
+              "canDownload": false,
+              "canRemove": false
+            }
+          },
+          "upload": {
+            "id": "generated_06",
+            "mode": "single",
+            "partSize": 4194304,
+            "partCount": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "upload-fail",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/files/uploads/generated_06/fail",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "reason": "synthetic_cancel"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "content-length": "571"
+        },
+        "body": {
+          "transfer": {
+            "status": "failed",
+            "usedToday": 88,
+            "remainingBytes": 2147483560,
+            "dailyQuotaBytes": 2147483648,
+            "id": "generated_06"
+          },
+          "attachment": {
+            "id": "generated_07",
+            "fileName": "failed.txt",
+            "mimeType": "text/plain",
+            "byteSize": 4,
+            "status": "failed",
+            "visibility": "space",
+            "uploaderId": "usr_owner",
+            "uploaderName": "timeStarry",
+            "uploader": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "conversationId": null,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "completedAt": null,
+            "availableAt": null,
+            "capabilities": {
+              "canDownload": false,
+              "canRemove": false
+            }
+          }
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "file.upload.failed",
+          "targetType": "attachment",
+          "result": "failure"
+        }
+      }
+    }
+  ]
+}

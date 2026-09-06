@@ -1,0 +1,911 @@
+openapi: 3.1.2
+info:
+  title: DualLane Workspace files HTTP API
+  version: 1.0.0
+  description: >-
+    Strict pre-deployment projection of the existing Node Workspace file
+    library and upload/download routes. DTOs are traced to
+    apps/web/server/index.mjs, workspace.mjs, workspace-upload-chunks.mjs,
+    workspace-object-store.mjs, and the checked-in Node route inventory.
+servers:
+  - url: /
+paths:
+  /api/workspace/files:
+    get:
+      operationId: workspaceListFiles
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/FileScopeQuery'
+        - $ref: '#/components/parameters/ConversationIdQuery'
+        - $ref: '#/components/parameters/UploaderIdQuery'
+        - $ref: '#/components/parameters/FileSearchQuery'
+        - $ref: '#/components/parameters/FileLimitQuery'
+      responses:
+        '200':
+          description: Viewer-scoped available file projections.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/files/uploads/reserve:
+    post:
+      operationId: workspaceReserveFileUpload
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadReservationRequest'
+      responses:
+        '201':
+          description: Quota reservation and pending attachment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadReservationSuccess'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Daily quota or concurrent reservation rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadReservationRejected'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/files/uploads/{uploadId}:
+    parameters:
+      - $ref: '#/components/parameters/UploadId'
+    get:
+      operationId: workspaceGetFileUpload
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Current upload and chunk status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadStatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/files/uploads/{uploadId}/parts/{partNumber}:
+    parameters:
+      - $ref: '#/components/parameters/UploadId'
+      - $ref: '#/components/parameters/PartNumber'
+    put:
+      operationId: workspaceUploadFilePart
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/PartSha256Header'
+        - $ref: '#/components/parameters/ContentLengthHeader'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              $ref: '#/components/schemas/BinaryUpload'
+          image/png:
+            schema:
+              $ref: '#/components/schemas/BinaryUpload'
+          image/jpeg:
+            schema:
+              $ref: '#/components/schemas/BinaryUpload'
+          image/webp:
+            schema:
+              $ref: '#/components/schemas/BinaryUpload'
+          image/gif:
+            schema:
+              $ref: '#/components/schemas/BinaryUpload'
+          image/bmp:
+            schema:
+              $ref: '#/components/schemas/BinaryUpload'
+      responses:
+        '201':
+          description: A newly stored upload part.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadPartResponse'
+        '200':
+          description: An idempotently reused upload part.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadPartResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestEntityTooLarge'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/files/uploads/{uploadId}/complete:
+    parameters:
+      - $ref: '#/components/parameters/UploadId'
+    post:
+      operationId: workspaceCompleteFileUpload
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadCompleteRequest'
+      responses:
+        '200':
+          description: Completed transfer and available attachment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadCompleteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/files/uploads/{uploadId}/content:
+    parameters:
+      - $ref: '#/components/parameters/UploadId'
+    put:
+      operationId: workspaceUploadFileContent
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              $ref: '#/components/schemas/BinaryUpload'
+          image/png:
+            schema:
+              $ref: '#/components/schemas/BinaryUpload'
+          image/jpeg:
+            schema:
+              $ref: '#/components/schemas/BinaryUpload'
+          image/gif:
+            schema:
+              $ref: '#/components/schemas/BinaryUpload'
+          image/webp:
+            schema:
+              $ref: '#/components/schemas/BinaryUpload'
+          image/bmp:
+            schema:
+              $ref: '#/components/schemas/BinaryUpload'
+      responses:
+        '200':
+          description: Completed single-part transfer and available attachment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadCompleteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestEntityTooLarge'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/files/uploads/{uploadId}/fail:
+    parameters:
+      - $ref: '#/components/parameters/UploadId'
+    post:
+      operationId: workspaceFailFileUpload
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadFailRequest'
+      responses:
+        '200':
+          description: Failed transfer with released quota and failed attachment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadFailedResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/files/{attachmentId}:
+    parameters:
+      - $ref: '#/components/parameters/AttachmentId'
+    delete:
+      operationId: workspaceRemoveFile
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Removed logical attachment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileRemoveResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/files/{attachmentId}/downloads/reserve:
+    parameters:
+      - $ref: '#/components/parameters/AttachmentId'
+    post:
+      operationId: workspaceReserveFileDownload
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmptyObject'
+      responses:
+        '201':
+          description: Completed download quota reservation and optional delivery URL.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DownloadReservationSuccess'
+        '409':
+          description: Download quota rejected before content delivery.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DownloadReservationRejected'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/files/{attachmentId}/preview:
+    parameters:
+      - $ref: '#/components/parameters/AttachmentId'
+    get:
+      operationId: workspacePreviewFile
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Private inline image content.
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+            Content-Length:
+              schema:
+                type: integer
+                format: int64
+          content:
+            image/png:
+              schema:
+                $ref: '#/components/schemas/BinaryDownload'
+            image/jpeg:
+              schema:
+                $ref: '#/components/schemas/BinaryDownload'
+            image/gif:
+              schema:
+                $ref: '#/components/schemas/BinaryDownload'
+            image/webp:
+              schema:
+                $ref: '#/components/schemas/BinaryDownload'
+            image/avif:
+              schema:
+                $ref: '#/components/schemas/BinaryDownload'
+            image/bmp:
+              schema:
+                $ref: '#/components/schemas/BinaryDownload'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/files/{attachmentId}/download:
+    parameters:
+      - $ref: '#/components/parameters/AttachmentId'
+      - $ref: '#/components/parameters/DownloadIdQuery'
+    get:
+      operationId: workspaceDownloadFile
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Private attachment bytes after a valid quota grant.
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+            Content-Length:
+              schema:
+                type: integer
+                format: int64
+          content:
+            application/octet-stream:
+              schema:
+                $ref: '#/components/schemas/BinaryDownload'
+            image/png:
+              schema:
+                $ref: '#/components/schemas/BinaryDownload'
+            image/jpeg:
+              schema:
+                $ref: '#/components/schemas/BinaryDownload'
+            image/gif:
+              schema:
+                $ref: '#/components/schemas/BinaryDownload'
+            image/webp:
+              schema:
+                $ref: '#/components/schemas/BinaryDownload'
+            image/avif:
+              schema:
+                $ref: '#/components/schemas/BinaryDownload'
+            image/bmp:
+              schema:
+                $ref: '#/components/schemas/BinaryDownload'
+            text/plain:
+              schema:
+                $ref: '#/components/schemas/BinaryDownload'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+components:
+  securitySchemes:
+    workspaceSession:
+      type: apiKey
+      in: cookie
+      name: duallane_workspace
+  parameters:
+    FileScopeQuery:
+      name: scope
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [all, conversation, standalone, mine]
+        default: all
+    ConversationIdQuery:
+      name: conversationId
+      in: query
+      required: false
+      schema:
+        type: string
+    UploaderIdQuery:
+      name: uploaderId
+      in: query
+      required: false
+      schema:
+        type: string
+    FileSearchQuery:
+      name: q
+      in: query
+      required: false
+      schema:
+        type: string
+    FileLimitQuery:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        maximum: 500
+        default: 200
+    UploadId:
+      name: uploadId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    AttachmentId:
+      name: attachmentId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    PartNumber:
+      name: partNumber
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        maximum: 10000
+    DownloadIdQuery:
+      name: downloadId
+      in: query
+      required: false
+      schema:
+        type: string
+    PartSha256Header:
+      name: X-DualLane-Part-SHA256
+      in: header
+      required: true
+      schema:
+        type: string
+        pattern: '^[a-f0-9]{64}$'
+    ContentLengthHeader:
+      name: Content-Length
+      in: header
+      required: true
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+  schemas:
+    EmptyObject:
+      type: object
+      additionalProperties: false
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/Error'
+    FileCapability:
+      type: object
+      additionalProperties: false
+      required: [canDownload, canRemove]
+      properties:
+        canDownload:
+          type: boolean
+        canRemove:
+          type: boolean
+    FileUploader:
+      type: object
+      additionalProperties: false
+      required: [id, displayName]
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+    FileItem:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - fileName
+        - mimeType
+        - byteSize
+        - status
+        - visibility
+        - uploaderId
+        - uploaderName
+        - uploader
+        - conversationId
+        - createdAt
+        - completedAt
+        - availableAt
+        - capabilities
+      properties:
+        id:
+          type: string
+        fileName:
+          type: string
+        mimeType:
+          type: string
+        byteSize:
+          type: integer
+          format: int64
+          minimum: 0
+        status:
+          type: string
+          enum: [pending, available, failed, removed]
+        visibility:
+          type: string
+          enum: [private_staging, conversation, space]
+        uploaderId:
+          type: string
+        uploaderName:
+          type: string
+        uploader:
+          $ref: '#/components/schemas/FileUploader'
+        conversationId:
+          type: [string, 'null']
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: [string, 'null']
+          format: date-time
+        availableAt:
+          type: [string, 'null']
+          format: date-time
+        capabilities:
+          $ref: '#/components/schemas/FileCapability'
+    FileListResponse:
+      type: object
+      additionalProperties: false
+      required: [files]
+      properties:
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileItem'
+    QuotaResponse:
+      type: object
+      additionalProperties: false
+      required: [status, usedToday, remainingBytes, dailyQuotaBytes]
+      properties:
+        status:
+          type: string
+          enum: [reserved, completed, failed, rejected]
+        usedToday:
+          type: integer
+          format: int64
+          minimum: 0
+        remainingBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        dailyQuotaBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        id:
+          type: string
+    UploadReservationRequest:
+      type: object
+      additionalProperties: false
+      required: [fileName, mimeType, byteSize, visibility]
+      properties:
+        fileName:
+          type: string
+          minLength: 1
+        mimeType:
+          type: string
+        byteSize:
+          type: integer
+          format: int64
+          minimum: 0
+        visibility:
+          type: string
+          enum: [private_staging, conversation, space]
+        conversationId:
+          type: [string, 'null']
+    UploadContract:
+      type: object
+      additionalProperties: false
+      required: [id, mode, partSize, partCount]
+      properties:
+        id:
+          type: string
+        mode:
+          type: string
+          enum: [single, chunked]
+        partSize:
+          type: integer
+          format: int64
+          const: 4194304
+        partCount:
+          type: integer
+          format: int32
+          minimum: 1
+    UploadReservationSuccess:
+      type: object
+      additionalProperties: false
+      required: [status, usedToday, remainingBytes, dailyQuotaBytes, id, attachment, upload]
+      properties:
+        status:
+          const: reserved
+        usedToday:
+          type: integer
+          format: int64
+          minimum: 0
+        remainingBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        dailyQuotaBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        id:
+          type: string
+        attachment:
+          $ref: '#/components/schemas/FileItem'
+        upload:
+          $ref: '#/components/schemas/UploadContract'
+    UploadReservationRejected:
+      type: object
+      additionalProperties: false
+      required: [status, usedToday, remainingBytes, dailyQuotaBytes]
+      properties:
+        status:
+          const: rejected
+        usedToday:
+          type: integer
+          format: int64
+        remainingBytes:
+          type: integer
+          format: int64
+        dailyQuotaBytes:
+          type: integer
+          format: int64
+    UploadStatusResponse:
+      type: object
+      additionalProperties: false
+      required: [uploadId, mode, partSize, partCount, parts]
+      properties:
+        uploadId:
+          type: string
+        mode:
+          type: string
+          enum: [single, chunked]
+        partSize:
+          type: integer
+          format: int64
+          const: 4194304
+        partCount:
+          type: integer
+          format: int32
+          minimum: 1
+        parts:
+          type: array
+          items:
+            $ref: '#/components/schemas/UploadPart'
+    UploadPart:
+      type: object
+      additionalProperties: false
+      required: [partNumber, byteSize, sha256]
+      properties:
+        partNumber:
+          type: integer
+          format: int32
+          minimum: 1
+        byteSize:
+          type: integer
+          format: int64
+          minimum: 0
+        sha256:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+    UploadPartResponse:
+      type: object
+      additionalProperties: false
+      required: [part]
+      properties:
+        part:
+          type: object
+          additionalProperties: false
+          required: [partNumber, byteSize, sha256, reused]
+          properties:
+            partNumber:
+              type: integer
+              format: int32
+              minimum: 1
+            byteSize:
+              type: integer
+              format: int64
+              minimum: 0
+            sha256:
+              type: string
+              pattern: '^[a-f0-9]{64}$'
+            reused:
+              type: boolean
+    UploadCompleteRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        mode:
+          const: chunked
+    UploadFailRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+    UploadCompleteResponse:
+      type: object
+      additionalProperties: false
+      required: [transfer, attachment]
+      properties:
+        transfer:
+          allOf:
+            - $ref: '#/components/schemas/QuotaResponse'
+            - type: object
+              properties:
+                status:
+                  const: completed
+                id:
+                  type: string
+              required: [id]
+        attachment:
+          $ref: '#/components/schemas/FileItem'
+    UploadFailedResponse:
+      type: object
+      additionalProperties: false
+      required: [transfer, attachment]
+      properties:
+        transfer:
+          allOf:
+            - $ref: '#/components/schemas/QuotaResponse'
+            - type: object
+              properties:
+                status:
+                  const: failed
+                id:
+                  type: string
+              required: [id]
+        attachment:
+          $ref: '#/components/schemas/FileItem'
+    FileRemoveResponse:
+      type: object
+      additionalProperties: false
+      required: [ok, attachmentId]
+      properties:
+        ok:
+          const: true
+        attachmentId:
+          type: string
+    DownloadReservationSuccess:
+      type: object
+      additionalProperties: false
+      required: [status, usedToday, remainingBytes, dailyQuotaBytes, id]
+      properties:
+        status:
+          const: completed
+        usedToday:
+          type: integer
+          format: int64
+        remainingBytes:
+          type: integer
+          format: int64
+        dailyQuotaBytes:
+          type: integer
+          format: int64
+        id:
+          type: string
+        downloadUrl:
+          type: string
+          format: uri-reference
+        expiresAt:
+          type: string
+          format: date-time
+    DownloadReservationRejected:
+      type: object
+      additionalProperties: false
+      required: [status, usedToday, remainingBytes, dailyQuotaBytes]
+      properties:
+        status:
+          const: rejected
+        usedToday:
+          type: integer
+          format: int64
+        remainingBytes:
+          type: integer
+          format: int64
+        dailyQuotaBytes:
+          type: integer
+          format: int64
+    BinaryUpload:
+      type: string
+      format: binary
+      maxLength: 4194304
+    BinaryDownload:
+      type: string
+      format: binary
+    WorkspaceError:
+      $ref: '#/components/schemas/ErrorResponse'
+  responses:
+    BadRequest:
+      description: User-safe validation or upload-state error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: A Workspace session is required.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: The authenticated member cannot perform the operation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: The attachment or storage-visible resource is unavailable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Quota, part, or upload state conflict.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RequestEntityTooLarge:
+      description: The raw body exceeded the 4 MiB Node route body limit.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    WorkspaceServiceUnavailable:
+      description: Workspace is disabled or storage is unavailable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
