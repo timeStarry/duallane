@@ -15,6 +15,7 @@ import {
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const helper = path.join(root, "deploy/production/release-helper.sh");
+const fakeIdentity = (hexDigit) => hexDigit.repeat(64);
 
 function environment(entries) {
   return Object.fromEntries(entries.map((entry) => {
@@ -183,6 +184,15 @@ function initialState(mode) {
     candidateEnvInvalid: mode === "node-candidate-env-invalid",
     candidateEnvDuplicate: mode === "node-candidate-env-duplicate",
     candidatePathMounted: mode === "node-candidate-path-mounted",
+    restartUpdateFailure: mode === "node-fence-update-failure",
+    restartStopFailure: mode === "node-fence-stop-failure",
+    fenceIdentityDrift: mode === "node-fence-identity-drift",
+    fenceDaemonRestart: mode === "node-fence-daemon-restart",
+    fenceMultiple: mode === "node-fence-multiple",
+    fenceProjectMismatch: mode === "node-fence-project-mismatch",
+    fenceServiceMismatch: mode === "node-fence-service-mismatch",
+    fenceInvalidIdentity: mode === "node-fence-invalid-identity",
+    rollbackFenceMidFailure: mode === "rollback-fence-mid-failure",
     serviceInventoryFailure: mode === "inventory-failure",
     servicePsFailure: mode === "ps-failure",
     imageInspectFailure: mode === "image-inspect-failure",
@@ -220,7 +230,14 @@ function initialState(mode) {
     },
     restoreIds: { api: "api-old", web: "web-old" },
   };
-  if (mode === "rollback" || mode === "rollback-daemon") {
+  if (mode === "node-fence-multiple") {
+    state.containers["api-old-2"] = {
+      ...state.containers["api-old"],
+      labels: { ...state.containers["api-old"].labels },
+    };
+    state.current.api = ["api-old", "api-old-2"];
+  }
+  if (mode === "rollback" || mode === "rollback-daemon" || mode === "rollback-fence-mid-failure") {
     state.containers["api-new"] = { image: "sha256:api-new", ref: "duallane-api:new", running: true, status: "running", health: "healthy", env: [], labels: { version: "0.15.5", revision: "new-commit" } };
     state.containers["web-new"] = { image: "sha256:web-new", ref: "duallane-web:new", running: true, status: "running", health: "healthy", env: [], labels: { version: "0.15.5", revision: "new-commit" } };
     state.containers["p2p-new"] = { image: "sha256:p2p-new", ref: "duallane-p2p:new", running: true, status: "running", health: "healthy", env: [], labels: { version: "0.15.5", revision: "new-commit" } };
@@ -330,6 +347,45 @@ function initialState(mode) {
   if (mode === "migration-exit-failure") {
     state.migrationExitCode = 1;
   }
+  const identityById = {
+    "pg-old": "f".repeat(64),
+    "api-old": "a".repeat(64),
+    "api-old-2": "6".repeat(64),
+    "web-old": "e".repeat(64),
+    "v2ray-old": "1".repeat(64),
+    "api-new": "2".repeat(64),
+    "web-new": "3".repeat(64),
+    "api-old-restored": "4".repeat(64),
+    "web-old-restored": "5".repeat(64),
+    "p2p-new": "b".repeat(64),
+    "workspace-new": "c".repeat(64),
+    "worker-new": "d".repeat(64),
+  };
+  const fallbackIdentity = (id) => {
+    let encoded = "";
+    for (const character of id) encoded += character.charCodeAt(0).toString(16);
+    return (encoded + "0".repeat(64)).slice(0, 64);
+  };
+  for (const [id, value] of Object.entries(state.containers)) {
+    const ref = value.ref ?? "";
+    const service = ref.match(/^duallane-(?:go-)?(api|p2p|workspace|worker|web):/)?.[1]
+      ?? (ref.startsWith("postgres:") ? "postgres" : ref.startsWith("v2ray:") ? "v2ray" : "");
+    value.identity = identityById[id] ?? fallbackIdentity(id);
+    value.labels ??= {};
+    value.labels["com.docker.compose.project"] ??= "duallane";
+    if (service) value.labels["com.docker.compose.service"] ??= service;
+    value.restartName ??= "always";
+    value.restartMax ??= 0;
+  }
+  if (mode === "node-fence-project-mismatch") {
+    state.containers["api-old"].labels["com.docker.compose.project"] = "foreign-project";
+  }
+  if (mode === "node-fence-service-mismatch") {
+    state.containers["api-old"].labels["com.docker.compose.service"] = "web";
+  }
+  if (mode === "node-fence-invalid-identity") {
+    state.containers["api-old"].identity = "api-old";
+  }
   return state;
 }
 
@@ -341,9 +397,11 @@ const state = JSON.parse(readFileSync(statePath, "utf8"));
 const args = process.argv.slice(2);
 const save = () => writeFileSync(statePath, JSON.stringify(state));
 const record = (value) => { state.calls.push(value); };
-const container = (id) => state.containers[id];
+const container = (id) => state.containers[id]
+  ?? Object.values(state.containers).find((value) => value.identity === id);
 const serviceId = (service) => (state.current[service] ?? []).join("\n");
 const formatValue = (value, format) => {
+  if (format.includes(".Id")) return value.identity ?? "";
   if (format.includes(".Mounts")) {
     if (format.includes("println .Destination")) {
       return (value.mounts ?? []).map((mount) => mount.Destination).join("\n") + ((value.mounts ?? []).length ? "\n" : "");
@@ -354,6 +412,8 @@ const formatValue = (value, format) => {
       .join("");
   }
   if (format.includes(".HostConfig.ReadonlyRootfs")) return value.readOnlyRootfs ? "true" : "false";
+  if (format.includes(".HostConfig.RestartPolicy.Name")) return value.restartName ?? "no";
+  if (format.includes(".HostConfig.RestartPolicy.MaximumRetryCount")) return String(value.restartMax ?? 0);
   if (format.includes(".Config.Labels")) {
     const match = format.match(/index \.Config\.Labels \"([^\"]+)\"/);
     if (!match) return "";
@@ -476,6 +536,45 @@ if (args[0] === "systemctl" && args[1] === "show") {
   process.stdout.write(state.daemon); process.exit(0);
 }
 if (args[0] === "info") process.exit(0);
+if (args[0] === "update") {
+  const restartIndex = args.findIndex((value) => value === "--restart" || value.startsWith("--restart="));
+  const restartSpec = restartIndex < 0
+    ? ""
+    : args[restartIndex].startsWith("--restart=") ? args[restartIndex].slice("--restart=".length) : args[restartIndex + 1];
+  const id = args.at(-1);
+  const value = container(id);
+  if (!value || !restartSpec) process.exit(1);
+  if ((state.restartUpdateFailure && value.ref === "duallane-api:old") ||
+      (state.rollbackFenceMidFailure && value.ref === "duallane-workspace:new")) {
+    record(["update-failed", id, restartSpec]); save(); process.exit(1);
+  }
+  if (restartSpec === "no" || restartSpec === "always" || restartSpec === "unless-stopped") {
+    value.restartName = restartSpec;
+    value.restartMax = 0;
+  } else if (restartSpec === "on-failure") {
+    value.restartName = "on-failure";
+    value.restartMax = 0;
+  } else if (restartSpec.startsWith("on-failure:")) {
+    const retryCount = restartSpec.slice("on-failure:".length);
+    if (!/^\\d+$/.test(retryCount)) process.exit(1);
+    value.restartName = "on-failure";
+    value.restartMax = Number(retryCount);
+  } else process.exit(1);
+  if (state.fenceDaemonRestart && value.ref === "duallane-api:old") state.daemon = "3";
+  record(["update", id, restartSpec]); save(); process.exit(0);
+}
+if (args[0] === "stop") {
+  const id = args.at(-1);
+  const value = container(id);
+  if (!value) process.exit(1);
+  if (state.restartStopFailure && value.ref === "duallane-api:old") {
+    record(["stop-failed", id]); save(); process.exit(1);
+  }
+  value.running = false;
+  value.status = "exited";
+  if (state.fenceDaemonRestart && value.ref === "duallane-api:old") state.daemon = "3";
+  record(["stop", id]); save(); process.exit(0);
+}
 if (args[0] === "start") {
   const value = container(args[1]);
   if (!value) process.exit(1);
@@ -517,7 +616,13 @@ if (args[0] === "inspect") {
   if (!value) process.exit(1);
   const index = args.indexOf("--format");
   const format = index >= 0 ? args[index + 1] : "";
-  process.stdout.write(formatValue(value, format));
+  let output = formatValue(value, format);
+  if (format.includes(".Id") && state.fenceIdentityDrift && value.ref === "duallane-api:old") {
+    value.identityInspects = (value.identityInspects ?? 0) + 1;
+    if (value.identityInspects >= 2) output = "b".repeat(64);
+  }
+  process.stdout.write(output);
+  save();
   process.exit(0);
 }
 if (args[0] === "exec") {
@@ -585,6 +690,7 @@ if (args[0] === "compose") {
     state.containers[candidateName] = {
       image: "sha256:" + service + "-candidate",
       ref: "duallane-" + service + ":new",
+      identity: candidateName,
       running: true,
       status: "running",
       health: "healthy",
@@ -596,6 +702,8 @@ if (args[0] === "compose") {
           ? [{ Destination: "/tmp", RW: true }]
         : [],
       readOnlyRootfs: !state.candidateRootfsWritable,
+      restartName: "always",
+      restartMax: 0,
       networks: service === "workspace" || service === "worker"
         ? { duallane_default: { Aliases: args.includes("--use-aliases") ? [service] : [] } }
         : {},
@@ -673,6 +781,7 @@ if (args[0] === "compose") {
       restoredId = id + "-restored";
       state.containers[restoredId] = {
         ...container(id),
+        identity: restoredId === "api-old-restored" ? "4".repeat(64) : "5".repeat(64),
         running: true,
         status: "running",
         networks: {},
@@ -725,7 +834,7 @@ fi
 if [[ "$MODE" == go-upgrade ]]; then
   RELEASE_GO_UPGRADE=true
 fi
-if [[ "$MODE" == node-active || "$MODE" == node-candidate || "$MODE" == node-candidate-env-invalid || "$MODE" == node-candidate-env-duplicate || "$MODE" == node-candidate-path-mounted ]]; then
+if [[ "$MODE" == node-active || "$MODE" == node-candidate || "$MODE" == node-candidate-env-invalid || "$MODE" == node-candidate-env-duplicate || "$MODE" == node-candidate-path-mounted || "$MODE" == node-fence-* ]]; then
   release_load_profile node-default
 else
   release_load_profile go-full
@@ -801,6 +910,22 @@ elif [[ "$MODE" == node-active ]]; then
     echo "node-default unexpectedly allowed an active Go service" >&2
     exit 1
   fi
+elif [[ "$MODE" == node-fence-* ]]; then
+  release_snapshot_app_state "$RELEASE_SNAPSHOT_FILE"
+  if release_stop_service_and_confirm api; then
+    [[ "$MODE" == node-fence-success || "$MODE" == node-fence-daemon-restart ]] || {
+      echo "fencing failure mode unexpectedly passed" >&2
+      exit 1
+    }
+    if [[ "$MODE" == node-fence-daemon-restart ]]; then
+      release_restore_daemon_snapshot
+    fi
+  else
+    [[ "$MODE" == node-fence-update-failure || "$MODE" == node-fence-stop-failure || "$MODE" == node-fence-identity-drift || "$MODE" == node-fence-multiple || "$MODE" == node-fence-project-mismatch || "$MODE" == node-fence-service-mismatch || "$MODE" == node-fence-invalid-identity ]] || {
+      echo "valid restart-policy fencing unexpectedly failed" >&2
+      exit 1
+    }
+  fi
 elif [[ "$MODE" == node-candidate || "$MODE" == node-candidate-env-invalid || "$MODE" == node-candidate-env-duplicate || "$MODE" == node-candidate-path-mounted ]]; then
   if release_start_candidate api; then
     [[ "$MODE" == node-candidate ]] || {
@@ -854,8 +979,23 @@ elif [[ "$MODE" == inventory-failure || "$MODE" == ps-failure ]]; then
     echo "inventory-failure unexpectedly produced a snapshot" >&2
     exit 1
   fi
+elif [[ "$MODE" == rollback-fence-mid-failure ]]; then
+  release_snapshot_app_state "$RELEASE_SNAPSHOT_FILE"
+  release_stop_service_and_confirm api
+  docker set-current api api-new
+  docker set-current web web-new
+  docker set-current p2p p2p-new
+  docker set-current workspace workspace-new
+  docker set-current worker worker-new
+  if release_rollback_application; then
+    echo "mid-failure rollback unexpectedly completed" >&2
+    exit 1
+  fi
 else
   release_snapshot_app_state "$RELEASE_SNAPSHOT_FILE"
+  if [[ "$MODE" == rollback || "$MODE" == rollback-daemon ]]; then
+    release_stop_service_and_confirm api
+  fi
   docker set-current api api-new
   docker set-current web web-new
   docker set-current p2p p2p-new
@@ -916,19 +1056,134 @@ test("fake Docker daemon recovery restores every captured running application co
 });
 
 test("fake Docker rollback fences Go services before restoring Node", async () => {
-  const { result, finalState } = await runFakeHarness("rollback");
+  const { result, finalState, recovery } = await runFakeHarness("rollback");
   assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
   for (const id of ["p2p-new", "workspace-new", "worker-new"]) {
     assert.equal(finalState.containers[id], undefined, `${id} was not removed`);
   }
   assert.equal(finalState.containers["api-old"].running, true);
   assert.equal(finalState.containers["web-old"].running, true);
-  const stopIndex = finalState.calls.findIndex(([operation, service]) => operation === "stop" && service === "worker");
+  assert.equal(finalState.containers["api-old"].restartName, "always");
+  assert.equal(finalState.containers["web-old"].restartName, "always");
+  for (const service of ["api", "p2p", "workspace", "worker"]) {
+    const id = {
+      api: fakeIdentity("a"),
+      p2p: fakeIdentity("b"),
+      workspace: fakeIdentity("c"),
+      worker: fakeIdentity("d"),
+    }[service];
+    assert.match(recovery, new RegExp(`^fence_target\\t${service}\\t${id}\\talways\\t0\\ttrue$`, "m"));
+    assert.match(recovery, new RegExp(`^fence_complete\\t${service}$`, "m"));
+  }
+  for (const id of ["p2p-new", "workspace-new", "worker-new"]) {
+    assert.equal(finalState.containers[id], undefined, `${id} was not removed after fencing`);
+  }
+  const stopIndex = finalState.calls.findIndex(([operation, id]) => operation === "stop" && id === fakeIdentity("d"));
   const apiUpIndex = finalState.calls.findIndex(([operation, service]) => operation === "up" && service === "api");
   assert.ok(stopIndex >= 0 && apiUpIndex > stopIndex, "Node was restored before Go services were fenced");
   assert.ok(finalState.tags.some(({ ref }) => ref === "duallane-api:old"));
   assert.ok(finalState.tags.some(({ ref }) => ref === "duallane-web:old"));
 });
+
+test("Node-to-Go fencing records the old API identity and leaves it stopped", async () => {
+  const { result, finalState, recovery } = await runFakeHarness("node-fence-success");
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  assert.equal(finalState.containers["api-old"].running, false);
+  assert.equal(finalState.containers["api-old"].restartName, "no");
+  assert.match(recovery, new RegExp(`^fence_target\\tapi\\t${fakeIdentity("a")}\\talways\\t0\\ttrue$`, "m"));
+  assert.match(recovery, new RegExp(`^fence_updated\\tapi\\t${fakeIdentity("a")}$`, "m"));
+  assert.match(recovery, new RegExp(`^fence_stopped\\tapi\\t${fakeIdentity("a")}$`, "m"));
+  assert.match(recovery, /^fence_complete\tapi$/m);
+  const updateIndex = finalState.calls.findIndex(([operation, id]) => operation === "update" && id === fakeIdentity("a"));
+  const stopIndex = finalState.calls.findIndex(([operation, id]) => operation === "stop" && id === fakeIdentity("a"));
+  assert.ok(updateIndex >= 0 && stopIndex > updateIndex, "API stop preceded restart-policy fencing");
+  assert.ok(!finalState.calls.some(([operation]) => ["start", "up"].includes(operation)));
+});
+
+test("restart-policy update failure stops no old owner", async () => {
+  const { result, finalState, recovery } = await runFakeHarness("node-fence-update-failure");
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  assert.equal(finalState.containers["api-old"].running, true);
+  assert.equal(finalState.containers["api-old"].restartName, "always");
+  assert.match(recovery, new RegExp(`^fence_target\\tapi\\t${fakeIdentity("a")}\\talways\\t0\\ttrue$`, "m"));
+  assert.doesNotMatch(recovery, new RegExp(`^fence_updated\\tapi\\t${fakeIdentity("a")}$`, "m"));
+  assert.ok(!finalState.calls.some(([operation]) => operation === "stop"));
+});
+
+test("container identity drift aborts before restart-policy update or stop", async () => {
+  const { result, finalState, recovery } = await runFakeHarness("node-fence-identity-drift");
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  assert.equal(finalState.containers["api-old"].running, true);
+  assert.equal(finalState.containers["api-old"].restartName, "always");
+  assert.match(recovery, new RegExp(`^fence_target\\tapi\\t${fakeIdentity("a")}\\talways\\t0\\ttrue$`, "m"));
+  assert.doesNotMatch(recovery, new RegExp(`^fence_updated\\tapi\\t${fakeIdentity("a")}$`, "m"));
+  assert.ok(!finalState.calls.some(([operation]) => ["update", "stop"].includes(operation)));
+});
+
+test("stop failure leaves the owner fenced but not recoverable", async () => {
+  const { result, finalState, recovery } = await runFakeHarness("node-fence-stop-failure");
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  assert.equal(finalState.containers["api-old"].running, true);
+  assert.equal(finalState.containers["api-old"].restartName, "no");
+  assert.match(recovery, new RegExp(`^fence_target\\tapi\\t${fakeIdentity("a")}\\talways\\t0\\ttrue$`, "m"));
+  assert.match(recovery, new RegExp(`^fence_updated\\tapi\\t${fakeIdentity("a")}$`, "m"));
+  assert.doesNotMatch(recovery, /^fence_complete\tapi$/m);
+  assert.ok(finalState.calls.some(([operation, id]) => operation === "stop-failed" && id === fakeIdentity("a")));
+  assert.ok(!finalState.calls.some(([operation, id]) => operation === "start" && id === fakeIdentity("a")));
+});
+
+test("daemon restart during fencing restores only the completed known-good API", async () => {
+  const { result, finalState, recovery } = await runFakeHarness("node-fence-daemon-restart");
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  assert.equal(finalState.containers["api-old"].running, true);
+  assert.equal(finalState.containers["api-old"].restartName, "always");
+  assert.match(recovery, /^fence_complete\tapi$/m);
+  assert.match(recovery, new RegExp(`^fence_restored\\tapi\\t${fakeIdentity("a")}$`, "m"));
+  const stopIndex = finalState.calls.findIndex(([operation, id]) => operation === "stop" && id === fakeIdentity("a"));
+  const startIndex = finalState.calls.findIndex(([operation, id]) => operation === "start" && id === fakeIdentity("a"));
+  assert.ok(stopIndex >= 0 && startIndex > stopIndex, "API was restored before the fenced stop completed");
+});
+
+test("mid-rollback fencing failure does not restore Node or revive later Go owners", async () => {
+  const { result, finalState, recovery } = await runFakeHarness("rollback-fence-mid-failure");
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  assert.equal(finalState.containers["api-old"].running, false);
+  assert.equal(finalState.containers["api-old"].restartName, "no");
+  assert.equal(finalState.containers["p2p-new"].running, false);
+  assert.equal(finalState.containers["p2p-new"].restartName, "no");
+  assert.equal(finalState.containers["workspace-new"].running, true);
+  assert.equal(finalState.containers["workspace-new"].restartName, "always");
+  assert.equal(finalState.containers["worker-new"].running, true);
+  assert.equal(finalState.containers["worker-new"].restartName, "always");
+  assert.match(recovery, /^fence_complete\tapi$/m);
+  assert.match(recovery, /^fence_complete\tp2p$/m);
+  assert.doesNotMatch(recovery, /^fence_complete\tworkspace$/m);
+  assert.ok(!finalState.calls.some(([operation, id]) =>
+    operation === "start" && [fakeIdentity("b"), fakeIdentity("c"), fakeIdentity("d")].includes(id)));
+  assert.ok(!finalState.calls.some(([operation]) => ["start", "up"].includes(operation)));
+});
+
+test("multiple owner containers fail closed before any restart-policy mutation", async () => {
+  const { result, finalState, recovery } = await runFakeHarness("node-fence-multiple");
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  assert.equal(finalState.containers["api-old"].running, true);
+  assert.equal(finalState.containers["api-old-2"].running, true);
+  assert.equal(finalState.containers["api-old"].restartName, "always");
+  assert.equal(finalState.containers["api-old-2"].restartName, "always");
+  assert.equal(recovery, "");
+  assert.ok(!finalState.calls.some(([operation]) => ["update", "stop"].includes(operation)));
+});
+
+for (const mode of ["node-fence-project-mismatch", "node-fence-service-mismatch", "node-fence-invalid-identity"]) {
+  test(`${mode} fails closed before restart-policy mutation`, async () => {
+    const { result, finalState, recovery } = await runFakeHarness(mode);
+    assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+    assert.equal(finalState.containers["api-old"].running, true);
+    assert.equal(finalState.containers["api-old"].restartName, "always");
+    assert.equal(recovery, "");
+    assert.ok(!finalState.calls.some(([operation]) => ["update", "stop"].includes(operation)));
+  });
+}
 
 test("legacy data permission failure aborts before Node owner handoff", async () => {
   const { result, finalState } = await runFakeHarness("permission-failure");
@@ -1057,13 +1312,15 @@ test("Compose ps failure is not treated as an absent service", async () => {
   assert.equal(snapshot, "");
 });
 
-test("daemon recovery uses replacement Node IDs after rollback recreation", async () => {
+test("daemon recovery with a Node-only snapshot never revives fenced Go owners", async () => {
   const { result, finalState, recovery } = await runFakeHarness("rollback-daemon");
   assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
   assert.equal(finalState.containers["api-old"], undefined);
   assert.equal(finalState.containers["web-old"], undefined);
   assert.equal(finalState.containers["api-old-restored"].running, true);
   assert.equal(finalState.containers["web-old-restored"].running, true);
+  assert.ok(!finalState.calls.some(([operation, id]) =>
+    operation === "start" && [fakeIdentity("b"), fakeIdentity("c"), fakeIdentity("d")].includes(id)));
   assert.match(recovery, /replacement_api=api-old-restored/);
   assert.match(recovery, /replacement_web=web-old-restored/);
   assert.match(recovery, /daemon_restart_restored=true/);
@@ -1076,7 +1333,7 @@ test("successful daemon restart restores only non-participants and verifies the 
   assert.equal(finalState.containers["api-old"].running, false);
   assert.ok(finalState.calls.some(([operation, id]) => operation === "start" && id === "v2ray-old"));
   assert.ok(!finalState.calls.some(([operation, id]) => operation === "start" && id === "api-old"));
-  assert.ok(finalState.calls.some(([operation, service]) => operation === "stop" && service === "api"));
+  assert.ok(finalState.calls.some(([operation, id]) => operation === "stop" && id === fakeIdentity("a")));
   for (const service of ["p2p", "workspace", "worker", "web"]) {
     assert.equal(finalState.containers[service + "-new"].running, true, `${service} profile is not healthy`);
   }

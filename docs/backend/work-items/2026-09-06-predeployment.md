@@ -1932,3 +1932,14 @@ The probe used only its generated synthetic corpus and cleaned its owned
 container. Its build context was the independently copied accepted candidate
 plus this explicit media patch, not an asserted clean Git release; the final
 same-commit runtime images and aggregate acceptance remain required.
+
+### Restart-Policy Fence And Recovery
+
+Parent independently passed all 51 release harness tests (60.027 seconds) and
+shell syntax after review of the canonical Docker identity, Compose ownership,
+single-instance and partial-failure handling. A Node-only original snapshot
+followed by failed Go activation/daemon recovery no longer revives the failed
+Go writers. The helper records the old policy before mutation, verifies
+`restart=no`, stops the exact owner and confirms it is not running. Only a
+completed fence can restore a selected known-good owner. This does not yet
+enable Go-to-Go upgrades or integrate the database/provider drain gate.

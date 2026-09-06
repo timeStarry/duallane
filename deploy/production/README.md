@@ -169,6 +169,19 @@ replacement IDs created by rollback are preferred. A missing container, failed
 start, or failed required healthcheck is a hard recovery failure; it is not
 hidden by cleanup error handling.
 
+Before stopping a writer or claimer, the helper records the exact Docker
+container identity and its original restart policy in the mode-0600 recovery
+record. It then applies `restart=no`, inspects that policy, stops the exact
+identity, and confirms the container is not running. A partial or failed fence
+is never treated as recoverable. A completed fence may restore only the
+explicitly selected known-good owner; failed Go owners remain stopped with
+`restart=no` and are not revived by daemon recovery. The identity must be the
+canonical 64-character lowercase Docker ID, and both Compose ownership labels
+(`com.docker.compose.project` and the target service) are rechecked before any
+update, stop, or recovery operation. This slice supports one container per
+owner; multiple matches fail closed. Daemon recovery skips a completed fenced
+Go owner and fails closed on an incomplete fence.
+
 If application replacement fails, `go-full` first stops and confirms all new Go
 services are not running, then retags captured images and restores the previous
 Node application state. Rollback restores application images only and never

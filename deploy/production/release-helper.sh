@@ -563,6 +563,281 @@ release_snapshot_was_running() {
   return 1
 }
 
+release_append_recovery_record() {
+  local record="$1"
+  [[ -n "${RELEASE_RECOVERY_FILE:-}" ]] || {
+    echo "restart-policy fencing requires a private recovery file" >&2
+    return 1
+  }
+  [[ "${record}" != *$'\n'* && "${record}" != *$'\r'* ]] || {
+    echo "restart-policy fencing record contains unsafe control data" >&2
+    return 1
+  }
+  umask 077
+  printf '%s\n' "${record}" >>"${RELEASE_RECOVERY_FILE}"
+}
+
+release_fence_service_has_target() {
+  local wanted_service="$1"
+  local kind service identity restart_name restart_max original_running
+  [[ -f "${RELEASE_RECOVERY_FILE:-}" ]] || return 1
+  while IFS=$'\t' read -r kind service identity restart_name restart_max original_running; do
+    if [[ "${kind}" == "fence_target" && "${service}" == "${wanted_service}" ]]; then
+      return 0
+    fi
+  done <"${RELEASE_RECOVERY_FILE}"
+  return 1
+}
+
+release_fence_service_is_complete() {
+  local wanted_service="$1"
+  local kind service rest
+  [[ -f "${RELEASE_RECOVERY_FILE:-}" ]] || return 1
+  while IFS=$'\t' read -r kind service rest; do
+    if [[ "${kind}" == "fence_complete" && "${service}" == "${wanted_service}" ]]; then
+      return 0
+    fi
+  done <"${RELEASE_RECOVERY_FILE}"
+  return 1
+}
+
+release_fence_target_count_for_service() {
+  local wanted_service="$1"
+  local count=0
+  local kind service identity restart_name restart_max original_running
+  [[ -f "${RELEASE_RECOVERY_FILE:-}" ]] || {
+    printf '0\n'
+    return 0
+  }
+  while IFS=$'\t' read -r kind service identity restart_name restart_max original_running; do
+    [[ "${kind}" == "fence_target" && "${service}" == "${wanted_service}" ]] || continue
+    count=$((count + 1))
+  done <"${RELEASE_RECOVERY_FILE}"
+  printf '%s\n' "${count}"
+}
+
+release_fence_require_single_target() {
+  local service="$1"
+  local count
+  count="$(release_fence_target_count_for_service "${service}")" || return 1
+  [[ "${count}" == 1 ]] || {
+    echo "${service} restart-policy recovery requires exactly one fenced container" >&2
+    return 1
+  }
+}
+
+release_fence_target_for_identity() {
+  local wanted_service="$1"
+  local wanted_identity="$2"
+  local kind service identity restart_name restart_max original_running
+  [[ -f "${RELEASE_RECOVERY_FILE:-}" ]] || return 1
+  while IFS=$'\t' read -r kind service identity restart_name restart_max original_running; do
+    if [[ "${kind}" == "fence_target" && "${service}" == "${wanted_service}" && "${identity}" == "${wanted_identity}" ]]; then
+      printf '%s\t%s\t%s\t%s\n' "${identity}" "${restart_name}" "${restart_max}" "${original_running}"
+      return 0
+    fi
+  done <"${RELEASE_RECOVERY_FILE}"
+  return 1
+}
+
+release_fence_target_records_for_service() {
+  local wanted_service="$1"
+  local kind service identity restart_name restart_max original_running
+  [[ -f "${RELEASE_RECOVERY_FILE:-}" ]] || return 0
+  while IFS=$'\t' read -r kind service identity restart_name restart_max original_running; do
+    [[ "${kind}" == "fence_target" && "${service}" == "${wanted_service}" ]] || continue
+    printf '%s\t%s\t%s\t%s\n' "${identity}" "${restart_name}" "${restart_max}" "${original_running}"
+  done <"${RELEASE_RECOVERY_FILE}"
+}
+
+release_capture_fence_target() {
+  local service="$1"
+  local container_id="$2"
+  local identity restart_name restart_max original_running existing
+  [[ -n "${RELEASE_RECOVERY_FILE:-}" ]] || {
+    echo "restart-policy fencing requires a private recovery file" >&2
+    return 1
+  }
+  [[ -n "${container_id}" && "${container_id}" != *$'\n'* && "${container_id}" != *$'\r'* && "${container_id}" != *$'\t'* ]] || {
+    echo "cannot capture an invalid container identity" >&2
+    return 1
+  }
+  if ! identity="$(docker inspect "${container_id}" --format '{{.Id}}' 2>/dev/null)"; then
+    echo "cannot inspect container identity before restart-policy fencing" >&2
+    return 1
+  fi
+  [[ "${identity}" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "container identity is invalid for restart-policy fencing" >&2
+    return 1
+  }
+  release_verify_fence_owner "${service}" "${identity}" || return 1
+  if existing="$(release_fence_target_for_identity "${service}" "${identity}")"; then
+    REPLY="${existing}"
+    return 0
+  fi
+  if release_fence_service_is_complete "${service}"; then
+    echo "refusing to fence a new container after ${service} fencing completed" >&2
+    return 1
+  fi
+  if ! restart_name="$(docker inspect "${identity}" --format '{{.HostConfig.RestartPolicy.Name}}' 2>/dev/null)" || \
+    ! restart_max="$(docker inspect "${identity}" --format '{{.HostConfig.RestartPolicy.MaximumRetryCount}}' 2>/dev/null)" || \
+    ! original_running="$(docker inspect "${identity}" --format '{{.State.Running}}' 2>/dev/null)"; then
+    echo "cannot capture container restart policy before fencing" >&2
+    return 1
+  fi
+  case "${restart_name}" in
+    no|always|unless-stopped|on-failure)
+      ;;
+    *)
+      echo "container has an unsupported restart policy" >&2
+      return 1
+      ;;
+  esac
+  [[ "${restart_max}" =~ ^[0-9]+$ && ("${original_running}" == true || "${original_running}" == false) ]] || {
+    echo "container restart policy state is invalid" >&2
+    return 1
+  }
+  release_append_recovery_record $'fence_target\t'"${service}"$'\t'"${identity}"$'\t'"${restart_name}"$'\t'"${restart_max}"$'\t'"${original_running}" || return 1
+  REPLY="${identity}"$'\t'"${restart_name}"$'\t'"${restart_max}"$'\t'"${original_running}"
+}
+
+release_verify_fence_identity() {
+  local container_id="$1"
+  local expected_identity="$2"
+  local actual_identity
+  if ! actual_identity="$(docker inspect "${container_id}" --format '{{.Id}}' 2>/dev/null)"; then
+    echo "cannot inspect container identity during restart-policy fencing" >&2
+    return 1
+  fi
+  if [[ "${actual_identity}" != "${expected_identity}" ]]; then
+    echo "container identity changed during restart-policy fencing" >&2
+    return 1
+  fi
+}
+
+release_verify_canonical_container_identity() {
+  local container_id="$1"
+  local actual_identity
+  if ! actual_identity="$(docker inspect "${container_id}" --format '{{.Id}}' 2>/dev/null)"; then
+    echo "cannot inspect container identity during restart-policy recovery" >&2
+    return 1
+  fi
+  [[ "${actual_identity}" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "container identity is invalid during restart-policy recovery" >&2
+    return 1
+  }
+}
+
+release_verify_fence_owner() {
+  local service="$1"
+  local container_id="$2"
+  local project label expected actual label_check
+  project="$(release_compose_project_name)" || return 1
+  for label_check in \
+    "com.docker.compose.project=${project}" \
+    "com.docker.compose.service=${service}"; do
+    label="${label_check%%=*}"
+    expected="${label_check#*=}"
+    if ! actual="$(docker inspect "${container_id}" --format "{{index .Config.Labels \"${label}\"}}" 2>/dev/null)"; then
+      echo "cannot inspect ${service} ownership labels during recovery" >&2
+      return 1
+    fi
+    if [[ "${actual}" != "${expected}" ]]; then
+      echo "refusing to recover an owner with mismatched Compose labels" >&2
+      return 1
+    fi
+  done
+}
+
+release_verify_restart_policy() {
+  local container_id="$1"
+  local expected_name="$2"
+  local expected_max="$3"
+  local actual_name actual_max
+  if ! actual_name="$(docker inspect "${container_id}" --format '{{.HostConfig.RestartPolicy.Name}}' 2>/dev/null)" || \
+    ! actual_max="$(docker inspect "${container_id}" --format '{{.HostConfig.RestartPolicy.MaximumRetryCount}}' 2>/dev/null)"; then
+    echo "cannot inspect container restart policy" >&2
+    return 1
+  fi
+  [[ "${actual_name}" == "${expected_name}" && "${actual_max}" == "${expected_max}" ]] || {
+    echo "container restart policy did not match the expected state" >&2
+    return 1
+  }
+}
+
+release_fence_target_restart_policy() {
+  local service="$1"
+  local identity="$2"
+  release_verify_fence_owner "${service}" "${identity}" || return 1
+  release_verify_fence_identity "${identity}" "${identity}" || return 1
+  if ! docker update --restart=no "${identity}" >/dev/null 2>&1; then
+    echo "could not disable restart policy for ${service}" >&2
+    return 1
+  fi
+  release_verify_fence_identity "${identity}" "${identity}" || return 1
+  release_verify_restart_policy "${identity}" no 0 || return 1
+  release_append_recovery_record $'fence_updated\t'"${service}"$'\t'"${identity}"
+}
+
+release_stop_fenced_target() {
+  local service="$1"
+  local identity="$2"
+  release_verify_fence_owner "${service}" "${identity}" || return 1
+  release_verify_fence_identity "${identity}" "${identity}" || return 1
+  if ! docker stop --time "${RELEASE_STOP_TIMEOUT}" "${identity}" >/dev/null 2>&1; then
+    echo "could not stop fenced ${service}" >&2
+    return 1
+  fi
+  release_wait_ids_not_running "${identity}" || return 1
+  release_verify_fence_identity "${identity}" "${identity}" || return 1
+  release_append_recovery_record $'fence_stopped\t'"${service}"$'\t'"${identity}"
+}
+
+release_fence_service_and_confirm() {
+  local service="$1"
+  local ids container_id target identity restart_name restart_max original_running
+  [[ -n "${RELEASE_RECOVERY_FILE:-}" ]] || {
+    echo "restart-policy fencing requires a private recovery file" >&2
+    return 1
+  }
+  if ! ids="$(release_current_service_ids "${service}")"; then
+    echo "could not inspect current containers for ${service} fencing" >&2
+    return 1
+  fi
+  [[ -n "${ids}" ]] || return 0
+
+  local container_count=0
+  while IFS= read -r container_id; do
+    [[ -n "${container_id}" ]] || continue
+    container_count=$((container_count + 1))
+  done <<<"${ids}"
+  [[ "${container_count}" == 1 ]] || {
+    echo "${service} restart-policy fencing supports exactly one container" >&2
+    return 1
+  }
+  if release_fence_service_has_target "${service}"; then
+    release_fence_require_single_target "${service}" || return 1
+  fi
+
+  local -a targets=()
+  while IFS= read -r container_id; do
+    [[ -n "${container_id}" ]] || continue
+    release_capture_fence_target "${service}" "${container_id}" || return 1
+    targets+=("${REPLY}")
+  done <<<"${ids}"
+  [[ "${#targets[@]}" -gt 0 ]] || return 0
+
+  for target in "${targets[@]}"; do
+    IFS=$'\t' read -r identity restart_name restart_max original_running <<<"${target}"
+    release_fence_target_restart_policy "${service}" "${identity}" || return 1
+  done
+  for target in "${targets[@]}"; do
+    IFS=$'\t' read -r identity restart_name restart_max original_running <<<"${target}"
+    release_stop_fenced_target "${service}" "${identity}" || return 1
+  done
+  release_append_recovery_record $'fence_complete\t'"${service}"
+}
+
 release_wait_ids_not_running() {
   local ids="$1"
   local attempt id running all_stopped
@@ -588,12 +863,7 @@ release_wait_ids_not_running() {
 }
 
 release_stop_service_and_confirm() {
-  local service="$1"
-  local ids
-  ids="$(release_current_service_ids "${service}")" || return 1
-  [[ -n "${ids}" ]] || return 0
-  compose stop --timeout "${RELEASE_STOP_TIMEOUT}" "${service}" >/dev/null || return 1
-  release_wait_ids_not_running "${ids}" || return 1
+  release_fence_service_and_confirm "$1"
 }
 
 release_remove_service_if_present() {
@@ -1188,6 +1458,116 @@ release_wait_container_ready() {
   return 1
 }
 
+release_restart_policy_spec() {
+  local restart_name="$1"
+  local restart_max="$2"
+  [[ "${restart_max}" =~ ^[0-9]+$ ]] || {
+    echo "container restart policy retry count is invalid" >&2
+    return 1
+  }
+  case "${restart_name}" in
+    no|always|unless-stopped)
+      [[ "${restart_max}" == 0 ]] || {
+        echo "container restart policy retry count is invalid" >&2
+        return 1
+      }
+      REPLY="${restart_name}"
+      ;;
+    on-failure)
+      if [[ "${restart_max}" == 0 ]]; then
+        REPLY="on-failure"
+      else
+        REPLY="on-failure:${restart_max}"
+      fi
+      ;;
+    *)
+      echo "container restart policy is unsupported" >&2
+      return 1
+      ;;
+  esac
+}
+
+release_apply_restart_policy() {
+  local container_id="$1"
+  local restart_name="$2"
+  local restart_max="$3"
+  local restart_spec
+  release_restart_policy_spec "${restart_name}" "${restart_max}" || return 1
+  restart_spec="${REPLY}"
+  if ! docker update --restart="${restart_spec}" "${container_id}" >/dev/null 2>&1; then
+    echo "could not restore the selected container restart policy" >&2
+    return 1
+  fi
+  release_verify_restart_policy "${container_id}" "${restart_name}" "${restart_max}"
+}
+
+release_fence_first_target_for_service() {
+  local wanted_service="$1"
+  local kind service identity restart_name restart_max original_running
+  [[ -f "${RELEASE_RECOVERY_FILE:-}" ]] || return 1
+  while IFS=$'\t' read -r kind service identity restart_name restart_max original_running; do
+    if [[ "${kind}" == "fence_target" && "${service}" == "${wanted_service}" ]]; then
+      printf '%s\t%s\t%s\t%s\n' "${identity}" "${restart_name}" "${restart_max}" "${original_running}"
+      return 0
+    fi
+  done <"${RELEASE_RECOVERY_FILE}"
+  return 1
+}
+
+release_restore_fenced_policy_on_container() {
+  local service="$1"
+  local container_id="$2"
+  local target old_identity restart_name restart_max original_running
+  if ! release_fence_service_has_target "${service}"; then
+    return 0
+  fi
+  release_fence_require_single_target "${service}" || return 1
+  release_fence_service_is_complete "${service}" || {
+    echo "cannot restore a known-good ${service} owner before fencing completes" >&2
+    return 1
+  }
+  release_verify_fence_owner "${service}" "${container_id}" || return 1
+  release_verify_canonical_container_identity "${container_id}" || return 1
+  if ! target="$(release_fence_first_target_for_service "${service}")"; then
+    return 1
+  fi
+  IFS=$'\t' read -r old_identity restart_name restart_max original_running <<<"${target}"
+  [[ "${original_running}" == true ]] || return 0
+  release_apply_restart_policy "${container_id}" "${restart_name}" "${restart_max}" || return 1
+  release_append_recovery_record $'fence_replacement_restored\t'"${service}"$'\t'"${container_id}"
+}
+
+release_restore_fenced_service() {
+  local service="$1"
+  release_fence_require_single_target "${service}" || return 1
+  release_fence_service_is_complete "${service}" || {
+    echo "cannot restore ${service} before restart-policy fencing completes" >&2
+    return 1
+  }
+  local target identity restart_name restart_max original_running current_state found=false
+  while IFS=$'\t' read -r identity restart_name restart_max original_running; do
+    [[ -n "${identity}" ]] || continue
+    found=true
+    [[ "${original_running}" == true ]] || continue
+    release_verify_fence_owner "${service}" "${identity}" || return 1
+    release_verify_fence_identity "${identity}" "${identity}" || return 1
+    if ! current_state="$(docker inspect "${identity}" --format '{{.State.Running}}' 2>/dev/null)"; then
+      echo "cannot inspect the fenced ${service} owner during recovery" >&2
+      return 1
+    fi
+    [[ "${current_state}" == false ]] || {
+      echo "refusing to restore a fenced ${service} owner that is still running" >&2
+      return 1
+    }
+    release_verify_restart_policy "${identity}" no 0 || return 1
+    docker start "${identity}" >/dev/null || return 1
+    release_wait_container_ready "${identity}" "${service}" || return 1
+    release_apply_restart_policy "${identity}" "${restart_name}" "${restart_max}" || return 1
+    release_append_recovery_record $'fence_restored\t'"${service}"$'\t'"${identity}"
+  done < <(release_fence_target_records_for_service "${service}")
+  [[ "${found}" == true ]]
+}
+
 release_start_snapshot_service() {
   local service="$1"
   local record id image_id image_ref running status health current_state
@@ -1228,6 +1608,20 @@ release_replacement_id_for_service() {
 release_start_recovery_service() {
   local service="$1"
   local replacement current_state
+  if release_profile_contains "${service}" "${RELEASE_GO_SERVICES[@]}"; then
+    if release_fence_service_has_target "${service}"; then
+      release_fence_service_is_complete "${service}" || {
+        echo "cannot recover while failed Go ${service} fencing is incomplete" >&2
+        return 1
+      }
+      echo "skipping fenced failed Go ${service} owner during daemon recovery" >&2
+      return 0
+    fi
+    if release_snapshot_was_running "${service}"; then
+      echo "refusing to resurrect a failed Go ${service} owner during daemon recovery" >&2
+      return 1
+    fi
+  fi
   replacement="$(release_replacement_id_for_service "${service}")"
   if [[ -n "${replacement}" ]]; then
     if ! current_state="$(docker inspect "${replacement}" --format '{{.State.Running}}')"; then
@@ -1238,6 +1632,11 @@ release_start_recovery_service() {
       docker start "${replacement}" >/dev/null || return 1
     fi
     release_wait_container_ready "${replacement}" "${service}" || return 1
+    release_restore_fenced_policy_on_container "${service}" "${replacement}" || return 1
+    return
+  fi
+  if release_fence_service_has_target "${service}"; then
+    release_restore_fenced_service "${service}" || return 1
     return
   fi
   release_start_snapshot_service "${service}" || return 1
@@ -1358,6 +1757,7 @@ release_restore_snapshot_service() {
     fi
     current_id="${current_ids}"
     release_wait_container_ready "${current_id}" "${service}" || return 1
+    release_restore_fenced_policy_on_container "${service}" "${current_id}" || return 1
     release_record_replacement "${service}" "${current_id}"
     return 0
   fi
