@@ -306,3 +306,19 @@ this removal passed for botgateway, messages and cards. A new aggregate run is
 still required. The local whole-browser rerun also recorded a separate failure
 waiting for `workspace-e2e-history-27`; do not report it as a local full pass or
 hide it behind the successful remote run.
+
+### Release Domain Acceptance
+
+The reviewed release slice now preserves all six checked-in Node guide snapshots
+and hashes, a synthetic Unicode/escaping guide, version casing, ID prefixes and
+publication lock keys. The final independent Node fixture check passed (six
+catalog entries plus one synthetic guide); fresh PostgreSQL/race tests passed
+after removal of the standalone delivery-state mutator (8.606 seconds), and
+integration-tag staticcheck passed. Publication, pending recipient rows and
+metadata audit remain one transaction; duplicate publication is version-keyed.
+Delivery claiming, state transitions and message/card effects belong exclusively
+to the Echo delivery coordinator. This accepts the release domain foundation,
+not command wiring, delivery execution, production ownership or deployment.
+
+All three remote CI jobs passed for `50f8224`. Later worker changes and the
+Bot raw-JSON compatibility patch still require their own final aggregate gate.
