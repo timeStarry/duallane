@@ -29,6 +29,14 @@ OpenAPI and JSON Schema become executable projections of these sources as
 capabilities migrate. They do not silently replace higher-level security or
 product requirements.
 
+The current Workspace schema slices are
+[`workspace-core.yaml`](../../apps/backend/api/workspace-core.yaml) and
+[`workspace-emotes.yaml`](../../apps/backend/api/workspace-emotes.yaml).
+Their actual Node characterization fixtures and strict schema tests live in
+`internal/workspacecontract`. These are contract projections, not evidence that
+every Go handler or service matches them. See the validation guide for the
+check-only commands; do not regenerate goldens to conceal a runtime mismatch.
+
 ## 3. HTTP Contract
 
 Every migrated route must preserve or deliberately version:

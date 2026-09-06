@@ -219,6 +219,24 @@ a working runner is not a blanket parity claim.
 
 ### Extending coverage
 
+The first strict Workspace schema slices describe auth/core and emote routes.
+Run their actual Node characterization checks after dependency installation:
+
+```bash
+node scripts/backend/workspace-core-contract.mjs --check
+node scripts/backend/workspace-emotes-contract.mjs --check
+node scripts/backend/topic-parser-fixtures.mjs --check
+node scripts/backend/topic-card-fixtures.mjs --check
+cd apps/backend
+go test -race ./internal/workspacecontract ./internal/workspace/topics
+```
+
+CI rechecks these fixtures against Node; Go tests verify the checked-in schema
+and parser/card results. The contract package does not execute Go HTTP handlers.
+Prove Go route behavior separately with enabled HTTP/PostgreSQL and browser
+tests. The core route inventory exceeds its initial scenario set: redirect
+headers, remaining cases and remaining families are not implicitly covered.
+
 `node scripts/backend/route-inventory.mjs --check` checks the generated
 `apps/backend/api/node-routes.json` against current literal route declarations
 and the actual Node application's registration/disabled responses. Regenerate

@@ -134,6 +134,10 @@ jobs:
           node scripts/backend/echo-release-fixtures.mjs --check
           node scripts/backend/bot-idempotency-fixtures.mjs --check
           node scripts/backend/route-inventory.mjs --check
+          node scripts/backend/workspace-core-contract.mjs --check
+          node scripts/backend/workspace-emotes-contract.mjs --check
+          node scripts/backend/topic-parser-fixtures.mjs --check
+          node scripts/backend/topic-card-fixtures.mjs --check
 
       - name: Run type and lint checks
         run: pnpm lint
