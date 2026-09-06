@@ -21,6 +21,9 @@ jobs:
     name: Go test, race, analysis, build, and PostgreSQL
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      CGO_ENABLED: "1"
+      CC: gcc
     services:
       postgres:
         image: postgres:17-alpine
@@ -45,6 +48,22 @@ jobs:
         with:
           go-version-file: apps/backend/go.mod
           cache-dependency-path: apps/backend/go.sum
+
+      - name: Provision Go native dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y gcc libvips-dev pkg-config
+          command -v gcc
+          command -v pkg-config
+          pkg-config --exists vips
+          test "$(go env CGO_ENABLED)" = "1"
+          printf 'Go: %s\n' "$(go version)"
+          printf 'C compiler: %s\n' "$(gcc --version | sed -n '1p')"
+          printf 'pkg-config: %s\n' "$(pkg-config --version)"
+          printf 'libvips: %s\n' "$(pkg-config --modversion vips)"
+          printf 'CGO_ENABLED: %s\n' "$(go env CGO_ENABLED)"
+          printf 'CC: %s\n' "$(go env CC)"
 
       - name: Run Go quality gate
         working-directory: apps/backend
@@ -80,6 +99,9 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+
+      - name: Validate Go CI native dependency guard
+        run: node --test .github/tests/ci-go-native-dependencies.test.mjs
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
