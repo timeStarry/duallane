@@ -470,6 +470,13 @@ test("runDrainCheck creates, validates, observes, writes, and removes one owned 
   });
   assert.deepEqual(JSON.parse(await readFile(state.reportPath, "utf8")), readyReport());
   const dockerArgs = state.dockerRunner.calls.map((call) => call.args.join(" "));
+  const creation = state.dockerRunner.calls.find(call => call.args[0] === "compose" && call.args.includes("create"));
+  assert.ok(creation);
+  // Compose create has no --no-deps flag. The generated service is the only
+  // service in its file and has no dependency declarations to traverse.
+  assert.equal(creation.args.includes("--no-deps"), false);
+  assert.deepEqual(Object.keys(generated.services), [RELEASE_CHECK_SERVICE]);
+  assert.equal(generated.services[RELEASE_CHECK_SERVICE].depends_on, undefined);
   assert.equal(dockerArgs.some((value) => value.includes(" network create ")), false);
   assert.equal(dockerArgs.some((value) => value.includes(" compose down")), false);
   assert.equal(dockerArgs.some((value) => value.includes(" compose start")), false);

@@ -797,6 +797,8 @@ async function ensureNoOwnedReleaseCheck(runner, project, composePath) {
 }
 
 async function createOwnedContainer(runner, generatedPath, project) {
+  // The generated file contains only the dependency-free checker. Unlike
+  // `up`, Compose `create` has no --no-deps option and never starts it.
   await dockerSuccess(
     runner,
     composeArgs(
@@ -806,7 +808,6 @@ async function createOwnedContainer(runner, generatedPath, project) {
       "--pull",
       "never",
       "--no-build",
-      "--no-deps",
       RELEASE_CHECK_SERVICE,
     ),
     { failureCode: "container_create_failed", timeoutCode: "container_create_timeout" },

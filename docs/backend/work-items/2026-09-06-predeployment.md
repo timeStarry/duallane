@@ -2307,3 +2307,23 @@ were rejected. The local-to-S3 expected error was corrected to the earlier
 credential-authority rejection; the separate S3 endpoint assertion remained.
 All exact task-owned containers, volumes, network and private fixture files
 were removed. No business writer, PostgreSQL server or provider ran in this gate.
+
+### Real One-Shot Drain And Compose Command Compatibility
+
+Parent's real Docker rehearsal exposed two fixture/runtime distinctions:
+hand-made Compose labels were not sufficient for Compose service discovery,
+and `docker compose create` does not accept `--no-deps`. PostgreSQL now uses
+real Compose creation, while the dependency-free checker uses supported
+`create --pull never --no-build`. The production-coordinator draft uses
+`up --no-start --no-deps` for dependency-bearing services; its complete gate
+remains pending. The runner's 25 focused tests passed in 0.733 seconds.
+
+The PostgreSQL readiness probe also needed TCP explicitly: its temporary
+Unix-only initialization server can answer the default probe before migration
+clients can connect. With that corrected, parent passed both real drain Docker
+results in 7.726 seconds, without skips, using exact newly built Workspace
+`sha256:27faeccce635d52fb094d8946f35114be1779f886d053026574a8b2ddeeaab09`
+from clean `469176d34d05df0bb38c6f6e7ad6dbcffb2ec084` (0.16.0) and PostgreSQL
+`sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73`.
+Canonical migration, actual checker execution, private ready report acceptance
+and exact owned cleanup completed. No production resources were touched.

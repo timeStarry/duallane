@@ -478,6 +478,21 @@ stop/removal, local/S3 canonical authority drift and exact owned cleanup are
 exercised. No database server, business writer or storage provider is started
 by this test; its scope is Docker volume identity, not data integrity.
 
+Run the real one-shot checker against an isolated migrated PostgreSQL with:
+
+```sh
+DUALLANE_DRAIN_TEST_IMAGE=sha256:<64-hex-go-image-id> \
+DUALLANE_DRAIN_TEST_POSTGRES_IMAGE=sha256:<64-hex-pg-image-id> \
+  node --test scripts/backend/release-drain-run.docker.test.mjs
+```
+
+This gate creates an owned PostgreSQL, requires its final TCP listener, runs
+the exact Go migration command, then invokes the actual drain runner and
+validates the private ready report. It checks exact images, labels, networks,
+mounts and owned cleanup. Only synthetic database data is written; no business
+service or provider is contacted. Missing exact image variables are a skip,
+and this component gate is not coordinated cutover/recovery evidence.
+
 The retained offline storage boundary is guarded by
 `node --test scripts/backend/storage-operator-retained.test.mjs` in CI. It
 checks the actual Node command modes, opt-in one-shot storage Compose services,
