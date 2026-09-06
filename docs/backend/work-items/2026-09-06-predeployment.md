@@ -1613,3 +1613,18 @@ are unchanged. Parent independently passed all five focused Node provisioning
 tests (31 ms); the added regression proves only HeadBucket/GetBucketPolicy run
 before refusal. No external bucket or policy was read or modified. Equivalent
 Go policy/invalid-JSON/report fixes remain under review in the separate slice.
+
+### Active Go Background Ownership Defaults
+
+The explicit full-Go profile now defaults Echo and maintenance on in its worker,
+matching the work previously executed by Node; explicit false overrides are
+preserved and the Workspace HTTP process keeps both off. Parent passed all three
+source/config guard tests and actual Docker Compose resolution for defaults and
+explicit false overrides, plus the Go race regression proving validate-only
+never invokes configured processors (1.031 seconds). The mount-only candidate
+overlay is not passive by itself: the guarded release helper still supplies and
+inspects its passive environment overrides. No providers or active containers
+were started by these checks. The new defaults test is included in CI.
+
+Remote CI `34044699666` passed all three jobs at `fce77df`; later commits require
+their own aggregate gate and this result does not include uncommitted drafts.

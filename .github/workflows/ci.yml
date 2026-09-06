@@ -133,7 +133,7 @@ jobs:
         run: node --test .github/tests/ci-go-native-dependencies.test.mjs .github/tests/ci-go-p2p-privacy.test.mjs .github/tests/ci-unit-fixtures.test.mjs scripts/backend/owned-process.test.mjs scripts/backend/p2p-parity.test.mjs scripts/backend/route-inventory.test.mjs scripts/backend/go-workspace-browser.test.mjs
 
       - name: Validate release ownership and rollback contracts
-        run: node --test scripts/backend/production-deploy.test.mjs
+        run: node --test scripts/backend/production-deploy.test.mjs scripts/backend/go-production-workers.test.mjs
 
       - name: Validate bounded permission rehearsal and owned cleanup
         run: node --test scripts/backend/runtime-permissions.test.mjs

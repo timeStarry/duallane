@@ -138,7 +138,9 @@ Logical expiry applies to lookups even if the sweeper is stopped. Enable this
 only on a synthetic candidate or after the capability's Go ownership is
 authorized; this switch does not authorize cutover or start another writer.
 
-`WORKSPACE_ECHO_WORKER_ENABLED=true` is a separate exact opt-in, default off.
+`WORKSPACE_ECHO_WORKER_ENABLED=true` is a separate exact opt-in, default off
+when running the standalone command. The explicit `go-full` Compose profile
+supplies `true` by default for both Echo and maintenance, as described below.
 It composes requirement, solicitation and release delivery plus active-human
 member reconciliation. The four loops run independently every 30 seconds after
 the worker startup delay, with 25-item keyset pages and independent cursors.
@@ -209,6 +211,13 @@ maintenance retry; never treat a logical resource removal as proof that bytes
 were deleted.
 
 ### Candidate Side-Effect Isolation
+
+The explicit `go-full` active profile defaults email, ntfy, Echo and maintenance
+processors on in the separate worker; their explicit `false` overrides remain
+available to operators. The Workspace HTTP process keeps these loops off.
+These defaults do not enable Go in the Node-default deployment. Candidate
+launches must still use the guarded release helper's passive environment; the
+read-only mount overlay alone does not disable processors.
 
 An unpublished port does not make a candidate passive. Startup hooks, job
 claimers, retention, object cleanup, seed reconciliation, and migration runners
