@@ -1715,3 +1715,14 @@ parity or final runtime-image authenticated HTTP evidence.
 
 Remote CI `34046105967` passed all three jobs at `a99f781`; later commits and
 uncommitted drafts remain subject to their own final gate.
+
+### Node Passive Startup Regression
+
+Parent independently passed the real Node `createApp` passive-candidate test
+(1/1, 328 ms). With Workspace and auto-migration disabled, all delivery workers
+off and a private temporary data directory, an intentionally invalid database
+URL is never opened. Health/version and P2P remain usable, Workspace/Bot HTTP
+and WebSocket entry points reject access, and the temporary data directory stays
+empty. This proves the application startup mode only; release-helper environment
+wiring and its inspection gate are still a separate pending change. It does not
+claim Workspace database or object-store readiness from the Node health response.
