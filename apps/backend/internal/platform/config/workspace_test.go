@@ -98,6 +98,18 @@ func TestLoadWorkspaceNtfyWorkerDefaultsEnabled(t *testing.T) {
 	}
 }
 
+func TestMaintenanceWorkerRequiresExplicitOptIn(t *testing.T) {
+	for _, value := range []string{"", "false", "TRUE", " true ", "1", "true"} {
+		configuration, err := LoadWorkspaceFrom(configLookup(map[string]string{WorkspaceMaintenanceWorkerEnv: value}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if configuration.MaintenanceEnabled != (value == "true") {
+			t.Fatalf("maintenance flag %q enabled=%v", value, configuration.MaintenanceEnabled)
+		}
+	}
+}
+
 func TestLoadWorkspaceBoundsOAuthTimeoutAndRejectsInvalidPort(t *testing.T) {
 	config, err := LoadWorkspaceFrom(configLookup(map[string]string{GitHubOAuthTimeoutEnvironment: "4294967296"}))
 	if err != nil {

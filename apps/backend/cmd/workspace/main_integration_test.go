@@ -16,15 +16,18 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/jackc/pgx/v5"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/config"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/migrations"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/emotes"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/presence"
 )
 
 func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
@@ -164,6 +167,67 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 	if err := app.pool.QueryRow(ctx, `SELECT COUNT(*) FROM audit_logs WHERE actor_user_id='composition-user' AND action='emote.create' AND result='rejected' AND reason=$1`, emotes.CodeEmoteInputTooLarge).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("overage audit count=%d err=%v", count, err)
 	}
+	t.Run("realtime publishes shared presence and removes only its own lease", func(t *testing.T) {
+		server := httptest.NewServer(app.handler)
+		defer server.Close()
+		lookup := presence.NewService(presence.ServiceOptions{Repository: presence.NewPGRepository(app.pool)})
+		waitForCount := func(want int) {
+			t.Helper()
+			deadline := time.NewTimer(5 * time.Second)
+			defer deadline.Stop()
+			tick := time.NewTicker(10 * time.Millisecond)
+			defer tick.Stop()
+			for {
+				var count int
+				if err := app.pool.QueryRow(ctx, `SELECT COUNT(*) FROM workspace_presence_leases WHERE user_id='composition-user'`).Scan(&count); err != nil {
+					t.Fatal(err)
+				}
+				if count == want {
+					online, err := lookup.IsOnlineContext(ctx, "composition-user")
+					if err != nil || online != (want > 0) {
+						t.Fatalf("shared presence online=%v error=%v", online, err)
+					}
+					return
+				}
+				select {
+				case <-deadline.C:
+					t.Fatalf("presence lease count=%d want=%d", count, want)
+				case <-tick.C:
+				}
+			}
+		}
+		dial := func() *websocket.Conn {
+			t.Helper()
+			connection, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/ws/workspace", &websocket.DialOptions{
+				HTTPHeader: http.Header{"Cookie": {(&http.Cookie{Name: auth.SessionCookieName, Value: session.Token}).String()}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = connection.CloseNow() })
+			if err := connection.Write(ctx, websocket.MessageText, []byte(`{"version":1,"type":"hello","lastSeq":0}`)); err != nil {
+				t.Fatal(err)
+			}
+			readCtx, cancelRead := context.WithTimeout(ctx, 5*time.Second)
+			defer cancelRead()
+			_, raw, err := connection.Read(readCtx)
+			var ready struct {
+				Type string `json:"type"`
+			}
+			if err != nil || json.Unmarshal(raw, &ready) != nil || ready.Type != "ready" {
+				t.Fatalf("realtime handshake type=%s error=%v", ready.Type, err)
+			}
+			return connection
+		}
+		first := dial()
+		waitForCount(1)
+		second := dial()
+		waitForCount(2)
+		_ = first.CloseNow()
+		waitForCount(1)
+		_ = second.CloseNow()
+		waitForCount(0)
+	})
 
 	// A missing migration must fail readiness and a fresh startup before any
 	// object directory, session, seed or event-listener side effect is created.

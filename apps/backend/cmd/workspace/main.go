@@ -38,6 +38,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/ntfy"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/overview"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/presence"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/realtime"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/topics"
 )
@@ -253,6 +254,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		overviewService = overview.NewService(overview.ServiceOptions{Repository: overview.NewPGRepository(pool)})
 		eventHub := realtime.NewHub()
 		eventService := events.NewService(events.ServiceOptions{Repository: events.NewPGRepository(pool)})
+		presenceService := presence.NewService(presence.ServiceOptions{Repository: presence.NewPGRepository(pool)})
 		bootstrapService = bootstrap.NewService(bootstrap.ServiceOptions{
 			Repository: bootstrap.NewPGRepository(pool), Members: memberService,
 			Conversations: conversationService, Files: fileService, Events: eventService,
@@ -260,6 +262,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		})
 		realtimeHandler = realtime.NewHandler(realtime.HandlerOptions{
 			RootContext: ctx, ActorResolver: authHandler, Events: eventService, Hub: eventHub,
+			Presence: presenceService,
 		})
 		listener := realtime.NewPGListener(realtime.ListenerOptions{Pool: pool, Hub: eventHub, Logger: logger})
 		backgroundDone = make(chan struct{})

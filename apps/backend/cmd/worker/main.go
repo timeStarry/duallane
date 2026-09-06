@@ -19,6 +19,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/ntfy"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/presence"
 )
 
 const serviceName = "worker"
@@ -84,7 +85,7 @@ func main() {
 
 func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, logger *slog.Logger) (*application, error) {
 	app := &application{rootContext: ctx, logger: logger, startupDelay: time.Minute}
-	if !runtimeConfig.Enabled || (!runtimeConfig.NtfyWorkerEnabled && !runtimeConfig.EmailWorkerEnabled) {
+	if !runtimeConfig.Enabled || (!runtimeConfig.NtfyWorkerEnabled && !runtimeConfig.EmailWorkerEnabled && !runtimeConfig.MaintenanceEnabled) {
 		return app, nil
 	}
 	pool, err := postgres.OpenPoolFromEnv(ctx)
@@ -126,6 +127,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		})
 	}
 	if runtimeConfig.EmailWorkerEnabled {
+		presenceService := presence.NewService(presence.ServiceOptions{Repository: presence.NewPGRepository(pool)})
 		service, err := email.NewServiceWithError(email.ServiceOptions{
 			Repository: email.NewPGRepository(pool), FrontendURL: frontendURL,
 			EncryptionKeyB64: runtimeConfig.SMTPEncryptionKey,
@@ -137,8 +139,18 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		app.processors = append(app.processors, workerProcessor{
 			name: "email", interval: email.DefaultWorkerInterval,
 			process: func(ctx context.Context) (processResult, error) {
-				result, err := service.ProcessJobs(ctx)
+				result, err := service.ProcessJobsWithContextPresence(ctx, presenceService)
 				return processResult(result), err
+			},
+		})
+	}
+	if runtimeConfig.MaintenanceEnabled {
+		presenceService := presence.NewService(presence.ServiceOptions{Repository: presence.NewPGRepository(pool)})
+		app.processors = append(app.processors, workerProcessor{
+			name: "presence_expiry", interval: time.Minute,
+			process: func(ctx context.Context) (processResult, error) {
+				_, err := presenceService.SweepExpired(ctx, presence.DefaultSweepBatch)
+				return processResult{}, err
 			},
 		})
 	}

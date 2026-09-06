@@ -365,3 +365,21 @@ and bounded expiry cleanup. Integration-tag staticcheck passed. Runtime injectio
 and worker scheduling are a subsequent composition slice, not accepted by these
 domain tests. The local Node aggregate rerun failed 12 tests and is being triaged;
 it is not counted as a passing gate.
+
+Remote CI for `30fc0ef` subsequently passed all three jobs, including Node
+unit/lint/build/Chromium, Go PostgreSQL/race/analysis, and Go P2P browser privacy.
+The separate local avatar characterization reproduced a default five-second
+test timeout; no contract assertion failed in that isolated result. The local
+aggregate remains a recorded failure, not a pass inferred from remote CI.
+
+The next composition slice injects PG presence into the actual Workspace
+realtime handler and email worker, and adds explicitly opted-in bounded expiry
+maintenance. Independent fresh PG/race passed for Workspace, worker and config
+(7.247 / 4.202 / 1.027 seconds). It tests two real WebSockets, independent lease
+cleanup, online email deferral, a failed presence-table lookup with job storage
+still available, and a 100-row sweep that preserves active leases. Initial
+config testing caught whitespace accepted by the generic environment helper;
+the new flag now compares the raw value with `true` and the exact-value
+regression passes. No external mail was sent, and no production worker was
+started. Deployment/Compose wiring remains a separate gate.
+Integration-tag staticcheck also passed for the three composition packages.

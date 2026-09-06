@@ -13,12 +13,22 @@ import (
 )
 
 func TestDisabledWorkerDoesNotOpenDatabase(t *testing.T) {
-	app, err := newApplication(context.Background(), config.WorkspaceConfig{Enabled: false, NtfyWorkerEnabled: true}, nil)
+	app, err := newApplication(context.Background(), config.WorkspaceConfig{Enabled: false, NtfyWorkerEnabled: true, EmailWorkerEnabled: true, MaintenanceEnabled: true}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if app.pool != nil || len(app.processors) != 0 {
 		t.Fatalf("disabled worker dependencies = %#v", app)
+	}
+}
+
+func TestEnabledWorkerWithAllJobsDisabledDoesNotOpenDatabase(t *testing.T) {
+	app, err := newApplication(context.Background(), config.WorkspaceConfig{Enabled: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.pool != nil || len(app.processors) != 0 {
+		t.Fatal("worker with all job flags disabled opened dependencies")
 	}
 }
 

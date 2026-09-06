@@ -101,6 +101,20 @@ processor, or connect to its database/object store. Media normalization uses
 one shared bounded processor; domain services retain authorization, logical
 quota, audit and storage-reference ownership.
 
+The Go realtime handler records a random per-connection PostgreSQL presence
+lease after authenticated replay. The Go email worker uses that shared lookup
+to defer immediate mail while any active human connection remains online;
+lookup failure also defers, never sends. Leases default to 90 seconds and require
+synchronized host clocks. No P2P connection, token, address, or message is stored.
+
+`WORKSPACE_MAINTENANCE_WORKER_ENABLED=true` explicitly enables Go worker expiry
+cleanup; all other values leave it off. Workspace itself must also be enabled.
+The presence sweep runs once per minute after worker startup delay, removes at
+most 100 expired leases per cycle, and has a five-second database deadline.
+Logical expiry applies to lookups even if the sweeper is stopped. Enable this
+only on a synthetic candidate or after the capability's Go ownership is
+authorized; this switch does not authorize cutover or start another writer.
+
 ## 6. Startup And Readiness
 
 Target dependency order:
