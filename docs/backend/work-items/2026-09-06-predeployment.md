@@ -1039,3 +1039,18 @@ Browser reruns still failed: once at the earlier reaction display before the
 catalog was connected, then twice at rapid history-message catch-up (line 728,
 20.5/22.6 seconds). No complete browser pass is claimed. Catch-up remains a
 separate active investigation; assertions and deadlines are unchanged.
+
+### Shared Echo And Feishu Card Transaction Composition
+
+The candidate Echo runtime now provides a cards repository that preserves
+Feishu's typed action/savepoint extension and adds requirement and solicitation
+views over the same accepting PostgreSQL transaction. It retains each configured
+repository's ID factory. This adapter is not yet selected by the application;
+registered Echo definitions and end-to-end action wiring remain separate gates.
+
+Independent PostgreSQL/race passed runtime (2.620 seconds), including a one-
+connection-pool regression: a late failure rolls back both domain writes, and
+the cards-owned savepoint rolls back both views before successful retry using
+the same configured IDs. Integration-tag staticcheck passed. An initial test
+placement polluted the existing writer fixture's zero-audit assertion; moving
+the independent subtest after those assertions fixed only fixture isolation.

@@ -180,4 +180,7 @@ func TestPGWriterKeepsCardMessageJobsAndEvidenceAtomic(t *testing.T) {
 	if _, err := write(input, false); err == nil {
 		t.Fatal("untrusted writer intent accepted")
 	}
+	t.Run("shared card domain transactions", func(t *testing.T) {
+		checkCardTransactionComposition(t, ctx, pool)
+	})
 }
