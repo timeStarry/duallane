@@ -22,6 +22,10 @@ const (
 	attachmentTargetType   = "attachment"
 	transferTargetType     = "transfer"
 	workspaceTargetType    = "workspace"
+	// Only server-side promotion and cleanup run inside the digest lock. Client
+	// uploads are staged first; a stalled object store must not pin the lock or
+	// a database connection indefinitely after the request has gone away.
+	storageMutationTimeout = 2 * time.Minute
 )
 
 type Clock func() time.Time
@@ -1045,24 +1049,14 @@ func (s *Service) CompleteUpload(ctx context.Context, input CompleteUploadInput)
 		}
 		return UploadResult{}, mapped
 	}
-	_, err = s.copyStagedToCanonical(ctx, staged, objectRecord)
-	if err != nil {
-		mapped := mapUploadStorageError(err)
-		cleanupErr := s.cleanupUploadStaging(context.Background(), uploadID, partRecords, transfer.ByteSize)
-		var failErr error
-		if shouldFailDuringStorage(mapped) {
-			failErr = s.failUploadAfterCompletion(context.Background(), actor.ID, uploadID, failureReason(mapped), input.Meta)
-		}
-		if cleanupErr != nil {
-			mapped = errors.Join(mapped, cleanupErr)
-		}
-		if failErr != nil {
-			mapped = errors.Join(mapped, failErr)
-		}
-		return UploadResult{}, mapped
-	}
-	_ = s.cleanupUploadStaging(context.Background(), uploadID, partRecords, transfer.ByteSize)
-
+	ctx, cancelPromotion := context.WithTimeout(ctx, storageMutationTimeout)
+	defer cancelPromotion()
+	defer func() {
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), storageMutationTimeout)
+		defer cancelCleanup()
+		_ = s.cleanupUploadStaging(cleanupCtx, uploadID, partRecords, transfer.ByteSize)
+	}()
+	var promotionFailed bool
 	value, txErr := s.withTransaction(ctx, actor.ID, input.Meta, func(tx Tx, currentActor *auth.Actor, now time.Time) (any, *rejection, error) {
 		currentTransfer, currentAttachment, loadErr := s.loadOwnedUpload(ctx, tx, currentActor.ID, uploadID)
 		if loadErr != nil {
@@ -1073,6 +1067,12 @@ func (s *Service) CompleteUpload(ctx context.Context, input CompleteUploadInput)
 		}
 		if err := lockKeys(ctx, tx, uploadLockKey(uploadID), storageObjectLockKey(objectRecord.ID)); err != nil {
 			return nil, nil, normalizeRepositoryError(err)
+		}
+		// Ensure bytes and bind their reference under the same shared digest
+		// lock as deletion, including when Put reuses an existing object.
+		if _, err := s.copyStagedToCanonical(ctx, staged, objectRecord); err != nil {
+			promotionFailed = true
+			return nil, nil, mapUploadStorageError(err)
 		}
 		_, _, bindErr := tx.EnsureStorageObjectAndBind(ctx, s.space(), currentAttachment.ID, objectRecord)
 		if bindErr != nil {
@@ -1109,9 +1109,11 @@ func (s *Service) CompleteUpload(ctx context.Context, input CompleteUploadInput)
 		return UploadResult{Status: string(TransferCompleted), ID: uploadID, UsedToday: maxInt64(used, 0), RemainingBytes: remainingQuota(used, s.dailyQuotaBytes), DailyQuotaBytes: s.dailyQuotaBytes, Attachment: ptrAttachment(projectAttachment(*completedAttachment, currentActor))}, nil, nil
 	})
 	if txErr != nil {
-		_ = s.cleanupObject(context.Background(), objectRecord)
-		if shouldFailAfterComplete(txErr) {
-			_ = s.failUploadAfterCompletion(ctx, actor.ID, uploadID, failureReason(txErr), input.Meta)
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), storageMutationTimeout)
+		defer cancelCleanup()
+		_ = s.cleanupObject(cleanupCtx, objectRecord)
+		if (promotionFailed && shouldFailDuringStorage(txErr)) || (!promotionFailed && shouldFailAfterComplete(txErr)) {
+			_ = s.failUploadAfterCompletion(cleanupCtx, actor.ID, uploadID, failureReason(txErr), input.Meta)
 		}
 		return UploadResult{}, txErr
 	}
@@ -1336,26 +1338,25 @@ func (s *Service) cleanupObject(ctx context.Context, object StorageObjectRecord)
 	if s == nil || s.repo == nil || s.blobStore == nil || strings.TrimSpace(object.ObjectKey) == "" {
 		return nil
 	}
-	var cleanup StorageCleanup
+	ctx, cancel := context.WithTimeout(ctx, storageMutationTimeout)
+	defer cancel()
 	if err := s.repo.WithTx(ctx, func(tx Tx) error {
 		if err := lockKeys(ctx, tx, storageObjectLockKey(object.ID)); err != nil {
 			return err
 		}
-		var err error
-		cleanup, err = tx.CleanupStorageObject(ctx, object.ID, object, s.nowUTC())
-		return err
+		cleanup, err := tx.CleanupStorageObject(ctx, object.ID, object, s.nowUTC())
+		if err != nil || !cleanup.DeleteObject {
+			return err
+		}
+		physical := object
+		if cleanup.Object != nil {
+			physical = *cleanup.Object
+		}
+		// The lock covers physical deletion, not only the reference count and
+		// tombstone. Failure rolls back the tombstone so maintenance can retry.
+		return normalizeStorageError(s.blobStore.Delete(ctx, physical.BlobObject()))
 	}); err != nil {
 		return normalizeRepositoryError(err)
-	}
-	if !cleanup.DeleteObject {
-		return nil
-	}
-	physical := object
-	if cleanup.Object != nil {
-		physical = *cleanup.Object
-	}
-	if err := s.blobStore.Delete(ctx, physical.BlobObject()); err != nil {
-		return normalizeStorageError(err)
 	}
 	return nil
 }
