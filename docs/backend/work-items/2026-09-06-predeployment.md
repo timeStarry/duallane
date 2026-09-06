@@ -1054,3 +1054,18 @@ the cards-owned savepoint rolls back both views before successful retry using
 the same configured IDs. Integration-tag staticcheck passed. An initial test
 placement polluted the existing writer fixture's zero-audit assertion; moving
 the independent subtest after those assertions fixed only fixture isolation.
+
+### Realtime Projection Pool Exhaustion
+
+Conversation/member and message/attachment projection held a pool connection
+while issuing a nested pool query. Both now collect IDs and close rows before
+hydration. The regression reserves a listener connection in a two-connection
+pool and concurrently replays 28 durable events for two actors. Worker observed
+failure before the fix and a pass afterwards. Parent made synthetic-schema
+cleanup failures visible and independently passed PostgreSQL/race events
+(9.349 seconds), realtime (4.893), and integration-tag staticcheck.
+
+The unchanged dual-user browser still failed at history-27 catch-up, line 728
+(31.9 seconds), so this is a verified pool bug fix, not closure of browser parity.
+Actual WebSocket/cursor recovery remains under investigation. Remote CI run
+`34032657515` passed all three jobs on `9367d5f`; later changes are not covered.

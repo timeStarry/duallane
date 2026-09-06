@@ -270,12 +270,24 @@ func (r *PGRepository) publicConversationPayload(ctx context.Context, spaceID st
 		return nil, internalError("project workspace conversation members", err)
 	}
 	defer rows.Close()
-	members := make([]any, 0)
+	memberIDs := make([]string, 0)
 	for rows.Next() {
 		var userID string
 		if err := rows.Scan(&userID); err != nil {
 			return nil, internalError("project workspace conversation members", err)
 		}
+		memberIDs = append(memberIDs, userID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, internalError("project workspace conversation members", err)
+	}
+	// Do not hold the pool connection for this result while hydrating each
+	// member. The nested publicMemberPayload query needs its own connection;
+	// retaining rows here can exhaust the pool when two replays run beside the
+	// long-lived PGListener connection.
+	members := make([]any, 0, len(memberIDs))
+	for _, userID := range memberIDs {
 		member, err := r.publicMemberPayload(ctx, spaceID, actor, userID)
 		if err != nil {
 			return nil, err
@@ -283,9 +295,6 @@ func (r *PGRepository) publicConversationPayload(ctx context.Context, spaceID st
 		if member != nil {
 			members = append(members, member)
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, internalError("project workspace conversation members", err)
 	}
 	result["members"] = members
 	if typ == "direct" {
@@ -455,12 +464,23 @@ func (r *PGRepository) publicMessageAttachments(ctx context.Context, spaceID str
 		return nil, internalError("project workspace message attachments", err)
 	}
 	defer rows.Close()
-	items := make([]any, 0)
+	attachmentIDs := make([]string, 0)
 	for rows.Next() {
 		var attachmentID string
 		if err := rows.Scan(&attachmentID); err != nil {
 			return nil, internalError("project workspace message attachments", err)
 		}
+		attachmentIDs = append(attachmentIDs, attachmentID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, internalError("project workspace message attachments", err)
+	}
+	// The attachment payload is a separate query. Release the rows connection
+	// before performing it so concurrent event projections cannot deadlock a
+	// small Workspace pool.
+	items := make([]any, 0, len(attachmentIDs))
+	for _, attachmentID := range attachmentIDs {
 		attachment, err := r.publicAttachmentPayload(ctx, spaceID, actor, attachmentID)
 		if err != nil {
 			return nil, err
@@ -468,9 +488,6 @@ func (r *PGRepository) publicMessageAttachments(ctx context.Context, spaceID str
 		if attachment != nil {
 			items = append(items, attachment)
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, internalError("project workspace message attachments", err)
 	}
 	return items, nil
 }
