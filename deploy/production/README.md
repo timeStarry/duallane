@@ -96,6 +96,26 @@ requested mode. Candidate containers have no published host port. The script
 does not treat a manifest field as proof that a candidate is passive; runtime
 flags, the actual health result, and parent-owned runtime tests are required.
 
+The `node-default` API candidate has a separate passive-environment contract.
+Its effective environment must contain each of these values exactly once:
+
+```text
+WORKSPACE_ENABLED=false
+DATABASE_AUTO_MIGRATE=false
+WORKSPACE_EMAIL_WORKER_ENABLED=false
+WORKSPACE_NTFY_WORKER_ENABLED=false
+WORKSPACE_ECHO_DELIVERY_WORKER_ENABLED=false
+DUALLANE_DATA_DIR=/tmp/duallane-candidate-api
+```
+
+The API candidate uses the private container path under `/tmp`; the release
+helper rejects any host or named mount covering `/tmp` (or a higher path), and
+the data directory is never the live `/app/data` volume. The candidate is
+removed after its health and version check. The Node candidate keeps the Node
+health and P2P surfaces available, but proves only basic API/version and health
+availability. It does not prove Workspace dependencies, persistence, or worker
+readiness.
+
 P2P candidates use the internal `/api/health` healthcheck and have no database,
 storage, Workspace, OAuth, SMTP, or provider secrets. Replacing the single
 P2P process interrupts in-memory direct sessions; the release output records

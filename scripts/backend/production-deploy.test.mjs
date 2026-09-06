@@ -180,6 +180,9 @@ function initialState(mode) {
     candidateModeFailure: mode === "permission-failure",
     candidateMountWritable: mode === "candidate-rw",
     candidateRootfsWritable: mode === "candidate-rootfs-rw",
+    candidateEnvInvalid: mode === "node-candidate-env-invalid",
+    candidateEnvDuplicate: mode === "node-candidate-env-duplicate",
+    candidatePathMounted: mode === "node-candidate-path-mounted",
     serviceInventoryFailure: mode === "inventory-failure",
     servicePsFailure: mode === "ps-failure",
     imageInspectFailure: mode === "image-inspect-failure",
@@ -204,6 +207,7 @@ function initialState(mode) {
     },
     replacementOnUp: mode === "rollback-daemon",
    calls: [],
+    candidateRuns: [],
     imageInspects: [],
    networks: {},
     tags: [],
@@ -341,6 +345,9 @@ const container = (id) => state.containers[id];
 const serviceId = (service) => (state.current[service] ?? []).join("\n");
 const formatValue = (value, format) => {
   if (format.includes(".Mounts")) {
+    if (format.includes("println .Destination")) {
+      return (value.mounts ?? []).map((mount) => mount.Destination).join("\n") + ((value.mounts ?? []).length ? "\n" : "");
+    }
     return (value.mounts ?? [])
       .filter((mount) => mount.Destination === "/app/data")
       .map((mount) => String(mount.RW))
@@ -554,6 +561,15 @@ if (args[0] === "compose") {
     for (let index = 0; index < args.length - 1; index += 1) {
       if (args[index] === "-e" || args[index] === "--env") env.push(args[index + 1]);
     }
+    if (service === "api" && state.candidateEnvInvalid) {
+      const index = env.indexOf("DATABASE_AUTO_MIGRATE=false");
+      if (index >= 0) env[index] = "DATABASE_AUTO_MIGRATE=true";
+    }
+    if (service === "api" && state.candidateEnvDuplicate) env.push("WORKSPACE_ENABLED=true");
+    const tmpfs = [];
+    for (let index = 0; index < args.length - 1; index += 1) {
+      if (args[index] === "--tmpfs") tmpfs.push(args[index + 1]);
+    }
     const labels = {
       version: "0.15.5",
       revision: "new-commit",
@@ -576,13 +592,23 @@ if (args[0] === "compose") {
       user: service === "workspace" || service === "worker" ? "65532:65532" : "",
       mounts: service === "workspace" || service === "worker"
         ? [{ Destination: "/app/data", RW: state.candidateMountWritable }]
+        : service === "api" && state.candidatePathMounted
+          ? [{ Destination: "/tmp", RW: true }]
         : [],
       readOnlyRootfs: !state.candidateRootfsWritable,
       networks: service === "workspace" || service === "worker"
         ? { duallane_default: { Aliases: args.includes("--use-aliases") ? [service] : [] } }
         : {},
+      tmpfs,
       labels,
     };
+    state.candidateRuns.push({
+      service,
+      candidateName,
+      env: [...env],
+      mounts: [...state.containers[candidateName].mounts],
+      tmpfs: [...tmpfs],
+    });
     const candidateNetwork = process.env.DUALLANE_GO_CANDIDATE_NETWORK;
     if (candidateNetwork) {
       state.containers[candidateName].networks[candidateNetwork] = {
@@ -597,7 +623,8 @@ if (args[0] === "compose") {
     state.current[service] = [candidateName];
     record(["run", service, candidateName,
       Boolean(state.containers["duallane-go-full-candidate-p2p-new-commit"]),
-      Boolean(state.containers["duallane-go-full-candidate-workspace-new-commit"]) ]);
+      Boolean(state.containers["duallane-go-full-candidate-workspace-new-commit"]),
+      tmpfs.includes("/tmp") ]);
     save(); process.stdout.write(candidateName + "\n"); process.exit(0);
   }
   if (command === "create" && service === "migrate") {
@@ -698,7 +725,7 @@ fi
 if [[ "$MODE" == go-upgrade ]]; then
   RELEASE_GO_UPGRADE=true
 fi
-if [[ "$MODE" == node-active || "$MODE" == node-candidate ]]; then
+if [[ "$MODE" == node-active || "$MODE" == node-candidate || "$MODE" == node-candidate-env-invalid || "$MODE" == node-candidate-env-duplicate || "$MODE" == node-candidate-path-mounted ]]; then
   release_load_profile node-default
 else
   release_load_profile go-full
@@ -774,8 +801,19 @@ elif [[ "$MODE" == node-active ]]; then
     echo "node-default unexpectedly allowed an active Go service" >&2
     exit 1
   fi
-elif [[ "$MODE" == node-candidate ]]; then
-  release_start_candidate api
+elif [[ "$MODE" == node-candidate || "$MODE" == node-candidate-env-invalid || "$MODE" == node-candidate-env-duplicate || "$MODE" == node-candidate-path-mounted ]]; then
+  if release_start_candidate api; then
+    [[ "$MODE" == node-candidate ]] || {
+      echo "unsafe Node candidate environment unexpectedly passed" >&2
+      exit 1
+    }
+  else
+    [[ "$MODE" != node-candidate ]] || {
+      echo "valid Node candidate environment unexpectedly failed" >&2
+      exit 1
+    }
+  fi
+  release_cleanup_candidates
 elif [[ "$MODE" == candidate-lifecycle ]]; then
   release_start_candidates
 elif [[ "$MODE" == candidate-filesystem ]]; then
@@ -914,6 +952,49 @@ test("node-default uses the base Compose candidate path", async () => {
   assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
   assert.ok(finalState.calls.some(([operation, service]) => operation === "run" && service === "api"));
   assert.ok(finalState.calls.some(([operation]) => operation === "rm"));
+  const apiRun = finalState.candidateRuns.find(({ service }) => service === "api");
+  assert.ok(apiRun, "Node API candidate run was not recorded");
+  assert.deepEqual([...apiRun.env].sort(), [
+    "DATABASE_AUTO_MIGRATE=false",
+    "DUALLANE_DATA_DIR=/tmp/duallane-candidate-api",
+    "WORKSPACE_ECHO_DELIVERY_WORKER_ENABLED=false",
+    "WORKSPACE_EMAIL_WORKER_ENABLED=false",
+    "WORKSPACE_ENABLED=false",
+    "WORKSPACE_NTFY_WORKER_ENABLED=false",
+  ]);
+  assert.deepEqual(apiRun.tmpfs, []);
+  const apiRunCall = finalState.calls.find(([operation, service]) => operation === "run" && service === "api");
+  assert.equal(apiRunCall[5], false, "Node API candidate unexpectedly requested an unsupported tmpfs option");
+  assert.equal(finalState.containers["duallane-node-default-candidate-api-new-commit"], undefined);
+});
+
+test("Node candidate rejects an unsafe effective environment", async () => {
+  const { result, finalState } = await runFakeHarness("node-candidate-env-invalid");
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const apiRun = finalState.candidateRuns.find(({ service }) => service === "api");
+  assert.ok(apiRun, "Node API candidate run was not recorded");
+  assert.ok(apiRun.env.includes("DATABASE_AUTO_MIGRATE=true"));
+  assert.ok(finalState.calls.some(([operation, ...ids]) => operation === "rm" && ids.includes("duallane-node-default-candidate-api-new-commit")));
+  assert.equal(finalState.containers["duallane-node-default-candidate-api-new-commit"], undefined);
+});
+
+test("Node candidate rejects duplicate effective safety keys", async () => {
+  const { result, finalState } = await runFakeHarness("node-candidate-env-duplicate");
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const apiRun = finalState.candidateRuns.find(({ service }) => service === "api");
+  assert.ok(apiRun, "Node API candidate run was not recorded");
+  assert.equal(apiRun.env.filter((value) => value.startsWith("WORKSPACE_ENABLED=")).length, 2);
+  assert.ok(finalState.calls.some(([operation, ...ids]) => operation === "rm" && ids.includes("duallane-node-default-candidate-api-new-commit")));
+  assert.equal(finalState.containers["duallane-node-default-candidate-api-new-commit"], undefined);
+});
+
+test("Node candidate rejects a mount covering its private data path", async () => {
+  const { result, finalState } = await runFakeHarness("node-candidate-path-mounted");
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  const apiRun = finalState.candidateRuns.find(({ service }) => service === "api");
+  assert.ok(apiRun, "Node API candidate run was not recorded");
+  assert.deepEqual(apiRun.mounts, [{ Destination: "/tmp", RW: true }]);
+  assert.ok(finalState.calls.some(([operation, ...ids]) => operation === "rm" && ids.includes("duallane-node-default-candidate-api-new-commit")));
   assert.equal(finalState.containers["duallane-node-default-candidate-api-new-commit"], undefined);
 });
 

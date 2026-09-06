@@ -798,8 +798,12 @@ release_candidate_environment_args() {
   case "${service}" in
     api)
       RELEASE_CANDIDATE_ENV_ARGS+=(
+        -e WORKSPACE_ENABLED=false
+        -e DATABASE_AUTO_MIGRATE=false
         -e WORKSPACE_EMAIL_WORKER_ENABLED=false
         -e WORKSPACE_NTFY_WORKER_ENABLED=false
+        -e WORKSPACE_ECHO_DELIVERY_WORKER_ENABLED=false
+        -e DUALLANE_DATA_DIR=/tmp/duallane-candidate-api
       )
       ;;
     p2p)
@@ -829,12 +833,33 @@ release_verify_candidate_environment() {
   local container_name="$1"
   local service="$2"
   local expected
-  release_candidate_environment_args "${service}"
+  release_candidate_environment_args "${service}" || return 1
   local environment
   if ! environment="$(docker inspect "${container_name}" --format '{{range .Config.Env}}{{println .}}{{end}}')"; then
     return 1
   fi
   case "${service}" in
+    api)
+      local key count
+      for expected in \
+        WORKSPACE_ENABLED=false \
+        DATABASE_AUTO_MIGRATE=false \
+        WORKSPACE_EMAIL_WORKER_ENABLED=false \
+        WORKSPACE_NTFY_WORKER_ENABLED=false \
+        WORKSPACE_ECHO_DELIVERY_WORKER_ENABLED=false \
+        DUALLANE_DATA_DIR=/tmp/duallane-candidate-api; do
+        key="${expected%%=*}"
+        count="$(grep -c -E "^${key}=" <<<"${environment}" || true)"
+        [[ "${count}" == "1" ]] || {
+          echo "api candidate effective environment is not exact" >&2
+          return 1
+        }
+        grep -Fxq "${expected}" <<<"${environment}" || {
+          echo "api candidate effective environment is not safe" >&2
+          return 1
+        }
+      done
+      ;;
     workspace)
       for expected in WORKSPACE_ENABLED=true WORKSPACE_CANDIDATE_HEALTH_ONLY=true; do
         grep -Fxq "${expected}" <<<"${environment}" || return 1
@@ -848,6 +873,28 @@ release_verify_candidate_environment() {
       done
       ;;
   esac
+}
+
+release_verify_candidate_private_data_path() {
+  local container_name="$1"
+  local service="$2"
+  [[ "${RELEASE_PROFILE_NAME}" == "node-default" && "${service}" == "api" ]] || return 0
+
+  local destinations
+  if ! destinations="$(docker inspect "${container_name}" --format '{{range .Mounts}}{{println .Destination}}{{end}}')"; then
+    echo "cannot inspect Node API candidate data mounts" >&2
+    return 1
+  fi
+  local destination
+  while IFS= read -r destination; do
+    [[ -n "${destination}" ]] || continue
+    case "${destination}" in
+      /|/tmp|/tmp/*)
+        echo "Node API candidate data path is covered by a container mount" >&2
+        return 1
+        ;;
+    esac
+  done <<<"${destinations}"
 }
 
 release_verify_candidate_user() {
@@ -976,7 +1023,7 @@ release_start_candidate() {
   local candidate_name="duallane-${RELEASE_PROFILE_NAME}-candidate-${service}-${current_commit:0:12}"
   local candidate_run_options=(-d --no-deps)
   local candidate_record="${service}"$'\t'"${candidate_name}"
-  release_candidate_environment_args "${service}"
+  release_candidate_environment_args "${service}" || return 1
   if [[ "${RELEASE_PROFILE_NAME}" == "go-full" ]]; then
     case "${service}" in
       p2p|web)
@@ -1007,8 +1054,9 @@ release_start_candidate() {
   fi
   release_verify_candidate_ownership "${candidate_name}" "${service}" "${candidate_id}" || return 1
   release_verify_container_release "${candidate_name}" "${service}" || return 1
+  release_verify_candidate_environment "${candidate_name}" "${service}" || return 1
+  release_verify_candidate_private_data_path "${candidate_name}" "${service}" || return 1
   if [[ "${RELEASE_PROFILE_NAME}" == "go-full" ]]; then
-    release_verify_candidate_environment "${candidate_name}" "${service}" || return 1
     release_verify_candidate_user "${candidate_name}" "${service}" || return 1
     release_verify_candidate_filesystem "${candidate_name}" "${service}" || return 1
     release_attach_candidate_alias "${candidate_name}" "${service}" || return 1

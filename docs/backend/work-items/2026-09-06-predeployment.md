@@ -1779,3 +1779,20 @@ complete conversation PostgreSQL/race (4.673 seconds), HTTP PostgreSQL/race
 fixture's cleanup order so schema removal runs before closing its connection
 and failures are reported. The original full Workspace browser suite remains
 a separate required gate, now being rerun against the integrated candidate.
+
+### Integrated Quality Gate And Passive Node Release Wiring
+
+At `37ae061`, parent passed the complete uncached PostgreSQL/race gate with an
+explicit disposable database, `make verify`, Node lint, 8 SDK/705 Web tests
+(2 PostgreSQL-specific tests skipped in that unit command), and the frontend
+build. Remote CI `34047601787` passed all three jobs, including Node Chromium
+and Go P2P Chromium. The Go vulnerability scan found no reachable vulnerable
+calls; its uncalled dependency advisories are not evidence that all dependencies
+or native OS packages are vulnerability-free.
+
+The Node release candidate now explicitly disables Workspace, migration and all
+delivery workers and uses a private container-layer data path. Runtime inspection
+requires exactly one safe value for each environment key and refuses a mount
+covering the private path. Parent independently passed all 41 release-harness
+tests (34.236 seconds) and shell syntax. This synthetic Docker harness does not
+replace real runtime checks or the still-pending Go upgrade/drain gates.
