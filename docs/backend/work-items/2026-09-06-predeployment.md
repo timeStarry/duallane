@@ -1845,3 +1845,15 @@ It is being fixed separately in the media owner; no tolerance or privacy
 assertion was relaxed. Owned probe containers and generated fixtures were
 removed. The tested build image remains the exact `863eb448...` image above,
 not a final release image.
+
+### Read-Only Durable Drain Observation
+
+Parent independently passed the final releasecheck PostgreSQL/race suite (5.239
+seconds) and tagged staticcheck. It checks real canonical schema fixtures,
+reserved/stale uploads, malformed/null states, email/ntfy sending/lease shapes,
+digest leases and queued/Echo observations. The lock regression demonstrates
+the statement and caller deadline bounds, safe errors and fail-closed readiness.
+Review corrected the stale-upload cutoff and setup-failure cleanup ordering.
+All database fixtures are isolated schemas, removed before closing their
+connections. The package explicitly reports writer fencing as not proven and
+provider state as not checked; it does not authorize the actual cutover.

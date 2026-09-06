@@ -315,6 +315,19 @@ read count remains bounded by the object's expected size even during close.
 
 ## 9. Release Order
 
+The `internal/platform/releasecheck` package provides a bounded repeatable-read,
+read-only PostgreSQL observation. Every reserved upload blocks handoff, including
+stale reservations and attachment anomalies. Email/ntfy `sending` rows block
+regardless of missing or expired leases; lease anomalies, active unnotified
+digest leases and incompatible schema also fail closed. Pending jobs and Echo
+reconciliation are counted without claiming them. It never cleans up a row.
+
+This observation is not a writer fence. Before using it, stop admission and
+claims, disable the old containers' restart policies and verify they are stopped.
+SQL cannot prove S3 multipart or external delivery state. Resolve ambiguous
+provider results through the existing owner's explicit recovery process;
+expiring a lease or clearing SQL is not proof that a provider did not deliver.
+
 Before any Go production cutover, `deploy/production/deploy.sh` must be extended
 and tested to understand every live application service. The target release
 sequence is:
