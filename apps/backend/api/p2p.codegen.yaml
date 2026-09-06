@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/oapi-codegen/oapi-codegen/v2.8.0/configuration-schema.json
+
+# This config is intentionally limited to generated contract types and the
+# standard-library server interface. The live P2P handler remains the runtime
+# owner until the migration ledger and route cutover say otherwise.
+package: p2pcontract
+generate:
+  models: true
+  std-http-server: true

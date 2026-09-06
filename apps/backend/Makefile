@@ -1,6 +1,12 @@
 GO ?= go
 
-.PHONY: test test-race vet staticcheck vuln build integration-postgres verify
+.PHONY: test test-race vet staticcheck vuln build generate check-generated integration-postgres verify
+
+generate:
+	$(GO) generate ./internal/p2pcontract
+
+check-generated:
+	$(GO) test -count=1 ./internal/p2pcontract -run '^TestGeneratedP2PContractIsFresh$$'
 
 test:
 	$(GO) test ./...

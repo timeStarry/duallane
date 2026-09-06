@@ -41,10 +41,13 @@ Use these terms precisely in migration notes and evidence records:
   [`apps/backend/api/realtime/p2p.schema.json`](../../apps/backend/api/realtime/p2p.schema.json)
   is the checked-in realtime frame schema. These are source contracts, not
   evidence that generated code or production routing exists.
-- `oapi-codegen`, `sqlc`, and `go-mail` remain selected target technologies but
-  are not currently pinned in `apps/backend/go.mod` or integrated by a checked-in
-  generation/build target. Do not describe them as installed, generated, or
-  verified until their source-manifest and command changes land.
+- `oapi-codegen` v2.8.0 is pinned as a Go tool, with runtime v1.6.0 and
+  kin-openapi v0.142.0 for contract tests. The P2P generation config and
+  `make generate`/`make check-generated` are integrated. Generated models and
+  interfaces do not replace the live handler or automatically validate input.
+- `sqlc` and `go-mail` remain selected but are not pinned or integrated. Do not
+  describe them as installed or verified until their manifest and command
+  changes land.
 - `Dockerfile.p2p` and `Dockerfile.workspace` provide candidate image recipes;
   their existence does not add a Go service to Compose or establish a cutover.
   Their current defaults use mutable image tags and unversioned OS package
@@ -60,7 +63,7 @@ Use these terms precisely in migration notes and evidence records:
 | HTTP server | Standard `net/http` | Server lifecycle, timeouts, cancellation, streaming, and middleware contracts |
 | Router | `github.com/go-chi/chi/v5` | Thin route grouping and parameters while retaining `http.Handler` compatibility |
 | HTTP contract | OpenAPI 3.1.2 | Versioned external request/response and error schema |
-| HTTP generation | `github.com/oapi-codegen/oapi-codegen/v2` | Target selection only until the OpenAPI 3.1.2 capability gate below pins and exercises it; generate models/interfaces, never domain behavior |
+| HTTP generation | `github.com/oapi-codegen/oapi-codegen/v2` | Pinned P2P models/interfaces; generate contract adapters, never domain behavior |
 | WebSocket | `github.com/coder/websocket` | Context-bounded P2P and Workspace connections, explicit size limits and close handling |
 | WebSocket contract | Versioned JSON Schema | Preserve existing JSON frames and `version: 1` behavior |
 | PostgreSQL | `github.com/jackc/pgx/v5` and `pgxpool` | Native transactions, savepoints where needed, advisory locks, `LISTEN/NOTIFY`, and pool control |
@@ -106,8 +109,8 @@ The migration PR must characterize nullable fields, omitted fields, unknown
 input fields, numeric limits, headers, status codes, and error bodies before a
 generated type becomes authoritative.
 
-The candidate map above distinguishes checked-in schemas from the still
-unintegrated generation toolchain.
+The candidate map above distinguishes source schemas, generated artifacts,
+test validation, and live runtime ownership.
 
 The official [oapi-codegen v2.8.0 release notes](https://github.com/oapi-codegen/oapi-codegen/releases/tag/v2.8.0)
 document initial OpenAPI 3.1 support, including version-aware handling of
@@ -121,16 +124,24 @@ share the 3.1 feature set, but the checked-in P2P schemas use direct property
 `const` values (for example `maxPeers` and health fields), which need explicit
 compatibility tests.
 
-Generation is gated until a follow-up slice pins a reviewed generator version
-and any required runtime in the Go tool/module manifests, adds an explicit
-configuration and repository target, and records a fixture/output review for
-`apps/backend/api/p2p.yaml`: exact 3.1.2 parsing, nullable/omitted-field behavior,
-generated-code compilation, and contract tests. Compiling generated models does
-not enforce schema constraints: prove that the selected request/response
-validation rejects invalid direct-`const` values and preserves the public error
-contract. Until that gate passes, keep the 3.1.2 document and realtime schema as
-the contract sources, use hand-authored transport where needed, and do not
-downgrade to 3.0 or claim generated parity. See
+The P2P slice pins that generator/runtime pair and an explicit config in
+`apps/backend/api/p2p.codegen.yaml`. Generated artifacts live in
+`internal/p2pcontract`, separate from the hand-authored runtime handler. Tests
+load the exact local 3.1.2 source with external references disabled and check
+request/response constraints through kin-openapi. Compiling a model alone does
+not enforce a direct `const`: decoding and validation remain separate steps.
+
+The pinned generator/runtime are Apache-2.0 and kin-openapi is MIT (verified
+from their pinned module license files). The generator is build-time tooling;
+kin-openapi is used by contract tests, not the P2P executable. This adds module
+download/build inputs but no database, network hop, image runtime library, or
+production route. Continue to review upstream fixes and run the pinned
+vulnerability gate when updating these modules.
+
+Every later capability must repeat this gate for its used schema features,
+including nullable/omitted fields and public errors. Keep the 3.1.2 document
+and realtime schema authoritative; do not downgrade to 3.0 or equate generated
+code with active-implementation parity. See
 [Backend validation](VALIDATION.md#openapi-312-generation-gate) for the
 evidence record.
 

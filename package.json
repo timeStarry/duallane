@@ -9,6 +9,8 @@
     "build": "pnpm --filter @duallane/web build",
     "backend:build": "make -C apps/backend build",
     "backend:check": "make -C apps/backend verify",
+    "backend:generate": "make -C apps/backend generate",
+    "backend:check-generated": "make -C apps/backend check-generated",
     "backend:lint": "make -C apps/backend vet staticcheck",
     "backend:test": "make -C apps/backend test",
     "backend:test:race": "make -C apps/backend test-race",

@@ -51,6 +51,8 @@ require GNU Make and a POSIX shell, such as a configured Linux/WSL environment.
 | `make -C apps/backend staticcheck` | `go tool staticcheck ./...` | Tool package declared in `go.mod`; version fixed by its module requirements. |
 | `make -C apps/backend vuln` | `go tool govulncheck ./...` | Tool package declared in `go.mod`; version fixed by its module requirements. |
 | `make -C apps/backend build` | `go build ./cmd/...` | Builds the checked-in command set. |
+| `make -C apps/backend generate` | `go generate ./internal/p2pcontract` | Regenerates the checked-in P2P contract with the pinned Go tool. |
+| `make -C apps/backend check-generated` | `go test -count=1 ./internal/p2pcontract -run '^TestGeneratedP2PContractIsFresh$'` | Non-mutating freshness check; also included in default package tests. |
 | `make -C apps/backend verify` | Prerequisites: `test test-race vet staticcheck vuln build` | Composite candidate gate; excludes PostgreSQL integration. |
 | `make -C apps/backend integration-postgres` | `go test -count=1 -race -tags postgres_integration ./...` | Requires disposable real PostgreSQL via `TEST_DATABASE_URL`; required for applicable changes in the matrix below. |
 
@@ -61,13 +63,18 @@ matching Make targets. CI currently runs `make verify` and then
 `make integration-postgres` in separate steps; a CI definition is wiring
 evidence, not a result for this worktree.
 
+`pnpm backend:generate` and `pnpm backend:check-generated` wrap the generation
+targets. Never hand-edit `p2p.gen.go`; edit the source/config and regenerate.
+
 The candidate declares Go `1.26` and toolchain `go1.26.8` in `go.mod`. Packages
 that import govips require a usable CGO compiler plus libvips headers/runtime.
 `Dockerfile.workspace` provisions `libvips-dev` and `pkg-config` for its image
-build, while the host-run Go CI job has no explicit `libvips-dev`/`pkg-config`
-installation step. This is a reproducibility gap to resolve before treating the
-host-run Go gate as portable, not evidence of an observed CI failure. The P2P
-image remains CGO-free.
+build. The host-run Go CI job installs `gcc`, `libvips-dev`, and `pkg-config`,
+sets CGO explicitly, and checks their availability before `make verify`.
+The dependency-order regression test is
+`node --test .github/tests/ci-go-native-dependencies.test.mjs`. These steps do
+not pin OS package versions or establish image reproducibility. The P2P image
+remains CGO-free.
 
 The race gate may be split from fast unit tests, but it remains required for P2P
 registries, WebSocket fanout, event delivery, presence, worker loops, and shared
@@ -78,20 +85,25 @@ installation in CI. Missing prerequisites are an explicit remaining gate.
 
 [`apps/backend/api/p2p.yaml`](../../apps/backend/api/p2p.yaml) and
 [`apps/backend/api/realtime/p2p.schema.json`](../../apps/backend/api/realtime/p2p.schema.json)
-are checked-in contract sources. The current candidate has no pinned
-oapi-codegen tool, generation configuration, or Make target; generation remains
-unverified until the capability gate in
-[Technology decisions](TECHNOLOGY.md#3-http-and-contract-policy) is completed.
-Do not report generated parity or downgrade the document to OpenAPI 3.0.
-An ad hoc generator experiment may supply dated research evidence, but does not
-establish a reproducible repository gate.
+are checked-in contract sources. The P2P generation config, pinned Go tool,
+generated models/interfaces, and conformance tests now live beside them in
+`api/p2p.codegen.yaml` and `internal/p2pcontract`. Run:
 
-When that gate is added, its evidence must name the pinned tool/runtime and
-record exact 3.1.2 parsing, generated-code compilation, and contract/parity
-checks. Test that request/response validation rejects invalid direct-`const`
-values from the checked-in spec, not just that a generated type compiles. A
-failed or unresolved generation attempt leaves the existing contract source
-authoritative.
+```bash
+make -C apps/backend generate
+make -C apps/backend check-generated
+cd apps/backend && go test -count=1 ./internal/p2pcontract
+```
+
+The freshness test generates into a temporary output and compares it with the
+checked-in artifact. Conformance tests load the exact 3.1.2 source locally,
+reject invalid request/response direct-`const` values, and exercise the existing
+P2P handler. They do not install a new runtime validator/router and do not cover
+WebSocket frames merely because the upgrade endpoint is present in OpenAPI.
+
+Name the pinned tool/runtime, exact tested commit, and outcomes in the evidence
+record. A passed generation gate does not establish Node/Go parity or permit
+cutover. See [Technology decisions](TECHNOLOGY.md#3-http-and-contract-policy).
 
 ### Replayable evidence record
 
