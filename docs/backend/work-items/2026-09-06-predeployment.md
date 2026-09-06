@@ -1628,3 +1628,20 @@ were started by these checks. The new defaults test is included in CI.
 
 Remote CI `34044699666` passed all three jobs at `fce77df`; later commits require
 their own aggregate gate and this result does not include uncommitted drafts.
+
+### Explicit Go S3 Provisioning
+
+The storage command now implements read-only-default bucket planning and an
+explicit apply path, with bounded AWS SDK requests, private-policy checks,
+versioning/CORS/lifecycle verification, and independent cancelled-canary cleanup.
+Independent review corrected inherited `Allow.NotPrincipal` handling, invalid
+top-level/null policy acceptance and a report that previously claimed Enabled
+before verification. Parent re-ran the revised complete command race suite
+(1.072 seconds) and staticcheck successfully. Tests use the actual AWS SDK
+against local synthetic HTTP as well as typed failure/partial/cancellation
+fixtures; no external S3 or production database was accessed.
+
+The operator runbook explicitly describes whole-configuration replacement,
+provider fallback limits, bucket-policy versus ACL scope, and the bucket-only
+configuration boundary. Backfill/finalization coordination and the old archive
+tools are not claimed as completed by this provisioning slice.

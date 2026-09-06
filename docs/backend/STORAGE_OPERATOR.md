@@ -8,8 +8,9 @@ before operating on Workspace storage. P2P content is never an input.
 ## Current Executable Surface
 
 `apps/backend/cmd/storage` provides candidate **read-only** `plan` and `verify`
-commands. Neither command performs backfill, migration, provisioning, legacy
-deletion, quota changes, or a writer handoff. `--apply` is rejected. Use a
+commands, plus the separately scoped `provision` command below. Neither `plan`
+nor `verify` performs backfill, migration, provisioning, legacy deletion, quota
+changes, or a writer handoff. They reject `--apply`. Use a
 read-only database account and read-only object credentials where possible.
 No production execution is implied by a passing candidate test.
 
@@ -24,7 +25,7 @@ paths:
 ./storage verify --target postgres --migrations-dir /checkout/apps/web/server/migrations \
   --store local --object-root /data/workspace-files --timeout 5m
 ./storage verify --target postgres --migrations-dir /checkout/apps/web/server/migrations \
-  --store s3 --s3-credentials-file /run/secrets/workspace-s3.json --timeout 5m
+  --store s3 --s3-credentials-file /run/secrets/workspace-s3 --timeout 5m
 ```
 
 S3 endpoint, region and bucket may use the existing Workspace S3 environment
@@ -40,6 +41,48 @@ blob root. The permission probe follows this same mapping: its synthetic data
 volume is mounted at `/app/data`, and its canonical/legacy checks open the
 `/app/data/workspace-files` subtree. The synthetic rehearsal does not by itself
 prove that an existing Node volume has been copied or reconciled correctly.
+
+## S3 Bucket Provisioning
+
+`duallane-storage provision` is a separate, explicitly invoked bucket-control
+command. It never runs during Workspace/worker startup or passive health checks.
+With no `--apply`, it only reads bucket existence, policy, versioning, CORS and
+multipart lifecycle settings and reports the planned changes. Supply existing
+Workspace S3 environment configuration and a private credentials file:
+
+```sh
+duallane-storage provision --s3-credentials-file /run/secrets/workspace-s3 \
+  --public-base-url https://your-workspace.example --timeout 30s
+```
+
+An operator-approved `--apply` enables versioning, restricts CORS to GET/HEAD
+from the chosen HTTPS origin and configures seven-day incomplete multipart
+cleanup. Like the existing Node provisioner, apply replaces the complete CORS
+and lifecycle configurations, including unrelated rules. Inspect/export the
+current bucket configuration and approve those replacements before applying.
+Apply re-reads the configured values; partial failures produce a safe report
+and nonzero exit, without an automatic rollback or a database/owner change.
+
+An unsupported CORS API reports `gateway` fallback. Unsupported lifecycle
+configuration reports `application` cleanup and, only during apply, verifies
+multipart permissions using a bounded, zero-byte create/list/abort canary. Abort
+has an independent five-second cleanup context even after cancellation. Cleanup
+failure is an error. The default plan never creates or aborts a multipart upload.
+Fallback reports do not enable missing gateway/worker behavior by themselves.
+
+`privatePolicy: verified` means only that `GetBucketPolicy` did not contain an
+anonymous Allow principal; unproven `Allow.NotPrincipal` and malformed nonempty
+policy documents fail closed. It is **not** an ACL, Public Access Block or complete
+bucket-access assessment; prove those separately for the provider. Credentials,
+endpoint URLs, policy bodies and raw provider errors are excluded from reports.
+No external S3 provisioning is implied by the synthetic candidate tests.
+
+This is a bucket-only tool: it uses the private S3 endpoint, not the Node signed
+delivery configuration's public endpoint. It does not certify Node/Go application
+configuration, signed delivery, gateway CORS or worker readiness. `versioning`
+starts as `not_checked`; plan records the actual provider status (which may be
+empty for a never-enabled bucket), and apply reports `Enabled` only after
+revalidation. Inspect action outcomes and the exit status after a partial error.
 
 ## Permission transition runbook: Node root to Go `65532`
 

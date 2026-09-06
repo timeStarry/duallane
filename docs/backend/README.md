@@ -32,7 +32,7 @@ authoritative for behavior and invariants at every status.
 | [Service boundaries](SERVICE_BOUNDARIES.md) | Runtime and package ownership, dependency direction, database access, and placement rules |
 | [Contracts and data](CONTRACTS_AND_DATA.md) | HTTP/WebSocket compatibility, sessions, transactions, events, migrations, storage, and sensitive data handling |
 | [Runtime and operations](OPERATIONS.md) | Containers, configuration, health, startup, shutdown, observability, deployment, and rollback |
-| [Storage operator](STORAGE_OPERATOR.md) | Candidate read-only catalog planning, canonical-byte verification, limits and mutation safety boundaries |
+| [Storage operator](STORAGE_OPERATOR.md) | Candidate catalog/byte verification, explicit bucket provisioning, container permission gates and mutation safety boundaries |
 | [Validation](VALIDATION.md) | Required test layers, parity evidence, security checks, concurrency checks, and release gates |
 | [Evolution and migration](EVOLUTION.md) | Capability status, migration sequence, cutover rules, completion criteria, and future architecture changes |
 | [Backend agent guide](AGENT_GUIDE.md) | Minimal task intake, reading routes, edit rules, validation, and handoff for development agents |

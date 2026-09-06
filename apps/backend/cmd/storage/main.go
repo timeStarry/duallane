@@ -49,6 +49,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runPlan(args[1:], stdout, stderr)
 	case "verify":
 		return runVerify(args[1:], stdout, stderr)
+	case "provision":
+		return runProvision(args[1:], stdout, stderr)
 	default:
 		writeUsage(stderr)
 		return errors.New("storageops.command_invalid")
@@ -232,9 +234,10 @@ func writeJSON(writer io.Writer, value any) error {
 }
 
 func writeUsage(writer io.Writer) {
-	_, _ = fmt.Fprintln(writer, "usage: storage <plan|verify> [flags]")
+	_, _ = fmt.Fprintln(writer, "usage: storage <plan|verify|provision> [flags]")
 	_, _ = fmt.Fprintln(writer, "plan: read-only manifest or PostgreSQL schema/owner/quota/CAS/reference plan")
 	_, _ = fmt.Fprintln(writer, "verify: read-only PostgreSQL snapshot plus local or S3 canonical-byte verification")
+	_, _ = fmt.Fprintln(writer, "provision: read-only S3 configuration plan by default; use --apply only for explicit bucket configuration")
 }
 
 type postgresSnapshotInput struct {
