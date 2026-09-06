@@ -247,6 +247,12 @@ func (s *Service) newID(operation string) (string, error) {
 // intentionally committed with its content-free audit row; other errors roll
 // the transaction back.
 func (s *Service) withTransaction(ctx context.Context, actorID string, meta auth.RequestMeta, fn func(Tx, *auth.Actor, time.Time) (any, *rejection, error)) (any, error) {
+	return s.withActorTransaction(ctx, actorID, meta, s.lookupActor, fn)
+}
+
+type fileActorLookup func(context.Context, ReadRepository, string) (*auth.Actor, error)
+
+func (s *Service) withActorTransaction(ctx context.Context, actorID string, meta auth.RequestMeta, lookup fileActorLookup, fn func(Tx, *auth.Actor, time.Time) (any, *rejection, error)) (any, error) {
 	if s == nil || s.repo == nil {
 		return nil, internalError("workspace file service", errors.New("repository is required"))
 	}
@@ -264,7 +270,7 @@ func (s *Service) withTransaction(ctx context.Context, actorID string, meta auth
 		if tx == nil {
 			return errors.New("transaction is required")
 		}
-		actor, err := s.lookupActor(ctx, tx, actorID)
+		actor, err := lookup(ctx, tx, actorID)
 		if err != nil {
 			return err
 		}
@@ -634,13 +640,21 @@ func lockKeys(ctx context.Context, tx Tx, keys ...string) error {
 }
 
 func (s *Service) ReserveUpload(ctx context.Context, input ReserveUploadInput) (UploadResult, error) {
+	return s.reserveUpload(ctx, input, s.lookupActor)
+}
+
+func (s *Service) reserveUpload(ctx context.Context, input ReserveUploadInput, lookup fileActorLookup) (UploadResult, error) {
 	if s == nil || s.repo == nil {
 		return UploadResult{}, internalError("reserve workspace upload", errors.New("repository is required"))
+	}
+	// Cleanup is a mutation too: unauthenticated callers must not trigger it.
+	if _, err := lookup(ctx, s.repo, input.ActorID); err != nil {
+		return UploadResult{}, err
 	}
 	if _, err := s.ReleaseStaleUploadReservations(ctx); err != nil {
 		return UploadResult{}, err
 	}
-	value, err := s.withTransaction(ctx, input.ActorID, input.Meta, func(tx Tx, actor *auth.Actor, now time.Time) (any, *rejection, error) {
+	value, err := s.withActorTransaction(ctx, input.ActorID, input.Meta, lookup, func(tx Tx, actor *auth.Actor, now time.Time) (any, *rejection, error) {
 		if denied := s.requireCapability(actor, fileUploadCapability, attachmentTargetType, "new"); denied != nil {
 			return nil, reject(denied, fileUploadCapability, attachmentTargetType, "new", "insufficient permission"), nil
 		}
