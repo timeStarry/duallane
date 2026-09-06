@@ -13,6 +13,7 @@ require (
 	github.com/go-chi/chi/v5 v5.2.3
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/nlnwa/whatwg-url v0.6.2
 	github.com/oapi-codegen/runtime v1.6.0
 	github.com/prometheus/client_golang v1.23.0
 	golang.org/x/image v0.43.0
@@ -36,6 +37,7 @@ require (
 	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c // indirect
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/bits-and-blooms/bitset v1.20.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dprotaso/go-yit v0.0.0-20220510233725-9ba8df137936 // indirect
 	github.com/go-openapi/jsonpointer v0.23.1 // indirect
