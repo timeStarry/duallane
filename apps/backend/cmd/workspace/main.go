@@ -413,14 +413,16 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			RootContext: ctx, ActorResolver: authHandler, Events: eventService, Hub: eventHub,
 			Presence: presenceService,
 		})
-		listener := realtime.NewPGListener(realtime.ListenerOptions{Pool: pool, Hub: eventHub, Logger: logger})
-		backgroundDone = make(chan struct{})
-		go func() {
-			defer close(backgroundDone)
-			if err := listener.Run(ctx); err != nil && logger != nil {
-				logger.Error("workspace event listener stopped", slog.String("error_code", "listener_failed"))
-			}
-		}()
+		if !runtimeConfig.CandidateHealthOnly {
+			listener := realtime.NewPGListener(realtime.ListenerOptions{Pool: pool, Hub: eventHub, Logger: logger})
+			backgroundDone = make(chan struct{})
+			go func() {
+				defer close(backgroundDone)
+				if err := listener.Run(ctx); err != nil && logger != nil {
+					logger.Error("workspace event listener stopped", slog.String("error_code", "listener_failed"))
+				}
+			}()
+		}
 	} else {
 		authHandler = auth.NewHTTPHandler(auth.HTTPHandler{
 			Environment: runtimeConfig.Environment, PublicBaseURL: runtimeConfig.PublicBaseURL,
@@ -430,7 +432,12 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	}
 
 	healthInput := func() gate.HealthInput {
+		mode := "active"
+		if runtimeConfig.CandidateHealthOnly {
+			mode = "candidate-health-only"
+		}
 		return gate.HealthInput{
+			Mode:    mode,
 			Service: serviceName, Version: runtimeConfig.AppVersion, Commit: runtimeConfig.Commit,
 			Live: ctx.Err() == nil, DatabaseReady: databaseReady, ObjectStoreReady: objectStoreReady || !runtimeConfig.Enabled, Workspace: workspaceGate,
 		}
@@ -440,6 +447,13 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		if store, ok := blobStore.(interface{ AssertReady(context.Context) error }); ok {
 			storageProbe = store.AssertReady
 		}
+	}
+	if runtimeConfig.CandidateHealthOnly {
+		// Compose the full dependency graph above, but install no business
+		// handlers, WebSockets or background tasks on a production candidate.
+		return &application{pool: pool, cancel: cancel, logger: logger, handler: candidateHealthRouter(
+			gate.HealthHandler(healthInput), readinessHandler(healthInput, databaseProbe, storageProbe),
+		)}, nil
 	}
 	return &application{
 		pool: pool, cancel: cancel, backgroundDone: backgroundDone,
@@ -473,8 +487,14 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 }
 
 func newBlobStore(ctx context.Context, runtimeConfig config.WorkspaceConfig) (platformstorage.BlobStore, error) {
-	if runtimeConfig.StorageDriver != "s3" {
+	newLocal := func() (*platformstorage.LocalBlobStore, error) {
+		if runtimeConfig.CandidateHealthOnly {
+			return platformstorage.OpenExistingLocalBlobStore(ctx, runtimeConfig.DataDir)
+		}
 		return platformstorage.NewLocalBlobStore(runtimeConfig.DataDir)
+	}
+	if runtimeConfig.StorageDriver != "s3" {
+		return newLocal()
 	}
 	credentials, err := config.LoadS3Credentials(runtimeConfig.S3CredentialsFile)
 	if err != nil {
@@ -493,7 +513,7 @@ func newBlobStore(ctx context.Context, runtimeConfig config.WorkspaceConfig) (pl
 	if !runtimeConfig.LocalReadFallback && !runtimeConfig.LocalMirrorWrite {
 		return primary, nil
 	}
-	local, err := platformstorage.NewLocalBlobStore(runtimeConfig.DataDir)
+	local, err := newLocal()
 	if err != nil {
 		return nil, err
 	}

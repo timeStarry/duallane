@@ -25,6 +25,8 @@ const (
 	WorkspaceEmailWorkerEnabled    = "WORKSPACE_EMAIL_WORKER_ENABLED"
 	WorkspaceMaintenanceWorkerEnv  = "WORKSPACE_MAINTENANCE_WORKER_ENABLED"
 	WorkspaceEchoWorkerEnv         = "WORKSPACE_ECHO_WORKER_ENABLED"
+	WorkspaceCandidateHealthEnv    = "WORKSPACE_CANDIDATE_HEALTH_ONLY"
+	WorkerValidateOnlyEnv          = "WORKER_VALIDATE_ONLY"
 	WorkspaceSMTPEncryptionKey     = "WORKSPACE_SMTP_ENCRYPTION_KEY"
 	WorkspaceStorageDriverEnv      = "WORKSPACE_STORAGE_DRIVER"
 	WorkspaceS3EndpointEnv         = "WORKSPACE_S3_ENDPOINT"
@@ -43,36 +45,38 @@ const (
 // audited lane. Secrets are kept only as values for dependency construction;
 // this type deliberately has no String or logging projection.
 type WorkspaceConfig struct {
-	Host               string
-	Port               int
-	AppVersion         string
-	Commit             string
-	Environment        string
-	Enabled            bool
-	PublicBaseURL      string
-	FrontendURL        string
-	TrustProxy         bool
-	GitHubClientID     string
-	GitHubClientSecret string
-	GitHubProxyURL     string
-	GitHubOAuthTimeout time.Duration
-	DataDir            string
-	EmoteCatalogPath   string
-	ReleaseCatalogPath string
-	MigrationsDir      string
-	NtfyBaseURL        string
-	NtfyWorkerEnabled  bool
-	EmailWorkerEnabled bool
-	MaintenanceEnabled bool
-	EchoWorkerEnabled  bool
-	SMTPEncryptionKey  string
-	StorageDriver      string
-	S3Endpoint         string
-	S3Bucket           string
-	S3Region           string
-	S3CredentialsFile  string
-	LocalReadFallback  bool
-	LocalMirrorWrite   bool
+	Host                string
+	Port                int
+	AppVersion          string
+	Commit              string
+	Environment         string
+	Enabled             bool
+	PublicBaseURL       string
+	FrontendURL         string
+	TrustProxy          bool
+	GitHubClientID      string
+	GitHubClientSecret  string
+	GitHubProxyURL      string
+	GitHubOAuthTimeout  time.Duration
+	DataDir             string
+	EmoteCatalogPath    string
+	ReleaseCatalogPath  string
+	MigrationsDir       string
+	NtfyBaseURL         string
+	NtfyWorkerEnabled   bool
+	EmailWorkerEnabled  bool
+	MaintenanceEnabled  bool
+	EchoWorkerEnabled   bool
+	CandidateHealthOnly bool
+	WorkerValidateOnly  bool
+	SMTPEncryptionKey   string
+	StorageDriver       string
+	S3Endpoint          string
+	S3Bucket            string
+	S3Region            string
+	S3CredentialsFile   string
+	LocalReadFallback   bool
+	LocalMirrorWrite    bool
 }
 
 func LoadWorkspace() (WorkspaceConfig, error) {
@@ -90,37 +94,41 @@ func LoadWorkspaceFrom(lookup func(string) (string, bool)) (WorkspaceConfig, err
 	workspaceEnabledValue, _ := lookup(WorkspaceEnabledEnvironment)
 	maintenanceEnabledValue, _ := lookup(WorkspaceMaintenanceWorkerEnv)
 	echoWorkerEnabledValue, _ := lookup(WorkspaceEchoWorkerEnv)
+	candidateHealthValue, _ := lookup(WorkspaceCandidateHealthEnv)
+	validateOnlyValue, _ := lookup(WorkerValidateOnlyEnv)
 	config := WorkspaceConfig{
-		Host:               valueOr(lookup, "HOST", DefaultHost),
-		Port:               DefaultPort,
-		AppVersion:         appVersion,
-		Commit:             valueOr(lookup, "DUALLANE_GIT_COMMIT", "unknown"),
-		Environment:        valueOr(lookup, "NODE_ENV", DefaultWorkspaceEnvironment),
-		Enabled:            workspaceEnabledValue == "true",
-		PublicBaseURL:      strings.TrimSpace(valueOr(lookup, "PUBLIC_BASE_URL", "")),
-		FrontendURL:        strings.TrimSpace(valueOr(lookup, WorkspaceFrontendEnvironment, "")),
-		TrustProxy:         valueOr(lookup, "TRUST_PROXY", "false") == "true",
-		GitHubClientID:     strings.TrimSpace(valueOr(lookup, "GITHUB_CLIENT_ID", "")),
-		GitHubClientSecret: strings.TrimSpace(valueOr(lookup, "GITHUB_CLIENT_SECRET", "")),
-		GitHubProxyURL:     strings.TrimSpace(valueOr(lookup, "GITHUB_PROXY_URL", "")),
-		GitHubOAuthTimeout: DefaultGitHubOAuthTimeout,
-		DataDir:            strings.TrimSpace(valueOr(lookup, WorkspaceDataDirEnvironment, DefaultWorkspaceDataDir)),
-		EmoteCatalogPath:   strings.TrimSpace(valueOr(lookup, WorkspaceEmoteCatalogEnv, DefaultWorkspaceEmoteCatalog)),
-		ReleaseCatalogPath: strings.TrimSpace(valueOr(lookup, WorkspaceReleaseCatalogEnv, DefaultWorkspaceReleaseCatalog)),
-		MigrationsDir:      strings.TrimSpace(valueOr(lookup, WorkspaceMigrationsDirEnv, DefaultWorkspaceMigrationsDir)),
-		NtfyBaseURL:        strings.TrimSpace(valueOr(lookup, WorkspaceNtfyBaseEnvironment, "")),
-		NtfyWorkerEnabled:  valueOr(lookup, WorkspaceNtfyWorkerEnabled, "true") != "false",
-		EmailWorkerEnabled: valueOr(lookup, WorkspaceEmailWorkerEnabled, "true") != "false",
-		MaintenanceEnabled: maintenanceEnabledValue == "true",
-		EchoWorkerEnabled:  echoWorkerEnabledValue == "true",
-		SMTPEncryptionKey:  strings.TrimSpace(valueOr(lookup, WorkspaceSMTPEncryptionKey, "")),
-		StorageDriver:      strings.ToLower(valueOr(lookup, WorkspaceStorageDriverEnv, "local")),
-		S3Endpoint:         strings.TrimSpace(valueOr(lookup, WorkspaceS3EndpointEnv, "")),
-		S3Bucket:           strings.TrimSpace(valueOr(lookup, WorkspaceS3BucketEnv, "")),
-		S3Region:           strings.TrimSpace(valueOr(lookup, WorkspaceS3RegionEnv, "us-east-1")),
-		S3CredentialsFile:  strings.TrimSpace(valueOr(lookup, WorkspaceS3CredentialsFileEnv, "")),
-		LocalReadFallback:  valueOr(lookup, WorkspaceLocalReadFallbackEnv, "false") == "true",
-		LocalMirrorWrite:   valueOr(lookup, WorkspaceLocalMirrorWriteEnv, "false") == "true",
+		Host:                valueOr(lookup, "HOST", DefaultHost),
+		Port:                DefaultPort,
+		AppVersion:          appVersion,
+		Commit:              valueOr(lookup, "DUALLANE_GIT_COMMIT", "unknown"),
+		Environment:         valueOr(lookup, "NODE_ENV", DefaultWorkspaceEnvironment),
+		Enabled:             workspaceEnabledValue == "true",
+		PublicBaseURL:       strings.TrimSpace(valueOr(lookup, "PUBLIC_BASE_URL", "")),
+		FrontendURL:         strings.TrimSpace(valueOr(lookup, WorkspaceFrontendEnvironment, "")),
+		TrustProxy:          valueOr(lookup, "TRUST_PROXY", "false") == "true",
+		GitHubClientID:      strings.TrimSpace(valueOr(lookup, "GITHUB_CLIENT_ID", "")),
+		GitHubClientSecret:  strings.TrimSpace(valueOr(lookup, "GITHUB_CLIENT_SECRET", "")),
+		GitHubProxyURL:      strings.TrimSpace(valueOr(lookup, "GITHUB_PROXY_URL", "")),
+		GitHubOAuthTimeout:  DefaultGitHubOAuthTimeout,
+		DataDir:             strings.TrimSpace(valueOr(lookup, WorkspaceDataDirEnvironment, DefaultWorkspaceDataDir)),
+		EmoteCatalogPath:    strings.TrimSpace(valueOr(lookup, WorkspaceEmoteCatalogEnv, DefaultWorkspaceEmoteCatalog)),
+		ReleaseCatalogPath:  strings.TrimSpace(valueOr(lookup, WorkspaceReleaseCatalogEnv, DefaultWorkspaceReleaseCatalog)),
+		MigrationsDir:       strings.TrimSpace(valueOr(lookup, WorkspaceMigrationsDirEnv, DefaultWorkspaceMigrationsDir)),
+		NtfyBaseURL:         strings.TrimSpace(valueOr(lookup, WorkspaceNtfyBaseEnvironment, "")),
+		NtfyWorkerEnabled:   valueOr(lookup, WorkspaceNtfyWorkerEnabled, "true") != "false",
+		EmailWorkerEnabled:  valueOr(lookup, WorkspaceEmailWorkerEnabled, "true") != "false",
+		MaintenanceEnabled:  maintenanceEnabledValue == "true",
+		EchoWorkerEnabled:   echoWorkerEnabledValue == "true",
+		CandidateHealthOnly: candidateHealthValue == "true",
+		WorkerValidateOnly:  validateOnlyValue == "true",
+		SMTPEncryptionKey:   strings.TrimSpace(valueOr(lookup, WorkspaceSMTPEncryptionKey, "")),
+		StorageDriver:       strings.ToLower(valueOr(lookup, WorkspaceStorageDriverEnv, "local")),
+		S3Endpoint:          strings.TrimSpace(valueOr(lookup, WorkspaceS3EndpointEnv, "")),
+		S3Bucket:            strings.TrimSpace(valueOr(lookup, WorkspaceS3BucketEnv, "")),
+		S3Region:            strings.TrimSpace(valueOr(lookup, WorkspaceS3RegionEnv, "us-east-1")),
+		S3CredentialsFile:   strings.TrimSpace(valueOr(lookup, WorkspaceS3CredentialsFileEnv, "")),
+		LocalReadFallback:   valueOr(lookup, WorkspaceLocalReadFallbackEnv, "false") == "true",
+		LocalMirrorWrite:    valueOr(lookup, WorkspaceLocalMirrorWriteEnv, "false") == "true",
 	}
 	if raw, ok := lookup("PORT"); ok && strings.TrimSpace(raw) != "" {
 		port, err := strconv.Atoi(strings.TrimSpace(raw))
@@ -146,6 +154,9 @@ func LoadWorkspaceFrom(lookup func(string) (string, bool)) (WorkspaceConfig, err
 }
 
 func (config WorkspaceConfig) Validate() error {
+	if (config.CandidateHealthOnly || config.WorkerValidateOnly) && !config.Enabled {
+		return errors.New("passive candidate validation requires WORKSPACE_ENABLED=true")
+	}
 	if strings.TrimSpace(config.Host) == "" {
 		return errors.New("HOST must not be empty")
 	}

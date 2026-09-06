@@ -207,6 +207,29 @@ environment switch or assume disabling external delivery also disables claims.
 Use a disposable environment for mutation smoke tests. If a service has no
 verified passive candidate mode, adding and testing that mode is a cutover gate.
 
+The Workspace command now supports exact `WORKSPACE_CANDIDATE_HEALTH_ONLY=true`:
+it constructs the configured dependencies, native media and schema checker,
+but registers only health/readiness handlers and starts no listener or business
+WebSocket. All other paths return a content-free 503. The worker's exact
+`WORKER_VALIDATE_ONLY=true` validates its configured processors and schema but
+blocks both the run loop and individual ticks. Both require enabled Workspace.
+An idle validate-only worker still verifies PostgreSQL, unlike an active worker
+with all processors intentionally disabled.
+
+Passive local storage construction requires an existing accessible directory
+and never creates it or changes its mode. S3 readiness remains a read-only bucket
+check. This is not a filesystem ownership migration: legacy root-owned private
+objects and mounted credential files must be checked for the Go UID 65532 before
+cutover. The release must fail closed on inaccessible dependencies, never run
+the active Go service as root or silently chmod/chown a live data volume.
+
+Private readiness includes `mode: candidate-health-only`, `validate-only` or
+`active`. The image helper accepts a second argument
+`--expect-mode=<one of those values>` only with `/readyz`, and requires an exact
+response match plus `ok: true` and `state: ready`. The public health contract is
+unchanged. A release script must check the actual response, not only environment
+variables. Metrics and readiness remain inaccessible through the public gateway.
+
 Readiness may inspect configuration/schema/dependencies, but must not deliver
 notifications, claim jobs, execute migrations, or create user-domain records as
 a health probe. A read-only startup check is not proof of write-path parity;

@@ -24,6 +24,24 @@ func TestLoadWorkspaceIsDisabledUnlessValueIsExactlyTrue(t *testing.T) {
 	}
 }
 
+func TestPassiveCandidateFlagsRequireExactOptInAndEnabledWorkspace(t *testing.T) {
+	for _, name := range []string{WorkspaceCandidateHealthEnv, WorkerValidateOnlyEnv} {
+		for _, value := range []string{"", "false", "TRUE", "1", " true ", "true"} {
+			cfg, err := LoadWorkspaceFrom(configLookup(map[string]string{WorkspaceEnabledEnvironment: "true", name: value}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := cfg.CandidateHealthOnly || cfg.WorkerValidateOnly
+			if got != (value == "true") {
+				t.Fatalf("%s=%q passive=%v", name, value, got)
+			}
+		}
+		if _, err := LoadWorkspaceFrom(configLookup(map[string]string{name: "true"})); err == nil {
+			t.Fatalf("disabled %s accepted", name)
+		}
+	}
+}
+
 func TestLoadWorkspacePreservesRuntimeCompatibility(t *testing.T) {
 	config, err := LoadWorkspaceFrom(configLookup(map[string]string{
 		"HOST":                        "127.0.0.1",

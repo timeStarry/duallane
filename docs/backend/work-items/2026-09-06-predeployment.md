@@ -1344,3 +1344,18 @@ passed PostgreSQL/race interactions (36.829 seconds), runtime (6.397), applicati
 recipient, no pending recipient and a durable frozen timestamp. A fresh browser
 run passed 11/12, including release, Bot and Strict Mode; the dual-user latest
 message visibility failure remains open and is not attributed to finalization.
+
+### Passive Candidate Dependency Validation
+
+The real Workspace application now validates its entire graph on a read-only
+PostgreSQL connection with business admission and background listeners absent.
+The worker validates all eight local-storage processors against the same
+read-only mode and leaves a pending email job unchanged. No provider is invoked.
+Local store construction in these modes never provisions or chmods the root;
+the health helper requires the exact runtime mode when requested.
+
+Independent PostgreSQL/race passed Workspace (10.335 seconds), health helper
+(4.083), local storage (4.142), gate (1.022), and, after correcting raw exact-flag
+parsing and the test's missing catalog path, worker/config (7.522/1.017).
+Tagged staticcheck passed. Full container mode proof and deployment harness
+integration are separate gates and are not claimed by these tests.

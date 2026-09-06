@@ -61,6 +61,22 @@ func NewLocalBlobStore(root string) (*LocalBlobStore, error) {
 	return &LocalBlobStore{root: resolved}, nil
 }
 
+// OpenExistingLocalBlobStore validates an existing root without provisioning or
+// chmod. Passive release candidates must not mutate a live owner's filesystem
+// even during dependency construction. Request admission is enforced by the
+// application; this constructor alone does not make subsequent I/O read-only.
+func OpenExistingLocalBlobStore(ctx context.Context, root string) (*LocalBlobStore, error) {
+	resolved, err := cleanRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	store := &LocalBlobStore{root: resolved}
+	if err := store.AssertReady(ctx); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
 func (s *LocalBlobStore) Put(ctx context.Context, key string, source io.Reader, expectedSize int64, expectedSHA256 string) (StoredObject, error) {
 	if s == nil || strings.TrimSpace(s.root) == "" {
 		return StoredObject{}, internalError("put local object", errors.New("storage root is required"))

@@ -46,6 +46,7 @@ type application struct {
 	logger       *slog.Logger
 	startupDelay time.Duration
 	checkSchema  func(context.Context) error
+	validateOnly bool
 }
 
 func main() {
@@ -85,8 +86,8 @@ func main() {
 }
 
 func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, logger *slog.Logger) (*application, error) {
-	app := &application{rootContext: ctx, logger: logger, startupDelay: time.Minute}
-	if !runtimeConfig.Enabled || (!runtimeConfig.NtfyWorkerEnabled && !runtimeConfig.EmailWorkerEnabled && !runtimeConfig.MaintenanceEnabled && !runtimeConfig.EchoWorkerEnabled) {
+	app := &application{rootContext: ctx, logger: logger, startupDelay: time.Minute, validateOnly: runtimeConfig.WorkerValidateOnly}
+	if !runtimeConfig.Enabled || (!runtimeConfig.WorkerValidateOnly && !runtimeConfig.NtfyWorkerEnabled && !runtimeConfig.EmailWorkerEnabled && !runtimeConfig.MaintenanceEnabled && !runtimeConfig.EchoWorkerEnabled) {
 		return app, nil
 	}
 	pool, err := postgres.OpenPoolFromEnv(ctx)
@@ -181,7 +182,7 @@ func (app *application) run(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if app == nil || len(app.processors) == 0 {
+	if app == nil || app.validateOnly || len(app.processors) == 0 {
 		<-ctx.Done()
 		return
 	}
@@ -198,6 +199,7 @@ func (app *application) run(ctx context.Context) {
 }
 
 type healthResponse struct {
+	Mode    string `json:"mode,omitempty"`
 	OK      bool   `json:"ok"`
 	Service string `json:"service"`
 	State   string `json:"state"`
@@ -206,12 +208,19 @@ type healthResponse struct {
 }
 
 func (app *application) healthHandler(runtimeConfig config.WorkspaceConfig) http.Handler {
+	mode := "active"
+	if app != nil && app.validateOnly {
+		mode = "validate-only"
+	}
 	router := http.NewServeMux()
 	router.HandleFunc("GET /healthz", func(response http.ResponseWriter, _ *http.Request) {
 		writeHealth(response, http.StatusOK, healthResponse{OK: true, Service: serviceName, State: "live", Version: runtimeConfig.AppVersion, Commit: runtimeConfig.Commit})
 	})
 	router.HandleFunc("GET /readyz", func(response http.ResponseWriter, request *http.Request) {
 		ready := app != nil && (app.pool != nil || len(app.processors) == 0)
+		if ready && app.validateOnly && app.pool == nil {
+			ready = false
+		}
 		if ready && app.rootContext != nil && app.rootContext.Err() != nil {
 			ready = false
 		}
@@ -224,7 +233,7 @@ func (app *application) healthHandler(runtimeConfig config.WorkspaceConfig) http
 			status = http.StatusServiceUnavailable
 			state = "not_ready"
 		}
-		writeHealth(response, status, healthResponse{OK: ready, Service: serviceName, State: state, Version: runtimeConfig.AppVersion, Commit: runtimeConfig.Commit})
+		writeHealth(response, status, healthResponse{OK: ready, Service: serviceName, State: state, Mode: mode, Version: runtimeConfig.AppVersion, Commit: runtimeConfig.Commit})
 	})
 	return router
 }
@@ -266,7 +275,7 @@ func (app *application) runProcessor(ctx context.Context, processor workerProces
 }
 
 func (app *application) tick(ctx context.Context, processor workerProcessor) {
-	if processor.process == nil {
+	if app == nil || app.validateOnly || processor.process == nil {
 		return
 	}
 	if !app.schemaReady(ctx) {

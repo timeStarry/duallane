@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -23,6 +24,7 @@ var errLoopbackOnly = errors.New("loopback health target required")
 type healthPayload struct {
 	OK    *bool   `json:"ok"`
 	State *string `json:"state"`
+	Mode  string  `json:"mode"`
 }
 
 func main() {
@@ -80,11 +82,14 @@ func run(args []string) bool {
 	if path == "/readyz" && (payload.State == nil || *payload.State != "ready") {
 		return false
 	}
+	if len(args) == 2 && payload.Mode != strings.TrimPrefix(args[1], "--expect-mode=") {
+		return false
+	}
 	return true
 }
 
 func parseTarget(args []string) (string, string, bool) {
-	if len(args) != 1 {
+	if len(args) != 1 && len(args) != 2 {
 		return "", "", false
 	}
 	target, err := url.Parse(args[0])
@@ -93,6 +98,16 @@ func parseTarget(args []string) (string, string, bool) {
 	}
 	if target.Path != "/api/health" && target.Path != "/readyz" {
 		return "", "", false
+	}
+	if len(args) == 2 {
+		if target.Path != "/readyz" {
+			return "", "", false
+		}
+		switch args[1] {
+		case "--expect-mode=active", "--expect-mode=candidate-health-only", "--expect-mode=validate-only":
+		default:
+			return "", "", false
+		}
 	}
 	port, err := strconv.Atoi(target.Port())
 	if err != nil || port < 1 || port > 65535 {

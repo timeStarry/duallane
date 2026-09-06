@@ -76,6 +76,7 @@ func TestWorkerCompositionUsesSharedPresenceAndBoundsExpiry(t *testing.T) {
 	query.Set("search_path", schema)
 	isolatedDSN.RawQuery = query.Encode()
 	t.Setenv("DATABASE_URL", isolatedDSN.String())
+	t.Run("validate-only composition", func(t *testing.T) { assertPassiveWorkerComposition(t, ctx, isolatedDSN.String(), migrationDir) })
 	app, err := newApplication(ctx, config.WorkspaceConfig{
 		Enabled: true, EmailWorkerEnabled: true, MaintenanceEnabled: true, MigrationsDir: migrationDir,
 		StorageDriver: "local", DataDir: t.TempDir(),

@@ -84,6 +84,7 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 	query.Set("search_path", schema)
 	isolatedDSN.RawQuery = query.Encode()
 	t.Setenv("DATABASE_URL", isolatedDSN.String())
+	t.Run("passive composition", func(t *testing.T) { assertPassiveWorkspaceComposition(t, ctx, isolatedDSN.String(), webDir) })
 	app, err := newApplication(ctx, config.WorkspaceConfig{
 		Enabled: true, Environment: "test", AppVersion: "test", StorageDriver: "local", DataDir: t.TempDir(),
 		EmoteCatalogPath: filepath.Join(webDir, "shared/emote-packs.json"), GitHubOAuthTimeout: time.Second,

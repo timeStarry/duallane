@@ -32,6 +32,29 @@ func TestRunAcceptsLoopbackHealthAndReadiness(t *testing.T) {
 	}
 }
 
+func TestRunRequiresExactPassiveModeProof(t *testing.T) {
+	for _, actual := range []string{"", "active", "candidate-health-only", "validate-only"} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = fmt.Fprintf(w, `{"ok":true,"state":"ready","mode":%q}`, actual)
+		}))
+		for _, expected := range []string{"active", "candidate-health-only", "validate-only"} {
+			if got := run([]string{server.URL + "/readyz", "--expect-mode=" + expected}); got != (actual == expected) {
+				t.Errorf("actual=%q expected=%q accepted=%v", actual, expected, got)
+			}
+		}
+		server.Close()
+	}
+	for _, args := range [][]string{
+		{"http://127.0.0.1:8787/api/health", "--expect-mode=active"},
+		{"http://127.0.0.1:8787/readyz", "--expect-mode=unknown"},
+		{"http://127.0.0.1:8787/readyz", "--expect-mode=active", "extra"},
+	} {
+		if _, _, ok := parseTarget(args); ok {
+			t.Fatalf("invalid proof flags accepted: %v", args)
+		}
+	}
+}
+
 func TestRunRejectsMalformedNon200AndWrongState(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -110,6 +110,7 @@ func WriteJSON(w http.ResponseWriter, status int, value any) {
 // booleans may be projected; connection strings, hosts, provider responses,
 // and internal errors must stay out of this type.
 type HealthInput struct {
+	Mode             string
 	Service          string
 	Version          string
 	Commit           string
@@ -120,6 +121,7 @@ type HealthInput struct {
 }
 
 type HealthProjection struct {
+	Mode       string `json:"mode,omitempty"`
 	OK         bool   `json:"ok"`
 	Service    string `json:"service"`
 	Lane       string `json:"lane"`
@@ -160,6 +162,7 @@ func ProjectHealth(input HealthInput) HealthProjection {
 		lane = string(state)
 	}
 	return HealthProjection{
+		Mode:       input.Mode,
 		OK:         input.Live,
 		Service:    service,
 		Lane:       lane,

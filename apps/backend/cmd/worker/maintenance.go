@@ -213,8 +213,14 @@ func cloneWorkerAttemptCursors(source map[string]string) map[string]string {
 }
 
 func newMaintenanceBlobStore(ctx context.Context, runtimeConfig config.WorkspaceConfig) (platformstorage.BlobStore, error) {
-	if runtimeConfig.StorageDriver != "s3" {
+	newLocal := func() (*platformstorage.LocalBlobStore, error) {
+		if runtimeConfig.WorkerValidateOnly {
+			return platformstorage.OpenExistingLocalBlobStore(ctx, runtimeConfig.DataDir)
+		}
 		return platformstorage.NewLocalBlobStore(runtimeConfig.DataDir)
+	}
+	if runtimeConfig.StorageDriver != "s3" {
+		return newLocal()
 	}
 	credentials, err := config.LoadS3Credentials(runtimeConfig.S3CredentialsFile)
 	if err != nil {
@@ -235,7 +241,7 @@ func newMaintenanceBlobStore(ctx context.Context, runtimeConfig config.Workspace
 	if !runtimeConfig.LocalReadFallback && !runtimeConfig.LocalMirrorWrite {
 		return primary, nil
 	}
-	local, err := platformstorage.NewLocalBlobStore(runtimeConfig.DataDir)
+	local, err := newLocal()
 	if err != nil {
 		return nil, err
 	}
