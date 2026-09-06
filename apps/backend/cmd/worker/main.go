@@ -15,6 +15,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/platform/config"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/httpserver"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/logging"
+	platformmetrics "github.com/timestarry/duallane/apps/backend/internal/platform/metrics"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/migrations"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
@@ -47,6 +48,7 @@ type application struct {
 	startupDelay time.Duration
 	checkSchema  func(context.Context) error
 	validateOnly bool
+	metrics      *platformmetrics.Metrics
 }
 
 func main() {
@@ -86,7 +88,11 @@ func main() {
 }
 
 func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, logger *slog.Logger) (*application, error) {
-	app := &application{rootContext: ctx, logger: logger, startupDelay: time.Minute, validateOnly: runtimeConfig.WorkerValidateOnly}
+	recorder, err := platformmetrics.New(platformmetrics.Options{})
+	if err != nil {
+		return nil, err
+	}
+	app := &application{rootContext: ctx, logger: logger, startupDelay: time.Minute, validateOnly: runtimeConfig.WorkerValidateOnly, metrics: recorder}
 	if !runtimeConfig.Enabled || (!runtimeConfig.WorkerValidateOnly && !runtimeConfig.NtfyWorkerEnabled && !runtimeConfig.EmailWorkerEnabled && !runtimeConfig.MaintenanceEnabled && !runtimeConfig.EchoWorkerEnabled) {
 		return app, nil
 	}
@@ -182,18 +188,29 @@ func (app *application) run(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if app == nil || app.validateOnly || len(app.processors) == 0 {
+	if app == nil {
 		<-ctx.Done()
 		return
 	}
 	var wait sync.WaitGroup
-	for _, configured := range app.processors {
+	if app.metrics != nil && app.pool != nil {
+		wait.Add(1)
+		go func() { defer wait.Done(); app.runMetrics(ctx) }()
+	}
+	processors := app.processors
+	if app.validateOnly {
+		processors = nil
+	}
+	for _, configured := range processors {
 		processor := configured
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
 			app.runProcessor(ctx, processor)
 		}()
+	}
+	if len(processors) == 0 {
+		<-ctx.Done()
 	}
 	wait.Wait()
 }
@@ -213,6 +230,17 @@ func (app *application) healthHandler(runtimeConfig config.WorkspaceConfig) http
 		mode = "validate-only"
 	}
 	router := http.NewServeMux()
+	if app != nil && app.metrics != nil {
+		// Scraping only reads cached aggregates and pool/process snapshots.
+		// Queue SQL belongs to the bounded background collection loop.
+		private := app.metrics.Handler()
+		router.Handle("/metrics", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if app.pool != nil {
+				app.metrics.SetPGPool(platformmetrics.ServiceWorker, platformmetrics.SnapshotFromPGPool(app.pool.Stat()))
+			}
+			private.ServeHTTP(w, r)
+		}))
+	}
 	router.HandleFunc("GET /healthz", func(response http.ResponseWriter, _ *http.Request) {
 		writeHealth(response, http.StatusOK, healthResponse{OK: true, Service: serviceName, State: "live", Version: runtimeConfig.AppVersion, Commit: runtimeConfig.Commit})
 	})
@@ -285,6 +313,10 @@ func (app *application) tick(ctx context.Context, processor workerProcessor) {
 		return
 	}
 	result, err := processor.process(ctx)
+	app.metrics.ObserveWorkerResult(platformmetrics.WorkerOperation(processor.name), platformmetrics.WorkerResult{
+		Claimed: int64(result.Claimed), Completed: int64(result.Sent), Cancelled: int64(result.Cancelled),
+		Retried: int64(result.Retried), Failed: int64(result.Failed),
+	})
 	if err != nil {
 		if app.logger != nil {
 			app.logger.Error("worker cycle failed", slog.String("worker", processor.name), slog.String("error_code", processor.name+"_cycle_failed"))
@@ -296,6 +328,21 @@ func (app *application) tick(ctx context.Context, processor workerProcessor) {
 			slog.Int("claimed", result.Claimed), slog.Int("sent", result.Sent),
 			slog.Int("cancelled", result.Cancelled), slog.Int("retried", result.Retried),
 			slog.Int("failed", result.Failed))
+	}
+}
+
+func (app *application) runMetrics(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		if err := collectWorkerBacklog(ctx, app.pool, app.metrics); err != nil && ctx.Err() == nil && app.logger != nil {
+			app.logger.Warn("worker metrics unavailable", slog.String("error_code", "metrics_unavailable"))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }
 

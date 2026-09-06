@@ -1423,3 +1423,18 @@ Parent independently passed PostgreSQL/race metrics (1.407 seconds), realtime
 upgrade regression passed and recorded HTTP 101 through the metrics middleware;
 route tests retain templates rather than resource IDs or query values. Command
 composition and worker queue collection are accepted in separate slices.
+
+### Worker Queue Collection And Metrics Wiring
+
+The worker now exposes private process/pool metrics and actual per-cycle result
+counts. A separate 30-second loop reads seven durable queue families in a
+500-millisecond read-only PostgreSQL transaction; scrapes never query queues.
+Collection failure retains the previous successful samples and emits only a
+fixed warning code. Echo counts describe recovery/reconciliation candidates,
+not necessarily pending sends. No provider is called to collect metrics; the
+tables lack lease acquisition time, so lease-age samples remain unavailable.
+
+Parent independently passed the worker PostgreSQL/race suite (15.186 seconds)
+and tagged staticcheck. A focused composition test passed (1.210 seconds),
+checking partial cycle counts, private GET/POST handling, raw-error/query
+exclusion and absence of invented backlog samples without a database.
