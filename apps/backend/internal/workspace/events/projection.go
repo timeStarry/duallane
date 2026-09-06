@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	workspaceConversations "github.com/timestarry/duallane/apps/backend/internal/workspace/conversations"
 	workspaceMessages "github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 )
 
@@ -193,41 +194,24 @@ func (r *PGRepository) publicConversationPayload(ctx context.Context, spaceID st
 	if actor == nil {
 		return nil, nil
 	}
-	active, err := r.conversationMemberActive(ctx, spaceID, conversationID, actor.ID)
-	if err != nil {
-		return nil, err
-	}
-	if !active {
-		return nil, nil
-	}
-	var id, typ, title string
-	var avatarEmoji *string
-	var retentionCount int64
-	var createdAt time.Time
-	err = r.pool.QueryRow(ctx, `
-		SELECT id, type, title, avatar_emoji, retention_count, created_at
-		FROM conversations WHERE id = $1 AND space_id = $2
-	`, conversationID, spaceID).Scan(&id, &typ, &title, &avatarEmoji, &retentionCount, &createdAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
+	conversationReader := workspaceConversations.NewPGRepository(r.pool)
+	record, err := conversationReader.GetVisibleConversationRecord(ctx, spaceID, actor.ID, conversationID)
 	if err != nil {
 		return nil, internalError("project workspace conversation event", err)
 	}
-	var messageCount, memberCount int64
-	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM messages WHERE conversation_id = $1 AND topic_id IS NULL AND deleted_at IS NULL`, id).Scan(&messageCount); err != nil {
-		return nil, internalError("project workspace conversation event", err)
+	if record == nil {
+		return nil, nil
 	}
+	id, typ, title := record.ID, record.Type, record.Title
+	avatarEmoji := record.AvatarEmoji
+	retentionCount := record.RetentionCount
+	createdAt := record.CreatedAt
+	messageCount := record.MessageCount
+	var memberCount int64
 	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM conversation_members WHERE conversation_id = $1 AND removed_at IS NULL`, id).Scan(&memberCount); err != nil {
 		return nil, internalError("project workspace conversation event", err)
 	}
-	var notificationLevel string
-	if err := r.pool.QueryRow(ctx, `
-		SELECT COALESCE(notification_level, 'all')
-		FROM conversation_members WHERE conversation_id = $1 AND user_id = $2 AND removed_at IS NULL
-	`, id, actor.ID).Scan(&notificationLevel); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return nil, internalError("project workspace conversation notification", err)
-	}
+	notificationLevel := record.NotificationLevel
 	if notificationLevel == "" {
 		notificationLevel = "all"
 	}
@@ -240,14 +224,26 @@ func (r *PGRepository) publicConversationPayload(ctx context.Context, spaceID st
 		"retentionCount":    retentionCount,
 		"retentionText":     "保留最近 " + formatInt(retentionCount) + " 条消息",
 		"createdAt":         formatTimestamp(createdAt),
-		"lastActivityAt":    formatTimestamp(createdAt),
+		"lastActivityAt":    formatTimestamp(record.LastActivityAt),
 		"messageCount":      messageCount,
 		"memberCount":       memberCount,
-		"unreadCount":       int64(0),
+		"unreadCount":       record.UnreadCount,
+		"lastReadMessageId": nil,
+		"lastReadAt":        nil,
+		"lastReadSeq":       nil,
 		"notificationLevel": notificationLevel,
 		"members":           []any{},
 		"otherMember":       nil,
 		"latestMessages":    []any{},
+	}
+	if record.LastReadMessageID != nil {
+		result["lastReadMessageId"] = *record.LastReadMessageID
+	}
+	if record.LastReadAt != nil {
+		result["lastReadAt"] = formatTimestamp(*record.LastReadAt)
+	}
+	if record.LastReadSeq != nil {
+		result["lastReadSeq"] = *record.LastReadSeq
 	}
 	if avatarEmoji == nil {
 		result["avatarEmoji"] = nil

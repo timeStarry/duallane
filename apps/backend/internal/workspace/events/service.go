@@ -566,12 +566,18 @@ func safeConversation(value any, viewerID string) (map[string]any, bool) {
 		return nil, false
 	}
 	result := stringFields(conversation, "id", "spaceId", "type", "title", "displayTitle", "retentionText", "createdAt", "lastActivityAt", "lastMessagePlainText", "notificationLevel")
-	for _, key := range []string{"avatarEmoji", "lastMessageAt"} {
+	for _, key := range []string{"avatarEmoji", "lastMessageAt", "lastReadMessageId", "lastReadAt"} {
 		copyNullableStringField(result, conversation, key)
 	}
-	for _, key := range []string{"retentionCount", "messageCount", "memberCount", "unreadCount"} {
-		if number, ok := safeIntField(conversation[key]); ok {
+	for _, key := range []string{"retentionCount", "messageCount", "memberCount", "unreadCount", "lastReadSeq"} {
+		value, exists := conversation[key]
+		if !exists {
+			continue
+		}
+		if number, ok := safeIntField(value); ok {
 			result[key] = number
+		} else if key == "lastReadSeq" && value == nil {
+			result[key] = nil
 		}
 	}
 	if members, ok := conversation["members"].([]any); ok {

@@ -985,3 +985,18 @@ the definition and wrapper; its real HTTP/PG test passed (2.971 seconds) through
 Bot create, human resolution, action and replay with one canonical action event.
 Integration-tag staticcheck passed. This does not enable external Bot delivery
 or close the separate lone-surrogate request-hash compatibility gate.
+
+### Realtime Viewer Read State
+
+Conversation event projections incorrectly forced `unreadCount` to zero and
+omitted the read marker. They now reuse the conversations repository's visible
+record and its existing read-boundary calculation; the transport allowlist
+preserves nullable marker ID/time/sequence. The database mutation was already
+correct and was not changed. Synthetic tests cover system/other-author messages,
+own-message exclusion, marker progression and event replay.
+
+Independent PostgreSQL/race passed events (4.173 seconds) and conversations
+(3.670), followed by integration-tag staticcheck. The unchanged dual-user
+Chromium scenario advanced past its earlier unread failure, then failed at
+the remote member reaction display (line 983, 32.5 seconds). That is a new
+remaining realtime projection issue, not a full browser pass.
