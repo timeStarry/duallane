@@ -52,6 +52,22 @@ prove all of the following before `go-full` can proceed:
   `WORKSPACE_ENABLED=true`; and
 - `migrate` remains a one-shot service with `restart: "no"`.
 
+After building, the Go image gate resolves the common reference to a canonical
+local image ID and checks revision/version labels on that ID, not on a mutable
+tag. A mode-0600 Compose override pins Workspace, worker, and migrate to the
+verified ID for all subsequent candidate and active starts. The private recovery
+record retains that identity and the unique release-run label. A later tag move
+cannot select a different migration binary.
+
+Migration uses create-without-start. The script refuses any existing migration
+container, then checks the created container's project/service/run ownership,
+stopped state and actual image ID before starting it. It waits for a zero exit,
+rechecks the image ID and removes only the exact, reverified owned container.
+Invalid IDs or foreign ownership never trigger guessed-name deletion. An error
+after execution does not imply database rollback; retain the backup and inspect
+the migration history before retrying. Active Workspace and worker image IDs
+must also match the verified image.
+
 For unpublished Go candidates, `deploy.sh` passes and then verifies the
 effective container environment:
 

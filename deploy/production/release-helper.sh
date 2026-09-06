@@ -26,6 +26,12 @@ RELEASE_CANDIDATE_RECORDS=()
 RELEASE_CANDIDATE_NETWORK_NAME=""
 RELEASE_SNAPSHOT_FILE=""
 RELEASE_RECOVERY_FILE=""
+RELEASE_GO_IMAGE_REF=""
+RELEASE_GO_IMAGE_ID=""
+RELEASE_GO_IMAGE_REVISION=""
+RELEASE_GO_IMAGE_VERSION=""
+RELEASE_GO_IMAGE_OVERRIDE_FILE=""
+RELEASE_GO_RUN_ID=""
 RELEASE_STOP_TIMEOUT="${DUALLANE_DEPLOY_STOP_TIMEOUT:-30}"
 RELEASE_STOP_ATTEMPTS="${DUALLANE_DEPLOY_STOP_ATTEMPTS:-30}"
 RELEASE_HEALTH_ATTEMPTS="${DUALLANE_DEPLOY_HEALTH_ATTEMPTS:-40}"
@@ -61,6 +67,12 @@ release_load_profile() {
   RELEASE_ROLLBACK_ORDER=()
   RELEASE_HEALTH_REQUIRED=()
   RELEASE_REQUIRED_SERVICES=()
+  RELEASE_GO_IMAGE_REF=""
+  RELEASE_GO_IMAGE_ID=""
+  RELEASE_GO_IMAGE_REVISION=""
+  RELEASE_GO_IMAGE_VERSION=""
+  RELEASE_GO_IMAGE_OVERRIDE_FILE=""
+  RELEASE_GO_RUN_ID=""
 
   while IFS= read -r line; do
     [[ -n "${line}" ]] || continue
@@ -141,6 +153,292 @@ release_load_profile() {
 
 release_validate_resolved_compose() {
   compose config --format json | node "${RELEASE_MANIFEST_HELPER}" --profile "${RELEASE_PROFILE_NAME}" --check-compose
+}
+
+release_record_go_image_identity() {
+  [[ -n "${RELEASE_RECOVERY_FILE:-}" ]] || return 0
+  local value
+  for value in "${RELEASE_GO_IMAGE_REF}" "${RELEASE_GO_IMAGE_ID}" \
+    "${RELEASE_GO_IMAGE_REVISION}" "${RELEASE_GO_IMAGE_VERSION}" "${RELEASE_GO_RUN_ID}"; do
+    if [[ "${value}" == *$'\n'* || "${value}" == *$'\r'* || "${value}" == *$'\t'* ]]; then
+      echo "Go image identity contains an unsafe control character" >&2
+      return 1
+    fi
+  done
+  umask 077
+  {
+    printf 'go_image_ref=%s\n' "${RELEASE_GO_IMAGE_REF}"
+    printf 'go_image_id=%s\n' "${RELEASE_GO_IMAGE_ID}"
+    printf 'go_image_revision=%s\n' "${RELEASE_GO_IMAGE_REVISION}"
+    printf 'go_image_version=%s\n' "${RELEASE_GO_IMAGE_VERSION}"
+    printf 'go_image_run_id=%s\n' "${RELEASE_GO_RUN_ID}"
+  } >>"${RELEASE_RECOVERY_FILE}"
+}
+
+release_create_go_image_override() {
+  [[ "${RELEASE_PROFILE_NAME}" == "go-full" ]] || return 0
+  [[ -n "${RELEASE_RECOVERY_FILE:-}" ]] || {
+    echo "Go image pinning requires a recovery file" >&2
+    return 1
+  }
+  [[ "${RELEASE_GO_IMAGE_ID}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo "Go image pinning requires a canonical image ID" >&2
+    return 1
+  }
+  local override_file="${RELEASE_RECOVERY_FILE}.go-image.override.yml"
+  local temporary_file="${override_file}.tmp.$$"
+  local run_seed
+  if [[ -z "${RELEASE_GO_RUN_ID}" ]]; then
+    run_seed="${current_commit:-}:${BASHPID:-$$}:$(date -u +%s%N)"
+    if ! RELEASE_GO_RUN_ID="$(printf '%s' "${run_seed}" | sha256sum | cut -d ' ' -f1)"; then
+      echo "could not generate a unique Go release run label" >&2
+      return 1
+    fi
+  fi
+  [[ "${RELEASE_GO_RUN_ID}" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "Go release run label is malformed" >&2
+    return 1
+  }
+  if [[ "${override_file}" == *$'\n'* || "${override_file}" == *$'\r'* || "${override_file}" == *$'\t'* || \
+    "${temporary_file}" == *$'\n'* || "${temporary_file}" == *$'\r'* || "${temporary_file}" == *$'\t'* ]]; then
+    echo "Go image override path contains an unsafe control character" >&2
+    return 1
+  fi
+  if [[ -e "${override_file}" || -L "${override_file}" || -e "${temporary_file}" || -L "${temporary_file}" ]]; then
+    echo "refusing to overwrite an existing Go image override" >&2
+    return 1
+  fi
+  umask 077
+  if ! {
+    printf 'services:\n'
+    printf '  workspace:\n    image: %s\n    labels:\n      com.duallane.release-run: %s\n' "${RELEASE_GO_IMAGE_ID}" "${RELEASE_GO_RUN_ID}"
+    printf '  worker:\n    image: %s\n    labels:\n      com.duallane.release-run: %s\n' "${RELEASE_GO_IMAGE_ID}" "${RELEASE_GO_RUN_ID}"
+    printf '  migrate:\n    image: %s\n    labels:\n      com.duallane.release-run: %s\n' "${RELEASE_GO_IMAGE_ID}" "${RELEASE_GO_RUN_ID}"
+  } >"${temporary_file}"; then
+    rm -f -- "${temporary_file}"
+    echo "could not write the private Go image override" >&2
+    return 1
+  fi
+  if ! chmod 600 -- "${temporary_file}" || ! mv -- "${temporary_file}" "${override_file}"; then
+    rm -f -- "${temporary_file}"
+    echo "could not install the private Go image override" >&2
+    return 1
+  fi
+  RELEASE_GO_IMAGE_OVERRIDE_FILE="${override_file}"
+}
+
+release_verify_go_image_identity() {
+  [[ "${RELEASE_PROFILE_NAME}" == "go-full" ]] || return 0
+  local image_refs image_ref image_id image_revision image_version
+  local verified_image_id="" verified_image_ref="" image_count=0
+  if ! image_refs="$(compose config --format json 2>/dev/null | node -e '
+    const fs = require("node:fs");
+    let compose;
+    try {
+      compose = JSON.parse(fs.readFileSync(0, "utf8"));
+    } catch {
+      process.exit(1);
+    }
+    const services = compose && compose.services;
+    const names = ["workspace", "worker", "migrate"];
+    if (!services || typeof services !== "object" || Array.isArray(services)) process.exit(1);
+    const refs = names.map((name) => services[name] && services[name].image);
+    if (refs.some((ref) => typeof ref !== "string" || ref.length === 0 || ref.includes("\n") || ref.includes("\r") || ref.includes("\t"))) process.exit(1);
+    if (!refs.every((ref) => ref === refs[0])) process.exit(1);
+    process.stdout.write(refs.join("\n"));
+  ')"; then
+    echo "could not resolve the Workspace, worker, and migrate image references" >&2
+    return 1
+  fi
+  while IFS= read -r image_ref; do
+    [[ -n "${image_ref}" && "${image_ref}" != *$'\r'* && "${image_ref}" != *$'\t'* ]] || {
+      echo "Go image reference is empty or malformed" >&2
+      return 1
+    }
+    ((image_count += 1))
+    if ! image_id="$(docker image inspect "${image_ref}" --format '{{.Id}}' 2>/dev/null)"; then
+      echo "could not inspect the built Go image" >&2
+      return 1
+    fi
+    if [[ ! "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+      echo "built Go image did not return a canonical image ID" >&2
+      return 1
+    fi
+    if [[ -z "${verified_image_id}" ]]; then
+      verified_image_id="${image_id}"
+      verified_image_ref="${image_ref}"
+    elif [[ "${image_id}" != "${verified_image_id}" ]]; then
+      echo "Workspace, worker, and migrate resolved to different image IDs" >&2
+      return 1
+    fi
+  done <<<"${image_refs}"
+  if ((image_count != 3)); then
+    echo "Go image identity gate did not receive all three service references" >&2
+    return 1
+  fi
+  if ! image_revision="$(docker image inspect "${verified_image_id}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)"; then
+    echo "could not inspect the verified Go image revision" >&2
+    return 1
+  fi
+  if ! image_version="$(docker image inspect "${verified_image_id}" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null)"; then
+    echo "could not inspect the verified Go image version" >&2
+    return 1
+  fi
+  if [[ "${image_revision}" != "${current_commit}" || "${image_version}" != "${expected_app_version}" ]]; then
+    echo "Go image release metadata does not match the requested commit/version" >&2
+    return 1
+  fi
+  RELEASE_GO_IMAGE_REF="${verified_image_ref}"
+  RELEASE_GO_IMAGE_ID="${verified_image_id}"
+  RELEASE_GO_IMAGE_REVISION="${current_commit}"
+  RELEASE_GO_IMAGE_VERSION="${expected_app_version}"
+  release_create_go_image_override || return 1
+  release_record_go_image_identity || return 1
+}
+
+release_verify_go_service_image_id() {
+  [[ "${RELEASE_PROFILE_NAME}" == "go-full" ]] || return 0
+  local service="$1"
+  local ids id actual_image_id
+  release_profile_contains "${service}" workspace worker || return 0
+  [[ -n "${RELEASE_GO_IMAGE_ID}" ]] || {
+    echo "Go image identity was not verified before starting ${service}" >&2
+    return 1
+  }
+  if ! ids="$(release_current_service_ids "${service}")"; then
+    echo "could not inspect active ${service} image" >&2
+    return 1
+  fi
+  [[ -n "${ids}" ]] || {
+    echo "active ${service} has no container for image identity verification" >&2
+    return 1
+  }
+  while IFS= read -r id; do
+    [[ -n "${id}" ]] || continue
+    if ! actual_image_id="$(docker inspect "${id}" --format '{{.Image}}' 2>/dev/null)"; then
+      echo "could not inspect active ${service} image ID" >&2
+      return 1
+    fi
+    if [[ "${actual_image_id}" != "${RELEASE_GO_IMAGE_ID}" ]]; then
+      echo "active ${service} does not use the verified Go image ID" >&2
+      return 1
+    fi
+  done <<<"${ids}"
+}
+
+release_verify_migration_container_owner() {
+  local migration_id="$1"
+  local project label expected actual label_check
+  [[ "${migration_id}" =~ ^[0-9a-f]{12,64}$ ]] || {
+    echo "Go migration container identifier is invalid" >&2
+    return 1
+  }
+  project="$(release_compose_project_name)" || return 1
+  local -a checks=(
+    "com.docker.compose.project=${project}"
+    "com.docker.compose.service=migrate"
+    "com.duallane.release-run=${RELEASE_GO_RUN_ID}"
+  )
+  for label_check in "${checks[@]}"; do
+    label="${label_check%%=*}"
+    expected="${label_check#*=}"
+    if ! actual="$(docker inspect "${migration_id}" --format "{{index .Config.Labels \"${label}\"}}" 2>/dev/null)"; then
+      echo "could not inspect Go migration ownership labels" >&2
+      return 1
+    fi
+    if [[ "${actual}" != "${expected}" ]]; then
+      echo "refusing to use an unowned Go migration container" >&2
+      return 1
+    fi
+  done
+}
+
+release_remove_owned_migration_container() {
+  local migration_id="$1"
+  release_verify_migration_container_owner "${migration_id}" || return 1
+  if ! docker rm -f "${migration_id}" >/dev/null 2>&1; then
+    echo "could not remove the owned Go migration container" >&2
+    return 1
+  fi
+}
+
+release_run_go_migration_and_verify() {
+  [[ "${RELEASE_PROFILE_NAME}" == "go-full" ]] || {
+    echo "Go migration image verification requires the go-full profile" >&2
+    return 1
+  }
+  [[ -n "${RELEASE_GO_IMAGE_ID}" ]] || {
+    echo "Go migration image identity was not verified before migration" >&2
+    return 1
+  }
+  local existing migration_id migration_running migration_status actual_image_id
+  if ! existing="$(compose ps -a -q migrate 2>/dev/null)"; then
+    echo "could not inspect existing Go migration containers" >&2
+    return 1
+  fi
+  if [[ -n "${existing}" ]]; then
+    echo "refusing to reuse an existing Go migration container" >&2
+    return 1
+  fi
+  if ! compose create --pull never --no-deps migrate >/dev/null 2>&1; then
+    echo "Go migration container could not be created" >&2
+    return 1
+  fi
+  if ! migration_id="$(compose ps -a -q migrate 2>/dev/null)"; then
+    echo "could not identify the created Go migration container" >&2
+    return 1
+  fi
+  if [[ ! "${migration_id}" =~ ^[0-9a-f]{12,64}$ ]]; then
+    echo "Go migration container identifier is invalid" >&2
+    return 1
+  fi
+  release_verify_migration_container_owner "${migration_id}" || return 1
+  if ! migration_running="$(docker inspect "${migration_id}" --format '{{.State.Running}}' 2>/dev/null)"; then
+    echo "could not inspect the created Go migration container state" >&2
+    release_remove_owned_migration_container "${migration_id}" || return 1
+    return 1
+  fi
+  if [[ "${migration_running}" != "false" ]]; then
+    echo "Go migration container was running before image verification" >&2
+    release_remove_owned_migration_container "${migration_id}" || return 1
+    return 1
+  fi
+  if ! actual_image_id="$(docker inspect "${migration_id}" --format '{{.Image}}' 2>/dev/null)"; then
+    echo "could not inspect the created Go migration image" >&2
+    release_remove_owned_migration_container "${migration_id}" || return 1
+    return 1
+  fi
+  if [[ "${actual_image_id}" != "${RELEASE_GO_IMAGE_ID}" ]]; then
+    echo "Go migration did not use the verified Go image ID" >&2
+    release_remove_owned_migration_container "${migration_id}" || return 1
+    return 1
+  fi
+  if ! docker start "${migration_id}" >/dev/null 2>&1; then
+    echo "Go migration container could not be started" >&2
+    release_remove_owned_migration_container "${migration_id}" || return 1
+    return 1
+  fi
+  if ! migration_status="$(docker wait "${migration_id}" 2>/dev/null)"; then
+    echo "Go migration did not reach a terminal state" >&2
+    release_remove_owned_migration_container "${migration_id}" || return 1
+    return 1
+  fi
+  if [[ "${migration_status}" != "0" ]]; then
+    echo "Go migration exited unsuccessfully" >&2
+    release_remove_owned_migration_container "${migration_id}" || return 1
+    return 1
+  fi
+  if ! actual_image_id="$(docker inspect "${migration_id}" --format '{{.Image}}' 2>/dev/null)"; then
+    echo "could not inspect the completed Go migration image" >&2
+    release_remove_owned_migration_container "${migration_id}" || return 1
+    return 1
+  fi
+  if [[ "${actual_image_id}" != "${RELEASE_GO_IMAGE_ID}" ]]; then
+    echo "completed Go migration did not retain the verified image ID" >&2
+    release_remove_owned_migration_container "${migration_id}" || return 1
+    return 1
+  fi
+  release_remove_owned_migration_container "${migration_id}"
 }
 
 release_candidate_compose() {
@@ -790,6 +1088,10 @@ release_snapshot_validate_for_go_cutover() {
   if [[ "${RELEASE_PROFILE_NAME}" != "go-full" ]]; then
     release_refuse_node_profile_with_active_go
     return
+  fi
+  if [[ "${RELEASE_GO_UPGRADE:-false}" == true ]]; then
+    echo "Go-to-Go upgrades require a frozen resolved Compose snapshot; this release tooling does not provide one yet" >&2
+    return 1
   fi
   local service
   [[ -f "${RELEASE_SNAPSHOT_FILE}" ]] || {

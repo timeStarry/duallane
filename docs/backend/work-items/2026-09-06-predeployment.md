@@ -1726,3 +1726,19 @@ and WebSocket entry points reject access, and the temporary data directory stays
 empty. This proves the application startup mode only; release-helper environment
 wiring and its inspection gate are still a separate pending change. It does not
 claim Workspace database or object-store readiness from the Node health response.
+
+### Pre-execution Migration Image Identity
+
+Parent passed the complete synthetic release suite (38/38, 52.181 seconds) and
+shell syntax checks. The Go image is frozen in a private ID-pinned Compose
+override before execution; migration is created stopped, checked for actual ID
+and exact project/service/run ownership, then started/waited and checked again.
+Cleanup refuses invalid IDs or another run's container. Failure cases include
+tag drift, wrong pre-start ID, failed exit and post-wait mismatch. Go-to-Go
+upgrades still fail closed until their full previous-configuration snapshot is
+implemented; this slice does not claim that gate or Node passive wiring.
+
+A separate real Docker create/inspect check confirmed that the local container's
+`Image` equals the inspected image ID on this daemon. That empty, never-started,
+network-isolated probe was removed by its verified exact ID. No database or
+production container was accessed by that check.

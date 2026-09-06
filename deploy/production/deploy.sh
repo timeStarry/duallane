@@ -20,6 +20,7 @@ source "${SCRIPT_DIR}/release-helper.sh"
 bootstrap=false
 expected_commit=""
 release_profile="node-default"
+go_upgrade=false
 app_replaced=false
 buildx_builder=""
 buildx_builder_ready=false
@@ -40,7 +41,8 @@ is mandatory so an operator cannot accidentally deploy a different checkout.
 The checkout must also match DUALLANE_PRODUCTION_DIR, which defaults to
 $HOME/duallane. go-full additionally requires the parent-provided Go Compose,
 health, and candidate-runtime wiring; the manifest cannot satisfy those checks
-by itself.
+by itself. Go-to-Go upgrades are intentionally unavailable until a mode-0600
+resolved Compose snapshot can prove the previous complete Go owner.
 EOF
 }
 
@@ -66,6 +68,10 @@ while (($# > 0)); do
       release_profile="$2"
       shift 2
       ;;
+    --go-upgrade)
+      go_upgrade=true
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -78,10 +84,22 @@ while (($# > 0)); do
   esac
 done
 
+if [[ "${go_upgrade}" == true && "${release_profile}" != "go-full" ]]; then
+  echo "--go-upgrade requires the explicit go-full release profile" >&2
+  exit 2
+fi
+if [[ "${go_upgrade}" == true ]]; then
+  echo "--go-upgrade is unavailable until a mode-0600 resolved Compose snapshot is implemented" >&2
+  exit 2
+fi
+
 compose() {
   local compose_files=("${BASE_COMPOSE_FILES[@]}")
   if [[ "${release_profile:-node-default}" == "go-full" ]]; then
     compose_files+=(--profile rollback -f "${PROJECT_DIR}/docker-compose.go-production.yml")
+    if [[ -n "${RELEASE_GO_IMAGE_OVERRIDE_FILE:-}" ]]; then
+      compose_files+=(-f "${RELEASE_GO_IMAGE_OVERRIDE_FILE}")
+    fi
   fi
   docker compose "${compose_files[@]}" "$@"
 }
@@ -97,6 +115,9 @@ candidate_compose() {
     -f "${PROJECT_DIR}/docker-compose.go-production.yml"
     -f "${PROJECT_DIR}/deploy/production/go-candidate.compose.yml"
   )
+  if [[ -n "${RELEASE_GO_IMAGE_OVERRIDE_FILE:-}" ]]; then
+    compose_files+=(-f "${RELEASE_GO_IMAGE_OVERRIDE_FILE}")
+  fi
   docker compose "${compose_files[@]}" "$@"
 }
 
@@ -315,6 +336,7 @@ start_release_service() {
   while IFS= read -r id; do
     [[ -n "${id}" ]] || continue
     verify_container_release "${id}" "${service}"
+    release_verify_go_service_image_id "${service}"
   done <<<"${ids}"
 }
 
@@ -570,7 +592,12 @@ export BUILDX_BUILDER="${buildx_builder}"
 export COMPOSE_PARALLEL_LIMIT="${COMPOSE_PARALLEL_LIMIT:-1}"
 ensure_buildx_builder "${buildx_builder}" "${buildkit_image}"
 compose build "${RELEASE_BUILD_SERVICES[@]}"
-compose run --rm --no-deps migrate
+release_verify_go_image_identity
+if [[ "${RELEASE_PROFILE_NAME}" == "go-full" ]]; then
+  release_run_go_migration_and_verify
+else
+  compose run --rm --no-deps migrate
+fi
 
 if [[ "${RELEASE_PROFILE_NAME}" == "node-default" ]]; then
   release_start_candidate api
