@@ -437,6 +437,23 @@ A service is not production-ready until the guarded deployment can:
 Record exact commands and results in the PR. An unavailable external environment
 is a remaining gate, not a pass.
 
+The isolated real-Docker restart-policy gate requires an explicit local
+shell-capable immutable image on Linux:
+
+```sh
+DUALLANE_RESTART_POLICY_TEST_IMAGE=sha256:<64-hex-image-id> \
+  node --test scripts/backend/release-restart-policy.docker.test.mjs
+```
+
+It creates two private, network-free, mount-free synthetic containers and
+exercises the real release helper's label checks, `restart=no` fencing, stop
+confirmation and selected-owner policy restoration. Both `always` and
+`on-failure:3` are covered. Cleanup rechecks exact IDs/image/ownership and
+removes only these containers. It never restarts Docker or exercises a
+production release. Without the explicit image the test reports `SKIP`;
+that is not evidence for this gate. The separate release harness covers
+partial failures and daemon-recovery decisions.
+
 ## 11. Performance Evidence
 
 Do not invent capacity targets. Before a scale or performance claim, record a

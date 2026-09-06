@@ -1943,3 +1943,25 @@ Go writers. The helper records the old policy before mutation, verifies
 `restart=no`, stops the exact owner and confirms it is not running. Only a
 completed fence can restore a selected known-good owner. This does not yet
 enable Go-to-Go upgrades or integrate the database/provider drain gate.
+
+The parent's separate real-Docker test then passed both restart-policy cases
+and mismatched-owner refusal (3 Node test results, 8.261 seconds). It used the
+rebuilt Workspace runtime image
+`sha256:27baa15853dc52b72b03faa3cd526f4996c6204ff61e56750e5568ecfd5041c0`,
+with observed UID `65532:65532` and revision label `78e43c6`. Both exact owned
+containers were removed and a label inventory found no remaining probes.
+There was no Docker daemon restart, mounted data or production application
+operation. This is policy-mechanics evidence, not a completed release rehearsal.
+
+### Retained Node Gateway Verification
+
+The delegated verification worker ran the committed read-only gateway probe
+against real isolated Node Web/API/PostgreSQL stacks in both Workspace-disabled
+and Workspace-enabled modes: 13 observations passed in each. It reported exact
+API image `sha256:e5e42b53d293a942ba8e541b34d9ea7bfa83990e1619272ad057858d300c2c6f`
+and Web image `sha256:603491aaa6f5324659a7306f65e4fccbb30d1bd5415416a206b72cc44dd5b6c9`.
+These are diagnostic images, not the final candidate release. The worker
+removed its two uniquely named stack resource sets, including their synthetic
+data volumes, without touching the parent's stacks. Parent reviewed the
+already independently tested probe and this evidence; the two Node stack runs
+are worker-executed, not a claim of a second parent browser or deployment run.
