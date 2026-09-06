@@ -2327,3 +2327,28 @@ from clean `469176d34d05df0bb38c6f6e7ad6dbcffb2ec084` (0.16.0) and PostgreSQL
 `sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73`.
 Canonical migration, actual checker execution, private ready report acceptance
 and exact owned cleanup completed. No production resources were touched.
+
+### Workspace Response-Ordering Fix And Browser Regression
+
+The client no longer chooses an incoming message window by array length alone.
+Request generations, session/membership epochs and history epochs distinguish
+stale responses from authoritative around/history changes, preserving newer
+local message changes without reviving removed conversations. Focused tests
+cover loaded history, post-request messages, permission changes and removal
+states. This does not change server authorization or retention policy.
+
+Parent confirmed the three frozen source/test files exactly matched the private
+Linux validation copy, reran all 21 focused tests (0.447 seconds), and completed
+`pnpm lint`. Parent also reviewed and independently ran both added Chromium
+regressions against the real Go server: 2/2 passed in 21.4 seconds, with only
+private harness ports changed to 6198/9898. The harness created its own schema;
+those ports were confirmed released afterward.
+
+The worker's separate `d60f71c` baseline failed the delayed-read/removal case;
+the around/read case also passed on that baseline and is compatibility coverage,
+not a demonstrated old failure. The removal assertion waits for the actual HTTP
+response to finish and two animation frames before checking React state. The
+unchanged original 12-case suite remains a separate open gate: latest completed
+CI on `469176d` is 10/12 (Echo visibility and the long-flow deadline at line
+1605), while all three other jobs passed. Private diagnostic files are excluded
+from this change.
