@@ -810,3 +810,21 @@ Token on the human message route. Integration-tag staticcheck passed. The
 unchanged Agent Bot Chromium/Go Workspace acceptance passed (9.7 seconds,
 19.2-second run), including Gateway REST authorization boundaries. Actual
 Feishu conversion/action integration is a separate remaining gate.
+
+### Core And Emote Contract Projections
+
+Two strict OpenAPI 3.1.2 documents describe the existing Node contract: 32
+auth/core operations with 29 actual Node scenarios, and 22 emote operations
+with 39 scenarios. The emote corpus exercises every declared emote route;
+the core inventory is broader than its first scenario set. Null versus omitted
+fields, closed response DTOs, binary content, private emote access and selected
+audit/event effects are explicitly represented. These tests validate actual
+Node fixtures against the schemas, not Go runtime equivalence or every OAuth
+response/header branch.
+
+Parent independently regenerated both fixtures in check-only mode against fresh
+synthetic SQLite (command-local RAM temp), then ran combined Go/race contract
+tests (5.077 seconds) and staticcheck. All completed successfully. ESLint is
+not a configured/installed project dependency; no ESLint pass is claimed.
+Family-by-family Go HTTP/PG replay, the remaining operations, complete security
+and response-header checks remain separate acceptance gates.

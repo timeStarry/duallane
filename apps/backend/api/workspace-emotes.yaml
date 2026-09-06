@@ -1,0 +1,1313 @@
+openapi: 3.1.2
+info:
+  title: DualLane Workspace emotes HTTP API
+  version: 1.0.0
+  description: >-
+    The pre-deployment contract projection for the existing Node Workspace
+    emote routes. The route inventory and the fixture are generated from the
+    Node service; this document describes concrete request and response DTOs,
+    including the private custom-emote content boundary.
+servers:
+  - url: /
+paths:
+  /api/workspace/me/emote-settings:
+    get:
+      operationId: workspaceGetEmoteSettings
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Viewer-owned emote pack preferences and catalog.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmoteSettingsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+    put:
+      operationId: workspaceUpdateEmoteSettings
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmoteSettingsPatch'
+      responses:
+        '200':
+          description: Updated viewer-owned emote pack preferences.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmoteSettingsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/emotes:
+    get:
+      operationId: workspaceListEmotes
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Viewer-owned active emote projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmoteListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+    post:
+      operationId: workspaceUploadEmote
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/CollectionIdQuery'
+        - $ref: '#/components/parameters/AddToLibraryQuery'
+        - $ref: '#/components/parameters/FileNameHeader'
+      requestBody:
+        required: true
+        content:
+          image/jpeg:
+            schema:
+              $ref: '#/components/schemas/BinaryImage'
+          image/png:
+            schema:
+              $ref: '#/components/schemas/BinaryImage'
+          image/webp:
+            schema:
+              $ref: '#/components/schemas/BinaryImage'
+          image/gif:
+            schema:
+              $ref: '#/components/schemas/BinaryImage'
+          image/bmp:
+            schema:
+              $ref: '#/components/schemas/BinaryImage'
+          application/octet-stream:
+            schema:
+              $ref: '#/components/schemas/BinaryImage'
+      responses:
+        '201':
+          description: Normalized custom emote.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmoteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestEntityTooLarge'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/emote-library:
+    get:
+      operationId: workspaceGetEmoteLibrary
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Viewer-owned ordered emote and collection library.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmoteLibrary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/emote-library/order:
+    put:
+      operationId: workspaceReorderEmoteLibrary
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmoteLibraryOrder'
+      responses:
+        '200':
+          description: Reordered viewer-owned library.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmoteLibrary'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/emote-collections:
+    post:
+      operationId: workspaceCreateEmoteCollection
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmoteCollectionCreate'
+      responses:
+        '201':
+          description: Created viewer-owned emote collection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmoteCollectionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/emote-collections/{collectionId}:
+    parameters:
+      - $ref: '#/components/parameters/CollectionId'
+    patch:
+      operationId: workspaceUpdateEmoteCollection
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmoteCollectionPatch'
+      responses:
+        '200':
+          description: Updated viewer-owned emote collection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmoteCollectionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+    delete:
+      operationId: workspaceDeleteEmoteCollection
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/ItemDispositionQuery'
+      responses:
+        '200':
+          description: Collection deleted; items are retained or removed per disposition.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionDeleteResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/emote-collections/{collectionId}/items:
+    parameters:
+      - $ref: '#/components/parameters/CollectionId'
+    post:
+      operationId: workspaceAddEmoteCollectionItems
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmoteCollectionItems'
+      responses:
+        '200':
+          description: Collection after adding owned emotes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmoteCollectionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/emote-collections/{collectionId}/items/{emoteId}:
+    parameters:
+      - $ref: '#/components/parameters/CollectionId'
+      - $ref: '#/components/parameters/EmoteId'
+    delete:
+      operationId: workspaceRemoveEmoteCollectionItem
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Collection after removing an item.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmoteCollectionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/emote-collections/{collectionId}/order:
+    parameters:
+      - $ref: '#/components/parameters/CollectionId'
+    put:
+      operationId: workspaceReorderEmoteCollection
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmoteCollectionItems'
+      responses:
+        '200':
+          description: Reordered collection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmoteCollectionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/emote-collections/{collectionId}/source-subscription:
+    parameters:
+      - $ref: '#/components/parameters/CollectionId'
+    put:
+      operationId: workspaceUpdateEmoteCollectionSourceSubscription
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceSubscriptionPatch'
+      responses:
+        '200':
+          description: Collection and library after changing source subscription state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceSubscriptionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/emote-collections/{collectionId}/shares:
+    parameters:
+      - $ref: '#/components/parameters/CollectionId'
+    post:
+      operationId: workspaceCreateEmoteCollectionShare
+      security:
+        - workspaceSession: []
+      responses:
+        '201':
+          description: Created immutable collection share snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmoteShareResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/emotes/favorite:
+    post:
+      operationId: workspaceFavoriteEmoteFromMessage
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmoteFavoriteRequest'
+      responses:
+        '201':
+          description: Viewer-owned favorite created from a visible message source.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmoteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/emotes/order:
+    put:
+      operationId: workspaceReorderEmotes
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmoteOrder'
+      responses:
+        '200':
+          description: Viewer-owned emotes after reordering.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmoteListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/emotes/{emoteId}:
+    parameters:
+      - $ref: '#/components/parameters/EmoteId'
+    patch:
+      operationId: workspaceUpdateEmote
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmotePatch'
+      responses:
+        '200':
+          description: Updated viewer-owned emote.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmoteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+    delete:
+      operationId: workspaceDeleteEmote
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Viewer-owned emote removed from local placements.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmoteDeleteResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/emote-collection-shares/{shareId}:
+    parameters:
+      - $ref: '#/components/parameters/ShareId'
+    get:
+      operationId: workspaceGetEmoteCollectionShare
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Public-to-Workspace share snapshot, including revocation state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmoteShareResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/emote-collection-shares/{shareId}/import:
+    parameters:
+      - $ref: '#/components/parameters/ShareId'
+    post:
+      operationId: workspaceImportEmoteCollectionShare
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmoteShareImportRequest'
+      responses:
+        '200':
+          description: Imported snapshot or source-subscribed collection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmoteShareImportResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '410':
+          $ref: '#/components/responses/Gone'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/emote-collection-shares/{shareId}:
+    parameters:
+      - $ref: '#/components/parameters/ShareId'
+    delete:
+      operationId: workspaceRevokeEmoteCollectionShare
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Revoked share snapshot with its item list removed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmoteShareResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/emotes/{emoteId}/content:
+    parameters:
+      - $ref: '#/components/parameters/EmoteId'
+    get:
+      operationId: workspaceGetEmoteContent
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Authorized normalized WebP bytes.
+          headers:
+            Cache-Control:
+              required: true
+              schema:
+                type: string
+                const: private, max-age=31536000, immutable
+            Content-Disposition:
+              required: true
+              schema:
+                type: string
+                const: inline
+          content:
+            image/webp:
+              schema:
+                $ref: '#/components/schemas/BinaryImage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+components:
+  securitySchemes:
+    workspaceSession:
+      type: apiKey
+      in: cookie
+      name: duallane_workspace
+      description: Opaque Workspace session cookie; no invite fragment is sent to this API.
+
+  parameters:
+    EmoteId:
+      name: emoteId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    CollectionId:
+      name: collectionId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    ShareId:
+      name: shareId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    CollectionIdQuery:
+      name: collectionId
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    AddToLibraryQuery:
+      name: addToLibrary
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: ['true', 'false']
+    ItemDispositionQuery:
+      name: itemDisposition
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [keep, remove]
+        default: keep
+    FileNameHeader:
+      name: X-DualLane-File-Name
+      in: header
+      required: false
+      description: URL-encoded original filename used only for the normalized label.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 512
+
+  responses:
+    BadRequest:
+      description: Safe domain validation error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: No active Workspace session.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Authenticated identity is not allowed to perform the operation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource is absent or intentionally hidden by authorization.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Bounded quota, subscription, or concurrent state conflict.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Gone:
+      description: Share was previously revoked and cannot be imported.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RequestEntityTooLarge:
+      description: Upload exceeded the input transfer bound.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    WorkspaceServiceUnavailable:
+      description: Workspace is disabled or its required service is unavailable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    Identifier:
+      type: string
+      minLength: 1
+      maxLength: 128
+
+    DateTime:
+      type: string
+      format: date-time
+
+    BinaryImage:
+      type: string
+      format: binary
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              pattern: '^[a-z][a-z0-9._-]{1,127}$'
+            message:
+              type: string
+
+    EmotePack:
+      type: object
+      additionalProperties: false
+      required: [id, label, defaultEnabled]
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 64
+        label:
+          type: string
+          minLength: 1
+          maxLength: 128
+        defaultEnabled:
+          type: boolean
+
+    EmoteSettings:
+      type: object
+      additionalProperties: false
+      required: [availablePacks, enabledPackIds, clickImageEmoteToSend, replyAutoMention, minimumEnabled]
+      properties:
+        availablePacks:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/EmotePack'
+        enabledPackIds:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+        clickImageEmoteToSend:
+          type: boolean
+        replyAutoMention:
+          type: boolean
+        minimumEnabled:
+          type: integer
+          const: 1
+
+    EmoteSettingsResponse:
+      type: object
+      additionalProperties: false
+      required: [settings]
+      properties:
+        settings:
+          $ref: '#/components/schemas/EmoteSettings'
+
+    EmoteSettingsPatch:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          properties:
+            enabledPackIds:
+              type: array
+              items:
+                type: string
+                minLength: 1
+                maxLength: 64
+            clickImageEmoteToSend:
+              type: boolean
+            replyAutoMention:
+              type: boolean
+          minProperties: 1
+        - type: array
+          minItems: 1
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+
+    Emote:
+      type: object
+      additionalProperties: false
+      required: [id, kind, label, token, src, animated, createdAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        kind:
+          type: string
+          enum: [builtin, custom]
+        label:
+          type: string
+          minLength: 1
+          maxLength: 128
+        token:
+          type: string
+          minLength: 1
+          maxLength: 256
+        src:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        emoteKey:
+          type: string
+          minLength: 1
+          maxLength: 128
+        animated:
+          type: boolean
+        byteSize:
+          type: integer
+          minimum: 1
+        width:
+          type: integer
+          minimum: 1
+        height:
+          type: integer
+          minimum: 1
+        sourceType:
+          type: string
+          enum: [upload, attachment, builtin, custom]
+        originalFileName:
+          type: string
+          minLength: 1
+          maxLength: 512
+        originalMimeType:
+          type: string
+          minLength: 1
+          maxLength: 128
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+
+    EmoteUsage:
+      type: object
+      additionalProperties: false
+      required: [itemCount, totalBytes, subscribedItemCount, subscribedTotalBytes, totalItemCount, allTotalBytes, collectionCount, subscribedCollectionCount, overLimit]
+      properties:
+        itemCount:
+          type: integer
+          minimum: 0
+        totalBytes:
+          type: integer
+          minimum: 0
+        subscribedItemCount:
+          type: integer
+          minimum: 0
+        subscribedTotalBytes:
+          type: integer
+          minimum: 0
+        totalItemCount:
+          type: integer
+          minimum: 0
+        allTotalBytes:
+          type: integer
+          minimum: 0
+        collectionCount:
+          type: integer
+          minimum: 0
+        subscribedCollectionCount:
+          type: integer
+          minimum: 0
+        overLimit:
+          type: boolean
+
+    EmoteLimits:
+      type: object
+      additionalProperties: false
+      required: [maxItems, maxTotalBytes, maxInputBytes, maxCollections, maxCollectionItems, maxBatchItems]
+      properties:
+        maxItems:
+          type: [integer, 'null']
+          minimum: 1
+        maxTotalBytes:
+          type: integer
+          const: 1073741824
+        maxInputBytes:
+          type: integer
+          const: 10485760
+        maxCollections:
+          type: [integer, 'null']
+          minimum: 1
+        maxCollectionItems:
+          type: integer
+          const: 100
+        maxBatchItems:
+          type: integer
+          const: 50
+
+    EmoteListResponse:
+      type: object
+      additionalProperties: false
+      required: [items, usage, limits]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Emote'
+        usage:
+          $ref: '#/components/schemas/EmoteUsage'
+        limits:
+          $ref: '#/components/schemas/EmoteLimits'
+
+    SourceSubscription:
+      type: object
+      additionalProperties: false
+      required: [eligible, enabled, status, sourceCollectionId, sourceRevision, lastSyncedAt, readOnly]
+      properties:
+        eligible:
+          type: boolean
+        enabled:
+          type: boolean
+        status:
+          type: string
+          enum: [synced, detached, off]
+        sourceCollectionId:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 128
+        sourceRevision:
+          type: [integer, 'null']
+          minimum: 1
+        lastSyncedAt:
+          oneOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+        readOnly:
+          type: boolean
+
+    EmoteCollectionOwner:
+      type: object
+      additionalProperties: false
+      required: [id, displayName]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 256
+
+    EmoteCollection:
+      type: object
+      additionalProperties: false
+      required: [id, name, sourceCollectionId, originalCreatorUserId, originalCreatorName, revision, createdAt, updatedAt, originalCreator, sourceSubscription, items, itemCount]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        sourceCollectionId:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 128
+        originalCreatorUserId:
+          $ref: '#/components/schemas/Identifier'
+        originalCreatorName:
+          type: string
+          minLength: 1
+          maxLength: 256
+        revision:
+          type: integer
+          minimum: 1
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        updatedAt:
+          $ref: '#/components/schemas/DateTime'
+        originalCreator:
+          $ref: '#/components/schemas/EmoteCollectionOwner'
+        sourceSubscription:
+          $ref: '#/components/schemas/SourceSubscription'
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/Emote'
+        itemCount:
+          type: integer
+          minimum: 0
+          maximum: 100
+
+    EmoteLibraryEntry:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [id, type, emote]
+          properties:
+            id:
+              $ref: '#/components/schemas/Identifier'
+            type:
+              const: emote
+            emote:
+              $ref: '#/components/schemas/Emote'
+        - type: object
+          additionalProperties: false
+          required: [id, type, collection]
+          properties:
+            id:
+              $ref: '#/components/schemas/Identifier'
+            type:
+              const: collection
+            collection:
+              $ref: '#/components/schemas/EmoteCollection'
+
+    EmoteLibrary:
+      type: object
+      additionalProperties: false
+      required: [entries, emotes, collections, usage, limits]
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmoteLibraryEntry'
+        emotes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Emote'
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmoteCollection'
+        usage:
+          $ref: '#/components/schemas/EmoteUsage'
+        limits:
+          $ref: '#/components/schemas/EmoteLimits'
+
+    EmoteShare:
+      type: object
+      additionalProperties: false
+      required: [id, sourceCollectionId, name, itemCount, createdAt, revokedAt, sharedBy, originalCreator, canSubscribeToSourceChanges, canRevoke, items, sharePath]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        sourceCollectionId:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 128
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        itemCount:
+          type: integer
+          minimum: 0
+          maximum: 100
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        revokedAt:
+          oneOf:
+            - $ref: '#/components/schemas/DateTime'
+            - type: 'null'
+        sharedBy:
+          $ref: '#/components/schemas/EmoteCollectionOwner'
+        originalCreator:
+          $ref: '#/components/schemas/EmoteCollectionOwner'
+        canSubscribeToSourceChanges:
+          type: boolean
+        canRevoke:
+          type: boolean
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/Emote'
+        sharePath:
+          type: string
+          minLength: 1
+          maxLength: 512
+
+    EmoteResponse:
+      type: object
+      additionalProperties: false
+      required: [emote]
+      properties:
+        emote:
+          $ref: '#/components/schemas/Emote'
+
+    EmoteListResponseWithLibrary:
+      type: object
+      additionalProperties: false
+      required: [collection, library]
+      properties:
+        collection:
+          oneOf:
+            - $ref: '#/components/schemas/EmoteCollection'
+            - type: 'null'
+        library:
+          $ref: '#/components/schemas/EmoteLibrary'
+
+    EmoteCollectionResponse:
+      type: object
+      additionalProperties: false
+      required: [collection]
+      properties:
+        collection:
+          $ref: '#/components/schemas/EmoteCollection'
+
+    SourceSubscriptionResponse:
+      $ref: '#/components/schemas/EmoteListResponseWithLibrary'
+
+    EmoteShareResponse:
+      type: object
+      additionalProperties: false
+      required: [share]
+      properties:
+        share:
+          $ref: '#/components/schemas/EmoteShare'
+
+    EmoteShareImportRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        subscribeToSourceChanges:
+          type: boolean
+        emoteIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/Identifier'
+        asCollection:
+          type: boolean
+
+    EmoteShareImportResponse:
+      type: object
+      additionalProperties: false
+      required: [collection, items, library]
+      properties:
+        collection:
+          oneOf:
+            - $ref: '#/components/schemas/EmoteCollection'
+            - type: 'null'
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/Emote'
+        library:
+          $ref: '#/components/schemas/EmoteLibrary'
+
+    EmoteCollectionCreate:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        emoteIds:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/Identifier'
+
+    EmoteCollectionPatch:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+
+    EmoteCollectionItems:
+      type: object
+      additionalProperties: false
+      required: [emoteIds]
+      properties:
+        emoteIds:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/Identifier'
+
+    SourceSubscriptionPatch:
+      type: object
+      additionalProperties: false
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+
+    EmoteFavoriteRequest:
+      type: object
+      additionalProperties: false
+      required: [messageId]
+      properties:
+        messageId:
+          $ref: '#/components/schemas/Identifier'
+        attachmentId:
+          $ref: '#/components/schemas/Identifier'
+        emoteKey:
+          type: string
+          minLength: 1
+          maxLength: 128
+        customEmoteId:
+          $ref: '#/components/schemas/Identifier'
+      oneOf:
+        - required: [attachmentId]
+        - required: [emoteKey]
+        - required: [customEmoteId]
+
+    EmoteOrder:
+      type: object
+      additionalProperties: false
+      required: [emoteIds]
+      properties:
+        emoteIds:
+          type: array
+          items:
+            $ref: '#/components/schemas/Identifier'
+
+    EmoteLibraryOrder:
+      type: object
+      additionalProperties: false
+      required: [entryIds]
+      properties:
+        entryIds:
+          type: array
+          items:
+            $ref: '#/components/schemas/Identifier'
+
+    EmotePatch:
+      type: object
+      additionalProperties: false
+      required: [label]
+      properties:
+        label:
+          type: string
+          minLength: 1
+          maxLength: 128
+
+    CollectionDeleteResponse:
+      type: object
+      additionalProperties: false
+      required: [ok, collectionId]
+      properties:
+        ok:
+          const: true
+        collectionId:
+          $ref: '#/components/schemas/Identifier'
+
+    EmoteDeleteResponse:
+      type: object
+      additionalProperties: false
+      required: [ok, emoteId]
+      properties:
+        ok:
+          const: true
+        emoteId:
+          $ref: '#/components/schemas/Identifier'

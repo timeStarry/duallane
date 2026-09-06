@@ -1,0 +1,3413 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "nodeRoutes": "apps/backend/api/node-routes.json",
+    "routeSource": "apps/web/server/index.mjs",
+    "fixtureRuntime": "apps/web/server/services/test-database.mjs"
+  },
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/workspace/emote-collection-shares/{shareId}",
+      "nodePath": "/api/workspace/emote-collection-shares/:shareId",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/emote-collection-shares/{shareId}/import",
+      "nodePath": "/api/workspace/emote-collection-shares/:shareId/import",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/emotes/{emoteId}/content",
+      "nodePath": "/api/workspace/emotes/:emoteId/content",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/me/emote-collection-shares/{shareId}",
+      "nodePath": "/api/workspace/me/emote-collection-shares/:shareId",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/me/emote-collections",
+      "nodePath": "/api/workspace/me/emote-collections",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/me/emote-collections/{collectionId}",
+      "nodePath": "/api/workspace/me/emote-collections/:collectionId",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/me/emote-collections/{collectionId}",
+      "nodePath": "/api/workspace/me/emote-collections/:collectionId",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/me/emote-collections/{collectionId}/items",
+      "nodePath": "/api/workspace/me/emote-collections/:collectionId/items",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/me/emote-collections/{collectionId}/items/{emoteId}",
+      "nodePath": "/api/workspace/me/emote-collections/:collectionId/items/:emoteId",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/me/emote-collections/{collectionId}/order",
+      "nodePath": "/api/workspace/me/emote-collections/:collectionId/order",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/me/emote-collections/{collectionId}/shares",
+      "nodePath": "/api/workspace/me/emote-collections/:collectionId/shares",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/me/emote-collections/{collectionId}/source-subscription",
+      "nodePath": "/api/workspace/me/emote-collections/:collectionId/source-subscription",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/me/emote-library",
+      "nodePath": "/api/workspace/me/emote-library",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/me/emote-library/order",
+      "nodePath": "/api/workspace/me/emote-library/order",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/me/emote-settings",
+      "nodePath": "/api/workspace/me/emote-settings",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/me/emote-settings",
+      "nodePath": "/api/workspace/me/emote-settings",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/me/emotes",
+      "nodePath": "/api/workspace/me/emotes",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/me/emotes",
+      "nodePath": "/api/workspace/me/emotes",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/me/emotes/favorite",
+      "nodePath": "/api/workspace/me/emotes/favorite",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/me/emotes/order",
+      "nodePath": "/api/workspace/me/emotes/order",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/me/emotes/{emoteId}",
+      "nodePath": "/api/workspace/me/emotes/:emoteId",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/me/emotes/{emoteId}",
+      "nodePath": "/api/workspace/me/emotes/:emoteId",
+      "source": "apps/web/server/index.mjs"
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "unauthenticated-emote-denied",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/me/emote-settings",
+        "headers": {}
+      },
+      "response": {
+        "status": 403,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "error": {
+            "code": "permission.denied",
+            "message": "当前账号不能使用收藏表情"
+          }
+        }
+      }
+    },
+    {
+      "name": "settings-read-catalog",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/me/emote-settings",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "settings": {
+            "availablePacks": [
+              {
+                "id": "emoji",
+                "label": "Emoji",
+                "defaultEnabled": true
+              },
+              {
+                "id": "bili",
+                "label": "B站",
+                "defaultEnabled": true
+              },
+              {
+                "id": "wechat",
+                "label": "微信",
+                "defaultEnabled": true
+              },
+              {
+                "id": "feishu",
+                "label": "飞书",
+                "defaultEnabled": true
+              },
+              {
+                "id": "xiaohongshu",
+                "label": "小红书",
+                "defaultEnabled": false
+              },
+              {
+                "id": "heybox",
+                "label": "小黑盒",
+                "defaultEnabled": false
+              },
+              {
+                "id": "tieba",
+                "label": "贴吧",
+                "defaultEnabled": false
+              }
+            ],
+            "enabledPackIds": [
+              "emoji",
+              "bili",
+              "wechat",
+              "feishu"
+            ],
+            "clickImageEmoteToSend": false,
+            "replyAutoMention": false,
+            "minimumEnabled": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "settings-update",
+      "request": {
+        "method": "PUT",
+        "path": "/api/workspace/me/emote-settings",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "enabledPackIds": [
+            "emoji",
+            "bili"
+          ],
+          "clickImageEmoteToSend": true,
+          "replyAutoMention": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "settings": {
+            "availablePacks": [
+              {
+                "id": "emoji",
+                "label": "Emoji",
+                "defaultEnabled": true
+              },
+              {
+                "id": "bili",
+                "label": "B站",
+                "defaultEnabled": true
+              },
+              {
+                "id": "wechat",
+                "label": "微信",
+                "defaultEnabled": true
+              },
+              {
+                "id": "feishu",
+                "label": "飞书",
+                "defaultEnabled": true
+              },
+              {
+                "id": "xiaohongshu",
+                "label": "小红书",
+                "defaultEnabled": false
+              },
+              {
+                "id": "heybox",
+                "label": "小黑盒",
+                "defaultEnabled": false
+              },
+              {
+                "id": "tieba",
+                "label": "贴吧",
+                "defaultEnabled": false
+              }
+            ],
+            "enabledPackIds": [
+              "emoji",
+              "bili"
+            ],
+            "clickImageEmoteToSend": true,
+            "replyAutoMention": true,
+            "minimumEnabled": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "settings-invalid-pack-selection",
+      "request": {
+        "method": "PUT",
+        "path": "/api/workspace/me/emote-settings",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "enabledPackIds": []
+        }
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "error": {
+            "code": "emote.pack_required",
+            "message": "至少保留一个表情包"
+          }
+        }
+      }
+    },
+    {
+      "name": "builtin-catalog-favorite",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/me/emotes/favorite",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "messageId": "msg_emote_contract",
+          "emoteKey": "bili:doge"
+        }
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "emote": {
+            "id": "emote_builtin_01",
+            "kind": "builtin",
+            "label": "doge",
+            "token": "[bili:doge]",
+            "src": "/emotes/bili/doge.png",
+            "emoteKey": "bili:doge",
+            "animated": false,
+            "createdAt": "2026-01-01T00:00:00.000Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "custom-upload",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/me/emotes?addToLibrary=true",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "image/bmp",
+          "x-duallane-file-name": "contract-pixel.bmp"
+        },
+        "bodyBase64": "Qk06AAAAAAAAADYAAAAoAAAAAQAAAAEAAAABABgAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAIIDgAA=="
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "emote": {
+            "id": "emote_custom_01",
+            "kind": "custom",
+            "label": "contract pixel",
+            "token": "[custom:emote_custom_01]",
+            "src": "/api/workspace/emotes/emote_custom_01/content",
+            "animated": false,
+            "byteSize": 68,
+            "width": 1,
+            "height": 1,
+            "sourceType": "upload",
+            "originalFileName": "contract-pixel.bmp",
+            "originalMimeType": "image/bmp",
+            "createdAt": "2026-01-01T00:00:00.000Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "custom-upload-invalid-body",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/me/emotes",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/octet-stream",
+          "x-duallane-file-name": "unsafe.bin"
+        },
+        "bodyBase64": "bm90IGFuIGltYWdl"
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "error": {
+            "code": "emote.invalid_format",
+            "message": "仅支持 JPEG、PNG、WebP、GIF 或 BMP 图片"
+          }
+        }
+      }
+    },
+    {
+      "name": "emote-list",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/me/emotes",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "items": [
+            {
+              "id": "emote_custom_01",
+              "kind": "custom",
+              "label": "contract pixel",
+              "token": "[custom:emote_custom_01]",
+              "src": "/api/workspace/emotes/emote_custom_01/content",
+              "animated": false,
+              "byteSize": 68,
+              "width": 1,
+              "height": 1,
+              "sourceType": "upload",
+              "originalFileName": "contract-pixel.bmp",
+              "originalMimeType": "image/bmp",
+              "createdAt": "2026-01-01T00:00:00.000Z"
+            },
+            {
+              "id": "emote_builtin_01",
+              "kind": "builtin",
+              "label": "doge",
+              "token": "[bili:doge]",
+              "src": "/emotes/bili/doge.png",
+              "emoteKey": "bili:doge",
+              "animated": false,
+              "createdAt": "2026-01-01T00:00:00.000Z"
+            }
+          ],
+          "usage": {
+            "itemCount": 2,
+            "totalBytes": 68,
+            "subscribedItemCount": 0,
+            "subscribedTotalBytes": 0,
+            "totalItemCount": 2,
+            "allTotalBytes": 68,
+            "collectionCount": 0,
+            "subscribedCollectionCount": 0,
+            "overLimit": false
+          },
+          "limits": {
+            "maxItems": null,
+            "maxTotalBytes": 1073741824,
+            "maxInputBytes": 10485760,
+            "maxCollections": null,
+            "maxCollectionItems": 100,
+            "maxBatchItems": 50
+          }
+        }
+      }
+    },
+    {
+      "name": "content-denied-before-share",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/emotes/emote_custom_01/content",
+        "headers": {
+          "x-workspace-user-id": "usr_emote_contract_member"
+        }
+      },
+      "response": {
+        "status": 403,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "error": {
+            "code": "permission.denied",
+            "message": "你没有访问该表情的权限"
+          }
+        }
+      }
+    },
+    {
+      "name": "content-authorized-webp",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/emotes/emote_custom_01/content",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "image/webp",
+          "cache-control": "private, max-age=31536000, immutable",
+          "content-disposition": "inline"
+        },
+        "bodyBase64": "UklGRjwAAABXRUJQVlA4IDAAAAAQAgCdASoBAAEAAUAiJaACdLoB+AH4AAPIAP7lhz/7dmmMfv7xP/1v/qCA/SAAAAA="
+      }
+    },
+    {
+      "name": "emote-update",
+      "request": {
+        "method": "PATCH",
+        "path": "/api/workspace/me/emotes/emote_custom_01",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "label": "Contract Pixel"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "emote": {
+            "id": "emote_custom_01",
+            "kind": "custom",
+            "label": "Contract Pixel",
+            "token": "[custom:emote_custom_01]",
+            "src": "/api/workspace/emotes/emote_custom_01/content",
+            "animated": false,
+            "byteSize": 68,
+            "width": 1,
+            "height": 1,
+            "sourceType": "upload",
+            "originalFileName": "contract-pixel.bmp",
+            "originalMimeType": "image/bmp",
+            "createdAt": "2026-01-01T00:00:00.000Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "custom-favorite-visible-message",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/me/emotes/favorite",
+        "headers": {
+          "x-workspace-user-id": "usr_emote_contract_member",
+          "content-type": "application/json"
+        },
+        "body": {
+          "messageId": "msg_emote_contract",
+          "customEmoteId": "emote_custom_01"
+        }
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "emote": {
+            "id": "generated_01",
+            "kind": "custom",
+            "label": "Contract Pixel",
+            "token": "[custom:generated_01]",
+            "src": "/api/workspace/emotes/generated_01/content",
+            "animated": false,
+            "byteSize": 68,
+            "width": 1,
+            "height": 1,
+            "sourceType": "custom",
+            "originalFileName": "contract-pixel.bmp",
+            "originalMimeType": "image/webp",
+            "createdAt": "2026-01-01T00:00:00.000Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "collection-create",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/me/emote-collections",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "name": "Contract Collection",
+          "emoteIds": [
+            "emote_custom_01",
+            "emote_builtin_01"
+          ]
+        }
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "collection": {
+            "id": "collection_source_01",
+            "name": "Contract Collection",
+            "sourceCollectionId": null,
+            "originalCreatorUserId": "usr_owner",
+            "originalCreatorName": "timeStarry",
+            "revision": 2,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "updatedAt": "2026-01-01T00:00:00.000Z",
+            "originalCreator": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "sourceSubscription": {
+              "eligible": false,
+              "enabled": false,
+              "status": "off",
+              "sourceCollectionId": null,
+              "sourceRevision": null,
+              "lastSyncedAt": null,
+              "readOnly": false
+            },
+            "items": [
+              {
+                "id": "emote_custom_01",
+                "kind": "custom",
+                "label": "Contract Pixel",
+                "token": "[custom:emote_custom_01]",
+                "src": "/api/workspace/emotes/emote_custom_01/content",
+                "animated": false,
+                "byteSize": 68,
+                "width": 1,
+                "height": 1,
+                "sourceType": "upload",
+                "originalFileName": "contract-pixel.bmp",
+                "originalMimeType": "image/bmp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "emote_builtin_01",
+                "kind": "builtin",
+                "label": "doge",
+                "token": "[bili:doge]",
+                "src": "/emotes/bili/doge.png",
+                "emoteKey": "bili:doge",
+                "animated": false,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "itemCount": 2
+          }
+        }
+      }
+    },
+    {
+      "name": "collection-owner-authorization",
+      "request": {
+        "method": "PATCH",
+        "path": "/api/workspace/me/emote-collections/collection_source_01",
+        "headers": {
+          "x-workspace-user-id": "usr_emote_contract_member",
+          "content-type": "application/json"
+        },
+        "body": {
+          "name": "Member Must Not Rename"
+        }
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "error": {
+            "code": "emote.collection_not_found",
+            "message": "表情合集不存在"
+          }
+        }
+      }
+    },
+    {
+      "name": "custom-upload-without-library-placement",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/me/emotes?addToLibrary=false",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "image/bmp",
+          "x-duallane-file-name": "contract-second.bmp"
+        },
+        "bodyBase64": "Qk06AAAAAAAAADYAAAAoAAAAAQAAAAEAAAABABgAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAYCDAAA=="
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "emote": {
+            "id": "emote_custom_02",
+            "kind": "custom",
+            "label": "contract second",
+            "token": "[custom:emote_custom_02]",
+            "src": "/api/workspace/emotes/emote_custom_02/content",
+            "animated": false,
+            "byteSize": 62,
+            "width": 1,
+            "height": 1,
+            "sourceType": "upload",
+            "originalFileName": "contract-second.bmp",
+            "originalMimeType": "image/bmp",
+            "createdAt": "2026-01-01T00:00:00.000Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "collection-add-items",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/me/emote-collections/collection_source_01/items",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "emoteIds": [
+            "emote_custom_02"
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "collection": {
+            "id": "collection_source_01",
+            "name": "Contract Collection",
+            "sourceCollectionId": null,
+            "originalCreatorUserId": "usr_owner",
+            "originalCreatorName": "timeStarry",
+            "revision": 3,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "updatedAt": "2026-01-01T00:00:00.000Z",
+            "originalCreator": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "sourceSubscription": {
+              "eligible": false,
+              "enabled": false,
+              "status": "off",
+              "sourceCollectionId": null,
+              "sourceRevision": null,
+              "lastSyncedAt": null,
+              "readOnly": false
+            },
+            "items": [
+              {
+                "id": "emote_custom_01",
+                "kind": "custom",
+                "label": "Contract Pixel",
+                "token": "[custom:emote_custom_01]",
+                "src": "/api/workspace/emotes/emote_custom_01/content",
+                "animated": false,
+                "byteSize": 68,
+                "width": 1,
+                "height": 1,
+                "sourceType": "upload",
+                "originalFileName": "contract-pixel.bmp",
+                "originalMimeType": "image/bmp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "emote_builtin_01",
+                "kind": "builtin",
+                "label": "doge",
+                "token": "[bili:doge]",
+                "src": "/emotes/bili/doge.png",
+                "emoteKey": "bili:doge",
+                "animated": false,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "emote_custom_02",
+                "kind": "custom",
+                "label": "contract second",
+                "token": "[custom:emote_custom_02]",
+                "src": "/api/workspace/emotes/emote_custom_02/content",
+                "animated": false,
+                "byteSize": 62,
+                "width": 1,
+                "height": 1,
+                "sourceType": "upload",
+                "originalFileName": "contract-second.bmp",
+                "originalMimeType": "image/bmp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "itemCount": 3
+          }
+        }
+      }
+    },
+    {
+      "name": "collection-reorder",
+      "request": {
+        "method": "PUT",
+        "path": "/api/workspace/me/emote-collections/collection_source_01/order",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "emoteIds": [
+            "emote_custom_02",
+            "emote_custom_01",
+            "emote_builtin_01"
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "collection": {
+            "id": "collection_source_01",
+            "name": "Contract Collection",
+            "sourceCollectionId": null,
+            "originalCreatorUserId": "usr_owner",
+            "originalCreatorName": "timeStarry",
+            "revision": 4,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "updatedAt": "2026-01-01T00:00:00.000Z",
+            "originalCreator": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "sourceSubscription": {
+              "eligible": false,
+              "enabled": false,
+              "status": "off",
+              "sourceCollectionId": null,
+              "sourceRevision": null,
+              "lastSyncedAt": null,
+              "readOnly": false
+            },
+            "items": [
+              {
+                "id": "emote_custom_02",
+                "kind": "custom",
+                "label": "contract second",
+                "token": "[custom:emote_custom_02]",
+                "src": "/api/workspace/emotes/emote_custom_02/content",
+                "animated": false,
+                "byteSize": 62,
+                "width": 1,
+                "height": 1,
+                "sourceType": "upload",
+                "originalFileName": "contract-second.bmp",
+                "originalMimeType": "image/bmp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "emote_custom_01",
+                "kind": "custom",
+                "label": "Contract Pixel",
+                "token": "[custom:emote_custom_01]",
+                "src": "/api/workspace/emotes/emote_custom_01/content",
+                "animated": false,
+                "byteSize": 68,
+                "width": 1,
+                "height": 1,
+                "sourceType": "upload",
+                "originalFileName": "contract-pixel.bmp",
+                "originalMimeType": "image/bmp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "emote_builtin_01",
+                "kind": "builtin",
+                "label": "doge",
+                "token": "[bili:doge]",
+                "src": "/emotes/bili/doge.png",
+                "emoteKey": "bili:doge",
+                "animated": false,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "itemCount": 3
+          }
+        }
+      }
+    },
+    {
+      "name": "collection-remove-item",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/workspace/me/emote-collections/collection_source_01/items/emote_custom_02",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "collection": {
+            "id": "collection_source_01",
+            "name": "Contract Collection",
+            "sourceCollectionId": null,
+            "originalCreatorUserId": "usr_owner",
+            "originalCreatorName": "timeStarry",
+            "revision": 5,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "updatedAt": "2026-01-01T00:00:00.000Z",
+            "originalCreator": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "sourceSubscription": {
+              "eligible": false,
+              "enabled": false,
+              "status": "off",
+              "sourceCollectionId": null,
+              "sourceRevision": null,
+              "lastSyncedAt": null,
+              "readOnly": false
+            },
+            "items": [
+              {
+                "id": "emote_custom_01",
+                "kind": "custom",
+                "label": "Contract Pixel",
+                "token": "[custom:emote_custom_01]",
+                "src": "/api/workspace/emotes/emote_custom_01/content",
+                "animated": false,
+                "byteSize": 68,
+                "width": 1,
+                "height": 1,
+                "sourceType": "upload",
+                "originalFileName": "contract-pixel.bmp",
+                "originalMimeType": "image/bmp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "emote_builtin_01",
+                "kind": "builtin",
+                "label": "doge",
+                "token": "[bili:doge]",
+                "src": "/emotes/bili/doge.png",
+                "emoteKey": "bili:doge",
+                "animated": false,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "itemCount": 2
+          }
+        }
+      }
+    },
+    {
+      "name": "library-read",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/me/emote-library",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "entries": [
+            {
+              "id": "generated_02",
+              "type": "collection",
+              "collection": {
+                "id": "collection_source_01",
+                "name": "Contract Collection",
+                "sourceCollectionId": null,
+                "originalCreatorUserId": "usr_owner",
+                "originalCreatorName": "timeStarry",
+                "revision": 5,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "updatedAt": "2026-01-01T00:00:00.000Z",
+                "originalCreator": {
+                  "id": "usr_owner",
+                  "displayName": "timeStarry"
+                },
+                "sourceSubscription": {
+                  "eligible": false,
+                  "enabled": false,
+                  "status": "off",
+                  "sourceCollectionId": null,
+                  "sourceRevision": null,
+                  "lastSyncedAt": null,
+                  "readOnly": false
+                },
+                "items": [
+                  {
+                    "id": "emote_custom_01",
+                    "kind": "custom",
+                    "label": "Contract Pixel",
+                    "token": "[custom:emote_custom_01]",
+                    "src": "/api/workspace/emotes/emote_custom_01/content",
+                    "animated": false,
+                    "byteSize": 68,
+                    "width": 1,
+                    "height": 1,
+                    "sourceType": "upload",
+                    "originalFileName": "contract-pixel.bmp",
+                    "originalMimeType": "image/bmp",
+                    "createdAt": "2026-01-01T00:00:00.000Z"
+                  },
+                  {
+                    "id": "emote_builtin_01",
+                    "kind": "builtin",
+                    "label": "doge",
+                    "token": "[bili:doge]",
+                    "src": "/emotes/bili/doge.png",
+                    "emoteKey": "bili:doge",
+                    "animated": false,
+                    "createdAt": "2026-01-01T00:00:00.000Z"
+                  }
+                ],
+                "itemCount": 2
+              }
+            },
+            {
+              "id": "generated_03",
+              "type": "emote",
+              "emote": {
+                "id": "emote_custom_01",
+                "kind": "custom",
+                "label": "Contract Pixel",
+                "token": "[custom:emote_custom_01]",
+                "src": "/api/workspace/emotes/emote_custom_01/content",
+                "animated": false,
+                "byteSize": 68,
+                "width": 1,
+                "height": 1,
+                "sourceType": "upload",
+                "originalFileName": "contract-pixel.bmp",
+                "originalMimeType": "image/bmp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            },
+            {
+              "id": "generated_04",
+              "type": "emote",
+              "emote": {
+                "id": "emote_builtin_01",
+                "kind": "builtin",
+                "label": "doge",
+                "token": "[bili:doge]",
+                "src": "/emotes/bili/doge.png",
+                "emoteKey": "bili:doge",
+                "animated": false,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            }
+          ],
+          "emotes": [
+            {
+              "id": "emote_custom_02",
+              "kind": "custom",
+              "label": "contract second",
+              "token": "[custom:emote_custom_02]",
+              "src": "/api/workspace/emotes/emote_custom_02/content",
+              "animated": false,
+              "byteSize": 62,
+              "width": 1,
+              "height": 1,
+              "sourceType": "upload",
+              "originalFileName": "contract-second.bmp",
+              "originalMimeType": "image/bmp",
+              "createdAt": "2026-01-01T00:00:00.000Z"
+            },
+            {
+              "id": "emote_custom_01",
+              "kind": "custom",
+              "label": "Contract Pixel",
+              "token": "[custom:emote_custom_01]",
+              "src": "/api/workspace/emotes/emote_custom_01/content",
+              "animated": false,
+              "byteSize": 68,
+              "width": 1,
+              "height": 1,
+              "sourceType": "upload",
+              "originalFileName": "contract-pixel.bmp",
+              "originalMimeType": "image/bmp",
+              "createdAt": "2026-01-01T00:00:00.000Z"
+            },
+            {
+              "id": "emote_builtin_01",
+              "kind": "builtin",
+              "label": "doge",
+              "token": "[bili:doge]",
+              "src": "/emotes/bili/doge.png",
+              "emoteKey": "bili:doge",
+              "animated": false,
+              "createdAt": "2026-01-01T00:00:00.000Z"
+            }
+          ],
+          "collections": [
+            {
+              "id": "collection_source_01",
+              "name": "Contract Collection",
+              "sourceCollectionId": null,
+              "originalCreatorUserId": "usr_owner",
+              "originalCreatorName": "timeStarry",
+              "revision": 5,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:00:00.000Z",
+              "originalCreator": {
+                "id": "usr_owner",
+                "displayName": "timeStarry"
+              },
+              "sourceSubscription": {
+                "eligible": false,
+                "enabled": false,
+                "status": "off",
+                "sourceCollectionId": null,
+                "sourceRevision": null,
+                "lastSyncedAt": null,
+                "readOnly": false
+              },
+              "items": [
+                {
+                  "id": "emote_custom_01",
+                  "kind": "custom",
+                  "label": "Contract Pixel",
+                  "token": "[custom:emote_custom_01]",
+                  "src": "/api/workspace/emotes/emote_custom_01/content",
+                  "animated": false,
+                  "byteSize": 68,
+                  "width": 1,
+                  "height": 1,
+                  "sourceType": "upload",
+                  "originalFileName": "contract-pixel.bmp",
+                  "originalMimeType": "image/bmp",
+                  "createdAt": "2026-01-01T00:00:00.000Z"
+                },
+                {
+                  "id": "emote_builtin_01",
+                  "kind": "builtin",
+                  "label": "doge",
+                  "token": "[bili:doge]",
+                  "src": "/emotes/bili/doge.png",
+                  "emoteKey": "bili:doge",
+                  "animated": false,
+                  "createdAt": "2026-01-01T00:00:00.000Z"
+                }
+              ],
+              "itemCount": 2
+            }
+          ],
+          "usage": {
+            "itemCount": 3,
+            "totalBytes": 130,
+            "subscribedItemCount": 0,
+            "subscribedTotalBytes": 0,
+            "totalItemCount": 3,
+            "allTotalBytes": 130,
+            "collectionCount": 1,
+            "subscribedCollectionCount": 0,
+            "overLimit": false
+          },
+          "limits": {
+            "maxItems": null,
+            "maxTotalBytes": 1073741824,
+            "maxInputBytes": 10485760,
+            "maxCollections": null,
+            "maxCollectionItems": 100,
+            "maxBatchItems": 50
+          }
+        }
+      }
+    },
+    {
+      "name": "library-reorder",
+      "request": {
+        "method": "PUT",
+        "path": "/api/workspace/me/emote-library/order",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "entryIds": [
+            "generated_04",
+            "generated_03",
+            "generated_02"
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "entries": [
+            {
+              "id": "generated_04",
+              "type": "emote",
+              "emote": {
+                "id": "emote_builtin_01",
+                "kind": "builtin",
+                "label": "doge",
+                "token": "[bili:doge]",
+                "src": "/emotes/bili/doge.png",
+                "emoteKey": "bili:doge",
+                "animated": false,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            },
+            {
+              "id": "generated_03",
+              "type": "emote",
+              "emote": {
+                "id": "emote_custom_01",
+                "kind": "custom",
+                "label": "Contract Pixel",
+                "token": "[custom:emote_custom_01]",
+                "src": "/api/workspace/emotes/emote_custom_01/content",
+                "animated": false,
+                "byteSize": 68,
+                "width": 1,
+                "height": 1,
+                "sourceType": "upload",
+                "originalFileName": "contract-pixel.bmp",
+                "originalMimeType": "image/bmp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            },
+            {
+              "id": "generated_02",
+              "type": "collection",
+              "collection": {
+                "id": "collection_source_01",
+                "name": "Contract Collection",
+                "sourceCollectionId": null,
+                "originalCreatorUserId": "usr_owner",
+                "originalCreatorName": "timeStarry",
+                "revision": 5,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "updatedAt": "2026-01-01T00:00:00.000Z",
+                "originalCreator": {
+                  "id": "usr_owner",
+                  "displayName": "timeStarry"
+                },
+                "sourceSubscription": {
+                  "eligible": false,
+                  "enabled": false,
+                  "status": "off",
+                  "sourceCollectionId": null,
+                  "sourceRevision": null,
+                  "lastSyncedAt": null,
+                  "readOnly": false
+                },
+                "items": [
+                  {
+                    "id": "emote_custom_01",
+                    "kind": "custom",
+                    "label": "Contract Pixel",
+                    "token": "[custom:emote_custom_01]",
+                    "src": "/api/workspace/emotes/emote_custom_01/content",
+                    "animated": false,
+                    "byteSize": 68,
+                    "width": 1,
+                    "height": 1,
+                    "sourceType": "upload",
+                    "originalFileName": "contract-pixel.bmp",
+                    "originalMimeType": "image/bmp",
+                    "createdAt": "2026-01-01T00:00:00.000Z"
+                  },
+                  {
+                    "id": "emote_builtin_01",
+                    "kind": "builtin",
+                    "label": "doge",
+                    "token": "[bili:doge]",
+                    "src": "/emotes/bili/doge.png",
+                    "emoteKey": "bili:doge",
+                    "animated": false,
+                    "createdAt": "2026-01-01T00:00:00.000Z"
+                  }
+                ],
+                "itemCount": 2
+              }
+            }
+          ],
+          "emotes": [
+            {
+              "id": "emote_custom_02",
+              "kind": "custom",
+              "label": "contract second",
+              "token": "[custom:emote_custom_02]",
+              "src": "/api/workspace/emotes/emote_custom_02/content",
+              "animated": false,
+              "byteSize": 62,
+              "width": 1,
+              "height": 1,
+              "sourceType": "upload",
+              "originalFileName": "contract-second.bmp",
+              "originalMimeType": "image/bmp",
+              "createdAt": "2026-01-01T00:00:00.000Z"
+            },
+            {
+              "id": "emote_custom_01",
+              "kind": "custom",
+              "label": "Contract Pixel",
+              "token": "[custom:emote_custom_01]",
+              "src": "/api/workspace/emotes/emote_custom_01/content",
+              "animated": false,
+              "byteSize": 68,
+              "width": 1,
+              "height": 1,
+              "sourceType": "upload",
+              "originalFileName": "contract-pixel.bmp",
+              "originalMimeType": "image/bmp",
+              "createdAt": "2026-01-01T00:00:00.000Z"
+            },
+            {
+              "id": "emote_builtin_01",
+              "kind": "builtin",
+              "label": "doge",
+              "token": "[bili:doge]",
+              "src": "/emotes/bili/doge.png",
+              "emoteKey": "bili:doge",
+              "animated": false,
+              "createdAt": "2026-01-01T00:00:00.000Z"
+            }
+          ],
+          "collections": [
+            {
+              "id": "collection_source_01",
+              "name": "Contract Collection",
+              "sourceCollectionId": null,
+              "originalCreatorUserId": "usr_owner",
+              "originalCreatorName": "timeStarry",
+              "revision": 5,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:00:00.000Z",
+              "originalCreator": {
+                "id": "usr_owner",
+                "displayName": "timeStarry"
+              },
+              "sourceSubscription": {
+                "eligible": false,
+                "enabled": false,
+                "status": "off",
+                "sourceCollectionId": null,
+                "sourceRevision": null,
+                "lastSyncedAt": null,
+                "readOnly": false
+              },
+              "items": [
+                {
+                  "id": "emote_custom_01",
+                  "kind": "custom",
+                  "label": "Contract Pixel",
+                  "token": "[custom:emote_custom_01]",
+                  "src": "/api/workspace/emotes/emote_custom_01/content",
+                  "animated": false,
+                  "byteSize": 68,
+                  "width": 1,
+                  "height": 1,
+                  "sourceType": "upload",
+                  "originalFileName": "contract-pixel.bmp",
+                  "originalMimeType": "image/bmp",
+                  "createdAt": "2026-01-01T00:00:00.000Z"
+                },
+                {
+                  "id": "emote_builtin_01",
+                  "kind": "builtin",
+                  "label": "doge",
+                  "token": "[bili:doge]",
+                  "src": "/emotes/bili/doge.png",
+                  "emoteKey": "bili:doge",
+                  "animated": false,
+                  "createdAt": "2026-01-01T00:00:00.000Z"
+                }
+              ],
+              "itemCount": 2
+            }
+          ],
+          "usage": {
+            "itemCount": 3,
+            "totalBytes": 130,
+            "subscribedItemCount": 0,
+            "subscribedTotalBytes": 0,
+            "totalItemCount": 3,
+            "allTotalBytes": 130,
+            "collectionCount": 1,
+            "subscribedCollectionCount": 0,
+            "overLimit": false
+          },
+          "limits": {
+            "maxItems": null,
+            "maxTotalBytes": 1073741824,
+            "maxInputBytes": 10485760,
+            "maxCollections": null,
+            "maxCollectionItems": 100,
+            "maxBatchItems": 50
+          }
+        }
+      }
+    },
+    {
+      "name": "emote-reorder",
+      "request": {
+        "method": "PUT",
+        "path": "/api/workspace/me/emotes/order",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "emoteIds": [
+            "emote_builtin_01",
+            "emote_custom_01"
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "items": [
+            {
+              "id": "emote_custom_02",
+              "kind": "custom",
+              "label": "contract second",
+              "token": "[custom:emote_custom_02]",
+              "src": "/api/workspace/emotes/emote_custom_02/content",
+              "animated": false,
+              "byteSize": 62,
+              "width": 1,
+              "height": 1,
+              "sourceType": "upload",
+              "originalFileName": "contract-second.bmp",
+              "originalMimeType": "image/bmp",
+              "createdAt": "2026-01-01T00:00:00.000Z"
+            },
+            {
+              "id": "emote_custom_01",
+              "kind": "custom",
+              "label": "Contract Pixel",
+              "token": "[custom:emote_custom_01]",
+              "src": "/api/workspace/emotes/emote_custom_01/content",
+              "animated": false,
+              "byteSize": 68,
+              "width": 1,
+              "height": 1,
+              "sourceType": "upload",
+              "originalFileName": "contract-pixel.bmp",
+              "originalMimeType": "image/bmp",
+              "createdAt": "2026-01-01T00:00:00.000Z"
+            },
+            {
+              "id": "emote_builtin_01",
+              "kind": "builtin",
+              "label": "doge",
+              "token": "[bili:doge]",
+              "src": "/emotes/bili/doge.png",
+              "emoteKey": "bili:doge",
+              "animated": false,
+              "createdAt": "2026-01-01T00:00:00.000Z"
+            }
+          ],
+          "usage": {
+            "itemCount": 3,
+            "totalBytes": 130,
+            "subscribedItemCount": 0,
+            "subscribedTotalBytes": 0,
+            "totalItemCount": 3,
+            "allTotalBytes": 130,
+            "collectionCount": 1,
+            "subscribedCollectionCount": 0,
+            "overLimit": false
+          },
+          "limits": {
+            "maxItems": null,
+            "maxTotalBytes": 1073741824,
+            "maxInputBytes": 10485760,
+            "maxCollections": null,
+            "maxCollectionItems": 100,
+            "maxBatchItems": 50
+          }
+        }
+      }
+    },
+    {
+      "name": "share-create",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/me/emote-collections/collection_source_01/shares",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "share": {
+            "id": "share_01",
+            "sourceCollectionId": "collection_source_01",
+            "name": "Contract Collection",
+            "itemCount": 2,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "revokedAt": null,
+            "sharedBy": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "originalCreator": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "canSubscribeToSourceChanges": false,
+            "canRevoke": true,
+            "items": [
+              {
+                "id": "emote_custom_01",
+                "kind": "custom",
+                "label": "Contract Pixel",
+                "token": "[custom:emote_custom_01]",
+                "src": "/api/workspace/emotes/emote_custom_01/content",
+                "animated": false,
+                "byteSize": 68,
+                "width": 1,
+                "height": 1,
+                "sourceType": "upload",
+                "originalFileName": "contract-pixel.bmp",
+                "originalMimeType": "image/bmp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "emote_builtin_01",
+                "kind": "builtin",
+                "label": "doge",
+                "token": "[bili:doge]",
+                "src": "/emotes/bili/doge.png",
+                "emoteKey": "bili:doge",
+                "animated": false,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "sharePath": "/workspace/emotes/shared/share_01"
+          }
+        }
+      }
+    },
+    {
+      "name": "share-read-member",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/emote-collection-shares/share_01",
+        "headers": {
+          "x-workspace-user-id": "usr_emote_contract_member"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "share": {
+            "id": "share_01",
+            "sourceCollectionId": "collection_source_01",
+            "name": "Contract Collection",
+            "itemCount": 2,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "revokedAt": null,
+            "sharedBy": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "originalCreator": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "canSubscribeToSourceChanges": true,
+            "canRevoke": false,
+            "items": [
+              {
+                "id": "emote_custom_01",
+                "kind": "custom",
+                "label": "Contract Pixel",
+                "token": "[custom:emote_custom_01]",
+                "src": "/api/workspace/emotes/emote_custom_01/content",
+                "animated": false,
+                "byteSize": 68,
+                "width": 1,
+                "height": 1,
+                "sourceType": "upload",
+                "originalFileName": "contract-pixel.bmp",
+                "originalMimeType": "image/bmp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "emote_builtin_01",
+                "kind": "builtin",
+                "label": "doge",
+                "token": "[bili:doge]",
+                "src": "/emotes/bili/doge.png",
+                "emoteKey": "bili:doge",
+                "animated": false,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "sharePath": "/workspace/emotes/shared/share_01"
+          }
+        }
+      }
+    },
+    {
+      "name": "share-import-invalid-selection",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/emote-collection-shares/share_01/import",
+        "headers": {
+          "x-workspace-user-id": "usr_emote_contract_member",
+          "content-type": "application/json"
+        },
+        "body": {
+          "emoteIds": [
+            "generated_05"
+          ]
+        }
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "error": {
+            "code": "emote.invalid_source",
+            "message": "分享中没有所选表情"
+          }
+        }
+      }
+    },
+    {
+      "name": "share-import-snapshot",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/emote-collection-shares/share_01/import",
+        "headers": {
+          "x-workspace-user-id": "usr_emote_contract_member",
+          "content-type": "application/json"
+        },
+        "body": {}
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "collection": {
+            "id": "collection_snapshot_01",
+            "name": "Contract Collection",
+            "sourceCollectionId": "collection_source_01",
+            "originalCreatorUserId": "usr_owner",
+            "originalCreatorName": "timeStarry",
+            "revision": 3,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "updatedAt": "2026-01-01T00:00:00.000Z",
+            "originalCreator": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "sourceSubscription": {
+              "eligible": true,
+              "enabled": false,
+              "status": "off",
+              "sourceCollectionId": "collection_source_01",
+              "sourceRevision": null,
+              "lastSyncedAt": null,
+              "readOnly": false
+            },
+            "items": [
+              {
+                "id": "generated_01",
+                "kind": "custom",
+                "label": "Contract Pixel",
+                "token": "[custom:generated_01]",
+                "src": "/api/workspace/emotes/generated_01/content",
+                "animated": false,
+                "byteSize": 68,
+                "width": 1,
+                "height": 1,
+                "sourceType": "custom",
+                "originalFileName": "contract-pixel.bmp",
+                "originalMimeType": "image/webp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "generated_06",
+                "kind": "builtin",
+                "label": "doge",
+                "token": "[bili:doge]",
+                "src": "/emotes/bili/doge.png",
+                "emoteKey": "bili:doge",
+                "animated": false,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "itemCount": 2
+          },
+          "items": [
+            {
+              "id": "generated_01",
+              "kind": "custom",
+              "label": "Contract Pixel",
+              "token": "[custom:generated_01]",
+              "src": "/api/workspace/emotes/generated_01/content",
+              "animated": false,
+              "byteSize": 68,
+              "width": 1,
+              "height": 1,
+              "sourceType": "custom",
+              "originalFileName": "contract-pixel.bmp",
+              "originalMimeType": "image/webp",
+              "createdAt": "2026-01-01T00:00:00.000Z"
+            },
+            {
+              "id": "generated_06",
+              "kind": "builtin",
+              "label": "doge",
+              "token": "[bili:doge]",
+              "src": "/emotes/bili/doge.png",
+              "emoteKey": "bili:doge",
+              "animated": false,
+              "createdAt": "2026-01-01T00:00:00.000Z"
+            }
+          ],
+          "library": {
+            "entries": [
+              {
+                "id": "generated_07",
+                "type": "collection",
+                "collection": {
+                  "id": "collection_snapshot_01",
+                  "name": "Contract Collection",
+                  "sourceCollectionId": "collection_source_01",
+                  "originalCreatorUserId": "usr_owner",
+                  "originalCreatorName": "timeStarry",
+                  "revision": 3,
+                  "createdAt": "2026-01-01T00:00:00.000Z",
+                  "updatedAt": "2026-01-01T00:00:00.000Z",
+                  "originalCreator": {
+                    "id": "usr_owner",
+                    "displayName": "timeStarry"
+                  },
+                  "sourceSubscription": {
+                    "eligible": true,
+                    "enabled": false,
+                    "status": "off",
+                    "sourceCollectionId": "collection_source_01",
+                    "sourceRevision": null,
+                    "lastSyncedAt": null,
+                    "readOnly": false
+                  },
+                  "items": [
+                    {
+                      "id": "generated_01",
+                      "kind": "custom",
+                      "label": "Contract Pixel",
+                      "token": "[custom:generated_01]",
+                      "src": "/api/workspace/emotes/generated_01/content",
+                      "animated": false,
+                      "byteSize": 68,
+                      "width": 1,
+                      "height": 1,
+                      "sourceType": "custom",
+                      "originalFileName": "contract-pixel.bmp",
+                      "originalMimeType": "image/webp",
+                      "createdAt": "2026-01-01T00:00:00.000Z"
+                    },
+                    {
+                      "id": "generated_06",
+                      "kind": "builtin",
+                      "label": "doge",
+                      "token": "[bili:doge]",
+                      "src": "/emotes/bili/doge.png",
+                      "emoteKey": "bili:doge",
+                      "animated": false,
+                      "createdAt": "2026-01-01T00:00:00.000Z"
+                    }
+                  ],
+                  "itemCount": 2
+                }
+              },
+              {
+                "id": "generated_08",
+                "type": "emote",
+                "emote": {
+                  "id": "generated_01",
+                  "kind": "custom",
+                  "label": "Contract Pixel",
+                  "token": "[custom:generated_01]",
+                  "src": "/api/workspace/emotes/generated_01/content",
+                  "animated": false,
+                  "byteSize": 68,
+                  "width": 1,
+                  "height": 1,
+                  "sourceType": "custom",
+                  "originalFileName": "contract-pixel.bmp",
+                  "originalMimeType": "image/webp",
+                  "createdAt": "2026-01-01T00:00:00.000Z"
+                }
+              }
+            ],
+            "emotes": [
+              {
+                "id": "generated_06",
+                "kind": "builtin",
+                "label": "doge",
+                "token": "[bili:doge]",
+                "src": "/emotes/bili/doge.png",
+                "emoteKey": "bili:doge",
+                "animated": false,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "generated_01",
+                "kind": "custom",
+                "label": "Contract Pixel",
+                "token": "[custom:generated_01]",
+                "src": "/api/workspace/emotes/generated_01/content",
+                "animated": false,
+                "byteSize": 68,
+                "width": 1,
+                "height": 1,
+                "sourceType": "custom",
+                "originalFileName": "contract-pixel.bmp",
+                "originalMimeType": "image/webp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "collections": [
+              {
+                "id": "collection_snapshot_01",
+                "name": "Contract Collection",
+                "sourceCollectionId": "collection_source_01",
+                "originalCreatorUserId": "usr_owner",
+                "originalCreatorName": "timeStarry",
+                "revision": 3,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "updatedAt": "2026-01-01T00:00:00.000Z",
+                "originalCreator": {
+                  "id": "usr_owner",
+                  "displayName": "timeStarry"
+                },
+                "sourceSubscription": {
+                  "eligible": true,
+                  "enabled": false,
+                  "status": "off",
+                  "sourceCollectionId": "collection_source_01",
+                  "sourceRevision": null,
+                  "lastSyncedAt": null,
+                  "readOnly": false
+                },
+                "items": [
+                  {
+                    "id": "generated_01",
+                    "kind": "custom",
+                    "label": "Contract Pixel",
+                    "token": "[custom:generated_01]",
+                    "src": "/api/workspace/emotes/generated_01/content",
+                    "animated": false,
+                    "byteSize": 68,
+                    "width": 1,
+                    "height": 1,
+                    "sourceType": "custom",
+                    "originalFileName": "contract-pixel.bmp",
+                    "originalMimeType": "image/webp",
+                    "createdAt": "2026-01-01T00:00:00.000Z"
+                  },
+                  {
+                    "id": "generated_06",
+                    "kind": "builtin",
+                    "label": "doge",
+                    "token": "[bili:doge]",
+                    "src": "/emotes/bili/doge.png",
+                    "emoteKey": "bili:doge",
+                    "animated": false,
+                    "createdAt": "2026-01-01T00:00:00.000Z"
+                  }
+                ],
+                "itemCount": 2
+              }
+            ],
+            "usage": {
+              "itemCount": 2,
+              "totalBytes": 68,
+              "subscribedItemCount": 0,
+              "subscribedTotalBytes": 0,
+              "totalItemCount": 2,
+              "allTotalBytes": 68,
+              "collectionCount": 1,
+              "subscribedCollectionCount": 0,
+              "overLimit": false
+            },
+            "limits": {
+              "maxItems": null,
+              "maxTotalBytes": 1073741824,
+              "maxInputBytes": 10485760,
+              "maxCollections": null,
+              "maxCollectionItems": 100,
+              "maxBatchItems": 50
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "share-import-subscription-requires-full-collection",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/emote-collection-shares/share_01/import",
+        "headers": {
+          "x-workspace-user-id": "usr_emote_contract_member",
+          "content-type": "application/json"
+        },
+        "body": {
+          "subscribeToSourceChanges": true,
+          "emoteIds": [
+            "emote_custom_01"
+          ]
+        }
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "error": {
+            "code": "emote.subscription_requires_collection",
+            "message": "只能订阅完整合集"
+          }
+        }
+      }
+    },
+    {
+      "name": "share-import-source-subscription",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/emote-collection-shares/share_01/import",
+        "headers": {
+          "x-workspace-user-id": "usr_emote_contract_member",
+          "content-type": "application/json"
+        },
+        "body": {
+          "subscribeToSourceChanges": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "collection": {
+            "id": "collection_subscription_01",
+            "name": "Contract Collection",
+            "sourceCollectionId": "collection_source_01",
+            "originalCreatorUserId": "usr_owner",
+            "originalCreatorName": "timeStarry",
+            "revision": 1,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "updatedAt": "2026-01-01T00:00:00.000Z",
+            "originalCreator": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "sourceSubscription": {
+              "eligible": true,
+              "enabled": true,
+              "status": "synced",
+              "sourceCollectionId": "collection_source_01",
+              "sourceRevision": 5,
+              "lastSyncedAt": "2026-01-01T00:00:00.000Z",
+              "readOnly": true
+            },
+            "items": [
+              {
+                "id": "generated_09",
+                "kind": "custom",
+                "label": "Contract Pixel",
+                "token": "[custom:generated_09]",
+                "src": "/api/workspace/emotes/generated_09/content",
+                "animated": false,
+                "byteSize": 68,
+                "width": 1,
+                "height": 1,
+                "sourceType": "custom",
+                "originalFileName": "contract-pixel.bmp",
+                "originalMimeType": "image/webp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "generated_10",
+                "kind": "builtin",
+                "label": "doge",
+                "token": "[bili:doge]",
+                "src": "/emotes/bili/doge.png",
+                "emoteKey": "bili:doge",
+                "animated": false,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "itemCount": 2
+          },
+          "items": [
+            {
+              "id": "generated_09",
+              "kind": "custom",
+              "label": "Contract Pixel",
+              "token": "[custom:generated_09]",
+              "src": "/api/workspace/emotes/generated_09/content",
+              "animated": false,
+              "byteSize": 68,
+              "width": 1,
+              "height": 1,
+              "sourceType": "custom",
+              "originalFileName": "contract-pixel.bmp",
+              "originalMimeType": "image/webp",
+              "createdAt": "2026-01-01T00:00:00.000Z"
+            },
+            {
+              "id": "generated_10",
+              "kind": "builtin",
+              "label": "doge",
+              "token": "[bili:doge]",
+              "src": "/emotes/bili/doge.png",
+              "emoteKey": "bili:doge",
+              "animated": false,
+              "createdAt": "2026-01-01T00:00:00.000Z"
+            }
+          ],
+          "library": {
+            "entries": [
+              {
+                "id": "generated_11",
+                "type": "collection",
+                "collection": {
+                  "id": "collection_subscription_01",
+                  "name": "Contract Collection",
+                  "sourceCollectionId": "collection_source_01",
+                  "originalCreatorUserId": "usr_owner",
+                  "originalCreatorName": "timeStarry",
+                  "revision": 1,
+                  "createdAt": "2026-01-01T00:00:00.000Z",
+                  "updatedAt": "2026-01-01T00:00:00.000Z",
+                  "originalCreator": {
+                    "id": "usr_owner",
+                    "displayName": "timeStarry"
+                  },
+                  "sourceSubscription": {
+                    "eligible": true,
+                    "enabled": true,
+                    "status": "synced",
+                    "sourceCollectionId": "collection_source_01",
+                    "sourceRevision": 5,
+                    "lastSyncedAt": "2026-01-01T00:00:00.000Z",
+                    "readOnly": true
+                  },
+                  "items": [
+                    {
+                      "id": "generated_09",
+                      "kind": "custom",
+                      "label": "Contract Pixel",
+                      "token": "[custom:generated_09]",
+                      "src": "/api/workspace/emotes/generated_09/content",
+                      "animated": false,
+                      "byteSize": 68,
+                      "width": 1,
+                      "height": 1,
+                      "sourceType": "custom",
+                      "originalFileName": "contract-pixel.bmp",
+                      "originalMimeType": "image/webp",
+                      "createdAt": "2026-01-01T00:00:00.000Z"
+                    },
+                    {
+                      "id": "generated_10",
+                      "kind": "builtin",
+                      "label": "doge",
+                      "token": "[bili:doge]",
+                      "src": "/emotes/bili/doge.png",
+                      "emoteKey": "bili:doge",
+                      "animated": false,
+                      "createdAt": "2026-01-01T00:00:00.000Z"
+                    }
+                  ],
+                  "itemCount": 2
+                }
+              },
+              {
+                "id": "generated_07",
+                "type": "collection",
+                "collection": {
+                  "id": "collection_snapshot_01",
+                  "name": "Contract Collection",
+                  "sourceCollectionId": "collection_source_01",
+                  "originalCreatorUserId": "usr_owner",
+                  "originalCreatorName": "timeStarry",
+                  "revision": 3,
+                  "createdAt": "2026-01-01T00:00:00.000Z",
+                  "updatedAt": "2026-01-01T00:00:00.000Z",
+                  "originalCreator": {
+                    "id": "usr_owner",
+                    "displayName": "timeStarry"
+                  },
+                  "sourceSubscription": {
+                    "eligible": true,
+                    "enabled": false,
+                    "status": "off",
+                    "sourceCollectionId": "collection_source_01",
+                    "sourceRevision": null,
+                    "lastSyncedAt": null,
+                    "readOnly": false
+                  },
+                  "items": [
+                    {
+                      "id": "generated_01",
+                      "kind": "custom",
+                      "label": "Contract Pixel",
+                      "token": "[custom:generated_01]",
+                      "src": "/api/workspace/emotes/generated_01/content",
+                      "animated": false,
+                      "byteSize": 68,
+                      "width": 1,
+                      "height": 1,
+                      "sourceType": "custom",
+                      "originalFileName": "contract-pixel.bmp",
+                      "originalMimeType": "image/webp",
+                      "createdAt": "2026-01-01T00:00:00.000Z"
+                    },
+                    {
+                      "id": "generated_06",
+                      "kind": "builtin",
+                      "label": "doge",
+                      "token": "[bili:doge]",
+                      "src": "/emotes/bili/doge.png",
+                      "emoteKey": "bili:doge",
+                      "animated": false,
+                      "createdAt": "2026-01-01T00:00:00.000Z"
+                    }
+                  ],
+                  "itemCount": 2
+                }
+              },
+              {
+                "id": "generated_08",
+                "type": "emote",
+                "emote": {
+                  "id": "generated_01",
+                  "kind": "custom",
+                  "label": "Contract Pixel",
+                  "token": "[custom:generated_01]",
+                  "src": "/api/workspace/emotes/generated_01/content",
+                  "animated": false,
+                  "byteSize": 68,
+                  "width": 1,
+                  "height": 1,
+                  "sourceType": "custom",
+                  "originalFileName": "contract-pixel.bmp",
+                  "originalMimeType": "image/webp",
+                  "createdAt": "2026-01-01T00:00:00.000Z"
+                }
+              }
+            ],
+            "emotes": [
+              {
+                "id": "generated_06",
+                "kind": "builtin",
+                "label": "doge",
+                "token": "[bili:doge]",
+                "src": "/emotes/bili/doge.png",
+                "emoteKey": "bili:doge",
+                "animated": false,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "generated_01",
+                "kind": "custom",
+                "label": "Contract Pixel",
+                "token": "[custom:generated_01]",
+                "src": "/api/workspace/emotes/generated_01/content",
+                "animated": false,
+                "byteSize": 68,
+                "width": 1,
+                "height": 1,
+                "sourceType": "custom",
+                "originalFileName": "contract-pixel.bmp",
+                "originalMimeType": "image/webp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "generated_09",
+                "kind": "custom",
+                "label": "Contract Pixel",
+                "token": "[custom:generated_09]",
+                "src": "/api/workspace/emotes/generated_09/content",
+                "animated": false,
+                "byteSize": 68,
+                "width": 1,
+                "height": 1,
+                "sourceType": "custom",
+                "originalFileName": "contract-pixel.bmp",
+                "originalMimeType": "image/webp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "generated_10",
+                "kind": "builtin",
+                "label": "doge",
+                "token": "[bili:doge]",
+                "src": "/emotes/bili/doge.png",
+                "emoteKey": "bili:doge",
+                "animated": false,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "collections": [
+              {
+                "id": "collection_subscription_01",
+                "name": "Contract Collection",
+                "sourceCollectionId": "collection_source_01",
+                "originalCreatorUserId": "usr_owner",
+                "originalCreatorName": "timeStarry",
+                "revision": 1,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "updatedAt": "2026-01-01T00:00:00.000Z",
+                "originalCreator": {
+                  "id": "usr_owner",
+                  "displayName": "timeStarry"
+                },
+                "sourceSubscription": {
+                  "eligible": true,
+                  "enabled": true,
+                  "status": "synced",
+                  "sourceCollectionId": "collection_source_01",
+                  "sourceRevision": 5,
+                  "lastSyncedAt": "2026-01-01T00:00:00.000Z",
+                  "readOnly": true
+                },
+                "items": [
+                  {
+                    "id": "generated_09",
+                    "kind": "custom",
+                    "label": "Contract Pixel",
+                    "token": "[custom:generated_09]",
+                    "src": "/api/workspace/emotes/generated_09/content",
+                    "animated": false,
+                    "byteSize": 68,
+                    "width": 1,
+                    "height": 1,
+                    "sourceType": "custom",
+                    "originalFileName": "contract-pixel.bmp",
+                    "originalMimeType": "image/webp",
+                    "createdAt": "2026-01-01T00:00:00.000Z"
+                  },
+                  {
+                    "id": "generated_10",
+                    "kind": "builtin",
+                    "label": "doge",
+                    "token": "[bili:doge]",
+                    "src": "/emotes/bili/doge.png",
+                    "emoteKey": "bili:doge",
+                    "animated": false,
+                    "createdAt": "2026-01-01T00:00:00.000Z"
+                  }
+                ],
+                "itemCount": 2
+              },
+              {
+                "id": "collection_snapshot_01",
+                "name": "Contract Collection",
+                "sourceCollectionId": "collection_source_01",
+                "originalCreatorUserId": "usr_owner",
+                "originalCreatorName": "timeStarry",
+                "revision": 3,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "updatedAt": "2026-01-01T00:00:00.000Z",
+                "originalCreator": {
+                  "id": "usr_owner",
+                  "displayName": "timeStarry"
+                },
+                "sourceSubscription": {
+                  "eligible": true,
+                  "enabled": false,
+                  "status": "off",
+                  "sourceCollectionId": "collection_source_01",
+                  "sourceRevision": null,
+                  "lastSyncedAt": null,
+                  "readOnly": false
+                },
+                "items": [
+                  {
+                    "id": "generated_01",
+                    "kind": "custom",
+                    "label": "Contract Pixel",
+                    "token": "[custom:generated_01]",
+                    "src": "/api/workspace/emotes/generated_01/content",
+                    "animated": false,
+                    "byteSize": 68,
+                    "width": 1,
+                    "height": 1,
+                    "sourceType": "custom",
+                    "originalFileName": "contract-pixel.bmp",
+                    "originalMimeType": "image/webp",
+                    "createdAt": "2026-01-01T00:00:00.000Z"
+                  },
+                  {
+                    "id": "generated_06",
+                    "kind": "builtin",
+                    "label": "doge",
+                    "token": "[bili:doge]",
+                    "src": "/emotes/bili/doge.png",
+                    "emoteKey": "bili:doge",
+                    "animated": false,
+                    "createdAt": "2026-01-01T00:00:00.000Z"
+                  }
+                ],
+                "itemCount": 2
+              }
+            ],
+            "usage": {
+              "itemCount": 2,
+              "totalBytes": 68,
+              "subscribedItemCount": 2,
+              "subscribedTotalBytes": 68,
+              "totalItemCount": 4,
+              "allTotalBytes": 136,
+              "collectionCount": 2,
+              "subscribedCollectionCount": 1,
+              "overLimit": false
+            },
+            "limits": {
+              "maxItems": null,
+              "maxTotalBytes": 1073741824,
+              "maxInputBytes": 10485760,
+              "maxCollections": null,
+              "maxCollectionItems": 100,
+              "maxBatchItems": 50
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "subscription-read-only-authorization",
+      "request": {
+        "method": "PATCH",
+        "path": "/api/workspace/me/emote-collections/collection_subscription_01",
+        "headers": {
+          "x-workspace-user-id": "usr_emote_contract_member",
+          "content-type": "application/json"
+        },
+        "body": {
+          "name": "Must Stay Read Only"
+        }
+      },
+      "response": {
+        "status": 409,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "error": {
+            "code": "emote.subscription_read_only",
+            "message": "订阅中的合集为只读"
+          }
+        }
+      }
+    },
+    {
+      "name": "subscription-disable",
+      "request": {
+        "method": "PUT",
+        "path": "/api/workspace/me/emote-collections/collection_subscription_01/source-subscription",
+        "headers": {
+          "x-workspace-user-id": "usr_emote_contract_member",
+          "content-type": "application/json"
+        },
+        "body": {
+          "enabled": false
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "collection": {
+            "id": "collection_subscription_01",
+            "name": "Contract Collection",
+            "sourceCollectionId": "collection_source_01",
+            "originalCreatorUserId": "usr_owner",
+            "originalCreatorName": "timeStarry",
+            "revision": 1,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "updatedAt": "2026-01-01T00:00:00.000Z",
+            "originalCreator": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "sourceSubscription": {
+              "eligible": true,
+              "enabled": false,
+              "status": "off",
+              "sourceCollectionId": "collection_source_01",
+              "sourceRevision": 5,
+              "lastSyncedAt": "2026-01-01T00:00:00.000Z",
+              "readOnly": false
+            },
+            "items": [
+              {
+                "id": "generated_09",
+                "kind": "custom",
+                "label": "Contract Pixel",
+                "token": "[custom:generated_09]",
+                "src": "/api/workspace/emotes/generated_09/content",
+                "animated": false,
+                "byteSize": 68,
+                "width": 1,
+                "height": 1,
+                "sourceType": "custom",
+                "originalFileName": "contract-pixel.bmp",
+                "originalMimeType": "image/webp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "generated_10",
+                "kind": "builtin",
+                "label": "doge",
+                "token": "[bili:doge]",
+                "src": "/emotes/bili/doge.png",
+                "emoteKey": "bili:doge",
+                "animated": false,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "itemCount": 2
+          },
+          "library": {
+            "entries": [
+              {
+                "id": "generated_11",
+                "type": "collection",
+                "collection": {
+                  "id": "collection_subscription_01",
+                  "name": "Contract Collection",
+                  "sourceCollectionId": "collection_source_01",
+                  "originalCreatorUserId": "usr_owner",
+                  "originalCreatorName": "timeStarry",
+                  "revision": 1,
+                  "createdAt": "2026-01-01T00:00:00.000Z",
+                  "updatedAt": "2026-01-01T00:00:00.000Z",
+                  "originalCreator": {
+                    "id": "usr_owner",
+                    "displayName": "timeStarry"
+                  },
+                  "sourceSubscription": {
+                    "eligible": true,
+                    "enabled": false,
+                    "status": "off",
+                    "sourceCollectionId": "collection_source_01",
+                    "sourceRevision": 5,
+                    "lastSyncedAt": "2026-01-01T00:00:00.000Z",
+                    "readOnly": false
+                  },
+                  "items": [
+                    {
+                      "id": "generated_09",
+                      "kind": "custom",
+                      "label": "Contract Pixel",
+                      "token": "[custom:generated_09]",
+                      "src": "/api/workspace/emotes/generated_09/content",
+                      "animated": false,
+                      "byteSize": 68,
+                      "width": 1,
+                      "height": 1,
+                      "sourceType": "custom",
+                      "originalFileName": "contract-pixel.bmp",
+                      "originalMimeType": "image/webp",
+                      "createdAt": "2026-01-01T00:00:00.000Z"
+                    },
+                    {
+                      "id": "generated_10",
+                      "kind": "builtin",
+                      "label": "doge",
+                      "token": "[bili:doge]",
+                      "src": "/emotes/bili/doge.png",
+                      "emoteKey": "bili:doge",
+                      "animated": false,
+                      "createdAt": "2026-01-01T00:00:00.000Z"
+                    }
+                  ],
+                  "itemCount": 2
+                }
+              },
+              {
+                "id": "generated_07",
+                "type": "collection",
+                "collection": {
+                  "id": "collection_snapshot_01",
+                  "name": "Contract Collection",
+                  "sourceCollectionId": "collection_source_01",
+                  "originalCreatorUserId": "usr_owner",
+                  "originalCreatorName": "timeStarry",
+                  "revision": 3,
+                  "createdAt": "2026-01-01T00:00:00.000Z",
+                  "updatedAt": "2026-01-01T00:00:00.000Z",
+                  "originalCreator": {
+                    "id": "usr_owner",
+                    "displayName": "timeStarry"
+                  },
+                  "sourceSubscription": {
+                    "eligible": true,
+                    "enabled": false,
+                    "status": "off",
+                    "sourceCollectionId": "collection_source_01",
+                    "sourceRevision": null,
+                    "lastSyncedAt": null,
+                    "readOnly": false
+                  },
+                  "items": [
+                    {
+                      "id": "generated_01",
+                      "kind": "custom",
+                      "label": "Contract Pixel",
+                      "token": "[custom:generated_01]",
+                      "src": "/api/workspace/emotes/generated_01/content",
+                      "animated": false,
+                      "byteSize": 68,
+                      "width": 1,
+                      "height": 1,
+                      "sourceType": "custom",
+                      "originalFileName": "contract-pixel.bmp",
+                      "originalMimeType": "image/webp",
+                      "createdAt": "2026-01-01T00:00:00.000Z"
+                    },
+                    {
+                      "id": "generated_06",
+                      "kind": "builtin",
+                      "label": "doge",
+                      "token": "[bili:doge]",
+                      "src": "/emotes/bili/doge.png",
+                      "emoteKey": "bili:doge",
+                      "animated": false,
+                      "createdAt": "2026-01-01T00:00:00.000Z"
+                    }
+                  ],
+                  "itemCount": 2
+                }
+              },
+              {
+                "id": "generated_08",
+                "type": "emote",
+                "emote": {
+                  "id": "generated_01",
+                  "kind": "custom",
+                  "label": "Contract Pixel",
+                  "token": "[custom:generated_01]",
+                  "src": "/api/workspace/emotes/generated_01/content",
+                  "animated": false,
+                  "byteSize": 68,
+                  "width": 1,
+                  "height": 1,
+                  "sourceType": "custom",
+                  "originalFileName": "contract-pixel.bmp",
+                  "originalMimeType": "image/webp",
+                  "createdAt": "2026-01-01T00:00:00.000Z"
+                }
+              }
+            ],
+            "emotes": [
+              {
+                "id": "generated_06",
+                "kind": "builtin",
+                "label": "doge",
+                "token": "[bili:doge]",
+                "src": "/emotes/bili/doge.png",
+                "emoteKey": "bili:doge",
+                "animated": false,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "generated_01",
+                "kind": "custom",
+                "label": "Contract Pixel",
+                "token": "[custom:generated_01]",
+                "src": "/api/workspace/emotes/generated_01/content",
+                "animated": false,
+                "byteSize": 68,
+                "width": 1,
+                "height": 1,
+                "sourceType": "custom",
+                "originalFileName": "contract-pixel.bmp",
+                "originalMimeType": "image/webp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "generated_09",
+                "kind": "custom",
+                "label": "Contract Pixel",
+                "token": "[custom:generated_09]",
+                "src": "/api/workspace/emotes/generated_09/content",
+                "animated": false,
+                "byteSize": 68,
+                "width": 1,
+                "height": 1,
+                "sourceType": "custom",
+                "originalFileName": "contract-pixel.bmp",
+                "originalMimeType": "image/webp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "generated_10",
+                "kind": "builtin",
+                "label": "doge",
+                "token": "[bili:doge]",
+                "src": "/emotes/bili/doge.png",
+                "emoteKey": "bili:doge",
+                "animated": false,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "collections": [
+              {
+                "id": "collection_subscription_01",
+                "name": "Contract Collection",
+                "sourceCollectionId": "collection_source_01",
+                "originalCreatorUserId": "usr_owner",
+                "originalCreatorName": "timeStarry",
+                "revision": 1,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "updatedAt": "2026-01-01T00:00:00.000Z",
+                "originalCreator": {
+                  "id": "usr_owner",
+                  "displayName": "timeStarry"
+                },
+                "sourceSubscription": {
+                  "eligible": true,
+                  "enabled": false,
+                  "status": "off",
+                  "sourceCollectionId": "collection_source_01",
+                  "sourceRevision": 5,
+                  "lastSyncedAt": "2026-01-01T00:00:00.000Z",
+                  "readOnly": false
+                },
+                "items": [
+                  {
+                    "id": "generated_09",
+                    "kind": "custom",
+                    "label": "Contract Pixel",
+                    "token": "[custom:generated_09]",
+                    "src": "/api/workspace/emotes/generated_09/content",
+                    "animated": false,
+                    "byteSize": 68,
+                    "width": 1,
+                    "height": 1,
+                    "sourceType": "custom",
+                    "originalFileName": "contract-pixel.bmp",
+                    "originalMimeType": "image/webp",
+                    "createdAt": "2026-01-01T00:00:00.000Z"
+                  },
+                  {
+                    "id": "generated_10",
+                    "kind": "builtin",
+                    "label": "doge",
+                    "token": "[bili:doge]",
+                    "src": "/emotes/bili/doge.png",
+                    "emoteKey": "bili:doge",
+                    "animated": false,
+                    "createdAt": "2026-01-01T00:00:00.000Z"
+                  }
+                ],
+                "itemCount": 2
+              },
+              {
+                "id": "collection_snapshot_01",
+                "name": "Contract Collection",
+                "sourceCollectionId": "collection_source_01",
+                "originalCreatorUserId": "usr_owner",
+                "originalCreatorName": "timeStarry",
+                "revision": 3,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "updatedAt": "2026-01-01T00:00:00.000Z",
+                "originalCreator": {
+                  "id": "usr_owner",
+                  "displayName": "timeStarry"
+                },
+                "sourceSubscription": {
+                  "eligible": true,
+                  "enabled": false,
+                  "status": "off",
+                  "sourceCollectionId": "collection_source_01",
+                  "sourceRevision": null,
+                  "lastSyncedAt": null,
+                  "readOnly": false
+                },
+                "items": [
+                  {
+                    "id": "generated_01",
+                    "kind": "custom",
+                    "label": "Contract Pixel",
+                    "token": "[custom:generated_01]",
+                    "src": "/api/workspace/emotes/generated_01/content",
+                    "animated": false,
+                    "byteSize": 68,
+                    "width": 1,
+                    "height": 1,
+                    "sourceType": "custom",
+                    "originalFileName": "contract-pixel.bmp",
+                    "originalMimeType": "image/webp",
+                    "createdAt": "2026-01-01T00:00:00.000Z"
+                  },
+                  {
+                    "id": "generated_06",
+                    "kind": "builtin",
+                    "label": "doge",
+                    "token": "[bili:doge]",
+                    "src": "/emotes/bili/doge.png",
+                    "emoteKey": "bili:doge",
+                    "animated": false,
+                    "createdAt": "2026-01-01T00:00:00.000Z"
+                  }
+                ],
+                "itemCount": 2
+              }
+            ],
+            "usage": {
+              "itemCount": 4,
+              "totalBytes": 136,
+              "subscribedItemCount": 0,
+              "subscribedTotalBytes": 0,
+              "totalItemCount": 4,
+              "allTotalBytes": 136,
+              "collectionCount": 2,
+              "subscribedCollectionCount": 0,
+              "overLimit": false
+            },
+            "limits": {
+              "maxItems": null,
+              "maxTotalBytes": 1073741824,
+              "maxInputBytes": 10485760,
+              "maxCollections": null,
+              "maxCollectionItems": 100,
+              "maxBatchItems": 50
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "subscription-enable",
+      "request": {
+        "method": "PUT",
+        "path": "/api/workspace/me/emote-collections/collection_subscription_01/source-subscription",
+        "headers": {
+          "x-workspace-user-id": "usr_emote_contract_member",
+          "content-type": "application/json"
+        },
+        "body": {
+          "enabled": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "collection": {
+            "id": "collection_subscription_01",
+            "name": "Contract Collection",
+            "sourceCollectionId": "collection_source_01",
+            "originalCreatorUserId": "usr_owner",
+            "originalCreatorName": "timeStarry",
+            "revision": 2,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "updatedAt": "2026-01-01T00:00:00.000Z",
+            "originalCreator": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "sourceSubscription": {
+              "eligible": true,
+              "enabled": true,
+              "status": "synced",
+              "sourceCollectionId": "collection_source_01",
+              "sourceRevision": 5,
+              "lastSyncedAt": "2026-01-01T00:00:00.000Z",
+              "readOnly": true
+            },
+            "items": [
+              {
+                "id": "generated_09",
+                "kind": "custom",
+                "label": "Contract Pixel",
+                "token": "[custom:generated_09]",
+                "src": "/api/workspace/emotes/generated_09/content",
+                "animated": false,
+                "byteSize": 68,
+                "width": 1,
+                "height": 1,
+                "sourceType": "custom",
+                "originalFileName": "contract-pixel.bmp",
+                "originalMimeType": "image/webp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "generated_10",
+                "kind": "builtin",
+                "label": "doge",
+                "token": "[bili:doge]",
+                "src": "/emotes/bili/doge.png",
+                "emoteKey": "bili:doge",
+                "animated": false,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "itemCount": 2
+          },
+          "library": {
+            "entries": [
+              {
+                "id": "generated_11",
+                "type": "collection",
+                "collection": {
+                  "id": "collection_subscription_01",
+                  "name": "Contract Collection",
+                  "sourceCollectionId": "collection_source_01",
+                  "originalCreatorUserId": "usr_owner",
+                  "originalCreatorName": "timeStarry",
+                  "revision": 2,
+                  "createdAt": "2026-01-01T00:00:00.000Z",
+                  "updatedAt": "2026-01-01T00:00:00.000Z",
+                  "originalCreator": {
+                    "id": "usr_owner",
+                    "displayName": "timeStarry"
+                  },
+                  "sourceSubscription": {
+                    "eligible": true,
+                    "enabled": true,
+                    "status": "synced",
+                    "sourceCollectionId": "collection_source_01",
+                    "sourceRevision": 5,
+                    "lastSyncedAt": "2026-01-01T00:00:00.000Z",
+                    "readOnly": true
+                  },
+                  "items": [
+                    {
+                      "id": "generated_09",
+                      "kind": "custom",
+                      "label": "Contract Pixel",
+                      "token": "[custom:generated_09]",
+                      "src": "/api/workspace/emotes/generated_09/content",
+                      "animated": false,
+                      "byteSize": 68,
+                      "width": 1,
+                      "height": 1,
+                      "sourceType": "custom",
+                      "originalFileName": "contract-pixel.bmp",
+                      "originalMimeType": "image/webp",
+                      "createdAt": "2026-01-01T00:00:00.000Z"
+                    },
+                    {
+                      "id": "generated_10",
+                      "kind": "builtin",
+                      "label": "doge",
+                      "token": "[bili:doge]",
+                      "src": "/emotes/bili/doge.png",
+                      "emoteKey": "bili:doge",
+                      "animated": false,
+                      "createdAt": "2026-01-01T00:00:00.000Z"
+                    }
+                  ],
+                  "itemCount": 2
+                }
+              },
+              {
+                "id": "generated_07",
+                "type": "collection",
+                "collection": {
+                  "id": "collection_snapshot_01",
+                  "name": "Contract Collection",
+                  "sourceCollectionId": "collection_source_01",
+                  "originalCreatorUserId": "usr_owner",
+                  "originalCreatorName": "timeStarry",
+                  "revision": 3,
+                  "createdAt": "2026-01-01T00:00:00.000Z",
+                  "updatedAt": "2026-01-01T00:00:00.000Z",
+                  "originalCreator": {
+                    "id": "usr_owner",
+                    "displayName": "timeStarry"
+                  },
+                  "sourceSubscription": {
+                    "eligible": true,
+                    "enabled": false,
+                    "status": "off",
+                    "sourceCollectionId": "collection_source_01",
+                    "sourceRevision": null,
+                    "lastSyncedAt": null,
+                    "readOnly": false
+                  },
+                  "items": [
+                    {
+                      "id": "generated_01",
+                      "kind": "custom",
+                      "label": "Contract Pixel",
+                      "token": "[custom:generated_01]",
+                      "src": "/api/workspace/emotes/generated_01/content",
+                      "animated": false,
+                      "byteSize": 68,
+                      "width": 1,
+                      "height": 1,
+                      "sourceType": "custom",
+                      "originalFileName": "contract-pixel.bmp",
+                      "originalMimeType": "image/webp",
+                      "createdAt": "2026-01-01T00:00:00.000Z"
+                    },
+                    {
+                      "id": "generated_06",
+                      "kind": "builtin",
+                      "label": "doge",
+                      "token": "[bili:doge]",
+                      "src": "/emotes/bili/doge.png",
+                      "emoteKey": "bili:doge",
+                      "animated": false,
+                      "createdAt": "2026-01-01T00:00:00.000Z"
+                    }
+                  ],
+                  "itemCount": 2
+                }
+              },
+              {
+                "id": "generated_08",
+                "type": "emote",
+                "emote": {
+                  "id": "generated_01",
+                  "kind": "custom",
+                  "label": "Contract Pixel",
+                  "token": "[custom:generated_01]",
+                  "src": "/api/workspace/emotes/generated_01/content",
+                  "animated": false,
+                  "byteSize": 68,
+                  "width": 1,
+                  "height": 1,
+                  "sourceType": "custom",
+                  "originalFileName": "contract-pixel.bmp",
+                  "originalMimeType": "image/webp",
+                  "createdAt": "2026-01-01T00:00:00.000Z"
+                }
+              }
+            ],
+            "emotes": [
+              {
+                "id": "generated_06",
+                "kind": "builtin",
+                "label": "doge",
+                "token": "[bili:doge]",
+                "src": "/emotes/bili/doge.png",
+                "emoteKey": "bili:doge",
+                "animated": false,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "generated_01",
+                "kind": "custom",
+                "label": "Contract Pixel",
+                "token": "[custom:generated_01]",
+                "src": "/api/workspace/emotes/generated_01/content",
+                "animated": false,
+                "byteSize": 68,
+                "width": 1,
+                "height": 1,
+                "sourceType": "custom",
+                "originalFileName": "contract-pixel.bmp",
+                "originalMimeType": "image/webp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "generated_09",
+                "kind": "custom",
+                "label": "Contract Pixel",
+                "token": "[custom:generated_09]",
+                "src": "/api/workspace/emotes/generated_09/content",
+                "animated": false,
+                "byteSize": 68,
+                "width": 1,
+                "height": 1,
+                "sourceType": "custom",
+                "originalFileName": "contract-pixel.bmp",
+                "originalMimeType": "image/webp",
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "generated_10",
+                "kind": "builtin",
+                "label": "doge",
+                "token": "[bili:doge]",
+                "src": "/emotes/bili/doge.png",
+                "emoteKey": "bili:doge",
+                "animated": false,
+                "createdAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "collections": [
+              {
+                "id": "collection_subscription_01",
+                "name": "Contract Collection",
+                "sourceCollectionId": "collection_source_01",
+                "originalCreatorUserId": "usr_owner",
+                "originalCreatorName": "timeStarry",
+                "revision": 2,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "updatedAt": "2026-01-01T00:00:00.000Z",
+                "originalCreator": {
+                  "id": "usr_owner",
+                  "displayName": "timeStarry"
+                },
+                "sourceSubscription": {
+                  "eligible": true,
+                  "enabled": true,
+                  "status": "synced",
+                  "sourceCollectionId": "collection_source_01",
+                  "sourceRevision": 5,
+                  "lastSyncedAt": "2026-01-01T00:00:00.000Z",
+                  "readOnly": true
+                },
+                "items": [
+                  {
+                    "id": "generated_09",
+                    "kind": "custom",
+                    "label": "Contract Pixel",
+                    "token": "[custom:generated_09]",
+                    "src": "/api/workspace/emotes/generated_09/content",
+                    "animated": false,
+                    "byteSize": 68,
+                    "width": 1,
+                    "height": 1,
+                    "sourceType": "custom",
+                    "originalFileName": "contract-pixel.bmp",
+                    "originalMimeType": "image/webp",
+                    "createdAt": "2026-01-01T00:00:00.000Z"
+                  },
+                  {
+                    "id": "generated_10",
+                    "kind": "builtin",
+                    "label": "doge",
+                    "token": "[bili:doge]",
+                    "src": "/emotes/bili/doge.png",
+                    "emoteKey": "bili:doge",
+                    "animated": false,
+                    "createdAt": "2026-01-01T00:00:00.000Z"
+                  }
+                ],
+                "itemCount": 2
+              },
+              {
+                "id": "collection_snapshot_01",
+                "name": "Contract Collection",
+                "sourceCollectionId": "collection_source_01",
+                "originalCreatorUserId": "usr_owner",
+                "originalCreatorName": "timeStarry",
+                "revision": 3,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "updatedAt": "2026-01-01T00:00:00.000Z",
+                "originalCreator": {
+                  "id": "usr_owner",
+                  "displayName": "timeStarry"
+                },
+                "sourceSubscription": {
+                  "eligible": true,
+                  "enabled": false,
+                  "status": "off",
+                  "sourceCollectionId": "collection_source_01",
+                  "sourceRevision": null,
+                  "lastSyncedAt": null,
+                  "readOnly": false
+                },
+                "items": [
+                  {
+                    "id": "generated_01",
+                    "kind": "custom",
+                    "label": "Contract Pixel",
+                    "token": "[custom:generated_01]",
+                    "src": "/api/workspace/emotes/generated_01/content",
+                    "animated": false,
+                    "byteSize": 68,
+                    "width": 1,
+                    "height": 1,
+                    "sourceType": "custom",
+                    "originalFileName": "contract-pixel.bmp",
+                    "originalMimeType": "image/webp",
+                    "createdAt": "2026-01-01T00:00:00.000Z"
+                  },
+                  {
+                    "id": "generated_06",
+                    "kind": "builtin",
+                    "label": "doge",
+                    "token": "[bili:doge]",
+                    "src": "/emotes/bili/doge.png",
+                    "emoteKey": "bili:doge",
+                    "animated": false,
+                    "createdAt": "2026-01-01T00:00:00.000Z"
+                  }
+                ],
+                "itemCount": 2
+              }
+            ],
+            "usage": {
+              "itemCount": 2,
+              "totalBytes": 68,
+              "subscribedItemCount": 2,
+              "subscribedTotalBytes": 68,
+              "totalItemCount": 4,
+              "allTotalBytes": 136,
+              "collectionCount": 2,
+              "subscribedCollectionCount": 1,
+              "overLimit": false
+            },
+            "limits": {
+              "maxItems": null,
+              "maxTotalBytes": 1073741824,
+              "maxInputBytes": 10485760,
+              "maxCollections": null,
+              "maxCollectionItems": 100,
+              "maxBatchItems": 50
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "collection-delete-imported-snapshot",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/workspace/me/emote-collections/collection_snapshot_01?itemDisposition=remove",
+        "headers": {
+          "x-workspace-user-id": "usr_emote_contract_member"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "ok": true,
+          "collectionId": "collection_snapshot_01"
+        }
+      }
+    },
+    {
+      "name": "share-revoke-owner-authorization",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/workspace/me/emote-collection-shares/share_01",
+        "headers": {
+          "x-workspace-user-id": "usr_emote_contract_member"
+        }
+      },
+      "response": {
+        "status": 403,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "error": {
+            "code": "permission.denied",
+            "message": "只能撤销自己的分享"
+          }
+        }
+      }
+    },
+    {
+      "name": "share-revoke",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/workspace/me/emote-collection-shares/share_01",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "share": {
+            "id": "share_01",
+            "sourceCollectionId": "collection_source_01",
+            "name": "Contract Collection",
+            "itemCount": 2,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "revokedAt": "2026-01-01T00:00:00.000Z",
+            "sharedBy": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "originalCreator": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "canSubscribeToSourceChanges": false,
+            "canRevoke": true,
+            "items": [],
+            "sharePath": "/workspace/emotes/shared/share_01"
+          }
+        }
+      }
+    },
+    {
+      "name": "share-read-revoked",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/emote-collection-shares/share_01",
+        "headers": {
+          "x-workspace-user-id": "usr_emote_contract_member"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "share": {
+            "id": "share_01",
+            "sourceCollectionId": "collection_source_01",
+            "name": "Contract Collection",
+            "itemCount": 2,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "revokedAt": "2026-01-01T00:00:00.000Z",
+            "sharedBy": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "originalCreator": {
+              "id": "usr_owner",
+              "displayName": "timeStarry"
+            },
+            "canSubscribeToSourceChanges": true,
+            "canRevoke": false,
+            "items": [],
+            "sharePath": "/workspace/emotes/shared/share_01"
+          }
+        }
+      }
+    },
+    {
+      "name": "share-import-revoked",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/emote-collection-shares/share_01/import",
+        "headers": {
+          "x-workspace-user-id": "usr_emote_contract_member",
+          "content-type": "application/json"
+        },
+        "body": {}
+      },
+      "response": {
+        "status": 410,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "error": {
+            "code": "emote.share_revoked",
+            "message": "该合集已停止分享"
+          }
+        }
+      }
+    },
+    {
+      "name": "share-read-missing",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/emote-collection-shares/missing-share",
+        "headers": {
+          "x-workspace-user-id": "usr_emote_contract_member"
+        }
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "error": {
+            "code": "emote.share_not_found",
+            "message": "分享不存在"
+          }
+        }
+      }
+    },
+    {
+      "name": "content-read-missing",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/emotes/missing-emote/content",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "error": {
+            "code": "emote.not_found",
+            "message": "收藏表情不存在"
+          }
+        }
+      }
+    },
+    {
+      "name": "collection-delete",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/workspace/me/emote-collections/collection_source_01?itemDisposition=keep",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "ok": true,
+          "collectionId": "collection_source_01"
+        }
+      }
+    },
+    {
+      "name": "emote-delete",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/workspace/me/emotes/emote_custom_02",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "ok": true,
+          "emoteId": "emote_custom_02"
+        }
+      }
+    }
+  ]
+}
