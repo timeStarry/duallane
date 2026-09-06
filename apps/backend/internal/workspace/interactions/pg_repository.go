@@ -38,6 +38,27 @@ func NewPGRepository(pool *pgxpool.Pool, factories ...func() (string, error)) *P
 	}
 	return &PGRepository{pool: pool, idFactory: factory}
 }
+
+// NewPGTransaction wraps an already-open PostgreSQL transaction with the
+// interaction domain's typed transaction surface. The caller owns commit and
+// rollback; this helper never acquires a pool connection.
+func NewPGTransaction(tx pgx.Tx) Tx {
+	if tx == nil {
+		return nil
+	}
+	return &pgTx{tx: tx, repository: NewPGRepository(nil)}
+}
+
+// NewTransaction reuses this repository's configured ID factory while
+// wrapping an already-open transaction. It is the composition seam for
+// services that need interaction and Echo domain writes in one transaction.
+func (r *PGRepository) NewTransaction(tx pgx.Tx) Tx {
+	if r == nil || tx == nil {
+		return nil
+	}
+	return &pgTx{tx: tx, repository: r}
+}
+
 func (r *PGRepository) Ping(ctx context.Context) error {
 	if r == nil || r.pool == nil {
 		return errors.New("workspace interactions postgres pool is required")
@@ -75,11 +96,16 @@ func (r *PGRepository) LookupActor(ctx context.Context, spaceID, userID string) 
 	if r == nil || r.pool == nil {
 		return nil, errors.New("workspace interactions postgres pool is required")
 	}
-	return lookupActor(ctx, r.pool, spaceID, userID)
+	return lookupActor(ctx, r.pool, spaceID, userID, false)
 }
-func lookupActor(ctx context.Context, queryer pgQueryer, spaceID, userID string) (*auth.Actor, error) {
+func lookupActor(ctx context.Context, queryer pgQueryer, spaceID, userID string, lock ...bool) (*auth.Actor, error) {
+	lockClause := ""
+	if len(lock) > 0 && lock[0] {
+		// Pin actor authorization through commit while a domain lock waits.
+		lockClause = " FOR SHARE OF sm, u"
+	}
 	var actor auth.Actor
-	err := queryer.QueryRow(ctx, `SELECT u.id, u.github_login, u.kind, sm.role, sm.joined_at FROM users u JOIN space_members sm ON sm.user_id = u.id WHERE u.id = $1 AND sm.space_id = $2 AND sm.removed_at IS NULL`, userID, spaceID).Scan(&actor.ID, &actor.GitHubLogin, &actor.Kind, &actor.Role, &actor.JoinedAt)
+	err := queryer.QueryRow(ctx, `SELECT u.id, u.github_login, u.kind, sm.role, sm.joined_at FROM users u JOIN space_members sm ON sm.user_id = u.id WHERE u.id = $1 AND sm.space_id = $2 AND sm.removed_at IS NULL`+lockClause, userID, spaceID).Scan(&actor.ID, &actor.GitHubLogin, &actor.Kind, &actor.Role, &actor.JoinedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -211,7 +237,7 @@ type pgTx struct {
 }
 
 func (t *pgTx) LookupActor(ctx context.Context, spaceID, userID string) (*auth.Actor, error) {
-	return lookupActor(ctx, t.tx, spaceID, userID)
+	return lookupActor(ctx, t.tx, spaceID, userID, true)
 }
 func (t *pgTx) GetConversation(ctx context.Context, spaceID, conversationID string) (*ConversationRecord, error) {
 	return getConversation(ctx, t.tx, spaceID, conversationID)

@@ -221,13 +221,15 @@ func (s *Service) ExecuteCommand(ctx context.Context, input ExecuteCommandInput)
 			}
 			safeResult, normalizeErr := cards.NormalizeCardPayload(result, cards.Limits{MaxPayloadBytes: 32 * 1024, MaxDepth: 8, MaxNodes: 200, MaxTextBytes: 16 * 1024}, false)
 			if normalizeErr != nil {
-				return s.failCommand(ctx, tx, run.ID, actor, spaceID, definition.Name, input.Request, normalizeErr)
+				// The executor has already mutated its domains. Invalid generated
+				// output is a server failure, not a commit-safe input rejection.
+				return wrapInfrastructureFailure(normalizeErr, "validate command result")
 			}
 			resultCardID := (*string)(nil)
 			if strings.TrimSpace(executed.ResultCardID) != "" {
 				normalized, idErr := normalizeID(executed.ResultCardID, "command.invalid_result_card", "命令结果卡片无效")
 				if idErr != nil {
-					return s.failCommand(ctx, tx, run.ID, actor, spaceID, definition.Name, input.Request, idErr)
+					return wrapInfrastructureFailure(idErr, "validate command result card")
 				}
 				resultCardID = &normalized
 			}
@@ -389,11 +391,11 @@ func (s *Service) StartWorkflow(ctx context.Context, input StartWorkflowInput) (
 			}
 			state, stateErr := s.validateState(definition, initialized.State)
 			if stateErr != nil {
-				return s.auditWorkflowFailure(ctx, tx, actor, spaceID, workflowID, input.Request, stateErr)
+				return wrapInfrastructureFailure(stateErr, "validate initialized workflow state")
 			}
 			status, statusErr := normalizeWorkflowStatus(initialized.Status)
 			if statusErr != nil {
-				return s.auditWorkflowFailure(ctx, tx, actor, spaceID, workflowID, input.Request, statusErr)
+				return wrapInfrastructureFailure(statusErr, "validate initialized workflow status")
 			}
 			record := WorkflowRecord{ID: workflowID, SpaceID: spaceID, ConversationID: stringPointer(conversationID), ActorUserID: actor.ID, BotUserID: stringPointer(botID), WorkflowType: typeName, WorkflowVersion: version, StateJSON: mustJSON(state), Status: status, Revision: 1, ExpiresAt: now.Add(ttl), CreatedAt: now, UpdatedAt: now, ClientInvocationID: stringPointer(invocationID), StartRequestHash: stringPointer(hash)}
 			stored, inserted, err := tx.InsertWorkflow(ctx, record)
@@ -495,6 +497,9 @@ func (s *Service) ContinueWorkflow(ctx context.Context, actorID string, input Co
 		}
 		actor, err := s.requireActor(ctx, tx, row.SpaceID, actorID)
 		if err != nil {
+			if shouldRollback(err) {
+				return wrapInfrastructureFailure(err, "continue workspace workflow")
+			}
 			operationErr = err
 			return nil
 		}
@@ -551,6 +556,9 @@ func (s *Service) ContinueWorkflow(ctx context.Context, actorID string, input Co
 		if definition.Authorize != nil {
 			permitted, authErr := definition.Authorize(ctx, WorkflowAuthorization{Actor: actor, Context: conversation, Operation: "continue", Workflow: public, Input: workflowInput})
 			if authErr != nil {
+				if shouldRollback(authErr) {
+					return wrapInfrastructureFailure(authErr, "authorize workspace workflow continuation")
+				}
 				operationErr = toError(authErr, CodeWorkflowFailed, "引导流程处理失败")
 				return s.auditExpected(ctx, tx, actor, row.SpaceID, "workflow.continue", "workspace.workflow", row.ID, input.Request, operationErr)
 			}
@@ -561,23 +569,23 @@ func (s *Service) ContinueWorkflow(ctx context.Context, actorID string, input Co
 		}
 		continued, continueErr := definition.Continue(ctx, WorkflowExecution{Tx: tx, Actor: actor, Context: conversation, Workflow: public, State: state, Input: workflowInput, BotUserID: stringValue(row.BotUserID), Request: input.Request})
 		if continueErr != nil {
+			if shouldRollback(continueErr) {
+				return wrapInfrastructureFailure(continueErr, "continue workspace workflow")
+			}
 			operationErr = toError(continueErr, CodeWorkflowFailed, "引导流程处理失败")
 			return s.auditExpected(ctx, tx, actor, row.SpaceID, "workflow.continue", "workspace.workflow", row.ID, input.Request, operationErr)
 		}
 		nextState, stateErr := s.validateState(definition, continued.State)
 		if stateErr != nil {
-			operationErr = toError(stateErr, CodeWorkflowFailed, "引导流程处理失败")
-			return s.auditExpected(ctx, tx, actor, row.SpaceID, "workflow.continue", "workspace.workflow", row.ID, input.Request, operationErr)
+			return wrapInfrastructureFailure(stateErr, "validate workspace workflow state")
 		}
 		status, statusErr := normalizeWorkflowStatus(continued.Status)
 		if statusErr != nil {
-			operationErr = toError(statusErr, CodeWorkflowFailed, "引导流程处理失败")
-			return s.auditExpected(ctx, tx, actor, row.SpaceID, "workflow.continue", "workspace.workflow", row.ID, input.Request, operationErr)
+			return wrapInfrastructureFailure(statusErr, "normalize workspace workflow status")
 		}
 		safeResult, resultErr := normalizeInteractionResult(continued.Result)
 		if resultErr != nil {
-			operationErr = toError(resultErr, CodeWorkflowFailed, "引导流程处理失败")
-			return s.auditExpected(ctx, tx, actor, row.SpaceID, "workflow.continue", "workspace.workflow", row.ID, input.Request, operationErr)
+			return wrapInfrastructureFailure(resultErr, "normalize workspace workflow result")
 		}
 		updated, changed, err := tx.UpdateWorkflow(ctx, row.ID, row.Revision, nextState, status, s.nowUTC())
 		if err != nil {
@@ -688,6 +696,9 @@ func (s *Service) CancelWorkflow(ctx context.Context, actorID string, input Canc
 		}
 		actor, err := s.requireActor(ctx, tx, current.SpaceID, actorID)
 		if err != nil {
+			if shouldRollback(err) {
+				return wrapInfrastructureFailure(err, "cancel workspace workflow")
+			}
 			operationErr = err
 			return nil
 		}
@@ -745,6 +756,152 @@ func (s *Service) CancelWorkflow(ctx context.Context, actorID string, input Canc
 		return Workflow{}, operationErr
 	}
 	return result, nil
+}
+
+// CancelWorkflowInTx applies workflow cancellation to a caller-owned
+// transaction. Every authorization and workflow read is performed through
+// tx, so a member removal or bot removal that is uncommitted on the caller's
+// connection cannot be bypassed by a pool read. Expected rejections write a
+// content-free audit in tx and return TransactionRejection; infrastructure
+// errors are returned unchanged and must roll the outer transaction back.
+func (s *Service) CancelWorkflowInTx(ctx context.Context, tx Tx, actorID string, input CancelWorkflowInput) (Workflow, error) {
+	if s == nil || s.repo == nil {
+		return Workflow{}, internalError("cancel workspace workflow", errors.New("repository is required"))
+	}
+	if tx == nil {
+		return Workflow{}, internalError("cancel workspace workflow", errors.New("transaction is required"))
+	}
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" {
+		return Workflow{}, authRequiredError()
+	}
+	spaceValue := strings.TrimSpace(input.SpaceID)
+	if spaceValue == "" {
+		spaceValue = s.spaceID
+	}
+	spaceID, err := normalizeID(spaceValue, CodeSpaceInvalid, "空间 ID 无效")
+	if err != nil {
+		return Workflow{}, err
+	}
+	actor, err := s.requireActor(ctx, tx, spaceID, actorID)
+	if err != nil {
+		return Workflow{}, err
+	}
+
+	var candidate *WorkflowRecord
+	workflowID := strings.TrimSpace(input.WorkflowID)
+	if workflowID != "" {
+		id, idErr := normalizeID(workflowID, CodeWorkflowInvalidID, "引导流程 ID 无效")
+		if idErr != nil {
+			return Workflow{}, idErr
+		}
+		if err := tx.Lock(ctx, "workspace:workflow:"+id); err != nil {
+			return Workflow{}, err
+		}
+		candidate, err = tx.GetWorkflow(ctx, spaceID, id)
+		if err != nil {
+			return Workflow{}, err
+		}
+		if candidate == nil || candidate.ActorUserID != actor.ID {
+			return Workflow{}, s.cancelWorkflowRejection(ctx, tx, actor, spaceID, "workspace.workflow", id, input.Request, workflowNotFoundError())
+		}
+	} else {
+		conversationID, conversationErr := normalizeID(input.ConversationID, CodeConversationInvalid, "会话 ID 无效")
+		if conversationErr != nil {
+			return Workflow{}, conversationErr
+		}
+		botID, botErr := normalizeID(input.BotUserID, "bot.invalid_id", "Bot ID 无效")
+		if botErr != nil {
+			return Workflow{}, botErr
+		}
+		if _, contextErr := s.requireCommandContext(ctx, tx, actor.ID, botID, conversationID, spaceID); contextErr != nil {
+			return Workflow{}, s.cancelWorkflowRejection(ctx, tx, actor, spaceID, "workspace.conversation", conversationID, input.Request, contextErr)
+		}
+		if err := tx.ExpireWorkflows(ctx, actor.ID, conversationID, botID, s.nowUTC()); err != nil {
+			return Workflow{}, err
+		}
+		active, listErr := tx.ListActiveWorkflows(ctx, actor.ID, conversationID, botID, 2)
+		if listErr != nil {
+			return Workflow{}, listErr
+		}
+		switch len(active) {
+		case 0:
+			return Workflow{}, s.cancelWorkflowRejection(ctx, tx, actor, spaceID, "workspace.conversation", conversationID, input.Request, NewError(CodeWorkflowActiveNotFound, "当前 Bot 会话没有进行中的引导流程", 404))
+		case 1:
+			copy := active[0]
+			candidate = &copy
+		default:
+			return Workflow{}, s.cancelWorkflowRejection(ctx, tx, actor, spaceID, "workspace.conversation", conversationID, input.Request, &Error{Code: CodeWorkflowActiveAmbiguous, Message: "当前 Bot 会话存在多个进行中的引导流程", StatusCode: 409})
+		}
+	}
+
+	if candidate == nil {
+		return Workflow{}, s.cancelWorkflowRejection(ctx, tx, actor, spaceID, "workspace.workflow", workflowID, input.Request, workflowNotFoundError())
+	}
+	if err := tx.Lock(ctx, "workspace:workflow:"+candidate.ID); err != nil {
+		return Workflow{}, err
+	}
+	current, err := tx.GetWorkflow(ctx, candidate.SpaceID, candidate.ID)
+	if err != nil {
+		return Workflow{}, err
+	}
+	if current == nil {
+		return Workflow{}, s.cancelWorkflowRejection(ctx, tx, actor, candidate.SpaceID, "workspace.workflow", candidate.ID, input.Request, workflowNotFoundError())
+	}
+	actor, err = s.requireActor(ctx, tx, current.SpaceID, actorID)
+	if err != nil {
+		return Workflow{}, err
+	}
+	if current.ActorUserID != actor.ID {
+		return Workflow{}, s.cancelWorkflowRejection(ctx, tx, actor, current.SpaceID, "workspace.workflow", current.ID, input.Request, workflowNotFoundError())
+	}
+	if current.Status != "active" {
+		return Workflow{}, s.cancelWorkflowRejection(ctx, tx, actor, current.SpaceID, "workspace.workflow", current.ID, input.Request, conflict(CodeWorkflowNotActive, MessageWorkflowNotActive))
+	}
+	if _, contextErr := s.requireCommandContext(ctx, tx, actor.ID, stringValue(current.BotUserID), stringValue(current.ConversationID), current.SpaceID); contextErr != nil {
+		return Workflow{}, s.cancelWorkflowRejection(ctx, tx, actor, current.SpaceID, "workspace.workflow", current.ID, input.Request, contextErr)
+	}
+	now := s.nowUTC()
+	allowed, retry, err := s.consumeRateLimit(ctx, tx, RateLimitInput{SpaceID: current.SpaceID, ActorUserID: actor.ID, BotUserID: stringValue(current.BotUserID), OperationKey: "workflow.cancel:" + current.WorkflowType, Limit: s.limits.WorkflowCancel, UpdatedAt: now})
+	if err != nil {
+		return Workflow{}, err
+	}
+	if !allowed {
+		return Workflow{}, s.cancelWorkflowRejection(ctx, tx, actor, current.SpaceID, "workspace.workflow", current.ID, input.Request, &Error{Code: CodeInteractionRateLimited, Message: MessageRateLimited, StatusCode: 429, Details: map[string]any{"retryAfterSeconds": int(retry.Seconds())}})
+	}
+	state, err := decodeJSON(current.StateJSON)
+	if err != nil {
+		return Workflow{}, err
+	}
+	definition := s.workflows.Get(current.WorkflowType, current.WorkflowVersion)
+	if definition == nil {
+		return Workflow{}, s.cancelWorkflowRejection(ctx, tx, actor, current.SpaceID, "workspace.workflow", current.ID, input.Request, NewError("workflow.unknown_version", MessageWorkflowUnknownVersion, 422))
+	}
+	updated, changed, err := tx.UpdateWorkflow(ctx, current.ID, current.Revision, state, "cancelled", now)
+	if err != nil {
+		return Workflow{}, err
+	}
+	if !changed || updated == nil {
+		return Workflow{}, s.cancelWorkflowRejection(ctx, tx, actor, current.SpaceID, "workspace.workflow", current.ID, input.Request, conflict(CodeWorkflowRaceConflict, "引导流程已被其他请求更新"))
+	}
+	if err := s.writeAudit(ctx, tx, actor, input.Request, AuditInput{SpaceID: current.SpaceID, Action: "workflow.cancel", TargetType: "workspace.workflow", TargetID: current.ID, Result: "success", CreatedAt: now}); err != nil {
+		return Workflow{}, err
+	}
+	if err := s.writeEvent(ctx, tx, EventInput{SpaceID: current.SpaceID, Type: "workflow.cancelled", ActorID: actor.ID, ConversationID: stringValue(current.ConversationID), TargetType: "workspace.workflow", TargetID: current.ID, PayloadJSON: mustJSON(map[string]any{"revision": updated.Revision, "status": updated.Status}), CreatedAt: now}); err != nil {
+		return Workflow{}, err
+	}
+	return s.projectWorkflow(ctx, definition, updated, actor, state)
+}
+
+func (s *Service) cancelWorkflowRejection(ctx context.Context, tx Tx, actor *auth.Actor, spaceID, targetType, targetID string, request Request, err error) error {
+	if shouldRollback(err) {
+		return wrapInfrastructureFailure(err, "cancel workspace workflow")
+	}
+	domain := toError(err, CodeWorkflowFailed, "引导流程取消失败")
+	if auditErr := s.auditExpected(ctx, tx, actor, spaceID, "workflow.cancel", targetType, targetID, request, domain); auditErr != nil {
+		return auditErr
+	}
+	return &TransactionRejection{Err: domain, TargetID: targetID, Reason: domain.Code}
 }
 
 func (s *Service) requireActor(ctx context.Context, repository ReadRepository, spaceID, actorID string) (*auth.Actor, error) {
@@ -851,10 +1008,16 @@ func (s *Service) auditExpected(ctx context.Context, tx Tx, actor *auth.Actor, s
 	if actor == nil {
 		return nil
 	}
+	if shouldRollback(err) {
+		return wrapInfrastructureFailure(err, action)
+	}
 	operationErr := toError(err, CodeWorkflowFailed, "操作失败")
 	return s.writeAudit(ctx, tx, actor, request, AuditInput{SpaceID: spaceID, Action: action, TargetType: targetType, TargetID: targetID, Result: "rejected", Reason: operationErr.Code, CreatedAt: s.nowUTC()})
 }
 func (s *Service) failCommand(ctx context.Context, tx Tx, runID string, actor *auth.Actor, spaceID, name string, request Request, err error) error {
+	if shouldRollback(err) {
+		return wrapInfrastructureFailure(err, "execute workspace command")
+	}
 	domain := toError(err, CodeCommandFailed, "命令执行失败")
 	if failErr := tx.FailCommandRun(ctx, runID, domain.Code, s.nowUTC()); failErr != nil {
 		return failErr
@@ -865,6 +1028,9 @@ func (s *Service) failCommand(ctx context.Context, tx Tx, runID string, actor *a
 	return interactionRejection{err: domain}
 }
 func (s *Service) auditWorkflowFailure(ctx context.Context, tx Tx, actor *auth.Actor, spaceID, targetID string, request Request, err error) error {
+	if shouldRollback(err) {
+		return wrapInfrastructureFailure(err, "start workspace workflow")
+	}
 	domain := toError(err, CodeWorkflowFailed, "引导流程创建失败")
 	if auditErr := s.writeAudit(ctx, tx, actor, request, AuditInput{SpaceID: spaceID, Action: "workflow.start", TargetType: "workspace.workflow", TargetID: targetID, Result: "rejected", Reason: domain.Code, CreatedAt: s.nowUTC()}); auditErr != nil {
 		return auditErr

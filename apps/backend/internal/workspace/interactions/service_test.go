@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
 )
 
 type interactionFakeState struct {
@@ -514,6 +515,183 @@ func interactionErrorCode(err error) string {
 	return ""
 }
 
+type testInfrastructureFailure struct{ cause error }
+
+func (e *testInfrastructureFailure) Error() string {
+	if e == nil || e.cause == nil {
+		return "test infrastructure failure"
+	}
+	return e.cause.Error()
+}
+
+func (*testInfrastructureFailure) InteractionInfrastructureFailure() {}
+
+func TestFailureDispositionPreservesOnlyTrustedExpectedRejections(t *testing.T) {
+	expected := NewError("test.rejected", "rejected", 422)
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "fourxx", err: expected, want: false},
+		{name: "fourxx-join", err: errors.Join(expected, NewError("test.also_rejected", "rejected", 409)), want: false},
+		{name: "fivexx", err: NewError("test.internal", "failed", 500), want: true},
+		{name: "unknown", err: errors.New("database connection failed"), want: true},
+		{name: "context-canceled", err: context.Canceled, want: true},
+		{name: "card-validation", err: &cards.CardValidationError{Code: "card.invalid", Message: "invalid"}, want: false},
+		{name: "joined-fourxx-unknown", err: errors.Join(expected, errors.New("savepoint release failed")), want: true},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if got := shouldRollback(test.err); got != test.want {
+				t.Fatalf("shouldRollback(%v) = %v, want %v", test.err, got, test.want)
+			}
+		})
+	}
+}
+
+func TestInfrastructureFailureWinsOverJoinedFourXXAndStaysOpaque(t *testing.T) {
+	fourXX := NewError("test.rejected", "rejected", 422)
+	joined := errors.Join(fourXX, &testInfrastructureFailure{cause: errors.New("savepoint release failed")})
+	if !shouldRollback(joined) {
+		t.Fatal("joined 4xx/infrastructure error was classified as a rejection")
+	}
+	wrapped := wrapInfrastructureFailure(joined, "test interaction")
+	var leaked *Error
+	if errors.As(wrapped, &leaked) {
+		t.Fatalf("opaque infrastructure wrapper exposed nested error: %#v", leaked)
+	}
+	public := normalizeError(wrapped)
+	if interactionErrorCode(public) != CodeInternal {
+		t.Fatalf("normalized infrastructure code = %q, want %q", interactionErrorCode(public), CodeInternal)
+	}
+}
+
+func TestExecuteCommandInfrastructureRollbackAndFourXXRejection(t *testing.T) {
+	fixture := newInteractionFixture(t)
+	registry, err := NewCommandRegistry(
+		CommandDefinition{
+			Name:     "infra-fault",
+			Contexts: []CommandContext{CommandContextDirect, CommandContextMention},
+			Execute: func(ctx context.Context, input CommandExecution) (CommandResult, error) {
+				if _, err := input.Tx.WriteEvent(ctx, EventInput{SpaceID: input.Context.SpaceID, Type: "test.domain.written", ActorID: input.Actor.ID, ConversationID: input.Context.ID, TargetType: "test", TargetID: "infra"}); err != nil {
+					return CommandResult{}, err
+				}
+				return CommandResult{}, errors.Join(NewError("test.rejected", "rejected", 422), &testInfrastructureFailure{cause: errors.New("late command failure")})
+			},
+		},
+		CommandDefinition{
+			Name:     "expected-reject",
+			Contexts: []CommandContext{CommandContextDirect, CommandContextMention},
+			Execute: func(context.Context, CommandExecution) (CommandResult, error) {
+				return CommandResult{}, NewError("test.rejected", "rejected", 422)
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.service.commands = registry
+	_, err = fixture.service.ExecuteCommand(context.Background(), ExecuteCommandInput{
+		ActorID: "usr_owner", SpaceID: "spc_test", ConversationID: "conv_test", BotUserID: "usr_bot",
+		Source: "/infra-fault", MentionedBotIDs: []string{"usr_bot"}, ClientInvocationID: "infra-command",
+	})
+	if interactionErrorCode(err) != CodeInternal {
+		t.Fatalf("infrastructure command error = %v", err)
+	}
+	fixture.repo.mu.Lock()
+	if len(fixture.repo.state.commands) != 0 || len(fixture.repo.state.events) != 0 || len(fixture.repo.state.audits) != 0 {
+		t.Fatalf("infrastructure command left transaction state: commands=%d events=%d audits=%d", len(fixture.repo.state.commands), len(fixture.repo.state.events), len(fixture.repo.state.audits))
+	}
+	fixture.repo.mu.Unlock()
+
+	_, err = fixture.service.ExecuteCommand(context.Background(), ExecuteCommandInput{
+		ActorID: "usr_owner", SpaceID: "spc_test", ConversationID: "conv_test", BotUserID: "usr_bot",
+		Source: "/expected-reject", MentionedBotIDs: []string{"usr_bot"}, ClientInvocationID: "expected-command",
+	})
+	if interactionErrorCode(err) != "test.rejected" {
+		t.Fatalf("expected command rejection = %v", err)
+	}
+	fixture.repo.mu.Lock()
+	defer fixture.repo.mu.Unlock()
+	if len(fixture.repo.state.commands) != 1 || len(fixture.repo.state.events) != 0 || len(fixture.repo.state.audits) != 1 {
+		t.Fatalf("expected command rejection state: commands=%d events=%d audits=%d", len(fixture.repo.state.commands), len(fixture.repo.state.events), len(fixture.repo.state.audits))
+	}
+	for _, run := range fixture.repo.state.commands {
+		if run.Status != "failed" || run.ErrorCode != "test.rejected" {
+			t.Fatalf("expected failed command run = %#v", run)
+		}
+	}
+}
+
+func TestContinueWorkflowInfrastructureRollbackAndFourXXRejection(t *testing.T) {
+	newWorkflowRegistry := func(continueFn func(context.Context, WorkflowExecution) (WorkflowResult, error)) *WorkflowRegistry {
+		registry, err := NewWorkflowRegistry(WorkflowDefinition{
+			Type:    "failure-test",
+			Version: 1,
+			Initialize: func(context.Context, WorkflowExecution) (WorkflowResult, error) {
+				return WorkflowResult{State: map[string]any{"step": 0}}, nil
+			},
+			Continue:      continueFn,
+			ValidateState: func(value any) (any, error) { return value, nil },
+			Project:       func(_ context.Context, input WorkflowProjectionContext) (any, error) { return input.State, nil },
+		})
+		if err != nil {
+			panic(err)
+		}
+		return registry
+	}
+
+	fixture := newInteractionFixture(t)
+	fixture.service.workflows = newWorkflowRegistry(func(ctx context.Context, input WorkflowExecution) (WorkflowResult, error) {
+		if _, err := input.Tx.WriteEvent(ctx, EventInput{SpaceID: input.Context.SpaceID, Type: "test.domain.written", ActorID: input.Actor.ID, ConversationID: input.Context.ID, TargetType: "test", TargetID: "infra"}); err != nil {
+			return WorkflowResult{}, err
+		}
+		return WorkflowResult{}, errors.Join(NewError("test.rejected", "rejected", 422), &testInfrastructureFailure{cause: errors.New("late workflow failure")})
+	})
+	started, err := fixture.service.StartWorkflow(context.Background(), StartWorkflowInput{
+		ActorID: "usr_owner", SpaceID: "spc_test", ConversationID: "conv_test", BotUserID: "usr_bot", Type: "failure-test", Version: 1, ClientInvocationID: "infra-workflow",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.repo.mu.Lock()
+	baselineAudits := len(fixture.repo.state.audits)
+	baselineEvents := len(fixture.repo.state.events)
+	fixture.repo.mu.Unlock()
+	_, err = fixture.service.ContinueWorkflow(context.Background(), "usr_owner", ContinueWorkflowInput{WorkflowID: started.ID, ExpectedRevision: 1})
+	if interactionErrorCode(err) != CodeInternal {
+		t.Fatalf("infrastructure workflow error = %v", err)
+	}
+	fixture.repo.mu.Lock()
+	workflow := fixture.repo.state.workflows[started.ID]
+	if workflow.Status != "active" || workflow.Revision != 1 || len(fixture.repo.state.events) != baselineEvents || len(fixture.repo.state.audits) != baselineAudits {
+		t.Fatalf("infrastructure workflow left state: workflow=%#v events=%d audits=%d", workflow, len(fixture.repo.state.events), len(fixture.repo.state.audits))
+	}
+	fixture.repo.mu.Unlock()
+
+	fixture = newInteractionFixture(t)
+	fixture.service.workflows = newWorkflowRegistry(func(context.Context, WorkflowExecution) (WorkflowResult, error) {
+		return WorkflowResult{}, NewError("test.rejected", "rejected", 422)
+	})
+	started, err = fixture.service.StartWorkflow(context.Background(), StartWorkflowInput{
+		ActorID: "usr_owner", SpaceID: "spc_test", ConversationID: "conv_test", BotUserID: "usr_bot", Type: "failure-test", Version: 1, ClientInvocationID: "expected-workflow",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fixture.service.ContinueWorkflow(context.Background(), "usr_owner", ContinueWorkflowInput{WorkflowID: started.ID, ExpectedRevision: 1})
+	if interactionErrorCode(err) != "test.rejected" {
+		t.Fatalf("expected workflow rejection = %v", err)
+	}
+	fixture.repo.mu.Lock()
+	defer fixture.repo.mu.Unlock()
+	workflow = fixture.repo.state.workflows[started.ID]
+	if workflow.Status != "active" || workflow.Revision != 1 || len(fixture.repo.state.events) != 1 || len(fixture.repo.state.audits) != 2 {
+		t.Fatalf("expected workflow rejection state: workflow=%#v events=%d audits=%d", workflow, len(fixture.repo.state.events), len(fixture.repo.state.audits))
+	}
+}
+
 func TestCommandRegistryRecognitionAndTriggerScope(t *testing.T) {
 	fixture := newInteractionFixture(t)
 	if recognized, err := fixture.service.commands.Recognize("/echo hello", RecognitionContext{ConversationType: "group", BotUserID: "usr_bot"}); err != nil || recognized != nil {
@@ -694,7 +872,10 @@ func TestWorkflowExpiryInvalidStatusAndCancel(t *testing.T) {
 	fixture = newInteractionFixture(t)
 	badStatus := fixture.service.workflows.Get("setup", 1)
 	badDefinition := *badStatus
-	badDefinition.Initialize = func(context.Context, WorkflowExecution) (WorkflowResult, error) {
+	badDefinition.Initialize = func(ctx context.Context, execution WorkflowExecution) (WorkflowResult, error) {
+		if _, err := execution.Tx.WriteEvent(ctx, EventInput{SpaceID: "spc_test", Type: "test.initialize.domain_written", ActorID: "usr_owner"}); err != nil {
+			return WorkflowResult{}, err
+		}
 		return WorkflowResult{State: map[string]any{"step": 0}, Status: "unknown"}, nil
 	}
 	registry, err := NewWorkflowRegistry(badDefinition)
@@ -702,8 +883,11 @@ func TestWorkflowExpiryInvalidStatusAndCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture.service.workflows = registry
-	if _, err := fixture.service.StartWorkflow(context.Background(), StartWorkflowInput{ActorID: "usr_owner", SpaceID: "spc_test", ConversationID: "conv_test", BotUserID: "usr_bot", Type: "setup", Version: 1, ClientInvocationID: "workflow-bad-status"}); interactionErrorCode(err) != "workflow.invalid_status" {
+	if _, err := fixture.service.StartWorkflow(context.Background(), StartWorkflowInput{ActorID: "usr_owner", SpaceID: "spc_test", ConversationID: "conv_test", BotUserID: "usr_bot", Type: "setup", Version: 1, ClientInvocationID: "workflow-bad-status"}); interactionErrorCode(err) != CodeInternal {
 		t.Fatalf("invalid status error = %v", err)
+	}
+	if len(fixture.repo.state.events) != 0 || len(fixture.repo.state.audits) != 0 || len(fixture.repo.state.workflows) != 0 {
+		t.Fatal("invalid generated workflow status committed partial state")
 	}
 
 	fixture = newInteractionFixture(t)
@@ -717,6 +901,40 @@ func TestWorkflowExpiryInvalidStatusAndCancel(t *testing.T) {
 	}
 	if _, err := fixture.service.CancelWorkflow(context.Background(), "usr_owner", CancelWorkflowInput{WorkflowID: started.ID}); interactionErrorCode(err) != CodeWorkflowNotActive {
 		t.Fatalf("cancel retry error = %v", err)
+	}
+}
+
+func TestCancelWorkflowInTxUsesCallerTransactionForCurrentAuthorization(t *testing.T) {
+	fixture := newInteractionFixture(t)
+	started, err := fixture.service.StartWorkflow(context.Background(), StartWorkflowInput{
+		ActorID: "usr_owner", SpaceID: "spc_test", ConversationID: "conv_test", BotUserID: "usr_bot",
+		Type: "setup", Version: 1, ClientInvocationID: "workflow-cancel-in-tx",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = fixture.repo.WithTx(context.Background(), func(tx Tx) error {
+		fakeTx, ok := tx.(*interactionFakeTx)
+		if !ok {
+			return errors.New("unexpected interaction transaction type")
+		}
+		fakeTx.state.conversationMembers[interactionMembershipKey("conv_test", "usr_owner")] = false
+		_, cancelErr := fixture.service.CancelWorkflowInTx(context.Background(), tx, "usr_owner", CancelWorkflowInput{
+			WorkflowID: started.ID, SpaceID: "spc_test", ConversationID: "conv_test", BotUserID: "usr_bot",
+		})
+		return cancelErr
+	})
+	var rejection *TransactionRejection
+	if !errors.As(err, &rejection) || rejection == nil {
+		t.Fatalf("cancel rejection = %v (%T)", err, err)
+	}
+	if interactionErrorCode(err) != CodeConversationNotFound {
+		t.Fatalf("cancel rejection code = %q", interactionErrorCode(err))
+	}
+	fixture.repo.mu.Lock()
+	defer fixture.repo.mu.Unlock()
+	if fixture.repo.state.workflows[started.ID].Status != "active" || fixture.repo.state.workflows[started.ID].Revision != 1 {
+		t.Fatalf("rejected cancellation changed workflow = %#v", fixture.repo.state.workflows[started.ID])
 	}
 }
 

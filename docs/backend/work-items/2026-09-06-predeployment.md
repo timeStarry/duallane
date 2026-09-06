@@ -1084,3 +1084,23 @@ followed by integration-tag staticcheck. Unit tests check input mapping and
 failure propagation; the PG release test rejects another publication identity.
 Application registration, worker recovery and real delivery through those
 entry points remain the next integration gate.
+
+### Interaction Infrastructure Rollback
+
+The generic interaction executor now distinguishes expected input/business
+rejections from infrastructure failures before retaining a failed-run/audit.
+Unknown failures, 5xx, cancellation, savepoint failures and joined error graphs
+roll back the outer transaction. Caller-owned workflow cancellation and a
+configured PG transaction factory support Echo's shared transaction without
+extra pool reads; transaction authorization pins the active actor membership.
+
+Parent review additionally rejected unknown errors with empty `Unwrap`, bounded
+cyclic graphs, and invalid server-generated command/workflow results. Generated
+output failures now return internal 500 and roll back, rather than incorrectly
+committing partial domain state as a client 4xx. Actual invalid client/domain
+input still retains its normal rejection contract and content-free audit.
+
+Fresh independent PostgreSQL/race passed interactions (19.512 seconds) and the
+uncommitted automation consumer (7.917); integration-tag staticcheck passed.
+PG cases cover late event/output failure, empty-unwrap failure, savepoint
+rollback/release failure, and legitimate 4xx with no partial domain writes.
