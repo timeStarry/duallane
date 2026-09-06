@@ -310,7 +310,48 @@ func (r *PGRepository) publicConversationPayload(ctx context.Context, spaceID st
 			break
 		}
 	}
+	latestMessages, err := r.publicConversationLatestMessages(ctx, spaceID, actor, id)
+	if err != nil {
+		return nil, err
+	}
+	result["latestMessages"] = latestMessages
 	return result, nil
+}
+
+// publicConversationLatestMessages delegates the bounded latest-message read
+// to the same conversation service projection used by HTTP. In particular,
+// this keeps the viewer-specific attachment capabilities, reactions, hidden
+// state, pins, and authorized emote-share covers identical to a conversation
+// read instead of manufacturing a second event-only DTO. An empty slice is
+// returned only when the current conversation has no visible messages.
+func (r *PGRepository) publicConversationLatestMessages(ctx context.Context, spaceID string, actor *auth.Actor, conversationID string) ([]any, error) {
+	if actor == nil {
+		return []any{}, nil
+	}
+	conversationReader := workspaceConversations.NewPGRepository(r.pool)
+	messageReader := workspaceMessages.NewPGRepository(r.pool)
+	messageReader.SetBuiltinEmoteSource(r.builtinEmoteSource)
+	conversationService := workspaceConversations.NewService(workspaceConversations.ServiceOptions{
+		Repository:         conversationReader,
+		SpaceID:            spaceID,
+		MessageShareReader: messageReader,
+	})
+	conversation, err := conversationService.GetConversation(ctx, workspaceConversations.ConversationInput{
+		ActorID:        actor.ID,
+		ConversationID: conversationID,
+	})
+	if err != nil {
+		return nil, internalError("project workspace conversation latest messages", err)
+	}
+	encoded, err := json.Marshal(conversation.LatestMessages)
+	if err != nil {
+		return nil, internalError("encode workspace conversation latest messages", err)
+	}
+	latestMessages := make([]any, 0, len(conversation.LatestMessages))
+	if err := json.Unmarshal(encoded, &latestMessages); err != nil {
+		return nil, internalError("decode workspace conversation latest messages", err)
+	}
+	return latestMessages, nil
 }
 
 func (r *PGRepository) publicMessagePayload(ctx context.Context, spaceID string, actor *auth.Actor, messageID string) (map[string]any, error) {
