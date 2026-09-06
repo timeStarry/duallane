@@ -77,6 +77,16 @@ startup. Boolean behavior does not use permissive parsing when the current
 contract requires an exact value; in particular, Workspace is disabled unless
 `WORKSPACE_ENABLED=true` exactly.
 
+`DUALLANE_DATA_DIR` is the application data directory, with the same meaning as
+Node. Workspace and worker local/hybrid adapters resolve their physical object
+root to `<DUALLANE_DATA_DIR>/workspace-files`. For the container default this is
+`/app/data/workspace-files`; canonical objects, legacy attachments, profile
+avatars and custom emotes all retain their existing relative keys below it.
+Do not flatten or move an existing volume to accommodate a different Go path.
+The storage operator's explicit `--object-root` takes this physical subdirectory,
+not the parent data directory. Permission transitions are a separate gate in
+[Storage operator](STORAGE_OPERATOR.md).
+
 Pass each service only what it owns:
 
 | Service | Allowed configuration classes |

@@ -1468,3 +1468,23 @@ use the private handler; public health is unchanged. Parent independently
 passed the command PostgreSQL/race suite (8.180 seconds), tagged staticcheck,
 and identifier-exclusion/private-method unit coverage. The separately identified
 data-root compatibility correction remains required before a final image.
+
+### Shared Local Root — Reproduced And Corrected
+
+Node's actual fixture demonstrated that `DUALLANE_DATA_DIR` names the parent
+application directory, while the object root is its `workspace-files` child.
+Both Go runtime factories now use one pure configuration resolver for that
+layout, including passive and local/hybrid construction. No files are moved,
+no production volume is changed, and the generic BlobStore's explicit-root API
+is unchanged. Operator `--object-root` remains the physical subdirectory.
+
+Parent reproduced all three new factory regressions against the old factory:
+canonical bytes were absent at Node's path, actual Node legacy content returned
+`file.storage_missing`, and the passive worker could not read Node's layout.
+After the fix they passed with race (Workspace 1.138 seconds, worker 1.037).
+Full command/config PostgreSQL/race passed (3.653/4.287/1.015), as did tagged
+staticcheck. The four-stage parity runner now creates a Node fixture, reads it
+through Go's authorized files service and actual passive Workspace factory,
+then rechecks Node's bytes/grant/audit. It passed and removed its own synthetic
+directory. CI runs that explicit parity step rather than silently skipping the
+environment-gated tests. Image permission/layout rehearsal remains separate.

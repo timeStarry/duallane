@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,9 +25,13 @@ func assertPassiveWorkerComposition(t *testing.T, ctx context.Context, dsn, migr
 	query.Set("default_transaction_read_only", "on")
 	parsed.RawQuery = query.Encode()
 	t.Setenv("DATABASE_URL", parsed.String())
+	dataDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dataDir, "workspace-files"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	app, err := newApplication(ctx, config.WorkspaceConfig{
 		Enabled: true, WorkerValidateOnly: true, NtfyWorkerEnabled: true, EmailWorkerEnabled: true, MaintenanceEnabled: true, EchoWorkerEnabled: true,
-		MigrationsDir: migrationDir, StorageDriver: "local", DataDir: t.TempDir(), NtfyBaseURL: "https://candidate.invalid",
+		MigrationsDir: migrationDir, StorageDriver: "local", DataDir: dataDir, NtfyBaseURL: "https://candidate.invalid",
 		ReleaseCatalogPath: filepath.Join(migrationDir, "../../shared/echo-release-guides.json"),
 	}, nil)
 	if err != nil {

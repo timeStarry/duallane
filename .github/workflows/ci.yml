@@ -101,6 +101,9 @@ jobs:
       - name: Compare actual Node and Go media owners
         run: node --test scripts/backend/media-compatibility.test.mjs
 
+      - name: Verify shared Node and Go local storage layout
+        run: node scripts/backend/workspace-files-legacy-parity.mjs
+
   quality-gate:
     name: Test, lint, build, and Chromium E2E
     runs-on: ubuntu-latest
