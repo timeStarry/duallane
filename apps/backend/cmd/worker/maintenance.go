@@ -213,11 +213,20 @@ func cloneWorkerAttemptCursors(source map[string]string) map[string]string {
 }
 
 func newMaintenanceBlobStore(ctx context.Context, runtimeConfig config.WorkspaceConfig) (platformstorage.BlobStore, error) {
+	return newMaintenanceBlobStoreWithObservation(ctx, runtimeConfig, platformstorage.ObservationOptions{})
+}
+
+func newMaintenanceBlobStoreWithObservation(ctx context.Context, runtimeConfig config.WorkspaceConfig, observation platformstorage.ObservationOptions) (platformstorage.BlobStore, error) {
+	directObservation := observation
+	if runtimeConfig.StorageDriver == "s3" && (runtimeConfig.LocalReadFallback || runtimeConfig.LocalMirrorWrite) {
+		directObservation = platformstorage.ObservationOptions{}
+	}
 	newLocal := func() (*platformstorage.LocalBlobStore, error) {
+		options := platformstorage.LocalBlobStoreOptions{Root: runtimeConfig.LocalStorageRoot(), ObservationOptions: directObservation}
 		if runtimeConfig.WorkerValidateOnly {
-			return platformstorage.OpenExistingLocalBlobStore(ctx, runtimeConfig.LocalStorageRoot())
+			return platformstorage.OpenExistingLocalBlobStoreWithOptions(ctx, options)
 		}
-		return platformstorage.NewLocalBlobStore(runtimeConfig.LocalStorageRoot())
+		return platformstorage.NewLocalBlobStoreWithOptions(options)
 	}
 	if runtimeConfig.StorageDriver != "s3" {
 		return newLocal()
@@ -226,10 +235,10 @@ func newMaintenanceBlobStore(ctx context.Context, runtimeConfig config.Workspace
 	if err != nil {
 		return nil, err
 	}
-	primary, err := platformstorage.NewS3BlobStore(platformstorage.S3Config{
+	primary, err := platformstorage.NewS3BlobStoreWithOptions(platformstorage.S3BlobStoreOptions{Config: platformstorage.S3Config{
 		Endpoint: runtimeConfig.S3Endpoint, Region: runtimeConfig.S3Region, Bucket: runtimeConfig.S3Bucket,
 		AccessKey: credentials.AccessKey, SecretKey: credentials.SecretKey,
-	})
+	}, ObservationOptions: directObservation})
 	if err != nil {
 		return nil, err
 	}
@@ -247,6 +256,6 @@ func newMaintenanceBlobStore(ctx context.Context, runtimeConfig config.Workspace
 	}
 	return platformstorage.NewHybridBlobStore(platformstorage.HybridBlobStoreOptions{
 		Primary: primary, Local: local, LocalReadFallback: runtimeConfig.LocalReadFallback,
-		LocalMirrorWrite: runtimeConfig.LocalMirrorWrite,
+		LocalMirrorWrite: runtimeConfig.LocalMirrorWrite, ObservationOptions: observation,
 	})
 }

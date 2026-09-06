@@ -18,6 +18,7 @@ import (
 	platformmetrics "github.com/timestarry/duallane/apps/backend/internal/platform/metrics"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/migrations"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
+	platformstorage "github.com/timestarry/duallane/apps/backend/internal/platform/storage"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/files"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/ntfy"
@@ -161,7 +162,9 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 				return processResult{}, err
 			},
 		})
-		store, err := newMaintenanceBlobStore(ctx, runtimeConfig)
+		store, err := newMaintenanceBlobStoreWithObservation(ctx, runtimeConfig, platformstorage.ObservationOptions{
+			Observer: recorder, Service: platformmetrics.ServiceWorker,
+		})
 		if err != nil {
 			pool.Close()
 			return nil, err

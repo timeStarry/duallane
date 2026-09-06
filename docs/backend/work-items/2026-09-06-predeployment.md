@@ -1528,3 +1528,24 @@ daemon restart or production operation was executed. The separate image-ID
 equality gate, durable Go-to-Go upgrade protocol and upload drain/fence checks
 remain follow-up work; this slice intentionally refuses an already active Go
 owner. A resolved image reference alone is not immutable-image proof.
+
+### Bounded Storage Observations And Runtime Composition
+
+Local/S3/hybrid adapters now expose fixed operation/outcome observations without
+losing optional legacy/maintenance interfaces. Handle acquisition and stream
+completion are separate; cancellation, early close and corrupt streams cannot
+produce successful verify observations. Review corrected a blocked-read/close
+deadlock and a close-race branch that could bypass the S3 returned-byte bound.
+Concurrent close now reaches the underlying reader, and even payload returned
+after close is clipped to the expected remaining bytes.
+
+Parent independently passed storage PostgreSQL/race (3.531 seconds), files
+PostgreSQL/race (20.063), tagged staticcheck, and the close-race ReadAll/Copy test
+100 times with race (1.062). No keys, URLs or raw provider errors enter labels.
+Command composition is separately reviewed: Workspace/worker configure only
+the outermost store, retain the Node-compatible root and passive no-provisioning
+path, and use their process-local private registry. Twelve provider/mode cases
+cover local/S3/hybrid with active/passive construction and exact single counters.
+Full command PostgreSQL/race passed (6.384/7.685). The actual Node-to-Go-to-Node
+legacy attachment/factory parity runner also passed after this integration and
+cleaned its own synthetic fixture. No production objects were read or modified.

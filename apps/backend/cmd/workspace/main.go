@@ -15,6 +15,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/platform/httpserver"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/logging"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/media"
+	platformmetrics "github.com/timestarry/duallane/apps/backend/internal/platform/metrics"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/migrations"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
 	platformstorage "github.com/timestarry/duallane/apps/backend/internal/platform/storage"
@@ -272,7 +273,9 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			Repository:         conversations.NewPGRepository(pool),
 			MessageShareReader: messageShareReader,
 		})
-		blobStore, err = newBlobStore(ctx, runtimeConfig)
+		blobStore, err = newBlobStoreWithObservation(ctx, runtimeConfig, platformstorage.ObservationOptions{
+			Observer: metricSet, Service: platformmetrics.ServiceWorkspace,
+		})
 		if err != nil {
 			pool.Close()
 			return nil, err
@@ -494,11 +497,21 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 }
 
 func newBlobStore(ctx context.Context, runtimeConfig config.WorkspaceConfig) (platformstorage.BlobStore, error) {
+	return newBlobStoreWithObservation(ctx, runtimeConfig, platformstorage.ObservationOptions{})
+}
+
+func newBlobStoreWithObservation(ctx context.Context, runtimeConfig config.WorkspaceConfig, observation platformstorage.ObservationOptions) (platformstorage.BlobStore, error) {
+	// Hybrid owns logical observations; its delegated stores stay unobserved.
+	directObservation := observation
+	if runtimeConfig.StorageDriver == "s3" && (runtimeConfig.LocalReadFallback || runtimeConfig.LocalMirrorWrite) {
+		directObservation = platformstorage.ObservationOptions{}
+	}
 	newLocal := func() (*platformstorage.LocalBlobStore, error) {
+		options := platformstorage.LocalBlobStoreOptions{Root: runtimeConfig.LocalStorageRoot(), ObservationOptions: directObservation}
 		if runtimeConfig.CandidateHealthOnly {
-			return platformstorage.OpenExistingLocalBlobStore(ctx, runtimeConfig.LocalStorageRoot())
+			return platformstorage.OpenExistingLocalBlobStoreWithOptions(ctx, options)
 		}
-		return platformstorage.NewLocalBlobStore(runtimeConfig.LocalStorageRoot())
+		return platformstorage.NewLocalBlobStoreWithOptions(options)
 	}
 	if runtimeConfig.StorageDriver != "s3" {
 		return newLocal()
@@ -507,10 +520,10 @@ func newBlobStore(ctx context.Context, runtimeConfig config.WorkspaceConfig) (pl
 	if err != nil {
 		return nil, err
 	}
-	primary, err := platformstorage.NewS3BlobStore(platformstorage.S3Config{
+	primary, err := platformstorage.NewS3BlobStoreWithOptions(platformstorage.S3BlobStoreOptions{Config: platformstorage.S3Config{
 		Endpoint: runtimeConfig.S3Endpoint, Region: runtimeConfig.S3Region, Bucket: runtimeConfig.S3Bucket,
 		AccessKey: credentials.AccessKey, SecretKey: credentials.SecretKey,
-	})
+	}, ObservationOptions: directObservation})
 	if err != nil {
 		return nil, err
 	}
@@ -526,6 +539,6 @@ func newBlobStore(ctx context.Context, runtimeConfig config.WorkspaceConfig) (pl
 	}
 	return platformstorage.NewHybridBlobStore(platformstorage.HybridBlobStoreOptions{
 		Primary: primary, Local: local, LocalReadFallback: runtimeConfig.LocalReadFallback,
-		LocalMirrorWrite: runtimeConfig.LocalMirrorWrite,
+		LocalMirrorWrite: runtimeConfig.LocalMirrorWrite, ObservationOptions: observation,
 	})
 }
