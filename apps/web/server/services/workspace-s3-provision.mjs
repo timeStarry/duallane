@@ -132,9 +132,16 @@ async function assertBucketHasNoPublicPolicy(client, bucket) {
     throw storagePolicyError("Workspace S3 bucket policy is invalid");
   }
   const statements = Array.isArray(policy.Statement) ? policy.Statement : [policy.Statement].filter(Boolean);
-  if (statements.some((statement) => statement?.Effect === "Allow" && isPublicPrincipal(statement.Principal))) {
+  if (statements.some((statement) => statement?.Effect === "Allow" && (
+    isPublicPrincipal(statement.Principal) || hasUnprovenAnonymousNotPrincipal(statement)
+  ))) {
     throw storagePolicyError("Workspace S3 bucket must not allow anonymous access");
   }
+}
+
+function hasUnprovenAnonymousNotPrincipal(statement) {
+  return statement && typeof statement === "object" &&
+    Object.prototype.hasOwnProperty.call(statement, "NotPrincipal");
 }
 
 function isPublicPrincipal(principal) {

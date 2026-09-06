@@ -150,6 +150,30 @@ describe("workspace S3 provisioning", () => {
     await expect(provisionWorkspaceS3Bucket({ env, client })).rejects.toMatchObject({ code: "storage.public_policy" });
   });
 
+  it("refuses Allow.NotPrincipal before any bucket write", async () => {
+    const env = await makeEnv();
+    const observed = [];
+    const client = {
+      async send(command) {
+        observed.push(command.constructor.name);
+        if (command.constructor.name === "GetBucketPolicyCommand") {
+          return { Policy: JSON.stringify({
+            Statement: [{
+              Effect: "Allow",
+              NotPrincipal: { AWS: "arn:aws:iam::123456789012:role/WorkspaceOnly" },
+              Action: "s3:GetObject"
+            }]
+          }) };
+        }
+        return {};
+      }
+    };
+
+    await expect(provisionWorkspaceS3Bucket({ env, client })).rejects.toMatchObject({ code: "storage.public_policy" });
+    expect(observed).toEqual(["HeadBucketCommand", "GetBucketPolicyCommand"]);
+    expect(observed.some((name) => name.startsWith("Put") || name.startsWith("Create") || name.startsWith("Abort"))).toBe(false);
+  });
+
   async function makeEnv() {
     const directory = await mkdtemp(path.join(tmpdir(), "duallane-s3-provision-"));
     directories.push(directory);

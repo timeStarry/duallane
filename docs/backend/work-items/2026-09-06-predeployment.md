@@ -1601,3 +1601,15 @@ tests and the earlier aggregate Go PostgreSQL/race gate also passed. CI now runs
 the runner's ownership/cleanup tests. No existing or production volume was
 modified. This image has diagnostic labels and predates the next favorite and
 provision slices, so it is not a final release artifact.
+
+### Node Rollback Provisioning Policy Guard
+
+Independent review of the Go provisioning candidate found an inherited Node
+policy gap: inspecting only `Allow.Principal` ignored `Allow.NotPrincipal`,
+which cannot prove anonymous access is excluded. The retained Node provisioner
+now conservatively rejects that shape with its existing safe public-policy
+error before any bucket write. `Deny` semantics and private principal handling
+are unchanged. Parent independently passed all five focused Node provisioning
+tests (31 ms); the added regression proves only HeadBucket/GetBucketPolicy run
+before refusal. No external bucket or policy was read or modified. Equivalent
+Go policy/invalid-JSON/report fixes remain under review in the separate slice.
