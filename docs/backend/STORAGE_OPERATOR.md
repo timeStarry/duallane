@@ -14,6 +14,50 @@ changes, or a writer handoff. They reject `--apply`. Use a
 read-only database account and read-only object credentials where possible.
 No production execution is implied by a passing candidate test.
 
+## Retained Offline Compatibility Tools
+
+These are retained one-shot operator tools for the current Node owner and for
+rollback preparation. They are not request handlers, continuous processes, or
+Go startup hooks. The current production owner remains Node; the table records
+the actual commands without authorizing a writer handoff.
+
+| Capability | Retained Node command and behavior | Go candidate status |
+| --- | --- | --- |
+| Schema migration | `pnpm --filter @duallane/web db:migrate` runs `server/migrate.mjs`. The default Compose `migrate` service runs this one-shot command before `api`. | `apps/backend/cmd/migrate` runs the Go numbered migration runner and seed in the separate Go candidate composition, but does not transfer the current production migration owner. |
+| S3 migration and archive | `pnpm --filter @duallane/web storage:migrate` runs `server/storage-migrate.mjs` with `backfill` or `verify`. Its inventory uploads active attachment/avatar records and treats unconsumed local keys as `archive` records under the run-specific archive prefix. There is no separate Node `archive` executable. | Go `storage plan` and `storage verify` can produce/read evidence; there is no Go archive or S3 migration executor. |
+| Canonical backfill | `pnpm --filter @duallane/web storage:dedupe` with `WORKSPACE_STORAGE_DEDUPE_MODE=backfill` creates/reuses canonical objects and binds attachment, avatar, and emote references while retaining legacy bytes. | `internal/workspace/storageops.RunBackfill` plus `PGJournal` is a coordinator-supplied candidate library only. It has no executable, scheduler, owner transition, or Compose service and must not be described or operated as a Go backfill command. |
+| Verification | Node `storage:migrate` supports `verify`; Node `storage:dedupe` supports `verify` and records its verification timestamps. | `duallane-storage plan` and `duallane-storage verify` are candidate read-only checks for PostgreSQL and local/S3 bytes; they do not perform Node verification writes or replace the Node owner. |
+| Legacy finalization | Node `storage:dedupe` with `WORKSPACE_STORAGE_DEDUPE_MODE=finalize` verifies the inventory and then deletes legacy objects under the Node registry's object lock. | No Go finalize command exists. The Go backfill library cannot delete legacy bytes or finalize the compatibility window. |
+| S3 provisioning | `pnpm --filter @duallane/web storage:provision` runs the retained Node bucket provisioner. | `duallane-storage provision` is a separate candidate tool and is read-only by default. This runbook does not add or recommend a production `--apply` command, and no provisioning is attached to Go startup or the default Compose file. |
+
+The corresponding current Compose services are opt-in: `storage-provision` and
+`storage-migrate` use profile `storage-migration`, while `storage-dedupe` uses
+profile `storage-dedupe`; each is `restart: "no"`. The default `migrate` service
+has no profile and runs only `db:migrate`; `api` does not invoke any
+`storage:*` command. Do not change these profiles or add them to default
+startup as part of a compatibility rehearsal.
+
+Before any retained Node storage command, obtain explicit operator approval,
+take and verify the required database/object-volume or bucket backup, drain
+and fence Node API writers, Go Workspace/worker writers, upload finalizers,
+and other storage maintenance, and identify one database/object authority and
+one active owner. Do not run these commands concurrently with Go writers or
+against a live shared authority. Use a stable run ID when the command supports
+resumption. `finalize` is destructive legacy deletion, not a routine action to
+run while the compatibility window remains open: explicitly close the legacy
+compatibility window first, verify an independent, recoverable backup and its
+restore path, and record the decision. After deletion, any rollback that
+depends on the deleted legacy bytes is no longer available; recovery requires
+that independent backup and the matching database/object authority. A window
+still being open is not permission to finalize.
+
+The Go workspace and worker entrypoints do not spawn Node or invoke these
+offline scripts; the Go storage command is manually invoked and does not
+attach itself to runtime or worker startup. This is an entrypoint contract,
+not a claim that every Go package has been whole-program audited. Retain the
+Node scripts and their rollback authority until the handoff and same-authority
+rollback gates in this document are independently accepted.
+
 Build from `apps/backend` with `go build -o storage ./cmd/storage`. Supply
 `DATABASE_URL` through the operator's private environment; do not put its value
 in reports, PRs, process arguments or shell history. Commands below assume that

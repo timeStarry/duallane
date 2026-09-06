@@ -420,6 +420,15 @@ secondary.
 
 ## 10. Deployment Acceptance
 
+The retained offline storage boundary is guarded by
+`node --test scripts/backend/storage-operator-retained.test.mjs` in CI. It
+checks the actual Node command modes, opt-in one-shot storage Compose services,
+Go plan/verify/provision dispatch and absence of Node-tool startup hooks in the
+Go entrypoints. This is a static entrypoint contract, not a whole-program
+proof or permission to execute a data-changing operator command. The canonical
+boundary and destructive-finalization conditions are in
+[Storage operator](STORAGE_OPERATOR.md#retained-offline-compatibility-tools).
+
 A service is not production-ready until the guarded deployment can:
 
 1. Build the exact labeled image from a clean commit.

@@ -137,7 +137,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Validate backend tooling guards
-        run: node --test .github/tests/ci-go-native-dependencies.test.mjs .github/tests/ci-go-p2p-privacy.test.mjs .github/tests/ci-go-workspace-privacy.test.mjs .github/tests/ci-unit-fixtures.test.mjs scripts/backend/owned-process.test.mjs scripts/backend/p2p-parity.test.mjs scripts/backend/route-inventory.test.mjs scripts/backend/go-workspace-browser.test.mjs scripts/backend/gateway-readonly-smoke.test.mjs
+        run: node --test .github/tests/ci-go-native-dependencies.test.mjs .github/tests/ci-go-p2p-privacy.test.mjs .github/tests/ci-go-workspace-privacy.test.mjs .github/tests/ci-unit-fixtures.test.mjs scripts/backend/owned-process.test.mjs scripts/backend/p2p-parity.test.mjs scripts/backend/route-inventory.test.mjs scripts/backend/go-workspace-browser.test.mjs scripts/backend/gateway-readonly-smoke.test.mjs scripts/backend/storage-operator-retained.test.mjs
 
       - name: Validate release ownership and rollback contracts
         run: node --test scripts/backend/production-deploy.test.mjs scripts/backend/go-production-workers.test.mjs scripts/backend/node-runtime-image.test.mjs

@@ -63,7 +63,7 @@ ownership is unchanged and is recorded only in the canonical ledger.
 | Actual native media | `78e43c6` fix; exact-image 28-case corpus passed with native libvips 8.14.1 | Build and test the final integrated runtime image |
 | Workspace browser | `3bb8391` complete CI suite: 10 passed, 2 failed; the long flow reached custom-emote upload before timing out | Fix Echo release delivery, the independently reproduced stale conversation merge, and the custom-emote response stall; rerun all original cases |
 | Release safety | Accepted immutable migration image checks, passive candidates, offline Node startup, canonical snapshot, database drain command, gateway smoke, and restart-policy fencing (`3d4b57b`/`3bb8391`) | Complete Go-to-Go old-configuration recovery, integrate drain/provider gate and post-cutover/recovery smoke; rehearse failure and rollback |
-| Storage compatibility | Accepted bounded legacy reads, permission probes, read-only plan/verify, explicit S3 provisioning and backfill journal library | Close retained offline operator-tool boundaries and prove final-image/same-authority recovery; no production copy or finalization |
+| Storage compatibility | Accepted bounded legacy reads, permission probes, read-only plan/verify, explicit S3 provisioning, backfill journal library and retained offline operator boundary | Prove final-image/same-authority recovery; no production copy or finalization |
 | Delivery | Draft PR #2 is open; commits through `3bb8391` are pushed; SSH transport recovered | Final aggregate review/CI, safe artifact cleanup and complete PR evidence before readiness |
 
 The parallel fixes do not change frontend test assertions, retries or timeouts.
@@ -1969,6 +1969,20 @@ disposable PostgreSQL, uncached race tests (5.265 seconds). The generated
 fixture retains the actual Node snapshot/hash and publication-ID behavior.
 These checks do not resolve the separate full-browser Echo visibility failure
 or constitute final-image/build/visual acceptance.
+
+### Retained Offline Storage Compatibility Boundary
+
+The storage runbook now distinguishes all actual Node one-shot operator modes
+from the candidate Go plan/verify/provision commands and backfill library.
+Node archive/backfill/verification/finalize compatibility tools remain present,
+profile-gated and outside the Go runtime/worker startup path. This does not add
+a Go mutation executor or authorize a production storage operation. Finalize
+requires an explicit compatibility-window decision and recoverable coordinated
+backup; deletion invalidates any rollback dependent on those live legacy bytes.
+
+Parent independently ran the new static entrypoint guard: 4/4 passed on Node
+22 in the Linux validation checkout (122.852 ms). The same guard is included
+in CI. No database, provider, production process or object was changed.
 
 The parent's separate real-Docker test then passed both restart-policy cases
 and mismatched-owner refusal (3 Node test results, 8.261 seconds). It used the
