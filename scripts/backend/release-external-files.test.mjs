@@ -18,6 +18,7 @@ import test from "node:test";
 
 import {
   GO_RECOVERY_SERVICES,
+  NODE_RECOVERY_SERVICES,
   MANIFEST_FORMAT,
   MANIFEST_VERSION,
   MAX_FILE_BYTES,
@@ -33,6 +34,7 @@ const root = path.resolve(
 );
 const helper = path.join(root, "deploy/production/release-external-files.mjs");
 const services = [...GO_RECOVERY_SERVICES];
+const nodeServices = [...NODE_RECOVERY_SERVICES];
 
 function expectCode(callback, code) {
   assert.throws(callback, (error) => error?.code === code);
@@ -120,6 +122,43 @@ async function writeCompose(directory, overrides = {}) {
     overrides.composePath ?? path.join(directory, "compose.json");
   await writePrivate(composePath, `${JSON.stringify(compose, null, 2)}\n`);
   return { compose, composePath, secretPath, configPath, bindPath };
+}
+
+async function writeNodeCompose(directory) {
+  const secretPath = path.join(directory, "node-secret$.json");
+  const bindPath = path.join(directory, "node-renderer.mjs");
+  await writePrivate(
+    secretPath,
+    '{"accessKey":"synthetic$node-access","secretKey":"synthetic$node-secret"}\n',
+  );
+  await writePrivate(bindPath, "export default 'synthetic-node';\n");
+  await chmod(bindPath, 0o644);
+  const compose = {
+    name: "duallane-synthetic-node-release",
+    services: {
+      api: {
+        image: "sha256:node-api",
+        secrets: [
+          { source: "node-s3", target: "node-s3", mode: "0600" },
+        ],
+        volumes: [
+          {
+            type: "bind",
+            source: bindPath,
+            target: "/app/node-renderer.mjs",
+            read_only: true,
+          },
+        ],
+      },
+      web: { image: "sha256:node-web" },
+    },
+    secrets: {
+      "node-s3": { file: secretPath },
+    },
+  };
+  const composePath = path.join(directory, "node-compose.json");
+  await writePrivate(composePath, `${JSON.stringify(compose, null, 2)}\n`);
+  return { compose, composePath, secretPath, bindPath };
 }
 
 async function captureFixture(overrides = {}) {
@@ -233,6 +272,118 @@ test("capture and verify bind the frozen canonical Compose structure and exact s
     (error) => error?.code === "compose_changed",
   );
   expectCode(() => assertSupportedPlatform("darwin"), "linux_only");
+});
+
+test("Node recovery captures its fixed API/Web files and rejects file drift", async (t) => {
+  if (process.platform !== "linux") {
+    t.skip(
+      "functional fixture checks run in the required Linux validation environment",
+    );
+    return;
+  }
+  const directory = await temporaryDirectory();
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const fixture = await writeNodeCompose(directory);
+  const manifestPath = path.join(directory, "node-external-manifest.json");
+  const captured = await captureExternalFiles({
+    composePath: fixture.composePath,
+    services: nodeServices,
+    outputPath: manifestPath,
+  });
+  assert.deepEqual(JSON.parse(await readFile(manifestPath, "utf8")).services, nodeServices);
+  assert.equal(captured.fileCount, 2);
+  const manifestText = await readFile(manifestPath, "utf8");
+  assert.equal(manifestText.includes("synthetic$node-secret"), false);
+  assert.deepEqual(
+    await verifyExternalFiles({
+      composePath: fixture.composePath,
+      inputPath: manifestPath,
+    }),
+    {
+      status: "completed",
+      operation: "verify",
+      format: MANIFEST_FORMAT,
+      version: MANIFEST_VERSION,
+      fileCount: 2,
+      totalBytes: captured.totalBytes,
+    },
+  );
+
+  const cliManifestPath = path.join(directory, "node-cli-manifest.json");
+  const cliCapture = runCLI([
+    "capture",
+    "--compose",
+    fixture.composePath,
+    "--services",
+    "web,api",
+    "--output",
+    cliManifestPath,
+  ]);
+  assert.equal(cliCapture.status, 0, cliCapture.stderr);
+  assert.deepEqual(JSON.parse(await readFile(cliManifestPath, "utf8")).services, nodeServices);
+  const cliVerify = runCLI([
+    "verify",
+    "--compose",
+    fixture.composePath,
+    "--input",
+    cliManifestPath,
+  ]);
+  assert.equal(cliVerify.status, 0, cliVerify.stderr);
+
+  await writePrivate(
+    fixture.secretPath,
+    '{"accessKey":"changed$node-access","secretKey":"synthetic$node-secret"}\n',
+  );
+  await expectAsyncCode(
+    () =>
+      verifyExternalFiles({
+        composePath: fixture.composePath,
+        inputPath: manifestPath,
+      }),
+    "external_file_changed",
+  );
+});
+
+test("external-file recovery accepts only the fixed Go or Node service set", async (t) => {
+  if (process.platform !== "linux") {
+    t.skip(
+      "functional fixture checks run in the required Linux validation environment",
+    );
+    return;
+  }
+  const directory = await temporaryDirectory();
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const fixture = await writeCompose(directory);
+  const invalidSets = [
+    ["api"],
+    ["api", "web", "p2p", "workspace", "worker"],
+    ["api", "api", "web"],
+    ["p2p", "workspace", "worker", "web", "web"],
+    ["api", "web", "migrate"],
+  ];
+  for (const [index, invalidServices] of invalidSets.entries()) {
+    await expectAsyncCode(
+      () =>
+        captureExternalFiles({
+          composePath: fixture.composePath,
+          services: invalidServices,
+          outputPath: path.join(directory, `invalid-${index}.json`),
+        }),
+      "invalid_services",
+    );
+  }
+
+  const nodeFixture = await writeNodeCompose(directory);
+  const nodeManifestPath = path.join(directory, "node-set-manifest.json");
+  await captureExternalFiles({
+    composePath: nodeFixture.composePath,
+    services: ["web", "api"],
+    outputPath: nodeManifestPath,
+  });
+  assert.deepEqual(
+    JSON.parse(await readFile(nodeManifestPath, "utf8")).services,
+    nodeServices,
+  );
 });
 
 test("verify rejects a changed final file before reading beyond the remaining total budget", async (t) => {

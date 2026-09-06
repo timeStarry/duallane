@@ -15,6 +15,7 @@ const GO_RECOVERY_SERVICES = Object.freeze([
   "web",
   "migrate",
 ]);
+const NODE_RECOVERY_SERVICES = Object.freeze(["api", "web"]);
 const EXTERNAL_KINDS = Object.freeze(["secret", "config", "bind"]);
 const MAX_FILES = 32;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
@@ -123,20 +124,24 @@ function normalizeServices(value) {
   const services = typeof value === "string" ? value.split(",") : value;
   if (
     !Array.isArray(services) ||
-    services.length !== GO_RECOVERY_SERVICES.length
-  )
-    reject("invalid_services");
-  if (
     services.some(
       (service) => typeof service !== "string" || service.length === 0,
     )
   )
     reject("invalid_services");
   const actual = [...services].sort();
-  const expected = [...GO_RECOVERY_SERVICES].sort();
-  if (actual.some((service, index) => service !== expected[index]))
-    reject("invalid_services");
-  return [...GO_RECOVERY_SERVICES];
+  for (const expectedServices of [
+    GO_RECOVERY_SERVICES,
+    NODE_RECOVERY_SERVICES,
+  ]) {
+    const expected = [...expectedServices].sort();
+    if (
+      actual.length === expected.length &&
+      actual.every((service, index) => service === expected[index])
+    )
+      return [...expectedServices];
+  }
+  reject("invalid_services");
 }
 
 function normalizeFsError(error, prefix) {
@@ -335,10 +340,10 @@ async function readJSONDocument(filePath, { prefix, requireMode }) {
   return { value, sha256: canonicalComposeHash(value) };
 }
 
-function validateCompose(compose) {
+function validateCompose(compose, requiredServices) {
   const input = requireRecord(compose, "compose_invalid");
   const services = requireRecord(input.services, "compose_services_missing");
-  for (const service of GO_RECOVERY_SERVICES) {
+  for (const service of normalizeServices(requiredServices)) {
     requireRecord(services[service], "compose_service_missing");
   }
   return input;
@@ -643,13 +648,13 @@ function assertObservationMatches(record, observation) {
     reject("external_file_changed");
 }
 
-async function loadCompose(composePath) {
+async function loadCompose(composePath, requiredServices) {
   const pathValue = assertAbsoluteCanonicalPath(composePath, "compose_path");
   const document = await readJSONDocument(pathValue, {
     prefix: "compose",
     requireMode: PRIVATE_MODE,
   });
-  const compose = validateCompose(document.value);
+  const compose = validateCompose(document.value, requiredServices);
   return { compose, sha256: canonicalComposeHash(compose) };
 }
 
@@ -744,7 +749,10 @@ function resultSummary(operation, files, totalBytes) {
 async function captureExternalFiles({ composePath, services, outputPath }) {
   assertSupportedPlatform();
   const normalizedServices = normalizeServices(services);
-  const { compose, sha256: composeSha256 } = await loadCompose(composePath);
+  const { compose, sha256: composeSha256 } = await loadCompose(
+    composePath,
+    normalizedServices,
+  );
   const entries = collectExternalReferences(compose, normalizedServices);
   const files = [];
   let totalBytes = 0;
@@ -786,7 +794,10 @@ async function captureExternalFiles({ composePath, services, outputPath }) {
 async function verifyExternalFiles({ composePath, inputPath }) {
   assertSupportedPlatform();
   const manifest = await loadManifest(inputPath);
-  const { compose, sha256: composeSha256 } = await loadCompose(composePath);
+  const { compose, sha256: composeSha256 } = await loadCompose(
+    composePath,
+    manifest.services,
+  );
   if (manifest.composeSha256 !== composeSha256) reject("compose_changed");
   const entries = collectExternalReferences(compose, manifest.services);
   assertReferenceSetMatches(entries, manifest.files);
@@ -857,6 +868,7 @@ function helpText() {
   return [
     "Usage:",
     "  release-external-files.mjs capture --compose <absolute-private-compose.json> --services p2p,workspace,worker,web,migrate --output <absolute-new-manifest>",
+    "  release-external-files.mjs capture --compose <absolute-private-node-compose.json> --services api,web --output <absolute-new-manifest>",
     "  release-external-files.mjs verify --compose <same-frozen-compose.json> --input <absolute-0600-manifest>",
     "",
     "Linux only; captures fingerprints for used secret/config files and read-only regular-file binds.",
@@ -891,6 +903,7 @@ async function runCLI(argv) {
 export {
   ExternalFilesError,
   GO_RECOVERY_SERVICES,
+  NODE_RECOVERY_SERVICES,
   MANIFEST_FORMAT,
   MANIFEST_VERSION,
   MAX_FILES,

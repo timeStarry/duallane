@@ -2229,3 +2229,14 @@ five affected rollback/daemon tests and nine activation/order tests passed.
 These models do not execute a coordinated real release. Private volume,
 Node-authority and one-shot drain integration still require independent review
 and an isolated container rehearsal before acceptance.
+
+### Node Recovery External-File Fingerprints
+
+The reviewed external-file helper now accepts the exact Node `api,web` set in
+addition to the existing Go five-service set. It retains the Go manifest
+format/version and all private-file limits; mixed, partial and duplicate sets
+are rejected. Parent independently passed all 11 Linux tests (0.997 seconds),
+including Node secret/read-only bind capture, CLI verification and drift
+rejection. Sources are fingerprinted in place, never copied or repaired.
+Frozen Node configuration/image integration remains part of the coordinator
+gate, not a claim that the first cutover was rehearsed.
