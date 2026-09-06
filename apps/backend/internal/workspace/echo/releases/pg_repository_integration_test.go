@@ -191,6 +191,9 @@ func TestPostgresReleasePublishSnapshotsAndReplays(t *testing.T) {
 	if card.Payload.Version != "0.15.1" || card.Payload.PublishedAt == "" || len(card.Payload.Sections) == 0 {
 		t.Fatalf("projected release card = %#v", card)
 	}
+	if _, err := fixture.service.ProjectCard(fixture.ctx, ProjectCardInput{ActorID: "usr_release_member", Version: "0.15.1", PublicationID: "wrong-publication"}); !hasCode(err, CodeNotFound) {
+		t.Fatalf("wrong publication projection error = %v", err)
+	}
 	if _, err := fixture.service.ProjectCard(fixture.ctx, ProjectCardInput{ActorID: "usr_release_removed", Version: "0.15.1"}); !hasCode(err, CodePermissionDenied) {
 		t.Fatalf("removed recipient error = %v", err)
 	}

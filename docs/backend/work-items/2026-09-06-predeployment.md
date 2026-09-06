@@ -1069,3 +1069,18 @@ The unchanged dual-user browser still failed at history-27 catch-up, line 728
 (31.9 seconds), so this is a verified pool bug fix, not closure of browser parity.
 Actual WebSocket/cursor recovery remains under investigation. Remote CI run
 `34032657515` passed all three jobs on `9367d5f`; later changes are not covered.
+
+### Echo Delivery Construction And Release Snapshot Binding
+
+A shared runtime constructor binds the already-configured message scheduler,
+base cards transaction (including Echo revision extension), domain projectors
+and atomic writer. It starts no worker and sends no external notification.
+The release adapter carries the recipient, space, version and immutable
+publication ID; release projection rejects mismatched IDs while preserving
+existing version-only reads for other internal callers.
+
+Independent PostgreSQL/race passed runtime (2.936 seconds) and releases (4.565),
+followed by integration-tag staticcheck. Unit tests check input mapping and
+failure propagation; the PG release test rejects another publication identity.
+Application registration, worker recovery and real delivery through those
+entry points remain the next integration gate.

@@ -148,6 +148,12 @@ func TestPublishSnapshotsActiveMembersAndReplaysByVersion(t *testing.T) {
 	if card.Block.CardType != CardType || card.Block.SchemaVersion != CardSchemaVersion || card.Payload.Version != "0.15.1" || card.Payload.PublishedAt == "" {
 		t.Fatalf("release card = %#v", card)
 	}
+	if _, err := service.ProjectCard(context.Background(), ProjectCardInput{ActorID: "usr_member", Version: "0.15.1", PublicationID: first.ID}); err != nil {
+		t.Fatalf("matching publication projection: %v", err)
+	}
+	if _, err := service.ProjectCard(context.Background(), ProjectCardInput{ActorID: "usr_member", Version: "0.15.1", PublicationID: "different-publication"}); !hasCode(err, CodeNotFound) {
+		t.Fatalf("mismatched publication projection: %v", err)
+	}
 	publicationSummary, err := service.GetPublication(context.Background(), "V0.15.1")
 	if err != nil || publicationSummary == nil || publicationSummary.ID != first.ID || publicationSummary.Replayed {
 		t.Fatalf("get publication = %#v err=%v", publicationSummary, err)

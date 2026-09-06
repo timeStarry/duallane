@@ -250,7 +250,7 @@ func (s *Service) ProjectCard(ctx context.Context, input ProjectCardInput) (*Car
 	if err != nil {
 		return nil, normalizeError(err)
 	}
-	if publication == nil {
+	if publication == nil || (input.PublicationID != "" && publication.ID != input.PublicationID) {
 		return nil, releaseNotFoundError()
 	}
 	guide, err := parseStoredGuide(publication.GuideJSON)

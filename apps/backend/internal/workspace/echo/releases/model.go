@@ -122,6 +122,9 @@ type ProjectCardInput struct {
 	ActorID string
 	SpaceID string
 	Version string
+	// PublicationID binds a delivery to its immutable snapshot. Other internal
+	// readers may omit it and keep the existing version-scoped read contract.
+	PublicationID string
 }
 
 type CardBlock struct {
