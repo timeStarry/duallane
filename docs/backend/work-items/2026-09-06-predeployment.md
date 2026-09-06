@@ -1796,3 +1796,20 @@ requires exactly one safe value for each environment key and refuses a mount
 covering the private path. Parent independently passed all 41 release-harness
 tests (34.236 seconds) and shell syntax. This synthetic Docker harness does not
 replace real runtime checks or the still-pending Go upgrade/drain gates.
+
+### Offline Node Rollback Image Startup
+
+A real network-isolated Node image failed before application startup: its runtime
+Corepack tried to download pnpm, whose cache existed only in the build stage.
+The runtime now starts the existing Node entry point directly from the same Web
+working directory as the package script, and carries the build's pnpm cache for
+retained migration/storage commands. No application/data contract changed.
+
+Parent rebuilt the image and confirmed default startup with no network, mounts,
+or usable database URL. Health/version and the actual P2P ICE route passed;
+Workspace bootstrap and Bot identity rejected with `workspace.disabled`, and
+the private data directory remained empty. `pnpm --version` also returned
+10.30.3 with `COREPACK_ENABLE_NETWORK=0`. The guard test passed and is in CI.
+The reviewed diagnostic image ID is
+`e5e42b53d293a942ba8e541b34d9ea7bfa83990e1619272ad057858d300c2c6f`;
+its base labels precede this fix, so this is not the final release artifact.

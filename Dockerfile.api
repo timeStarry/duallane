@@ -2,6 +2,7 @@ ARG NODE_IMAGE=docker.m.daocloud.io/library/node:22-alpine
 
 FROM ${NODE_IMAGE} AS deps
 WORKDIR /app
+ENV COREPACK_HOME=/opt/corepack
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/package.json
@@ -12,6 +13,7 @@ ARG DUALLANE_APP_VERSION=0.0.0
 ARG DUALLANE_GIT_COMMIT=unknown
 WORKDIR /app
 ENV NODE_ENV=production
+ENV COREPACK_HOME=/opt/corepack
 ENV HOST=0.0.0.0
 ENV PORT=8787
 ENV WORKSPACE_ENABLED=false
@@ -23,7 +25,9 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/package.json
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules
+COPY --from=deps /opt/corepack /opt/corepack
 COPY apps/web/server ./apps/web/server
 COPY apps/web/shared ./apps/web/shared
 EXPOSE 8787
-CMD ["pnpm", "--filter", "@duallane/web", "start"]
+WORKDIR /app/apps/web
+CMD ["node", "server/index.mjs"]
