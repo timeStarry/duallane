@@ -2001,6 +2001,32 @@ small file grows to 8 MiB. The test joins CI's private recovery snapshot step.
 This is a recovery-file component gate; coordinated Go-to-Go release and
 same-authority rollback still require separate integration and rehearsal.
 
+### Read-Only Database And S3 Release Check
+
+`duallane-release-check --check-provider` now composes the accepted read-only
+PostgreSQL check with a bounded whole-bucket S3 multipart observation. The
+default command and help remain provider-free. A database blocker stops before
+provider access; local storage reports multipart state as not applicable. One
+signed S3 GET (`MaxUploads=1`, no prefix or retry, two seconds, 64 KiB plus one
+overflow-probe byte) proves only a complete empty snapshot. Existing uploads
+block, and incomplete, oversized, denied or unavailable responses fail closed.
+It does not abort uploads or start any runtime worker. Writer/provider limits
+remain explicit in the separate database and provider report fields.
+
+Parent independent checks passed on the exact seven candidate files in the
+Linux validation checkout: uncached race tests for command/storage (1.056 /
+5.470 seconds), command invalid-state additions (1.042 seconds), tagged
+PostgreSQL/race for command/releasecheck/storage (8.197 / 6.047 / 3.194 seconds),
+tagged staticcheck, and CGO-disabled command tests. The command integration
+exercises five real PostgreSQL plus synthetic HTTP-provider scenarios; seeded
+row counts and upload/attachment statuses remain unchanged, and a reserved
+upload produces no S3 request. All temporary schemas and credential fixtures
+belong to the tests. No actual provider or production state was accessed.
+
+This accepted component must still be integrated after the release writer fence
+and into the appropriate recovery path. It is not itself a deployment,
+admission fence or proof that an external email/notification was never delivered.
+
 The parent's separate real-Docker test then passed both restart-policy cases
 and mismatched-owner refusal (3 Node test results, 8.261 seconds). It used the
 rebuilt Workspace runtime image

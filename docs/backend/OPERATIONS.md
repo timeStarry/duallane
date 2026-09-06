@@ -328,14 +328,31 @@ SQL cannot prove S3 multipart or external delivery state. Resolve ambiguous
 provider results through the existing owner's explicit recovery process;
 expiring a lease or clearing SQL is not proof that a provider did not deliver.
 
-The Workspace image includes `/usr/local/bin/duallane-release-check`. It accepts
-no mutation flags and reads only `DATABASE_URL`/`PG*` configuration using one
-connection and an overall ten-second command deadline. Its content-free JSON
-uses schema `duallane.release-check/v1`: exit 0 means the durable database
-snapshot is ready, exit 2 means observed blockers, and exit 1 means the check
-failed. Writer/provider limitations remain present even on exit 0. The guarded
-release coordinator must separately enforce the fence and recovery sequence;
-running this command by itself is not a deployment or cleanup procedure.
+The Workspace image includes `/usr/local/bin/duallane-release-check`. By default
+it reads only `DATABASE_URL`/`PG*` using one connection and an overall ten-second
+command deadline, without contacting providers. Its content-free JSON uses
+schema `duallane.release-check/v1`: exit 0 means the observed snapshot is ready,
+exit 2 means observed blockers, and exit 1 means the check failed.
+
+Explicit `--check-provider` changes the report scope to
+`database_and_provider_snapshot`. Only after the database is ready does it read
+the existing `WORKSPACE_STORAGE_DRIVER`/`WORKSPACE_S3_*` settings. Local storage
+reports `not_applicable` for provider multipart state. S3 performs one signed
+`ListMultipartUploads` GET over the entire configured bucket, with `MaxUploads=1`,
+no prefix, no retry, a two-second deadline and a 64 KiB response-body budget
+(at most one additional overflow-probe byte). Only a complete non-truncated
+empty page is ready. Uploads block; truncation, missing fields, oversized XML,
+denial, unsupported operations and timeouts fail closed. The command never
+aborts an upload, provisions storage, changes rows or starts a worker.
+
+The database snapshot still reports `writers: not_proven` and
+`provider: not_checked`; the additional provider observation is a separate
+outer field. Neither observation proves an admission fence or the absence of
+ambiguous external delivery. The credential file must be a private regular
+non-symlink file; its pre-open check assumes trusted operator-controlled paths
+and is not an atomic defense against a malicious filesystem owner. The guarded
+release coordinator must enforce fencing, file integrity and recovery order.
+Running this command by itself is not a deployment or cleanup procedure.
 
 `scripts/backend/gateway-readonly-smoke.mjs` checks an explicit local HTTP
 gateway without credentials or mutations. Supply `--base-url`,

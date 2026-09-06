@@ -420,6 +420,16 @@ secondary.
 
 ## 10. Deployment Acceptance
 
+With an explicit disposable `TEST_DATABASE_URL`, run
+`go test -count=1 -race -tags postgres_integration ./cmd/release-check ./internal/platform/releasecheck ./internal/platform/storage`
+from `apps/backend`. The command integration covers local readiness, database
+upload blockers with zero S3 requests, and ready/blocked/denied synthetic S3
+responses. It runs canonical migrations in its own random schemas and checks
+that seeded row counts and upload/attachment states remain unchanged. The
+storage unit tests additionally check signed GET-only observation, exact and
+over-limit XML, truncation, cancellation and private-error redaction. Missing
+database configuration is `SKIP`, not an integration pass.
+
 Private recovery-file checks run with
 `node --test scripts/backend/release-external-files.test.mjs` on Linux in CI.
 They cover frozen Compose binding, external-file selection, identity/content/
