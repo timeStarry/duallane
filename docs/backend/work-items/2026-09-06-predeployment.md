@@ -296,3 +296,13 @@ topic interaction remains an identified UI/testing limitation, not a fixed
 backend issue. Go P2P keeps its own explicit reduce setting and passing gate.
 Temporary click diagnostics/hover experiments were confined to the disposable
 validation checkout and removed; no debug code or failure artifacts are committed.
+
+Remote CI for `36cc4d9` passed the full Node job (including Chromium) and the
+four Go P2P Chromium tests. Go unit/race passed, but staticcheck found two
+WebSocket-only error helpers accidentally included in the preceding runtime
+commit while their consumers remained uncommitted. The helpers now belong to
+the draft WebSocket file. Independent staticcheck on clean `36cc4d9` plus only
+this removal passed for botgateway, messages and cards. A new aggregate run is
+still required. The local whole-browser rerun also recorded a separate failure
+waiting for `workspace-e2e-history-27`; do not report it as a local full pass or
+hide it behind the successful remote run.

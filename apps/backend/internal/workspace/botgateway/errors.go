@@ -121,11 +121,3 @@ func scopeDeniedError() *Error {
 func invalidSequenceError() *Error {
 	return NewError(CodeInvalidSequence, MessageInvalidSequence, 400)
 }
-
-func invalidHelloError() *Error {
-	return NewError(CodeInvalidHello, MessageInvalidHello, 400)
-}
-
-func invalidMessageError() *Error {
-	return NewError(CodeInvalidMessage, MessageInvalidMessage, 400)
-}
