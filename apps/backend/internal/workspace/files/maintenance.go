@@ -25,11 +25,15 @@ const (
 	// DefaultUploadMaintenanceRetries is the default retry count after the
 	// first database or physical-storage attempt.
 	DefaultUploadMaintenanceRetries = 2
+	// MaxUploadMaintenanceAttemptCursors bounds opaque provider cursors kept
+	// between cycles. A provider must never be able to grow this map without
+	// limit by returning a new upload ID on every page.
+	MaxUploadMaintenanceAttemptCursors = 256
 )
 
-// UploadMaintenanceCursor is an in-process page cursor. A worker may retain
-// it only for the current bounded run and must restart from nil on a later
-// interval if it does not finish the page.
+// UploadMaintenanceCursor is a keyset cursor ordered by transfer activity and
+// ID. A worker retains it across bounded cycles until a page reaches the end;
+// only then does the next cycle wrap to the beginning.
 type UploadMaintenanceCursor struct {
 	ActivityAt time.Time
 	ID         string
@@ -119,14 +123,24 @@ func (s *Service) RunUploadMaintenance(ctx context.Context, options UploadMainte
 	}
 	runCtx, cancel := context.WithTimeout(ctx, runTimeout)
 	defer cancel()
-	result := UploadMaintenanceResult{AttemptCursors: cloneAttemptCursors(options.AttemptCursors)}
+	result := UploadMaintenanceResult{
+		Next:           cloneUploadMaintenanceCursor(options.Cursor),
+		AttemptCursors: cloneAttemptCursors(options.AttemptCursors),
+	}
+	if err := runCtx.Err(); err != nil {
+		return result, err
+	}
 	cutoff := now.Add(-s.staleUploadAge)
 	page, err := s.listUploadMaintenancePage(runCtx, cutoff, options.Cursor, batchSize, options.IncludeTerminalArtifacts)
 	if err != nil {
 		return result, normalizeRepositoryError(err)
 	}
 	result.Scanned = len(page.Records)
-	result.Next = page.Next
+	if len(page.Records) == 0 {
+		// An empty page is the end-of-keyspace marker. A nil Next therefore
+		// deliberately wraps the next cycle back to the first page.
+		result.Next = cloneUploadMaintenanceCursor(page.Next)
+	}
 	var firstErr error
 	recordError := func(value error) {
 		if value == nil {
@@ -145,9 +159,19 @@ func (s *Service) RunUploadMaintenance(ctx context.Context, options UploadMainte
 		plan, planErr := s.confirmUploadMaintenance(runCtx, candidate, cutoff, now, options.IncludeTerminalArtifacts, options.MaxRetries)
 		if planErr != nil {
 			recordError(normalizeRepositoryError(planErr))
+			if runCtx.Err() != nil {
+				break
+			}
+			// A failed candidate was attempted. Advance past it so a single
+			// transient row cannot starve later records in this keyset.
+			result.Next = maintenanceCursorFor(candidate)
 			continue
 		}
 		if !plan.failed && !plan.terminal {
+			if runCtx.Err() != nil {
+				break
+			}
+			result.Next = maintenanceCursorFor(candidate)
 			continue
 		}
 		if plan.failed {
@@ -162,12 +186,28 @@ func (s *Service) RunUploadMaintenance(ctx context.Context, options UploadMainte
 		result.ObjectsDeleted += deleted
 		result.ObjectFailures += failures
 		if nextAttemptCursor == "" {
-			delete(result.AttemptCursors, plan.uploadID)
+			rememberAttemptCursor(result.AttemptCursors, plan.uploadID, "")
 		} else {
-			result.AttemptCursors[plan.uploadID] = nextAttemptCursor
+			rememberAttemptCursor(result.AttemptCursors, plan.uploadID, nextAttemptCursor)
 		}
 		if cleanupErr != nil {
 			recordError(cleanupErr)
+		}
+		if runCtx.Err() != nil {
+			break
+		}
+		// Physical failures are retryable, but the candidate has still been
+		// attempted. Keep moving through the page while the cycle budget is
+		// available; attempt cursors resume provider pages after wrap.
+		result.Next = maintenanceCursorFor(candidate)
+	}
+	if runCtx.Err() == nil && len(page.Records) > 0 && result.Next != nil {
+		// If every record in this page was attempted, use the repository's
+		// keyset successor. When the page has no successor this becomes nil,
+		// which is the explicit wrap marker.
+		last := page.Records[len(page.Records)-1]
+		if result.Next.ActivityAt.Equal(transferActivity(last.Transfer)) && result.Next.ID == last.Transfer.ID {
+			result.Next = cloneUploadMaintenanceCursor(page.Next)
 		}
 	}
 	if firstErr != nil {
@@ -331,7 +371,10 @@ func (s *Service) cleanupMaintenanceArtifacts(ctx context.Context, plan maintena
 		if firstErr == nil {
 			firstErr = normalizeStorageError(err)
 		}
-		return deleted, failures, "", firstErr
+		// Keep the opaque marker when listing fails. Dropping it would force
+		// every cycle back to the provider's first page and can starve later
+		// attempts indefinitely.
+		return deleted, failures, attemptCursor, firstErr
 	}
 	for _, object := range page.Objects {
 		if err := ctx.Err(); err != nil {
@@ -472,9 +515,50 @@ func cloneAttemptCursors(source map[string]string) map[string]string {
 	if len(source) == 0 {
 		return make(map[string]string)
 	}
-	result := make(map[string]string, len(source))
+	keys := make([]string, 0, len(source))
 	for key, value := range source {
-		result[key] = value
+		if strings.TrimSpace(key) == "" || value == "" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) > MaxUploadMaintenanceAttemptCursors {
+		keys = keys[len(keys)-MaxUploadMaintenanceAttemptCursors:]
+	}
+	result := make(map[string]string, len(keys))
+	for _, key := range keys {
+		result[key] = source[key]
 	}
 	return result
+}
+
+func rememberAttemptCursor(target map[string]string, uploadID, cursor string) {
+	if target == nil {
+		return
+	}
+	if strings.TrimSpace(uploadID) == "" || cursor == "" {
+		delete(target, uploadID)
+		return
+	}
+	if _, exists := target[uploadID]; !exists && len(target) >= MaxUploadMaintenanceAttemptCursors {
+		keys := make([]string, 0, len(target))
+		for key := range target {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		if len(keys) > 0 {
+			delete(target, keys[0])
+		}
+	}
+	target[uploadID] = cursor
+}
+
+func cloneUploadMaintenanceCursor(cursor *UploadMaintenanceCursor) *UploadMaintenanceCursor {
+	if cursor == nil {
+		return nil
+	}
+	copy := *cursor
+	copy.ActivityAt = copy.ActivityAt.UTC()
+	return &copy
 }

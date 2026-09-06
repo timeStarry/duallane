@@ -373,6 +373,9 @@ func (s *S3BlobStore) DeleteUploadAttemptObject(ctx context.Context, uploadID, k
 // provider page per call. It never accepts a caller-provided generic prefix;
 // only in-progress uploads whose keys begin with workspace/ are considered.
 func (s *S3BlobStore) AbortStaleMultipartUploads(ctx context.Context, before time.Time, cursor string, limit int) (MultipartMaintenanceResult, error) {
+	if err := ctx.Err(); err != nil {
+		return MultipartMaintenanceResult{NextCursor: cursor}, err
+	}
 	if err := s.valid(); err != nil {
 		return MultipartMaintenanceResult{}, err
 	}
@@ -400,21 +403,35 @@ func (s *S3BlobStore) AbortStaleMultipartUploads(ctx context.Context, before tim
 	if page == nil {
 		return MultipartMaintenanceResult{}, s3ProviderError("list stale multipart uploads", errors.New("S3 multipart list response is nil"))
 	}
-	result := MultipartMaintenanceResult{Scanned: len(page.Uploads)}
+	result := MultipartMaintenanceResult{Scanned: len(page.Uploads), NextCursor: cursor}
 	var firstErr error
 	for _, upload := range page.Uploads {
+		if err := ctx.Err(); err != nil {
+			return result, errors.Join(firstErr, err)
+		}
 		if upload.Key == nil || upload.UploadId == nil || !strings.HasPrefix(*upload.Key, "workspace/") || upload.Initiated == nil || upload.Initiated.After(before) {
+			if upload.Key != nil && upload.UploadId != nil {
+				result.NextCursor = encodeMultipartCursor(*upload.Key, *upload.UploadId)
+			}
 			continue
 		}
 		_, abortErr := s.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{Bucket: aws.String(s.bucket), Key: upload.Key, UploadId: upload.UploadId})
 		if abortErr != nil {
+			if ctx.Err() != nil {
+				// Retry the unfinished record on the next cycle, not the next
+				// provider page. The provider marker skips every row in this page.
+				return result, errors.Join(firstErr, s3ProviderError("abort stale multipart upload", abortErr))
+			}
 			if firstErr == nil {
 				firstErr = s3ProviderError("abort stale multipart upload", abortErr)
 			}
+			result.NextCursor = encodeMultipartCursor(*upload.Key, *upload.UploadId)
 			continue
 		}
 		result.Aborted++
+		result.NextCursor = encodeMultipartCursor(*upload.Key, *upload.UploadId)
 	}
+	result.NextCursor = ""
 	if page.IsTruncated != nil && *page.IsTruncated {
 		if page.NextKeyMarker == nil || strings.TrimSpace(*page.NextKeyMarker) == "" {
 			return result, s3ProviderError("list stale multipart uploads", errors.New("S3 multipart key marker is missing"))

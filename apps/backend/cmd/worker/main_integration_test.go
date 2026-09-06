@@ -78,6 +78,7 @@ func TestWorkerCompositionUsesSharedPresenceAndBoundsExpiry(t *testing.T) {
 	t.Setenv("DATABASE_URL", isolatedDSN.String())
 	app, err := newApplication(ctx, config.WorkspaceConfig{
 		Enabled: true, EmailWorkerEnabled: true, MaintenanceEnabled: true, MigrationsDir: migrationDir,
+		StorageDriver: "local", DataDir: t.TempDir(),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -87,8 +88,75 @@ func TestWorkerCompositionUsesSharedPresenceAndBoundsExpiry(t *testing.T) {
 	for _, processor := range app.processors {
 		processors[processor.name] = processor
 	}
-	if len(processors) != 2 || processors["email"].process == nil || processors["presence_expiry"].process == nil {
-		t.Fatal("email and presence maintenance processors were not composed")
+	if len(processors) != 3 || processors["email"].process == nil || processors["presence_expiry"].process == nil || processors["upload_storage_maintenance"].process == nil {
+		t.Fatal("email, presence, and upload maintenance processors were not composed")
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO attachments (
+		id, space_id, uploader_id, visibility, status, file_name, mime_type, byte_size,
+		storage_key, upload_transfer_id, created_at
+	) VALUES ('worker-maintenance-attachment','spc_default','worker-owner','private_staging','pending','stale.txt','text/plain',7,NULL,'worker-maintenance-upload',NOW()-INTERVAL '1 hour')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO transfer_ledger (
+		id, space_id, user_id, direction, byte_size, status, attachment_id, created_at, last_activity_at
+	) VALUES ('worker-maintenance-upload','spc_default','worker-owner','upload',7,'reserved','worker-maintenance-attachment',NOW()-INTERVAL '1 hour',NOW()-INTERVAL '1 hour')`); err != nil {
+		t.Fatal(err)
+	}
+	secondApp, err := newApplication(ctx, config.WorkspaceConfig{
+		Enabled: true, MaintenanceEnabled: true, MigrationsDir: migrationDir,
+		StorageDriver: "local", DataDir: t.TempDir(),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondApp.pool.Close()
+	secondProcessors := make(map[string]workerProcessor)
+	for _, processor := range secondApp.processors {
+		secondProcessors[processor.name] = processor
+	}
+	cycleResults := make(chan struct {
+		result processResult
+		err    error
+	}, 2)
+	go func() {
+		result, processErr := processors["upload_storage_maintenance"].process(ctx)
+		cycleResults <- struct {
+			result processResult
+			err    error
+		}{result: result, err: processErr}
+	}()
+	go func() {
+		result, processErr := secondProcessors["upload_storage_maintenance"].process(ctx)
+		cycleResults <- struct {
+			result processResult
+			err    error
+		}{result: result, err: processErr}
+	}()
+	for range 2 {
+		cycle := <-cycleResults
+		if cycle.err != nil {
+			t.Fatalf("concurrent maintenance cycle result=%+v error=%v", cycle.result, cycle.err)
+		}
+	}
+	var transferStatus string
+	if err := conn.QueryRow(ctx, `SELECT status FROM transfer_ledger WHERE id='worker-maintenance-upload'`).Scan(&transferStatus); err != nil {
+		t.Fatal(err)
+	}
+	if transferStatus != "failed" {
+		t.Fatalf("concurrent maintenance status=%s", transferStatus)
+	}
+	var evidenceCount int
+	if err := conn.QueryRow(ctx, `SELECT COUNT(*) FROM workspace_events WHERE target_id='worker-maintenance-attachment' AND type='attachment.failed'`).Scan(&evidenceCount); err != nil {
+		t.Fatal(err)
+	}
+	if evidenceCount != 1 {
+		t.Fatalf("concurrent maintenance event count=%d", evidenceCount)
+	}
+	if err := conn.QueryRow(ctx, `SELECT COUNT(*) FROM audit_logs WHERE target_id='worker-maintenance-attachment' AND action='file.upload.failed'`).Scan(&evidenceCount); err != nil {
+		t.Fatal(err)
+	}
+	if evidenceCount != 1 {
+		t.Fatalf("concurrent maintenance audit count=%d", evidenceCount)
 	}
 	// A second service models the Workspace process. No process-local Hub is
 	// shared with the actual worker constructed above.

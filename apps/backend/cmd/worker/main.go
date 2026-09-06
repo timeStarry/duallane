@@ -18,6 +18,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/platform/migrations"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/files"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/ntfy"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/presence"
 )
@@ -153,6 +154,16 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 				return processResult{}, err
 			},
 		})
+		store, err := newMaintenanceBlobStore(ctx, runtimeConfig)
+		if err != nil {
+			pool.Close()
+			return nil, err
+		}
+		fileService := files.NewService(files.ServiceOptions{
+			Repository: files.NewPGRepository(pool), BlobStore: store,
+		})
+		maintenance := newMaintenanceRunner(fileService, store)
+		app.processors = append(app.processors, maintenance.processors()...)
 	}
 	app.pool = pool
 	return app, nil

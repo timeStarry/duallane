@@ -630,3 +630,30 @@ libvips 8.15.1. Queue cancellation, slot release and output overage are covered;
 interrupting an already-running native libvips call is not claimed. Imported
 emote assets were untouched, and all generated media/database objects were
 synthetic and removed by the harness.
+
+### Upload And Multipart Maintenance Composition
+
+The opt-in worker now composes stale-upload/staging cleanup only when both
+Workspace and maintenance are enabled. It retains upload keyset and bounded
+attempt cursors across periods, advances past attempted transient failures,
+preserves unfinished work on cancellation, and wraps only at the end.
+
+Parent review split upload and multipart maintenance into independent
+processors so slow staging I/O cannot consume the multipart worker's entire
+budget indefinitely. Upload work keeps its 30-second cycle and 15-second object
+budgets; multipart keeps the existing six-hour cadence and a separate bounded
+provider call. S3 readiness is also bounded. A scheduler regression proves
+multipart runs while upload processing is blocked and both join on shutdown.
+The S3 adapter now returns its last finished record on mid-page cancellation,
+not the provider's whole-page successor, and starts no further provider I/O
+after cancellation. HTTP provider tests retain prefix/age/cursor coverage.
+
+The worker's initial PostgreSQL test was skipped by its author because the
+environment was not configured. Parent then independently ran the real
+disposable PostgreSQL tests, including two composed workers racing on one
+stale upload: exactly one failure event and one content-free audit persisted.
+After the review corrections, fresh PostgreSQL/race passed worker, files and
+storage (2.944 / 18.493 / 4.585 seconds), followed by integration-tag
+staticcheck. No production worker was started. Node's S3 multipart timer remains
+the current owner; the deployment handoff must disable it before enabling the
+candidate maintenance worker.

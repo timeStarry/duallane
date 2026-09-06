@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 type multipartFixture struct {
@@ -159,5 +164,56 @@ func TestS3MultipartMaintenanceUsesWorkspacePrefixAgeAndCursor(t *testing.T) {
 	}
 	if got := server.abortedIDs(); len(got) != 2 || got[0] != "mpu-a" || got[1] != "mpu-b" {
 		t.Fatalf("aborted multipart IDs = %#v", got)
+	}
+}
+
+type interruptedMultipartAPI struct {
+	s3API
+	listCalls  int
+	abortCalls []string
+	page       *s3.ListMultipartUploadsOutput
+	cancel     context.CancelFunc
+}
+
+func (api *interruptedMultipartAPI) ListMultipartUploads(context.Context, *s3.ListMultipartUploadsInput, ...func(*s3.Options)) (*s3.ListMultipartUploadsOutput, error) {
+	api.listCalls++
+	return api.page, nil
+}
+
+func (api *interruptedMultipartAPI) AbortMultipartUpload(_ context.Context, input *s3.AbortMultipartUploadInput, _ ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error) {
+	api.abortCalls = append(api.abortCalls, *input.UploadId)
+	if *input.UploadId == "mpu-b" {
+		api.cancel()
+		return nil, context.Canceled
+	}
+	return &s3.AbortMultipartUploadOutput{}, nil
+}
+
+func TestS3MultipartCancellationRetainsLastFinishedCursor(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	before := time.Now().UTC()
+	api := &interruptedMultipartAPI{cancel: cancel, page: &s3.ListMultipartUploadsOutput{
+		IsTruncated: aws.Bool(true), NextKeyMarker: aws.String("workspace/c"), NextUploadIdMarker: aws.String("mpu-c"),
+		Uploads: []types.MultipartUpload{
+			{Key: aws.String("workspace/a"), UploadId: aws.String("mpu-a"), Initiated: &before},
+			{Key: aws.String("workspace/b"), UploadId: aws.String("mpu-b"), Initiated: &before},
+			{Key: aws.String("workspace/c"), UploadId: aws.String("mpu-c"), Initiated: &before},
+		},
+	}}
+	store := &S3BlobStore{bucket: "duallane", client: api}
+	result, err := store.AbortStaleMultipartUploads(ctx, before, "", 100)
+	if !errors.Is(err, context.Canceled) || result.Aborted != 1 {
+		t.Fatalf("partial abort = %#v, %v", result, err)
+	}
+	key, id, err := decodeMultipartCursor(result.NextCursor)
+	if err != nil || key != "workspace/a" || id != "mpu-a" {
+		t.Fatalf("unfinished upload skipped by cursor: %q %q %v", key, id, err)
+	}
+	if len(api.abortCalls) != 2 {
+		t.Fatalf("I/O started after cancellation: %v", api.abortCalls)
+	}
+	if _, err := store.AbortStaleMultipartUploads(ctx, before, result.NextCursor, 100); !errors.Is(err, context.Canceled) || api.listCalls != 1 {
+		t.Fatalf("cancelled call made new list request: %d %v", api.listCalls, err)
 	}
 }
