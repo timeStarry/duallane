@@ -1189,3 +1189,20 @@ pre-recognition limit remains unchanged. Parent review corrected the command
 name boundary so skipping delimiters cannot append those delimiters to the
 name. Independent PostgreSQL/race passed interactions (42.636 seconds), Echo
 automation (18.208) and application composition (10.541); staticcheck passed.
+
+### Storage Backfill Journal And Safety Review
+
+The additive `032` journal and backfill library bind canonical objects, logical
+references and completed items in one transaction. Review added full-stream
+digest verification including maximum-size EOF, private-schema isolation,
+bounded clone chains, run/item fence and revision checks, late-created cleanup
+deadlines, panic rollback and rejection of unbound completion. Concurrent
+reference-only changes are rejected against the captured target snapshot.
+
+Independent PostgreSQL/race passed storageops (9.136 seconds); integration-tag
+staticcheck and the actual Node backfill/replay contract passed. Parent then
+corrected report-only logical bytes to include completed clone references like
+Node, with an explicit deduplicated-byte regression. The corrected PostgreSQL/
+race rerun passed in 12.307 seconds. Trusted owner coordination,
+CLI mutation admission and recovery remain separate uncompleted gates. No
+production schema, reference, object or quota was modified.

@@ -71,3 +71,25 @@ failure, no-write behavior, cancellation and secret-safe flag errors.
 through the actual Node storage owner. Run Go `verify` against the returned
 manifest/object-root and remove only that generated fixture directory afterward.
 This fixture proves canonical-byte compatibility, not production owner safety.
+
+## Candidate Backfill Library
+
+`internal/workspace/storageops.RunBackfill` and `PGJournal` implement the
+candidate mutation library, not an enabled CLI command. Migration `032` adds
+run/item journals without modifying historical migrations. Each canonical
+object acquire, logical-reference bind and item completion share one database
+transaction; run/item revisions and captured source/reference metadata reject
+stale work. Recovery requires the coordinator to supply a newly acquired live
+fence, the old observed fence hash and matching run revision. A manifest or
+caller-supplied boolean never substitutes for that coordinator.
+
+Processing uses bounded keyset pages, roots before clone chains, full-byte
+digest/size verification and independent cancellation cleanup. Only validated
+canonical bytes may be created; this library cannot delete legacy bytes or
+alter quota/audit/event ledgers. Its logical-byte report counts every completed
+reference, including clones; unique bytes count each digest once. These are
+operator report values, not mutations to user quota.
+
+The CLI continues to reject `--apply` until live writer admission, exclusive
+ownership and recovery are composed and independently tested. A passing
+journal test alone does not authorize using this library against production.
