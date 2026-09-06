@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,10 +34,22 @@ type EventService interface {
 	Replay(context.Context, workspaceEvents.ReplayInput) (workspaceEvents.ReplayResult, error)
 }
 
+// metricsRecorder is deliberately narrower than the platform metrics
+// surface. Realtime only reports its active connection count and replay
+// observations; HTTP, pool, worker, and object instrumentation stay at their
+// owning boundaries.
+type metricsRecorder interface {
+	AddWorkspaceWebSocketConnections(int64)
+	ObserveWorkspaceWebSocketReplay(int64, bool)
+	ObserveWorkspaceWebSocketReplayLag(time.Duration)
+	ObserveWorkspaceWebSocketReplayDuration(time.Duration)
+}
+
 type HandlerOptions struct {
 	RootContext       context.Context
 	ActorResolver     ActorResolver
 	Events            EventService
+	Metrics           metricsRecorder
 	Hub               *Hub
 	Presence          workspacePresence.Lifecycle
 	SpaceID           string
@@ -50,6 +63,7 @@ type Handler struct {
 	rootContext       context.Context
 	actorResolver     ActorResolver
 	events            EventService
+	metrics           metricsRecorder
 	hub               *Hub
 	presence          workspacePresence.Lifecycle
 	spaceID           string
@@ -89,7 +103,7 @@ func NewHandler(options HandlerOptions) *Handler {
 		hub = NewHub()
 	}
 	return &Handler{
-		rootContext: rootContext, actorResolver: options.ActorResolver, events: options.Events, hub: hub,
+		rootContext: rootContext, actorResolver: options.ActorResolver, events: options.Events, metrics: options.Metrics, hub: hub,
 		presence: options.Presence, spaceID: spaceID,
 		maxFrameBytes: maxFrameBytes, pollInterval: pollInterval,
 		heartbeatInterval: heartbeatInterval, ioTimeout: ioTimeout,
@@ -152,6 +166,10 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 	if err != nil {
 		return
 	}
+	if h.metrics != nil {
+		h.metrics.AddWorkspaceWebSocketConnections(1)
+		defer h.metrics.AddWorkspaceWebSocketConnections(-1)
+	}
 	connection.SetReadLimit(h.maxFrameBytes)
 	ctx, cancel := context.WithCancel(request.Context())
 	var activePresence *workspacePresence.Lease
@@ -197,7 +215,9 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 				_ = writer.close(websocket.StatusPolicyViolation, "workspace access changed")
 				return
 			}
+			replayStartedAt := time.Now()
 			result, replayErr := h.events.Replay(ctx, workspaceEvents.ReplayInput{ActorID: actor.ID, LastSeq: message.hello.lastSeq})
+			h.observeReplay(replayStartedAt, result, result.SyncRequired)
 			if replayErr != nil {
 				_ = writer.write(ctx, publicErrorFrame(replayErr))
 				_ = writer.close(closeStatus(replayErr), "workspace access changed")
@@ -323,7 +343,9 @@ func (h *Handler) readLoop(ctx context.Context, connection *websocket.Conn, outp
 }
 
 func (h *Handler) deliverCatchUp(ctx context.Context, writer *socketWriter, actorID string, lastDeliveredSeq *int64) bool {
+	replayStartedAt := time.Now()
 	result, err := h.events.Replay(ctx, workspaceEvents.ReplayInput{ActorID: actorID, LastSeq: *lastDeliveredSeq})
+	h.observeReplay(replayStartedAt, result, result.SyncRequired || result.HasMore)
 	if err != nil {
 		_ = writer.write(ctx, publicErrorFrame(err))
 		_ = writer.close(closeStatus(err), "workspace access changed")
@@ -347,6 +369,38 @@ func (h *Handler) deliverCatchUp(ctx context.Context, writer *socketWriter, acto
 		}) == nil
 	}
 	return true
+}
+
+func (h *Handler) observeReplay(startedAt time.Time, result workspaceEvents.ReplayResult, syncRequired bool) {
+	if h == nil || h.metrics == nil {
+		return
+	}
+	if startedAt.IsZero() {
+		startedAt = time.Now()
+	}
+	observedAt := time.Now()
+	h.metrics.ObserveWorkspaceWebSocketReplay(int64(len(result.Events)), syncRequired)
+	h.metrics.ObserveWorkspaceWebSocketReplayDuration(observedAt.Sub(startedAt))
+	if lag, ok := oldestReplayEventAge(observedAt, result.Events); ok {
+		h.metrics.ObserveWorkspaceWebSocketReplayLag(lag)
+	}
+}
+
+func oldestReplayEventAge(now time.Time, events []workspaceEvents.Event) (time.Duration, bool) {
+	var oldest time.Time
+	for _, event := range events {
+		createdAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(event.CreatedAt))
+		if err != nil {
+			continue
+		}
+		if oldest.IsZero() || createdAt.Before(oldest) {
+			oldest = createdAt
+		}
+	}
+	if oldest.IsZero() {
+		return 0, false
+	}
+	return now.Sub(oldest), true
 }
 
 func deliveredCursor(previous int64, result workspaceEvents.ReplayResult) int64 {

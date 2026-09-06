@@ -1406,3 +1406,20 @@ transient P2P room. The new gateway Web image ID is
 These are preliminary container checks: the backend image was an earlier
 candidate snapshot. Final full-commit images, passive mode, data permissions,
 worker behavior and rollback still require their separate rehearsal evidence.
+
+### Private Metrics And Transport Observation
+
+A private Prometheus registry now accepts fixed service/operation categories
+and a static allowlist derived from the real HTTP router. It rejects request
+identifiers as labels. Realtime instrumentation counts accepted sockets and
+durable replay batches; event age and query duration are separate observations.
+PostgreSQL cumulative counters use per-field high-watermarks so late concurrent
+snapshots cannot double-count. Unavailable lease acquisition timestamps do not
+create misleading zero-valued lease-age gauges. Go/process collectors remain
+private, and the candidate gateway denies their public path.
+
+Parent independently passed PostgreSQL/race metrics (1.407 seconds), realtime
+(23.057) and HTTP (25.609), plus tagged staticcheck. A focused actual WebSocket
+upgrade regression passed and recorded HTTP 101 through the metrics middleware;
+route tests retain templates rather than resource IDs or query values. Command
+composition and worker queue collection are accepted in separate slices.

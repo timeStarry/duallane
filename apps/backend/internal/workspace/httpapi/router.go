@@ -103,6 +103,7 @@ type EmailService interface {
 }
 
 type RouterOptions struct {
+	ObserveHTTP         HTTPObserver
 	Gate                gate.Gate
 	Health              http.Handler
 	Readiness           http.Handler
@@ -139,6 +140,9 @@ type RouterOptions struct {
 
 func NewRouter(options RouterOptions) http.Handler {
 	router := chi.NewRouter()
+	if options.ObserveHTTP != nil {
+		router.Use(observeHTTP(options.ObserveHTTP))
+	}
 	if options.Health != nil {
 		router.Handle("/api/health", options.Health)
 	}
