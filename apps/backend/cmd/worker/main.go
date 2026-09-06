@@ -37,6 +37,7 @@ type workerProcessor struct {
 }
 
 type application struct {
+	rootContext  context.Context
 	pool         *pgxpool.Pool
 	processors   []workerProcessor
 	logger       *slog.Logger
@@ -80,7 +81,7 @@ func main() {
 }
 
 func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, logger *slog.Logger) (*application, error) {
-	app := &application{logger: logger, startupDelay: time.Minute}
+	app := &application{rootContext: ctx, logger: logger, startupDelay: time.Minute}
 	if !runtimeConfig.Enabled || (!runtimeConfig.NtfyWorkerEnabled && !runtimeConfig.EmailWorkerEnabled) {
 		return app, nil
 	}
@@ -163,8 +164,16 @@ func (app *application) healthHandler(runtimeConfig config.WorkspaceConfig) http
 	router.HandleFunc("GET /healthz", func(response http.ResponseWriter, _ *http.Request) {
 		writeHealth(response, http.StatusOK, healthResponse{OK: true, Service: serviceName, State: "live", Version: runtimeConfig.AppVersion, Commit: runtimeConfig.Commit})
 	})
-	router.HandleFunc("GET /readyz", func(response http.ResponseWriter, _ *http.Request) {
+	router.HandleFunc("GET /readyz", func(response http.ResponseWriter, request *http.Request) {
 		ready := app != nil && (app.pool != nil || len(app.processors) == 0)
+		if ready && app.rootContext != nil && app.rootContext.Err() != nil {
+			ready = false
+		}
+		if ready && app.pool != nil {
+			ctx, cancel := context.WithTimeout(request.Context(), 2*time.Second)
+			defer cancel()
+			ready = app.pool.Ping(ctx) == nil
+		}
 		status := http.StatusOK
 		state := "ready"
 		if !ready {

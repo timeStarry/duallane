@@ -100,6 +100,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	var emailService *email.Service
 	var emoteService *emotes.Service
 	var realtimeHandler http.Handler
+	var blobStore platformstorage.BlobStore
 	if runtimeConfig.Enabled {
 		var err error
 		catalog, err := emotes.LoadCatalogFile(runtimeConfig.EmoteCatalogPath)
@@ -134,7 +135,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		botService = bots.NewService(bots.ServiceOptions{Repository: bots.NewPGRepository(pool)})
 		memberService = members.NewService(members.ServiceOptions{Repository: members.NewPGRepository(pool)})
 		conversationService = conversations.NewService(conversations.ServiceOptions{Repository: conversations.NewPGRepository(pool)})
-		blobStore, err := newBlobStore(ctx, runtimeConfig)
+		blobStore, err = newBlobStore(ctx, runtimeConfig)
 		if err != nil {
 			pool.Close()
 			return nil, err
@@ -224,13 +225,20 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	healthInput := func() gate.HealthInput {
 		return gate.HealthInput{
 			Service: serviceName, Version: runtimeConfig.AppVersion, Commit: runtimeConfig.Commit,
-			Live: true, DatabaseReady: databaseReady, ObjectStoreReady: objectStoreReady || !runtimeConfig.Enabled, Workspace: workspaceGate,
+			Live: ctx.Err() == nil, DatabaseReady: databaseReady, ObjectStoreReady: objectStoreReady || !runtimeConfig.Enabled, Workspace: workspaceGate,
+		}
+	}
+	var databaseProbe, storageProbe func(context.Context) error
+	if runtimeConfig.Enabled {
+		databaseProbe = pool.Ping
+		if store, ok := blobStore.(interface{ AssertReady(context.Context) error }); ok {
+			storageProbe = store.AssertReady
 		}
 	}
 	return &application{
 		pool: pool,
 		handler: httpapi.NewRouter(httpapi.RouterOptions{
-			Gate: workspaceGate, Health: gate.HealthHandler(healthInput), Readiness: gate.ReadinessHandler(healthInput),
+			Gate: workspaceGate, Health: gate.HealthHandler(healthInput), Readiness: readinessHandler(healthInput, databaseProbe, storageProbe),
 			AuthRoutes: authHandler, ActorResolver: authHandler, Invites: inviteService,
 			Members: memberService, Conversations: conversationService, Messages: messageService,
 			Cards: cardService, Interactions: interactionService,

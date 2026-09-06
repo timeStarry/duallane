@@ -80,3 +80,14 @@ func TestWorkerRunsImmediatelyWhenConfiguredAndStops(t *testing.T) {
 		t.Fatal("worker did not stop after cancellation")
 	}
 }
+
+func TestStoppingWorkerIsNotReady(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	app := &application{rootContext: ctx}
+	cancel()
+	w := httptest.NewRecorder()
+	app.healthHandler(config.WorkspaceConfig{}).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("stopping readiness=%d", w.Code)
+	}
+}

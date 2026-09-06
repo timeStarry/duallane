@@ -18,6 +18,30 @@ type LocalBlobStore struct {
 	root string
 }
 
+// AssertReady inspects the configured directory without creating probe files,
+// changing permissions, or mutating object/registry state.
+func (s *LocalBlobStore) AssertReady(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s == nil || s.root == "" {
+		return internalError("inspect local storage", errors.New("storage root is required"))
+	}
+	if err := ensureNoSymlink(s.root); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(s.root)
+	if err != nil {
+		return internalError("inspect local storage", err)
+	}
+	defer root.Close()
+	_, err = root.Stat(".")
+	if err != nil {
+		return internalError("inspect local storage", err)
+	}
+	return nil
+}
+
 func NewLocalBlobStore(root string) (*LocalBlobStore, error) {
 	resolved, err := cleanRoot(root)
 	if err != nil {
