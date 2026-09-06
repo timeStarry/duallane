@@ -614,7 +614,7 @@ describe("workspace custom emotes", () => {
     for (let index = 0; index < 21; index += 1) {
       await service.createCollection("usr_owner", { name: `Collection ${index + 1}` });
     }
-    seedSyntheticEmotes(db, { count: 501, addToLibrary: true });
+    await seedSyntheticEmotes(db, { count: 501, addToLibrary: true });
 
     const uploaded = await service.upload({
       actorId: "usr_owner",
@@ -630,7 +630,7 @@ describe("workspace custom emotes", () => {
 
   it("rejects the 101st item in one collection with a stable conflict", async () => {
     const { service, db } = await fixture();
-    const emoteIds = seedSyntheticEmotes(db, { count: 101 });
+    const emoteIds = await seedSyntheticEmotes(db, { count: 101 });
     const collection = await service.createCollection("usr_owner", {
       name: "Full collection",
       emoteIds: emoteIds.slice(0, 100)
@@ -775,35 +775,39 @@ function seedMember(db, id = "usr_member", login = "member") {
   `).run(id, now);
 }
 
-function seedSyntheticEmotes(db, { count, addToLibrary = false }) {
+async function seedSyntheticEmotes(db, { count, addToLibrary = false }) {
   const now = new Date().toISOString();
   const ids = [];
-  for (let index = 0; index < count; index += 1) {
-    const id = `synthetic_emote_${index}`;
-    ids.push(id);
-    db.prepare(`
+  await db.transaction(async () => {
+    const insertEmote = db.prepare(`
       INSERT INTO workspace_custom_emotes (
         id, user_id, source_type, original_file_name, original_mime_type, label,
         normalized_mime_type, byte_size, width, height, frame_count, duration_ms,
         sha256, storage_key, sort_order, created_at, removed_at
       ) VALUES (?, 'usr_owner', 'upload', ?, 'image/webp', ?, 'image/webp', 1, 1, 1, 1, 0, ?, ?, ?, ?, NULL)
-    `).run(
-      id,
-      `${id}.webp`,
-      `Synthetic ${index}`,
-      index.toString(16).padStart(64, "0"),
-      `custom-emotes/usr_owner/${id}/content.webp`,
-      index,
-      now
-    );
-    if (addToLibrary) {
-      db.prepare(`
+    `);
+    const insertLibraryEntry = addToLibrary
+      ? db.prepare(`
         INSERT INTO workspace_emote_library_entries (
           id, user_id, entry_type, emote_id, collection_id, sort_order, created_at
         ) VALUES (?, 'usr_owner', 'emote', ?, NULL, ?, ?)
-      `).run(`synthetic_entry_${index}`, id, index, now);
+      `)
+      : null;
+    for (let index = 0; index < count; index += 1) {
+      const id = `synthetic_emote_${index}`;
+      ids.push(id);
+      insertEmote.run(
+        id,
+        `${id}.webp`,
+        `Synthetic ${index}`,
+        index.toString(16).padStart(64, "0"),
+        `custom-emotes/usr_owner/${id}/content.webp`,
+        index,
+        now
+      );
+      insertLibraryEntry?.run(`synthetic_entry_${index}`, id, index, now);
     }
-  }
+  });
   return ids;
 }
 
