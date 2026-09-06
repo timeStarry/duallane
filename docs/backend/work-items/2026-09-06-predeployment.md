@@ -59,16 +59,25 @@ ownership is unchanged and is recorded only in the canonical ledger.
 
 | Gate | Latest reviewed result | Remaining acceptance |
 | --- | --- | --- |
-| Go/Node aggregate baseline | `37ae061` full PostgreSQL/race, Go verify, Node lint/unit/build; its three CI jobs passed; `e31f56e` CI also passed | Repeat on the final integrated commit |
+| Go/Node aggregate baseline | `3bb8391` CI: Go quality/PostgreSQL/media, Node lint/unit/build/Chromium, and Go P2P Chromium jobs passed | Repeat on the final integrated commit; the separate Go Workspace job failed |
 | Actual native media | `78e43c6` fix; exact-image 28-case corpus passed with native libvips 8.14.1 | Build and test the final integrated runtime image |
-| Workspace browser | Original complete local suite: 10 passed, 2 failed; independent CI job added in `2c5c164` | Fix Echo release delivery and continuous-message realtime; rerun all original cases |
-| Release safety | Accepted immutable migration image checks, passive candidates, offline Node startup, canonical snapshot component, read-only database drain command, read-only gateway smoke | Integrate restart-policy fencing, complete Go-to-Go old-configuration recovery, drain/provider gate and post-cutover/recovery smoke; rehearse failure and rollback |
+| Workspace browser | `3bb8391` complete CI suite: 10 passed, 2 failed; the long flow reached custom-emote upload before timing out | Fix Echo release delivery, the independently reproduced stale conversation merge, and the custom-emote response stall; rerun all original cases |
+| Release safety | Accepted immutable migration image checks, passive candidates, offline Node startup, canonical snapshot, database drain command, gateway smoke, and restart-policy fencing (`3d4b57b`/`3bb8391`) | Complete Go-to-Go old-configuration recovery, integrate drain/provider gate and post-cutover/recovery smoke; rehearse failure and rollback |
 | Storage compatibility | Accepted bounded legacy reads, permission probes, read-only plan/verify, explicit S3 provisioning and backfill journal library | Close retained offline operator-tool boundaries and prove final-image/same-authority recovery; no production copy or finalization |
-| Delivery | Draft PR #2 is open; commits through `78e43c6` are pushed; SSH transport recovered | Final aggregate review/CI, safe artifact cleanup and complete PR evidence before readiness |
+| Delivery | Draft PR #2 is open; commits through `3bb8391` are pushed; SSH transport recovered | Final aggregate review/CI, safe artifact cleanup and complete PR evidence before readiness |
 
 The parallel fixes do not change frontend test assertions, retries or timeouts.
 Private browser diagnostics are not PR artifacts. Passing component checks do
 not substitute for a coordinated release rehearsal or authorize a deployment.
+
+CI run [34050116344](https://github.com/timeStarry/duallane/actions/runs/34050116344)
+tested exact commit `3bb83919b490e492cc25395f261a3cbab201a598` and completed on
+2026-09-07 (Asia/Shanghai). The new complete Go Workspace job failed on Echo
+release-card visibility and on the long flow's custom-emote upload response at
+`e2e/workspace.spec.ts:1605` (the existing 240-second case deadline). Reaching
+that later step is not a complete browser pass and does not eliminate the
+separately identified client merge race. No failed-job DOM, cookies, or private
+diagnostic artifacts are copied into this record or the PR.
 
 ## Parallel Ownership — Wave 1
 
