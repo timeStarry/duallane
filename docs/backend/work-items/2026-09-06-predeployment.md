@@ -1325,3 +1325,22 @@ hash-only persistence, member denial, owner revocation and missing-resource audi
 Cleanup errors fail the test. Parent independently passed the frozen fixture,
 file and invite tests with PostgreSQL and race detection (8.008 seconds).
 These focused cases do not claim exhaustive parity for every route or status.
+
+### Stable Release Delivery Result
+
+Migration 033 adds a nullable finalization timestamp without changing Node's
+history or result contract. The interaction service revalidates original command
+recognition/hash, actor and membership under the existing invocation lock, then
+freezes only the five delivery counts of a successful `release-published`
+result. Non-count identity cannot change; counts must be nonnegative JavaScript
+safe integers with a consistent total. Concurrent finalizers and crash replay
+return the first persisted result. Failed post-commit work preserves the accepted
+command and remains retryable, rather than returning an ambiguous command failure.
+
+The runtime now reads the all-recipient publication summary after delivery and
+wires the finalizer in the actual Workspace application. Parent independently
+passed PostgreSQL/race interactions (36.829 seconds), runtime (6.397), application
+(10.335), and tagged staticcheck. HTTP first/replay assertions verify one sent
+recipient, no pending recipient and a durable frozen timestamp. A fresh browser
+run passed 11/12, including release, Bot and Strict Mode; the dual-user latest
+message visibility failure remains open and is not attributed to finalization.

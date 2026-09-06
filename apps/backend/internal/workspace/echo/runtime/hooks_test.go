@@ -66,6 +66,9 @@ func TestInteractionHooksRunOnlyAfterSuccessfulMutations(t *testing.T) {
 				t.Fatalf("command hook outcome=%+v err=%v calls=%v", out, err, deliver.kinds)
 			}
 			stub.command.Replayed = true
+			if row.resultType == "release-published" {
+				stub.command.ResultFinalized = true
+			}
 			hook.InteractionService = stub
 			if _, err := hook.ExecuteCommand(context.Background(), interactions.ExecuteCommandInput{}); err != nil || len(deliver.kinds) != 1 {
 				t.Fatal("command replay triggered delivery")

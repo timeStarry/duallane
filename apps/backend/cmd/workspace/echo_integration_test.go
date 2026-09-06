@@ -136,6 +136,14 @@ func assertEchoHTTPComposition(t *testing.T, ctx context.Context, app *applicati
 		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &result) != nil || !result.Command.OK || result.Command.Replayed != (attempt == 1) {
 			t.Fatalf("Echo release command=%d %s", response.Code, response.Body.String())
 		}
+		counts, ok := result.Command.Result.(map[string]any)
+		if !ok || counts["recipientCount"] != float64(1) || counts["sentCount"] != float64(1) || counts["pendingCount"] != float64(0) || counts["failedCount"] != float64(0) || counts["skippedCount"] != float64(0) {
+			t.Fatalf("first/replayed release must expose the committed delivery summary: %s", response.Body.String())
+		}
+	}
+	var frozen bool
+	if err := app.pool.QueryRow(ctx, `SELECT result_finalized_at IS NOT NULL FROM workspace_command_runs WHERE client_invocation_id='composition-echo-release'`).Scan(&frozen); err != nil || !frozen {
+		t.Fatalf("release result was not frozen: frozen=%v err=%v", frozen, err)
 	}
 	var releaseDeliveries int
 	var releaseStatus, releaseError string

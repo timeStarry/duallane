@@ -179,6 +179,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	var emoteService *emotes.Service
 	var echoRequirements *requirements.Service
 	var echoSolicitations *solicitations.Service
+	var echoReleases *releases.Service
 	var echoDelivery *delivery.Service
 	var realtimeHandler http.Handler
 	var blobStore platformstorage.BlobStore
@@ -258,7 +259,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			Requirements: echoRequirements,
 		})
 		releaseRepository := releases.NewPGRepository(pool)
-		echoReleases, err := releases.NewService(releases.ServiceOptions{Repository: releaseRepository, Catalog: releaseCatalog})
+		echoReleases, err = releases.NewService(releases.ServiceOptions{Repository: releaseRepository, Catalog: releaseCatalog})
 		if err != nil {
 			pool.Close()
 			return nil, err
@@ -449,7 +450,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			Members: echoruntime.MemberHooks{Service: memberService, Delivery: echoDelivery, SpaceID: auth.DefaultSpaceID}, Conversations: conversationService, Messages: messageService,
 			Avatars:             avatarService,
 			Cards:               echoruntime.CardHooks{CardService: cardService, Delivery: echoDelivery, SpaceID: auth.DefaultSpaceID},
-			Interactions:        echoruntime.InteractionHooks{InteractionService: interactionService, Delivery: echoDelivery, SpaceID: auth.DefaultSpaceID},
+			Interactions:        echoruntime.InteractionHooks{InteractionService: interactionService, Delivery: echoDelivery, Finalizer: interactionService, PublicationReader: echoReleases, SpaceID: auth.DefaultSpaceID},
 			Overview:            overviewService,
 			Bootstrap:           bootstrapService,
 			Files:               fileService,

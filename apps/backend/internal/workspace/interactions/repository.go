@@ -29,6 +29,7 @@ type Tx interface {
 	ConsumeRateLimit(context.Context, RateLimitInput) (bool, time.Duration, error)
 	InsertCommandRun(context.Context, CommandRunRecord) (*CommandRunRecord, bool, error)
 	CompleteCommandRun(context.Context, string, *string, []byte, time.Time) error
+	FinalizeCommandRun(context.Context, string, []byte, time.Time) (*CommandRunRecord, bool, error)
 	FailCommandRun(context.Context, string, string, time.Time) error
 	ExpireWorkflows(context.Context, string, string, string, time.Time) error
 	InsertWorkflow(context.Context, WorkflowRecord) (*WorkflowRecord, bool, error)

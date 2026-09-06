@@ -162,6 +162,7 @@ type CommandRunRecord struct {
 	ErrorCode          string
 	CreatedAt          time.Time
 	CompletedAt        *time.Time
+	ResultFinalizedAt  *time.Time
 }
 
 type ExecuteCommandInput struct {
@@ -173,6 +174,16 @@ type ExecuteCommandInput struct {
 	MentionedBotIDs    []string
 	ClientInvocationID string
 	Request            Request
+}
+
+// FinalizeCommandResultInput carries the trusted result of the original
+// command execution into the post-commit finalization seam. The execution
+// input is intentionally retained so interactions can recompute the request
+// binding; callers must not supply a precomputed hash.
+type FinalizeCommandResultInput struct {
+	Execution ExecuteCommandInput
+	Original  CommandOutcome
+	Result    any
 }
 
 type StartWorkflowInput struct {
@@ -203,10 +214,11 @@ type CancelWorkflowInput struct {
 }
 
 type CommandOutcome struct {
-	OK           bool    `json:"ok"`
-	Replayed     bool    `json:"replayed"`
-	Result       any     `json:"result"`
-	ResultCardID *string `json:"resultCardId"`
+	OK              bool    `json:"ok"`
+	Replayed        bool    `json:"replayed"`
+	Result          any     `json:"result"`
+	ResultCardID    *string `json:"resultCardId"`
+	ResultFinalized bool    `json:"-"`
 }
 type WorkflowOutcome struct {
 	Workflow Workflow `json:"workflow"`

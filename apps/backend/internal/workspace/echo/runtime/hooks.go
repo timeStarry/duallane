@@ -30,13 +30,21 @@ type InteractionService interface {
 
 type InteractionHooks struct {
 	InteractionService
-	Delivery DeliveryHooks
-	SpaceID  string
+	Delivery          DeliveryHooks
+	Finalizer         Finalizer
+	PublicationReader PublicationReader
+	SpaceID           string
 }
 
 func (s InteractionHooks) ExecuteCommand(ctx context.Context, input interactions.ExecuteCommandInput) (interactions.CommandOutcome, error) {
 	value, err := s.InteractionService.ExecuteCommand(ctx, input)
-	if err == nil && value.OK && !value.Replayed {
+	if err != nil || !value.OK || value.ResultFinalized {
+		return value, err
+	}
+	if isReleaseResult(value.Result) {
+		return s.finalizeReleaseCommand(ctx, input, value), nil
+	}
+	if !value.Replayed {
 		s.syncResult(ctx, value.Result, input.Request.Meta)
 	}
 	return value, err

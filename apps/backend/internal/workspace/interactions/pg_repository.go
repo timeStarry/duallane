@@ -161,9 +161,15 @@ func (r *PGRepository) GetCommandRun(ctx context.Context, spaceID, actorID, clie
 	}
 	return getCommandRun(ctx, r.pool, spaceID, actorID, clientID)
 }
-func getCommandRun(ctx context.Context, queryer pgQueryer, spaceID, actorID, clientID string) (*CommandRunRecord, error) {
+
+const commandRunColumns = `id, space_id, conversation_id, actor_user_id, bot_user_id,
+       command_name, command_version, client_invocation_id, request_hash,
+       arguments_json, status, result_card_id, COALESCE(result_json, ''),
+       COALESCE(error_code, ''), created_at, completed_at, result_finalized_at`
+
+func scanCommandRun(row pgx.Row) (*CommandRunRecord, error) {
 	var record CommandRunRecord
-	err := queryer.QueryRow(ctx, `SELECT id, space_id, conversation_id, actor_user_id, bot_user_id, command_name, command_version, client_invocation_id, request_hash, arguments_json, status, result_card_id, COALESCE(result_json, ''), COALESCE(error_code, ''), created_at, completed_at FROM workspace_command_runs WHERE space_id = $1 AND actor_user_id = $2 AND client_invocation_id = $3`, spaceID, actorID, clientID).Scan(&record.ID, &record.SpaceID, &record.ConversationID, &record.ActorUserID, &record.BotUserID, &record.CommandName, &record.CommandVersion, &record.ClientInvocationID, &record.RequestHash, &record.ArgumentsJSON, &record.Status, &record.ResultCardID, &record.ResultJSON, &record.ErrorCode, &record.CreatedAt, &record.CompletedAt)
+	err := row.Scan(&record.ID, &record.SpaceID, &record.ConversationID, &record.ActorUserID, &record.BotUserID, &record.CommandName, &record.CommandVersion, &record.ClientInvocationID, &record.RequestHash, &record.ArgumentsJSON, &record.Status, &record.ResultCardID, &record.ResultJSON, &record.ErrorCode, &record.CreatedAt, &record.CompletedAt, &record.ResultFinalizedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -171,7 +177,19 @@ func getCommandRun(ctx context.Context, queryer pgQueryer, spaceID, actorID, cli
 		return nil, err
 	}
 	record.CreatedAt = record.CreatedAt.UTC()
+	if record.CompletedAt != nil {
+		value := record.CompletedAt.UTC()
+		record.CompletedAt = &value
+	}
+	if record.ResultFinalizedAt != nil {
+		value := record.ResultFinalizedAt.UTC()
+		record.ResultFinalizedAt = &value
+	}
 	return &record, nil
+}
+
+func getCommandRun(ctx context.Context, queryer pgQueryer, spaceID, actorID, clientID string) (*CommandRunRecord, error) {
+	return scanCommandRun(queryer.QueryRow(ctx, `SELECT `+commandRunColumns+` FROM workspace_command_runs WHERE space_id = $1 AND actor_user_id = $2 AND client_invocation_id = $3`, spaceID, actorID, clientID))
 }
 
 const workflowSelect = `SELECT id, space_id, conversation_id, actor_user_id, bot_user_id, workflow_type, workflow_version, state_json, status, revision, expires_at, created_at, updated_at, client_invocation_id, start_request_hash FROM workspace_workflow_sessions`
@@ -284,15 +302,14 @@ func (t *pgTx) ConsumeRateLimit(ctx context.Context, input RateLimitInput) (bool
 }
 
 func (t *pgTx) InsertCommandRun(ctx context.Context, input CommandRunRecord) (*CommandRunRecord, bool, error) {
-	var record CommandRunRecord
-	err := t.tx.QueryRow(ctx, `INSERT INTO workspace_command_runs (id, space_id, conversation_id, actor_user_id, bot_user_id, command_name, command_version, client_invocation_id, request_hash, arguments_json, status, result_card_id, result_json, error_code, created_at, completed_at) VALUES ($1, $2, NULLIF($3, ''), $4, NULLIF($5, ''), $6, $7, $8, $9, $10, $11, NULL, NULL, NULL, $12, NULL) ON CONFLICT (space_id, actor_user_id, client_invocation_id) DO NOTHING RETURNING id, space_id, conversation_id, actor_user_id, bot_user_id, command_name, command_version, client_invocation_id, request_hash, arguments_json, status, result_card_id, COALESCE(result_json, ''), COALESCE(error_code, ''), created_at, completed_at`, input.ID, input.SpaceID, stringValue(input.ConversationID), input.ActorUserID, stringValue(input.BotUserID), input.CommandName, input.CommandVersion, input.ClientInvocationID, input.RequestHash, string(input.ArgumentsJSON), input.Status, input.CreatedAt.UTC()).Scan(&record.ID, &record.SpaceID, &record.ConversationID, &record.ActorUserID, &record.BotUserID, &record.CommandName, &record.CommandVersion, &record.ClientInvocationID, &record.RequestHash, &record.ArgumentsJSON, &record.Status, &record.ResultCardID, &record.ResultJSON, &record.ErrorCode, &record.CreatedAt, &record.CompletedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, false, nil
-	}
+	record, err := scanCommandRun(t.tx.QueryRow(ctx, `INSERT INTO workspace_command_runs (id, space_id, conversation_id, actor_user_id, bot_user_id, command_name, command_version, client_invocation_id, request_hash, arguments_json, status, result_card_id, result_json, error_code, created_at, completed_at) VALUES ($1, $2, NULLIF($3, ''), $4, NULLIF($5, ''), $6, $7, $8, $9, $10, $11, NULL, NULL, NULL, $12, NULL) ON CONFLICT (space_id, actor_user_id, client_invocation_id) DO NOTHING RETURNING `+commandRunColumns, input.ID, input.SpaceID, stringValue(input.ConversationID), input.ActorUserID, stringValue(input.BotUserID), input.CommandName, input.CommandVersion, input.ClientInvocationID, input.RequestHash, string(input.ArgumentsJSON), input.Status, input.CreatedAt.UTC()))
 	if err != nil {
 		return nil, false, err
 	}
-	return &record, true, nil
+	if record == nil {
+		return nil, false, nil
+	}
+	return record, true, nil
 }
 func (t *pgTx) CompleteCommandRun(ctx context.Context, runID string, resultCardID *string, resultJSON []byte, at time.Time) error {
 	result, err := t.tx.Exec(ctx, `UPDATE workspace_command_runs SET status = 'succeeded', result_card_id = $1, result_json = $2, completed_at = $3 WHERE id = $4 AND status = 'pending'`, resultCardID, string(resultJSON), at.UTC(), runID)
@@ -304,6 +321,18 @@ func (t *pgTx) CompleteCommandRun(ctx context.Context, runID string, resultCardI
 	}
 	return nil
 }
+
+func (t *pgTx) FinalizeCommandRun(ctx context.Context, runID string, resultJSON []byte, at time.Time) (*CommandRunRecord, bool, error) {
+	updated, err := scanCommandRun(t.tx.QueryRow(ctx, `UPDATE workspace_command_runs SET result_json = $2, result_finalized_at = $3 WHERE id = $1 AND status = 'succeeded' AND result_finalized_at IS NULL RETURNING `+commandRunColumns, runID, string(resultJSON), at.UTC()))
+	if err != nil {
+		return nil, false, err
+	}
+	if updated == nil {
+		return nil, false, nil
+	}
+	return updated, true, nil
+}
+
 func (t *pgTx) FailCommandRun(ctx context.Context, runID, errorCode string, at time.Time) error {
 	result, err := t.tx.Exec(ctx, `UPDATE workspace_command_runs SET status = 'failed', error_code = $1, completed_at = $2 WHERE id = $3 AND status = 'pending'`, errorCode, at.UTC(), runID)
 	if err != nil {

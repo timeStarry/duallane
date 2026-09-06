@@ -154,7 +154,7 @@ func (s *Service) ExecuteCommand(ctx context.Context, input ExecuteCommandInput)
 				}
 				if existing.Status == "succeeded" {
 					result, _ := decodeJSON(existing.ResultJSON)
-					outcome = CommandOutcome{OK: true, Replayed: true, Result: result, ResultCardID: existing.ResultCardID}
+					outcome = CommandOutcome{OK: true, Replayed: true, Result: result, ResultCardID: existing.ResultCardID, ResultFinalized: existing.ResultFinalizedAt != nil}
 					return nil
 				}
 				if existing.Status == "failed" {
@@ -196,7 +196,7 @@ func (s *Service) ExecuteCommand(ctx context.Context, input ExecuteCommandInput)
 				}
 				if run.Status == "succeeded" {
 					result, _ := decodeJSON(run.ResultJSON)
-					outcome = CommandOutcome{OK: true, Replayed: true, Result: result, ResultCardID: run.ResultCardID}
+					outcome = CommandOutcome{OK: true, Replayed: true, Result: result, ResultCardID: run.ResultCardID, ResultFinalized: run.ResultFinalizedAt != nil}
 					return nil
 				}
 				operationErr = conflict(CodeCommandInProgress, "命令正在执行")
