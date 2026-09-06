@@ -2166,3 +2166,18 @@ test/lint/build/Chromium job, Go quality/PostgreSQL job and Go P2P browser job.
 Its original Go Workspace suite remained 10/12 (Echo visibility and the history
 message click). That commit predates this shutdown patch and the pending
 frontend fix; it is not a final all-green candidate.
+
+### Real Read-Only Release-Check Runtime
+
+Parent reviewed and independently ran
+`scripts/backend/release-drain-runtime.docker.test.mjs` with the exact
+`97a75c4` Workspace image `sha256:881a3bb401e4d166a90e2f8aa574d107002a3881fb086af07c90b90066bd047e`:
+six test results passed in 4.013 seconds. Actual CLI exits were 0 for local
+ready, 2 for a reserved upload, 2 for an absent schema, and 1 for a nonexistent
+synthetic database. Container identity, non-root UID, read-only root filesystem,
+capability removal, no-new-privileges and absence of data mounts were checked.
+Before/after table fingerprints were unchanged. The tests removed their exact
+owned containers and isolated schema; no production data or real provider was
+accessed. The no-image invocation is explicitly skipped, not a runtime pass.
+This is a command/runtime gate, not a substitute for the pending coordinated
+cutover and recovery rehearsal.
