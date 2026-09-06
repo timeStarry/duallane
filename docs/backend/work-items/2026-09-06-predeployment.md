@@ -1457,3 +1457,14 @@ injection and full Node-to-Go physical fixture read are separate integration
 checks. The latter exposed a local-root layout mismatch (`workspace-files`
 under Node's data directory), now tracked for a command-composition correction;
 these domain tests alone do not establish existing-volume compatibility.
+
+### Workspace Command Observation And Legacy Reader Injection
+
+Workspace command composition now supplies the concrete legacy reader to the
+file service, shares one private registry with HTTP/realtime observers, and
+exposes `/metrics` only on its private service surface. Scrapes read pool/process
+snapshots without issuing business SQL. Both active and health-only applications
+use the private handler; public health is unchanged. Parent independently
+passed the command PostgreSQL/race suite (8.180 seconds), tagged staticcheck,
+and identifier-exclusion/private-method unit coverage. The separately identified
+data-root compatibility correction remains required before a final image.

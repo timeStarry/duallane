@@ -149,6 +149,10 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		}
 	}()
 	var logger *slog.Logger
+	metricSet, err := newWorkspaceMetrics()
+	if err != nil {
+		return nil, err
+	}
 	if len(loggers) > 0 {
 		logger = loggers[0]
 	}
@@ -274,7 +278,8 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			return nil, err
 		}
 		objectStoreReady = true
-		fileService = files.NewService(files.ServiceOptions{Repository: files.NewPGRepository(pool), BlobStore: blobStore})
+		legacyFileReader, _ := blobStore.(files.LegacyObjectReader)
+		fileService = files.NewService(files.ServiceOptions{Repository: files.NewPGRepository(pool), BlobStore: blobStore, LegacyReader: legacyFileReader})
 		legacyAvatarReader, _ := blobStore.(avatars.LegacyObjectReader)
 		avatarService = avatars.NewService(avatars.ServiceOptions{
 			Repository: avatars.NewPGRepository(pool), BlobStore: blobStore,
@@ -410,6 +415,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			AppVersion: runtimeConfig.AppVersion,
 		})
 		realtimeHandler = realtime.NewHandler(realtime.HandlerOptions{
+			Metrics:     metricSet,
 			RootContext: ctx, ActorResolver: authHandler, Events: eventService, Hub: eventHub,
 			Presence: presenceService,
 		})
@@ -451,15 +457,16 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	if runtimeConfig.CandidateHealthOnly {
 		// Compose the full dependency graph above, but install no business
 		// handlers, WebSockets or background tasks on a production candidate.
-		return &application{pool: pool, cancel: cancel, logger: logger, handler: candidateHealthRouter(
+		return &application{pool: pool, cancel: cancel, logger: logger, handler: withPrivateWorkspaceMetrics(candidateHealthRouter(
 			gate.HealthHandler(healthInput), readinessHandler(healthInput, databaseProbe, storageProbe),
-		)}, nil
+		), metricSet, pool)}, nil
 	}
 	return &application{
 		pool: pool, cancel: cancel, backgroundDone: backgroundDone,
 		shutdownBotGateway: botGatewayWebSocket.Shutdown, logger: logger,
-		handler: httpapi.NewRouter(httpapi.RouterOptions{
-			Gate: workspaceGate, Health: gate.HealthHandler(healthInput), Readiness: readinessHandler(healthInput, databaseProbe, storageProbe),
+		handler: withPrivateWorkspaceMetrics(httpapi.NewRouter(httpapi.RouterOptions{
+			ObserveHTTP: workspaceHTTPObserver(metricSet),
+			Gate:        workspaceGate, Health: gate.HealthHandler(healthInput), Readiness: readinessHandler(healthInput, databaseProbe, storageProbe),
 			AuthRoutes: authHandler, ActorResolver: authHandler, Invites: inviteService,
 			Members: echoruntime.MemberHooks{Service: memberService, Delivery: echoDelivery, SpaceID: auth.DefaultSpaceID}, Conversations: conversationService, Messages: messageService,
 			Avatars:             avatarService,
@@ -482,7 +489,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			Realtime:            realtimeHandler,
 			FrontendURL:         runtimeConfig.FrontendURL, PublicBaseURL: runtimeConfig.PublicBaseURL,
 			TrustProxy: runtimeConfig.TrustProxy,
-		}),
+		}), metricSet, pool),
 	}, nil
 }
 
