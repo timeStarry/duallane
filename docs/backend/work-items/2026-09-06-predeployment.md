@@ -695,3 +695,19 @@ fields enter the typed owner operation. Fresh PostgreSQL/race passed the Bot
 package (4.170 seconds); focused HTTP/race passed (1.219 seconds), followed by
 integration-tag staticcheck. WebSocket shutdown and application composition
 remain independently validated changes.
+
+### Read-Only Storage Operator
+
+The candidate storage command can obtain one repeatable-read/read-only
+PostgreSQL snapshot and verify canonical objects through local or S3 read-only
+adapters. Parent review added explicit catalog row limits, cancellation-aware
+verification, signal handling and secret-safe flag diagnostics. Manifest
+assertions never mark a run mutation-ready; a live runtime fence remains a
+separate required integration. No backfill or finalization is enabled here.
+
+Independent fresh PostgreSQL/race passed storageops and its real command
+(5.618 / 1.310 seconds), followed by integration-tag staticcheck. A newly
+generated actual Node backfill/verify fixture then passed Go canonical-byte
+verification: one object, 37 bytes, zero failures and zero Go mutations.
+See [Storage operator](../STORAGE_OPERATOR.md) for the durable operating contract,
+including the distinction from Node's timestamp-writing dedupe verification.
