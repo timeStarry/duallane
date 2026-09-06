@@ -40,6 +40,13 @@ type Repository interface {
 	WithTx(ctx context.Context, fn func(Tx) error) error
 }
 
+// UploadMaintenanceRepository is the bounded read seam used by the optional
+// worker. It is kept separate from Repository so compatibility fakes and
+// non-PostgreSQL adapters are not forced to implement cleanup enumeration.
+type UploadMaintenanceRepository interface {
+	ListUploadMaintenancePage(ctx context.Context, spaceID string, before time.Time, after *UploadMaintenanceCursor, limit int, includeTerminal bool) (UploadMaintenancePage, error)
+}
+
 type StorageCleanup struct {
 	Object       *StorageObjectRecord
 	DeleteObject bool
@@ -64,3 +71,4 @@ type Tx interface {
 }
 
 var _ Repository = (*PGRepository)(nil)
+var _ UploadMaintenanceRepository = (*PGRepository)(nil)

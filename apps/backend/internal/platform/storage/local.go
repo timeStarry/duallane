@@ -7,7 +7,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 )
 
 // LocalBlobStore stores private Workspace bytes below one configured root.
@@ -225,6 +227,161 @@ func (s *LocalBlobStore) Delete(_ context.Context, object Object) error {
 		return internalError("delete local object", err)
 	}
 	return nil
+}
+
+// ListUploadAttemptObjects enumerates only the flat attempts directory for
+// one validated upload. It intentionally rejects symlinks instead of
+// resolving them so a cleanup worker cannot escape the configured root.
+func (s *LocalBlobStore) ListUploadAttemptObjects(ctx context.Context, uploadID string, before time.Time, cursor string, limit int) (UploadAttemptObjectPage, error) {
+	if err := ctx.Err(); err != nil {
+		return UploadAttemptObjectPage{}, err
+	}
+	if s == nil || strings.TrimSpace(s.root) == "" {
+		return UploadAttemptObjectPage{}, internalError("list local upload attempts", errors.New("storage root is required"))
+	}
+	prefix, err := uploadAttemptPrefix(uploadID)
+	if err != nil {
+		return UploadAttemptObjectPage{}, err
+	}
+	root, err := os.OpenRoot(s.root)
+	if err != nil {
+		return UploadAttemptObjectPage{}, internalError("open local upload maintenance root", err)
+	}
+	defer root.Close()
+	relativeDirectory := filepath.FromSlash(strings.TrimSuffix(prefix, "/"))
+	if err := ensurePathParents(s.root, filepath.Join(s.root, relativeDirectory)); err != nil {
+		return UploadAttemptObjectPage{}, err
+	}
+	directoryInfo, err := root.Lstat(relativeDirectory)
+	if errors.Is(err, os.ErrNotExist) {
+		return UploadAttemptObjectPage{}, nil
+	}
+	if err != nil {
+		return UploadAttemptObjectPage{}, internalError("inspect local upload attempts", err)
+	}
+	if directoryInfo.Mode()&os.ModeSymlink != 0 {
+		return UploadAttemptObjectPage{}, newError("storage.invalid_key", "文件存储路径无效", 500, errors.New("upload attempts directory is a symlink"))
+	}
+	if !directoryInfo.IsDir() {
+		return UploadAttemptObjectPage{}, newError("storage.object_conflict", "存储对象登记冲突", 409, errors.New("upload attempts path is not a directory"))
+	}
+	directory, err := root.Open(relativeDirectory)
+	if errors.Is(err, os.ErrNotExist) {
+		return UploadAttemptObjectPage{}, nil
+	}
+	if err != nil {
+		return UploadAttemptObjectPage{}, internalError("open local upload attempts", err)
+	}
+	defer directory.Close()
+	page := UploadAttemptObjectPage{Objects: make([]UploadAttemptObject, 0, minMaintenancePageCapacity(limit))}
+	limit = normalizeMaintenanceLimit(limit)
+	// File.ReadDir returns filesystem order, not lexical order. Scan bounded
+	// chunks and retain only the smallest page after the key cursor; otherwise
+	// an early high key can permanently skip lower keys on the next call.
+	for {
+		if err := ctx.Err(); err != nil {
+			return UploadAttemptObjectPage{}, err
+		}
+		entries, readErr := directory.ReadDir(128)
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return UploadAttemptObjectPage{}, internalError("list local upload attempts", readErr)
+		}
+		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return UploadAttemptObjectPage{}, err
+			}
+			if entry.Type()&os.ModeSymlink != 0 {
+				return UploadAttemptObjectPage{}, newError("storage.invalid_key", "文件存储路径无效", 500, errors.New("symlink is not allowed in upload attempts"))
+			}
+			if !entry.Type().IsRegular() {
+				continue
+			}
+			key := prefix + entry.Name()
+			if _, err := validateUploadAttemptObjectKey(uploadID, key); err != nil {
+				return UploadAttemptObjectPage{}, err
+			}
+			if key <= cursor {
+				continue
+			}
+			info, err := root.Lstat(filepath.Join(relativeDirectory, entry.Name()))
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return UploadAttemptObjectPage{}, internalError("stat local upload attempt", err)
+			}
+			if !info.Mode().IsRegular() {
+				continue
+			}
+			if !before.IsZero() && info.ModTime().After(before) {
+				continue
+			}
+			index := sort.Search(len(page.Objects), func(index int) bool { return page.Objects[index].Key >= key })
+			if index >= limit {
+				continue
+			}
+			if len(page.Objects) < limit {
+				page.Objects = append(page.Objects, UploadAttemptObject{})
+			}
+			copy(page.Objects[index+1:], page.Objects[index:len(page.Objects)-1])
+			page.Objects[index] = UploadAttemptObject{Key: key, LastModified: info.ModTime().UTC(), ByteSize: info.Size()}
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+	}
+	if len(page.Objects) == limit {
+		page.NextCursor = page.Objects[len(page.Objects)-1].Key
+	}
+	return page, nil
+}
+
+// DeleteUploadAttemptObject removes one object after validating that the key
+// is a single child of the requested upload's attempts directory.
+func (s *LocalBlobStore) DeleteUploadAttemptObject(ctx context.Context, uploadID, key string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s == nil || strings.TrimSpace(s.root) == "" {
+		return internalError("delete local upload attempt", errors.New("storage root is required"))
+	}
+	key, err := validateUploadAttemptObjectKey(uploadID, key)
+	if err != nil {
+		return err
+	}
+	if err := ensurePathParents(s.root, filepath.Dir(filepath.Join(s.root, filepath.FromSlash(key)))); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(s.root)
+	if err != nil {
+		return internalError("open local upload maintenance root", err)
+	}
+	defer root.Close()
+	relativeKey := filepath.FromSlash(key)
+	info, err := root.Lstat(relativeKey)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return internalError("inspect local upload attempt", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return newError("storage.invalid_key", "文件存储路径无效", 500, errors.New("attempt is a symlink"))
+	}
+	if !info.Mode().IsRegular() {
+		return newError("storage.object_conflict", "存储对象登记冲突", 409, errors.New("attempt is not a regular file"))
+	}
+	if err := root.Remove(relativeKey); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return internalError("delete local upload attempt", err)
+	}
+	return nil
+}
+
+func minMaintenancePageCapacity(limit int) int {
+	if limit <= 0 || limit > 1000 {
+		return DefaultMaintenanceBatchSize
+	}
+	return limit
 }
 
 var errDigestMismatch = errors.New("object digest mismatch")

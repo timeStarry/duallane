@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -56,6 +57,9 @@ type s3API interface {
 	GetObject(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 	DeleteObject(context.Context, *s3.DeleteObjectInput, ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
 	HeadBucket(context.Context, *s3.HeadBucketInput, ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
+	ListObjectsV2(context.Context, *s3.ListObjectsV2Input, ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+	ListMultipartUploads(context.Context, *s3.ListMultipartUploadsInput, ...func(*s3.Options)) (*s3.ListMultipartUploadsOutput, error)
+	AbortMultipartUpload(context.Context, *s3.AbortMultipartUploadInput, ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error)
 }
 
 // AssertReady verifies that the configured private bucket is reachable using
@@ -292,6 +296,142 @@ func (s *S3BlobStore) Delete(ctx context.Context, object Object) error {
 		return s3ProviderError("delete object", err)
 	}
 	return nil
+}
+
+// ListUploadAttemptObjects lists one request-owned prefix only. The prefix is
+// constructed from a validated upload ID rather than accepted from a caller,
+// which prevents this maintenance capability from becoming a bucket scan.
+func (s *S3BlobStore) ListUploadAttemptObjects(ctx context.Context, uploadID string, before time.Time, cursor string, limit int) (UploadAttemptObjectPage, error) {
+	if err := s.valid(); err != nil {
+		return UploadAttemptObjectPage{}, err
+	}
+	prefix, err := uploadAttemptPrefix(uploadID)
+	if err != nil {
+		return UploadAttemptObjectPage{}, err
+	}
+	limit = normalizeMaintenanceLimit(limit)
+	input := &s3.ListObjectsV2Input{
+		Bucket:  aws.String(s.bucket),
+		Prefix:  aws.String(prefix),
+		MaxKeys: aws.Int32(int32(limit)),
+	}
+	if cursor != "" {
+		input.ContinuationToken = aws.String(cursor)
+	}
+	page, err := s.client.ListObjectsV2(ctx, input)
+	if err != nil {
+		return UploadAttemptObjectPage{}, s3ProviderError("list upload attempts", err)
+	}
+	if page == nil {
+		return UploadAttemptObjectPage{}, s3ProviderError("list upload attempts", errors.New("S3 list response is nil"))
+	}
+	result := UploadAttemptObjectPage{Objects: make([]UploadAttemptObject, 0, len(page.Contents))}
+	for _, item := range page.Contents {
+		if item.Key == nil {
+			return UploadAttemptObjectPage{}, s3ProviderError("list upload attempts", errors.New("S3 object key is missing"))
+		}
+		key, keyErr := validateUploadAttemptObjectKey(uploadID, *item.Key)
+		if keyErr != nil {
+			return UploadAttemptObjectPage{}, keyErr
+		}
+		modified := time.Time{}
+		if item.LastModified != nil {
+			modified = item.LastModified.UTC()
+		}
+		if !before.IsZero() && modified.IsZero() {
+			return UploadAttemptObjectPage{}, s3ProviderError("list upload attempts", errors.New("S3 object timestamp is missing"))
+		}
+		if !before.IsZero() && modified.After(before) {
+			continue
+		}
+		size := int64(0)
+		if item.Size != nil {
+			size = *item.Size
+		}
+		result.Objects = append(result.Objects, UploadAttemptObject{Key: key, LastModified: modified, ByteSize: size})
+	}
+	if page.IsTruncated != nil && *page.IsTruncated {
+		if page.NextContinuationToken == nil || strings.TrimSpace(*page.NextContinuationToken) == "" {
+			return UploadAttemptObjectPage{}, s3ProviderError("list upload attempts", errors.New("S3 continuation token is missing"))
+		}
+		result.NextCursor = *page.NextContinuationToken
+	}
+	return result, nil
+}
+
+// DeleteUploadAttemptObject revalidates the exact upload prefix before using
+// the normal idempotent object delete operation.
+func (s *S3BlobStore) DeleteUploadAttemptObject(ctx context.Context, uploadID, key string) error {
+	key, err := validateUploadAttemptObjectKey(uploadID, key)
+	if err != nil {
+		return err
+	}
+	return s.Delete(ctx, Object{Key: key})
+}
+
+// AbortStaleMultipartUploads mirrors the Node cleanup contract with one
+// provider page per call. It never accepts a caller-provided generic prefix;
+// only in-progress uploads whose keys begin with workspace/ are considered.
+func (s *S3BlobStore) AbortStaleMultipartUploads(ctx context.Context, before time.Time, cursor string, limit int) (MultipartMaintenanceResult, error) {
+	if err := s.valid(); err != nil {
+		return MultipartMaintenanceResult{}, err
+	}
+	if before.IsZero() {
+		return MultipartMaintenanceResult{}, newError("storage.maintenance_time_invalid", "存储维护时间无效", 500, errors.New("multipart cutoff is required"))
+	}
+	keyMarker, uploadIDMarker, err := decodeMultipartCursor(cursor)
+	if err != nil {
+		return MultipartMaintenanceResult{}, err
+	}
+	limit = normalizeMaintenanceLimit(limit)
+	input := &s3.ListMultipartUploadsInput{
+		Bucket:     aws.String(s.bucket),
+		Prefix:     aws.String("workspace/"),
+		MaxUploads: aws.Int32(int32(limit)),
+	}
+	if keyMarker != "" {
+		input.KeyMarker = aws.String(keyMarker)
+		input.UploadIdMarker = aws.String(uploadIDMarker)
+	}
+	page, err := s.client.ListMultipartUploads(ctx, input)
+	if err != nil {
+		return MultipartMaintenanceResult{}, s3ProviderError("list stale multipart uploads", err)
+	}
+	if page == nil {
+		return MultipartMaintenanceResult{}, s3ProviderError("list stale multipart uploads", errors.New("S3 multipart list response is nil"))
+	}
+	result := MultipartMaintenanceResult{Scanned: len(page.Uploads)}
+	var firstErr error
+	for _, upload := range page.Uploads {
+		if upload.Key == nil || upload.UploadId == nil || !strings.HasPrefix(*upload.Key, "workspace/") || upload.Initiated == nil || upload.Initiated.After(before) {
+			continue
+		}
+		_, abortErr := s.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{Bucket: aws.String(s.bucket), Key: upload.Key, UploadId: upload.UploadId})
+		if abortErr != nil {
+			if firstErr == nil {
+				firstErr = s3ProviderError("abort stale multipart upload", abortErr)
+			}
+			continue
+		}
+		result.Aborted++
+	}
+	if page.IsTruncated != nil && *page.IsTruncated {
+		if page.NextKeyMarker == nil || strings.TrimSpace(*page.NextKeyMarker) == "" {
+			return result, s3ProviderError("list stale multipart uploads", errors.New("S3 multipart key marker is missing"))
+		}
+		result.NextCursor = encodeMultipartCursor(stringValue(page.NextKeyMarker), stringValue(page.NextUploadIdMarker))
+	}
+	if firstErr != nil {
+		return result, firstErr
+	}
+	return result, nil
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func (s *S3BlobStore) headObject(ctx context.Context, key string) (*s3.HeadObjectOutput, error) {

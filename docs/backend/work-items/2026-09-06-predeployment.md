@@ -445,3 +445,33 @@ This demonstrates why matching disabled responses alone cannot prove route
 composition. The failing registration regression remains in the integration
 queue until those worker slices are accepted; it is not hidden by an allowlist
 or counted as a passing candidate gate.
+
+### Bounded Upload Maintenance Foundation
+
+The reviewed cleanup slice adds a one-shot upload maintenance service with PG
+keyset pages, upload/quota locks, a decisive current-activity check, atomic
+failure/quota/event/audit updates and post-commit staging cleanup. Terminal
+artifact enumeration is explicit. Storage exposes only per-upload attempt
+paths and a separate age-bounded Workspace multipart abort operation; it does
+not scan or delete canonical CAS objects. No scheduler is started here.
+
+Parent review reproduced a local pagination bug: filesystem-order `ReadDir`
+followed by a lexical cursor returned only two of five synthetic attempt keys.
+The adapter now reads fixed-size chunks, keeps a bounded sorted page and checks
+cancellation during enumeration. The same regression passes. Parent review
+also prevented new storage operations after cancellation, pruned completed
+attempt cursors, made the age fixture independent of wall-clock date, and kept
+hybrid multipart cleanup exclusively on the primary store.
+
+Independent fresh PostgreSQL/race passed for files and storage (45.907 / 7.432
+seconds), including a barrier-controlled touch winning after candidate selection,
+quota release and exact audit/event counts. Integration-tag staticcheck passed.
+Additional S3 loopback regressions verify exact prefix, age, continuation,
+missing timestamp/cursor refusal and cross-upload deletion refusal; fresh storage
+race tests then passed in 3.109 seconds. These are synthetic local/S3-protocol
+checks, not cloud IAM or production bucket evidence.
+
+Worker scheduling, fair cursor continuation across bounded periods, and real
+candidate-container rehearsal remain separate composition gates. The default
+reservation age is 30 minutes and multipart age is seven days; a five-minute
+loop interval is not an object-age cutoff.

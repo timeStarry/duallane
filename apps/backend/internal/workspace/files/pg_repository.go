@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -130,6 +131,13 @@ func (r *PGRepository) ListStaleUploads(ctx context.Context, spaceID string, bef
 	return listStaleUploads(ctx, r.pool, spaceID, before)
 }
 
+func (r *PGRepository) ListUploadMaintenancePage(ctx context.Context, spaceID string, before time.Time, after *UploadMaintenanceCursor, limit int, includeTerminal bool) (UploadMaintenancePage, error) {
+	if r == nil || r.pool == nil {
+		return UploadMaintenancePage{}, internalError("list workspace upload maintenance", errors.New("workspace postgres pool is required"))
+	}
+	return listUploadMaintenancePage(ctx, r.pool, spaceID, before, after, limit, includeTerminal)
+}
+
 func (r *PGRepository) ConversationMemberActive(ctx context.Context, spaceID, conversationID, userID string) (bool, error) {
 	if r == nil || r.pool == nil {
 		return false, internalError("check workspace conversation membership", errors.New("workspace postgres pool is required"))
@@ -193,6 +201,10 @@ func (t *pgTx) UsedTransferBytes(ctx context.Context, spaceID, userID string, si
 
 func (t *pgTx) ListStaleUploads(ctx context.Context, spaceID string, before time.Time) ([]StaleUploadRecord, error) {
 	return listStaleUploads(ctx, t.tx, spaceID, before)
+}
+
+func (t *pgTx) ListUploadMaintenancePage(ctx context.Context, spaceID string, before time.Time, after *UploadMaintenanceCursor, limit int, includeTerminal bool) (UploadMaintenancePage, error) {
+	return listUploadMaintenancePage(ctx, t.tx, spaceID, before, after, limit, includeTerminal)
 }
 
 func (t *pgTx) ConversationMemberActive(ctx context.Context, spaceID, conversationID, userID string) (bool, error) {
@@ -730,6 +742,59 @@ func listStaleUploads(ctx context.Context, queryer pgQueryer, spaceID string, be
 		return nil, internalError("scan stale workspace uploads", err)
 	}
 	return items, nil
+}
+
+func listUploadMaintenancePage(ctx context.Context, queryer pgQueryer, spaceID string, before time.Time, after *UploadMaintenanceCursor, limit int, includeTerminal bool) (UploadMaintenancePage, error) {
+	limit = normalizeUploadMaintenanceLimit(limit)
+	activity := "COALESCE(tl.last_activity_at, tl.created_at)"
+	statusCondition := "tl.status = 'reserved' AND a.status = 'pending' AND " + activity + " < $2"
+	if includeTerminal {
+		statusCondition = "(" + statusCondition + ") OR (tl.status IN ('completed', 'failed', 'released') AND " + activity + " < $2)"
+	}
+	query := `SELECT
+		tl.id, tl.space_id, tl.user_id, tl.direction, tl.byte_size, tl.status,
+		tl.attachment_id, tl.created_at, tl.completed_at, tl.released_at, tl.last_activity_at,
+		a.id, a.space_id, a.uploader_id, u.display_name, c.title, a.conversation_id,
+		a.visibility, a.status, a.file_name, a.mime_type, a.byte_size, a.storage_key,
+		a.upload_transfer_id, a.storage_object_id, a.created_at, a.completed_at,
+		so.id, so.sha256, so.object_key, so.byte_size, so.content_type, so.created_at,
+		so.verified_at, so.deleted_at
+	FROM attachments a
+	INNER JOIN users u ON u.id = a.uploader_id
+	LEFT JOIN conversations c ON c.id = a.conversation_id
+	LEFT JOIN workspace_storage_objects so ON so.id = a.storage_object_id AND so.deleted_at IS NULL
+	INNER JOIN transfer_ledger tl ON tl.id = a.upload_transfer_id
+	WHERE a.space_id = $1 AND tl.space_id = a.space_id AND tl.direction = 'upload'
+		AND (` + statusCondition + `)`
+	args := []any{spaceID, normalizeTime(before)}
+	if after != nil {
+		query += ` AND (` + activity + ` > $3 OR (` + activity + ` = $3 AND tl.id > $4))`
+		args = append(args, normalizeTime(after.ActivityAt), after.ID)
+	}
+	query += ` ORDER BY ` + activity + ` ASC, tl.id ASC LIMIT $` + strconv.Itoa(len(args)+1)
+	args = append(args, limit+1)
+	rows, err := queryer.Query(ctx, query, args...)
+	if err != nil {
+		return UploadMaintenancePage{}, internalError("list workspace upload maintenance", err)
+	}
+	defer rows.Close()
+	items := make([]StaleUploadRecord, 0, limit)
+	for rows.Next() {
+		candidate, scanErr := scanStaleUpload(rows)
+		if scanErr != nil {
+			return UploadMaintenancePage{}, internalError("scan workspace upload maintenance", scanErr)
+		}
+		items = append(items, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		return UploadMaintenancePage{}, internalError("scan workspace upload maintenance", err)
+	}
+	page := UploadMaintenancePage{Records: items}
+	if len(items) > limit {
+		page.Records = items[:limit]
+		page.Next = maintenanceCursorFor(page.Records[len(page.Records)-1])
+	}
+	return page, nil
 }
 
 func conversationMemberActive(ctx context.Context, queryer pgQueryer, spaceID, conversationID, userID string) (bool, error) {

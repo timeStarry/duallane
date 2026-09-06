@@ -1280,54 +1280,8 @@ func (s *Service) failUploadAfterCompletion(ctx context.Context, actorID, upload
 }
 
 func (s *Service) ReleaseStaleUploadReservations(ctx context.Context) (int, error) {
-	if s == nil || s.repo == nil {
-		return 0, internalError("release stale workspace uploads", errors.New("repository is required"))
-	}
-	now := s.nowUTC()
-	stale, err := s.repo.ListStaleUploads(ctx, s.space(), now.Add(-s.staleUploadAge))
-	if err != nil {
-		return 0, normalizeRepositoryError(err)
-	}
-	released := 0
-	for _, candidate := range stale {
-		parts, partsErr := s.repo.ListUploadParts(ctx, candidate.Transfer.ID)
-		if partsErr != nil {
-			return released, normalizeRepositoryError(partsErr)
-		}
-		var changed bool
-		err := s.repo.WithTx(ctx, func(tx Tx) error {
-			if err := lockKeys(ctx, tx, quotaLockKey(s.space(), candidate.Transfer.UserID, now), uploadLockKey(candidate.Transfer.ID)); err != nil {
-				return err
-			}
-			changedNow, err := tx.FailUpload(ctx, s.space(), candidate.Transfer.UserID, candidate.Transfer.ID, candidate.Attachment.ID, "stale upload reservation", now)
-			if err != nil {
-				return err
-			}
-			if !changedNow {
-				return nil
-			}
-			changed = true
-			payload, marshalErr := json.Marshal(map[string]any{"attachmentId": candidate.Attachment.ID, "status": string(AttachmentFailed)})
-			if marshalErr != nil {
-				return marshalErr
-			}
-			if err := s.writeEvent(ctx, tx, EventInput{Type: "attachment.failed", ActorID: candidate.Transfer.UserID, ConversationID: pointerValue(candidate.Attachment.ConversationID), TargetType: attachmentTargetType, TargetID: candidate.Attachment.ID, PayloadJSON: payload}, now); err != nil {
-				return err
-			}
-			if err := s.writeAudit(ctx, tx, nil, auth.RequestMeta{}, AuditInput{Action: "file.upload.failed", TargetType: attachmentTargetType, TargetID: candidate.Attachment.ID, ActorUserID: candidate.Transfer.UserID, Result: "failure", Reason: "stale upload reservation"}, now); err != nil {
-				return err
-			}
-			return nil
-		})
-		if err != nil {
-			return released, normalizeRepositoryError(err)
-		}
-		if changed {
-			released++
-			_ = s.cleanupUploadStaging(context.Background(), candidate.Transfer.ID, parts, candidate.Transfer.ByteSize)
-		}
-	}
-	return released, nil
+	result, err := s.RunUploadMaintenance(ctx, UploadMaintenanceOptions{})
+	return result.StaleReservationsFailed, err
 }
 
 func storageObjectLockKey(objectID string) string {
