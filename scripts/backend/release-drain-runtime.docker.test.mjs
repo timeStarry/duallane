@@ -12,6 +12,7 @@ import {
   validateRehearsalEnvironment,
 } from "./schema-coexistence.mjs";
 import { migrateDatabase, openDatabase } from "../../apps/web/server/services/db.mjs";
+import { validateReport } from "../../deploy/production/release-drain-config.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const image = String(process.env.DUALLANE_DRAIN_TEST_IMAGE ?? "").trim();
@@ -400,6 +401,8 @@ function assertLocalReady(result) {
   assert.equal(result.report.provider?.driver, "local");
   assert.equal(result.report.provider?.status, "not_applicable");
   assert.equal(result.report.provider?.readOnly, true);
+  assert.equal(validateReport(result.report, "local"), result.report);
+  assert.throws(() => validateReport(result.report, "s3"), /report_provider_driver_mismatch/);
 }
 
 function assertReservedUploadBlocked(result) {

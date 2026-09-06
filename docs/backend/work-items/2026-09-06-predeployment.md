@@ -2181,3 +2181,19 @@ owned containers and isolated schema; no production data or real provider was
 accessed. The no-image invocation is explicitly skipped, not a runtime pass.
 This is a command/runtime gate, not a substitute for the pending coordinated
 cutover and recovery rehearsal.
+
+### Private Drain Configuration And Report Validation
+
+Parent reviewed the configuration builder and independently passed all nine
+Linux cases, including an explicit real `docker compose config` dollar-value
+roundtrip (0.635 seconds; no resources started). The generated service excludes
+business/data-volume capabilities and references only existing named bridge
+networks. Unsupported secret/PG forms fail closed; report acceptance requires
+the canonical expected storage driver and consistent zero blocking counts.
+Private file operations are bounded and exclusive, with no-follow and pre/post
+metadata checks under the documented trusted-parent assumption.
+
+The real runtime test was then rerun with the actual JSON passed through that
+validator: six results passed in 3.858 seconds. Local success was also rejected
+when deliberately paired with an expected S3 driver. Coordinator lifecycle,
+writer fencing and final recovery remain separate pending integration gates.

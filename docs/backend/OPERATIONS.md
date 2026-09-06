@@ -361,6 +361,16 @@ empty page is ready. Uploads block; truncation, missing fields, oversized XML,
 denial, unsupported operations and timeouts fail closed. The command never
 aborts an upload, provisions storage, changes rows or starts a worker.
 
+`deploy/production/release-drain-config.mjs create` derives a private, one-shot
+Compose file from a canonical resolved Go configuration and an exact Workspace
+image ID. It copies only database and storage-check authority, references
+already-existing bridge networks, and excludes business services, data volumes,
+OAuth/notification settings and published ports. S3 credentials must use a
+supported file-backed secret; unsupported PG environment or secret sources
+fail closed. Creation does not start Docker or establish a writer fence.
+The companion report validator requires the expected local/S3 driver and
+rejects contradictory ready flags, blocking counts or overstated writer proof.
+
 The database snapshot still reports `writers: not_proven` and
 `provider: not_checked`; the additional provider observation is a separate
 outer field. Neither observation proves an admission fence or the absence of
