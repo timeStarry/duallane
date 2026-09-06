@@ -101,7 +101,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Validate backend tooling guards
-        run: node --test .github/tests/ci-go-native-dependencies.test.mjs scripts/backend/p2p-parity.test.mjs
+        run: node --test .github/tests/ci-go-native-dependencies.test.mjs .github/tests/ci-go-p2p-privacy.test.mjs scripts/backend/owned-process.test.mjs scripts/backend/p2p-parity.test.mjs
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -147,3 +147,45 @@ jobs:
             test-results/
           if-no-files-found: ignore
           retention-days: 7
+
+  go-p2p-browser:
+    name: Go P2P Chromium privacy and transfer
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: "true"
+      CGO_ENABLED: "0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: apps/backend/go.mod
+          cache-dependency-path: apps/backend/go.sum
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium and system dependencies
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run Go P2P browser gate
+        run: pnpm test:e2e:p2p-go
+
+      # Do not upload traces, DOM snapshots, raw requests, or P2P content.
+      # The dedicated config disables recording and separates failure output.
