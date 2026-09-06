@@ -119,13 +119,11 @@ func (r *CommandRegistry) Recognize(source string, context RecognitionContext) (
 	if utf8.RuneCountInString(source) > MaxCommandTextCodePoints {
 		return nil, nil
 	}
-	match := commandPattern.FindStringSubmatch(source)
-	if match == nil {
+	name, raw, ok := parseCommandSource(source)
+	if !ok {
 		return nil, nil
 	}
-	name := strings.ToLower(strings.TrimSpace(match[1]))
 	definition := r.Get(name)
-	raw := strings.TrimSpace(match[2])
 	if definition == nil {
 		return &RecognizedCommand{Type: "unknown_command", Name: name, RawArguments: raw}, nil
 	}
@@ -189,22 +187,89 @@ func (r *WorkflowRegistry) Get(typeName string, version int) *WorkflowDefinition
 	return r.definitions[workflowKey(typeName, version)]
 }
 
-var commandPattern = regexp.MustCompile(`(?s)^\s*/([A-Za-z][A-Za-z0-9_-]{0,31})(?:\s+(.*?))?\s*$`)
+func parseCommandSource(source string) (name, raw string, ok bool) {
+	text := trimJavaScriptWhitespace(source)
+	if len(text) < 2 || text[0] != '/' || !isASCIICommandLetter(text[1]) {
+		return "", "", false
+	}
+
+	nameEnd := 2
+	for nameEnd < len(text) && isASCIICommandNameByte(text[nameEnd]) {
+		if nameEnd-1 >= 32 {
+			return "", "", false
+		}
+		nameEnd++
+	}
+	name = strings.ToLower(text[1:nameEnd])
+	if nameEnd < len(text) {
+		runeValue, _ := utf8.DecodeRuneInString(text[nameEnd:])
+		if !isJavaScriptWhitespace(runeValue) {
+			return "", "", false
+		}
+		var size int
+		for nameEnd < len(text) {
+			runeValue, size = utf8.DecodeRuneInString(text[nameEnd:])
+			if !isJavaScriptWhitespace(runeValue) {
+				break
+			}
+			nameEnd += size
+		}
+	}
+
+	return name, trimJavaScriptWhitespace(text[nameEnd:]), true
+}
 
 func normalizeCommandName(value string) (string, error) {
-	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized := strings.ToLower(trimJavaScriptWhitespace(value))
 	if !commandNamePattern.MatchString(normalized) {
 		return "", &DefinitionError{Code: "command.invalid_name", Message: "命令名称无效"}
 	}
 	return normalized, nil
 }
 func normalizeWorkflowType(value string) (string, error) {
-	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized := strings.ToLower(trimJavaScriptWhitespace(value))
 	if !workflowTypePattern.MatchString(normalized) {
 		return "", &DefinitionError{Code: "workflow.invalid_type", Message: "引导流程类型无效"}
 	}
 	return normalized, nil
 }
+
+func isASCIICommandLetter(value byte) bool {
+	return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z')
+}
+
+func isASCIICommandNameByte(value byte) bool {
+	return isASCIICommandLetter(value) || (value >= '0' && value <= '9') || value == '_' || value == '-'
+}
+
+func trimJavaScriptWhitespace(value string) string {
+	start := 0
+	for start < len(value) {
+		runeValue, size := utf8.DecodeRuneInString(value[start:])
+		if !isJavaScriptWhitespace(runeValue) {
+			break
+		}
+		start += size
+	}
+	end := len(value)
+	for end > start {
+		runeValue, size := utf8.DecodeLastRuneInString(value[:end])
+		if !isJavaScriptWhitespace(runeValue) {
+			break
+		}
+		end -= size
+	}
+	return value[start:end]
+}
+
+func isJavaScriptWhitespace(value rune) bool {
+	switch value {
+	case '\u0009', '\u000A', '\u000B', '\u000C', '\u000D', '\u0020', '\u00A0', '\u1680', '\u2028', '\u2029', '\u202F', '\u205F', '\u3000', '\uFEFF':
+		return true
+	}
+	return value >= '\u2000' && value <= '\u200A'
+}
+
 func workflowKey(typeName string, version int) string { return typeName + "@" + strconvItoa(version) }
 func strconvItoa(value int) string {
 	if value == 0 {

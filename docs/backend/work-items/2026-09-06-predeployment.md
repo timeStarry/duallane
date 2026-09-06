@@ -1179,3 +1179,13 @@ Feishu (23.972) and application composition (11.211). Integration-tag staticchec
 and seven actual Node fixture cases passed. Parent added Go rejection assertions
 for the fixture's empty/null cases and made synthetic schema cleanup errors
 visible; focused PostgreSQL/race then passed gateway (4.002) and HTTP (4.402).
+
+### Generic Command Whitespace Compatibility
+
+The generic registry now uses ECMAScript whitespace for command recognition
+and command/workflow names: BOM and JavaScript Unicode spaces are recognized;
+U+0085 is not a delimiter and is retained in arguments. The 4096-code-point
+pre-recognition limit remains unchanged. Parent review corrected the command
+name boundary so skipping delimiters cannot append those delimiters to the
+name. Independent PostgreSQL/race passed interactions (42.636 seconds), Echo
+automation (18.208) and application composition (10.541); staticcheck passed.
