@@ -2143,3 +2143,26 @@ removed its two uniquely named stack resource sets, including their synthetic
 data volumes, without touching the parent's stacks. Parent reviewed the
 already independently tested probe and this evidence; the two Node stack runs
 are worker-executed, not a claim of a second parent browser or deployment run.
+
+### Bounded P2P Peer Shutdown
+
+The P2P shutdown finding is now addressed: graceful peer closes share a
+two-second batch budget, followed by raw-socket force-close to interrupt the
+WebSocket library's handshake wait. Each phase has at most 32 callbacks (64
+while phases overlap). Concurrent manager shutdown callers wait for the same
+batch; expired-room close does not hold the global room lock. No payload is
+stored, and normal close codes and envelope validation remain unchanged.
+
+Parent reviewed the worker's three-file implementation, added failure-path test
+cleanup and independently passed uncached race checks for the complete P2P,
+P2P-contract and command packages (7.504 / 1.958 seconds), plus staticcheck.
+Regressions include 40 real unresponsive sockets, concurrent shutdown and
+expired-room isolation. The worker's focused 40-peer test took 2.07 seconds;
+the old serial implementation was inspected, not run as a timing baseline.
+
+CI [34052776038](https://github.com/timeStarry/duallane/actions/runs/34052776038)
+on exact `7ce4c6704bfb4465977bdbf753e7910410a9d2a5` passed the complete Node
+test/lint/build/Chromium job, Go quality/PostgreSQL job and Go P2P browser job.
+Its original Go Workspace suite remained 10/12 (Echo visibility and the history
+message click). That commit predates this shutdown patch and the pending
+frontend fix; it is not a final all-green candidate.

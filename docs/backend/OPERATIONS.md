@@ -285,6 +285,14 @@ single-process topology does. Zero-disruption P2P deployment requires the
 separate scale-out/room-ownership design; it must not be implied by candidate
 health checks.
 
+P2P peer shutdown uses one two-second graceful batch budget, not a separate
+timeout per room. If peers do not acknowledge close, the transport closes the
+underlying sockets to interrupt pending handshakes. Graceful and force phases
+each use at most 32 close callbacks (at most 64 during overlap). All concurrent
+manager shutdown callers wait for this batch to finish. This bounds peer
+handshake waiting; it does not promise uninterrupted P2P sessions or replace
+the process supervisor's shutdown timeout.
+
 ## 8. Observability
 
 Each service emits JSON logs to stdout/stderr using the safe-field policy in

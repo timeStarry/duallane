@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,6 +18,11 @@ import (
 const (
 	MaxRoomPeers = 2
 	MaxRooms     = 10_000
+
+	peerCloseWorkers             = 32
+	peerCloseBudget              = 2 * time.Second
+	p2pCloseCodeGoingAway        = 1001
+	p2pCloseCodeNoStatusReceived = 1005
 )
 
 var (
@@ -29,6 +35,9 @@ var (
 type PeerConn interface {
 	Send(ctx context.Context, payload []byte) error
 	Close(code int, reason string) error
+	// CloseNow must interrupt a concurrent Close and release the underlying
+	// connection without waiting for a peer close handshake.
+	CloseNow() error
 }
 
 type ManagerOptions struct {
@@ -141,6 +150,7 @@ type Manager struct {
 	newRoomID      func() (string, error)
 	newPeerID      func() (string, error)
 	closed         bool
+	closeDone      chan struct{}
 }
 
 type roomState struct {
@@ -189,6 +199,7 @@ func NewManager(options ManagerOptions) *Manager {
 		maxRooms:       maxRooms,
 		newRoomID:      newRoomID,
 		newPeerID:      newPeerID,
+		closeDone:      make(chan struct{}),
 	}
 }
 
@@ -459,8 +470,15 @@ func (m *Manager) Close() {
 	}
 	m.mu.Lock()
 	if m.closed {
+		done := m.closeDone
 		m.mu.Unlock()
+		if done != nil {
+			<-done
+		}
 		return
+	}
+	if m.closeDone == nil {
+		m.closeDone = make(chan struct{})
 	}
 	m.closed = true
 	peers := make([]*peerState, 0)
@@ -473,9 +491,8 @@ func (m *Manager) Close() {
 		delete(m.rooms, id)
 	}
 	m.mu.Unlock()
-	for _, peer := range peers {
-		_ = peer.conn.Close(1001, "server shutdown")
-	}
+	closePeersWithReason(peers, p2pCloseCodeGoingAway, "server shutdown")
+	close(m.closeDone)
 }
 
 func (m *Manager) broadcast(roomID string, payload []byte, exceptPeerID string) {
@@ -576,8 +593,72 @@ func sendPeer(conn PeerConn, payload []byte) error {
 }
 
 func closePeers(peers []*peerState) {
+	closePeersWithReason(peers, p2pCloseCodeNoStatusReceived, "")
+}
+
+func closePeersWithReason(peers []*peerState, code int, reason string) {
+	if len(peers) == 0 {
+		return
+	}
+	deadline := time.Now().Add(peerCloseBudget)
+	gracefulDone := startPeerCloseBatch(peers, func(peer *peerState) {
+		_ = peer.conn.Close(code, reason)
+	})
+	if waitForPeerCloseBatch(gracefulDone, deadline) {
+		return
+	}
+
+	// A websocket close handshake can outlive the batch budget. Force every
+	// connection through a second bounded worker pool so the total wait is not
+	// multiplied by the number of peers. Each phase has at most 32 workers; the
+	// phases overlap while force-close interrupts graceful Close, so at most 64
+	// close callbacks are live. The concrete websocket peer closes its raw
+	// socket first, which also unblocks an in-flight graceful Close.
+	forceDone := startPeerCloseBatch(peers, func(peer *peerState) {
+		_ = peer.conn.CloseNow()
+	})
+	<-forceDone
+	<-gracefulDone
+}
+
+func startPeerCloseBatch(peers []*peerState, closePeer func(*peerState)) <-chan struct{} {
+	done := make(chan struct{})
+	jobs := make(chan *peerState, len(peers))
+	var remaining atomic.Int64
+	remaining.Store(int64(len(peers)))
+	workers := peerCloseWorkers
+	if len(peers) < workers {
+		workers = len(peers)
+	}
+	for range workers {
+		go func() {
+			for peer := range jobs {
+				closePeer(peer)
+				if remaining.Add(-1) == 0 {
+					close(done)
+				}
+			}
+		}()
+	}
 	for _, peer := range peers {
-		_ = peer.conn.Close(1005, "")
+		jobs <- peer
+	}
+	close(jobs)
+	return done
+}
+
+func waitForPeerCloseBatch(done <-chan struct{}, deadline time.Time) bool {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return false
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
 	}
 }
 

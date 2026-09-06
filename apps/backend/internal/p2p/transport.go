@@ -270,7 +270,11 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	conn.SetReadLimit(h.config.MaxFrameBytes)
-	peer := &websocketPeer{conn: conn}
+	var rawConn net.Conn
+	if recorder, ok := w.(*statusRecorder); ok {
+		rawConn = recorder.hijacked
+	}
+	peer := &websocketPeer{conn: conn, rawConn: rawConn}
 	peerID, err := h.manager.Join(roomID, peer)
 	if err != nil {
 		h.metrics.RejectFrame(roomErrorReason(err))
@@ -279,7 +283,7 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 		} else if errors.Is(err, ErrRoomFull) {
 			_ = sendPeer(peer, marshalSystem("room-full", "", nil))
 		}
-		_ = peer.Close(closeCodeForRoomError(err), "room unavailable")
+		closePeersWithReason([]*peerState{{conn: peer}}, closeCodeForRoomError(err), "room unavailable")
 		return
 	}
 	h.metrics.AddConnection(1)
@@ -288,7 +292,7 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 		h.manager.Leave(roomID, peerID, false)
 		h.metrics.AddConnection(-1)
 		h.metrics.SetRooms(h.manager.RoomCount())
-		_ = peer.Close(int(websocket.StatusNormalClosure), "")
+		closePeersWithReason([]*peerState{{conn: peer}}, int(websocket.StatusNormalClosure), "")
 	}()
 
 	for {
@@ -313,7 +317,7 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 		switch message.Kind {
 		case ClientMessageLeave:
 			h.manager.Leave(roomID, peerID, true)
-			_ = peer.Close(int(websocket.StatusNoStatusRcvd), "")
+			closePeersWithReason([]*peerState{{conn: peer}}, int(websocket.StatusNoStatusRcvd), "")
 			return
 		case ClientMessageSecure:
 			if h.manager.Relay(roomID, peerID, message.Envelope) {
@@ -324,8 +328,9 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 }
 
 type websocketPeer struct {
-	mu   sync.Mutex
-	conn *websocket.Conn
+	mu      sync.Mutex
+	conn    *websocket.Conn
+	rawConn net.Conn
 }
 
 func (p *websocketPeer) Send(ctx context.Context, payload []byte) error {
@@ -341,9 +346,17 @@ func (p *websocketPeer) Close(code int, reason string) error {
 	return p.conn.Close(websocket.StatusCode(code), reason)
 }
 
+func (p *websocketPeer) CloseNow() error {
+	if p.rawConn != nil {
+		_ = p.rawConn.Close()
+	}
+	return p.conn.CloseNow()
+}
+
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status   int
+	hijacked net.Conn
 }
 
 func (r *statusRecorder) WriteHeader(status int) {
@@ -370,7 +383,11 @@ func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	if !ok {
 		return nil, nil, errors.New("websocket upgrade is unavailable")
 	}
-	return hijacker.Hijack()
+	conn, reader, err := hijacker.Hijack()
+	if err == nil {
+		r.hijacked = conn
+	}
+	return conn, reader, err
 }
 
 func (r *statusRecorder) Flush() {
