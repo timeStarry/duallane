@@ -737,3 +737,22 @@ creation not producing a topic, and a durable unread count remaining two after
 the UI cleared it. The two-user test now passes the previously failing Beacon
 header and reaches the unread check. These failures are acceptance work, not
 waivers or reasons to relax browser assertions. The PR remains draft.
+
+### Validated Ordered Card Payloads
+
+The card registry now offers an explicit raw-JSON canonicalizer for registered
+order-sensitive card types. Both input and canonical output pass generic byte,
+depth, node, text, field-name and URL/content checks. Only the registered
+validator's cloned output is preserved; unknown types and definitions without
+the callback follow ordinary domain normalization instead of storing raw input.
+Create/update inputs accept this optional internal raw field without changing
+the public API. Status-only actions and invalidation preserve existing payload
+order; invalid persisted JSON fails instead of being silently replaced by an
+empty object.
+
+Independent fresh PostgreSQL/race passed (4.950 seconds), followed by
+integration-tag staticcheck after removing a redundant decode found by analysis.
+Tests exercise create, resolution, update, action and invalidation against real
+PostgreSQL, retaining member order and escaped lone UTF-16 code units. Unit tests
+cover input/output safety and mutable-buffer isolation. Actual Feishu conversion,
+gateway ingress and card-action bridge acceptance remain separate gates.

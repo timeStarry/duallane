@@ -136,7 +136,11 @@ func (s *Service) create(ctx context.Context, externalTx Tx, input CreateInput) 
 		return nil, err
 	}
 	definition := s.registry.Get(block.CardType, block.SchemaVersion)
-	validated, err := s.validatePayload(block, input.Payload, definition, input.AllowUnknownDefinition && input.TrustedCustomBot)
+	payload := input.Payload
+	if len(input.RawPayload) > 0 {
+		payload = input.RawPayload
+	}
+	validated, err := s.validatePayload(block, payload, definition, input.AllowUnknownDefinition && input.TrustedCustomBot)
 	if err != nil {
 		return nil, toError(err)
 	}
@@ -311,6 +315,8 @@ func (s *Service) Resolve(ctx context.Context, actorID, cardID string, request R
 		if err != nil {
 			return Resolution{}, toError(err)
 		}
+	} else if definition.ValidatePayloadJSON != nil {
+		payload = json.RawMessage(row.PayloadJSON)
 	}
 	validated, err := s.registry.ValidatePayload(row.PublicBlock(), payload)
 	if err != nil {
@@ -509,7 +515,7 @@ func (s *Service) ExecuteAction(ctx context.Context, input ActionInput) (ActionO
 				}
 				resultingRevision = row.Revision
 				nextStatus := status
-				nextPayload := payload
+				var nextPayload any = json.RawMessage(row.PayloadJSON)
 				changed := executed.CardPayload != nil || executed.CardStatus != nil
 				if executed.CardPayload != nil {
 					validated, validationErr := s.registry.ValidatePayload(row.PublicBlock(), executed.CardPayload)
@@ -666,7 +672,10 @@ func (s *Service) InvalidateCustomBotCard(ctx context.Context, input CustomBotIn
 		if row == nil || row.SourceKind != SourceCustomBot || stringValue(row.CreatedByUserID) != actor.ID {
 			return notFoundError()
 		}
-		updated, changed, err := tx.UpdateCard(ctx, row.ID, input.ExpectedRevision, parseOrEmpty(row.PayloadJSON), status, row.FallbackText, s.nowUTC())
+		if !json.Valid(row.PayloadJSON) {
+			return internalError("decode workspace card payload", invalidJSONPayload())
+		}
+		updated, changed, err := tx.UpdateCard(ctx, row.ID, input.ExpectedRevision, json.RawMessage(row.PayloadJSON), status, row.FallbackText, s.nowUTC())
 		if err != nil {
 			return err
 		}
@@ -680,8 +689,7 @@ func (s *Service) InvalidateCustomBotCard(ctx context.Context, input CustomBotIn
 			return err
 		}
 		definition := s.registry.Get(row.CardType, row.SchemaVersion)
-		payload, _ := decodeJSON(row.PayloadJSON)
-		result = s.publicCard(updated, definition, payload)
+		result = s.publicCard(updated, definition, json.RawMessage(row.PayloadJSON))
 		return nil
 	})
 	if err != nil {
@@ -732,7 +740,10 @@ func (s *Service) Invalidate(ctx context.Context, spaceID, cardID string, status
 		if expectedRevision != nil {
 			revision = *expectedRevision
 		}
-		updated, changed, err := tx.UpdateCard(ctx, cardID, revision, parseOrEmpty(current.PayloadJSON), status, current.FallbackText, s.nowUTC())
+		if !json.Valid(current.PayloadJSON) {
+			return internalError("decode workspace card payload", invalidJSONPayload())
+		}
+		updated, changed, err := tx.UpdateCard(ctx, cardID, revision, json.RawMessage(current.PayloadJSON), status, current.FallbackText, s.nowUTC())
 		if err != nil {
 			return err
 		}
@@ -743,8 +754,7 @@ func (s *Service) Invalidate(ctx context.Context, spaceID, cardID string, status
 			return err
 		}
 		definition := s.registry.Get(current.CardType, current.SchemaVersion)
-		payload, _ := decodeJSON(current.PayloadJSON)
-		result = s.publicCard(updated, definition, payload)
+		result = s.publicCard(updated, definition, json.RawMessage(current.PayloadJSON))
 		return nil
 	})
 	if err != nil {
@@ -798,12 +808,15 @@ func (s *Service) updateCustomBot(ctx context.Context, input CustomBotUpdateInpu
 		if s.effectiveStatus(row) != StatusActive {
 			return notFoundError()
 		}
-		payload, err := decodeJSON(row.PayloadJSON)
-		if err != nil {
-			return err
+		if !json.Valid(row.PayloadJSON) {
+			return internalError("decode workspace card payload", invalidJSONPayload())
 		}
+		var payload any = json.RawMessage(row.PayloadJSON)
 		if input.Payload != nil {
 			payload = input.Payload
+		}
+		if len(input.RawPayload) > 0 {
+			payload = input.RawPayload
 		}
 		definition := s.registry.Get(row.CardType, row.SchemaVersion)
 		validated, err := s.validatePayload(row.PublicBlock(), payload, definition, true)
@@ -1030,6 +1043,9 @@ func (s *Service) validatePayload(block CardBlock, payload any, definition *Card
 		if !allowUnknown {
 			return nil, unknownVersionError()
 		}
+		if raw, ok := payload.(json.RawMessage); ok {
+			return normalizeJSONPayload(raw, DefaultLimits, false)
+		}
 		safe, err := NormalizeCardPayload(payload, DefaultLimits, false)
 		if err != nil {
 			return nil, err
@@ -1136,13 +1152,6 @@ func formatOptional(value *time.Time) *string {
 	}
 	result := formatTimestamp(*value)
 	return &result
-}
-func parseOrEmpty(raw []byte) any {
-	value, err := decodeJSON(raw)
-	if err != nil {
-		return map[string]any{}
-	}
-	return value
 }
 func decodeJSON(raw []byte) (any, error) {
 	if len(raw) == 0 {

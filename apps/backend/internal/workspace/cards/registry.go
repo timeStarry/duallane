@@ -362,12 +362,22 @@ func (r *Registry) Resolve(block CardBlock) (ValidationResult, error) {
 }
 
 func (r *Registry) ValidatePayload(block CardBlock, payload any) (ValidationResult, error) {
+	if raw, ok := payload.(json.RawMessage); ok {
+		return r.ValidatePayloadJSON(block, raw)
+	}
 	resolved, err := r.Resolve(block)
 	if err != nil {
 		return ValidationResult{}, err
 	}
 	if resolved.Definition == nil {
 		return resolved, nil
+	}
+	if resolved.Definition.ValidatePayloadJSON != nil {
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return ValidationResult{}, invalidJSONPayload()
+		}
+		return r.ValidatePayloadJSON(block, raw)
 	}
 	safe, err := NormalizeCardPayload(payload, resolved.Definition.Limits, resolved.Definition.AllowPublicURLs)
 	if err != nil {

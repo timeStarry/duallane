@@ -146,11 +146,15 @@ type CardDefinition struct {
 	CardType        string
 	SchemaVersion   int
 	ValidatePayload CardValidator
-	ProjectPayload  CardProjector
-	Authorize       CardAuthorizer
-	Actions         map[string]CardAction
-	AllowPublicURLs bool
-	Limits          Limits
+	// ValidatePayloadJSON is a trusted type-specific canonicalizer. Its input
+	// and output must pass the generic safety limits; only its validated output
+	// is preserved as ordered JSON. It takes precedence over ValidatePayload.
+	ValidatePayloadJSON func(json.RawMessage) (json.RawMessage, error)
+	ProjectPayload      CardProjector
+	Authorize           CardAuthorizer
+	Actions             map[string]CardAction
+	AllowPublicURLs     bool
+	Limits              Limits
 }
 
 type CardAction struct {
@@ -218,6 +222,7 @@ type CreateInput struct {
 	SchemaVersion          int
 	FallbackText           string
 	Payload                any
+	RawPayload             json.RawMessage
 	SourceKind             SourceKind
 	SourceID               string
 	ResourceType           string
@@ -245,6 +250,7 @@ type CustomBotUpdateInput struct {
 	BotUserID        string
 	ExpectedRevision int64
 	Payload          any
+	RawPayload       json.RawMessage
 	FallbackText     *string
 	Meta             auth.RequestMeta
 }
