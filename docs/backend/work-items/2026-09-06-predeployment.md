@@ -1880,3 +1880,15 @@ private paths and unauthenticated Workspace WebSocket. Its runtime version is
 gate. This verifies probe behavior on the diagnostic stack, not a final release
 or immutable commit match. No business data was created; real Node gateway and
 final-image release-coordinator smoke remain integration work.
+
+### Independent Workspace Browser CI Gate
+
+The dedicated CI job now runs the complete original Go Workspace Chromium
+command against its own PostgreSQL service, with no test filtering, retry or
+timeout changes and no private artifact upload. Parent independently passed
+all 28 tooling/privacy guards (325 ms), including the four new Workspace CI
+guards and four read-only gateway smoke groups. The browser job is new wiring,
+not evidence that the full browser suite passed: the latest full local run
+remains 10 passed and 2 failed (Echo release delivery and continuous-message
+realtime), each under separate diagnosis. The existing Node/P2P CI passes do
+not cover those failures.

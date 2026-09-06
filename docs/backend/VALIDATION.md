@@ -386,6 +386,15 @@ This is a separate gate from the active Node browser suite and the Go P2P
 browser suite. A harness commit or passing guards does not mean all Workspace
 browser cases passed; record the complete selected test count and any failure.
 
+CI runs this complete command in the independent `go-workspace-browser` job
+with disposable PostgreSQL 17, the module-selected Go toolchain, Node 22,
+pnpm 10.30.3, native CGO/libvips dependencies and Chromium. It has a 30-minute
+job limit and publishes no browser artifacts. Configuration/privacy guards in
+`.github/tests/ci-go-workspace-privacy.test.mjs` ensure that the job does not
+silently filter tests, change test timeouts/retries or upload private failure
+output. These guards are part of the general backend tooling gate; their pass
+does not substitute for the browser job itself.
+
 Realtime validation includes:
 
 - notify before/after listener startup race;

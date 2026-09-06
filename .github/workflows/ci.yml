@@ -137,7 +137,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Validate backend tooling guards
-        run: node --test .github/tests/ci-go-native-dependencies.test.mjs .github/tests/ci-go-p2p-privacy.test.mjs .github/tests/ci-unit-fixtures.test.mjs scripts/backend/owned-process.test.mjs scripts/backend/p2p-parity.test.mjs scripts/backend/route-inventory.test.mjs scripts/backend/go-workspace-browser.test.mjs
+        run: node --test .github/tests/ci-go-native-dependencies.test.mjs .github/tests/ci-go-p2p-privacy.test.mjs .github/tests/ci-go-workspace-privacy.test.mjs .github/tests/ci-unit-fixtures.test.mjs scripts/backend/owned-process.test.mjs scripts/backend/p2p-parity.test.mjs scripts/backend/route-inventory.test.mjs scripts/backend/go-workspace-browser.test.mjs scripts/backend/gateway-readonly-smoke.test.mjs
 
       - name: Validate release ownership and rollback contracts
         run: node --test scripts/backend/production-deploy.test.mjs scripts/backend/go-production-workers.test.mjs scripts/backend/node-runtime-image.test.mjs
@@ -225,6 +225,75 @@ jobs:
             test-results/
           if-no-files-found: ignore
           retention-days: 7
+
+  go-workspace-browser:
+    name: Go Workspace Chromium integration and privacy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI: "true"
+      CGO_ENABLED: "1"
+      CC: gcc
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: duallane
+          POSTGRES_USER: duallane
+          POSTGRES_PASSWORD: duallane-ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U duallane -d duallane"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go from the backend module
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: apps/backend/go.mod
+          cache-dependency-path: apps/backend/go.sum
+
+      - name: Provision Go Workspace native dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y gcc libvips-dev pkg-config
+          command -v gcc
+          command -v pkg-config
+          pkg-config --exists vips
+          test "$(go env CGO_ENABLED)" = "1"
+          test "$(go env CC)" = "gcc"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium and system dependencies
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run complete Go Workspace browser gate
+        env:
+          TEST_DATABASE_URL: postgres://duallane:duallane-ci-password@127.0.0.1:5432/duallane?sslmode=disable
+          DUALLANE_GO_E2E_ALLOW_SCHEMA_CREATION: "true"
+        run: pnpm test:e2e:workspace-go
 
   go-p2p-browser:
     name: Go P2P Chromium privacy and transfer
