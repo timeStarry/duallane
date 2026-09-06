@@ -550,6 +550,7 @@ func (s *Service) createMessageInTransaction(ctx context.Context, tx Tx, actor *
 		return message, nil, err
 	}
 	if inlineTopics {
+		input.ActorID = actor.ID
 		input.ClientMessageID = clientMessageID
 		input.ConversationID = conversation.ID
 		record, denied, err := s.groupTopicCreator.CreateGroupTopic(ctx, tx, input, normalized)

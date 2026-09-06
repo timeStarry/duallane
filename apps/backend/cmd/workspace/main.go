@@ -261,7 +261,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		topicService = topics.NewService(topics.ServiceOptions{
 			Repository: topicRepository, RequireMessageJobs: true,
 		})
-		cardRegistry, err := cards.NewRegistry()
+		cardRegistry, err := cards.NewRegistry(topics.CardDefinitions()...)
 		if err != nil {
 			pool.Close()
 			return nil, err

@@ -779,3 +779,19 @@ existing notification behavior; the transaction bridge does not add delivery.
 The unchanged two-member topic browser test now passes topic creation but stops
 at the group card display. Registry composition and the remainder of that full
 browser workflow remain required; this slice is not a topic parity completion.
+
+### Registered Topic Cards And Full Browser Workflow
+
+The actual Workspace application now registers the created-topic and synced-
+message card definitions. They project only the allowlisted Node fields, retain
+the generic no-public-URL limits, and rely on the existing card membership
+authorization. Twenty-seven actual Node validator goldens cover payload shape,
+numeric coercion, preview limits, control handling and invalid references.
+
+Fresh independent PostgreSQL/race passed topics, messageblocks and application
+composition (3.134 / 4.255 / 2.827 seconds); focused staticcheck and actual Node
+fixture verification passed. The unchanged two-member Chromium/Go Workspace
+test passed end to end (12.3 seconds, 27.8-second run): create, join, notification
+settings, sync, unsync, close and archive. It used only disposable synthetic
+data. This closes the browser failure recorded in the preceding slice, not the
+separate all-Workspace browser, complete contract or production-cutover gates.

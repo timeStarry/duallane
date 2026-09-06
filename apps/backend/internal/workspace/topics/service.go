@@ -1094,7 +1094,7 @@ func sanitizeAvatarPointer(value *string) *string {
 }
 
 func summarize(value string) string {
-	value = strings.Join(strings.Fields(value), " ")
+	value = strings.Join(strings.FieldsFunc(value, isSpace), " ")
 	runes := []rune(value)
 	if len(runes) > 160 {
 		return string(runes[:160]) + "…"

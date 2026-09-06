@@ -26,7 +26,9 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/platform/migrations"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/emotes"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/presence"
 )
 
@@ -227,6 +229,41 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 		waitForCount(1)
 		_ = second.CloseNow()
 		waitForCount(0)
+	})
+
+	t.Run("inline topic message resolves the registered card", func(t *testing.T) {
+		for _, query := range []string{
+			`INSERT INTO conversations (id,space_id,type,title,retention_count,created_by,created_at) VALUES ('composition-group','spc_default','group','Fixture group',10000,'composition-user',NOW())`,
+			`INSERT INTO conversation_members (conversation_id,user_id,joined_at) VALUES ('composition-group','composition-user',NOW())`,
+		} {
+			if _, err := conn.Exec(ctx, query); err != nil {
+				t.Fatal(err)
+			}
+		}
+		body := []byte(`{"conversationId":"composition-group","clientMessageId":"inline-fixture","content":{"format":"duallane.message+json;v=1","blocks":[{"type":"text","text":"#[Fixture topic](Fixture body)"}]}}`)
+		var firstID string
+		for attempt := 0; attempt < 2; attempt++ {
+			created := request(http.MethodPost, "/api/workspace/messages", "application/json", body)
+			var result struct {
+				Message messages.Message `json:"message"`
+			}
+			if created.Code != http.StatusCreated || json.Unmarshal(created.Body.Bytes(), &result) != nil || result.Message.ClientMessageID == nil || *result.Message.ClientMessageID != "inline-fixture" || len(result.Message.Content.Blocks) != 2 {
+				t.Fatalf("topic create=%d %s", created.Code, created.Body.String())
+			}
+			if attempt == 0 {
+				firstID = result.Message.ID
+			} else if result.Message.ID != firstID {
+				t.Fatal("inline HTTP retry duplicated message")
+			}
+			cardID := result.Message.Content.Blocks[1].CardID
+			resolved := request(http.MethodGet, "/api/workspace/cards/"+cardID, "", nil)
+			var card struct {
+				Card cards.Resolution `json:"card"`
+			}
+			if resolved.Code != http.StatusOK || json.Unmarshal(resolved.Body.Bytes(), &card) != nil || card.Card.Type != "card" || card.Card.Payload == nil {
+				t.Fatalf("topic card=%d %s", resolved.Code, resolved.Body.String())
+			}
+		}
 	})
 
 	// A missing migration must fail readiness and a fresh startup before any
