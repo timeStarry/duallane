@@ -115,7 +115,7 @@ compose() {
   if [[ "${release_profile:-node-default}" == go-full && -n "${RELEASE_GO_ACTIVATION_COMPOSE_FILE:-}" ]]; then
     docker compose --project-name "${RELEASE_GO_ACTIVATION_PROJECT}" \
       --profile rollback -f "${RELEASE_GO_ACTIVATION_COMPOSE_FILE}" "$@"
-    return
+    return "$?"
   fi
   local compose_files=("${BASE_COMPOSE_FILES[@]}")
   if [[ "${release_profile:-node-default}" == "go-full" ]]; then
@@ -130,13 +130,13 @@ compose() {
 candidate_compose() {
   if [[ "${release_profile:-node-default}" != "go-full" ]]; then
     compose "$@"
-    return
+    return "$?"
   fi
   if [[ -n "${RELEASE_GO_ACTIVATION_COMPOSE_FILE:-}" ]]; then
     docker compose --project-name "${RELEASE_GO_ACTIVATION_PROJECT}" --profile rollback \
       -f "${RELEASE_GO_ACTIVATION_COMPOSE_FILE}" \
       -f "${PROJECT_DIR}/deploy/production/go-candidate.compose.yml" "$@"
-    return
+    return "$?"
   fi
   local compose_files=(
     "${BASE_COMPOSE_FILES[@]}"
@@ -154,7 +154,7 @@ rollback_compose() {
   if [[ -n "${RELEASE_NODE_RECOVERY_COMPOSE_FILE:-}" ]]; then
     docker compose --project-name "${RELEASE_NODE_RECOVERY_PROJECT}" \
       -f "${RELEASE_NODE_RECOVERY_COMPOSE_FILE}" "$@"
-    return
+    return "$?"
   fi
   # Rollback must reconstruct the captured Node stack from the base files;
   # the Go production override changes the Web image, user, dependencies, and
@@ -245,7 +245,7 @@ read_running_app_version() {
   fi
   if [[ "$(docker inspect "${container_id}" --format '{{.State.Running}}')" == "true" ]]; then
     docker exec "${container_id}" node -p "require('/app/apps/web/package.json').version"
-    return
+    return "$?"
   fi
   image_ref="$(docker inspect "${container_id}" --format '{{.Image}}')"
   docker run --rm --entrypoint node "${image_ref}" -p "require('/app/apps/web/package.json').version"
@@ -380,7 +380,7 @@ start_release_service() {
     docker start "${id}" >/dev/null 2>&1 || return 1
     release_wait_container_ready "${id}" "${service}" || return 1
     release_verify_go_service_image_id "${service}"
-    return
+    return "$?"
   fi
   compose up -d --no-deps --wait --wait-timeout 120 "${service}" >/dev/null || return 1
   ids="$(compose ps -q "${service}")"

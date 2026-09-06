@@ -1286,7 +1286,9 @@ release_current_service_ids() {
   local inventory_status
   if release_compose_service_configured "${service}"; then
     compose ps -a -q "${service}"
-    return
+    # A bare return inside an ERR trap inherits the triggering failure, even
+    # when the delegated command succeeded. Forward its actual status.
+    return "$?"
   else
     inventory_status=$?
   fi
@@ -1307,7 +1309,7 @@ release_rollback_service_ids() {
   fi
   if grep -Fxq -- "${service}" <<<"${configured}"; then
     release_rollback_compose ps -a -q "${service}"
-    return
+    return "$?"
   fi
   return 0
 }
@@ -1943,7 +1945,7 @@ release_go_upgrade_fence_new_services() {
 release_go_upgrade_rollback_compose() {
   if declare -F go_upgrade_rollback_compose >/dev/null 2>&1; then
     go_upgrade_rollback_compose "$@"
-    return
+    return "$?"
   fi
   echo "Go-to-Go rollback Compose function is unavailable" >&2
   return 1
@@ -2699,11 +2701,11 @@ release_refuse_node_profile_with_active_go() {
 release_snapshot_validate_for_go_cutover() {
   if [[ "${RELEASE_PROFILE_NAME}" != "go-full" ]]; then
     release_refuse_node_profile_with_active_go
-    return
+    return "$?"
   fi
   if [[ "${RELEASE_GO_UPGRADE:-false}" == true ]]; then
     release_prepare_go_upgrade_snapshot
-    return
+    return "$?"
   fi
   local service
   [[ -f "${RELEASE_SNAPSHOT_FILE}" ]] || {
@@ -2904,7 +2906,7 @@ release_start_recovery_service() {
   local replacement current_state
   if [[ "${RELEASE_GO_UPGRADE:-false}" == true ]] && release_go_upgrade_service_is_managed "${service}"; then
     release_go_upgrade_recover_service "${service}"
-    return
+    return "$?"
   fi
   if release_profile_contains "${service}" "${RELEASE_GO_SERVICES[@]}"; then
     if release_fence_service_has_target "${service}"; then
@@ -2931,11 +2933,11 @@ release_start_recovery_service() {
     fi
     release_wait_container_ready "${replacement}" "${service}" || return 1
     release_restore_fenced_policy_on_container "${service}" "${replacement}" || return 1
-    return
+    return "$?"
   fi
   if release_fence_service_has_target "${service}"; then
     release_restore_fenced_service "${service}" || return 1
-    return
+    return "$?"
   fi
   release_start_snapshot_service "${service}" || return 1
 }
@@ -3045,7 +3047,7 @@ release_restore_snapshot_service() {
   if release_snapshot_was_running "${service}"; then
     if [[ "${RELEASE_PROFILE_NAME}" == go-full && -n "${RELEASE_NODE_RECOVERY_COMPOSE_FILE}" ]]; then
       release_restore_pinned_node_service "${service}"
-      return
+      return "$?"
     fi
     release_rollback_compose up -d --no-deps --force-recreate --wait --wait-timeout 120 "${service}" >/dev/null || return 1
     current_ids="$(release_rollback_service_ids "${service}")" || return 1
@@ -3102,7 +3104,7 @@ release_rollback_application() {
   local service
   if [[ "${RELEASE_GO_UPGRADE:-false}" == true ]]; then
     release_go_upgrade_rollback_application
-    return
+    return "$?"
   fi
   [[ -f "${RELEASE_SNAPSHOT_FILE}" ]] || {
     echo "cannot rollback without an application state snapshot" >&2
