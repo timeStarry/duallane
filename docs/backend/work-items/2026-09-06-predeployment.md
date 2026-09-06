@@ -917,3 +917,23 @@ Parent independently regenerated the fixture in check-only mode against fresh
 synthetic SQLite. PostgreSQL/race passed Gateway (10.985 seconds), HTTP (1.874)
 and application composition (3.896), followed by integration-tag staticcheck.
 The narrow projection golden does not replace full Go HTTP request parity.
+
+### Card Authorization Race Correction
+
+Parent PostgreSQL reproductions showed that a Bot removed from the space or
+changed to a human between preliminary checks and transaction entry could still
+update or invalidate a card. Both mutations now recheck the Bot writer in the
+accepting transaction. Card transaction reads pin user identity, space and
+conversation membership, and active custom-Bot state with compatible share locks
+until commit; read-only repository calls do not acquire those locks.
+
+Regressions cover update/invalidate after membership, identity and active-Bot
+revocation, unchanged cards/events on rejection, and a separate transaction
+unable to revoke any of four pinned authorization records before commit. A test
+fixture initially used an invalid Bot status; it was corrected to `paused` and
+now explicitly fails if establishing the revocation itself fails.
+
+Fresh independent PostgreSQL/race passed cards (22.063 seconds), Gateway
+(14.815), Echo runtime (3.030) and application composition (5.357), followed by
+integration-tag staticcheck. The four initial membership/identity reproductions
+failed before the fix. No public API or production ownership changed.

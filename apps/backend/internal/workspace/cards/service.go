@@ -666,6 +666,9 @@ func (s *Service) InvalidateCustomBotCard(ctx context.Context, input CustomBotIn
 	}
 	var result *Card
 	err = s.repo.WithTx(ctx, func(tx Tx) error {
+		if err := s.recheckCustomBotWriter(ctx, tx, spaceID, botID, actor.ID); err != nil {
+			return err
+		}
 		if err := tx.Lock(ctx, "workspace:card:bot-invalidate:"+cardID); err != nil {
 			return err
 		}
@@ -799,6 +802,9 @@ func (s *Service) updateCustomBot(ctx context.Context, input CustomBotUpdateInpu
 	}
 	var result *Card
 	err = s.repo.WithTx(ctx, func(tx Tx) error {
+		if err := s.recheckCustomBotWriter(ctx, tx, spaceID, botID, actor.ID); err != nil {
+			return err
+		}
 		if err := tx.Lock(ctx, "workspace:card:bot-update:"+cardID); err != nil {
 			return err
 		}
@@ -854,6 +860,17 @@ func (s *Service) updateCustomBot(ctx context.Context, input CustomBotUpdateInpu
 		return nil, normalizeError(err)
 	}
 	return result, nil
+}
+
+func (s *Service) recheckCustomBotWriter(ctx context.Context, tx Tx, spaceID, botID, actorID string) error {
+	actor, err := s.requireActor(ctx, tx, spaceID, actorID, true)
+	if err != nil {
+		return err
+	}
+	if actor.Kind != "bot" {
+		return NewError(CodeCardInvalidOwner, "卡片所有者无效", 403)
+	}
+	return s.requireCustomBot(ctx, tx, spaceID, botID, actor.ID)
 }
 
 func (s *Service) requireActor(ctx context.Context, repository ReadRepository, spaceID, actorID string, allowBot bool) (*auth.Actor, error) {

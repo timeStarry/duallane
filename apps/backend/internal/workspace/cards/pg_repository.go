@@ -98,17 +98,21 @@ func (r *PGRepository) LookupActor(ctx context.Context, spaceID, userID string) 
 	if r == nil || r.pool == nil {
 		return nil, errors.New("workspace cards postgres pool is required")
 	}
-	return lookupActor(ctx, r.pool, spaceID, userID)
+	return lookupActor(ctx, r.pool, spaceID, userID, false)
 }
 
-func lookupActor(ctx context.Context, queryer pgQueryer, spaceID, userID string) (*auth.Actor, error) {
+func lookupActor(ctx context.Context, queryer pgQueryer, spaceID, userID string, pin bool) (*auth.Actor, error) {
 	var actor auth.Actor
-	err := queryer.QueryRow(ctx, `
+	query := `
 		SELECT u.id, u.github_login, u.kind, sm.role, sm.joined_at
 		FROM users u
 		JOIN space_members sm ON sm.user_id = u.id
 		WHERE u.id = $1 AND sm.space_id = $2 AND sm.removed_at IS NULL
-	`, userID, spaceID).Scan(&actor.ID, &actor.GitHubLogin, &actor.Kind, &actor.Role, &actor.JoinedAt)
+	`
+	if pin {
+		query += " FOR SHARE OF u, sm"
+	}
+	err := queryer.QueryRow(ctx, query, userID, spaceID).Scan(&actor.ID, &actor.GitHubLogin, &actor.Kind, &actor.Role, &actor.JoinedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -155,18 +159,22 @@ func (r *PGRepository) ConversationMemberActive(ctx context.Context, spaceID, co
 	if r == nil || r.pool == nil {
 		return false, errors.New("workspace cards postgres pool is required")
 	}
-	return conversationMemberActive(ctx, r.pool, spaceID, conversationID, userID)
+	return conversationMemberActive(ctx, r.pool, spaceID, conversationID, userID, false)
 }
 
-func conversationMemberActive(ctx context.Context, queryer pgQueryer, spaceID, conversationID, userID string) (bool, error) {
+func conversationMemberActive(ctx context.Context, queryer pgQueryer, spaceID, conversationID, userID string, pin bool) (bool, error) {
 	var present bool
-	err := queryer.QueryRow(ctx, `
+	query := `
 		SELECT EXISTS (
 			SELECT 1 FROM conversation_members cm
 			JOIN conversations c ON c.id = cm.conversation_id AND c.space_id = $1
 			WHERE cm.conversation_id = $2 AND cm.user_id = $3 AND cm.removed_at IS NULL
-		)
-	`, spaceID, conversationID, userID).Scan(&present)
+	`
+	if pin {
+		query += " FOR SHARE OF cm, c"
+	}
+	query += ")"
+	err := queryer.QueryRow(ctx, query, spaceID, conversationID, userID).Scan(&present)
 	return present, err
 }
 
@@ -247,7 +255,7 @@ type pgTx struct {
 }
 
 func (t *pgTx) LookupActor(ctx context.Context, spaceID, userID string) (*auth.Actor, error) {
-	return lookupActor(ctx, t.tx, spaceID, userID)
+	return lookupActor(ctx, t.tx, spaceID, userID, true)
 }
 func (t *pgTx) SpaceExists(ctx context.Context, spaceID string) (bool, error) {
 	return spaceExists(ctx, t.tx, spaceID)
@@ -256,7 +264,7 @@ func (t *pgTx) GetConversation(ctx context.Context, spaceID, conversationID stri
 	return getConversation(ctx, t.tx, spaceID, conversationID)
 }
 func (t *pgTx) ConversationMemberActive(ctx context.Context, spaceID, conversationID, userID string) (bool, error) {
-	return conversationMemberActive(ctx, t.tx, spaceID, conversationID, userID)
+	return conversationMemberActive(ctx, t.tx, spaceID, conversationID, userID, true)
 }
 func (t *pgTx) GetCard(ctx context.Context, spaceID, cardID string) (*CardRecord, error) {
 	return scanCard(t.tx.QueryRow(ctx, cardSelect+" WHERE space_id = $1 AND id = $2", spaceID, cardID))
@@ -268,7 +276,7 @@ func (t *pgTx) GetActionRun(ctx context.Context, cardID, actorID, clientActionID
 	return getActionRun(ctx, t.tx, cardID, actorID, clientActionID)
 }
 func (t *pgTx) CustomBotActive(ctx context.Context, spaceID, botID, botUserID string) (bool, error) {
-	return customBotActive(ctx, t.tx, spaceID, botID, botUserID)
+	return customBotActive(ctx, t.tx, spaceID, botID, botUserID, true)
 }
 
 func (t *pgTx) Lock(ctx context.Context, key string) error {
@@ -471,17 +479,21 @@ func (r *PGRepository) CustomBotActive(ctx context.Context, spaceID, botID, botU
 	if r == nil || r.pool == nil {
 		return false, errors.New("workspace cards postgres pool is required")
 	}
-	return customBotActive(ctx, r.pool, spaceID, botID, botUserID)
+	return customBotActive(ctx, r.pool, spaceID, botID, botUserID, false)
 }
 
-func customBotActive(ctx context.Context, queryer pgQueryer, spaceID, botID, botUserID string) (bool, error) {
+func customBotActive(ctx context.Context, queryer pgQueryer, spaceID, botID, botUserID string, pin bool) (bool, error) {
 	var active bool
-	query := `SELECT EXISTS (SELECT 1 FROM workspace_agent_bots WHERE id = $1 AND space_id = $2 AND bot_user_id = $3 AND status = 'active')`
+	query := `SELECT EXISTS (SELECT 1 FROM workspace_agent_bots WHERE id = $1 AND space_id = $2 AND bot_user_id = $3 AND status = 'active'`
 	args := []any{botID, spaceID, botUserID}
 	if strings.TrimSpace(botID) == "" {
-		query = `SELECT EXISTS (SELECT 1 FROM workspace_agent_bots WHERE space_id = $1 AND bot_user_id = $2 AND status = 'active')`
+		query = `SELECT EXISTS (SELECT 1 FROM workspace_agent_bots WHERE space_id = $1 AND bot_user_id = $2 AND status = 'active'`
 		args = []any{spaceID, botUserID}
 	}
+	if pin {
+		query += " FOR SHARE"
+	}
+	query += ")"
 	err := queryer.QueryRow(ctx, query, args...).Scan(&active)
 	return active, err
 }
