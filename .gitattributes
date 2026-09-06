@@ -1,4 +1,5 @@
-# Keep only the sqlc source/generated boundary byte-stable across checkouts.
+# Keep generated contract boundaries byte-stable across checkouts.
+apps/backend/api/node-routes.json text eol=lf
 apps/backend/sqlc.yaml text eol=lf
 apps/backend/internal/workspace/presence/queries.sql text eol=lf
 apps/backend/internal/workspace/presence/internal/presencequeries/*.go text eol=lf

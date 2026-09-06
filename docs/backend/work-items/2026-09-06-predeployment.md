@@ -428,3 +428,20 @@ tool; `go mod tidy` repaired the manifest graph before the passing runs.
 These checks include the tool-induced OAuth v0.34.0 and protobuf v1.36.11
 updates, but exclude ongoing SMTP, Bot, Echo, Feishu and maintenance drafts.
 They establish this query/tool boundary only, not whole-candidate acceptance.
+
+### Executable Route Inventory
+
+The actual disabled Node application confirmed 164 literal public declarations
+from its entry point and six route modules. The generator captured 153 HTTP
+disabled responses, all the existing safe 503 envelope. Two inventory unit tests
+and a fresh actual-Node `--check` passed. CI now checks inventory freshness;
+implicit HEAD and static-plugin paths are explicitly outside its scope.
+
+An independent, not-yet-accepted Go registration test against the reviewed
+candidate reproduced 19 missing registrations: 16 Echo paths, two owner Bot
+connection paths and `/ws/bot-gateway`. A separate gate-response comparison
+passed 153 paths across five non-enabled flag values without actor resolution.
+This demonstrates why matching disabled responses alone cannot prove route
+composition. The failing registration regression remains in the integration
+queue until those worker slices are accepted; it is not hidden by an allowlist
+or counted as a passing candidate gate.

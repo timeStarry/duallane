@@ -1,0 +1,2695 @@
+{
+  "schemaVersion": 1,
+  "scope": "declared routes and disabled HTTP responses",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/",
+      "nodePath": "/",
+      "transport": "http",
+      "lane": "edge",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/github/callback",
+      "nodePath": "/api/auth/github/callback",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/github/start",
+      "nodePath": "/api/auth/github/start",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/logout",
+      "nodePath": "/api/auth/logout",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/bot-gateway/v1/attachments",
+      "nodePath": "/api/bot-gateway/v1/attachments",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/bot-gateway/v1/attachments/{attachmentId}",
+      "nodePath": "/api/bot-gateway/v1/attachments/:attachmentId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/bot-gateway/v1/cards",
+      "nodePath": "/api/bot-gateway/v1/cards",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/bot-gateway/v1/cards/{cardId}",
+      "nodePath": "/api/bot-gateway/v1/cards/:cardId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/bot-gateway/v1/conversations/{conversationId}/context",
+      "nodePath": "/api/bot-gateway/v1/conversations/:conversationId/context",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/bot-gateway/v1/events/ack",
+      "nodePath": "/api/bot-gateway/v1/events/ack",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/bot-gateway/v1/me",
+      "nodePath": "/api/bot-gateway/v1/me",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/bot-gateway/v1/messages",
+      "nodePath": "/api/bot-gateway/v1/messages",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/bot-gateway/v1/setup/exchange",
+      "nodePath": "/api/bot-gateway/v1/setup/exchange",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/bot-gateway/v1/setup/request",
+      "nodePath": "/api/bot-gateway/v1/setup/request",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/bot-gateway/v1/setup/status",
+      "nodePath": "/api/bot-gateway/v1/setup/status",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/bot-gateway/v1/typing",
+      "nodePath": "/api/bot-gateway/v1/typing",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/health",
+      "nodePath": "/api/health",
+      "transport": "http",
+      "lane": "edge",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/p2p/ice-servers",
+      "nodePath": "/api/p2p/ice-servers",
+      "transport": "http",
+      "lane": "p2p",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/p2p/rooms",
+      "nodePath": "/api/p2p/rooms",
+      "transport": "http",
+      "lane": "p2p",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/p2p/rooms/{roomId}",
+      "nodePath": "/api/p2p/rooms/:roomId",
+      "transport": "http",
+      "lane": "p2p",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/avatars/{userId}/{version}",
+      "nodePath": "/api/workspace/avatars/:userId/:version",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/bootstrap",
+      "nodePath": "/api/workspace/bootstrap",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/bot-setup/{sessionId}",
+      "nodePath": "/api/workspace/bot-setup/:sessionId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bot-setup/{sessionId}/approve",
+      "nodePath": "/api/workspace/bot-setup/:sessionId/approve",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bot-setup/{sessionId}/deny",
+      "nodePath": "/api/workspace/bot-setup/:sessionId/deny",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/bots",
+      "nodePath": "/api/workspace/bots",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bots",
+      "nodePath": "/api/workspace/bots",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/bots/{botId}",
+      "nodePath": "/api/workspace/bots/:botId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/bots/{botId}",
+      "nodePath": "/api/workspace/bots/:botId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/bots/{botId}/connection",
+      "nodePath": "/api/workspace/bots/:botId/connection",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bots/{botId}/connection/test",
+      "nodePath": "/api/workspace/bots/:botId/connection/test",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/bots/{botId}/context-grants/{conversationId}",
+      "nodePath": "/api/workspace/bots/:botId/context-grants/:conversationId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bots/{botId}/delete/confirm",
+      "nodePath": "/api/workspace/bots/:botId/delete/confirm",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/bots/{botId}/group-policies",
+      "nodePath": "/api/workspace/bots/:botId/group-policies",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/bots/{botId}/group-policies/{conversationId}",
+      "nodePath": "/api/workspace/bots/:botId/group-policies/:conversationId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bots/{botId}/pause",
+      "nodePath": "/api/workspace/bots/:botId/pause",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bots/{botId}/resume",
+      "nodePath": "/api/workspace/bots/:botId/resume",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/bots/{botId}/settings",
+      "nodePath": "/api/workspace/bots/:botId/settings",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/bots/{botId}/settings",
+      "nodePath": "/api/workspace/bots/:botId/settings",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bots/{botId}/setup-sessions",
+      "nodePath": "/api/workspace/bots/:botId/setup-sessions",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/bots/{botId}/tokens",
+      "nodePath": "/api/workspace/bots/:botId/tokens",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bots/{botId}/tokens",
+      "nodePath": "/api/workspace/bots/:botId/tokens",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bots/{botId}/tokens/rotate",
+      "nodePath": "/api/workspace/bots/:botId/tokens/rotate",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bots/{botId}/tokens/{tokenId}/revoke",
+      "nodePath": "/api/workspace/bots/:botId/tokens/:tokenId/revoke",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/cards/{cardId}",
+      "nodePath": "/api/workspace/cards/:cardId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-cards.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/cards/{cardId}/actions",
+      "nodePath": "/api/workspace/cards/:cardId/actions",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-cards.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/conversations",
+      "nodePath": "/api/workspace/conversations",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/conversations",
+      "nodePath": "/api/workspace/conversations",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/conversations/{conversationId}",
+      "nodePath": "/api/workspace/conversations/:conversationId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/conversations/{conversationId}/messages",
+      "nodePath": "/api/workspace/conversations/:conversationId/messages",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/conversations/{conversationId}/notification",
+      "nodePath": "/api/workspace/conversations/:conversationId/notification",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/conversations/{conversationId}/read",
+      "nodePath": "/api/workspace/conversations/:conversationId/read",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/conversations/{conversationId}/topics",
+      "nodePath": "/api/workspace/conversations/:conversationId/topics",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-topics.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/conversations/{conversationId}/topics",
+      "nodePath": "/api/workspace/conversations/:conversationId/topics",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-topics.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/echo/requirements",
+      "nodePath": "/api/workspace/echo/requirements",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-echo.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/echo/requirements",
+      "nodePath": "/api/workspace/echo/requirements",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-echo.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/echo/requirements/stats",
+      "nodePath": "/api/workspace/echo/requirements/stats",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-echo.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/echo/requirements/{publicId}",
+      "nodePath": "/api/workspace/echo/requirements/:publicId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-echo.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/echo/requirements/{publicId}/history",
+      "nodePath": "/api/workspace/echo/requirements/:publicId/history",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-echo.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/echo/requirements/{publicId}/transition",
+      "nodePath": "/api/workspace/echo/requirements/:publicId/transition",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-echo.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/echo/solicitations",
+      "nodePath": "/api/workspace/echo/solicitations",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-echo.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/echo/solicitations",
+      "nodePath": "/api/workspace/echo/solicitations",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-echo.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/echo/solicitations/{publicId}",
+      "nodePath": "/api/workspace/echo/solicitations/:publicId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-echo.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/echo/solicitations/{publicId}/close",
+      "nodePath": "/api/workspace/echo/solicitations/:publicId/close",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-echo.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/echo/solicitations/{publicId}/deliveries",
+      "nodePath": "/api/workspace/echo/solicitations/:publicId/deliveries",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-echo.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/echo/solicitations/{publicId}/deliveries/retry",
+      "nodePath": "/api/workspace/echo/solicitations/:publicId/deliveries/retry",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-echo.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/echo/solicitations/{publicId}/publish",
+      "nodePath": "/api/workspace/echo/solicitations/:publicId/publish",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-echo.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/echo/solicitations/{publicId}/vote",
+      "nodePath": "/api/workspace/echo/solicitations/:publicId/vote",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-echo.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/echo/solicitations/{publicId}/votes",
+      "nodePath": "/api/workspace/echo/solicitations/:publicId/votes",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-echo.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/echo/solicitations/{publicId}/withdraw",
+      "nodePath": "/api/workspace/echo/solicitations/:publicId/withdraw",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-echo.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/emote-collection-shares/{shareId}",
+      "nodePath": "/api/workspace/emote-collection-shares/:shareId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/emote-collection-shares/{shareId}/import",
+      "nodePath": "/api/workspace/emote-collection-shares/:shareId/import",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/emotes/{emoteId}/content",
+      "nodePath": "/api/workspace/emotes/:emoteId/content",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/files",
+      "nodePath": "/api/workspace/files",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/files/uploads/reserve",
+      "nodePath": "/api/workspace/files/uploads/reserve",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/files/uploads/{uploadId}",
+      "nodePath": "/api/workspace/files/uploads/:uploadId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/files/uploads/{uploadId}/complete",
+      "nodePath": "/api/workspace/files/uploads/:uploadId/complete",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/files/uploads/{uploadId}/content",
+      "nodePath": "/api/workspace/files/uploads/:uploadId/content",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/files/uploads/{uploadId}/fail",
+      "nodePath": "/api/workspace/files/uploads/:uploadId/fail",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/files/uploads/{uploadId}/parts/{partNumber}",
+      "nodePath": "/api/workspace/files/uploads/:uploadId/parts/:partNumber",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/files/{attachmentId}",
+      "nodePath": "/api/workspace/files/:attachmentId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/files/{attachmentId}/download",
+      "nodePath": "/api/workspace/files/:attachmentId/download",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/files/{attachmentId}/downloads/reserve",
+      "nodePath": "/api/workspace/files/:attachmentId/downloads/reserve",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/files/{attachmentId}/preview",
+      "nodePath": "/api/workspace/files/:attachmentId/preview",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/groups/{conversationId}",
+      "nodePath": "/api/workspace/groups/:conversationId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/groups/{conversationId}/leave",
+      "nodePath": "/api/workspace/groups/:conversationId/leave",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/groups/{conversationId}/members",
+      "nodePath": "/api/workspace/groups/:conversationId/members",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/groups/{conversationId}/members/{userId}",
+      "nodePath": "/api/workspace/groups/:conversationId/members/:userId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/groups/{conversationId}/pins",
+      "nodePath": "/api/workspace/groups/:conversationId/pins",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/groups/{conversationId}/pins",
+      "nodePath": "/api/workspace/groups/:conversationId/pins",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/groups/{conversationId}/pins/{messageId}",
+      "nodePath": "/api/workspace/groups/:conversationId/pins/:messageId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/interactions/commands",
+      "nodePath": "/api/workspace/interactions/commands",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-interactions.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/invites",
+      "nodePath": "/api/workspace/invites",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/invites/{code}/accept",
+      "nodePath": "/api/workspace/invites/:code/accept",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/invites/{inviteId}/revoke",
+      "nodePath": "/api/workspace/invites/:inviteId/revoke",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/me/avatar",
+      "nodePath": "/api/workspace/me/avatar",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/me/avatar",
+      "nodePath": "/api/workspace/me/avatar",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/me/emote-collection-shares/{shareId}",
+      "nodePath": "/api/workspace/me/emote-collection-shares/:shareId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/me/emote-collections",
+      "nodePath": "/api/workspace/me/emote-collections",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/me/emote-collections/{collectionId}",
+      "nodePath": "/api/workspace/me/emote-collections/:collectionId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/me/emote-collections/{collectionId}",
+      "nodePath": "/api/workspace/me/emote-collections/:collectionId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/me/emote-collections/{collectionId}/items",
+      "nodePath": "/api/workspace/me/emote-collections/:collectionId/items",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/me/emote-collections/{collectionId}/items/{emoteId}",
+      "nodePath": "/api/workspace/me/emote-collections/:collectionId/items/:emoteId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/me/emote-collections/{collectionId}/order",
+      "nodePath": "/api/workspace/me/emote-collections/:collectionId/order",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/me/emote-collections/{collectionId}/shares",
+      "nodePath": "/api/workspace/me/emote-collections/:collectionId/shares",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/me/emote-collections/{collectionId}/source-subscription",
+      "nodePath": "/api/workspace/me/emote-collections/:collectionId/source-subscription",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/me/emote-library",
+      "nodePath": "/api/workspace/me/emote-library",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/me/emote-library/order",
+      "nodePath": "/api/workspace/me/emote-library/order",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/me/emote-settings",
+      "nodePath": "/api/workspace/me/emote-settings",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/me/emote-settings",
+      "nodePath": "/api/workspace/me/emote-settings",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/me/emotes",
+      "nodePath": "/api/workspace/me/emotes",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/me/emotes",
+      "nodePath": "/api/workspace/me/emotes",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/me/emotes/favorite",
+      "nodePath": "/api/workspace/me/emotes/favorite",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/me/emotes/order",
+      "nodePath": "/api/workspace/me/emotes/order",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/me/emotes/{emoteId}",
+      "nodePath": "/api/workspace/me/emotes/:emoteId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/me/emotes/{emoteId}",
+      "nodePath": "/api/workspace/me/emotes/:emoteId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/me/notification-email/challenges",
+      "nodePath": "/api/workspace/me/notification-email/challenges",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/me/notification-email/use-github",
+      "nodePath": "/api/workspace/me/notification-email/use-github",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/me/notification-email/verify",
+      "nodePath": "/api/workspace/me/notification-email/verify",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/me/notifications",
+      "nodePath": "/api/workspace/me/notifications",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/me/notifications",
+      "nodePath": "/api/workspace/me/notifications",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/me/ntfy",
+      "nodePath": "/api/workspace/me/ntfy",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/me/ntfy",
+      "nodePath": "/api/workspace/me/ntfy",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/me/ntfy/rotate",
+      "nodePath": "/api/workspace/me/ntfy/rotate",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/me/profile",
+      "nodePath": "/api/workspace/me/profile",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/member-visibility/{userId}",
+      "nodePath": "/api/workspace/member-visibility/:userId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/member-visibility/{userId}",
+      "nodePath": "/api/workspace/member-visibility/:userId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/members",
+      "nodePath": "/api/workspace/members",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/members/{userId}",
+      "nodePath": "/api/workspace/members/:userId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/members/{userId}/remark",
+      "nodePath": "/api/workspace/members/:userId/remark",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/members/{userId}/remark",
+      "nodePath": "/api/workspace/members/:userId/remark",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/members/{userId}/role",
+      "nodePath": "/api/workspace/members/:userId/role",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/messages",
+      "nodePath": "/api/workspace/messages",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/messages/{messageId}/hidden",
+      "nodePath": "/api/workspace/messages/:messageId/hidden",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/messages/{messageId}/hidden",
+      "nodePath": "/api/workspace/messages/:messageId/hidden",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/messages/{messageId}/reactions",
+      "nodePath": "/api/workspace/messages/:messageId/reactions",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/messages/{messageId}/reactions/{emoteKey}",
+      "nodePath": "/api/workspace/messages/:messageId/reactions/:emoteKey",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/messages/{messageId}/recall",
+      "nodePath": "/api/workspace/messages/:messageId/recall",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/settings/email",
+      "nodePath": "/api/workspace/settings/email",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/settings/email",
+      "nodePath": "/api/workspace/settings/email",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/settings/email/test",
+      "nodePath": "/api/workspace/settings/email/test",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/statistics",
+      "nodePath": "/api/workspace/statistics",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/topics",
+      "nodePath": "/api/workspace/topics",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-topics.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/topics/mine",
+      "nodePath": "/api/workspace/topics/mine",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-topics.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/topics/{topicId}",
+      "nodePath": "/api/workspace/topics/:topicId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-topics.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/topics/{topicId}/archive",
+      "nodePath": "/api/workspace/topics/:topicId/archive",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-topics.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/topics/{topicId}/close",
+      "nodePath": "/api/workspace/topics/:topicId/close",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-topics.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/topics/{topicId}/join",
+      "nodePath": "/api/workspace/topics/:topicId/join",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-topics.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/topics/{topicId}/leave",
+      "nodePath": "/api/workspace/topics/:topicId/leave",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-topics.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/topics/{topicId}/members",
+      "nodePath": "/api/workspace/topics/:topicId/members",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-topics.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/topics/{topicId}/messages",
+      "nodePath": "/api/workspace/topics/:topicId/messages",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-topics.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/topics/{topicId}/messages",
+      "nodePath": "/api/workspace/topics/:topicId/messages",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-topics.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/topics/{topicId}/messages/{messageId}/sync",
+      "nodePath": "/api/workspace/topics/:topicId/messages/:messageId/sync",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-topics.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/topics/{topicId}/messages/{messageId}/sync",
+      "nodePath": "/api/workspace/topics/:topicId/messages/:messageId/sync",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-topics.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/topics/{topicId}/notification",
+      "nodePath": "/api/workspace/topics/:topicId/notification",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-topics.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/topics/{topicId}/projections",
+      "nodePath": "/api/workspace/topics/:topicId/projections",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-topics.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/topics/{topicId}/read",
+      "nodePath": "/api/workspace/topics/:topicId/read",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-topics.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/workflows",
+      "nodePath": "/api/workspace/workflows",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-interactions.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/workflows/{workflowId}",
+      "nodePath": "/api/workspace/workflows/:workflowId",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-interactions.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/workflows/{workflowId}/cancel",
+      "nodePath": "/api/workspace/workflows/:workflowId/cancel",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-interactions.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/workflows/{workflowId}/continue",
+      "nodePath": "/api/workspace/workflows/:workflowId/continue",
+      "transport": "http",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-interactions.mjs",
+      "disabled": {
+        "status": 503,
+        "body": {
+          "error": {
+            "code": "workspace.disabled",
+            "message": "共享空间暂未开放"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/ws/bot-gateway",
+      "nodePath": "/ws/bot-gateway",
+      "transport": "websocket",
+      "lane": "workspace",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/ws/p2p/{roomId}",
+      "nodePath": "/ws/p2p/:roomId",
+      "transport": "websocket",
+      "lane": "p2p",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/ws/workspace",
+      "nodePath": "/ws/workspace",
+      "transport": "websocket",
+      "lane": "workspace",
+      "source": "apps/web/server/index.mjs"
+    }
+  ]
+}

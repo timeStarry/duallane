@@ -101,7 +101,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Validate backend tooling guards
-        run: node --test .github/tests/ci-go-native-dependencies.test.mjs .github/tests/ci-go-p2p-privacy.test.mjs scripts/backend/owned-process.test.mjs scripts/backend/p2p-parity.test.mjs
+        run: node --test .github/tests/ci-go-native-dependencies.test.mjs .github/tests/ci-go-p2p-privacy.test.mjs scripts/backend/owned-process.test.mjs scripts/backend/p2p-parity.test.mjs scripts/backend/route-inventory.test.mjs
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -114,6 +114,7 @@ jobs:
           node scripts/backend/echo-requirement-fixtures.mjs --check
           node scripts/backend/echo-release-fixtures.mjs --check
           node scripts/backend/bot-idempotency-fixtures.mjs --check
+          node scripts/backend/route-inventory.mjs --check
 
       - name: Run type and lint checks
         run: pnpm lint

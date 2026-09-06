@@ -219,6 +219,21 @@ a working runner is not a blanket parity claim.
 
 ### Extending coverage
 
+`node scripts/backend/route-inventory.mjs --check` checks the generated
+`apps/backend/api/node-routes.json` against current literal route declarations
+and the actual Node application's registration/disabled responses. Regenerate
+with `--write` only after reviewing changes. The script creates and removes a
+unique synthetic directory, disables Workspace, uses no database, and makes no
+external provider calls. It currently inventories 164 declarations and 153
+disabled HTTP responses. Static-file plugin routes and implicit HEAD routes
+are outside this explicit API inventory.
+
+This inventory is a transport coverage input, not complete OpenAPI schemas or
+proof that a Go route has real dependencies. Prefix-level disabled middleware
+can return 503 even for an unwired route. Check registration separately, then
+prove enabled authorization, DTOs and persisted effects through owning-domain
+fixtures and command-composition tests.
+
 Build parity fixtures by capability, not one snapshot for the entire API. Each
 fixture contains synthetic input, prepared database/object state, expected
 public response, persisted changes, audit rows, event projections, and safe
