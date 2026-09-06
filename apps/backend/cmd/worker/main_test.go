@@ -13,7 +13,7 @@ import (
 )
 
 func TestDisabledWorkerDoesNotOpenDatabase(t *testing.T) {
-	app, err := newApplication(context.Background(), config.WorkspaceConfig{Enabled: false, NtfyWorkerEnabled: true, EmailWorkerEnabled: true, MaintenanceEnabled: true}, nil)
+	app, err := newApplication(context.Background(), config.WorkspaceConfig{Enabled: false, NtfyWorkerEnabled: true, EmailWorkerEnabled: true, MaintenanceEnabled: true, EchoWorkerEnabled: true}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

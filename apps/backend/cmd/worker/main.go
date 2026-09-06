@@ -86,7 +86,7 @@ func main() {
 
 func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, logger *slog.Logger) (*application, error) {
 	app := &application{rootContext: ctx, logger: logger, startupDelay: time.Minute}
-	if !runtimeConfig.Enabled || (!runtimeConfig.NtfyWorkerEnabled && !runtimeConfig.EmailWorkerEnabled && !runtimeConfig.MaintenanceEnabled) {
+	if !runtimeConfig.Enabled || (!runtimeConfig.NtfyWorkerEnabled && !runtimeConfig.EmailWorkerEnabled && !runtimeConfig.MaintenanceEnabled && !runtimeConfig.EchoWorkerEnabled) {
 		return app, nil
 	}
 	pool, err := postgres.OpenPoolFromEnv(ctx)
@@ -164,6 +164,14 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		})
 		maintenance := newMaintenanceRunner(fileService, store)
 		app.processors = append(app.processors, maintenance.processors()...)
+	}
+	if runtimeConfig.EchoWorkerEnabled {
+		processors, err := newEchoProcessors(pool, &runtimeConfig)
+		if err != nil {
+			pool.Close()
+			return nil, err
+		}
+		app.processors = append(app.processors, processors...)
 	}
 	app.pool = pool
 	return app, nil

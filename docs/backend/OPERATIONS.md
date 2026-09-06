@@ -123,6 +123,17 @@ Logical expiry applies to lookups even if the sweeper is stopped. Enable this
 only on a synthetic candidate or after the capability's Go ownership is
 authorized; this switch does not authorize cutover or start another writer.
 
+`WORKSPACE_ECHO_WORKER_ENABLED=true` is a separate exact opt-in, default off.
+It composes requirement, solicitation and release delivery plus active-human
+member reconciliation. The four loops run independently every 30 seconds after
+the worker startup delay, with 25-item keyset pages and independent cursors.
+Errors or cancellation retain the previous cursor for a later retry. Member
+reconciliation has a 15-second cycle budget and does not publish old releases.
+Messages/cards and configured email/ntfy jobs use the same durable transactional
+writer as HTTP requests. Enabling this switch does not enable external
+notification sending; those providers retain their own switches and ownership.
+Do not enable Node and Go Echo claimers together.
+
 ## 6. Startup And Readiness
 
 Both candidate Go images include `/usr/local/bin/duallane-healthcheck`. It

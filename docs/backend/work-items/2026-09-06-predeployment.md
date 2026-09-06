@@ -1283,3 +1283,19 @@ new actual-owner Bot creation fixture. The PostgreSQL coexistence rehearsal is
 also in the Go CI job. No Go Workspace browser gate is enabled yet: the latest
 full browser run passed 9/12, with Bot card update 404, intermittent release
 card visibility and reaction-removal projection failures still under review.
+
+### Echo Worker Recovery Composition
+
+Four default-off bounded processors now compose the actual repositories,
+delivery service, five card definitions and durable message-jobs scheduler.
+Separate cursors cover requirement/solicitation/release queues and active-human
+member reconciliation. The latter repairs a join whose HTTP hook never ran,
+without broadcasting historical releases. Errors/cancellation retain the
+previous page cursor; successful short pages wrap.
+
+Independent PostgreSQL/race passed worker/config (4.245/1.020 seconds). Parent
+corrected staticcheck error-string findings, then staticcheck passed. The
+expanded real worker test passed in 4.068 seconds: reconstruction retains one
+message/card/delivery and one pending email/ntfy job each, with zero provider
+attempts. Schema cleanup failures are reported. No notification was sent and
+no production worker was enabled.

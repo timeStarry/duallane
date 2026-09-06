@@ -114,6 +114,18 @@ func TestMaintenanceWorkerRequiresExplicitOptIn(t *testing.T) {
 	}
 }
 
+func TestEchoWorkerRequiresExplicitOptIn(t *testing.T) {
+	for _, value := range []string{"", "false", "TRUE", " true", "true ", "1", "true"} {
+		configuration, err := LoadWorkspaceFrom(configLookup(map[string]string{WorkspaceEchoWorkerEnv: value}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if configuration.EchoWorkerEnabled != (value == "true") {
+			t.Fatalf("Echo worker flag %q enabled=%v", value, configuration.EchoWorkerEnabled)
+		}
+	}
+}
+
 func TestLoadWorkspaceBoundsOAuthTimeoutAndRejectsInvalidPort(t *testing.T) {
 	config, err := LoadWorkspaceFrom(configLookup(map[string]string{GitHubOAuthTimeoutEnvironment: "4294967296"}))
 	if err != nil {

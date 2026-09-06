@@ -24,6 +24,7 @@ const (
 	WorkspaceNtfyWorkerEnabled     = "WORKSPACE_NTFY_WORKER_ENABLED"
 	WorkspaceEmailWorkerEnabled    = "WORKSPACE_EMAIL_WORKER_ENABLED"
 	WorkspaceMaintenanceWorkerEnv  = "WORKSPACE_MAINTENANCE_WORKER_ENABLED"
+	WorkspaceEchoWorkerEnv         = "WORKSPACE_ECHO_WORKER_ENABLED"
 	WorkspaceSMTPEncryptionKey     = "WORKSPACE_SMTP_ENCRYPTION_KEY"
 	WorkspaceStorageDriverEnv      = "WORKSPACE_STORAGE_DRIVER"
 	WorkspaceS3EndpointEnv         = "WORKSPACE_S3_ENDPOINT"
@@ -63,6 +64,7 @@ type WorkspaceConfig struct {
 	NtfyWorkerEnabled  bool
 	EmailWorkerEnabled bool
 	MaintenanceEnabled bool
+	EchoWorkerEnabled  bool
 	SMTPEncryptionKey  string
 	StorageDriver      string
 	S3Endpoint         string
@@ -87,6 +89,7 @@ func LoadWorkspaceFrom(lookup func(string) (string, bool)) (WorkspaceConfig, err
 	}
 	workspaceEnabledValue, _ := lookup(WorkspaceEnabledEnvironment)
 	maintenanceEnabledValue, _ := lookup(WorkspaceMaintenanceWorkerEnv)
+	echoWorkerEnabledValue, _ := lookup(WorkspaceEchoWorkerEnv)
 	config := WorkspaceConfig{
 		Host:               valueOr(lookup, "HOST", DefaultHost),
 		Port:               DefaultPort,
@@ -109,6 +112,7 @@ func LoadWorkspaceFrom(lookup func(string) (string, bool)) (WorkspaceConfig, err
 		NtfyWorkerEnabled:  valueOr(lookup, WorkspaceNtfyWorkerEnabled, "true") != "false",
 		EmailWorkerEnabled: valueOr(lookup, WorkspaceEmailWorkerEnabled, "true") != "false",
 		MaintenanceEnabled: maintenanceEnabledValue == "true",
+		EchoWorkerEnabled:  echoWorkerEnabledValue == "true",
 		SMTPEncryptionKey:  strings.TrimSpace(valueOr(lookup, WorkspaceSMTPEncryptionKey, "")),
 		StorageDriver:      strings.ToLower(valueOr(lookup, WorkspaceStorageDriverEnv, "local")),
 		S3Endpoint:         strings.TrimSpace(valueOr(lookup, WorkspaceS3EndpointEnv, "")),
