@@ -19,7 +19,7 @@ type ReadRepository interface {
 	FindMessageByClientID(ctx context.Context, spaceID, conversationID, actorID, clientMessageID string) (*MessageRecord, error)
 	MessageExists(ctx context.Context, spaceID, conversationID, messageID string) (bool, error)
 	ListMessages(ctx context.Context, options ListOptions) ([]MessageRecord, error)
-	ListAttachments(ctx context.Context, spaceID string, messageIDs []string) (map[string][]AttachmentRecord, error)
+	ListAttachments(ctx context.Context, spaceID, viewerID string, messageIDs []string) (map[string][]AttachmentRecord, error)
 	ListReactions(ctx context.Context, spaceID, viewerID string, messageIDs []string) (map[string][]ReactionGroup, error)
 	ListHidden(ctx context.Context, spaceID, viewerID string, messageIDs []string) (map[string]bool, error)
 	FindMentionMember(ctx context.Context, spaceID, conversationID, userID string) (*MentionMember, error)

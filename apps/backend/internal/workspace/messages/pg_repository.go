@@ -195,11 +195,11 @@ func (s *PGRepository) ListMessages(ctx context.Context, options ListOptions) ([
 	return listMessages(ctx, s.pool, options)
 }
 
-func (s *PGRepository) ListAttachments(ctx context.Context, spaceID string, messageIDs []string) (map[string][]AttachmentRecord, error) {
+func (s *PGRepository) ListAttachments(ctx context.Context, spaceID, viewerID string, messageIDs []string) (map[string][]AttachmentRecord, error) {
 	if s == nil || s.pool == nil {
 		return nil, errors.New("workspace messages postgres pool is required")
 	}
-	return listAttachments(ctx, s.pool, spaceID, messageIDs)
+	return listAttachments(ctx, s.pool, spaceID, viewerID, messageIDs)
 }
 
 func (s *PGRepository) ListReactions(ctx context.Context, spaceID, viewerID string, messageIDs []string) (map[string][]ReactionGroup, error) {
@@ -326,8 +326,8 @@ func (t *pgTx) ListMessages(ctx context.Context, options ListOptions) ([]Message
 	return listMessages(ctx, t.tx, options)
 }
 
-func (t *pgTx) ListAttachments(ctx context.Context, spaceID string, messageIDs []string) (map[string][]AttachmentRecord, error) {
-	return listAttachments(ctx, t.tx, spaceID, messageIDs)
+func (t *pgTx) ListAttachments(ctx context.Context, spaceID, viewerID string, messageIDs []string) (map[string][]AttachmentRecord, error) {
+	return listAttachments(ctx, t.tx, spaceID, viewerID, messageIDs)
 }
 
 func (t *pgTx) ListReactions(ctx context.Context, spaceID, viewerID string, messageIDs []string) (map[string][]ReactionGroup, error) {
@@ -968,11 +968,11 @@ func scanMessageRows(rows pgx.Rows) (*MessageRecord, error) {
 	return &record, nil
 }
 
-func listAttachments(ctx context.Context, queryer pgQueryer, spaceID string, messageIDs []string) (map[string][]AttachmentRecord, error) {
-	return listAttachmentsRows(ctx, queryer, spaceID, messageIDs)
+func listAttachments(ctx context.Context, queryer pgQueryer, spaceID, viewerID string, messageIDs []string) (map[string][]AttachmentRecord, error) {
+	return listAttachmentsRows(ctx, queryer, spaceID, viewerID, messageIDs)
 }
 
-func listAttachmentsRows(ctx context.Context, queryer pgQueryer, spaceID string, messageIDs []string) (map[string][]AttachmentRecord, error) {
+func listAttachmentsRows(ctx context.Context, queryer pgQueryer, spaceID, viewerID string, messageIDs []string) (map[string][]AttachmentRecord, error) {
 	result := make(map[string][]AttachmentRecord, len(messageIDs))
 	for _, id := range messageIDs {
 		result[id] = make([]AttachmentRecord, 0)
@@ -983,13 +983,24 @@ func listAttachmentsRows(ctx context.Context, queryer pgQueryer, spaceID string,
 	rows, err := queryer.Query(ctx, `
 		SELECT
 			ma.message_id, a.id, a.space_id, a.uploader_id, a.conversation_id,
+			COALESCE(ur.remark, u.nickname, u.github_login, u.display_name, ''),
 			a.visibility, a.status, a.file_name, a.mime_type, a.byte_size,
 			a.created_at, a.completed_at
 		FROM message_attachments ma
 		INNER JOIN attachments a ON a.id = ma.attachment_id
-		WHERE a.space_id = $1 AND ma.message_id = ANY($2::text[])
+		INNER JOIN messages m ON m.id = ma.message_id AND m.space_id = $1
+		INNER JOIN users u ON u.id = a.uploader_id
+		LEFT JOIN space_members uploader_members
+			ON uploader_members.space_id = a.space_id
+			AND uploader_members.user_id = u.id
+			AND uploader_members.removed_at IS NULL
+		LEFT JOIN user_remarks ur
+			ON ur.owner_user_id = $2
+			AND ur.target_user_id = u.id
+			AND uploader_members.user_id IS NOT NULL
+		WHERE a.space_id = $1 AND ma.message_id = ANY($3::text[])
 		ORDER BY ma.message_id, a.created_at ASC, a.id ASC
-	`, spaceID, messageIDs)
+	`, spaceID, viewerID, messageIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -998,7 +1009,7 @@ func listAttachmentsRows(ctx context.Context, queryer pgQueryer, spaceID string,
 		var messageID string
 		var record AttachmentRecord
 		if err := rows.Scan(&messageID, &record.ID, &record.SpaceID, &record.UploaderID, &record.ConversationID,
-			&record.Visibility, &record.Status, &record.FileName, &record.MIMEType, &record.ByteSize,
+			&record.UploaderName, &record.Visibility, &record.Status, &record.FileName, &record.MIMEType, &record.ByteSize,
 			&record.CreatedAt, &record.CompletedAt); err != nil {
 			return nil, err
 		}

@@ -197,7 +197,7 @@ func (f *fakeRepo) ListMessages(_ context.Context, options ListOptions) ([]Messa
 	return append([]MessageRecord(nil), all[start:]...), nil
 }
 
-func (f *fakeRepo) ListAttachments(_ context.Context, _ string, messageIDs []string) (map[string][]AttachmentRecord, error) {
+func (f *fakeRepo) ListAttachments(_ context.Context, _, _ string, messageIDs []string) (map[string][]AttachmentRecord, error) {
 	result := make(map[string][]AttachmentRecord, len(messageIDs))
 	for _, messageID := range messageIDs {
 		result[messageID] = make([]AttachmentRecord, 0)
@@ -301,8 +301,8 @@ func (t *fakeTx) MessageExists(ctx context.Context, spaceID, conversationID, id 
 func (t *fakeTx) ListMessages(ctx context.Context, options ListOptions) ([]MessageRecord, error) {
 	return t.repo.ListMessages(ctx, options)
 }
-func (t *fakeTx) ListAttachments(ctx context.Context, spaceID string, ids []string) (map[string][]AttachmentRecord, error) {
-	return t.repo.ListAttachments(ctx, spaceID, ids)
+func (t *fakeTx) ListAttachments(ctx context.Context, spaceID, viewerID string, ids []string) (map[string][]AttachmentRecord, error) {
+	return t.repo.ListAttachments(ctx, spaceID, viewerID, ids)
 }
 func (t *fakeTx) ListReactions(ctx context.Context, spaceID, viewerID string, ids []string) (map[string][]ReactionGroup, error) {
 	return t.repo.ListReactions(ctx, spaceID, viewerID, ids)

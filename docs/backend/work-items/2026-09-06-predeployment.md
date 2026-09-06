@@ -1689,3 +1689,29 @@ the read response; this is not yet a full-browser pass.
 Independent review identified adjacent reaction/hidden-state/pin projection
 and attachment DTO parity gaps. They remain separate follow-ups; this focused
 fix does not claim those message projections are already complete.
+
+### Viewer-Bound Message Attachment DTO
+
+The messages owner now returns Node's full public attachment shape, including
+uploader identity/display name, conversation and timestamps, and status/actor
+capabilities. The PostgreSQL batch query binds remarks to the requesting viewer
+and the space; no object keys, digests or transfer internals enter the DTO.
+Message list/create/idempotent/recall responses pass their authenticated actor to
+the shared projector. Conversation/pin consumers are a separately reviewed slice.
+Parent independently passed the frozen messages PostgreSQL/race suite (6.421
+seconds) and tagged staticcheck. This result does not establish the remaining
+full Workspace browser gate.
+
+### Native Image Media Check
+
+Parent built the Workspace Dockerfile's build target from the accepted snapshot
+through `a99f781`, then passed its complete media race suite (2.390 seconds) with
+network disabled and no host mounts. The inspected local image ID is
+`863eb448c66da8ce73dd587d9c495f1a2fb255190102dc6f7c6d1d6ba74c6bb9`.
+This uses the same pinned libvips 8.14.1 package version as the runtime Dockerfile,
+instead of relying only on the host's 8.15.1. The owned `--rm` test container exited
+successfully. This is a build-target test, not yet actual Node/image media corpus
+parity or final runtime-image authenticated HTTP evidence.
+
+Remote CI `34046105967` passed all three jobs at `a99f781`; later commits and
+uncommitted drafts remain subject to their own final gate.

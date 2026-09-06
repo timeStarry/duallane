@@ -363,7 +363,7 @@ func (s *Service) ListMessages(ctx context.Context, options ListOptions) ([]Mess
 		if err != nil {
 			return nil, nil, err
 		}
-		messages, err := s.projectRecords(ctx, tx, actor.ID, records)
+		messages, err := s.projectRecords(ctx, tx, actor, records)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -384,16 +384,20 @@ func (s *Service) List(ctx context.Context, options ListOptions) ([]Message, err
 	return s.ListMessages(ctx, options)
 }
 
-func (s *Service) projectRecords(ctx context.Context, repo ReadRepository, viewerID string, records []MessageRecord) ([]Message, error) {
+func (s *Service) projectRecords(ctx context.Context, repo ReadRepository, viewer *auth.Actor, records []MessageRecord) ([]Message, error) {
 	result := make([]Message, 0, len(records))
 	if len(records) == 0 {
 		return result, nil
+	}
+	viewerID := ""
+	if viewer != nil {
+		viewerID = viewer.ID
 	}
 	ids := make([]string, 0, len(records))
 	for _, record := range records {
 		ids = append(ids, record.ID)
 	}
-	attachments, err := repo.ListAttachments(ctx, s.space(), ids)
+	attachments, err := repo.ListAttachments(ctx, s.space(), viewerID, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -415,7 +419,7 @@ func (s *Service) projectRecords(ctx context.Context, repo ReadRepository, viewe
 	for _, record := range records {
 		record.HiddenByCurrentUser = hidden[record.ID]
 		record.EmoteCollectionShares = shares[record.ID]
-		projected, err := ProjectMessage(record, attachments[record.ID], reactions[record.ID])
+		projected, err := ProjectMessageForViewer(record, attachments[record.ID], reactions[record.ID], viewer)
 		if err != nil {
 			return nil, internalError("project workspace message", err)
 		}
@@ -424,11 +428,11 @@ func (s *Service) projectRecords(ctx context.Context, repo ReadRepository, viewe
 	return result, nil
 }
 
-func (s *Service) projectOne(ctx context.Context, repo ReadRepository, viewerID string, record *MessageRecord) (Message, error) {
+func (s *Service) projectOne(ctx context.Context, repo ReadRepository, viewer *auth.Actor, record *MessageRecord) (Message, error) {
 	if record == nil {
 		return Message{}, messageNotFoundError()
 	}
-	projected, err := s.projectRecords(ctx, repo, viewerID, []MessageRecord{*record})
+	projected, err := s.projectRecords(ctx, repo, viewer, []MessageRecord{*record})
 	if err != nil {
 		return Message{}, err
 	}
@@ -546,7 +550,7 @@ func (s *Service) createMessageInTransaction(ctx context.Context, tx Tx, actor *
 			err := idempotencyConflictError()
 			return nil, rejectedError(err, "message.create", conversationTargetType, conversation.ID, CodeMessageIdempotency), nil
 		}
-		message, err := s.projectOne(ctx, tx, actor.ID, existing)
+		message, err := s.projectOne(ctx, tx, actor, existing)
 		return message, nil, err
 	}
 	if inlineTopics {
@@ -563,7 +567,7 @@ func (s *Service) createMessageInTransaction(ctx context.Context, tx Tx, actor *
 			return nil, rejected, nil
 		}
 		if record != nil {
-			message, err := s.projectOne(ctx, tx, actor.ID, record)
+			message, err := s.projectOne(ctx, tx, actor, record)
 			// Only the HTTP response acknowledges the original optimistic key;
 			// storage and outbox retain topic-card:<topic ID> for replay.
 			message.ClientMessageID = &clientMessageID
@@ -618,7 +622,7 @@ func (s *Service) createMessageInTransaction(ctx context.Context, tx Tx, actor *
 			err := idempotencyConflictError()
 			return nil, rejectedError(err, "message.create", conversationTargetType, conversation.ID, CodeMessageIdempotency), nil
 		}
-		message, err := s.projectOne(ctx, tx, actor.ID, winner)
+		message, err := s.projectOne(ctx, tx, actor, winner)
 		return message, nil, err
 	}
 	for _, attachmentID := range attachmentIDs {
@@ -646,7 +650,7 @@ func (s *Service) createMessageInTransaction(ctx context.Context, tx Tx, actor *
 	if created == nil {
 		return nil, nil, internalError("read created message", errors.New("inserted message is missing"))
 	}
-	message, err := s.projectOne(ctx, tx, actor.ID, created)
+	message, err := s.projectOne(ctx, tx, actor, created)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -725,7 +729,7 @@ func (s *Service) RecallMessage(ctx context.Context, input RecallInput) (Message
 			return nil, rejectedError(err, "message.recall", messageTargetType, messageID, CodeMessageRecallUnsupported), nil
 		}
 		if target.RecalledAt != nil && !target.RecalledAt.IsZero() {
-			message, err := s.projectOne(ctx, tx, actor.ID, target)
+			message, err := s.projectOne(ctx, tx, actor, target)
 			return message, nil, err
 		}
 		if input.ExpectedRevision > 0 && target.Revision > 0 && input.ExpectedRevision != target.Revision {
@@ -758,7 +762,7 @@ func (s *Service) RecallMessage(ctx context.Context, input RecallInput) (Message
 				return nil, nil, err
 			}
 			if current != nil && current.RecalledAt != nil && !current.RecalledAt.IsZero() {
-				message, err := s.projectOne(ctx, tx, actor.ID, current)
+				message, err := s.projectOne(ctx, tx, actor, current)
 				return message, nil, err
 			}
 			conflictErr := revisionConflictError()
@@ -783,7 +787,7 @@ func (s *Service) RecallMessage(ctx context.Context, input RecallInput) (Message
 		if current == nil {
 			return nil, nil, internalError("read recalled message", errors.New("recalled message is missing"))
 		}
-		message, err := s.projectOne(ctx, tx, actor.ID, current)
+		message, err := s.projectOne(ctx, tx, actor, current)
 		if err != nil {
 			return nil, nil, err
 		}

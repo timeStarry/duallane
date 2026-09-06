@@ -105,6 +105,7 @@ type AttachmentRecord struct {
 	ID             string
 	SpaceID        string
 	UploaderID     string
+	UploaderName   string
 	ConversationID *string
 	Visibility     string
 	Status         string
@@ -115,13 +116,34 @@ type AttachmentRecord struct {
 	CompletedAt    *time.Time
 }
 
+type AttachmentCapabilities struct {
+	CanDownload bool `json:"canDownload"`
+	CanRemove   bool `json:"canRemove"`
+}
+
+type PublicUploader struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+}
+
+// Attachment is the server-owned message attachment projection. Internal
+// storage keys, digests, transfer IDs, and ledger rows are intentionally not
+// represented here.
 type Attachment struct {
-	ID         string `json:"id"`
-	FileName   string `json:"fileName"`
-	MIMEType   string `json:"mimeType"`
-	ByteSize   int64  `json:"byteSize"`
-	Status     string `json:"status"`
-	Visibility string `json:"visibility"`
+	ID             string                 `json:"id"`
+	FileName       string                 `json:"fileName"`
+	MIMEType       string                 `json:"mimeType"`
+	ByteSize       int64                  `json:"byteSize"`
+	Status         string                 `json:"status"`
+	Visibility     string                 `json:"visibility"`
+	UploaderID     string                 `json:"uploaderId"`
+	UploaderName   string                 `json:"uploaderName"`
+	Uploader       PublicUploader         `json:"uploader"`
+	ConversationID *string                `json:"conversationId"`
+	CreatedAt      string                 `json:"createdAt"`
+	CompletedAt    *string                `json:"completedAt"`
+	AvailableAt    *string                `json:"availableAt"`
+	Capabilities   AttachmentCapabilities `json:"capabilities"`
 }
 
 type ReactionUser struct {
@@ -319,6 +341,18 @@ type RequestMeta = auth.RequestMeta
 // authorization or query other domains; callers must provide only rows the
 // current viewer may see.
 func ProjectMessage(record MessageRecord, attachments []AttachmentRecord, reactions []ReactionGroup) (Message, error) {
+	return projectMessage(record, attachments, reactions, nil)
+}
+
+// ProjectMessageForViewer adds the viewer-bound attachment capabilities and
+// uploader display name to the otherwise shared message projection. Related
+// rows must already have been authorized by the caller; this function does
+// not perform domain reads or authorization itself.
+func ProjectMessageForViewer(record MessageRecord, attachments []AttachmentRecord, reactions []ReactionGroup, viewer *auth.Actor) (Message, error) {
+	return projectMessage(record, attachments, reactions, viewer)
+}
+
+func projectMessage(record MessageRecord, attachments []AttachmentRecord, reactions []ReactionGroup, viewer *auth.Actor) (Message, error) {
 	authorName := firstNonEmpty(record.AuthorRemark, record.AuthorNickname, record.AuthorGitHubLogin, record.AuthorName)
 	if authorName == "" {
 		if record.AuthorKind == "bot" {
@@ -379,7 +413,7 @@ func ProjectMessage(record MessageRecord, attachments []AttachmentRecord, reacti
 	message.Content = content
 	message.PlainText = content.PlainText
 	for _, attachment := range attachments {
-		message.Attachments = append(message.Attachments, projectAttachment(attachment))
+		message.Attachments = append(message.Attachments, projectAttachment(attachment, viewer))
 	}
 	return message, nil
 }
@@ -478,15 +512,42 @@ func cloneEmoteCollectionShare(value EmoteCollectionShare) EmoteCollectionShare 
 	return result
 }
 
-func projectAttachment(record AttachmentRecord) Attachment {
-	return Attachment{
-		ID:         record.ID,
-		FileName:   record.FileName,
-		MIMEType:   record.MIMEType,
-		ByteSize:   record.ByteSize,
-		Status:     record.Status,
-		Visibility: record.Visibility,
+func projectAttachment(record AttachmentRecord, viewer *auth.Actor) Attachment {
+	uploaderName := record.UploaderName
+	if uploaderName == "" && viewer != nil {
+		uploaderName = viewer.DisplayName
 	}
+	canRemove := false
+	if viewer != nil && record.Status == "available" {
+		canRemove = record.UploaderID == viewer.ID || viewer.Role == "owner" || viewer.Role == "admin"
+	}
+	return Attachment{
+		ID:             record.ID,
+		FileName:       record.FileName,
+		MIMEType:       record.MIMEType,
+		ByteSize:       record.ByteSize,
+		Status:         record.Status,
+		Visibility:     record.Visibility,
+		UploaderID:     record.UploaderID,
+		UploaderName:   uploaderName,
+		Uploader:       PublicUploader{ID: record.UploaderID, DisplayName: uploaderName},
+		ConversationID: cloneMessageStringPointer(record.ConversationID),
+		CreatedAt:      formatTimestamp(record.CreatedAt),
+		CompletedAt:    formatNullableTimestamp(record.CompletedAt),
+		AvailableAt:    formatNullableTimestamp(record.CompletedAt),
+		Capabilities: AttachmentCapabilities{
+			CanDownload: record.Status == "available",
+			CanRemove:   canRemove,
+		},
+	}
+}
+
+func cloneMessageStringPointer(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	copyValue := *value
+	return &copyValue
 }
 
 func sanitizeMessageAvatar(value string) string {
