@@ -1570,3 +1570,14 @@ owned `--rm` container was stopped and removed; no volume was created. These
 diagnostic release labels are not final release metadata. Transitive APT package
 resolution remains repository-dependent; a release must record and reuse the
 exact built image digest rather than assume later rebuilds are byte-identical.
+
+### Release Contract CI Follow-up
+
+CI at `17129e4` exposed the former static test's references to removed candidate
+function names. The test now inspects the actual shared helper and the executed
+Node/Go release branches: healthy candidates must still precede replacement,
+and passive mode remains mandatory. Parent passed all 15 focused configuration
+tests, then the full Node gate using CI's SQLite-only tmpfs setting: SDK 8/8 and
+Web 703 passed, 2 PostgreSQL tests explicitly skipped (24.36 seconds). No timeout
+or assertions were relaxed. Synthetic release ownership/rollback tests are now
+an explicit CI step rather than a local-only check.
