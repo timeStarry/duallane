@@ -229,6 +229,10 @@ func (p *Processor) encode(ctx context.Context, input []byte, kind Kind, info im
 	if err != nil {
 		return encodedImage{}, processFailedError(kind, err)
 	}
+	output, err = stripWebPMetadata(output)
+	if err != nil {
+		return encodedImage{}, processFailedError(kind, err)
+	}
 	outputInfo, err := inspectImage(output)
 	if err != nil || outputInfo.format != "webp" {
 		if err == nil {

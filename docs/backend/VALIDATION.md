@@ -360,6 +360,14 @@ metadata stripping, pixel, animation, rejection and resource-limit assertions
 without adjusting them for the native version. Record a mismatch as a failed
 image compatibility gate, even if the host tests passed.
 
+The processor normalizes the freshly encoded WebP container after native
+export: only structural image/alpha/animation chunks survive, metadata feature
+bits are cleared, and lengths/padding are reconstructed without modifying the
+encoded pixel payloads. This is a defense against native saver version drift,
+not a general sanitizer for an arbitrary user-supplied WebP. Keep the real
+Node/native-image corpus as the acceptance gate; a parser unit test alone does
+not establish color, orientation, transparency or animation preservation.
+
 ## 9. Realtime And Failure Injection
 
 ### Workspace browser candidate

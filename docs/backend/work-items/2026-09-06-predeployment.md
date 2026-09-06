@@ -1892,3 +1892,23 @@ not evidence that the full browser suite passed: the latest full local run
 remains 10 passed and 2 failed (Echo release delivery and continuous-message
 realtime), each under separate diagnosis. The existing Node/P2P CI passes do
 not cover those failures.
+
+### Native Metadata Privacy Fix And Independent Corpus Pass
+
+The media owner now strips ancillary metadata from the freshly encoded WebP
+container, retaining encoded pixels, alpha and animation structures. Exact
+VP8X length/reserved-byte checks, bounded integer arithmetic, regenerated
+padding and immutable-input tests guard the container rewrite. No public
+media limits, rejection contract, corpus assertion or dependency was relaxed.
+
+Parent independently passed host media race (2.209 seconds) and staticcheck,
+then rebuilt the Workspace build target with the three reviewed media files
+and the accepted release-check command. Exact local image
+`sha256:3710143330bdf0840715d09e16b097815c326426bb5ed999d477454bb506e012`
+passed the actual Node/native corpus: 28 cases, 16 accepted, 12 rejected,
+16 pixel checks, zero failures; Go 1.26.8, native libvips 8.14.1, Node 22.23.2,
+Sharp 0.35.3/libvips 8.18.3. This closes the preceding native metadata failure.
+The probe used only its generated synthetic corpus and cleaned its owned
+container. Its build context was the independently copied accepted candidate
+plus this explicit media patch, not an asserted clean Git release; the final
+same-commit runtime images and aggregate acceptance remain required.
