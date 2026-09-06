@@ -110,6 +110,7 @@ type RouterOptions struct {
 	ActorResolver      ActorResolver
 	Invites            InviteService
 	Members            MemberService
+	Avatars            AvatarService
 	Conversations      ConversationService
 	Messages           MessageService
 	Cards              CardService
@@ -164,6 +165,9 @@ func NewRouter(options RouterOptions) http.Handler {
 			})
 		}
 		registerCoreRoutes(workspace, options)
+		RegisterAvatarRoutes(workspace, AvatarRouteOptions{
+			Service: options.Avatars, ActorResolver: options.ActorResolver, TrustProxy: options.TrustProxy,
+		})
 		registerFileRoutes(workspace, options)
 		registerTopicRoutes(workspace, options)
 		registerNtfyRoutes(workspace, options)

@@ -19,6 +19,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
 	platformstorage "github.com/timestarry/duallane/apps/backend/internal/platform/storage"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/avatars"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bootstrap"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bots"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
@@ -116,6 +117,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	var authHandler *auth.HTTPHandler
 	var inviteService *invites.Service
 	var memberService *members.Service
+	var avatarService *avatars.Service
 	var conversationService *conversations.Service
 	var messageService *messages.Service
 	var cardService *cards.Service
@@ -188,6 +190,11 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		}
 		objectStoreReady = true
 		fileService = files.NewService(files.ServiceOptions{Repository: files.NewPGRepository(pool), BlobStore: blobStore})
+		legacyAvatarReader, _ := blobStore.(avatars.LegacyObjectReader)
+		avatarService = avatars.NewService(avatars.ServiceOptions{
+			Repository: avatars.NewPGRepository(pool), BlobStore: blobStore,
+			LegacyReader: legacyAvatarReader, Processor: processor,
+		})
 		frontendURL := runtimeConfig.FrontendURL
 		if frontendURL == "" {
 			frontendURL = runtimeConfig.PublicBaseURL
@@ -288,7 +295,8 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			Gate: workspaceGate, Health: gate.HealthHandler(healthInput), Readiness: readinessHandler(healthInput, databaseProbe, storageProbe),
 			AuthRoutes: authHandler, ActorResolver: authHandler, Invites: inviteService,
 			Members: memberService, Conversations: conversationService, Messages: messageService,
-			Cards: cardService, Interactions: interactionService,
+			Avatars: avatarService,
+			Cards:   cardService, Interactions: interactionService,
 			Overview:    overviewService,
 			Bootstrap:   bootstrapService,
 			Files:       fileService,

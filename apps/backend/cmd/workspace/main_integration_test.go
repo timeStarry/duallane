@@ -112,6 +112,30 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 	if err := png.Encode(&input, image.NewNRGBA(image.Rect(0, 0, 2, 2))); err != nil {
 		t.Fatal(err)
 	}
+	avatarUpload := request(http.MethodPut, "/api/workspace/me/avatar", "image/png", input.Bytes())
+	var avatarBody struct {
+		User struct {
+			AvatarURL string `json:"avatarUrl"`
+		} `json:"user"`
+	}
+	if avatarUpload.Code != http.StatusOK || json.Unmarshal(avatarUpload.Body.Bytes(), &avatarBody) != nil || avatarBody.User.AvatarURL == "" {
+		t.Fatalf("avatar upload=%d %s", avatarUpload.Code, avatarUpload.Body.String())
+	}
+	avatar := request(http.MethodGet, avatarBody.User.AvatarURL, "", nil)
+	if avatar.Code != http.StatusOK || avatar.Header().Get("Content-Type") != "image/webp" || !bytes.HasPrefix(avatar.Body.Bytes(), []byte("RIFF")) {
+		t.Fatalf("avatar delivery=%d type=%q", avatar.Code, avatar.Header().Get("Content-Type"))
+	}
+	removedAvatar := request(http.MethodDelete, "/api/workspace/me/avatar", "", nil)
+	if removedAvatar.Code != http.StatusOK {
+		t.Fatalf("avatar remove=%d %s", removedAvatar.Code, removedAvatar.Body.String())
+	}
+	if stale := request(http.MethodGet, avatarBody.User.AvatarURL, "", nil); stale.Code != http.StatusNotFound {
+		t.Fatalf("removed avatar still visible: %d", stale.Code)
+	}
+	var avatarAudits int
+	if err := app.pool.QueryRow(ctx, `SELECT COUNT(*) FROM audit_logs WHERE actor_user_id='composition-user' AND action IN ('profile.avatar_update','profile.avatar_remove') AND result='success'`).Scan(&avatarAudits); err != nil || avatarAudits != 2 {
+		t.Fatalf("avatar audit count=%d err=%v", avatarAudits, err)
+	}
 	upload := request(http.MethodPost, "/api/workspace/me/emotes", "image/png", input.Bytes())
 	var uploadBody struct {
 		Emote emotes.CustomEmote `json:"emote"`
