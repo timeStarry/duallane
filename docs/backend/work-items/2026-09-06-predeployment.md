@@ -1221,3 +1221,19 @@ new build-only public `GOPROXY` override, the P2P image built and its real healt
 probe exited zero in a non-root, read-only, network-none disposable container.
 Workspace image and full candidate gateway readiness remain uncompleted; no
 production container, daemon configuration or persistent volume was changed.
+
+### Echo Card References In Realtime Projection
+
+The real PostgreSQL listener/hub/WebSocket test isolated the missing release
+card: message events arrived, but the strict block allowlist dropped `cardId`,
+`cardType` and `schemaVersion`. Only these public reference fields are restored
+for card blocks, with a positive integral schema version; card bodies remain
+excluded. Parent added negative allowlist/version tests.
+
+Independent PostgreSQL/race passed events (9.094 seconds), realtime (9.608),
+focused allowlist race (1.026) and integration-tag staticcheck. All four unchanged
+Echo browser scenarios now pass (32.8 seconds total), including mobile release
+delivery/replay, StrictMode, viewport workflow and complete/cancel behavior.
+The Vite harness logged an ECONNRESET during page teardown; assertions still
+passed. Full Workspace browser, release result finalization and worker recovery
+remain separate gates.

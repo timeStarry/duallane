@@ -679,6 +679,15 @@ func safeBlock(value any) (map[string]any, bool) {
 	for _, key := range []string{"text", "userId", "label", "url", "shortcode", "attachmentId", "shareId", "topicId", "title", "fallbackText"} {
 		copyStringField(result, block, key)
 	}
+	// Card blocks carry only the public reference needed to resolve the
+	// server-owned card; the card body remains outside the message event.
+	if typeName == "card" {
+		copyStringField(result, block, "cardId")
+		copyStringField(result, block, "cardType")
+		if schemaVersion, ok := safeIntField(block["schemaVersion"]); ok && schemaVersion > 0 {
+			result["schemaVersion"] = schemaVersion
+		}
+	}
 	if share, ok := safeEmoteCollectionShare(block["share"]); ok {
 		result["share"] = share
 	}
