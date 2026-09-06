@@ -148,7 +148,7 @@ jobs:
       - name: Validate private release checks and data authority
         env:
           DUALLANE_RELEASE_DRAIN_COMPOSE_ROUNDTRIP: "1"
-        run: node --test scripts/backend/release-drain-config.test.mjs scripts/backend/release-drain-run.test.mjs scripts/backend/release-node-authority.test.mjs
+        run: node --test scripts/backend/release-drain-config.test.mjs scripts/backend/release-drain-run.test.mjs scripts/backend/release-node-authority.test.mjs scripts/backend/release-volume-authority.test.mjs
 
       - name: Validate bounded permission rehearsal and owned cleanup
         run: node --test scripts/backend/runtime-permissions.test.mjs

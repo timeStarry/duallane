@@ -437,6 +437,32 @@ permission changes, symlinks, unavailable files, exclusive 0600 output, bounded
 file/total bytes and content-free CLI errors. They do not create application
 containers or prove named-volume or live writer authority.
 
+The private drain and physical authority component gate is:
+
+```sh
+DUALLANE_RELEASE_DRAIN_COMPOSE_ROUNDTRIP=1 node --test \
+  scripts/backend/release-drain-config.test.mjs \
+  scripts/backend/release-drain-run.test.mjs \
+  scripts/backend/release-node-authority.test.mjs \
+  scripts/backend/release-volume-authority.test.mjs
+```
+
+The roundtrip executes real Compose configuration only; the other component
+tests model Docker responses. For real retained-Node mount inspection, provide
+exact, already-local image IDs on Linux:
+
+```sh
+DUALLANE_NODE_AUTHORITY_NODE_IMAGE=sha256:<64-hex-node-image-id> \
+DUALLANE_NODE_AUTHORITY_POSTGRES_IMAGE=sha256:<64-hex-pg-image-id> \
+  node --test scripts/backend/release-node-authority.docker.test.mjs
+```
+
+This opt-in test creates, but never starts, uniquely owned Node/PostgreSQL
+containers with synthetic named volumes and a private synthetic secret. It
+checks real mount identity, canonical authority drift and exact owned cleanup.
+Missing image variables produce an explicit skip. It does not rehearse a
+coordinated release or prove a running writer is fenced.
+
 The retained offline storage boundary is guarded by
 `node --test scripts/backend/storage-operator-retained.test.mjs` in CI. It
 checks the actual Node command modes, opt-in one-shot storage Compose services,
