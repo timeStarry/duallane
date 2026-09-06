@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/timestarry/duallane/apps/backend/internal/platform/config"
 	platformstorage "github.com/timestarry/duallane/apps/backend/internal/platform/storage"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/echo/releases"
 )
 
 func TestDisabledApplicationDoesNotRequireWorkspaceDependencies(t *testing.T) {
@@ -115,6 +117,17 @@ func TestEnabledApplicationRejectsMissingCatalogBeforeOpeningDatabase(t *testing
 		Enabled: true, EmoteCatalogPath: filepath.Join(t.TempDir(), "missing.json"),
 	})
 	if app != nil || err == nil || !strings.Contains(err.Error(), "open emote catalog") {
+		t.Fatalf("application=%v error=%v", app, err)
+	}
+}
+
+func TestEnabledApplicationRejectsMissingReleaseCatalogBeforeOpeningDatabase(t *testing.T) {
+	t.Setenv("DATABASE_URL", "not a connection string")
+	app, err := newApplication(context.Background(), config.WorkspaceConfig{
+		Enabled: true, EmoteCatalogPath: filepath.Join("../../../web/shared", "emote-packs.json"),
+		ReleaseCatalogPath: filepath.Join(t.TempDir(), "missing-release.json"),
+	})
+	if app != nil || !errors.Is(err, releases.ErrCatalogInvalid) {
 		t.Fatalf("application=%v error=%v", app, err)
 	}
 }

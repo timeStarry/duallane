@@ -25,7 +25,12 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bots"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/conversations"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/echo/automation"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/echo/carddefinitions"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/echo/delivery"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/echo/releases"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/echo/requirements"
+	echoruntime "github.com/timestarry/duallane/apps/backend/internal/workspace/echo/runtime"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/echo/solicitations"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/emotes"
@@ -174,6 +179,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	var emoteService *emotes.Service
 	var echoRequirements *requirements.Service
 	var echoSolicitations *solicitations.Service
+	var echoDelivery *delivery.Service
 	var realtimeHandler http.Handler
 	var blobStore platformstorage.BlobStore
 	var backgroundDone chan struct{}
@@ -181,6 +187,10 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	if runtimeConfig.Enabled {
 		var err error
 		catalog, err := emotes.LoadCatalogFile(runtimeConfig.EmoteCatalogPath)
+		if err != nil {
+			return nil, err
+		}
+		releaseCatalog, err := releases.LoadGuideCatalog(runtimeConfig.ReleaseCatalogPath)
 		if err != nil {
 			return nil, err
 		}
@@ -232,12 +242,19 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		memberService = members.NewService(members.ServiceOptions{Repository: members.NewPGRepository(pool)})
 		messageShareReader := messages.NewPGRepository(pool)
 		messageShareReader.SetBuiltinEmoteSource(builtinEmoteSource)
-		echoRequirements = requirements.NewService(requirements.ServiceOptions{Repository: requirements.NewPGRepository(pool)})
+		requirementRepository := requirements.NewPGRepository(pool)
+		echoRequirements = requirements.NewService(requirements.ServiceOptions{Repository: requirementRepository})
 		solicitationRepository := solicitations.NewPGRepository(pool)
 		echoSolicitations = solicitations.NewService(solicitations.ServiceOptions{
 			Repository: solicitationRepository, ConversationAccess: messageShareReader,
 			Requirements: echoRequirements,
 		})
+		releaseRepository := releases.NewPGRepository(pool)
+		echoReleases, err := releases.NewService(releases.ServiceOptions{Repository: releaseRepository, Catalog: releaseCatalog})
+		if err != nil {
+			pool.Close()
+			return nil, err
+		}
 		conversationService = conversations.NewService(conversations.ServiceOptions{
 			Repository:         conversations.NewPGRepository(pool),
 			MessageShareReader: messageShareReader,
@@ -282,6 +299,9 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			Repository: topicRepository, RequireMessageJobs: true,
 		})
 		cardDefinitions := append(topics.CardDefinitions(), feishucards.AsCardsDefinition())
+		cardDefinitions = append(cardDefinitions, carddefinitions.CardDefinitions(carddefinitions.Options{
+			Requirements: echoRequirements, Solicitations: echoSolicitations,
+		})...)
 		cardRegistry, err := cards.NewRegistry(cardDefinitions...)
 		if err != nil {
 			pool.Close()
@@ -289,7 +309,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		}
 		cardRepository := cards.NewPGRepository(pool)
 		cardService = cards.NewService(cards.ServiceOptions{
-			Repository: feishucards.NewPGRepository(pool, cardRepository), Registry: cardRegistry,
+			Repository: echoruntime.NewCardRepository(pool, cardRepository, requirementRepository, solicitationRepository), Registry: cardRegistry,
 		})
 		emoteService = emotes.NewService(emotes.ServiceOptions{
 			Repository: emotes.NewPGRepository(pool), BlobStore: blobStore,
@@ -332,6 +352,14 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		botGatewayWebSocket = botgateway.NewWebSocketHandler(botgateway.WebSocketHandlerOptions{
 			RootContext: ctx, Gateway: botGatewayService, SpaceID: botgateway.DefaultSpaceID,
 		})
+		echoDelivery, err = echoruntime.NewDeliveryService(echoruntime.DeliveryOptions{
+			Pool: pool, Messages: messageRepository, Cards: cardRepository, CardService: cardService,
+			Requirements: echoRequirements, Solicitations: echoSolicitations, Releases: echoReleases,
+		})
+		if err != nil {
+			pool.Close()
+			return nil, err
+		}
 		commandRegistry, err := interactions.NewCommandRegistry()
 		if err != nil {
 			pool.Close()
@@ -343,8 +371,24 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			return nil, err
 		}
 		interactionService = interactions.NewService(interactions.ServiceOptions{
-			Repository: interactions.NewPGRepository(pool), CommandRegistry: commandRegistry, WorkflowRegistry: workflowRegistry,
+			Repository: automation.NewPGRepository(pool, automation.PGRepositoryOptions{
+				InteractionRepository: interactions.NewPGRepository(pool), RequirementsRepository: requirementRepository,
+				SolicitationsRepository: solicitationRepository, ReleasesRepository: releaseRepository,
+			}), CommandRegistry: commandRegistry, WorkflowRegistry: workflowRegistry,
 		})
+		echoAutomation := automation.OptionsForServices(echoRequirements, echoSolicitations, echoReleases, interactionService, time.Now)
+		for _, definition := range automation.NewCommandDefinitions(echoAutomation) {
+			if _, err := commandRegistry.Register(definition); err != nil {
+				pool.Close()
+				return nil, err
+			}
+		}
+		for _, definition := range automation.NewWorkflowDefinitions(echoAutomation) {
+			if _, err := workflowRegistry.Register(definition); err != nil {
+				pool.Close()
+				return nil, err
+			}
+		}
 		overviewService = overview.NewService(overview.ServiceOptions{Repository: overview.NewPGRepository(pool)})
 		eventHub := realtime.NewHub()
 		eventRepository := events.NewPGRepository(pool)
@@ -395,8 +439,9 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			Gate: workspaceGate, Health: gate.HealthHandler(healthInput), Readiness: readinessHandler(healthInput, databaseProbe, storageProbe),
 			AuthRoutes: authHandler, ActorResolver: authHandler, Invites: inviteService,
 			Members: memberService, Conversations: conversationService, Messages: messageService,
-			Avatars: avatarService,
-			Cards:   cardService, Interactions: interactionService,
+			Avatars:             avatarService,
+			Cards:               echoruntime.CardHooks{CardService: cardService, Delivery: echoDelivery, SpaceID: auth.DefaultSpaceID},
+			Interactions:        echoruntime.InteractionHooks{InteractionService: interactionService, Delivery: echoDelivery, SpaceID: auth.DefaultSpaceID},
 			Overview:            overviewService,
 			Bootstrap:           bootstrapService,
 			Files:               fileService,
@@ -406,6 +451,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			Emotes:              emoteService,
 			EchoRequirements:    echoRequirements,
 			EchoSolicitations:   echoSolicitations,
+			EchoDelivery:        echoDelivery,
 			Bots:                botService,
 			BotGateway:          botGatewayService,
 			BotGatewaySetup:     botService,

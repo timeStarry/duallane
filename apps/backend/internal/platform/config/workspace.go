@@ -10,30 +10,32 @@ import (
 )
 
 const (
-	DefaultWorkspaceEnvironment   = "development"
-	DefaultGitHubOAuthTimeout     = 8 * time.Second
-	MaximumGitHubOAuthTimeout     = 30 * time.Second
-	WorkspaceEnabledEnvironment   = "WORKSPACE_ENABLED"
-	WorkspaceFrontendEnvironment  = "WORKSPACE_FRONTEND_URL"
-	GitHubOAuthTimeoutEnvironment = "GITHUB_OAUTH_TIMEOUT_MS"
-	WorkspaceDataDirEnvironment   = "DUALLANE_DATA_DIR"
-	WorkspaceEmoteCatalogEnv      = "DUALLANE_EMOTE_CATALOG_PATH"
-	WorkspaceMigrationsDirEnv     = "DUALLANE_MIGRATIONS_DIR"
-	WorkspaceNtfyBaseEnvironment  = "WORKSPACE_NTFY_BASE_URL"
-	WorkspaceNtfyWorkerEnabled    = "WORKSPACE_NTFY_WORKER_ENABLED"
-	WorkspaceEmailWorkerEnabled   = "WORKSPACE_EMAIL_WORKER_ENABLED"
-	WorkspaceMaintenanceWorkerEnv = "WORKSPACE_MAINTENANCE_WORKER_ENABLED"
-	WorkspaceSMTPEncryptionKey    = "WORKSPACE_SMTP_ENCRYPTION_KEY"
-	WorkspaceStorageDriverEnv     = "WORKSPACE_STORAGE_DRIVER"
-	WorkspaceS3EndpointEnv        = "WORKSPACE_S3_ENDPOINT"
-	WorkspaceS3BucketEnv          = "WORKSPACE_S3_BUCKET"
-	WorkspaceS3RegionEnv          = "WORKSPACE_S3_REGION"
-	WorkspaceS3CredentialsFileEnv = "WORKSPACE_S3_CREDENTIALS_FILE"
-	WorkspaceLocalReadFallbackEnv = "WORKSPACE_STORAGE_LOCAL_READ_FALLBACK"
-	WorkspaceLocalMirrorWriteEnv  = "WORKSPACE_STORAGE_LOCAL_MIRROR_WRITE"
-	DefaultWorkspaceDataDir       = "../../data"
-	DefaultWorkspaceEmoteCatalog  = "../web/shared/emote-packs.json"
-	DefaultWorkspaceMigrationsDir = "../web/server/migrations"
+	DefaultWorkspaceEnvironment    = "development"
+	DefaultGitHubOAuthTimeout      = 8 * time.Second
+	MaximumGitHubOAuthTimeout      = 30 * time.Second
+	WorkspaceEnabledEnvironment    = "WORKSPACE_ENABLED"
+	WorkspaceFrontendEnvironment   = "WORKSPACE_FRONTEND_URL"
+	GitHubOAuthTimeoutEnvironment  = "GITHUB_OAUTH_TIMEOUT_MS"
+	WorkspaceDataDirEnvironment    = "DUALLANE_DATA_DIR"
+	WorkspaceEmoteCatalogEnv       = "DUALLANE_EMOTE_CATALOG_PATH"
+	WorkspaceReleaseCatalogEnv     = "DUALLANE_ECHO_RELEASE_CATALOG_PATH"
+	WorkspaceMigrationsDirEnv      = "DUALLANE_MIGRATIONS_DIR"
+	WorkspaceNtfyBaseEnvironment   = "WORKSPACE_NTFY_BASE_URL"
+	WorkspaceNtfyWorkerEnabled     = "WORKSPACE_NTFY_WORKER_ENABLED"
+	WorkspaceEmailWorkerEnabled    = "WORKSPACE_EMAIL_WORKER_ENABLED"
+	WorkspaceMaintenanceWorkerEnv  = "WORKSPACE_MAINTENANCE_WORKER_ENABLED"
+	WorkspaceSMTPEncryptionKey     = "WORKSPACE_SMTP_ENCRYPTION_KEY"
+	WorkspaceStorageDriverEnv      = "WORKSPACE_STORAGE_DRIVER"
+	WorkspaceS3EndpointEnv         = "WORKSPACE_S3_ENDPOINT"
+	WorkspaceS3BucketEnv           = "WORKSPACE_S3_BUCKET"
+	WorkspaceS3RegionEnv           = "WORKSPACE_S3_REGION"
+	WorkspaceS3CredentialsFileEnv  = "WORKSPACE_S3_CREDENTIALS_FILE"
+	WorkspaceLocalReadFallbackEnv  = "WORKSPACE_STORAGE_LOCAL_READ_FALLBACK"
+	WorkspaceLocalMirrorWriteEnv   = "WORKSPACE_STORAGE_LOCAL_MIRROR_WRITE"
+	DefaultWorkspaceDataDir        = "../../data"
+	DefaultWorkspaceEmoteCatalog   = "../web/shared/emote-packs.json"
+	DefaultWorkspaceReleaseCatalog = "../web/shared/echo-release-guides.json"
+	DefaultWorkspaceMigrationsDir  = "../web/server/migrations"
 )
 
 // WorkspaceConfig contains request-serving configuration for the retained,
@@ -55,6 +57,7 @@ type WorkspaceConfig struct {
 	GitHubOAuthTimeout time.Duration
 	DataDir            string
 	EmoteCatalogPath   string
+	ReleaseCatalogPath string
 	MigrationsDir      string
 	NtfyBaseURL        string
 	NtfyWorkerEnabled  bool
@@ -100,6 +103,7 @@ func LoadWorkspaceFrom(lookup func(string) (string, bool)) (WorkspaceConfig, err
 		GitHubOAuthTimeout: DefaultGitHubOAuthTimeout,
 		DataDir:            strings.TrimSpace(valueOr(lookup, WorkspaceDataDirEnvironment, DefaultWorkspaceDataDir)),
 		EmoteCatalogPath:   strings.TrimSpace(valueOr(lookup, WorkspaceEmoteCatalogEnv, DefaultWorkspaceEmoteCatalog)),
+		ReleaseCatalogPath: strings.TrimSpace(valueOr(lookup, WorkspaceReleaseCatalogEnv, DefaultWorkspaceReleaseCatalog)),
 		MigrationsDir:      strings.TrimSpace(valueOr(lookup, WorkspaceMigrationsDirEnv, DefaultWorkspaceMigrationsDir)),
 		NtfyBaseURL:        strings.TrimSpace(valueOr(lookup, WorkspaceNtfyBaseEnvironment, "")),
 		NtfyWorkerEnabled:  valueOr(lookup, WorkspaceNtfyWorkerEnabled, "true") != "false",
@@ -155,6 +159,9 @@ func (config WorkspaceConfig) Validate() error {
 	}
 	if config.Enabled && strings.TrimSpace(config.EmoteCatalogPath) == "" {
 		return errors.New("DUALLANE_EMOTE_CATALOG_PATH must not be empty when Workspace is enabled")
+	}
+	if config.Enabled && strings.TrimSpace(config.ReleaseCatalogPath) == "" {
+		return errors.New("DUALLANE_ECHO_RELEASE_CATALOG_PATH must not be empty when Workspace is enabled")
 	}
 	if config.Enabled && strings.TrimSpace(config.MigrationsDir) == "" {
 		return errors.New("DUALLANE_MIGRATIONS_DIR must not be empty when Workspace is enabled")

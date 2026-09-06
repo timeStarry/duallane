@@ -40,6 +40,7 @@ func TestLoadWorkspacePreservesRuntimeCompatibility(t *testing.T) {
 		GitHubOAuthTimeoutEnvironment: "25000",
 		WorkspaceDataDirEnvironment:   "/srv/duallane-data",
 		WorkspaceEmoteCatalogEnv:      "/app/assets/emote-packs.json",
+		WorkspaceReleaseCatalogEnv:    "/app/assets/echo-release-guides.json",
 		WorkspaceMigrationsDirEnv:     "/app/migrations",
 		WorkspaceNtfyBaseEnvironment:  "https://ntfy.example.test",
 		WorkspaceNtfyWorkerEnabled:    "false",
@@ -70,6 +71,9 @@ func TestLoadWorkspacePreservesRuntimeCompatibility(t *testing.T) {
 	}
 	if config.MigrationsDir != "/app/migrations" {
 		t.Fatalf("migrations directory = %q", config.MigrationsDir)
+	}
+	if config.ReleaseCatalogPath != "/app/assets/echo-release-guides.json" {
+		t.Fatalf("Echo release catalog path = %q", config.ReleaseCatalogPath)
 	}
 	if config.NtfyWorkerEnabled {
 		t.Fatal("WORKSPACE_NTFY_WORKER_ENABLED=false did not disable ntfy worker")
@@ -151,6 +155,22 @@ func TestWorkspaceCatalogValidationOnlyRequiresEnabledLane(t *testing.T) {
 		err = configuration.Validate()
 		if (err != nil) != (enabled == "true") {
 			t.Fatalf("enabled=%s, empty catalog error=%v", enabled, err)
+		}
+	}
+}
+
+func TestWorkspaceReleaseCatalogValidationOnlyRequiresEnabledLane(t *testing.T) {
+	for _, enabled := range []string{"true", "false"} {
+		configuration, err := LoadWorkspaceFrom(configLookup(map[string]string{
+			WorkspaceEnabledEnvironment: enabled, WorkspaceReleaseCatalogEnv: "   ",
+		}))
+		if err != nil || configuration.ReleaseCatalogPath != DefaultWorkspaceReleaseCatalog {
+			t.Fatalf("blank environment must select release catalog default, err=%v", err)
+		}
+		configuration.ReleaseCatalogPath = ""
+		err = configuration.Validate()
+		if (err != nil) != (enabled == "true") {
+			t.Fatalf("enabled=%s, empty release catalog error=%v", enabled, err)
 		}
 	}
 }

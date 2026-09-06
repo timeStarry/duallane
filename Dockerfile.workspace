@@ -31,8 +31,10 @@ COPY --from=build /out/worker /usr/local/bin/duallane-worker
 COPY --from=build /out/migrate /usr/local/bin/duallane-migrate
 COPY apps/web/server/migrations /app/migrations
 COPY apps/web/shared/emote-packs.json /app/assets/emote-packs.json
+COPY apps/web/shared/echo-release-guides.json /app/assets/echo-release-guides.json
 ENV DUALLANE_MIGRATIONS_DIR=/app/migrations \
-    DUALLANE_EMOTE_CATALOG_PATH=/app/assets/emote-packs.json
+    DUALLANE_EMOTE_CATALOG_PATH=/app/assets/emote-packs.json \
+    DUALLANE_ECHO_RELEASE_CATALOG_PATH=/app/assets/echo-release-guides.json
 USER 65532:65532
 EXPOSE 8787
 ENTRYPOINT ["/usr/local/bin/duallane-workspace"]

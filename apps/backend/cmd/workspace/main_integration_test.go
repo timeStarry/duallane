@@ -87,7 +87,8 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 	app, err := newApplication(ctx, config.WorkspaceConfig{
 		Enabled: true, Environment: "test", AppVersion: "test", StorageDriver: "local", DataDir: t.TempDir(),
 		EmoteCatalogPath: filepath.Join(webDir, "shared/emote-packs.json"), GitHubOAuthTimeout: time.Second,
-		MigrationsDir: filepath.Join(webDir, "server/migrations"),
+		ReleaseCatalogPath: filepath.Join(webDir, "shared/echo-release-guides.json"),
+		MigrationsDir:      filepath.Join(webDir, "server/migrations"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -295,8 +296,9 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 	untouchedDataDir := filepath.Join(t.TempDir(), "must-not-create")
 	refused, err := newApplication(ctx, config.WorkspaceConfig{
 		Enabled: true, StorageDriver: "local", DataDir: untouchedDataDir,
-		EmoteCatalogPath: filepath.Join(webDir, "shared/emote-packs.json"),
-		MigrationsDir:    filepath.Join(webDir, "server/migrations"), GitHubOAuthTimeout: time.Second,
+		EmoteCatalogPath:   filepath.Join(webDir, "shared/emote-packs.json"),
+		ReleaseCatalogPath: filepath.Join(webDir, "shared/echo-release-guides.json"),
+		MigrationsDir:      filepath.Join(webDir, "server/migrations"), GitHubOAuthTimeout: time.Second,
 	})
 	if refused != nil {
 		refused.Close()

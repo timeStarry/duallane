@@ -101,6 +101,14 @@ processor, or connect to its database/object store. Media normalization uses
 one shared bounded processor; domain services retain authorization, logical
 quota, audit and storage-reference ownership.
 
+The same enabled startup loads the canonical Echo release guide catalog via
+`DUALLANE_ECHO_RELEASE_CATALOG_PATH` (image:
+`/app/assets/echo-release-guides.json`; local backend working directory:
+`../web/shared/echo-release-guides.json`). Missing or invalid guides fail before
+database initialization; disabled Workspace does not read this asset either.
+The catalog is a public build asset, not a runtime secret or a second copy to
+edit independently.
+
 The Go realtime handler records a random per-connection PostgreSQL presence
 lease after authenticated replay. The Go email worker uses that shared lookup
 to defer immediate mail while any active human connection remains online;

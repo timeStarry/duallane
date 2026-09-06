@@ -1138,3 +1138,29 @@ Independent PostgreSQL/race passed carddefinitions (1.071 seconds), requirements
 check passed. A real application test subsequently passed requirement create,
 card delivery, collect/replay and solicitation delivery. Full command/workflow,
 vote and browser acceptance remains separate from these focused checks.
+
+### Echo Request Runtime Composition
+
+Workspace now registers the 11 commands, two workflows, five card definitions,
+shared accepting transactions and the configured durable-message delivery
+writer. Enabled startup validates the canonical release asset before opening
+dependencies; disabled startup remains dependency-free. Successful domain/card
+operations trigger post-commit projection delivery, without converting a
+durable success into a retryable rejection when delivery fails. Recovery worker
+composition remains a separate gate.
+
+Integration found that blindly copying Node's Echo action adapter injected an
+idempotency key into Feishu's empty-input action contract. The candidate narrows
+injection to actor-authorized Echo requirement/solicitation card types. Generic
+card execution still rechecks authorization and stored provenance in its own
+transaction; non-Echo inputs are unchanged. This intentional correction avoids
+weakening Feishu's arbitrary-input rejection.
+
+Independent PostgreSQL/race passed application composition (4.632 seconds) and
+runtime (2.766), including real HTTP collect/vote/replay, release invocation/
+replay and sent delivery rows. Integration-tag staticcheck passed. Three of four
+unchanged Echo browser scenarios passed (StrictMode, guided workflow and release
+viewports); the release scenario still failed waiting for its card after the
+success title appeared. The PG test confirms durable release delivery, but live
+browser projection is not yet accepted. Release result-counter parity and
+durable recovery are also open; this commit is not whole-Echo parity.
