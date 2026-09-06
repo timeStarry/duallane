@@ -121,6 +121,11 @@ type MessageRecord struct {
 	RecalledAt          *time.Time
 	RecallReason        *string
 	HiddenByCurrentUser bool
+	// Attachments is populated by the conversation read adapter before a
+	// message is projected. Keeping it on the storage record avoids returning
+	// a message whose content references attachments that the public DTO cannot
+	// resolve.
+	Attachments []workspaceMessages.AttachmentRecord
 	// EmoteCollectionShares is an authorized read-only projection populated by
 	// the optional messages share reader. It is never persisted by this domain.
 	EmoteCollectionShares map[string]workspaceMessages.EmoteCollectionShare

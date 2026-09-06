@@ -13,6 +13,7 @@ import (
 
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	workspaceMembers "github.com/timestarry/duallane/apps/backend/internal/workspace/members"
+	workspaceMessages "github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 )
 
 type conversationFakeState struct {
@@ -130,6 +131,19 @@ func (f *conversationFakeRepository) ListLatestMessages(_ context.Context, _ str
 		items = items[len(items)-limit:]
 	}
 	return items, nil
+}
+
+func (f *conversationFakeRepository) ListMessageAttachments(_ context.Context, _ string, messageIDs []string) (map[string][]workspaceMessages.AttachmentRecord, error) {
+	result := make(map[string][]workspaceMessages.AttachmentRecord, len(messageIDs))
+	for _, messageID := range messageIDs {
+		message, ok := f.state.messages[messageID]
+		if !ok {
+			result[messageID] = []workspaceMessages.AttachmentRecord{}
+			continue
+		}
+		result[messageID] = append([]workspaceMessages.AttachmentRecord(nil), message.Attachments...)
+	}
+	return result, nil
 }
 
 func (f *conversationFakeRepository) FindMember(_ context.Context, _ string, userID string) (*MemberRecord, error) {

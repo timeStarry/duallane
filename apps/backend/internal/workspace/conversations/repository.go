@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	workspaceMessages "github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 )
 
 // ReadRepository is the intentionally small storage seam used by the
@@ -19,6 +20,7 @@ type ReadRepository interface {
 	FindDirectConversation(ctx context.Context, spaceID, directKey string) (*ConversationRecord, error)
 	ListConversationMembers(ctx context.Context, spaceID, conversationID, viewerID string) ([]MemberRecord, error)
 	ListLatestMessages(ctx context.Context, spaceID, conversationID, viewerID string, limit int) ([]MessageRecord, error)
+	ListMessageAttachments(ctx context.Context, spaceID string, messageIDs []string) (map[string][]workspaceMessages.AttachmentRecord, error)
 	FindMember(ctx context.Context, spaceID, userID string) (*MemberRecord, error)
 	MemberVisible(ctx context.Context, spaceID, viewerID, visibleUserID string) (bool, error)
 	SharesActiveGroup(ctx context.Context, spaceID, actorID, targetUserID string) (bool, error)

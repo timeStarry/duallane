@@ -1673,3 +1673,19 @@ covers reserve/upload, message attachment association, favorite/media processing
 WebP delivery, unchanged download ledger and revoked message access returning
 404. Parent passed complete Workspace command PostgreSQL/race (9.956 seconds),
 HTTP PostgreSQL/race (14.985) and tagged staticcheck with this final domain slice.
+
+### Mark-Read Attachment Projection
+
+The full browser diagnostic showed successful image requests and a visible
+preview before the mark-read response replaced the latest message with missing
+attachment metadata. Conversation projection passed no attachments to the
+shared message projector. It now loads a space-bounded batch for the authorized
+latest-message IDs, preserving public attachment metadata without storage keys.
+Parent compared the source to the exact tested snapshot and passed complete
+conversation PostgreSQL/race (2.598 seconds), HTTP PostgreSQL/race (8.834) and
+tagged staticcheck. New fake, real PostgreSQL and HTTP route regressions cover
+the read response; this is not yet a full-browser pass.
+
+Independent review identified adjacent reaction/hidden-state/pin projection
+and attachment DTO parity gaps. They remain separate follow-ups; this focused
+fix does not claim those message projections are already complete.

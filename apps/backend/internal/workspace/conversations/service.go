@@ -523,7 +523,7 @@ func projectMessage(record MessageRecord, actor *auth.Actor) (Message, error) {
 			canonical.AuthorGitHubLogin = ""
 		}
 	}
-	projected, err := workspaceMessages.ProjectMessage(canonical, nil, nil)
+	projected, err := workspaceMessages.ProjectMessage(canonical, record.Attachments, nil)
 	if err != nil {
 		return Message{}, internalError("project workspace message", err)
 	}
@@ -592,6 +592,17 @@ func (s *Service) projectConversation(ctx context.Context, repo ReadRepository, 
 	latest, err := repo.ListLatestMessages(ctx, s.space(), record.ID, actor.ID, 20)
 	if err != nil {
 		return Conversation{}, normalizeRepositoryError(err)
+	}
+	messageIDs := make([]string, 0, len(latest))
+	for _, message := range latest {
+		messageIDs = append(messageIDs, message.ID)
+	}
+	attachments, err := repo.ListMessageAttachments(ctx, s.space(), messageIDs)
+	if err != nil {
+		return Conversation{}, normalizeRepositoryError(err)
+	}
+	for index := range latest {
+		latest[index].Attachments = attachments[latest[index].ID]
 	}
 	if err := s.hydrateMessageShares(ctx, actor.ID, latest); err != nil {
 		return Conversation{}, err

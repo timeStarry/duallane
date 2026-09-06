@@ -161,6 +161,20 @@ func TestPGConversationReadMarkerMatchesNodeSemantics(t *testing.T) {
 	if err := insertReadMarkerMessage(ctx, pool, group.ID, "usr_read_owner", "read-owner-message", "owner message", now.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO attachments (
+			id, space_id, uploader_id, conversation_id, visibility, status,
+			file_name, mime_type, byte_size, storage_key, created_at
+		) VALUES ($1, $2, $3, $4, 'conversation', 'available', $5, 'image/png', 68, NULL, $6)
+	`, "read-owner-attachment", DefaultSpaceID, "usr_read_owner", group.ID, "synthetic.png", now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO message_attachments (message_id, attachment_id)
+		VALUES ('read-owner-message', 'read-owner-attachment')
+	`); err != nil {
+		t.Fatal(err)
+	}
 
 	withNewMessages, err := service.GetConversation(ctx, ConversationInput{
 		ActorID:        "usr_read_member",
@@ -172,6 +186,9 @@ func TestPGConversationReadMarkerMatchesNodeSemantics(t *testing.T) {
 	}
 	if withNewMessages.UnreadCount != 1 {
 		t.Fatalf("unread after own and owner messages = %d, want one owner message", withNewMessages.UnreadCount)
+	}
+	if message := findConversationMessageForReadTest(withNewMessages, "read-owner-message"); message == nil || len(message.Attachments) != 1 || message.Attachments[0].ID != "read-owner-attachment" || message.Attachments[0].MIMEType != "image/png" {
+		t.Fatalf("get conversation attachment projection = %#v, want one image attachment", message)
 	}
 	if withNewMessages.LastReadSeq == nil || *withNewMessages.LastReadSeq != storedReadSeq {
 		t.Fatalf("marker changed before second read = %v, want %d", withNewMessages.LastReadSeq, storedReadSeq)
@@ -205,6 +222,9 @@ func TestPGConversationReadMarkerMatchesNodeSemantics(t *testing.T) {
 	}
 	if readAgain.UnreadCount != 0 {
 		t.Fatalf("unread after second mark = %d, want zero", readAgain.UnreadCount)
+	}
+	if message := findConversationMessageForReadTest(readAgain, "read-owner-message"); message == nil || len(message.Attachments) != 1 || message.Attachments[0].ID != "read-owner-attachment" || message.Attachments[0].Status != "available" {
+		t.Fatalf("mark read attachment projection = %#v, want available attachment", message)
 	}
 
 	listedAgain, err := service.ListConversations(ctx, "usr_read_member", auth.RequestMeta{RequestID: "conversation-read-list-again"})
@@ -271,4 +291,13 @@ func requireConversationForReadTest(t *testing.T, conversations []Conversation, 
 	}
 	t.Fatalf("conversation %s not found in %#v", id, conversations)
 	return Conversation{}
+}
+
+func findConversationMessageForReadTest(conversation Conversation, messageID string) *Message {
+	for index := range conversation.LatestMessages {
+		if conversation.LatestMessages[index].ID == messageID {
+			return &conversation.LatestMessages[index]
+		}
+	}
+	return nil
 }

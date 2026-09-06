@@ -177,6 +177,13 @@ func (r *PGRepository) ListLatestMessages(ctx context.Context, spaceID, conversa
 	return items, nil
 }
 
+func (r *PGRepository) ListMessageAttachments(ctx context.Context, spaceID string, messageIDs []string) (map[string][]workspaceMessages.AttachmentRecord, error) {
+	if r == nil || r.pool == nil {
+		return nil, internalError("list conversation message attachments", errors.New("workspace postgres pool is required"))
+	}
+	return listMessageAttachments(ctx, r.pool, spaceID, messageIDs)
+}
+
 func (r *PGRepository) FindMember(ctx context.Context, spaceID, userID string) (*MemberRecord, error) {
 	if r == nil || r.pool == nil {
 		return nil, internalError("find space member", errors.New("workspace postgres pool is required"))
@@ -403,6 +410,54 @@ func (t *pgTx) ListLatestMessages(ctx context.Context, spaceID, conversationID, 
 		items[left], items[right] = items[right], items[left]
 	}
 	return items, nil
+}
+
+func (t *pgTx) ListMessageAttachments(ctx context.Context, spaceID string, messageIDs []string) (map[string][]workspaceMessages.AttachmentRecord, error) {
+	return listMessageAttachments(ctx, t.tx, spaceID, messageIDs)
+}
+
+type attachmentQueryer interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
+func listMessageAttachments(ctx context.Context, queryer attachmentQueryer, spaceID string, messageIDs []string) (map[string][]workspaceMessages.AttachmentRecord, error) {
+	result := make(map[string][]workspaceMessages.AttachmentRecord, len(messageIDs))
+	for _, messageID := range messageIDs {
+		result[messageID] = make([]workspaceMessages.AttachmentRecord, 0)
+	}
+	if len(messageIDs) == 0 {
+		return result, nil
+	}
+	rows, err := queryer.Query(ctx, `
+		SELECT
+			ma.message_id, a.id, a.space_id, a.uploader_id, a.conversation_id,
+			a.visibility, a.status, a.file_name, a.mime_type, a.byte_size,
+			a.created_at, a.completed_at
+		FROM message_attachments ma
+		INNER JOIN messages m ON m.id = ma.message_id AND m.space_id = $1
+		INNER JOIN attachments a ON a.id = ma.attachment_id AND a.space_id = $1
+		WHERE ma.message_id = ANY($2::text[])
+		ORDER BY ma.message_id, a.created_at ASC, a.id ASC
+	`, spaceID, messageIDs)
+	if err != nil {
+		return nil, internalError("list conversation message attachments", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var messageID string
+		var attachment workspaceMessages.AttachmentRecord
+		if err := rows.Scan(&messageID, &attachment.ID, &attachment.SpaceID, &attachment.UploaderID, &attachment.ConversationID,
+			&attachment.Visibility, &attachment.Status, &attachment.FileName, &attachment.MIMEType, &attachment.ByteSize,
+			&attachment.CreatedAt, &attachment.CompletedAt); err != nil {
+			return nil, internalError("scan conversation message attachments", err)
+		}
+		attachment.CreatedAt = attachment.CreatedAt.UTC()
+		result[messageID] = append(result[messageID], attachment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, internalError("scan conversation message attachments", err)
+	}
+	return result, nil
 }
 
 func (t *pgTx) FindMember(ctx context.Context, spaceID, userID string) (*MemberRecord, error) {
