@@ -657,3 +657,22 @@ storage (2.944 / 18.493 / 4.585 seconds), followed by integration-tag
 staticcheck. No production worker was started. Node's S3 multipart timer remains
 the current owner; the deployment handoff must disable it before enabling the
 candidate maintenance worker.
+
+### Card Action Transaction Isolation
+
+Card actions now run domain writes, payload validation, card revision CAS and
+events inside a savepoint on the original typed transaction. A controlled 4xx
+rejection rolls those effects back before the outer transaction records the
+failed action and content-free audit. Infrastructure errors, including a
+registered payload validator failing unexpectedly or a savepoint unwind
+failure, abort the entire transaction. Savepoint identifiers use a bounded
+digest of the action-run ID, avoiding PostgreSQL identifier truncation.
+
+Independent fresh PostgreSQL/race passed (4.856 seconds) and integration-tag
+staticcheck passed after parent review corrections. Regressions cover domain
+writes followed by rejection, revision conflict, invalid action output and
+unexpected validator failure. Trusted action executors can explicitly report
+that they already wrote the domain action event, avoiding a duplicate generic
+event; the original stored payload JSON is available to typed executors for
+order-sensitive adapters. This is the safety boundary, not evidence that all
+Echo or Feishu card definitions have been composed.

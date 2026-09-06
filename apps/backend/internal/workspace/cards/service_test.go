@@ -186,6 +186,17 @@ func (r *cardFakeRepo) CustomBotActive(_ context.Context, _, botID, botUserID st
 }
 
 func (tx *cardFakeTx) Lock(context.Context, string) error { return nil }
+func (tx *cardFakeTx) WithActionSavepoint(ctx context.Context, _ string, callback func(context.Context) error) error {
+	if callback == nil {
+		return errors.New("savepoint callback is required")
+	}
+	snapshot := cloneCardState(tx.state)
+	if err := callback(ctx); err != nil {
+		tx.cardFakeRepo.state = snapshot
+		return err
+	}
+	return nil
+}
 func (tx *cardFakeTx) InsertCard(_ context.Context, input CardInsert) (*CardRecord, bool, error) {
 	for _, value := range tx.state.cards {
 		if input.SourceID != nil && value.SourceKind == input.SourceKind && stringValue(value.SourceID) == stringValue(input.SourceID) && value.CardType == input.CardType && value.SpaceID == input.SpaceID {
@@ -387,6 +398,194 @@ func TestCardActionIdempotencyRevisionAndAudit(t *testing.T) {
 		if audit.RequestID == "action-req" && audit.TargetID == card.ID && audit.Reason != "" && audit.Reason != "card.idempotency_conflict" {
 			continue
 		}
+	}
+}
+
+func savepointCardDefinition(expectedRaw string, now time.Time) CardDefinition {
+	validate := func(payload any) (any, error) {
+		normalized, err := NormalizeCardPayload(payload, DefaultLimits, false)
+		if err != nil {
+			return nil, err
+		}
+		object, ok := normalized.(map[string]any)
+		if !ok {
+			return nil, &CardValidationError{Code: "test.invalid_payload", Message: "payload must be an object"}
+		}
+		if _, ok := cardCount(object["count"]); !ok {
+			return nil, &CardValidationError{Code: "test.invalid_payload", Message: "count must be numeric"}
+		}
+		return object, nil
+	}
+	writeDomainEffect := func(ctx context.Context, input CardActionContext) error {
+		updated, changed, err := input.Tx.UpdateCard(ctx, input.Card.ID, input.Card.Revision, map[string]any{"count": int64(99)}, StatusActive, input.Card.Block.FallbackText, now)
+		if err != nil {
+			return err
+		}
+		if !changed || updated == nil {
+			return errors.New("domain card write was not applied")
+		}
+		_, err = input.Tx.WriteEvent(ctx, EventInput{SpaceID: input.Card.SpaceID, Type: "test.domain.changed", ActorID: input.Actor.ID, TargetType: "workspace.card", TargetID: input.Card.ID, PayloadJSON: []byte(`{"domain":true}`), CreatedAt: now})
+		return err
+	}
+	return CardDefinition{
+		CardType:        "test.savepoint",
+		SchemaVersion:   1,
+		ValidatePayload: validate,
+		Actions: map[string]CardAction{
+			"reject-after-write": {Execute: func(ctx context.Context, input CardActionContext) (CardActionResult, error) {
+				if err := writeDomainEffect(ctx, input); err != nil {
+					return CardActionResult{}, err
+				}
+				return CardActionResult{}, NewError("test.domain_rejected", "domain rejected", 409)
+			}},
+			"invalid-after-write": {Execute: func(ctx context.Context, input CardActionContext) (CardActionResult, error) {
+				if err := writeDomainEffect(ctx, input); err != nil {
+					return CardActionResult{}, err
+				}
+				return CardActionResult{CardPayload: map[string]any{"count": "invalid"}, Result: map[string]any{"ok": true}}, nil
+			}},
+			"cas-after-write": {Execute: func(ctx context.Context, input CardActionContext) (CardActionResult, error) {
+				if err := writeDomainEffect(ctx, input); err != nil {
+					return CardActionResult{}, err
+				}
+				return CardActionResult{CardPayload: map[string]any{"count": int64(100)}, Result: map[string]any{"ok": true}}, nil
+			}},
+			"event-owned": {Execute: func(ctx context.Context, input CardActionContext) (CardActionResult, error) {
+				if string(input.PayloadJSON) != expectedRaw {
+					return CardActionResult{}, NewError("test.raw_payload_mismatch", "raw payload mismatch", 409)
+				}
+				if len(input.PayloadJSON) > 0 {
+					input.PayloadJSON[0] = 'x'
+				}
+				_, err := input.Tx.WriteEvent(ctx, EventInput{SpaceID: input.Card.SpaceID, Type: "test.action.owned", ActorID: input.Actor.ID, TargetType: "workspace.card", TargetID: input.Card.ID, PayloadJSON: []byte(`{"owned":true}`), CreatedAt: now})
+				if err != nil {
+					return CardActionResult{}, err
+				}
+				return CardActionResult{Result: map[string]any{"owned": true}, ActionEventWritten: true}, nil
+			}},
+		},
+	}
+}
+
+func createSavepointCard(t *testing.T, service *Service, actionDefinition CardDefinition, sourceID string) *Card {
+	t.Helper()
+	if _, err := service.Registry().Register(actionDefinition); err != nil {
+		t.Fatal(err)
+	}
+	card, err := service.Create(context.Background(), CreateInput{ActorID: "usr_owner", SpaceID: "spc_test", CardType: actionDefinition.CardType, SchemaVersion: actionDefinition.SchemaVersion, FallbackText: "savepoint card", Payload: map[string]any{"count": int64(1)}, SourceKind: SourceWorkspace, SourceID: sourceID, VisibilityScope: VisibilitySpace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return card
+}
+
+func TestCardActionSavepointRollsBackDomainEffectsBeforeRejectionCommit(t *testing.T) {
+	repo, service, _ := cardFixture(t)
+	now := time.Date(2026, 9, 4, 12, 34, 56, 789000000, time.UTC)
+	definition := savepointCardDefinition(`{"z":1,"a":2}`, now)
+	card := createSavepointCard(t, service, definition, "savepoint-reject")
+	repo.mu.Lock()
+	stored := repo.state.cards[card.ID]
+	stored.PayloadJSON = []byte(`{"z":1,"a":2}`)
+	repo.state.cards[card.ID] = stored
+	repo.mu.Unlock()
+
+	_, err := service.ExecuteAction(context.Background(), ActionInput{ActorID: "usr_member", CardID: card.ID, ActionID: "reject-after-write", ClientActionID: "reject-1", ExpectedRevision: 1})
+	if !hasCardCode(err, "test.domain_rejected") {
+		t.Fatalf("rejection = %v", err)
+	}
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	if got := repo.state.cards[card.ID].Revision; got != 1 {
+		t.Fatalf("domain card write committed on rejection: revision=%d", got)
+	}
+	for _, event := range repo.state.events {
+		if event.Type == "test.domain.changed" {
+			t.Fatal("domain event committed on rejection")
+		}
+	}
+	var failed *ActionRunRecord
+	for _, run := range repo.state.actions {
+		if run.ClientActionID == "reject-1" {
+			copy := cloneAction(run)
+			failed = &copy
+		}
+	}
+	if failed == nil || failed.Status != "failed" {
+		t.Fatalf("failed action run = %#v", failed)
+	}
+	foundAudit := false
+	for _, audit := range repo.state.audits {
+		if audit.Action == "card.action.reject-after-write" && audit.Result == "rejected" && audit.Reason == "test.domain_rejected" {
+			foundAudit = true
+		}
+	}
+	if !foundAudit {
+		t.Fatal("content-free rejection audit was not committed")
+	}
+}
+
+func TestCardActionSavepointRollsBackOnInvalidPayloadAndCASFailure(t *testing.T) {
+	for _, test := range []struct {
+		name, actionID string
+	}{
+		{name: "invalid payload", actionID: "invalid-after-write"},
+		{name: "cas failure", actionID: "cas-after-write"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo, service, _ := cardFixture(t)
+			now := time.Date(2026, 9, 4, 12, 34, 56, 789000000, time.UTC)
+			definition := savepointCardDefinition(`{"z":1,"a":2}`, now)
+			card := createSavepointCard(t, service, definition, "savepoint-"+test.actionID)
+			_, err := service.ExecuteAction(context.Background(), ActionInput{ActorID: "usr_member", CardID: card.ID, ActionID: test.actionID, ClientActionID: "failure-1", ExpectedRevision: 1})
+			if err == nil {
+				t.Fatal("action unexpectedly succeeded")
+			}
+			repo.mu.Lock()
+			defer repo.mu.Unlock()
+			if got := repo.state.cards[card.ID].Revision; got != 1 {
+				t.Fatalf("domain card write committed: revision=%d", got)
+			}
+			for _, event := range repo.state.events {
+				if event.Type == "test.domain.changed" {
+					t.Fatal("domain event committed after action failure")
+				}
+			}
+		})
+	}
+}
+
+func TestCardActionUsesClonedStoredPayloadAndSuppressesGenericEvent(t *testing.T) {
+	repo, service, _ := cardFixture(t)
+	now := time.Date(2026, 9, 4, 12, 34, 56, 789000000, time.UTC)
+	definition := savepointCardDefinition(`{"z":1,"a":2}`, now)
+	card := createSavepointCard(t, service, definition, "savepoint-event-owned")
+	repo.mu.Lock()
+	stored := repo.state.cards[card.ID]
+	stored.PayloadJSON = []byte(`{"z":1,"a":2}`)
+	repo.state.cards[card.ID] = stored
+	repo.mu.Unlock()
+
+	result, err := service.ExecuteAction(context.Background(), ActionInput{ActorID: "usr_member", CardID: card.ID, ActionID: "event-owned", ClientActionID: "owned-1", ExpectedRevision: 1})
+	if err != nil || !result.OK {
+		t.Fatalf("event-owned action = %#v, err=%v", result, err)
+	}
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	if string(repo.state.cards[card.ID].PayloadJSON) != `{"z":1,"a":2}` {
+		t.Fatalf("stored payload mutated through action context: %s", repo.state.cards[card.ID].PayloadJSON)
+	}
+	owned, generic := 0, 0
+	for _, event := range repo.state.events {
+		if event.Type == "test.action.owned" {
+			owned++
+		}
+		if event.Type == "card.action" {
+			generic++
+		}
+	}
+	if owned != 1 || generic != 0 {
+		t.Fatalf("action event counts owned=%d generic=%d", owned, generic)
 	}
 }
 

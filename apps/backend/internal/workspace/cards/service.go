@@ -454,6 +454,9 @@ func (s *Service) ExecuteAction(ctx context.Context, input ActionInput) (ActionO
 			}
 			status := s.effectiveStatus(row)
 			if err := s.assertVisible(ctx, tx, row, definition, actor, "action", Request{Meta: input.Meta}); err != nil {
+				if !isActionRejection(err) {
+					return err
+				}
 				return s.finishFailed(ctx, tx, run.ID, actor, row, actionID, input.Meta, err)
 			}
 			if status != StatusActive {
@@ -465,6 +468,9 @@ func (s *Service) ExecuteAction(ctx context.Context, input ActionInput) (ActionO
 			if action.Authorize != nil {
 				allowed, authErr := action.Authorize(ctx, CardAuthorization{Actor: actor, Card: s.publicCardValue(row, definition, nil, status), Operation: "action", Input: normalizedInput, Request: Request{Meta: input.Meta}, ClientActionID: clientActionID})
 				if authErr != nil {
+					if !isActionRejection(authErr) {
+						return authErr
+					}
 					return s.finishFailed(ctx, tx, run.ID, actor, row, actionID, input.Meta, authErr)
 				}
 				if !allowed {
@@ -473,49 +479,79 @@ func (s *Service) ExecuteAction(ctx context.Context, input ActionInput) (ActionO
 			}
 			payload, err := decodeJSON(row.PayloadJSON)
 			if err != nil {
-				return s.finishFailed(ctx, tx, run.ID, actor, row, actionID, input.Meta, internalError("decode workspace card payload", err))
+				return internalError("decode workspace card payload", err)
 			}
-			executed, execErr := action.Execute(ctx, CardActionContext{Tx: tx, Actor: actor, Card: s.publicCardValue(row, definition, payload, status), Payload: payload, Input: normalizedInput, ClientActionID: clientActionID, Request: Request{Meta: input.Meta}})
-			if execErr != nil {
-				return s.finishFailed(ctx, tx, run.ID, actor, row, actionID, input.Meta, execErr)
-			}
-			result := executed.Result
-			if result == nil {
-				result = map[string]any{}
-			}
-			safeResult, err := NormalizeCardPayload(result, Limits{MaxPayloadBytes: MaxActionPayloadBytes, MaxDepth: MaxActionPayloadDepth, MaxNodes: MaxActionPayloadNodes, MaxTextBytes: MaxActionTextBytes}, false)
-			if err != nil {
-				return s.finishFailed(ctx, tx, run.ID, actor, row, actionID, input.Meta, err)
-			}
-			resultingRevision := row.Revision
-			nextStatus := status
-			nextPayload := payload
-			changed := executed.CardPayload != nil || executed.CardStatus != nil
-			if executed.CardPayload != nil {
-				validated, validationErr := s.registry.ValidatePayload(row.PublicBlock(), executed.CardPayload)
-				if validationErr != nil {
-					return s.finishFailed(ctx, tx, run.ID, actor, row, actionID, input.Meta, validationErr)
+			var executed CardActionResult
+			var safeResult any
+			var resultingRevision int64
+			savepointID := sha256.Sum256([]byte(run.ID))
+			savepointErr := tx.WithActionSavepoint(ctx, "card_action_"+hex.EncodeToString(savepointID[:16]), func(actionCtx context.Context) error {
+				var execErr error
+				executed, execErr = action.Execute(actionCtx, CardActionContext{
+					Tx: tx, Actor: actor, Card: s.publicCardValue(row, definition, payload, status), Payload: payload,
+					PayloadJSON: append(json.RawMessage(nil), row.PayloadJSON...), Input: normalizedInput,
+					ClientActionID: clientActionID, Request: Request{Meta: input.Meta},
+				})
+				if execErr != nil {
+					if isActionRejection(execErr) {
+						return actionSavepointRejection{err: execErr}
+					}
+					return execErr
 				}
-				nextPayload = validated.Payload
-			}
-			if executed.CardStatus != nil {
-				nextStatus = *executed.CardStatus
-				if nextStatus != StatusActive && nextStatus != StatusInvalidated && nextStatus != StatusExpired {
-					return s.finishFailed(ctx, tx, run.ID, actor, row, actionID, input.Meta, NewError(CodeCardInvalidStatus, "卡片状态无效", 400))
+				result := executed.Result
+				if result == nil {
+					result = map[string]any{}
 				}
-			}
-			if changed {
-				updated, didChange, updateErr := tx.UpdateCard(ctx, row.ID, row.Revision, nextPayload, nextStatus, row.FallbackText, s.nowUTC())
-				if updateErr != nil {
-					return updateErr
+				var normalizeErr error
+				safeResult, normalizeErr = NormalizeCardPayload(result, Limits{MaxPayloadBytes: MaxActionPayloadBytes, MaxDepth: MaxActionPayloadDepth, MaxNodes: MaxActionPayloadNodes, MaxTextBytes: MaxActionTextBytes}, false)
+				if normalizeErr != nil {
+					return actionSavepointRejection{err: normalizeErr}
 				}
-				if !didChange || updated == nil {
-					return s.finishFailed(ctx, tx, run.ID, actor, row, actionID, input.Meta, conflictError(CodeCardRevisionConflict, "卡片版本已变化"))
+				resultingRevision = row.Revision
+				nextStatus := status
+				nextPayload := payload
+				changed := executed.CardPayload != nil || executed.CardStatus != nil
+				if executed.CardPayload != nil {
+					validated, validationErr := s.registry.ValidatePayload(row.PublicBlock(), executed.CardPayload)
+					if validationErr != nil {
+						if !isActionRejection(validationErr) {
+							return validationErr
+						}
+						return actionSavepointRejection{err: validationErr}
+					}
+					nextPayload = validated.Payload
 				}
-				resultingRevision = updated.Revision
-				if err := s.writeEvent(ctx, tx, EventInput{SpaceID: row.SpaceID, Type: "card.updated", ActorID: actor.ID, ConversationID: stringValue(row.ConversationID), TargetType: "workspace.card", TargetID: row.ID, PayloadJSON: evidenceJSON(map[string]any{"cardId": row.ID, "cardType": row.CardType, "revision": resultingRevision, "status": nextStatus}), CreatedAt: s.nowUTC()}); err != nil {
-					return err
+				if executed.CardStatus != nil {
+					nextStatus = *executed.CardStatus
+					if nextStatus != StatusActive && nextStatus != StatusInvalidated && nextStatus != StatusExpired {
+						return actionSavepointRejection{err: NewError(CodeCardInvalidStatus, "卡片状态无效", 400)}
+					}
 				}
+				if changed {
+					updated, didChange, updateErr := tx.UpdateCard(actionCtx, row.ID, row.Revision, nextPayload, nextStatus, row.FallbackText, s.nowUTC())
+					if updateErr != nil {
+						return updateErr
+					}
+					if !didChange || updated == nil {
+						return actionSavepointRejection{err: conflictError(CodeCardRevisionConflict, "卡片版本已变化")}
+					}
+					resultingRevision = updated.Revision
+					if err := s.writeEvent(actionCtx, tx, EventInput{SpaceID: row.SpaceID, Type: "card.updated", ActorID: actor.ID, ConversationID: stringValue(row.ConversationID), TargetType: "workspace.card", TargetID: row.ID, PayloadJSON: evidenceJSON(map[string]any{"cardId": row.ID, "cardType": row.CardType, "revision": resultingRevision, "status": nextStatus}), CreatedAt: s.nowUTC()}); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+			if savepointErr != nil {
+				var savepointFailure *actionSavepointFailure
+				if errors.As(savepointErr, &savepointFailure) {
+					return savepointErr
+				}
+				var rejected actionSavepointRejection
+				if errors.As(savepointErr, &rejected) {
+					return s.finishFailed(ctx, tx, run.ID, actor, row, actionID, input.Meta, rejected.err)
+				}
+				return savepointErr
 			}
 			if err := tx.CompleteActionRun(ctx, run.ID, "succeeded", mustJSON(safeResult), &resultingRevision, s.nowUTC()); err != nil {
 				return err
@@ -523,8 +559,10 @@ func (s *Service) ExecuteAction(ctx context.Context, input ActionInput) (ActionO
 			if err := s.writeAudit(ctx, tx, actor, input.Meta, AuditInput{SpaceID: row.SpaceID, Action: "card.action." + actionID, TargetType: "workspace.card", TargetID: row.ID, Result: "success", CreatedAt: s.nowUTC()}); err != nil {
 				return err
 			}
-			if err := s.writeEvent(ctx, tx, EventInput{SpaceID: row.SpaceID, Type: "card.action", ActorID: actor.ID, ConversationID: stringValue(row.ConversationID), TargetType: "workspace.card", TargetID: row.ID, PayloadJSON: evidenceJSON(map[string]any{"cardId": row.ID, "actionId": actionID, "revision": resultingRevision}), CreatedAt: s.nowUTC()}); err != nil {
-				return err
+			if !executed.ActionEventWritten {
+				if err := s.writeEvent(ctx, tx, EventInput{SpaceID: row.SpaceID, Type: "card.action", ActorID: actor.ID, ConversationID: stringValue(row.ConversationID), TargetType: "workspace.card", TargetID: row.ID, PayloadJSON: evidenceJSON(map[string]any{"cardId": row.ID, "actionId": actionID, "revision": resultingRevision}), CreatedAt: s.nowUTC()}); err != nil {
+					return err
+				}
 			}
 			outcome = ActionOutcome{OK: true, Result: safeResult, Revision: resultingRevision}
 			return nil
@@ -907,6 +945,34 @@ func (s *Service) rejected(ctx context.Context, tx Tx, actor *auth.Actor, _ *Car
 }
 
 type rejection struct{ err error }
+
+// actionSavepointRejection is deliberately private. It marks an error from
+// the savepoint callback as a controlled card/domain rejection; the savepoint
+// implementation can therefore roll back action effects before the outer
+// transaction records the failed run and content-free audit. Infrastructure
+// errors are returned unwrapped and abort the outer transaction instead.
+type actionSavepointRejection struct{ err error }
+
+func (r actionSavepointRejection) Error() string {
+	if r.err == nil {
+		return ""
+	}
+	return r.err.Error()
+}
+
+func (r actionSavepointRejection) Unwrap() error { return r.err }
+
+func isActionRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	var domainErr *Error
+	if errors.As(err, &domainErr) {
+		return domainErr != nil && domainErr.Code != CodeInternal && domainErr.StatusCode >= 400 && domainErr.StatusCode < 500
+	}
+	var validationErr *CardValidationError
+	return errors.As(err, &validationErr) && validationErr != nil
+}
 
 func (r rejection) Error() string {
 	if r.err == nil {

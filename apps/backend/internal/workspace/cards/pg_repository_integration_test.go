@@ -127,6 +127,17 @@ func pgCardCount(t *testing.T, fixture *pgCardIntegrationFixture, query string, 
 }
 
 func pgCardIntegrationDefinition() CardDefinition {
+	writeDomainEffect := func(ctx context.Context, input CardActionContext) error {
+		updated, changed, err := input.Tx.UpdateCard(ctx, input.Card.ID, input.Card.Revision, map[string]any{"count": int64(99)}, StatusActive, input.Card.Block.FallbackText, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		if !changed || updated == nil {
+			return errors.New("domain card write was not applied")
+		}
+		_, err = input.Tx.WriteEvent(ctx, EventInput{SpaceID: input.Card.SpaceID, Type: "card.test.domain.changed", ActorID: input.Actor.ID, TargetType: "workspace.card", TargetID: input.Card.ID, PayloadJSON: []byte(`{"domain":true}`), CreatedAt: time.Now().UTC()})
+		return err
+	}
 	return CardDefinition{
 		CardType:      "test.counter",
 		SchemaVersion: 1,
@@ -134,6 +145,9 @@ func pgCardIntegrationDefinition() CardDefinition {
 			object, ok := value.(map[string]any)
 			if !ok {
 				return nil, &CardValidationError{Code: "card.test_invalid", Message: "counter payload must be an object"}
+			}
+			if object["validatorFailure"] == true {
+				return nil, errors.New("synthetic validator dependency failure")
 			}
 			count, ok := pgCardNumber(object["count"])
 			if !ok || count < 0 {
@@ -150,6 +164,36 @@ func pgCardIntegrationDefinition() CardDefinition {
 					return CardActionResult{}, errors.New("counter payload is invalid")
 				}
 				return CardActionResult{CardPayload: map[string]any{"count": count + 1}, Result: map[string]any{"count": count + 1}}, nil
+			}},
+			"reject-after-write": {Execute: func(ctx context.Context, input CardActionContext) (CardActionResult, error) {
+				if err := writeDomainEffect(ctx, input); err != nil {
+					return CardActionResult{}, err
+				}
+				return CardActionResult{}, NewError("card.test_rejected", "synthetic domain rejection", 409)
+			}},
+			"cas-after-write": {Execute: func(ctx context.Context, input CardActionContext) (CardActionResult, error) {
+				if err := writeDomainEffect(ctx, input); err != nil {
+					return CardActionResult{}, err
+				}
+				return CardActionResult{CardPayload: map[string]any{"count": int64(100)}, Result: map[string]any{"ok": true}}, nil
+			}},
+			"infra-after-write": {Execute: func(ctx context.Context, input CardActionContext) (CardActionResult, error) {
+				if err := writeDomainEffect(ctx, input); err != nil {
+					return CardActionResult{}, err
+				}
+				return CardActionResult{}, errors.New("synthetic infrastructure failure")
+			}},
+			"validator-after-write": {Execute: func(ctx context.Context, input CardActionContext) (CardActionResult, error) {
+				if err := writeDomainEffect(ctx, input); err != nil {
+					return CardActionResult{}, err
+				}
+				return CardActionResult{CardPayload: map[string]any{"validatorFailure": true}}, nil
+			}},
+			"invalid-result-after-write": {Execute: func(ctx context.Context, input CardActionContext) (CardActionResult, error) {
+				if err := writeDomainEffect(ctx, input); err != nil {
+					return CardActionResult{}, err
+				}
+				return CardActionResult{Result: make(chan int)}, nil
 			}},
 		},
 	}
@@ -253,6 +297,50 @@ func TestPGCardLifecycleUsesIsolatedSchemaAndAtomicEvidence(t *testing.T) {
 		return tx.FailActionRun(fixture.ctx, "missing-run", "card.test_failure", fixture.now)
 	}); err == nil {
 		t.Fatal("missing card action run failed")
+	}
+}
+
+func TestPGCardActionSavepointRollsBackDomainWrites(t *testing.T) {
+	fixture := newPGCardIntegrationFixture(t)
+	for _, test := range []struct {
+		name, actionID, clientActionID string
+		wantCode                       string
+		wantFailedRun                  bool
+	}{
+		{name: "controlled rejection", actionID: "reject-after-write", clientActionID: "pg-reject", wantCode: "card.test_rejected", wantFailedRun: true},
+		{name: "cas rejection", actionID: "cas-after-write", clientActionID: "pg-cas", wantCode: CodeCardRevisionConflict, wantFailedRun: true},
+		{name: "infrastructure failure", actionID: "infra-after-write", clientActionID: "pg-infra", wantCode: CodeInternal, wantFailedRun: false},
+		{name: "validator infrastructure failure", actionID: "validator-after-write", clientActionID: "pg-validator", wantCode: CodeInternal, wantFailedRun: false},
+		{name: "invalid action result", actionID: "invalid-result-after-write", clientActionID: "pg-invalid-result", wantCode: CodeCardInvalidPayload, wantFailedRun: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			card, err := fixture.service.Create(fixture.ctx, CreateInput{ActorID: "usr_card_owner", SpaceID: DefaultSpaceID, CardType: "test.counter", SchemaVersion: 1, FallbackText: "Savepoint card", Payload: map[string]any{"count": 1}, SourceKind: SourceWorkspace, SourceID: "savepoint-" + test.clientActionID, VisibilityScope: VisibilitySpace})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = fixture.service.ExecuteAction(fixture.ctx, ActionInput{ActorID: "usr_card_member", CardID: card.ID, ActionID: test.actionID, ClientActionID: test.clientActionID, ExpectedRevision: 1})
+			if got := pgCardErrorCode(err); got != test.wantCode {
+				t.Fatalf("error code = %q, err=%v, want %q", got, err, test.wantCode)
+			}
+			var revision int64
+			if err := fixture.pool.QueryRow(fixture.ctx, `SELECT revision FROM workspace_cards WHERE id = $1`, card.ID).Scan(&revision); err != nil {
+				t.Fatal(err)
+			}
+			if revision != 1 {
+				t.Fatalf("domain card write committed: revision=%d", revision)
+			}
+			if got := pgCardCount(t, fixture, `SELECT COUNT(*) FROM workspace_events WHERE type = 'card.test.domain.changed' AND target_id = $1`, card.ID); got != 0 {
+				t.Fatalf("domain events = %d", got)
+			}
+			failedRuns := pgCardCount(t, fixture, `SELECT COUNT(*) FROM workspace_card_action_runs WHERE card_id = $1 AND client_action_id = $2 AND status = 'failed'`, card.ID, test.clientActionID)
+			if (failedRuns == 1) != test.wantFailedRun {
+				t.Fatalf("failed action runs = %d, wantFailedRun=%v", failedRuns, test.wantFailedRun)
+			}
+			rejectedAudits := pgCardCount(t, fixture, `SELECT COUNT(*) FROM audit_logs WHERE action = 'card.action.' || $1 AND target_id = $2 AND result = 'rejected'`, test.actionID, card.ID)
+			if (rejectedAudits == 1) != test.wantFailedRun {
+				t.Fatalf("rejection audits = %d, wantFailedRun=%v", rejectedAudits, test.wantFailedRun)
+			}
+		})
 	}
 }
 

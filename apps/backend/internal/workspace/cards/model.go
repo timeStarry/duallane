@@ -2,6 +2,7 @@ package cards
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
@@ -177,10 +178,15 @@ type CardAuthorization struct {
 }
 
 type CardActionContext struct {
-	Tx             Tx
-	Actor          *auth.Actor
-	Card           Card
-	Payload        any
+	Tx      Tx
+	Actor   *auth.Actor
+	Card    Card
+	Payload any
+	// PayloadJSON is an immutable-by-convention clone of the exact payload
+	// bytes stored for the card. Action adapters that have to preserve the
+	// stored JSON member order (for example an external card converter) must
+	// use this value instead of re-marshalling Payload.
+	PayloadJSON    json.RawMessage
 	Input          any
 	ClientActionID string
 	Request        Request
@@ -190,6 +196,11 @@ type CardActionResult struct {
 	CardPayload any
 	CardStatus  *CardStatus
 	Result      any
+	// ActionEventWritten is trusted only because it is returned by the
+	// server-side action executor. When true, the executor has already written
+	// the action-specific event in the same transaction and the generic card
+	// service must not emit a duplicate card.action event.
+	ActionEventWritten bool
 }
 
 type CardActionExecutor func(context.Context, CardActionContext) (CardActionResult, error)

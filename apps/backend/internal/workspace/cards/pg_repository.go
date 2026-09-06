@@ -279,6 +279,49 @@ func (t *pgTx) Lock(ctx context.Context, key string) error {
 	return err
 }
 
+// WithActionSavepoint runs an action's domain effects inside a savepoint on
+// the caller-owned transaction. The action service deliberately creates the
+// action run before entering this boundary, so a controlled action rejection
+// can roll back domain/card effects while still recording the failed run and
+// content-free rejection audit in the outer transaction.
+func (t *pgTx) WithActionSavepoint(ctx context.Context, name string, callback func(context.Context) error) error {
+	if t == nil || t.tx == nil {
+		return errors.New("card action transaction is required")
+	}
+	if callback == nil {
+		return errors.New("card action savepoint callback is required")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New("card action savepoint name is required")
+	}
+	identifier := pgx.Identifier{name}.Sanitize()
+	if _, err := t.tx.Exec(ctx, "SAVEPOINT "+identifier); err != nil {
+		return &actionSavepointFailure{err: err}
+	}
+
+	callbackErr := callback(ctx)
+	if callbackErr != nil {
+		rollbackErr := func() error {
+			_, err := t.tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+identifier)
+			return err
+		}()
+		releaseErr := func() error {
+			_, err := t.tx.Exec(ctx, "RELEASE SAVEPOINT "+identifier)
+			return err
+		}()
+		if rollbackErr != nil || releaseErr != nil {
+			return &actionSavepointFailure{err: errors.Join(callbackErr, rollbackErr, releaseErr)}
+		}
+		return callbackErr
+	}
+	_, err := t.tx.Exec(ctx, "RELEASE SAVEPOINT "+identifier)
+	if err != nil {
+		return &actionSavepointFailure{err: err}
+	}
+	return nil
+}
+
 func (t *pgTx) InsertCard(ctx context.Context, input CardInsert) (*CardRecord, bool, error) {
 	record := input.CardRecord
 	row := t.tx.QueryRow(ctx, `
