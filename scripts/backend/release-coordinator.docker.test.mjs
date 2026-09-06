@@ -1,0 +1,390 @@
+import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const imagePattern = /^sha256:[0-9a-f]{64}$/u;
+const idPattern = /^[0-9a-f]{64}$/u;
+const ownerLabel = "com.duallane.release-coordinator-test";
+const selected = process.env.DUALLANE_RELEASE_COORDINATOR_DOCKER_TEST === "true";
+const imageVariables = {
+  node: "DUALLANE_RELEASE_COORDINATOR_NODE_IMAGE",
+  nodeWeb: "DUALLANE_RELEASE_COORDINATOR_NODE_WEB_IMAGE",
+  goWorkspace: "DUALLANE_RELEASE_COORDINATOR_GO_IMAGE",
+  goP2P: "DUALLANE_RELEASE_COORDINATOR_P2P_IMAGE",
+  goWeb: "DUALLANE_RELEASE_COORDINATOR_WEB_IMAGE",
+  postgres: "DUALLANE_RELEASE_COORDINATOR_POSTGRES_IMAGE",
+};
+
+function reject(code) { throw new Error(code); }
+
+function selectedImages(environment) {
+  return Object.fromEntries(Object.entries(imageVariables).map(([name, key]) => {
+    const image = environment[key];
+    if (!imagePattern.test(image ?? "")) reject(`invalid_${name}_image`);
+    return [name, image];
+  }));
+}
+
+function docker(args, { timeout = 30_000, allowFailure = false } = {}) {
+  const result = spawnSync("docker", args, {
+    cwd: root, encoding: "utf8", timeout, maxBuffer: 1024 * 1024,
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, DOCKER_HOST: "unix:///var/run/docker.sock", COMPOSE_DISABLE_ENV_FILE: "1" },
+  });
+  if (result.error || result.signal) reject("docker_execution_failed");
+  if (!allowFailure && result.status !== 0) {
+    const reason = ["dependency", "unhealthy", "permission denied", "no such container", "port is already allocated", "invalid mount"]
+      .find((value) => result.stderr.toLowerCase().includes(value));
+    reject(`docker_${args[0]}_failed${reason ? `_${reason.replaceAll(" ", "_")}` : ""}`);
+  }
+  return result;
+}
+
+function inspect(kind, id) {
+  const result = docker([kind, "inspect", id]);
+  let value;
+  try { value = JSON.parse(result.stdout); } catch { reject("docker_inspect_invalid"); }
+  if (!Array.isArray(value) || value.length !== 1) reject("docker_inspect_count_invalid");
+  return value[0];
+}
+
+function exactImage(image) {
+  const value = inspect("image", image);
+  if (value.Id !== image) reject("image_identity_changed");
+  return value.Config?.Labels ?? {};
+}
+
+function releaseMetadata(labels) {
+  const commit = labels["org.opencontainers.image.revision"];
+  const version = labels["org.opencontainers.image.version"];
+  if (!/^[0-9a-f]{40}$/u.test(commit ?? "") || !/^\d+\.\d+\.\d+$/u.test(version ?? "")) {
+    reject("release_metadata_invalid");
+  }
+  return { commit, version };
+}
+
+function extractFunction(source, name) {
+  const start = source.indexOf(`\n${name}() {`);
+  if (start < 0) reject("release_function_missing");
+  const end = source.indexOf("\n}\n", start);
+  if (end < 0) reject("release_function_unbounded");
+  return source.slice(start + 1, end + 2);
+}
+
+async function availablePort() {
+  const server = net.createServer();
+  await new Promise((resolve, rejectPromise) => {
+    server.once("error", rejectPromise);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const port = server.address().port;
+  await new Promise((resolve) => server.close(resolve));
+  return port;
+}
+
+function ownedContainers(project, runID, allowedImages) {
+  const result = docker(["ps", "-a", "--no-trunc", "-q", "--filter", `label=com.docker.compose.project=${project}`]);
+  return result.stdout.trim().split(/\s+/u).filter(Boolean).map((id) => {
+    if (!idPattern.test(id)) reject("container_identity_invalid");
+    const container = inspect("container", id);
+    if (container.Id !== id || container.Config?.Labels?.[ownerLabel] !== runID ||
+        container.Config?.Labels?.["com.docker.compose.project"] !== project ||
+        !allowedImages.has(container.Image)) reject("container_ownership_changed");
+    return container;
+  });
+}
+
+function removeExactContainer(container, project, runID, allowedImages) {
+  const current = inspect("container", container.Id);
+  if (current.Id !== container.Id || current.Image !== container.Image ||
+      current.Config?.Labels?.[ownerLabel] !== runID ||
+      current.Config?.Labels?.["com.docker.compose.project"] !== project ||
+      !allowedImages.has(current.Image)) reject("cleanup_owner_changed");
+  // Cleanup is not evidence that the coordinator fenced an owner. Stop only
+  // this disposable fixture's exact ID, then require a stopped identity before
+  // removal; a failed lifecycle assertion still fails the test.
+  if (current.State?.Running) docker(["stop", "--time", "10", container.Id]);
+  const stopped = inspect("container", container.Id);
+  if (stopped.Id !== current.Id || stopped.Image !== current.Image || stopped.State?.Running ||
+      stopped.Config?.Labels?.[ownerLabel] !== runID ||
+      stopped.Config?.Labels?.["com.docker.compose.project"] !== project) reject("cleanup_stop_unverified");
+  docker(["rm", container.Id]);
+}
+
+function coordinatorScript(deploySource) {
+  const functions = ["verify_container_release", "start_release_service", "stop_legacy_services_for_go",
+    "start_release_backend", "start_release_edge"].map((name) => extractFunction(deploySource, name));
+  return [
+    "set -Eeuo pipefail", "umask 077", 'source "$ROOT/deploy/production/release-helper.sh"',
+    ...functions,
+    // Only the Compose input adapter differs from production: all lifecycle,
+    // authority, drain, migration, smoke and recovery functions are real.
+    'compose() { local files=(-f "${RELEASE_GO_ACTIVATION_COMPOSE_FILE:-$GO_COMPOSE}"); if [[ -z "$RELEASE_GO_ACTIVATION_COMPOSE_FILE" && -n "$RELEASE_GO_IMAGE_OVERRIDE_FILE" ]]; then files+=(-f "$RELEASE_GO_IMAGE_OVERRIDE_FILE"); fi; docker compose --project-name "$PROJECT" --profile rollback "${files[@]}" "$@"; }',
+    'rollback_compose() { docker compose --project-name "$PROJECT" -f "${RELEASE_NODE_RECOVERY_COMPOSE_FILE:-$NODE_COMPOSE}" "$@"; }',
+    'phase() { printf "%s\\n" "$1" >> "$PHASE_FILE"; }',
+    'trap \'printf "failed_line=%s\\n" "$LINENO" >> "$PHASE_FILE"\' ERR',
+    'PROJECT_DIR=$ROOT; current_commit=$GO_COMMIT; expected_app_version=$GO_VERSION',
+    'release_load_profile go-full',
+    'RELEASE_GO_UPGRADE=false; RELEASE_SNAPSHOT_FILE=$SNAPSHOT; RELEASE_RECOVERY_FILE=$RECOVERY',
+    'RELEASE_PREVIOUS_NODE_COMMIT=$NODE_COMMIT; RELEASE_PREVIOUS_NODE_VERSION=$NODE_VERSION',
+    'RELEASE_STOP_TIMEOUT=10; RELEASE_STOP_ATTEMPTS=15; RELEASE_HEALTH_ATTEMPTS=30',
+    ': > "$RECOVERY"; phase snapshot',
+    'release_validate_resolved_compose; release_pin_compose_project',
+    'release_snapshot_app_state "$SNAPSHOT"; release_snapshot_validate_for_go_cutover',
+    'release_freeze_node_recovery_compose',
+    'phase pin; release_verify_go_edge_images; release_verify_go_image_identity',
+    'release_freeze_go_activation_compose; release_verify_activation_authority',
+    'phase migrate; release_run_go_migration_and_verify',
+    'phase activate; start_release_backend; start_release_edge',
+    'phase smoke; release_run_gateway_smoke go-full "$GO_VERSION" "$GO_COMMIT"',
+    'phase capture; release_capture_successful_go_snapshot',
+    'phase rollback; release_rollback_application',
+    'phase complete',
+  ].join("\n");
+}
+
+async function runCoordinator(scriptPath, environment) {
+  return await new Promise((resolve, rejectPromise) => {
+    const child = spawn("bash", ["--noprofile", "--norc", scriptPath], {
+      cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"],
+      env: { PATH: process.env.PATH, HOME: process.env.HOME, DOCKER_HOST: "unix:///var/run/docker.sock", COMPOSE_DISABLE_ENV_FILE: "1", ...environment },
+    });
+    let bytes = 0, terminationTimer, failure, errors = "", reports = "";
+    const terminate = (code) => {
+      if (failure) return;
+      failure = code;
+      try { process.kill(-child.pid, "SIGTERM"); } catch { /* child already exited */ }
+      terminationTimer = setTimeout(() => {
+        try { process.kill(-child.pid, "SIGKILL"); } catch { /* owned group already exited */ }
+      }, 3000);
+    };
+    const timer = setTimeout(() => terminate("coordinator_timeout"), 360_000);
+    for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => {
+      bytes += chunk.length;
+      if (bytes > 1024 * 1024) terminate("coordinator_output_limit");
+      if (stream === child.stderr && bytes <= 1024 * 1024) errors += chunk.toString("utf8");
+      if (stream === child.stdout && bytes <= 1024 * 1024) reports += chunk.toString("utf8");
+      // Never publish Compose environments, HTTP bodies or process diagnostics.
+    });
+    child.once("error", () => {
+      clearTimeout(timer); clearTimeout(terminationTimer);
+      rejectPromise(new Error("coordinator_spawn_failed"));
+    });
+    child.once("close", (status) => {
+      clearTimeout(timer); clearTimeout(terminationTimer);
+      const codes = [...errors.matchAll(/^release (?:drain run|node authority|volume authority|external files) rejected: ([a-z_]+)$/gmu)]
+        .map((match) => match[1]);
+      for (const [message, code] of [
+        ["gateway smoke requires one supported local application binding", "gateway_binding_invalid"],
+        ["gateway release metadata differs from the expected release", "gateway_metadata_mismatch"],
+        ["gateway smoke requires verified release metadata", "gateway_expected_metadata_invalid"],
+      ]) if (errors.includes(message)) codes.push(code);
+      for (const line of reports.split("\n")) {
+        try {
+          const report = JSON.parse(line);
+          if (report.status === "FAIL" && /^[a-z_-]+$/u.test(report.error?.stage ?? "") &&
+              /^[a-z_]+$/u.test(report.error?.code ?? "")) codes.push(`${report.error.stage}_${report.error.code}`);
+        } catch { /* Only the smoke helper's content-free error fields are retained. */ }
+      }
+      resolve({ status, failure, codes });
+    });
+  });
+}
+
+test("coordinator gate rejects mutable images and extracts only scoped release functions", async () => {
+  assert.throws(() => selectedImages({}), /invalid_node_image/u);
+  const env = Object.fromEntries(Object.values(imageVariables).map((name) => [name, `sha256:${"a".repeat(64)}`]));
+  assert.equal(Object.keys(selectedImages(env)).length, 6);
+  env.DUALLANE_RELEASE_COORDINATOR_GO_IMAGE = "workspace:latest";
+  assert.throws(() => selectedImages(env), /invalid_goWorkspace_image/u);
+  const source = (await readFile(path.join(root, "deploy/production/deploy.sh"), "utf8")).replaceAll("\r\n", "\n");
+  const script = coordinatorScript(source);
+  assert.match(script, /release_rollback_application/u);
+  assert.doesNotMatch(script, /systemctl|git pull|compose build|deploy\.sh --/u);
+});
+
+test("disposable release fixtures expose only Web to the gateway network", async () => {
+  const { buildReleaseFixtures } = await import("./testdata/release-fixture.mjs");
+  const { validateResolvedCompose, profileOrFail } = await import("../../deploy/production/release-manifest.mjs");
+  const options = { project: "dl-release-fixture", root, port: 18789, secretPath: path.join(root, "synthetic-secret.json"),
+    images: Object.fromEntries(Object.keys(imageVariables).map((name) => [name, `sha256:${"a".repeat(64)}`])),
+    versions: { node: "0.15.5", go: "0.16.0" }, commits: { node: "b".repeat(40), go: "c".repeat(40) },
+    names: { network: "dl-release-private", gatewayNetwork: "dl-release-gateway", postgresVolume: "dl-release-pg", dataVolume: "dl-release-data" } };
+  assert.throws(() => buildReleaseFixtures({ ...options, names: { ...options.names, gatewayNetwork: undefined } }), /gateway_network_invalid/u);
+  const { nodeCompose, goCompose } = buildReleaseFixtures(options);
+  for (const [profile, compose] of [["node-default", nodeCompose], ["go-full", goCompose]]) {
+    validateResolvedCompose(profileOrFail(profile), compose);
+    assert.equal(compose.networks.default.external, true);
+    assert.equal(compose.networks.gateway.external, true);
+    for (const [name, service] of Object.entries(compose.services)) {
+      assert.deepEqual(service.networks, name === "web" ? ["default", "gateway"] : ["default"]);
+      if (name === "web") assert.deepEqual(service.ports, ["127.0.0.1:18789:8080"]);
+      else assert.equal(service.ports, undefined);
+      for (const worker of ["EMAIL", "NTFY", "ECHO"]) {
+        assert.notEqual(service.environment?.[`WORKSPACE_${worker}_WORKER_ENABLED`], "true");
+      }
+    }
+  }
+  assert.equal(goCompose.services.p2p.volumes, undefined);
+  assert.equal(goCompose.services.p2p.secrets, undefined);
+  assert.equal(Object.keys(goCompose.services.p2p.environment).some((name) => /^(?:PG|DATABASE|WORKSPACE_S3)/u.test(name)), false);
+});
+
+test("real Node-to-Go activation captures a recovery snapshot and restores the exact Node gateway", {
+  skip: selected ? false : "set DUALLANE_RELEASE_COORDINATOR_DOCKER_TEST=true with six exact local image IDs",
+  timeout: 480_000,
+}, async (t) => {
+  if (process.platform !== "linux") { t.skip("Linux-only disposable Docker gate"); return; }
+  const images = selectedImages(process.env);
+  const labels = Object.fromEntries(Object.entries(images).map(([name, image]) => [name, exactImage(image)]));
+  const node = releaseMetadata(labels.node), go = releaseMetadata(labels.goWorkspace);
+  assert.deepEqual(releaseMetadata(labels.nodeWeb), node, "Node images must identify one release");
+  assert.deepEqual(releaseMetadata(labels.goP2P), go, "Go P2P must identify the Workspace release");
+  assert.deepEqual(releaseMetadata(labels.goWeb), go, "Go Web must identify the Workspace release");
+  if (node.commit === go.commit) reject("rehearsal_requires_distinct_releases");
+  const runID = randomBytes(24).toString("hex"), project = `dl-release-${runID.slice(0, 20)}`;
+  const names = { network: `${project}-private`, gatewayNetwork: `${project}-gateway`,
+    postgresVolume: `${project}-pg`, dataVolume: `${project}-data` };
+  const directory = await mkdtemp(path.join(os.tmpdir(), "duallane-coordinator-"));
+  const paths = Object.fromEntries(["node", "go", "secret", "phases", "snapshot", "recovery", "script"]
+    .map((name) => [name, path.join(directory, name + (name === "script" ? ".sh" : ".json"))]));
+  const allowedImages = new Set(Object.values(images));
+  const resources = { networks: [], volumes: [] };
+  let phase = "fixture", primary;
+  try {
+    const { buildReleaseFixtures } = await import("./testdata/release-fixture.mjs");
+    const fixtures = buildReleaseFixtures({ project, images, versions: { node: node.version, go: go.version },
+      commits: { node: node.commit, go: go.commit }, names, port: await availablePort(), secretPath: paths.secret, root });
+    for (const compose of [fixtures.nodeCompose, fixtures.goCompose]) {
+      for (const service of Object.values(compose.services)) service.labels = { ...service.labels, [ownerLabel]: runID };
+    }
+    await writeFile(paths.secret, JSON.stringify({ accessKey: "synthetic", secretKey: "synthetic-only" }), { mode: 0o600, flag: "wx" });
+    await writeFile(paths.node, JSON.stringify(fixtures.nodeCompose), { mode: 0o600, flag: "wx" });
+    await writeFile(paths.go, JSON.stringify(fixtures.goCompose), { mode: 0o600, flag: "wx" });
+    phase = "node-config";
+    docker(["compose", "--project-name", project, "-f", paths.node, "config", "--quiet"]);
+    phase = "go-config";
+    docker(["compose", "--project-name", project, "--profile", "rollback", "-f", paths.go, "config", "--quiet"]);
+    if (docker(["ps", "-a", "-q", "--filter", `label=com.docker.compose.project=${project}`]).stdout.trim()) reject("project_already_exists");
+    for (const [name, logical, internal] of [[names.network, "default", true], [names.gatewayNetwork, "gateway", false]]) {
+      if (docker(["network", "inspect", name], { allowFailure: true }).status === 0) reject("network_already_exists");
+      // Record intent before a mutating CLI call: a lost response must not leave
+      // a newly created disposable resource outside the cleanup inventory.
+      const resource = { name, id: null, internal };
+      resources.networks.push(resource);
+      resource.id = docker(["network", "create", ...(internal ? ["--internal"] : []), "--driver", "bridge",
+        "--opt", "com.docker.network.bridge.host_binding_ipv4=127.0.0.1", "--label", `${ownerLabel}=${runID}`,
+        "--label", `com.docker.compose.project=${project}`, "--label", `com.docker.compose.network=${logical}`, name]).stdout.trim();
+      if (!idPattern.test(resource.id)) reject("network_id_invalid");
+      const network = inspect("network", resource.id);
+      if (network.Internal !== internal || network.Name !== name || network.Labels?.[ownerLabel] !== runID) reject("network_not_isolated");
+    }
+    for (const name of [names.postgresVolume, names.dataVolume]) {
+      if (docker(["volume", "inspect", name], { allowFailure: true }).status === 0) reject("volume_already_exists");
+      resources.volumes.push(name);
+      const created = docker(["volume", "create", "--label", `${ownerLabel}=${runID}`, name]).stdout.trim();
+      if (created !== name) reject("volume_name_changed");
+    }
+    const base = ["compose", "--project-name", project, "-f", paths.node];
+    phase = "permissions";
+    const init = docker(["create", "--pull=never", "--network", "none", "--user", "0:0", "--label", `${ownerLabel}=${runID}`,
+      "--label", `com.docker.compose.project=${project}`, "--mount", `type=volume,source=${names.dataVolume},target=/app/data`,
+      "--entrypoint", "/bin/sh", images.goWorkspace, "-c", "mkdir -p /app/data/workspace-files && chown 65532:65532 /app/data /app/data/workspace-files && chmod 0770 /app/data /app/data/workspace-files"]).stdout.trim();
+    if (!idPattern.test(init)) reject("permission_container_id_invalid");
+    docker(["start", "--attach", init]);
+    const initialized = inspect("container", init);
+    if (initialized.State?.ExitCode !== 0) reject("permission_initialization_failed");
+    removeExactContainer(initialized, project, runID, allowedImages);
+    phase = "node-postgres";
+    docker([...base, "up", "-d", "--no-deps", "--pull", "never", "--no-build", "--wait", "--wait-timeout", "60", "postgres"], { timeout: 75_000 });
+    const pgID = docker([...base, "ps", "-a", "-q", "postgres"]).stdout.trim();
+    docker(["exec", pgID, "pg_isready", "-h", "127.0.0.1", "-U", "duallane", "-d", "duallane"]);
+    phase = "node-migrate";
+    docker([...base, "up", "--no-start", "--no-deps", "--pull", "never", "--no-build", "migrate"]);
+    const migrationID = docker([...base, "ps", "-a", "-q", "migrate"]).stdout.trim();
+    docker(["start", "--attach", migrationID], { timeout: 75_000 });
+    const migration = inspect("container", migrationID);
+    if (migration.State?.ExitCode !== 0) reject("node_migration_failed");
+    for (const service of ["api", "web"]) {
+      phase = `node-${service}`;
+      docker([...base, "up", "-d", "--no-deps", "--pull", "never", "--no-build", "--wait", "--wait-timeout", "60", service], { timeout: 75_000 });
+    }
+    removeExactContainer(migration, project, runID, allowedImages);
+    const originalPG = inspect("container", pgID).Id;
+    const deploy = (await readFile(path.join(root, "deploy/production/deploy.sh"), "utf8")).replaceAll("\r\n", "\n");
+    await writeFile(paths.script, coordinatorScript(deploy), { mode: 0o600, flag: "wx" });
+    phase = "coordinator";
+    const result = await runCoordinator(paths.script, { ROOT: root, PROJECT: project, NODE_COMPOSE: paths.node, GO_COMPOSE: paths.go,
+      NODE_COMMIT: node.commit, NODE_VERSION: node.version, GO_COMMIT: go.commit, GO_VERSION: go.version,
+      SNAPSHOT: paths.snapshot, RECOVERY: paths.recovery, PHASE_FILE: paths.phases });
+    const phases = (await readFile(paths.phases, "utf8").catch(() => "")).trim().split("\n");
+    if (result.status !== 0 || result.failure) reject(`coordinator_failed_${phases.filter((value) => /^[a-z_]+(?:=\d+)?$/u.test(value)).slice(-2).join("_")}_${result.codes.join("_")}`);
+    assert.deepEqual(phases, ["snapshot", "pin", "migrate", "activate", "smoke", "capture", "rollback", "complete"]);
+    const snapshotPath = `${paths.recovery}.go-compose.snapshot.json`;
+    for (const suffix of ["", ".compose.json", ".external.json", ".volumes.json"]) {
+      const metadata = await stat(snapshotPath + suffix);
+      if ((metadata.mode & 0o777) !== 0o600) reject("snapshot_not_private");
+    }
+    const current = ownedContainers(project, runID, allowedImages);
+    for (const [service, image] of [["api", images.node], ["web", images.nodeWeb], ["postgres", images.postgres]]) {
+      const matches = current.filter((container) => container.Config.Labels["com.docker.compose.service"] === service);
+      if (matches.length !== 1 || !matches[0].State?.Running || matches[0].State?.Health?.Status !== "healthy" || matches[0].Image !== image) reject(`recovery_${service}_invalid`);
+      if (service === "postgres" && matches[0].Id !== originalPG) reject("postgres_owner_changed");
+    }
+    if (current.some((container) => ["p2p", "workspace", "worker"].includes(container.Config.Labels["com.docker.compose.service"]))) reject("candidate_owner_remained");
+    t.diagnostic("real Node migration, pinned Go activation, drain, gateway smoke, four private snapshot artifacts and exact Node recovery passed");
+  } catch (error) {
+    primary = new Error(`release_fixture_${phase}: ${/^[a-zA-Z0-9_= :.-]+$/u.test(error.message) ? error.message : "check_failed"}`);
+    // Content-free failure evidence from this test's already verified owners.
+    // Do not emit raw application/health logs, configuration or response bodies.
+    try {
+      for (const container of ownedContainers(project, runID, allowedImages)) {
+        const logs = docker(["logs", "--tail", "80", container.Id], { allowFailure: true });
+        const codes = [...new Set((logs.stdout + logs.stderr).match(/\b(?:EACCES|EPERM|ENOENT|ENOTFOUND|ECONNREFUSED|ERR_[A-Z_]+)\b/gu) ?? [])];
+        const frames = [...new Set((logs.stdout + logs.stderr).match(/[a-z][a-z-]+\.mjs:\d+:\d+/gu) ?? [])].slice(0, 5);
+        const bindings = container.Config.Labels["com.docker.compose.service"] === "web"
+          ? container.NetworkSettings?.Ports?.["8080/tcp"]?.map((binding) => ({
+            loopback: ["127.0.0.1", "::1"].includes(binding.HostIp), hasPort: /^[0-9]+$/u.test(binding.HostPort ?? "") })) ?? []
+          : undefined;
+        t.diagnostic(JSON.stringify({ service: container.Config.Labels["com.docker.compose.service"],
+          running: container.State?.Running, exit: container.State?.ExitCode,
+          health: container.State?.Health?.Status, restarts: container.RestartCount, codes, frames, bindings }));
+      }
+    } catch { t.diagnostic("owned_fixture_diagnostics_unavailable"); }
+  } finally {
+    let cleanupFailure;
+    try {
+      for (const container of ownedContainers(project, runID, allowedImages)) removeExactContainer(container, project, runID, allowedImages);
+      for (const name of resources.volumes) {
+        const present = docker(["volume", "ls", "--format", "{{.Name}}"])
+          .stdout.trim().split("\n").includes(name);
+        if (!present) continue;
+        const volume = inspect("volume", name);
+        if (volume.Name !== name || volume.Driver !== "local" || volume.Labels?.[ownerLabel] !== runID) reject("cleanup_volume_owner_changed");
+        docker(["volume", "rm", name]);
+      }
+      for (const resource of resources.networks) {
+        const present = docker(["network", "ls", "--format", "{{.Name}}"])
+          .stdout.trim().split("\n").includes(resource.name);
+        if (present) {
+          const network = inspect("network", resource.name);
+          if (!idPattern.test(network.Id) || (resource.id && network.Id !== resource.id) ||
+              network.Name !== resource.name || network.Internal !== resource.internal ||
+              network.Labels?.[ownerLabel] !== runID || Object.keys(network.Containers ?? {}).length) reject("cleanup_network_owner_changed");
+          docker(["network", "rm", network.Id]);
+        }
+      }
+    } catch { cleanupFailure = new Error("release_fixture_cleanup_failed"); }
+    // Temporary files contain only this test's synthetic configuration. Keep
+    // them private for operator recovery if exact Docker cleanup was refused.
+    if (!cleanupFailure) await rm(directory, { recursive: true, force: true });
+    if (cleanupFailure) throw new AggregateError(primary ? [primary, cleanupFailure] : [cleanupFailure], "release_fixture_failed");
+  }
+  if (primary) throw primary;
+});

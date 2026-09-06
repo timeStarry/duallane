@@ -520,6 +520,39 @@ proof or permission to execute a data-changing operator command. The canonical
 boundary and destructive-finalization conditions are in
 [Storage operator](STORAGE_OPERATOR.md#retained-offline-compatibility-tools).
 
+The opt-in coordinated Node-to-Go rehearsal uses six already-local immutable
+image IDs, with one consistent release identity for each Node and Go image set:
+
+```sh
+DUALLANE_RELEASE_COORDINATOR_DOCKER_TEST=true \
+DUALLANE_RELEASE_COORDINATOR_NODE_IMAGE="sha256:<old-node-api-image-id>" \
+DUALLANE_RELEASE_COORDINATOR_NODE_WEB_IMAGE="sha256:<old-node-web-image-id>" \
+DUALLANE_RELEASE_COORDINATOR_GO_IMAGE="sha256:<go-workspace-worker-migrate-image-id>" \
+DUALLANE_RELEASE_COORDINATOR_P2P_IMAGE="sha256:<go-p2p-image-id>" \
+DUALLANE_RELEASE_COORDINATOR_WEB_IMAGE="sha256:<go-web-image-id>" \
+DUALLANE_RELEASE_COORDINATOR_POSTGRES_IMAGE="sha256:<postgres-image-id>" \
+  node --test scripts/backend/release-coordinator.docker.test.mjs
+```
+
+Run only on Linux with the local Docker socket. The test neither builds nor
+pulls images and never invokes the production deployment entry point. It uses
+the real release functions with private, synthetic Compose inputs: a random
+project, new data/database volumes, an internal backend network, and a separate
+network attached only to Web for a random loopback-bound gateway port. External
+notification workers are disabled; provider endpoints are synthetic loopback
+addresses. The normal migration and maintenance code runs only on this new
+disposable state.
+
+The positive lifecycle gate proves the old Node bootstrap, pinned Go migration,
+writer fencing and drain, real Go readiness/gateway smoke, four private recovery
+artifacts, and exact-image Node application rollback with the same PostgreSQL
+container. It is not evidence for passive candidate startup, injected failure
+recovery, Go-to-Go upgrades or a production cutover. Those gates remain separate.
+Cleanup rechecks exact image/owner identities, stops only owned fixture
+containers, confirms their stopped state, and removes only the test's labeled
+containers, volumes and networks. Ambiguous cleanup keeps private artifacts and
+fails the test. A skipped opt-in test is not a rehearsal pass.
+
 A service is not production-ready until the guarded deployment can:
 
 1. Build the exact labeled image from a clean commit.
