@@ -2276,3 +2276,21 @@ verification accepts stopped or absent Workspace/worker holders only with the
 same named-volume identity/metadata and canonical database, storage and secret
 authority. Missing PostgreSQL, rebuilt volumes and changed credentials fail
 closed. Real Docker coverage and coordinator integration remain separate gates.
+
+### Actual Node Authority And Read-Only Bind Metadata
+
+Parent executed the opt-in Node authority Docker test against exact Node image
+`sha256:e5e42b53d293a942ba8e541b34d9ea7bfa83990e1619272ad057858d300c2c6f`
+and PostgreSQL image
+`sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73`:
+one result passed in 1.280 seconds, without skips. The test used uniquely owned,
+never-started containers, private synthetic credentials and task-only volumes;
+it verified real mount identity and rejected canonical authority drift. It
+removed its exact owned resources and did not contact a provider.
+
+A separate never-started Docker probe confirmed `--mount ...,readonly` reports
+`RW=false` with an empty `Mode`. The drain runner now accepts that representation
+while still requiring the exact credential source/target and `RW=false`, and
+rejecting contradictory nonempty modes. Its 25 focused results passed in
+0.630 seconds, including writable and contradictory-mode regressions. The probe
+was removed; its bind source was a checked-in public example, unchanged.

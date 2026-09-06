@@ -600,7 +600,9 @@ function assertContainerIdentity(
     if (input.Source !== expectedMount.sourcePath) {
       reject("container_mount_source_mismatch");
     }
-    if (input.Mode !== undefined && input.Mode !== "ro") {
+    // Docker --mount/Compose may leave Mode empty; RW is the authoritative
+    // read-only flag. Still reject a contradictory nonempty mode.
+    if (input.Mode !== undefined && input.Mode !== "" && input.Mode !== "ro") {
       reject("container_mount_not_read_only_secret");
     }
   }

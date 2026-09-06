@@ -502,6 +502,32 @@ test("S3 authority keeps its one credential mount read-only and rejects other mo
   assert.equal(state.dockerRunner.removed, true);
 });
 
+test("empty Docker mount mode requires an independently read-only credential bind", async (t) => {
+  for (const [mode, writable, accepted] of [["", false, true], ["rw", false, false], ["", true, false]]) {
+    const state = await fixture(t, "s3");
+    const originalRun = state.dockerRunner.run.bind(state.dockerRunner);
+    state.dockerRunner.run = async (args, options) => {
+      const result = await originalRun(args, options);
+      if (args[0] === "inspect" && args.at(-1) === ownedID && result.status === 0) {
+        const [container] = JSON.parse(result.stdout);
+        container.Mounts[0].Mode = mode;
+        container.Mounts[0].RW = writable;
+        return { ...result, stdout: JSON.stringify([container]) };
+      }
+      return result;
+    };
+    if (accepted) {
+      assert.deepEqual(await runDrainCheck(state.options), {
+        status: "ready", exitCode: 0, reportWritten: true,
+      });
+    } else {
+      await expectCode(runDrainCheck(state.options), "container_mount_not_read_only_secret");
+      assert.equal(state.dockerRunner.calls.some(call => call.args[0] === "start"), false);
+    }
+    assert.equal(state.dockerRunner.removed, true);
+  }
+});
+
 test("container env accepts exactly one Compose dollar decoding layer", async (t) => {
   const state = await fixture(t, "dollar-env");
   const result = await runDrainCheck(state.options);
