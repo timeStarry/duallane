@@ -2267,3 +2267,12 @@ and private inputs. Docker calls are limited to read-only `ps`/`inspect` with
 bounded output and fixed errors. This is fake-runner component evidence; the
 actual container-mount check and integrated first-cutover/recovery rehearsal
 are still required.
+
+### Physical Volume Authority Component
+
+Parent reviewed the read-only volume verifier and independently passed its 17
+Linux cases (0.518 seconds, no skips). Capture requires unique running holders;
+verification accepts stopped or absent Workspace/worker holders only with the
+same named-volume identity/metadata and canonical database, storage and secret
+authority. Missing PostgreSQL, rebuilt volumes and changed credentials fail
+closed. Real Docker coverage and coordinator integration remain separate gates.

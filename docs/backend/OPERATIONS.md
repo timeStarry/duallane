@@ -486,6 +486,19 @@ directories: pre/post identity checks are not protection from malicious root
 path swaps. Keep the manifest's private paths and hashes outside Git and normal
 logs; CLI summaries contain only counts and fixed outcome codes.
 
+`release-volume-authority.mjs capture --compose <private-go.json> --output
+<new-private-manifest>` records the running Workspace, worker and PostgreSQL
+physical named-volume identities and metadata. `verify --previous-compose
+<old-private-go.json> --current-compose <new-private-go.json> --input
+<manifest>` rechecks database/storage authority and the physical volumes without
+changing Docker state. It requires the standard PostgreSQL connection, shared
+`/app/data` root and matching read-only S3 credential binding where configured.
+Capture requires unique running holders; recovery verification permits stopped
+or absent Workspace/worker holders only while the exact recorded volumes and
+canonical authority remain unchanged. PostgreSQL must still be identifiable.
+This private sidecar complements the external-file fingerprint; neither check
+proves quiescence, data contents or backup recoverability.
+
 Schema and contracts use expand-contract evolution. The new migration must be
 safe for every Node/Go version that can run during rollout or automatic
 application rollback. Destructive cleanup occurs only after the old owner is
