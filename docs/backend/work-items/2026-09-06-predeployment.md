@@ -2109,6 +2109,28 @@ quality/race/analysis/build/PostgreSQL/media job passed. The run remains failed
 because of the already recorded Node assertion and Workspace browser failures.
 The successor `ea9f017` run is tracked separately, not assumed to pass.
 
+### Persisted Contract Version Refresh
+
+CI [34051836003](https://github.com/timeStarry/duallane/actions/runs/34051836003)
+on `ea9f01744d1030e10e6d507a706a035ffe38ceaa` passed the Go aggregate and P2P
+jobs. Node unit tests passed, then the actual Node persisted-contract step
+correctly detected an additional version-preparation omission: bootstrap in
+`node-core.json` still contained `0.15.5`. Parent ran the actual Node generator,
+compared its output and confirmed that the only difference was bootstrap
+`appVersion: 0.16.0`; no authorization/data contract was rewritten.
+
+After updating that generated field, parent independently passed all 24 commands
+from CI's complete persisted-contract step on Linux Node 22 (9.42 seconds),
+including core's 29 scenarios/32 routes and the 164-route inventory. Go's
+uncached Workspace contract race suite also passed (8.024 seconds). The
+unmodified Node P2P/ICE/HTTP-error tests passed 16/16, and the candidate P2P/config
+staticcheck passed separately.
+
+The same CI run's original Go Workspace suite remained 11/12: Echo passed,
+but the long flow timed out clicking the newest history message at line 734.
+Later Node lint/build/browser steps were skipped after contract failure. These
+results do not close the pending frontend race or release-coordinator gates.
+
 ### Retained Node Gateway Verification
 
 The delegated verification worker ran the committed read-only gateway probe
