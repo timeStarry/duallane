@@ -1020,3 +1020,22 @@ Remote CI run `34032028949` completed all three jobs successfully on exact
 commit `5ba8a90`, including the scoped tmpfs Node unit step, Node browser,
 Go quality/PostgreSQL/media, and Go P2P browser checks. It does not cover later
 read-state, reaction, contract or unaccepted automation changes.
+
+### Reaction Runtime Composition And Replay
+
+Two missing runtime links were found while following the unchanged browser
+scenario: reaction events lacked the current viewer's groups, and the human
+message service had no reaction catalog validator, rejecting valid reactions
+after the client's optimistic display. Main now reuses the immutable imported
+catalog: additions require visible entries; removal permits known hidden entries.
+Replay reconstructs the viewer's names and selected state from current rows,
+never stored caller projections. No imported asset changed.
+
+The PostgreSQL projection regression failed before the fix. Fresh independent
+PostgreSQL/race then passed events (4.628 seconds) and application composition
+(4.471); staticcheck passed. Real HTTP tests cover visible add/remove, unknown
+and hidden-add rejection; the adapter unit test preserves hidden removal.
+Browser reruns still failed: once at the earlier reaction display before the
+catalog was connected, then twice at rapid history-message catch-up (line 728,
+20.5/22.6 seconds). No complete browser pass is claimed. Catch-up remains a
+separate active investigation; assertions and deadlines are unchanged.

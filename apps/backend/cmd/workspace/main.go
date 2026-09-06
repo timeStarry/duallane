@@ -64,6 +64,15 @@ func (source catalogBuiltinEmoteSource) ResolveBuiltinEmote(_ context.Context, e
 	return item.Src, true
 }
 
+func (source catalogBuiltinEmoteSource) IsVisibleReactionEmote(_ context.Context, emoteKey string) (bool, error) {
+	return source.catalog.IsVisible(emoteKey), nil
+}
+
+func (source catalogBuiltinEmoteSource) IsKnownReactionEmote(_ context.Context, emoteKey string) (bool, error) {
+	_, exists := source.catalog.Lookup(emoteKey)
+	return exists, nil
+}
+
 type application struct {
 	handler            http.Handler
 	pool               *pgxpool.Pool
@@ -291,7 +300,8 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		messageRepository.SetTopicRepository(topicRepository)
 		messageService = messages.NewService(messages.ServiceOptions{
 			Repository: messageRepository, RequireMessageJobs: true,
-			GroupTopicCreator: messageblocks.NewGroupTopicCreator(topicService, topics.DefaultSpaceID),
+			ReactionEmoteValidator: builtinEmoteSource,
+			GroupTopicCreator:      messageblocks.NewGroupTopicCreator(topicService, topics.DefaultSpaceID),
 			AdvancedBlockValidator: messageblocks.NewValidator(messageblocks.ValidatorOptions{
 				Cards: cardService, Emotes: emoteService, Topics: topicService,
 			}),

@@ -70,6 +70,9 @@ func TestPGEventReplayVisibilityAndWindow(t *testing.T) {
 	t.Cleanup(pool.Close)
 
 	repository := NewPGRepository(pool)
+	t.Run("reaction events hydrate current viewer state", func(t *testing.T) {
+		assertReactionEventProjection(t, ctx, repository)
+	})
 	beaconConversation := &auth.Actor{ID: "usr_viewer", Kind: "human", Role: "member"}
 	projectedConversation, err := repository.publicConversationPayload(ctx, DefaultSpaceID, beaconConversation, "conv-events-beacon")
 	if err != nil {

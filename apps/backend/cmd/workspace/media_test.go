@@ -12,6 +12,33 @@ import (
 
 type imageProcessorFunc func(context.Context, []byte, media.Source) (media.ProcessedUpload, error)
 
+func TestReactionCatalogAdapterKeepsHiddenRemovalCompatibility(t *testing.T) {
+	items := []emotes.CatalogItem{{ID: "heart", Kind: "unicode", Label: "Heart", Value: "♥"}}
+	catalog, err := emotes.NewCatalog([]emotes.CatalogPack{
+		{ID: "visible", Label: "Visible", Items: items},
+		{ID: "qq", Label: "Hidden", Items: items},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		key            string
+		visible, known bool
+	}{
+		{"visible:heart", true, true}, {"qq:heart", false, true}, {"forged:heart", false, false},
+	} {
+		adapter := catalogBuiltinEmoteSource{catalog: catalog}
+		visible, err := adapter.IsVisibleReactionEmote(context.Background(), test.key)
+		if err != nil || visible != test.visible {
+			t.Fatalf("visible %s = %t, %v", test.key, visible, err)
+		}
+		known, err := adapter.IsKnownReactionEmote(context.Background(), test.key)
+		if err != nil || known != test.known {
+			t.Fatalf("known %s = %t, %v", test.key, known, err)
+		}
+	}
+}
+
 func (f imageProcessorFunc) Process(ctx context.Context, input []byte, source media.Source) (media.ProcessedUpload, error) {
 	return f(ctx, input, source)
 }

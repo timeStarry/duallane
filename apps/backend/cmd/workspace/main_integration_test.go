@@ -267,6 +267,18 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 				t.Fatalf("topic card=%d %s", resolved.Code, resolved.Body.String())
 			}
 		}
+		for _, test := range []struct {
+			key    string
+			status int
+		}{{"feishu:ok", http.StatusCreated}, {"qq:smile", http.StatusBadRequest}, {"forged:ok", http.StatusBadRequest}} {
+			response := request(http.MethodPost, "/api/workspace/messages/"+firstID+"/reactions", "application/json", []byte(`{"emoteKey":"`+test.key+`"}`))
+			if response.Code != test.status {
+				t.Fatalf("composed reaction %s = %d %s", test.key, response.Code, response.Body.String())
+			}
+		}
+		if removed := request(http.MethodDelete, "/api/workspace/messages/"+firstID+"/reactions/feishu:ok", "", nil); removed.Code != http.StatusOK {
+			t.Fatalf("composed reaction removal = %d", removed.Code)
+		}
 	})
 
 	// A missing migration must fail readiness and a fresh startup before any

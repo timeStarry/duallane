@@ -52,6 +52,18 @@ func (r *PGRepository) ProjectEventPayload(ctx context.Context, actor *auth.Acto
 				projected["conversation"] = conversation
 			}
 		}
+	case "reaction.added", "reaction.removed":
+		// Reaction events persist references only. Hydrate the current viewer's
+		// names and selected state, just as the Node replay projector does.
+		projected["reactions"] = []any{}
+		messageID := stringField(projected, "messageId")
+		if messageID != "" && actor != nil {
+			reactions, err := r.publicMessageReactions(ctx, event.SpaceID, actor, messageID)
+			if err != nil {
+				return nil, err
+			}
+			projected["reactions"] = reactions
+		}
 	case "message.created", "message.recalled":
 		messageID := stringField(projected, "messageId")
 		if messageID == "" {
