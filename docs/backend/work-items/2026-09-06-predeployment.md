@@ -1984,6 +1984,23 @@ Parent independently ran the new static entrypoint guard: 4/4 passed on Node
 22 in the Linux validation checkout (122.852 ms). The same guard is included
 in CI. No database, provider, production process or object was changed.
 
+### Private External-File Recovery Fingerprints
+
+The accepted external-files helper binds a private complete Go canonical Compose
+configuration to the exact secret/config/read-only regular-file references and
+their file identities, owner/mode, size and hash. It never copies or repairs the
+source files. Old versioned files must remain immutable through recovery; an
+in-place rotation, missing file, symlink or changed configuration fails closed.
+Parent review corrected swallowed close errors, post-write path/parent checks,
+and both capture and verification read budgets (32 files / 8 MiB each / 32 MiB
+total). The trusted-parent-directory limitation is explicit.
+
+Parent independently ran the frozen helper's Linux Node 22 suite: 9/9 passed,
+0 skipped (1.190 seconds), including a near-total-limit manifest whose final
+small file grows to 8 MiB. The test joins CI's private recovery snapshot step.
+This is a recovery-file component gate; coordinated Go-to-Go release and
+same-authority rollback still require separate integration and rehearsal.
+
 The parent's separate real-Docker test then passed both restart-policy cases
 and mismatched-owner refusal (3 Node test results, 8.261 seconds). It used the
 rebuilt Workspace runtime image

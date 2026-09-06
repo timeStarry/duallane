@@ -420,6 +420,13 @@ secondary.
 
 ## 10. Deployment Acceptance
 
+Private recovery-file checks run with
+`node --test scripts/backend/release-external-files.test.mjs` on Linux in CI.
+They cover frozen Compose binding, external-file selection, identity/content/
+permission changes, symlinks, unavailable files, exclusive 0600 output, bounded
+file/total bytes and content-free CLI errors. They do not create application
+containers or prove named-volume or live writer authority.
+
 The retained offline storage boundary is guarded by
 `node --test scripts/backend/storage-operator-retained.test.mjs` in CI. It
 checks the actual Node command modes, opt-in one-shot storage Compose services,

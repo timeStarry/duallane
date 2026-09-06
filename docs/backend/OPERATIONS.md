@@ -400,6 +400,26 @@ does not freeze external bind/config/secret file bytes or prove live ownership,
 schema compatibility, draining or provider state. The caller must verify those
 separately before recovery. This helper alone does not enable `--go-upgrade`.
 
+`release-external-files.mjs` adds a Linux-only fingerprint sidecar for that
+private, pinned canonical Compose JSON. `capture --compose <absolute-json>
+--services p2p,workspace,worker,web,migrate --output <new-absolute-manifest>`
+records only external files used by those five services; `verify --compose
+<same-json> --input <manifest>` rechecks the exact reference set, canonical
+configuration hash, file identity, owner/mode, byte size and SHA-256. Both JSON
+inputs and the exclusively created manifest require mode 0600. It rejects
+non-file/external/environment secret sources, writable/directory binds,
+symlinks and symlinked parent directories. Limits are 32 files, 8 MiB per file
+and 32 MiB total; changed sizes are rejected before reading beyond the budget.
+
+This sidecar does not copy or repair secrets, freeze named volumes, or authorize
+recovery. Keep versioned old secret/config files unchanged and readable through
+the rollback window; rotate to a new file path instead of editing the old file
+in place. Missing or changed old files block recovery rather than substituting
+current values. Run as a trusted deployment identity controlling the parent
+directories: pre/post identity checks are not protection from malicious root
+path swaps. Keep the manifest's private paths and hashes outside Git and normal
+logs; CLI summaries contain only counts and fixed outcome codes.
+
 Schema and contracts use expand-contract evolution. The new migration must be
 safe for every Node/Go version that can run during rollout or automatic
 application rollback. Destructive cleanup occurs only after the old owner is
