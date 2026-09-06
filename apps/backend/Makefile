@@ -1,12 +1,22 @@
 GO ?= go
+NODE ?= node
 
-.PHONY: test test-race vet staticcheck vuln build generate check-generated integration-postgres verify
+.PHONY: test test-race vet staticcheck vuln build generate check-generated parity-p2p integration-postgres verify
 
 generate:
 	$(GO) generate ./internal/p2pcontract
 
 check-generated:
 	$(GO) test -count=1 ./internal/p2pcontract -run '^TestGeneratedP2PContractIsFresh$$'
+
+# Run both implementations in the same OS with a disposable, CGO-free binary.
+parity-p2p:
+	@set -eu; \
+	binary_dir=$$(mktemp -d); \
+	trap 'rm -f "$$binary_dir/p2p"; rmdir "$$binary_dir"' EXIT; \
+	CGO_ENABLED=0 $(GO) build -o "$$binary_dir/p2p" ./cmd/p2p; \
+	cd ../..; \
+	$(NODE) scripts/backend/p2p-parity.mjs --go-binary "$$binary_dir/p2p"
 
 test:
 	$(GO) test ./...

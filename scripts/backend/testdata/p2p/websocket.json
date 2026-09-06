@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "plaintext": {
+    "type": "message",
+    "body": "synthetic plaintext must not relay"
+  },
+  "secure": {
+    "type": "secure",
+    "v": 1,
+    "channel": "ws-chat",
+    "nonce": "fixture_nonce_-",
+    "ciphertext": "fixture_ciphertext_-",
+    "unknown": "ignored-on-relay"
+  },
+  "invalidEnvelope": {
+    "type": "secure",
+    "v": 1,
+    "channel": "ws-chat",
+    "nonce": "invalid=nonce",
+    "ciphertext": "fixture_ciphertext_-"
+  },
+  "leave": {
+    "type": "leave"
+  },
+  "missingRoomId": "not-found"
+}

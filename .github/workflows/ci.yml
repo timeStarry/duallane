@@ -100,8 +100,8 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
-      - name: Validate Go CI native dependency guard
-        run: node --test .github/tests/ci-go-native-dependencies.test.mjs
+      - name: Validate backend tooling guards
+        run: node --test .github/tests/ci-go-native-dependencies.test.mjs scripts/backend/p2p-parity.test.mjs
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

@@ -149,6 +149,47 @@ invite fragments, P2P payloads, or sensitive user data.
 
 ## 5. Contract Parity Harness
 
+### Executable P2P slice
+
+Run `pnpm backend:parity:p2p` (or `make -C apps/backend parity-p2p`) with
+Node 22+, Go and GNU Make on the same OS. On Windows, use WSL and prefer a
+Linux-native checkout with its own frozen-lockfile dependency install; cold
+imports on a Windows-mounted checkout may exhaust the startup bound. The Make
+target builds a disposable CGO-free P2P executable and removes it after the run.
+To reuse an explicitly built local binary:
+
+```bash
+node scripts/backend/p2p-parity.mjs --go-binary /absolute/path/to/p2p
+node --test scripts/backend/p2p-parity.test.mjs
+```
+
+The runner starts the actual Node server and Go candidate sequentially on the
+same ephemeral loopback port. It uses isolated temporary directories, synthetic
+fixtures, a minimal child environment and `WORKSPACE_ENABLED=false`. It does not
+accept a remote API endpoint or inherit database/provider credentials. Startup,
+request, frame-read and total-run waits are bounded; signals trigger child and
+temporary-data cleanup. Child logs are discarded, not retained as privacy proof.
+
+The initial fixture suite observes 20 HTTP responses and 19 WebSocket frames:
+health/default ICE, room creation/status/input boundaries, two peers, presence,
+secure relay, plaintext/invalid-envelope rejection, leave, full/missing rooms.
+The full JSON body/frame is compared, including error fields and omissions.
+Only generated room/peer identities (with relationships preserved), timestamps
+and release versions are normalized. Object key ordering is ignored, array
+ordering is retained. HTTP headers, close codes, expiry/reconnect, oversized
+input, TURN variants, browser fragments and log/storage absence are not covered
+by this initial suite; the gates below still apply.
+
+Exit zero means these observations match, not permission to route traffic.
+Any mismatch exits nonzero and reports case/field paths without response values.
+Do not replace error bodies with status-only assertions to make parity pass.
+The runner's unit guards run in CI; the cross-implementation command is separate
+from `make verify` while compatibility differences remain unresolved. Record
+observed differences and the exact tested source in the slice's evidence record;
+a working runner is not a blanket parity claim.
+
+### Extending coverage
+
 Build parity fixtures by capability, not one snapshot for the entire API. Each
 fixture contains synthetic input, prepared database/object state, expected
 public response, persisted changes, audit rows, event projections, and safe
