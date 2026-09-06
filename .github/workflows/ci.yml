@@ -104,6 +104,13 @@ jobs:
       - name: Verify shared Node and Go local storage layout
         run: node scripts/backend/workspace-files-legacy-parity.mjs
 
+      - name: Verify actual Node legacy emotes through Go HTTP and PostgreSQL
+        env:
+          TEST_DATABASE_URL: postgres://duallane:duallane-ci-password@127.0.0.1:5432/duallane?sslmode=disable
+        run: |
+          node --test scripts/backend/workspace-emotes-legacy-parity.test.mjs
+          node scripts/backend/workspace-emotes-legacy-parity.mjs --go
+
   quality-gate:
     name: Test, lint, build, and Chromium E2E
     runs-on: ubuntu-latest

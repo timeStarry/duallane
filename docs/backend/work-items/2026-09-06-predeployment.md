@@ -1758,3 +1758,11 @@ Parent independently passed the final emotes PostgreSQL/race suite (14.206
 seconds), Workspace command PostgreSQL/race (5.842) and tagged staticcheck.
 The real Node/Go fixture and runtime injection are accepted separately below;
 the domain alone does not claim application wiring or a production transition.
+
+The composition/fixture slice injects the real factory's legacy reader into
+emotes. Parent ran Node creation -> real Go PostgreSQL/session-authenticated
+HTTP -> Node recheck twice, including the final removed-entry compatibility
+correction. All five scenarios/seven records passed and each owned fixture was
+cleaned. The final three runner tests passed (4.564 seconds); a missing database
+is an error for the opt-in Go path, not a silent skip. CI now runs this same full
+sequence. These synthetic files contain no real user content.

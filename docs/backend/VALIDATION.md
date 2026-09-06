@@ -85,6 +85,27 @@ registries, WebSocket fanout, event delivery, presence, worker loops, and shared
 caches. Pin tools through the Go module mechanism, never an unbounded `latest`
 installation in CI. Missing prerequisites are an explicit remaining gate.
 
+### Actual Node Legacy Emote Compatibility
+
+With the pinned Node/Go dependencies and an explicit disposable PostgreSQL
+`TEST_DATABASE_URL`, run:
+
+```sh
+node --test scripts/backend/workspace-emotes-legacy-parity.test.mjs
+node scripts/backend/workspace-emotes-legacy-parity.mjs --go
+```
+
+The Node owner creates synthetic historical files and a small metadata manifest.
+The Go probe imports those rows into its own temporary PostgreSQL schema and
+uses the real Workspace application, session cookie and HTTP delivery path.
+Node then rechecks the same fixture. Cases cover a null-metadata clone chain,
+missing-canonical fallback, no-resource deletion, malformed keys and denied
+access. The runner cleans only its own temporary directory and reports success
+after cleanup. `--go` refuses a missing test database; without `--go`, the output
+explicitly says Go was not run. Neither mode uses production content or proves
+S3-provider interoperability. CI runs the full `--go` path separately from
+ordinary Go tests, where the fixture-dependent test is intentionally skipped.
+
 ### OpenAPI 3.1.2 generation gate
 
 [`apps/backend/api/p2p.yaml`](../../apps/backend/api/p2p.yaml) and
