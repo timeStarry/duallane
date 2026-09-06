@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { crc32 } from "node:zlib";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -75,6 +75,10 @@ const MIME_BY_FORMAT = Object.freeze({
 });
 
 const MAX_GO_WAIT_MS = 120_000;
+const DOCKER_CONTROL_TIMEOUT_MS = 15_000;
+const DOCKER_RUN_LABEL = "com.duallane.media-compat-run";
+const GO_IMAGE_PATTERN = /^sha256:[a-f0-9]{64}$/;
+const PROBE_ENV_MAX_BYTES = 4 * 1024;
 const PIXEL_SAMPLE_GRID = 7;
 const MAX_PIXEL_MEAN_ABS = 32;
 const MAX_PIXEL_ALPHA_ABS = 16;
@@ -85,7 +89,8 @@ const OWNER_ERROR_NAMES = new Set([
   "WorkspacePermissionError"
 ]);
 
-export async function runMediaCompatibility({ jsonOutput = false } = {}) {
+export async function runMediaCompatibility({ jsonOutput = false, goImage = undefined } = {}) {
+  const normalizedGoImage = parseGoImageReference(goImage);
   const testdata = JSON.parse(await readFile(testdataPath, "utf8"));
   if (testdata.version !== 1 || !Array.isArray(testdata.cases) || testdata.cases.length === 0) {
     throw new Error("media compatibility corpus has an unsupported shape");
@@ -124,7 +129,12 @@ export async function runMediaCompatibility({ jsonOutput = false } = {}) {
     const manifestPath = path.join(workDirectory, "manifest.json");
     const goReportPath = path.join(workDirectory, "go-report.json");
     await writeFile(manifestPath, JSON.stringify({ version: 1, cases: manifestCases }), { mode: 0o600 });
-    await runGoProbe({ manifestPath, goReportPath, workDirectory });
+    const probe = await runGoProbe({
+      manifestPath,
+      goReportPath,
+      workDirectory,
+      goImage: normalizedGoImage
+    });
     trace("Go probe complete");
     const goReport = JSON.parse(await readFile(goReportPath, "utf8"));
     if (goReport.version !== 1 || !Array.isArray(goReport.cases)) {
@@ -135,7 +145,7 @@ export async function runMediaCompatibility({ jsonOutput = false } = {}) {
     const report = {
       version: 1,
       baseCommit: await gitRevision(),
-      environment: await environmentReport(),
+      environment: await environmentReport({ probe, goImage: normalizedGoImage }),
       budgets: {
         processingConcurrency: 2,
         vipsConcurrency: 1,
@@ -482,7 +492,76 @@ function rejected(error) {
   return { accepted: false, error };
 }
 
-async function runGoProbe({ manifestPath, goReportPath, workDirectory }) {
+export function parseGoImageReference(value) {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || !GO_IMAGE_PATTERN.test(value)) {
+    throw new Error("--go-image must be an exact sha256:<64 lowercase hex> image ID");
+  }
+  return value;
+}
+
+export function buildNativeProbeContainerSpec({
+  image,
+  label,
+  manifestPath,
+  goReportPath,
+  workDirectory,
+  environmentPaths,
+  containerUser = nativeProbeContainerUser()
+}) {
+  const probeCommand = [
+    'mkdir -p "$GOCACHE"',
+    'go version > "$DUALLANE_MEDIA_COMPATIBILITY_GO_VERSION"',
+    'go env CGO_ENABLED > "$DUALLANE_MEDIA_COMPATIBILITY_GO_CGO"',
+    'pkg-config --modversion vips-cpp > "$DUALLANE_MEDIA_COMPATIBILITY_LIBVIPS"',
+    'exec go test -count=1 ./internal/platform/media -run "^TestMediaCompatibilityProbe$"'
+  ].join(" && ");
+  return {
+    image,
+    label,
+    environmentPaths,
+    args: [
+      "create",
+      "--rm",
+      "--label", `${DOCKER_RUN_LABEL}=${label}`,
+      "--network", "none",
+      "--cap-drop", "ALL",
+      "--security-opt", "no-new-privileges",
+      "--read-only",
+      // The build-target test binary executes from Go's temporary directory.
+      // This does not change the separate production runtime filesystem policy.
+      "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=2g",
+      "--user", containerUser,
+      "--mount", `type=bind,src=${workDirectory},dst=${workDirectory}`,
+      "--workdir", "/src/apps/backend",
+      "--env", "GOPROXY=off",
+      "--env", "GOCACHE=/tmp/duallane-go-build",
+      "--env", `DUALLANE_MEDIA_COMPATIBILITY_MANIFEST=${manifestPath}`,
+      "--env", `DUALLANE_MEDIA_COMPATIBILITY_OUTPUT=${goReportPath}`,
+      "--env", `DUALLANE_MEDIA_COMPATIBILITY_WORKDIR=${workDirectory}`,
+      "--env", `DUALLANE_MEDIA_COMPATIBILITY_GO_VERSION=${environmentPaths.goVersion}`,
+      "--env", `DUALLANE_MEDIA_COMPATIBILITY_GO_CGO=${environmentPaths.goCgo}`,
+      "--env", `DUALLANE_MEDIA_COMPATIBILITY_LIBVIPS=${environmentPaths.libvips}`,
+      image,
+      "/bin/sh",
+      "-c",
+      probeCommand
+    ]
+  };
+}
+
+export async function runGoProbe({ manifestPath, goReportPath, workDirectory, goImage, dockerRunner } = {}) {
+  const normalizedGoImage = parseGoImageReference(goImage);
+  if (normalizedGoImage) {
+    return await runNativeGoProbe({
+      manifestPath,
+      goReportPath,
+      workDirectory,
+      goImage: normalizedGoImage,
+      dockerRunner
+    });
+  }
+
   const goBinary = process.env.GO_BIN || "go";
   const environment = {
     ...process.env,
@@ -497,6 +576,129 @@ async function runGoProbe({ manifestPath, goReportPath, workDirectory }) {
     timeoutMs: MAX_GO_WAIT_MS
   });
   if (result.code !== 0) throw new Error(`Go compatibility probe failed with exit ${result.code ?? "signal"}`);
+  return { mode: "host", environmentPaths: null };
+}
+
+async function runNativeGoProbe({ manifestPath, goReportPath, workDirectory, goImage, dockerRunner }) {
+  const containerUser = nativeProbeContainerUser();
+  const runner = dockerRunner ?? createDockerRunner();
+  const imageID = await runner.inspectImage(goImage);
+  if (imageID !== goImage) {
+    throw new Error("Go image inspect did not confirm the requested image ID");
+  }
+
+  const environmentPaths = {
+    goVersion: path.join(workDirectory, "go-version.txt"),
+    goCgo: path.join(workDirectory, "go-cgo.txt"),
+    libvips: path.join(workDirectory, "libvips-version.txt")
+  };
+  const label = randomUUID();
+  const spec = buildNativeProbeContainerSpec({
+    image: imageID,
+    label,
+    manifestPath,
+    goReportPath,
+    workDirectory,
+    environmentPaths,
+    containerUser
+  });
+  let containerID;
+  try {
+    const createdContainerID = await runner.create(spec);
+    if (!/^[a-f0-9]{64}$/.test(createdContainerID)) {
+      throw new Error("native Go probe returned an invalid container ID");
+    }
+    containerID = createdContainerID;
+    const inspected = await runner.inspectContainer(containerID, label);
+    if (inspected.missing || inspected.id !== containerID || inspected.image !== imageID || inspected.label !== label) {
+      throw new Error("native Go probe container ownership could not be confirmed");
+    }
+    await runner.start(containerID, MAX_GO_WAIT_MS);
+  } finally {
+    if (containerID) await runner.remove(containerID, label);
+  }
+  return { mode: "native-container", environmentPaths, imageID };
+}
+
+function nativeProbeContainerUser() {
+  if (process.platform !== "linux" || typeof process.getuid !== "function" || typeof process.getgid !== "function") {
+    throw new Error("native Go probe requires Linux host UID/GID");
+  }
+  const uid = process.getuid();
+  const gid = process.getgid();
+  if (!Number.isSafeInteger(uid) || uid < 0 || !Number.isSafeInteger(gid) || gid < 0) {
+    throw new Error("native Go probe requires valid host UID/GID");
+  }
+  return `${uid}:${gid}`;
+}
+
+function createDockerRunner() {
+  const invoke = (args, timeoutMs = DOCKER_CONTROL_TIMEOUT_MS) => spawnBounded("docker", args, {
+    cwd: repositoryRoot,
+    env: process.env,
+    timeoutMs
+  });
+
+  return {
+    async inspectImage(image) {
+      const result = await invoke(["image", "inspect", "--format", "{{.Id}}", image]);
+      if (result.code !== 0 || result.stdout.trim() !== image) {
+        throw new Error("Go image inspect failed to confirm the exact local image ID");
+      }
+      return result.stdout.trim();
+    },
+
+    async create(spec) {
+      const result = await invoke(["create", ...spec.args.slice(1)]);
+      if (result.code !== 0) throw new Error("native Go probe container creation failed");
+      const containerID = result.stdout.trim();
+      if (!/^[a-f0-9]{64}$/.test(containerID)) {
+        throw new Error("native Go probe returned an invalid container ID");
+      }
+      return containerID;
+    },
+
+    async inspectContainer(containerID) {
+      const result = await invoke([
+        "container", "inspect", "--format",
+        `{{.Id}}\t{{.Image}}\t{{index .Config.Labels "${DOCKER_RUN_LABEL}"}}`,
+        containerID
+      ]);
+      if (result.code === 0) {
+        const fields = result.stdout.trim().split("\t");
+        if (fields.length !== 3 || !/^[a-f0-9]{64}$/.test(fields[0]) || !GO_IMAGE_PATTERN.test(fields[1])) {
+          throw new Error("native Go probe container inspection was malformed");
+        }
+        return { missing: false, id: fields[0], image: fields[1], label: fields[2] };
+      }
+
+      const listing = await invoke([
+        "container", "ls", "--all", "--no-trunc", "--filter", `id=${containerID}`, "--format", "{{.ID}}"
+      ]);
+      if (listing.code !== 0) throw new Error("native Go probe container inspection failed");
+      if (listing.stdout.trim() === "") return { missing: true };
+      throw new Error("native Go probe container inspection failed");
+    },
+
+    async start(containerID, timeoutMs) {
+      const result = await invoke(["start", "--attach", containerID], timeoutMs);
+      if (result.code !== 0) throw new Error("native Go probe container failed");
+    },
+
+    async remove(containerID, label) {
+      const before = await this.inspectContainer(containerID, label);
+      if (before.missing) return;
+      if (before.id !== containerID || before.label !== label) {
+        throw new Error("native Go probe cleanup ownership check failed");
+      }
+      const result = await invoke(["rm", "--force", containerID]);
+      if (result.code === 0) return;
+
+      const after = await this.inspectContainer(containerID, label);
+      if (after.missing) return;
+      throw new Error("native Go probe container cleanup failed");
+    }
+  };
 }
 
 async function compareReports(specs, nodeResults, goCases, workDirectory) {
@@ -717,7 +919,20 @@ function pixelSummary(pixels) {
   return { width: pixels.width, height: pixels.height, pages: pixels.pages, pageHeight: pixels.pageHeight, samples: samplePoints };
 }
 
-async function environmentReport() {
+export async function environmentReport({ probe = null, goImage = undefined } = {}) {
+  if (probe?.mode === "native-container") {
+    return {
+      node: process.version,
+      sharp: sharp.versions,
+      platform: `${process.platform}/${process.arch}`,
+      go: await readProbeEnvironmentValue(probe.environmentPaths.goVersion, "Go version", (value) => /^go version go\d+(?:\.\d+)+(?:[a-z]+\d*)?\s+\S+\/\S+$/.test(value)),
+      systemLibvips: await readProbeEnvironmentValue(probe.environmentPaths.libvips, "libvips version", (value) => /^\d+\.\d+(?:\.\d+)?(?:[-+~][0-9A-Za-z.-]+)?$/.test(value)),
+      goCgo: await readProbeEnvironmentValue(probe.environmentPaths.goCgo, "CGO_ENABLED", (value) => value === "1"),
+      goSource: "container",
+      goImage
+    };
+  }
+
   const goBinary = process.env.GO_BIN || "go";
   const go = await commandOutput(goBinary, ["version"], repositoryRoot);
   const cgo = await commandOutput(goBinary, ["env", "CGO_ENABLED"], repositoryRoot);
@@ -730,6 +945,31 @@ async function environmentReport() {
     systemLibvips: pkgConfig.trim(),
     goCgo: cgo.trim() || "unavailable"
   };
+}
+
+async function readProbeEnvironmentValue(filePath, fieldName, validate) {
+  let handle;
+  try {
+    handle = await open(filePath, "r");
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > PROBE_ENV_MAX_BYTES) {
+      throw new Error("oversized or non-file evidence");
+    }
+    const buffer = Buffer.alloc(PROBE_ENV_MAX_BYTES + 1);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    if (bytesRead > PROBE_ENV_MAX_BYTES) {
+      throw new Error("oversized evidence");
+    }
+    const value = buffer.subarray(0, bytesRead).toString("utf8").trim();
+    if (!value || value.includes("\u0000") || !validate(value)) {
+      throw new Error("invalid evidence");
+    }
+    return value;
+  } catch {
+    throw new Error(`native Go probe ${fieldName} evidence is invalid`);
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+  }
 }
 
 async function gitRevision() {
@@ -784,7 +1024,10 @@ async function spawnBounded(command, args, { cwd, env, timeoutMs }) {
 function printReport(report) {
   console.log(`Media compatibility: ${report.summary.failures === 0 ? "PASS" : "FAIL"}`);
   console.log(`Base commit: ${report.baseCommit}`);
-  console.log(`Environment: Node ${report.environment.node}, Sharp ${report.environment.sharp.sharp}, Sharp/libvips ${report.environment.sharp.vips}, Go ${report.environment.go}, system libvips ${report.environment.systemLibvips}`);
+  const goSource = report.environment.goSource === "container"
+    ? `container ${report.environment.goImage}`
+    : "host";
+  console.log(`Environment: Node ${report.environment.node}, Sharp ${report.environment.sharp.sharp}, Sharp/libvips ${report.environment.sharp.vips}, Go ${report.environment.go} (${goSource}), system libvips ${report.environment.systemLibvips}`);
   console.log(`Cases: ${report.summary.total}; accepted ${report.summary.accepted}; rejected ${report.summary.rejected}; pixel checks ${report.summary.pixelChecks}; failures ${report.summary.failures}`);
   console.log(`Pixel comparison: ${report.pixelComparison.gridPerPage}x${report.pixelComparison.gridPerPage} samples per page; color mean <= ${report.pixelComparison.maxColorMeanAbs}; alpha mean/max <= ${report.pixelComparison.maxAlphaMeanAbs}`);
   console.log(`Budgets: avatar input ${report.budgets.avatar.maxInputBytes}B/${report.budgets.avatar.maxInputPixels}px/${report.budgets.avatar.maxInputEdge}px; emote input ${report.budgets.customEmote.maxInputBytes}B/${report.budgets.customEmote.maxInputPixels}px/${report.budgets.customEmote.maxInputEdge}px/${report.budgets.customEmote.maxFrames} frames/${report.budgets.customEmote.maxDurationMs}ms; output ${report.budgets.customEmote.maxOutputBytes}B; processing concurrency ${report.budgets.processingConcurrency}`);
@@ -795,14 +1038,41 @@ function printReport(report) {
   }
 }
 
+export function parseMediaCompatibilityArguments(argv) {
+  const options = { jsonOutput: false, goImage: undefined };
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (argument === "--json") {
+      options.jsonOutput = true;
+      continue;
+    }
+    if (argument === "--go-image") {
+      const value = argv[index + 1];
+      if (value === undefined) throw new Error("--go-image requires an exact sha256:<64 lowercase hex> image ID");
+      options.goImage = parseGoImageReference(value);
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--go-image=")) {
+      options.goImage = parseGoImageReference(argument.slice("--go-image=".length));
+      continue;
+    }
+    throw new Error("unsupported media compatibility option");
+  }
+  return options;
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const jsonOutput = process.argv.includes("--json");
-  runMediaCompatibility({ jsonOutput }).catch((error) => {
-    if (jsonOutput) {
-      process.stderr.write(`${error.message}\n`);
-    } else {
-      console.error(`Media compatibility: FAIL (${error.message})`);
-    }
-    process.exitCode = 1;
-  });
+  Promise.resolve()
+    .then(() => parseMediaCompatibilityArguments(process.argv.slice(2)))
+    .then((options) => runMediaCompatibility(options))
+    .catch((error) => {
+      if (jsonOutput) {
+        process.stderr.write(`${error.message}\n`);
+      } else {
+        console.error(`Media compatibility: FAIL (${error.message})`);
+      }
+      process.exitCode = 1;
+    });
 }

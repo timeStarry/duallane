@@ -343,6 +343,23 @@ deduplication or an existing externally observable contract.
 Run media tests with bounded concurrency and observe peak memory. Imported emote
 assets and production user content are not test fixtures.
 
+`node --test scripts/backend/media-compatibility.test.mjs` runs the actual
+Node owners against the host Go/libvips toolchain. A host pass is not the native
+image gate. On a Linux Docker host, build the Workspace Dockerfile's `build`
+target from the reviewed snapshot, inspect its exact local image ID, then run
+`node scripts/backend/media-compatibility.mjs --go-image sha256:<64-hex-image-id>`.
+Tags are rejected. The runner checks the created container's ID, image and unique
+run label before starting it and removes only that owned container.
+
+The native probe has no network, capabilities or production mounts. Only its
+generated corpus directory is mounted read/write with the invoking Linux UID/GID;
+Go compiles in a bounded executable tmpfs. This build-target test does not loosen
+the production runtime's filesystem policy. The report reads actual Go/CGO and
+libvips versions from bounded container evidence files. It compares all existing
+metadata stripping, pixel, animation, rejection and resource-limit assertions
+without adjusting them for the native version. Record a mismatch as a failed
+image compatibility gate, even if the host tests passed.
+
 ## 9. Realtime And Failure Injection
 
 ### Workspace browser candidate

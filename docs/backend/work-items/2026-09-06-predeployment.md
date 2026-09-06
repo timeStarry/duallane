@@ -1827,3 +1827,21 @@ These checks only parse synthetic configuration and private fixtures; they do
 not start a container or inspect production secrets. The component is not yet
 the Go-to-Go release/rollback integration, and does not freeze external file
 contents or prove a live writer fence.
+
+### Exact-Image Media Corpus Runner And Remaining Failure
+
+The runner now accepts only an explicit exact local image ID for a native
+build-target probe and verifies its actual image/run identity before starting.
+Parent passed all eight host/runner tests (49.468 seconds; 28 media cases,
+16 accepted, 12 rejected, all pixel checks passing), then six focused tests
+after correcting the executable temporary-directory requirement.
+
+Actual native execution initially failed because Docker's tmpfs prevented the
+Go test binary from executing. After isolating and correcting that test-only
+configuration, the 8.14.1 probe completed: all 12 rejection contracts matched,
+but all 16 accepted outputs failed the unchanged metadata-stripping assertions.
+This is a real native compatibility/privacy failure, not a passing media gate.
+It is being fixed separately in the media owner; no tolerance or privacy
+assertion was relaxed. Owned probe containers and generated fixtures were
+removed. The tested build image remains the exact `863eb448...` image above,
+not a final release image.
