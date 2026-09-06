@@ -1742,3 +1742,19 @@ A separate real Docker create/inspect check confirmed that the local container's
 `Image` equals the inspected image ID on this daemon. That empty, never-started,
 network-isolated probe was removed by its verified exact ID. No database or
 production container was accessed by that check.
+
+### Bounded Legacy Emote Delivery
+
+The emote owner now reads exact identity-derived historical keys through the
+read-only legacy interface, retaining clone-chain/null-metadata compatibility.
+Only canonical absence permits fallback; canonical tombstones, identity/size/
+digest mismatches, malformed keys and provider failures do not. Parent review
+changed the first streaming draft to bounded complete verification before HTTP
+delivery and preserved removed-but-still-referenced library content, distinct
+from a deleted storage object. No-resource and invalid-key responses follow the
+actual Node owner; new integrity failures use safe content-free errors.
+
+Parent independently passed the final emotes PostgreSQL/race suite (14.206
+seconds), Workspace command PostgreSQL/race (5.842) and tagged staticcheck.
+The real Node/Go fixture and runtime injection are accepted separately below;
+the domain alone does not claim application wiring or a production transition.

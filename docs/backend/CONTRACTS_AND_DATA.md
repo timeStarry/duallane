@@ -258,6 +258,25 @@ owns canonical physical bytes. Go adapters preserve:
 Original filenames are logical resource metadata only and never form internal
 paths or object keys.
 
+Legacy emote reads use the read-only `LegacyReader`, not a canonical-object
+identity bypass. After actor/resource authorization, accept only the exact
+`custom-emotes/<owner>/<emote>/content.webp` or historical
+`workspace/custom-emotes/<owner>/<emote>/content.webp` key derived from the
+resolved source identity. Follow source-clone chains without inventing missing
+metadata. Only a genuinely missing canonical object may fall back; tombstoned
+registry rows, inconsistent identity/size/hash, malformed paths and provider
+failures must not resurrect legacy bytes.
+
+Before returning an emote body, consume at most its allowed size plus one byte
+(maximum 2 MiB plus the overage sentinel), validate exact size and the available
+digest, and close the source. A mismatch fails before HTTP delivery. Historical
+rows may have null size/hash; use bounded actual-object metadata rather than
+treating null as zero or fabricating a digest. A removed library entry whose
+storage is retained for message/clone references remains readable under Node's
+authorization contract; a removed registry object is a different, authoritative
+storage tombstone. New writes remain canonical and no legacy backfill runs on
+read. See the executable Node/Go fixture in [Validation](VALIDATION.md).
+
 ## 12. Logs, Metrics, Audit, And Errors
 
 HTTP request logs use an allowlist: request ID, method, matched route template,

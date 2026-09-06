@@ -28,6 +28,7 @@ type IDFactory func() (string, error)
 type ServiceOptions struct {
 	Repository              Repository
 	BlobStore               platformstorage.BlobStore
+	LegacyReader            platformstorage.LegacyReader
 	Catalog                 *Catalog
 	Processor               MediaProcessor
 	AttachmentContentReader AttachmentContentReader
@@ -39,6 +40,7 @@ type ServiceOptions struct {
 type Service struct {
 	repo                    Repository
 	blobStore               platformstorage.BlobStore
+	legacyReader            platformstorage.LegacyReader
 	catalog                 *Catalog
 	processor               MediaProcessor
 	attachmentContentReader AttachmentContentReader
@@ -82,7 +84,7 @@ func NewService(options ServiceOptions) *Service {
 		idFactory = defaultIDFactory
 	}
 	return &Service{
-		repo: options.Repository, blobStore: options.BlobStore, catalog: options.Catalog,
+		repo: options.Repository, blobStore: options.BlobStore, legacyReader: options.LegacyReader, catalog: options.Catalog,
 		processor: options.Processor, attachmentContentReader: options.AttachmentContentReader,
 		spaceID: spaceID, now: now, idFactory: idFactory,
 	}
@@ -1590,26 +1592,9 @@ func (s *Service) ReadContent(ctx context.Context, input ReadContentInput) (Deli
 	if limit <= 0 || limit > MaxOutputBytes {
 		limit = MaxOutputBytes
 	}
-	if resource.StorageObjectID != "" {
-		object, err := s.repo.GetStorageObject(ctx, resource.StorageObjectID, false)
-		if err != nil {
-			return Delivery{}, normalizeError(err)
-		}
-		if object == nil {
-			return Delivery{}, notFoundError(CodeEmoteStorageMissing, MessageEmoteStorageMissing)
-		}
-		opened, err := s.blobStore.Open(ctx, object.BlobObject(), limit)
-		if err != nil {
-			return Delivery{}, normalizeStorageError(err)
-		}
-		return Delivery{Body: opened.Body, ContentType: nonEmpty(resource.NormalizedMIMEType, "image/webp"), ByteSize: opened.ByteSize}, nil
-	}
-	if resource.StorageKey == "" || s.blobStore == nil {
-		return Delivery{}, notFoundError(CodeEmoteStorageMissing, MessageEmoteStorageMissing)
-	}
-	opened, err := s.blobStore.Open(ctx, platformstorage.Object{Key: resource.StorageKey, ByteSize: valueOrZero(resource.ByteSize), ContentType: nonEmpty(resource.NormalizedMIMEType, "image/webp")}, limit)
+	opened, err := s.openEmoteContent(ctx, resource, limit)
 	if err != nil {
-		return Delivery{}, normalizeStorageError(err)
+		return Delivery{}, err
 	}
 	return Delivery{Body: opened.Body, ContentType: nonEmpty(resource.NormalizedMIMEType, "image/webp"), ByteSize: opened.ByteSize}, nil
 }
@@ -1622,7 +1607,7 @@ func (s *Service) resolveResource(ctx context.Context, row *CustomEmoteRecord) (
 			return current, nil
 		}
 		if current.SourceCustomEmoteID == "" {
-			return nil, notFoundError(CodeEmoteStorageMissing, MessageEmoteStorageMissing)
+			return nil, notFoundError(CodeEmoteNotFound, MessageEmoteNotFound)
 		}
 		if _, ok := seen[current.ID]; ok {
 			return nil, internalError("resolve emote storage source", errors.New("custom emote source cycle"))
@@ -1634,7 +1619,7 @@ func (s *Service) resolveResource(ctx context.Context, row *CustomEmoteRecord) (
 		}
 		current = next
 	}
-	return nil, notFoundError(CodeEmoteStorageMissing, MessageEmoteStorageMissing)
+	return nil, notFoundError(CodeEmoteNotFound, MessageEmoteNotFound)
 }
 
 func valueOrZero(value *int64) int64 {
