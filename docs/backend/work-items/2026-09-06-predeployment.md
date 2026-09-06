@@ -121,3 +121,32 @@ All PostgreSQL checks above used synthetic data in isolated schemas of the
 task-owned disposable database. No production credentials, volumes, providers,
 notifications or deployment were used. The original draft domains and new
 worker slices remain under review until separately accepted below.
+
+- `d3f12da`: private Workspace/worker readiness rechecks required dependencies
+  with a two-second request budget and refuses readiness during shutdown. Local
+  storage inspection performs no writes or directory recreation. Scoped race
+  and staticcheck passed. A mounted command integration attempt overlapped an
+  incomplete worker Emote edit and could not compile; independent clean
+  `34e5d5e` command PostgreSQL/race tests subsequently passed.
+- `34e5d5e`: expanded P2P privacy/dependency/lifecycle/oversize/header/ICE
+  coverage, parser assertions, storage-artifact checks and close-frame parity.
+  Parent corrected the worker's initial 1000 close-code assumption: real Node
+  sends an empty close frame, observed as 1005. Node characterization passed
+  while old Go failed; the corrected candidate independently passed 21 HTTP /
+  22 WebSocket observations, fresh P2P/contract race tests, staticcheck and all
+  eight parity-runner unit tests. Browser/fragment acceptance is delegated and
+  remains open.
+
+### PR And Independent Gates
+
+[Draft PR #2](https://github.com/timeStarry/duallane/pull/2) is open. The first
+remote CI at `1dca0d3` passed both Go/PostgreSQL and Node/lint/build/Chromium E2E
+jobs. Those existing browser tests run against Node, not the new Go browser
+candidate. Clean `e5c1141` also passed `make verify` and a fresh complete
+`make integration-postgres` against the disposable task database. These gates
+exclude uncommitted worker slices and must be repeated after final integration.
+
+The GitHub connector could not create the PR with its integration permissions;
+the already-authenticated local GitHub CLI successfully created the same scoped
+draft. No token/permission settings changed. The PR remains draft until every
+pre-deployment acceptance item and aggregate review is complete.

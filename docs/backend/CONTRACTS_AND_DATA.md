@@ -110,6 +110,13 @@ Room-not-found, capacity, joined/left, peer list, reconnect grace, expiry, and
 close behavior require compatibility tests. The URL fragment containing `#k=`
 must never appear in an HTTP request or server-rendered/logged value.
 
+Node's room-full, room-not-found and explicit-leave paths use `ws.close()`
+without a status. Preserve that empty wire close frame: browser clients observe
+1005 (no status received), not an explicit normal-close 1000 or policy-close
+1008. The Go library's `StatusNoStatusRcvd` requests an empty frame; reserved
+status 1005 must never be encoded as an on-wire close code. The candidate parity
+runner asserts these observations independently against both implementations.
+
 ### Workspace
 
 The Workspace service preserves the `version: 1` hello/ready/event/error and
