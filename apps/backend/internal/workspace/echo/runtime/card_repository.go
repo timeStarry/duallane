@@ -33,6 +33,15 @@ func NewCardRepository(pool *pgxpool.Pool, cardRepository *cards.PGRepository, r
 	}
 }
 
+// Preserve the optional Bot authorization boundary across the action adapter.
+// Embedding only ReadRepository otherwise hides this concrete capability.
+func (r *CardRepository) CustomBotActive(ctx context.Context, spaceID, botID, botUserID string) (bool, error) {
+	if r == nil || r.base == nil {
+		return false, errors.New("card authorization repository is required")
+	}
+	return r.base.CustomBotActive(ctx, spaceID, botID, botUserID)
+}
+
 func (r *CardRepository) WithTx(ctx context.Context, callback func(cards.Tx) error) error {
 	if r == nil || r.pool == nil || r.base == nil || r.requirements == nil || r.solicitations == nil || callback == nil {
 		return errors.New("echo card transaction dependencies are required")
@@ -50,8 +59,13 @@ func (r *CardRepository) WithTx(ctx context.Context, callback func(cards.Tx) err
 	if !ok {
 		return errors.New("feishu card transaction bridge is unavailable")
 	}
+	botAuthorization, ok := r.base.NewTransaction(tx).(cards.CustomBotAuthorizer)
+	if !ok {
+		return errors.New("card authorization transaction bridge is unavailable")
+	}
 	view := &cardTransaction{
 		feishuCardTransaction: base,
+		CustomBotAuthorizer:   botAuthorization,
 		requirementTx:         r.requirements.NewTransaction(tx),
 		solicitationTx:        r.solicitations.NewTransaction(tx),
 	}
@@ -72,6 +86,7 @@ type feishuCardTransaction interface {
 
 type cardTransaction struct {
 	feishuCardTransaction
+	cards.CustomBotAuthorizer
 	requirementTx  requirements.Tx
 	solicitationTx solicitations.Tx
 }
@@ -80,3 +95,5 @@ func (tx *cardTransaction) RequirementTransaction() requirements.Tx   { return t
 func (tx *cardTransaction) SolicitationTransaction() solicitations.Tx { return tx.solicitationTx }
 
 var _ cards.Repository = (*CardRepository)(nil)
+var _ cards.CustomBotAuthorizer = (*CardRepository)(nil)
+var _ cards.CustomBotAuthorizer = (*cardTransaction)(nil)

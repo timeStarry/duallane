@@ -1299,3 +1299,18 @@ expanded real worker test passed in 4.068 seconds: reconstruction retains one
 message/card/delivery and one pending email/ntfy job each, with zero provider
 attempts. Schema cleanup failures are reported. No notification was sent and
 no production worker was enabled.
+
+### Composed Bot Card Authorization
+
+The full browser failure exposed a lost optional interface: Gateway card
+creation used the base transaction, but updates entered the Echo/Feishu action
+repository whose embedded read interface hid `CustomBotActive`. The adapter
+now forwards the base repository check and the same-transaction authorization
+view. It does not bypass inactive-Bot checks or open a nested transaction.
+
+An actual application HTTP regression now creates, acts on and updates the
+Feishu card through the composed Gateway. Independent PostgreSQL/race passed
+application/runtime (11.124/7.008 seconds), integration-tag staticcheck passed,
+and the unchanged full Bot owner/Gateway browser scenario passed (19.5 seconds;
+45.7 including startup). Existing Vite teardown ECONNRESET was observed. This
+fix does not claim the remaining Workspace browser failures are resolved.

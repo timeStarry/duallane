@@ -61,4 +61,19 @@ func assertFeishuHTTPComposition(t *testing.T, ctx context.Context, conn *pgx.Co
 	if !strings.Contains(payload, `"data":{"z":1,"a":"synthetic"}`) {
 		t.Fatalf("composed Feishu event lost validated canonical data: %s", payload)
 	}
+	// Gateway creation uses an outer card transaction, while updates use the
+	// composed action repository. Both must retain Bot owner authorization.
+	update := httptest.NewRequest(http.MethodPatch, "/api/bot-gateway/v1/cards/"+created.Card.ID, strings.NewReader(`{"expectedRevision":1,"fallbackText":"Updated synthetic card","format":"feishu-card","feishuCard":{"elements":[{"tag":"div","text":{"tag":"plain_text","content":"Updated synthetic card"}}]}}`))
+	update.Header.Set("Authorization", "Bearer "+token)
+	update.Header.Set("Content-Type", "application/json")
+	updated := httptest.NewRecorder()
+	app.handler.ServeHTTP(updated, update)
+	var updatedCard struct {
+		Card struct {
+			Revision int64 `json:"revision"`
+		} `json:"card"`
+	}
+	if updated.Code != http.StatusOK || json.Unmarshal(updated.Body.Bytes(), &updatedCard) != nil || updatedCard.Card.Revision != 2 {
+		t.Fatalf("composed Bot card update = %d %s", updated.Code, updated.Body.String())
+	}
 }
