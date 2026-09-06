@@ -227,7 +227,15 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			pool.Close()
 			return nil, err
 		}
-		authService := auth.NewService(auth.ServiceOptions{Store: auth.NewPGStore(pool)})
+		authService := auth.NewService(auth.ServiceOptions{Store: echoruntime.AuthStoreHooks{
+			AuthenticationStore: auth.NewPGStore(pool), SpaceID: auth.DefaultSpaceID,
+			Delivery: func() echoruntime.MemberDelivery {
+				if echoDelivery == nil {
+					return nil
+				}
+				return echoDelivery
+			},
+		}})
 		authHandler = auth.NewHTTPHandler(auth.HTTPHandler{
 			Service: authService, GitHub: github, Environment: runtimeConfig.Environment,
 			PublicBaseURL: runtimeConfig.PublicBaseURL, FrontendURL: runtimeConfig.FrontendURL,
@@ -438,7 +446,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		handler: httpapi.NewRouter(httpapi.RouterOptions{
 			Gate: workspaceGate, Health: gate.HealthHandler(healthInput), Readiness: readinessHandler(healthInput, databaseProbe, storageProbe),
 			AuthRoutes: authHandler, ActorResolver: authHandler, Invites: inviteService,
-			Members: memberService, Conversations: conversationService, Messages: messageService,
+			Members: echoruntime.MemberHooks{Service: memberService, Delivery: echoDelivery, SpaceID: auth.DefaultSpaceID}, Conversations: conversationService, Messages: messageService,
 			Avatars:             avatarService,
 			Cards:               echoruntime.CardHooks{CardService: cardService, Delivery: echoDelivery, SpaceID: auth.DefaultSpaceID},
 			Interactions:        echoruntime.InteractionHooks{InteractionService: interactionService, Delivery: echoDelivery, SpaceID: auth.DefaultSpaceID},

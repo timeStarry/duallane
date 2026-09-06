@@ -1250,3 +1250,17 @@ no token is issued. The Gateway scenario consumes the separate actual Node
 message-writer golden. Go OpenAPI/race validation passed (13.009 seconds), and
 the updated Node fixture freshness check passed. Negative schema validation
 rejects an extra author field in the deliberately smaller Gateway message DTO.
+
+### Member Post-Commit Echo Delivery
+
+Successful invite-backed GitHub authentication and human role updates now
+request a bounded five-second Echo member sync after the underlying transaction
+commits. The adapter does not forward GitHub profiles, invite hashes or secrets,
+and an ordinary login does not repeat invite delivery. Delivery failure cannot
+undo or misreport durable authentication/membership success. The independently
+composed member-reconciliation worker repairs missed hooks.
+
+Independent PostgreSQL/race passed application composition (7.221 seconds) and
+runtime (4.358); staticcheck and focused post-commit/failure tests passed. The
+worker recovery evidence is recorded separately; this hook does not grant any
+new production job ownership.
