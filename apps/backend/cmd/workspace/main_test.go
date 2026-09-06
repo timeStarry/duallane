@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -50,5 +51,15 @@ func TestNewBlobStoreUsesLocalDriverWithoutS3Secrets(t *testing.T) {
 	}
 	if _, ok := store.(*platformstorage.LocalBlobStore); !ok {
 		t.Fatalf("local store = %T", store)
+	}
+}
+
+func TestEnabledApplicationRejectsMissingCatalogBeforeOpeningDatabase(t *testing.T) {
+	t.Setenv("DATABASE_URL", "not a connection string")
+	app, err := newApplication(context.Background(), config.WorkspaceConfig{
+		Enabled: true, EmoteCatalogPath: filepath.Join(t.TempDir(), "missing.json"),
+	})
+	if app != nil || err == nil || !strings.Contains(err.Error(), "open emote catalog") {
+		t.Fatalf("application=%v error=%v", app, err)
 	}
 }

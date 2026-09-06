@@ -39,6 +39,7 @@ func TestLoadWorkspacePreservesRuntimeCompatibility(t *testing.T) {
 		"GITHUB_PROXY_URL":            "socks5://proxy:1080",
 		GitHubOAuthTimeoutEnvironment: "25000",
 		WorkspaceDataDirEnvironment:   "/srv/duallane-data",
+		WorkspaceEmoteCatalogEnv:      "/app/assets/emote-packs.json",
 		WorkspaceNtfyBaseEnvironment:  "https://ntfy.example.test",
 		WorkspaceNtfyWorkerEnabled:    "false",
 		WorkspaceEmailWorkerEnabled:   "false",
@@ -62,6 +63,9 @@ func TestLoadWorkspacePreservesRuntimeCompatibility(t *testing.T) {
 	}
 	if config.NtfyBaseURL != "https://ntfy.example.test" {
 		t.Fatalf("ntfy base URL = %q", config.NtfyBaseURL)
+	}
+	if config.EmoteCatalogPath != "/app/assets/emote-packs.json" {
+		t.Fatalf("emote catalog path = %q", config.EmoteCatalogPath)
 	}
 	if config.NtfyWorkerEnabled {
 		t.Fatal("WORKSPACE_NTFY_WORKER_ENABLED=false did not disable ntfy worker")
@@ -113,6 +117,25 @@ func TestLoadWorkspaceBoundsOAuthTimeoutAndRejectsInvalidPort(t *testing.T) {
 	}
 	if config.DataDir != DefaultWorkspaceDataDir {
 		t.Fatalf("default data dir = %q", config.DataDir)
+	}
+	if config.EmoteCatalogPath != DefaultWorkspaceEmoteCatalog {
+		t.Fatalf("default emote catalog path = %q", config.EmoteCatalogPath)
+	}
+}
+
+func TestWorkspaceCatalogValidationOnlyRequiresEnabledLane(t *testing.T) {
+	for _, enabled := range []string{"true", "false"} {
+		configuration, err := LoadWorkspaceFrom(configLookup(map[string]string{
+			WorkspaceEnabledEnvironment: enabled, WorkspaceEmoteCatalogEnv: "   ",
+		}))
+		if err != nil || configuration.EmoteCatalogPath != DefaultWorkspaceEmoteCatalog {
+			t.Fatalf("blank environment must select catalog default, err=%v", err)
+		}
+		configuration.EmoteCatalogPath = ""
+		err = configuration.Validate()
+		if (err != nil) != (enabled == "true") {
+			t.Fatalf("enabled=%s, empty catalog error=%v", enabled, err)
+		}
 	}
 }
 

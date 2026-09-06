@@ -12,6 +12,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/platform/config"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/httpserver"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/logging"
+	"github.com/timestarry/duallane/apps/backend/internal/platform/media"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/postgres"
 	platformstorage "github.com/timestarry/duallane/apps/backend/internal/platform/storage"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
@@ -97,9 +98,19 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	var topicService *topics.Service
 	var ntfyService *ntfy.Service
 	var emailService *email.Service
+	var emoteService *emotes.Service
 	var realtimeHandler http.Handler
 	if runtimeConfig.Enabled {
 		var err error
+		catalog, err := emotes.LoadCatalogFile(runtimeConfig.EmoteCatalogPath)
+		if err != nil {
+			return nil, err
+		}
+		// A single processor bounds native media concurrency across this process.
+		processor, err := media.NewProcessor(media.Options{})
+		if err != nil {
+			return nil, err
+		}
 		pool, err = postgres.OpenPoolFromEnv(ctx)
 		if err != nil {
 			return nil, err
@@ -162,11 +173,14 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			return nil, err
 		}
 		cardService = cards.NewService(cards.ServiceOptions{Repository: cards.NewPGRepository(pool), Registry: cardRegistry})
-		emoteReferenceService := emotes.NewService(emotes.ServiceOptions{Repository: emotes.NewPGRepository(pool)})
+		emoteService = emotes.NewService(emotes.ServiceOptions{
+			Repository: emotes.NewPGRepository(pool), BlobStore: blobStore,
+			Catalog: catalog, Processor: emoteMediaProcessor{processor: processor},
+		})
 		messageService = messages.NewService(messages.ServiceOptions{
 			Repository: messages.NewPGRepositoryWithMessageJobs(pool, jobScheduler), RequireMessageJobs: true,
 			AdvancedBlockValidator: messageblocks.NewValidator(messageblocks.ValidatorOptions{
-				Cards: cardService, Emotes: emoteReferenceService, Topics: topicService,
+				Cards: cardService, Emotes: emoteService, Topics: topicService,
 			}),
 		})
 		commandRegistry, err := interactions.NewCommandRegistry()
@@ -226,6 +240,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			Topics:      topicService,
 			Ntfy:        ntfyService,
 			Email:       emailService,
+			Emotes:      emoteService,
 			Bots:        botService,
 			Realtime:    realtimeHandler,
 			FrontendURL: runtimeConfig.FrontendURL, PublicBaseURL: runtimeConfig.PublicBaseURL,

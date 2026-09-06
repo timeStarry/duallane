@@ -92,6 +92,15 @@ Workspace encryption credentials. Secrets remain in environment variables only
 where already required or in Compose-mounted `0600` files; they are never build
 arguments, image layers, command-line flags, health output, or logs.
 
+The Go Workspace command loads the existing imported emote catalog through
+`DUALLANE_EMOTE_CATALOG_PATH`. The image sets `/app/assets/emote-packs.json`;
+local runs from `apps/backend` default to `../web/shared/emote-packs.json`.
+Enabled Workspace fails startup if the catalog cannot be read or decoded. A
+disabled Workspace does not open the catalog, initialize the native media
+processor, or connect to its database/object store. Media normalization uses
+one shared bounded processor; domain services retain authorization, logical
+quota, audit and storage-reference ownership.
+
 ## 6. Startup And Readiness
 
 Target dependency order:
