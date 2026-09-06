@@ -1386,3 +1386,23 @@ package (9.624 seconds), complete contract/race package (11.687), and three CI
 wiring tests. CI now runs 24 Node fixture commands. This review separately
 identified logical file-not-found 400/404 drift; its fix is tracked with the
 file-owner slice and is not claimed here.
+
+### Isolated Six-Service Gateway Candidate
+
+The candidate Compose project isolates Web, P2P, Workspace, worker, migration
+and PostgreSQL with project-owned synthetic volumes and one loopback Web port.
+Go processes run as 65532 and Web as 101; the Nginx cache tmpfs has explicit
+owner permissions. Only migration is one-shot. P2P has no database/storage
+configuration, secrets or mounts. Notifications default off. Public gateway
+routes explicitly deny all three private health/metrics paths.
+
+Parent independently passed the six-service Compose guard and started project
+`duallane-predeployment-stack-20260906`: five long-running containers became
+healthy and migration exited zero. Gateway smoke passed ten assertions on
+loopback port 18788, including the protocol-correct unauthenticated hello error
+and close 1008, security headers, private endpoint denial, and a content-free
+transient P2P room. The new gateway Web image ID is
+`sha256:6c3c24cc083a0f3a36e52603188c2098962df8b95e3b45db722cca750e38fcf8`.
+These are preliminary container checks: the backend image was an earlier
+candidate snapshot. Final full-commit images, passive mode, data permissions,
+worker behavior and rollback still require their separate rehearsal evidence.
