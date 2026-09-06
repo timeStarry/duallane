@@ -2830,6 +2830,11 @@ export function App() {
     if (conversationId) {
       advanceWorkspaceConversationEpoch(workspaceConversationMembershipEpochRef.current, conversationId);
       workspaceMarkReadInFlightRef.current.delete(conversationId);
+      setWorkspaceHistoryLoadingByConversation((current) => {
+        if (!(conversationId in current)) return current;
+        const { [conversationId]: _removed, ...rest } = current;
+        return rest;
+      });
       if (removeConversation) {
         workspaceConversationsRef.current = workspaceConversationsRef.current.filter((item) => item.id !== conversationId);
       }
@@ -4833,6 +4838,14 @@ export function App() {
     }
     const previousPermissions = workspaceBootstrap?.permissions;
     const previousRole = workspaceBootstrap?.auth.currentUser.role;
+    const readAccessRestored = Boolean(
+      !workspaceCanReadConversationsRef.current &&
+      data.permissions.canReadConversations
+    );
+    const downloadAccessRestored = Boolean(
+      !workspaceCanDownloadRef.current &&
+      data.permissions.canDownload
+    );
     if (
       previousPermissions &&
       (workspacePermissionsChanged(previousPermissions, data.permissions) ||
@@ -4849,6 +4862,24 @@ export function App() {
       setWorkspaceFiles([]);
       setWorkspaceLibraryFiles([]);
       setWorkspaceImagePreview(null);
+    }
+    if (readAccessRestored) {
+      if (data.conversations) {
+        workspaceConversationsRef.current = data.conversations;
+        setWorkspaceConversations(data.conversations);
+        setWorkspaceHistoryLoadingByConversation({});
+        setWorkspaceHistoryExhaustedByConversation({});
+      } else {
+        void refreshWorkspaceConversations().catch(() => undefined);
+      }
+    }
+    if (downloadAccessRestored) {
+      if (data.files) {
+        setWorkspaceFiles(data.files);
+        setWorkspaceLibraryFiles(data.files);
+      } else {
+        void refreshWorkspaceFiles().catch(() => undefined);
+      }
     }
     setWorkspaceBootstrap(data);
     setWorkspaceDirectoryMembers(data.members);
@@ -6181,15 +6212,34 @@ export function App() {
     if (!workspaceSelectedConversation || workspaceSelectedConversation.notificationLevel === level) {
       return;
     }
+    const conversationId = workspaceSelectedConversation.id;
+    const sessionEpoch = workspaceSessionEpochRef.current;
+    const accessEpoch = workspaceAccessEpochRef.current;
+    const membershipEpoch = currentWorkspaceConversationEpoch(
+      workspaceConversationMembershipEpochRef.current,
+      conversationId
+    );
     clearWorkspaceNotice();
     try {
       const data = await workspaceJson<{ conversation: WorkspaceConversation }>(
-        `/api/workspace/conversations/${encodeURIComponent(workspaceSelectedConversation.id)}/notification`,
+        `/api/workspace/conversations/${encodeURIComponent(conversationId)}/notification`,
         {
           method: "PATCH",
           body: JSON.stringify({ level })
         }
       );
+      if (
+        sessionEpoch !== workspaceSessionEpochRef.current ||
+        !isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current) ||
+        membershipEpoch !== currentWorkspaceConversationEpoch(
+          workspaceConversationMembershipEpochRef.current,
+          conversationId
+        ) ||
+        !workspaceCanReadConversationsRef.current ||
+        !workspaceConversationsRef.current.some((conversation) => conversation.id === conversationId)
+      ) {
+        return;
+      }
       setWorkspaceConversations((conversations) => upsertWorkspaceConversationList(conversations, data.conversation));
       showWorkspaceNotice("success", "会话提醒已更新");
     } catch (error) {

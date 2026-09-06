@@ -431,6 +431,60 @@ describe("workspace UI permission boundaries", () => {
     expect(tabFallbackSource).toContain('setWorkspaceSpaceTab("overview")');
   });
 
+  it("guards notification responses and hydrates only a current permission restoration", () => {
+    const source = readSource();
+    const notificationStart = source.indexOf("async function updateWorkspaceConversationNotification");
+    const notificationEnd = source.indexOf("async function loadOlderWorkspaceMessages", notificationStart);
+    expect(notificationStart).toBeGreaterThan(-1);
+    expect(notificationEnd).toBeGreaterThan(notificationStart);
+    const notificationSource = source.slice(notificationStart, notificationEnd);
+
+    expect(notificationSource).toContain("const conversationId = workspaceSelectedConversation.id;");
+    expect(notificationSource).toContain("const sessionEpoch = workspaceSessionEpochRef.current;");
+    expect(notificationSource).toContain("const accessEpoch = workspaceAccessEpochRef.current;");
+    expect(notificationSource).toContain("const membershipEpoch = currentWorkspaceConversationEpoch(");
+    expect(notificationSource).toContain("!isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current)");
+    expect(notificationSource).toContain("!workspaceCanReadConversationsRef.current");
+    expect(notificationSource).toContain("membershipEpoch !== currentWorkspaceConversationEpoch(");
+    expect(notificationSource).toContain("!workspaceConversationsRef.current.some((conversation) => conversation.id === conversationId)");
+    expect(notificationSource.indexOf("if (\n        sessionEpoch !== workspaceSessionEpochRef.current")).toBeLessThan(
+      notificationSource.indexOf("setWorkspaceConversations((conversations) => upsertWorkspaceConversationList")
+    );
+
+    const bootstrapStart = source.indexOf("async function refreshWorkspaceBootstrap");
+    const bootstrapEnd = source.indexOf("function clearWorkspaceClientState", bootstrapStart);
+    const bootstrapSource = source.slice(bootstrapStart, bootstrapEnd);
+    expect(bootstrapSource).toContain("const readAccessRestored = Boolean(");
+    expect(bootstrapSource).toContain(
+      "!workspaceCanReadConversationsRef.current"
+    );
+    expect(bootstrapSource).toContain("data.permissions.canReadConversations");
+    expect(bootstrapSource).toContain("if (readAccessRestored)");
+    expect(bootstrapSource).toContain("workspaceConversationsRef.current = data.conversations;");
+    expect(bootstrapSource).toContain("setWorkspaceConversations(data.conversations);");
+    expect(bootstrapSource).toContain("const downloadAccessRestored = Boolean(");
+    expect(bootstrapSource).toContain(
+      "!workspaceCanDownloadRef.current"
+    );
+    expect(bootstrapSource).toContain("data.permissions.canDownload");
+    expect(bootstrapSource).toContain("if (downloadAccessRestored)");
+    expect(bootstrapSource).toContain("setWorkspaceFiles(data.files);");
+    expect(bootstrapSource).toContain("setWorkspaceLibraryFiles(data.files);");
+  });
+
+  it("releases only the invalidated conversation history loading entry", () => {
+    const source = readSource();
+    const invalidateStart = source.indexOf("function invalidateWorkspaceConversationAccess");
+    const invalidateEnd = source.indexOf("function clearWorkspaceConversationAccessState", invalidateStart);
+    expect(invalidateStart).toBeGreaterThan(-1);
+    expect(invalidateEnd).toBeGreaterThan(invalidateStart);
+    const invalidateSource = source.slice(invalidateStart, invalidateEnd);
+    expect(invalidateSource).toContain("setWorkspaceHistoryLoadingByConversation((current) => {");
+    expect(invalidateSource).toContain("if (!(conversationId in current)) return current;");
+    expect(invalidateSource).toContain("const { [conversationId]: _removed, ...rest } = current;");
+    expect(invalidateSource).toContain("return rest;");
+  });
+
   it("uses targeted active-message refetch when realtime message payload is partial", () => {
     const source = readSource();
     const refreshStart = source.indexOf("async function refreshWorkspaceConversationMessages");
@@ -724,7 +778,7 @@ describe("workspace UI permission boundaries", () => {
     expect(source).toContain("function workspaceNotificationLevelLabel");
     expect(source).toContain("function workspaceNotificationLevelDescription");
     expect(source).toContain("async function updateWorkspaceConversationNotification");
-    expect(source).toContain('`/api/workspace/conversations/${encodeURIComponent(workspaceSelectedConversation.id)}/notification`');
+    expect(source).toContain('`/api/workspace/conversations/${encodeURIComponent(conversationId)}/notification`');
     expect(source).toContain("body: JSON.stringify({ level })");
     expect(source).toContain('if (event.type === "conversation.notification_updated")');
     expect(settingsSource).toContain("会话提醒");
