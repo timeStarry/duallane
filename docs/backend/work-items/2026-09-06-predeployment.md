@@ -865,3 +865,25 @@ forged-human Echo rejection and an outer failure rolling back the update/event.
 The existing card action and raw JSON tests also passed. Integration-tag
 staticcheck passed after correcting one capitalization diagnostic. This accepts
 the card write seam, not Echo's registered projection/action definitions.
+
+### Atomic Echo Message And Job Handoff
+
+The new runtime writer accepts only the fixed Echo identity, registered Echo
+card families, an active human recipient and a direct conversation. Configured
+typed card/message views share the delivery transaction; card references are
+validated against the newly written card inside that same transaction. The
+normal message service retains authorization, retention, idempotency, audit,
+event and required notification-job scheduling. No network sender is present.
+
+Node `index.mjs` and the real system-bot message writer establish that Echo
+enqueues preference-filtered email/ntfy work. The earlier delivery interface
+comment incorrectly prohibited that enqueue. `InternalOnly` now correctly means
+no external send in this transaction, not suppressed durable notification jobs.
+
+Independent fresh PostgreSQL/race passed runtime (3.647 seconds), delivery
+(9.383), messages (8.755) and application composition (4.549); focused staticcheck
+passed. A transaction-local synthetic scheduling probe verifies all writes roll
+back after a late scheduler failure, eight concurrent retries yield one message
+and one job, and a card revision refresh creates neither again. The probe cannot
+send notifications. Real notification preference fixtures, actual Node delivery
+effect comparisons, application registration and worker recovery remain gates.

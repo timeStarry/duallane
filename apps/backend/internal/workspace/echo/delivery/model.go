@@ -133,8 +133,9 @@ type CardMessageWriteInput struct {
 	ClientMessageID  string
 	ContentPlainText string
 	// InternalOnly is always true for Echo. The parent writer must reject a
-	// false value and must not schedule email, ntfy, webhook, or other external
-	// notification work for this internal Workspace delivery.
+	// false value and perform no external network delivery here. Preserve the
+	// normal message transaction's preference-filtered email/ntfy job enqueue;
+	// only the separately configured worker may send those durable jobs.
 	InternalOnly bool
 	Meta         auth.RequestMeta
 }
