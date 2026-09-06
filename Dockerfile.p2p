@@ -2,11 +2,13 @@ ARG GO_IMAGE=docker.m.daocloud.io/library/golang:1.26-bookworm
 ARG RUNTIME_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim
 
 FROM ${GO_IMAGE} AS build
+ARG GOPROXY=https://proxy.golang.org,direct
 WORKDIR /src/apps/backend
 COPY apps/backend/go.mod apps/backend/go.sum ./
 RUN go mod download
 COPY apps/backend ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/p2p ./cmd/p2p
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/p2p ./cmd/p2p \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/healthcheck ./cmd/healthcheck
 
 FROM ${RUNTIME_IMAGE} AS runtime
 ARG DUALLANE_APP_VERSION=0.0.0
@@ -18,6 +20,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/p2p /usr/local/bin/duallane-p2p
+COPY --from=build /out/healthcheck /usr/local/bin/duallane-healthcheck
 USER 65532:65532
 EXPOSE 8787
 ENTRYPOINT ["/usr/local/bin/duallane-p2p"]

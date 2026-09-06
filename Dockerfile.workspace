@@ -2,6 +2,7 @@ ARG GO_IMAGE=docker.m.daocloud.io/library/golang:1.26-bookworm
 ARG RUNTIME_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim
 
 FROM ${GO_IMAGE} AS build
+ARG GOPROXY=https://proxy.golang.org,direct
 ENV PATH="/usr/local/go/bin:${PATH}"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libvips-dev pkg-config \
@@ -12,7 +13,8 @@ RUN go mod download
 COPY apps/backend ./
 RUN CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/workspace ./cmd/workspace \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker \
-    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/healthcheck ./cmd/healthcheck
 
 FROM ${RUNTIME_IMAGE} AS runtime
 ARG DUALLANE_APP_VERSION=0.0.0
@@ -29,6 +31,7 @@ WORKDIR /app
 COPY --from=build /out/workspace /usr/local/bin/duallane-workspace
 COPY --from=build /out/worker /usr/local/bin/duallane-worker
 COPY --from=build /out/migrate /usr/local/bin/duallane-migrate
+COPY --from=build /out/healthcheck /usr/local/bin/duallane-healthcheck
 COPY apps/web/server/migrations /app/migrations
 COPY apps/web/shared/emote-packs.json /app/assets/emote-packs.json
 COPY apps/web/shared/echo-release-guides.json /app/assets/echo-release-guides.json

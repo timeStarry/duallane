@@ -125,6 +125,20 @@ authorized; this switch does not authorize cutover or start another writer.
 
 ## 6. Startup And Readiness
 
+Both candidate Go images include `/usr/local/bin/duallane-healthcheck`. It
+accepts one literal-loopback HTTP URL, only `/api/health` or `/readyz`, and
+performs a bounded read-only GET with no proxy/redirect or response logging.
+It requires HTTP 200 and `ok: true`; `/readyz` additionally requires state
+`ready`, so a healthy-but-disabled Workspace cannot pass candidate readiness.
+Image-specific Docker ignore files restrict build inputs and exclude local
+environment files, dependencies and runtime data. Use BuildKit; the legacy
+builder does not reliably apply these per-Dockerfile context rules.
+
+`GOPROXY` is an optional build-stage argument, defaulting to the Go public
+proxy/direct chain. Candidate builds may select a reachable public module
+proxy while retaining `go.sum` verification. Never pass credential-bearing
+proxy URLs as build arguments. This does not configure the runtime network.
+
 Target dependency order:
 
 1. PostgreSQL becomes healthy.

@@ -1206,3 +1206,18 @@ Node, with an explicit deduplicated-byte regression. The corrected PostgreSQL/
 race rerun passed in 12.307 seconds. Trusted owner coordination,
 CLI mutation admission and recovery remain separate uncompleted gates. No
 production schema, reference, object or quota was modified.
+
+### Candidate Health Probe And Build Inputs
+
+The loopback-only health helper passed independent race (4.030 seconds),
+CGO-disabled tests (3.017) and staticcheck. Both Go Dockerfiles build/copy it;
+per-image context allowlists exclude local environments, runtime data and
+dependencies. The first local legacy-builder attempt was stopped after it
+ignored the per-file context restriction. Installing only Ubuntu's buildx
+package required no daemon restart; the BuildKit P2P context was 5.44 MB.
+
+The first BuildKit build failed reaching the default Go module proxy. With the
+new build-only public `GOPROXY` override, the P2P image built and its real health
+probe exited zero in a non-root, read-only, network-none disposable container.
+Workspace image and full candidate gateway readiness remain uncompleted; no
+production container, daemon configuration or persistent volume was changed.
