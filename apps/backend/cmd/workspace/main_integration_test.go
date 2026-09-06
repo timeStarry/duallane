@@ -127,6 +127,19 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 	if err := app.pool.QueryRow(ctx, `SELECT COUNT(*) FROM audit_logs WHERE actor_user_id='composition-user' AND action='emote.create' AND result='success'`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("upload audit count=%d err=%v", count, err)
 	}
+	overage := httptest.NewRequest(http.MethodPost, "/api/workspace/me/emotes", nil)
+	overage.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: session.Token})
+	overage.ContentLength = emotes.MaxInputBytes + 1
+	unread := &forbiddenUploadBody{t: t}
+	overage.Body = unread
+	rejected := httptest.NewRecorder()
+	app.handler.ServeHTTP(rejected, overage)
+	if rejected.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("declared overage status = %d", rejected.Code)
+	}
+	if err := app.pool.QueryRow(ctx, `SELECT COUNT(*) FROM audit_logs WHERE actor_user_id='composition-user' AND action='emote.create' AND result='rejected' AND reason=$1`, emotes.CodeEmoteInputTooLarge).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("overage audit count=%d err=%v", count, err)
+	}
 
 	// A missing migration must fail readiness and a fresh startup before any
 	// object directory, session, seed or event-listener side effect is created.
@@ -155,3 +168,12 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 		t.Fatalf("refused startup touched storage: %v", err)
 	}
 }
+
+type forbiddenUploadBody struct{ t *testing.T }
+
+func (body *forbiddenUploadBody) Read([]byte) (int, error) {
+	body.t.Error("declared upload overage read the request body")
+	return 0, errors.New("request body must not be read")
+}
+
+func (*forbiddenUploadBody) Close() error { return nil }

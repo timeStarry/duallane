@@ -20,6 +20,12 @@ type emoteRoutesStub struct {
 	importInput   emotes.ImportShareInput
 	content       []byte
 	err           error
+	checkedLength int64
+}
+
+func (s *emoteRoutesStub) CheckUploadLength(_ context.Context, _ string, length int64, _ auth.RequestMeta) error {
+	s.checkedLength = length
+	return emotes.NewError(emotes.CodeEmoteInputTooLarge, emotes.MessageEmoteInputTooLarge, http.StatusRequestEntityTooLarge)
 }
 
 func (*emoteRoutesStub) GetSettings(context.Context, string) (emotes.EmoteSettings, error) {
@@ -145,6 +151,9 @@ func TestEmoteUploadBoundsAndContentIsPrivate(t *testing.T) {
 	router.ServeHTTP(response, tooLarge)
 	if response.Code != http.StatusRequestEntityTooLarge || !strings.Contains(response.Body.String(), emotes.CodeEmoteInputTooLarge) {
 		t.Fatalf("large upload status=%d body=%s", response.Code, response.Body.String())
+	}
+	if service.checkedLength != emotes.MaxInputBytes+1 || service.uploadInput.ActorID != "" {
+		t.Fatal("overage did not use the domain rejection preflight before upload")
 	}
 
 	response = httptest.NewRecorder()

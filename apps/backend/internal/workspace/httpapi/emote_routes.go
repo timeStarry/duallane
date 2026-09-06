@@ -20,6 +20,7 @@ type emoteService interface {
 	List(context.Context, string) ([]emotes.CustomEmote, emotes.EmoteUsage, emotes.EmoteLimits, error)
 	GetLibrary(context.Context, string) (emotes.PublicLibrary, error)
 	Upload(context.Context, emotes.UploadInput) (*emotes.CustomEmote, error)
+	CheckUploadLength(context.Context, string, int64, auth.RequestMeta) error
 	CreateBuiltinFavorite(context.Context, string, string, auth.RequestMeta) (*emotes.CustomEmote, error)
 	CreateCollection(context.Context, emotes.CreateCollectionInput) (emotes.Collection, error)
 	UpdateCollection(context.Context, emotes.UpdateCollectionInput) (emotes.Collection, error)
@@ -142,7 +143,7 @@ func uploadEmote(w http.ResponseWriter, r *http.Request, actor *auth.Actor, opti
 		return
 	}
 	if r.ContentLength > emotes.MaxInputBytes {
-		writeError(w, emotes.NewError(emotes.CodeEmoteInputTooLarge, emotes.MessageEmoteInputTooLarge, http.StatusRequestEntityTooLarge))
+		writeError(w, options.Emotes.CheckUploadLength(r.Context(), actor.ID, r.ContentLength, requestMeta(r, options)))
 		return
 	}
 	fileName, err := decodeEmoteFileName(r.Header.Get("X-DualLane-File-Name"))
