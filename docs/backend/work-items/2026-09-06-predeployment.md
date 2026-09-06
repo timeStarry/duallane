@@ -546,3 +546,37 @@ These are domain and adapter gates only. The HTTP routes, nonempty Echo
 automation registry, outer card rejection-audit policy, delivery worker and
 real composition still require separate acceptance. A domain rejection marker
 does not authorize committing unrelated prior writes in an outer transaction.
+
+### Echo Delivery Candidate Review
+
+The delivery coordinator and sixteen thin Echo HTTP declarations are now
+reviewed as a candidate foundation, not yet mounted in the application. Delivery
+claims, direct-conversation creation, typed card/message handoff, state and
+content-free evidence share the accepting transaction. Failed domain writes
+roll back before a separate failure record; a late failure cannot overwrite a
+concurrently completed delivery. The actual card/message writer remains a
+composition gate, not a success inferred from a fake writer.
+
+Parent review corrected three execution gaps: requirement recovery selected an
+empty submitter instead of all requirements; permanent first-page sent/exhausted
+rows could starve later work; and lease callbacks captured the outer context
+instead of the bounded lease context. Work now uses explicit ID cursors, returns
+partial progress, wraps at the end, and supports separately budgeted family
+processors. The worker must retain each family's cursor between periods. A
+single combined one-shot call is not a fairness guarantee between busy families.
+
+The accepting requirement delivery rechecks current owner-or-submitter access,
+and member/identity share locks protect authorization through commit. Existing
+conversation creation uses compatible share locks instead of lock upgrades;
+new deterministic IDs also include the space. Public operational JSON preserves
+Node's lower-case fields, publicId/version distinction, explicit successful null
+references and replay flag. It never includes the private card payload.
+
+Independent fresh PostgreSQL/race passed (6.467 seconds), including three pages
+for each delivery family and transaction-local role demotion. Unit regressions
+cover cancellation before an unfinished row, cursor continuation/wrap, separate
+family selection, the lease callback deadline and status-dependent public JSON.
+Echo HTTP/race passed (1.138 seconds), followed by integration-tag staticcheck
+for both HTTP and delivery. Six capitalization findings were corrected before
+the passing staticcheck run. Real command/router composition, actual Node/Go
+delivery effect fixtures and the full Workspace browser gate remain open.
