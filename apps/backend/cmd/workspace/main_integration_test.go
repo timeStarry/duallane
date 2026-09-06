@@ -174,6 +174,9 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 	if err := app.pool.QueryRow(ctx, `SELECT COUNT(*) FROM audit_logs WHERE actor_user_id='composition-user' AND action='emote.create' AND result='rejected' AND reason=$1`, emotes.CodeEmoteInputTooLarge).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("overage audit count=%d err=%v", count, err)
 	}
+	t.Run("favorite reads the authorized attachment through real storage and media", func(t *testing.T) {
+		assertEmoteFavoriteHTTPComposition(t, ctx, app, request)
+	})
 	t.Run("realtime publishes shared presence and removes only its own lease", func(t *testing.T) {
 		server := httptest.NewServer(app.handler)
 		defer server.Close()

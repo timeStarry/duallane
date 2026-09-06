@@ -331,6 +331,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		emoteService = emotes.NewService(emotes.ServiceOptions{
 			Repository: emotes.NewPGRepository(pool), BlobStore: blobStore,
 			Catalog: catalog, Processor: emoteMediaProcessor{processor: processor},
+			AttachmentContentReader: emoteAttachmentReader{files: fileService},
 		})
 		messageRepository := messages.NewPGRepositoryWithMessageJobs(pool, jobScheduler)
 		messageRepository.SetBuiltinEmoteSource(builtinEmoteSource)

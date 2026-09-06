@@ -21,6 +21,7 @@ type emoteService interface {
 	GetLibrary(context.Context, string) (emotes.PublicLibrary, error)
 	Upload(context.Context, emotes.UploadInput) (*emotes.CustomEmote, error)
 	CheckUploadLength(context.Context, string, int64, auth.RequestMeta) error
+	FavoriteFromMessage(context.Context, emotes.FavoriteFromMessageInput) (*emotes.CustomEmote, error)
 	CreateBuiltinFavorite(context.Context, string, string, auth.RequestMeta) (*emotes.CustomEmote, error)
 	CreateCollection(context.Context, emotes.CreateCollectionInput) (emotes.Collection, error)
 	UpdateCollection(context.Context, emotes.UpdateCollectionInput) (emotes.Collection, error)
@@ -172,11 +173,11 @@ func favoriteEmote(w http.ResponseWriter, r *http.Request, actor *auth.Actor, op
 	if !decodeBody(w, r, &body) {
 		return
 	}
-	if strings.TrimSpace(body.EmoteKey) == "" || body.AttachmentID != "" || body.CustomEmoteID != "" {
-		writeError(w, emotes.NewError(emotes.CodeEmoteProcessingUnavailable, emotes.MessageEmoteProcessingUnavailable, http.StatusNotImplemented))
-		return
-	}
-	result, err := options.Emotes.CreateBuiltinFavorite(r.Context(), actor.ID, body.EmoteKey, requestMeta(r, options))
+	result, err := options.Emotes.FavoriteFromMessage(r.Context(), emotes.FavoriteFromMessageInput{
+		ActorID: actor.ID, MessageID: body.MessageID, AttachmentID: body.AttachmentID,
+		EmoteKey: body.EmoteKey, CustomEmoteID: body.CustomEmoteID,
+		Meta: requestMeta(r, options),
+	})
 	writeResult(w, http.StatusCreated, map[string]any{"emote": result}, err)
 }
 

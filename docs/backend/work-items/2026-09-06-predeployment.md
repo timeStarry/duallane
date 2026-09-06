@@ -1664,3 +1664,12 @@ after source removal. Reference counts are derived from logical rows, not a
 separate counter column. Message visibility follows Node's pre-mutation check;
 this does not claim new same-transaction membership fencing. Legacy StorageKey-only
 emote delivery is a separate follow-up, not proved by canonical favorite tests.
+
+The separately reviewed HTTP/runtime slice removes the favorite 501/builtin-only
+shortcut. The handler forwards all source fields to the domain; the composition
+adapter calls the files authorized inline reader, preserves safe status/code and
+does not create a download reservation. Real enabled-application regression
+covers reserve/upload, message attachment association, favorite/media processing,
+WebP delivery, unchanged download ledger and revoked message access returning
+404. Parent passed complete Workspace command PostgreSQL/race (9.956 seconds),
+HTTP PostgreSQL/race (14.985) and tagged staticcheck with this final domain slice.

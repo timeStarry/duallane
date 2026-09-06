@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,12 +16,16 @@ import (
 )
 
 type emoteRoutesStub struct {
-	settingsInput emotes.UpdateSettingsInput
-	uploadInput   emotes.UploadInput
-	importInput   emotes.ImportShareInput
-	content       []byte
-	err           error
-	checkedLength int64
+	settingsInput  emotes.UpdateSettingsInput
+	uploadInput    emotes.UploadInput
+	favoriteInput  emotes.FavoriteFromMessageInput
+	favoriteResult *emotes.CustomEmote
+	importInput    emotes.ImportShareInput
+	content        []byte
+	err            error
+	favoriteErr    error
+	favoriteCalls  int
+	checkedLength  int64
 }
 
 func (s *emoteRoutesStub) CheckUploadLength(_ context.Context, _ string, length int64, _ auth.RequestMeta) error {
@@ -49,6 +54,14 @@ func (s *emoteRoutesStub) Upload(_ context.Context, input emotes.UploadInput) (*
 	}
 	s.content = content
 	return &emotes.CustomEmote{ID: "uploaded", Label: "Upload"}, s.err
+}
+func (s *emoteRoutesStub) FavoriteFromMessage(_ context.Context, input emotes.FavoriteFromMessageInput) (*emotes.CustomEmote, error) {
+	s.favoriteCalls++
+	s.favoriteInput = input
+	if s.favoriteResult == nil {
+		s.favoriteResult = &emotes.CustomEmote{ID: "favorite", Kind: "custom", Label: "Favorite"}
+	}
+	return s.favoriteResult, s.favoriteErr
 }
 func (*emoteRoutesStub) CreateBuiltinFavorite(context.Context, string, string, auth.RequestMeta) (*emotes.CustomEmote, error) {
 	return &emotes.CustomEmote{ID: "favorite"}, nil
@@ -139,6 +152,122 @@ func TestEmoteSettingsListAndUploadContracts(t *testing.T) {
 	router.ServeHTTP(upload, request)
 	if upload.Code != http.StatusCreated || service.uploadInput.ActorID != "actor-1" || service.uploadInput.CollectionID != "collection-1" || service.uploadInput.AddToLibrary || service.uploadInput.Source.FileName != "表情+1.png" || service.uploadInput.Source.MIMEType != "image/png" || string(service.content) != "image bytes" {
 		t.Fatalf("upload status=%d input=%#v content=%q body=%s", upload.Code, service.uploadInput, service.content, upload.Body.String())
+	}
+}
+
+func TestFavoriteEmotePassesEverySourceActorAndSafeRequestMeta(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		messageID  string
+		attachment string
+		emoteKey   string
+		customID   string
+	}{
+		{name: "builtin", body: `{"messageId":"msg-builtin","emoteKey":" bili:doge "}`, messageID: "msg-builtin", emoteKey: " bili:doge "},
+		{name: "attachment", body: `{"messageId":"msg-attachment","attachmentId":"att-1"}`, messageID: "msg-attachment", attachment: "att-1"},
+		{name: "custom", body: `{"messageId":"msg-custom","customEmoteId":"11111111-1111-1111-1111-111111111111"}`, messageID: "msg-custom", customID: "11111111-1111-1111-1111-111111111111"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := &emoteRoutesStub{}
+			router := NewRouter(RouterOptions{
+				Gate: gate.New("true"), ActorResolver: &fakeResolver{actor: &auth.Actor{ID: "actor-1", Kind: "human", Role: "member"}},
+				Emotes: service, TrustProxy: true,
+			})
+			request := httptest.NewRequest(http.MethodPost, "/api/workspace/me/emotes/favorite", strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("X-Request-ID", "favorite-route-request")
+			request.Header.Set("X-Forwarded-For", "198.51.100.8, 10.0.0.1")
+			request.Header.Set("User-Agent", "favorite-route-test")
+			response := httptest.NewRecorder()
+
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), `"id":"favorite"`) {
+				t.Fatalf("favorite response = %d %s", response.Code, response.Body.String())
+			}
+			input := service.favoriteInput
+			if service.favoriteCalls != 1 || input.ActorID != "actor-1" || input.MessageID != test.messageID {
+				t.Fatalf("favorite invocation = calls:%d input:%#v", service.favoriteCalls, input)
+			}
+			if input.AttachmentID != test.attachment || input.EmoteKey != test.emoteKey || input.CustomEmoteID != test.customID {
+				t.Fatalf("favorite source input = %#v", input)
+			}
+			if input.Meta.RequestID != "favorite-route-request" || input.Meta.IPAddress != "198.51.100.8" || input.Meta.UserAgent != "favorite-route-test" {
+				t.Fatalf("favorite request meta = %#v", input.Meta)
+			}
+		})
+	}
+}
+
+func TestFavoriteEmotePassesInvalidMultipleSourceToDomain(t *testing.T) {
+	service := &emoteRoutesStub{favoriteErr: emotes.NewError(emotes.CodeEmoteInvalidSource, emotes.MessageEmoteInvalidSource, http.StatusBadRequest)}
+	router := NewRouter(RouterOptions{
+		Gate: gate.New("true"), ActorResolver: &fakeResolver{actor: &auth.Actor{ID: "actor-1", Kind: "human", Role: "member"}}, Emotes: service,
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/workspace/me/emotes/favorite", strings.NewReader(`{"messageId":"msg-multi","attachmentId":"att-1","emoteKey":"bili:doge","customEmoteId":"11111111-1111-1111-1111-111111111111"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"`+emotes.CodeEmoteInvalidSource+`"`) || service.favoriteCalls != 1 {
+		t.Fatalf("invalid multiple source = status:%d calls:%d body:%s", response.Code, service.favoriteCalls, response.Body.String())
+	}
+	if service.favoriteInput.AttachmentID != "att-1" || service.favoriteInput.EmoteKey != "bili:doge" || service.favoriteInput.CustomEmoteID == "" {
+		t.Fatalf("invalid multiple source was rewritten = %#v", service.favoriteInput)
+	}
+}
+
+func TestFavoriteEmoteProjectsDomainErrorsWithoutLeakingCause(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status int
+		code   string
+		msg    string
+	}{
+		{name: "message missing", status: http.StatusNotFound, code: "message.not_found", msg: "消息不存在"},
+		{name: "permission removed", status: http.StatusForbidden, code: emotes.CodePermissionDenied, msg: emotes.MessagePermissionDenied},
+		{name: "source too large", status: http.StatusRequestEntityTooLarge, code: emotes.CodeEmoteSourceTooLarge, msg: emotes.MessageEmoteSourceTooLarge},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service := &emoteRoutesStub{favoriteErr: &emotes.Error{
+				Code: test.code, Message: test.msg, StatusCode: test.status,
+				Cause: errors.New("private filesystem path and sha256 secret"),
+			}}
+			router := NewRouter(RouterOptions{
+				Gate: gate.New("true"), ActorResolver: &fakeResolver{actor: &auth.Actor{ID: "actor-1", Kind: "human", Role: "member"}}, Emotes: service,
+			})
+			request := httptest.NewRequest(http.MethodPost, "/api/workspace/me/emotes/favorite", strings.NewReader(`{"messageId":"msg-error","attachmentId":"att-error"}`))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			body := response.Body.String()
+			if response.Code != test.status || service.favoriteCalls != 1 || !strings.Contains(body, `"code":"`+test.code+`"`) || !strings.Contains(body, test.msg) {
+				t.Fatalf("domain error = status:%d calls:%d body:%s", response.Code, service.favoriteCalls, body)
+			}
+			if strings.Contains(body, "private filesystem") || strings.Contains(body, "sha256 secret") {
+				t.Fatalf("domain error leaked cause: %s", body)
+			}
+		})
+	}
+}
+
+func TestFavoriteEmoteHonorsGateAndAuthBeforeService(t *testing.T) {
+	service := &emoteRoutesStub{}
+	resolver := &fakeResolver{actor: &auth.Actor{ID: "actor-1", Kind: "human", Role: "member"}}
+	disabled := NewRouter(RouterOptions{Gate: gate.New("false"), ActorResolver: resolver, Emotes: service})
+	request := httptest.NewRequest(http.MethodPost, "/api/workspace/me/emotes/favorite", strings.NewReader(`{"messageId":"secret-message","attachmentId":"secret-attachment"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	disabled.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || resolver.calls != 0 || service.favoriteCalls != 0 || strings.Contains(response.Body.String(), "secret-message") {
+		t.Fatalf("disabled favorite = status:%d resolver:%d calls:%d body:%s", response.Code, resolver.calls, service.favoriteCalls, response.Body.String())
+	}
+
+	unauthenticated := NewRouter(RouterOptions{Gate: gate.New("true"), Emotes: service})
+	response = httptest.NewRecorder()
+	unauthenticated.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/workspace/me/emotes/favorite", strings.NewReader(`{"messageId":"msg-unauth","emoteKey":"bili:doge"}`)))
+	if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), `"code":"auth.required"`) || service.favoriteCalls != 0 {
+		t.Fatalf("unauthenticated favorite = status:%d calls:%d body:%s", response.Code, service.favoriteCalls, response.Body.String())
 	}
 }
 
