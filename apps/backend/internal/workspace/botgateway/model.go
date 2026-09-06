@@ -319,8 +319,12 @@ type SendCardInput struct {
 	// RawFeishuCard preserves HTTP JSON presence/order for the Node-compatible
 	// Feishu conversion path. It is never persisted or hashed directly.
 	RawFeishuCard json.RawMessage
-	Fields        map[string]any
-	Meta          auth.RequestMeta
+	// RawFallbackText preserves HTTP JSON presence and UTF-16 units for the
+	// Feishu fallback validation/hash path. It is never trusted without the
+	// gateway's validation or persisted directly.
+	RawFallbackText json.RawMessage
+	Fields          map[string]any
+	Meta            auth.RequestMeta
 }
 
 type SendCardResult struct {
@@ -337,10 +341,11 @@ type UpdateCardInput struct {
 	FeishuCard       any
 	// RawPayload and RawFeishuCard preserve input presence for Node-compatible
 	// nullish selection. Only the converter's safe output is persisted.
-	RawPayload    json.RawMessage
-	RawFeishuCard json.RawMessage
-	Fields        map[string]any
-	Meta          auth.RequestMeta
+	RawPayload      json.RawMessage
+	RawFeishuCard   json.RawMessage
+	RawFallbackText json.RawMessage
+	Fields          map[string]any
+	Meta            auth.RequestMeta
 }
 
 type AttachmentRecord struct {

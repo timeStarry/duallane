@@ -791,6 +791,7 @@ func (s *Service) SendCard(ctx context.Context, value *Auth, input SendCardInput
 	encodedInput := cardIdempotencyInput{
 		ConversationID: conversation.ID,
 		CardType:       converted.CardType, SchemaVersion: converted.SchemaVersion, FallbackText: converted.FallbackText, Payload: converted.Payload,
+		HashFallbackJSON: converted.HashFallbackJSON,
 	}
 	if converted.Feishu {
 		// Feishu hashes the converter's safe, ordered output. The caller's
@@ -884,6 +885,7 @@ type normalizedGatewayCard struct {
 	FallbackText         string
 	Payload              any
 	RawPayload           json.RawMessage
+	HashFallbackJSON     json.RawMessage
 	Feishu               bool
 	NativePayloadPresent bool
 }
@@ -913,8 +915,16 @@ func normalizeGatewayCardCreate(input SendCardInput) (normalizedGatewayCard, err
 			return normalizedGatewayCard{}, err
 		}
 		fallback := converted.FallbackText
-		if fieldOrValuePresent(input.Fields, "fallbackText", input.FallbackText) {
-			fallback, err = normalizeFallback(input.FallbackText)
+		hashFallbackJSON := cloneRawJSON(converted.CanonicalFallbackJSON)
+		if fieldOrValuePresent(input.Fields, "fallbackText", input.FallbackText) || input.RawFallbackText != nil {
+			if input.RawFallbackText != nil {
+				fallback, hashFallbackJSON, err = normalizeRawFallbackJSON(input.RawFallbackText)
+			} else {
+				fallback, err = normalizeFallback(input.FallbackText)
+				if err == nil {
+					hashFallbackJSON, err = nodeJSONMarshal(fallback)
+				}
+			}
 			if err != nil {
 				return normalizedGatewayCard{}, err
 			}
@@ -922,7 +932,7 @@ func normalizeGatewayCardCreate(input SendCardInput) (normalizedGatewayCard, err
 		return normalizedGatewayCard{
 			CardType: feishucards.CardType, SchemaVersion: feishucards.SchemaVersion,
 			FallbackText: fallback, Payload: converted.Payload,
-			RawPayload: cloneRawJSON(converted.PayloadJSON), Feishu: true,
+			RawPayload: cloneRawJSON(converted.PayloadJSON), HashFallbackJSON: hashFallbackJSON, Feishu: true,
 		}, nil
 	}
 
@@ -960,8 +970,12 @@ func normalizeGatewayCardUpdate(input UpdateCardInput) (normalizedGatewayCard, e
 		return normalizedGatewayCard{}, err
 	}
 	fallback := converted.FallbackText
-	if fieldPresent(input.Fields, "fallbackText") {
-		fallback, err = normalizeFallback(input.Fields["fallbackText"])
+	if fieldPresent(input.Fields, "fallbackText") || input.RawFallbackText != nil {
+		if input.RawFallbackText != nil {
+			fallback, _, err = normalizeRawFallbackJSON(input.RawFallbackText)
+		} else {
+			fallback, err = normalizeFallback(input.Fields["fallbackText"])
+		}
 	} else if input.FallbackText != nil {
 		fallback, err = normalizeFallback(*input.FallbackText)
 	}

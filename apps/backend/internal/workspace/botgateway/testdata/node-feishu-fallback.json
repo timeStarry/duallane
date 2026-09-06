@@ -1,0 +1,1152 @@
+{
+  "contract": "node-bot-gateway-feishu-fallback-v1",
+  "source": "apps/web/server/routes/workspace-bot-gateway.mjs + services/workspace-bot-gateway.mjs + services/workspace-card-interactions.mjs + routes/workspace-cards.mjs",
+  "database": "synthetic-sqlite",
+  "observations": [
+    {
+      "name": "default-header-title-lone-surrogate",
+      "input": {
+        "header": {
+          "title": {
+            "tag": "plain_text",
+            "content": "\ud800 title"
+          }
+        },
+        "elements": [
+          {
+            "tag": "div",
+            "text": {
+              "tag": "plain_text",
+              "content": "body"
+            }
+          }
+        ]
+      },
+      "createStatus": 201,
+      "createCard": {
+        "id": "card_fixture",
+        "botId": "bot_fixture",
+        "spaceId": "spc_default",
+        "conversationId": "conv_feishu_fallback",
+        "cardType": "feishu.adaptive.v1",
+        "schemaVersion": 1,
+        "payload": {
+          "format": "duallane.feishu-card.v1",
+          "config": {
+            "version": "1.0",
+            "wideScreen": false
+          },
+          "header": {
+            "title": "\ud800 title",
+            "tone": "neutral"
+          },
+          "elements": [
+            {
+              "type": "text",
+              "format": "plain",
+              "text": "body"
+            }
+          ]
+        },
+        "fallbackText": "� title",
+        "revision": 1,
+        "status": "active",
+        "createdAt": "2026-09-06T09:10:11.123Z",
+        "updatedAt": "2026-09-06T09:10:11.123Z"
+      },
+      "createFallbackText": {
+        "value": "� title",
+        "json": "\"� title\"",
+        "codeUnits": [
+          65533,
+          32,
+          116,
+          105,
+          116,
+          108,
+          101
+        ],
+        "codePoints": [
+          65533,
+          32,
+          116,
+          105,
+          116,
+          108,
+          101
+        ]
+      },
+      "getStatus": 200,
+      "getCard": {
+        "id": "card_fixture",
+        "spaceId": "spc_default",
+        "conversationId": "conv_feishu_fallback",
+        "block": {
+          "type": "card",
+          "cardId": "card_fixture",
+          "cardType": "feishu.adaptive.v1",
+          "schemaVersion": 1,
+          "fallbackText": "� title"
+        },
+        "payload": {
+          "format": "duallane.feishu-card.v1",
+          "config": {
+            "version": "1.0",
+            "wideScreen": false
+          },
+          "header": {
+            "title": "\ud800 title",
+            "tone": "neutral"
+          },
+          "elements": [
+            {
+              "type": "text",
+              "format": "plain",
+              "text": "body"
+            }
+          ]
+        },
+        "status": "active",
+        "revision": 1,
+        "createdAt": "2026-09-06T09:10:11.123Z",
+        "updatedAt": "2026-09-06T09:10:11.123Z",
+        "actions": [
+          "cancel",
+          "confirm",
+          "refresh",
+          "submit"
+        ]
+      },
+      "getFallbackText": {
+        "value": "� title",
+        "json": "\"� title\"",
+        "codeUnits": [
+          65533,
+          32,
+          116,
+          105,
+          116,
+          108,
+          101
+        ],
+        "codePoints": [
+          65533,
+          32,
+          116,
+          105,
+          116,
+          108,
+          101
+        ]
+      },
+      "dbFallbackText": {
+        "value": "� title",
+        "json": "\"� title\"",
+        "codeUnits": [
+          65533,
+          32,
+          116,
+          105,
+          116,
+          108,
+          101
+        ],
+        "codePoints": [
+          65533,
+          32,
+          116,
+          105,
+          116,
+          108,
+          101
+        ]
+      },
+      "dbPayloadHeaderTitle": {
+        "value": "\ud800 title",
+        "json": "\"\\ud800 title\"",
+        "codeUnits": [
+          55296,
+          32,
+          116,
+          105,
+          116,
+          108,
+          101
+        ],
+        "codePoints": [
+          55296,
+          32,
+          116,
+          105,
+          116,
+          108,
+          101
+        ]
+      },
+      "dbPayloadFirstText": {
+        "value": "body",
+        "json": "\"body\"",
+        "codeUnits": [
+          98,
+          111,
+          100,
+          121
+        ],
+        "codePoints": [
+          98,
+          111,
+          100,
+          121
+        ]
+      },
+      "hashInputFallbackText": {
+        "value": "\ud800 title",
+        "json": "\"\\ud800 title\"",
+        "codeUnits": [
+          55296,
+          32,
+          116,
+          105,
+          116,
+          108,
+          101
+        ],
+        "codePoints": [
+          55296,
+          32,
+          116,
+          105,
+          116,
+          108,
+          101
+        ]
+      },
+      "hashInputJSON": "{\"conversationId\":\"conv_feishu_fallback\",\"cardType\":\"feishu.adaptive.v1\",\"schemaVersion\":1,\"fallbackText\":\"\\ud800 title\",\"payload\":{\"format\":\"duallane.feishu-card.v1\",\"config\":{\"version\":\"1.0\",\"wideScreen\":false},\"header\":{\"title\":\"\\ud800 title\",\"tone\":\"neutral\"},\"elements\":[{\"type\":\"text\",\"format\":\"plain\",\"text\":\"body\"}]}}",
+      "requestHash": "06e2e7d3139914a33290d708c24b830560854cdbaf12ff0c109c45b670cf8029",
+      "normalizedFallbackHash": "1972abef87a49854e59bc95fca88ef725ad8f2c2515aecc8940ed9f96ad7ff78",
+      "hashDiffersWhenFallbackUsesDBValue": true
+    },
+    {
+      "name": "default-markdown-lone-surrogate",
+      "input": {
+        "elements": [
+          {
+            "tag": "markdown",
+            "content": "\ud800 markdown"
+          }
+        ]
+      },
+      "createStatus": 201,
+      "createCard": {
+        "id": "card_fixture",
+        "botId": "bot_fixture",
+        "spaceId": "spc_default",
+        "conversationId": "conv_feishu_fallback",
+        "cardType": "feishu.adaptive.v1",
+        "schemaVersion": 1,
+        "payload": {
+          "format": "duallane.feishu-card.v1",
+          "config": {
+            "version": "1.0",
+            "wideScreen": false
+          },
+          "header": null,
+          "elements": [
+            {
+              "type": "text",
+              "format": "markdown",
+              "text": "\ud800 markdown"
+            }
+          ]
+        },
+        "fallbackText": "� markdown",
+        "revision": 1,
+        "status": "active",
+        "createdAt": "2026-09-06T09:10:11.123Z",
+        "updatedAt": "2026-09-06T09:10:11.123Z"
+      },
+      "createFallbackText": {
+        "value": "� markdown",
+        "json": "\"� markdown\"",
+        "codeUnits": [
+          65533,
+          32,
+          109,
+          97,
+          114,
+          107,
+          100,
+          111,
+          119,
+          110
+        ],
+        "codePoints": [
+          65533,
+          32,
+          109,
+          97,
+          114,
+          107,
+          100,
+          111,
+          119,
+          110
+        ]
+      },
+      "getStatus": 200,
+      "getCard": {
+        "id": "card_fixture",
+        "spaceId": "spc_default",
+        "conversationId": "conv_feishu_fallback",
+        "block": {
+          "type": "card",
+          "cardId": "card_fixture",
+          "cardType": "feishu.adaptive.v1",
+          "schemaVersion": 1,
+          "fallbackText": "� markdown"
+        },
+        "payload": {
+          "format": "duallane.feishu-card.v1",
+          "config": {
+            "version": "1.0",
+            "wideScreen": false
+          },
+          "header": null,
+          "elements": [
+            {
+              "type": "text",
+              "format": "markdown",
+              "text": "\ud800 markdown"
+            }
+          ]
+        },
+        "status": "active",
+        "revision": 1,
+        "createdAt": "2026-09-06T09:10:11.123Z",
+        "updatedAt": "2026-09-06T09:10:11.123Z",
+        "actions": [
+          "cancel",
+          "confirm",
+          "refresh",
+          "submit"
+        ]
+      },
+      "getFallbackText": {
+        "value": "� markdown",
+        "json": "\"� markdown\"",
+        "codeUnits": [
+          65533,
+          32,
+          109,
+          97,
+          114,
+          107,
+          100,
+          111,
+          119,
+          110
+        ],
+        "codePoints": [
+          65533,
+          32,
+          109,
+          97,
+          114,
+          107,
+          100,
+          111,
+          119,
+          110
+        ]
+      },
+      "dbFallbackText": {
+        "value": "� markdown",
+        "json": "\"� markdown\"",
+        "codeUnits": [
+          65533,
+          32,
+          109,
+          97,
+          114,
+          107,
+          100,
+          111,
+          119,
+          110
+        ],
+        "codePoints": [
+          65533,
+          32,
+          109,
+          97,
+          114,
+          107,
+          100,
+          111,
+          119,
+          110
+        ]
+      },
+      "dbPayloadHeaderTitle": null,
+      "dbPayloadFirstText": {
+        "value": "\ud800 markdown",
+        "json": "\"\\ud800 markdown\"",
+        "codeUnits": [
+          55296,
+          32,
+          109,
+          97,
+          114,
+          107,
+          100,
+          111,
+          119,
+          110
+        ],
+        "codePoints": [
+          55296,
+          32,
+          109,
+          97,
+          114,
+          107,
+          100,
+          111,
+          119,
+          110
+        ]
+      },
+      "hashInputFallbackText": {
+        "value": "\ud800 markdown",
+        "json": "\"\\ud800 markdown\"",
+        "codeUnits": [
+          55296,
+          32,
+          109,
+          97,
+          114,
+          107,
+          100,
+          111,
+          119,
+          110
+        ],
+        "codePoints": [
+          55296,
+          32,
+          109,
+          97,
+          114,
+          107,
+          100,
+          111,
+          119,
+          110
+        ]
+      },
+      "hashInputJSON": "{\"conversationId\":\"conv_feishu_fallback\",\"cardType\":\"feishu.adaptive.v1\",\"schemaVersion\":1,\"fallbackText\":\"\\ud800 markdown\",\"payload\":{\"format\":\"duallane.feishu-card.v1\",\"config\":{\"version\":\"1.0\",\"wideScreen\":false},\"header\":null,\"elements\":[{\"type\":\"text\",\"format\":\"markdown\",\"text\":\"\\ud800 markdown\"}]}}",
+      "requestHash": "09b0e2070ed39517d5566ebc8e0013fb803bead533ecc51588640cdcdc91e9ff",
+      "normalizedFallbackHash": "48d093eb439f64933593aaccb208150afc840e04a44e2d0fe6579edc40b5accf",
+      "hashDiffersWhenFallbackUsesDBValue": true
+    },
+    {
+      "name": "explicit-lone-surrogate",
+      "input": {
+        "elements": [
+          {
+            "tag": "div",
+            "text": {
+              "tag": "plain_text",
+              "content": "body"
+            }
+          }
+        ]
+      },
+      "fallbackText": "\ud800 explicit",
+      "createStatus": 201,
+      "createCard": {
+        "id": "card_fixture",
+        "botId": "bot_fixture",
+        "spaceId": "spc_default",
+        "conversationId": "conv_feishu_fallback",
+        "cardType": "feishu.adaptive.v1",
+        "schemaVersion": 1,
+        "payload": {
+          "format": "duallane.feishu-card.v1",
+          "config": {
+            "version": "1.0",
+            "wideScreen": false
+          },
+          "header": null,
+          "elements": [
+            {
+              "type": "text",
+              "format": "plain",
+              "text": "body"
+            }
+          ]
+        },
+        "fallbackText": "� explicit",
+        "revision": 1,
+        "status": "active",
+        "createdAt": "2026-09-06T09:10:11.123Z",
+        "updatedAt": "2026-09-06T09:10:11.123Z"
+      },
+      "createFallbackText": {
+        "value": "� explicit",
+        "json": "\"� explicit\"",
+        "codeUnits": [
+          65533,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ],
+        "codePoints": [
+          65533,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ]
+      },
+      "getStatus": 200,
+      "getCard": {
+        "id": "card_fixture",
+        "spaceId": "spc_default",
+        "conversationId": "conv_feishu_fallback",
+        "block": {
+          "type": "card",
+          "cardId": "card_fixture",
+          "cardType": "feishu.adaptive.v1",
+          "schemaVersion": 1,
+          "fallbackText": "� explicit"
+        },
+        "payload": {
+          "format": "duallane.feishu-card.v1",
+          "config": {
+            "version": "1.0",
+            "wideScreen": false
+          },
+          "header": null,
+          "elements": [
+            {
+              "type": "text",
+              "format": "plain",
+              "text": "body"
+            }
+          ]
+        },
+        "status": "active",
+        "revision": 1,
+        "createdAt": "2026-09-06T09:10:11.123Z",
+        "updatedAt": "2026-09-06T09:10:11.123Z",
+        "actions": [
+          "cancel",
+          "confirm",
+          "refresh",
+          "submit"
+        ]
+      },
+      "getFallbackText": {
+        "value": "� explicit",
+        "json": "\"� explicit\"",
+        "codeUnits": [
+          65533,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ],
+        "codePoints": [
+          65533,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ]
+      },
+      "dbFallbackText": {
+        "value": "� explicit",
+        "json": "\"� explicit\"",
+        "codeUnits": [
+          65533,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ],
+        "codePoints": [
+          65533,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ]
+      },
+      "dbPayloadHeaderTitle": null,
+      "dbPayloadFirstText": {
+        "value": "body",
+        "json": "\"body\"",
+        "codeUnits": [
+          98,
+          111,
+          100,
+          121
+        ],
+        "codePoints": [
+          98,
+          111,
+          100,
+          121
+        ]
+      },
+      "hashInputFallbackText": {
+        "value": "\ud800 explicit",
+        "json": "\"\\ud800 explicit\"",
+        "codeUnits": [
+          55296,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ],
+        "codePoints": [
+          55296,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ]
+      },
+      "hashInputJSON": "{\"conversationId\":\"conv_feishu_fallback\",\"cardType\":\"feishu.adaptive.v1\",\"schemaVersion\":1,\"fallbackText\":\"\\ud800 explicit\",\"payload\":{\"format\":\"duallane.feishu-card.v1\",\"config\":{\"version\":\"1.0\",\"wideScreen\":false},\"header\":null,\"elements\":[{\"type\":\"text\",\"format\":\"plain\",\"text\":\"body\"}]}}",
+      "requestHash": "16a3f02386549f93297f1e09206108093e53325e6cd37b109b1ebba6e26a9745",
+      "normalizedFallbackHash": "8c287c9630bce6a1110582cdf0b1c623323b7b78f2b0cec5872fbdf469e48119",
+      "hashDiffersWhenFallbackUsesDBValue": true
+    },
+    {
+      "name": "explicit-bom-trim",
+      "input": {
+        "elements": [
+          {
+            "tag": "div",
+            "text": {
+              "tag": "plain_text",
+              "content": "body"
+            }
+          }
+        ]
+      },
+      "fallbackText": "﻿  BOM explicit  ﻿",
+      "createStatus": 201,
+      "createCard": {
+        "id": "card_fixture",
+        "botId": "bot_fixture",
+        "spaceId": "spc_default",
+        "conversationId": "conv_feishu_fallback",
+        "cardType": "feishu.adaptive.v1",
+        "schemaVersion": 1,
+        "payload": {
+          "format": "duallane.feishu-card.v1",
+          "config": {
+            "version": "1.0",
+            "wideScreen": false
+          },
+          "header": null,
+          "elements": [
+            {
+              "type": "text",
+              "format": "plain",
+              "text": "body"
+            }
+          ]
+        },
+        "fallbackText": "BOM explicit",
+        "revision": 1,
+        "status": "active",
+        "createdAt": "2026-09-06T09:10:11.123Z",
+        "updatedAt": "2026-09-06T09:10:11.123Z"
+      },
+      "createFallbackText": {
+        "value": "BOM explicit",
+        "json": "\"BOM explicit\"",
+        "codeUnits": [
+          66,
+          79,
+          77,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ],
+        "codePoints": [
+          66,
+          79,
+          77,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ]
+      },
+      "getStatus": 200,
+      "getCard": {
+        "id": "card_fixture",
+        "spaceId": "spc_default",
+        "conversationId": "conv_feishu_fallback",
+        "block": {
+          "type": "card",
+          "cardId": "card_fixture",
+          "cardType": "feishu.adaptive.v1",
+          "schemaVersion": 1,
+          "fallbackText": "BOM explicit"
+        },
+        "payload": {
+          "format": "duallane.feishu-card.v1",
+          "config": {
+            "version": "1.0",
+            "wideScreen": false
+          },
+          "header": null,
+          "elements": [
+            {
+              "type": "text",
+              "format": "plain",
+              "text": "body"
+            }
+          ]
+        },
+        "status": "active",
+        "revision": 1,
+        "createdAt": "2026-09-06T09:10:11.123Z",
+        "updatedAt": "2026-09-06T09:10:11.123Z",
+        "actions": [
+          "cancel",
+          "confirm",
+          "refresh",
+          "submit"
+        ]
+      },
+      "getFallbackText": {
+        "value": "BOM explicit",
+        "json": "\"BOM explicit\"",
+        "codeUnits": [
+          66,
+          79,
+          77,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ],
+        "codePoints": [
+          66,
+          79,
+          77,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ]
+      },
+      "dbFallbackText": {
+        "value": "BOM explicit",
+        "json": "\"BOM explicit\"",
+        "codeUnits": [
+          66,
+          79,
+          77,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ],
+        "codePoints": [
+          66,
+          79,
+          77,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ]
+      },
+      "dbPayloadHeaderTitle": null,
+      "dbPayloadFirstText": {
+        "value": "body",
+        "json": "\"body\"",
+        "codeUnits": [
+          98,
+          111,
+          100,
+          121
+        ],
+        "codePoints": [
+          98,
+          111,
+          100,
+          121
+        ]
+      },
+      "hashInputFallbackText": {
+        "value": "BOM explicit",
+        "json": "\"BOM explicit\"",
+        "codeUnits": [
+          66,
+          79,
+          77,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ],
+        "codePoints": [
+          66,
+          79,
+          77,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ]
+      },
+      "hashInputJSON": "{\"conversationId\":\"conv_feishu_fallback\",\"cardType\":\"feishu.adaptive.v1\",\"schemaVersion\":1,\"fallbackText\":\"BOM explicit\",\"payload\":{\"format\":\"duallane.feishu-card.v1\",\"config\":{\"version\":\"1.0\",\"wideScreen\":false},\"header\":null,\"elements\":[{\"type\":\"text\",\"format\":\"plain\",\"text\":\"body\"}]}}",
+      "requestHash": "010f217c014813e24928b565619c09526946425066593380be81e968cf60d454",
+      "normalizedFallbackHash": "010f217c014813e24928b565619c09526946425066593380be81e968cf60d454",
+      "hashDiffersWhenFallbackUsesDBValue": false
+    },
+    {
+      "name": "explicit-astral",
+      "input": {
+        "elements": [
+          {
+            "tag": "div",
+            "text": {
+              "tag": "plain_text",
+              "content": "body"
+            }
+          }
+        ]
+      },
+      "fallbackText": "  😀 explicit  ",
+      "createStatus": 201,
+      "createCard": {
+        "id": "card_fixture",
+        "botId": "bot_fixture",
+        "spaceId": "spc_default",
+        "conversationId": "conv_feishu_fallback",
+        "cardType": "feishu.adaptive.v1",
+        "schemaVersion": 1,
+        "payload": {
+          "format": "duallane.feishu-card.v1",
+          "config": {
+            "version": "1.0",
+            "wideScreen": false
+          },
+          "header": null,
+          "elements": [
+            {
+              "type": "text",
+              "format": "plain",
+              "text": "body"
+            }
+          ]
+        },
+        "fallbackText": "😀 explicit",
+        "revision": 1,
+        "status": "active",
+        "createdAt": "2026-09-06T09:10:11.123Z",
+        "updatedAt": "2026-09-06T09:10:11.123Z"
+      },
+      "createFallbackText": {
+        "value": "😀 explicit",
+        "json": "\"😀 explicit\"",
+        "codeUnits": [
+          55357,
+          56832,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ],
+        "codePoints": [
+          128512,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ]
+      },
+      "getStatus": 200,
+      "getCard": {
+        "id": "card_fixture",
+        "spaceId": "spc_default",
+        "conversationId": "conv_feishu_fallback",
+        "block": {
+          "type": "card",
+          "cardId": "card_fixture",
+          "cardType": "feishu.adaptive.v1",
+          "schemaVersion": 1,
+          "fallbackText": "😀 explicit"
+        },
+        "payload": {
+          "format": "duallane.feishu-card.v1",
+          "config": {
+            "version": "1.0",
+            "wideScreen": false
+          },
+          "header": null,
+          "elements": [
+            {
+              "type": "text",
+              "format": "plain",
+              "text": "body"
+            }
+          ]
+        },
+        "status": "active",
+        "revision": 1,
+        "createdAt": "2026-09-06T09:10:11.123Z",
+        "updatedAt": "2026-09-06T09:10:11.123Z",
+        "actions": [
+          "cancel",
+          "confirm",
+          "refresh",
+          "submit"
+        ]
+      },
+      "getFallbackText": {
+        "value": "😀 explicit",
+        "json": "\"😀 explicit\"",
+        "codeUnits": [
+          55357,
+          56832,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ],
+        "codePoints": [
+          128512,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ]
+      },
+      "dbFallbackText": {
+        "value": "😀 explicit",
+        "json": "\"😀 explicit\"",
+        "codeUnits": [
+          55357,
+          56832,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ],
+        "codePoints": [
+          128512,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ]
+      },
+      "dbPayloadHeaderTitle": null,
+      "dbPayloadFirstText": {
+        "value": "body",
+        "json": "\"body\"",
+        "codeUnits": [
+          98,
+          111,
+          100,
+          121
+        ],
+        "codePoints": [
+          98,
+          111,
+          100,
+          121
+        ]
+      },
+      "hashInputFallbackText": {
+        "value": "😀 explicit",
+        "json": "\"😀 explicit\"",
+        "codeUnits": [
+          55357,
+          56832,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ],
+        "codePoints": [
+          128512,
+          32,
+          101,
+          120,
+          112,
+          108,
+          105,
+          99,
+          105,
+          116
+        ]
+      },
+      "hashInputJSON": "{\"conversationId\":\"conv_feishu_fallback\",\"cardType\":\"feishu.adaptive.v1\",\"schemaVersion\":1,\"fallbackText\":\"😀 explicit\",\"payload\":{\"format\":\"duallane.feishu-card.v1\",\"config\":{\"version\":\"1.0\",\"wideScreen\":false},\"header\":null,\"elements\":[{\"type\":\"text\",\"format\":\"plain\",\"text\":\"body\"}]}}",
+      "requestHash": "b0ae09ecd799c63b5d6def553645b23b51385588ed7916235459f9e34fa4234d",
+      "normalizedFallbackHash": "b0ae09ecd799c63b5d6def553645b23b51385588ed7916235459f9e34fa4234d",
+      "hashDiffersWhenFallbackUsesDBValue": false
+    },
+    {
+      "name": "explicit-empty",
+      "input": {
+        "elements": [
+          {
+            "tag": "div",
+            "text": {
+              "tag": "plain_text",
+              "content": "body"
+            }
+          }
+        ]
+      },
+      "fallbackText": "",
+      "createStatus": 400,
+      "errorCode": "card.invalid_fallback"
+    },
+    {
+      "name": "explicit-null",
+      "input": {
+        "elements": [
+          {
+            "tag": "div",
+            "text": {
+              "tag": "plain_text",
+              "content": "body"
+            }
+          }
+        ]
+      },
+      "fallbackText": null,
+      "createStatus": 400,
+      "errorCode": "card.invalid_fallback"
+    }
+  ]
+}

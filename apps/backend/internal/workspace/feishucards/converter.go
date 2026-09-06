@@ -90,14 +90,20 @@ func (c *Converter) convertRaw(raw []byte) (Result, error) {
 	if err := json.Unmarshal(encoded, &typed); err != nil {
 		return Result{}, validationError(CodeInvalidPayload, "卡片映射结果无效")
 	}
-	fallback := deriveFallback(converted)
+	fallbackUnits := deriveFallbackUnits(converted)
+	fallback := string(utf16.Decode(fallbackUnits))
+	canonicalFallbackJSON, err := marshalNodeStringUnits(fallbackUnits, fallback)
+	if err != nil {
+		return Result{}, err
+	}
 	return Result{
-		CardType:      CardType,
-		SchemaVersion: SchemaVersion,
-		Payload:       typed,
-		FallbackText:  fallback,
-		PayloadJSON:   cloneBytes(encoded),
-		HashJSON:      cloneBytes(encoded),
+		CardType:              CardType,
+		SchemaVersion:         SchemaVersion,
+		Payload:               typed,
+		FallbackText:          fallback,
+		PayloadJSON:           cloneBytes(encoded),
+		HashJSON:              cloneBytes(encoded),
+		CanonicalFallbackJSON: cloneBytes(canonicalFallbackJSON),
 	}, nil
 }
 
@@ -593,12 +599,14 @@ var (
 	headerTones     = map[string]string{"blue": "info", "green": "success", "orange": "warning", "red": "danger", "grey": "neutral", "gray": "neutral"}
 )
 
-func deriveFallback(payload orderedValue) string {
+func deriveFallbackUnits(payload orderedValue) []uint16 {
 	candidates := make([]string, 0, 1+len(payload.array))
+	candidateUnits := make([][]uint16, 0, 1+len(payload.array))
 	if header, ok := payload.field("header"); ok && header.kind == jsonObject {
 		if title, ok := header.field("title"); ok {
 			if value, ok := stringValue(title); ok {
 				candidates = append(candidates, value)
+				candidateUnits = append(candidateUnits, valueUnits(title))
 			}
 		}
 	}
@@ -607,39 +615,48 @@ func deriveFallback(payload orderedValue) string {
 			typeValue, _ := stringValue(fieldOrNull(element, "type"))
 			switch typeValue {
 			case "text":
-				if text, ok := stringValue(fieldOrNull(element, "text")); ok {
+				textValue := fieldOrNull(element, "text")
+				if text, ok := stringValue(textValue); ok {
 					candidates = append(candidates, text)
+					candidateUnits = append(candidateUnits, valueUnits(textValue))
 				}
 			case "note":
 				parts := fieldOrNull(element, "parts")
 				if parts.kind == jsonArray {
 					values := make([]string, 0, len(parts.array))
+					units := make([]uint16, 0)
 					for _, part := range parts.array {
-						if text, ok := stringValue(fieldOrNull(part, "text")); ok {
+						textValue := fieldOrNull(part, "text")
+						if text, ok := stringValue(textValue); ok {
+							if len(units) > 0 {
+								units = append(units, utf16Units(" ")...)
+							}
 							values = append(values, text)
+							units = append(units, valueUnits(textValue)...)
 						}
 					}
 					candidates = append(candidates, strings.Join(values, " "))
+					candidateUnits = append(candidateUnits, units)
 				}
 			}
 		}
 	}
-	for _, candidate := range candidates {
-		candidate = nodeTrimSpace(candidate)
-		if candidate != "" {
-			return truncateNodeString(candidate, 240)
+	for index, candidate := range candidates {
+		units := trimNodeSpaceUnits(candidateUnits[index])
+		if candidate != "" && len(units) > 0 {
+			return truncateNodeStringUnits(units, 240)
 		}
 	}
-	return DefaultFallback
+	return utf16Units(DefaultFallback)
 }
 
-func truncateNodeString(value string, limit int) string {
-	units := utf16.Encode([]rune(value))
+func truncateNodeStringUnits(units []uint16, limit int) []uint16 {
 	if len(units) <= limit {
-		return value
+		return cloneUnits(units)
 	}
 	if limit <= 3 {
-		return string(utf16.Decode(units[:limit]))
+		return cloneUnits(units[:limit])
 	}
-	return string(utf16.Decode(units[:limit-3])) + "..."
+	result := cloneUnits(units[:limit-3])
+	return append(result, utf16Units("...")...)
 }

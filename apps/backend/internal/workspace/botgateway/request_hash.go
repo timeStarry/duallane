@@ -20,12 +20,13 @@ type messageIdempotencyInput struct {
 }
 
 type cardIdempotencyInput struct {
-	ConversationID string          `json:"conversationId"`
-	CardType       string          `json:"cardType"`
-	SchemaVersion  int             `json:"schemaVersion"`
-	FallbackText   string          `json:"fallbackText"`
-	Payload        any             `json:"payload"`
-	RawPayload     json.RawMessage `json:"-"`
+	ConversationID   string          `json:"conversationId"`
+	CardType         string          `json:"cardType"`
+	SchemaVersion    int             `json:"schemaVersion"`
+	FallbackText     string          `json:"fallbackText"`
+	Payload          any             `json:"payload"`
+	RawPayload       json.RawMessage `json:"-"`
+	HashFallbackJSON json.RawMessage `json:"-"`
 }
 
 type nodeRawJSON []byte
@@ -63,11 +64,15 @@ func (value cardIdempotencyInput) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	fallbackText := any(value.FallbackText)
+	if len(value.HashFallbackJSON) > 0 {
+		fallbackText = nodeRawJSON(value.HashFallbackJSON)
+	}
 	return marshalNodeObject(
 		nodeField{key: "conversationId", value: value.ConversationID},
 		nodeField{key: "cardType", value: value.CardType},
 		nodeField{key: "schemaVersion", value: value.SchemaVersion},
-		nodeField{key: "fallbackText", value: value.FallbackText},
+		nodeField{key: "fallbackText", value: fallbackText},
 		nodeField{key: "payload", value: nodeRawJSON(payload)},
 	)
 }

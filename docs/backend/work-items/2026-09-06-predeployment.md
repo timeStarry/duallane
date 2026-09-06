@@ -1164,3 +1164,18 @@ viewports); the release scenario still failed waiting for its card after the
 success title appeared. The PG test confirms durable release delivery, but live
 browser projection is not yet accepted. Release result-counter parity and
 durable recovery are also open; this commit is not whole-Echo parity.
+
+### Feishu Fallback Hash Compatibility
+
+Feishu conversion now retains a validated hash-only UTF-16 representation for
+its generated fallback. The HTTP boundary also preserves explicit fallback
+presence/raw JSON through validation, including lone surrogate units and
+JavaScript trimming. Only canonical validated values enter the hash; database,
+message and public fallback strings still use replacement-safe Unicode. Native
+card hashing is unchanged.
+
+Independent PostgreSQL/race passed botgateway (38.754 seconds), HTTP API (12.723),
+Feishu (23.972) and application composition (11.211). Integration-tag staticcheck
+and seven actual Node fixture cases passed. Parent added Go rejection assertions
+for the fixture's empty/null cases and made synthetic schema cleanup errors
+visible; focused PostgreSQL/race then passed gateway (4.002) and HTTP (4.402).

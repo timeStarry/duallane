@@ -98,6 +98,10 @@ type Result struct {
 	FallbackText  string  `json:"fallbackText"`
 	PayloadJSON   []byte  `json:"-"`
 	HashJSON      []byte  `json:"-"`
+	// CanonicalFallbackJSON is hash-only. It preserves the validated
+	// converter fallback's UTF-16 code units for Node JSON.stringify parity;
+	// callers must continue persisting FallbackText instead.
+	CanonicalFallbackJSON []byte `json:"-"`
 }
 
 // Definition is intentionally independent of the storage service. Parent

@@ -314,7 +314,7 @@ func botGatewayCardInput(fields map[string]json.RawMessage, meta auth.RequestMet
 		IdempotencyKey: objectFieldString(fields, "idempotencyKey"), CardType: objectFieldAny(fields, "cardType"),
 		SchemaVersion: objectFieldAny(fields, "schemaVersion"), FallbackText: objectFieldAny(fields, "fallbackText"),
 		Payload: objectFieldAny(fields, "payload"), RawPayload: fields["payload"], Format: objectFieldString(fields, "format"),
-		FeishuCard: objectFieldAny(fields, "feishuCard"), RawFeishuCard: fields["feishuCard"], Fields: values, Meta: meta,
+		FeishuCard: objectFieldAny(fields, "feishuCard"), RawFeishuCard: fields["feishuCard"], RawFallbackText: fields["fallbackText"], Fields: values, Meta: meta,
 	}
 }
 
@@ -326,7 +326,7 @@ func botGatewayCardUpdateInput(fields map[string]json.RawMessage, meta auth.Requ
 	return botgateway.UpdateCardInput{
 		ExpectedRevision: fieldInt64OrZero(fields, "expectedRevision"), Payload: objectFieldAny(fields, "payload"),
 		FallbackText: fallback, Status: objectFieldString(fields, "status"), Format: objectFieldString(fields, "format"),
-		RawPayload: fields["payload"], FeishuCard: objectFieldAny(fields, "feishuCard"), RawFeishuCard: fields["feishuCard"],
+		RawPayload: fields["payload"], FeishuCard: objectFieldAny(fields, "feishuCard"), RawFeishuCard: fields["feishuCard"], RawFallbackText: fields["fallbackText"],
 		Fields: mustBotGatewayFieldValues(fields), Meta: meta,
 	}, true
 }
