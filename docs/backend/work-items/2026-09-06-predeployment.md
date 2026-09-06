@@ -204,3 +204,41 @@ pre-deployment acceptance item and aggregate review is complete.
 Remote CI for `a79254b` passed both existing jobs. These reviewed commits and
 worker slices postdate that run: its result does not validate the final candidate.
 All database evidence continues to use task-owned synthetic isolated schemas.
+
+- `702d8d1`: wired the existing Bot REST adapter into the root router, including
+  exact Workspace gating and Bearer-only credentials (never browser cookies or
+  query tokens). Its HTTP race suite and staticcheck passed independently against
+  committed domain code, excluding the worker's draft runtime adapters.
+- `0b9c6c1`: composed Avatar service and routes using the same bounded media
+  processor and local/S3/hybrid store. Real session-authenticated native-image
+  upload/read/remove and audit checks passed with PostgreSQL, as did HTTP/race
+  and scoped staticcheck. The actual Node raw-stream route returns
+  `400 avatar.invalid_size` on both declared and chunked overages; a new Node
+  characterization proves this, and the old Go 413 expectation failed before
+  correction. The fixture verifies chunked requests really omit Content-Length.
+- `91847ca`: introduced the narrow `ReserveAgentBotUpload` domain entry point.
+  It revalidates an active custom bot and active membership inside the quota
+  transaction; ordinary human file APIs still reject Bot identities. PG/race
+  covers concurrent quota contention, paused/removed identities, revocation
+  between preflight and reservation, atomic audit failure and refusal to grant
+  content completion. Unauthenticated reservations no longer trigger stale
+  cleanup. Scoped staticcheck passed. **Existing product limitation:** Node's
+  Bot endpoint reserves metadata/quota but does not provide a Bot content upload
+  channel. A refactor must not silently invent that permission or claim it works.
+- `e8bd0de`: preserves explicit empty `duplicateOfPublicId` versus omitted/null
+  in Echo transition hashes. The Node fixture set now contains 15 cases; the old
+  Go implementation failed the empty-string golden, and corrected unit/PG/race,
+  replay side-effect checks, staticcheck and independent Node `--check` passed.
+  Future HTTP/command adapters must carry string-field presence into the service.
+
+Independent clean `33ba294` passed fresh `make integration-postgres` and
+`make verify` (unit/race/vet/staticcheck/govulncheck/build). Govulncheck reported
+zero reachable vulnerabilities, with one imported-package and four required-module
+advisories without an apparent call path; do not describe this as zero advisories.
+Remote CI for that commit also passed both existing jobs. Newer commits and
+uncommitted workers still require the final aggregate gate.
+
+Echo releases' first draft is **not accepted**: parent review found persisted
+snapshot escaping, version-case and ID-prefix differences. The worker is revising
+it against the actual Node service. No release, solicitation, delivery or Bot
+runtime acceptance is implied by this work record until recorded separately.
