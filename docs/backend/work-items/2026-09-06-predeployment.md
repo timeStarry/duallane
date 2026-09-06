@@ -1237,3 +1237,16 @@ delivery/replay, StrictMode, viewport workflow and complete/cancel behavior.
 The Vite harness logged an ECONNRESET during page teardown; assertions still
 passed. Full Workspace browser, release result finalization and worker recovery
 remain separate gates.
+
+### Bot API Contract Inventory
+
+The owner and Gateway OpenAPI documents now cover 35 HTTP/WebSocket route
+operations and distinguish browser-session, Bot-token and public setup
+boundaries. Two executable response scenarios cover owner creation and Gateway
+message DTOs; this is not full behavioral coverage of those 35 operations.
+Parent replaced the handwritten owner response with actual Node Fastify,
+service and synthetic SQLite execution. Its output matches the existing golden;
+no token is issued. The Gateway scenario consumes the separate actual Node
+message-writer golden. Go OpenAPI/race validation passed (13.009 seconds), and
+the updated Node fixture freshness check passed. Negative schema validation
+rejects an extra author field in the deliberately smaller Gateway message DTO.
