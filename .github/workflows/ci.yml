@@ -145,6 +145,11 @@ jobs:
       - name: Validate private Compose recovery snapshots
         run: node --test scripts/backend/release-compose-snapshot.test.mjs scripts/backend/release-compose-snapshot.docker.test.mjs scripts/backend/release-external-files.test.mjs
 
+      - name: Validate private release drain configuration
+        env:
+          DUALLANE_RELEASE_DRAIN_COMPOSE_ROUNDTRIP: "1"
+        run: node --test scripts/backend/release-drain-config.test.mjs
+
       - name: Validate bounded permission rehearsal and owned cleanup
         run: node --test scripts/backend/runtime-permissions.test.mjs
 

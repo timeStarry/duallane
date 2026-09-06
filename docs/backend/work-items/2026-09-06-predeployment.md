@@ -59,12 +59,14 @@ ownership is unchanged and is recorded only in the canonical ledger.
 
 | Gate | Latest reviewed result | Remaining acceptance |
 | --- | --- | --- |
-| Go/Node aggregate baseline | `0a093b2` Go quality/PostgreSQL/media and Go P2P CI passed; Node's stale health-version assertion was fixed in `ea9f017` and all 99 route tests passed locally | Repeat all gates on the final integrated commit; latest complete Workspace CI remains 11/12 |
+| Go/Node aggregate baseline | `7ce4c6` CI passed complete Node test/lint/build/Chromium, Go quality/PostgreSQL and Go P2P; version contract drift is fixed | Repeat all gates on the final integrated commit; latest complete Workspace CI remains 10/12 |
 | Actual native media | `78e43c6` fix; exact-image 28-case corpus passed with native libvips 8.14.1 | Build and test the final integrated runtime image |
-| Workspace browser | `0a093b2` complete CI suite: 11 passed, 1 failed on continuous-message visibility; Echo passed this run | Fix the independently reproduced stale conversation merge, complete custom-emote response-stall diagnosis, and rerun all original cases; one Echo pass does not by itself close its intermittent failure |
+| Workspace browser | `7ce4c6` complete CI suite: 10 passed, 2 failed (Echo visibility and history message click) | Finish reviewed response-ordering fixes and deterministic regressions, then rerun every original case; isolate any remaining emote/Echo failure without changing assertions |
 | Release safety | Accepted immutable migration image checks, passive candidates, offline Node startup, canonical snapshot, database drain command, gateway smoke, and restart-policy fencing (`3d4b57b`/`3bb8391`) | Complete Go-to-Go old-configuration recovery, integrate drain/provider gate and post-cutover/recovery smoke; rehearse failure and rollback |
 | Storage compatibility | Accepted bounded legacy reads, permission probes, read-only plan/verify, explicit S3 provisioning, backfill journal library and retained offline operator boundary | Prove final-image/same-authority recovery; no production copy or finalization |
-| Delivery | Draft PR #2 is open; commits through `0a093b2` are pushed; SSH transport recovered | Final aggregate review/CI, safe artifact cleanup and complete PR evidence before readiness |
+| P2P shutdown | `db1f535` reviewed bounded peer close; parent P2P/contract race and staticcheck passed | Final integrated image/browser and privacy review |
+| Drain checks | `f9dd4ba`/`ceb48e1`: real pinned CLI 6 results and private config/report 9 cases passed, including real Compose config roundtrip | Integrate after confirmed writer fencing and rehearse coordinated failure/recovery |
+| Delivery | Draft PR #2 is open; commits through `ceb48e1` are pushed and evidence updated | Final aggregate review/CI, safe artifact cleanup and complete PR evidence before readiness |
 
 The parallel fixes do not change frontend test assertions, retries or timeouts.
 Private browser diagnostics are not PR artifacts. Passing component checks do
