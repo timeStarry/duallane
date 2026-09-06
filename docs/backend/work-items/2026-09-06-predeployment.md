@@ -59,7 +59,7 @@ ownership is unchanged and is recorded only in the canonical ledger.
 
 | Gate | Latest reviewed result | Remaining acceptance |
 | --- | --- | --- |
-| Go/Node aggregate baseline | `3bb8391` CI: Go quality/PostgreSQL/media, Node lint/unit/build/Chromium, and Go P2P Chromium jobs passed | Repeat on the final integrated commit; the separate Go Workspace job failed |
+| Go/Node aggregate baseline | `0a093b2` Go quality/PostgreSQL/media and Go P2P CI passed; Node's stale health-version assertion was fixed in `ea9f017` and all 99 route tests passed locally | Repeat all gates on the final integrated commit; latest complete Workspace CI remains 11/12 |
 | Actual native media | `78e43c6` fix; exact-image 28-case corpus passed with native libvips 8.14.1 | Build and test the final integrated runtime image |
 | Workspace browser | `0a093b2` complete CI suite: 11 passed, 1 failed on continuous-message visibility; Echo passed this run | Fix the independently reproduced stale conversation merge, complete custom-emote response-stall diagnosis, and rerun all original cases; one Echo pass does not by itself close its intermittent failure |
 | Release safety | Accepted immutable migration image checks, passive candidates, offline Node startup, canonical snapshot, database drain command, gateway smoke, and restart-policy fencing (`3d4b57b`/`3bb8391`) | Complete Go-to-Go old-configuration recovery, integrate drain/provider gate and post-cutover/recovery smoke; rehearse failure and rollback |
@@ -2066,6 +2066,48 @@ fixed `snapshot_failed` code only). No mounts, database access or provider calls
 were used, and both disposable containers were removed automatically. This
 verifies the newly packaged command, not the still-pending aggregate release
 coordinator, frontend patch or final same-commit multi-image rehearsal.
+
+### Explicit P2P Acceptance Exceptions
+
+The independent worker audit found no concrete P2P persistence, secret-injection
+or envelope/logging defect within its inspected scope. It identified a serial
+close-handshake shutdown risk, now assigned for a focused implementation and
+real unresponsive-peer regression; that finding is not closed by earlier
+cooperative-peer shutdown tests.
+
+Parent documented three existing Go safety tightenings rather than falsely
+claiming identical acceptance of all Node inputs: browser Origin host checks,
+the full-message default 64 KiB transport budget (including ignored fields),
+and fail-closed configured TURN TTL bounds. No runtime security check was
+relaxed. New real-socket tests prove that an exact-limit valid opaque envelope
+with ignored padding is relayed without that padding, while a one-byte-over
+valid envelope closes with 1009. Same-host and absent Origin join; cross-host
+Origin receives 403. Nine configuration scenarios cover unset/blank defaults,
+valid TTL endpoints and malformed/out-of-range refusal.
+
+Parent uncached P2P/config race suites passed (1.330 / 1.020 seconds) in the
+Linux validation checkout with the two exact added/updated test files. These
+are explicitly documented compatibility exceptions, not a new Node/Go
+differential-process parity result. Final P2P shutdown and aggregate browser
+acceptance remain separate gates.
+
+### Public Release-Page Visual Review
+
+Parent rendered the accepted `0.16.0` release content in Chromium at desktop
+1440x1000 and mobile 390x844, and inspected both full-page screenshots. Version,
+date, trust-lane copy and operator-enable/recovery guidance are readable with
+no observed clipping or overlap. The current version is marked correctly and
+history remains collapsed. This was unauthenticated Vite-only public-page QA;
+no backend was running, so expected health proxy refusals are not a backend
+health pass. The owned Vite process was stopped. Screenshots remain in the
+ignored Linux validation `workspace-qa-artifacts/release-0.16.0` directory;
+they contain only public copy and are not committed. This does not replace
+the final integrated authenticated browser or image checks.
+
+After the earlier status inspection, CI `34051173383` completed: its Go
+quality/race/analysis/build/PostgreSQL/media job passed. The run remains failed
+because of the already recorded Node assertion and Workspace browser failures.
+The successor `ea9f017` run is tracked separately, not assumed to pass.
 
 ### Retained Node Gateway Verification
 

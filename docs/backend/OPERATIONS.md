@@ -82,6 +82,14 @@ startup. Boolean behavior does not use permissive parsing when the current
 contract requires an exact value; in particular, Workspace is disabled unless
 `WORKSPACE_ENABLED=true` exactly.
 
+One explicit P2P transition is `DUALLANE_TURN_TTL_SECONDS`: unset/blank uses
+600 seconds, while a configured value must be an integer in `1..86400`.
+Node previously fell back for zero, negative or malformed values; Go rejects
+them during configuration validation. Correct or remove an invalid legacy
+value before candidate startup. Do not log TURN credentials while diagnosing
+the configuration. The other P2P transport acceptance exceptions are listed
+in [WebSocket contracts](CONTRACTS_AND_DATA.md#p2p).
+
 `DUALLANE_DATA_DIR` is the application data directory, with the same meaning as
 Node. Workspace and worker local/hybrid adapters resolve their physical object
 root to `<DUALLANE_DATA_DIR>/workspace-files`. For the container default this is

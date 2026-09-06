@@ -125,6 +125,31 @@ without a status. Preserve that empty wire close frame: browser clients observe
 status 1005 must never be encoded as an on-wire close code. The candidate parity
 runner asserts these observations independently against both implementations.
 
+The Go candidate deliberately narrows three permissive Node behaviors; these
+are compatibility exceptions, not claims of byte-for-byte acceptance parity:
+
+- A browser-supplied WebSocket `Origin` must pass the pinned library's default
+  request-host check. Cross-host browser origins accepted by the Node plugin
+  are rejected by Go. The supported frontend uses the existing same-origin
+  gateway; do not disable this check to expose an alternate origin. Origin is
+  not authentication, and a non-browser client can omit or forge it.
+- The complete incoming WebSocket message has a 64 KiB default limit, including
+  ignored JSON fields and whitespace; exceeding it closes with 1009. The
+  existing 16,384-character limit on each opaque nonce/ciphertext value is
+  unchanged. Small unknown fields remain ignored, but padding an otherwise
+  valid envelope beyond the transport bound is not supported. Node's larger
+  plugin-level limit must not be mistaken for a required application payload.
+- Invalid non-empty TURN TTL configuration fails startup instead of silently
+  falling back to ten minutes; see the configuration transition in
+  [Operations](OPERATIONS.md#5-configuration-and-secrets).
+
+These boundaries reduce cross-host browser access and resource-exhaustion risk
+without decoding or persisting P2P content. Validate standard same-origin
+browser transfer/fallback and the explicit cross-origin/oversize refusals. A
+deployment with custom clients or invalid legacy environment values must resolve
+these differences before selecting the Go profile; it must not silently weaken
+the privacy or resource limits to make an old configuration start.
+
 ### Workspace
 
 The Workspace service preserves the `version: 1` hello/ready/event/error and

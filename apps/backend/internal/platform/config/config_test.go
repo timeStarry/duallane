@@ -73,3 +73,43 @@ func TestLoadRejectsUnsafeConfiguration(t *testing.T) {
 		})
 	}
 }
+
+func TestP2PTurnTTLConfigurationTransition(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		raw     string
+		present bool
+		want    time.Duration
+	}{
+		{name: "unset", want: 600 * time.Second},
+		{name: "blank", raw: "  ", present: true, want: 600 * time.Second},
+		{name: "minimum", raw: "1", present: true, want: time.Second},
+		{name: "maximum", raw: "86400", present: true, want: 24 * time.Hour},
+		{name: "zero", raw: "0", present: true},
+		{name: "negative", raw: "-1", present: true},
+		{name: "malformed", raw: "invalid", present: true},
+		{name: "fraction", raw: "1.5", present: true},
+		{name: "over maximum", raw: "86401", present: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg, err := LoadFrom(func(key string) (string, bool) {
+				if key == "DUALLANE_TURN_TTL_SECONDS" {
+					return test.raw, test.present
+				}
+				return "", false
+			})
+			if test.want == 0 {
+				if err == nil {
+					t.Fatal("invalid configured TTL silently fell back")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.TURNTTL != test.want {
+				t.Fatalf("TTL = %v, want %v", cfg.TURNTTL, test.want)
+			}
+		})
+	}
+}
