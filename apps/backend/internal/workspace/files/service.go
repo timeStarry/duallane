@@ -829,7 +829,12 @@ func (s *Service) UploadPart(ctx context.Context, input UploadPartInput) (Upload
 	if s.blobStore == nil {
 		return UploadPartResult{}, internalError("save workspace upload part", errors.New("blob store is required"))
 	}
-	stored, storeErr := s.blobStore.Put(ctx, stagingPartKey(uploadID, input.PartNumber), input.Content, expectedSize, digest)
+	attemptKey, err := newUploadAttemptKey(uploadID)
+	if err != nil {
+		return UploadPartResult{}, err
+	}
+	defer s.cleanupUploadAttempt(ctx, attemptKey)
+	stored, storeErr := s.blobStore.Put(ctx, attemptKey, input.Content, expectedSize, digest)
 	if storeErr != nil {
 		if storageCode(storeErr) == "storage.object_conflict" {
 			return UploadPartResult{}, NewError(CodeUploadPartConflict, MessageUploadPartConflict, 409)
@@ -846,12 +851,14 @@ func (s *Service) UploadPart(ctx context.Context, input UploadPartInput) (Upload
 		}
 		return UploadPartResult{}, mapped
 	}
+	ctx, cancelPromotion := context.WithTimeout(ctx, storageMutationTimeout)
+	defer cancelPromotion()
 	result, txErr := s.withTransaction(ctx, actor.ID, input.Meta, func(tx Tx, currentActor *auth.Actor, now time.Time) (any, *rejection, error) {
-		if _, _, loadErr := s.loadOwnedUpload(ctx, tx, currentActor.ID, uploadID); loadErr != nil {
-			return nil, nil, loadErr
-		}
 		if err := tx.Lock(ctx, uploadLockKey(uploadID)); err != nil {
 			return nil, nil, normalizeRepositoryError(err)
+		}
+		if _, _, loadErr := s.loadOwnedUpload(ctx, tx, currentActor.ID, uploadID); loadErr != nil {
+			return nil, nil, loadErr
 		}
 		existing, err := tx.GetUploadPart(ctx, uploadID, input.PartNumber)
 		if err != nil {
@@ -859,6 +866,17 @@ func (s *Service) UploadPart(ctx context.Context, input UploadPartInput) (Upload
 		}
 		if existing != nil && (existing.ByteSize != expectedSize || !strings.EqualFold(existing.SHA256, digest)) {
 			return nil, nil, NewError(CodeUploadPartConflict, MessageUploadPartConflict, 409)
+		}
+		opened, err := s.blobStore.Open(ctx, platformstorage.Object{Key: attemptKey, SHA256: digest, ByteSize: expectedSize}, expectedSize)
+		if err != nil {
+			return nil, nil, normalizeStorageError(err)
+		}
+		defer opened.Body.Close()
+		if _, err := s.blobStore.Put(ctx, stagingPartKey(uploadID, input.PartNumber), opened.Body, expectedSize, digest); err != nil {
+			if storageCode(err) == "storage.object_conflict" {
+				return nil, nil, NewError(CodeUploadPartConflict, MessageUploadPartConflict, 409)
+			}
+			return nil, nil, normalizeStorageError(err)
 		}
 		changed, err := tx.UpsertUploadPart(ctx, UploadPartRecord{UploadID: uploadID, PartNumber: input.PartNumber, ByteSize: expectedSize, SHA256: digest, CreatedAt: now, UpdatedAt: now})
 		if err != nil {
@@ -870,10 +888,7 @@ func (s *Service) UploadPart(ctx context.Context, input UploadPartInput) (Upload
 		return UploadPartResult{PartNumber: input.PartNumber, ByteSize: stored.ByteSize, SHA256: digest, Reused: existing != nil && !changed}, nil, nil
 	})
 	if txErr != nil {
-		// The deterministic staging key belongs to this upload/part. Removing it
-		// is safe only when the database rejected this request; a later retry can
-		// recreate the verified bytes.
-		_ = s.blobStore.Delete(context.Background(), platformstorage.Object{Key: stored.Key})
+		s.cleanupUnboundPart(ctx, uploadID, input.PartNumber)
 		return UploadPartResult{}, txErr
 	}
 	return result.(UploadPartResult), nil
@@ -977,16 +992,19 @@ func (s *Service) CompleteUpload(ctx context.Context, input CompleteUploadInput)
 		return UploadResult{}, validationError(CodeUploadInvalid, MessageUploadInvalid)
 	}
 	partRecords := make([]UploadPartRecord, 0)
+	attemptKey, err := newUploadAttemptKey(uploadID)
+	if err != nil {
+		return UploadResult{}, err
+	}
+	defer s.cleanupUploadAttempt(ctx, attemptKey)
 	var staged platformstorage.StoredObject
 	if mode == "single" {
 		if input.Content == nil {
 			return UploadResult{}, validationError(CodeUploadInvalidContent, MessageUploadInvalidContent)
 		}
-		stagingKey := stagingContentKey(uploadID)
-		staged, err = s.blobStore.Put(ctx, stagingKey, input.Content, transfer.ByteSize, "")
+		staged, err = s.blobStore.Put(ctx, attemptKey, input.Content, transfer.ByteSize, "")
 		if err != nil {
 			mapped := mapUploadStorageError(err)
-			_ = s.cleanupUploadStaging(context.Background(), uploadID, partRecords, transfer.ByteSize)
 			if shouldFailDuringStorage(mapped) {
 				_ = s.failUploadAfterCompletion(ctx, actor.ID, uploadID, failureReason(mapped), input.Meta)
 			}
@@ -1035,12 +1053,10 @@ func (s *Service) CompleteUpload(ctx context.Context, input CompleteUploadInput)
 			readers = append(readers, opened.Body)
 			closers = append(closers, opened.Body)
 		}
-		stagingKey := stagingAssembledKey(uploadID)
-		staged, err = s.blobStore.Put(ctx, stagingKey, io.MultiReader(readers...), transfer.ByteSize, "")
+		staged, err = s.blobStore.Put(ctx, attemptKey, io.MultiReader(readers...), transfer.ByteSize, "")
 		closeReaders()
 		if err != nil {
 			mapped := mapUploadStorageError(err)
-			_ = s.cleanupUploadStaging(context.Background(), uploadID, partRecords, transfer.ByteSize)
 			if shouldFailDuringStorage(mapped) {
 				_ = s.failUploadAfterCompletion(ctx, actor.ID, uploadID, failureReason(mapped), input.Meta)
 			}
@@ -1050,13 +1066,9 @@ func (s *Service) CompleteUpload(ctx context.Context, input CompleteUploadInput)
 	objectRecord, err := canonicalObjectRecord(staged.SHA256, staged.ByteSize, attachment.MIMEType, s.nowUTC())
 	if err != nil {
 		mapped := normalizeStorageError(err)
-		cleanupErr := s.cleanupUploadStaging(context.Background(), uploadID, partRecords, transfer.ByteSize)
 		var failErr error
 		if shouldFailDuringStorage(mapped) {
 			failErr = s.failUploadAfterCompletion(context.Background(), actor.ID, uploadID, failureReason(mapped), input.Meta)
-		}
-		if cleanupErr != nil {
-			mapped = errors.Join(mapped, cleanupErr)
 		}
 		if failErr != nil {
 			mapped = errors.Join(mapped, failErr)
@@ -1066,21 +1078,19 @@ func (s *Service) CompleteUpload(ctx context.Context, input CompleteUploadInput)
 	ctx, cancelPromotion := context.WithTimeout(ctx, storageMutationTimeout)
 	defer cancelPromotion()
 	defer func() {
-		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), storageMutationTimeout)
-		defer cancelCleanup()
-		_ = s.cleanupUploadStaging(cleanupCtx, uploadID, partRecords, transfer.ByteSize)
+		s.cleanupTerminalUploadStaging(ctx, actor.ID, uploadID, partRecords, transfer.ByteSize)
 	}()
 	var promotionFailed bool
 	value, txErr := s.withTransaction(ctx, actor.ID, input.Meta, func(tx Tx, currentActor *auth.Actor, now time.Time) (any, *rejection, error) {
+		if err := lockKeys(ctx, tx, uploadLockKey(uploadID), storageObjectLockKey(objectRecord.ID)); err != nil {
+			return nil, nil, normalizeRepositoryError(err)
+		}
 		currentTransfer, currentAttachment, loadErr := s.loadOwnedUpload(ctx, tx, currentActor.ID, uploadID)
 		if loadErr != nil {
 			return nil, nil, loadErr
 		}
 		if currentTransfer.ByteSize != objectRecord.ByteSize || currentAttachment.ID != attachment.ID {
 			return nil, nil, validationError(CodeUploadSizeMismatch, MessageUploadSizeMismatch)
-		}
-		if err := lockKeys(ctx, tx, uploadLockKey(uploadID), storageObjectLockKey(objectRecord.ID)); err != nil {
-			return nil, nil, normalizeRepositoryError(err)
 		}
 		// Ensure bytes and bind their reference under the same shared digest
 		// lock as deletion, including when Put reuses an existing object.
@@ -1325,6 +1335,8 @@ func storageObjectLockKey(objectID string) string {
 }
 
 func (s *Service) cleanupUploadStaging(ctx context.Context, uploadID string, parts []UploadPartRecord, uploadByteSize int64) error {
+	ctx, cancel := context.WithTimeout(ctx, storageMutationTimeout)
+	defer cancel()
 	keys := []string{stagingContentKey(uploadID), stagingAssembledKey(uploadID)}
 	partNumbers := make(map[int]struct{}, len(parts))
 	for _, part := range parts {
