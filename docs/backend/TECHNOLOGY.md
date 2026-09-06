@@ -45,9 +45,15 @@ Use these terms precisely in migration notes and evidence records:
   kin-openapi v0.142.0 for contract tests. The P2P generation config and
   `make generate`/`make check-generated` are integrated. Generated models and
   interfaces do not replace the live handler or automatically validate input.
-- `sqlc` and `go-mail` remain selected but are not pinned or integrated. Do not
-  describe them as installed or verified until their manifest and command
-  changes land.
+- `sqlc` v1.31.1 is pinned as a Go tool. `sqlc.yaml` reads the canonical
+  migrations and generates the presence repository's pgx/v5 query bindings;
+  `make generate` and the non-mutating `make check-generated` include it.
+  The tool has no runtime import and uses local schema analysis without a
+  remote service or database connection. Its tool dependency graph raises
+  OAuth to v0.34.0 and protobuf to v1.36.11; these remain subject to runtime
+  regression checks. This does not claim all existing pgx queries are generated.
+- `go-mail` remains selected but is not yet pinned or integrated in an accepted
+  commit. Do not describe a concurrent publisher draft as verified.
 - `Dockerfile.p2p` and `Dockerfile.workspace` provide candidate image recipes;
   their existence does not add a Go service to Compose or establish a cutover.
   Their current defaults use mutable image tags and unversioned OS package
@@ -91,6 +97,8 @@ Official references:
 - [coder/websocket](https://github.com/coder/websocket)
 - [pgx](https://github.com/jackc/pgx)
 - [sqlc](https://docs.sqlc.dev/en/latest/)
+- [sqlc v1.31.1 release](https://github.com/sqlc-dev/sqlc/releases/tag/v1.31.1)
+- [sqlc v1.31.1 module requirements](https://github.com/sqlc-dev/sqlc/blob/v1.31.1/go.mod)
 - [oapi-codegen](https://github.com/oapi-codegen/oapi-codegen)
 - [oapi-codegen v2.8.0 release notes](https://github.com/oapi-codegen/oapi-codegen/releases/tag/v2.8.0)
 - [AWS SDK for Go v2](https://docs.aws.amazon.com/sdk-for-go/v2/developer-guide/)
@@ -190,6 +198,14 @@ returning rows, and notifications.
 when forcing every optional filter into generated SQL would reduce clarity.
 Dynamic fragments are assembled only from constant allowlisted clauses;
 untrusted values remain parameters.
+
+The initial generated boundary is `internal/workspace/presence/queries.sql`.
+Edit that source and run `make generate`; never edit its nested
+`internal/presencequeries` output. The nested internal package prevents other
+domains from bypassing presence authorization through generated query methods.
+The parent repository keeps validation, stable errors and deadline policy.
+Existing reviewed explicit pgx repositories remain in place; convert them in
+focused, tested slices when changing their queries, not as formatting churn.
 
 Do not port the SQLite test double into Go. Unit tests use narrow fakes at
 package boundaries; transaction, constraint, lock, migration, and query behavior

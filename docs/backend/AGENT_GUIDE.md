@@ -74,6 +74,12 @@ still reads the current architecture, contract, security, and validation
 guidance that applies. `EVOLUTION.md` remains the source for compatibility
 history and later ownership changes.
 
+For generated SQL, inspect `apps/backend/sqlc.yaml` and the owning `queries.sql`.
+Keep generated bindings behind that domain's nested `internal` boundary; never
+call them across domains or hand-edit the generated files. Run `make generate`,
+`make check-generated`, and the relevant PostgreSQL/race tests. Generation
+checks types and freshness, not authorization or transaction correctness.
+
 ## 5. Pre-Edit Contract
 
 Write a compact task contract in the issue/PR or working update:

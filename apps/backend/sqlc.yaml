@@ -1,0 +1,15 @@
+version: "2"
+sql:
+  - name: workspace_presence
+    engine: postgresql
+    schema: ../web/server/migrations
+    queries: internal/workspace/presence/queries.sql
+    analyzer:
+      database: false
+    gen:
+      go:
+        package: presencequeries
+        out: internal/workspace/presence/internal/presencequeries
+        sql_package: pgx/v5
+        omit_unused_structs: true
+        query_parameter_limit: 0

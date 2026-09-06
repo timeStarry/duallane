@@ -383,3 +383,48 @@ the new flag now compares the raw value with `true` and the exact-value
 regression passes. No external mail was sent, and no production worker was
 started. Deployment/Compose wiring remains a separate gate.
 Integration-tag staticcheck also passed for the three composition packages.
+
+### Local Node Gate Follow-up
+
+Remote CI for `d018bc6` passed all three jobs. Locally, the default WSL disk-backed
+temporary SQLite run was not usable as a passing gate: a four-file, one-worker
+rerun took 1,439.73 seconds and failed 67 of 227 tests, including timeouts,
+cleanup errors and downstream HTTP assertions. The same isolated avatar case
+failed its unchanged five-second budget with disk-backed temp files but passed
+in 779 ms with command-local `TMPDIR=/dev/shm`. This affects only synthetic
+temporary fixtures, not application storage or production configuration.
+
+The first full RAM-temp run passed 702 Web tests but exceeded one realtime
+replay test's existing 15-second budget while other validation was running.
+That case passed independently in 7.949 seconds. A fresh full
+`TMPDIR=/dev/shm pnpm test` then passed: SDK 8, Web 703, with the two optional
+PostgreSQL tests skipped by the default command. No timeout, assertion, retry
+or global environment setting was relaxed. This replaces the local unit gate
+failure with completed evidence, not the separate whole-browser or dedicated
+Node PostgreSQL gates.
+
+### Pinned SQL Generation Boundary
+
+`sqlc` v1.31.1 is pinned in the Go tool graph and generates the existing
+presence predicates from the canonical PostgreSQL migrations. No historical
+migration or production ownership changed. The generated package is nested
+inside presence so other domains cannot use its methods to bypass that service.
+The adapter retains stable authorization errors and validates the batch bound
+before conversion to the generated 32-bit parameter. Scoped LF attributes keep
+generation byte-stable across Windows and Linux.
+
+Independent Linux validation of the reviewed candidate plus this slice passed
+`make verify`: generation freshness, unit/race tests, vet, staticcheck,
+govulncheck and command builds. Govulncheck reported zero called vulnerable
+symbols, with one imported-package and four module-level advisories not reached
+by this program; this is not a claim of an advisory-free dependency graph.
+Fresh PostgreSQL/race tests passed for presence, auth, Workspace and worker
+(5.305 / 3.388 / 4.710 / 4.382 seconds), followed by integration-tag staticcheck.
+The final adapter input/UTC regressions passed separately with `-count=1 -race`.
+`go list -deps ./cmd/...` contained no sqlc, SQLite, MySQL or wazero package.
+The initial query-test setup exposed a missing OAuth checksum after adding the
+tool; `go mod tidy` repaired the manifest graph before the passing runs.
+
+These checks include the tool-induced OAuth v0.34.0 and protobuf v1.36.11
+updates, but exclude ongoing SMTP, Bot, Echo, Feishu and maintenance drafts.
+They establish this query/tool boundary only, not whole-candidate acceptance.

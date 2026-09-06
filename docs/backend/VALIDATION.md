@@ -51,9 +51,9 @@ require GNU Make and a POSIX shell, such as a configured Linux/WSL environment.
 | `make -C apps/backend staticcheck` | `go tool staticcheck ./...` | Tool package declared in `go.mod`; version fixed by its module requirements. |
 | `make -C apps/backend vuln` | `go tool govulncheck ./...` | Tool package declared in `go.mod`; version fixed by its module requirements. |
 | `make -C apps/backend build` | `go build ./cmd/...` | Builds the checked-in command set. |
-| `make -C apps/backend generate` | `go generate ./internal/p2pcontract` | Regenerates the checked-in P2P contract with the pinned Go tool. |
-| `make -C apps/backend check-generated` | `go test -count=1 ./internal/p2pcontract -run '^TestGeneratedP2PContractIsFresh$'` | Non-mutating freshness check; also included in default package tests. |
-| `make -C apps/backend verify` | Prerequisites: `test test-race vet staticcheck vuln build` | Composite candidate gate; excludes PostgreSQL integration. |
+| `make -C apps/backend generate` | `go generate ./internal/p2pcontract`, then `go tool sqlc generate --no-remote` | Regenerates P2P contract and presence queries with pinned tools. |
+| `make -C apps/backend check-generated` | P2P freshness test, then `go tool sqlc diff --no-remote` | Non-mutating freshness checks against source contracts, query source and canonical migrations. |
+| `make -C apps/backend verify` | Prerequisites: `check-generated test test-race vet staticcheck vuln build` | Composite candidate gate; excludes PostgreSQL integration. |
 | `make -C apps/backend integration-postgres` | `go test -count=1 -race -tags postgres_integration ./...` | Requires disposable real PostgreSQL via `TEST_DATABASE_URL`; required for applicable changes in the matrix below. |
 
 Root wrappers are also checked in: `pnpm backend:check` invokes `verify`,
@@ -64,7 +64,11 @@ matching Make targets. CI currently runs `make verify` and then
 evidence, not a result for this worktree.
 
 `pnpm backend:generate` and `pnpm backend:check-generated` wrap the generation
-targets. Never hand-edit `p2p.gen.go`; edit the source/config and regenerate.
+targets. Never hand-edit `p2p.gen.go` or the nested presence query output;
+edit the source/config and regenerate. The first sqlc invocation may compile a
+large development-tool dependency graph; this does not add SQLite or sqlc to
+the runtime service. Generated SQL preserves the handwritten authorization and
+locking predicates, which must still pass real PostgreSQL/race tests.
 
 The candidate declares Go `1.26` and toolchain `go1.26.8` in `go.mod`. Packages
 that import govips require a usable CGO compiler plus libvips headers/runtime.
