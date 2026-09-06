@@ -1264,3 +1264,22 @@ Independent PostgreSQL/race passed application composition (7.221 seconds) and
 runtime (4.358); staticcheck and focused post-commit/failure tests passed. The
 worker recovery evidence is recorded separately; this hook does not grant any
 new production job ownership.
+
+### Migration Coexistence And CI Contract Gates
+
+The isolated schema rehearsal executes the actual Node and Go migration
+commands against loopback PostgreSQL, with generated owned schemas and explicit
+opt-in. It covers bootstrap through 029, both owners waiting on the same
+advisory migration lock, current-history no-op, exactly-once seeds and a failing
+031 upgrade rolling the full pending batch back to 030. Canonical SQL hashes
+are checked before/after; the existing history table still stores only names
+and applied times, not checksums. Parent independently passed all seven CI/
+schema tests with PostgreSQL enabled (7.475 seconds; 33 files in the reviewed
+worktree, including the pending additive command-finalization migration).
+
+The CI Node contract step now runs 23 actual fixture/check scripts with their
+supported flags. Parent independently reran all 23 successfully, including the
+new actual-owner Bot creation fixture. The PostgreSQL coexistence rehearsal is
+also in the Go CI job. No Go Workspace browser gate is enabled yet: the latest
+full browser run passed 9/12, with Bot card update 404, intermittent release
+card visibility and reaction-removal projection failures still under review.

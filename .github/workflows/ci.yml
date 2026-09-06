@@ -91,6 +91,13 @@ jobs:
       - name: Install media owner dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Rehearse Node and Go migration owners on PostgreSQL
+        env:
+          TEST_DATABASE_URL: postgres://duallane:duallane-ci-password@127.0.0.1:5432/duallane?sslmode=disable
+          DUALLANE_SCHEMA_COEXISTENCE_ALLOW_SCHEMA_CREATION: "true"
+          DUALLANE_SCHEMA_COEXISTENCE_RUN_PG: "true"
+        run: node --test scripts/backend/schema-coexistence.test.mjs
+
       - name: Compare actual Node and Go media owners
         run: node --test scripts/backend/media-compatibility.test.mjs
 
@@ -138,12 +145,27 @@ jobs:
         run: |
           node scripts/backend/echo-requirement-fixtures.mjs --check
           node scripts/backend/echo-release-fixtures.mjs --check
-          node scripts/backend/bot-idempotency-fixtures.mjs --check
+          node scripts/backend/echo-solicitation-fixtures.mjs --check
+          node scripts/backend/echo-automation-fixtures.mjs --check
+          node scripts/backend/echo-parser-fixtures.mjs --check
+          node scripts/backend/echo-card-fixtures.mjs
+          node scripts/backend/bot-idempotency-fixtures.mjs
+          node scripts/backend/bot-message-dto-fixtures.mjs
+          node scripts/backend/bot-websocket-fixtures.mjs
+          node scripts/backend/bot-connection-fixtures.mjs
+          node scripts/backend/bot-contract-fixtures.mjs
+          node scripts/backend/bot-feishu-contract.mjs
+          node scripts/backend/bot-feishu-fallback-fixtures.mjs
+          node scripts/backend/feishu-card-converter-golden.mjs
+          node scripts/backend/feishu-card-action-golden.mjs
           node scripts/backend/route-inventory.mjs --check
           node scripts/backend/workspace-core-contract.mjs --check
           node scripts/backend/workspace-emotes-contract.mjs --check
-          node scripts/backend/topic-parser-fixtures.mjs --check
-          node scripts/backend/topic-card-fixtures.mjs --check
+          node scripts/backend/workspace-files-contract.mjs --check
+          node scripts/backend/workspace-invites-contract.mjs --check
+          node scripts/backend/workspace-notifications-contract.mjs --check
+          node scripts/backend/topic-parser-fixtures.mjs
+          node scripts/backend/topic-card-fixtures.mjs
 
       - name: Run type and lint checks
         run: pnpm lint
