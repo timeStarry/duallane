@@ -1488,3 +1488,21 @@ through Go's authorized files service and actual passive Workspace factory,
 then rechecks Node's bytes/grant/audit. It passed and removed its own synthetic
 directory. CI runs that explicit parity step rather than silently skipping the
 environment-gated tests. Image permission/layout rehearsal remains separate.
+
+### Encoded Reaction Removal — HTTP Boundary Regression
+
+The unchanged dual-user browser flow reached reaction removal and exposed a
+400 for `feishu%3Aok`. Chi uses the escaped `RawPath` when present; otherwise
+Go's URL parser has already decoded `Path`. The route now decodes the key only
+in the former case, preserving literal percent sequences and plus signs.
+Unconditional decoding would incorrectly turn a double-encoded key into a
+valid catalog entry. Authorization and the domain validation remain unchanged.
+
+Parent reproduced five failures in the new nine-case route matrix before the
+fix; afterward the focused race check passed (1.082 seconds). A real HTTP
+server plus disposable PostgreSQL test passed (2.072): encoded removal succeeds,
+replay produces only one durable `reaction.removed` event, and a double-encoded
+key is rejected. The full HTTP PostgreSQL/race suite passed (6.964), as did
+tagged staticcheck. The original full browser flow is being rerun without
+altering its assertions, timeout or viewport. The earlier history right-click
+timeout was not reproduced in this diagnostic; no root-cause claim is made.

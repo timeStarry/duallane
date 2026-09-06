@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -443,6 +444,17 @@ func removeReaction(response http.ResponseWriter, request *http.Request, actor *
 	if missingService(response, options.Messages) {
 		return
 	}
-	result, err := options.Messages.RemoveReaction(request.Context(), messages.ReactionInput{ActorID: actor.ID, MessageID: chi.URLParam(request, "messageId"), EmoteKey: chi.URLParam(request, "emoteKey"), Meta: requestMeta(request, options)})
+	emoteKey := chi.URLParam(request, "emoteKey")
+	// Chi matches RawPath when present; otherwise net/http already decoded Path.
+	// Unconditionally unescaping would decode literal percent sequences twice.
+	if request.URL.RawPath != "" {
+		decoded, err := url.PathUnescape(emoteKey)
+		if err != nil {
+			writeError(response, messages.NewError(messages.CodeReactionInvalidEmote, messages.MessageReactionInvalidEmote, http.StatusBadRequest))
+			return
+		}
+		emoteKey = decoded
+	}
+	result, err := options.Messages.RemoveReaction(request.Context(), messages.ReactionInput{ActorID: actor.ID, MessageID: chi.URLParam(request, "messageId"), EmoteKey: emoteKey, Meta: requestMeta(request, options)})
 	writeResult(response, http.StatusOK, map[string]any{"messageId": result.MessageID, "reactions": result.Reactions}, err)
 }
