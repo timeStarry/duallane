@@ -1123,3 +1123,18 @@ Parser fixtures include JavaScript whitespace and the current Node quoted-token
 behavior, without pretending that pre-parsing in the generic command registry
 is already characterized. Application composition, post-commit delivery, generic
 parser parity and the unchanged Echo browser scenarios remain integration gates.
+
+### Echo Card Definitions And Provenance
+
+The five Echo card definitions now bind requirement transitions and solicitation
+votes to the same accepting card transaction. Requirement projection can reuse
+that transaction, including its membership checks and content-free rejection
+audit. Before either mutation, the adapter checks the stored card's source,
+space, type/version, ID and resource binding; a custom Bot's Echo-shaped payload
+cannot authorize a mutation of an unrelated resource.
+
+Independent PostgreSQL/race passed carddefinitions (1.071 seconds), requirements
+(11.614) and runtime (3.292); staticcheck and the Node five-definition fixture
+check passed. A real application test subsequently passed requirement create,
+card delivery, collect/replay and solicitation delivery. Full command/workflow,
+vote and browser acceptance remains separate from these focused checks.

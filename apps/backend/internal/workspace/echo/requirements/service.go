@@ -647,6 +647,56 @@ func (s *Service) ProjectCard(ctx context.Context, input GetInput) (*CardProject
 	if err != nil {
 		return nil, err
 	}
+	return projectRequirementCard(input, requirement)
+}
+
+// ProjectCardInTx projects a requirement through the caller-owned transaction.
+// Card actions use this seam after a TransitionInTx so the authorization read,
+// requirement snapshot, and projection all observe the same transaction.
+// It never falls back to the service repository or starts a pool transaction.
+func (s *Service) ProjectCardInTx(ctx context.Context, tx Tx, input GetInput) (*CardProjection, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("project echo requirement card", errors.New("repository is required"))
+	}
+	if tx == nil {
+		return nil, internalError("project echo requirement card", errors.New("transaction is required"))
+	}
+	spaceID, validationErr := normalizeIdentifier(s.space(input.SpaceID), CodeInvalidSpace, MessageInvalidSpace)
+	if validationErr != nil {
+		return nil, validationErr
+	}
+	actor, err := s.lookupActor(ctx, tx, spaceID, strings.TrimSpace(input.ActorID))
+	if err != nil {
+		return nil, err
+	}
+	publicID, publicIDErr := normalizePublicID(input.PublicID)
+	if publicIDErr != nil {
+		return nil, publicIDErr
+	}
+	record, err := tx.GetRequirementByPublicID(ctx, spaceID, publicID)
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	if record == nil {
+		if auditErr := s.writeReadAuditInTx(ctx, tx, spaceID, actor, input.Meta, publicID, CodeRequirementNotFound); auditErr != nil {
+			return nil, normalizeError(auditErr)
+		}
+		return nil, notFoundError()
+	}
+	if actor.Role != "owner" && actor.ID != record.SubmitterUserID {
+		if auditErr := s.writeReadAuditInTx(ctx, tx, spaceID, actor, input.Meta, publicID, "echo.permission_denied"); auditErr != nil {
+			return nil, normalizeError(auditErr)
+		}
+		return nil, notFoundError()
+	}
+	requirement := ProjectRequirement(*record)
+	return projectRequirementCard(input, &requirement)
+}
+
+func projectRequirementCard(input GetInput, requirement *Requirement) (*CardProjection, error) {
+	if requirement == nil {
+		return nil, internalError("project echo requirement card", errors.New("requirement is required"))
+	}
 	cardType, cardTypeErr := normalizeRequirementCardType(input.CardType)
 	if cardTypeErr != nil {
 		return nil, cardTypeErr
@@ -1160,8 +1210,15 @@ func (s *Service) writeReadAudit(ctx context.Context, spaceID string, actor *aut
 		return errors.New("repository is required")
 	}
 	return s.repo.WithTx(ctx, func(tx Tx) error {
-		return tx.WriteAudit(ctx, AuditInput{SpaceID: spaceID, ActorUserID: actor.ID, ActorGitHubLogin: actor.GitHubLogin, Action: "echo.requirement.read", TargetType: "echo.requirement", TargetID: targetID, Result: "rejected", Reason: reason, Meta: meta.Safe(), CreatedAt: s.nowUTC()})
+		return s.writeReadAuditInTx(ctx, tx, spaceID, actor, meta, targetID, reason)
 	})
+}
+
+func (s *Service) writeReadAuditInTx(ctx context.Context, tx Tx, spaceID string, actor *auth.Actor, meta auth.RequestMeta, targetID, reason string) error {
+	if s == nil || tx == nil || actor == nil {
+		return errors.New("read audit transaction is required")
+	}
+	return tx.WriteAudit(ctx, AuditInput{SpaceID: spaceID, ActorUserID: actor.ID, ActorGitHubLogin: actor.GitHubLogin, Action: "echo.requirement.read", TargetType: "echo.requirement", TargetID: targetID, Result: "rejected", Reason: reason, Meta: meta.Safe(), CreatedAt: s.nowUTC()})
 }
 
 func ProjectRequirement(record RequirementRecord) Requirement {
