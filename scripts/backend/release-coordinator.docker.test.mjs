@@ -7,12 +7,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { buildGoUpgradeCycle } from "./testdata/go-upgrade-coordinator.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const imagePattern = /^sha256:[0-9a-f]{64}$/u;
 const idPattern = /^[0-9a-f]{64}$/u;
 const ownerLabel = "com.duallane.release-coordinator-test";
 const selected = process.env.DUALLANE_RELEASE_COORDINATOR_DOCKER_TEST === "true";
+const upgradeSelected = process.env.DUALLANE_RELEASE_COORDINATOR_UPGRADE_TEST === "true";
 const imageVariables = {
   node: "DUALLANE_RELEASE_COORDINATOR_NODE_IMAGE",
   nodeWeb: "DUALLANE_RELEASE_COORDINATOR_NODE_WEB_IMAGE",
@@ -24,8 +26,14 @@ const imageVariables = {
 
 function reject(code) { throw new Error(code); }
 
-function selectedImages(environment) {
-  return Object.fromEntries(Object.entries(imageVariables).map(([name, key]) => {
+const upgradeImageVariables = {
+  goWorkspace: "DUALLANE_RELEASE_COORDINATOR_UPGRADE_GO_IMAGE",
+  goP2P: "DUALLANE_RELEASE_COORDINATOR_UPGRADE_P2P_IMAGE",
+  goWeb: "DUALLANE_RELEASE_COORDINATOR_UPGRADE_WEB_IMAGE",
+};
+
+function selectedImages(environment, variables = imageVariables) {
+  return Object.fromEntries(Object.entries(variables).map(([name, key]) => {
     const image = environment[key];
     if (!imagePattern.test(image ?? "")) reject(`invalid_${name}_image`);
     return [name, image];
@@ -117,9 +125,11 @@ function removeExactContainer(container, project, runID, allowedImages) {
   docker(["rm", container.Id]);
 }
 
-function coordinatorScript(deploySource) {
+function coordinatorScript(deploySource, scenario = "success") {
+  if (!["success", "after-backend", "after-capture", "go-upgrade"].includes(scenario)) reject("coordinator_scenario_invalid");
   const functions = ["verify_container_release", "start_release_service", "stop_legacy_services_for_go",
-    "start_release_backend", "start_release_edge"].map((name) => extractFunction(deploySource, name));
+    "start_release_backend", "start_release_edge", "cleanup_candidates", "rollback_app",
+    "restore_runtime_after_daemon_restart", "on_error", "go_upgrade_rollback_compose"].map((name) => extractFunction(deploySource, name));
   return [
     "set -Eeuo pipefail", "umask 077", 'source "$ROOT/deploy/production/release-helper.sh"',
     ...functions,
@@ -128,7 +138,10 @@ function coordinatorScript(deploySource) {
     'compose() { local files=(-f "${RELEASE_GO_ACTIVATION_COMPOSE_FILE:-$GO_COMPOSE}"); if [[ -z "$RELEASE_GO_ACTIVATION_COMPOSE_FILE" && -n "$RELEASE_GO_IMAGE_OVERRIDE_FILE" ]]; then files+=(-f "$RELEASE_GO_IMAGE_OVERRIDE_FILE"); fi; docker compose --project-name "$PROJECT" --profile rollback "${files[@]}" "$@"; }',
     'rollback_compose() { docker compose --project-name "$PROJECT" -f "${RELEASE_NODE_RECOVERY_COMPOSE_FILE:-$NODE_COMPOSE}" "$@"; }',
     'phase() { printf "%s\\n" "$1" >> "$PHASE_FILE"; }',
-    'trap \'printf "failed_line=%s\\n" "$LINENO" >> "$PHASE_FILE"\' ERR',
+    'app_replaced=false; trap on_error ERR',
+    // A deterministic failure enters the actual production ERR handler. No
+    // cleanup, fence, recovery or health decision is replaced by the fixture.
+    'inject_failure() { phase injected_failure; return 74; }',
     'PROJECT_DIR=$ROOT; current_commit=$GO_COMMIT; expected_app_version=$GO_VERSION',
     'release_load_profile go-full',
     'RELEASE_GO_UPGRADE=false; RELEASE_SNAPSHOT_FILE=$SNAPSHOT; RELEASE_RECOVERY_FILE=$RECOVERY',
@@ -141,15 +154,34 @@ function coordinatorScript(deploySource) {
     'phase pin; release_verify_go_edge_images; release_verify_go_image_identity',
     'release_freeze_go_activation_compose; release_verify_activation_authority',
     'phase migrate; release_run_go_migration_and_verify',
-    'phase activate; start_release_backend; start_release_edge',
+    'phase activate; start_release_backend',
+    ...(scenario === "after-backend" ? ['inject_failure'] : []),
+    'start_release_edge',
     'phase smoke; release_run_gateway_smoke go-full "$GO_VERSION" "$GO_COMMIT"',
     'phase capture; release_capture_successful_go_snapshot',
+    ...(scenario === "after-capture" ? ['inject_failure'] : []),
+    ...(scenario === "go-upgrade" ? [buildGoUpgradeCycle()] : []),
     'phase rollback; release_rollback_application',
     'phase complete',
   ].join("\n");
 }
 
-async function runCoordinator(scriptPath, environment) {
+function releaseErrorCatalog(source, prefix) {
+  return source.split("\n").flatMap((line, index) => {
+    const message = line.match(/^\s*echo "([^"]+)" >&2\s*$/u)?.[1];
+    if (!message) return [];
+    const pattern = message.split(/\$\{[^}]+\}/u)
+      .map((part) => part.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("[^\\n]*");
+    return [{ code: `${prefix}_${index + 1}`, pattern: new RegExp(`^${pattern}$`, "mu") }];
+  });
+}
+
+async function runCoordinator(scriptPath, environment, timeout = 360_000) {
+  const errorCatalog = [];
+  for (const [filename, prefix] of [["deploy.sh", "deploy_line"], ["release-helper.sh", "helper_line"]]) {
+    const source = (await readFile(path.join(root, "deploy/production", filename), "utf8")).replaceAll("\r\n", "\n");
+    errorCatalog.push(...releaseErrorCatalog(source, prefix));
+  }
   return await new Promise((resolve, rejectPromise) => {
     const child = spawn("bash", ["--noprofile", "--norc", scriptPath], {
       cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"],
@@ -164,7 +196,7 @@ async function runCoordinator(scriptPath, environment) {
         try { process.kill(-child.pid, "SIGKILL"); } catch { /* owned group already exited */ }
       }, 3000);
     };
-    const timer = setTimeout(() => terminate("coordinator_timeout"), 360_000);
+    const timer = setTimeout(() => terminate("coordinator_timeout"), timeout);
     for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => {
       bytes += chunk.length;
       if (bytes > 1024 * 1024) terminate("coordinator_output_limit");
@@ -180,7 +212,19 @@ async function runCoordinator(scriptPath, environment) {
       clearTimeout(timer); clearTimeout(terminationTimer);
       const codes = [...errors.matchAll(/^release (?:drain run|node authority|volume authority|external files) rejected: ([a-z_]+)$/gmu)]
         .map((match) => match[1]);
+      // Report the known source location, not interpolated values (which may
+      // contain private configuration paths or other recovery authority).
+      for (const entry of errorCatalog) if (entry.pattern.test(errors)) codes.push(entry.code);
+      for (const match of errors.matchAll(/^Production deployment failed with exit code (\d+)$/gmu)) {
+        codes.push(`deployment_failed_${match[1]}`);
+      }
+      // Retain only shell identifiers, never raw arguments or environment
+      // values, when a fixture omitted a production initialization variable.
+      for (const match of errors.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*): unbound variable\b/gu)) {
+        codes.push(`unbound_${match[1]}`);
+      }
       for (const [message, code] of [
+        ["Production deployment failed and automatic runtime recovery was incomplete", "automatic_recovery_incomplete"],
         ["gateway smoke requires one supported local application binding", "gateway_binding_invalid"],
         ["gateway release metadata differs from the expected release", "gateway_metadata_mismatch"],
         ["gateway smoke requires verified release metadata", "gateway_expected_metadata_invalid"],
@@ -206,6 +250,19 @@ test("coordinator gate rejects mutable images and extracts only scoped release f
   const source = (await readFile(path.join(root, "deploy/production/deploy.sh"), "utf8")).replaceAll("\r\n", "\n");
   const script = coordinatorScript(source);
   assert.match(script, /release_rollback_application/u);
+  assert.match(script, /trap on_error ERR/u);
+  for (const scenario of ["after-backend", "after-capture"]) {
+    const failureScript = coordinatorScript(source, scenario);
+    assert.match(failureScript, /\ninject_failure\n/u);
+    assert.match(failureScript, /local exit_code=\$\?/u);
+  }
+  assert.throws(() => coordinatorScript(source, "unknown"), /coordinator_scenario_invalid/u);
+  const upgradeScript = coordinatorScript(source, "go-upgrade");
+  assert.match(upgradeScript, /exec bash --noprofile --norc -s/u);
+  assert.ok(upgradeScript.indexOf("release_capture_successful_go_snapshot") < upgradeScript.indexOf("exec bash --noprofile --norc -s"));
+  const catalog = releaseErrorCatalog('  echo "cannot inspect ${private_path} (owner)" >&2', "fixture");
+  assert.equal(catalog[0].pattern.test("cannot inspect secret-value (owner)"), true);
+  assert.equal(catalog[0].code, "fixture_1");
   assert.doesNotMatch(script, /systemctl|git pull|compose build|deploy\.sh --/u);
 });
 
@@ -236,10 +293,7 @@ test("disposable release fixtures expose only Web to the gateway network", async
   assert.equal(Object.keys(goCompose.services.p2p.environment).some((name) => /^(?:PG|DATABASE|WORKSPACE_S3)/u.test(name)), false);
 });
 
-test("real Node-to-Go activation captures a recovery snapshot and restores the exact Node gateway", {
-  skip: selected ? false : "set DUALLANE_RELEASE_COORDINATOR_DOCKER_TEST=true with six exact local image IDs",
-  timeout: 480_000,
-}, async (t) => {
+async function rehearseCoordinator(t, scenario) {
   if (process.platform !== "linux") { t.skip("Linux-only disposable Docker gate"); return; }
   const images = selectedImages(process.env);
   const labels = Object.fromEntries(Object.entries(images).map(([name, image]) => [name, exactImage(image)]));
@@ -248,29 +302,45 @@ test("real Node-to-Go activation captures a recovery snapshot and restores the e
   assert.deepEqual(releaseMetadata(labels.goP2P), go, "Go P2P must identify the Workspace release");
   assert.deepEqual(releaseMetadata(labels.goWeb), go, "Go Web must identify the Workspace release");
   if (node.commit === go.commit) reject("rehearsal_requires_distinct_releases");
+  let upgradeImages, upgrade;
+  if (scenario === "go-upgrade") {
+    upgradeImages = selectedImages(process.env, upgradeImageVariables);
+    upgrade = releaseMetadata(exactImage(upgradeImages.goWorkspace));
+    for (const image of [upgradeImages.goP2P, upgradeImages.goWeb]) {
+      assert.deepEqual(releaseMetadata(exactImage(image)), upgrade, "upgrade images must identify one release");
+    }
+    const before = go.version.split(".").map(BigInt), after = upgrade.version.split(".").map(BigInt);
+    const different = after.findIndex((value, index) => value !== before[index]);
+    if (upgrade.commit === go.commit || different < 0 || after[different] <= before[different]) reject("upgrade_requires_newer_distinct_release");
+  }
   const runID = randomBytes(24).toString("hex"), project = `dl-release-${runID.slice(0, 20)}`;
   const names = { network: `${project}-private`, gatewayNetwork: `${project}-gateway`,
     postgresVolume: `${project}-pg`, dataVolume: `${project}-data` };
   const directory = await mkdtemp(path.join(os.tmpdir(), "duallane-coordinator-"));
-  const paths = Object.fromEntries(["node", "go", "secret", "phases", "snapshot", "recovery", "script"]
+  const paths = Object.fromEntries(["node", "go", "secret", "phases", "snapshot", "recovery", "script", "upgrade", "upgradeSnapshot", "upgradeRecovery"]
     .map((name) => [name, path.join(directory, name + (name === "script" ? ".sh" : ".json"))]));
-  const allowedImages = new Set(Object.values(images));
+  const allowedImages = new Set([...Object.values(images), ...Object.values(upgradeImages ?? {})]);
   const resources = { networks: [], volumes: [] };
   let phase = "fixture", primary;
   try {
     const { buildReleaseFixtures } = await import("./testdata/release-fixture.mjs");
-    const fixtures = buildReleaseFixtures({ project, images, versions: { node: node.version, go: go.version },
-      commits: { node: node.commit, go: go.commit }, names, port: await availablePort(), secretPath: paths.secret, root });
-    for (const compose of [fixtures.nodeCompose, fixtures.goCompose]) {
+    const fixtureOptions = { project, images, versions: { node: node.version, go: go.version },
+      commits: { node: node.commit, go: go.commit }, names, port: await availablePort(), secretPath: paths.secret, root };
+    const fixtures = buildReleaseFixtures(fixtureOptions);
+    const upgradeCompose = upgrade && buildReleaseFixtures({ ...fixtureOptions, images: { ...images, ...upgradeImages },
+      versions: { node: node.version, go: upgrade.version }, commits: { node: node.commit, go: upgrade.commit } }).goCompose;
+    for (const compose of [fixtures.nodeCompose, fixtures.goCompose, ...(upgradeCompose ? [upgradeCompose] : [])]) {
       for (const service of Object.values(compose.services)) service.labels = { ...service.labels, [ownerLabel]: runID };
     }
     await writeFile(paths.secret, JSON.stringify({ accessKey: "synthetic", secretKey: "synthetic-only" }), { mode: 0o600, flag: "wx" });
     await writeFile(paths.node, JSON.stringify(fixtures.nodeCompose), { mode: 0o600, flag: "wx" });
     await writeFile(paths.go, JSON.stringify(fixtures.goCompose), { mode: 0o600, flag: "wx" });
+    if (upgradeCompose) await writeFile(paths.upgrade, JSON.stringify(upgradeCompose), { mode: 0o600, flag: "wx" });
     phase = "node-config";
     docker(["compose", "--project-name", project, "-f", paths.node, "config", "--quiet"]);
     phase = "go-config";
     docker(["compose", "--project-name", project, "--profile", "rollback", "-f", paths.go, "config", "--quiet"]);
+    if (upgradeCompose) docker(["compose", "--project-name", project, "--profile", "rollback", "-f", paths.upgrade, "config", "--quiet"]);
     if (docker(["ps", "-a", "-q", "--filter", `label=com.docker.compose.project=${project}`]).stdout.trim()) reject("project_already_exists");
     for (const [name, logical, internal] of [[names.network, "default", true], [names.gatewayNetwork, "gateway", false]]) {
       if (docker(["network", "inspect", name], { allowFailure: true }).status === 0) reject("network_already_exists");
@@ -318,18 +388,31 @@ test("real Node-to-Go activation captures a recovery snapshot and restores the e
     removeExactContainer(migration, project, runID, allowedImages);
     const originalPG = inspect("container", pgID).Id;
     const deploy = (await readFile(path.join(root, "deploy/production/deploy.sh"), "utf8")).replaceAll("\r\n", "\n");
-    await writeFile(paths.script, coordinatorScript(deploy), { mode: 0o600, flag: "wx" });
+    await writeFile(paths.script, coordinatorScript(deploy, scenario), { mode: 0o600, flag: "wx" });
     phase = "coordinator";
     const result = await runCoordinator(paths.script, { ROOT: root, PROJECT: project, NODE_COMPOSE: paths.node, GO_COMPOSE: paths.go,
       NODE_COMMIT: node.commit, NODE_VERSION: node.version, GO_COMMIT: go.commit, GO_VERSION: go.version,
-      SNAPSHOT: paths.snapshot, RECOVERY: paths.recovery, PHASE_FILE: paths.phases });
+      SNAPSHOT: paths.snapshot, RECOVERY: paths.recovery, PHASE_FILE: paths.phases,
+      ...(upgrade ? { UPGRADE_GO_COMPOSE: paths.upgrade, UPGRADE_COMMIT: upgrade.commit, UPGRADE_VERSION: upgrade.version,
+        UPGRADE_SNAPSHOT: paths.upgradeSnapshot, UPGRADE_RECOVERY: paths.upgradeRecovery,
+        PREVIOUS_GO_SNAPSHOT: `${paths.recovery}.go-compose.snapshot.json` } : {}),
+    }, upgrade ? 600_000 : 360_000);
     const phases = (await readFile(paths.phases, "utf8").catch(() => "")).trim().split("\n");
-    if (result.status !== 0 || result.failure) reject(`coordinator_failed_${phases.filter((value) => /^[a-z_]+(?:=\d+)?$/u.test(value)).slice(-2).join("_")}_${result.codes.join("_")}`);
-    assert.deepEqual(phases, ["snapshot", "pin", "migrate", "activate", "smoke", "capture", "rollback", "complete"]);
-    const snapshotPath = `${paths.recovery}.go-compose.snapshot.json`;
-    for (const suffix of ["", ".compose.json", ".external.json", ".volumes.json"]) {
-      const metadata = await stat(snapshotPath + suffix);
-      if ((metadata.mode & 0o777) !== 0o600) reject("snapshot_not_private");
+    const injectedFailure = ["after-backend", "after-capture"].includes(scenario);
+    const expectedStatus = injectedFailure ? 74 : 0;
+    if (result.status !== expectedStatus || result.failure) reject(`coordinator_failed_status${result.status}_${result.failure ?? "none"}_${phases.filter((value) => /^[a-z_]+(?:=\d+)?$/u.test(value)).slice(-2).join("_")}_${result.codes.join("_")}`);
+    const expectedPhases = ["snapshot", "pin", "migrate", "activate"];
+    if (scenario !== "after-backend") expectedPhases.push("smoke", "capture");
+    if (upgrade) expectedPhases.push(...["validate", "snapshot", "pin", "freeze", "migrate", "fence_drain_activate", "edge", "smoke", "capture", "rollback", "complete"].map((name) => `upgrade_${name}`));
+    expectedPhases.push(...(injectedFailure ? ["injected_failure"] : ["rollback", "complete"]));
+    assert.deepEqual(phases, expectedPhases);
+    if (injectedFailure) assert.ok(result.codes.includes("deployment_failed_74"), "actual ERR handler must preserve the injected failure status");
+    for (const recovery of [paths.recovery, ...(upgrade ? [paths.upgradeRecovery] : [])]) {
+      const snapshotPath = `${recovery}.go-compose.snapshot.json`;
+      for (const suffix of scenario === "after-backend" ? [] : ["", ".compose.json", ".external.json", ".volumes.json"]) {
+        const metadata = await stat(snapshotPath + suffix);
+        if ((metadata.mode & 0o777) !== 0o600) reject("snapshot_not_private");
+      }
     }
     const current = ownedContainers(project, runID, allowedImages);
     for (const [service, image] of [["api", images.node], ["web", images.nodeWeb], ["postgres", images.postgres]]) {
@@ -338,7 +421,10 @@ test("real Node-to-Go activation captures a recovery snapshot and restores the e
       if (service === "postgres" && matches[0].Id !== originalPG) reject("postgres_owner_changed");
     }
     if (current.some((container) => ["p2p", "workspace", "worker"].includes(container.Config.Labels["com.docker.compose.service"]))) reject("candidate_owner_remained");
-    t.diagnostic("real Node migration, pinned Go activation, drain, gateway smoke, four private snapshot artifacts and exact Node recovery passed");
+    t.diagnostic(upgrade ? "real pinned Go-to-Go activation and exact previous Go rollback passed before final exact Node recovery"
+      : scenario === "success"
+      ? "real Node migration, pinned Go activation, drain, gateway smoke, four private snapshot artifacts and exact Node recovery passed"
+      : `actual ERR recovery passed after ${scenario}: original failure status, exact Node health and unchanged PostgreSQL identity`);
   } catch (error) {
     primary = new Error(`release_fixture_${phase}: ${/^[a-zA-Z0-9_= :.-]+$/u.test(error.message) ? error.message : "check_failed"}`);
     // Content-free failure evidence from this test's already verified owners.
@@ -387,4 +473,17 @@ test("real Node-to-Go activation captures a recovery snapshot and restores the e
     if (cleanupFailure) throw new AggregateError(primary ? [primary, cleanupFailure] : [cleanupFailure], "release_fixture_failed");
   }
   if (primary) throw primary;
-});
+}
+
+for (const [scenario, name] of [
+  ["success", "real Node-to-Go activation captures a recovery snapshot and restores the exact Node gateway"],
+  ["after-backend", "real ERR handler recovers Node after Go backend activation fails before edge startup"],
+  ["after-capture", "real ERR handler recovers Node after a complete Go activation and snapshot"],
+  ["go-upgrade", "real Go-to-Go upgrade restores the previous Go release before exact Node recovery"],
+]) {
+  test(name, {
+    skip: selected && (scenario !== "go-upgrade" || upgradeSelected) ? false
+      : "set the Docker gate opt-in and exact local images; Go upgrade additionally requires its opt-in and three upgrade images",
+    timeout: scenario === "go-upgrade" ? 720_000 : 480_000,
+  }, (t) => rehearseCoordinator(t, scenario));
+}

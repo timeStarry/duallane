@@ -543,15 +543,47 @@ notification workers are disabled; provider endpoints are synthetic loopback
 addresses. The normal migration and maintenance code runs only on this new
 disposable state.
 
-The positive lifecycle gate proves the old Node bootstrap, pinned Go migration,
+The positive lifecycle case checks the old Node bootstrap, pinned Go migration,
 writer fencing and drain, real Go readiness/gateway smoke, four private recovery
 artifacts, and exact-image Node application rollback with the same PostgreSQL
-container. It is not evidence for passive candidate startup, injected failure
-recovery, Go-to-Go upgrades or a production cutover. Those gates remain separate.
+container. Two additional cases inject a deterministic failure after backend
+activation but before edge startup, and after successful Go snapshot capture.
+They enter the actual deployment `ERR` handler and require the original failure
+exit code, healthy exact-image Node recovery, no remaining Go owners, and the
+unchanged PostgreSQL container. They do not restart Docker or simulate a
+production outage. Passive candidate startup remains a separate gate.
+A pass must name the executed cases and immutable image set;
+the presence of these tests is not evidence that a rehearsal completed.
+Recovery helpers must also be exercised inside a real Bash `ERR` trap, with
+successful and failed delegated commands. A bare `return` there can inherit
+the triggering failure instead of the immediately preceding command's status;
+forward that status explicitly. A direct manual rollback does not cover this
+execution context.
 Cleanup rechecks exact image/owner identities, stops only owned fixture
 containers, confirms their stopped state, and removes only the test's labeled
 containers, volumes and networks. Ambiguous cleanup keeps private artifacts and
 fails the test. A skipped opt-in test is not a rehearsal pass.
+
+The Go-to-Go case additionally requires exact local Workspace, P2P and Web
+images with one consistent, strictly newer version and a distinct commit.
+Keep the six variables above and add these assignments to the same command:
+
+```sh
+DUALLANE_RELEASE_COORDINATOR_UPGRADE_TEST=true \
+DUALLANE_RELEASE_COORDINATOR_UPGRADE_GO_IMAGE="sha256:<new-go-workspace-image-id>" \
+DUALLANE_RELEASE_COORDINATOR_UPGRADE_P2P_IMAGE="sha256:<new-go-p2p-image-id>" \
+DUALLANE_RELEASE_COORDINATOR_UPGRADE_WEB_IMAGE="sha256:<new-go-web-image-id>"
+```
+
+Use `--test-name-pattern="real Go-to-Go"` to select that case when the Node
+fault cases have already been recorded separately. It first completes the
+Node-to-Go activation, then runs the actual upgrade and previous-Go recovery
+helpers in a fresh Bash process. This prevents upgrade state from overwriting
+the outer Node recovery state. Finally it restores Node and checks the same
+PostgreSQL container and both sets of mode-0600 recovery artifacts. Any
+synthetic version label used to exercise version ordering must be recorded as
+test-only metadata, never as a published product release. This positive
+upgrade/rollback case does not cover every possible Go-to-Go failure timing.
 
 A service is not production-ready until the guarded deployment can:
 
