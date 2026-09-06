@@ -61,10 +61,10 @@ ownership is unchanged and is recorded only in the canonical ledger.
 | --- | --- | --- |
 | Go/Node aggregate baseline | `3bb8391` CI: Go quality/PostgreSQL/media, Node lint/unit/build/Chromium, and Go P2P Chromium jobs passed | Repeat on the final integrated commit; the separate Go Workspace job failed |
 | Actual native media | `78e43c6` fix; exact-image 28-case corpus passed with native libvips 8.14.1 | Build and test the final integrated runtime image |
-| Workspace browser | `3bb8391` complete CI suite: 10 passed, 2 failed; the long flow reached custom-emote upload before timing out | Fix Echo release delivery, the independently reproduced stale conversation merge, and the custom-emote response stall; rerun all original cases |
+| Workspace browser | `0a093b2` complete CI suite: 11 passed, 1 failed on continuous-message visibility; Echo passed this run | Fix the independently reproduced stale conversation merge, complete custom-emote response-stall diagnosis, and rerun all original cases; one Echo pass does not by itself close its intermittent failure |
 | Release safety | Accepted immutable migration image checks, passive candidates, offline Node startup, canonical snapshot, database drain command, gateway smoke, and restart-policy fencing (`3d4b57b`/`3bb8391`) | Complete Go-to-Go old-configuration recovery, integrate drain/provider gate and post-cutover/recovery smoke; rehearse failure and rollback |
 | Storage compatibility | Accepted bounded legacy reads, permission probes, read-only plan/verify, explicit S3 provisioning, backfill journal library and retained offline operator boundary | Prove final-image/same-authority recovery; no production copy or finalization |
-| Delivery | Draft PR #2 is open; commits through `3bb8391` are pushed; SSH transport recovered | Final aggregate review/CI, safe artifact cleanup and complete PR evidence before readiness |
+| Delivery | Draft PR #2 is open; commits through `0a093b2` are pushed; SSH transport recovered | Final aggregate review/CI, safe artifact cleanup and complete PR evidence before readiness |
 
 The parallel fixes do not change frontend test assertions, retries or timeouts.
 Private browser diagnostics are not PR artifacts. Passing component checks do
@@ -78,6 +78,17 @@ release-card visibility and on the long flow's custom-emote upload response at
 that later step is not a complete browser pass and does not eliminate the
 separately identified client merge race. No failed-job DOM, cookies, or private
 diagnostic artifacts are copied into this record or the PR.
+
+The next CI run
+[34051173383](https://github.com/timeStarry/duallane/actions/runs/34051173383)
+tested `0a093b28e17a5cc9407fc8dd425fed3e64c81dce`. Its complete Go Workspace
+job passed 11 cases, including Echo, and failed the long flow at the unchanged
+`workspace.spec.ts:728` newest-message visibility assertion. Go P2P passed.
+Node unit tests exposed one release-preparation omission: the health privacy
+test still expected `0.15.5` after the package changed to `0.16.0`. Parent
+reproduced that exact mismatch locally. Later Node lint/build/browser steps
+were skipped, not passed. The Go aggregate job was still running when these
+completed job results were inspected.
 
 ## Parallel Ownership — Wave 1
 
@@ -2035,6 +2046,26 @@ with observed UID `65532:65532` and revision label `78e43c6`. Both exact owned
 containers were removed and a label inventory found no remaining probes.
 There was no Docker daemon restart, mounted data or production application
 operation. This is policy-mechanics evidence, not a completed release rehearsal.
+
+### Version-Aware Health Privacy Regression And Candidate Runtime
+
+The Node health privacy regression now reads the Web package version, matching
+the established passive-candidate test pattern. Its exact response-object
+assertion still forbids extra storage paths or fields. Parent first reproduced
+the stale `0.15.5` expectation against `0.16.0`, then independently passed the
+complete 99-case Workspace route file on Linux Node 22 (96.90 seconds).
+Runtime health behavior and the original browser assertions are unchanged.
+
+Parent also built the Workspace runtime from a clean detached clone of exact
+`97a75c4258d58bfffccd6aa547f2e370bdbcbdaa`. Observed Docker image ID is
+`sha256:881a3bb401e4d166a90e2f8aa574d107002a3881fb086af07c90b90066bd047e`,
+with UID/GID `65532:65532`, version `0.16.0` and that complete revision label.
+Real no-network, read-only, capability-dropped executions passed `--help`
+(exit 0) and safe invalid-database refusal with `--check-provider` (exit 1,
+fixed `snapshot_failed` code only). No mounts, database access or provider calls
+were used, and both disposable containers were removed automatically. This
+verifies the newly packaged command, not the still-pending aggregate release
+coordinator, frontend patch or final same-commit multi-image rehearsal.
 
 ### Retained Node Gateway Verification
 

@@ -397,7 +397,7 @@ describe("workspace routes", () => {
       ok: true,
       service: "duallane",
       lane: "ready",
-      appVersion: "0.15.5"
+      appVersion: JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).version
     });
   });
 
