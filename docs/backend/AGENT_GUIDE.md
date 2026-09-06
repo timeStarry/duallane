@@ -6,6 +6,16 @@ This guide turns the backend architecture into an executable task workflow for
 human contributors and development agents. It supplements root `AGENTS.md`; it
 does not replace security, product, protocol, workflow, or release documents.
 
+It is for humans and coding/development agents that inspect, edit, test, review,
+and hand off repository changes. It is not an instruction source for product
+Agent Bots. A product Agent Bot is a runtime Workspace integration that uses the
+Bot Gateway/SDK, Bot authentication, and explicitly granted context to serve an
+end-user workflow. Bot Gateway credentials grant only the capabilities defined
+by that product contract, not repository, deployment, or migration ownership
+authority. Any separately provided development tools require their own explicit
+authorization. Keep Bot behavior and privacy promises in the Agent Bot
+contracts; distinguish product Bots from development agents in task assignments.
+
 ## 2. Mandatory Intake
 
 Before a backend edit:
@@ -21,6 +31,11 @@ Before a backend edit:
 
 Do not assume Go owns a capability because a target document or candidate
 package exists. The ledger and actual route/job claimant must agree.
+
+For a small documentation or test-only change, use a short working note. For a
+migration, cutover, cross-process change, or parallel task, the optional
+[work-item and handoff record](templates/WORK_ITEM.md) captures ownership and
+evidence for the next contributor.
 
 ## 3. Interpret Capability Status
 
@@ -52,6 +67,13 @@ an accidental route or vice versa without reviewing rollout and rollback.
 Read the target file and tests after this routing set. Avoid loading every
 Workspace product document for a narrow capability.
 
+This is the minimum context route, not a requirement to read the whole
+repository. After a capability becomes `active` or `complete`, continue to use
+the same route based on its current owner and changed surface; post-cutover work
+still reads the current architecture, contract, security, and validation
+guidance that applies. `EVOLUTION.md` remains the source for compatibility
+history and later ownership changes.
+
 ## 5. Pre-Edit Contract
 
 Write a compact task contract in the issue/PR or working update:
@@ -71,6 +93,9 @@ Rollout and rollback:
 
 A missing answer is a design gap. Resolve it before introducing another service,
 table, dependency, protocol, or cross-process call.
+
+For a tiny docs or test change, a one-line behavior/scope/check note is sufficient
+when no runtime, data, ownership, or rollout contract changes.
 
 ## 6. Go Implementation Rules
 
@@ -141,7 +166,85 @@ Review the final diff for:
 - generated or formatting churn and unrelated cleanup;
 - imported emote asset changes.
 
-## 10. Documentation Updates
+A worker's summary is a handoff, not independent proof. The lead or named
+integrator inspects the actual worktree diff and changed paths, checks that the
+no-touch scope was preserved, and runs the validation needed to accept the
+change. `not run`, `blocked`, and `failed` remain distinct from `passed`.
+
+## 10. Parallel Work, Review, And Handoff
+
+Parallel work is an execution choice, not a change to architectural ownership.
+The lead coordinates trust-lane, data, compatibility, and architecture decisions
+within the approved task scope, obtaining maintainer approval where required.
+It owns task decomposition, dependency order, integration, independent
+validation, final deliverables, and serialized split commits. A development
+worker owns only its bounded assignment and must escalate a contract or
+ownership conflict instead of widening its scope.
+
+When a `luna-worker` is available in the current Codex task environment, the
+lead should prefer it for a bounded, disjoint file/module assignment. Worker or
+model availability is task-local; this guide does not promise a worker, model,
+plugin, or tool in a future run. Development authority must be explicitly
+assigned; a Workspace Bot credential is not such an assignment.
+
+Before starting parallel work, the lead records or states:
+
+1. the capability, current and target owner/status, trust lane, and data impact;
+2. observable acceptance behavior and explicit non-goals;
+3. the exact read set, write set, and no-touch set for each worker;
+4. dependencies, contract decisions, required predecessor outputs, and the
+   handoff artifact each worker must return;
+5. the validation commands/evidence and commit boundaries; and
+6. the rollout owner and authorization required before a route, writer, job
+   claimer, migration runner, or production setting changes.
+
+Do not start a worker until those dependencies and handoff expectations are
+clear. If a dependency changes, pause the affected work and update the contract;
+do not resolve it by overlapping edits.
+
+### Disjoint Scope And Single Writers
+
+Independent work may proceed when the file/module scopes do not overlap and the
+dependency graph permits it. Reserve shared integration surfaces to one named
+integrator for the task, including:
+
+- `cmd/*` composition and lifecycle wiring;
+- shared router or gateway route tables;
+- `go.mod`/`go.sum` and other shared dependency manifests;
+- database schema, migrations, and shared generated contract outputs; and
+- repository or backend index files, including `docs/backend/README.md`.
+
+Other workers may read these files or return a proposed hunk, but must not edit
+them concurrently. Parallel workers must also have disjoint domain ownership:
+one capability write unit has one active implementation owner for each writer,
+claimer, scheduler, or migration role. That implementation may run approved
+replicas, such as multiple Go workers with leases; replicas are not a second
+owner. Do not introduce Node/Go dual writes or uncoordinated claimers/runners for
+the same role. Read-only characterization and independent tests may run in
+parallel when they cannot mutate the same state.
+
+### Shared-Tree Integration
+
+Never run concurrent Git index operations in a shared worktree. Workers leave
+the shared index untouched: no `git add`, commit, interactive staging, branch
+switch, reset, cleanup, or equivalent operation. The lead/integrator inspects
+the actual diff, stages exact paths, and serializes reviewable split commits.
+Broad staging is not a substitute for file ownership. Before accepting a worker
+claim, the lead verifies `git status`, the diff for the assigned paths, the
+no-touch paths, and the focused checks independently; a claimed pass without a
+current result is not accepted as evidence.
+
+### Required Handoff
+
+Each worker returns the exact changed paths, contract decisions, data/schema or
+object effects, tests/checks run with their results, checks not run and why,
+active processes or secret references (never credential values), and remaining
+risks/blockers. The lead reviews that handoff against the actual diff and
+acceptance criteria before
+integrating it. A handoff does not authorize rollout or production ownership;
+the lead records the authorized operator and status transition separately.
+
+## 11. Documentation Updates
 
 Update the owning canonical document rather than copying its rule elsewhere:
 
@@ -157,7 +260,11 @@ Root and development indexes receive links and short routing rules only. Update
 product documents when user behavior changes; backend docs do not override the
 product contract.
 
-## 11. Handoff Template
+## 12. Handoff Template
+
+Use the compact block below for routine work. For a migration, cutover,
+parallel assignment, or handoff with compatibility/rollout risk, use the
+[optional task and handoff record](templates/WORK_ITEM.md).
 
 ```text
 Capability and status:

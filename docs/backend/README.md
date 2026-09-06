@@ -49,6 +49,7 @@ authoritative for behavior and invariants at every status.
 | Change a worker or external delivery | Service boundaries, Operations, Validation | Notification or Bot product contract |
 | Change Compose, images, health, or release order | Operations, Evolution, Validation | Testing and release |
 | Migrate a Node capability to Go | Evolution, Agent guide, owning topic documents | Current implementation and nearby tests |
+| Coordinate parallel development or hand off a backend task | [Agent collaboration rules](AGENT_GUIDE.md#10-parallel-work-review-and-handoff); optional [work-item record](templates/WORK_ITEM.md) | Development workflow; only the owning domain guides |
 
 ## Current And Target Shape
 
