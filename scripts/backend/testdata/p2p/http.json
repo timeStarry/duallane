@@ -9,7 +9,7 @@
       "projection": "health"
     },
     {
-      "name": "ice-servers-default",
+      "name": "ice-servers-configured-variants",
       "method": "GET",
       "path": "/api/p2p/ice-servers",
       "expectedStatus": 200,
@@ -42,7 +42,13 @@
         "content-type": "application/json"
       },
       "expectedStatus": 400,
-      "projection": "error"
+      "projection": "parser-error",
+      "errorContract": {
+        "statusCode": 400,
+        "error": "Bad Request",
+        "code": "FST_ERR_CTP_EMPTY_JSON_BODY",
+        "message": "Body cannot be empty when content-type is set to 'application/json'"
+      }
     },
     {
       "name": "create-empty-object-default",
@@ -141,7 +147,13 @@
       },
       "body": "{\"maxPeers\":",
       "expectedStatus": 400,
-      "projection": "error"
+      "projection": "parser-error",
+      "errorContract": {
+        "statusCode": 400,
+        "error": "Bad Request",
+        "code": "FST_ERR_CTP_INVALID_JSON_BODY",
+        "message": "Body is not valid JSON but content-type is set to 'application/json'"
+      }
     },
     {
       "name": "create-trailing-json",
@@ -152,7 +164,35 @@
       },
       "body": "{\"maxPeers\":2}{\"unknown\":true}",
       "expectedStatus": 400,
-      "projection": "error"
+      "projection": "parser-error",
+      "errorContract": {
+        "statusCode": 400,
+        "error": "Bad Request",
+        "code": "FST_ERR_CTP_INVALID_JSON_BODY",
+        "message": "Body is not valid JSON but content-type is set to 'application/json'"
+      }
+    },
+    {
+      "name": "create-oversize-json",
+      "method": "POST",
+      "path": "/api/p2p/rooms",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "bodyGenerator": {
+        "prefix": "{\"maxPeers\":2,\"padding\":\"",
+        "repeat": "x",
+        "count": 1048576,
+        "suffix": "\"}"
+      },
+      "expectedStatus": 413,
+      "projection": "parser-error",
+      "errorContract": {
+        "statusCode": 413,
+        "error": "Payload Too Large",
+        "code": "FST_ERR_CTP_BODY_TOO_LARGE",
+        "message": "Request body is too large"
+      }
     },
     {
       "name": "create-number-decimal",

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,7 +17,11 @@ const WEBSOCKET_TIMEOUT_MS = 3_000;
 const NO_FRAME_TIMEOUT_MS = 150;
 const TOTAL_TIMEOUT_MS = 90_000;
 const MAX_RESPONSE_BYTES = 128 * 1024;
-const DEFAULT_STUN_URL = "stun:stun.l.google.com:19302";
+const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
+const COMPARABLE_RESPONSE_HEADERS = Object.freeze({
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer"
+});
 const REPORTABLE_FIELDS = new Set([
   "status", "body", "error", "code", "message", "statusCode", "ok", "service",
   "lane", "appVersion", "iceServers", "urls", "username", "credential",
@@ -165,11 +169,11 @@ function buildChildEnvironment({ baseUrl, port, dataDir, implementation }) {
     PUBLIC_BASE_URL: baseUrl,
     TRUST_PROXY: "false",
     WORKSPACE_ENABLED: "false",
-    DUALLANE_STUN_URLS: DEFAULT_STUN_URL,
-    DUALLANE_TURN_URLS: "",
+    DUALLANE_STUN_URLS: "stun:one.example, stun:two.example",
+    DUALLANE_TURN_URLS: "turn:one.example, turns:two.example",
     DUALLANE_TURN_SHARED_SECRET: "",
-    DUALLANE_TURN_USERNAME: "",
-    DUALLANE_TURN_CREDENTIAL: "",
+    DUALLANE_TURN_USERNAME: "synthetic-turn-user",
+    DUALLANE_TURN_CREDENTIAL: "synthetic-turn-credential",
     DUALLANE_EMPTY_ROOM_GRACE_MS: "0",
     DUALLANE_P2P_ROOM_TTL_MS: "7200000",
     DUALLANE_P2P_MAX_FRAME_BYTES: "65536",
@@ -382,6 +386,8 @@ async function requestJson(baseUrl, fixture, state, deadline, scope, runSignal) 
   };
   if (Object.prototype.hasOwnProperty.call(fixture, "body")) {
     options.body = fixture.body;
+  } else if (Object.prototype.hasOwnProperty.call(fixture, "bodyGenerator")) {
+    options.body = buildGeneratedBody(fixture.bodyGenerator, scope, fixture.name);
   }
 
   let response;
@@ -405,7 +411,30 @@ async function requestJson(baseUrl, fixture, state, deadline, scope, runSignal) 
       json = null;
     }
   }
-  return { status: response.status, json };
+  const headers = {};
+  for (const headerName of Object.keys(COMPARABLE_RESPONSE_HEADERS)) {
+    headers[headerName] = response.headers.get(headerName);
+  }
+  return { status: response.status, json, headers };
+}
+
+function buildGeneratedBody(generator, scope, caseName) {
+  if (!generator || typeof generator !== "object" || Array.isArray(generator)) {
+    fail(scope, caseName, "generated request body specification is invalid");
+  }
+  const prefix = generator.prefix;
+  const repeatedValue = generator.repeat;
+  const suffix = generator.suffix;
+  const count = generator.count;
+  if (typeof prefix !== "string" || typeof repeatedValue !== "string" || typeof suffix !== "string" ||
+      !Number.isSafeInteger(count) || count < 0 || repeatedValue.length === 0) {
+    fail(scope, caseName, "generated request body specification is invalid");
+  }
+  const bodyBytes = Buffer.byteLength(prefix) + Buffer.byteLength(suffix) + Buffer.byteLength(repeatedValue) * count;
+  if (bodyBytes > MAX_REQUEST_BYTES) {
+    fail(scope, caseName, "generated request body exceeded the runner bound");
+  }
+  return `${prefix}${repeatedValue.repeat(count)}${suffix}`;
 }
 
 function expandFixturePath(pathValue, state, scope, caseName) {
@@ -457,7 +486,7 @@ function assertRoomResponseShape(response, scope, caseName, kind) {
 }
 
 function assertResponseShape(fixture, response, scope) {
-  if (["health", "ice", "created", "room-status", "error"].includes(fixture.projection) && response.json === null) {
+  if (["health", "ice", "created", "room-status", "error", "parser-error"].includes(fixture.projection) && response.json === null) {
     fail(scope, fixture.name, "expected a JSON response");
   }
   if (fixture.projection === "status") {
@@ -481,6 +510,29 @@ function assertResponseShape(fixture, response, scope) {
   } else if (fixture.projection === "error") {
     if (typeof response.json?.error !== "string") {
       fail(scope, fixture.name, "error response shape did not match");
+    }
+  } else if (fixture.projection === "parser-error") {
+    const expected = fixture.errorContract;
+    if (!expected || typeof expected !== "object" || Array.isArray(expected)) {
+      fail(scope, fixture.name, "parser-error fixture contract is missing");
+    }
+    const actualKeys = Object.keys(response.json).sort();
+    const expectedKeys = Object.keys(expected).sort();
+    if (stableStringify(actualKeys) !== stableStringify(expectedKeys)) {
+      fail(scope, fixture.name, "parser-error fields did not match the fixed contract");
+    }
+    for (const [key, value] of Object.entries(expected)) {
+      if (response.json[key] !== value) {
+        fail(scope, fixture.name, "parser-error field did not match the fixed contract");
+      }
+    }
+  }
+}
+
+function assertResponseHeaders(fixture, response, scope) {
+  for (const [headerName, expectedValue] of Object.entries(COMPARABLE_RESPONSE_HEADERS)) {
+    if (response.headers?.[headerName] !== expectedValue) {
+      fail(scope, fixture.name, "security response header did not match the contract");
     }
   }
 }
@@ -549,6 +601,7 @@ function createNormalizer() {
 function projectHttpResponse(response, normalizer) {
   return {
     status: response.status,
+    headers: response.headers,
     body: normalizer.normalize(response.json)
   };
 }
@@ -585,6 +638,7 @@ async function runHttpFixtures(baseUrl, fixtures, deadline, scope, normalizer, r
     }
     const response = await requestJson(baseUrl, fixture, state, deadline, scope, runSignal);
     assertExpectedStatus(fixture, response, scope);
+    assertResponseHeaders(fixture, response, scope);
     assertResponseShape(fixture, response, scope);
     if (fixture.captureRoom) {
       const roomId = response.json?.roomId;
@@ -624,6 +678,7 @@ function createSocketClient(url, scope, caseName, deadline) {
   const queue = [];
   const waiters = [];
   let closed = false;
+  let closeCode = null;
   let failure = null;
   let openResolve;
   let openReject;
@@ -655,8 +710,11 @@ function createSocketClient(url, scope, caseName, deadline) {
     openReject(error);
     rejectFrames(error);
   });
-  socket.addEventListener("close", () => {
+  socket.addEventListener("close", (event) => {
     closed = true;
+    if (Number.isInteger(event.code)) {
+      closeCode = event.code;
+    }
     closeResolve();
     rejectWaiters(new Error("WebSocket closed"));
   });
@@ -744,6 +802,9 @@ function createSocketClient(url, scope, caseName, deadline) {
       socket.send(JSON.stringify(value));
     },
     waitClosed,
+    closeCode() {
+      return closeCode;
+    },
     dispose
   };
 }
@@ -862,6 +923,8 @@ async function runWebSocketFixtures(baseUrl, httpState, fixture, deadline, scope
     assertFrame(peerListAfterLeave, { type: "system", event: "peer-list" }, scope, "peer-list-after-leave");
     recordFrame(observations, "peer-list-after-leave", peerListAfterLeave, normalizer, scope);
     await first.waitClosed();
+    if (first.closeCode() !== 1005) fail(scope, "leave-close", "close status did not match the empty Node close frame");
+    recordFrame(observations, "leave-close", { code: first.closeCode() }, normalizer, scope);
 
     const fullFirst = createSocketClient(localWebSocketUrl(baseUrl, primaryRoom), scope, "full-first", deadline);
     sockets.push(fullFirst);
@@ -893,6 +956,9 @@ async function runWebSocketFixtures(baseUrl, httpState, fixture, deadline, scope
     const fullRejected = await fullThird.next();
     assertFrame(fullRejected, { type: "system", event: "room-full" }, scope, "room-full");
     recordFrame(observations, "room-full", fullRejected, normalizer, scope);
+    await fullThird.waitClosed();
+    if (fullThird.closeCode() !== 1005) fail(scope, "room-full-close", "close status did not match the empty Node close frame");
+    recordFrame(observations, "room-full-close", { code: fullThird.closeCode() }, normalizer, scope);
 
     const missing = createSocketClient(localWebSocketUrl(baseUrl, fixture.missingRoomId), scope, "missing-room", deadline);
     sockets.push(missing);
@@ -900,6 +966,9 @@ async function runWebSocketFixtures(baseUrl, httpState, fixture, deadline, scope
     const missingFrame = await missing.next();
     assertFrame(missingFrame, { type: "system", event: "room-not-found" }, scope, "room-not-found");
     recordFrame(observations, "room-not-found", missingFrame, normalizer, scope);
+    await missing.waitClosed();
+    if (missing.closeCode() !== 1005) fail(scope, "room-not-found-close", "close status did not match the empty Node close frame");
+    recordFrame(observations, "room-not-found-close", { code: missing.closeCode() }, normalizer, scope);
   } finally {
     for (const client of sockets.reverse()) {
       await client.dispose();
@@ -924,7 +993,23 @@ async function runImplementation({ implementation, binary, port, fixtures, run, 
     };
   } finally {
     await stopProcess(state);
-    await rm(dataDir, { recursive: true, force: true }).catch(() => {});
+    try {
+      await assertDataDirectoryEmpty(dataDir, implementation);
+    } finally {
+      await rm(dataDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+}
+
+async function assertDataDirectoryEmpty(dataDir, scope) {
+  let entries;
+  try {
+    entries = await readdir(dataDir);
+  } catch {
+    fail(scope, "privacy-storage", "P2P data directory could not be inspected");
+  }
+  if (entries.length > 0) {
+    fail(scope, "privacy-storage", "P2P runtime created persistent data artifacts");
   }
 }
 

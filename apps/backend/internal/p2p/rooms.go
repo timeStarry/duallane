@@ -577,7 +577,7 @@ func sendPeer(conn PeerConn, payload []byte) error {
 
 func closePeers(peers []*peerState) {
 	for _, peer := range peers {
-		_ = peer.conn.Close(1000, "room expired")
+		_ = peer.conn.Close(1005, "")
 	}
 }
 

@@ -313,6 +313,7 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 		switch message.Kind {
 		case ClientMessageLeave:
 			h.manager.Leave(roomID, peerID, true)
+			_ = peer.Close(int(websocket.StatusNoStatusRcvd), "")
 			return
 		case ClientMessageSecure:
 			if h.manager.Relay(roomID, peerID, message.Envelope) {
@@ -457,7 +458,9 @@ func envelopeErrorReason(err error) string {
 
 func closeCodeForRoomError(err error) int {
 	if errors.Is(err, ErrRoomFull) || errors.Is(err, ErrRoomNotFound) {
-		return int(websocket.StatusPolicyViolation)
+		// Node ws.close() sends an empty close frame. coder/websocket uses
+		// StatusNoStatusRcvd to request that wire shape, not to send code 1005.
+		return int(websocket.StatusNoStatusRcvd)
 	}
 	return int(websocket.StatusTryAgainLater)
 }

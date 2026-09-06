@@ -24,6 +24,10 @@ test("comparison retains error fields, omission, array order and values", () => 
   assert.equal(compareObservations(observation([1, 2]), observation([2, 1])).length, 1);
   assert.equal(compareObservations(observation(null), { http: [], websocket: [] }).length, 1);
   assert.equal(compareObservations(observation({ a: 1, b: 2 }), observation({ b: 2, a: 1 })).length, 0);
+  assert.equal(compareObservations(
+    observation({ status: 200, headers: { "x-content-type-options": "nosniff" } }),
+    observation({ status: 200, headers: { "x-content-type-options": "same-origin" } })
+  ).length, 1);
 });
 
 test("normalization preserves relationships between distinct generated identities", () => {
@@ -55,6 +59,8 @@ test("child environment explicitly disables Workspace and omits application cred
     assert.equal(Object.hasOwn(environment, key), false);
   }
   assert.equal(environment.DUALLANE_TURN_SHARED_SECRET, "");
+  assert.equal(environment.DUALLANE_TURN_USERNAME, "synthetic-turn-user");
+  assert.equal(environment.DUALLANE_TURN_CREDENTIAL, "synthetic-turn-credential");
 });
 
 test("CLI rejects nonlocal or relative binaries without starting a server", () => {
@@ -69,13 +75,30 @@ test("CLI rejects nonlocal or relative binaries without starting a server", () =
 
 test("HTTP fixtures have unique names and never substitute status-only evidence", async () => {
   const fixtures = JSON.parse(await readFile(new URL("./testdata/p2p/http.json", import.meta.url), "utf8"));
-  assert.equal(fixtures.cases.length, 20);
-  assert.equal(new Set(fixtures.cases.map((entry) => entry.name)).size, 20);
+  assert.equal(fixtures.cases.length, 21);
+  assert.equal(new Set(fixtures.cases.map((entry) => entry.name)).size, 21);
   for (const fixture of fixtures.cases) {
     assert.notEqual(fixture.projection, "status");
     assert.ok(fixture.path.startsWith("/"));
     assert.ok(!fixture.path.includes("#"));
   }
+  assert.doesNotMatch(JSON.stringify(fixtures), /#k=/);
+});
+
+test("parser-error fixtures assert the fixed safe framework fields", async () => {
+  const fixtures = JSON.parse(await readFile(new URL("./testdata/p2p/http.json", import.meta.url), "utf8"));
+  const parserErrors = fixtures.cases.filter((entry) => entry.projection === "parser-error");
+  assert.equal(parserErrors.length, 4);
+  for (const fixture of parserErrors) {
+    assert.deepEqual(Object.keys(fixture.errorContract).sort(), ["code", "error", "message", "statusCode"]);
+    assert.equal(typeof fixture.errorContract.code, "string");
+    assert.equal(typeof fixture.errorContract.message, "string");
+  }
+  const oversized = parserErrors.find((entry) => entry.name === "create-oversize-json");
+  assert.ok(oversized);
+  assert.equal(oversized.expectedStatus, 413);
+  assert.equal(oversized.bodyGenerator.count, 1_048_576);
+  assert.ok(oversized.bodyGenerator.count < 2 * 1024 * 1024);
 });
 
 test("unsolicited invalid or excessive WebSocket frames remain a sticky failure", async (t) => {
