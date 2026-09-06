@@ -849,3 +849,19 @@ workflow registries, and delivery recovery remain separate composition gates.
 The preceding exact commit `2d5bfd4` completed all three CI jobs successfully
 in run `34029306873`, including actual Node fixture freshness checks. This does
 not extend that CI result to later commits or unaccepted worker changes.
+
+### Transaction-Bound Echo Card Refresh
+
+The cards domain now exposes a narrow internal Echo upsert with a fixed official
+author, conversation visibility, immutable recipient/resource binding and the
+Node revision floor. It reuses generic payload validation and card creation;
+updates use a typed PostgreSQL compare-and-swap extension, not generic SQL in
+the delivery coordinator. Replays do not write another event. Shared source
+locks serialize creation and refresh across processes.
+
+Independent fresh PostgreSQL/race passed the card package (11.455 seconds),
+including revision jumps, eight concurrent refreshes, source-rebinding rejection,
+forged-human Echo rejection and an outer failure rolling back the update/event.
+The existing card action and raw JSON tests also passed. Integration-tag
+staticcheck passed after correcting one capitalization diagnostic. This accepts
+the card write seam, not Echo's registered projection/action definitions.

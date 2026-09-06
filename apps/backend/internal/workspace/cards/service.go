@@ -89,6 +89,10 @@ func (s *Service) CreateInTx(ctx context.Context, tx Tx, input CreateInput) (*Ca
 }
 
 func (s *Service) create(ctx context.Context, externalTx Tx, input CreateInput) (*Card, error) {
+	return s.createWithRevision(ctx, externalTx, input, 1)
+}
+
+func (s *Service) createWithRevision(ctx context.Context, externalTx Tx, input CreateInput, initialRevision int64) (*Card, error) {
 	if s == nil || s.repo == nil {
 		return nil, internalError("create workspace card", errors.New("repository is required"))
 	}
@@ -184,7 +188,7 @@ func (s *Service) create(ctx context.Context, externalTx Tx, input CreateInput) 
 		return nil, toError(err)
 	}
 	now := s.nowUTC()
-	insert := CardInsert{CardRecord: CardRecord{ID: cardID, SpaceID: spaceID, ConversationID: conversationID, CardType: block.CardType, SchemaVersion: block.SchemaVersion, PayloadJSON: mustJSON(validated), FallbackText: block.FallbackText, SourceKind: sourceKind, SourceID: sourceID, ResourceType: resourceType, ResourceID: resourceID, VisibilityScope: visibility, CreatedByUserID: &createdBy, Status: StatusActive, Revision: 1, ExpiresAt: cloneTime(input.ExpiresAt), CreatedAt: now, UpdatedAt: now}}
+	insert := CardInsert{CardRecord: CardRecord{ID: cardID, SpaceID: spaceID, ConversationID: conversationID, CardType: block.CardType, SchemaVersion: block.SchemaVersion, PayloadJSON: mustJSON(validated), FallbackText: block.FallbackText, SourceKind: sourceKind, SourceID: sourceID, ResourceType: resourceType, ResourceID: resourceID, VisibilityScope: visibility, CreatedByUserID: &createdBy, Status: StatusActive, Revision: initialRevision, ExpiresAt: cloneTime(input.ExpiresAt), CreatedAt: now, UpdatedAt: now}}
 	var result *Card
 	write := func(tx Tx) error {
 		if err := tx.Lock(ctx, "workspace:card:create:"+spaceID+":"+string(sourceKind)+":"+sourceKey(sourceID, cardID)+":"+block.CardType); err != nil {
@@ -254,7 +258,7 @@ func (s *Service) create(ctx context.Context, externalTx Tx, input CreateInput) 
 			}
 			return conflictError(CodeCardRevisionConflict, "卡片 ID 已存在")
 		}
-		if err := s.writeEvent(ctx, tx, EventInput{SpaceID: spaceID, Type: "card.created", ActorID: actor.ID, ConversationID: stringValue(conversationID), TargetType: "workspace.card", TargetID: cardID, PayloadJSON: evidenceJSON(map[string]any{"cardId": cardID, "cardType": block.CardType, "revision": 1, "status": StatusActive}), CreatedAt: now}); err != nil {
+		if err := s.writeEvent(ctx, tx, EventInput{SpaceID: spaceID, Type: "card.created", ActorID: actor.ID, ConversationID: stringValue(conversationID), TargetType: "workspace.card", TargetID: cardID, PayloadJSON: evidenceJSON(map[string]any{"cardId": cardID, "cardType": block.CardType, "revision": initialRevision, "status": StatusActive}), CreatedAt: now}); err != nil {
 			return err
 		}
 		if err := s.writeAudit(ctx, tx, actor, input.Meta, AuditInput{SpaceID: spaceID, Action: "card.create", TargetType: "workspace.card", TargetID: cardID, Result: "success", CreatedAt: now}); err != nil {
