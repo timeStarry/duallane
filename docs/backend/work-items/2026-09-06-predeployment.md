@@ -2256,3 +2256,14 @@ retain the name/mode proof. The probe container was removed by its exact owned
 ID and had no data mounts. This was a Docker lifecycle observation, not a
 successful end-to-end drain run; the new runner's real isolated PostgreSQL
 rehearsal and the complete release coordinator remain pending.
+
+### First-Cutover Node Authority Component
+
+Parent reviewed the Node authority verifier and independently passed its 17
+Linux results (0.234 seconds). Cases cover the retained stopped singleton,
+database/user/migration agreement, local/S3 authority, physical volume names,
+read-only credential binding, fixed path-style behavior, literal dollar values
+and private inputs. Docker calls are limited to read-only `ps`/`inspect` with
+bounded output and fixed errors. This is fake-runner component evidence; the
+actual container-mount check and integrated first-cutover/recovery rehearsal
+are still required.

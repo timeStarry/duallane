@@ -384,6 +384,16 @@ exact container ID, image and run/project/service labels. Ambiguous ownership
 is left for operator review, never removed by a guessed name. This component
 does not stop writers or authorize a handoff; the coordinator must do so first.
 
+For the first Node-to-Go cutover, `release-node-authority.mjs verify --compose
+<private-go.json> --node-compose <private-node.json>` compares the resolved
+database, local/S3 storage and physical named-volume authority with the actual
+retained Node API and PostgreSQL containers. The Node API may be stopped but
+must remain a unique identifiable owner. The supported database form is the
+standard Compose `PGHOST=postgres`, port 5432, database and user shared by every
+client/migration process; unsupported connection overrides fail closed. The
+credential mount must point to the same file and remain read-only. This is a
+read-only identity check, not backup, data migration or a writer fence.
+
 The database snapshot still reports `writers: not_proven` and
 `provider: not_checked`; the additional provider observation is a separate
 outer field. Neither observation proves an admission fence or the absence of
