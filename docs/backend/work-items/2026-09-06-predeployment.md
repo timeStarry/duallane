@@ -887,3 +887,19 @@ back after a late scheduler failure, eight concurrent retries yield one message
 and one job, and a card revision refresh creates neither again. The probe cannot
 send notifications. Real notification preference fixtures, actual Node delivery
 effect comparisons, application registration and worker recovery remain gates.
+
+### Feishu Conversion Safety Foundation
+
+The restricted converter and registered action adapter preserve Node's ordered
+canonical JSON, duplicate-key semantics, UTF-16 payload units and error priority.
+Parent review required fixes for non-finite numbers, WHATWG private IPv4 aliases,
+IPv4-mapped IPv6 (including mapped public addresses), and ECMAScript whitespace.
+The existing approved WHATWG parser is reused; no dependency was added. Raw
+payload output is revalidated before it can cross the cards persistence seam.
+
+Independent Node converter/action/raw-boundary tests passed 31/31. Go/race
+passed Feishu (1.081 seconds) and cards (1.028 seconds), followed by staticcheck
+after removing six unused helpers/assignments. These accept the converter and
+typed action foundation, not the real action PostgreSQL bridge or Gateway/main
+registration. Final persisted fallback-text behavior for lone UTF-16 units is
+being characterized separately against the actual Node HTTP writer.

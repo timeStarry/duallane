@@ -1,0 +1,30 @@
+[
+  {
+    "name": "node-confirm-action-success",
+    "ok": true,
+    "result": {
+      "accepted": true,
+      "actionId": "confirm"
+    },
+    "event": {
+      "type": "card.action",
+      "spaceId": "space-synthetic",
+      "actorId": "actor-synthetic",
+      "conversationId": "conversation-synthetic",
+      "targetType": "workspace.card",
+      "targetId": "card-synthetic",
+      "payloadJSON": "{\"botId\":\"bot-synthetic\",\"botUserId\":\"bot-user-synthetic\",\"cardId\":\"card-synthetic\",\"actionId\":\"confirm\",\"clientActionId\":\"client-synthetic\",\"data\":{\"0\":\"zero\",\"z\":\"last\",\"a\":\"first\"}}"
+    }
+  },
+  {
+    "name": "node-action-no-active-bot",
+    "ok": false,
+    "errorCode": "card.unknown_action",
+    "eventCount": 0
+  },
+  {
+    "name": "node-action-input-rejects-content",
+    "ok": false,
+    "errorCode": "card.feishu_action_input_forbidden"
+  }
+]

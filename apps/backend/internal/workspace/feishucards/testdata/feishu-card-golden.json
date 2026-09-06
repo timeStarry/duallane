@@ -1,0 +1,102 @@
+[
+  {
+    "name": "all-elements-and-button-styles",
+    "ok": true,
+    "fallbackText": "审阅卡片",
+    "payloadJSON": "{\"format\":\"duallane.feishu-card.v1\",\"config\":{\"version\":\"1.0\",\"wideScreen\":true},\"header\":{\"title\":\"审阅卡片\",\"tone\":\"info\"},\"elements\":[{\"type\":\"text\",\"format\":\"plain\",\"text\":\"纯文本\"},{\"type\":\"text\",\"format\":\"markdown\",\"text\":\"内嵌 [公开说明](https://example.com/docs)\"},{\"type\":\"text\",\"format\":\"markdown\",\"text\":\"[帮助](https://example.com/help)\"},{\"type\":\"note\",\"parts\":[{\"format\":\"plain\",\"text\":\"仅合成数据\"},{\"format\":\"markdown\",\"text\":\"再次查看 [说明](https://example.com/note)\"}]},{\"type\":\"divider\"},{\"type\":\"actions\",\"buttons\":[{\"type\":\"button\",\"label\":\"确认\",\"actionId\":\"confirm\",\"style\":\"primary\",\"data\":{\"0\":\"zero\",\"z\":\"last\",\"a\":\"first\"}}]},{\"type\":\"columns\",\"columns\":[{\"width\":\"weighted\",\"weight\":1,\"elements\":[{\"type\":\"text\",\"format\":\"plain\",\"text\":\"左列\"}]},{\"width\":\"auto\",\"elements\":[{\"type\":\"text\",\"format\":\"markdown\",\"text\":\"[右列](https://example.com/right)\"}]}]}]}"
+  },
+  {
+    "name": "button-list-and-button-styles",
+    "ok": true,
+    "fallbackText": "Bot 卡片",
+    "payloadJSON": "{\"format\":\"duallane.feishu-card.v1\",\"config\":{\"version\":\"1.0\",\"wideScreen\":false},\"header\":null,\"elements\":[{\"type\":\"actions\",\"buttons\":[{\"type\":\"button\",\"label\":\"取消\",\"actionId\":\"cancel\",\"style\":\"default\",\"data\":{}},{\"type\":\"button\",\"label\":\"刷新\",\"actionId\":\"refresh\",\"style\":\"danger\",\"data\":{\"mode\":\"synthetic\"}},{\"type\":\"button\",\"label\":\"提交\",\"actionId\":\"submit\",\"style\":\"default\",\"data\":null}]}]}"
+  },
+  {
+    "name": "ordered-data-and-lone-surrogate",
+    "ok": true,
+    "fallbackText": "Bot 卡片",
+    "payloadJSON": "{\"format\":\"duallane.feishu-card.v1\",\"config\":{\"version\":\"1.0\",\"wideScreen\":false},\"header\":null,\"elements\":[{\"type\":\"actions\",\"buttons\":[{\"type\":\"button\",\"label\":\"确认\",\"actionId\":\"confirm\",\"style\":\"default\",\"data\":{\"0\":\"zero\",\"z\":\"last\",\"a\":\"first\",\"surrogate\":\"\\ud800\"}}]}]}"
+  },
+  {
+    "name": "nested-columns-and-reconstruction",
+    "ok": true,
+    "fallbackText": "Bot 卡片",
+    "payloadJSON": "{\"format\":\"duallane.feishu-card.v1\",\"config\":{\"version\":\"1.0\",\"wideScreen\":false},\"header\":null,\"elements\":[{\"type\":\"columns\",\"columns\":[{\"width\":\"weighted\",\"weight\":1,\"elements\":[{\"type\":\"actions\",\"buttons\":[{\"type\":\"button\",\"label\":\"确认\",\"actionId\":\"confirm\",\"style\":\"default\",\"data\":{\"choice\":\"yes\"}}]}]},{\"width\":\"weighted\",\"weight\":1,\"elements\":[{\"type\":\"note\",\"parts\":[{\"format\":\"plain\",\"text\":\"列内备注\"}]}]}]}]}"
+  },
+  {
+    "name": "canonical-payload-reconstruction",
+    "ok": true,
+    "fallbackText": "重建",
+    "payloadJSON": "{\"format\":\"duallane.feishu-card.v1\",\"config\":{\"version\":\"1.0\",\"wideScreen\":false},\"header\":{\"title\":\"重建\",\"subtitle\":\"合成\",\"tone\":\"warning\"},\"elements\":[{\"type\":\"text\",\"format\":\"plain\",\"text\":\"正文\"},{\"type\":\"text\",\"format\":\"markdown\",\"text\":\"[链接](https://example.com/rebuild)\"},{\"type\":\"note\",\"parts\":[{\"format\":\"plain\",\"text\":\"备注\"}]},{\"type\":\"divider\"},{\"type\":\"actions\",\"buttons\":[{\"type\":\"button\",\"label\":\"提交\",\"actionId\":\"submit\",\"style\":\"default\",\"data\":{\"0\":\"zero\",\"z\":\"last\",\"a\":\"first\",\"surrogate\":\"\\ud800\"}}]},{\"type\":\"columns\",\"columns\":[{\"width\":\"weighted\",\"weight\":1,\"elements\":[{\"type\":\"text\",\"format\":\"plain\",\"text\":\"列\"}]},{\"width\":\"auto\",\"elements\":[{\"type\":\"divider\"}]}]}]}"
+  },
+  {
+    "name": "invalid-root",
+    "ok": false,
+    "errorCode": "card.feishu_invalid"
+  },
+  {
+    "name": "missing-elements",
+    "ok": false,
+    "errorCode": "card.feishu_elements_required"
+  },
+  {
+    "name": "unsafe-html",
+    "ok": false,
+    "errorCode": "card.unsafe_content"
+  },
+  {
+    "name": "private-loopback",
+    "ok": false,
+    "errorCode": "card.private_url"
+  },
+  {
+    "name": "private-host-suffix",
+    "ok": false,
+    "errorCode": "card.private_url"
+  },
+  {
+    "name": "cleartext-url",
+    "ok": false,
+    "errorCode": "card.url_forbidden"
+  },
+  {
+    "name": "unknown-action",
+    "ok": false,
+    "errorCode": "card.unknown_action"
+  },
+  {
+    "name": "duplicate-action",
+    "ok": false,
+    "errorCode": "card.feishu_duplicate_action"
+  },
+  {
+    "name": "unknown-element",
+    "ok": false,
+    "errorCode": "card.feishu_unknown_element"
+  },
+  {
+    "name": "unknown-field",
+    "ok": false,
+    "errorCode": "card.feishu_unknown_field"
+  },
+  {
+    "name": "unsupported-version",
+    "ok": false,
+    "errorCode": "card.feishu_unsupported_version"
+  },
+  {
+    "name": "oversize-text",
+    "ok": false,
+    "errorCode": "card.text_too_large"
+  },
+  {
+    "name": "too-many-nodes",
+    "ok": false,
+    "errorCode": "card.payload_too_complex"
+  },
+  {
+    "name": "private-mapped-ipv6",
+    "ok": false,
+    "errorCode": "card.private_url"
+  }
+]
