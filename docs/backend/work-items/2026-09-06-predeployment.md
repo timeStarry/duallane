@@ -1864,3 +1864,19 @@ the disposable database's empty public schema returned `blocked`/exit 2; an
 invalid synthetic connection string returned only `snapshot_failed`/exit 1,
 without repeating credentials. Dockerfile build/copy wiring is present; the
 final rebuilt image and coordinator integration still require verification.
+
+### Bounded Read-Only Gateway Smoke
+
+Parent independently passed all four grouped tests (280 ms), including exact
+Workspace enabled/disabled behavior, Node SPA-only private paths, unsafe inputs,
+redirect/body limits, and unauthorized ready frames immediately followed by a
+close (including asynchronous Blob conversion). Frame validation completes
+before an otherwise acceptable close can pass the check.
+
+The existing owned six-service diagnostic gateway passed 13 read-only
+observations: HTML, five assets, health, ICE, unauthenticated bootstrap, three
+private paths and unauthenticated Workspace WebSocket. Its runtime version is
+`candidate`; the intentional first run with expected `0.15.5` failed the version
+gate. This verifies probe behavior on the diagnostic stack, not a final release
+or immutable commit match. No business data was created; real Node gateway and
+final-image release-coordinator smoke remain integration work.

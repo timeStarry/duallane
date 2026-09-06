@@ -337,6 +337,21 @@ failed. Writer/provider limitations remain present even on exit 0. The guarded
 release coordinator must separately enforce the fence and recovery sequence;
 running this command by itself is not a deployment or cleanup procedure.
 
+`scripts/backend/gateway-readonly-smoke.mjs` checks an explicit local HTTP
+gateway without credentials or mutations. Supply `--base-url`,
+`--expected-version`, `--full-commit`, `--profile node-default|go-full` and
+`--workspace-enabled true|false` (Go full requires true). It bounds requests,
+HTML/assets and WebSocket frames, refuses redirects and external targets, checks
+unauthenticated Workspace denial and private endpoints, and prints only safe
+stage/count results. The immutable commit must be checked against actual image
+and container identities separately: public health exposes version, not commit,
+and the smoke report explicitly says `publicCommit: not-exposed`.
+
+Go private paths must return 404. The retained Node gateway may instead return
+its exact static SPA HTML; that is classified as no private endpoint exposure,
+not backend readiness. These unauthenticated read-only probes cannot replace
+the disposable authenticated browser, upload, provider and recovery gates.
+
 Before any Go production cutover, `deploy/production/deploy.sh` must be extended
 and tested to understand every live application service. The target release
 sequence is:
