@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bootstrap"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/botgateway"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bots"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/conversations"
@@ -121,6 +122,8 @@ type RouterOptions struct {
 	Email              EmailService
 	Emotes             emoteService
 	Bots               BotService
+	BotGateway         BotGatewayService
+	BotGatewaySetup    BotGatewaySetupService
 	Realtime           http.Handler
 	FrontendURL        string
 	PublicBaseURL      string
@@ -146,6 +149,10 @@ func NewRouter(options RouterOptions) http.Handler {
 		realtimeHandler = http.NotFoundHandler()
 	}
 	router.With(options.Gate.Middleware).Handle("/ws/workspace", realtimeHandler)
+	registerBotGatewayRoutes(router, BotGatewayRouteOptions{
+		Gateway: options.BotGateway, Setup: options.BotGatewaySetup,
+		WorkspaceEnabled: options.Gate.Enabled(), TrustProxy: options.TrustProxy,
+	})
 	router.Route("/api/workspace", func(workspace chi.Router) {
 		workspace.Use(options.Gate.Middleware)
 		workspace.Get("/bootstrap", bootstrapHandler(options))
@@ -340,6 +347,7 @@ func writeError(response http.ResponseWriter, err error) {
 	var emailError *email.Error
 	var emoteError *emotes.Error
 	var botError *bots.Error
+	var gatewayError *botgateway.Error
 	var transportError *publicError
 	switch {
 	case errors.As(err, &authError):
@@ -370,6 +378,8 @@ func writeError(response http.ResponseWriter, err error) {
 		value = &publicError{Code: emoteError.Code, Message: emoteError.Message, StatusCode: emoteError.StatusCode}
 	case errors.As(err, &botError):
 		value = &publicError{Code: botError.Code, Message: botError.Message, StatusCode: botError.StatusCode}
+	case errors.As(err, &gatewayError):
+		value = &publicError{Code: gatewayError.Code, Message: gatewayError.Message, StatusCode: publicStatus(gatewayError.StatusCode)}
 	case errors.As(err, &transportError):
 		value = transportError
 	}

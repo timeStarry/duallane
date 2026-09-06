@@ -12,6 +12,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/botgateway"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bots"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/gate"
 )
 
 // BotGatewayService is the transport-facing portion of the Bot Gateway. Bot
@@ -185,12 +186,23 @@ func withBotGatewayAuth(options BotGatewayRouteOptions, handler botGatewayAuthHa
 		if missingService(response, options.Gateway) {
 			return
 		}
+		authorization := request.Header.Get("Authorization")
+		// The domain also accepts a raw token for trusted adapters. HTTP only
+		// accepts the Bearer envelope; cookies and query parameters are not Bot credentials.
+		if !strings.HasPrefix(authorization, "Bearer") {
+			writeError(response, botgateway.NewError(botgateway.CodeInvalidToken, botgateway.MessageInvalidToken, http.StatusUnauthorized))
+			return
+		}
+		if _, err := botgateway.ExtractBearerToken(authorization); err != nil {
+			writeError(response, err)
+			return
+		}
 		spaceID, err := botGatewaySpaceID(request, options)
 		if err != nil {
 			writeError(response, err)
 			return
 		}
-		value, err := options.Gateway.Authenticate(request.Context(), request.Header.Get("Authorization"), botgateway.TokenAuthOptions{SpaceID: spaceID})
+		value, err := options.Gateway.Authenticate(request.Context(), authorization, botgateway.TokenAuthOptions{SpaceID: spaceID})
 		if err != nil {
 			writeError(response, err)
 			return
@@ -220,7 +232,7 @@ func withBotGatewaySetup(options BotGatewayRouteOptions, handler botGatewaySetup
 }
 
 func workspaceDisabledError() *publicError {
-	return &publicError{Code: "workspace.disabled", Message: "共享空间暂未开放", StatusCode: http.StatusServiceUnavailable}
+	return &publicError{Code: gate.DisabledCode, Message: gate.DisabledMessage, StatusCode: http.StatusServiceUnavailable}
 }
 
 func invalidBotGatewayRequest() *publicError {

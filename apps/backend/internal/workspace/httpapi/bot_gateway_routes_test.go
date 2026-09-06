@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/botgateway"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bots"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/gate"
 )
 
 type botGatewayRouteFake struct {
@@ -130,7 +132,7 @@ func gatewayJSONRequest(method, target string, body string) *http.Request {
 	if body != "" {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	request.Header.Set("Authorization", "Bearer dl_bot_route_token")
+	request.Header.Set("Authorization", testGatewayAuthorization)
 	request.Header.Set("X-Request-ID", "req_gateway")
 	request.Header.Set("User-Agent", "gateway-test/1")
 	request.RemoteAddr = "192.0.2.10:1234"
@@ -167,7 +169,7 @@ func TestBotGatewayRoutesAuthenticateAndForwardRESTRequests(t *testing.T) {
 
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, gatewayJSONRequest(http.MethodGet, "/api/bot-gateway/v1/me", ""))
-	if response.Code != http.StatusOK || gateway.authHeader != "Bearer dl_bot_route_token" || gateway.spaceID != "space_resolved" {
+	if response.Code != http.StatusOK || gateway.authHeader != testGatewayAuthorization || gateway.spaceID != "space_resolved" {
 		t.Fatalf("me response/status or auth mismatch: status=%d auth=%q space=%q", response.Code, gateway.authHeader, gateway.spaceID)
 	}
 
@@ -304,9 +306,92 @@ func TestBotGatewayRoutesUseDefaultSpaceWithoutResolver(t *testing.T) {
 	registerBotGatewayRoutes(router, BotGatewayRouteOptions{Gateway: gateway, WorkspaceEnabled: true})
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/bot-gateway/v1/me", nil)
-	request.Header.Set("Authorization", "Bearer dl_bot_route_token")
+	request.Header.Set("Authorization", testGatewayAuthorization)
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || gateway.spaceID != auth.DefaultSpaceID {
 		t.Fatalf("default space mismatch: status=%d space=%q", response.Code, gateway.spaceID)
+	}
+}
+
+const testGatewayAuthorization = "Bearer dl_bot_abcdefghijklmnopqrstuvwxyz012345"
+
+func TestBotGatewayRootRouterUsesTokenIdentity(t *testing.T) {
+	gateway := &botGatewayRouteFake{}
+	resolver := &fakeResolver{actor: &auth.Actor{ID: "browser-owner"}}
+	router := NewRouter(RouterOptions{Gate: gate.New("true"), BotGateway: gateway, ActorResolver: resolver})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, gatewayJSONRequest(http.MethodGet, "/api/bot-gateway/v1/me", ""))
+	if response.Code != http.StatusOK || resolver.calls != 0 || gateway.spaceID != auth.DefaultSpaceID {
+		t.Fatalf("gateway root wiring: status=%d browserAuth=%d space=%q", response.Code, resolver.calls, gateway.spaceID)
+	}
+}
+
+func TestBotGatewayRootRouterGatesEveryRESTEndpoint(t *testing.T) {
+	endpoints := []struct{ method, path string }{
+		{http.MethodGet, "/api/bot-gateway/v1/me"},
+		{http.MethodPost, "/api/bot-gateway/v1/events/ack"},
+		{http.MethodGet, "/api/bot-gateway/v1/conversations/c/context"},
+		{http.MethodPost, "/api/bot-gateway/v1/messages"},
+		{http.MethodPost, "/api/bot-gateway/v1/cards"},
+		{http.MethodPatch, "/api/bot-gateway/v1/cards/c"},
+		{http.MethodGet, "/api/bot-gateway/v1/attachments/a"},
+		{http.MethodPost, "/api/bot-gateway/v1/attachments"},
+		{http.MethodPost, "/api/bot-gateway/v1/typing"},
+		{http.MethodPost, "/api/bot-gateway/v1/setup/request"},
+		{http.MethodGet, "/api/bot-gateway/v1/setup/status"},
+		{http.MethodPost, "/api/bot-gateway/v1/setup/exchange"},
+	}
+	for _, flag := range []string{"", "false", "TRUE", " true", "true "} {
+		for _, endpoint := range endpoints {
+			t.Run(flag+"/"+endpoint.method+endpoint.path, func(t *testing.T) {
+				gateway := &botGatewayRouteFake{}
+				setup := &botGatewaySetupRouteFake{}
+				router := NewRouter(RouterOptions{Gate: gate.New(flag), BotGateway: gateway, BotGatewaySetup: setup})
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, gatewayJSONRequest(endpoint.method, endpoint.path, "invalid-json"))
+				payload := gatewayResponseJSON(t, response)
+				value := payload["error"].(map[string]any)
+				if response.Code != http.StatusServiceUnavailable || value["code"] != gate.DisabledCode || value["message"] != gate.DisabledMessage || gateway.authHeader != "" || setup.requestInput.SetupID != "" {
+					t.Fatalf("disabled endpoint reached a dependency or changed contract: %d %s", response.Code, response.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func TestBotGatewayRejectsCredentialsOutsideBearerHeader(t *testing.T) {
+	for _, header := range []string{"", "dl_bot_abcdefghijklmnopqrstuvwxyz012345", "Basic abc", "bearer dl_bot_abcdefghijklmnopqrstuvwxyz012345", "Bearer dl_bot_short"} {
+		gateway := &botGatewayRouteFake{}
+		router := NewRouter(RouterOptions{Gate: gate.New("true"), BotGateway: gateway})
+		request := httptest.NewRequest(http.MethodGet, "/api/bot-gateway/v1/me?token=dl_bot_abcdefghijklmnopqrstuvwxyz012345", nil)
+		request.Header.Set("Authorization", header)
+		request.AddCookie(&http.Cookie{Name: "workspace_session", Value: "browser-session"})
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusUnauthorized || gateway.authHeader != "" || strings.Contains(response.Body.String(), "abcdefghijklmnopqrstuvwxyz") {
+			t.Fatalf("non-Bearer credentials accepted or exposed: status=%d body=%s", response.Code, response.Body.String())
+		}
+	}
+}
+
+type failingBotGatewayRoute struct {
+	botGatewayRouteFake
+	err error
+}
+
+func (f *failingBotGatewayRoute) Authenticate(context.Context, string, botgateway.TokenAuthOptions) (*botgateway.Auth, error) {
+	return nil, f.err
+}
+
+func TestBotGatewayRootRouterProjectsSafeDomainErrors(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict, http.StatusInternalServerError} {
+		domain := botgateway.NewError("gateway.test", "safe message", status)
+		domain.Cause = errors.New("postgres://secret:password@private-host/db")
+		router := NewRouter(RouterOptions{Gate: gate.New("true"), BotGateway: &failingBotGatewayRoute{err: domain}})
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, gatewayJSONRequest(http.MethodGet, "/api/bot-gateway/v1/me", ""))
+		if response.Code != status || !strings.Contains(response.Body.String(), `"code":"gateway.test"`) || strings.Contains(response.Body.String(), "password") || strings.Contains(response.Body.String(), "private-host") {
+			t.Fatalf("unsafe or incorrect gateway error: status=%d body=%s", response.Code, response.Body.String())
+		}
 	}
 }
