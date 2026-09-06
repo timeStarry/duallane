@@ -1506,3 +1506,25 @@ key is rejected. The full HTTP PostgreSQL/race suite passed (6.964), as did
 tagged staticcheck. The original full browser flow is being rerun without
 altering its assertions, timeout or viewport. The earlier history right-click
 timeout was not reproduced in this diagnostic; no root-cause claim is made.
+
+### Explicit Release Profiles And Passive Candidate Preflight
+
+The release script now keeps `node-default` unchanged unless `go-full` is
+explicitly selected. The Go overlay preserves the existing database/data
+authority and reserves Node for rollback. Candidate P2P/Web use an owned private
+network; Workspace/worker reach PostgreSQL without publishing production
+upstream aliases and mount `/app/data` read-only. Actual container inspection
+must prove the passive runtime mode, UID, read-only mount/rootfs, release labels,
+and absence of published ports. Candidate health failure precedes owner handoff.
+
+Parent independently passed all 18 synthetic release-helper tests (19.154
+seconds), including actual Node `candidate_compose` function composition,
+candidate-name collisions, inventory/ps failures, permission denial, writable
+mount/rootfs rejection, Node rollback fencing, replacement IDs, and Docker
+restart recovery. Actual resolved Compose checks passed for Node/Go dependencies,
+candidate RO versus active RW on the same volume, shared Workspace/worker/migrate
+image reference, and P2P secret/mount isolation. No release script, real rollback,
+daemon restart or production operation was executed. The separate image-ID
+equality gate, durable Go-to-Go upgrade protocol and upload drain/fence checks
+remain follow-up work; this slice intentionally refuses an already active Go
+owner. A resolved image reference alone is not immutable-image proof.

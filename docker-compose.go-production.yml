@@ -1,0 +1,185 @@
+# Opt-in only through deploy/production/deploy.sh --release-profile go-full.
+# Never add this file to the default Node release or run a bare compose up.
+x-go-logging: &go-logging
+  driver: json-file
+  options:
+    max-size: "${DUALLANE_LOG_MAX_SIZE:-10m}"
+    max-file: "${DUALLANE_LOG_MAX_FILE:-5}"
+
+x-workspace-build: &workspace-build
+  context: .
+  dockerfile: Dockerfile.workspace
+  args:
+    DUALLANE_APP_VERSION: ${DUALLANE_APP_VERSION:?release version is required}
+    DUALLANE_GIT_COMMIT: ${DUALLANE_GIT_COMMIT:?full release commit is required}
+    GOPROXY: ${DUALLANE_GO_BUILD_PROXY:-https://proxy.golang.org,direct}
+    DEBIAN_MIRROR: ${DUALLANE_DEBIAN_BUILD_MIRROR:-http://deb.debian.org}
+
+x-workspace-environment: &workspace-environment
+  HOST: 0.0.0.0
+  PORT: "8787"
+  NODE_ENV: production
+  DUALLANE_APP_VERSION: ${DUALLANE_APP_VERSION:?release version is required}
+  DUALLANE_GIT_COMMIT: ${DUALLANE_GIT_COMMIT:?full release commit is required}
+  WORKSPACE_ENABLED: ${WORKSPACE_ENABLED:-false}
+  DUALLANE_DATA_DIR: /app/data
+  PGHOST: postgres
+  PGPORT: "5432"
+  PGDATABASE: ${POSTGRES_DB:-duallane}
+  PGUSER: ${POSTGRES_USER:-duallane}
+  PGPASSWORD: ${POSTGRES_PASSWORD:?database password is required}
+  DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
+  DATABASE_SSL: "false"
+  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8787}
+  WORKSPACE_FRONTEND_URL: ${WORKSPACE_FRONTEND_URL:-}
+  WORKSPACE_SMTP_ENCRYPTION_KEY: ${WORKSPACE_SMTP_ENCRYPTION_KEY:-}
+  WORKSPACE_NTFY_BASE_URL: ${WORKSPACE_NTFY_BASE_URL:-https://ntfy.tsio.top}
+  WORKSPACE_STORAGE_DRIVER: ${WORKSPACE_STORAGE_DRIVER:-local}
+  WORKSPACE_S3_ENDPOINT: ${WORKSPACE_S3_ENDPOINT:-http://100.99.0.4:9000}
+  WORKSPACE_S3_BUCKET: ${WORKSPACE_S3_BUCKET:-duallane}
+  WORKSPACE_S3_REGION: ${WORKSPACE_S3_REGION:-us-east-1}
+  WORKSPACE_S3_CREDENTIALS_FILE: /run/secrets/workspace-s3
+  WORKSPACE_STORAGE_LOCAL_READ_FALLBACK: ${WORKSPACE_STORAGE_LOCAL_READ_FALLBACK:-true}
+  WORKSPACE_STORAGE_LOCAL_MIRROR_WRITE: ${WORKSPACE_STORAGE_LOCAL_MIRROR_WRITE:-true}
+
+x-workspace-dependencies: &workspace-dependencies
+  postgres:
+    condition: service_healthy
+  migrate:
+    condition: service_completed_successfully
+
+services:
+  api:
+    profiles: [rollback]
+
+  web:
+    build:
+      dockerfile: deploy/candidate/Dockerfile.web
+    user: "101:101"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx:uid=101,gid=101,mode=0700
+    # Requires Compose 2.24.4+: remove the legacy api dependency completely.
+    depends_on: !override
+      p2p:
+        condition: service_healthy
+      workspace:
+        condition: service_healthy
+
+  p2p:
+    image: duallane-go-p2p:${DUALLANE_GIT_COMMIT:?full release commit is required}
+    build:
+      context: .
+      dockerfile: Dockerfile.p2p
+      args:
+        DEBIAN_MIRROR: ${DUALLANE_DEBIAN_BUILD_MIRROR:-http://deb.debian.org}
+        DUALLANE_APP_VERSION: ${DUALLANE_APP_VERSION:?release version is required}
+        DUALLANE_GIT_COMMIT: ${DUALLANE_GIT_COMMIT:?full release commit is required}
+        GOPROXY: ${DUALLANE_GO_BUILD_PROXY:-https://proxy.golang.org,direct}
+    user: "65532:65532"
+    read_only: true
+    expose: ["8787"]
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8787"
+      DUALLANE_APP_VERSION: ${DUALLANE_APP_VERSION:?release version is required}
+      DUALLANE_GIT_COMMIT: ${DUALLANE_GIT_COMMIT:?full release commit is required}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8787}
+      TRUST_PROXY: ${TRUST_PROXY:-true}
+      DUALLANE_STUN_URLS: ${DUALLANE_STUN_URLS:-stun:stun.l.google.com:19302}
+      DUALLANE_TURN_URLS: ${DUALLANE_TURN_URLS:-}
+      DUALLANE_TURN_SHARED_SECRET: ${DUALLANE_TURN_SHARED_SECRET:-}
+      DUALLANE_TURN_TTL_SECONDS: ${DUALLANE_TURN_TTL_SECONDS:-600}
+      DUALLANE_TURN_USERNAME: ${DUALLANE_TURN_USERNAME:-}
+      DUALLANE_TURN_CREDENTIAL: ${DUALLANE_TURN_CREDENTIAL:-}
+      DUALLANE_EMPTY_ROOM_GRACE_MS: ${DUALLANE_EMPTY_ROOM_GRACE_MS:-10000}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/duallane-healthcheck", "http://127.0.0.1:8787/api/health"]
+      interval: 3s
+      timeout: 4s
+      retries: 20
+      start_period: 5s
+    logging: *go-logging
+    restart: always
+
+  workspace:
+    image: duallane-go-workspace:${DUALLANE_GIT_COMMIT:?full release commit is required}
+    build: *workspace-build
+    entrypoint: ["/usr/local/bin/duallane-workspace"]
+    user: "65532:65532"
+    read_only: true
+    tmpfs: [/tmp]
+    expose: ["8787"]
+    depends_on: *workspace-dependencies
+    environment:
+      <<: *workspace-environment
+      WORKSPACE_CANDIDATE_HEALTH_ONLY: "false"
+      WORKER_VALIDATE_ONLY: "false"
+      WORKSPACE_EMAIL_WORKER_ENABLED: "false"
+      WORKSPACE_NTFY_WORKER_ENABLED: "false"
+      WORKSPACE_MAINTENANCE_WORKER_ENABLED: "false"
+      WORKSPACE_ECHO_WORKER_ENABLED: "false"
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      GITHUB_PROXY_URL: ${GITHUB_PROXY_URL:-}
+      GITHUB_OAUTH_TIMEOUT_MS: ${GITHUB_OAUTH_TIMEOUT_MS:-8000}
+      TRUST_PROXY: ${TRUST_PROXY:-true}
+    volumes:
+      - duallane-data:/app/data
+    secrets:
+      - source: workspace-s3
+        target: workspace-s3
+        mode: 0600
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/duallane-healthcheck", "http://127.0.0.1:8787/readyz"]
+      interval: 3s
+      timeout: 4s
+      retries: 20
+      start_period: 10s
+    logging: *go-logging
+    restart: always
+
+  worker:
+    image: duallane-go-workspace:${DUALLANE_GIT_COMMIT:?full release commit is required}
+    build: *workspace-build
+    entrypoint: ["/usr/local/bin/duallane-worker"]
+    user: "65532:65532"
+    read_only: true
+    tmpfs: [/tmp]
+    depends_on: *workspace-dependencies
+    environment:
+      <<: *workspace-environment
+      DATABASE_POOL_MAX: ${WORKSPACE_WORKER_DATABASE_POOL_MAX:-4}
+      WORKSPACE_CANDIDATE_HEALTH_ONLY: "false"
+      WORKER_VALIDATE_ONLY: "false"
+      WORKSPACE_EMAIL_WORKER_ENABLED: ${WORKSPACE_EMAIL_WORKER_ENABLED:-true}
+      WORKSPACE_NTFY_WORKER_ENABLED: ${WORKSPACE_NTFY_WORKER_ENABLED:-true}
+      WORKSPACE_MAINTENANCE_WORKER_ENABLED: ${WORKSPACE_MAINTENANCE_WORKER_ENABLED:-false}
+      WORKSPACE_ECHO_WORKER_ENABLED: ${WORKSPACE_ECHO_WORKER_ENABLED:-false}
+    volumes:
+      - duallane-data:/app/data
+    secrets:
+      - source: workspace-s3
+        target: workspace-s3
+        mode: 0600
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/duallane-healthcheck", "http://127.0.0.1:8787/readyz"]
+      interval: 3s
+      timeout: 4s
+      retries: 20
+      start_period: 10s
+    logging: *go-logging
+    restart: always
+
+  migrate:
+    image: duallane-go-workspace:${DUALLANE_GIT_COMMIT:?full release commit is required}
+    build: *workspace-build
+    entrypoint: ["/usr/local/bin/duallane-migrate"]
+    command: []
+    user: "65532:65532"
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      DUALLANE_MIGRATIONS_DIR: /app/migrations
+    logging: *go-logging

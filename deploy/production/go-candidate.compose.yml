@@ -1,0 +1,39 @@
+# Opt-in candidate-only network overlay. deploy.sh supplies the exact,
+# commit-scoped external network after it verifies its ownership labels.
+# This file is never part of the active production Compose project.
+
+networks:
+  candidate:
+    external: true
+    name: ${DUALLANE_GO_CANDIDATE_NETWORK:?candidate network is required}
+
+services:
+  p2p:
+    networks:
+      candidate:
+        aliases:
+          - p2p
+
+  workspace:
+    networks:
+      default: {}
+      candidate:
+        aliases:
+          - workspace
+    volumes:
+      - duallane-data:/app/data:ro
+
+  worker:
+    networks:
+      default: {}
+      candidate:
+        aliases:
+          - worker
+    volumes:
+      - duallane-data:/app/data:ro
+
+  web:
+    networks:
+      candidate:
+        aliases:
+          - web
