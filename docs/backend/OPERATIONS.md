@@ -328,6 +328,15 @@ SQL cannot prove S3 multipart or external delivery state. Resolve ambiguous
 provider results through the existing owner's explicit recovery process;
 expiring a lease or clearing SQL is not proof that a provider did not deliver.
 
+The Workspace image includes `/usr/local/bin/duallane-release-check`. It accepts
+no mutation flags and reads only `DATABASE_URL`/`PG*` configuration using one
+connection and an overall ten-second command deadline. Its content-free JSON
+uses schema `duallane.release-check/v1`: exit 0 means the durable database
+snapshot is ready, exit 2 means observed blockers, and exit 1 means the check
+failed. Writer/provider limitations remain present even on exit 0. The guarded
+release coordinator must separately enforce the fence and recovery sequence;
+running this command by itself is not a deployment or cleanup procedure.
+
 Before any Go production cutover, `deploy/production/deploy.sh` must be extended
 and tested to understand every live application service. The target release
 sequence is:

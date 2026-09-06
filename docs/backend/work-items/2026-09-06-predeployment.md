@@ -1857,3 +1857,10 @@ Review corrected the stale-upload cutoff and setup-failure cleanup ordering.
 All database fixtures are isolated schemas, removed before closing their
 connections. The package explicitly reports writer fencing as not proven and
 provider state as not checked; it does not authorize the actual cutover.
+
+The separate command boundary passed parent unit/race (1.011 seconds),
+CGO-disabled compilation/tests and tagged staticcheck. Real execution against
+the disposable database's empty public schema returned `blocked`/exit 2; an
+invalid synthetic connection string returned only `snapshot_failed`/exit 1,
+without repeating credentials. Dockerfile build/copy wiring is present; the
+final rebuilt image and coordinator integration still require verification.
