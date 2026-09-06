@@ -756,3 +756,26 @@ Tests exercise create, resolution, update, action and invalidation against real
 PostgreSQL, retaining member order and escaped lone UTF-16 code units. Unit tests
 cover input/output safety and mutable-buffer isolation. Actual Feishu conversion,
 gateway ingress and card-action bridge acceptance remain separate gates.
+
+### Inline Group Topic Transaction Bridge
+
+The normal message entry point now recognizes eligible leading topic syntax
+through a trusted adapter. The message and topic PostgreSQL adapters share one
+transaction, retaining their typed domain surfaces. Authorization and normalized
+content precede conversion; replies and mixed/non-text content remain ordinary
+messages. The original client key is acknowledged only in the response, while
+storage and events retain the topic-card key. Stable locks serialize ordinary
+versus topic-shaped requests and direct versus inline topic creation.
+
+Fresh independent PostgreSQL/race passed messageblocks, topics, messages and
+the application (6.114 / 3.766 / 13.295 / 5.728 seconds); focused staticcheck
+passed. Regressions cover eight concurrent retries, changed intent, mixed
+content/replies, competing request shapes and a late card-write failure that
+rolls back topic, member, message, event and success-audit effects. Twenty
+actual Node parser goldens verify whitespace, balanced parentheses, code-point
+limits and raw body byte limits. Topic creation intentionally retains Node's
+existing notification behavior; the transaction bridge does not add delivery.
+
+The unchanged two-member topic browser test now passes topic creation but stops
+at the group card display. Registry composition and the remainder of that full
+browser workflow remain required; this slice is not a topic parity completion.

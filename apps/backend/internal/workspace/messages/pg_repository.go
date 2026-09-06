@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messagejobs"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/topics"
 )
 
 // PGRepository is the native PostgreSQL adapter for the message domain. It
@@ -23,6 +24,7 @@ type PGRepository struct {
 	idFactory          IDFactory
 	jobScheduler       messagejobs.PGScheduler
 	builtinEmoteSource BuiltinEmoteSource
+	topics             *topics.PGRepository
 }
 
 func NewPGRepository(pool *pgxpool.Pool, idFactories ...IDFactory) *PGRepository {
@@ -53,6 +55,21 @@ func (s *PGRepository) SetBuiltinEmoteSource(source BuiltinEmoteSource) {
 	}
 }
 
+// SetTopicRepository is startup-only composition. Both adapters wrap the same
+// PostgreSQL transaction; the topic service cannot independently commit here.
+func (s *PGRepository) SetTopicRepository(repository *topics.PGRepository) {
+	if s != nil {
+		s.topics = repository
+	}
+}
+
+type pgTopicMessageTx struct {
+	*pgTx
+	topicTx topics.Tx
+}
+
+func (t *pgTopicMessageTx) TopicTransaction() topics.Tx { return t.topicTx }
+
 // NewPGTransaction wraps an already-open PostgreSQL transaction with the
 // message domain's typed Tx surface. The caller remains responsible for
 // commit/rollback; no pool transaction is started here.
@@ -70,7 +87,11 @@ func (s *PGRepository) NewTransaction(tx pgx.Tx) Tx {
 	if s == nil || tx == nil {
 		return nil
 	}
-	return &pgTx{tx: tx, repository: s}
+	adapter := &pgTx{tx: tx, repository: s}
+	if s.topics != nil {
+		return &pgTopicMessageTx{pgTx: adapter, topicTx: s.topics.NewTransaction(tx)}
+	}
+	return adapter
 }
 
 func newUUID() (string, error) {
@@ -96,7 +117,7 @@ func (s *PGRepository) WithTx(ctx context.Context, fn func(Tx) error) error {
 	if err != nil {
 		return err
 	}
-	wrapper := &pgTx{tx: tx, repository: s}
+	wrapper := s.NewTransaction(tx)
 	if err := fn(wrapper); err != nil {
 		_ = tx.Rollback(ctx)
 		return err

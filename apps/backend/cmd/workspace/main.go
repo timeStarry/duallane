@@ -257,8 +257,9 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			return nil, err
 		}
 		jobScheduler := messagejobs.NewScheduler(emailService, emailRepository, ntfyService, ntfyRepository)
+		topicRepository := topics.NewPGRepositoryWithMessageJobs(pool, jobScheduler)
 		topicService = topics.NewService(topics.ServiceOptions{
-			Repository: topics.NewPGRepositoryWithMessageJobs(pool, jobScheduler), RequireMessageJobs: true,
+			Repository: topicRepository, RequireMessageJobs: true,
 		})
 		cardRegistry, err := cards.NewRegistry()
 		if err != nil {
@@ -273,8 +274,10 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		})
 		messageRepository := messages.NewPGRepositoryWithMessageJobs(pool, jobScheduler)
 		messageRepository.SetBuiltinEmoteSource(builtinEmoteSource)
+		messageRepository.SetTopicRepository(topicRepository)
 		messageService = messages.NewService(messages.ServiceOptions{
 			Repository: messageRepository, RequireMessageJobs: true,
+			GroupTopicCreator: messageblocks.NewGroupTopicCreator(topicService, topics.DefaultSpaceID),
 			AdvancedBlockValidator: messageblocks.NewValidator(messageblocks.ValidatorOptions{
 				Cards: cardService, Emotes: emoteService, Topics: topicService,
 			}),

@@ -1,0 +1,202 @@
+[
+  {
+    "name": "balanced",
+    "parts": [
+      "  #[资料页](先讨论 (通知)，再讨论链接。)  "
+    ],
+    "expected": {
+      "title": "资料页",
+      "descriptionSHA256": "c34fd694f97d379642111b5a03026491e73d3c16477bea0a70766a537c19d588"
+    }
+  },
+  {
+    "name": "multiple text blocks",
+    "parts": [
+      "#[资料",
+      "页](正文)"
+    ],
+    "expected": {
+      "title": "资料页",
+      "descriptionSHA256": "d661c3d96d53ebc0ca8a55aae24b5df4a4d1bf28d37337b982fe8ebf54846eeb"
+    }
+  },
+  {
+    "name": "missing close",
+    "parts": [
+      "#[标题](正文"
+    ],
+    "expected": null
+  },
+  {
+    "name": "non-leading",
+    "parts": [
+      "prefix #[标题](正文)"
+    ],
+    "expected": null
+  },
+  {
+    "name": "trailing text",
+    "parts": [
+      "#[标题](正文) text"
+    ],
+    "expected": null
+  },
+  {
+    "name": "empty body",
+    "parts": [
+      "#[标题]( \n )"
+    ],
+    "expected": null
+  },
+  {
+    "name": "BOM",
+    "parts": [
+      "﻿#[﻿标题﻿](﻿正文﻿)﻿"
+    ],
+    "expected": {
+      "title": "标题",
+      "descriptionSHA256": "d661c3d96d53ebc0ca8a55aae24b5df4a4d1bf28d37337b982fe8ebf54846eeb"
+    }
+  },
+  {
+    "name": "NEXT LINE prefix is not whitespace",
+    "parts": [
+      "#[标题](正文)"
+    ],
+    "expected": null
+  },
+  {
+    "name": "NEXT LINE retained",
+    "parts": [
+      "#[标题](正文)"
+    ],
+    "expected": {
+      "title": "标题",
+      "descriptionSHA256": "02c903fc42a6d3c150b7dd5b9c26352bb738a2abd8ee3a8aae0db311ec73a987"
+    }
+  },
+  {
+    "name": "line separator",
+    "parts": [
+      " #[标题](正文) "
+    ],
+    "expected": {
+      "title": "标题",
+      "descriptionSHA256": "d661c3d96d53ebc0ca8a55aae24b5df4a4d1bf28d37337b982fe8ebf54846eeb"
+    }
+  },
+  {
+    "name": "title brackets",
+    "parts": [
+      "#[[标题]](正文)"
+    ],
+    "expected": null
+  },
+  {
+    "name": "title newline",
+    "parts": [
+      "#[标\n题](正文)"
+    ],
+    "expected": null
+  },
+  {
+    "name": "40 astral title",
+    "parts": [
+      "#[",
+      [
+        "😀",
+        40
+      ],
+      "](正文)"
+    ],
+    "expected": {
+      "title": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "descriptionSHA256": "d661c3d96d53ebc0ca8a55aae24b5df4a4d1bf28d37337b982fe8ebf54846eeb"
+    }
+  },
+  {
+    "name": "41 astral title",
+    "parts": [
+      "#[",
+      [
+        "😀",
+        41
+      ],
+      "](正文)"
+    ],
+    "expected": null
+  },
+  {
+    "name": "30000 body",
+    "parts": [
+      "#[标题](",
+      [
+        "a",
+        30000
+      ],
+      ")"
+    ],
+    "expected": {
+      "title": "标题",
+      "descriptionSHA256": "72d6b9e03a5ff2fb44a3bc3a0e5988dae8bb4c300d5297788bdd72e0ca0a59ec"
+    }
+  },
+  {
+    "name": "30001 body",
+    "parts": [
+      "#[标题](",
+      [
+        "a",
+        30001
+      ],
+      ")"
+    ],
+    "expected": null
+  },
+  {
+    "name": "raw body bound before trim",
+    "parts": [
+      "#[标题](",
+      [
+        " ",
+        30000
+      ],
+      "a)"
+    ],
+    "expected": null
+  },
+  {
+    "name": "exact byte bound",
+    "parts": [
+      "#[标题](",
+      [
+        "😀",
+        25600
+      ],
+      ")"
+    ],
+    "expected": {
+      "title": "标题",
+      "descriptionSHA256": "d390cd4649fe4c08f25d539d42d9fbc658ae24272af7fcae8724c6b15e02f5bd"
+    }
+  },
+  {
+    "name": "byte overflow",
+    "parts": [
+      "#[标题](",
+      [
+        "😀",
+        25601
+      ],
+      ")"
+    ],
+    "expected": null
+  },
+  {
+    "name": "empty marker",
+    "parts": [
+      "#[]()"
+    ],
+    "expected": null
+  }
+]

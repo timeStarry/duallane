@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -122,6 +121,10 @@ func (s *Service) newID(operation string) (string, error) {
 // domain rejection writes its content-free audit row and commits that row;
 // storage and invariant failures roll the transaction back.
 func (s *Service) withTransaction(ctx context.Context, actorID string, meta auth.RequestMeta, fn func(Tx, *auth.Actor, time.Time) (any, *rejection, error)) (any, error) {
+	return s.withTransactionUsing(ctx, nil, actorID, meta, fn)
+}
+
+func (s *Service) withTransactionUsing(ctx context.Context, external Tx, actorID string, meta auth.RequestMeta, fn func(Tx, *auth.Actor, time.Time) (any, *rejection, error)) (any, error) {
 	if s == nil || s.repo == nil {
 		return nil, internalError("workspace topic service", errors.New("repository is required"))
 	}
@@ -135,7 +138,7 @@ func (s *Service) withTransaction(ctx context.Context, actorID string, meta auth
 	meta = meta.Safe()
 	var result any
 	var rejected *rejection
-	err := s.repo.WithTx(ctx, func(tx Tx) error {
+	run := func(tx Tx) error {
 		if tx == nil {
 			return errors.New("transaction is required")
 		}
@@ -159,11 +162,20 @@ func (s *Service) withTransaction(ctx context.Context, actorID string, meta auth
 			return internalError("write topic rejection audit", err)
 		}
 		return nil
-	})
+	}
+	var err error
+	if external != nil {
+		err = run(external)
+	} else {
+		err = s.repo.WithTx(ctx, run)
+	}
 	if err != nil {
 		return nil, normalizeRepositoryError(err)
 	}
 	if rejected != nil {
+		if external != nil {
+			return nil, &transactionRejection{err: rejected.err}
+		}
 		return nil, rejected.err
 	}
 	return result, nil
@@ -419,10 +431,24 @@ func (s *Service) ListTopics(ctx context.Context, input ListInput) ([]Topic, err
 }
 
 func (s *Service) Create(ctx context.Context, input CreateInput) (Topic, error) {
+	return s.createUsing(ctx, nil, input)
+}
+
+// CreateInTx keeps the topic, membership, messages, cards, events and jobs in
+// the caller's transaction. Only IsTransactionRejection permits committing an
+// error result: it denotes a content-free rejection audit with no domain writes.
+func (s *Service) CreateInTx(ctx context.Context, tx Tx, input CreateInput) (Topic, error) {
+	if tx == nil {
+		return Topic{}, internalError("create topic in transaction", errors.New("transaction is required"))
+	}
+	return s.createUsing(ctx, tx, input)
+}
+
+func (s *Service) createUsing(ctx context.Context, tx Tx, input CreateInput) (Topic, error) {
 	if strings.TrimSpace(input.ActorID) == "" {
 		return Topic{}, authRequiredError()
 	}
-	result, err := s.withTransaction(ctx, input.ActorID, input.Meta, func(tx Tx, actor *auth.Actor, now time.Time) (any, *rejection, error) {
+	result, err := s.withTransactionUsing(ctx, tx, input.ActorID, input.Meta, func(tx Tx, actor *auth.Actor, now time.Time) (any, *rejection, error) {
 		conversation, denied, err := s.authorizeGroup(ctx, tx, actor, input.ConversationID)
 		if err != nil {
 			return nil, nil, normalizeRepositoryError(err)
@@ -442,6 +468,11 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Topic, error) 
 			return nil, rejected(validationErr, "topic.create", "new", validationErr.Code), nil
 		}
 		idempotency := optionalString(idempotencyKey)
+		// Serialize direct and inline creation before reading the idempotency
+		// winner. A PostgreSQL unique error would otherwise abort this transaction.
+		if err := tx.Lock(ctx, "workspace:topic:create:"+actor.ID); err != nil {
+			return nil, nil, normalizeRepositoryError(err)
+		}
 		if existing, err := tx.GetTopicByIdempotency(ctx, s.space(), actor.ID, idempotencyKey); err != nil {
 			return nil, nil, normalizeRepositoryError(err)
 		} else if existing != nil {
@@ -921,16 +952,21 @@ func parseTopicSyntax(source string) (TopicIntent, bool) {
 		return TopicIntent{}, false
 	}
 	titleEnd += start + 2
-	title := strings.TrimSpace(source[start+2 : titleEnd])
+	title := strings.TrimFunc(source[start+2:titleEnd], isSpace)
 	if _, err := normalizeTitle(title); err != nil {
 		return TopicIntent{}, false
 	}
 	bodyStart := titleEnd + 2
 	bodyEnd := balancedBodyEnd(source, bodyStart)
-	if bodyEnd < 0 || strings.TrimSpace(source[bodyEnd+1:]) != "" {
+	if bodyEnd < 0 || strings.TrimFunc(source[bodyEnd+1:], isSpace) != "" {
 		return TopicIntent{}, false
 	}
-	description, err := normalizeDescription(source[bodyStart:bodyEnd])
+	rawBody := source[bodyStart:bodyEnd]
+	// The Node parser bounds the untrimmed body; whitespace cannot bypass it.
+	if utf8.RuneCountInString(rawBody) > TopicDescriptionMaxPoints || len(rawBody) > TopicDescriptionMaxBytes {
+		return TopicIntent{}, false
+	}
+	description, err := normalizeDescription(rawBody)
 	if err != nil {
 		return TopicIntent{}, false
 	}
@@ -963,7 +999,7 @@ func balancedBodyEnd(value string, start int) int {
 }
 
 func normalizeTitle(value string) (string, *Error) {
-	value = strings.TrimSpace(value)
+	value = strings.TrimFunc(value, isSpace)
 	if value == "" || utf8.RuneCountInString(value) > TopicTitleMaxCodePoints || strings.ContainsAny(value, "[]\r\n") {
 		return "", topicValidationError(CodeTopicInvalidTitle, MessageTopicInvalidTitle)
 	}
@@ -971,7 +1007,7 @@ func normalizeTitle(value string) (string, *Error) {
 }
 
 func normalizeDescription(value string) (string, *Error) {
-	value = strings.TrimSpace(value)
+	value = strings.TrimFunc(value, isSpace)
 	if value == "" || utf8.RuneCountInString(value) > TopicDescriptionMaxPoints || len([]byte(value)) > TopicDescriptionMaxBytes {
 		return "", topicValidationError(CodeTopicInvalidDescription, MessageTopicInvalidDescription)
 	}
@@ -1089,7 +1125,13 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 func isSpace(character rune) bool {
-	return unicode.IsSpace(character)
+	// ECMAScript WhiteSpace + LineTerminator: unlike Unicode IsSpace, this
+	// includes BOM and excludes NEXT LINE (U+0085).
+	switch character {
+	case '\t', '\n', '\v', '\f', '\r', ' ', '\u00a0', '\u1680', '\u2028', '\u2029', '\u202f', '\u205f', '\u3000', '\ufeff':
+		return true
+	}
+	return character >= '\u2000' && character <= '\u200a'
 }
 func isUniqueViolation(err error) bool {
 	return strings.Contains(strings.ToLower(fmt.Sprint(err)), "unique") || strings.Contains(fmt.Sprint(err), "23505")

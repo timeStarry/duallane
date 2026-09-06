@@ -44,6 +44,17 @@ type TransactionalBlockValidator interface {
 	ValidateBlockInTx(ctx context.Context, tx Tx, actor *auth.Actor, conversationID string, block Block) (Block, error)
 }
 
+// GroupTopicCreator is trusted composition, not a second writer: every topic
+// effect must use the supplied message transaction. Nil means ordinary text.
+type GroupTopicCreator interface {
+	CreateGroupTopic(context.Context, Tx, CreateInput, Content) (*MessageRecord, *GroupTopicRejection, error)
+}
+
+type GroupTopicRejection struct {
+	Err     *Error
+	Audited bool
+}
+
 type ServiceOptions struct {
 	Repository             Repository
 	SpaceID                string
@@ -51,6 +62,7 @@ type ServiceOptions struct {
 	IDFactory              IDFactory
 	ReactionEmoteValidator ReactionEmoteValidator
 	AdvancedBlockValidator AdvancedBlockValidator
+	GroupTopicCreator      GroupTopicCreator
 	AllowBots              bool
 	RequireMessageJobs     bool
 }
@@ -62,13 +74,15 @@ type Service struct {
 	idFactory              IDFactory
 	reactionEmoteValidator ReactionEmoteValidator
 	advancedBlockValidator AdvancedBlockValidator
+	groupTopicCreator      GroupTopicCreator
 	allowBots              bool
 	requireMessageJobs     bool
 }
 
 type rejection struct {
-	err   *Error
-	audit AuditInput
+	err     *Error
+	audit   AuditInput
+	audited bool
 }
 
 func NewService(options ServiceOptions) *Service {
@@ -94,6 +108,7 @@ func NewService(options ServiceOptions) *Service {
 		idFactory:              idFactory,
 		reactionEmoteValidator: options.ReactionEmoteValidator,
 		advancedBlockValidator: options.AdvancedBlockValidator,
+		groupTopicCreator:      options.GroupTopicCreator,
 		allowBots:              options.AllowBots,
 		requireMessageJobs:     options.RequireMessageJobs,
 	}
@@ -170,7 +185,7 @@ func (s *Service) withTransaction(ctx context.Context, actorID string, meta auth
 		if err != nil {
 			return err
 		}
-		if rejected == nil {
+		if rejected == nil || rejected.audited {
 			return nil
 		}
 		audit := s.auditFor(actor, meta, rejected.audit, now)
@@ -469,8 +484,10 @@ func (s *Service) CreateMessageInTx(ctx context.Context, tx Tx, input CreateInpu
 		return Message{}, normalizeRepositoryError(err)
 	}
 	if rejected != nil {
-		if err := tx.WriteAudit(ctx, s.auditFor(actor, input.Meta, rejected.audit, now)); err != nil {
-			return Message{}, internalError("write message rejection audit", err)
+		if !rejected.audited {
+			if err := tx.WriteAudit(ctx, s.auditFor(actor, input.Meta, rejected.audit, now)); err != nil {
+				return Message{}, internalError("write message rejection audit", err)
+			}
 		}
 		return Message{}, rejected.err
 	}
@@ -507,6 +524,18 @@ func (s *Service) createMessageInTransaction(ctx context.Context, tx Tx, actor *
 	if err != nil {
 		return nil, nil, internalError("canonicalize message content", err)
 	}
+	inlineTopics := s.groupTopicCreator != nil && conversation.Type == "group" && (actor.Kind == "" || actor.Kind == "human")
+	if inlineTopics {
+		// Ordinary and topic-shaped messages share the original client key.
+		// Lock before both lookups so concurrent requests cannot create one of each.
+		key, err := json.Marshal([]string{s.space(), conversation.ID, actor.ID, clientMessageID})
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := tx.Lock(ctx, "workspace:message:create:"+string(key)); err != nil {
+			return nil, nil, err
+		}
+	}
 
 	existing, err := tx.FindMessageByClientID(ctx, s.space(), conversation.ID, actor.ID, clientMessageID)
 	if err != nil {
@@ -519,6 +548,26 @@ func (s *Service) createMessageInTransaction(ctx context.Context, tx Tx, actor *
 		}
 		message, err := s.projectOne(ctx, tx, actor.ID, existing)
 		return message, nil, err
+	}
+	if inlineTopics {
+		input.ClientMessageID = clientMessageID
+		input.ConversationID = conversation.ID
+		record, denied, err := s.groupTopicCreator.CreateGroupTopic(ctx, tx, input, normalized)
+		if err != nil {
+			return nil, nil, err
+		}
+		if denied != nil {
+			rejected := rejectedError(denied.Err, "message.create", conversationTargetType, conversation.ID, denied.Err.Code)
+			rejected.audited = denied.Audited
+			return nil, rejected, nil
+		}
+		if record != nil {
+			message, err := s.projectOne(ctx, tx, actor.ID, record)
+			// Only the HTTP response acknowledges the original optimistic key;
+			// storage and outbox retain topic-card:<topic ID> for replay.
+			message.ClientMessageID = &clientMessageID
+			return message, nil, err
+		}
 	}
 
 	replyID := normalizedOptionalID(input.ReplyToMessageID)

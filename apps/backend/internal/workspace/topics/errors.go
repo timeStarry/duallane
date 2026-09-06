@@ -5,6 +5,18 @@ import (
 	"fmt"
 )
 
+type transactionRejection struct{ err *Error }
+
+func (e *transactionRejection) Error() string { return e.err.Error() }
+func (e *transactionRejection) Unwrap() error { return e.err }
+
+// IsTransactionRejection distinguishes an audited, pre-mutation rejection from
+// an infrastructure or post-mutation error that must roll back the entire unit.
+func IsTransactionRejection(err error) bool {
+	var rejected *transactionRejection
+	return errors.As(err, &rejected)
+}
+
 const (
 	CodeAuthRequired             = "auth.required"
 	CodeIdentityForbidden        = "auth.identity_forbidden"

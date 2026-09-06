@@ -40,6 +40,15 @@ func NewPGRepositoryWithMessageJobs(pool *pgxpool.Pool, scheduler messagejobs.PG
 	return repository
 }
 
+// NewTransaction exposes only topic operations and keeps the configured job
+// scheduler. It never begins, commits or rolls back the caller's transaction.
+func (r *PGRepository) NewTransaction(tx pgx.Tx) Tx {
+	if r == nil || tx == nil {
+		return nil
+	}
+	return &pgTx{tx: tx, idFactory: r.idFactory, jobScheduler: r.jobScheduler}
+}
+
 func (r *PGRepository) Ping(ctx context.Context) error {
 	if r == nil || r.pool == nil {
 		return internalError("ping workspace topic database", errors.New("workspace postgres pool is required"))
@@ -67,7 +76,7 @@ func (r *PGRepository) WithTx(ctx context.Context, callback func(Tx) error) erro
 			_ = tx.Rollback(context.Background())
 		}
 	}()
-	adapter := &pgTx{tx: tx, idFactory: r.idFactory, jobScheduler: r.jobScheduler}
+	adapter := r.NewTransaction(tx)
 	if err := callback(adapter); err != nil {
 		return err
 	}
