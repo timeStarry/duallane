@@ -420,6 +420,24 @@ secondary.
 
 ## 10. Deployment Acceptance
 
+The release state-machine gate sources the real production helper with bounded
+synthetic Docker responses:
+
+```sh
+node --test scripts/backend/production-deploy.test.mjs \
+  scripts/backend/release-activation.test.mjs \
+  scripts/backend/release-cleanup.test.mjs \
+  scripts/backend/release-go-restore.test.mjs \
+  scripts/backend/go-production-workers.test.mjs \
+  scripts/backend/node-runtime-image.test.mjs
+```
+
+It covers immutable creation before start, complete owner fencing before drain,
+exact-ID cleanup, authority checks around recreation, captured restart-policy
+restoration and recovery retries after partial activation. These modeled checks
+run in CI but do not replace the real-container and coordinated release gates
+below. Do not invoke the production deployment entrypoint as a test harness.
+
 With an explicit disposable `TEST_DATABASE_URL`, run
 `go test -count=1 -race -tags postgres_integration ./cmd/release-check ./internal/platform/releasecheck ./internal/platform/storage`
 from `apps/backend`. The command integration covers local readiness, database

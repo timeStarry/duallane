@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 
-# Shared, deliberately small release helpers. The caller owns the Compose
+# Shared release helpers. The caller owns the Compose
 # function and the production preflight; this file only handles the fixed
 # release profiles' state transitions.
 
 readonly RELEASE_HELPER_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly RELEASE_MANIFEST_HELPER="${RELEASE_HELPER_DIR}/release-manifest.mjs"
+readonly RELEASE_COMPOSE_SNAPSHOT_HELPER="${RELEASE_HELPER_DIR}/release-compose-snapshot.mjs"
 
 RELEASE_PROFILE_NAME=""
 RELEASE_SERVICES=()
@@ -30,8 +31,39 @@ RELEASE_GO_IMAGE_REF=""
 RELEASE_GO_IMAGE_ID=""
 RELEASE_GO_IMAGE_REVISION=""
 RELEASE_GO_IMAGE_VERSION=""
+RELEASE_GO_MIGRATION_VERIFIED=false
+RELEASE_GO_P2P_IMAGE_ID=""
+RELEASE_GO_WEB_IMAGE_ID=""
+RELEASE_GO_ACTIVATION_COMPOSE_FILE=""
+RELEASE_GO_ACTIVATION_PROJECT=""
+RELEASE_GO_ACTIVATION_EXTERNAL_MANIFEST=""
+RELEASE_NODE_RECOVERY_COMPOSE_FILE=""
+RELEASE_NODE_RECOVERY_EXTERNAL_MANIFEST=""
+RELEASE_NODE_RECOVERY_PROJECT=""
+RELEASE_DRAIN_CHECK_NUMBER=0
+RELEASE_PREVIOUS_NODE_VERSION=""
+RELEASE_PREVIOUS_NODE_COMMIT=""
 RELEASE_GO_IMAGE_OVERRIDE_FILE=""
 RELEASE_GO_RUN_ID=""
+RELEASE_GO_UPGRADE_OLD_COMPOSE_FILE=""
+RELEASE_GO_UPGRADE_OLD_EXTERNAL_MANIFEST=""
+RELEASE_GO_UPGRADE_OLD_VOLUME_MANIFEST=""
+RELEASE_GO_UPGRADE_OLD_PROJECT=""
+RELEASE_GO_UPGRADE_OLD_COMMIT=""
+RELEASE_GO_UPGRADE_OLD_VERSION=""
+RELEASE_GO_UPGRADE_OLD_SCHEMA_VERSION=""
+RELEASE_GO_UPGRADE_OLD_P2P_IMAGE_ID=""
+RELEASE_GO_UPGRADE_OLD_WORKSPACE_IMAGE_ID=""
+RELEASE_GO_UPGRADE_OLD_WORKER_IMAGE_ID=""
+RELEASE_GO_UPGRADE_OLD_WEB_IMAGE_ID=""
+RELEASE_GO_UPGRADE_OLD_MIGRATE_IMAGE_ID=""
+RELEASE_GO_UPGRADE_VALIDATED=false
+RELEASE_GO_UPGRADE_CURRENT_COMPOSE_FILE=""
+RELEASE_GO_UPGRADE_NEW_ATTEMPTED_SERVICES=()
+RELEASE_GO_UPGRADE_TEMP_FILES=()
+RELEASE_GO_UPGRADE_NEW_SNAPSHOT_FILES=()
+RELEASE_GO_UPGRADE_SNAPSHOT_PUBLISHED=false
+RELEASE_GO_UPGRADE_DAEMON_RECOVERY_DONE=false
 RELEASE_STOP_TIMEOUT="${DUALLANE_DEPLOY_STOP_TIMEOUT:-30}"
 RELEASE_STOP_ATTEMPTS="${DUALLANE_DEPLOY_STOP_ATTEMPTS:-30}"
 RELEASE_HEALTH_ATTEMPTS="${DUALLANE_DEPLOY_HEALTH_ATTEMPTS:-40}"
@@ -43,6 +75,21 @@ release_parse_array() {
   else
     IFS=',' read -r -a REPLY <<<"${value}"
   fi
+}
+
+version_is_greater() {
+  local candidate="$1" current="$2"
+  [[ "${candidate}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "${current}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  # Decimal strings avoid shell arithmetic overflow on malformed release
+  # metadata. The repository only publishes three-component numeric versions.
+  node -e '
+    const a = process.argv[1].split(".").map(BigInt);
+    const b = process.argv[2].split(".").map(BigInt);
+    for (let i = 0; i < 3; i++) {
+      if (a[i] !== b[i]) process.exit(a[i] > b[i] ? 0 : 1);
+    }
+    process.exit(1);
+  ' "${candidate}" "${current}"
 }
 
 release_load_profile() {
@@ -71,8 +118,39 @@ release_load_profile() {
   RELEASE_GO_IMAGE_ID=""
   RELEASE_GO_IMAGE_REVISION=""
   RELEASE_GO_IMAGE_VERSION=""
+  RELEASE_GO_MIGRATION_VERIFIED=false
+  RELEASE_GO_P2P_IMAGE_ID=""
+  RELEASE_GO_WEB_IMAGE_ID=""
+  RELEASE_GO_ACTIVATION_COMPOSE_FILE=""
+  RELEASE_GO_ACTIVATION_PROJECT=""
+  RELEASE_GO_ACTIVATION_EXTERNAL_MANIFEST=""
+  RELEASE_NODE_RECOVERY_COMPOSE_FILE=""
+  RELEASE_NODE_RECOVERY_EXTERNAL_MANIFEST=""
+  RELEASE_NODE_RECOVERY_PROJECT=""
+  RELEASE_DRAIN_CHECK_NUMBER=0
+  RELEASE_PREVIOUS_NODE_VERSION=""
+  RELEASE_PREVIOUS_NODE_COMMIT=""
   RELEASE_GO_IMAGE_OVERRIDE_FILE=""
   RELEASE_GO_RUN_ID=""
+  RELEASE_GO_UPGRADE_OLD_COMPOSE_FILE=""
+  RELEASE_GO_UPGRADE_OLD_EXTERNAL_MANIFEST=""
+  RELEASE_GO_UPGRADE_OLD_VOLUME_MANIFEST=""
+  RELEASE_GO_UPGRADE_OLD_PROJECT=""
+  RELEASE_GO_UPGRADE_OLD_COMMIT=""
+  RELEASE_GO_UPGRADE_OLD_VERSION=""
+  RELEASE_GO_UPGRADE_OLD_SCHEMA_VERSION=""
+  RELEASE_GO_UPGRADE_OLD_P2P_IMAGE_ID=""
+  RELEASE_GO_UPGRADE_OLD_WORKSPACE_IMAGE_ID=""
+  RELEASE_GO_UPGRADE_OLD_WORKER_IMAGE_ID=""
+  RELEASE_GO_UPGRADE_OLD_WEB_IMAGE_ID=""
+  RELEASE_GO_UPGRADE_OLD_MIGRATE_IMAGE_ID=""
+  RELEASE_GO_UPGRADE_VALIDATED=false
+  RELEASE_GO_UPGRADE_CURRENT_COMPOSE_FILE=""
+  RELEASE_GO_UPGRADE_NEW_ATTEMPTED_SERVICES=()
+  RELEASE_GO_UPGRADE_TEMP_FILES=()
+  RELEASE_GO_UPGRADE_NEW_SNAPSHOT_FILES=()
+  RELEASE_GO_UPGRADE_SNAPSHOT_PUBLISHED=false
+  RELEASE_GO_UPGRADE_DAEMON_RECOVERY_DONE=false
 
   while IFS= read -r line; do
     [[ -n "${line}" ]] || continue
@@ -155,6 +233,681 @@ release_validate_resolved_compose() {
   compose config --format json | node "${RELEASE_MANIFEST_HELPER}" --profile "${RELEASE_PROFILE_NAME}" --check-compose
 }
 
+release_pin_compose_project() {
+  local resolved
+  resolved="$(compose config --format json | node -e '
+    try {
+      const data = require("node:fs").readFileSync(0, "utf8");
+      const name = JSON.parse(data).name;
+      if (typeof name !== "string" || !/^[a-z0-9][a-z0-9_-]*$/.test(name)) process.exit(1);
+      process.stdout.write(name);
+    } catch { process.exit(1); }
+  ')" || {
+    echo "could not pin the resolved Compose project identity" >&2
+    return 1
+  }
+  # Includes Compose's --env-file/project-name resolution. The directory
+  # basename is not proof of the project which owns the current containers.
+  export COMPOSE_PROJECT_NAME="${resolved}"
+}
+
+release_private_artifact_path() {
+  local path="$1"
+  local label="${2:-artifact}"
+  local mode
+  [[ "${path}" == /* && "${path}" != *$'\n'* && "${path}" != *$'\r'* && "${path}" != *$'\t'* ]] || {
+    echo "${label} path must be an absolute path without control characters" >&2
+    return 1
+  }
+  [[ -f "${path}" && ! -L "${path}" ]] || {
+    echo "${label} must be a regular non-symlink file" >&2
+    return 1
+  }
+  if ! mode="$(stat -c '%a' -- "${path}" 2>/dev/null)"; then
+    echo "could not inspect ${label} permissions" >&2
+    return 1
+  fi
+  [[ "${mode}" == 600 ]] || {
+    echo "${label} must have mode 0600" >&2
+    return 1
+  }
+}
+
+release_private_new_artifact_path() {
+  local path="$1"
+  local label="${2:-artifact}"
+  [[ "${path}" == /* && "${path}" != *$'\n'* && "${path}" != *$'\r'* && "${path}" != *$'\t'* ]] || {
+    echo "${label} path must be an absolute path without control characters" >&2
+    return 1
+  }
+  if [[ -e "${path}" || -L "${path}" ]]; then
+    echo "refusing to overwrite existing ${label}" >&2
+    return 1
+  fi
+}
+
+release_external_files_helper_path() {
+  local helper_path="${RELEASE_EXTERNAL_FILES_HELPER:-${RELEASE_HELPER_DIR}/release-external-files.mjs}"
+  [[ "${helper_path}" == /* && "${helper_path}" != *$'\n'* && "${helper_path}" != *$'\r'* && "${helper_path}" != *$'\t'* ]] || {
+    echo "external-files helper path is not an absolute safe path" >&2
+    return 1
+  }
+  [[ -f "${helper_path}" && ! -L "${helper_path}" ]] || {
+    echo "external-files helper is unavailable; Go recovery is disabled" >&2
+    return 1
+  }
+  printf '%s\n' "${helper_path}"
+}
+
+release_verify_external_files_manifest() {
+  local compose_file="$1"
+  local manifest_file="$2"
+  local helper_path
+  release_private_artifact_path "${compose_file}" "canonical recovery Compose" || return 1
+  release_private_artifact_path "${manifest_file}" "external-files manifest" || return 1
+  helper_path="$(release_external_files_helper_path)" || return 1
+  node "${helper_path}" verify \
+    --compose "${compose_file}" \
+    --input "${manifest_file}" >/dev/null 2>/dev/null || {
+    echo "external-file verification rejected the selected Go recovery snapshot" >&2
+    return 1
+  }
+}
+
+release_validate_go_snapshot_sidecars() {
+  local snapshot_file="$1"
+  local compose_file="${snapshot_file}.compose.json"
+  local verification_file="${compose_file}.verify.${BASHPID}.json"
+  release_private_artifact_path "${snapshot_file}" "previous Go snapshot" || return 1
+  release_private_artifact_path "${compose_file}" "previous canonical recovery Compose" || return 1
+  release_private_artifact_path "${snapshot_file}.volumes.json" "previous volume authority manifest" || return 1
+  release_private_new_artifact_path "${verification_file}" "snapshot verification Compose" || return 1
+
+  if ! node "${RELEASE_COMPOSE_SNAPSHOT_HELPER}" recover \
+    --input "${snapshot_file}" \
+    --output "${verification_file}" >/dev/null 2>/dev/null; then
+    rm -f -- "${verification_file}"
+    echo "previous Go snapshot could not be recovered" >&2
+    return 1
+  fi
+  if ! cmp -s -- "${verification_file}" "${compose_file}"; then
+    rm -f -- "${verification_file}"
+    echo "previous Go recovery Compose differs from the pinned snapshot" >&2
+    return 1
+  fi
+  rm -f -- "${verification_file}"
+  release_verify_external_files_manifest "${compose_file}" "${snapshot_file}.external.json"
+}
+
+release_read_go_snapshot_metadata() {
+  local snapshot_file="$1"
+  RELEASE_SNAPSHOT_HELPER_PATH="${RELEASE_COMPOSE_SNAPSHOT_HELPER}" node --input-type=module - "${snapshot_file}" <<'NODE'
+import { pathToFileURL } from "node:url";
+
+const helperPath = process.env.RELEASE_SNAPSHOT_HELPER_PATH;
+const snapshotPath = process.argv[2];
+try {
+  const { readSnapshot } = await import(pathToFileURL(helperPath).href);
+  const snapshot = await readSnapshot(snapshotPath);
+  const ids = snapshot.imageIDs;
+  process.stdout.write([
+    snapshot.project,
+    snapshot.commit,
+    snapshot.semver,
+    String(snapshot.schemaVersion),
+    ids.p2p,
+    ids.workspace,
+    ids.worker,
+    ids.web,
+    ids.migrate,
+  ].join("\t") + "\n");
+} catch {
+  process.exitCode = 1;
+}
+NODE
+}
+
+release_prepare_current_go_compose_artifact() {
+  local destination="$1"
+  release_private_new_artifact_path "${destination}" "current resolved Compose" || return 1
+  umask 077
+  if ! compose config --format json >"${destination}"; then
+    rm -f -- "${destination}"
+    echo "could not capture the current resolved Compose configuration" >&2
+    return 1
+  fi
+  if ! chmod 600 -- "${destination}" || ! release_private_artifact_path "${destination}" "current resolved Compose"; then
+    rm -f -- "${destination}"
+    return 1
+  fi
+}
+
+release_freeze_go_activation_compose() {
+  [[ "${RELEASE_PROFILE_NAME}" == go-full ]] || return 0
+  [[ -z "${RELEASE_GO_ACTIVATION_COMPOSE_FILE}" ]] || return 0
+  local artifact="${RELEASE_RECOVERY_FILE}.go-activation.compose.json"
+  local project
+  project="$(release_compose_project_name)" || return 1
+  release_prepare_current_go_compose_artifact "${artifact}" || return 1
+  # All post-build operations use this resolved, image-pinned configuration;
+  # later edits of .env cannot silently move the writer or checker authority.
+  RELEASE_GO_ACTIVATION_COMPOSE_FILE="${artifact}"
+  RELEASE_GO_ACTIVATION_PROJECT="${project}"
+  RELEASE_GO_ACTIVATION_EXTERNAL_MANIFEST="${artifact}.external.json"
+  node "${RELEASE_HELPER_DIR}/release-external-files.mjs" capture \
+    --compose "${artifact}" --services p2p,workspace,worker,web,migrate \
+    --output "${RELEASE_GO_ACTIVATION_EXTERNAL_MANIFEST}" >/dev/null || return 1
+}
+
+release_freeze_node_recovery_compose() {
+  [[ "${RELEASE_PROFILE_NAME}" == go-full && "${RELEASE_GO_UPGRADE:-false}" != true ]] || return 0
+  local raw="${RELEASE_RECOVERY_FILE}.node-resolved.compose.json"
+  local frozen="${RELEASE_RECOVERY_FILE}.node-recovery.compose.json"
+  release_private_new_artifact_path "${raw}" "Node resolved Compose" || return 1
+  release_private_new_artifact_path "${frozen}" "Node recovery Compose" || return 1
+  umask 077
+  release_rollback_compose config --format json >"${raw}" || return 1
+  RELEASE_PRIVATE_JSON_HELPER="${RELEASE_HELPER_DIR}/release-drain-config.mjs" \
+    node --input-type=module - "${raw}" "${frozen}" "${RELEASE_SNAPSHOT_FILE}" <<'NODE'
+import { pathToFileURL } from "node:url";
+import { readFile } from "node:fs/promises";
+try {
+  const { readPrivateJSON, writePrivateJSON } = await import(pathToFileURL(process.env.RELEASE_PRIVATE_JSON_HELPER));
+  const [source, output, snapshot] = process.argv.slice(2);
+  const compose = await readPrivateJSON(source, "node_compose");
+  const rows = (await readFile(snapshot, "utf8")).trim().split("\n").map(row => row.split("\t"));
+  for (const service of ["api", "web"]) {
+    const matches = rows.filter(row => row[0] === service);
+    if (matches.length !== 1 || matches[0][4] !== "true" || !/^sha256:[0-9a-f]{64}$/.test(matches[0][2]) || !compose.services?.[service]) throw new Error();
+    compose.services[service].image = matches[0][2];
+    delete compose.services[service].build;
+    compose.services[service].pull_policy = "never";
+  }
+  await writePrivateJSON(output, compose);
+} catch { process.stderr.write("Node recovery Compose could not be pinned\n"); process.exitCode = 1; }
+NODE
+  local result=$?
+  [[ "${result}" == 0 ]] || return 1
+  RELEASE_NODE_RECOVERY_COMPOSE_FILE="${frozen}"
+  RELEASE_NODE_RECOVERY_PROJECT="$(release_compose_project_name)" || return 1
+  RELEASE_NODE_RECOVERY_EXTERNAL_MANIFEST="${frozen}.external.json"
+  node "${RELEASE_HELPER_DIR}/release-external-files.mjs" capture \
+    --compose "${frozen}" --services api,web \
+    --output "${RELEASE_NODE_RECOVERY_EXTERNAL_MANIFEST}" >/dev/null || return 1
+}
+
+release_verify_activation_authority() {
+  [[ "${RELEASE_PROFILE_NAME}" == go-full ]] || return 0
+  release_verify_external_files_manifest "${RELEASE_GO_ACTIVATION_COMPOSE_FILE}" \
+    "${RELEASE_GO_ACTIVATION_EXTERNAL_MANIFEST}" || return 1
+  if [[ "${RELEASE_GO_UPGRADE:-false}" == true ]]; then
+    release_verify_pinned_volume_authority "${RELEASE_GO_UPGRADE_OLD_COMPOSE_FILE}" \
+      "${RELEASE_GO_ACTIVATION_COMPOSE_FILE}" || return 1
+  else
+    release_verify_external_files_manifest "${RELEASE_NODE_RECOVERY_COMPOSE_FILE}" \
+      "${RELEASE_NODE_RECOVERY_EXTERNAL_MANIFEST}" || return 1
+    node "${RELEASE_HELPER_DIR}/release-node-authority.mjs" verify \
+      --compose "${RELEASE_GO_ACTIVATION_COMPOSE_FILE}" \
+      --node-compose "${RELEASE_NODE_RECOVERY_COMPOSE_FILE}" >/dev/null || return 1
+  fi
+}
+
+release_require_drained_runtime() {
+  [[ "${RELEASE_PROFILE_NAME}" == go-full ]] || return 0
+  local phase="$1"
+  [[ "${phase}" == activation || "${phase}" == recovery ]] || return 1
+  release_verify_activation_authority || return 1
+  RELEASE_DRAIN_CHECK_NUMBER=$((RELEASE_DRAIN_CHECK_NUMBER + 1))
+  local artifact="${RELEASE_RECOVERY_FILE}.drain-${phase}-${RELEASE_DRAIN_CHECK_NUMBER}"
+  node "${RELEASE_HELPER_DIR}/release-drain-run.mjs" run \
+    --compose "${RELEASE_GO_ACTIVATION_COMPOSE_FILE}" \
+    --workspace-image "${RELEASE_GO_IMAGE_ID}" \
+    --output "${artifact}.compose.json" --report "${artifact}.report.json" \
+    --run-id "${RELEASE_GO_RUN_ID}" >/dev/null || {
+      echo "Release drain is blocked or failed; keep writers fenced and reconcile the private report before recovery" >&2
+      return 1
+    }
+  release_verify_activation_authority || return 1
+  release_append_recovery_record "drain_${phase}=ready" || return 1
+}
+
+release_run_gateway_smoke() {
+  local profile="$1" version="$2" commit="$3"
+  local web_ids web_id base_url observed_version observed_commit
+  [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "${commit}" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "gateway smoke requires verified release metadata" >&2
+    return 1
+  }
+  web_ids="$(release_current_service_ids web)" || return 1
+  release_go_upgrade_require_single_current_id web "${web_ids}" || return 1
+  web_id="${REPLY}"
+  release_verify_fence_owner web "${web_id}" || return 1
+  observed_version="$(docker inspect "${web_id}" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null)" || return 1
+  observed_commit="$(docker inspect "${web_id}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" || return 1
+  [[ "${observed_version}" == "${version}" && "${observed_commit}" == "${commit}" ]] || {
+    echo "gateway release metadata differs from the expected release" >&2
+    return 1
+  }
+  # Resolve the actual local published port, not an operator-controlled URL
+  # that could point to another release. The probe cannot follow redirects.
+  base_url="$(docker inspect "${web_id}" --format '{{json .NetworkSettings.Ports}}' 2>/dev/null | node -e '
+    try {
+      const ports = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+      const bindings = ports["8080/tcp"];
+      if (!Array.isArray(bindings) || bindings.length !== 1) process.exit(1);
+      const { HostIp, HostPort } = bindings[0];
+      if (!/^[0-9]+$/.test(HostPort) || Number(HostPort) < 1 || Number(HostPort) > 65535) process.exit(1);
+      const host = HostIp === "0.0.0.0" || HostIp === "127.0.0.1" ? "127.0.0.1" :
+        HostIp === "::" || HostIp === "::1" ? "[::1]" : null;
+      if (!host) process.exit(1);
+      process.stdout.write(`http://${host}:${HostPort}`);
+    } catch { process.exit(1); }
+  ')" || {
+    echo "gateway smoke requires one supported local application binding" >&2
+    return 1
+  }
+  local enabled=true api_ids
+  if [[ "${profile}" == node-default ]]; then
+    api_ids="$(release_current_service_ids api)" || return 1
+    release_go_upgrade_require_single_current_id api "${api_ids}" || return 1
+    enabled="$(docker inspect "${REPLY}" --format '{{json .Config.Env}}' 2>/dev/null | node -e '
+      try {
+        const env = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+        if (!Array.isArray(env)) process.exit(1);
+        const values = env.filter((v) => typeof v === "string" && v.startsWith("WORKSPACE_ENABLED="));
+        if (values.length > 1) process.exit(1);
+        process.stdout.write(values[0] === "WORKSPACE_ENABLED=true" ? "true" : "false");
+      } catch { process.exit(1); }
+    ')" || return 1
+  fi
+  node "${RELEASE_HELPER_DIR}/../../scripts/backend/gateway-readonly-smoke.mjs" \
+    --base-url "${base_url}" --expected-version "${version}" --full-commit "${commit}" \
+    --profile "${profile}" --workspace-enabled "${enabled}" || return 1
+  release_append_recovery_record "gateway_smoke_passed=${profile}:${commit}"
+}
+
+release_run_previous_gateway_smoke() {
+  [[ "${RELEASE_PROFILE_NAME}" == go-full ]] || return 0
+  if [[ "${RELEASE_GO_UPGRADE:-false}" == true ]]; then
+    release_run_gateway_smoke go-full "${RELEASE_GO_UPGRADE_OLD_VERSION}" "${RELEASE_GO_UPGRADE_OLD_COMMIT}"
+  else
+    release_run_gateway_smoke node-default "${RELEASE_PREVIOUS_NODE_VERSION}" "${RELEASE_PREVIOUS_NODE_COMMIT}"
+  fi
+}
+
+release_verify_go_upgrade_storage_authority() {
+  local previous_compose="$1"
+  local current_compose="$2"
+  if declare -F release_verify_pinned_volume_authority >/dev/null 2>&1; then
+    release_verify_pinned_volume_authority "${previous_compose}" "${current_compose}" || {
+      echo "named-volume authority differs between the previous Go release and the candidate" >&2
+      return 1
+    }
+    return 0
+  fi
+  echo "named-volume authority verifier is unavailable; refusing Go-to-Go recovery" >&2
+  return 1
+}
+
+release_capture_go_volume_authority() {
+  node "${RELEASE_HELPER_DIR}/release-volume-authority.mjs" capture \
+    --compose "$1" --output "$2" >/dev/null || return 1
+}
+
+release_verify_pinned_volume_authority() {
+  [[ -n "${RELEASE_GO_UPGRADE_OLD_VOLUME_MANIFEST}" ]] || {
+    echo "previous volume authority manifest is unavailable" >&2
+    return 1
+  }
+  node "${RELEASE_HELPER_DIR}/release-volume-authority.mjs" verify \
+    --previous-compose "$1" --current-compose "$2" \
+    --input "${RELEASE_GO_UPGRADE_OLD_VOLUME_MANIFEST}" >/dev/null || return 1
+}
+
+release_capture_successful_go_snapshot() {
+  [[ "${RELEASE_PROFILE_NAME}" == go-full ]] || return 0
+  local input_file snapshot_file compose_file external_file volume_file project schema_version
+  local p2p_image workspace_image worker_image web_image migrate_image
+  input_file="${RELEASE_RECOVERY_FILE}.go-success.snapshot-input.json"
+  snapshot_file="${RELEASE_RECOVERY_FILE}.go-compose.snapshot.json"
+  compose_file="${snapshot_file}.compose.json"
+  external_file="${snapshot_file}.external.json"
+  volume_file="${snapshot_file}.volumes.json"
+
+  release_private_new_artifact_path "${input_file}" "Go snapshot capture input" || return 1
+  release_private_new_artifact_path "${snapshot_file}" "Go success snapshot" || return 1
+  release_private_new_artifact_path "${compose_file}" "Go recovery Compose" || return 1
+  release_private_new_artifact_path "${external_file}" "Go external-files manifest" || return 1
+  release_private_new_artifact_path "${volume_file}" "Go volume authority manifest" || return 1
+  RELEASE_GO_UPGRADE_TEMP_FILES+=("${input_file}")
+  RELEASE_GO_UPGRADE_NEW_SNAPSHOT_FILES+=("${snapshot_file}" "${compose_file}" "${external_file}" "${volume_file}")
+
+  local resolved_compose="${RELEASE_RECOVERY_FILE}.go-success.resolved.compose.json"
+  release_private_new_artifact_path "${resolved_compose}" "Go success resolved Compose" || return 1
+  release_prepare_current_go_compose_artifact "${resolved_compose}" || return 1
+  RELEASE_GO_UPGRADE_TEMP_FILES+=("${resolved_compose}")
+
+  p2p_image="$(release_current_go_service_image_id p2p)" || return 1
+  workspace_image="$(release_current_go_service_image_id workspace)" || return 1
+  worker_image="$(release_current_go_service_image_id worker)" || return 1
+  web_image="$(release_current_go_service_image_id web)" || return 1
+  migrate_image="${RELEASE_GO_IMAGE_ID}"
+  [[ "${workspace_image}" == "${RELEASE_GO_IMAGE_ID}" && "${worker_image}" == "${RELEASE_GO_IMAGE_ID}" && "${migrate_image}" == "${RELEASE_GO_IMAGE_ID}" ]] || {
+    echo "active Workspace, worker, and migrate images are not the verified Go image" >&2
+    return 1
+  }
+  [[ "${p2p_image}" =~ ^sha256:[0-9a-f]{64}$ && "${web_image}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo "active Go edge image identity is not canonical" >&2
+    return 1
+  }
+  project="$(release_compose_project_name)" || return 1
+  schema_version="$(release_current_schema_version)" || return 1
+  [[ "${schema_version}" =~ ^[0-9]+$ ]] || return 1
+
+  CAPTURE_INPUT_PATH="${input_file}" \
+  CAPTURE_COMPOSE_PATH="${resolved_compose}" \
+  CAPTURE_P2P_IMAGE="${p2p_image}" \
+  CAPTURE_WORKSPACE_IMAGE="${workspace_image}" \
+  CAPTURE_WORKER_IMAGE="${worker_image}" \
+  CAPTURE_WEB_IMAGE="${web_image}" \
+  CAPTURE_MIGRATE_IMAGE="${migrate_image}" \
+  CAPTURE_PROJECT="${project}" \
+  CAPTURE_COMMIT="${current_commit}" \
+  CAPTURE_VERSION="${expected_app_version}" \
+  CAPTURE_SCHEMA_VERSION="${schema_version}" \
+  node --input-type=module - <<'NODE'
+import { readFile, writeFile } from "node:fs/promises";
+
+const compose = JSON.parse(await readFile(process.env.CAPTURE_COMPOSE_PATH, "utf8"));
+const input = {
+  compose,
+  imageIDs: {
+    p2p: process.env.CAPTURE_P2P_IMAGE,
+    workspace: process.env.CAPTURE_WORKSPACE_IMAGE,
+    worker: process.env.CAPTURE_WORKER_IMAGE,
+    web: process.env.CAPTURE_WEB_IMAGE,
+    migrate: process.env.CAPTURE_MIGRATE_IMAGE,
+  },
+  profile: "go-full",
+  project: process.env.CAPTURE_PROJECT,
+  commit: process.env.CAPTURE_COMMIT,
+  semver: process.env.CAPTURE_VERSION,
+  schemaVersion: Number(process.env.CAPTURE_SCHEMA_VERSION),
+};
+await writeFile(process.env.CAPTURE_INPUT_PATH, JSON.stringify(input) + "\n", {
+  encoding: "utf8",
+  flag: "wx",
+  mode: 0o600,
+});
+NODE
+  chmod 600 "${input_file}" || return 1
+  node "${RELEASE_COMPOSE_SNAPSHOT_HELPER}" capture --input "${input_file}" --output "${snapshot_file}" >/dev/null || return 1
+  node "${RELEASE_COMPOSE_SNAPSHOT_HELPER}" recover --input "${snapshot_file}" --output "${compose_file}" >/dev/null || return 1
+  local external_helper
+  external_helper="$(release_external_files_helper_path)" || return 1
+  node "${external_helper}" capture \
+    --compose "${compose_file}" \
+    --services p2p,workspace,worker,web,migrate \
+    --output "${external_file}" >/dev/null || return 1
+  release_capture_go_volume_authority "${compose_file}" "${volume_file}" || return 1
+  release_validate_go_snapshot_sidecars "${snapshot_file}" || return 1
+  rm -f -- "${input_file}" "${resolved_compose}"
+  release_append_recovery_record "go_upgrade_success_snapshot=${snapshot_file}" || return 1
+  RELEASE_GO_UPGRADE_SNAPSHOT_PUBLISHED=true
+}
+
+release_cleanup_go_upgrade_artifacts() {
+  local path
+  for path in "${RELEASE_GO_UPGRADE_TEMP_FILES[@]}"; do
+    [[ -n "${path}" && -f "${path}" && ! -L "${path}" ]] || continue
+    rm -f -- "${path}"
+  done
+  # A published successful-release snapshot is durable operator evidence.
+  [[ "${RELEASE_GO_UPGRADE_SNAPSHOT_PUBLISHED}" != true ]] || return 0
+  for path in "${RELEASE_GO_UPGRADE_NEW_SNAPSHOT_FILES[@]}"; do
+    [[ -n "${path}" && -f "${path}" && ! -L "${path}" ]] || continue
+    rm -f -- "${path}"
+  done
+}
+
+release_go_upgrade_old_image_id() {
+  local service="$1"
+  case "${service}" in
+    p2p) printf '%s\n' "${RELEASE_GO_UPGRADE_OLD_P2P_IMAGE_ID}" ;;
+    workspace) printf '%s\n' "${RELEASE_GO_UPGRADE_OLD_WORKSPACE_IMAGE_ID}" ;;
+    worker) printf '%s\n' "${RELEASE_GO_UPGRADE_OLD_WORKER_IMAGE_ID}" ;;
+    web) printf '%s\n' "${RELEASE_GO_UPGRADE_OLD_WEB_IMAGE_ID}" ;;
+    migrate) printf '%s\n' "${RELEASE_GO_UPGRADE_OLD_MIGRATE_IMAGE_ID}" ;;
+    *)
+      echo "no pinned previous Go image is defined for ${service}" >&2
+      return 1
+      ;;
+  esac
+}
+
+release_go_upgrade_service_is_managed() {
+  case "$1" in
+    p2p|workspace|worker|web) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+release_go_upgrade_require_single_current_id() {
+  local service="$1"
+  local ids="$2"
+  [[ -n "${ids}" && "${ids}" != *$'\n'* ]] || {
+    echo "Go-to-Go recovery requires exactly one ${service} container" >&2
+    return 1
+  }
+  REPLY="${ids}"
+}
+
+release_go_upgrade_verify_owner_container() {
+  local service="$1"
+  local container_id="$2"
+  local expected_image="$3"
+  local expected_commit="$4"
+  local identity image revision version running
+  if ! identity="$(docker inspect "${container_id}" --format '{{.Id}}' 2>/dev/null)"; then
+    echo "could not inspect the ${service} Go owner identity" >&2
+    return 1
+  fi
+  [[ "${identity}" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "${service} Go owner identity is not canonical" >&2
+    return 1
+  }
+  release_verify_fence_owner "${service}" "${identity}" || return 1
+  if ! image="$(docker inspect "${identity}" --format '{{.Image}}' 2>/dev/null)"; then
+    echo "could not inspect the ${service} Go owner image" >&2
+    return 1
+  fi
+  [[ "${image}" == "${expected_image}" ]] || {
+    echo "${service} Go owner image differs from its pinned previous image" >&2
+    return 1
+  }
+  if ! revision="$(docker inspect "${identity}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)"; then
+    echo "could not inspect the ${service} Go owner revision" >&2
+    return 1
+  fi
+  [[ "${revision}" == "${expected_commit}" ]] || {
+    echo "${service} Go owner revision differs from the previous release" >&2
+    return 1
+  }
+  if ! version="$(docker inspect "${identity}" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null)" ||
+    [[ "${version}" != "${RELEASE_GO_UPGRADE_OLD_VERSION}" ]]; then
+    echo "${service} Go owner version differs from the previous release" >&2
+    return 1
+  fi
+  if ! running="$(docker inspect "${identity}" --format '{{.State.Running}}' 2>/dev/null)"; then
+    echo "could not inspect the ${service} Go owner state" >&2
+    return 1
+  fi
+  [[ "${running}" == true ]] || {
+    echo "previous ${service} Go owner is not running" >&2
+    return 1
+  }
+  REPLY="${identity}"
+}
+
+release_go_upgrade_previous_owner_record() {
+  local wanted_service="$1"
+  local kind service identity image_id commit
+  local found=0
+  [[ -f "${RELEASE_RECOVERY_FILE:-}" ]] || return 1
+  while IFS=$'\t' read -r kind service identity image_id commit; do
+    [[ "${kind}" == go_upgrade_old_owner && "${service}" == "${wanted_service}" ]] || continue
+    found=$((found + 1))
+    REPLY="${identity}"$'\t'"${image_id}"$'\t'"${commit}"
+  done <"${RELEASE_RECOVERY_FILE}"
+  [[ "${found}" == 1 ]]
+}
+
+release_go_upgrade_verify_previous_owners() {
+  local service ids expected_image identity recorded_identity recorded_image recorded_commit
+  for service in p2p workspace worker web; do
+    if ! ids="$(release_current_service_ids "${service}")"; then
+      echo "could not inspect the previous ${service} Go owner" >&2
+      return 1
+    fi
+    release_go_upgrade_require_single_current_id "${service}" "${ids}" || return 1
+    identity="${REPLY}"
+    expected_image="$(release_go_upgrade_old_image_id "${service}")" || return 1
+    release_go_upgrade_verify_owner_container "${service}" "${identity}" "${expected_image}" "${RELEASE_GO_UPGRADE_OLD_COMMIT}" || return 1
+    if release_go_upgrade_previous_owner_record "${service}"; then
+      IFS=$'\t' read -r recorded_identity recorded_image recorded_commit <<<"${REPLY}"
+      [[ "${recorded_identity}" == "${identity}" && "${recorded_image}" == "${expected_image}" && "${recorded_commit}" == "${RELEASE_GO_UPGRADE_OLD_COMMIT}" ]] || {
+        echo "previous ${service} Go owner identity changed before fencing" >&2
+        return 1
+      }
+    else
+      release_append_recovery_record $'go_upgrade_old_owner\t'"${service}"$'\t'"${identity}"$'\t'"${expected_image}"$'\t'"${RELEASE_GO_UPGRADE_OLD_COMMIT}" || return 1
+    fi
+  done
+}
+
+release_prepare_go_upgrade_snapshot() {
+  [[ "${RELEASE_PROFILE_NAME}" == go-full && "${RELEASE_GO_UPGRADE:-false}" == true ]] || return 0
+  [[ "${RELEASE_GO_UPGRADE_VALIDATED}" != true ]] || return 0
+  local snapshot_file="${RELEASE_PREVIOUS_RELEASE_SNAPSHOT:-}"
+  local metadata previous_project previous_commit previous_version previous_schema
+  local previous_p2p previous_workspace previous_worker previous_web previous_migrate
+  local current_project current_compose_file api_ids api_id api_running
+  [[ -n "${snapshot_file}" ]] || {
+    echo "Go-to-Go requires --previous-release-snapshot" >&2
+    return 1
+  }
+  release_validate_go_snapshot_sidecars "${snapshot_file}" || return 1
+  if ! metadata="$(release_read_go_snapshot_metadata "${snapshot_file}")"; then
+    echo "previous Go snapshot metadata could not be read safely" >&2
+    return 1
+  fi
+  IFS=$'\t' read -r previous_project previous_commit previous_version previous_schema \
+    previous_p2p previous_workspace previous_worker previous_web previous_migrate <<<"${metadata}"
+  [[ -n "${previous_project}" && -n "${previous_commit}" && -n "${previous_version}" && -n "${previous_schema}" && \
+    -n "${previous_p2p}" && -n "${previous_workspace}" && -n "${previous_worker}" && -n "${previous_web}" && -n "${previous_migrate}" ]] || {
+    echo "previous Go snapshot metadata is incomplete" >&2
+    return 1
+  }
+  current_project="$(release_compose_project_name)" || return 1
+  [[ "${previous_project}" == "${current_project}" ]] || {
+    echo "previous Go snapshot belongs to a different Compose project" >&2
+    return 1
+  }
+  [[ "${previous_commit}" != "${current_commit}" ]] || {
+    echo "Go-to-Go requires a different previous release commit" >&2
+    return 1
+  }
+  [[ "${previous_commit}" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "previous Go snapshot commit is malformed" >&2
+    return 1
+  }
+  if ! version_is_greater "${expected_app_version}" "${previous_version}"; then
+    echo "Go release version must be newer than the pinned previous Go version" >&2
+    return 1
+  fi
+
+  RELEASE_GO_UPGRADE_OLD_PROJECT="${previous_project}"
+  RELEASE_GO_UPGRADE_OLD_COMMIT="${previous_commit}"
+  RELEASE_GO_UPGRADE_OLD_VERSION="${previous_version}"
+  RELEASE_GO_UPGRADE_OLD_SCHEMA_VERSION="${previous_schema}"
+  RELEASE_GO_UPGRADE_OLD_P2P_IMAGE_ID="${previous_p2p}"
+  RELEASE_GO_UPGRADE_OLD_WORKSPACE_IMAGE_ID="${previous_workspace}"
+  RELEASE_GO_UPGRADE_OLD_WORKER_IMAGE_ID="${previous_worker}"
+  RELEASE_GO_UPGRADE_OLD_WEB_IMAGE_ID="${previous_web}"
+  RELEASE_GO_UPGRADE_OLD_MIGRATE_IMAGE_ID="${previous_migrate}"
+  RELEASE_GO_UPGRADE_OLD_COMPOSE_FILE="${snapshot_file}.compose.json"
+  RELEASE_GO_UPGRADE_OLD_EXTERNAL_MANIFEST="${snapshot_file}.external.json"
+  RELEASE_GO_UPGRADE_OLD_VOLUME_MANIFEST="${snapshot_file}.volumes.json"
+
+  current_compose_file="${RELEASE_RECOVERY_FILE}.go-upgrade.current.compose.json"
+  release_prepare_current_go_compose_artifact "${current_compose_file}" || return 1
+  RELEASE_GO_UPGRADE_CURRENT_COMPOSE_FILE="${current_compose_file}"
+  RELEASE_GO_UPGRADE_TEMP_FILES+=("${current_compose_file}")
+  release_verify_go_upgrade_storage_authority "${RELEASE_GO_UPGRADE_OLD_COMPOSE_FILE}" "${current_compose_file}" || return 1
+
+  if ! api_ids="$(release_current_service_ids api)"; then
+    echo "could not inspect the Node API while checking for mixed Go ownership" >&2
+    return 1
+  fi
+  while IFS= read -r api_id; do
+    [[ -n "${api_id}" ]] || continue
+    if ! api_running="$(docker inspect "${api_id}" --format '{{.State.Running}}' 2>/dev/null)"; then
+      echo "could not inspect the Node API state" >&2
+      return 1
+    fi
+    if [[ "${api_running}" == true ]]; then
+      echo "Go-to-Go refuses a mixed active Node API owner" >&2
+      return 1
+    fi
+  done <<<"${api_ids}"
+
+  release_go_upgrade_verify_previous_owners || return 1
+  release_append_recovery_record $'go_upgrade_previous_snapshot\t'"${snapshot_file}" || return 1
+  RELEASE_GO_UPGRADE_VALIDATED=true
+}
+
+release_current_go_service_image_id() {
+  local service="$1"
+  local ids identity image_id
+  release_go_upgrade_service_is_managed "${service}" || return 1
+  if ! ids="$(release_current_service_ids "${service}")"; then
+    echo "could not inspect active Go ${service} containers for snapshot capture" >&2
+    return 1
+  fi
+  release_go_upgrade_require_single_current_id "${service}" "${ids}" || return 1
+  identity="${REPLY}"
+  if ! image_id="$(docker inspect "${identity}" --format '{{.Image}}' 2>/dev/null)"; then
+    echo "could not inspect active Go ${service} image identity for snapshot capture" >&2
+    return 1
+  fi
+  [[ "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo "active Go ${service} image identity is not canonical" >&2
+    return 1
+  }
+  printf '%s\n' "${image_id}"
+}
+
+release_current_schema_version() {
+  # This is the canonical release schema, not an operator-supplied number or
+  # a claim based only on filenames. Capture requires this run's exact-image
+  # migration to have completed successfully; readiness also checks history.
+  [[ "${RELEASE_GO_MIGRATION_VERIFIED}" == true && -n "${PROJECT_DIR:-}" ]] || {
+    echo "a verified successful migration is required for schema snapshot capture" >&2
+    return 1
+  }
+  node -e '
+    const fs = require("node:fs");
+    try {
+      const files = fs.readdirSync(process.argv[1], { withFileTypes: true });
+      const sql = files.filter((f) => f.name.endsWith(".sql"));
+      if (sql.length === 0 || sql.some((f) => !f.isFile() || !/^[0-9]+_[a-z0-9_]+\.sql$/.test(f.name))) process.exit(1);
+      const versions = sql.map((f) => Number(f.name.split("_", 1)[0]));
+      if (versions.some((v) => !Number.isSafeInteger(v) || v < 1)) process.exit(1);
+      process.stdout.write(String(Math.max(...versions)) + "\n");
+    } catch { process.exit(1); }
+  ' "${PROJECT_DIR}/apps/web/server/migrations"
+}
+
 release_record_go_image_identity() {
   [[ -n "${RELEASE_RECOVERY_FILE:-}" ]] || return 0
   local value
@@ -211,6 +964,10 @@ release_create_go_image_override() {
   umask 077
   if ! {
     printf 'services:\n'
+    if [[ -n "${RELEASE_GO_P2P_IMAGE_ID}" && -n "${RELEASE_GO_WEB_IMAGE_ID}" ]]; then
+      printf '  p2p:\n    image: %s\n    labels:\n      com.duallane.release-run: %s\n' "${RELEASE_GO_P2P_IMAGE_ID}" "${RELEASE_GO_RUN_ID}"
+      printf '  web:\n    image: %s\n    labels:\n      com.duallane.release-run: %s\n' "${RELEASE_GO_WEB_IMAGE_ID}" "${RELEASE_GO_RUN_ID}"
+    fi
     printf '  workspace:\n    image: %s\n    labels:\n      com.duallane.release-run: %s\n' "${RELEASE_GO_IMAGE_ID}" "${RELEASE_GO_RUN_ID}"
     printf '  worker:\n    image: %s\n    labels:\n      com.duallane.release-run: %s\n' "${RELEASE_GO_IMAGE_ID}" "${RELEASE_GO_RUN_ID}"
     printf '  migrate:\n    image: %s\n    labels:\n      com.duallane.release-run: %s\n' "${RELEASE_GO_IMAGE_ID}" "${RELEASE_GO_RUN_ID}"
@@ -225,6 +982,49 @@ release_create_go_image_override() {
     return 1
   fi
   RELEASE_GO_IMAGE_OVERRIDE_FILE="${override_file}"
+}
+
+release_verify_go_edge_images() {
+  [[ "${RELEASE_PROFILE_NAME}" == go-full ]] || return 0
+  local service ref image revision version
+  for service in p2p web; do
+    if ! ref="$(compose config --format json 2>/dev/null | node -e '
+      try {
+        const value = JSON.parse(require("node:fs").readFileSync(0, "utf8")).services[process.argv[1]].image;
+        if (typeof value !== "string" || !value || /[\x00-\x20\x7f]/.test(value)) process.exit(1);
+        process.stdout.write(value);
+      } catch { process.exit(1); }
+    ' "${service}")" ||
+      ! image="$(docker image inspect "${ref}" --format '{{.Id}}' 2>/dev/null)" ||
+      [[ ! "${image}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+      echo "could not resolve the built Go ${service} image identity" >&2
+      return 1
+    fi
+    revision="$(docker image inspect "${image}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" || return 1
+    version="$(docker image inspect "${image}" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null)" || return 1
+    [[ "${revision}" == "${current_commit}" && "${version}" == "${expected_app_version}" ]] || {
+      echo "Go ${service} image release metadata differs from the requested release" >&2
+      return 1
+    }
+    case "${service}" in
+      p2p) RELEASE_GO_P2P_IMAGE_ID="${image}" ;;
+      web) RELEASE_GO_WEB_IMAGE_ID="${image}" ;;
+    esac
+    release_append_recovery_record "go_${service}_image_id=${image}" || return 1
+  done
+}
+
+release_expected_go_service_image_id() {
+  case "$1" in
+    p2p) REPLY="${RELEASE_GO_P2P_IMAGE_ID}" ;;
+    web) REPLY="${RELEASE_GO_WEB_IMAGE_ID}" ;;
+    workspace|worker|migrate) REPLY="${RELEASE_GO_IMAGE_ID}" ;;
+    *) return 1 ;;
+  esac
+  [[ "${REPLY}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo "Go service image was not pinned before activation" >&2
+    return 1
+  }
 }
 
 release_verify_go_image_identity() {
@@ -299,12 +1099,10 @@ release_verify_go_image_identity() {
 release_verify_go_service_image_id() {
   [[ "${RELEASE_PROFILE_NAME}" == "go-full" ]] || return 0
   local service="$1"
-  local ids id actual_image_id
-  release_profile_contains "${service}" workspace worker || return 0
-  [[ -n "${RELEASE_GO_IMAGE_ID}" ]] || {
-    echo "Go image identity was not verified before starting ${service}" >&2
-    return 1
-  }
+  local ids id actual_image_id expected_image
+  release_profile_contains "${service}" p2p workspace worker web || return 0
+  release_expected_go_service_image_id "${service}" || return 1
+  expected_image="${REPLY}"
   if ! ids="$(release_current_service_ids "${service}")"; then
     echo "could not inspect active ${service} image" >&2
     return 1
@@ -319,7 +1117,7 @@ release_verify_go_service_image_id() {
       echo "could not inspect active ${service} image ID" >&2
       return 1
     fi
-    if [[ "${actual_image_id}" != "${RELEASE_GO_IMAGE_ID}" ]]; then
+    if [[ "${actual_image_id}" != "${expected_image}" ]]; then
       echo "active ${service} does not use the verified Go image ID" >&2
       return 1
     fi
@@ -363,6 +1161,7 @@ release_remove_owned_migration_container() {
 }
 
 release_run_go_migration_and_verify() {
+  RELEASE_GO_MIGRATION_VERIFIED=false
   [[ "${RELEASE_PROFILE_NAME}" == "go-full" ]] || {
     echo "Go migration image verification requires the go-full profile" >&2
     return 1
@@ -380,7 +1179,7 @@ release_run_go_migration_and_verify() {
     echo "refusing to reuse an existing Go migration container" >&2
     return 1
   fi
-  if ! compose create --pull never --no-deps migrate >/dev/null 2>&1; then
+  if ! compose up --no-start --pull never --no-build --no-deps migrate >/dev/null 2>&1; then
     echo "Go migration container could not be created" >&2
     return 1
   fi
@@ -438,7 +1237,9 @@ release_run_go_migration_and_verify() {
     release_remove_owned_migration_container "${migration_id}" || return 1
     return 1
   fi
-  release_remove_owned_migration_container "${migration_id}"
+  release_remove_owned_migration_container "${migration_id}" || return 1
+  release_append_recovery_record "go_migration_verified_image=${RELEASE_GO_IMAGE_ID}" || return 1
+  RELEASE_GO_MIGRATION_VERIFIED=true
 }
 
 release_candidate_compose() {
@@ -866,12 +1667,505 @@ release_stop_service_and_confirm() {
   release_fence_service_and_confirm "$1"
 }
 
+release_go_upgrade_fence_target_count() {
+  local wanted_phase="$1"
+  local wanted_service="$2"
+  local kind phase service identity restart_name restart_max original_running image_id commit
+  local count=0
+  [[ -f "${RELEASE_RECOVERY_FILE:-}" ]] || {
+    printf '0\n'
+    return 0
+  }
+  while IFS=$'\t' read -r kind phase service identity restart_name restart_max original_running image_id commit; do
+    [[ "${kind}" == go_upgrade_fence_target && "${phase}" == "${wanted_phase}" && "${service}" == "${wanted_service}" ]] || continue
+    count=$((count + 1))
+  done <"${RELEASE_RECOVERY_FILE}"
+  printf '%s\n' "${count}"
+}
+
+release_go_upgrade_fence_target_for_service() {
+  local wanted_phase="$1"
+  local wanted_service="$2"
+  local kind phase service identity restart_name restart_max original_running image_id commit
+  local found=0
+  [[ -f "${RELEASE_RECOVERY_FILE:-}" ]] || return 1
+  while IFS=$'\t' read -r kind phase service identity restart_name restart_max original_running image_id commit; do
+    [[ "${kind}" == go_upgrade_fence_target && "${phase}" == "${wanted_phase}" && "${service}" == "${wanted_service}" ]] || continue
+    found=$((found + 1))
+    REPLY="${identity}"$'\t'"${restart_name}"$'\t'"${restart_max}"$'\t'"${original_running}"$'\t'"${image_id}"$'\t'"${commit}"
+  done <"${RELEASE_RECOVERY_FILE}"
+  [[ "${found}" == 1 ]]
+}
+
+release_go_upgrade_fence_complete() {
+  local wanted_phase="$1"
+  local wanted_service="$2"
+  local kind phase service identity rest
+  [[ -f "${RELEASE_RECOVERY_FILE:-}" ]] || return 1
+  while IFS=$'\t' read -r kind phase service identity rest; do
+    if [[ "${kind}" == go_upgrade_fence_complete && "${phase}" == "${wanted_phase}" && "${service}" == "${wanted_service}" ]]; then
+      return 0
+    fi
+  done <"${RELEASE_RECOVERY_FILE}"
+  return 1
+}
+
+release_go_upgrade_fence_phase_and_confirm() {
+  local phase="$1"
+  local service="$2"
+  local expected_image="$3"
+  local expected_commit="$4"
+  local expected_identity="${5:-}"
+  local ids container_id identity image revision restart_name restart_max original_running running target
+  if ! ids="$(release_current_service_ids "${service}")"; then
+    echo "could not inspect ${phase} Go owner ${service} before fencing" >&2
+    return 1
+  fi
+  release_go_upgrade_require_single_current_id "${service}" "${ids}" || return 1
+  container_id="${REPLY}"
+  if ! identity="$(docker inspect "${container_id}" --format '{{.Id}}' 2>/dev/null)"; then
+    echo "could not inspect ${phase} Go owner identity for ${service}" >&2
+    return 1
+  fi
+  [[ "${identity}" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "${phase} Go owner identity for ${service} is not canonical" >&2
+    return 1
+  }
+  [[ -z "${expected_identity}" || "${identity}" == "${expected_identity}" ]] || {
+    echo "${phase} Go owner identity changed before fencing ${service}" >&2
+    return 1
+  }
+  release_verify_fence_owner "${service}" "${identity}" || return 1
+  if ! image="$(docker inspect "${identity}" --format '{{.Image}}' 2>/dev/null)" || [[ "${image}" != "${expected_image}" ]]; then
+    echo "${phase} Go owner image for ${service} is not the expected pinned image" >&2
+    return 1
+  fi
+  if ! revision="$(docker inspect "${identity}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" || [[ "${revision}" != "${expected_commit}" ]]; then
+    echo "${phase} Go owner revision for ${service} is not the expected release" >&2
+    return 1
+  fi
+
+  if release_go_upgrade_fence_target_for_service "${phase}" "${service}"; then
+    IFS=$'\t' read -r identity restart_name restart_max original_running image revision <<<"${REPLY}"
+    [[ "${identity}" == "$(docker inspect "${container_id}" --format '{{.Id}}' 2>/dev/null)" ]] || {
+      echo "${phase} Go fence target for ${service} changed" >&2
+      return 1
+    }
+  else
+    if [[ "$(release_go_upgrade_fence_target_count "${phase}" "${service}")" != 0 ]]; then
+      echo "${phase} Go fencing found multiple targets for ${service}" >&2
+      return 1
+    fi
+    if ! restart_name="$(docker inspect "${identity}" --format '{{.HostConfig.RestartPolicy.Name}}' 2>/dev/null)" || \
+      ! restart_max="$(docker inspect "${identity}" --format '{{.HostConfig.RestartPolicy.MaximumRetryCount}}' 2>/dev/null)" || \
+      ! original_running="$(docker inspect "${identity}" --format '{{.State.Running}}' 2>/dev/null)"; then
+      echo "could not capture ${phase} Go restart policy for ${service}" >&2
+      return 1
+    fi
+    case "${restart_name}" in
+      no|always|unless-stopped|on-failure) ;;
+      *) echo "${phase} Go owner ${service} has an unsupported restart policy" >&2; return 1 ;;
+    esac
+    [[ "${restart_max}" =~ ^[0-9]+$ && ("${original_running}" == true || "${original_running}" == false) ]] || {
+      echo "${phase} Go restart policy state for ${service} is invalid" >&2
+      return 1
+    }
+    release_append_recovery_record $'go_upgrade_fence_target\t'"${phase}"$'\t'"${service}"$'\t'"${identity}"$'\t'"${restart_name}"$'\t'"${restart_max}"$'\t'"${original_running}"$'\t'"${image}"$'\t'"${revision}" || return 1
+  fi
+
+  if ! running="$(docker inspect "${identity}" --format '{{.State.Running}}' 2>/dev/null)"; then
+    echo "could not inspect ${phase} Go owner state for ${service}" >&2
+    return 1
+  fi
+  if ! release_verify_restart_policy "${identity}" no 0; then
+    if ! docker update --restart=no "${identity}" >/dev/null 2>&1; then
+      echo "could not disable ${phase} Go owner restart policy for ${service}" >&2
+      return 1
+    fi
+    release_verify_fence_identity "${identity}" "${identity}" || return 1
+    release_verify_restart_policy "${identity}" no 0 || return 1
+    release_append_recovery_record $'go_upgrade_fence_updated\t'"${phase}"$'\t'"${service}"$'\t'"${identity}" || return 1
+  fi
+  if [[ "${running}" == true ]]; then
+    release_verify_fence_identity "${identity}" "${identity}" || return 1
+    if ! docker stop --time "${RELEASE_STOP_TIMEOUT}" "${identity}" >/dev/null 2>&1; then
+      echo "could not stop ${phase} Go owner ${service}" >&2
+      return 1
+    fi
+    release_wait_ids_not_running "${identity}" || return 1
+    release_verify_fence_identity "${identity}" "${identity}" || return 1
+    release_append_recovery_record $'go_upgrade_fence_stopped\t'"${phase}"$'\t'"${service}"$'\t'"${identity}" || return 1
+  else
+    [[ "${running}" == false ]] || {
+      echo "${phase} Go owner ${service} has an invalid running state" >&2
+      return 1
+    }
+    release_wait_ids_not_running "${identity}" || return 1
+  fi
+  if ! release_go_upgrade_fence_complete "${phase}" "${service}"; then
+    release_append_recovery_record $'go_upgrade_fence_complete\t'"${phase}"$'\t'"${service}"$'\t'"${identity}" || return 1
+  fi
+}
+
+release_go_upgrade_fence_old_services() {
+  [[ "${RELEASE_GO_UPGRADE:-false}" == true ]] || return 0
+  local service ids identity expected_identity expected_image expected_commit
+  for service in p2p workspace worker web; do
+    if release_go_upgrade_previous_owner_record "${service}"; then
+      IFS=$'\t' read -r expected_identity expected_image expected_commit <<<"${REPLY}"
+    else
+      if ! ids="$(release_current_service_ids "${service}")"; then
+        echo "could not inspect the previous ${service} Go owner before fencing" >&2
+        return 1
+      fi
+      release_go_upgrade_require_single_current_id "${service}" "${ids}" || return 1
+      identity="${REPLY}"
+      expected_image="$(release_go_upgrade_old_image_id "${service}")" || return 1
+      release_go_upgrade_verify_owner_container "${service}" "${identity}" "${expected_image}" "${RELEASE_GO_UPGRADE_OLD_COMMIT}" || return 1
+      expected_identity="${identity}"
+      expected_commit="${RELEASE_GO_UPGRADE_OLD_COMMIT}"
+      release_append_recovery_record $'go_upgrade_old_owner\t'"${service}"$'\t'"${expected_identity}"$'\t'"${expected_image}"$'\t'"${expected_commit}" || return 1
+    fi
+    [[ "${expected_commit}" == "${RELEASE_GO_UPGRADE_OLD_COMMIT}" ]] || {
+      echo "previous ${service} Go owner record has the wrong release commit" >&2
+      return 1
+    }
+    release_go_upgrade_fence_phase_and_confirm old "${service}" "${expected_image}" "${RELEASE_GO_UPGRADE_OLD_COMMIT}" "${expected_identity}" || return 1
+  done
+  release_append_recovery_record 'go_upgrade_old_owners_fenced=true'
+}
+
+release_go_upgrade_note_new_service_attempt() {
+  local service="$1"
+  release_go_upgrade_service_is_managed "${service}" || return 0
+  local existing
+  for existing in "${RELEASE_GO_UPGRADE_NEW_ATTEMPTED_SERVICES[@]}"; do
+    [[ "${existing}" == "${service}" ]] && return 0
+  done
+  RELEASE_GO_UPGRADE_NEW_ATTEMPTED_SERVICES+=("${service}")
+  release_append_recovery_record $'go_upgrade_new_attempt\t'"${service}"
+}
+
+release_go_upgrade_new_owner_record() {
+  local wanted_service="$1"
+  local kind service identity image_id commit
+  local found=0
+  [[ -f "${RELEASE_RECOVERY_FILE:-}" ]] || return 1
+  while IFS=$'\t' read -r kind service identity image_id commit; do
+    [[ "${kind}" == go_upgrade_new_owner && "${service}" == "${wanted_service}" ]] || continue
+    found=$((found + 1))
+    REPLY="${identity}"$'\t'"${image_id}"$'\t'"${commit}"
+  done <"${RELEASE_RECOVERY_FILE}"
+  [[ "${found}" == 1 ]]
+}
+
+release_go_upgrade_record_new_owner() {
+  local service="$1"
+  local container_id="$2"
+  local identity image_id revision expected_image
+  release_go_upgrade_service_is_managed "${service}" || return 0
+  if ! identity="$(docker inspect "${container_id}" --format '{{.Id}}' 2>/dev/null)"; then
+    echo "could not inspect new Go ${service} owner identity" >&2
+    return 1
+  fi
+  [[ "${identity}" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "new Go ${service} owner identity is not canonical" >&2
+    return 1
+  }
+  release_verify_fence_owner "${service}" "${identity}" || return 1
+  release_expected_go_service_image_id "${service}" || return 1
+  expected_image="${REPLY}"
+  if ! image_id="$(docker inspect "${identity}" --format '{{.Image}}' 2>/dev/null)" || [[ ! "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "new Go ${service} owner image identity is not canonical" >&2
+    return 1
+  fi
+  [[ "${image_id}" == "${expected_image}" ]] || {
+    echo "new Go ${service} owner does not use its pinned candidate image" >&2
+    return 1
+  }
+  if ! revision="$(docker inspect "${identity}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" || [[ "${revision}" != "${current_commit}" ]]; then
+    echo "new Go ${service} owner revision is not the requested release" >&2
+    return 1
+  fi
+  # Record the verified created container before start/health can fail. This
+  # record also identifies an unhealthy writer during fail-closed recovery.
+  if release_go_upgrade_new_owner_record "${service}"; then
+    local recorded_identity recorded_image recorded_commit
+    IFS=$'\t' read -r recorded_identity recorded_image recorded_commit <<<"${REPLY}"
+    [[ "${recorded_identity}" == "${identity}" && "${recorded_image}" == "${image_id}" && "${recorded_commit}" == "${current_commit}" ]] || {
+      echo "new Go ${service} owner identity changed" >&2
+      return 1
+    }
+    return 0
+  fi
+  release_append_recovery_record $'go_upgrade_new_owner\t'"${service}"$'\t'"${identity}"$'\t'"${image_id}"$'\t'"${current_commit}"
+}
+
+release_go_upgrade_fence_new_services() {
+  [[ "${RELEASE_GO_UPGRADE:-false}" == true ]] || return 0
+  local service ids identity old_identity expected_image new_identity new_image new_commit
+  for service in "${RELEASE_GO_UPGRADE_NEW_ATTEMPTED_SERVICES[@]}"; do
+    if ! ids="$(release_current_service_ids "${service}")"; then
+      echo "could not inspect failed new Go ${service} owner" >&2
+      return 1
+    fi
+    [[ -n "${ids}" ]] || continue
+    release_go_upgrade_require_single_current_id "${service}" "${ids}" || return 1
+    identity="${REPLY}"
+    release_go_upgrade_previous_owner_record "${service}" || {
+      echo "previous Go ${service} owner record is missing during failed-owner fencing" >&2
+      return 1
+    }
+    IFS=$'\t' read -r old_identity expected_image _ <<<"${REPLY}"
+    if [[ "${identity}" == "${old_identity}" ]]; then
+      release_go_upgrade_fence_phase_and_confirm old "${service}" "${expected_image}" \
+        "${RELEASE_GO_UPGRADE_OLD_COMMIT}" "${identity}" || return 1
+      continue
+    fi
+    if release_go_upgrade_is_recreated_old_owner "${service}" "${identity}"; then
+      release_go_upgrade_fence_phase_and_confirm "recovered-${identity}" "${service}" "${expected_image}" \
+        "${RELEASE_GO_UPGRADE_OLD_COMMIT}" "${identity}" || return 1
+      continue
+    fi
+    release_go_upgrade_new_owner_record "${service}" || {
+      echo "new Go ${service} owner was not recorded before failure" >&2
+      return 1
+    }
+    IFS=$'\t' read -r new_identity new_image new_commit <<<"${REPLY}"
+    [[ "${identity}" == "${new_identity}" && "${new_commit}" == "${current_commit}" ]] || {
+      echo "new Go ${service} owner identity drifted before fencing" >&2
+      return 1
+    }
+    release_go_upgrade_fence_phase_and_confirm new "${service}" "${new_image}" "${current_commit}" "${new_identity}" || return 1
+  done
+}
+
+release_go_upgrade_rollback_compose() {
+  if declare -F go_upgrade_rollback_compose >/dev/null 2>&1; then
+    go_upgrade_rollback_compose "$@"
+    return
+  fi
+  echo "Go-to-Go rollback Compose function is unavailable" >&2
+  return 1
+}
+
+release_go_upgrade_is_recreated_old_owner() {
+  local wanted_service="$1" wanted_id="$2" kind service identity image commit expected count=0
+  expected="$(release_go_upgrade_old_image_id "${wanted_service}")" || return 1
+  [[ "${wanted_id}" =~ ^[0-9a-f]{64}$ && -f "${RELEASE_RECOVERY_FILE}" ]] || return 1
+  while IFS=$'\t' read -r kind service identity image commit; do
+    [[ "${kind}" == go_upgrade_old_created && "${service}" == "${wanted_service}" && "${identity}" == "${wanted_id}" ]] || continue
+    [[ "${image}" == "${expected}" && "${commit}" == "${RELEASE_GO_UPGRADE_OLD_COMMIT}" ]] || return 1
+    count=$((count + 1))
+  done <"${RELEASE_RECOVERY_FILE}"
+  [[ "${count}" == 1 ]]
+}
+
+release_go_upgrade_restore_old_service() {
+  local service="$1"
+  local current_ids current_id old_image old_identity old_commit restored_ids restored_id image revision project service_label running
+  local fenced_identity restart_name restart_max original_running fenced_image fenced_commit
+  release_go_upgrade_service_is_managed "${service}" || return 1
+  [[ -n "${RELEASE_GO_UPGRADE_OLD_COMPOSE_FILE}" ]] || {
+    echo "previous Go recovery Compose is unavailable" >&2
+    return 1
+  }
+  release_verify_external_files_manifest "${RELEASE_GO_UPGRADE_OLD_COMPOSE_FILE}" "${RELEASE_GO_UPGRADE_OLD_EXTERNAL_MANIFEST}" || return 1
+  release_verify_pinned_volume_authority "${RELEASE_GO_UPGRADE_OLD_COMPOSE_FILE}" \
+    "${RELEASE_GO_ACTIVATION_COMPOSE_FILE:-${RELEASE_GO_UPGRADE_CURRENT_COMPOSE_FILE}}" || return 1
+  old_image="$(release_go_upgrade_old_image_id "${service}")" || return 1
+  release_go_upgrade_previous_owner_record "${service}" || return 1
+  IFS=$'\t' read -r old_identity _ old_commit <<<"${REPLY}"
+  [[ "${old_commit}" == "${RELEASE_GO_UPGRADE_OLD_COMMIT}" ]] || return 1
+  release_go_upgrade_fence_target_for_service old "${service}" || return 1
+  IFS=$'\t' read -r fenced_identity restart_name restart_max original_running fenced_image fenced_commit <<<"${REPLY}"
+  [[ "${fenced_identity}" == "${old_identity}" && "${fenced_image}" == "${old_image}" && \
+    "${fenced_commit}" == "${old_commit}" && "${original_running}" == true ]] || return 1
+  release_restart_policy_spec "${restart_name}" "${restart_max}" || return 1
+
+  if ! release_go_upgrade_rollback_compose up --no-start --pull never --no-build --no-deps --force-recreate "${service}" >/dev/null 2>&1; then
+    echo "could not recreate previous Go ${service} from its canonical Compose" >&2
+    return 1
+  fi
+  if ! restored_ids="$(release_go_upgrade_rollback_compose ps -a -q "${service}" 2>/dev/null)"; then
+    echo "could not identify restored Go ${service}" >&2
+    return 1
+  fi
+  release_go_upgrade_require_single_current_id "${service}" "${restored_ids}" || return 1
+  restored_id="${REPLY}"
+  if ! image="$(docker inspect "${restored_id}" --format '{{.Image}}' 2>/dev/null)" || [[ "${image}" != "${old_image}" ]]; then
+    echo "restored Go ${service} does not use the pinned previous image" >&2
+    return 1
+  fi
+  release_verify_fence_owner "${service}" "${restored_id}" || return 1
+  if ! revision="$(docker inspect "${restored_id}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" || [[ "${revision}" != "${RELEASE_GO_UPGRADE_OLD_COMMIT}" ]]; then
+    echo "restored Go ${service} revision does not match the previous release" >&2
+    return 1
+  fi
+  if ! running="$(docker inspect "${restored_id}" --format '{{.State.Running}}' 2>/dev/null)" || [[ "${running}" != false ]]; then
+    echo "previous Go ${service} was running before recovery verification" >&2
+    return 1
+  fi
+  local version
+  if ! version="$(docker inspect "${restored_id}" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null)" || [[ "${version}" != "${RELEASE_GO_UPGRADE_OLD_VERSION}" ]]; then
+    echo "restored Go service version differs from its pinned previous release" >&2
+    return 1
+  fi
+  # Retrying recovery must recognize this exact replacement even if start,
+  # readiness, or the final gateway smoke fails after creation.
+  release_verify_fence_identity "${restored_id}" "${restored_id}" || return 1
+  release_append_recovery_record $'go_upgrade_old_created\t'"${service}"$'\t'"${restored_id}"$'\t'"${old_image}"$'\t'"${RELEASE_GO_UPGRADE_OLD_COMMIT}" || return 1
+  release_apply_restart_policy "${restored_id}" no 0 || return 1
+  release_verify_pinned_volume_authority "${RELEASE_GO_UPGRADE_OLD_COMPOSE_FILE}" \
+    "${RELEASE_GO_ACTIVATION_COMPOSE_FILE:-${RELEASE_GO_UPGRADE_CURRENT_COMPOSE_FILE}}" || return 1
+  docker start "${restored_id}" >/dev/null 2>&1 || return 1
+  release_wait_container_ready "${restored_id}" "${service}" || return 1
+  release_verify_pinned_volume_authority "${RELEASE_GO_UPGRADE_OLD_COMPOSE_FILE}" \
+    "${RELEASE_GO_ACTIVATION_COMPOSE_FILE:-${RELEASE_GO_UPGRADE_CURRENT_COMPOSE_FILE}}" || return 1
+  release_apply_restart_policy "${restored_id}" "${restart_name}" "${restart_max}" || return 1
+  release_record_replacement "${service}" "${restored_id}" || return 1
+  release_append_recovery_record $'go_upgrade_old_restored\t'"${service}"$'\t'"${restored_id}"
+}
+
+release_go_upgrade_recover_all_services() {
+  [[ "${RELEASE_PROFILE_NAME}" == go-full && "${RELEASE_GO_UPGRADE:-false}" == true ]] || return 1
+  [[ "${RELEASE_GO_UPGRADE_VALIDATED}" == true && -n "${RELEASE_GO_UPGRADE_OLD_COMPOSE_FILE}" ]] || {
+    echo "Go-to-Go daemon recovery requires a validated previous release snapshot" >&2
+    return 1
+  }
+  [[ "${RELEASE_GO_UPGRADE_DAEMON_RECOVERY_DONE}" != true ]] || return 0
+
+  local service ids identity old_identity old_image old_commit
+  local new_identity new_image new_commit new_running
+  local -a services=(p2p workspace worker web)
+
+  # This is deliberately a complete first phase. No old Go owner is restored
+  # until every service has either fenced its new owner or confirmed that no
+  # recorded new owner is running.
+  for service in "${services[@]}"; do
+    release_go_upgrade_previous_owner_record "${service}" || {
+      echo "previous ${service} Go owner record is missing during daemon recovery" >&2
+      return 1
+    }
+    IFS=$'\t' read -r old_identity old_image old_commit <<<"${REPLY}"
+    [[ "${old_commit}" == "${RELEASE_GO_UPGRADE_OLD_COMMIT}" ]] || {
+      echo "previous ${service} Go owner record has the wrong release commit" >&2
+      return 1
+    }
+
+    if ! ids="$(release_current_service_ids "${service}")"; then
+      echo "could not inspect ${service} during Go-to-Go daemon recovery" >&2
+      return 1
+    fi
+    if [[ -n "${ids}" ]]; then
+      release_go_upgrade_require_single_current_id "${service}" "${ids}" || return 1
+      identity="${REPLY}"
+      if [[ "${identity}" == "${old_identity}" ]]; then
+        release_go_upgrade_fence_phase_and_confirm old "${service}" "${old_image}" "${RELEASE_GO_UPGRADE_OLD_COMMIT}" "${old_identity}" || return 1
+        continue
+      fi
+      if release_go_upgrade_is_recreated_old_owner "${service}" "${identity}"; then
+        release_go_upgrade_fence_phase_and_confirm "recovered-${identity}" "${service}" "${old_image}" \
+          "${RELEASE_GO_UPGRADE_OLD_COMMIT}" "${identity}" || return 1
+        continue
+      fi
+      release_go_upgrade_new_owner_record "${service}" || {
+        echo "unrecorded Go-to-Go owner found during daemon recovery" >&2
+        return 1
+      }
+      IFS=$'\t' read -r new_identity new_image new_commit <<<"${REPLY}"
+      [[ "${identity}" == "${new_identity}" && "${new_commit}" == "${current_commit}" ]] || {
+        echo "new Go-to-Go owner identity drifted during daemon recovery" >&2
+        return 1
+      }
+      release_go_upgrade_fence_phase_and_confirm new "${service}" "${new_image}" "${current_commit}" "${new_identity}" || return 1
+      continue
+    fi
+
+    # A failed start may have left a recorded container outside the current
+    # Compose service inventory. It is safe to continue only after Docker
+    # confirms that exact owner is stopped. An inspect failure, including
+    # an unproven absence, blocks automatic recovery for operator review.
+    if release_go_upgrade_new_owner_record "${service}"; then
+      IFS=$'\t' read -r new_identity new_image new_commit <<<"${REPLY}"
+      [[ "${new_commit}" == "${current_commit}" ]] || {
+        echo "recorded new Go ${service} owner has the wrong release commit" >&2
+        return 1
+      }
+      if ! new_running="$(docker inspect "${new_identity}" --format '{{.State.Running}}' 2>/dev/null)"; then
+        echo "could not confirm the recorded new Go ${service} owner is gone" >&2
+        return 1
+      fi
+      [[ "${new_running}" == false ]] || {
+        echo "recorded new Go ${service} owner is not stopped during daemon recovery" >&2
+        return 1
+      }
+    fi
+  done
+  release_append_recovery_record 'go_upgrade_daemon_new_owners_fenced=true' || return 1
+
+  release_require_drained_runtime recovery || return 1
+
+  for service in "${services[@]}"; do
+    release_go_upgrade_restore_old_service "${service}" || return 1
+  done
+  release_append_recovery_record 'go_upgrade_daemon_old_owners_restored=true' || return 1
+  release_run_previous_gateway_smoke || return 1
+  RELEASE_GO_UPGRADE_DAEMON_RECOVERY_DONE=true
+}
+
+release_go_upgrade_recover_service() {
+  local service="$1"
+  release_go_upgrade_service_is_managed "${service}" || return 1
+  release_go_upgrade_recover_all_services
+}
+
+release_go_upgrade_rollback_application() {
+  [[ "${RELEASE_PROFILE_NAME}" == go-full && "${RELEASE_GO_UPGRADE:-false}" == true ]] || return 1
+  [[ "${RELEASE_GO_UPGRADE_VALIDATED}" == true && -n "${RELEASE_GO_UPGRADE_OLD_COMPOSE_FILE}" ]] || {
+    echo "Go-to-Go rollback requires a validated previous release snapshot" >&2
+    return 1
+  }
+  release_append_recovery_record 'go_upgrade_rollback_started=true' || return 1
+  # A previous recovery may already have recreated services that the partial
+  # activation never attempted. Re-fence the complete current owner set on
+  # every retry, using the same recovery path as a daemon interruption.
+  release_go_upgrade_recover_all_services || return 1
+  release_append_recovery_record 'go_upgrade_rollback_complete=true' || return 1
+}
+
 release_remove_service_if_present() {
   local service="$1"
-  local ids
+  local ids identity expected_image actual_image actual_run running remaining
   ids="$(release_current_service_ids "${service}")" || return 1
   [[ -n "${ids}" ]] || return 0
-  compose rm -sf "${service}" >/dev/null || return 1
+  release_go_upgrade_require_single_current_id "${service}" "${ids}" || return 1
+  identity="${REPLY}"
+  release_verify_fence_owner "${service}" "${identity}" || return 1
+  release_verify_fence_identity "${identity}" "${identity}" || return 1
+  release_expected_go_service_image_id "${service}" || return 1
+  expected_image="${REPLY}"
+  actual_image="$(docker inspect "${identity}" --format '{{.Image}}' 2>/dev/null)" || return 1
+  actual_run="$(docker inspect "${identity}" --format '{{index .Config.Labels "com.duallane.release-run"}}' 2>/dev/null)" || return 1
+  [[ "${RELEASE_GO_RUN_ID}" =~ ^[0-9a-f]{64}$ && "${actual_run}" == "${RELEASE_GO_RUN_ID}" && "${actual_image}" == "${expected_image}" ]] || {
+    echo "refusing to remove a container outside the pinned release run" >&2
+    return 1
+  }
+  release_fence_target_for_identity "${service}" "${identity}" || return 1
+  release_fence_service_is_complete "${service}" || return 1
+  release_verify_restart_policy "${identity}" no 0 || return 1
+  running="$(docker inspect "${identity}" --format '{{.State.Running}}' 2>/dev/null)" || return 1
+  [[ "${running}" == false ]] || return 1
+  # Never resolve the service name again inside a destructive command. A
+  # concurrent replacement is not this run's cleanup target; rm without force
+  # also refuses a container that restarted after the stopped-state check.
+  docker rm "${identity}" >/dev/null 2>&1 || return 1
+  remaining="$(release_current_service_ids "${service}")" || return 1
+  [[ -z "${remaining}" ]] || {
+    echo "a service owner appeared during release cleanup; recovery is blocked" >&2
+    return 1
+  }
+  release_append_recovery_record $'removed_release_owner\t'"${service}"$'\t'"${identity}"
 }
 
 release_candidate_network_alias() {
@@ -1408,8 +2702,8 @@ release_snapshot_validate_for_go_cutover() {
     return
   fi
   if [[ "${RELEASE_GO_UPGRADE:-false}" == true ]]; then
-    echo "Go-to-Go upgrades require a frozen resolved Compose snapshot; this release tooling does not provide one yet" >&2
-    return 1
+    release_prepare_go_upgrade_snapshot
+    return
   fi
   local service
   [[ -f "${RELEASE_SNAPSHOT_FILE}" ]] || {
@@ -1608,6 +2902,10 @@ release_replacement_id_for_service() {
 release_start_recovery_service() {
   local service="$1"
   local replacement current_state
+  if [[ "${RELEASE_GO_UPGRADE:-false}" == true ]] && release_go_upgrade_service_is_managed "${service}"; then
+    release_go_upgrade_recover_service "${service}"
+    return
+  fi
   if release_profile_contains "${service}" "${RELEASE_GO_SERVICES[@]}"; then
     if release_fence_service_has_target "${service}"; then
       release_fence_service_is_complete "${service}" || {
@@ -1745,6 +3043,10 @@ release_restore_snapshot_service() {
   local service="$1"
   local id image_id image_ref running status health current_ids current_id
   if release_snapshot_was_running "${service}"; then
+    if [[ "${RELEASE_PROFILE_NAME}" == go-full && -n "${RELEASE_NODE_RECOVERY_COMPOSE_FILE}" ]]; then
+      release_restore_pinned_node_service "${service}"
+      return
+    fi
     release_rollback_compose up -d --no-deps --force-recreate --wait --wait-timeout 120 "${service}" >/dev/null || return 1
     current_ids="$(release_rollback_service_ids "${service}")" || return 1
     [[ -n "${current_ids}" ]] || {
@@ -1766,8 +3068,42 @@ release_restore_snapshot_service() {
   release_rollback_compose rm -sf "${service}" >/dev/null || return 1
 }
 
+release_restore_pinned_node_service() {
+  local service="$1" rows id image image_ref running status health current_id observed
+  [[ "${service}" == api || "${service}" == web ]] || return 1
+  release_verify_activation_authority || return 1
+  rows="$(release_snapshot_records_for_service "${service}")" || return 1
+  [[ -n "${rows}" && "${rows}" != *$'\n'* ]] || return 1
+  IFS=$'\t' read -r id image image_ref running status health <<<"${rows}"
+  [[ "${image}" =~ ^sha256:[0-9a-f]{64}$ && "${running}" == true ]] || return 1
+  release_rollback_compose up --no-start --pull never --no-build --no-deps --force-recreate "${service}" >/dev/null 2>&1 || return 1
+  current_id="$(release_rollback_service_ids "${service}")" || return 1
+  release_go_upgrade_require_single_current_id "${service}" "${current_id}" || return 1
+  release_verify_fence_owner "${service}" "${current_id}" || return 1
+  observed="$(docker inspect "${current_id}" --format '{{.Image}}' 2>/dev/null)" || return 1
+  [[ "${observed}" == "${image}" ]] || return 1
+  observed="$(docker inspect "${current_id}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" || return 1
+  [[ "${observed}" == "${RELEASE_PREVIOUS_NODE_COMMIT}" ]] || return 1
+  observed="$(docker inspect "${current_id}" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null)" || return 1
+  [[ "${observed}" == "${RELEASE_PREVIOUS_NODE_VERSION}" ]] || return 1
+  observed="$(docker inspect "${current_id}" --format '{{.State.Running}}' 2>/dev/null)" || return 1
+  [[ "${observed}" == false ]] || return 1
+  # Re-creation must not silently change mounts or database/provider authority.
+  # Recheck the real replacement before it can write, and again after health.
+  release_verify_activation_authority || return 1
+  release_record_replacement "${service}" "${current_id}" || return 1
+  docker start "${current_id}" >/dev/null 2>&1 || return 1
+  release_wait_container_ready "${current_id}" "${service}" || return 1
+  release_verify_activation_authority || return 1
+  release_restore_fenced_policy_on_container "${service}" "${current_id}" || return 1
+}
+
 release_rollback_application() {
   local service
+  if [[ "${RELEASE_GO_UPGRADE:-false}" == true ]]; then
+    release_go_upgrade_rollback_application
+    return
+  fi
   [[ -f "${RELEASE_SNAPSHOT_FILE}" ]] || {
     echo "cannot rollback without an application state snapshot" >&2
     return 1
@@ -1777,7 +3113,15 @@ release_rollback_application() {
   for service in "${RELEASE_GO_SERVICES[@]}"; do
     release_stop_service_and_confirm "${service}" || return 1
   done
-  release_retag_snapshot_images || return 1
+  # A failed first cutover may have stopped midway through fencing Node.
+  # Complete that fence as well before treating a database snapshot as quiet.
+  if [[ "${RELEASE_PROFILE_NAME}" == go-full ]]; then
+    release_stop_service_and_confirm api || return 1
+  fi
+  release_require_drained_runtime recovery || return 1
+  if [[ "${RELEASE_PROFILE_NAME}" != go-full ]]; then
+    release_retag_snapshot_images || return 1
+  fi
   for service in "${RELEASE_GO_SERVICES[@]}"; do
     if ! release_snapshot_has_record "${service}"; then
       release_remove_service_if_present "${service}" || return 1
@@ -1786,4 +3130,6 @@ release_rollback_application() {
   for service in "${RELEASE_ROLLBACK_ORDER[@]}"; do
     release_restore_snapshot_service "${service}" || return 1
   done
+  release_run_previous_gateway_smoke || return 1
+  release_verify_activation_authority
 }

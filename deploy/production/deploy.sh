@@ -21,6 +21,7 @@ bootstrap=false
 expected_commit=""
 release_profile="node-default"
 go_upgrade=false
+previous_release_snapshot=""
 app_replaced=false
 buildx_builder=""
 buildx_builder_ready=false
@@ -41,8 +42,8 @@ is mandatory so an operator cannot accidentally deploy a different checkout.
 The checkout must also match DUALLANE_PRODUCTION_DIR, which defaults to
 $HOME/duallane. go-full additionally requires the parent-provided Go Compose,
 health, and candidate-runtime wiring; the manifest cannot satisfy those checks
-by itself. Go-to-Go upgrades are intentionally unavailable until a mode-0600
-resolved Compose snapshot can prove the previous complete Go owner.
+by itself. Go-to-Go upgrades require --previous-release-snapshot pointing at
+the mode-0600 snapshot from the last successful Go release.
 EOF
 }
 
@@ -72,6 +73,14 @@ while (($# > 0)); do
       go_upgrade=true
       shift
       ;;
+    --previous-release-snapshot)
+      if (($# < 2)); then
+        echo "Missing value for --previous-release-snapshot" >&2
+        exit 2
+      fi
+      previous_release_snapshot="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -88,12 +97,26 @@ if [[ "${go_upgrade}" == true && "${release_profile}" != "go-full" ]]; then
   echo "--go-upgrade requires the explicit go-full release profile" >&2
   exit 2
 fi
-if [[ "${go_upgrade}" == true ]]; then
-  echo "--go-upgrade is unavailable until a mode-0600 resolved Compose snapshot is implemented" >&2
+if [[ "${go_upgrade}" == true && -z "${previous_release_snapshot}" ]]; then
+  echo "--go-upgrade requires --previous-release-snapshot" >&2
   exit 2
 fi
+if [[ "${go_upgrade}" != true && -n "${previous_release_snapshot}" ]]; then
+  echo "--previous-release-snapshot requires --go-upgrade" >&2
+  exit 2
+fi
+if [[ "${go_upgrade}" == true ]]; then
+  release_private_artifact_path "${previous_release_snapshot}" "previous Go snapshot" || exit 2
+fi
+export RELEASE_GO_UPGRADE="${go_upgrade}"
+export RELEASE_PREVIOUS_RELEASE_SNAPSHOT="${previous_release_snapshot}"
 
 compose() {
+  if [[ "${release_profile:-node-default}" == go-full && -n "${RELEASE_GO_ACTIVATION_COMPOSE_FILE:-}" ]]; then
+    docker compose --project-name "${RELEASE_GO_ACTIVATION_PROJECT}" \
+      --profile rollback -f "${RELEASE_GO_ACTIVATION_COMPOSE_FILE}" "$@"
+    return
+  fi
   local compose_files=("${BASE_COMPOSE_FILES[@]}")
   if [[ "${release_profile:-node-default}" == "go-full" ]]; then
     compose_files+=(--profile rollback -f "${PROJECT_DIR}/docker-compose.go-production.yml")
@@ -109,6 +132,12 @@ candidate_compose() {
     compose "$@"
     return
   fi
+  if [[ -n "${RELEASE_GO_ACTIVATION_COMPOSE_FILE:-}" ]]; then
+    docker compose --project-name "${RELEASE_GO_ACTIVATION_PROJECT}" --profile rollback \
+      -f "${RELEASE_GO_ACTIVATION_COMPOSE_FILE}" \
+      -f "${PROJECT_DIR}/deploy/production/go-candidate.compose.yml" "$@"
+    return
+  fi
   local compose_files=(
     "${BASE_COMPOSE_FILES[@]}"
     --profile rollback
@@ -122,10 +151,30 @@ candidate_compose() {
 }
 
 rollback_compose() {
+  if [[ -n "${RELEASE_NODE_RECOVERY_COMPOSE_FILE:-}" ]]; then
+    docker compose --project-name "${RELEASE_NODE_RECOVERY_PROJECT}" \
+      -f "${RELEASE_NODE_RECOVERY_COMPOSE_FILE}" "$@"
+    return
+  fi
   # Rollback must reconstruct the captured Node stack from the base files;
   # the Go production override changes the Web image, user, dependencies, and
   # filesystem policy and is never valid for the old Node owner.
   docker compose "${BASE_COMPOSE_FILES[@]}" "$@"
+}
+
+go_upgrade_rollback_compose() {
+  [[ "${RELEASE_GO_UPGRADE:-false}" == true ]] || {
+    echo "Go-to-Go rollback Compose is only available for an explicit upgrade" >&2
+    return 1
+  }
+  [[ -n "${RELEASE_GO_UPGRADE_OLD_PROJECT}" && -n "${RELEASE_GO_UPGRADE_OLD_COMPOSE_FILE}" ]] || {
+    echo "Go-to-Go rollback Compose snapshot is unavailable" >&2
+    return 1
+  }
+  docker compose \
+    --project-name "${RELEASE_GO_UPGRADE_OLD_PROJECT}" \
+    -f "${RELEASE_GO_UPGRADE_OLD_COMPOSE_FILE}" \
+    "$@"
 }
 
 read_env_value() {
@@ -184,24 +233,6 @@ prune_buildx_cache() {
     --max-used-space "${cache_max}" >/dev/null; then
     echo "WARNING: could not constrain Buildx cache for ${buildx_builder}" >&2
   fi
-}
-
-version_is_greater() {
-  local candidate="$1"
-  local current="$2"
-  local candidate_major candidate_minor candidate_patch
-  local current_major current_minor current_patch
-  IFS=. read -r candidate_major candidate_minor candidate_patch <<<"${candidate}"
-  IFS=. read -r current_major current_minor current_patch <<<"${current}"
-  if ((10#${candidate_major} != 10#${current_major})); then
-    ((10#${candidate_major} > 10#${current_major}))
-    return
-  fi
-  if ((10#${candidate_minor} != 10#${current_minor})); then
-    ((10#${candidate_minor} > 10#${current_minor}))
-    return
-  fi
-  ((10#${candidate_patch} > 10#${current_patch}))
 }
 
 read_running_app_version() {
@@ -326,8 +357,32 @@ restore_runtime_after_successful_deploy() {
 
 start_release_service() {
   local service="$1"
-  local ids id
-  compose up -d --no-deps --wait --wait-timeout 120 "${service}" >/dev/null
+  local ids id running
+  if [[ "${RELEASE_PROFILE_NAME}" == go-full ]] && release_go_upgrade_service_is_managed "${service}"; then
+    if [[ "${RELEASE_GO_UPGRADE:-false}" == true ]]; then
+      release_go_upgrade_note_new_service_attempt "${service}" || return 1
+    fi
+    compose up --no-start --pull never --no-build --no-deps --force-recreate "${service}" >/dev/null 2>&1 || return 1
+    ids="$(compose ps -a -q "${service}" 2>/dev/null)" || return 1
+    release_go_upgrade_require_single_current_id "${service}" "${ids}" || return 1
+    id="${REPLY}"
+    release_verify_fence_owner "${service}" "${id}" || return 1
+    verify_container_release "${id}" "${service}" || return 1
+    release_verify_go_service_image_id "${service}" || return 1
+    running="$(docker inspect "${id}" --format '{{.State.Running}}' 2>/dev/null)" || return 1
+    [[ "${running}" == false ]] || {
+      echo "Go owner was already running before activation verification" >&2
+      return 1
+    }
+    if [[ "${RELEASE_GO_UPGRADE:-false}" == true ]]; then
+      release_go_upgrade_record_new_owner "${service}" "${id}" || return 1
+    fi
+    docker start "${id}" >/dev/null 2>&1 || return 1
+    release_wait_container_ready "${id}" "${service}" || return 1
+    release_verify_go_service_image_id "${service}"
+    return
+  fi
+  compose up -d --no-deps --wait --wait-timeout 120 "${service}" >/dev/null || return 1
   ids="$(compose ps -q "${service}")"
   [[ -n "${ids}" ]] || {
     echo "Compose did not return a container for ${service}" >&2
@@ -343,7 +398,7 @@ start_release_service() {
 stop_legacy_services_for_go() {
   local service
   for service in "${RELEASE_STOP_BEFORE_BACKEND[@]}"; do
-    release_stop_service_and_confirm "${service}"
+    release_stop_service_and_confirm "${service}" || return 1
   done
   echo "P2P in-memory sessions are interrupted by the whole-backend cutover" >&2
 }
@@ -351,17 +406,22 @@ stop_legacy_services_for_go() {
 start_release_backend() {
   local service
   if [[ "${RELEASE_PROFILE_NAME}" == "go-full" ]]; then
-    release_snapshot_validate_for_go_cutover
+    release_snapshot_validate_for_go_cutover || return 1
     app_replaced=true
-    stop_legacy_services_for_go
+    if [[ "${RELEASE_GO_UPGRADE:-false}" == true ]]; then
+      release_go_upgrade_fence_old_services || return 1
+    else
+      stop_legacy_services_for_go || return 1
+    fi
+    release_require_drained_runtime activation || return 1
   else
     app_replaced=true
   fi
   for service in "${RELEASE_BACKEND_SERVICES[@]}"; do
-    start_release_service "${service}"
+    start_release_service "${service}" || return 1
   done
   for service in "${RELEASE_WORKER_SERVICES[@]}"; do
-    start_release_service "${service}"
+    start_release_service "${service}" || return 1
   done
 }
 
@@ -375,6 +435,7 @@ start_release_edge() {
 on_error() {
   local exit_code=$?
   local recovery_failed=false
+  local application_recovered=true
   trap - ERR
   if [[ -n "${backup_temporary:-}" ]]; then
     rm -f "${backup_temporary}" || true
@@ -384,14 +445,22 @@ on_error() {
   fi
   if ! rollback_app; then
     recovery_failed=true
+    application_recovered=false
   fi
-  if ! restore_runtime_after_daemon_restart; then
-    recovery_failed=true
+  # A failed fence/drain is not permission for the generic daemon-restorer
+  # to start the old writer. Leave ambiguous ownership stopped for review.
+  if [[ "${application_recovered}" == true ]]; then
+    if ! restore_runtime_after_daemon_restart; then
+      recovery_failed=true
+    fi
   fi
   if [[ "${recovery_failed}" == true ]]; then
     echo "Production deployment failed and automatic runtime recovery was incomplete; operator review is required" >&2
     exit 1
   fi
+  # Recovery still needs the immutable current/previous Compose artifacts.
+  # Keep them for operator diagnosis if automatic recovery was incomplete.
+  release_cleanup_go_upgrade_artifacts || true
   echo "Production deployment failed with exit code ${exit_code}" >&2
   exit "${exit_code}"
 }
@@ -407,7 +476,7 @@ on_exit() {
 trap on_error ERR
 trap on_exit EXIT
 
-for command in docker curl git grep node realpath sed sha256sum flock systemctl; do
+for command in docker cmp curl find flock git grep node realpath sed sha256sum sort stat systemctl tail; do
   if ! command -v "${command}" >/dev/null 2>&1; then
     echo "Required command is unavailable: ${command}" >&2
     exit 1
@@ -526,6 +595,7 @@ fi
 docker volume inspect "${postgres_volume}" >/dev/null
 compose config --quiet
 release_validate_resolved_compose
+release_pin_compose_project
 
 if ! postgres_container="$(compose ps -a -q postgres 2>/dev/null)"; then
   echo "Could not inspect the PostgreSQL Compose container" >&2
@@ -546,7 +616,7 @@ if ! running_api_container="$(compose ps -a -q api 2>/dev/null)"; then
   echo "Could not inspect the API Compose container" >&2
   exit 1
 fi
-if [[ -n "${running_api_container}" ]]; then
+if [[ "${go_upgrade}" != true && -n "${running_api_container}" ]]; then
   running_app_version="$(read_running_app_version "${running_api_container}")"
   running_app_commit="$(docker inspect "${running_api_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)"
   if [[ ! "${running_app_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -557,6 +627,14 @@ if [[ -n "${running_api_container}" ]]; then
     ! version_is_greater "${expected_app_version}" "${running_app_version}"; then
     echo "Release version ${expected_app_version} must be newer than running version ${running_app_version}" >&2
     exit 1
+  fi
+  if [[ "${release_profile}" == go-full ]]; then
+    [[ "${running_app_commit}" =~ ^[0-9a-f]{40}$ ]] || {
+      echo "Node-to-Go recovery requires a complete previous release revision" >&2
+      exit 1
+    }
+    RELEASE_PREVIOUS_NODE_VERSION="${running_app_version}"
+    RELEASE_PREVIOUS_NODE_COMMIT="${running_app_commit}"
   fi
 fi
 
@@ -570,6 +648,7 @@ RELEASE_RECOVERY_FILE="${release_recovery_file}"
 : >"${release_recovery_file}"
 release_snapshot_app_state "${release_state_file}"
 release_snapshot_validate_for_go_cutover
+release_freeze_node_recovery_compose
 
 if [[ -z "${postgres_container}" || "$(container_health "${postgres_container}")" != "healthy" ]]; then
   compose up -d --no-deps postgres
@@ -592,7 +671,10 @@ export BUILDX_BUILDER="${buildx_builder}"
 export COMPOSE_PARALLEL_LIMIT="${COMPOSE_PARALLEL_LIMIT:-1}"
 ensure_buildx_builder "${buildx_builder}" "${buildkit_image}"
 compose build "${RELEASE_BUILD_SERVICES[@]}"
+release_verify_go_edge_images
 release_verify_go_image_identity
+release_freeze_go_activation_compose
+release_verify_activation_authority
 if [[ "${RELEASE_PROFILE_NAME}" == "go-full" ]]; then
   release_run_go_migration_and_verify
 else
@@ -636,6 +718,10 @@ if [[ -z "${docker_started_after}" ]]; then
 fi
 if [[ -n "${docker_started_before}" && "${docker_started_before}" != "${docker_started_after}" ]]; then
   restore_runtime_after_successful_deploy
+fi
+if [[ "${RELEASE_PROFILE_NAME}" == go-full ]]; then
+  release_run_gateway_smoke go-full "${expected_app_version}" "${current_commit}"
+  release_capture_successful_go_snapshot
 fi
 
 app_replaced=false

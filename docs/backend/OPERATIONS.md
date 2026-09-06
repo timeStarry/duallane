@@ -418,23 +418,30 @@ its exact static SPA HTML; that is classified as no private endpoint exposure,
 not backend readiness. These unauthenticated read-only probes cannot replace
 the disposable authenticated browser, upload, provider and recovery gates.
 
-Before any Go production cutover, `deploy/production/deploy.sh` must be extended
-and tested to understand every live application service. The target release
-sequence is:
+The guarded `deploy/production/deploy.sh` is an executable candidate workflow,
+not evidence that a full production rehearsal has passed and not deployment
+authorization. An explicitly authorized operator must still use the required
+production checkout and release procedure. The coordinator's release sequence
+is:
 
-1. Verify clean `main`, exact `origin/main` commit, semantic version, production
+1. Verify clean `main`, the exact requested `origin/main` commit, semantic version, production
    path, authoritative PostgreSQL volume, and required tools.
-2. Capture a private logical database backup and checksum.
-3. Capture rollback image IDs for Web and every active backend/worker service.
-4. Build all affected images from the exact commit.
-5. Run migrations once.
-6. Start unpublished candidates for affected request-serving services and wait
-   for readiness.
-7. Replace/start backend services before changing edge routes.
-8. Start the worker only after its compatible schema and owning API are ready.
-9. Replace the Web/Nginx gateway last, then verify direct gateway and public
-   smoke paths.
-10. Retain previous images until the rollback window closes.
+2. Capture a private logical database backup and checksum plus the application
+   state needed for recovery. Before building, freeze the previous Node API/Web
+   recovery Compose and external-file manifest for a first Node-to-Go cutover,
+   or verify the previous Go snapshot and all three sidecars for an upgrade.
+3. Build the exact image IDs, then freeze the image-pinned activation Compose.
+4. Verify physical database/storage authority before the one-shot migration.
+5. Start unpublished candidates and wait for their private readiness checks.
+6. Fence the old writers and claimers: Node `api` for the first Node-to-Go
+   cutover, or every previous Go owner for a Go-to-Go upgrade. Disable their
+   restart policies and confirm they are stopped.
+7. Run the bounded drain observation and recheck authority; the observation is
+   not itself a writer fence.
+8. Start Go backend and worker services, then replace the Web/Nginx gateway
+   last. Verify application health and the direct gateway smoke paths.
+9. After the final smoke gate, capture the new private Go recovery snapshot and
+   retain the previous images and artifacts through the rollback window.
 
 For every changing writer or background claimant, insert an explicit ownership
 handoff before activation: stop admission/claims on the old owner, drain its
@@ -444,6 +451,65 @@ new owner. A temporary bounded pause is preferable to unproven overlap. Existing
 WebSockets and internal jobs can still mutate data after an edge route changes;
 include them in the drain plan. Record recovery for each interrupted handoff
 step. Unpublished candidates remain passive throughout this sequence.
+
+### Guarded Go activation and upgrade inputs
+
+The first candidate invocation has the following shape; the expected commit is
+mandatory and the profile must be explicit:
+
+```text
+deploy/production/deploy.sh --expected-commit <40-hex-commit> --release-profile go-full
+```
+
+A Go-to-Go upgrade additionally requires the base snapshot from the last
+successful Go release:
+
+```text
+deploy/production/deploy.sh --expected-commit <40-hex-commit> \
+  --release-profile go-full --go-upgrade \
+  --previous-release-snapshot /absolute/private/go-compose.snapshot.json
+```
+
+That argument names one of four matching private mode-0600 artifacts, kept
+outside Git and normal logs:
+
+1. `go-compose.snapshot.json` — profile/project, commit/version, schema, five
+   exact image IDs, and the canonical resolved Compose input.
+2. `go-compose.snapshot.json.compose.json` — recovered old Go Compose.
+3. `go-compose.snapshot.json.external.json` — external bind/config/secret
+   fingerprints.
+4. `go-compose.snapshot.json.volumes.json` — physical PostgreSQL/Workspace/
+   worker volume authority.
+
+The base path is the CLI value; the three sidecars must remain beside it,
+unchanged, regular non-symlink 0600 files. The coordinator also creates a
+private image-pinned Go activation artifact and, for the first Node-to-Go
+cutover, a private image-pinned Node recovery artifact. All post-freeze Compose
+operations use those artifacts; later `.env` or tag changes must not silently
+move authority.
+
+Fencing records each original restart policy and retry limit, temporarily sets
+`restart=no`, and verifies the owner is stopped. A known-good replacement gets
+the recorded policy only after authority, readiness, and recovery checks pass.
+Cleanup of a new Go service is allowed only when the service was absent from the
+old snapshot and the exact current container has the release-run/image/Compose
+ownership labels, a completed fence, `restart=no`, and a stopped state; remove
+that exact ID without `compose rm` or force. A pre-existing stopped Go service
+present in the old snapshot is not an unowned cleanup target.
+
+If authority, fencing, drain, readiness, or smoke fails, the coordinator fails
+closed: confirmed fences stay in place and ambiguous writer state requires
+manual review; a failed stop is never reported as a stopped owner. It does not
+infer that Node ownership changed or let generic daemon recovery bypass a
+failed application-recovery gate. Node recovery uses only the pinned old artifact after the same
+authority and drain gates. A successful candidate check or synthetic rehearsal
+does not constitute the pending full rehearsal or grant deployment authority.
+
+For a Go-to-Go rollback retry, recovery is exhaustive: it re-identifies and
+re-fences all four current owners (`p2p`, `workspace`, `worker`, and `web`),
+including an owner whose recreation was never attempted or only partially
+completed, before running the recovery drain or starting any old owner. The
+original restart policy is restored only after the recovered owner is healthy.
 
 Do not use a bare `docker compose up` to replace an existing production
 deployment. Do not run production deployment from the development checkout.

@@ -154,6 +154,34 @@ owning domain instead of `platform` or `common`.
   tests.
 - Keep rollback-only legacy code frozen except for compatibility/security fixes.
 
+### Guarded Go release handoff
+
+Release-facing work must distinguish candidate validation from an authorized
+production rollout and its observation evidence. The coordinator requires
+`--expected-commit <40-hex>` and an explicit `--release-profile go-full`; a
+Go-to-Go upgrade also requires `--go-upgrade` plus the base
+`--previous-release-snapshot <path>`. That base path is valid only with its
+three adjacent private 0600 sidecars: recovered old Compose, external-file
+fingerprints, and physical-volume authority. Keep all four outside Git/logs and
+do not edit them after capture.
+
+The release owner freezes image-pinned activation and old-owner recovery Compose,
+checks physical authority, runs the one-shot migration, starts passive
+candidates, fences old writers/claimers, observes the bounded drain, starts Go
+backend/worker, and changes the edge last before gateway smoke. Original restart
+policies are restored only after the known-good replacement is authoritative and
+ready. On every Go-to-Go rollback retry, all four current owners (`p2p`,
+`workspace`, `worker`, and `web`) are re-identified and fenced—including
+unattempted or partially recreated owners—before recovery drain or any old owner
+start; original policies return only after health. Authority/fence/drain failures
+preserve confirmed fences and require manual review of ambiguous writer state;
+a candidate check, synthetic rehearsal, or agent handoff does not authorize
+deployment or an ownership-ledger transition.
+
+See [Runtime and operations](OPERATIONS.md) for the operator command shape,
+artifact names, and recovery details. Do not duplicate those facts in the
+historical work record or infer production ownership from repository artifacts.
+
 ## 9. Validation And Review
 
 Run the smallest focused test while iterating and the complete gate required by

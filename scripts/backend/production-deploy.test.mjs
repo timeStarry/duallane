@@ -12,6 +12,11 @@ import {
   validateProfile,
   validateResolvedCompose,
 } from "../../deploy/production/release-manifest.mjs";
+import {
+  captureComposeSnapshot,
+  writeRecoverableCompose,
+  writeSnapshot,
+} from "../../deploy/production/release-compose-snapshot.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const helper = path.join(root, "deploy/production/release-helper.sh");
@@ -75,6 +80,74 @@ function validGoCompose() {
       postgres: { healthcheck: { test: ["CMD", "pg_isready"] } },
     },
   };
+}
+
+const goUpgradeOldCommit = "a".repeat(40);
+const goUpgradeNewCommit = "b".repeat(40);
+const goUpgradeRetryModes = Object.freeze([
+  "go-upgrade-old-start-retry",
+  "go-upgrade-old-health-retry",
+  "go-upgrade-old-smoke-retry",
+]);
+
+function goUpgradeImage(hexDigit) {
+  return "sha256:" + hexDigit.repeat(64);
+}
+
+const rollbackGoImage = goUpgradeImage("9");
+const rollbackGoRunID = "d".repeat(64);
+
+function goUpgradeSnapshotInput() {
+  const compose = structuredClone(validGoCompose());
+  compose.name = "duallane";
+  compose.services.web.image = "registry.example/web:synthetic";
+  compose.volumes = { "legacy-data": {} };
+  return {
+    compose,
+    imageIDs: {
+      p2p: goUpgradeImage("1"),
+      workspace: goUpgradeImage("2"),
+      worker: goUpgradeImage("2"),
+      web: goUpgradeImage("3"),
+      migrate: goUpgradeImage("2"),
+    },
+    profile: "go-full",
+    project: "duallane",
+    commit: goUpgradeOldCommit,
+    semver: "0.15.5",
+    schemaVersion: 42,
+  };
+}
+
+async function writeGoUpgradeSnapshotArtifacts(directory) {
+  const snapshotPath = path.join(directory, "previous-go.snapshot.json");
+  const composePath = snapshotPath + ".compose.json";
+  const externalPath = snapshotPath + ".external.json";
+  const volumePath = snapshotPath + ".volumes.json";
+  const snapshot = captureComposeSnapshot(goUpgradeSnapshotInput());
+  await writeSnapshot(snapshotPath, snapshot);
+  await writeRecoverableCompose(composePath, snapshot);
+  // This harness models volume authority; real inspection/refusal behavior
+  // belongs to release-volume-authority.test.mjs and container rehearsals.
+  await writeFile(volumePath, "{}\n", { mode: 0o600 });
+  const external = spawnSync(
+    process.execPath,
+    [
+      path.join(root, "deploy/production/release-external-files.mjs"),
+      "capture",
+      "--compose",
+      composePath,
+      "--services",
+      "p2p,workspace,worker,web,migrate",
+      "--output",
+      externalPath,
+    ],
+    { cwd: root, encoding: "utf8" },
+  );
+  if (external.status !== 0) {
+    throw new Error("synthetic external-file snapshot failed: " + external.stderr);
+  }
+  return { snapshotPath, composePath, externalPath };
 }
 
 test("release manifest exposes only the fixed profiles and preserves Node default", () => {
@@ -229,6 +302,20 @@ function initialState(mode) {
       v2ray: ["v2ray-old"],
     },
     restoreIds: { api: "api-old", web: "web-old" },
+    goUpgradeRecreateOld: goUpgradeRetryModes.includes(mode),
+    goUpgradeOldRestoreFailureMode: mode === "go-upgrade-old-start-retry"
+      ? "start"
+      : mode === "go-upgrade-old-health-retry"
+        ? "health"
+        : "",
+    goUpgradeOldRestoreFailureService: goUpgradeRetryModes.includes(mode) ? "workspace" : "",
+    goUpgradeOldRestoreFailuresRemaining: mode === "go-upgrade-old-start-retry" || mode === "go-upgrade-old-health-retry"
+      ? 1
+      : 0,
+    goUpgradeOldCreateCounts: {},
+    goUpgradeOldCreatedIds: {},
+    goUpgradeOldCreatedHistory: {},
+    requireOldCreatedBeforeStart: goUpgradeRetryModes.includes(mode),
   };
   if (mode === "node-fence-multiple") {
     state.containers["api-old-2"] = {
@@ -240,9 +327,26 @@ function initialState(mode) {
   if (mode === "rollback" || mode === "rollback-daemon" || mode === "rollback-fence-mid-failure") {
     state.containers["api-new"] = { image: "sha256:api-new", ref: "duallane-api:new", running: true, status: "running", health: "healthy", env: [], labels: { version: "0.15.5", revision: "new-commit" } };
     state.containers["web-new"] = { image: "sha256:web-new", ref: "duallane-web:new", running: true, status: "running", health: "healthy", env: [], labels: { version: "0.15.5", revision: "new-commit" } };
-    state.containers["p2p-new"] = { image: "sha256:p2p-new", ref: "duallane-p2p:new", running: true, status: "running", health: "healthy", env: [], labels: { version: "0.15.5", revision: "new-commit" } };
-    state.containers["workspace-new"] = { image: "sha256:workspace-new", ref: "duallane-workspace:new", running: true, status: "running", health: "healthy", env: [], labels: { version: "0.15.5", revision: "new-commit" } };
-    state.containers["worker-new"] = { image: "sha256:worker-new", ref: "duallane-worker:new", running: true, status: "running", health: "healthy", env: [], labels: { version: "0.15.5", revision: "new-commit" } };
+    const makeRollbackGoContainer = (service) => ({
+      image: rollbackGoImage,
+      ref: "duallane-" + service + ":new",
+      running: true,
+      status: "running",
+      health: "healthy",
+      env: [],
+      restartName: "always",
+      restartMax: 0,
+      labels: {
+        version: "0.15.5",
+        revision: "new-commit",
+        "com.docker.compose.project": "duallane",
+        "com.docker.compose.service": service,
+        "com.duallane.release-run": rollbackGoRunID,
+      },
+    });
+    state.containers["p2p-new"] = makeRollbackGoContainer("p2p");
+    state.containers["workspace-new"] = makeRollbackGoContainer("workspace");
+    state.containers["worker-new"] = makeRollbackGoContainer("worker");
     state.current = { postgres: ["pg-old"], api: ["api-old"], web: ["web-old"], v2ray: ["v2ray-old"] };
   }
   if (mode === "node-active") {
@@ -347,6 +451,117 @@ function initialState(mode) {
   if (mode === "migration-exit-failure") {
     state.migrationExitCode = 1;
   }
+  if (["go-upgrade-valid", "go-upgrade-interleaved", "go-upgrade-fence-failure", "go-success-snapshot", ...goUpgradeRetryModes].includes(mode)) {
+    const oldIds = {
+      p2p: "1".repeat(64),
+      workspace: "2".repeat(64),
+      worker: "3".repeat(64),
+      web: "4".repeat(64),
+    };
+    const newIds = {
+      p2p: "5".repeat(64),
+      workspace: "6".repeat(64),
+      worker: "7".repeat(64),
+      web: "8".repeat(64),
+    };
+    const oldImages = {
+      p2p: goUpgradeImage("1"),
+      workspace: goUpgradeImage("2"),
+      worker: goUpgradeImage("2"),
+      web: goUpgradeImage("3"),
+    };
+    const newImage = goUpgradeImage("9");
+    const makeGoContainer = (service, image, identity, revision) => ({
+      image,
+      ref: "duallane-" + service + ":go",
+      identity,
+      running: true,
+      status: "running",
+      health: "healthy",
+      env: [],
+      restartName: "always",
+      restartMax: 0,
+      labels: {
+        version: "0.15.5",
+        revision,
+        "com.docker.compose.project": "duallane",
+        "com.docker.compose.service": service,
+      },
+    });
+    state.goUpgradeOldIds = oldIds;
+    state.goUpgradeNewIds = newIds;
+    state.goUpgradeNewStopFailureService = mode === "go-upgrade-fence-failure" ? "worker" : "";
+    state.containers = {
+      "api-old": {
+        image: "sha256:" + "a".repeat(64),
+        ref: "duallane-api:old",
+        running: false,
+        status: "exited",
+        health: "healthy",
+        env: [],
+        labels: {
+          version: "0.15.4",
+          revision: "old-node-commit",
+          "com.docker.compose.project": "duallane",
+          "com.docker.compose.service": "api",
+        },
+      },
+    };
+    for (const service of Object.keys(oldIds)) {
+      state.containers[oldIds[service]] = makeGoContainer(
+        service,
+        oldImages[service],
+        oldIds[service],
+        goUpgradeOldCommit,
+      );
+    }
+    if (goUpgradeRetryModes.includes(mode)) {
+      state.containers[oldIds.workspace].restartName = "on-failure";
+      state.containers[oldIds.workspace].restartMax = 3;
+    }
+    for (const service of Object.keys(newIds)) {
+      state.containers[newIds[service]] = makeGoContainer(
+        service,
+        newImage,
+        newIds[service],
+        goUpgradeNewCommit,
+      );
+    }
+    state.current = {
+      api: ["api-old"],
+      p2p: [oldIds.p2p],
+      workspace: [oldIds.workspace],
+      worker: [oldIds.worker],
+      web: [oldIds.web],
+    };
+    state.restoreIds = {};
+    state.composeConfig = structuredClone(validGoCompose());
+    state.composeConfig.name = "duallane";
+    state.composeConfig.services.web.image = "registry.example/web:synthetic";
+    state.composeConfig.volumes = { "legacy-data": {} };
+    for (const service of ["p2p", "workspace", "worker", "web", "migrate"]) {
+      state.composeConfig.services[service].image = service === "p2p"
+        ? oldImages.p2p
+        : service === "web"
+          ? oldImages.web
+          : oldImages.workspace;
+    }
+    if (goUpgradeRetryModes.includes(mode)) {
+      state.containers["foreign-workspace"] = {
+        ...makeGoContainer("workspace", "sha256:foreign", "g".repeat(64), "foreign-commit"),
+        ref: "duallane-workspace:foreign",
+        running: true,
+        status: "running",
+        health: "healthy",
+        labels: {
+          version: "9.9.9",
+          revision: "foreign-commit",
+          "com.docker.compose.project": "foreign-project",
+          "com.docker.compose.service": "workspace",
+        },
+      };
+    }
+  }
   const identityById = {
     "pg-old": "f".repeat(64),
     "api-old": "a".repeat(64),
@@ -370,7 +585,7 @@ function initialState(mode) {
     const ref = value.ref ?? "";
     const service = ref.match(/^duallane-(?:go-)?(api|p2p|workspace|worker|web):/)?.[1]
       ?? (ref.startsWith("postgres:") ? "postgres" : ref.startsWith("v2ray:") ? "v2ray" : "");
-    value.identity = identityById[id] ?? fallbackIdentity(id);
+    value.identity = value.identity ?? identityById[id] ?? fallbackIdentity(id);
     value.labels ??= {};
     value.labels["com.docker.compose.project"] ??= "duallane";
     if (service) value.labels["com.docker.compose.service"] ??= service;
@@ -447,10 +662,16 @@ if (args[0] === "set-running") {
 if (args[0] === "rm") {
   const ids = args.slice(1).filter((value) => !value.startsWith("-"));
   for (const id of ids) {
-    for (const network of Object.values(state.networks)) delete network.containers[id];
-    delete state.containers[id];
+    const actualKey = Object.hasOwn(state.containers, id)
+      ? id
+      : Object.entries(state.containers).find(([, value]) => value.identity === id)?.[0] ?? id;
+    for (const network of Object.values(state.networks)) {
+      delete network.containers[id];
+      delete network.containers[actualKey];
+    }
+    delete state.containers[actualKey];
     for (const [service, currentIds] of Object.entries(state.current)) {
-      state.current[service] = currentIds.filter((currentId) => currentId !== id);
+      state.current[service] = currentIds.filter((currentId) => currentId !== id && currentId !== actualKey);
     }
   }
   record(["rm", ...ids]); save(); process.exit(0);
@@ -556,7 +777,7 @@ if (args[0] === "update") {
     value.restartMax = 0;
   } else if (restartSpec.startsWith("on-failure:")) {
     const retryCount = restartSpec.slice("on-failure:".length);
-    if (!/^\\d+$/.test(retryCount)) process.exit(1);
+    if (!/^\d+$/.test(retryCount)) process.exit(1);
     value.restartName = "on-failure";
     value.restartMax = Number(retryCount);
   } else process.exit(1);
@@ -567,6 +788,11 @@ if (args[0] === "stop") {
   const id = args.at(-1);
   const value = container(id);
   if (!value) process.exit(1);
+  const service = value.labels?.["com.docker.compose.service"] ?? "";
+  if (state.goUpgradeNewStopFailureService === service &&
+      value.labels?.revision === "b".repeat(40)) {
+    record(["go-upgrade-stop-failed", service, id]); save(); process.exit(1);
+  }
   if (state.restartStopFailure && value.ref === "duallane-api:old") {
     record(["stop-failed", id]); save(); process.exit(1);
   }
@@ -578,7 +804,35 @@ if (args[0] === "stop") {
 if (args[0] === "start") {
   const value = container(args[1]);
   if (!value) process.exit(1);
-  value.running = true; value.status = "running"; if (value.health === "unknown") value.health = "healthy";
+  const service = value.labels?.["com.docker.compose.service"] ?? "";
+  if (value.recreatedOld && state.requireOldCreatedBeforeStart) {
+    let recovery = "";
+    if (process.env.RELEASE_RECOVERY_FILE) {
+      try {
+        recovery = readFileSync(process.env.RELEASE_RECOVERY_FILE, "utf8");
+      } catch {
+        recovery = "";
+      }
+    }
+    const prefix = "go_upgrade_old_created\t" + service + "\t" + args[1] + "\t";
+    if (!recovery.split("\n").some((line) => line.startsWith(prefix))) {
+      record(["old-start-before-record", service, args[1]]); save(); process.exit(1);
+    }
+  }
+  if (value.recreatedOld && service === state.goUpgradeOldRestoreFailureService &&
+      state.goUpgradeOldRestoreFailuresRemaining > 0) {
+    state.goUpgradeOldRestoreFailuresRemaining -= 1;
+    if (state.goUpgradeOldRestoreFailureMode === "start") {
+      record(["go-up-old-start-failed", service, args[1]]); save(); process.exit(1);
+    }
+    value.running = true;
+    value.status = "running";
+    value.health = "unhealthy";
+    record(["go-up-old-health-failed", service, args[1]]); save(); process.exit(0);
+  }
+  value.running = true;
+  value.status = "running";
+  if (value.health === "unknown" || (value.recreatedOld && value.health === "unhealthy")) value.health = "healthy";
   if (value.migration) state.databaseMutated = true;
   record(["start", args[1]]); save(); process.stdout.write(args[1] + "\n"); process.exit(0);
 }
@@ -735,7 +989,7 @@ if (args[0] === "compose") {
       tmpfs.includes("/tmp") ]);
     save(); process.stdout.write(candidateName + "\n"); process.exit(0);
   }
-  if (command === "create" && service === "migrate") {
+  if ((command === "create" || command === "up") && service === "migrate") {
     if ((state.current.migrate ?? []).length > 0) process.exit(1);
     const overrideIndex = args.findIndex((value) => value.endsWith(".go-image.override.yml"));
     let migrationImage = state.migrationImage;
@@ -770,29 +1024,81 @@ if (args[0] === "compose") {
       },
     };
     state.current.migrate = [id];
-    record(["migration-create", id, overrideUsed]);
+    record(["migration-create", id, overrideUsed, command === "up" ? "up-no-start" : "create"]);
     save(); process.exit(0);
   }
-  if (command === "up") {
+  if (command === "up" || (command === "create" && process.env.GO_UPGRADE_RESTORE_OLD === "true")) {
+    if (process.env.GO_UPGRADE_RESTORE_OLD === "true" && state.goUpgradeOldIds?.[service]) {
+      if (state.goUpgradeRecreateOld) {
+        const oldId = state.goUpgradeOldIds[service];
+        const previousId = (state.current[service] ?? [])[0] ?? oldId;
+        const previous = container(previousId);
+        const source = previous?.recreatedOld ? previous : container(oldId);
+        if (!source) process.exit(1);
+        const prefixes = { p2p: "c", workspace: "d", worker: "e", web: "f" };
+        state.goUpgradeOldCreateCounts[service] = (state.goUpgradeOldCreateCounts[service] ?? 0) + 1;
+        const count = state.goUpgradeOldCreateCounts[service];
+        const id = prefixes[service].repeat(62) + count.toString(16).padStart(2, "0");
+        state.containers[id] = {
+          ...source,
+          identity: id,
+          running: false,
+          status: "created",
+          health: "healthy",
+          restartName: "always",
+          restartMax: 0,
+          recreatedOld: true,
+          networks: {},
+          env: [...(source.env ?? [])],
+          labels: { ...(source.labels ?? {}) },
+        };
+        if (previous?.recreatedOld && previousId !== oldId) delete state.containers[previousId];
+        state.goUpgradeOldCreatedIds[service] = id;
+        state.goUpgradeOldCreatedHistory[service] ??= [];
+        state.goUpgradeOldCreatedHistory[service].push(id);
+        state.current[service] = [id];
+        record(["go-up-old-create", service, id, count, previousId, args.includes("--no-start") ? "up-no-start" : "up-started"]);
+        save(); process.exit(0);
+      }
+      const id = state.goUpgradeOldIds[service];
+      const value = container(id);
+      if (!value) process.exit(1);
+      const noStart = args.includes("--no-start");
+      value.running = !noStart;
+      value.status = noStart ? "created" : "running";
+      value.health = "healthy";
+      value.restartName = "always";
+      value.restartMax = 0;
+      state.current[service] = [id];
+      record([
+        "go-up-old",
+        service,
+        id,
+        args.includes(process.env.GO_UPGRADE_COMPOSE_FILE ?? "") ? "canonical" : "wrong-compose",
+        noStart ? "up-no-start" : "up-started",
+      ]); save(); process.exit(0);
+    }
     const id = state.restoreIds[service];
     if (!id || !container(id)) process.exit(1);
     let restoredId = id;
+    const noStart = args.includes("--no-start");
     if (state.replacementOnUp) {
       restoredId = id + "-restored";
       state.containers[restoredId] = {
         ...container(id),
         identity: restoredId === "api-old-restored" ? "4".repeat(64) : "5".repeat(64),
-        running: true,
-        status: "running",
+        running: !noStart,
+        status: noStart ? "created" : "running",
         networks: {},
       };
       delete state.containers[id];
     } else {
-      container(id).running = true; container(id).status = "running";
-      if (container(id).health === "none") container(id).health = "healthy";
+      container(id).running = !noStart;
+      container(id).status = noStart ? "created" : "running";
+      if (!noStart && container(id).health === "none") container(id).health = "healthy";
     }
     state.current[service] = [restoredId];
-    record(["up", service]); save(); process.exit(0);
+    record(["up", service, noStart ? "up-no-start" : "up-started"]); save(); process.exit(0);
   }
 }
 process.exit(1);
@@ -806,6 +1112,15 @@ async function runFakeHarness(mode) {
   const systemctl = path.join(directory, "systemctl");
   const sleep = path.join(directory, "sleep");
   const state = initialState(mode);
+  const goUpgradeModes = [
+    "go-upgrade-valid",
+    "go-upgrade-interleaved",
+    "go-upgrade-fence-failure",
+    ...goUpgradeRetryModes,
+  ];
+  const goUpgradeArtifacts = goUpgradeModes.includes(mode)
+    ? await writeGoUpgradeSnapshotArtifacts(directory)
+    : null;
   await writeFile(statePath, JSON.stringify(state));
   await writeFile(fakeDocker, fakeDockerSource, { mode: 0o700 });
   await writeFile(docker, `#!/usr/bin/env bash\nexec node "${fakeDocker}" "$@"\n`, { mode: 0o700 });
@@ -815,6 +1130,25 @@ async function runFakeHarness(mode) {
   const driver = String.raw`
 set -Eeuo pipefail
 source "$RELEASE_HELPER"
+# These lifecycle tests model a successful read-only gateway probe. Its
+# actual HTTP/WebSocket contract has dedicated unit and container gates.
+gateway_smoke_attempt=0
+release_run_previous_gateway_smoke() {
+  if [[ "$MODE" == go-upgrade-old-smoke-retry && "$gateway_smoke_attempt" == 0 ]]; then
+    gateway_smoke_attempt=1
+    release_append_recovery_record 'gateway_smoke_model=failed'
+    return 1
+  fi
+  release_append_recovery_record 'gateway_smoke_model=passed'
+}
+# Models only lifecycle ordering, not a real database/provider drain.
+release_require_drained_runtime() {
+  release_append_recovery_record "drain_model_$1=ready"
+}
+release_capture_go_volume_authority() {
+  [[ -f "$1" ]] || return 1
+  (umask 077; printf '{}\n' > "$2")
+}
 compose() {
   if [[ -n "$RELEASE_GO_IMAGE_OVERRIDE_FILE" ]]; then
     docker compose -f "$RELEASE_GO_IMAGE_OVERRIDE_FILE" "$@"
@@ -825,22 +1159,51 @@ compose() {
 wait_for_docker() { docker info >/dev/null; }
 candidate_compose() { docker compose "$@"; }
 rollback_compose() { docker compose "$@"; }
+go_upgrade_rollback_compose() {
+  GO_UPGRADE_RESTORE_OLD=true docker compose \
+    --project-name "$RELEASE_GO_UPGRADE_OLD_PROJECT" \
+    -f "$RELEASE_GO_UPGRADE_OLD_COMPOSE_FILE" "$@"
+}
 current_commit="new-commit"
 expected_app_version="0.15.5"
 docker_started_before="1"
 if [[ "$MODE" == image-* || "$MODE" == migration-* ]]; then
   current_commit="$(printf 'a%.0s' {1..40})"
 fi
-if [[ "$MODE" == go-upgrade ]]; then
+if [[ "$MODE" == go-upgrade || "$MODE" == go-upgrade-valid || "$MODE" == go-upgrade-interleaved || "$MODE" == go-upgrade-fence-failure || "$MODE" == go-upgrade-old-start-retry || "$MODE" == go-upgrade-old-health-retry || "$MODE" == go-upgrade-old-smoke-retry ]]; then
   RELEASE_GO_UPGRADE=true
+  current_commit="$(printf 'b%.0s' {1..40})"
+  expected_app_version="0.16.0"
+fi
+if [[ "$MODE" == go-success-snapshot ]]; then
+  current_commit="$(printf 'b%.0s' {1..40})"
 fi
 if [[ "$MODE" == node-active || "$MODE" == node-candidate || "$MODE" == node-candidate-env-invalid || "$MODE" == node-candidate-env-duplicate || "$MODE" == node-candidate-path-mounted || "$MODE" == node-fence-* ]]; then
   release_load_profile node-default
 else
   release_load_profile go-full
 fi
+if [[ "$MODE" == rollback || "$MODE" == rollback-daemon || "$MODE" == rollback-fence-mid-failure ]]; then
+  RELEASE_GO_RUN_ID="$(printf 'd%.0s' {1..64})"
+  RELEASE_GO_IMAGE_ID="sha256:$(printf '9%.0s' {1..64})"
+  RELEASE_GO_P2P_IMAGE_ID="$RELEASE_GO_IMAGE_ID"
+  RELEASE_GO_WEB_IMAGE_ID="$RELEASE_GO_IMAGE_ID"
+  # These fake-Docker cases model fencing/restart order, not real Compose,
+  # file or volume authority. Those checks have dedicated authority tests and
+  # the opt-in real coordinator gate; never claim this model proves them.
+  release_verify_activation_authority() {
+    release_append_recovery_record 'authority_model=ready'
+  }
+fi
 RELEASE_SNAPSHOT_FILE="$STATE_PATH.snapshot"
 RELEASE_RECOVERY_FILE="$STATE_PATH.recovery"
+export RELEASE_SNAPSHOT_FILE RELEASE_RECOVERY_FILE
+if [[ "$MODE" == go-upgrade-valid || "$MODE" == go-upgrade-interleaved || "$MODE" == go-upgrade-fence-failure || "$MODE" == go-upgrade-old-start-retry || "$MODE" == go-upgrade-old-health-retry || "$MODE" == go-upgrade-old-smoke-retry ]]; then
+  RELEASE_PREVIOUS_RELEASE_SNAPSHOT="$GO_UPGRADE_SNAPSHOT"
+  RELEASE_GO_IMAGE_ID="sha256:$(printf '9%.0s' {1..64})"
+  RELEASE_GO_P2P_IMAGE_ID="$RELEASE_GO_IMAGE_ID"
+  RELEASE_GO_WEB_IMAGE_ID="$RELEASE_GO_IMAGE_ID"
+fi
 if [[ "$MODE" == snapshot ]]; then
   release_snapshot_app_state "$RELEASE_SNAPSHOT_FILE"
   for id in pg-old api-old web-old v2ray-old; do docker set-running "$id" false; done
@@ -894,6 +1257,74 @@ elif [[ "$MODE" == go-upgrade ]]; then
   if release_snapshot_validate_for_go_cutover; then
     echo "Go-to-Go upgrade unexpectedly passed without a frozen resolved Compose snapshot" >&2
     exit 1
+  fi
+elif [[ "$MODE" == go-success-snapshot ]]; then
+  RELEASE_GO_IMAGE_ID="sha256:$(printf '9%.0s' {1..64})"
+  # The fake lifecycle models an already completed migration. Runtime tests
+  # separately execute the real migration/check binaries against PostgreSQL.
+  RELEASE_GO_MIGRATION_VERIFIED=true
+  PROJECT_DIR="$(dirname "$(dirname "$(dirname "$RELEASE_HELPER")")")"
+  for service in p2p workspace worker web; do
+    case "$service" in
+      p2p) new_id="$(printf '5%.0s' {1..64})" ;;
+      workspace) new_id="$(printf '6%.0s' {1..64})" ;;
+      worker) new_id="$(printf '7%.0s' {1..64})" ;;
+      web) new_id="$(printf '8%.0s' {1..64})" ;;
+    esac
+    docker set-current "$service" "$new_id"
+  done
+  release_capture_successful_go_snapshot
+  success_snapshot="$(sed -n 's/^go_upgrade_success_snapshot=//p' "$RELEASE_RECOVERY_FILE")"
+  [[ -n "$success_snapshot" && -f "$success_snapshot" ]]
+  [[ -f "$success_snapshot.compose.json" && -f "$success_snapshot.external.json" && -f "$success_snapshot.volumes.json" ]]
+  [[ "$(stat -c '%a' "$success_snapshot")" == 600 ]]
+  [[ "$(stat -c '%a' "$success_snapshot.compose.json")" == 600 ]]
+  [[ "$(stat -c '%a' "$success_snapshot.external.json")" == 600 ]]
+  [[ "$(stat -c '%a' "$success_snapshot.volumes.json")" == 600 ]]
+  release_append_recovery_record "go_success_snapshot_modes=600,600,600,600"
+elif [[ "$MODE" == go-upgrade-valid || "$MODE" == go-upgrade-interleaved || "$MODE" == go-upgrade-fence-failure || "$MODE" == go-upgrade-old-start-retry || "$MODE" == go-upgrade-old-health-retry || "$MODE" == go-upgrade-old-smoke-retry ]]; then
+  release_verify_pinned_volume_authority() {
+    [[ -f "$1" && -f "$2" ]] || return 1
+    release_append_recovery_record "volume_authority_verified=true"
+  }
+  release_snapshot_validate_for_go_cutover
+  [[ "$RELEASE_GO_UPGRADE_VALIDATED" == true ]]
+  release_go_upgrade_fence_old_services
+  for service in p2p workspace worker web; do
+    if [[ "$MODE" == go-upgrade-interleaved && "$service" == web ]]; then
+      continue
+    fi
+    case "$service" in
+      p2p) new_id="$(printf '5%.0s' {1..64})" ;;
+      workspace) new_id="$(printf '6%.0s' {1..64})" ;;
+      worker) new_id="$(printf '7%.0s' {1..64})" ;;
+      web) new_id="$(printf '8%.0s' {1..64})" ;;
+    esac
+    release_go_upgrade_note_new_service_attempt "$service"
+    docker set-current "$service" "$new_id"
+    release_go_upgrade_record_new_owner "$service" "$new_id"
+  done
+  if [[ "$MODE" == go-upgrade-fence-failure ]]; then
+    if release_go_upgrade_recover_all_services; then
+      echo "Go-to-Go recovery unexpectedly passed after a new-owner fence failure" >&2
+      exit 1
+    fi
+  elif [[ "$MODE" == go-upgrade-old-start-retry || "$MODE" == go-upgrade-old-health-retry || "$MODE" == go-upgrade-old-smoke-retry ]]; then
+    if [[ "$MODE" == go-upgrade-old-smoke-retry ]]; then
+      if release_go_upgrade_rollback_application; then
+        echo "Go-to-Go rollback unexpectedly passed on its injected first attempt" >&2
+        exit 1
+      fi
+      release_go_upgrade_rollback_application
+    else
+      if release_go_upgrade_recover_all_services; then
+        echo "Go-to-Go recovery unexpectedly passed on its injected first attempt" >&2
+        exit 1
+      fi
+      release_go_upgrade_recover_all_services
+    fi
+  else
+    release_go_upgrade_recover_all_services
   fi
 elif [[ "$MODE" == permission-failure ]]; then
   release_snapshot_app_state "$RELEASE_SNAPSHOT_FILE"
@@ -982,11 +1413,11 @@ elif [[ "$MODE" == inventory-failure || "$MODE" == ps-failure ]]; then
 elif [[ "$MODE" == rollback-fence-mid-failure ]]; then
   release_snapshot_app_state "$RELEASE_SNAPSHOT_FILE"
   release_stop_service_and_confirm api
-  docker set-current api api-new
-  docker set-current web web-new
-  docker set-current p2p p2p-new
-  docker set-current workspace workspace-new
-  docker set-current worker worker-new
+  # First Go cutover retains the stopped Node API; only Web is replaced.
+  docker set-current web "$(printf '3%.0s' {1..64})"
+  docker set-current p2p "$(printf 'b%.0s' {1..64})"
+  docker set-current workspace "$(printf 'c%.0s' {1..64})"
+  docker set-current worker "$(printf 'd%.0s' {1..64})"
   if release_rollback_application; then
     echo "mid-failure rollback unexpectedly completed" >&2
     exit 1
@@ -996,11 +1427,17 @@ else
   if [[ "$MODE" == rollback || "$MODE" == rollback-daemon ]]; then
     release_stop_service_and_confirm api
   fi
-  docker set-current api api-new
-  docker set-current web web-new
-  docker set-current p2p p2p-new
-  docker set-current workspace workspace-new
-  docker set-current worker worker-new
+  if [[ "$MODE" == rollback || "$MODE" == rollback-daemon ]]; then
+    docker set-current web "$(printf '3%.0s' {1..64})"
+    docker set-current p2p "$(printf 'b%.0s' {1..64})"
+    docker set-current workspace "$(printf 'c%.0s' {1..64})"
+    docker set-current worker "$(printf 'd%.0s' {1..64})"
+  else
+    docker set-current web web-new
+    docker set-current p2p p2p-new
+    docker set-current workspace workspace-new
+    docker set-current worker worker-new
+  fi
   release_rollback_application
   if [[ "$MODE" == rollback-daemon ]]; then
     docker set-daemon 3
@@ -1019,6 +1456,8 @@ fi
       RELEASE_HELPER: helper,
       STATE_PATH: statePath,
       MODE: mode,
+      GO_UPGRADE_SNAPSHOT: goUpgradeArtifacts?.snapshotPath ?? "",
+      GO_UPGRADE_COMPOSE_FILE: goUpgradeArtifacts?.composePath ?? "",
       COMPOSE_PROJECT_NAME: "duallane",
       DUALLANE_DEPLOY_STOP_ATTEMPTS: "2",
       DUALLANE_DEPLOY_HEALTH_ATTEMPTS: "2",
@@ -1081,8 +1520,8 @@ test("fake Docker rollback fences Go services before restoring Node", async () =
   const stopIndex = finalState.calls.findIndex(([operation, id]) => operation === "stop" && id === fakeIdentity("d"));
   const apiUpIndex = finalState.calls.findIndex(([operation, service]) => operation === "up" && service === "api");
   assert.ok(stopIndex >= 0 && apiUpIndex > stopIndex, "Node was restored before Go services were fenced");
-  assert.ok(finalState.tags.some(({ ref }) => ref === "duallane-api:old"));
-  assert.ok(finalState.tags.some(({ ref }) => ref === "duallane-web:old"));
+  assert.equal(finalState.tags.length, 0, "Go rollback must not repoint mutable image tags");
+  assert.match(recovery, /drain_model_recovery=ready/);
 });
 
 test("Node-to-Go fencing records the old API identity and leaves it stopped", async () => {
@@ -1510,5 +1949,272 @@ test("the Go-to-Go CLI flag fails before any production Docker checks", () => {
     { cwd: root, encoding: "utf8" },
   );
   assert.equal(result.status, 2, `${result.stderr}\n${result.stdout}`);
-  assert.match(result.stderr, /--go-upgrade is unavailable/);
+  assert.match(result.stderr, /--go-upgrade requires --previous-release-snapshot/);
+});
+
+test("successful Go releases publish a private pinned recovery snapshot", async () => {
+  const { result, recovery, finalState } = await runFakeHarness("go-success-snapshot");
+  assert.equal(result.status, 0, result.stderr + "\n" + result.stdout);
+  assert.match(recovery, /^go_upgrade_success_snapshot=\/.+\.go-compose\.snapshot\.json$/m);
+  assert.match(recovery, /^go_success_snapshot_modes=600,600,600,600$/m);
+  assert.ok(
+    !finalState.calls.some(([operation]) => operation === "go-up-old"),
+    "successful snapshot capture unexpectedly restored an old owner",
+  );
+});
+
+test("Go-to-Go recovery validates real owner records and fences every new owner before restore", async () => {
+  const { result, finalState, recovery } = await runFakeHarness("go-upgrade-valid");
+  assert.equal(result.status, 0, result.stderr + "\n" + result.stdout);
+  const oldIds = {
+    p2p: "1".repeat(64),
+    workspace: "2".repeat(64),
+    worker: "3".repeat(64),
+    web: "4".repeat(64),
+  };
+  const newIds = {
+    p2p: "5".repeat(64),
+    workspace: "6".repeat(64),
+    worker: "7".repeat(64),
+    web: "8".repeat(64),
+  };
+  const oldImages = {
+    p2p: goUpgradeImage("1"),
+    workspace: goUpgradeImage("2"),
+    worker: goUpgradeImage("2"),
+    web: goUpgradeImage("3"),
+  };
+  for (const service of Object.keys(oldIds)) {
+    assert.match(
+      recovery,
+      new RegExp(
+        "^go_upgrade_old_owner\\t" + service + "\\t" + oldIds[service] +
+          "\\t" + oldImages[service] + "\\t" + goUpgradeOldCommit + "$",
+        "m",
+      ),
+    );
+    assert.equal(finalState.containers[oldIds[service]].running, true);
+    assert.equal(finalState.containers[oldIds[service]].restartName, "always");
+    assert.equal(finalState.current[service][0], oldIds[service]);
+  }
+  assert.match(recovery, /^volume_authority_verified=true$/m);
+  assert.match(recovery, /^go_upgrade_daemon_new_owners_fenced=true$/m);
+  assert.match(recovery, /^go_upgrade_daemon_old_owners_restored=true$/m);
+  const newFenceMarker = recovery.indexOf("go_upgrade_daemon_new_owners_fenced=true");
+  const firstRestoreMarker = recovery.indexOf("go_upgrade_old_restored\t");
+  assert.ok(newFenceMarker >= 0 && firstRestoreMarker > newFenceMarker);
+
+  const firstRestore = finalState.calls.findIndex(([operation]) => operation === "go-up-old");
+  assert.ok(firstRestore >= 0, "old Go owners were not restored");
+  for (const service of Object.keys(newIds)) {
+    const stopIndex = finalState.calls.findIndex(
+      ([operation, id]) => operation === "stop" && id === newIds[service],
+    );
+    assert.ok(
+      stopIndex >= 0 && stopIndex < firstRestore,
+      service + " was restored before its new owner was fenced",
+    );
+    assert.equal(finalState.containers[newIds[service]].running, false);
+    assert.equal(finalState.containers[newIds[service]].restartName, "no");
+  }
+  for (const call of finalState.calls.filter(([operation]) => operation === "go-up-old")) {
+    assert.equal(call[3], "canonical");
+  }
+  assert.ok(!finalState.calls.some(([operation, service]) => operation === "go-up-old" && service === "api"));
+});
+
+test("Go-to-Go daemon recovery keeps a failed new owner fenced during interleaved owner recovery", async () => {
+  const { result, finalState, recovery } = await runFakeHarness("go-upgrade-fence-failure");
+  assert.equal(result.status, 0, result.stderr + "\n" + result.stdout);
+  const oldIds = ["1".repeat(64), "2".repeat(64), "3".repeat(64), "4".repeat(64)];
+  const newIds = ["5".repeat(64), "6".repeat(64), "7".repeat(64), "8".repeat(64)];
+  for (const id of oldIds) {
+    assert.equal(finalState.containers[id].running, false);
+    assert.equal(finalState.containers[id].restartName, "no");
+  }
+  for (const id of newIds.slice(0, 2)) {
+    assert.equal(finalState.containers[id].running, false);
+    assert.equal(finalState.containers[id].restartName, "no");
+  }
+  assert.equal(finalState.containers[newIds[2]].running, true);
+  assert.equal(finalState.containers[newIds[2]].restartName, "no");
+  assert.doesNotMatch(recovery, /^go_upgrade_daemon_new_owners_fenced=true$/m);
+  assert.doesNotMatch(recovery, /^go_upgrade_old_restored=/m);
+  assert.ok(!finalState.calls.some(([operation]) => operation === "go-up-old"));
+  assert.ok(finalState.calls.some(([operation, service]) =>
+    operation === "go-upgrade-stop-failed" && service === "worker"));
+});
+
+test("Go-to-Go recovery keeps canonical owner records through an interleaved partial cutover", async () => {
+  const { result, finalState, recovery } = await runFakeHarness("go-upgrade-interleaved");
+  assert.equal(result.status, 0, result.stderr + "\n" + result.stdout);
+  assert.match(recovery, /^go_upgrade_old_owner\tweb\t4{64}\tsha256:3{64}\ta{40}$/m);
+  assert.match(recovery, /^go_upgrade_new_owner\tworker\t7{64}\tsha256:9{64}\tb{40}$/m);
+  const firstRestore = finalState.calls.findIndex(([operation]) => operation === "go-up-old");
+  const newStopIndexes = finalState.calls
+    .map(([operation, id], index) =>
+      operation === "stop" && ["5", "6", "7"].some((digit) => id === digit.repeat(64)) ? index : -1)
+    .filter((index) => index >= 0);
+  assert.ok(firstRestore >= 0 && newStopIndexes.every((index) => index < firstRestore));
+  assert.equal(finalState.current.web[0], "4".repeat(64));
+});
+
+const goUpgradeRetryServices = Object.freeze(["p2p", "workspace", "worker", "web"]);
+const goUpgradeRetryNewIds = Object.freeze({
+  p2p: "5".repeat(64),
+  workspace: "6".repeat(64),
+  worker: "7".repeat(64),
+  web: "8".repeat(64),
+});
+const goUpgradeRetryOldImages = Object.freeze({
+  p2p: goUpgradeImage("1"),
+  workspace: goUpgradeImage("2"),
+  worker: goUpgradeImage("2"),
+  web: goUpgradeImage("3"),
+});
+const goUpgradeRetryOldRestartPolicies = Object.freeze({
+  p2p: { name: "always", max: 0 },
+  workspace: { name: "on-failure", max: 3 },
+  worker: { name: "always", max: 0 },
+  web: { name: "always", max: 0 },
+});
+
+function assertGoUpgradeRetryState({ result, finalState, recovery }) {
+  assert.equal(result.status, 0, result.stderr + "\n" + result.stdout);
+  assert.match(recovery, /^go_upgrade_daemon_new_owners_fenced=true$/m);
+  assert.match(recovery, /^go_upgrade_daemon_old_owners_restored=true$/m);
+  assert.match(recovery, /^go_upgrade_fence_target\told\tworkspace\t2{64}\ton-failure\t3\ttrue\tsha256:2{64}\ta{40}$/m);
+
+  const history = finalState.goUpgradeOldCreatedHistory;
+  assert.deepEqual(Object.keys(history).sort(), [...goUpgradeRetryServices].sort());
+  const createdIDs = new Set();
+  const createdRecords = recovery
+    .split("\n")
+    .filter((line) => line.startsWith("go_upgrade_old_created\t"));
+  const newFenceMarker = recovery.indexOf("go_upgrade_daemon_new_owners_fenced=true");
+  const firstCreatedMarker = recovery.indexOf("go_upgrade_old_created\t");
+  assert.ok(newFenceMarker >= 0 && firstCreatedMarker > newFenceMarker);
+  assert.equal(
+    createdRecords.length,
+    goUpgradeRetryServices.reduce((total, service) => total + history[service].length, 0),
+    "every recreated old container must have one durable creation record",
+  );
+  for (const line of createdRecords) {
+    const [kind, service, id, image, commit] = line.split("\t");
+    assert.equal(kind, "go_upgrade_old_created");
+    assert.ok(goUpgradeRetryServices.includes(service));
+    assert.match(id, /^[0-9a-f]{64}$/);
+    assert.equal(image, goUpgradeRetryOldImages[service]);
+    assert.equal(commit, goUpgradeOldCommit);
+    assert.ok(!createdIDs.has(id), "Docker recreation must produce a fresh owner ID");
+    createdIDs.add(id);
+    assert.ok(history[service].includes(id));
+  }
+
+  const oldStartIndexes = finalState.calls
+    .map(([operation, id], index) => operation === "start" && createdIDs.has(id) ? index : -1)
+    .filter((index) => index >= 0);
+  const newStopIndexes = finalState.calls
+    .map(([operation, id], index) => operation === "stop" && Object.values(goUpgradeRetryNewIds).includes(id) ? index : -1)
+    .filter((index) => index >= 0);
+  assert.ok(oldStartIndexes.length > 0, "a retry scenario must start a known old owner");
+  assert.equal(newStopIndexes.length, goUpgradeRetryServices.length);
+  assert.ok(
+    Math.max(...newStopIndexes) < Math.min(...oldStartIndexes),
+    "all candidate owners must be fenced before any recreated old owner starts",
+  );
+  assert.equal(
+    finalState.calls.filter(([operation]) => operation === "old-start-before-record").length,
+    0,
+    "the fake Docker start gate observed no start before its creation record",
+  );
+
+  for (const service of goUpgradeRetryServices) {
+    const currentID = finalState.current[service]?.[0];
+    assert.ok(currentID && history[service].includes(currentID), `${service} did not finish on a recorded owner`);
+    const current = finalState.containers[currentID];
+    assert.ok(current, `${service} current owner disappeared`);
+    assert.equal(current.running, true, `${service} old owner is not running after retry`);
+    assert.equal(current.status, "running");
+    assert.equal(current.health, "healthy", `${service} old owner is not healthy after retry`);
+    assert.equal(current.image, goUpgradeRetryOldImages[service]);
+    assert.equal(current.labels.revision, goUpgradeOldCommit);
+    assert.equal(current.restartName, goUpgradeRetryOldRestartPolicies[service].name);
+    assert.equal(current.restartMax, goUpgradeRetryOldRestartPolicies[service].max);
+    for (const id of history[service]) {
+      const createCall = finalState.calls.findIndex(
+        ([operation, callService, callID]) => operation === "go-up-old-create" && callService === service && callID === id,
+      );
+      assert.ok(createCall >= 0, `${service} ${id} was not created by the canonical rollback Compose`);
+      assert.equal(finalState.calls[createCall][5], "up-no-start");
+      const startCall = finalState.calls.findIndex(
+        ([operation, callID]) => operation === "start" && callID === id,
+      );
+      if (startCall >= 0) assert.ok(createCall < startCall, `${service} ${id} started before create returned`);
+    }
+  }
+
+  for (const id of Object.values(goUpgradeRetryNewIds)) {
+    assert.equal(finalState.containers[id].running, false, `${id} candidate owner is still running`);
+    assert.equal(finalState.containers[id].restartName, "no");
+  }
+  assert.ok(!finalState.calls.some(([operation]) => operation === "go-up-old"));
+  assert.ok(!finalState.calls.some((call) => call.includes("foreign-workspace")));
+  assert.deepEqual(
+    {
+      image: finalState.containers["foreign-workspace"].image,
+      ref: finalState.containers["foreign-workspace"].ref,
+      running: finalState.containers["foreign-workspace"].running,
+      status: finalState.containers["foreign-workspace"].status,
+      health: finalState.containers["foreign-workspace"].health,
+      project: finalState.containers["foreign-workspace"].labels["com.docker.compose.project"],
+      revision: finalState.containers["foreign-workspace"].labels.revision,
+    },
+    {
+      image: "sha256:foreign",
+      ref: "duallane-workspace:foreign",
+      running: true,
+      status: "running",
+      health: "healthy",
+      project: "foreign-project",
+      revision: "foreign-commit",
+    },
+  );
+}
+
+test("Go-to-Go recovery retries a recorded old owner after a start failure", async () => {
+  const result = await runFakeHarness("go-upgrade-old-start-retry");
+  assertGoUpgradeRetryState(result);
+  const failureIndex = result.finalState.calls.findIndex(
+    ([operation, service]) => operation === "go-up-old-start-failed" && service === "workspace",
+  );
+  const laterCreate = result.finalState.calls.findIndex(
+    ([operation, service]) => operation === "go-up-old-create" && service === "worker",
+  );
+  assert.ok(failureIndex >= 0 && (laterCreate < 0 || failureIndex < laterCreate));
+});
+
+test("Go-to-Go recovery retries a recorded old owner after a health failure", async () => {
+  const result = await runFakeHarness("go-upgrade-old-health-retry");
+  assertGoUpgradeRetryState(result);
+  const failureIndex = result.finalState.calls.findIndex(
+    ([operation, service]) => operation === "go-up-old-health-failed" && service === "workspace",
+  );
+  const laterCreate = result.finalState.calls.findIndex(
+    ([operation, service]) => operation === "go-up-old-create" && service === "worker",
+  );
+  assert.ok(failureIndex >= 0 && (laterCreate < 0 || failureIndex < laterCreate));
+});
+
+test("Go-to-Go recovery retries the same old restore intent after final smoke failure", async () => {
+  const result = await runFakeHarness("go-upgrade-old-smoke-retry");
+  assertGoUpgradeRetryState(result);
+  assert.match(result.recovery, /^go_upgrade_rollback_started=true$/m);
+  assert.match(result.recovery, /^go_upgrade_rollback_complete=true$/m);
+  assert.deepEqual(
+    result.recovery
+      .split("\n")
+      .filter((line) => line.startsWith("gateway_smoke_model=")),
+    ["gateway_smoke_model=failed", "gateway_smoke_model=passed"],
+  );
 });
