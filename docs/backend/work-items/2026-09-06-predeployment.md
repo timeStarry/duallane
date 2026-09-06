@@ -1549,3 +1549,24 @@ cover local/S3/hybrid with active/passive construction and exact single counters
 Full command PostgreSQL/race passed (6.384/7.685). The actual Node-to-Go-to-Node
 legacy attachment/factory parity runner also passed after this integration and
 cleaned its own synthetic fixture. No production objects were read or modified.
+
+### Aggregate Go Gate And P2P Base Image
+
+After accepting through `17129e4`, the parent's Linux-native validation copy
+completed `go test -tags=postgres_integration -race -count=1 ./...` with the
+explicit disposable PostgreSQL DSN. All packages passed. The copy additionally
+contained the bounded permission-probe candidate; it did not contain the still
+unreviewed favorite/provision/next-release-tooling drafts. This is a point-in-time
+gate and must be repeated after those slices are integrated.
+
+The P2P Dockerfile now pins Go/Debian base digests and direct certificate/timezone
+package versions. An allowlisted HTTPS APT mirror can bootstrap from the build
+image's CA bundle while retaining signed Debian metadata checks. Parent built
+`duallane-predeployment-p2p:pinned-base-check` (local inspected image index
+`cdd4b425c0357fa0ea851ce7f69ba08ca22f3b3ceb6844e1516510f4d067b846`), then started
+an isolated owned container and passed its actual health binary. Inspection
+proved UID/GID 65532, read-only rootfs, network none, and zero mounts. The exact
+owned `--rm` container was stopped and removed; no volume was created. These
+diagnostic release labels are not final release metadata. Transitive APT package
+resolution remains repository-dependent; a release must record and reuse the
+exact built image digest rather than assume later rebuilds are byte-identical.
