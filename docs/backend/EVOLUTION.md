@@ -28,6 +28,38 @@ by Node and Go.
 This ledger reflects the repository at approval of the target architecture.
 Update it in every cutover or rollback PR.
 
+### Ownership Is Not Implementation Progress
+
+The status column records migration acceptance and production ownership, not a
+percentage of code written. A `planned` capability may already have Go packages,
+handlers, tests, or an image while still lacking complete parity evidence.
+Inspect the [executable evidence map](README.md#find-the-executable-evidence)
+and the owning migration PR before starting duplicate implementation work.
+
+Track candidate progress in that PR or task record: implemented transport and
+domain scope, composition, contract coverage, checks actually executed, and
+remaining gates. Do not create a second production-owner ledger. Split a broad
+capability row before independently routing its sub-capabilities; each row must
+identify a complete, non-overlapping write/claim unit.
+
+An ownership transition record must identify:
+
+- the capability, previous/new owner, and status transition;
+- the exact tested base/candidate commits, environment, and dated validation
+  evidence required by [Validation](VALIDATION.md);
+- the route configuration and any background writer, job claimer, scheduler,
+  or migration-runner ownership affected by the change;
+- for production transitions, the deployed release/image identity, authorized
+  operator record, observation window/results, and rollback evidence;
+- the reviewer and outstanding gates, with `not run` distinct from `passed`.
+
+An approved design or merged PR is not deployment evidence. If production
+cannot be inspected, state that limitation; do not infer a live cutover from a
+repository file. The approval baseline below remains historical evidence only,
+not test results for the current worktree.
+
+### Owner Ledger
+
 | Capability | Current owner | Target owner | Status | Required next gate |
 | --- | --- | --- | --- | --- |
 | Static Web and edge gateway | Nginx/Web image | Nginx/Web image | `active` | Add target upstreams without weakening headers/logging/body limits |

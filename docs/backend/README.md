@@ -2,9 +2,10 @@
 
 This directory is the progressive-disclosure entry point for the DualLane Go
 backend transition and for backend development after that transition completes.
-It defines an approved target architecture. It does not claim that a target
-component exists or owns production traffic until
-[Evolution and migration](EVOLUTION.md) marks that capability `active`.
+It defines an approved target architecture. Candidate code can exist before
+production ownership moves. Use the status and evidence in
+[Evolution and migration](EVOLUTION.md) to distinguish implementation progress
+from production routing; `routed`, `active`, and `complete` are different gates.
 
 ## Start Here
 
@@ -65,6 +66,24 @@ physically and logically separate no-persistence lane.
 See [Evolution and migration](EVOLUTION.md) for the live owner of each
 capability. A directory, binary, image, or passing test is not sufficient to
 change ownership; the status ledger and production route must agree.
+
+## Find The Executable Evidence
+
+Read only the row needed for the task. These are repository entry points, not
+a claim that every candidate capability is integrated, verified, or deployed.
+
+| Question | Inspect |
+| --- | --- |
+| Which backend does the checked-in deployment select? | [Compose](../../docker-compose.yml), [production override](../../docker-compose.production.yml), and [Nginx routes](../../deploy/nginx/default.conf) |
+| Where is a Go candidate composed? | [P2P](../../apps/backend/cmd/p2p/main.go), [Workspace](../../apps/backend/cmd/workspace/main.go), [worker](../../apps/backend/cmd/worker/main.go), or [migration](../../apps/backend/cmd/migrate/main.go) |
+| Which versions and checks are executable? | [Go module](../../apps/backend/go.mod), [Makefile](../../apps/backend/Makefile), [root scripts](../../package.json), and [CI](../../.github/workflows/ci.yml); see [Validation](VALIDATION.md) for the required evidence |
+| Which candidate images exist? | [P2P image](../../Dockerfile.p2p) and [Workspace image](../../Dockerfile.workspace); image existence does not establish a Compose service or cutover |
+| Which contracts and migrations are present? | [Candidate API directory](../../apps/backend/api) and [canonical SQL migrations](../../apps/web/server/migrations); inspect coverage before assuming a whole API family is characterized |
+
+The checked-in Compose and gateway still select Node `api`; the Go entry points
+are candidates. Repository configuration is not a live production inspection.
+A cutover record must additionally identify the deployed release and operator
+evidence. Update this map in the same change that moves an entry point.
 
 ## Authority And Conflict Resolution
 

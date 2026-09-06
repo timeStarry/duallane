@@ -3,9 +3,11 @@
 ## 1. Status And Scope
 
 This document defines the approved target backend architecture. The migration
-status in [Evolution and migration](EVOLUTION.md) determines which parts are
-currently implemented. Target diagrams must not be used to infer that a Go
-service already owns traffic.
+status in [Evolution and migration](EVOLUTION.md) determines production
+ownership, not whether candidate code exists. Target diagrams must not be used
+to infer that a Go service already owns traffic. Use the
+[executable evidence map](README.md#find-the-executable-evidence) to locate
+candidate wiring and the checked-in deployment independently.
 
 The architecture is sized for personal and small-team self-hosting on one
 Docker host. It improves ownership, failure isolation, testability, and future

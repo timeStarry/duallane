@@ -118,6 +118,25 @@ Health responses contain only status, service, version, commit, and safe
 dependency categories. They never include connection strings, hosts requiring
 secrecy, bucket keys, tokens, provider responses, or stack traces.
 
+### Candidate Side-Effect Isolation
+
+An unpublished port does not make a candidate passive. Startup hooks, job
+claimers, retention, object cleanup, seed reconciliation, and migration runners
+can change production data without receiving an HTTP request.
+
+Before a candidate uses production dependencies, the release implementation
+must prove that it cannot run those effects. Record each enabled background
+loop, its current owner, and the tested mechanism that prevents the candidate
+from claiming or mutating that owner's work. Do not invent an undocumented
+environment switch or assume disabling external delivery also disables claims.
+Use a disposable environment for mutation smoke tests. If a service has no
+verified passive candidate mode, adding and testing that mode is a cutover gate.
+
+Readiness may inspect configuration/schema/dependencies, but must not deliver
+notifications, claim jobs, execute migrations, or create user-domain records as
+a health probe. A read-only startup check is not proof of write-path parity;
+that evidence comes from the disposable-environment tests.
+
 ## 7. Graceful Shutdown
 
 On `SIGTERM` or deployment replacement, a Go service:
@@ -178,6 +197,15 @@ sequence is:
    smoke paths.
 10. Retain previous images until the rollback window closes.
 
+For every changing writer or background claimant, insert an explicit ownership
+handoff before activation: stop admission/claims on the old owner, drain its
+in-flight transactions and leases (or wait for a verified expiry/fencing
+mechanism), confirm it can no longer complete conflicting work, then enable the
+new owner. A temporary bounded pause is preferable to unproven overlap. Existing
+WebSockets and internal jobs can still mutate data after an edge route changes;
+include them in the drain plan. Record recovery for each interrupted handoff
+step. Unpublished candidates remain passive throughout this sequence.
+
 Do not use a bare `docker compose up` to replace an existing production
 deployment. Do not run production deployment from the development checkout.
 
@@ -189,10 +217,14 @@ application rollback. Destructive cleanup occurs only after the old owner is
 removed, the migration is `complete`, backups are verified, and rollback no
 longer needs the old shape.
 
-Rollback order restores the gateway route first when needed, then known-good
-backend/worker images. Before rolling application code backward, verify schema,
-stored-data, object, and job compatibility. Database restoration is a separate
-operator decision and is never an automatic response to an application failure.
+Rollback first fences the failed writer/claimer and verifies that the selected
+known-good owner can read the current schema, stored data, objects, cursors, and
+pending jobs. Start that owner only after conflicting work is drained or safely
+fenced; expose its route only after readiness passes. Restoring an edge route
+alone does not stop background or existing-socket writes. If the old owner is
+already safely running, routing back may be sufficient, but the release record
+must prove those conditions. Database restoration is a separate operator
+decision and is never an automatic response to an application failure.
 
 If Docker restarts during a failed deployment, record and restore all previously
 running DualLane application containers, not only Web and one API container.
