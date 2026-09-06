@@ -27,7 +27,7 @@ Unchecked work is not complete, and a test command listed here is not evidence
 that it passed. Each accepted slice records exact commits and commands below.
 
 - [ ] Close P2P error/HTTP/WebSocket parity and privacy/lifecycle gaps.
-- [ ] Run browser P2P text/file/fallback/fragment acceptance against Go.
+- [x] Run browser P2P text/file/fallback/fragment acceptance against Go.
 - [ ] Complete and integrate Avatar, Emote, Bot Gateway and Echo candidates.
 - [ ] Inventory all active Node endpoints, jobs, maintenance operations and Go
       composition; account for each capability without placeholder services.
@@ -265,3 +265,34 @@ runtime acceptance is implied by this work record until recorded separately.
   files' TypeScript check passed. The check also corrected the existing default
   config's `reducedMotion` placement into `contextOptions`. A new remote CI result
   and final aggregate gate remain due; this is not deployment evidence.
+
+### Runtime Review And Browser Baseline Correction
+
+`0be0335` adds Bot domain adapters with typed card/message transactions. Parent
+independent fresh PostgreSQL/race tests passed for botgateway, messages and cards;
+staticcheck first found two unused message wrappers and passed after their
+removal. The fault tests cover card/message audit failure, the final idempotency
+insert failing, concurrent replay and token revocation before commit. Narrow Bot
+file reservation also passed with the runtime adapter. This does **not** accept
+the draft WebSocket, runtime command wiring, arbitrary JSON request hash parity
+or Node's Feishu conversion. Those remain explicit Bot integration gates.
+
+Remote CI for `f4ab6d9` passed Go/PostgreSQL and all four Go P2P browser cases,
+but the Node Chromium job failed on the topic unsync click; local whole-suite
+results were 16 passed / 1 failed. Fresh local `make verify` passed with cached
+unchanged package results and the same unreachable dependency advisories noted
+above. No full green result is claimed for this commit.
+
+The original default Playwright config used an unsupported top-level
+`use.reducedMotion` option. Moving it into `contextOptions` in `4fdf9ed`
+unintentionally changed the legacy browser environment. In reduce mode, the
+topic click failed three out of three diagnostic repetitions: pointer-down
+and pointer-up hit different rows, no DELETE request was sent, and adding an
+explicit hover did not fix it. Removing the newly effective option restored
+the previous default motion behavior; the unchanged test then passed three out
+of three repetitions. Keep the old gate's effective environment rather than
+altering application behavior in a backend test split. The reduced-motion
+topic interaction remains an identified UI/testing limitation, not a fixed
+backend issue. Go P2P keeps its own explicit reduce setting and passing gate.
+Temporary click diagnostics/hover experiments were confined to the disposable
+validation checkout and removed; no debug code or failure artifacts are committed.
