@@ -62,6 +62,9 @@ shared routers, gateway/CI, and handbook integration. No overlapping writes.
 | P2P safety | New P2P tests, room/envelope tests, parity runner/tests/fixtures | Bounded privacy/lifecycle coverage; parent owns transport error fix, schemas and Node route |
 | Avatar | Existing `internal/workspace/avatars` draft; new avatar HTTP/test files | Complete repository/service/transport and focused tests; return router/composition requirements |
 | Echo requirements | Existing `internal/workspace/echo/requirements` draft | Complete requirement domain and PG tests; report adjacent Echo integration needs |
+| Node emote baseline / schema check | First the emote test fixture only; then new read-only platform migration-check files | Preserve test volume/time limit; return read-only startup schema verification for parent composition |
+| Bot Gateway | `internal/workspace/botgateway` only | Real v1 WebSocket and domain adapters; parent owns HTTP/router/commands |
+| Emote subscriptions | `internal/workspace/emotes` only | Replace fixed 501 and prove source sync/detach/readonly/quota/reference/audit/event atomicity |
 
 The original Bot Gateway/router, Avatar and Echo drafts were preserved through
 the preceding foundation slice. This broader user request brings completion of
@@ -81,3 +84,40 @@ database/provider/storage tests must not target a production account or instance
 This work is in progress. No acceptance checkbox above is satisfied solely by
 the inherited foundation results. Append reviewed slice commits, exact fresh
 checks, failures, environment limitations and cleanup as work progresses.
+
+### Accepted Slices — 2026-09-06
+
+- `3998567`: Go now preserves the locked Fastify 5.8.5 safe empty/invalid/
+  oversize JSON error contract. The new regression failed before the fix;
+  scoped Go race and staticcheck, generated-contract freshness and conformance
+  passed after it. Node runtime is unchanged; five Node characterization cases
+  passed. Independent clean-process `pnpm backend:parity:p2p` passed 20 HTTP
+  and 19 WebSocket observations. Expanded privacy/lifecycle and browser gates
+  are still pending; this is not a full P2P acceptance claim.
+- `c575549`: composed the real catalog, bounded native processor and Emote
+  service in the Workspace command, reusing that service for message references.
+  `go test -tags=postgres_integration -count=1 -race ./cmd/workspace
+  ./internal/platform/config` passed on disposable PostgreSQL, including real
+  session-authenticated HTTP upload, libvips normalization, local read and audit.
+  Scoped staticcheck passed. No production writer changed.
+- `e58b30f`: bounded legacy local/S3/hybrid reads for pre-registry records,
+  without a canonical-key/digest bypass. Storage race tests passed, including
+  containment/symlink rejection, cancellation, overage-before-GET and missing-only
+  fallback. Staticcheck passed on the adapter before the final canonical-alias
+  rejection assertion; the final whole-tree gate remains required.
+- `bd9cdc6`: test-fixture-only SQLite batching removes 1,002 standalone writes
+  from the large-emote case; runtime, assertions, item/collection counts and
+  the five-second timeout are unchanged. Parent independently passed all 21
+  focused tests in both mounted and Linux-native checkouts. Clean `bd9cdc6`
+  `pnpm test` passed 8 SDK and 702 Web tests, with the two explicitly gated
+  PostgreSQL cases skipped. This resolves the previously recorded Node timeout;
+  skipped PostgreSQL checks still require their separate gate.
+- `e5c1141`: suppress raw native image diagnostics before first libvips startup.
+  A fresh-process regression reproduced unfiltered startup logs before the fix;
+  media `go test -count=1 -race` and staticcheck passed after it. Typed safe
+  domain errors and content-free audit remain the operational error surface.
+
+All PostgreSQL checks above used synthetic data in isolated schemas of the
+task-owned disposable database. No production credentials, volumes, providers,
+notifications or deployment were used. The original draft domains and new
+worker slices remain under review until separately accepted below.
