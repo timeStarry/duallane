@@ -1,0 +1,243 @@
+{
+  "contract": "node-bot-gateway-message-v1",
+  "source": "apps/web/server/routes/workspace-bot-gateway.mjs + services/workspace-bot-gateway.mjs + services/workspace.mjs",
+  "method": "POST",
+  "path": "/api/bot-gateway/v1/messages",
+  "statusCode": 201,
+  "responseMessageKeys": [
+    "id",
+    "conversationId",
+    "plainText",
+    "content",
+    "createdAt"
+  ],
+  "responseMessageAuthor": "omitted",
+  "contentKeys": [
+    "format",
+    "plainText",
+    "blocks"
+  ],
+  "cases": [
+    {
+      "name": "text-alias",
+      "request": {
+        "conversationId": "conv_message_dto",
+        "clientMessageId": "client_text_alias",
+        "idempotencyKey": "idem_text_alias",
+        "text": "Hello <& "
+      },
+      "statusCode": 201,
+      "response": {
+        "message": {
+          "id": "message_fixture",
+          "conversationId": "conv_message_dto",
+          "plainText": "Hello <&",
+          "content": {
+            "format": "duallane.message+json;v=1",
+            "plainText": "Hello <&",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Hello <&"
+              }
+            ]
+          },
+          "createdAt": "2026-09-06T09:10:11.123Z"
+        },
+        "clientMessageId": "client_text_alias"
+      },
+      "responseKeys": [
+        "message",
+        "clientMessageId"
+      ],
+      "messageKeys": [
+        "id",
+        "conversationId",
+        "plainText",
+        "content",
+        "createdAt"
+      ],
+      "contentKeys": [
+        "format",
+        "plainText",
+        "blocks"
+      ],
+      "messageCountBefore": 0,
+      "messageCountAfter": 1,
+      "replay": {
+        "statusCode": 201,
+        "response": {
+          "message": {
+            "id": "message_fixture",
+            "conversationId": "conv_message_dto",
+            "plainText": "Hello <&",
+            "content": {
+              "format": "duallane.message+json;v=1",
+              "plainText": "Hello <&",
+              "blocks": [
+                {
+                  "type": "text",
+                  "text": "Hello <&"
+                }
+              ]
+            },
+            "createdAt": "2026-09-06T09:10:11.123Z"
+          },
+          "clientMessageId": "client_text_alias"
+        },
+        "messageCountAfter": 1
+      }
+    },
+    {
+      "name": "content-wins-over-text",
+      "request": {
+        "conversationId": "conv_message_dto",
+        "clientMessageId": "client_content_wins",
+        "idempotencyKey": "idem_content_wins",
+        "text": "ignored text",
+        "content": {
+          "format": "duallane.message+json;v=1",
+          "plainText": "Content wins",
+          "blocks": [
+            {
+              "type": "text",
+              "text": "Content wins"
+            }
+          ]
+        }
+      },
+      "statusCode": 201,
+      "response": {
+        "message": {
+          "id": "message_fixture",
+          "conversationId": "conv_message_dto",
+          "plainText": "Content wins",
+          "content": {
+            "format": "duallane.message+json;v=1",
+            "plainText": "Content wins",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Content wins"
+              }
+            ]
+          },
+          "createdAt": "2026-09-06T09:10:11.123Z"
+        },
+        "clientMessageId": "client_content_wins"
+      },
+      "responseKeys": [
+        "message",
+        "clientMessageId"
+      ],
+      "messageKeys": [
+        "id",
+        "conversationId",
+        "plainText",
+        "content",
+        "createdAt"
+      ],
+      "contentKeys": [
+        "format",
+        "plainText",
+        "blocks"
+      ],
+      "messageCountBefore": 1,
+      "messageCountAfter": 2
+    },
+    {
+      "name": "null-content-falls-back-to-text",
+      "request": {
+        "conversationId": "conv_message_dto",
+        "clientMessageId": "client_null_content",
+        "idempotencyKey": "idem_null_content",
+        "content": null,
+        "text": "Null content fallback"
+      },
+      "statusCode": 201,
+      "response": {
+        "message": {
+          "id": "message_fixture",
+          "conversationId": "conv_message_dto",
+          "plainText": "Null content fallback",
+          "content": {
+            "format": "duallane.message+json;v=1",
+            "plainText": "Null content fallback",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Null content fallback"
+              }
+            ]
+          },
+          "createdAt": "2026-09-06T09:10:11.123Z"
+        },
+        "clientMessageId": "client_null_content"
+      },
+      "responseKeys": [
+        "message",
+        "clientMessageId"
+      ],
+      "messageKeys": [
+        "id",
+        "conversationId",
+        "plainText",
+        "content",
+        "createdAt"
+      ],
+      "contentKeys": [
+        "format",
+        "plainText",
+        "blocks"
+      ],
+      "messageCountBefore": 2,
+      "messageCountAfter": 3
+    },
+    {
+      "name": "idempotency-aliases-client-message-id",
+      "request": {
+        "conversationId": "conv_message_dto",
+        "idempotencyKey": "idem_only_client",
+        "text": "Idempotency alias"
+      },
+      "statusCode": 201,
+      "response": {
+        "message": {
+          "id": "message_fixture",
+          "conversationId": "conv_message_dto",
+          "plainText": "Idempotency alias",
+          "content": {
+            "format": "duallane.message+json;v=1",
+            "plainText": "Idempotency alias",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Idempotency alias"
+              }
+            ]
+          },
+          "createdAt": "2026-09-06T09:10:11.123Z"
+        },
+        "clientMessageId": "idem_only_client"
+      },
+      "responseKeys": [
+        "message",
+        "clientMessageId"
+      ],
+      "messageKeys": [
+        "id",
+        "conversationId",
+        "plainText",
+        "content",
+        "createdAt"
+      ],
+      "contentKeys": [
+        "format",
+        "plainText",
+        "blocks"
+      ],
+      "messageCountBefore": 3,
+      "messageCountAfter": 4
+    }
+  ]
+}

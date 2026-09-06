@@ -341,12 +341,12 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 			app.handler.ServeHTTP(response, r)
 			var message struct {
 				Message struct {
-					ID      string                    `json:"id"`
-					Author  struct{ ID, Kind string } `json:"author"`
-					Content messages.Content          `json:"content"`
+					ID      string           `json:"id"`
+					Author  json.RawMessage  `json:"author"`
+					Content messages.Content `json:"content"`
 				} `json:"message"`
 			}
-			if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &message) != nil || message.Message.Author.ID != createdBody.Bot.BotUserID || message.Message.Author.Kind != "bot" || len(message.Message.Content.Blocks) != 1 || message.Message.Content.Blocks[0].Type != "text" {
+			if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &message) != nil || len(message.Message.Author) != 0 || len(message.Message.Content.Blocks) != 1 || message.Message.Content.Blocks[0].Type != "text" {
 				t.Fatalf("composed bot send status=%d body=%s", response.Code, response.Body.String())
 			}
 			if attempt == 0 {
@@ -354,6 +354,10 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 			} else if message.Message.ID != firstID {
 				t.Fatal("composed bot replay created a second message")
 			}
+		}
+		var storedAuthor, storedKind string
+		if err := conn.QueryRow(ctx, `SELECT author_id,author_kind FROM messages WHERE id=$1`, firstID).Scan(&storedAuthor, &storedKind); err != nil || storedAuthor != createdBody.Bot.BotUserID || storedKind != "bot" {
+			t.Fatalf("composed Bot writer persisted the wrong identity: author=%s kind=%s err=%v", storedAuthor, storedKind, err)
 		}
 		humanBody, err := json.Marshal(map[string]any{"conversationId": directResult.Conversation.ID, "clientMessageId": "forged-human-fixture", "content": map[string]any{"format": messages.MessageContentFormat, "blocks": []map[string]string{{"type": "text", "text": "synthetic"}}}})
 		if err != nil {

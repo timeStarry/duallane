@@ -186,16 +186,9 @@ func projectWorkspaceMessage(message workspacemessages.Message) GatewayMessage {
 	if len(content) == 0 {
 		content = map[string]any{"format": MessageContentFormat, "plainText": message.PlainText, "blocks": []any{}}
 	}
-	var author any
-	if message.AuthorID != nil && strings.TrimSpace(*message.AuthorID) != "" {
-		author = map[string]any{
-			"id": *message.AuthorID, "name": message.AuthorName, "nickname": message.AuthorNickname,
-			"kind": message.AuthorKind,
-		}
-	}
 	return GatewayMessage{
 		ID: message.ID, ConversationID: message.ConversationID, PlainText: message.PlainText,
-		Content: content, CreatedAt: message.CreatedAt, Author: author,
+		Content: content, CreatedAt: message.CreatedAt,
 	}
 }
 

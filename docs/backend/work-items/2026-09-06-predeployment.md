@@ -903,3 +903,17 @@ after removing six unused helpers/assignments. These accept the converter and
 typed action foundation, not the real action PostgreSQL bridge or Gateway/main
 registration. Final persisted fallback-text behavior for lone UTF-16 units is
 being characterized separately against the actual Node HTTP writer.
+
+### Bot Gateway Message DTO Compatibility
+
+The actual Node Gateway route plus SQLite message writer confirms that its
+message response omits the nested `author` property. The Go adapter no longer
+adds that incompatible field. Four actual Node cases cover text/content/nullish
+selection and client-key aliases; replay is also observed. The application test
+now checks the response omission and separately verifies the persisted Bot
+author identity, preserving the security assertion without inventing a DTO.
+
+Parent independently regenerated the fixture in check-only mode against fresh
+synthetic SQLite. PostgreSQL/race passed Gateway (10.985 seconds), HTTP (1.874)
+and application composition (3.896), followed by integration-tag staticcheck.
+The narrow projection golden does not replace full Go HTTP request parity.

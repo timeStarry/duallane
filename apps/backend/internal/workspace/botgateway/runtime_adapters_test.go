@@ -2,6 +2,7 @@ package botgateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -56,8 +57,19 @@ func TestRuntimeAdaptersProjectSafeMessage(t *testing.T) {
 			Blocks: []workspacemessages.Block{{Type: "text", Text: "hello"}},
 		},
 	})
-	if message.Author.(map[string]any)["id"] != authorID {
-		t.Fatalf("author projection = %#v", message.Author)
+	if message.Author != nil {
+		t.Fatalf("Node Gateway message unexpectedly projected author = %#v", message.Author)
+	}
+	encoded, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := fields["author"]; present {
+		t.Fatal("Node Gateway message must omit author")
 	}
 	if message.Content["format"] != workspacemessages.MessageContentFormat || message.Content["plainText"] != "hello" {
 		t.Fatalf("content projection = %#v", message.Content)
