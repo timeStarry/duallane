@@ -347,6 +347,22 @@ deployment. Do not run production deployment from the development checkout.
 
 ## 10. Rolling Compatibility And Rollback
 
+`deploy/production/release-compose-snapshot.mjs` validates a private Go recovery
+artifact containing profile/project, full release commit/version, schema version,
+five exact image IDs and the full canonical `docker compose config --format json`
+output. The Workspace, worker and migrate IDs must match. Capture and recovery
+files use exclusive creation and mode 0600; reads reject symlinks, non-regular
+files, oversized input and unsafe permissions. Summaries do not print the
+environment. Keep these artifacts outside Git and normal logs.
+
+Canonical Compose output already escapes literal dollar values. Preserve that
+serialization exactly when recovering; raw container environment inspection is
+not interchangeable with canonical Compose input. A real Compose round-trip
+test checks recovery against a changed process/environment file. The artifact
+does not freeze external bind/config/secret file bytes or prove live ownership,
+schema compatibility, draining or provider state. The caller must verify those
+separately before recovery. This helper alone does not enable `--go-upgrade`.
+
 Schema and contracts use expand-contract evolution. The new migration must be
 safe for every Node/Go version that can run during rollout or automatic
 application rollback. Destructive cleanup occurs only after the old owner is

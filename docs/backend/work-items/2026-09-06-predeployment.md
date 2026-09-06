@@ -1813,3 +1813,17 @@ the private data directory remained empty. `pnpm --version` also returned
 The reviewed diagnostic image ID is
 `e5e42b53d293a942ba8e541b34d9ea7bfa83990e1619272ad057858d300c2c6f`;
 its base labels precede this fix, so this is not the final release artifact.
+
+### Private Complete Compose Snapshot Component
+
+Parent independently passed five snapshot tests (540 ms): complete immutable
+owner image identities, private exclusive files, symlink/FIFO/size/mode rejection,
+safe CLI output and an actual Docker Compose configuration round trip with a
+changed environment. Review corrected a double-escape bug: canonical Compose
+JSON already protects literal dollar values, and re-escaping it changes recovered
+credentials/commands. The fixed helper preserves canonical serialization.
+
+These checks only parse synthetic configuration and private fixtures; they do
+not start a container or inspect production secrets. The component is not yet
+the Go-to-Go release/rollback integration, and does not freeze external file
+contents or prove a live writer fence.

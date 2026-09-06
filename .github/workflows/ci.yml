@@ -142,6 +142,9 @@ jobs:
       - name: Validate release ownership and rollback contracts
         run: node --test scripts/backend/production-deploy.test.mjs scripts/backend/go-production-workers.test.mjs scripts/backend/node-runtime-image.test.mjs
 
+      - name: Validate private Compose recovery snapshots
+        run: node --test scripts/backend/release-compose-snapshot.test.mjs scripts/backend/release-compose-snapshot.docker.test.mjs
+
       - name: Validate bounded permission rehearsal and owned cleanup
         run: node --test scripts/backend/runtime-permissions.test.mjs
 
