@@ -106,7 +106,7 @@ func TestWorkspaceFilesContractPGUsesRealServiceAndKeepsRejectionsContentFree(t 
 	}
 
 	missing := contractPGServe(database, router, contractPGRequest(http.MethodGet, "/api/workspace/files/missing-contract/download", "", contractPGOwnerID, "", "files-missing"))
-	if missing.Code != http.StatusNotFound || contractPGErrorCode(t, missing) != files.CodeFileNotFound {
+	if missing.Code != http.StatusBadRequest || contractPGErrorCode(t, missing) != files.CodeFileNotFound {
 		t.Fatalf("missing file status=%d body=%s", missing.Code, missing.Body.String())
 	}
 	contractPGAssertBodyExcludes(t, missing, "missing-contract", "contract.txt")

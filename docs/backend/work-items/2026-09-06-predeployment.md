@@ -1438,3 +1438,22 @@ Parent independently passed the worker PostgreSQL/race suite (15.186 seconds)
 and tagged staticcheck. A focused composition test passed (1.210 seconds),
 checking partial cycle counts, private GET/POST handling, raw-error/query
 exclusion and absence of invented backlog samples without a database.
+
+### Authorized Legacy Attachment Reads
+
+The files service now supports explicitly injected local/S3 legacy readers
+after authorization and download-grant validation. Only recognized keys derived
+from the attachment's own namespace are tried; canonical reads remain first,
+and only physical absence allows fallback. Tombstoned/inconsistent bindings,
+provider failures and size/key mismatches fail closed. A known canonical hash
+must match the fallback; metadata-free S3 streams are verified at EOF without
+buffering the object. Early close is not an integrity proof.
+
+Logical `file.not_found` now preserves Node's 400 status; physical object
+absence remains 404. Parent independently passed files PostgreSQL/race (47.750
+seconds), HTTP PostgreSQL/race (25.609), file schema regressions (2.201), actual
+Node legacy fixture creation, and tagged staticcheck. The runtime legacy-reader
+injection and full Node-to-Go physical fixture read are separate integration
+checks. The latter exposed a local-root layout mismatch (`workspace-files`
+under Node's data directory), now tracked for a command-composition correction;
+these domain tests alone do not establish existing-volume compatibility.

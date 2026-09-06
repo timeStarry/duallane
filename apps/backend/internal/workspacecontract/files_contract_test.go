@@ -110,6 +110,24 @@ func TestWorkspaceFilesContractRouteInventory(t *testing.T) {
 	}
 }
 
+func TestWorkspaceFilesLogicalMissingUsesNodeBadRequestContract(t *testing.T) {
+	harness := loadFilesContract(t)
+	for _, route := range []filesRoute{
+		{Method: http.MethodDelete, Path: "/api/workspace/files/{attachmentId}"},
+		{Method: http.MethodPost, Path: "/api/workspace/files/{attachmentId}/downloads/reserve"},
+		{Method: http.MethodGet, Path: "/api/workspace/files/{attachmentId}/preview"},
+		{Method: http.MethodGet, Path: "/api/workspace/files/{attachmentId}/download"},
+	} {
+		operation := harness.doc.Paths.Find(route.Path).Operations()[route.Method]
+		if operation.Responses.Value("400") == nil {
+			t.Fatalf("%s %s lacks logical file-not-found 400", route.Method, route.Path)
+		}
+		if route.Method != http.MethodGet && operation.Responses.Value("404") != nil {
+			t.Fatalf("%s %s still treats logical file-not-found as 404", route.Method, route.Path)
+		}
+	}
+}
+
 func TestWorkspaceFilesFixturesValidateAgainstOpenAPI(t *testing.T) {
 	harness := loadFilesContract(t)
 	if got, want := len(harness.fixture.Scenarios), 16; got != want {

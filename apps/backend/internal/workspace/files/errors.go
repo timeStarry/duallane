@@ -128,7 +128,10 @@ func permissionDeniedError() *Error {
 }
 
 func fileNotFoundError() *Error {
-	return NewError(CodeFileNotFound, MessageFileNotFound, 404)
+	// Node's WorkspaceValidationError uses the default 400 status for logical
+	// file-not-found cases (download/preview/reserve/remove). Physical object
+	// absence remains CodeFileStorageMissing with its own storage status.
+	return NewError(CodeFileNotFound, MessageFileNotFound, 400)
 }
 
 func conversationNotFoundError() *Error {

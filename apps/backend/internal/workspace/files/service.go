@@ -31,9 +31,19 @@ const (
 type Clock func() time.Time
 type IDFactory func() (string, error)
 
+// LegacyObjectReader is the read-only compatibility seam for attachments
+// created before the content-addressed registry. The files service supplies
+// only an already-authorized, namespace-derived key and a bounded limit. New
+// writes never use this seam; the parent composition layer must explicitly
+// inject the concrete adapter.
+type LegacyObjectReader interface {
+	OpenLegacy(context.Context, string, int64) (platformstorage.OpenedObject, error)
+}
+
 type ServiceOptions struct {
 	Repository       Repository
 	BlobStore        platformstorage.BlobStore
+	LegacyReader     LegacyObjectReader
 	SpaceID          string
 	Now              Clock
 	IDFactory        IDFactory
@@ -45,6 +55,7 @@ type ServiceOptions struct {
 type Service struct {
 	repo             Repository
 	blobStore        platformstorage.BlobStore
+	legacyReader     LegacyObjectReader
 	spaceID          string
 	now              Clock
 	idFactory        IDFactory
@@ -182,6 +193,7 @@ func NewService(options ServiceOptions) *Service {
 	return &Service{
 		repo:             options.Repository,
 		blobStore:        options.BlobStore,
+		legacyReader:     options.LegacyReader,
 		spaceID:          spaceID,
 		now:              now,
 		idFactory:        idFactory,
@@ -1684,24 +1696,10 @@ func (s *Service) OpenAttachmentContent(ctx context.Context, input OpenAttachmen
 	if err != nil {
 		return platformstorage.OpenedObject{}, normalizeRepositoryError(err)
 	}
-	if record == nil || record.Status != string(AttachmentAvailable) || record.StorageObject == nil {
+	if record == nil || record.Status != string(AttachmentAvailable) {
 		return platformstorage.OpenedObject{}, fileNotFoundError()
 	}
-	if s.blobStore == nil {
-		return platformstorage.OpenedObject{}, internalError("open workspace attachment", errors.New("blob store is required"))
-	}
-	opened, err := s.blobStore.Open(ctx, record.StorageObject.BlobObject(), input.MaxBytes)
-	if err != nil {
-		mapped := normalizeStorageError(err)
-		if isCode(mapped, "file.storage_too_large") {
-			return platformstorage.OpenedObject{}, NewError(CodeFileStorageTooLarge, MessageFileStorageTooLarge, 413)
-		}
-		if isCode(mapped, "file.storage_missing") || isCode(mapped, "file.storage_mismatch") {
-			return platformstorage.OpenedObject{}, NewError(CodeFileStorageMissing, MessageFileStorageMissing, 404)
-		}
-		return platformstorage.OpenedObject{}, mapped
-	}
-	return opened, nil
+	return s.openAttachmentRecord(ctx, *record, input.MaxBytes, "open workspace attachment")
 }
 
 // OpenDownload verifies the short-lived logical grant before opening bytes.
@@ -1712,24 +1710,7 @@ func (s *Service) OpenDownload(ctx context.Context, input CompletedDownloadInput
 	if err != nil {
 		return platformstorage.OpenedObject{}, err
 	}
-	if grant.Attachment.StorageObject == nil {
-		return platformstorage.OpenedObject{}, NewError(CodeFileStorageMissing, MessageFileStorageMissing, 404)
-	}
-	if s.blobStore == nil {
-		return platformstorage.OpenedObject{}, internalError("open workspace download", errors.New("blob store is required"))
-	}
-	opened, err := s.blobStore.Open(ctx, grant.Attachment.StorageObject.BlobObject(), input.MaxBytes)
-	if err != nil {
-		mapped := normalizeStorageError(err)
-		if isCode(mapped, "file.storage_too_large") {
-			return platformstorage.OpenedObject{}, NewError(CodeFileStorageTooLarge, MessageFileStorageTooLarge, 413)
-		}
-		if isCode(mapped, "file.storage_missing") || isCode(mapped, "file.storage_mismatch") {
-			return platformstorage.OpenedObject{}, NewError(CodeFileStorageMissing, MessageFileStorageMissing, 404)
-		}
-		return platformstorage.OpenedObject{}, mapped
-	}
-	return opened, nil
+	return s.openAttachmentRecord(ctx, grant.Attachment, input.MaxBytes, "open workspace download")
 }
 
 // RemoveAttachment atomically hides the logical attachment and detaches its
