@@ -26,23 +26,25 @@ type Clock func() time.Time
 type IDFactory func() (string, error)
 
 type ServiceOptions struct {
-	Repository Repository
-	BlobStore  platformstorage.BlobStore
-	Catalog    *Catalog
-	Processor  MediaProcessor
-	SpaceID    string
-	Now        Clock
-	IDFactory  IDFactory
+	Repository              Repository
+	BlobStore               platformstorage.BlobStore
+	Catalog                 *Catalog
+	Processor               MediaProcessor
+	AttachmentContentReader AttachmentContentReader
+	SpaceID                 string
+	Now                     Clock
+	IDFactory               IDFactory
 }
 
 type Service struct {
-	repo      Repository
-	blobStore platformstorage.BlobStore
-	catalog   *Catalog
-	processor MediaProcessor
-	spaceID   string
-	now       Clock
-	idFactory IDFactory
+	repo                    Repository
+	blobStore               platformstorage.BlobStore
+	catalog                 *Catalog
+	processor               MediaProcessor
+	attachmentContentReader AttachmentContentReader
+	spaceID                 string
+	now                     Clock
+	idFactory               IDFactory
 }
 
 type mutationEvidence struct {
@@ -81,7 +83,8 @@ func NewService(options ServiceOptions) *Service {
 	}
 	return &Service{
 		repo: options.Repository, blobStore: options.BlobStore, catalog: options.Catalog,
-		processor: options.Processor, spaceID: spaceID, now: now, idFactory: idFactory,
+		processor: options.Processor, attachmentContentReader: options.AttachmentContentReader,
+		spaceID: spaceID, now: now, idFactory: idFactory,
 	}
 }
 
@@ -672,7 +675,7 @@ func (s *Service) StoreProcessed(ctx context.Context, input StoreProcessedInput)
 		if err := tx.Lock(ctx, "workspace-emote-library:"+actor.ID); err != nil {
 			return nil, nil, normalizeError(err)
 		}
-		if err := tx.Lock(ctx, "workspace-storage-object:"+objectID); err != nil {
+		if err := tx.Lock(ctx, workspaceStorageObjectLockKey(objectID)); err != nil {
 			return nil, nil, normalizeError(err)
 		}
 		stored, err := s.blobStore.Put(ctx, objectKey, bytes.NewReader(input.Processed.Content), input.Processed.ByteSize, digest)
@@ -695,7 +698,7 @@ func (s *Service) StoreProcessed(ctx context.Context, input StoreProcessedInput)
 		if object == nil || object.ID != objectID {
 			return nil, nil, internalError("acquire emote storage object", errors.New("invalid storage object"))
 		}
-		duplicate, err := tx.FindCustomEmoteByDigest(ctx, actor.ID, digest)
+		duplicate, err := s.findReusableLocalEmote(ctx, tx, actor.ID, digest)
 		if err != nil {
 			return nil, nil, normalizeError(err)
 		}
@@ -1677,7 +1680,7 @@ func (s *Service) cleanupObjectIfUnreferencedWithFallback(ctx context.Context, o
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	return s.repo.WithTx(ctx, func(tx Tx) error {
-		if err := tx.Lock(ctx, "workspace-storage-object:"+objectID); err != nil {
+		if err := tx.Lock(ctx, workspaceStorageObjectLockKey(objectID)); err != nil {
 			return normalizeError(err)
 		}
 		object, err := tx.GetStorageObject(ctx, objectID, true)

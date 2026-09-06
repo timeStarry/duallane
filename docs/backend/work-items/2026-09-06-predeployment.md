@@ -1645,3 +1645,22 @@ The operator runbook explicitly describes whole-configuration replacement,
 provider fallback limits, bucket-policy versus ACL scope, and the bucket-only
 configuration boundary. Backfill/finalization coordination and the old archive
 tools are not claimed as completed by this provisioning slice.
+
+### Message-Scoped Emote Favorites
+
+The emote domain now validates a visible source message and exactly one builtin,
+image-attachment or custom-emote source. Attachment processing uses a bounded
+authorized read, and custom favorites reuse canonical objects without creating
+duplicate physical bytes. Read-only subscription entries cannot masquerade as
+local reusable favorites. Parent review added a fresh source read inside the
+mutation and the same canonical-object advisory lock used by cleanup, covering
+the reference insertion and placement transaction.
+
+Parent independently passed the final emotes PostgreSQL/race suite (15.624
+seconds) and tagged staticcheck. The PostgreSQL regression proves an independent
+lock attempt is denied while favorite holds the object, cleanup completes after
+release, a stale source label is refreshed, and the target remains readable
+after source removal. Reference counts are derived from logical rows, not a
+separate counter column. Message visibility follows Node's pre-mutation check;
+this does not claim new same-transaction membership fencing. Legacy StorageKey-only
+emote delivery is a separate follow-up, not proved by canonical favorite tests.

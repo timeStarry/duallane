@@ -233,7 +233,7 @@ func (r *PGRepository) FindCustomEmoteByDigest(ctx context.Context, userID, dige
 }
 
 func findCustomEmoteByDigest(ctx context.Context, queryer pgQueryer, userID, digest string) (*CustomEmoteRecord, error) {
-	return scanCustomEmote(queryer.QueryRow(ctx, customEmoteSelect+` WHERE user_id = $1 AND sha256 = $2 ORDER BY removed_at NULLS FIRST, created_at DESC LIMIT 1`, userID, digest))
+	return scanCustomEmote(queryer.QueryRow(ctx, customEmoteSelect+` WHERE user_id = $1 AND sha256 = $2 ORDER BY removed_at NULLS FIRST, created_at ASC, id ASC LIMIT 1`, userID, digest))
 }
 
 func (r *PGRepository) FindBuiltinEmote(ctx context.Context, userID, emoteKey string) (*CustomEmoteRecord, error) {
