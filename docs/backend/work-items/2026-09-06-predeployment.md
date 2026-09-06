@@ -1104,3 +1104,22 @@ Fresh independent PostgreSQL/race passed interactions (19.512 seconds) and the
 uncommitted automation consumer (7.917); integration-tag staticcheck passed.
 PG cases cover late event/output failure, empty-unwrap failure, savepoint
 rollback/release failure, and legitimate 4xx with no partial domain writes.
+
+### Echo Command And Workflow Definitions
+
+Echo's 11 commands and two workflows now have candidate definitions and a PG
+repository that supplies configured interaction/requirement/solicitation/release
+views over one transaction. Solicitation create/publish share their existing
+mutation implementations with caller-owned `InTx` entry points. Multi-step
+publish and requirement operations use savepoints and preserve only safe
+rejection evidence after rollback; adapters inspect all error leaves before
+converting domain 4xx errors.
+
+Parent removed an unused helper and added no-cause 503/typed-nil error tests.
+Independent PostgreSQL/race passed automation (7.917 seconds), interactions
+(19.512), and solicitations in the earlier combined run (25.030); staticcheck
+passed after cleanup. Both Node automation and parser fixture checks passed.
+Parser fixtures include JavaScript whitespace and the current Node quoted-token
+behavior, without pretending that pre-parsing in the generic command registry
+is already characterized. Application composition, post-commit delivery, generic
+parser parity and the unchanged Echo browser scenarios remain integration gates.

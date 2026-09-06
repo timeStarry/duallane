@@ -1,0 +1,126 @@
+{
+  "commandInventory": [
+    "help",
+    "cancel",
+    "publish",
+    "release",
+    "need",
+    "feedback",
+    "list",
+    "view",
+    "collect",
+    "implement",
+    "reject"
+  ],
+  "helpCommands": [
+    "/help",
+    "/cancel",
+    "/publish",
+    "/release",
+    "/need",
+    "/feedback",
+    "/list",
+    "/view",
+    "/collect",
+    "/implement",
+    "/reject"
+  ],
+  "helpResult": {
+    "type": "help",
+    "botUserId": "usr_system_echo",
+    "commands": [
+      "/help",
+      "/cancel",
+      "/publish",
+      "/release",
+      "/need",
+      "/feedback",
+      "/list",
+      "/view",
+      "/collect",
+      "/implement",
+      "/reject"
+    ]
+  },
+  "unknownResourceNames": [
+    "idea",
+    "requirements",
+    "solicitations"
+  ],
+  "authorization": {
+    "ownerRelease": true,
+    "memberRelease": false,
+    "auditorNeed": false,
+    "memberNeed": true
+  },
+  "workflow": {
+    "initialization": {
+      "requirement": {
+        "state": {
+          "step": "title",
+          "fields": {
+            "type": "requirement"
+          }
+        }
+      },
+      "publish": {
+        "state": {
+          "step": "confirm",
+          "fields": {
+            "title": "T",
+            "description": "D",
+            "question": "Q",
+            "options": [
+              "A"
+            ]
+          }
+        }
+      }
+    },
+    "steps": {
+      "requirementPartial": {
+        "state": {
+          "step": "detail",
+          "fields": {
+            "type": "requirement",
+            "title": "Synthetic title"
+          }
+        },
+        "result": {
+          "type": "workflow-step",
+          "step": "detail",
+          "missing": [
+            "detail",
+            "scenario",
+            "expectedResult"
+          ]
+        }
+      },
+      "publishPartial": {
+        "state": {
+          "step": "confirm",
+          "fields": {
+            "title": "T",
+            "description": "D",
+            "question": "Q",
+            "options": [
+              "A"
+            ]
+          }
+        },
+        "result": {
+          "type": "workflow-step",
+          "step": "confirm",
+          "missing": []
+        }
+      }
+    },
+    "requirementConcurrentSame": true,
+    "requirementWrites": 1,
+    "solicitationConcurrentSame": true,
+    "solicitationCreateWrites": 1,
+    "solicitationPublishWrites": 1,
+    "faultDraftsAfterPublishFailure": 1,
+    "faultRequiresSharedTxRollback": true
+  }
+}

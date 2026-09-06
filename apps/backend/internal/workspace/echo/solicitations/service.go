@@ -266,7 +266,24 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Solicitation,
 	if err != nil {
 		return nil, err
 	}
-	return s.withMutation(ctx, input.ActorID, spaceID, input.Meta, "echo.solicitation.create", func(tx Tx, actor *auth.Actor, at time.Time) (*Solicitation, *mutationRejection, bool, string, error) {
+	return s.withMutation(ctx, input.ActorID, spaceID, input.Meta, "echo.solicitation.create", s.createMutation(ctx, spaceID, input))
+}
+
+// CreateInTx applies the complete solicitation creation to a caller-owned
+// transaction. It never starts or commits a pool transaction. Domain
+// rejections return TransactionRejection after their content-free audit has
+// been written to tx; infrastructure errors must roll the outer transaction
+// back.
+func (s *Service) CreateInTx(ctx context.Context, tx Tx, input CreateInput) (*Solicitation, error) {
+	spaceID, err := normalizeIdentifier(s.space(input.SpaceID), CodeInvalidSpace, MessageInvalidSpace)
+	if err != nil {
+		return nil, err
+	}
+	return s.withMutationInTx(ctx, tx, input.ActorID, spaceID, input.Meta, "echo.solicitation.create", s.createMutation(ctx, spaceID, input))
+}
+
+func (s *Service) createMutation(ctx context.Context, spaceID string, input CreateInput) func(Tx, *auth.Actor, time.Time) (*Solicitation, *mutationRejection, bool, string, error) {
+	return func(tx Tx, actor *auth.Actor, at time.Time) (*Solicitation, *mutationRejection, bool, string, error) {
 		if actor.Role != "owner" {
 			return nil, reject(hiddenPermissionError(), "", ""), true, "", nil
 		}
@@ -357,7 +374,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*Solicitation,
 			return nil, nil, false, "", err
 		}
 		return result, nil, true, StatusDraft, nil
-	})
+	}
 }
 
 func (s *Service) Get(ctx context.Context, input GetInput) (*Solicitation, error) {
@@ -451,6 +468,17 @@ func (s *Service) Publish(ctx context.Context, input TransitionInput) (*Solicita
 	return s.transition(ctx, input, "publish", StatusOpen)
 }
 
+// PublishInTx applies the complete solicitation publication to a caller-owned
+// transaction. It shares the same mutation and current-transaction
+// authorization path as Publish and never falls back to a pool read.
+func (s *Service) PublishInTx(ctx context.Context, tx Tx, input TransitionInput) (*Solicitation, error) {
+	spaceID, err := normalizeIdentifier(s.space(input.SpaceID), CodeInvalidSpace, MessageInvalidSpace)
+	if err != nil {
+		return nil, err
+	}
+	return s.withMutationInTx(ctx, tx, input.ActorID, spaceID, input.Meta, "echo.solicitation.publish", s.transitionMutation(ctx, spaceID, input, "publish", StatusOpen))
+}
+
 func (s *Service) Close(ctx context.Context, input TransitionInput) (*Solicitation, error) {
 	return s.transition(ctx, input, "close", StatusClosed)
 }
@@ -464,7 +492,11 @@ func (s *Service) transition(ctx context.Context, input TransitionInput, operati
 	if err != nil {
 		return nil, err
 	}
-	return s.withMutation(ctx, input.ActorID, spaceID, input.Meta, "echo.solicitation."+operation, func(tx Tx, actor *auth.Actor, at time.Time) (*Solicitation, *mutationRejection, bool, string, error) {
+	return s.withMutation(ctx, input.ActorID, spaceID, input.Meta, "echo.solicitation."+operation, s.transitionMutation(ctx, spaceID, input, operation, targetStatus))
+}
+
+func (s *Service) transitionMutation(ctx context.Context, spaceID string, input TransitionInput, operation, targetStatus string) func(Tx, *auth.Actor, time.Time) (*Solicitation, *mutationRejection, bool, string, error) {
+	return func(tx Tx, actor *auth.Actor, at time.Time) (*Solicitation, *mutationRejection, bool, string, error) {
 		if actor.Role != "owner" {
 			return nil, reject(hiddenPermissionError(), "", ""), true, "", nil
 		}
@@ -583,7 +615,7 @@ func (s *Service) transition(ctx context.Context, input TransitionInput, operati
 			return nil, nil, false, "", err
 		}
 		return result, nil, true, targetStatus, nil
-	})
+	}
 }
 
 func (s *Service) Vote(ctx context.Context, input VoteInput) (*Solicitation, error) {
