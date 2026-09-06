@@ -129,6 +129,31 @@ execution evidence is required. Neither skipped nor unattempted checks supply
 coverage. Evidence must not contain credentials, private connection strings,
 invite fragments, P2P payloads, or sensitive user data.
 
+### Go P2P browser gate
+
+Run `pnpm test:e2e:p2p-go` with the pinned Go/Node/pnpm toolchains and the
+repository's Chromium installed. The dedicated Playwright config builds
+`cmd/p2p` without CGO, starts an isolated loopback service plus Vite on ports
+8897/5197, and refuses to reuse an existing server. It passes no Workspace,
+database, storage, OAuth, or notification credentials to P2P. Do not terminate
+an unrelated process if those ports are occupied.
+
+The suite covers two-context direct text/file delivery, encrypted WebSocket
+fallback with acknowledgements, malformed fragment refusal before transport,
+and a valid-format wrong key that cannot decrypt a relayed chat. Secret and
+plaintext observations remain bounded in test memory; assertions emit booleans
+or counts. Traces, videos and screenshots are disabled. Failure DOM context
+stays under ignored `.private-test-results/`, outside normal CI artifact paths;
+never upload it or copy raw browser requests into evidence.
+
+The Node suite deliberately excludes this spec. CI has a separate Go P2P job
+without artifact uploads. Run
+`node --test .github/tests/ci-go-p2p-privacy.test.mjs scripts/backend/owned-process.test.mjs`
+when changing its configuration or process helper. These guards verify isolation
+and bounded shutdown, including TERM escalation; they are not browser coverage.
+Browser success proves this candidate's P2P flow, not Workspace parity, gateway
+deployment, production routing or a completed cutover.
+
 ## 4. Change Matrix
 
 | Change | Required evidence |

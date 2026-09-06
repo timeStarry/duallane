@@ -242,3 +242,26 @@ Echo releases' first draft is **not accepted**: parent review found persisted
 snapshot escaping, version-case and ID-prefix differences. The worker is revising
 it against the actual Node service. No release, solicitation, delivery or Bot
 runtime acceptance is implied by this work record until recorded separately.
+
+- `777fc84`: each file part/single/assembled upload now uses an independent
+  request-attempt object before publishing under the upload lock. Three real PG
+  regressions first failed: a failed duplicate deleted a committed part, a slow
+  conflicting part overwrote/deleted the winner, and concurrent whole uploads
+  shared staging so neither could complete. Fresh complete files PG/race and
+  scoped staticcheck passed after the fix. Revalidation follows the locks;
+  cleanup cannot remove a committed part or another request's staging. Forward
+  publication and detached cleanup have two-minute budgets. Crashes can still
+  leave attempt objects: bounded age cleanup excluding active uploads remains
+  an explicit maintenance gate, not a claimed completed feature.
+- `4fdf9ed`: four real Go P2P Chromium cases passed independently on the clean
+  validation clone with the exact reviewed browser patch (13.1 seconds): direct
+  text/file, encrypted fallback/ack, malformed fragment, and valid-format wrong
+  key. The initial wrong-key assertion expected a visible warning, but the
+  current chat UI does not render that internal error state; the corrected test
+  observes actual WebCrypto rejection, no delivered plaintext and disabled file
+  transfer, without changing application behavior. CI now runs a separate Go
+  browser job and excludes the suite from Node's default runner. No P2P failure
+  artifacts are uploaded. Thirteen tooling/runner tests and the three Playwright
+  files' TypeScript check passed. The check also corrected the existing default
+  config's `reducedMotion` placement into `contextOptions`. A new remote CI result
+  and final aggregate gate remain due; this is not deployment evidence.
