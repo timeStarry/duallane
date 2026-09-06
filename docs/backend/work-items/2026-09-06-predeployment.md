@@ -2294,3 +2294,16 @@ while still requiring the exact credential source/target and `RW=false`, and
 rejecting contradictory nonempty modes. Its 25 focused results passed in
 0.630 seconds, including writable and contradictory-mode regressions. The probe
 was removed; its bind source was a checked-in public example, unchanged.
+
+### Actual Volume Authority Lifecycle
+
+Parent ran the reviewed volume Docker gate with exact Workspace image
+`sha256:881a3bb401e4d166a90e2f8aa574d107002a3881fb086af07c90b90066bd047e`
+and PostgreSQL image `18cfe3ef...` identified above. One result passed in
+24.979 seconds, without skips. Local and S3 configurations were captured while
+harmless holders ran, then verified after those holders stopped and were
+removed. Database, physical-volume, credential-source and S3 endpoint drift
+were rejected. The local-to-S3 expected error was corrected to the earlier
+credential-authority rejection; the separate S3 endpoint assertion remained.
+All exact task-owned containers, volumes, network and private fixture files
+were removed. No business writer, PostgreSQL server or provider ran in this gate.

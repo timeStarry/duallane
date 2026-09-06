@@ -463,6 +463,21 @@ checks real mount identity, canonical authority drift and exact owned cleanup.
 Missing image variables produce an explicit skip. It does not rehearse a
 coordinated release or prove a running writer is fenced.
 
+The physical-volume lifecycle gate is similarly opt-in:
+
+```sh
+DUALLANE_VOLUME_AUTHORITY_DOCKER_TEST=true \
+DUALLANE_VOLUME_AUTHORITY_GO_IMAGE=sha256:<64-hex-go-image-id> \
+DUALLANE_VOLUME_AUTHORITY_POSTGRES_IMAGE=sha256:<64-hex-pg-image-id> \
+  node --test scripts/backend/release-volume-authority.docker.test.mjs
+```
+
+It runs only harmless sleep processes in exact images, on its own internal
+network and named volumes. Capture with running holders, verification after
+stop/removal, local/S3 canonical authority drift and exact owned cleanup are
+exercised. No database server, business writer or storage provider is started
+by this test; its scope is Docker volume identity, not data integrity.
+
 The retained offline storage boundary is guarded by
 `node --test scripts/backend/storage-operator-retained.test.mjs` in CI. It
 checks the actual Node command modes, opt-in one-shot storage Compose services,
