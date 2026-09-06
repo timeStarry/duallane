@@ -33,6 +33,29 @@ type botGatewayRouteFake struct {
 	typingID        string
 }
 
+func TestGatewayDecoderPreservesHashSubtreeOrderAndReplyPresence(t *testing.T) {
+	const content = `{"format":"duallane.message+json;v=1","plainText":"text","blocks":[{"text":"text","type":"text"}]}`
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(`{"content":`+content+`,"replyToMessageId":""}`), &fields); err != nil {
+		t.Fatal(err)
+	}
+	message := botGatewayMessageInput(fields, auth.RequestMeta{})
+	if string(message.RawContent) != content {
+		t.Fatal("message decoder lost field order")
+	}
+	if reply, present := message.Fields["replyToMessageId"]; !present || reply != "" {
+		t.Fatal("reply presence lost")
+	}
+	const payload = `{"z":0,"a":1,"z":2}`
+	if err := json.Unmarshal([]byte(`{"payload":`+payload+`}`), &fields); err != nil {
+		t.Fatal(err)
+	}
+	card := botGatewayCardInput(fields, auth.RequestMeta{})
+	if string(card.RawPayload) != payload {
+		t.Fatal("card decoder lost order/duplicate keys")
+	}
+}
+
 func (f *botGatewayRouteFake) Authenticate(_ context.Context, authorization string, options botgateway.TokenAuthOptions) (*botgateway.Auth, error) {
 	f.authHeader = authorization
 	f.spaceID = options.SpaceID

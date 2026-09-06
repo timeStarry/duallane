@@ -20,11 +20,12 @@ type messageIdempotencyInput struct {
 }
 
 type cardIdempotencyInput struct {
-	ConversationID string `json:"conversationId"`
-	CardType       string `json:"cardType"`
-	SchemaVersion  int    `json:"schemaVersion"`
-	FallbackText   string `json:"fallbackText"`
-	Payload        any    `json:"payload"`
+	ConversationID string          `json:"conversationId"`
+	CardType       string          `json:"cardType"`
+	SchemaVersion  int             `json:"schemaVersion"`
+	FallbackText   string          `json:"fallbackText"`
+	Payload        any             `json:"payload"`
+	RawPayload     json.RawMessage `json:"-"`
 }
 
 type nodeRawJSON []byte
@@ -56,6 +57,9 @@ func (value messageIdempotencyInput) MarshalJSON() ([]byte, error) {
 
 func (value cardIdempotencyInput) MarshalJSON() ([]byte, error) {
 	payload, err := nodeJSONMarshal(value.Payload)
+	if len(value.RawPayload) > 0 {
+		payload, err = nodeParsedJSON(value.RawPayload)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -69,6 +73,17 @@ func (value cardIdempotencyInput) MarshalJSON() ([]byte, error) {
 }
 
 func marshalMessageContent(value MessageContent) ([]byte, error) {
+	var plainText any = value.PlainText
+	if len(value.hashPlainText) > 0 {
+		plainText = nodeRawJSON(value.hashPlainText)
+	}
+	if len(value.hashBlocks) > 0 {
+		return marshalNodeObject(
+			nodeField{key: "format", value: value.Format},
+			nodeField{key: "plainText", value: plainText},
+			nodeField{key: "blocks", value: nodeRawJSON(value.hashBlocks)},
+		)
+	}
 	blocks := bytes.NewBufferString("[")
 	for index, block := range value.Blocks {
 		if index > 0 {
@@ -83,7 +98,7 @@ func marshalMessageContent(value MessageContent) ([]byte, error) {
 	blocks.WriteByte(']')
 	return marshalNodeObject(
 		nodeField{key: "format", value: value.Format},
-		nodeField{key: "plainText", value: value.PlainText},
+		nodeField{key: "plainText", value: plainText},
 		nodeField{key: "blocks", value: nodeRawJSON(blocks.Bytes())},
 	)
 }

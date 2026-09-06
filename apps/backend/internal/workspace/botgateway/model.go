@@ -208,6 +208,10 @@ type MessageContent struct {
 	Format    string           `json:"format"`
 	PlainText string           `json:"plainText"`
 	Blocks    []map[string]any `json:"blocks"`
+	// Hash-only JSON retains the client's property order and UTF-16 strings.
+	// It never bypasses message domain normalization or reaches response DTOs.
+	hashPlainText json.RawMessage
+	hashBlocks    json.RawMessage
 }
 
 type MessageWriteRequest struct {
@@ -236,6 +240,11 @@ type SendMessageInput struct {
 	ReplyToMessageID string
 	Text             string
 	Content          any
+	// RawContent/RawText are the original bounded JSON field bytes. When set,
+	// they are authoritative over their decoded counterparts, preventing a
+	// caller from hashing one value while writing a different value.
+	RawContent json.RawMessage
+	RawText    json.RawMessage
 	// Fields is populated by a transport decoder when it needs to preserve
 	// unknown input names for the gateway's forged-identity check.
 	Fields map[string]any
@@ -298,6 +307,7 @@ type SendCardInput struct {
 	SchemaVersion   any
 	FallbackText    any
 	Payload         any
+	RawPayload      json.RawMessage
 	Format          string
 	FeishuCard      any
 	Fields          map[string]any

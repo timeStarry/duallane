@@ -322,3 +322,29 @@ not command wiring, delivery execution, production ownership or deployment.
 
 All three remote CI jobs passed for `50f8224`. Later worker changes and the
 Bot raw-JSON compatibility patch still require their own final aggregate gate.
+
+### Bot Persisted Idempotency Compatibility
+
+The Bot message/card HTTP adapters now carry bounded raw JSON subtrees into
+the hash boundary. The operation envelope keeps its fixed Node field order;
+client subtrees retain insertion order, integer-index ordering, duplicate-key
+semantics, binary64 formatting and UTF-16 string escaping. Raw inputs remain
+subject to domain validation and cannot hash one decoded value while writing
+another. Message trim/length now uses Node's ECMAScript trim and UTF-16 budget;
+an explicit empty/non-string reply ID is no longer treated as omitted.
+
+Independent actual Node service/SQLite characterization passed 18 operations
+and 266 JSON edge cases. Fresh Go PostgreSQL/race passed for botgateway and
+httpapi (15.725 / 3.183 seconds); the new PG regression imports Node hash
+records, retries twice, tests conflicting payloads, and verifies unchanged
+message/card/event/audit counts. Integration-tag staticcheck passed. The raw
+parser's deep-input regression and 15-second two-worker fuzz run passed
+(211,098 executions). Parser rendering uses one output buffer so container
+nesting does not multiply serialized copies. CI now also verifies the actual
+Node requirement, release and Bot persisted-contract fixtures.
+
+This is hash/replay evidence, not complete Bot HTTP/WS parity, Feishu conversion
+or runtime composition. In particular, lossless response/payload round-tripping
+of unpaired UTF-16 surrogates is not established by the hash tests; the Go domain
+uses Unicode scalar strings. Keep that distinction in aggregate compatibility
+review rather than treating matching hashes as proof of every DTO byte.

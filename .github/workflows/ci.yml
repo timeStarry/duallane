@@ -109,6 +109,12 @@ jobs:
       - name: Run tests
         run: pnpm test
 
+      - name: Verify Node persisted backend contracts
+        run: |
+          node scripts/backend/echo-requirement-fixtures.mjs --check
+          node scripts/backend/echo-release-fixtures.mjs --check
+          node scripts/backend/bot-idempotency-fixtures.mjs --check
+
       - name: Run type and lint checks
         run: pnpm lint
 

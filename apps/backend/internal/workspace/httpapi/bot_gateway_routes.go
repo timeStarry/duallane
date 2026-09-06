@@ -303,6 +303,7 @@ func botGatewayMessageInput(fields map[string]json.RawMessage, meta auth.Request
 		ConversationID: objectFieldString(fields, "conversationId"), ClientMessageID: objectFieldString(fields, "clientMessageId"),
 		IdempotencyKey: objectFieldString(fields, "idempotencyKey"), ReplyToMessageID: objectFieldString(fields, "replyToMessageId"),
 		Text: objectFieldString(fields, "text"), Content: objectFieldAny(fields, "content"), Fields: values, Meta: meta,
+		RawContent: fields["content"], RawText: fields["text"],
 	}
 }
 
@@ -312,7 +313,7 @@ func botGatewayCardInput(fields map[string]json.RawMessage, meta auth.RequestMet
 		ConversationID: objectFieldString(fields, "conversationId"), ClientMessageID: objectFieldString(fields, "clientMessageId"),
 		IdempotencyKey: objectFieldString(fields, "idempotencyKey"), CardType: objectFieldAny(fields, "cardType"),
 		SchemaVersion: objectFieldAny(fields, "schemaVersion"), FallbackText: objectFieldAny(fields, "fallbackText"),
-		Payload: objectFieldAny(fields, "payload"), Format: objectFieldString(fields, "format"),
+		Payload: objectFieldAny(fields, "payload"), RawPayload: fields["payload"], Format: objectFieldString(fields, "format"),
 		FeishuCard: objectFieldAny(fields, "feishuCard"), Fields: values, Meta: meta,
 	}
 }

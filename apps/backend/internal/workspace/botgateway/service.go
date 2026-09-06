@@ -644,13 +644,13 @@ func (s *Service) SendMessage(ctx context.Context, value *Auth, input SendMessag
 		return SendMessageResult{}, err
 	}
 	replyTo := ""
-	if strings.TrimSpace(input.ReplyToMessageID) != "" {
+	if reply, present := input.Fields["replyToMessageId"]; input.ReplyToMessageID != "" || present && reply != nil {
 		replyTo, err = normalizeIdentifier(input.ReplyToMessageID, CodeMessageInvalidReply)
 		if err != nil {
 			return SendMessageResult{}, err
 		}
 	}
-	content, err := normalizeBotContent(input.Content, input.Text)
+	content, err := normalizeBotInputContent(input)
 	if err != nil {
 		return SendMessageResult{}, err
 	}
@@ -691,8 +691,8 @@ func normalizeBotContent(value any, text string) (MessageContent, error) {
 		value = text
 	}
 	if stringValue, ok := value.(string); ok {
-		stringValue = strings.TrimSpace(stringValue)
-		if stringValue == "" || !utf8.ValidString(stringValue) || utf8.RuneCountInString(stringValue) > MaxMessageTextRunes {
+		stringValue = nodeTrimSpace(stringValue)
+		if stringValue == "" || !utf8.ValidString(stringValue) || nodeStringLength(stringValue) > MaxMessageTextRunes {
 			return MessageContent{}, NewError(CodeMessageInvalid, MessageMessageInvalid, 400)
 		}
 		return MessageContent{Format: MessageContentFormat, PlainText: stringValue, Blocks: []map[string]any{{"type": "text", "text": stringValue}}}, nil
@@ -709,8 +709,8 @@ func normalizeBotContent(value any, text string) (MessageContent, error) {
 		return MessageContent{}, NewError(CodeMessageInvalid, MessageMessageInvalid, 400)
 	}
 	plainText, ok := object["plainText"].(string)
-	plainText = strings.TrimSpace(plainText)
-	if !ok || plainText == "" || !utf8.ValidString(plainText) || utf8.RuneCountInString(plainText) > MaxMessageTextRunes {
+	plainText = nodeTrimSpace(plainText)
+	if !ok || plainText == "" || !utf8.ValidString(plainText) || nodeStringLength(plainText) > MaxMessageTextRunes {
 		return MessageContent{}, NewError(CodeMessageInvalid, MessageMessageInvalid, 400)
 	}
 	rawBlocks, ok := object["blocks"].([]any)
@@ -785,7 +785,13 @@ func (s *Service) SendCard(ctx context.Context, value *Auth, input SendCardInput
 	if err != nil {
 		return SendCardResult{}, s.recordCardRejection(ctx, current, input.Meta, "bot.gateway.card.send", current.BotID, err)
 	}
-	payload, err := normalizeCardPayload(input.Payload)
+	payloadValue := input.Payload
+	if len(input.RawPayload) > 0 {
+		if json.Unmarshal(input.RawPayload, &payloadValue) != nil {
+			return SendCardResult{}, s.recordCardRejection(ctx, current, input.Meta, "bot.gateway.card.send", current.BotID, NewError(CodeCardInvalidPayload, "卡片内容无效", 422))
+		}
+	}
+	payload, err := normalizeCardPayload(payloadValue)
 	if err != nil {
 		return SendCardResult{}, s.recordCardRejection(ctx, current, input.Meta, "bot.gateway.card.send", current.BotID, err)
 	}
@@ -801,6 +807,9 @@ func (s *Service) SendCard(ctx context.Context, value *Auth, input SendCardInput
 	encodedInput := cardIdempotencyInput{
 		ConversationID: conversation.ID,
 		CardType:       cardType, SchemaVersion: version, FallbackText: fallback, Payload: payload,
+	}
+	if payloadValue != nil {
+		encodedInput.RawPayload = input.RawPayload
 	}
 	result, err := s.withIdempotency(ctx, current, "card.send", key, encodedInput, func(tx Tx) (any, error) {
 		var card Card
@@ -1103,7 +1112,8 @@ func (s *Service) Acknowledge(ctx context.Context, value *Auth, input Acknowledg
 }
 
 func normalizeSequence(value int64, allowZero bool) (int64, error) {
-	if value < 0 || (!allowZero && value == 0) {
+	const maxSafeInteger int64 = (1 << 53) - 1
+	if value < 0 || value > maxSafeInteger || (!allowZero && value == 0) {
 		return 0, invalidSequenceError()
 	}
 	return value, nil
