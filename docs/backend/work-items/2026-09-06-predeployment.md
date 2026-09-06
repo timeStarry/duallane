@@ -1766,3 +1766,16 @@ correction. All five scenarios/seven records passed and each owned fixture was
 cleaned. The final three runner tests passed (4.564 seconds); a missing database
 is an error for the opt-in Go path, not a silent skip. CI now runs this same full
 sequence. These synthetic files contain no real user content.
+
+### Conversation And Pin Relation Projection
+
+Conversation/read responses and pin list/mutation responses now hydrate the
+same viewer-bound attachment, reaction and hidden-state relations as message
+responses. The transaction adapter uses the already-open transaction, not a
+separate pool query. Hidden latest messages do not become the conversation
+preview; recalled messages omit their pin metadata. Parent independently passed
+complete conversation PostgreSQL/race (4.673 seconds), HTTP PostgreSQL/race
+(10.062) and tagged staticcheck. Review also corrected the new integration
+fixture's cleanup order so schema removal runs before closing its connection
+and failures are reported. The original full Workspace browser suite remains
+a separate required gate, now being rerun against the integrated candidate.

@@ -523,13 +523,13 @@ func projectMessage(record MessageRecord, actor *auth.Actor) (Message, error) {
 			canonical.AuthorGitHubLogin = ""
 		}
 	}
-	projected, err := workspaceMessages.ProjectMessage(canonical, record.Attachments, nil)
+	projected, err := workspaceMessages.ProjectMessageForViewer(canonical, record.Attachments, record.Reactions, actor)
 	if err != nil {
 		return Message{}, internalError("project workspace message", err)
 	}
 	projected.AuthorAvatarURL = sanitizeAvatarURL(projected.AuthorAvatarURL)
 	message := Message{Message: projected}
-	if record.Pin != nil {
+	if record.Pin != nil && (record.RecalledAt == nil || record.RecalledAt.IsZero()) {
 		message.Pin = &MessagePin{
 			PinnedByUserID: record.Pin.PinnedByUserID,
 			PinnedAt:       formatTime(record.Pin.CreatedAt),
@@ -593,18 +593,7 @@ func (s *Service) projectConversation(ctx context.Context, repo ReadRepository, 
 	if err != nil {
 		return Conversation{}, normalizeRepositoryError(err)
 	}
-	messageIDs := make([]string, 0, len(latest))
-	for _, message := range latest {
-		messageIDs = append(messageIDs, message.ID)
-	}
-	attachments, err := repo.ListMessageAttachments(ctx, s.space(), messageIDs)
-	if err != nil {
-		return Conversation{}, normalizeRepositoryError(err)
-	}
-	for index := range latest {
-		latest[index].Attachments = attachments[latest[index].ID]
-	}
-	if err := s.hydrateMessageShares(ctx, actor.ID, latest); err != nil {
+	if err := s.hydrateMessageRecords(ctx, repo, actor.ID, latest); err != nil {
 		return Conversation{}, err
 	}
 	projectedMembers := make([]Member, 0, len(members))
@@ -671,6 +660,45 @@ func (s *Service) projectConversation(ctx context.Context, repo ReadRepository, 
 		}
 	}
 	return conversation, nil
+}
+
+// hydrateMessageRecords loads every viewer-bound relation required by the
+// canonical message projection. Conversation and pin reads must not project a
+// message from only its base row: doing so lets a later response replace a
+// realtime/message-read DTO with empty attachment, reaction, or hidden-state
+// data.
+func (s *Service) hydrateMessageRecords(ctx context.Context, repo ReadRepository, viewerID string, records []MessageRecord) error {
+	if s == nil || repo == nil || len(records) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(records))
+	for _, record := range records {
+		if strings.TrimSpace(record.ID) != "" {
+			ids = append(ids, record.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	attachments, err := repo.ListMessageAttachments(ctx, s.space(), viewerID, ids)
+	if err != nil {
+		return normalizeRepositoryError(err)
+	}
+	reactions, err := repo.ListMessageReactions(ctx, s.space(), viewerID, ids)
+	if err != nil {
+		return normalizeRepositoryError(err)
+	}
+	hidden, err := repo.ListMessageHidden(ctx, s.space(), viewerID, ids)
+	if err != nil {
+		return normalizeRepositoryError(err)
+	}
+	for index := range records {
+		messageID := records[index].ID
+		records[index].Attachments = attachments[messageID]
+		records[index].Reactions = reactions[messageID]
+		records[index].HiddenByCurrentUser = hidden[messageID]
+	}
+	return s.hydrateMessageShares(ctx, viewerID, records)
 }
 
 func (s *Service) hydrateMessageShares(ctx context.Context, viewerID string, records []MessageRecord) error {
@@ -1698,11 +1726,11 @@ func (s *Service) ListPins(ctx context.Context, input ConversationInput) ([]PinL
 	for index := range pins {
 		pinMessages[index] = pins[index].Message
 	}
-	if err := s.hydrateMessageShares(ctx, actor.ID, pinMessages); err != nil {
+	if err := s.hydrateMessageRecords(ctx, s.repo, actor.ID, pinMessages); err != nil {
 		return nil, err
 	}
 	for index := range pins {
-		pins[index].Message.EmoteCollectionShares = pinMessages[index].EmoteCollectionShares
+		pins[index].Message = pinMessages[index]
 	}
 	items := make([]PinListItem, 0, len(pins))
 	for _, pin := range pins {
@@ -1800,11 +1828,11 @@ func (s *Service) Pin(ctx context.Context, input PinInput) (PinListItem, error) 
 		if existing.Message.ID == "" {
 			existing.Message = *message
 		}
-		shareRecords := []MessageRecord{existing.Message}
-		if err := s.hydrateMessageShares(ctx, actor.ID, shareRecords); err != nil {
+		messageRecords := []MessageRecord{existing.Message}
+		if err := s.hydrateMessageRecords(ctx, tx, actor.ID, messageRecords); err != nil {
 			return nil, nil, err
 		}
-		existing.Message.EmoteCollectionShares = shareRecords[0].EmoteCollectionShares
+		existing.Message = messageRecords[0]
 		projectedMessage, err := projectPinnedMessage(existing.Message, existing, actor)
 		if err != nil {
 			return nil, nil, err

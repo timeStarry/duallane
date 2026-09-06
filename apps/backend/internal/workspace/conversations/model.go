@@ -126,6 +126,10 @@ type MessageRecord struct {
 	// a message whose content references attachments that the public DTO cannot
 	// resolve.
 	Attachments []workspaceMessages.AttachmentRecord
+	// Reactions and HiddenByCurrentUser are populated by the same authorized
+	// message-read adapter as attachments. They are kept off write inputs and
+	// only exist to make conversation/pin projections match message reads.
+	Reactions []workspaceMessages.ReactionGroup
 	// EmoteCollectionShares is an authorized read-only projection populated by
 	// the optional messages share reader. It is never persisted by this domain.
 	EmoteCollectionShares map[string]workspaceMessages.EmoteCollectionShare

@@ -133,7 +133,7 @@ func (f *conversationFakeRepository) ListLatestMessages(_ context.Context, _ str
 	return items, nil
 }
 
-func (f *conversationFakeRepository) ListMessageAttachments(_ context.Context, _ string, messageIDs []string) (map[string][]workspaceMessages.AttachmentRecord, error) {
+func (f *conversationFakeRepository) ListMessageAttachments(_ context.Context, _, _ string, messageIDs []string) (map[string][]workspaceMessages.AttachmentRecord, error) {
 	result := make(map[string][]workspaceMessages.AttachmentRecord, len(messageIDs))
 	for _, messageID := range messageIDs {
 		message, ok := f.state.messages[messageID]
@@ -142,6 +142,27 @@ func (f *conversationFakeRepository) ListMessageAttachments(_ context.Context, _
 			continue
 		}
 		result[messageID] = append([]workspaceMessages.AttachmentRecord(nil), message.Attachments...)
+	}
+	return result, nil
+}
+
+func (f *conversationFakeRepository) ListMessageReactions(_ context.Context, _, _ string, messageIDs []string) (map[string][]workspaceMessages.ReactionGroup, error) {
+	result := make(map[string][]workspaceMessages.ReactionGroup, len(messageIDs))
+	for _, messageID := range messageIDs {
+		message, ok := f.state.messages[messageID]
+		if !ok {
+			result[messageID] = []workspaceMessages.ReactionGroup{}
+			continue
+		}
+		result[messageID] = append([]workspaceMessages.ReactionGroup(nil), message.Reactions...)
+	}
+	return result, nil
+}
+
+func (f *conversationFakeRepository) ListMessageHidden(_ context.Context, _, _ string, messageIDs []string) (map[string]bool, error) {
+	result := make(map[string]bool, len(messageIDs))
+	for _, messageID := range messageIDs {
+		result[messageID] = f.state.messages[messageID].HiddenByCurrentUser
 	}
 	return result, nil
 }
