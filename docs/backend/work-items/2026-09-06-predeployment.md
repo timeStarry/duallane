@@ -59,14 +59,14 @@ ownership is unchanged and is recorded only in the canonical ledger.
 
 | Gate | Latest reviewed result | Remaining acceptance |
 | --- | --- | --- |
-| Go/Node aggregate baseline | `7ce4c6` CI passed complete Node test/lint/build/Chromium, Go quality/PostgreSQL and Go P2P; version contract drift is fixed | Repeat all gates on the final integrated commit; latest complete Workspace CI remains 10/12 |
+| Go/Node aggregate baseline | `d60f71c` CI passed complete Node test/lint/build/Chromium, Go quality/PostgreSQL and Go P2P; version contract drift is fixed | Repeat all gates on the final integrated commit; latest complete Workspace CI remains 10/12 |
 | Actual native media | `78e43c6` fix; exact-image 28-case corpus passed with native libvips 8.14.1 | Build and test the final integrated runtime image |
-| Workspace browser | `7ce4c6` complete CI suite: 10 passed, 2 failed (Echo visibility and history message click) | Finish reviewed response-ordering fixes and deterministic regressions, then rerun every original case; isolate any remaining emote/Echo failure without changing assertions |
+| Workspace browser | `d60f71c` complete CI suite: 10 passed, 2 failed (Echo visibility and long-flow deadline at emote response) | Finish reviewed response-ordering fixes and deterministic regressions, then rerun every original case without changing assertions |
 | Release safety | Accepted immutable migration image checks, passive candidates, offline Node startup, canonical snapshot, database drain command, gateway smoke, and restart-policy fencing (`3d4b57b`/`3bb8391`) | Complete Go-to-Go old-configuration recovery, integrate drain/provider gate and post-cutover/recovery smoke; rehearse failure and rollback |
 | Storage compatibility | Accepted bounded legacy reads, permission probes, read-only plan/verify, explicit S3 provisioning, backfill journal library and retained offline operator boundary | Prove final-image/same-authority recovery; no production copy or finalization |
 | P2P shutdown | `db1f535` reviewed bounded peer close; parent P2P/contract race and staticcheck passed | Final integrated image/browser and privacy review |
 | Drain checks | `f9dd4ba`/`ceb48e1`: real pinned CLI 6 results and private config/report 9 cases passed, including real Compose config roundtrip | Integrate after confirmed writer fencing and rehearse coordinated failure/recovery |
-| Delivery | Draft PR #2 is open; commits through `ceb48e1` are pushed and evidence updated | Final aggregate review/CI, safe artifact cleanup and complete PR evidence before readiness |
+| Delivery | Draft PR #2 is open; commits through `d60f71c` are pushed | Final aggregate review/CI, safe artifact cleanup and complete PR evidence before readiness |
 
 The parallel fixes do not change frontend test assertions, retries or timeouts.
 Private browser diagnostics are not PR artifacts. Passing component checks do
@@ -2199,3 +2199,33 @@ The real runtime test was then rerun with the actual JSON passed through that
 validator: six results passed in 3.858 seconds. Local success was also rejected
 when deliberately paired with an expected S3 driver. Coordinator lifecycle,
 writer fencing and final recovery remain separate pending integration gates.
+
+### Latest Aggregate And Unaccepted Integration Checks
+
+CI [34053717337](https://github.com/timeStarry/duallane/actions/runs/34053717337)
+completed on exact `d60f71ca22fa48fa3f753b2dd1dc550a36b22401`. The complete
+Node, Go quality/PostgreSQL and P2P browser jobs passed. Workspace remained
+10/12: Echo release-card visibility at line 34, and the long flow's existing
+240-second deadline during the emote response at line 1605. This is not an
+all-green candidate.
+
+The independent Go verification worker also passed `make verify` and explicit,
+uncached `make integration-postgres` on a private Linux checkout based on
+`7ce4c67` with exactly the three accepted `db1f535` P2P files overlaid. Its
+environment was Go 1.26.8, CGO, GCC 13.3 and host libvips 8.15.1. This is
+worker-executed overlay evidence, not a final-commit check or the pinned
+8.14.1 runtime-image media gate.
+
+Parent's latest uncommitted frontend response-ordering draft passed its 21
+focused tests and `pnpm lint`, but the unchanged original Go browser suite
+remained 10/12: Echo at line 34 and the group reaction trigger at line 969.
+The earlier history step passed in that run; this alone does not prove that
+all message-window races are fixed. The draft remains under investigation.
+
+The release-coordinator draft passed 59 lifecycle/model tests before the
+additional partial-Node-fence check. After correcting its test fixture to retain
+the stopped Node API (the real first cutover replaces Web, not Node API), the
+five affected rollback/daemon tests and nine activation/order tests passed.
+These models do not execute a coordinated real release. Private volume,
+Node-authority and one-shot drain integration still require independent review
+and an isolated container rehearsal before acceptance.
