@@ -290,6 +290,60 @@
     "error": "echo.related_link_invalid"
   },
   {
+    "name": "empty-duplicate",
+    "input": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "type": "requirement",
+      "title": "Synthetic request",
+      "detail": "Synthetic detail",
+      "scenario": "Synthetic scenario",
+      "expectedResult": "Synthetic result",
+      "relatedLink": null,
+      "idempotencyKey": "empty-duplicate"
+    },
+    "relatedLink": null,
+    "hash": "b684274746bfdb28611ec242acc1ff4b9fe95388211f1d9babc6cbd4100234a8",
+    "transition": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "publicId": "REQ-2026-0011",
+      "toState": "collected",
+      "expectedRevision": 1,
+      "response": "A < B & C line",
+      "idempotencyKey": "transition-empty-duplicate",
+      "duplicateOfPublicId": ""
+    },
+    "transitionHash": "5da5ed077e6027f4a048b64409e1cb839da554dcee1748983fd3ae02d3233638"
+  },
+  {
+    "name": "null-duplicate",
+    "input": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "type": "requirement",
+      "title": "Synthetic request",
+      "detail": "Synthetic detail",
+      "scenario": "Synthetic scenario",
+      "expectedResult": "Synthetic result",
+      "relatedLink": null,
+      "idempotencyKey": "null-duplicate"
+    },
+    "relatedLink": null,
+    "hash": "b684274746bfdb28611ec242acc1ff4b9fe95388211f1d9babc6cbd4100234a8",
+    "transition": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "publicId": "REQ-2026-0012",
+      "toState": "collected",
+      "expectedRevision": 1,
+      "response": "A < B & C line",
+      "idempotencyKey": "transition-null-duplicate",
+      "duplicateOfPublicId": null
+    },
+    "transitionHash": "a8ae01626a674cc0048a7cd8b4cc6de73cbe1b07d4a4e6ac27041cf2826db952"
+  },
+  {
     "name": "private-ipv6",
     "input": {
       "actorId": "usr_owner",
@@ -307,12 +361,12 @@
     "transition": {
       "actorId": "usr_owner",
       "spaceId": "spc_default",
-      "publicId": "REQ-2026-0011",
+      "publicId": "REQ-2026-0013",
       "toState": "collected",
       "expectedRevision": 1,
       "response": "A < B & C line",
       "idempotencyKey": "transition-private-ipv6"
     },
-    "transitionHash": "9618d8530ddec2c7e0ca9ec9e330f2a679b0c41357eea83c17d3a56b6573ce8e"
+    "transitionHash": "289eedbaee479479062b08a01da3f7de6e720cbb00891f317a90e898675084a4"
   }
 ]

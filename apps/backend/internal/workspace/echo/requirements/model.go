@@ -293,6 +293,9 @@ type TransitionInput struct {
 	// ResponseSet lets an adapter preserve the Node distinction between an
 	// omitted response and an explicitly supplied empty response.
 	ResponseSet bool
+	// DuplicateOfPublicIDSet preserves an explicitly supplied empty string in
+	// Node's persisted request hash. Omitted and null values remain equivalent.
+	DuplicateOfPublicIDSet bool
 }
 
 type AuditInput struct {

@@ -21,6 +21,8 @@ const examples = [
   { name: "bom-trimming", title: "\ufeff Synthetic request \ufeff" },
   { name: "next-line-rejected", title: "\u0085Synthetic request\u0085" },
   { name: "private-numeric", relatedLink: "http://2130706433/private" },
+  { name: "empty-duplicate", transitionExtra: { duplicateOfPublicId: "" } },
+  { name: "null-duplicate", transitionExtra: { duplicateOfPublicId: null } },
   { name: "private-ipv6", relatedLink: "http://[::1]/private" }
 ];
 
@@ -32,7 +34,7 @@ export async function characterizeRequirements() {
     const service = createEchoRequirementService({ db, now: () => new Date("2026-09-06T12:00:00.000Z") });
     const fixtures = [];
     for (const example of examples) {
-      const { name, ...overrides } = example;
+      const { name, transitionExtra = {}, ...overrides } = example;
       const input = {
         actorId: "usr_owner", spaceId: "spc_default", type: "requirement",
         title: "Synthetic request", detail: "Synthetic detail", scenario: "Synthetic scenario",
@@ -42,7 +44,7 @@ export async function characterizeRequirements() {
       try {
         const result = await service.submit(input);
         const hash = db.prepare("SELECT request_hash AS hash FROM echo_requirement_idempotency WHERE operation = 'submit' AND idempotency_key = ?").get(name).hash;
-        const transition = { actorId: "usr_owner", spaceId: "spc_default", publicId: result.publicId, toState: "collected", expectedRevision: 1, response: "A < B & C\u2028line", idempotencyKey: `transition-${name}` };
+        const transition = { actorId: "usr_owner", spaceId: "spc_default", publicId: result.publicId, toState: "collected", expectedRevision: 1, response: "A < B & C\u2028line", idempotencyKey: `transition-${name}`, ...transitionExtra };
         await service.transition(transition);
         const transitionHash = db.prepare("SELECT request_hash AS hash FROM echo_requirement_idempotency WHERE operation = 'transition' AND idempotency_key = ?").get(transition.idempotencyKey).hash;
         fixtures.push({ name, input, relatedLink: result.relatedLink, hash, transition, transitionHash });

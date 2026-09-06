@@ -462,7 +462,11 @@ func (s *Service) Transition(ctx context.Context, input TransitionInput) (*Requi
 		if validationErr != nil {
 			return nil, rejectError(validationErr, ""), "", nil
 		}
-		requestHash := transitionRequestHash(spaceID, publicID, expected, expectedRevision, response, input.DuplicateOfPublicID)
+		duplicateID := nullableString(input.DuplicateOfPublicID)
+		if input.DuplicateOfPublicIDSet {
+			duplicateID = &input.DuplicateOfPublicID
+		}
+		requestHash := transitionRequestHash(spaceID, publicID, expected, expectedRevision, response, duplicateID)
 		if err := tx.Lock(ctx, fmt.Sprintf("echo-requirement:transition:%s:%s", spaceID, publicID)); err != nil {
 			return nil, nil, "", err
 		}
@@ -1054,7 +1058,7 @@ func submitRequestHash(spaceID, actorID string, input normalizedSubmission) stri
 	return hashJSON(value)
 }
 
-func transitionRequestHash(spaceID, publicID string, expected normalizedTarget, revision int64, response *string, duplicateID string) string {
+func transitionRequestHash(spaceID, publicID string, expected normalizedTarget, revision int64, response *string, duplicateID *string) string {
 	value := struct {
 		SpaceID             string               `json:"spaceId"`
 		PublicID            string               `json:"publicId"`
@@ -1062,7 +1066,7 @@ func transitionRequestHash(spaceID, publicID string, expected normalizedTarget, 
 		ExpectedRevision    int64                `json:"expectedRevision"`
 		Response            *string              `json:"response"`
 		DuplicateOfPublicID *string              `json:"duplicateOfPublicId"`
-	}{spaceID, publicID, normalizedTargetHash{Phase: expected.Phase, Status: expected.Status, ArchiveOutcome: expected.ArchiveOutcome}, revision, response, nullableString(duplicateID)}
+	}{spaceID, publicID, normalizedTargetHash{Phase: expected.Phase, Status: expected.Status, ArchiveOutcome: expected.ArchiveOutcome}, revision, response, duplicateID}
 	return hashJSON(value)
 }
 

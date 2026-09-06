@@ -27,8 +27,17 @@ func loadNodeRequirementFixtures(t *testing.T) []nodeRequirementFixture {
 	if err := json.Unmarshal(encoded, &fixtures); err != nil {
 		t.Fatal(err)
 	}
-	if len(fixtures) != 13 {
+	if len(fixtures) != 15 {
 		t.Fatalf("fixture count = %d", len(fixtures))
+	}
+	var presence []struct {
+		Transition struct{ DuplicateOfPublicID *string }
+	}
+	if err := json.Unmarshal(encoded, &presence); err != nil {
+		t.Fatal(err)
+	}
+	for index := range fixtures {
+		fixtures[index].Transition.DuplicateOfPublicIDSet = presence[index].Transition.DuplicateOfPublicID != nil
 	}
 	return fixtures
 }
@@ -66,7 +75,11 @@ func TestPersistedHashesMatchNodeFixtures(t *testing.T) {
 				t.Fatal(targetErr)
 			}
 			input := fixture.Transition
-			if hash := transitionRequestHash(input.SpaceID, input.PublicID, target, input.ExpectedRevision, &input.Response, input.DuplicateOfPublicID); hash != fixture.TransitionHash {
+			duplicateID := nullableString(input.DuplicateOfPublicID)
+			if input.DuplicateOfPublicIDSet {
+				duplicateID = &input.DuplicateOfPublicID
+			}
+			if hash := transitionRequestHash(input.SpaceID, input.PublicID, target, input.ExpectedRevision, &input.Response, duplicateID); hash != fixture.TransitionHash {
 				t.Errorf("transition hash = %s, want %s", hash, fixture.TransitionHash)
 			}
 		})
