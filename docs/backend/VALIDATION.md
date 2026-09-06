@@ -323,6 +323,29 @@ Use real PostgreSQL to prove the cases SQLite or mocks cannot establish:
 Tests assert safe public errors and required content-free rejection audits, not
 only database success.
 
+### Migration Ownership And Rollback Rehearsal
+
+Run the real Node/Go migrators only against explicitly disposable loopback
+PostgreSQL. The harness creates and removes its own uniquely named schemas,
+does not edit canonical SQL, and reports cleanup failure as a failed gate:
+
+```sh
+DUALLANE_SCHEMA_COEXISTENCE_RUN_PG=true \
+DUALLANE_SCHEMA_COEXISTENCE_ALLOW_SCHEMA_CREATION=true \
+TEST_DATABASE_URL="postgres://<test-user>:<test-password>@127.0.0.1:<test-port>/<disposable-db>?sslmode=disable" \
+  node --test scripts/backend/schema-coexistence.test.mjs
+```
+
+Keep the advisory-lock race, but do not infer which runner upgraded from its
+final history. Separate deterministic cases bootstrap Go at 029 or 030, let
+only Go advance to the current manifest's latest migration, then require Node
+to be a no-op. Compare both migration names and `applied_at`, seed state,
+required schema and synthetic read/write behavior. Failure cases cover the
+first pending migration and a later 033 conflict: earlier 031/032 effects must
+also roll back, the original history/sentinel must remain intact, and Go must
+successfully retry after removing only the test-created conflict. A default
+run without the PostgreSQL opt-in is `SKIP`, not an ownership proof.
+
 ## 8. Media Compatibility Gate
 
 The govips decision requires a checked-in synthetic corpus or deterministic

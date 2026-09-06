@@ -13,7 +13,6 @@ const migrationNamePattern = /^[0-9]{3}_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$/;
 const schemaNamePattern = /^duallane_coexistence_[a-z0-9_]+$/;
 const advisoryLockIdentity = "duallane:schema-migrations";
 const allowSchemaCreationVariable = "DUALLANE_SCHEMA_COEXISTENCE_ALLOW_SCHEMA_CREATION";
-const runPostgresVariable = "DUALLANE_SCHEMA_COEXISTENCE_RUN_PG";
 const migrationTimeoutMs = 120_000;
 const lockWaitTimeoutMs = 10_000;
 
@@ -59,8 +58,9 @@ export async function loadCanonicalMigrationManifest(directory = migrationRoot) 
   if (names.length === 0 || !names.some((name) => name.startsWith("029_"))
     || !names.some((name) => name.startsWith("030_"))
     || !names.some((name) => name.startsWith("031_"))
-    || !names.some((name) => name.startsWith("032_"))) {
-    throw new Error("canonical migrations 029 through 032 are required for schema coexistence rehearsal");
+    || !names.some((name) => name.startsWith("032_"))
+    || !names.some((name) => name.startsWith("033_"))) {
+    throw new Error("canonical migrations 029 through 033 are required for schema coexistence rehearsal");
   }
 
   const files = [];
@@ -264,6 +264,38 @@ async function assertHistory(databaseURL, expected, label) {
   });
 }
 
+async function readMigrationSnapshot(databaseURL) {
+  return withClient(databaseURL, async (client) => {
+    const result = await client.query(`
+      SELECT name, applied_at::text AS applied_at
+      FROM schema_migrations
+      ORDER BY name
+    `);
+    return result.rows.map((row) => ({ name: row.name, appliedAt: row.applied_at }));
+  });
+}
+
+async function assertMigrationSnapshotUnchanged(databaseURL, expected, label) {
+  const actual = await readMigrationSnapshot(databaseURL);
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`${label} changed migration history`);
+  }
+}
+
+function assertGoMigrationCount(outcome, expectedApplied, expectedDiscovered, label) {
+  const expectedOutput = `Applied ${expectedApplied} migration(s); discovered ${expectedDiscovered}.`;
+  if (outcome.timedOut || outcome.code !== 0 || outcome.stdout !== expectedOutput) {
+    throw new Error(`${label} returned an unexpected migration result`);
+  }
+}
+
+async function assertNodeNoop(databaseURL, outcome, before, label) {
+  if (outcome.timedOut || outcome.code !== 0) {
+    throw new Error(`${label} did not complete successfully`);
+  }
+  await assertMigrationSnapshotUnchanged(databaseURL, before, label);
+}
+
 async function assertMigrationContract(databaseURL, label) {
   await withClient(databaseURL, async (client) => {
     const result = await client.query(`
@@ -326,10 +358,21 @@ async function assertCurrentSchema(databaseURL, label) {
       ) AS present
     `);
     if (!triggerResult.rows[0].present) throw new Error(`${label} workspace event notification trigger is missing`);
+
+    const finalizationResult = await client.query(`
+      SELECT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'workspace_command_runs'
+          AND column_name = 'result_finalized_at'
+      ) AS present
+    `);
+    if (!finalizationResult.rows[0].present) throw new Error(`${label} command result finalization column is missing`);
   });
 }
 
-async function assertNodeReadWrite(databaseURL) {
+async function assertWorkspaceReadWrite(databaseURL) {
   const connectionID = `schema-coexistence-${randomUUID().replaceAll("-", "")}`;
   await withClient(databaseURL, async (client) => {
     let inserted = false;
@@ -342,14 +385,14 @@ async function assertNodeReadWrite(databaseURL) {
       `, ["spc_default", "usr_owner", connectionID]);
       inserted = true;
       if (created.rowCount !== 1 || created.rows[0].connection_id !== connectionID) {
-        throw new Error("Node synthetic presence write returned an unexpected row");
+        throw new Error("Workspace synthetic presence write returned an unexpected row");
       }
       const read = await client.query(
         "SELECT connection_id FROM workspace_presence_leases WHERE space_id = $1 AND user_id = $2 AND connection_id = $3",
         ["spc_default", "usr_owner", connectionID]
       );
       if (read.rowCount !== 1 || read.rows[0].connection_id !== connectionID) {
-        throw new Error("Node synthetic presence read did not observe its write");
+        throw new Error("Workspace synthetic presence read did not observe its write");
       }
     } finally {
       if (inserted) {
@@ -359,6 +402,57 @@ async function assertNodeReadWrite(databaseURL) {
         );
       }
     }
+  });
+}
+
+async function assertNoLatestObjects(databaseURL, label, finalizationSentinel = false) {
+  await withClient(databaseURL, async (client) => {
+    for (const relation of [
+      "workspace_presence_user_expiry_idx",
+      "workspace_presence_expiry_idx",
+      "workspace_storage_operator_runs",
+      "workspace_storage_operator_items",
+      ...(finalizationSentinel ? ["workspace_presence_leases"] : [])
+    ]) {
+      const result = await client.query("SELECT to_regclass($1) IS NOT NULL AS present", [relation]);
+      if (result.rows[0].present) throw new Error(`${label} left relation ${relation}`);
+    }
+    const finalizationResult = await client.query(`
+      SELECT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'workspace_command_runs'
+          AND column_name = 'result_finalized_at'
+      ) AS present
+    `);
+    if (finalizationResult.rows[0].present !== finalizationSentinel) {
+      throw new Error(`${label} changed migration 033 sentinel state`);
+    }
+  });
+}
+
+async function assertUpgradeSentinel(databaseURL, label) {
+  await withClient(databaseURL, async (client) => {
+    const result = await client.query(`
+      SELECT column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = current_schema() AND table_name = 'workspace_presence_leases'
+      ORDER BY ordinal_position
+    `);
+    if (JSON.stringify(result.rows) !== JSON.stringify([{
+      column_name: "sentinel",
+      data_type: "text",
+      is_nullable: "NO"
+    }])) {
+      throw new Error(`${label} sentinel table was not preserved`);
+    }
+  });
+}
+
+async function dropUpgradeSentinel(databaseURL) {
+  await withClient(databaseURL, async (client) => {
+    await client.query("DROP TABLE IF EXISTS workspace_presence_leases");
   });
 }
 
@@ -494,20 +588,23 @@ async function rehearse(databaseURL, manifest, migrationDirectories, goBinary, a
     scenarioAGoEnvironment,
     activeProcesses
   );
-  await assertHistory(scenarioADatabaseURL, fullHistory, "Node upgrade after 029");
-  await assertMigrationContract(scenarioADatabaseURL, "Node upgrade after 029");
-  await assertSeed(scenarioADatabaseURL, "Node upgrade after 029");
-  await assertCurrentSchema(scenarioADatabaseURL, "Node upgrade after 029");
-  await assertNodeReadWrite(scenarioADatabaseURL);
+  await assertHistory(scenarioADatabaseURL, fullHistory, "locked Node/Go upgrade after 029");
+  await assertMigrationContract(scenarioADatabaseURL, "locked Node/Go upgrade after 029");
+  await assertSeed(scenarioADatabaseURL, "locked Node/Go upgrade after 029");
+  await assertCurrentSchema(scenarioADatabaseURL, "locked Node/Go upgrade after 029");
+  await assertWorkspaceReadWrite(scenarioADatabaseURL);
+  const goNoopBefore = await readMigrationSnapshot(scenarioADatabaseURL);
   const goNoop = await runGo(goBinary, scenarioADatabaseURL, migrationDirectories.full, scenarioAGoEnvironment, activeProcesses, "Go compatibility check after Node upgrade");
+  assertGoMigrationCount(goNoop, 0, fullHistory.length, "Go compatibility check after Node upgrade");
   await assertHistory(scenarioADatabaseURL, fullHistory, "Go compatibility check after Node upgrade");
   await assertSeed(scenarioADatabaseURL, "Go compatibility check after Node upgrade");
+  await assertMigrationSnapshotUnchanged(scenarioADatabaseURL, goNoopBefore, "Go compatibility check after Node upgrade");
   report.scenarios.push({
-    name: "Go 029 bootstrap -> Node upgrade -> Go no-op",
+    name: "Go 029 bootstrap -> locked Node/Go upgrade -> Go no-op",
     schema: scenarioA.name,
     history: fullHistory.length,
     advisoryLockWait: lockReport.lockObserved,
-    goNoopOutput: goNoop.stdout
+    goNoop: true
   });
 
   const scenarioB = { name: createRehearsalSchemaName(), created: false };
@@ -522,15 +619,18 @@ async function rehearse(databaseURL, manifest, migrationDirectories, goBinary, a
   await assertMigrationContract(scenarioBDatabaseURL, "Node full bootstrap");
   await assertSeed(scenarioBDatabaseURL, "Node full bootstrap");
   await assertCurrentSchema(scenarioBDatabaseURL, "Node full bootstrap");
-  await assertNodeReadWrite(scenarioBDatabaseURL);
+  await assertWorkspaceReadWrite(scenarioBDatabaseURL);
+  const goAfterNodeBefore = await readMigrationSnapshot(scenarioBDatabaseURL);
   const goAfterNode = await runGo(goBinary, scenarioBGoDatabaseURL, migrationDirectories.full, scenarioBGoEnvironment, activeProcesses, "Go compatibility check after Node bootstrap");
+  assertGoMigrationCount(goAfterNode, 0, fullHistory.length, "Go compatibility check after Node bootstrap");
   await assertHistory(scenarioBDatabaseURL, fullHistory, "Go compatibility check after Node bootstrap");
   await assertSeed(scenarioBDatabaseURL, "Go compatibility check after Node bootstrap");
+  await assertMigrationSnapshotUnchanged(scenarioBDatabaseURL, goAfterNodeBefore, "Go compatibility check after Node bootstrap");
   report.scenarios.push({
     name: "Node full bootstrap -> Go no-op",
     schema: scenarioB.name,
     history: fullHistory.length,
-    goNoopOutput: goAfterNode.stdout
+    goNoop: true
   });
 
   const scenarioC = { name: createRehearsalSchemaName(), created: false };
@@ -544,6 +644,7 @@ async function rehearse(databaseURL, manifest, migrationDirectories, goBinary, a
   await assertHistory(scenarioCDatabaseURL, through030, "Go bootstrap through 030");
   await assertMigrationContract(scenarioCDatabaseURL, "Go bootstrap through 030");
   await assertSeed(scenarioCDatabaseURL, "Go bootstrap through 030");
+  const scenarioCBeforeFailure = await readMigrationSnapshot(scenarioCDatabaseURL);
   await withClient(scenarioCDatabaseURL, async (client) => {
     await client.query("CREATE TABLE workspace_presence_leases (sentinel TEXT PRIMARY KEY)");
   });
@@ -558,12 +659,9 @@ async function rehearse(databaseURL, manifest, migrationDirectories, goBinary, a
     throw new Error("Node rollback rehearsal unexpectedly completed migration 031/032");
   }
   await assertHistory(scenarioCDatabaseURL, through030, "Node failed upgrade rollback");
-  await withClient(scenarioCDatabaseURL, async (client) => {
-    for (const relation of ["workspace_presence_user_expiry_idx", "workspace_presence_expiry_idx", "workspace_storage_operator_runs", "workspace_storage_operator_items"]) {
-      const result = await client.query("SELECT to_regclass($1) IS NOT NULL AS present", [relation]);
-      if (result.rows[0].present) throw new Error(`Node failed upgrade left relation ${relation}`);
-    }
-  });
+  await assertMigrationSnapshotUnchanged(scenarioCDatabaseURL, scenarioCBeforeFailure, "Node failed upgrade rollback");
+  await assertUpgradeSentinel(scenarioCDatabaseURL, "Node failed upgrade rollback");
+  await assertNoLatestObjects(scenarioCDatabaseURL, "Node failed upgrade rollback");
   report.scenarios.push({
     name: "Node failed 031/032 batch rolls back",
     schema: scenarioC.name,
@@ -571,6 +669,249 @@ async function rehearse(databaseURL, manifest, migrationDirectories, goBinary, a
     expectedFailure: true,
     partialObjects: false
   });
+
+  const scenarioD = { name: createRehearsalSchemaName(), created: false };
+  schemas.push(scenarioD);
+  await createOwnedSchema(databaseURL, scenarioD);
+  const scenarioDDatabaseURL = scopedDatabaseURL(databaseURL, scenarioD.name, "go-stepwise-029");
+  const scenarioDGoEnvironment = goEnvironment(scenarioDDatabaseURL);
+  const scenarioDGo029 = await runGo(
+    goBinary,
+    scenarioDDatabaseURL,
+    migrationDirectories.through029,
+    scenarioDGoEnvironment,
+    activeProcesses,
+    "Go-only bootstrap through migration 029"
+  );
+  assertGoMigrationCount(scenarioDGo029, through029.length, through029.length, "Go-only bootstrap through migration 029");
+  await assertHistory(scenarioDDatabaseURL, through029, "Go-only bootstrap through 029");
+  await assertMigrationContract(scenarioDDatabaseURL, "Go-only bootstrap through 029");
+  await assertSeed(scenarioDDatabaseURL, "Go-only bootstrap through 029");
+
+  const scenarioDGo030 = await runGo(
+    goBinary,
+    scenarioDDatabaseURL,
+    migrationDirectories.through030,
+    scenarioDGoEnvironment,
+    activeProcesses,
+    "Go-only upgrade through migration 030"
+  );
+  assertGoMigrationCount(
+    scenarioDGo030,
+    through030.length - through029.length,
+    through030.length,
+    "Go-only upgrade through migration 030"
+  );
+  await assertHistory(scenarioDDatabaseURL, through030, "Go-only upgrade through 030");
+  await assertMigrationContract(scenarioDDatabaseURL, "Go-only upgrade through 030");
+  await assertSeed(scenarioDDatabaseURL, "Go-only upgrade through 030");
+
+  const scenarioDGoLatest = await runGo(
+    goBinary,
+    scenarioDDatabaseURL,
+    migrationDirectories.full,
+    scenarioDGoEnvironment,
+    activeProcesses,
+    "Go-only upgrade through the dynamic latest migration"
+  );
+  assertGoMigrationCount(
+    scenarioDGoLatest,
+    fullHistory.length - through030.length,
+    fullHistory.length,
+    "Go-only upgrade through the dynamic latest migration"
+  );
+  await assertHistory(scenarioDDatabaseURL, fullHistory, "Go-only upgrade through latest");
+  await assertMigrationContract(scenarioDDatabaseURL, "Go-only upgrade through latest");
+  await assertSeed(scenarioDDatabaseURL, "Go-only upgrade through latest");
+  await assertCurrentSchema(scenarioDDatabaseURL, "Go-only upgrade through latest");
+  await assertWorkspaceReadWrite(scenarioDDatabaseURL);
+
+  const scenarioDNodeBefore = await readMigrationSnapshot(scenarioDDatabaseURL);
+  const scenarioDNode = await runNode(
+    scenarioDDatabaseURL,
+    nodeEnvironment(scenarioDDatabaseURL),
+    activeProcesses,
+    "Node no-op after Go-only latest upgrade"
+  );
+  await assertNodeNoop(scenarioDDatabaseURL, scenarioDNode, scenarioDNodeBefore, "Node no-op after Go-only latest upgrade");
+  await assertHistory(scenarioDDatabaseURL, fullHistory, "Node no-op after Go-only latest upgrade");
+  await assertSeed(scenarioDDatabaseURL, "Node no-op after Go-only latest upgrade");
+  await assertCurrentSchema(scenarioDDatabaseURL, "Node no-op after Go-only latest upgrade");
+  report.scenarios.push({
+    name: "Go 029 -> Go 030 -> Go latest -> Node no-op",
+    schema: scenarioD.name,
+    history: fullHistory.length,
+    goIncremental: true,
+    nodeNoop: true,
+    verification: { history: true, seed: true, schema: true, readWrite: true }
+  });
+
+  const scenarioE = { name: createRehearsalSchemaName(), created: false };
+  schemas.push(scenarioE);
+  await createOwnedSchema(databaseURL, scenarioE);
+  const scenarioEDatabaseURL = scopedDatabaseURL(databaseURL, scenarioE.name, "go-stepwise-030");
+  const scenarioEGoEnvironment = goEnvironment(scenarioEDatabaseURL);
+  const scenarioEGo030 = await runGo(
+    goBinary,
+    scenarioEDatabaseURL,
+    migrationDirectories.through030,
+    scenarioEGoEnvironment,
+    activeProcesses,
+    "Go-only bootstrap through migration 030"
+  );
+  assertGoMigrationCount(scenarioEGo030, through030.length, through030.length, "Go-only bootstrap through migration 030");
+  await assertHistory(scenarioEDatabaseURL, through030, "Go-only bootstrap through 030");
+  await assertMigrationContract(scenarioEDatabaseURL, "Go-only bootstrap through 030");
+  await assertSeed(scenarioEDatabaseURL, "Go-only bootstrap through 030");
+
+  const scenarioEGoLatest = await runGo(
+    goBinary,
+    scenarioEDatabaseURL,
+    migrationDirectories.full,
+    scenarioEGoEnvironment,
+    activeProcesses,
+    "Go-only upgrade from migration 030 through the dynamic latest migration"
+  );
+  assertGoMigrationCount(
+    scenarioEGoLatest,
+    fullHistory.length - through030.length,
+    fullHistory.length,
+    "Go-only upgrade from migration 030 through the dynamic latest migration"
+  );
+  await assertHistory(scenarioEDatabaseURL, fullHistory, "Go-only upgrade from 030 through latest");
+  await assertMigrationContract(scenarioEDatabaseURL, "Go-only upgrade from 030 through latest");
+  await assertSeed(scenarioEDatabaseURL, "Go-only upgrade from 030 through latest");
+  await assertCurrentSchema(scenarioEDatabaseURL, "Go-only upgrade from 030 through latest");
+  await assertWorkspaceReadWrite(scenarioEDatabaseURL);
+
+  const scenarioENodeBefore = await readMigrationSnapshot(scenarioEDatabaseURL);
+  const scenarioENode = await runNode(
+    scenarioEDatabaseURL,
+    nodeEnvironment(scenarioEDatabaseURL),
+    activeProcesses,
+    "Node no-op after Go-only 030-to-latest upgrade"
+  );
+  await assertNodeNoop(scenarioEDatabaseURL, scenarioENode, scenarioENodeBefore, "Node no-op after Go-only 030-to-latest upgrade");
+  await assertHistory(scenarioEDatabaseURL, fullHistory, "Node no-op after Go-only 030-to-latest upgrade");
+  await assertSeed(scenarioEDatabaseURL, "Node no-op after Go-only 030-to-latest upgrade");
+  await assertCurrentSchema(scenarioEDatabaseURL, "Node no-op after Go-only 030-to-latest upgrade");
+  report.scenarios.push({
+    name: "Go 030 -> Go latest -> Node no-op",
+    schema: scenarioE.name,
+    history: fullHistory.length,
+    goIncremental: true,
+    nodeNoop: true,
+    verification: { history: true, seed: true, schema: true, readWrite: true }
+  });
+
+  const scenarioF = { name: createRehearsalSchemaName(), created: false };
+  schemas.push(scenarioF);
+  await createOwnedSchema(databaseURL, scenarioF);
+  const scenarioFDatabaseURL = scopedDatabaseURL(databaseURL, scenarioF.name, "go-rollback");
+  const scenarioFGoEnvironment = goEnvironment(scenarioFDatabaseURL);
+  const scenarioFGo030 = await runGo(
+    goBinary,
+    scenarioFDatabaseURL,
+    migrationDirectories.through030,
+    scenarioFGoEnvironment,
+    activeProcesses,
+    "Go rollback bootstrap through migration 030"
+  );
+  assertGoMigrationCount(scenarioFGo030, through030.length, through030.length, "Go rollback bootstrap through migration 030");
+  await assertHistory(scenarioFDatabaseURL, through030, "Go rollback bootstrap through 030");
+  await assertMigrationContract(scenarioFDatabaseURL, "Go rollback bootstrap through 030");
+  await assertSeed(scenarioFDatabaseURL, "Go rollback bootstrap through 030");
+  const scenarioFBeforeFailure = await readMigrationSnapshot(scenarioFDatabaseURL);
+  let sentinelCreated = false;
+  try {
+    await withClient(scenarioFDatabaseURL, async (client) => {
+      await client.query("CREATE TABLE workspace_presence_leases (sentinel TEXT PRIMARY KEY)");
+    });
+    sentinelCreated = true;
+    const failedGoUpgrade = await startOwnedCommand(
+      goBinary,
+      ["-migrations-dir", migrationDirectories.full],
+      { cwd: backendRoot, env: scenarioFGoEnvironment, stdio: ["ignore", "pipe", "pipe"] },
+      migrationTimeoutMs,
+      activeProcesses
+    ).promise;
+    if (failedGoUpgrade.timedOut || failedGoUpgrade.code === null || failedGoUpgrade.code === 0) {
+      throw new Error("Go failed upgrade unexpectedly completed");
+    }
+    await assertMigrationSnapshotUnchanged(scenarioFDatabaseURL, scenarioFBeforeFailure, "Go failed upgrade rollback");
+    await assertHistory(scenarioFDatabaseURL, through030, "Go failed upgrade rollback");
+    await assertUpgradeSentinel(scenarioFDatabaseURL, "Go failed upgrade rollback");
+    await assertNoLatestObjects(scenarioFDatabaseURL, "Go failed upgrade rollback");
+  } finally {
+    if (sentinelCreated) await dropUpgradeSentinel(scenarioFDatabaseURL);
+  }
+
+  // Failing the first pending migration alone cannot prove that earlier
+  // migrations in the same batch roll back. Fail at 033 after 031/032 ran,
+  // without editing the canonical SQL history.
+  let finalizationSentinelCreated = false;
+  try {
+    await withClient(scenarioFDatabaseURL, async (client) => {
+      await client.query("ALTER TABLE workspace_command_runs ADD COLUMN result_finalized_at TEXT");
+    });
+    finalizationSentinelCreated = true;
+    const lateFailure = await startOwnedCommand(
+      goBinary,
+      ["-migrations-dir", migrationDirectories.full],
+      { cwd: backendRoot, env: scenarioFGoEnvironment, stdio: ["ignore", "pipe", "pipe"] },
+      migrationTimeoutMs,
+      activeProcesses
+    ).promise;
+    if (lateFailure.timedOut || lateFailure.code === null || lateFailure.code === 0) {
+      throw new Error("Go late-batch failure unexpectedly completed");
+    }
+    await assertMigrationSnapshotUnchanged(scenarioFDatabaseURL, scenarioFBeforeFailure, "Go late-batch rollback");
+    await assertNoLatestObjects(scenarioFDatabaseURL, "Go late-batch rollback", true);
+    await withClient(scenarioFDatabaseURL, async (client) => {
+      const result = await client.query(`SELECT data_type FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'workspace_command_runs'
+          AND column_name = 'result_finalized_at'`);
+      if (result.rowCount !== 1 || result.rows[0].data_type !== "text") {
+        throw new Error("Go late-batch rollback changed the synthetic sentinel");
+      }
+    });
+  } finally {
+    if (finalizationSentinelCreated) await withClient(scenarioFDatabaseURL, async (client) => {
+      await client.query("ALTER TABLE workspace_command_runs DROP COLUMN result_finalized_at");
+    });
+  }
+
+  const scenarioFRetry = await runGo(
+    goBinary,
+    scenarioFDatabaseURL,
+    migrationDirectories.full,
+    scenarioFGoEnvironment,
+    activeProcesses,
+    "Go retry after failed upgrade rollback"
+  );
+  assertGoMigrationCount(
+    scenarioFRetry,
+    fullHistory.length - through030.length,
+    fullHistory.length,
+    "Go retry after failed upgrade rollback"
+  );
+  await assertHistory(scenarioFDatabaseURL, fullHistory, "Go retry after failed upgrade rollback");
+  await assertMigrationContract(scenarioFDatabaseURL, "Go retry after failed upgrade rollback");
+  await assertSeed(scenarioFDatabaseURL, "Go retry after failed upgrade rollback");
+  await assertCurrentSchema(scenarioFDatabaseURL, "Go retry after failed upgrade rollback");
+  await assertWorkspaceReadWrite(scenarioFDatabaseURL);
+  report.scenarios.push({
+    name: "Go failed latest upgrade rolls back -> retry succeeds",
+    schema: scenarioF.name,
+    history: fullHistory.length,
+    expectedFailure: true,
+    transactionRollback: true,
+    lateBatchRollback: true,
+    retrySucceeded: true,
+    partialObjects: false,
+    verification: { history: true, seed: true, schema: true, readWrite: true }
+  });
+
   return report;
 }
 
