@@ -953,3 +953,19 @@ environment: SDK 8 passed; web 703 passed and two explicit PostgreSQL cases
 skipped, in 25.48 seconds. The three CI guards passed. These local results are
 not a claim that the new commit passed remote CI or the dedicated Node
 PostgreSQL gate.
+
+### Bot Gateway Feishu Ingress
+
+The Gateway selects the existing Node Feishu branch using field presence and
+nullish source precedence, persists only validated converter output, and hashes
+the canonical converted payload. Native card hashing remains unchanged. Updates
+verify stored card ownership/type before conversion and retain the accepting
+cards transaction's authorization checks. Human routes do not accept Bot tokens.
+
+Parent added a successful real PostgreSQL update to the worker's create/hash,
+replay and non-owner rejection coverage; the update checks canonical payload,
+revision and fallback persistence. Fresh independent PostgreSQL/race passed
+Gateway (10.969 seconds) and HTTP (1.878), followed by integration-tag staticcheck
+and both Node hash-fixture tests. Main registry/action composition and the
+actual Node lone-surrogate fallback request-hash comparison remain separate
+gates; converter-only hash fixtures do not prove those boundaries.

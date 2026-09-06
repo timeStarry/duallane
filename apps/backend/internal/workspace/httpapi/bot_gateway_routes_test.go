@@ -54,6 +54,18 @@ func TestGatewayDecoderPreservesHashSubtreeOrderAndReplyPresence(t *testing.T) {
 	if string(card.RawPayload) != payload {
 		t.Fatal("card decoder lost order/duplicate keys")
 	}
+	const feishu = `{"elements":[{"tag":"div","text":{"tag":"plain_text","content":"审批"}}]}`
+	if err := json.Unmarshal([]byte(`{"format":"feishu-card","feishuCard":`+feishu+`,"payload":{"fallback":true}}`), &fields); err != nil {
+		t.Fatal(err)
+	}
+	feishuCard := botGatewayCardInput(fields, auth.RequestMeta{})
+	if string(feishuCard.RawFeishuCard) != feishu || feishuCard.Fields["feishuCard"] == nil {
+		t.Fatal("Feishu decoder lost raw source or presence")
+	}
+	update, ok := botGatewayCardUpdateInput(fields, auth.RequestMeta{})
+	if !ok || string(update.RawFeishuCard) != feishu || update.Fields["format"] != "feishu-card" {
+		t.Fatal("Feishu update decoder lost raw source or format")
+	}
 }
 
 func (f *botGatewayRouteFake) Authenticate(_ context.Context, authorization string, options botgateway.TokenAuthOptions) (*botgateway.Auth, error) {

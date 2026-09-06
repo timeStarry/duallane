@@ -1,14 +1,21 @@
 package botgateway
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/feishucards"
 )
 
 type fakeRepository struct {
@@ -331,6 +338,8 @@ type fakeCardGateway struct {
 	count       int
 	card        Card
 	lastRequest CardCreateRequest
+	lastUpdate  CardUpdateRequest
+	ownerError  error
 	validation  error
 }
 
@@ -342,8 +351,14 @@ func (w *fakeCardGateway) CreateCustomBotCard(_ context.Context, input CardCreat
 	}
 	return w.card, nil
 }
-func (w *fakeCardGateway) UpdateCustomBotCard(context.Context, CardUpdateRequest) (Card, error) {
+func (w *fakeCardGateway) UpdateCustomBotCard(_ context.Context, input CardUpdateRequest) (Card, error) {
+	w.count++
+	w.lastUpdate = input
 	return w.card, nil
+}
+
+func (w *fakeCardGateway) CheckFeishuCardOwner(context.Context, string, string, string) error {
+	return w.ownerError
 }
 func (w *fakeCardGateway) InvalidateCustomBotCard(_ context.Context, input CardUpdateRequest) (Card, error) {
 	w.card.Status = "invalidated"
@@ -526,6 +541,136 @@ func TestSendCardNormalizesOpaqueSourceAndAuditsRejection(t *testing.T) {
 	}
 	if len(repo.audits) != 1 || repo.audits[0].Action != "bot.gateway.card.send" || repo.audits[0].Reason != CodeCardInvalidFallback {
 		t.Fatalf("card rejection audits = %#v", repo.audits)
+	}
+}
+
+func TestSendCardFeishuPersistsOnlyConvertedPayloadAndHashesConvertedJSON(t *testing.T) {
+	repo, service, authValue, _, card := gatewayFixture(t)
+	raw := json.RawMessage(`{"elements":[{"tag":"div","text":{"tag":"plain_text","content":"审批"}}]}`)
+	converted, err := feishucards.ConvertJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := SendCardInput{
+		ConversationID: "conv_direct", ClientMessageID: "feishu-message", IdempotencyKey: "feishu-key",
+		Format: "feishu-card", RawFeishuCard: raw,
+		Fields: map[string]any{"format": "feishu-card", "feishuCard": map[string]any{}},
+	}
+	first, err := service.SendCard(context.Background(), authValue, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Card.CardType != feishucards.CardType || first.Card.SchemaVersion != feishucards.SchemaVersion || first.Card.FallbackText != converted.FallbackText {
+		t.Fatalf("Feishu projection = %#v", first.Card)
+	}
+	if !bytes.Equal(card.lastRequest.RawPayload, converted.PayloadJSON) {
+		t.Fatalf("persisted raw payload = %s, want %s", card.lastRequest.RawPayload, converted.PayloadJSON)
+	}
+	if got, want := jsonValueBytes(t, card.lastRequest.Payload), jsonValueBytes(t, converted.Payload); !bytes.Equal(got, want) {
+		t.Fatalf("typed payload = %s, want %s", got, want)
+	}
+	record, ok := repo.idempotency[authValue.BotID+":card.send:feishu-key"]
+	if !ok {
+		t.Fatal("Feishu idempotency record missing")
+	}
+	wantHash, err := hashGatewayRequest(cardIdempotencyInput{
+		ConversationID: "conv_direct", CardType: feishucards.CardType, SchemaVersion: feishucards.SchemaVersion,
+		FallbackText: converted.FallbackText, Payload: converted.Payload, RawPayload: converted.PayloadJSON,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.RequestHash != wantHash {
+		t.Fatalf("Feishu request hash = %s, want converted hash %s", record.RequestHash, wantHash)
+	}
+	if _, err := service.SendCard(context.Background(), authValue, input); err != nil {
+		t.Fatal(err)
+	}
+	if card.count != 1 {
+		t.Fatalf("Feishu replay card writes = %d, want 1", card.count)
+	}
+}
+
+func TestUpdateCardFeishuOwnerAndRawPayloadSemantics(t *testing.T) {
+	repo, service, authValue, _, card := gatewayFixture(t)
+	card.card = Card{ID: "card-feishu", BotID: authValue.BotID, SpaceID: authValue.SpaceID, ConversationID: "conv_direct", CardType: feishucards.CardType, SchemaVersion: feishucards.SchemaVersion, Revision: 1, Status: "active"}
+	raw := json.RawMessage(`{"elements":[{"tag":"div","text":{"tag":"plain_text","content":"更新"}}]}`)
+	converted, err := feishucards.ConvertJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.UpdateCard(context.Background(), authValue, card.card.ID, UpdateCardInput{
+		ExpectedRevision: 1, Format: "feishu-card", RawFeishuCard: raw,
+		Fields: map[string]any{"format": "feishu-card", "feishuCard": map[string]any{}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(card.lastUpdate.RawPayload, converted.PayloadJSON) || card.lastUpdate.FallbackText == nil || *card.lastUpdate.FallbackText != converted.FallbackText {
+		t.Fatalf("Feishu update request = %#v, raw=%s", card.lastUpdate, card.lastUpdate.RawPayload)
+	}
+	card.ownerError = NewError(CodeCardNotFound, MessageAttachmentNotFound, 404)
+	if _, err := service.UpdateCard(context.Background(), authValue, card.card.ID, UpdateCardInput{
+		ExpectedRevision: 2, Format: "feishu-card", RawFeishuCard: raw,
+		Fields: map[string]any{"format": "feishu-card", "feishuCard": map[string]any{}},
+	}); !isCode(err, CodeCardNotFound) {
+		t.Fatalf("owner rejection = %v", err)
+	}
+	if len(repo.audits) == 0 || repo.audits[len(repo.audits)-1].Action != "bot.gateway.card.update" || repo.audits[len(repo.audits)-1].Result != "rejected" {
+		t.Fatalf("owner rejection audit = %#v", repo.audits)
+	}
+}
+
+func jsonValueBytes(t *testing.T, value any) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func TestGoFeishuCardHashMatchesNodeContractGolden(t *testing.T) {
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	goldenPath := filepath.Join(filepath.Dir(sourceFile), "../../../../../scripts/backend/bot-feishu-contract-golden.json")
+	raw, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixtures []struct {
+		RequestJSON string `json:"requestJSON"`
+		RequestHash string `json:"requestHash"`
+		PayloadJSON string `json:"payloadJSON"`
+	}
+	if err := json.Unmarshal(raw, &fixtures); err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range fixtures {
+		var request struct {
+			ConversationID string          `json:"conversationId"`
+			CardType       string          `json:"cardType"`
+			SchemaVersion  int             `json:"schemaVersion"`
+			FallbackText   string          `json:"fallbackText"`
+			Payload        json.RawMessage `json:"payload"`
+		}
+		if err := json.Unmarshal([]byte(fixture.RequestJSON), &request); err != nil {
+			t.Fatal(err)
+		}
+		if string(request.Payload) != fixture.PayloadJSON {
+			t.Fatalf("Node golden payload changed: %s", request.Payload)
+		}
+		got, err := hashGatewayRequest(cardIdempotencyInput{
+			ConversationID: request.ConversationID, CardType: request.CardType, SchemaVersion: request.SchemaVersion,
+			FallbackText: request.FallbackText, Payload: request.Payload, RawPayload: request.Payload,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != fixture.RequestHash {
+			t.Fatalf("Go Feishu hash = %s, Node golden = %s", got, fixture.RequestHash)
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	workspacebots "github.com/timestarry/duallane/apps/backend/internal/workspace/bots"
 	workspacecards "github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/feishucards"
 	workspacefiles "github.com/timestarry/duallane/apps/backend/internal/workspace/files"
 	workspacemessages "github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 )
@@ -203,6 +204,26 @@ func newCardGateway(service *workspacecards.Service) CardGateway {
 	return &cardGateway{service: service}
 }
 
+// CheckFeishuCardOwner is a narrow read projection for the Node-compatible
+// Feishu update branch. The cards service remains the owner of the subsequent
+// mutation and repeats source/actor authorization inside its transaction.
+func (w *cardGateway) CheckFeishuCardOwner(ctx context.Context, spaceID, cardID, botUserID string) error {
+	if w == nil || w.service == nil || w.service.Repository() == nil {
+		return internalError("check Feishu card owner", errors.New("card service is required"))
+	}
+	row, err := w.service.Repository().GetCard(ctx, spaceID, cardID)
+	if err != nil {
+		return normalizeRuntimeAdapterError(err, "check Feishu card owner")
+	}
+	if row == nil || row.SourceKind != workspacecards.SourceCustomBot || row.CreatedByUserID == nil || strings.TrimSpace(*row.CreatedByUserID) != strings.TrimSpace(botUserID) {
+		return NewError(CodeCardNotFound, "卡片不存在", 404)
+	}
+	if row.CardType != feishucards.CardType || row.SchemaVersion != feishucards.SchemaVersion {
+		return NewError("card.type_mismatch", "卡片格式与更新内容不一致", 409)
+	}
+	return nil
+}
+
 func (w *cardGateway) CreateCustomBotCard(ctx context.Context, input CardCreateRequest) (Card, error) {
 	if w == nil || w.service == nil {
 		return Card{}, internalError("create bot card", errors.New("card service is required"))
@@ -211,7 +232,7 @@ func (w *cardGateway) CreateCustomBotCard(ctx context.Context, input CardCreateR
 		CreateInput: workspacecards.CreateInput{
 			ActorID: input.BotUserID, SpaceID: input.SpaceID, ConversationID: input.ConversationID,
 			SourceID: input.SourceID, CardType: input.CardType, SchemaVersion: input.SchemaVersion,
-			FallbackText: input.FallbackText, Payload: input.Payload, SourceKind: workspacecards.SourceCustomBot,
+			FallbackText: input.FallbackText, Payload: input.Payload, RawPayload: cloneRawJSON(input.RawPayload), SourceKind: workspacecards.SourceCustomBot,
 			VisibilityScope: workspacecards.VisibilityConversation, CreatedByUserID: input.BotUserID,
 			TrustedCustomBot: true, AllowUnknownDefinition: true, BotID: input.BotID, Meta: input.Meta.Safe(),
 		},
@@ -235,7 +256,7 @@ func (w *cardGateway) CreateCustomBotCardInTx(ctx context.Context, tx Tx, input 
 		CreateInput: workspacecards.CreateInput{
 			ActorID: input.BotUserID, SpaceID: input.SpaceID, ConversationID: input.ConversationID,
 			SourceID: input.SourceID, CardType: input.CardType, SchemaVersion: input.SchemaVersion,
-			FallbackText: input.FallbackText, Payload: input.Payload, SourceKind: workspacecards.SourceCustomBot,
+			FallbackText: input.FallbackText, Payload: input.Payload, RawPayload: cloneRawJSON(input.RawPayload), SourceKind: workspacecards.SourceCustomBot,
 			VisibilityScope: workspacecards.VisibilityConversation, CreatedByUserID: input.BotUserID,
 			TrustedCustomBot: true, AllowUnknownDefinition: true, BotID: input.BotID, Meta: input.Meta.Safe(),
 		},
@@ -253,13 +274,20 @@ func (w *cardGateway) UpdateCustomBotCard(ctx context.Context, input CardUpdateR
 	}
 	card, err := w.service.UpdateCustomBotCard(ctx, workspacecards.CustomBotUpdateInput{
 		ActorID: input.BotUserID, SpaceID: input.SpaceID, CardID: input.CardID, BotID: input.BotID,
-		BotUserID: input.BotUserID, ExpectedRevision: input.ExpectedRevision, Payload: input.Payload,
+		BotUserID: input.BotUserID, ExpectedRevision: input.ExpectedRevision, Payload: input.Payload, RawPayload: cloneRawJSON(input.RawPayload),
 		FallbackText: input.FallbackText, Meta: input.Meta.Safe(),
 	})
 	if err != nil {
 		return Card{}, normalizeRuntimeAdapterError(err, "update bot card")
 	}
 	return projectWorkspaceCard(input.BotID, card), nil
+}
+
+func cloneRawJSON(value json.RawMessage) json.RawMessage {
+	if len(value) == 0 {
+		return nil
+	}
+	return append(json.RawMessage(nil), value...)
 }
 
 func (w *cardGateway) InvalidateCustomBotCard(ctx context.Context, input CardUpdateRequest) (Card, error) {

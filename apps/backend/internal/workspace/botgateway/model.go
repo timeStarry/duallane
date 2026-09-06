@@ -283,7 +283,10 @@ type CardCreateRequest struct {
 	SchemaVersion  int
 	FallbackText   string
 	Payload        any
-	Meta           auth.RequestMeta
+	// RawPayload is the already validated canonical representation that the
+	// owning cards service must persist. It is never caller input.
+	RawPayload json.RawMessage
+	Meta       auth.RequestMeta
 }
 
 type CardUpdateRequest struct {
@@ -294,9 +297,12 @@ type CardUpdateRequest struct {
 	CardID           string
 	ExpectedRevision int64
 	Payload          any
-	FallbackText     *string
-	Status           string
-	Meta             auth.RequestMeta
+	// RawPayload is the already validated canonical representation that the
+	// owning cards service must persist. It is never caller input.
+	RawPayload   json.RawMessage
+	FallbackText *string
+	Status       string
+	Meta         auth.RequestMeta
 }
 
 type SendCardInput struct {
@@ -310,8 +316,11 @@ type SendCardInput struct {
 	RawPayload      json.RawMessage
 	Format          string
 	FeishuCard      any
-	Fields          map[string]any
-	Meta            auth.RequestMeta
+	// RawFeishuCard preserves HTTP JSON presence/order for the Node-compatible
+	// Feishu conversion path. It is never persisted or hashed directly.
+	RawFeishuCard json.RawMessage
+	Fields        map[string]any
+	Meta          auth.RequestMeta
 }
 
 type SendCardResult struct {
@@ -326,8 +335,12 @@ type UpdateCardInput struct {
 	Status           string
 	Format           string
 	FeishuCard       any
-	Fields           map[string]any
-	Meta             auth.RequestMeta
+	// RawPayload and RawFeishuCard preserve input presence for Node-compatible
+	// nullish selection. Only the converter's safe output is persisted.
+	RawPayload    json.RawMessage
+	RawFeishuCard json.RawMessage
+	Fields        map[string]any
+	Meta          auth.RequestMeta
 }
 
 type AttachmentRecord struct {

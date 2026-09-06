@@ -1,6 +1,7 @@
 package botgateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	workspacecards "github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/feishucards"
 )
 
 var (
@@ -773,25 +775,7 @@ func (s *Service) SendCard(ctx context.Context, value *Auth, input SendCardInput
 	if err != nil {
 		return SendCardResult{}, err
 	}
-	cardType, err := normalizeCardType(input.CardType)
-	if err != nil {
-		return SendCardResult{}, s.recordCardRejection(ctx, current, input.Meta, "bot.gateway.card.send", current.BotID, err)
-	}
-	version, err := normalizeCardVersion(input.SchemaVersion)
-	if err != nil {
-		return SendCardResult{}, s.recordCardRejection(ctx, current, input.Meta, "bot.gateway.card.send", current.BotID, err)
-	}
-	fallback, err := normalizeFallback(input.FallbackText)
-	if err != nil {
-		return SendCardResult{}, s.recordCardRejection(ctx, current, input.Meta, "bot.gateway.card.send", current.BotID, err)
-	}
-	payloadValue := input.Payload
-	if len(input.RawPayload) > 0 {
-		if json.Unmarshal(input.RawPayload, &payloadValue) != nil {
-			return SendCardResult{}, s.recordCardRejection(ctx, current, input.Meta, "bot.gateway.card.send", current.BotID, NewError(CodeCardInvalidPayload, "卡片内容无效", 422))
-		}
-	}
-	payload, err := normalizeCardPayload(payloadValue)
+	converted, err := normalizeGatewayCardCreate(input)
 	if err != nil {
 		return SendCardResult{}, s.recordCardRejection(ctx, current, input.Meta, "bot.gateway.card.send", current.BotID, err)
 	}
@@ -803,12 +787,18 @@ func (s *Service) SendCard(ctx context.Context, value *Auth, input SendCardInput
 	if cardTransactional != messageTransactional {
 		return SendCardResult{}, internalError("send bot card", errors.New("card and message transactional writers must be configured together"))
 	}
-	request := CardCreateRequest{ActorID: current.UserID, BotID: current.BotID, BotUserID: current.UserID, SpaceID: current.SpaceID, ConversationID: conversation.ID, SourceID: opaqueCardSourceID(current.BotID, key), CardType: cardType, SchemaVersion: version, FallbackText: fallback, Payload: payload, Meta: input.Meta.Safe()}
+	request := CardCreateRequest{ActorID: current.UserID, BotID: current.BotID, BotUserID: current.UserID, SpaceID: current.SpaceID, ConversationID: conversation.ID, SourceID: opaqueCardSourceID(current.BotID, key), CardType: converted.CardType, SchemaVersion: converted.SchemaVersion, FallbackText: converted.FallbackText, Payload: converted.Payload, RawPayload: cloneRawJSON(converted.RawPayload), Meta: input.Meta.Safe()}
 	encodedInput := cardIdempotencyInput{
 		ConversationID: conversation.ID,
-		CardType:       cardType, SchemaVersion: version, FallbackText: fallback, Payload: payload,
+		CardType:       converted.CardType, SchemaVersion: converted.SchemaVersion, FallbackText: converted.FallbackText, Payload: converted.Payload,
 	}
-	if payloadValue != nil {
+	if converted.Feishu {
+		// Feishu hashes the converter's safe, ordered output. The caller's
+		// source bytes never enter persistence or the request hash.
+		encodedInput.RawPayload = converted.RawPayload
+	} else if converted.NativePayloadPresent {
+		// Preserve the established native-card request hash behavior. This raw
+		// value is hash-only; the cards adapter receives the normalized value.
 		encodedInput.RawPayload = input.RawPayload
 	}
 	result, err := s.withIdempotency(ctx, current, "card.send", key, encodedInput, func(tx Tx) (any, error) {
@@ -826,7 +816,7 @@ func (s *Service) SendCard(ctx context.Context, value *Auth, input SendCardInput
 		if block == nil {
 			block = map[string]any{"type": "card", "cardId": card.ID, "cardType": card.CardType, "schemaVersion": card.SchemaVersion, "fallbackText": card.FallbackText}
 		}
-		messageRequest := MessageWriteRequest{ActorID: current.UserID, SpaceID: current.SpaceID, ConversationID: conversation.ID, ClientMessageID: clientMessageID, Content: MessageContent{Format: MessageContentFormat, PlainText: fallback, Blocks: []map[string]any{block}}, Meta: input.Meta.Safe()}
+		messageRequest := MessageWriteRequest{ActorID: current.UserID, SpaceID: current.SpaceID, ConversationID: conversation.ID, ClientMessageID: clientMessageID, Content: MessageContent{Format: MessageContentFormat, PlainText: converted.FallbackText, Blocks: []map[string]any{block}}, Meta: input.Meta.Safe()}
 		if _, transactional := s.cardGateway.(TransactionalCardGateway); transactional {
 			validator, ok := s.cardGateway.(TransactionalCardReferenceValidator)
 			if !ok {
@@ -886,6 +876,152 @@ func rejectImmutableCardFields(fields map[string]any) error {
 		}
 	}
 	return nil
+}
+
+type normalizedGatewayCard struct {
+	CardType             string
+	SchemaVersion        int
+	FallbackText         string
+	Payload              any
+	RawPayload           json.RawMessage
+	Feishu               bool
+	NativePayloadPresent bool
+}
+
+func normalizeGatewayCardCreate(input SendCardInput) (normalizedGatewayCard, error) {
+	if gatewayCardUsesFeishu(input.Format, input.Fields, input.RawFeishuCard, input.FeishuCard) {
+		if fieldOrValuePresent(input.Fields, "cardType", input.CardType) {
+			cardType, typeErr := normalizeCardType(input.CardType)
+			if typeErr != nil {
+				return normalizedGatewayCard{}, typeErr
+			}
+			if cardType != feishucards.CardType {
+				return normalizedGatewayCard{}, NewError("card.type_mismatch", "飞书卡片类型无效", 400)
+			}
+		}
+		if fieldOrValuePresent(input.Fields, "schemaVersion", input.SchemaVersion) {
+			version, versionErr := normalizeCardVersion(input.SchemaVersion)
+			if versionErr != nil {
+				return normalizedGatewayCard{}, versionErr
+			}
+			if version != feishucards.SchemaVersion {
+				return normalizedGatewayCard{}, NewError("card.type_mismatch", "飞书卡片版本无效", 400)
+			}
+		}
+		converted, err := convertGatewayFeishuCard(input.RawFeishuCard, input.RawPayload, input.FeishuCard, input.Payload)
+		if err != nil {
+			return normalizedGatewayCard{}, err
+		}
+		fallback := converted.FallbackText
+		if fieldOrValuePresent(input.Fields, "fallbackText", input.FallbackText) {
+			fallback, err = normalizeFallback(input.FallbackText)
+			if err != nil {
+				return normalizedGatewayCard{}, err
+			}
+		}
+		return normalizedGatewayCard{
+			CardType: feishucards.CardType, SchemaVersion: feishucards.SchemaVersion,
+			FallbackText: fallback, Payload: converted.Payload,
+			RawPayload: cloneRawJSON(converted.PayloadJSON), Feishu: true,
+		}, nil
+	}
+
+	cardType, err := normalizeCardType(input.CardType)
+	if err != nil {
+		return normalizedGatewayCard{}, err
+	}
+	version, err := normalizeCardVersion(input.SchemaVersion)
+	if err != nil {
+		return normalizedGatewayCard{}, err
+	}
+	fallback, err := normalizeFallback(input.FallbackText)
+	if err != nil {
+		return normalizedGatewayCard{}, err
+	}
+	payloadValue := input.Payload
+	if len(input.RawPayload) > 0 {
+		if json.Unmarshal(input.RawPayload, &payloadValue) != nil {
+			return normalizedGatewayCard{}, NewError(CodeCardInvalidPayload, "卡片内容无效", 422)
+		}
+	}
+	payload, err := normalizeCardPayload(payloadValue)
+	if err != nil {
+		return normalizedGatewayCard{}, err
+	}
+	return normalizedGatewayCard{
+		CardType: cardType, SchemaVersion: version, FallbackText: fallback,
+		Payload: payload, NativePayloadPresent: payloadValue != nil,
+	}, nil
+}
+
+func normalizeGatewayCardUpdate(input UpdateCardInput) (normalizedGatewayCard, error) {
+	converted, err := convertGatewayFeishuCard(input.RawFeishuCard, input.RawPayload, input.FeishuCard, input.Payload)
+	if err != nil {
+		return normalizedGatewayCard{}, err
+	}
+	fallback := converted.FallbackText
+	if fieldPresent(input.Fields, "fallbackText") {
+		fallback, err = normalizeFallback(input.Fields["fallbackText"])
+	} else if input.FallbackText != nil {
+		fallback, err = normalizeFallback(*input.FallbackText)
+	}
+	if err != nil {
+		return normalizedGatewayCard{}, err
+	}
+	return normalizedGatewayCard{
+		CardType: feishucards.CardType, SchemaVersion: feishucards.SchemaVersion,
+		FallbackText: fallback, Payload: converted.Payload,
+		RawPayload: cloneRawJSON(converted.PayloadJSON), Feishu: true,
+	}, nil
+}
+
+func gatewayCardUsesFeishu(format string, fields map[string]any, rawFeishuCard json.RawMessage, feishuCard any) bool {
+	return len(rawFeishuCard) > 0 || fieldPresent(fields, "feishuCard") || feishuCard != nil || format == "feishu-card"
+}
+
+func fieldPresent(fields map[string]any, key string) bool {
+	_, ok := fields[key]
+	return ok
+}
+
+func fieldOrValuePresent(fields map[string]any, key string, value any) bool {
+	return fieldPresent(fields, key) || value != nil
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return len(raw) > 0 && bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+}
+
+func convertGatewayFeishuCard(rawFeishuCard, rawPayload json.RawMessage, feishuCard, payload any) (feishucards.Result, error) {
+	var (
+		result feishucards.Result
+		err    error
+	)
+	switch {
+	case len(rawFeishuCard) > 0 && !isJSONNull(rawFeishuCard):
+		result, err = feishucards.ConvertJSON(rawFeishuCard)
+	case len(rawFeishuCard) > 0 && len(rawPayload) > 0:
+		// JS uses nullish coalescing: an explicit null Feishu value falls
+		// through to payload, but a non-null payload value remains exact raw
+		// JSON for ordered conversion.
+		result, err = feishucards.ConvertJSON(rawPayload)
+	case len(rawFeishuCard) > 0:
+		result, err = feishucards.Convert(payload)
+	case feishuCard != nil:
+		result, err = feishucards.Convert(feishuCard)
+	case len(rawPayload) > 0:
+		result, err = feishucards.ConvertJSON(rawPayload)
+	default:
+		result, err = feishucards.Convert(payload)
+	}
+	if err == nil {
+		return result, nil
+	}
+	var validation *feishucards.ValidationError
+	if errors.As(err, &validation) {
+		return feishucards.Result{}, NewError(validation.Code, validation.Message, 422)
+	}
+	return feishucards.Result{}, NewError(CodeCardInvalidPayload, "卡片内容无效", 422)
 }
 
 func normalizeCardType(value any) (string, error) {
@@ -989,6 +1125,30 @@ func (s *Service) UpdateCard(ctx context.Context, value *Auth, cardID string, in
 	request := CardUpdateRequest{ActorID: current.UserID, BotID: current.BotID, BotUserID: current.UserID, SpaceID: current.SpaceID, CardID: id, ExpectedRevision: input.ExpectedRevision, Payload: input.Payload, FallbackText: input.FallbackText, Status: input.Status, Meta: input.Meta.Safe()}
 	if input.Status != "" && input.Status != "active" {
 		card, err := s.cardGateway.InvalidateCustomBotCard(ctx, request)
+		if err != nil {
+			return nil, normalizeError(err)
+		}
+		return map[string]any{"card": card}, nil
+	}
+	if gatewayCardUsesFeishu(input.Format, input.Fields, input.RawFeishuCard, input.FeishuCard) {
+		checker, ok := s.cardGateway.(interface {
+			CheckFeishuCardOwner(context.Context, string, string, string) error
+		})
+		if !ok {
+			return nil, s.recordCardRejection(ctx, current, input.Meta, "bot.gateway.card.update", id, internalError("check Feishu card owner", errors.New("card owner checker is required")))
+		}
+		if err := checker.CheckFeishuCardOwner(ctx, current.SpaceID, id, current.UserID); err != nil {
+			return nil, s.recordCardRejection(ctx, current, input.Meta, "bot.gateway.card.update", id, err)
+		}
+		converted, err := normalizeGatewayCardUpdate(input)
+		if err != nil {
+			return nil, s.recordCardRejection(ctx, current, input.Meta, "bot.gateway.card.update", id, err)
+		}
+		fallback := converted.FallbackText
+		request.Payload = converted.Payload
+		request.RawPayload = cloneRawJSON(converted.RawPayload)
+		request.FallbackText = &fallback
+		card, err := s.cardGateway.UpdateCustomBotCard(ctx, request)
 		if err != nil {
 			return nil, normalizeError(err)
 		}
