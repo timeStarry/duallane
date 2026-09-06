@@ -306,6 +306,30 @@ assets and production user content are not test fixtures.
 
 ## 9. Realtime And Failure Injection
 
+### Workspace browser candidate
+
+`pnpm test:e2e:workspace-go` runs the existing `e2e/workspace*.spec.ts`
+assertions against freshly built Go migrate/Workspace commands and Vite, with
+one Chromium worker and no retries. It requires Go/CGO/libvips, installed pnpm
+dependencies, Chromium, and an explicit disposable loopback PostgreSQL URL in
+`TEST_DATABASE_URL`. Set `DUALLANE_GO_E2E_ALLOW_SCHEMA_CREATION=true` exactly
+only for that disposable database: the harness creates and drops its own random
+schema. It refuses non-loopback hosts, system databases and connection options
+that could override the synthetic search path.
+
+The fixed loopback ports 8898/5198 must be free. Existing servers are never
+reused. Children receive a minimal environment, synthetic local storage and
+disabled email/ntfy/maintenance workers; no real provider configuration is
+forwarded. Shutdown awaits owned processes before dropping the random schema
+and temporary files. Failure details remain in the ignored
+`.private-test-results/workspace-go-browser` directory; do not publish these
+artifacts. Guard tests run with
+`node --test scripts/backend/go-workspace-browser.test.mjs`.
+
+This is a separate gate from the active Node browser suite and the Go P2P
+browser suite. A harness commit or passing guards does not mean all Workspace
+browser cases passed; record the complete selected test count and any failure.
+
 Realtime validation includes:
 
 - notify before/after listener startup race;

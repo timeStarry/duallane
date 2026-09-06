@@ -497,3 +497,24 @@ vulnerable symbols, while reporting one imported-package and seven module-level
 advisories not reached by those programs; the dependency graph is not claimed
 to be advisory-free.
 No actual SMTP provider, production credential or external recipient was used.
+
+### Real Go Workspace Browser Harness
+
+The new browser harness builds the real Go migrate/Workspace commands, applies
+canonical migrations to its own random schema in explicitly opted-in disposable
+loopback PostgreSQL, and reuses the existing frontend assertions. Provider
+workers are disabled and runtime environment inheritance is allowlisted. Two
+harness guards passed. The first selected semantic-routes/OAuth/refresh/history
+case passed (21.7 seconds). A subsequent six-case run passed four and failed
+two: the emote share card lacked its live sharing projection, and the two-user
+flow timed out at the Beacon header's bounding-box observation after visibility
+passed. Neither assertion nor its timeout was weakened.
+
+The first failure was traced to Go message projection emitting only `shareId`
+where Node also emits relation-bound, viewer-specific share metadata. A worker
+is implementing and characterizing that projection. The second failure still
+requires diagnosis. After both runs the synthetic browser schema count was
+verified as zero; the first run's temporary directory and Go child processes
+were also verified absent. These partial results are not the full twelve-case
+Workspace browser gate. The harness guard is wired into CI; the actual Go
+Workspace browser job awaits successful full-suite integration.

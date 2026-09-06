@@ -21,6 +21,7 @@
     "test": "pnpm --filter @duallane/agent-sdk test && pnpm --filter @duallane/web test",
     "test:e2e": "playwright test",
     "test:e2e:p2p-go": "playwright test --config=playwright.p2p-go.config.ts",
+    "test:e2e:workspace-go": "playwright test --config=playwright.workspace-go.config.ts",
     "lint": "pnpm --filter @duallane/agent-sdk lint && pnpm --filter @duallane/web lint"
   },
   "packageManager": "pnpm@10.30.3",
