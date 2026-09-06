@@ -1,0 +1,2239 @@
+openapi: 3.1.2
+info:
+  title: DualLane Workspace core HTTP API
+  version: 1.0.0
+  description: >-
+    The pre-deployment contract projection for the existing Node Workspace
+    core routes. DTOs are projected from apps/web/server/index.mjs,
+    apps/web/server/services/workspace.mjs, the Workspace API contract, and
+    the checked-in node-routes.json inventory. File-transfer, emote, ntfy,
+    email, bot, topic, Echo, and interaction families are intentionally
+    separate contracts.
+servers:
+  - url: /
+paths:
+  /api/auth/github/start:
+    get:
+      operationId: workspaceGithubLoginStart
+      description: >-
+        Starts GitHub OAuth and sets browser-only OAuth state cookies. In the
+        test-only Node profile, the callback can use synthetic identity query
+        fields; production exchanges code with GitHub.
+      parameters:
+        - $ref: '#/components/parameters/InviteQuery'
+        - $ref: '#/components/parameters/ReturnToQuery'
+      responses:
+        '302':
+          description: Redirect to GitHub or the development callback.
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+                format: uri-reference
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/auth/github/callback:
+    get:
+      operationId: workspaceGithubLoginCallback
+      description: >-
+        Resolves the GitHub identity, binds or rejects the Workspace account,
+        creates the opaque session cookie, and returns JSON only when format=json
+        or an application/json Accept header is used.
+      parameters:
+        - $ref: '#/components/parameters/OAuthCodeQuery'
+        - $ref: '#/components/parameters/OAuthStateQuery'
+        - $ref: '#/components/parameters/JSONFormatQuery'
+        - $ref: '#/components/parameters/DevelopmentGithubIdQuery'
+        - $ref: '#/components/parameters/DevelopmentGithubLoginQuery'
+        - $ref: '#/components/parameters/DevelopmentEmailQuery'
+        - $ref: '#/components/parameters/DevelopmentDisplayNameQuery'
+        - $ref: '#/components/parameters/DevelopmentAvatarUrlQuery'
+      responses:
+        '200':
+          description: Successful JSON login projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '302':
+          description: Successful browser redirect to the Workspace frontend.
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+                format: uri-reference
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/OAuthBadGateway'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/auth/logout:
+    post:
+      operationId: workspaceLogout
+      description: Revokes the current session when present and clears its cookie.
+      responses:
+        '200':
+          description: Logout is idempotent for an absent session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogoutResponse'
+
+  /api/workspace/bootstrap:
+    get:
+      operationId: workspaceBootstrap
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Ready Workspace shell projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BootstrapResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/statistics:
+    get:
+      operationId: workspaceStatistics
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Owner-only aggregate statistics projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatisticsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/members:
+    get:
+      operationId: workspaceListMembers
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/MemberSearchQuery'
+        - $ref: '#/components/parameters/RoleQuery'
+        - $ref: '#/components/parameters/KindQuery'
+        - $ref: '#/components/parameters/LimitQuery'
+      responses:
+        '200':
+          description: Viewer-scoped active member directory.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MembersResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/profile:
+    patch:
+      operationId: workspaceUpdateOwnProfile
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfilePatch'
+      responses:
+        '200':
+          description: The current member projection after the patch.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/member-visibility/{userId}:
+    get:
+      operationId: workspaceGetMemberVisibility
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Owner-managed visibility rule for the selected viewer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VisibilityResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+    put:
+      operationId: workspaceUpdateMemberVisibility
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VisibilityUpdate'
+      responses:
+        '200':
+          description: Replaced owner-managed visibility grants.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VisibilityResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/members/{userId}/role:
+    patch:
+      operationId: workspaceUpdateMemberRole
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemberRoleUpdate'
+      responses:
+        '200':
+          description: Updated active member projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/members/{userId}:
+    delete:
+      operationId: workspaceRemoveMember
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Member removal and session revocation result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoveMemberResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/members/{userId}/remark:
+    put:
+      operationId: workspaceSetMemberRemark
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RemarkUpdate'
+      responses:
+        '200':
+          description: Member projection with the viewer's private remark.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+    delete:
+      operationId: workspaceDeleteMemberRemark
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Member projection after removing the private remark.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/conversations:
+    get:
+      operationId: workspaceListConversations
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Conversations visible to the current member.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+    post:
+      operationId: workspaceCreateConversation
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/CreateDirectConversationRequest'
+                - $ref: '#/components/schemas/CreateGroupConversationRequest'
+      responses:
+        '201':
+          description: Created or reused direct conversation, or created group.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/conversations/{conversationId}:
+    get:
+      operationId: workspaceGetConversation
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      responses:
+        '200':
+          description: Authorized conversation projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/conversations/{conversationId}/messages:
+    get:
+      operationId: workspaceListMessages
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/BeforeQuery'
+        - $ref: '#/components/parameters/AfterQuery'
+        - $ref: '#/components/parameters/AroundQuery'
+        - $ref: '#/components/parameters/LimitQuery'
+      responses:
+        '200':
+          description: Ordered authorized message projections.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessagesResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/conversations/{conversationId}/read:
+    post:
+      operationId: workspaceMarkConversationRead
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      responses:
+        '200':
+          description: Current viewer's conversation projection after marking read.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/conversations/{conversationId}/notification:
+    patch:
+      operationId: workspaceUpdateConversationNotification
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationUpdate'
+      responses:
+        '200':
+          description: Current viewer's conversation projection with personal notification level.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/groups/{conversationId}:
+    patch:
+      operationId: workspaceUpdateGroup
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GroupUpdate'
+      responses:
+        '200':
+          description: Updated group conversation projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/groups/{conversationId}/leave:
+    post:
+      operationId: workspaceLeaveGroup
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      responses:
+        '200':
+          description: The current member left the group.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveGroupResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/groups/{conversationId}/members:
+    post:
+      operationId: workspaceAddGroupMember
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddGroupMemberRequest'
+      responses:
+        '201':
+          description: Group conversation after adding the member.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/groups/{conversationId}/members/{userId}:
+    delete:
+      operationId: workspaceRemoveGroupMember
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Group conversation after removing the member.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/groups/{conversationId}/pins:
+    get:
+      operationId: workspaceListPins
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/LimitQuery'
+      responses:
+        '200':
+          description: Current group pins with authorized message projections.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PinsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+    post:
+      operationId: workspacePinMessage
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PinRequest'
+      responses:
+        '201':
+          description: Newly pinned message projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PinItemResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/groups/{conversationId}/pins/{messageId}:
+    delete:
+      operationId: workspaceUnpinMessage
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/MessageId'
+      responses:
+        '200':
+          description: Idempotent unpin result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnpinResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/messages:
+    post:
+      operationId: workspaceCreateMessage
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMessageRequest'
+      responses:
+        '201':
+          description: Canonical persisted message projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/messages/{messageId}/reactions:
+    post:
+      operationId: workspaceAddMessageReaction
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddReactionRequest'
+      responses:
+        '200':
+          description: Idempotent reaction result when the row already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReactionsResponse'
+        '201':
+          description: Newly added reaction result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReactionsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/messages/{messageId}/reactions/{emoteKey}:
+    delete:
+      operationId: workspaceRemoveMessageReaction
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+        - $ref: '#/components/parameters/EmoteKey'
+      responses:
+        '200':
+          description: Idempotent reaction removal result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReactionsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/messages/{messageId}/recall:
+    post:
+      operationId: workspaceRecallMessage
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+      responses:
+        '200':
+          description: Recalled message projection; the nested conversation is included by the Node service.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/messages/{messageId}/hidden:
+    put:
+      operationId: workspaceHideMessage
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+      responses:
+        '200':
+          description: Idempotent viewer-scoped hidden state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HiddenResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+    delete:
+      operationId: workspaceUnhideMessage
+      security:
+        - workspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+      responses:
+        '200':
+          description: Idempotent viewer-scoped hidden state removal.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HiddenResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+components:
+  securitySchemes:
+    workspaceSession:
+      type: apiKey
+      in: cookie
+      name: duallane_workspace
+      description: Opaque browser session cookie issued by the GitHub callback.
+
+  parameters:
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    ConversationId:
+      name: conversationId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    MessageId:
+      name: messageId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    EmoteKey:
+      name: emoteKey
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    InviteQuery:
+      name: invite
+      in: query
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 256
+    ReturnToQuery:
+      name: returnTo
+      in: query
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 512
+    OAuthCodeQuery:
+      name: code
+      in: query
+      required: false
+      schema:
+        type: string
+        minLength: 1
+    OAuthStateQuery:
+      name: state
+      in: query
+      required: false
+      schema:
+        type: string
+        minLength: 1
+    JSONFormatQuery:
+      name: format
+      in: query
+      required: false
+      schema:
+        type: string
+        const: json
+    DevelopmentGithubIdQuery:
+      name: githubId
+      in: query
+      required: false
+      description: Test-only synthetic identity field accepted by the Node test profile.
+      schema:
+        type: string
+        minLength: 1
+    DevelopmentGithubLoginQuery:
+      name: githubLogin
+      in: query
+      required: false
+      description: Test-only synthetic identity field accepted by the Node test profile.
+      schema:
+        type: string
+        minLength: 1
+    DevelopmentEmailQuery:
+      name: email
+      in: query
+      required: false
+      description: Test-only synthetic identity field accepted by the Node test profile.
+      schema:
+        type: string
+        format: email
+    DevelopmentDisplayNameQuery:
+      name: displayName
+      in: query
+      required: false
+      description: Test-only synthetic identity field accepted by the Node test profile.
+      schema:
+        type: string
+        minLength: 1
+    DevelopmentAvatarUrlQuery:
+      name: avatarUrl
+      in: query
+      required: false
+      description: Test-only synthetic identity field accepted by the Node test profile.
+      schema:
+        type: string
+        format: uri-reference
+    MemberSearchQuery:
+      name: q
+      in: query
+      required: false
+      schema:
+        type: string
+        maxLength: 256
+    RoleQuery:
+      name: role
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/UserRole'
+    KindQuery:
+      name: kind
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/MemberKind'
+    LimitQuery:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+    BeforeQuery:
+      name: before
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    AfterQuery:
+      name: after
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    AroundQuery:
+      name: around
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/Identifier'
+
+  responses:
+    BadRequest:
+      description: Safe domain validation error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: No active session or rejected login identity.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Authenticated identity is not allowed to perform the operation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource is absent or intentionally hidden by authorization.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    OAuthBadGateway:
+      description: GitHub OAuth exchange failed without exposing provider details.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    WorkspaceServiceUnavailable:
+      description: Workspace is disabled or its required service is unavailable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    Identifier:
+      type: string
+      minLength: 1
+      maxLength: 128
+
+    DateTime:
+      type: string
+      format: date-time
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              pattern: '^[a-z][a-z0-9._-]{1,127}$'
+            message:
+              type: string
+
+    UserRole:
+      type: string
+      enum: [owner, admin, auditor, member]
+
+    MemberKind:
+      type: string
+      enum: [human, bot]
+
+    MemberCapabilities:
+      type: object
+      additionalProperties: false
+      required: [canStartDirectConversation, canJoinGroups, canManage]
+      properties:
+        canStartDirectConversation:
+          type: boolean
+        canJoinGroups:
+          type: boolean
+        canManage:
+          type: boolean
+
+    Member:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, kind, role, roleLabel, capabilities, joinedAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        githubLogin:
+          type: [string, 'null']
+        displayName:
+          type: string
+        nickname:
+          type: [string, 'null']
+        remark:
+          type: string
+        description:
+          type: string
+        avatarUrl:
+          type: [string, 'null']
+        searchDiscoverable:
+          type: boolean
+        recallReason:
+          type: string
+        kind:
+          $ref: '#/components/schemas/MemberKind'
+        role:
+          $ref: '#/components/schemas/UserRole'
+        roleLabel:
+          type: string
+        capabilities:
+          $ref: '#/components/schemas/MemberCapabilities'
+        joinedAt:
+          type: [string, 'null']
+          format: date-time
+
+    AcceptedMember:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, kind, role, roleLabel, capabilities, joinedAt, acceptedAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        githubLogin:
+          type: [string, 'null']
+        displayName:
+          type: string
+        nickname:
+          type: [string, 'null']
+        remark:
+          type: string
+        description:
+          type: string
+        avatarUrl:
+          type: [string, 'null']
+        searchDiscoverable:
+          type: boolean
+        recallReason:
+          type: string
+        kind:
+          $ref: '#/components/schemas/MemberKind'
+        role:
+          $ref: '#/components/schemas/UserRole'
+        roleLabel:
+          type: string
+        capabilities:
+          $ref: '#/components/schemas/MemberCapabilities'
+        joinedAt:
+          type: [string, 'null']
+          format: date-time
+        acceptedAt:
+          $ref: '#/components/schemas/DateTime'
+
+    AuthUser:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, kind, role, joinedAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        githubLogin:
+          type: [string, 'null']
+        displayName:
+          type: string
+        nickname:
+          type: [string, 'null']
+        avatarUrl:
+          type: [string, 'null']
+        searchDiscoverable:
+          type: boolean
+        kind:
+          $ref: '#/components/schemas/MemberKind'
+        role:
+          $ref: '#/components/schemas/UserRole'
+        joinedAt:
+          type: [string, 'null']
+          format: date-time
+
+    LoginResponse:
+      type: object
+      additionalProperties: false
+      required: [user, session]
+      properties:
+        user:
+          $ref: '#/components/schemas/AuthUser'
+        session:
+          type: object
+          additionalProperties: false
+          required: [expiresAt]
+          properties:
+            expiresAt:
+              $ref: '#/components/schemas/DateTime'
+
+    LogoutResponse:
+      type: object
+      additionalProperties: false
+      required: [ok]
+      properties:
+        ok:
+          const: true
+
+    Space:
+      type: object
+      additionalProperties: false
+      required: [id, name, slug, createdBy, createdAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        name:
+          type: string
+        slug:
+          type: string
+        createdBy:
+          $ref: '#/components/schemas/Identifier'
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+
+    Policy:
+      type: object
+      additionalProperties: false
+      required: [dailyQuotaBytes, usedTodayBytes, remainingQuotaBytes, messageRetentionCount, memberVisibilityBasis]
+      properties:
+        dailyQuotaBytes:
+          type: integer
+          minimum: 0
+        usedTodayBytes:
+          type: integer
+          minimum: 0
+        remainingQuotaBytes:
+          type: integer
+          minimum: 0
+        messageRetentionCount:
+          type: integer
+          minimum: 1
+        memberVisibilityBasis:
+          type: string
+          const: direct_contacts
+
+    Permissions:
+      type: object
+      additionalProperties: false
+      required:
+        - canCreateMemberInvite
+        - canCreatePrivilegedInvite
+        - canManageMemberVisibility
+        - canManageEmailSettings
+        - canReadConversations
+        - canCreateGroup
+        - canCreateDirect
+        - canUpload
+        - canDownload
+        - canViewOperationRecords
+      properties:
+        canCreateMemberInvite:
+          type: boolean
+        canCreatePrivilegedInvite:
+          type: boolean
+        canManageMemberVisibility:
+          type: boolean
+        canManageEmailSettings:
+          type: boolean
+        canReadConversations:
+          type: boolean
+        canCreateGroup:
+          type: boolean
+        canCreateDirect:
+          type: boolean
+        canUpload:
+          type: boolean
+        canDownload:
+          type: boolean
+        canViewOperationRecords:
+          const: false
+
+    Invite:
+      type: object
+      additionalProperties: false
+      required: [id, codePreview, defaultRole, maxUses, uses, expiresAt, revokedAt, createdAt, acceptedMemberCount, acceptedMembers]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        codePreview:
+          type: string
+        defaultRole:
+          $ref: '#/components/schemas/UserRole'
+        maxUses:
+          type: integer
+          minimum: 1
+        uses:
+          type: integer
+          minimum: 0
+        expiresAt:
+          type: [string, 'null']
+          format: date-time
+        revokedAt:
+          type: [string, 'null']
+          format: date-time
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        acceptedMemberCount:
+          type: integer
+          minimum: 0
+        acceptedMembers:
+          type: array
+          items:
+            $ref: '#/components/schemas/AcceptedMember'
+
+    InviteSummary:
+      type: object
+      additionalProperties: false
+      required: [total, active, history, acceptedUses, availableUses]
+      properties:
+        total:
+          type: integer
+          minimum: 0
+        active:
+          type: integer
+          minimum: 0
+        history:
+          type: integer
+          minimum: 0
+        acceptedUses:
+          type: integer
+          minimum: 0
+        availableUses:
+          type: integer
+          minimum: 0
+
+    AttachmentCapabilities:
+      type: object
+      additionalProperties: false
+      required: [canDownload, canRemove]
+      properties:
+        canDownload:
+          type: boolean
+        canRemove:
+          type: boolean
+
+    Attachment:
+      type: object
+      additionalProperties: false
+      required: [id, fileName, mimeType, byteSize, status, visibility, uploaderId, uploader, createdAt, completedAt, availableAt, capabilities]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        fileName:
+          type: string
+        mimeType:
+          type: string
+        byteSize:
+          type: integer
+          minimum: 0
+        status:
+          type: string
+          enum: [pending, available, failed, removed]
+        visibility:
+          type: string
+          enum: [private_staging, conversation, space]
+        uploaderId:
+          $ref: '#/components/schemas/Identifier'
+        uploaderName:
+          type: string
+        uploader:
+          type: object
+          additionalProperties: false
+          required: [id, displayName]
+          properties:
+            id:
+              $ref: '#/components/schemas/Identifier'
+            displayName:
+              type: string
+        conversationId:
+          type: [string, 'null']
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        completedAt:
+          type: [string, 'null']
+          format: date-time
+        availableAt:
+          type: [string, 'null']
+          format: date-time
+        capabilities:
+          $ref: '#/components/schemas/AttachmentCapabilities'
+
+    ConversationCapabilities:
+      type: object
+      additionalProperties: false
+      required: [canSendMessage, canUploadFile, canManageMembers]
+      properties:
+        canSendMessage:
+          type: boolean
+        canUploadFile:
+          type: boolean
+        canManageMembers:
+          type: boolean
+
+    MessageContent:
+      type: object
+      additionalProperties: false
+      required: [format, plainText, blocks]
+      properties:
+        format:
+          type: string
+          const: duallane.message+json;v=1
+        plainText:
+          type: string
+        blocks:
+          type: array
+          minItems: 0
+          items:
+            $ref: '#/components/schemas/MessageBlock'
+
+    MessageContentInput:
+      type: object
+      additionalProperties: false
+      required: [format, blocks]
+      properties:
+        format:
+          type: string
+          const: duallane.message+json;v=1
+        plainText:
+          type: string
+        blocks:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/MessageBlockInput'
+
+    MessageBlock:
+      oneOf:
+        - $ref: '#/components/schemas/TextBlock'
+        - $ref: '#/components/schemas/MentionBlock'
+        - $ref: '#/components/schemas/LinkBlock'
+        - $ref: '#/components/schemas/EmojiBlock'
+        - $ref: '#/components/schemas/AttachmentBlock'
+        - $ref: '#/components/schemas/EmoteCollectionBlock'
+        - $ref: '#/components/schemas/TopicReferenceBlock'
+        - $ref: '#/components/schemas/CardBlock'
+
+    MessageBlockInput:
+      oneOf:
+        - $ref: '#/components/schemas/TextBlock'
+        - $ref: '#/components/schemas/MentionBlock'
+        - $ref: '#/components/schemas/LinkBlock'
+        - $ref: '#/components/schemas/EmojiBlock'
+        - $ref: '#/components/schemas/AttachmentBlock'
+        - $ref: '#/components/schemas/EmoteCollectionInputBlock'
+        - $ref: '#/components/schemas/TopicReferenceBlock'
+        - $ref: '#/components/schemas/CardBlock'
+
+    TextBlock:
+      type: object
+      additionalProperties: false
+      required: [type, text]
+      properties:
+        type:
+          const: text
+        text:
+          type: string
+
+    MentionBlock:
+      type: object
+      additionalProperties: false
+      required: [type, userId, label]
+      properties:
+        type:
+          const: mention
+        userId:
+          $ref: '#/components/schemas/Identifier'
+        label:
+          type: string
+
+    LinkBlock:
+      type: object
+      additionalProperties: false
+      required: [type, url]
+      properties:
+        type:
+          const: link
+        url:
+          type: string
+          format: uri-reference
+        label:
+          type: string
+
+    EmojiBlock:
+      type: object
+      additionalProperties: false
+      required: [type, shortcode]
+      properties:
+        type:
+          const: emoji
+        shortcode:
+          type: string
+
+    AttachmentBlock:
+      type: object
+      additionalProperties: false
+      required: [type, attachmentId]
+      properties:
+        type:
+          const: attachment
+        attachmentId:
+          $ref: '#/components/schemas/Identifier'
+
+    EmoteCollectionInputBlock:
+      type: object
+      additionalProperties: false
+      required: [type, shareId]
+      properties:
+        type:
+          const: emote_collection
+        shareId:
+          $ref: '#/components/schemas/Identifier'
+
+    EmoteCollectionBlock:
+      type: object
+      additionalProperties: false
+      required: [type, shareId]
+      properties:
+        type:
+          const: emote_collection
+        shareId:
+          $ref: '#/components/schemas/Identifier'
+        share:
+          $ref: '#/components/schemas/EmoteCollectionShare'
+
+    EmoteCollectionShare:
+      type: object
+      additionalProperties: false
+      required: [id, name, itemCount, createdAt, revokedAt, sharedBy, originalCreator, canRevoke, covers, sharePath]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        name:
+          type: string
+        itemCount:
+          type: integer
+          minimum: 0
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        revokedAt:
+          type: [string, 'null']
+          format: date-time
+        sharedBy:
+          $ref: '#/components/schemas/DisplayMember'
+        originalCreator:
+          $ref: '#/components/schemas/DisplayMember'
+        canRevoke:
+          type: boolean
+        covers:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, label, src]
+            properties:
+              id:
+                $ref: '#/components/schemas/Identifier'
+              label:
+                type: string
+              src:
+                type: string
+              animated:
+                type: boolean
+        sharePath:
+          type: string
+
+    DisplayMember:
+      type: object
+      additionalProperties: false
+      required: [id, displayName]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        displayName:
+          type: string
+
+    TopicReferenceBlock:
+      type: object
+      additionalProperties: false
+      required: [type, topicId, title]
+      properties:
+        type:
+          const: topic_reference
+        topicId:
+          $ref: '#/components/schemas/Identifier'
+        title:
+          type: string
+
+    CardBlock:
+      type: object
+      additionalProperties: false
+      required: [type, cardId, cardType, schemaVersion, fallbackText]
+      properties:
+        type:
+          const: card
+        cardId:
+          $ref: '#/components/schemas/Identifier'
+        cardType:
+          type: string
+          pattern: '^[a-z][a-z0-9._-]{0,127}$'
+        schemaVersion:
+          type: integer
+          minimum: 1
+        fallbackText:
+          type: string
+
+    Message:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - conversationId
+        - authorId
+        - authorName
+        - authorKind
+        - kind
+        - clientMessageId
+        - content
+        - plainText
+        - replyToMessageId
+        - createdAt
+        - editedAt
+        - deletedAt
+        - recalledAt
+        - recallReason
+        - attachments
+        - reactions
+        - hiddenByCurrentUser
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        conversationId:
+          $ref: '#/components/schemas/Identifier'
+        authorId:
+          type: [string, 'null']
+        authorName:
+          type: [string, 'null']
+        authorNickname:
+          type: [string, 'null']
+        authorRemark:
+          type: [string, 'null']
+        authorGithubLogin:
+          type: [string, 'null']
+        authorAvatarUrl:
+          type: [string, 'null']
+        authorKind:
+          type: string
+          enum: [human, bot, system]
+        kind:
+          type: string
+          enum: [user, bot, system]
+        clientMessageId:
+          type: [string, 'null']
+        content:
+          $ref: '#/components/schemas/MessageContent'
+        plainText:
+          type: string
+        replyToMessageId:
+          type: [string, 'null']
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        editedAt:
+          type: [string, 'null']
+          format: date-time
+        deletedAt:
+          type: [string, 'null']
+          format: date-time
+        recalledAt:
+          type: [string, 'null']
+          format: date-time
+        recallReason:
+          type: [string, 'null']
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/Attachment'
+        reactions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Reaction'
+        pin:
+          $ref: '#/components/schemas/MessagePin'
+        hiddenByCurrentUser:
+          type: boolean
+        conversation:
+          $ref: '#/components/schemas/Conversation'
+
+    MessagePin:
+      type: object
+      additionalProperties: false
+      required: [pinnedByUserId, pinnedAt, canUnpin]
+      properties:
+        pinnedByUserId:
+          $ref: '#/components/schemas/Identifier'
+        pinnedAt:
+          $ref: '#/components/schemas/DateTime'
+        canUnpin:
+          type: boolean
+
+    ReactionUser:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, githubLogin, createdAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        displayName:
+          type: string
+        githubLogin:
+          type: [string, 'null']
+        avatarUrl:
+          type: [string, 'null']
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+
+    Reaction:
+      type: object
+      additionalProperties: false
+      required: [emoteKey, count, reactedByCurrentUser, users]
+      properties:
+        emoteKey:
+          type: string
+          minLength: 1
+          maxLength: 128
+        count:
+          type: integer
+          minimum: 1
+        reactedByCurrentUser:
+          type: boolean
+        users:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ReactionUser'
+
+    Conversation:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - spaceId
+        - type
+        - title
+        - avatarEmoji
+        - displayTitle
+        - otherMember
+        - retentionCount
+        - retentionText
+        - createdAt
+        - lastActivityAt
+        - messageCount
+        - memberCount
+        - lastMessagePlainText
+        - lastMessageAt
+        - unreadCount
+        - lastReadMessageId
+        - lastReadAt
+        - lastReadSeq
+        - notificationLevel
+        - capabilities
+        - members
+        - latestMessages
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        spaceId:
+          $ref: '#/components/schemas/Identifier'
+        type:
+          type: string
+          enum: [direct, group]
+        title:
+          type: [string, 'null']
+        avatarEmoji:
+          type: [string, 'null']
+        displayTitle:
+          type: string
+        otherMember:
+          oneOf:
+            - $ref: '#/components/schemas/Member'
+            - type: 'null'
+        retentionCount:
+          type: integer
+          minimum: 1
+        retentionText:
+          type: string
+        createdAt:
+          $ref: '#/components/schemas/DateTime'
+        lastActivityAt:
+          $ref: '#/components/schemas/DateTime'
+        messageCount:
+          type: integer
+          minimum: 0
+        memberCount:
+          type: integer
+          minimum: 0
+        lastMessagePlainText:
+          type: string
+        lastMessageAt:
+          type: [string, 'null']
+          format: date-time
+        unreadCount:
+          type: integer
+          minimum: 0
+        lastReadMessageId:
+          type: [string, 'null']
+        lastReadAt:
+          type: [string, 'null']
+          format: date-time
+        lastReadSeq:
+          type: [integer, 'null']
+          minimum: 0
+        notificationLevel:
+          type: string
+          enum: [all, mentions, muted]
+        capabilities:
+          $ref: '#/components/schemas/ConversationCapabilities'
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/Member'
+        latestMessages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+
+    Pin:
+      type: object
+      additionalProperties: false
+      required: [messageId, pinnedByUserId, pinnedAt, canUnpin, message]
+      properties:
+        messageId:
+          $ref: '#/components/schemas/Identifier'
+        pinnedByUserId:
+          $ref: '#/components/schemas/Identifier'
+        pinnedAt:
+          $ref: '#/components/schemas/DateTime'
+        canUnpin:
+          type: boolean
+        message:
+          $ref: '#/components/schemas/Message'
+
+    BootstrapResponse:
+      type: object
+      additionalProperties: false
+      required: [auth, space, policy, permissions, members, conversations, files, invites, inviteSummary, eventCursor, appVersion]
+      properties:
+        auth:
+          type: object
+          additionalProperties: false
+          required: [mode, inviteOnly, currentUser]
+          properties:
+            mode:
+              type: string
+              const: development
+            inviteOnly:
+              const: true
+            currentUser:
+              $ref: '#/components/schemas/Member'
+        space:
+          $ref: '#/components/schemas/Space'
+        policy:
+          $ref: '#/components/schemas/Policy'
+        permissions:
+          $ref: '#/components/schemas/Permissions'
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/Member'
+        conversations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Conversation'
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/Attachment'
+        invites:
+          type: array
+          items:
+            $ref: '#/components/schemas/Invite'
+        inviteSummary:
+          $ref: '#/components/schemas/InviteSummary'
+        eventCursor:
+          type: integer
+          minimum: 0
+        appVersion:
+          type: string
+
+    Statistics:
+      type: object
+      additionalProperties: false
+      required: [asOf, dayStartedAt, totals, today]
+      properties:
+        asOf:
+          $ref: '#/components/schemas/DateTime'
+        dayStartedAt:
+          $ref: '#/components/schemas/DateTime'
+        totals:
+          $ref: '#/components/schemas/StatisticsCounts'
+        today:
+          $ref: '#/components/schemas/StatisticsCounts'
+
+    StatisticsCounts:
+      type: object
+      additionalProperties: false
+      required: [members, conversations, messages, files, uploadedBytes]
+      properties:
+        members:
+          type: integer
+          minimum: 0
+        conversations:
+          type: integer
+          minimum: 0
+        messages:
+          type: integer
+          minimum: 0
+        files:
+          type: integer
+          minimum: 0
+        uploadedBytes:
+          type: integer
+          minimum: 0
+
+    Visibility:
+      type: object
+      additionalProperties: false
+      required: [basis, viewerUserId, automaticUserIds, grantedUserIds, visibleUserIds]
+      properties:
+        basis:
+          type: string
+          const: direct_contacts
+        viewerUserId:
+          $ref: '#/components/schemas/Identifier'
+        automaticUserIds:
+          type: array
+          items:
+            $ref: '#/components/schemas/Identifier'
+        grantedUserIds:
+          type: array
+          items:
+            $ref: '#/components/schemas/Identifier'
+        visibleUserIds:
+          type: array
+          items:
+            $ref: '#/components/schemas/Identifier'
+
+    ProfilePatch:
+      type: object
+      additionalProperties: false
+      properties:
+        nickname:
+          type: [string, 'null']
+          maxLength: 32
+        searchDiscoverable:
+          type: boolean
+        recallReason:
+          type: [string, 'null']
+          maxLength: 16
+
+    VisibilityUpdate:
+      type: object
+      additionalProperties: false
+      required: [visibleUserIds]
+      properties:
+        visibleUserIds:
+          type: array
+          items:
+            $ref: '#/components/schemas/Identifier'
+
+    MemberRoleUpdate:
+      type: object
+      additionalProperties: false
+      required: [role]
+      properties:
+        role:
+          $ref: '#/components/schemas/UserRole'
+
+    RemarkUpdate:
+      type: object
+      additionalProperties: false
+      required: [remark]
+      properties:
+        remark:
+          type: string
+          minLength: 1
+          maxLength: 32
+
+    CreateDirectConversationRequest:
+      type: object
+      additionalProperties: false
+      required: [type, targetUserId]
+      properties:
+        type:
+          const: direct
+        targetUserId:
+          $ref: '#/components/schemas/Identifier'
+
+    CreateGroupConversationRequest:
+      type: object
+      additionalProperties: false
+      required: [type, title, memberIds]
+      properties:
+        type:
+          const: group
+        title:
+          type: string
+          minLength: 1
+          maxLength: 80
+        avatarEmoji:
+          type: [string, 'null']
+        memberIds:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/Identifier'
+
+    GroupUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 80
+        avatarEmoji:
+          type: [string, 'null']
+
+    AddGroupMemberRequest:
+      type: object
+      additionalProperties: false
+      required: [userId]
+      properties:
+        userId:
+          $ref: '#/components/schemas/Identifier'
+
+    NotificationUpdate:
+      type: object
+      additionalProperties: false
+      required: [level]
+      properties:
+        level:
+          type: string
+          enum: [all, mentions, muted]
+
+    CreateMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [conversationId, clientMessageId, content]
+      properties:
+        conversationId:
+          $ref: '#/components/schemas/Identifier'
+        clientMessageId:
+          type: string
+          minLength: 1
+          maxLength: 256
+        content:
+          $ref: '#/components/schemas/MessageContentInput'
+        replyToMessageId:
+          type: [string, 'null']
+
+    AddReactionRequest:
+      type: object
+      additionalProperties: false
+      required: [emoteKey]
+      properties:
+        emoteKey:
+          type: string
+          minLength: 1
+          maxLength: 128
+
+    PinRequest:
+      type: object
+      additionalProperties: false
+      required: [messageId]
+      properties:
+        messageId:
+          $ref: '#/components/schemas/Identifier'
+
+    BootstrapAuthResponse:
+      type: object
+      additionalProperties: false
+      required: [auth]
+      properties:
+        auth:
+          $ref: '#/components/schemas/BootstrapResponse'
+
+    UserResponse:
+      type: object
+      additionalProperties: false
+      required: [user]
+      properties:
+        user:
+          $ref: '#/components/schemas/Member'
+
+    MemberResponse:
+      type: object
+      additionalProperties: false
+      required: [member]
+      properties:
+        member:
+          $ref: '#/components/schemas/Member'
+
+    MembersResponse:
+      type: object
+      additionalProperties: false
+      required: [members]
+      properties:
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/Member'
+
+    VisibilityResponse:
+      type: object
+      additionalProperties: false
+      required: [visibility]
+      properties:
+        visibility:
+          $ref: '#/components/schemas/Visibility'
+
+    RemoveMemberResponse:
+      type: object
+      additionalProperties: false
+      required: [ok, userId, removedAt]
+      properties:
+        ok:
+          const: true
+        userId:
+          $ref: '#/components/schemas/Identifier'
+        removedAt:
+          $ref: '#/components/schemas/DateTime'
+
+    StatisticsResponse:
+      type: object
+      additionalProperties: false
+      required: [statistics]
+      properties:
+        statistics:
+          $ref: '#/components/schemas/Statistics'
+
+    ConversationResponse:
+      type: object
+      additionalProperties: false
+      required: [conversation]
+      properties:
+        conversation:
+          $ref: '#/components/schemas/Conversation'
+
+    ConversationsResponse:
+      type: object
+      additionalProperties: false
+      required: [conversations]
+      properties:
+        conversations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Conversation'
+
+    MessagesResponse:
+      type: object
+      additionalProperties: false
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+
+    MessageResponse:
+      type: object
+      additionalProperties: false
+      required: [message]
+      properties:
+        message:
+          $ref: '#/components/schemas/Message'
+
+    LeaveGroupResponse:
+      type: object
+      additionalProperties: false
+      required: [ok, conversationId]
+      properties:
+        ok:
+          const: true
+        conversationId:
+          $ref: '#/components/schemas/Identifier'
+
+    PinsResponse:
+      type: object
+      additionalProperties: false
+      required: [pins]
+      properties:
+        pins:
+          type: array
+          items:
+            $ref: '#/components/schemas/Pin'
+
+    PinItemResponse:
+      type: object
+      additionalProperties: false
+      required: [pin]
+      properties:
+        pin:
+          $ref: '#/components/schemas/Pin'
+
+    UnpinResponse:
+      type: object
+      additionalProperties: false
+      required: [messageId, removed]
+      properties:
+        messageId:
+          $ref: '#/components/schemas/Identifier'
+        removed:
+          type: boolean
+
+    ReactionsResponse:
+      type: object
+      additionalProperties: false
+      required: [messageId, reactions]
+      properties:
+        messageId:
+          $ref: '#/components/schemas/Identifier'
+        reactions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Reaction'
+
+    HiddenResponse:
+      type: object
+      additionalProperties: false
+      required: [messageId, hidden, changed]
+      properties:
+        messageId:
+          $ref: '#/components/schemas/Identifier'
+        hidden:
+          type: boolean
+        changed:
+          type: boolean
