@@ -50,6 +50,26 @@ that it passed. Each accepted slice records exact commits and commands below.
 Production observation and final legacy removal occur after this task's boundary;
 they remain explicit operator gates, never fabricated pre-deployment passes.
 
+## Current Closeout Map — 2026-09-07
+
+This map supersedes earlier **open implementation** notes only where an
+accepted slice below records the fix. Historical failed checks remain useful
+regressions; they are not erased or silently turned into passes. Production
+ownership is unchanged and is recorded only in the canonical ledger.
+
+| Gate | Latest reviewed result | Remaining acceptance |
+| --- | --- | --- |
+| Go/Node aggregate baseline | `37ae061` full PostgreSQL/race, Go verify, Node lint/unit/build; its three CI jobs passed; `e31f56e` CI also passed | Repeat on the final integrated commit |
+| Actual native media | `78e43c6` fix; exact-image 28-case corpus passed with native libvips 8.14.1 | Build and test the final integrated runtime image |
+| Workspace browser | Original complete local suite: 10 passed, 2 failed; independent CI job added in `2c5c164` | Fix Echo release delivery and continuous-message realtime; rerun all original cases |
+| Release safety | Accepted immutable migration image checks, passive candidates, offline Node startup, canonical snapshot component, read-only database drain command, read-only gateway smoke | Integrate restart-policy fencing, complete Go-to-Go old-configuration recovery, drain/provider gate and post-cutover/recovery smoke; rehearse failure and rollback |
+| Storage compatibility | Accepted bounded legacy reads, permission probes, read-only plan/verify, explicit S3 provisioning and backfill journal library | Close retained offline operator-tool boundaries and prove final-image/same-authority recovery; no production copy or finalization |
+| Delivery | Draft PR #2 is open; commits through `78e43c6` are pushed; SSH transport recovered | Final aggregate review/CI, safe artifact cleanup and complete PR evidence before readiness |
+
+The parallel fixes do not change frontend test assertions, retries or timeouts.
+Private browser diagnostics are not PR artifacts. Passing component checks do
+not substitute for a coordinated release rehearsal or authorize a deployment.
+
 ## Parallel Ownership — Wave 1
 
 All workers read mandatory and owning product/security guides. Workers edit
