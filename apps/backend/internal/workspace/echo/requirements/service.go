@@ -130,62 +130,76 @@ func (s *Service) withMutation(ctx context.Context, actorID, spaceID string, met
 	}
 	meta = meta.Safe()
 	var result *Requirement
-	var rejection *mutationRejection
+	var rejected *TransactionRejection
 	err := s.repo.WithTx(ctx, func(tx Tx) error {
-		if tx == nil {
-			return errors.New("echo requirement transaction is required")
-		}
-		actor, err := s.lookupActor(ctx, tx, spaceID, actorID)
-		if err != nil {
-			return err
-		}
-		var successReason string
-		at := s.nowUTC()
-		result, rejection, successReason, err = fn(tx, actor, at)
-		if err != nil {
-			return err
-		}
-		// A successful idempotency replay has no new domain mutation. The
-		// original transaction already recorded its audit/event pair; emitting
-		// another success audit here would make retries observable as writes.
-		if rejection == nil && successReason == "" {
+		var txErr error
+		result, txErr = s.withMutationInTx(ctx, tx, actorID, spaceID, meta, action, fn)
+		if marker, ok := txErr.(*TransactionRejection); ok {
+			rejected = marker
 			return nil
 		}
-		targetID := ""
-		reason := successReason
-		outcome := "success"
-		if rejection != nil {
-			targetID = rejection.targetID
-			reason = rejection.reason
-			if reason == "" && rejection.err != nil {
-				reason = rejection.err.Code
-			}
-			outcome = "rejected"
-		} else if result != nil {
-			targetID = result.PublicID
-		}
-		audit := AuditInput{
-			SpaceID:          spaceID,
-			ActorUserID:      actor.ID,
-			ActorGitHubLogin: actor.GitHubLogin,
-			Action:           action,
-			TargetType:       "echo.requirement",
-			TargetID:         targetID,
-			Result:           outcome,
-			Reason:           reason,
-			Meta:             meta,
-			CreatedAt:        at,
-		}
-		if err := tx.WriteAudit(ctx, audit); err != nil {
-			return err
-		}
-		return nil
+		return txErr
 	})
 	if err != nil {
 		return nil, normalizeError(err)
 	}
+	if rejected != nil {
+		return nil, rejected.Err
+	}
+	return result, nil
+}
+
+// withMutationInTx applies requirement authorization, mutation, idempotency,
+// events, and audit writes to a caller-owned transaction. A domain rejection
+// is returned as TransactionRejection after its content-free audit is written;
+// infrastructure failures remain ordinary errors and must roll back.
+func (s *Service) withMutationInTx(ctx context.Context, tx Tx, actorID, spaceID string, meta auth.RequestMeta, action string, fn func(Tx, *auth.Actor, time.Time) (*Requirement, *mutationRejection, string, error)) (*Requirement, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("run echo requirement mutation", errors.New("repository is required"))
+	}
+	if tx == nil {
+		return nil, internalError("run echo requirement mutation", errors.New("transaction is required"))
+	}
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" {
+		return nil, authRequiredError()
+	}
+	meta = meta.Safe()
+	actor, err := s.lookupActor(ctx, tx, spaceID, actorID)
+	if err != nil {
+		return nil, err
+	}
+	result, rejection, successReason, err := fn(tx, actor, s.nowUTC())
+	if err != nil {
+		return nil, err
+	}
+	// A successful idempotency replay has no new domain mutation. The original
+	// transaction already recorded its audit/event pair.
+	if rejection == nil && successReason == "" {
+		return result, nil
+	}
+	targetID := ""
+	reason := successReason
+	outcome := "success"
 	if rejection != nil {
-		return nil, rejection.err
+		targetID = rejection.targetID
+		reason = rejection.reason
+		if reason == "" && rejection.err != nil {
+			reason = rejection.err.Code
+		}
+		outcome = "rejected"
+	} else if result != nil {
+		targetID = result.PublicID
+	}
+	if err := tx.WriteAudit(ctx, AuditInput{
+		SpaceID: spaceID, ActorUserID: actor.ID, ActorGitHubLogin: actor.GitHubLogin,
+		Action: action, TargetType: "echo.requirement", TargetID: targetID,
+		Result: outcome, Reason: reason, Meta: meta, CreatedAt: s.nowUTC(),
+	}); err != nil {
+		return nil, err
+	}
+	if rejection != nil {
+		return nil, &TransactionRejection{Err: rejection.err, TargetID: rejection.targetID, Reason: reason}
 	}
 	return result, nil
 }
@@ -216,11 +230,23 @@ func (s *Service) Submit(ctx context.Context, input SubmitInput) (*Requirement, 
 	if err != nil {
 		return nil, err
 	}
-	actorID := strings.TrimSpace(input.ActorID)
-	if _, err := s.readActor(ctx, spaceID, actorID); err != nil {
+	return s.withMutation(ctx, input.ActorID, spaceID, input.Meta, "echo.requirement.submit", s.submitMutation(ctx, spaceID, input))
+}
+
+// SubmitInTx applies the complete requirement submission to an already-open
+// transaction. Domain rejections return TransactionRejection after their
+// audit is written; infrastructure failures must roll the outer transaction
+// back.
+func (s *Service) SubmitInTx(ctx context.Context, tx Tx, input SubmitInput) (*Requirement, error) {
+	spaceID, err := normalizeIdentifier(s.space(input.SpaceID), CodeInvalidSpace, MessageInvalidSpace)
+	if err != nil {
 		return nil, err
 	}
-	return s.withMutation(ctx, actorID, spaceID, input.Meta, "echo.requirement.submit", func(tx Tx, actor *auth.Actor, at time.Time) (*Requirement, *mutationRejection, string, error) {
+	return s.withMutationInTx(ctx, tx, input.ActorID, spaceID, input.Meta, "echo.requirement.submit", s.submitMutation(ctx, spaceID, input))
+}
+
+func (s *Service) submitMutation(ctx context.Context, spaceID string, input SubmitInput) func(Tx, *auth.Actor, time.Time) (*Requirement, *mutationRejection, string, error) {
+	return func(tx Tx, actor *auth.Actor, at time.Time) (*Requirement, *mutationRejection, string, error) {
 		if actor.Role == "auditor" {
 			return nil, &mutationRejection{err: NewError(CodePermissionDenied, "审计角色不能提交需求", 403), reason: "permission.denied"}, "", nil
 		}
@@ -309,7 +335,7 @@ func (s *Service) Submit(ctx context.Context, input SubmitInput) (*Requirement, 
 			return nil, nil, "", err
 		}
 		return &result, nil, "submitted", nil
-	})
+	}
 }
 
 // Create is an intentional alias for callers that model all domain writes as
@@ -433,11 +459,22 @@ func (s *Service) Transition(ctx context.Context, input TransitionInput) (*Requi
 	if err != nil {
 		return nil, err
 	}
-	actorID := strings.TrimSpace(input.ActorID)
-	if _, err := s.readActor(ctx, spaceID, actorID); err != nil {
+	return s.withMutation(ctx, input.ActorID, spaceID, input.Meta, "echo.requirement.transition", s.transitionMutation(ctx, spaceID, input))
+}
+
+// TransitionInTx applies a requirement transition to a caller-owned
+// transaction. The transaction rejection marker keeps the rejection audit in
+// the same outer transaction while still returning the public domain error.
+func (s *Service) TransitionInTx(ctx context.Context, tx Tx, input TransitionInput) (*Requirement, error) {
+	spaceID, err := normalizeIdentifier(s.space(input.SpaceID), CodeInvalidSpace, MessageInvalidSpace)
+	if err != nil {
 		return nil, err
 	}
-	return s.withMutation(ctx, actorID, spaceID, input.Meta, "echo.requirement.transition", func(tx Tx, actor *auth.Actor, at time.Time) (*Requirement, *mutationRejection, string, error) {
+	return s.withMutationInTx(ctx, tx, input.ActorID, spaceID, input.Meta, "echo.requirement.transition", s.transitionMutation(ctx, spaceID, input))
+}
+
+func (s *Service) transitionMutation(ctx context.Context, spaceID string, input TransitionInput) func(Tx, *auth.Actor, time.Time) (*Requirement, *mutationRejection, string, error) {
+	return func(tx Tx, actor *auth.Actor, at time.Time) (*Requirement, *mutationRejection, string, error) {
 		// Keep all input normalization inside the rejection-audit transaction.
 		// This mirrors the active Node service: malformed transition attempts are
 		// content-free audit records, while authentication failures remain
@@ -578,7 +615,7 @@ func (s *Service) Transition(ctx context.Context, input TransitionInput) (*Requi
 			}
 		}
 		return &result, nil, reason, nil
-	})
+	}
 }
 
 func (s *Service) ProjectEvent(ctx context.Context, input GetInput) (*RequirementEvent, error) {

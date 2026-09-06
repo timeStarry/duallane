@@ -518,3 +518,31 @@ verified as zero; the first run's temporary directory and Go child processes
 were also verified absent. These partial results are not the full twelve-case
 Workspace browser gate. The harness guard is wired into CI; the actual Go
 Workspace browser job awaits successful full-suite integration.
+
+### Echo Solicitation Domain And Shared Transaction Review
+
+The solicitation domain now characterizes create/publish/close/withdraw/vote,
+owner-only voter/delivery projections, revision and idempotency behavior, and
+content-free audit/event effects. The actual Node persisted-contract generator
+passed all twenty cases. Independent fresh PostgreSQL/race initially passed
+requirements/releases/solicitations (15.253 / 8.472 / 28.993 seconds), but parent
+review found that the new transaction-scoped solicitation APIs still read
+conversation membership through another pool connection.
+
+A real PostgreSQL regression first reproduced that uncommitted conversation
+revocation still permitted projection and created a vote. Both paths now use
+the caller's typed transaction. Accepting membership reads hold share locks;
+all three Echo transaction adapters similarly pin actor membership and identity
+until completion. PostgreSQL NOWAIT regressions verify those protections.
+Fresh PostgreSQL/race then passed the three domains (7.875 / 4.806 / 17.350
+seconds). The shared card adapter now requires one typed solicitation view,
+avoiding conflicting card/domain method signatures and removing pool fallbacks.
+Its regression preserves the actual Node use of `card.revision`. After that
+change solicitation PostgreSQL/race passed again (14.139 seconds), followed by
+integration-tag staticcheck. Three unused delivery-write helpers left by the
+ownership separation were removed after staticcheck identified them.
+
+These are domain and adapter gates only. The HTTP routes, nonempty Echo
+automation registry, outer card rejection-audit policy, delivery worker and
+real composition still require separate acceptance. A domain rejection marker
+does not authorize committing unrelated prior writes in an outer transaction.

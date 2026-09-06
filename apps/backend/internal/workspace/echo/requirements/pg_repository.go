@@ -40,6 +40,25 @@ func defaultIDFactory() (string, error) {
 	return id.String(), nil
 }
 
+// NewPGTransaction wraps an already-open PostgreSQL transaction with the
+// requirement domain's typed Tx surface. The caller owns commit/rollback.
+func NewPGTransaction(tx pgx.Tx) Tx {
+	if tx == nil {
+		return nil
+	}
+	return &pgTx{tx: tx, repository: NewPGRepository(nil)}
+}
+
+// NewTransaction reuses this repository's configured ID factory while
+// wrapping an already-open transaction. It never starts or commits a pool
+// transaction.
+func (r *PGRepository) NewTransaction(tx pgx.Tx) Tx {
+	if r == nil || tx == nil {
+		return nil
+	}
+	return &pgTx{tx: tx, repository: r}
+}
+
 func (r *PGRepository) Ping(ctx context.Context) error {
 	if r == nil || r.pool == nil {
 		return errors.New("workspace echo requirements postgres pool is required")
@@ -78,10 +97,15 @@ func (r *PGRepository) LookupActor(ctx context.Context, spaceID, userID string) 
 	if r == nil || r.pool == nil {
 		return nil, errors.New("workspace echo requirements postgres pool is required")
 	}
-	return lookupActor(ctx, r.pool, spaceID, userID)
+	return lookupActor(ctx, r.pool, spaceID, userID, false)
 }
 
-func lookupActor(ctx context.Context, queryer pgQueryer, spaceID, userID string) (*auth.Actor, error) {
+func lookupActor(ctx context.Context, queryer pgQueryer, spaceID, userID string, lock bool) (*auth.Actor, error) {
+	lockClause := ""
+	if lock {
+		// Pin authorization through commit, including while a domain lock waits.
+		lockClause = " FOR SHARE OF sm, u"
+	}
 	var actor auth.Actor
 	var githubID, email, nickname, avatarURL *string
 	err := queryer.QueryRow(ctx, `
@@ -91,7 +115,7 @@ func lookupActor(ctx context.Context, queryer pgQueryer, spaceID, userID string)
 		FROM users u
 		INNER JOIN space_members sm ON sm.user_id = u.id
 		WHERE u.id = $1 AND sm.space_id = $2 AND sm.removed_at IS NULL
-	`, userID, spaceID).Scan(&actor.ID, &githubID, &actor.GitHubLogin, &email, &actor.DisplayName, &nickname, &avatarURL, &actor.SearchDiscoverable, &actor.Kind, &actor.Role, &actor.JoinedAt)
+	`+lockClause, userID, spaceID).Scan(&actor.ID, &githubID, &actor.GitHubLogin, &email, &actor.DisplayName, &nickname, &avatarURL, &actor.SearchDiscoverable, &actor.Kind, &actor.Role, &actor.JoinedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -303,7 +327,7 @@ type pgTx struct {
 }
 
 func (t *pgTx) LookupActor(ctx context.Context, spaceID, userID string) (*auth.Actor, error) {
-	return lookupActor(ctx, t.tx, spaceID, userID)
+	return lookupActor(ctx, t.tx, spaceID, userID, true)
 }
 func (t *pgTx) GetRequirementByPublicID(ctx context.Context, spaceID, publicID string) (*RequirementRecord, error) {
 	return getRequirementByPublicID(ctx, t.tx, spaceID, publicID)

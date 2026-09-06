@@ -39,6 +39,37 @@ type Error struct {
 	Cause      error  `json:"-"`
 }
 
+// TransactionRejection marks a publish rejection whose metadata-only audit
+// has already been written to a caller-owned transaction. The outer caller
+// must commit this marker path; database/provider failures remain ordinary
+// errors and must roll back.
+type TransactionRejection struct {
+	Err      *Error
+	TargetID string
+	Reason   string
+}
+
+func (e *TransactionRejection) Error() string {
+	if e == nil || e.Err == nil {
+		return ""
+	}
+	return e.Err.Error()
+}
+
+func (e *TransactionRejection) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func (e *TransactionRejection) PublicError() *Error {
+	if e == nil || e.Err == nil {
+		return nil
+	}
+	return e.Err.Public()
+}
+
 func (e *Error) Error() string {
 	if e == nil {
 		return ""

@@ -78,6 +78,37 @@ type Error struct {
 	Cause      error  `json:"-"`
 }
 
+// TransactionRejection marks a domain rejection whose content-free audit was
+// written through a caller-owned transaction. The outer transaction must
+// commit this marker path; repository and infrastructure failures never use
+// it and must roll the transaction back.
+type TransactionRejection struct {
+	Err      *Error
+	TargetID string
+	Reason   string
+}
+
+func (e *TransactionRejection) Error() string {
+	if e == nil || e.Err == nil {
+		return ""
+	}
+	return e.Err.Error()
+}
+
+func (e *TransactionRejection) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func (e *TransactionRejection) PublicError() *Error {
+	if e == nil || e.Err == nil {
+		return nil
+	}
+	return e.Err.Public()
+}
+
 func (e *Error) Error() string {
 	if e == nil {
 		return ""

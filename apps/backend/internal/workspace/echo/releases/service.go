@@ -106,6 +106,40 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*Publication
 	if s == nil || s.repo == nil {
 		return nil, internalError("publish echo release", errors.New("repository is required"))
 	}
+	var result *PublicationSummary
+	var rejected *TransactionRejection
+	err := s.repo.WithTx(ctx, func(tx Tx) error {
+		var txErr error
+		result, txErr = s.PublishInTx(ctx, tx, input)
+		if marker, ok := txErr.(*TransactionRejection); ok {
+			rejected = marker
+			return nil
+		}
+		return txErr
+	})
+	if err != nil {
+		if domainErr := asDomainError(err); domainErr != nil {
+			return nil, domainErr
+		}
+		return nil, normalizeError(err)
+	}
+	if rejected != nil {
+		return nil, rejected.Err
+	}
+	return result, nil
+}
+
+// PublishInTx applies release publication, recipient row creation, snapshot,
+// idempotent replay, and audit writes to a caller-owned transaction. A
+// TransactionRejection is returned only after its rejection audit is in tx;
+// the caller must commit that path.
+func (s *Service) PublishInTx(ctx context.Context, tx Tx, input PublishInput) (*PublicationSummary, error) {
+	if s == nil || s.repo == nil {
+		return nil, internalError("publish echo release", errors.New("repository is required"))
+	}
+	if tx == nil {
+		return nil, internalError("publish echo release", errors.New("transaction is required"))
+	}
 	spaceID := s.space(input.SpaceID)
 	version, err := normalizeVersion(input.Version)
 	if err != nil {
@@ -116,82 +150,75 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*Publication
 		return nil, unauthorizedError()
 	}
 	meta := input.Meta.Safe()
-	var result *PublicationSummary
-	var rejected *Error
-	err = s.repo.WithTx(ctx, func(tx Tx) error {
-		if tx == nil {
-			return errors.New("echo release transaction is required")
-		}
-		actor, lookupErr := tx.LookupActor(ctx, spaceID, actorID)
-		if lookupErr != nil {
-			return lookupErr
-		}
-		if actor == nil || actor.Kind != "human" || strings.TrimSpace(actor.Role) == "" {
-			return unauthorizedError()
-		}
-		if actor.Role != "owner" {
-			rejected = permissionDeniedError()
-			return tx.WriteAudit(ctx, releaseAudit(actor, spaceID, version, "rejected", "permission.denied", meta, s.nowUTC()))
-		}
-		guide, ok := s.catalog.Guide(version)
-		if !ok {
-			rejected = guideNotFoundError()
-			return tx.WriteAudit(ctx, releaseAudit(actor, spaceID, version, "rejected", CodeGuideNotFound, meta, s.nowUTC()))
-		}
-		if err := tx.Lock(ctx, "duallane:echo-release:"+spaceID+":"+version); err != nil {
-			return err
-		}
-		existing, err := tx.GetPublication(ctx, spaceID, version)
-		if err != nil {
-			return err
-		}
-		if existing != nil {
-			result, err = s.summary(ctx, tx, existing, true)
-			if err != nil {
-				return err
-			}
-			return tx.WriteAudit(ctx, releaseAudit(actor, spaceID, version, "success", "replayed", meta, s.nowUTC()))
-		}
-
-		publicationSuffix, err := s.newIdentifier("echo release publication")
-		if err != nil {
-			return err
-		}
-		at := s.nowUTC()
-		guideJSON, guideHash, err := marshalGuide(guide)
-		if err != nil {
-			return err
-		}
-		record := PublicationRecord{
-			ID:                "echo_release_" + publicationSuffix,
-			SpaceID:           spaceID,
-			Version:           version,
-			Title:             guide.Title,
-			GuideHash:         guideHash,
-			GuideJSON:         guideJSON,
-			PublishedByUserID: actor.ID,
-			PublishedAt:       at,
-		}
-		if err := tx.InsertPublication(ctx, record); err != nil {
-			return err
-		}
-		if err := tx.InsertDeliveryRows(ctx, spaceID, record.ID, at); err != nil {
-			return err
-		}
-		result, err = s.summary(ctx, tx, &record, false)
-		if err != nil {
-			return err
-		}
-		return tx.WriteAudit(ctx, releaseAudit(actor, spaceID, version, "success", "published", meta, at))
-	})
+	actor, err := tx.LookupActor(ctx, spaceID, actorID)
 	if err != nil {
-		if domainErr := asDomainError(err); domainErr != nil {
-			return nil, domainErr
-		}
-		return nil, normalizeError(err)
+		return nil, err
 	}
-	if rejected != nil {
-		return nil, rejected
+	if actor == nil || actor.Kind != "human" || strings.TrimSpace(actor.Role) == "" {
+		return nil, unauthorizedError()
+	}
+	if actor.Role != "owner" {
+		if err := tx.WriteAudit(ctx, releaseAudit(actor, spaceID, version, "rejected", "permission.denied", meta, s.nowUTC())); err != nil {
+			return nil, err
+		}
+		return nil, &TransactionRejection{Err: permissionDeniedError(), TargetID: version, Reason: "permission.denied"}
+	}
+	guide, ok := s.catalog.Guide(version)
+	if !ok {
+		if err := tx.WriteAudit(ctx, releaseAudit(actor, spaceID, version, "rejected", CodeGuideNotFound, meta, s.nowUTC())); err != nil {
+			return nil, err
+		}
+		return nil, &TransactionRejection{Err: guideNotFoundError(), TargetID: version, Reason: CodeGuideNotFound}
+	}
+	if err := tx.Lock(ctx, "duallane:echo-release:"+spaceID+":"+version); err != nil {
+		return nil, err
+	}
+	existing, err := tx.GetPublication(ctx, spaceID, version)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		result, err := s.summary(ctx, tx, existing, true)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.WriteAudit(ctx, releaseAudit(actor, spaceID, version, "success", "replayed", meta, s.nowUTC())); err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
+
+	publicationSuffix, err := s.newIdentifier("echo release publication")
+	if err != nil {
+		return nil, err
+	}
+	at := s.nowUTC()
+	guideJSON, guideHash, err := marshalGuide(guide)
+	if err != nil {
+		return nil, err
+	}
+	record := PublicationRecord{
+		ID:                "echo_release_" + publicationSuffix,
+		SpaceID:           spaceID,
+		Version:           version,
+		Title:             guide.Title,
+		GuideHash:         guideHash,
+		GuideJSON:         guideJSON,
+		PublishedByUserID: actor.ID,
+		PublishedAt:       at,
+	}
+	if err := tx.InsertPublication(ctx, record); err != nil {
+		return nil, err
+	}
+	if err := tx.InsertDeliveryRows(ctx, spaceID, record.ID, at); err != nil {
+		return nil, err
+	}
+	result, err := s.summary(ctx, tx, &record, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.WriteAudit(ctx, releaseAudit(actor, spaceID, version, "success", "published", meta, at)); err != nil {
+		return nil, err
 	}
 	return result, nil
 }

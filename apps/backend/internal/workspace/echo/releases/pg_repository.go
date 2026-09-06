@@ -38,6 +38,25 @@ func NewPGRepository(pool *pgxpool.Pool, factories ...IDFactory) *PGRepository {
 	return &PGRepository{pool: pool, idFactory: idFactory}
 }
 
+// NewPGTransaction wraps an already-open PostgreSQL transaction with the
+// release domain's typed Tx surface. The caller owns commit/rollback.
+func NewPGTransaction(tx pgx.Tx) Tx {
+	if tx == nil {
+		return nil
+	}
+	return &pgTx{tx: tx, repository: NewPGRepository(nil)}
+}
+
+// NewTransaction reuses this repository's configured ID factory while
+// wrapping an already-open transaction. It never starts or commits a pool
+// transaction.
+func (r *PGRepository) NewTransaction(tx pgx.Tx) Tx {
+	if r == nil || tx == nil {
+		return nil
+	}
+	return &pgTx{tx: tx, repository: r}
+}
+
 func (r *PGRepository) Ping(ctx context.Context) error {
 	if r == nil || r.pool == nil {
 		return errors.New("workspace echo releases postgres pool is required")
@@ -77,17 +96,22 @@ func (r *PGRepository) LookupActor(ctx context.Context, spaceID, userID string) 
 	if r == nil || r.pool == nil {
 		return nil, errors.New("workspace echo releases postgres pool is required")
 	}
-	return lookupActor(ctx, r.pool, spaceID, userID)
+	return lookupActor(ctx, r.pool, spaceID, userID, false)
 }
 
-func lookupActor(ctx context.Context, queryer pgQueryer, spaceID, userID string) (*auth.Actor, error) {
+func lookupActor(ctx context.Context, queryer pgQueryer, spaceID, userID string, lock bool) (*auth.Actor, error) {
+	lockClause := ""
+	if lock {
+		// Pin authorization through commit, including while a domain lock waits.
+		lockClause = " FOR SHARE OF sm, u"
+	}
 	var actor auth.Actor
 	err := queryer.QueryRow(ctx, `
 		SELECT u.id, u.github_login, u.kind, sm.role
 		FROM users u
 		INNER JOIN space_members sm ON sm.user_id = u.id
 		WHERE u.id = $1 AND sm.space_id = $2 AND sm.removed_at IS NULL
-	`, userID, spaceID).Scan(&actor.ID, &actor.GitHubLogin, &actor.Kind, &actor.Role)
+	`+lockClause, userID, spaceID).Scan(&actor.ID, &actor.GitHubLogin, &actor.Kind, &actor.Role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -254,7 +278,7 @@ type pgTx struct {
 }
 
 func (t *pgTx) LookupActor(ctx context.Context, spaceID, userID string) (*auth.Actor, error) {
-	return lookupActor(ctx, t.tx, spaceID, userID)
+	return lookupActor(ctx, t.tx, spaceID, userID, true)
 }
 
 func (t *pgTx) GetPublication(ctx context.Context, spaceID, version string) (*PublicationRecord, error) {
