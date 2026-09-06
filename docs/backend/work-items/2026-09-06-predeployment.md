@@ -1314,3 +1314,14 @@ application/runtime (11.124/7.008 seconds), integration-tag staticcheck passed,
 and the unchanged full Bot owner/Gateway browser scenario passed (19.5 seconds;
 45.7 including startup). Existing Vite teardown ECONNRESET was observed. This
 fix does not claim the remaining Workspace browser failures are resolved.
+
+### PostgreSQL File And Invite HTTP Contracts
+
+The shared disposable fixture now exercises actual authentication, domain
+services, PostgreSQL repositories and HTTP routing. File cases cover reserved
+upload, completion/list projection, early quota rejection without orphan objects,
+and auditor denial. Invite cases cover unauthenticated access, null-body creation,
+hash-only persistence, member denial, owner revocation and missing-resource audit.
+Cleanup errors fail the test. Parent independently passed the frozen fixture,
+file and invite tests with PostgreSQL and race detection (8.008 seconds).
+These focused cases do not claim exhaustive parity for every route or status.
