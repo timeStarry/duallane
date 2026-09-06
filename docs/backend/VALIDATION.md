@@ -6,9 +6,11 @@ Migration is complete by behavioral evidence, not by equivalent-looking code.
 Tests scale with the affected trust lane, data invariant, concurrency risk,
 external side effect, and deployment blast radius.
 
-Do not claim a Go check passed before `apps/backend` and the command exist in the
-current worktree. Until then, use the current repository gates and record the
-missing target gate in the migration PR.
+The Go candidate and its repository-native commands now exist, but a manifest,
+Make target, CI definition, or candidate image is not a passing result. Record
+the exact command, commit, environment, and status for every gate. Production
+ownership and parity still require the separate migration evidence in
+[Evolution and migration](EVOLUTION.md).
 
 ## 2. Current Documentation And Baseline Gates
 
@@ -30,27 +32,90 @@ pnpm test:e2e
 ```
 
 PostgreSQL-sensitive behavior additionally uses the existing disposable
-`TEST_DATABASE_URL` integration command.
+`TEST_DATABASE_URL` integration command. For the Go candidate, the exact target
+is `make -C apps/backend integration-postgres`; it is separate from
+`make -C apps/backend verify`.
 
-## 3. Go Gate Activation
+## 3. Candidate Go Gates And Evidence
 
-The first Go scaffold PR must add exact repository-native commands and connect
-them to the root scripts/CI. Once active, the minimum Go gate is equivalent to:
+The checked-in [`apps/backend/Makefile`](../../apps/backend/Makefile) is the
+source of truth for candidate checks. From the repository root, use the Make
+targets below; do not substitute an unpinned global tool command. The recipes
+require GNU Make and a POSIX shell, such as a configured Linux/WSL environment.
 
-```bash
-cd apps/backend
-go test ./...
-go test -race ./...
-go vet ./...
-staticcheck ./...
-govulncheck ./...
-go build ./cmd/...
+| Target | Recipe with default `GO=go` | Scope/prerequisite |
+| --- | --- | --- |
+| `make -C apps/backend test` | `go test ./...` | Default package tests; does not select PostgreSQL integration files. |
+| `make -C apps/backend test-race` | `go test -race ./...` | Race coverage for the default package set. |
+| `make -C apps/backend vet` | `go vet ./...` | Static analysis for the default package set. |
+| `make -C apps/backend staticcheck` | `go tool staticcheck ./...` | Tool package declared in `go.mod`; version fixed by its module requirements. |
+| `make -C apps/backend vuln` | `go tool govulncheck ./...` | Tool package declared in `go.mod`; version fixed by its module requirements. |
+| `make -C apps/backend build` | `go build ./cmd/...` | Builds the checked-in command set. |
+| `make -C apps/backend verify` | Prerequisites: `test test-race vet staticcheck vuln build` | Composite candidate gate; excludes PostgreSQL integration. |
+| `make -C apps/backend integration-postgres` | `go test -count=1 -race -tags postgres_integration ./...` | Requires disposable real PostgreSQL via `TEST_DATABASE_URL`; required for applicable changes in the matrix below. |
+
+Root wrappers are also checked in: `pnpm backend:check` invokes `verify`,
+`pnpm backend:lint` invokes `vet staticcheck`, and the `backend:test`,
+`backend:test:race`, `backend:vuln`, and `backend:build` scripts invoke their
+matching Make targets. CI currently runs `make verify` and then
+`make integration-postgres` in separate steps; a CI definition is wiring
+evidence, not a result for this worktree.
+
+The candidate declares Go `1.26` and toolchain `go1.26.8` in `go.mod`. Packages
+that import govips require a usable CGO compiler plus libvips headers/runtime.
+`Dockerfile.workspace` provisions `libvips-dev` and `pkg-config` for its image
+build, while the host-run Go CI job has no explicit `libvips-dev`/`pkg-config`
+installation step. This is a reproducibility gap to resolve before treating the
+host-run Go gate as portable, not evidence of an observed CI failure. The P2P
+image remains CGO-free.
+
+The race gate may be split from fast unit tests, but it remains required for P2P
+registries, WebSocket fanout, event delivery, presence, worker loops, and shared
+caches. Pin tools through the Go module mechanism, never an unbounded `latest`
+installation in CI. Missing prerequisites are an explicit remaining gate.
+
+### OpenAPI 3.1.2 generation gate
+
+[`apps/backend/api/p2p.yaml`](../../apps/backend/api/p2p.yaml) and
+[`apps/backend/api/realtime/p2p.schema.json`](../../apps/backend/api/realtime/p2p.schema.json)
+are checked-in contract sources. The current candidate has no pinned
+oapi-codegen tool, generation configuration, or Make target; generation remains
+unverified until the capability gate in
+[Technology decisions](TECHNOLOGY.md#3-http-and-contract-policy) is completed.
+Do not report generated parity or downgrade the document to OpenAPI 3.0.
+An ad hoc generator experiment may supply dated research evidence, but does not
+establish a reproducible repository gate.
+
+When that gate is added, its evidence must name the pinned tool/runtime and
+record exact 3.1.2 parsing, generated-code compilation, and contract/parity
+checks. Test that request/response validation rejects invalid direct-`const`
+values from the checked-in spec, not just that a generated type compiles. A
+failed or unresolved generation attempt leaves the existing contract source
+authoritative.
+
+### Replayable evidence record
+
+Attach a compact record to each migration slice or validation report:
+
+```text
+base_commit: <exact base commit>
+candidate_commit: <exact candidate commit; identify any uncommitted patch tested>
+checked_at: <timestamp and timezone>
+environment: <OS, Go/tool/runtime, CGO/libvips, PostgreSQL/container versions as applicable>
+command: <exact command or Make/root wrapper; redact credentials>
+status: PASS | FAIL | SKIP | NOT RUN
+coverage: <lane, capability, test layer, and required cases actually executed>
+safe_artifacts: <redacted paths, reports, or none>
+reason_or_next_gate: <required for FAIL, SKIP, or NOT RUN>
 ```
 
-Pin tool versions through the Go module/tool mechanism rather than installing
-unbounded `latest` tools during CI. The race gate may be split from fast unit
-tests, but it remains required for P2P registries, WebSocket fanout, event
-delivery, presence, worker loops, and shared caches.
+`PASS` and `FAIL` describe executed checks. `SKIP` identifies deliberately
+omitted checks or test cases, with a reason; `NOT RUN` records no attempt.
+A zero exit code with required tests skipped is not a passing capability gate.
+Report cached Go test results as cached; rerun with `-count=1` when fresh
+execution evidence is required. Neither skipped nor unattempted checks supply
+coverage. Evidence must not contain credentials, private connection strings,
+invite fragments, P2P payloads, or sensitive user data.
 
 ## 4. Change Matrix
 
