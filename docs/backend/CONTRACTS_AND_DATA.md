@@ -52,6 +52,25 @@ Resource authorization is repeated in the owning Workspace operation even when
 the gateway or middleware has authenticated an actor. A hidden route or client
 control is never authorization.
 
+### P2P JSON Parser Compatibility
+
+The lockfile's Fastify 5.8.5 parser converts invalid JSON to a fixed error, not a
+raw JavaScript parser diagnostic. The Go candidate must preserve that safe
+response rather than replacing it with the room-domain validation error:
+
+| Input to room creation with JSON content type | HTTP status | Stable code |
+| --- | --- | --- |
+| Empty body | 400 | `FST_ERR_CTP_EMPTY_JSON_BODY` |
+| Invalid JSON, including trailing JSON values | 400 | `FST_ERR_CTP_INVALID_JSON_BODY` |
+| Body exceeding the existing 1 MiB parser bound | 413 | `FST_ERR_CTP_BODY_TOO_LARGE` |
+
+These parser responses retain `statusCode`, `code`, `error` and the fixed
+content-free `message`. Valid JSON with an unsupported room shape continues to
+return the existing domain `{error: ...}` response. Never copy a raw decoder
+error, body excerpt or offset-dependent diagnostic into Go responses or logs.
+This is candidate compatibility with the active pinned Node parser, not a Node
+protocol change. Synthetic route and schema tests must lock the full objects.
+
 ## 4. Authentication And Sessions
 
 The migration preserves the existing server-side opaque session model:

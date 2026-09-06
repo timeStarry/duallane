@@ -215,6 +215,58 @@ func TestP2PHTTPResponseValidationRejectsEveryDirectConstViolation(t *testing.T)
 	}
 }
 
+func TestParserErrorResponsesPreserveRequiredFieldsAndSafeConstants(t *testing.T) {
+	harness := newP2PContractHarness(t)
+	for _, test := range []struct {
+		name, body string
+		status     int
+	}{
+		{"empty", "", 400},
+		{"invalid", "{", 400},
+		{"trailing", `{"maxPeers":2}{}`, 400},
+		{"oversize", strings.Repeat("x", 1024*1024+1), 413},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := newP2PRequest(http.MethodPost, "/api/p2p/rooms", test.body)
+			request.Header.Set("Content-Type", "application/json")
+			input, err := routeP2PRequest(harness.router, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := serveP2PRequest(harness.handler, request)
+			if response.Code != test.status {
+				t.Fatalf("status = %d, want %d", response.Code, test.status)
+			}
+			if err := validateP2PResponse(input, response); err != nil {
+				t.Fatalf("safe parser response does not conform: %v", err)
+			}
+			for field, value := range map[string]any{
+				"statusCode": 200, "code": "unknown", "message": "raw decoder diagnostic", "error": "unknown",
+			} {
+				if err := validateP2PResponse(input, responseWithJSONField(t, response, field, value)); err == nil {
+					t.Fatalf("schema accepted incompatible parser %s", field)
+				}
+			}
+			for _, field := range []string{"code", "message", "statusCode"} {
+				var body map[string]any
+				if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				delete(body, field)
+				incomplete := httptest.NewRecorder()
+				incomplete.Header().Set("Content-Type", "application/json")
+				incomplete.WriteHeader(test.status)
+				if err := json.NewEncoder(incomplete).Encode(body); err != nil {
+					t.Fatal(err)
+				}
+				if err := validateP2PResponse(input, incomplete); err == nil {
+					t.Fatalf("schema accepted parser response without %s", field)
+				}
+			}
+		})
+	}
+}
+
 func TestP2PContractCoversUnknownOmittedAndNullEdgeSemantics(t *testing.T) {
 	harness := newP2PContractHarness(t)
 

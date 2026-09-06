@@ -158,14 +158,30 @@ func (h *Handler) createRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, createRoomBodyLimit)
-	var body map[string]json.RawMessage
-	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(&body); err != nil || body == nil {
-		writeError(w, http.StatusBadRequest, "maxPeers must be 2 for p2p rooms")
+	if r.ContentLength > createRoomBodyLimit {
+		writeParserError(w, http.StatusRequestEntityTooLarge, "FST_ERR_CTP_BODY_TOO_LARGE", "Request body is too large")
 		return
 	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+	rawBody, err := io.ReadAll(r.Body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeParserError(w, http.StatusRequestEntityTooLarge, "FST_ERR_CTP_BODY_TOO_LARGE", "Request body is too large")
+		} else {
+			writeParserError(w, http.StatusBadRequest, "FST_ERR_CTP_INVALID_JSON_BODY", "Body is not valid JSON but content-type is set to 'application/json'")
+		}
+		return
+	}
+	if len(rawBody) == 0 {
+		writeParserError(w, http.StatusBadRequest, "FST_ERR_CTP_EMPTY_JSON_BODY", "Body cannot be empty when content-type is set to 'application/json'")
+		return
+	}
+	if !json.Valid(rawBody) {
+		writeParserError(w, http.StatusBadRequest, "FST_ERR_CTP_INVALID_JSON_BODY", "Body is not valid JSON but content-type is set to 'application/json'")
+		return
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(rawBody, &body); err != nil || body == nil {
 		writeError(w, http.StatusBadRequest, "maxPeers must be 2 for p2p rooms")
 		return
 	}
@@ -376,6 +392,20 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, struct {
 		Error string `json:"error"`
 	}{Error: message})
+}
+
+// Keep the active Node parser's fixed public object, never a raw decoder error.
+func writeParserError(w http.ResponseWriter, status int, code, message string) {
+	label := "Bad Request"
+	if status == http.StatusRequestEntityTooLarge {
+		label = "Payload Too Large"
+	}
+	writeJSON(w, status, struct {
+		StatusCode int    `json:"statusCode"`
+		Code       string `json:"code"`
+		Error      string `json:"error"`
+		Message    string `json:"message"`
+	}{StatusCode: status, Code: code, Error: label, Message: message})
 }
 
 func requestBaseURL(r *http.Request, trustProxy bool) string {

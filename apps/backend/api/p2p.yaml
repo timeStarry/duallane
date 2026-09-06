@@ -33,11 +33,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/CreatedRoom'
         '400':
-          description: Unsupported room shape or capacity request.
+          description: Unsupported room shape or safe JSON parser rejection.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/ErrorResponse'
+                  - $ref: '#/components/schemas/JSONParserError'
+        '413':
+          description: JSON request body exceeds the 1 MiB bound.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BodyTooLargeError'
         '503':
           description: Bounded in-memory room capacity is unavailable.
           content:
@@ -173,6 +181,43 @@ components:
     ErrorResponse:
       type: object
       required: [error]
+      additionalProperties: false
       properties:
         error:
           type: string
+    JSONParserError:
+      type: object
+      required: [statusCode, code, error, message]
+      additionalProperties: false
+      properties:
+        statusCode:
+          type: integer
+          const: 400
+        code:
+          type: string
+          enum: [FST_ERR_CTP_EMPTY_JSON_BODY, FST_ERR_CTP_INVALID_JSON_BODY]
+        error:
+          type: string
+          const: Bad Request
+        message:
+          type: string
+          enum:
+            - "Body cannot be empty when content-type is set to 'application/json'"
+            - "Body is not valid JSON but content-type is set to 'application/json'"
+    BodyTooLargeError:
+      type: object
+      required: [statusCode, code, error, message]
+      additionalProperties: false
+      properties:
+        statusCode:
+          type: integer
+          const: 413
+        code:
+          type: string
+          const: FST_ERR_CTP_BODY_TOO_LARGE
+        error:
+          type: string
+          const: Payload Too Large
+        message:
+          type: string
+          const: Request body is too large

@@ -404,7 +404,7 @@ func TestP2PHTTPBodyLimit(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/api/p2p/rooms", strings.NewReader(fmt.Sprintf(`{"maxPeers":2,"padding":"%s"}`, strings.Repeat("a", createRoomBodyLimit))))
 	request.Header.Set("Content-Type", "application/json")
 	handler.Routes().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusBadRequest {
+	if recorder.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("body-limit status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
 }

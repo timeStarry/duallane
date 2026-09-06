@@ -14,6 +14,66 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for BodyTooLargeErrorCode.
+const (
+	FSTERRCTPBODYTOOLARGE BodyTooLargeErrorCode = "FST_ERR_CTP_BODY_TOO_LARGE"
+)
+
+// Valid indicates whether the value is a known member of the BodyTooLargeErrorCode enum.
+func (e BodyTooLargeErrorCode) Valid() bool {
+	switch e {
+	case FSTERRCTPBODYTOOLARGE:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BodyTooLargeErrorError.
+const (
+	PayloadTooLarge BodyTooLargeErrorError = "Payload Too Large"
+)
+
+// Valid indicates whether the value is a known member of the BodyTooLargeErrorError enum.
+func (e BodyTooLargeErrorError) Valid() bool {
+	switch e {
+	case PayloadTooLarge:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BodyTooLargeErrorMessage.
+const (
+	RequestBodyIsTooLarge BodyTooLargeErrorMessage = "Request body is too large"
+)
+
+// Valid indicates whether the value is a known member of the BodyTooLargeErrorMessage enum.
+func (e BodyTooLargeErrorMessage) Valid() bool {
+	switch e {
+	case RequestBodyIsTooLarge:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BodyTooLargeErrorStatusCode.
+const (
+	N413 BodyTooLargeErrorStatusCode = 413
+)
+
+// Valid indicates whether the value is a known member of the BodyTooLargeErrorStatusCode enum.
+func (e BodyTooLargeErrorStatusCode) Valid() bool {
+	switch e {
+	case N413:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateRoomRequestMaxPeers.
 const (
 	CreateRoomRequestMaxPeersN2 CreateRoomRequestMaxPeers = 2
@@ -44,6 +104,72 @@ func (e CreatedRoomMaxPeers) Valid() bool {
 	}
 }
 
+// Defines values for JSONParserErrorCode.
+const (
+	FSTERRCTPEMPTYJSONBODY   JSONParserErrorCode = "FST_ERR_CTP_EMPTY_JSON_BODY"
+	FSTERRCTPINVALIDJSONBODY JSONParserErrorCode = "FST_ERR_CTP_INVALID_JSON_BODY"
+)
+
+// Valid indicates whether the value is a known member of the JSONParserErrorCode enum.
+func (e JSONParserErrorCode) Valid() bool {
+	switch e {
+	case FSTERRCTPEMPTYJSONBODY:
+		return true
+	case FSTERRCTPINVALIDJSONBODY:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for JSONParserErrorError.
+const (
+	BadRequest JSONParserErrorError = "Bad Request"
+)
+
+// Valid indicates whether the value is a known member of the JSONParserErrorError enum.
+func (e JSONParserErrorError) Valid() bool {
+	switch e {
+	case BadRequest:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for JSONParserErrorMessage.
+const (
+	BodyCannotBeEmptyWhenContentTypeIsSetToapplicationjson JSONParserErrorMessage = "Body cannot be empty when content-type is set to 'application/json'"
+	BodyIsNotValidJSONButContentTypeIsSetToapplicationjson JSONParserErrorMessage = "Body is not valid JSON but content-type is set to 'application/json'"
+)
+
+// Valid indicates whether the value is a known member of the JSONParserErrorMessage enum.
+func (e JSONParserErrorMessage) Valid() bool {
+	switch e {
+	case BodyCannotBeEmptyWhenContentTypeIsSetToapplicationjson:
+		return true
+	case BodyIsNotValidJSONButContentTypeIsSetToapplicationjson:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for JSONParserErrorStatusCode.
+const (
+	N400 JSONParserErrorStatusCode = 400
+)
+
+// Valid indicates whether the value is a known member of the JSONParserErrorStatusCode enum.
+func (e JSONParserErrorStatusCode) Valid() bool {
+	switch e {
+	case N400:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RoomStatusMaxPeers.
 const (
 	RoomStatusMaxPeersN2 RoomStatusMaxPeers = 2
@@ -58,6 +184,26 @@ func (e RoomStatusMaxPeers) Valid() bool {
 		return false
 	}
 }
+
+// BodyTooLargeError defines model for BodyTooLargeError.
+type BodyTooLargeError struct {
+	Code       BodyTooLargeErrorCode       `json:"code"`
+	Error      BodyTooLargeErrorError      `json:"error"`
+	Message    BodyTooLargeErrorMessage    `json:"message"`
+	StatusCode BodyTooLargeErrorStatusCode `json:"statusCode"`
+}
+
+// BodyTooLargeErrorCode defines model for BodyTooLargeError.Code.
+type BodyTooLargeErrorCode string
+
+// BodyTooLargeErrorError defines model for BodyTooLargeError.Error.
+type BodyTooLargeErrorError string
+
+// BodyTooLargeErrorMessage defines model for BodyTooLargeError.Message.
+type BodyTooLargeErrorMessage string
+
+// BodyTooLargeErrorStatusCode defines model for BodyTooLargeError.StatusCode.
+type BodyTooLargeErrorStatusCode int
 
 // CreateRoomRequest defines model for CreateRoomRequest.
 type CreateRoomRequest struct {
@@ -110,6 +256,26 @@ type IceServer_Urls struct {
 	union json.RawMessage
 }
 
+// JSONParserError defines model for JSONParserError.
+type JSONParserError struct {
+	Code       JSONParserErrorCode       `json:"code"`
+	Error      JSONParserErrorError      `json:"error"`
+	Message    JSONParserErrorMessage    `json:"message"`
+	StatusCode JSONParserErrorStatusCode `json:"statusCode"`
+}
+
+// JSONParserErrorCode defines model for JSONParserError.Code.
+type JSONParserErrorCode string
+
+// JSONParserErrorError defines model for JSONParserError.Error.
+type JSONParserErrorError string
+
+// JSONParserErrorMessage defines model for JSONParserError.Message.
+type JSONParserErrorMessage string
+
+// JSONParserErrorStatusCode defines model for JSONParserError.StatusCode.
+type JSONParserErrorStatusCode int
+
 // RoomStatus defines model for RoomStatus.
 type RoomStatus struct {
 	ExpiresAt time.Time          `json:"expiresAt"`
@@ -123,6 +289,11 @@ type RoomStatusMaxPeers int
 
 // RoomId defines model for RoomId.
 type RoomId = string
+
+// CreateP2PRoom400JSONResponseBody defines parameters for CreateP2PRoom.
+type CreateP2PRoom400JSONResponseBody struct {
+	union json.RawMessage
+}
 
 // CreateP2PRoomJSONRequestBody defines body for CreateP2PRoom for application/json ContentType.
 type CreateP2PRoomJSONRequestBody = CreateRoomRequest
@@ -251,6 +422,68 @@ func (t IceServer_Urls) MarshalJSON() ([]byte, error) {
 }
 
 func (t *IceServer_Urls) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsErrorResponse returns the union data inside the CreateP2PRoom400JSONResponseBody as a ErrorResponse
+func (t CreateP2PRoom400JSONResponseBody) AsErrorResponse() (ErrorResponse, error) {
+	var body ErrorResponse
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromErrorResponse overwrites any union data inside the CreateP2PRoom400JSONResponseBody as the provided ErrorResponse
+func (t *CreateP2PRoom400JSONResponseBody) FromErrorResponse(v ErrorResponse) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeErrorResponse performs a merge with any union data inside the CreateP2PRoom400JSONResponseBody, using the provided ErrorResponse
+func (t *CreateP2PRoom400JSONResponseBody) MergeErrorResponse(v ErrorResponse) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsJSONParserError returns the union data inside the CreateP2PRoom400JSONResponseBody as a JSONParserError
+func (t CreateP2PRoom400JSONResponseBody) AsJSONParserError() (JSONParserError, error) {
+	var body JSONParserError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromJSONParserError overwrites any union data inside the CreateP2PRoom400JSONResponseBody as the provided JSONParserError
+func (t *CreateP2PRoom400JSONResponseBody) FromJSONParserError(v JSONParserError) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeJSONParserError performs a merge with any union data inside the CreateP2PRoom400JSONResponseBody, using the provided JSONParserError
+func (t *CreateP2PRoom400JSONResponseBody) MergeJSONParserError(v JSONParserError) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t CreateP2PRoom400JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *CreateP2PRoom400JSONResponseBody) UnmarshalJSON(b []byte) error {
 	err := t.union.UnmarshalJSON(b)
 	return err
 }
