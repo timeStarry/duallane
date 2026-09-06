@@ -475,3 +475,25 @@ Worker scheduling, fair cursor continuation across bounded periods, and real
 candidate-container rehearsal remain separate composition gates. The default
 reservation age is 30 minutes and multipart age is seven days; a five-minute
 loop interval is not an object-age cutoff.
+
+### SMTP Transport And Lifetime
+
+The selected go-mail implementation is now pinned at v0.8.1 (MIT), with
+x/crypto v0.55.0 selected by the unified module graph. Parent review rejected
+the first cancellation adapter because the library's `Close` sends QUIT and
+cannot safely stand in for concurrent raw-socket cancellation. The corrected
+adapter tracks and closes its owned connection on cancellation and failed Dial,
+and clamps every phase's socket deadline to the absolute operation budget.
+
+Synthetic loopback regressions cover trusted/untrusted implicit TLS, mandatory
+STARTTLS, authentication only after encryption, multipart plain/HTML output,
+header rejection, safe provider errors, failed-Dial cleanup and indefinitely
+stalled greeting/TLS/auth/DATA/QUIT phases. Cancellation tests use barriers,
+not short provider sleeps that could finish within the assertion timeout.
+Independent fresh PostgreSQL/race tests passed for email, worker and Workspace
+(21.703 / 8.289 / 6.937 seconds); integration-tag staticcheck also passed.
+Scoped govulncheck for email and both composition commands found zero called
+vulnerable symbols, while reporting one imported-package and seven module-level
+advisories not reached by those programs; the dependency graph is not claimed
+to be advisory-free.
+No actual SMTP provider, production credential or external recipient was used.

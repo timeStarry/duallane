@@ -52,8 +52,12 @@ Use these terms precisely in migration notes and evidence records:
   remote service or database connection. Its tool dependency graph raises
   OAuth to v0.34.0 and protobuf to v1.36.11; these remain subject to runtime
   regression checks. This does not claim all existing pgx queries are generated.
-- `go-mail` remains selected but is not yet pinned or integrated in an accepted
-  commit. Do not describe a concurrent publisher draft as verified.
+- `go-mail` v0.8.1 is pinned and integrated behind the SMTP publisher. The
+  application owns the connection and an absolute operation deadline, including
+  greeting, TLS, authentication, DATA and QUIT. Cancellation closes the raw
+  connection rather than concurrently invoking graceful SMTP shutdown. The
+  unified module graph selects x/crypto v0.55.0 and retains x/text v0.41.0.
+  Loopback protocol tests do not establish real-provider delivery or credentials.
 - `Dockerfile.p2p` and `Dockerfile.workspace` provide candidate image recipes;
   their existence does not add a Go service to Compose or establish a cutover.
   Their current defaults use mutable image tags and unversioned OS package
@@ -104,6 +108,8 @@ Official references:
 - [AWS SDK for Go v2](https://docs.aws.amazon.com/sdk-for-go/v2/developer-guide/)
 - [govips](https://github.com/davidbyttow/govips)
 - [go-mail](https://github.com/wneessen/go-mail)
+- [go-mail v0.8.1 release](https://github.com/wneessen/go-mail/releases/tag/v0.8.1)
+- [go-mail v0.8.1 module requirements](https://github.com/wneessen/go-mail/blob/v0.8.1/go.mod)
 
 ## 3. HTTP And Contract Policy
 

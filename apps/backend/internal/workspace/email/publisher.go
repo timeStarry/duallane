@@ -4,13 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"fmt"
-	"mime"
 	"net"
-	"net/mail"
-	netsmtp "net/smtp"
 	"strings"
+	"sync"
 	"time"
+
+	mail "github.com/wneessen/go-mail"
 )
 
 // SMTPMailer is the production-safe adapter used by the worker and by the
@@ -18,11 +17,16 @@ import (
 // to the service; callers receive only stable provider classifications.
 type SMTPMailerOptions struct {
 	Timeout time.Duration
+
+	// tlsConfig is an internal test seam. Production callers leave it nil so
+	// the adapter uses the host's system trust store. It is never allowed to
+	// enable InsecureSkipVerify.
+	tlsConfig *tls.Config
 }
 
 type SMTPMailer struct {
 	timeout   time.Duration
-	configErr error
+	tlsConfig *tls.Config
 }
 
 func NewSMTPMailer(options SMTPMailerOptions) *SMTPMailer {
@@ -30,17 +34,23 @@ func NewSMTPMailer(options SMTPMailerOptions) *SMTPMailer {
 	if timeout <= 0 {
 		timeout = DefaultPublishTimeout
 	}
-	return &SMTPMailer{timeout: timeout}
+	var tlsConfig *tls.Config
+	if options.tlsConfig != nil {
+		tlsConfig = options.tlsConfig.Clone()
+	}
+	return &SMTPMailer{timeout: timeout, tlsConfig: tlsConfig}
 }
 
 func (m *SMTPMailer) Send(ctx context.Context, config MailConfig, message Message, recipient string) error {
-	if m == nil || m.configErr != nil {
+	if m == nil {
 		return &ProviderError{Code: CodeSMTPFailed}
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if !validSMTPConfig(config) || !safeRecipient(recipient) || strings.ContainsAny(message.Subject+message.Text+message.HTML, "\x00") {
+	if !validSMTPConfig(config) || !safeRecipient(recipient) ||
+		strings.ContainsAny(message.Subject, "\r\n") ||
+		strings.ContainsAny(message.Subject+message.Text+message.HTML, "\x00") {
 		return &ProviderError{Code: CodeSMTPFailed}
 	}
 	if config.Encryption == "none" && config.Username != "" {
@@ -48,6 +58,9 @@ func (m *SMTPMailer) Send(ctx context.Context, config MailConfig, message Messag
 		return &ProviderError{Code: CodeSMTPAuthFailed}
 	}
 	timeout := m.timeout
+	if timeout <= 0 {
+		timeout = DefaultPublishTimeout
+	}
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
@@ -57,72 +70,196 @@ func (m *SMTPMailer) Send(ctx context.Context, config MailConfig, message Messag
 			timeout = remaining
 		}
 	}
-	dialCtx, cancel := context.WithTimeout(ctx, timeout)
+	operationCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	dialer := net.Dialer{Timeout: timeout}
-	address := net.JoinHostPort(config.SMTPHost, fmt.Sprintf("%d", config.SMTPPort))
-	var conn net.Conn
-	var err error
-	if config.Encryption == "tls" {
-		conn, err = tls.DialWithDialer(&dialer, "tcp", address, &tls.Config{ServerName: config.SMTPHost, MinVersion: tls.VersionTLS12})
-	} else {
-		conn, err = dialer.DialContext(dialCtx, "tcp", address)
+	operationDeadline, ok := operationCtx.Deadline()
+	if !ok || operationExpired(operationCtx, operationDeadline) {
+		return &ProviderError{Code: CodeSMTPTimeout, Timeout: true}
 	}
+	msg, err := buildMailMessage(config, message, recipient)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || isTimeoutError(err) {
-			return &ProviderError{Code: CodeSMTPTimeout, Timeout: true}
-		}
-		return &ProviderError{Code: CodeSMTPUnreachable}
+		return &ProviderError{Code: CodeSMTPFailed}
 	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(timeout))
-	client, err := netsmtp.NewClient(conn, config.SMTPHost)
-	if err != nil {
-		return classifySMTPError(err)
+	tlsConfig := m.tlsConfigFor(config.SMTPHost)
+	connectionTracker := newSMTPConnectionTracker(operationDeadline)
+	options := []mail.Option{
+		mail.WithPort(config.SMTPPort),
+		mail.WithTimeout(time.Until(operationDeadline)),
+		mail.WithTLSConfig(tlsConfig),
+		mail.WithDialContextFunc(m.dialContext(config, tlsConfig, connectionTracker)),
 	}
-	defer client.Close()
-	secure := config.Encryption == "tls"
-	if config.Encryption == "starttls" {
-		if ok, _ := client.Extension("STARTTLS"); !ok {
-			return &ProviderError{Code: CodeSMTPFailed}
-		}
-		if err := client.StartTLS(&tls.Config{ServerName: config.SMTPHost, MinVersion: tls.VersionTLS12}); err != nil {
-			return classifySMTPError(err)
-		}
-		secure = true
+	switch config.Encryption {
+	case "tls":
+		options = append(options, mail.WithSSL())
+	case "starttls":
+		options = append(options, mail.WithTLSPortPolicy(mail.TLSMandatory))
+	case "none":
+		options = append(options, mail.WithTLSPolicy(mail.NoTLS))
 	}
 	if config.Username != "" {
-		if !secure {
-			return &ProviderError{Code: CodeSMTPAuthFailed}
+		options = append(options,
+			mail.WithUsername(config.Username),
+			mail.WithPassword(config.Password),
+			mail.WithSMTPAuth(mail.SMTPAuthPlain),
+		)
+	}
+	watchStop := make(chan struct{})
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		select {
+		case <-operationCtx.Done():
+			// Cancellation must interrupt the active I/O directly. Calling
+			// client.Close here would send QUIT concurrently with Send and can
+			// wait for a server response after DATA has stalled.
+			connectionTracker.close()
+		case <-watchStop:
 		}
-		if err := client.Auth(netsmtp.PlainAuth("", config.Username, config.Password, config.SMTPHost)); err != nil {
-			return &ProviderError{Code: CodeSMTPAuthFailed}
-		}
-	}
-	fromAddress := mail.Address{Name: config.FromName, Address: config.FromAddress}
-	from := fromAddress.String()
-	if err := client.Mail(config.FromAddress); err != nil {
-		return classifySMTPError(err)
-	}
-	if err := client.Rcpt(strings.TrimSpace(recipient)); err != nil {
-		return classifySMTPError(err)
-	}
-	writer, err := client.Data()
+	}()
+	defer func() {
+		close(watchStop)
+		<-watchDone
+		connectionTracker.close()
+	}()
+	client, err := mail.NewClient(config.SMTPHost, options...)
 	if err != nil {
+		if operationExpired(operationCtx, operationDeadline) {
+			return &ProviderError{Code: CodeSMTPTimeout, Timeout: true}
+		}
 		return classifySMTPError(err)
 	}
-	body := buildRFCMessage(from, recipient, message)
-	if _, err := writer.Write([]byte(body)); err != nil {
-		_ = writer.Close()
+	if err := client.DialWithContext(operationCtx); err != nil {
+		if operationExpired(operationCtx, operationDeadline) {
+			return &ProviderError{Code: CodeSMTPTimeout, Timeout: true}
+		}
 		return classifySMTPError(err)
 	}
-	if err := writer.Close(); err != nil {
-		return classifySMTPError(err)
+
+	sendErr := client.Send(msg)
+	if operationExpired(operationCtx, operationDeadline) {
+		return &ProviderError{Code: CodeSMTPTimeout, Timeout: true}
 	}
-	if err := client.Quit(); err != nil {
-		return classifySMTPError(err)
+	if sendErr != nil {
+		return classifySMTPError(sendErr)
+	}
+	closeErr := client.Close()
+	if operationExpired(operationCtx, operationDeadline) {
+		return &ProviderError{Code: CodeSMTPTimeout, Timeout: true}
+	}
+	if closeErr != nil {
+		return classifySMTPError(closeErr)
 	}
 	return nil
+}
+
+func operationExpired(ctx context.Context, deadline time.Time) bool {
+	return (ctx != nil && ctx.Err() != nil) || (!deadline.IsZero() && !time.Now().Before(deadline))
+}
+
+type smtpConnectionTracker struct {
+	mu       sync.Mutex
+	conn     net.Conn
+	deadline time.Time
+	closed   bool
+}
+
+func newSMTPConnectionTracker(deadline time.Time) *smtpConnectionTracker {
+	return &smtpConnectionTracker{deadline: deadline}
+}
+
+func (t *smtpConnectionTracker) set(conn net.Conn) {
+	if t == nil || conn == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		_ = conn.Close()
+		return
+	}
+	t.conn = conn
+	t.mu.Unlock()
+}
+
+func (t *smtpConnectionTracker) close() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return
+	}
+	t.closed = true
+	conn := t.conn
+	t.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
+}
+
+func (m *SMTPMailer) dialContext(config MailConfig, tlsConfig *tls.Config, tracker *smtpConnectionTracker) mail.DialContextFunc {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		dialer := net.Dialer{}
+		conn, err := dialer.DialContext(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		tracked := &deadlineConn{Conn: conn, deadline: tracker.deadline}
+		tracker.set(tracked)
+		if config.Encryption != "tls" {
+			return tracked, nil
+		}
+		secure := tls.Client(tracked, tlsConfig)
+		if err := secure.HandshakeContext(ctx); err != nil {
+			_ = secure.Close()
+			return nil, err
+		}
+		return secure, nil
+	}
+}
+
+type deadlineConn struct {
+	net.Conn
+	deadline time.Time
+	mu       sync.Mutex
+	closed   bool
+}
+
+func (c *deadlineConn) Close() error {
+	if c == nil || c.Conn == nil {
+		return nil
+	}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closed = true
+	c.mu.Unlock()
+	return c.Conn.Close()
+}
+
+func (c *deadlineConn) SetDeadline(deadline time.Time) error {
+	return c.Conn.SetDeadline(c.clamp(deadline))
+}
+
+func (c *deadlineConn) SetReadDeadline(deadline time.Time) error {
+	return c.Conn.SetReadDeadline(c.clamp(deadline))
+}
+
+func (c *deadlineConn) SetWriteDeadline(deadline time.Time) error {
+	return c.Conn.SetWriteDeadline(c.clamp(deadline))
+}
+
+func (c *deadlineConn) clamp(deadline time.Time) time.Time {
+	if c == nil || c.deadline.IsZero() {
+		return deadline
+	}
+	if deadline.IsZero() || c.deadline.Before(deadline) {
+		return c.deadline
+	}
+	return deadline
 }
 
 func validSMTPConfig(config MailConfig) bool {
@@ -134,12 +271,25 @@ func classifySMTPError(err error) error {
 	if err == nil {
 		return &ProviderError{Code: CodeSMTPFailed}
 	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return &ProviderError{Code: CodeSMTPTimeout, Timeout: true}
+	}
 	if isTimeoutError(err) {
 		return &ProviderError{Code: CodeSMTPTimeout, Timeout: true}
 	}
 	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "certificate") || strings.Contains(message, "unknown authority") || strings.Contains(message, "x509:") {
+		return &ProviderError{Code: CodeSMTPFailed}
+	}
+	var netErr *net.OpError
+	if errors.As(err, &netErr) {
+		return &ProviderError{Code: CodeSMTPUnreachable}
+	}
 	if strings.Contains(message, "535") || strings.Contains(message, "authentication") || strings.Contains(message, "auth") {
 		return &ProviderError{Code: CodeSMTPAuthFailed}
+	}
+	if strings.Contains(message, "connection refused") || strings.Contains(message, "no such host") || strings.Contains(message, "temporary failure in name resolution") {
+		return &ProviderError{Code: CodeSMTPUnreachable}
 	}
 	return &ProviderError{Code: CodeSMTPFailed}
 }
@@ -149,22 +299,33 @@ func isTimeoutError(err error) bool {
 	return errors.As(err, &timeout) && timeout.Timeout()
 }
 
-func buildRFCMessage(from, recipient string, message Message) string {
-	encodedSubject := mime.QEncoding.Encode("UTF-8", message.Subject)
-	contentType := "multipart/alternative; boundary=\"duallane-email\""
-	var builder strings.Builder
-	builder.WriteString("From: ")
-	builder.WriteString(from)
-	builder.WriteString("\r\nTo: ")
-	builder.WriteString(recipient)
-	builder.WriteString("\r\nSubject: ")
-	builder.WriteString(encodedSubject)
-	builder.WriteString("\r\nMIME-Version: 1.0\r\nContent-Type: ")
-	builder.WriteString(contentType)
-	builder.WriteString("\r\n\r\n--duallane-email\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n")
-	builder.WriteString(strings.ReplaceAll(message.Text, "\n", "\r\n"))
-	builder.WriteString("\r\n--duallane-email\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n")
-	builder.WriteString(strings.ReplaceAll(message.HTML, "\n", "\r\n"))
-	builder.WriteString("\r\n--duallane-email--\r\n")
-	return builder.String()
+func (m *SMTPMailer) tlsConfigFor(host string) *tls.Config {
+	config := &tls.Config{}
+	if m != nil && m.tlsConfig != nil {
+		config = m.tlsConfig.Clone()
+	}
+	config.ServerName = host
+	config.MinVersion = tls.VersionTLS12
+	config.InsecureSkipVerify = false
+	return config
+}
+
+func buildMailMessage(config MailConfig, message Message, recipient string) (*mail.Msg, error) {
+	msg := mail.NewMsg(mail.WithNoDefaultUserAgent())
+	var err error
+	if config.FromName == "" {
+		err = msg.From(config.FromAddress)
+	} else {
+		err = msg.FromFormat(config.FromName, config.FromAddress)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := msg.To(strings.TrimSpace(recipient)); err != nil {
+		return nil, err
+	}
+	msg.Subject(message.Subject)
+	msg.SetBodyString(mail.ContentType("text/plain"), message.Text)
+	msg.AddAlternativeString(mail.ContentType("text/html"), message.HTML)
+	return msg, nil
 }
