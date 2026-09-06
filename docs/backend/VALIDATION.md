@@ -551,7 +551,27 @@ activation but before edge startup, and after successful Go snapshot capture.
 They enter the actual deployment `ERR` handler and require the original failure
 exit code, healthy exact-image Node recovery, no remaining Go owners, and the
 unchanged PostgreSQL container. They do not restart Docker or simulate a
-production outage. Passive candidate startup remains a separate gate.
+production outage.
+
+The additional passive-candidate case uses the same six pinned images. Select
+it alone with `--test-name-pattern="real passive"` when the lifecycle/fault
+cases are already recorded. It runs the actual `release_start_candidates`
+and canonical `go-candidate.compose.yml` overlay before fencing Node. The
+private fixture replaces active network maps before applying that overlay:
+P2P/Web use only the candidate network, while Workspace/worker also reach
+the disposable PostgreSQL network without publishing their upstream aliases
+there. Real checks require health-only/validate-only modes, non-root users,
+read-only rootfs/data, no host ports and candidate cleanup. The exact old Node
+API/Web containers must remain healthy until activation; the normal Go
+activation and exact Node recovery then run. All providers are disabled.
+
+The fixture pre-creates an internal candidate network with unique test and
+release ownership labels, recording cleanup intent before creation. Thus this
+case exercises the helper's verified network reuse and cleanup, not its
+network-creation branch. Any pre-existing commit-scoped candidate container
+causes refusal before mutation. The separate default
+`passive-candidate-fixture.test.mjs` checks actual Linux Compose resolution
+without creating Docker resources.
 A pass must name the executed cases and immutable image set;
 the presence of these tests is not evidence that a rehearsal completed.
 Recovery helpers must also be exercised inside a real Bash `ERR` trap, with

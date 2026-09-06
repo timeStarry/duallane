@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { buildGoUpgradeCycle } from "./testdata/go-upgrade-coordinator.mjs";
+import { buildPassiveCandidateComposeAdapter, buildPassiveCandidateFixture } from "./testdata/passive-candidate-fixture.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const imagePattern = /^sha256:[0-9a-f]{64}$/u;
@@ -125,8 +126,8 @@ function removeExactContainer(container, project, runID, allowedImages) {
   docker(["rm", container.Id]);
 }
 
-function coordinatorScript(deploySource, scenario = "success") {
-  if (!["success", "after-backend", "after-capture", "go-upgrade"].includes(scenario)) reject("coordinator_scenario_invalid");
+function coordinatorScript(deploySource, scenario = "success", candidateAdapter = "") {
+  if (!["success", "after-backend", "after-capture", "go-upgrade", "passive"].includes(scenario)) reject("coordinator_scenario_invalid");
   const functions = ["verify_container_release", "start_release_service", "stop_legacy_services_for_go",
     "start_release_backend", "start_release_edge", "cleanup_candidates", "rollback_app",
     "restore_runtime_after_daemon_restart", "on_error", "go_upgrade_rollback_compose"].map((name) => extractFunction(deploySource, name));
@@ -137,6 +138,7 @@ function coordinatorScript(deploySource, scenario = "success") {
     // authority, drain, migration, smoke and recovery functions are real.
     'compose() { local files=(-f "${RELEASE_GO_ACTIVATION_COMPOSE_FILE:-$GO_COMPOSE}"); if [[ -z "$RELEASE_GO_ACTIVATION_COMPOSE_FILE" && -n "$RELEASE_GO_IMAGE_OVERRIDE_FILE" ]]; then files+=(-f "$RELEASE_GO_IMAGE_OVERRIDE_FILE"); fi; docker compose --project-name "$PROJECT" --profile rollback "${files[@]}" "$@"; }',
     'rollback_compose() { docker compose --project-name "$PROJECT" -f "${RELEASE_NODE_RECOVERY_COMPOSE_FILE:-$NODE_COMPOSE}" "$@"; }',
+    ...(scenario === "passive" ? [candidateAdapter] : []),
     'phase() { printf "%s\\n" "$1" >> "$PHASE_FILE"; }',
     'app_replaced=false; trap on_error ERR',
     // A deterministic failure enters the actual production ERR handler. No
@@ -154,6 +156,16 @@ function coordinatorScript(deploySource, scenario = "success") {
     'phase pin; release_verify_go_edge_images; release_verify_go_image_identity',
     'release_freeze_go_activation_compose; release_verify_activation_authority',
     'phase migrate; release_run_go_migration_and_verify',
+    ...(scenario === "passive" ? [
+      'phase candidates; release_start_candidates',
+      // The old application remains the only active writer during preflight.
+      '[[ "$(rollback_compose ps -a -q api)" == "$ORIGINAL_NODE_API" ]]',
+      '[[ "$(docker inspect "$ORIGINAL_NODE_API" --format "{{.State.Running}}:{{.State.Health.Status}}")" == true:healthy ]]',
+      '[[ "$(rollback_compose ps -a -q web)" == "$ORIGINAL_NODE_WEB" ]]',
+      '[[ "$(docker inspect "$ORIGINAL_NODE_WEB" --format "{{.State.Running}}:{{.State.Health.Status}}")" == true:healthy ]]',
+      '[[ "${#RELEASE_CANDIDATE_RECORDS[@]}" == 0 ]]',
+      'if docker network inspect "$EXPECTED_CANDIDATE_NETWORK" >/dev/null 2>&1; then false; fi',
+    ] : []),
     'phase activate; start_release_backend',
     ...(scenario === "after-backend" ? ['inject_failure'] : []),
     'start_release_edge',
@@ -257,6 +269,24 @@ test("coordinator gate rejects mutable images and extracts only scoped release f
     assert.match(failureScript, /local exit_code=\$\?/u);
   }
   assert.throws(() => coordinatorScript(source, "unknown"), /coordinator_scenario_invalid/u);
+  const passiveScript = coordinatorScript(source, "passive", "candidate_compose() { false; }");
+  assert.ok(passiveScript.indexOf("phase candidates; release_start_candidates") < passiveScript.indexOf("phase activate; start_release_backend"));
+  assert.match(passiveScript, /ORIGINAL_NODE_API/u);
+  const networkGuard = passiveScript.split("\n").find((line) => line.startsWith('if docker network inspect "$EXPECTED_CANDIDATE_NETWORK"'));
+  assert.match(networkGuard, /then false; fi$/u);
+  if (process.platform === "linux") {
+    for (const present of [true, false]) {
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", [
+        "set -Eeuo pipefail",
+        "trap 'status=$?; printf recovery_entered; exit \"$status\"' ERR",
+        "EXPECTED_CANDIDATE_NETWORK=synthetic",
+        `docker() { return ${present ? 0 : 1}; }`, networkGuard, "printf cleanup_confirmed",
+      ].join("\n")], { encoding: "utf8", timeout: 5000, maxBuffer: 4096 });
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, present ? 1 : 0);
+      assert.equal(result.stdout, present ? "recovery_entered" : "cleanup_confirmed");
+    }
+  }
   const upgradeScript = coordinatorScript(source, "go-upgrade");
   assert.match(upgradeScript, /exec bash --noprofile --norc -s/u);
   assert.ok(upgradeScript.indexOf("release_capture_successful_go_snapshot") < upgradeScript.indexOf("exec bash --noprofile --norc -s"));
@@ -317,7 +347,7 @@ async function rehearseCoordinator(t, scenario) {
   const names = { network: `${project}-private`, gatewayNetwork: `${project}-gateway`,
     postgresVolume: `${project}-pg`, dataVolume: `${project}-data` };
   const directory = await mkdtemp(path.join(os.tmpdir(), "duallane-coordinator-"));
-  const paths = Object.fromEntries(["node", "go", "secret", "phases", "snapshot", "recovery", "script", "upgrade", "upgradeSnapshot", "upgradeRecovery"]
+  const paths = Object.fromEntries(["node", "go", "secret", "phases", "snapshot", "recovery", "script", "upgrade", "upgradeSnapshot", "upgradeRecovery", "candidate"]
     .map((name) => [name, path.join(directory, name + (name === "script" ? ".sh" : ".json"))]));
   const allowedImages = new Set([...Object.values(images), ...Object.values(upgradeImages ?? {})]);
   const resources = { networks: [], volumes: [] };
@@ -327,22 +357,36 @@ async function rehearseCoordinator(t, scenario) {
     const fixtureOptions = { project, images, versions: { node: node.version, go: go.version },
       commits: { node: node.commit, go: go.commit }, names, port: await availablePort(), secretPath: paths.secret, root };
     const fixtures = buildReleaseFixtures(fixtureOptions);
+    const candidate = scenario === "passive" && buildPassiveCandidateFixture(fixtureOptions);
+    const candidateAdapter = candidate && buildPassiveCandidateComposeAdapter({ project, commit: go.commit,
+      candidateComposePath: paths.candidate, candidateOverlayPath: candidate.candidateOverlayPath });
     const upgradeCompose = upgrade && buildReleaseFixtures({ ...fixtureOptions, images: { ...images, ...upgradeImages },
       versions: { node: node.version, go: upgrade.version }, commits: { node: node.commit, go: upgrade.commit } }).goCompose;
-    for (const compose of [fixtures.nodeCompose, fixtures.goCompose, ...(upgradeCompose ? [upgradeCompose] : [])]) {
+    for (const compose of [fixtures.nodeCompose, fixtures.goCompose, ...(upgradeCompose ? [upgradeCompose] : []),
+      ...(candidate ? [candidate.candidateCompose] : [])]) {
       for (const service of Object.values(compose.services)) service.labels = { ...service.labels, [ownerLabel]: runID };
     }
     await writeFile(paths.secret, JSON.stringify({ accessKey: "synthetic", secretKey: "synthetic-only" }), { mode: 0o600, flag: "wx" });
     await writeFile(paths.node, JSON.stringify(fixtures.nodeCompose), { mode: 0o600, flag: "wx" });
     await writeFile(paths.go, JSON.stringify(fixtures.goCompose), { mode: 0o600, flag: "wx" });
     if (upgradeCompose) await writeFile(paths.upgrade, JSON.stringify(upgradeCompose), { mode: 0o600, flag: "wx" });
+    if (candidate) await writeFile(paths.candidate, JSON.stringify(candidate.candidateCompose), { mode: 0o600, flag: "wx" });
     phase = "node-config";
     docker(["compose", "--project-name", project, "-f", paths.node, "config", "--quiet"]);
     phase = "go-config";
     docker(["compose", "--project-name", project, "--profile", "rollback", "-f", paths.go, "config", "--quiet"]);
     if (upgradeCompose) docker(["compose", "--project-name", project, "--profile", "rollback", "-f", paths.upgrade, "config", "--quiet"]);
     if (docker(["ps", "-a", "-q", "--filter", `label=com.docker.compose.project=${project}`]).stdout.trim()) reject("project_already_exists");
-    for (const [name, logical, internal] of [[names.network, "default", true], [names.gatewayNetwork, "gateway", false]]) {
+    if (candidate) {
+      for (const name of Object.values(candidate.candidateContainerNames)) {
+        if (docker(["container", "inspect", name], { allowFailure: true }).status === 0) reject("candidate_name_already_exists");
+      }
+    }
+    // Pre-create and inventory the disposable candidate network. The real
+    // helper verifies/reuses it and owns normal cleanup; its create branch is
+    // deliberately not claimed by this rehearsal.
+    for (const [name, logical, internal] of [[names.network, "default", true], [names.gatewayNetwork, "gateway", false],
+      ...(candidate ? [[candidate.candidateNetworkName, "candidate", true]] : [])]) {
       if (docker(["network", "inspect", name], { allowFailure: true }).status === 0) reject("network_already_exists");
       // Record intent before a mutating CLI call: a lost response must not leave
       // a newly created disposable resource outside the cleanup inventory.
@@ -350,7 +394,9 @@ async function rehearseCoordinator(t, scenario) {
       resources.networks.push(resource);
       resource.id = docker(["network", "create", ...(internal ? ["--internal"] : []), "--driver", "bridge",
         "--opt", "com.docker.network.bridge.host_binding_ipv4=127.0.0.1", "--label", `${ownerLabel}=${runID}`,
-        "--label", `com.docker.compose.project=${project}`, "--label", `com.docker.compose.network=${logical}`, name]).stdout.trim();
+        "--label", `com.docker.compose.project=${project}`, "--label", `com.docker.compose.network=${logical}`,
+        ...(logical === "candidate" ? ["--label", "com.duallane.release-owned=true", "--label", "com.duallane.release-profile=go-full",
+          "--label", `com.duallane.release-commit=${go.commit}`] : []), name]).stdout.trim();
       if (!idPattern.test(resource.id)) reject("network_id_invalid");
       const network = inspect("network", resource.id);
       if (network.Internal !== internal || network.Name !== name || network.Labels?.[ownerLabel] !== runID) reject("network_not_isolated");
@@ -387,12 +433,16 @@ async function rehearseCoordinator(t, scenario) {
     }
     removeExactContainer(migration, project, runID, allowedImages);
     const originalPG = inspect("container", pgID).Id;
+    const originalAPI = docker([...base, "ps", "-a", "-q", "api"]).stdout.trim();
+    const originalWeb = docker([...base, "ps", "-a", "-q", "web"]).stdout.trim();
     const deploy = (await readFile(path.join(root, "deploy/production/deploy.sh"), "utf8")).replaceAll("\r\n", "\n");
-    await writeFile(paths.script, coordinatorScript(deploy, scenario), { mode: 0o600, flag: "wx" });
+    await writeFile(paths.script, coordinatorScript(deploy, scenario, candidateAdapter?.script), { mode: 0o600, flag: "wx" });
     phase = "coordinator";
     const result = await runCoordinator(paths.script, { ROOT: root, PROJECT: project, NODE_COMPOSE: paths.node, GO_COMPOSE: paths.go,
       NODE_COMMIT: node.commit, NODE_VERSION: node.version, GO_COMMIT: go.commit, GO_VERSION: go.version,
       SNAPSHOT: paths.snapshot, RECOVERY: paths.recovery, PHASE_FILE: paths.phases,
+      ...(candidate ? { ORIGINAL_NODE_API: originalAPI, ORIGINAL_NODE_WEB: originalWeb,
+        EXPECTED_CANDIDATE_NETWORK: candidate.candidateNetworkName } : {}),
       ...(upgrade ? { UPGRADE_GO_COMPOSE: paths.upgrade, UPGRADE_COMMIT: upgrade.commit, UPGRADE_VERSION: upgrade.version,
         UPGRADE_SNAPSHOT: paths.upgradeSnapshot, UPGRADE_RECOVERY: paths.upgradeRecovery,
         PREVIOUS_GO_SNAPSHOT: `${paths.recovery}.go-compose.snapshot.json` } : {}),
@@ -401,7 +451,7 @@ async function rehearseCoordinator(t, scenario) {
     const injectedFailure = ["after-backend", "after-capture"].includes(scenario);
     const expectedStatus = injectedFailure ? 74 : 0;
     if (result.status !== expectedStatus || result.failure) reject(`coordinator_failed_status${result.status}_${result.failure ?? "none"}_${phases.filter((value) => /^[a-z_]+(?:=\d+)?$/u.test(value)).slice(-2).join("_")}_${result.codes.join("_")}`);
-    const expectedPhases = ["snapshot", "pin", "migrate", "activate"];
+    const expectedPhases = ["snapshot", "pin", "migrate", ...(candidate ? ["candidates"] : []), "activate"];
     if (scenario !== "after-backend") expectedPhases.push("smoke", "capture");
     if (upgrade) expectedPhases.push(...["validate", "snapshot", "pin", "freeze", "migrate", "fence_drain_activate", "edge", "smoke", "capture", "rollback", "complete"].map((name) => `upgrade_${name}`));
     expectedPhases.push(...(injectedFailure ? ["injected_failure"] : ["rollback", "complete"]));
@@ -415,13 +465,20 @@ async function rehearseCoordinator(t, scenario) {
       }
     }
     const current = ownedContainers(project, runID, allowedImages);
+    if (candidate) {
+      for (const name of Object.values(candidate.candidateContainerNames)) {
+        if (docker(["container", "inspect", name], { allowFailure: true }).status === 0) reject("passive_candidate_remained");
+      }
+      if (docker(["network", "inspect", candidate.candidateNetworkName], { allowFailure: true }).status === 0) reject("passive_network_remained");
+    }
     for (const [service, image] of [["api", images.node], ["web", images.nodeWeb], ["postgres", images.postgres]]) {
       const matches = current.filter((container) => container.Config.Labels["com.docker.compose.service"] === service);
       if (matches.length !== 1 || !matches[0].State?.Running || matches[0].State?.Health?.Status !== "healthy" || matches[0].Image !== image) reject(`recovery_${service}_invalid`);
       if (service === "postgres" && matches[0].Id !== originalPG) reject("postgres_owner_changed");
     }
     if (current.some((container) => ["p2p", "workspace", "worker"].includes(container.Config.Labels["com.docker.compose.service"]))) reject("candidate_owner_remained");
-    t.diagnostic(upgrade ? "real pinned Go-to-Go activation and exact previous Go rollback passed before final exact Node recovery"
+    t.diagnostic(candidate ? "real passive candidates passed mode, read-only, no-published-port and cleanup checks while exact Node API/Web stayed healthy, followed by Go activation and Node recovery"
+      : upgrade ? "real pinned Go-to-Go activation and exact previous Go rollback passed before final exact Node recovery"
       : scenario === "success"
       ? "real Node migration, pinned Go activation, drain, gateway smoke, four private snapshot artifacts and exact Node recovery passed"
       : `actual ERR recovery passed after ${scenario}: original failure status, exact Node health and unchanged PostgreSQL identity`);
@@ -480,6 +537,7 @@ for (const [scenario, name] of [
   ["after-backend", "real ERR handler recovers Node after Go backend activation fails before edge startup"],
   ["after-capture", "real ERR handler recovers Node after a complete Go activation and snapshot"],
   ["go-upgrade", "real Go-to-Go upgrade restores the previous Go release before exact Node recovery"],
+  ["passive", "real passive Go candidates preserve the active Node release before cutover and recovery"],
 ]) {
   test(name, {
     skip: selected && (scenario !== "go-upgrade" || upgradeSelected) ? false
