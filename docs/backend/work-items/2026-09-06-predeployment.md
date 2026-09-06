@@ -2240,3 +2240,19 @@ including Node secret/read-only bind capture, CLI verification and drift
 rejection. Sources are fingerprinted in place, never copied or repaired.
 Frozen Node configuration/image integration remains part of the coordinator
 gate, not a claim that the first cutover was rehearsed.
+
+### Bounded One-Shot Drain Runner Component
+
+Parent reviewed the runner and passed its 24 Linux cases (0.715 seconds),
+covering owned create/start/wait/cleanup, ready/blocked reports, private outputs,
+image/secret-source/environment mismatches and bounded command failures. Parent
+added exact checks for the three asset-path environment variables baked into
+the Workspace image and refusal of an already-started checker.
+
+A real, never-started disposable Docker container confirmed that created
+containers have empty endpoint network IDs. The runner checks their exact
+network names/mode before start and IDs when running; fast-exited containers
+retain the name/mode proof. The probe container was removed by its exact owned
+ID and had no data mounts. This was a Docker lifecycle observation, not a
+successful end-to-end drain run; the new runner's real isolated PostgreSQL
+rehearsal and the complete release coordinator remain pending.

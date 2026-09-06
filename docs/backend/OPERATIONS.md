@@ -371,6 +371,19 @@ fail closed. Creation does not start Docker or establish a writer fence.
 The companion report validator requires the expected local/S3 driver and
 rejects contradictory ready flags, blocking counts or overstated writer proof.
 
+`deploy/production/release-drain-run.mjs run` executes that one-shot check with
+`--compose`, `--workspace-image`, `--output`, `--report` and `--run-id`. The
+inputs are a private canonical Go Compose file, an exact local image ID and a
+64-hex release-run identity; outputs must be new private paths. It verifies the
+existing PostgreSQL bridge network, creates without pulling/building, checks
+the created container's image, environment, read-only secret source and
+isolation, then starts and observes only that exact container. Docker command
+output is bounded to 64 KiB and checker waiting to 20 seconds. A valid blocked
+report is retained with exit 2; other failures return 1. Cleanup requires the
+exact container ID, image and run/project/service labels. Ambiguous ownership
+is left for operator review, never removed by a guessed name. This component
+does not stop writers or authorize a handoff; the coordinator must do so first.
+
 The database snapshot still reports `writers: not_proven` and
 `provider: not_checked`; the additional provider observation is a separate
 outer field. Neither observation proves an admission fence or the absence of
