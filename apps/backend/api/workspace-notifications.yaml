@@ -327,11 +327,11 @@ components:
       additionalProperties: false
       properties:
         enabled:
-          type: boolean
+          type: [boolean, 'null']
         immediateEnabled:
-          type: boolean
+          type: [boolean, 'null']
         digestEnabled:
-          type: boolean
+          type: [boolean, 'null']
     NtfyPreferences:
       type: object
       additionalProperties: false

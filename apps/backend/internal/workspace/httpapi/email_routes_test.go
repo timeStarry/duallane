@@ -111,7 +111,7 @@ func TestEmailRoutesPreserveLegacyResponseShapesAndInputs(t *testing.T) {
 	updateRequest.Header.Set("X-Request-ID", "email-update")
 	updateRequest.Header.Set("X-Forwarded-For", "203.0.113.21, 10.0.0.1")
 	router.ServeHTTP(update, updateRequest)
-	if update.Code != http.StatusOK || service.updateInput.ActorID != "actor-1" || service.updateInput.Enabled == nil || *service.updateInput.Enabled || service.updateInput.Immediate != nil || service.updateInput.Digest == nil || !*service.updateInput.Digest {
+	if update.Code != http.StatusOK || service.updateInput.ActorID != "actor-1" || service.updateInput.Enabled == nil || *service.updateInput.Enabled || service.updateInput.Immediate == nil || *service.updateInput.Immediate || service.updateInput.Digest == nil || !*service.updateInput.Digest {
 		t.Fatalf("update status=%d input=%#v body=%s", update.Code, service.updateInput, update.Body.String())
 	}
 	if service.updateInput.Meta.RequestID != "email-update" || service.updateInput.Meta.IPAddress != "203.0.113.21" {

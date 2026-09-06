@@ -1,0 +1,153 @@
+{
+  "contract": "node-workspace-notifications-null-v1",
+  "source": "apps/web/server/index.mjs + services/workspace-email.mjs",
+  "database": "synthetic-sqlite",
+  "scenarios": [
+    {
+      "name": "initial-true-state",
+      "request": {
+        "method": "GET",
+        "url": "/api/workspace/me/notifications",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "flags": {
+          "enabled": true,
+          "immediateEnabled": false,
+          "digestEnabled": true
+        }
+      }
+    },
+    {
+      "name": "explicit-null-enabled",
+      "request": {
+        "method": "PATCH",
+        "url": "/api/workspace/me/notifications",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "payload": {
+          "enabled": null
+        }
+      },
+      "response": {
+        "status": 200,
+        "flags": {
+          "enabled": false,
+          "immediateEnabled": false,
+          "digestEnabled": true
+        }
+      }
+    },
+    {
+      "name": "restore-enabled",
+      "request": {
+        "method": "PATCH",
+        "url": "/api/workspace/me/notifications",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "payload": {
+          "enabled": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "flags": {
+          "enabled": true,
+          "immediateEnabled": false,
+          "digestEnabled": true
+        }
+      }
+    },
+    {
+      "name": "omitted-enabled",
+      "request": {
+        "method": "PATCH",
+        "url": "/api/workspace/me/notifications",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "payload": {}
+      },
+      "response": {
+        "status": 200,
+        "flags": {
+          "enabled": true,
+          "immediateEnabled": false,
+          "digestEnabled": true
+        }
+      }
+    },
+    {
+      "name": "set-immediate-true",
+      "request": {
+        "method": "PATCH",
+        "url": "/api/workspace/me/notifications",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "payload": {
+          "immediateEnabled": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "flags": {
+          "enabled": true,
+          "immediateEnabled": true,
+          "digestEnabled": true
+        }
+      }
+    },
+    {
+      "name": "explicit-null-immediate",
+      "request": {
+        "method": "PATCH",
+        "url": "/api/workspace/me/notifications",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "payload": {
+          "immediateEnabled": null
+        }
+      },
+      "response": {
+        "status": 200,
+        "flags": {
+          "enabled": true,
+          "immediateEnabled": false,
+          "digestEnabled": true
+        }
+      }
+    },
+    {
+      "name": "omitted-immediate",
+      "request": {
+        "method": "PATCH",
+        "url": "/api/workspace/me/notifications",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "payload": {}
+      },
+      "response": {
+        "status": 200,
+        "flags": {
+          "enabled": true,
+          "immediateEnabled": false,
+          "digestEnabled": true
+        }
+      }
+    }
+  ]
+}

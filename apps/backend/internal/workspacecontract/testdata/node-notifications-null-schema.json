@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "nodeFixture": "scripts/backend/testdata/workspace-notifications-null.json",
+    "nodeImplementation": "apps/web/server/services/workspace-email.mjs"
+  },
+  "route": {
+    "method": "PATCH",
+    "path": "/api/workspace/me/notifications"
+  },
+  "scenarios": [
+    {
+      "name": "explicit-null-enabled",
+      "nodeScenario": "explicit-null-enabled",
+      "body": {
+        "enabled": null
+      }
+    },
+    {
+      "name": "explicit-null-immediate-enabled",
+      "nodeScenario": "explicit-null-immediate",
+      "body": {
+        "immediateEnabled": null
+      }
+    },
+    {
+      "name": "explicit-null-digest-enabled",
+      "body": {
+        "digestEnabled": null
+      }
+    }
+  ]
+}

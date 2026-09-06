@@ -1370,3 +1370,19 @@ rows are created through the API, not directly inserted. Parent independently
 passed the realtime package with PostgreSQL/race (19.604 seconds). These focused
 regressions passed while the full browser visibility issue remained open; they
 are stronger writer/transport evidence, not a claim that the issue is resolved.
+
+### Notification Null Compatibility
+
+Actual Node characterization found that explicitly null email preference flags
+mean false, while omitted flags retain their value. The Go HTTP adapter now
+preserves this distinction without changing the shared optional-field decoder
+or ntfy's boolean-only contract. The three email PATCH fields also accept null
+in OpenAPI. The seven-case actual Node fixture and three schema cases retain
+their source links; PostgreSQL tests prime true values before testing null and
+omission, verify persistence, and assert no provider calls.
+
+Parent independently passed the Node fixture (7 cases), PostgreSQL/race HTTP
+package (9.624 seconds), complete contract/race package (11.687), and three CI
+wiring tests. CI now runs 24 Node fixture commands. This review separately
+identified logical file-not-found 400/404 drift; its fix is tracked with the
+file-owner slice and is not claimed here.

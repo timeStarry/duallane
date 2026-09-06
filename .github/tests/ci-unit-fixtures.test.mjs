@@ -27,6 +27,7 @@ const expectedFixtureCommands = [
   'node scripts/backend/workspace-emotes-contract.mjs --check',
   'node scripts/backend/workspace-files-contract.mjs --check',
   'node scripts/backend/workspace-invites-contract.mjs --check',
+  'node scripts/backend/workspace-notifications-null-fixtures.mjs',
   'node scripts/backend/workspace-notifications-contract.mjs --check',
   'node scripts/backend/topic-parser-fixtures.mjs',
   'node scripts/backend/topic-card-fixtures.mjs'

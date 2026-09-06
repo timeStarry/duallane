@@ -132,10 +132,21 @@ func updateEmailPreferences(response http.ResponseWriter, request *http.Request,
 		return
 	}
 	preferences, err := options.Email.UpdatePreferences(request.Context(), email.UpdatePreferencesInput{
-		ActorID: actor.ID, Enabled: body.Enabled.Value, Immediate: body.Immediate.Value, Digest: body.Digest.Value,
+		ActorID: actor.ID, Enabled: notificationPreferenceBool(body.Enabled), Immediate: notificationPreferenceBool(body.Immediate), Digest: notificationPreferenceBool(body.Digest),
 		Meta: requestMeta(request, options),
 	})
 	writeResult(response, http.StatusOK, map[string]any{"notifications": preferences}, err)
+}
+
+func notificationPreferenceBool(field optional[bool]) *bool {
+	if !field.Set {
+		return nil
+	}
+	if field.Value == nil {
+		value := false
+		return &value
+	}
+	return field.Value
 }
 
 func createEmailChallenge(response http.ResponseWriter, request *http.Request, actor *auth.Actor, options RouterOptions) {
