@@ -13,6 +13,16 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.16.0",
+    releasedAt: "2026-09-07",
+    title: "为后台更新做好准备",
+    summary: "保留熟悉的聊天入口和两条通道的隐私规则，为维护者加入新的后台运行方案与更新前检查。",
+    categories: [
+      { title: "日常使用", items: ["私密直连与共享空间继续使用原有入口，无需更换聊天链接", "私密直连仍不保存聊天和文件内容，共享空间继续按成员权限保存与访问内容"] },
+      { title: "维护更新", items: ["维护者可按运维指引选择新后台，启用前核对版本、存储和恢复条件", "保留上一版本的恢复支持；新后台需要维护者检查并启用，不会自动切换"] }
+    ]
+  },
+  {
     version: "0.15.5",
     releasedAt: "2026-08-29",
     title: "更清楚的个人 Bot 设置",

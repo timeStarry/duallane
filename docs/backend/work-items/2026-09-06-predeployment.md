@@ -1953,6 +1953,23 @@ Go writers. The helper records the old policy before mutation, verifies
 completed fence can restore a selected known-good owner. This does not yet
 enable Go-to-Go upgrades or integrate the database/provider drain gate.
 
+### Product Version And Release Guidance Preparation
+
+Root and Web package versions are aligned at `0.16.0`, a compatible minor
+release for the optional Go backend composition. The public release entry and
+Echo guide use the same date, title and summary. They preserve the existing
+entry points and trust-lane promises, explicitly require operator enablement,
+and do not claim a live production switch. The Agent SDK version is unchanged.
+
+Parent validation against the exact six copied release files in the Linux
+validation checkout passed: release-history and actual Node Echo service tests
+(11 tests); actual Node fixture regeneration and `--check` (7 catalog entries
+plus the Unicode/escaping synthetic case); and Go Echo releases with explicit
+disposable PostgreSQL, uncached race tests (5.265 seconds). The generated
+fixture retains the actual Node snapshot/hash and publication-ID behavior.
+These checks do not resolve the separate full-browser Echo visibility failure
+or constitute final-image/build/visual acceptance.
+
 The parent's separate real-Docker test then passed both restart-policy cases
 and mismatched-owner refusal (3 Node test results, 8.261 seconds). It used the
 rebuilt Workspace runtime image
