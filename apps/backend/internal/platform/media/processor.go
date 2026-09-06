@@ -63,11 +63,18 @@ func (p *Processor) process(ctx context.Context, input []byte, source Source) (P
 	}
 	if !formatAllowed(source.Kind, info.format) {
 		if source.Kind == KindAvatar {
-			return ProcessedUpload{}, decodeFailedError(source.Kind, errors.New("format is not accepted for avatars"))
+			// The owning Node avatar service has already decoded the image at
+			// this point and reports a safe dimensions/format diagnostic for a
+			// decoded-but-disallowed format (for example GIF). Keep malformed
+			// input on the decode diagnostic above.
+			return ProcessedUpload{}, dimensionsExceededError(source.Kind, errors.New("format is not accepted for avatars"))
 		}
 		return ProcessedUpload{}, supportedFormatError(source.Kind, errors.New("format is not accepted"))
 	}
 	if err := info.validate(source.Kind, limits); err != nil {
+		if errors.Is(err, errPixelBudgetExceeded) {
+			return ProcessedUpload{}, decodeFailedError(source.Kind, err)
+		}
 		return ProcessedUpload{}, err
 	}
 	if err := p.acquire(ctx); err != nil {

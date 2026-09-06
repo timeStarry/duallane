@@ -75,6 +75,25 @@ jobs:
           TEST_DATABASE_URL: postgres://duallane:duallane-ci-password@127.0.0.1:5432/duallane?sslmode=disable
         run: make integration-postgres
 
+      - name: Set up pnpm for media owner parity
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+          run_install: false
+
+      - name: Set up Node.js for media owner parity
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install media owner dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Compare actual Node and Go media owners
+        run: node --test scripts/backend/media-compatibility.test.mjs
+
   quality-gate:
     name: Test, lint, build, and Chromium E2E
     runs-on: ubuntu-latest

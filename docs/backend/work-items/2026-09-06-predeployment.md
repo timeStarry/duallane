@@ -604,3 +604,29 @@ are read-projection gates; trusted catalog composition and the unchanged full
 Go Workspace browser suite remain separate acceptance steps. CI for the prior
 delivery commit `89b1449` passed all three existing jobs; it does not cover these
 new local changes or establish complete Go Workspace parity.
+
+### Native Media Owner Compatibility
+
+The differential corpus calls the actual Node avatar/custom-emote services,
+using Sharp only to generate synthetic inputs and inspect normalized output.
+The Go probe runs the real govips processor. Twenty-seven initial cases passed
+independently, including orientation, metadata stripping, transparency, GIF/
+WebP animation, BMP, declared-MIME mismatches, byte/pixel/edge/frame/duration
+limits and malformed data. Every accepted output receives sampled pixel and
+alpha comparison as well as format, dimensions and animation metadata checks.
+
+Parent review added a deterministic high-entropy 180-frame GIF which reaches
+the actual 2 MiB output-overage rejection after fallback compression. This
+first failed because Go's public rejection copy differed from Node. The copy
+was corrected without changing either runtime's limits or conversion settings;
+all 28 cases then passed (16 accepted, 12 rejected, 16 pixel comparisons;
+60.421 seconds). The test requires that this fixture reaches the named owner
+rejection, so two accidental acceptances cannot count as boundary evidence.
+
+Independent final media/race passed (2.312 seconds), followed by staticcheck.
+The corpus is now part of the native-dependency CI job. Local evidence used
+Node 22.23.2, Sharp 0.35.3 with bundled libvips 8.18.3, Go 1.26.8 and system
+libvips 8.15.1. Queue cancellation, slot release and output overage are covered;
+interrupting an already-running native libvips call is not claimed. Imported
+emote assets were untouched, and all generated media/database objects were
+synthetic and removed by the harness.

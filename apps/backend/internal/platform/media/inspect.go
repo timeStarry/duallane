@@ -29,7 +29,10 @@ type bmpHeader struct {
 	bytesPerPixel int
 }
 
-var errMalformedImage = errors.New("image header is malformed")
+var (
+	errMalformedImage      = errors.New("image header is malformed")
+	errPixelBudgetExceeded = errors.New("decoded pixel budget exceeded")
+)
 
 func inspectImage(input []byte) (imageHeader, error) {
 	switch {
@@ -447,14 +450,14 @@ func (h imageHeader) validate(kind Kind, limits Limits) *Error {
 	}
 	pixels, ok := checkedMul(h.width, h.height)
 	if !ok || pixels > uint64(limits.MaxInputPixels) {
-		return dimensionsExceededError(kind, errors.New("decoded pixel budget exceeded"))
+		return dimensionsExceededError(kind, errPixelBudgetExceeded)
 	}
 	totalPixels, ok := checkedMul(pixels, uint64(h.frameCount))
 	if !ok || totalPixels > uint64(limits.MaxInputPixels) {
-		return dimensionsExceededError(kind, errors.New("animated decoded pixel budget exceeded"))
+		return dimensionsExceededError(kind, errPixelBudgetExceeded)
 	}
 	if h.totalFramePixels > uint64(limits.MaxInputPixels) {
-		return dimensionsExceededError(kind, errors.New("frame pixel budget exceeded"))
+		return dimensionsExceededError(kind, errPixelBudgetExceeded)
 	}
 	if h.frameCount > limits.MaxFrames || h.durationMS > limits.MaxDurationMS {
 		return animationTooComplexError(kind, errors.New("animation limits exceeded"))

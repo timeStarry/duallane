@@ -1,0 +1,296 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "avatar-jpeg-orientation",
+      "kind": "avatar",
+      "mime": "image/jpeg",
+      "fixture": "image",
+      "format": "jpeg",
+      "width": 640,
+      "height": 320,
+      "pattern": "quadrants",
+      "orientation": 6,
+      "metadata": true
+    },
+    {
+      "id": "avatar-png-transparency",
+      "kind": "avatar",
+      "mime": "image/png",
+      "fixture": "image",
+      "format": "png",
+      "width": 320,
+      "height": 640,
+      "pattern": "quadrants-alpha",
+      "metadata": true
+    },
+    {
+      "id": "avatar-webp-centre",
+      "kind": "avatar",
+      "mime": "image/webp",
+      "fixture": "image",
+      "format": "webp",
+      "width": 640,
+      "height": 320,
+      "pattern": "quadrants"
+    },
+    {
+      "id": "emote-jpeg-static",
+      "kind": "custom_emote",
+      "mime": "image/jpeg",
+      "fixture": "image",
+      "format": "jpeg",
+      "width": 320,
+      "height": 160,
+      "pattern": "stripes"
+    },
+    {
+      "id": "emote-png-transparency",
+      "kind": "custom_emote",
+      "mime": "image/png",
+      "fixture": "image",
+      "format": "png",
+      "width": 48,
+      "height": 32,
+      "pattern": "quadrants-alpha",
+      "metadata": true
+    },
+    {
+      "id": "emote-webp-static",
+      "kind": "custom_emote",
+      "mime": "image/webp",
+      "fixture": "image",
+      "format": "webp",
+      "width": 300,
+      "height": 100,
+      "pattern": "stripes"
+    },
+    {
+      "id": "emote-gif-static",
+      "kind": "custom_emote",
+      "mime": "image/gif",
+      "fixture": "animation",
+      "format": "gif",
+      "width": 8,
+      "height": 4,
+      "frames": 1,
+      "delays": [130],
+      "pattern": "frames"
+    },
+    {
+      "id": "emote-gif-animated",
+      "kind": "custom_emote",
+      "mime": "image/gif",
+      "fixture": "animation",
+      "format": "gif",
+      "width": 8,
+      "height": 8,
+      "frames": 3,
+      "delays": [70, 130, 190],
+      "pattern": "frames"
+    },
+    {
+      "id": "emote-webp-animated",
+      "kind": "custom_emote",
+      "mime": "image/webp",
+      "fixture": "animation",
+      "format": "webp",
+      "width": 8,
+      "height": 8,
+      "frames": 3,
+      "delays": [70, 130, 190],
+      "pattern": "frames"
+    },
+    {
+      "id": "emote-bmp-24-bottom-up",
+      "kind": "custom_emote",
+      "mime": "image/bmp",
+      "fixture": "bmp",
+      "format": "bmp",
+      "width": 8,
+      "height": 4,
+      "bitsPerPixel": 24,
+      "topDown": false,
+      "pattern": "quadrants"
+    },
+    {
+      "id": "emote-bmp-32-top-down-alpha",
+      "kind": "custom_emote",
+      "mime": "image/bmp",
+      "fixture": "bmp",
+      "format": "bmp",
+      "width": 8,
+      "height": 4,
+      "bitsPerPixel": 32,
+      "topDown": true,
+      "pattern": "quadrants-alpha"
+    },
+    {
+      "id": "emote-png-declared-jpeg",
+      "kind": "custom_emote",
+      "mime": "image/jpeg",
+      "fixture": "image",
+      "format": "png",
+      "width": 16,
+      "height": 12,
+      "pattern": "quadrants",
+      "description": "synthetic declared-MIME mismatch"
+    },
+    {
+      "id": "emote-bmp-declared-png",
+      "kind": "custom_emote",
+      "mime": "image/png",
+      "fixture": "bmp",
+      "format": "bmp",
+      "width": 16,
+      "height": 12,
+      "bitsPerPixel": 24,
+      "topDown": false,
+      "pattern": "stripes",
+      "description": "synthetic declared-MIME mismatch"
+    },
+    {
+      "id": "avatar-gif-declared-png",
+      "kind": "avatar",
+      "mime": "image/png",
+      "fixture": "animation",
+      "format": "gif",
+      "width": 8,
+      "height": 8,
+      "frames": 1,
+      "delays": [0],
+      "pattern": "frames"
+    },
+    {
+      "id": "avatar-truncated-png",
+      "kind": "avatar",
+      "mime": "image/png",
+      "fixture": "truncated",
+      "source": "avatar-png-transparency",
+      "truncateAt": 20
+    },
+    {
+      "id": "emote-truncated-gif",
+      "kind": "custom_emote",
+      "mime": "image/gif",
+      "fixture": "truncated",
+      "source": "emote-gif-animated",
+      "truncateAt": 20
+    },
+    {
+      "id": "emote-truncated-webp",
+      "kind": "custom_emote",
+      "mime": "image/webp",
+      "fixture": "truncated",
+      "source": "emote-webp-animated",
+      "truncateAt": 20
+    },
+    {
+      "id": "emote-unsupported-mime",
+      "kind": "custom_emote",
+      "mime": "image/svg+xml",
+      "fixture": "invalid"
+    },
+    {
+      "id": "avatar-input-over-limit",
+      "kind": "avatar",
+      "mime": "image/png",
+      "fixture": "oversize",
+      "bytes": 5242881
+    },
+    {
+      "id": "emote-input-over-limit",
+      "kind": "custom_emote",
+      "mime": "image/png",
+      "fixture": "oversize",
+      "bytes": 10485761
+    },
+    {
+      "id": "emote-edge-over-limit",
+      "kind": "custom_emote",
+      "mime": "image/png",
+      "fixture": "patched-png",
+      "width": 4097,
+      "height": 1
+    },
+    {
+      "id": "avatar-pixels-over-limit",
+      "kind": "avatar",
+      "mime": "image/png",
+      "fixture": "patched-png",
+      "width": 8192,
+      "height": 5121
+    },
+    {
+      "id": "emote-frames-over-limit",
+      "kind": "custom_emote",
+      "mime": "image/gif",
+      "fixture": "animation",
+      "format": "gif",
+      "width": 2,
+      "height": 2,
+      "frames": 181,
+      "delays": [100],
+      "pattern": "frames"
+    },
+    {
+      "id": "emote-duration-over-limit",
+      "kind": "custom_emote",
+      "mime": "image/gif",
+      "fixture": "animation",
+      "format": "gif",
+      "width": 2,
+      "height": 2,
+      "frames": 2,
+      "delays": [15000, 15100],
+      "pattern": "frames"
+    },
+    {
+      "id": "emote-output-over-owner-limit",
+      "kind": "custom_emote",
+      "mime": "image/gif",
+      "fixture": "animation",
+      "format": "gif",
+      "width": 192,
+      "height": 192,
+      "frames": 180,
+      "delays": [100],
+      "pattern": "noise",
+      "expectedErrorCode": "emote.output_too_large"
+    },
+    {
+      "id": "emote-output-within-owner-limit",
+      "kind": "custom_emote",
+      "mime": "image/png",
+      "fixture": "image",
+      "format": "png",
+      "width": 48,
+      "height": 32,
+      "pattern": "quadrants-alpha"
+    },
+    {
+      "id": "emote-frames-at-limit",
+      "kind": "custom_emote",
+      "mime": "image/gif",
+      "fixture": "animation",
+      "format": "gif",
+      "width": 2,
+      "height": 2,
+      "frames": 180,
+      "delays": [100],
+      "pattern": "frames"
+    },
+    {
+      "id": "emote-duration-at-limit",
+      "kind": "custom_emote",
+      "mime": "image/gif",
+      "fixture": "animation",
+      "format": "gif",
+      "width": 2,
+      "height": 2,
+      "frames": 2,
+      "delays": [15000, 15000],
+      "pattern": "frames"
+    }
+  ]
+}

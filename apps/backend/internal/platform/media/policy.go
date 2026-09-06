@@ -354,6 +354,9 @@ func processFailedError(kind Kind, cause error) *Error {
 }
 
 func outputTooLargeError(kind Kind, cause error) *Error {
+	if kind == KindCustomEmote {
+		return validationError(kind, "output_too_large", "压缩后的表情仍然过大", 400, cause)
+	}
 	return validationError(kind, "output_too_large", "压缩后的图片仍然过大", 400, cause)
 }
 
