@@ -191,6 +191,16 @@ func (t *pgTx) ListUploadParts(ctx context.Context, uploadID string) ([]UploadPa
 	return listUploadParts(ctx, t.tx, uploadID)
 }
 
+func (t *pgTx) DeleteUploadParts(ctx context.Context, uploadID string) error {
+	if strings.TrimSpace(uploadID) == "" {
+		return internalError("cleanup workspace upload parts", errors.New("upload ID is required"))
+	}
+	if _, err := t.tx.Exec(ctx, `DELETE FROM workspace_upload_parts WHERE upload_id = $1`, uploadID); err != nil {
+		return internalError("cleanup workspace upload parts", err)
+	}
+	return nil
+}
+
 func (t *pgTx) GetUploadPart(ctx context.Context, uploadID string, partNumber int) (*UploadPartRecord, error) {
 	return getUploadPart(ctx, t.tx, uploadID, partNumber)
 }

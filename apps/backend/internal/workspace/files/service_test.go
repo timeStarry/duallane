@@ -17,18 +17,19 @@ import (
 )
 
 type fakeFileState struct {
-	actors      map[string]*auth.Actor
-	attachments map[string]*AttachmentRecord
-	transfers   map[string]*TransferRecord
-	parts       map[string]map[int]*UploadPartRecord
-	objects     map[string]*StorageObjectRecord
-	members     map[string]bool
-	participant map[string]bool
-	events      []EventInput
-	audits      []AuditInput
-	locks       []string
-	failAudit   bool
-	failEvent   bool
+	actors         map[string]*auth.Actor
+	attachments    map[string]*AttachmentRecord
+	transfers      map[string]*TransferRecord
+	parts          map[string]map[int]*UploadPartRecord
+	objects        map[string]*StorageObjectRecord
+	members        map[string]bool
+	participant    map[string]bool
+	events         []EventInput
+	audits         []AuditInput
+	locks          []string
+	failAudit      bool
+	failEvent      bool
+	deletePartsErr error
 }
 
 type fakeFileRepo struct {
@@ -193,6 +194,14 @@ func (t *fakeFileTx) GetTransfer(_ context.Context, _, userID, transferID string
 
 func (t *fakeFileTx) ListUploadParts(_ context.Context, uploadID string) ([]UploadPartRecord, error) {
 	return cloneParts(t.state.parts[uploadID]), nil
+}
+
+func (t *fakeFileTx) DeleteUploadParts(_ context.Context, uploadID string) error {
+	if t.state.deletePartsErr != nil {
+		return t.state.deletePartsErr
+	}
+	delete(t.state.parts, uploadID)
+	return nil
 }
 
 func (t *fakeFileTx) GetUploadPart(_ context.Context, uploadID string, partNumber int) (*UploadPartRecord, error) {
@@ -375,18 +384,19 @@ func (t *fakeFileTx) WriteAudit(_ context.Context, input AuditInput) error {
 
 func (s *fakeFileState) clone() *fakeFileState {
 	copy := &fakeFileState{
-		actors:      map[string]*auth.Actor{},
-		attachments: map[string]*AttachmentRecord{},
-		transfers:   map[string]*TransferRecord{},
-		parts:       map[string]map[int]*UploadPartRecord{},
-		objects:     map[string]*StorageObjectRecord{},
-		members:     map[string]bool{},
-		participant: map[string]bool{},
-		events:      append([]EventInput(nil), s.events...),
-		audits:      append([]AuditInput(nil), s.audits...),
-		locks:       append([]string(nil), s.locks...),
-		failAudit:   s.failAudit,
-		failEvent:   s.failEvent,
+		actors:         map[string]*auth.Actor{},
+		attachments:    map[string]*AttachmentRecord{},
+		transfers:      map[string]*TransferRecord{},
+		parts:          map[string]map[int]*UploadPartRecord{},
+		objects:        map[string]*StorageObjectRecord{},
+		members:        map[string]bool{},
+		participant:    map[string]bool{},
+		events:         append([]EventInput(nil), s.events...),
+		audits:         append([]AuditInput(nil), s.audits...),
+		locks:          append([]string(nil), s.locks...),
+		failAudit:      s.failAudit,
+		failEvent:      s.failEvent,
+		deletePartsErr: s.deletePartsErr,
 	}
 	for id, actor := range s.actors {
 		copy.actors[id] = cloneActor(actor)

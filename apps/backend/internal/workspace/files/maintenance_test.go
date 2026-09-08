@@ -185,10 +185,14 @@ func TestRunUploadMaintenanceDeletesOnlyOldAttemptsForTerminalUpload(t *testing.
 	transfer, attachment, record := maintenanceTestTransfer(string(TransferCompleted), "upload-terminal-maint", at.Add(-time.Hour))
 	base.state.transfers[transfer.ID] = &transfer
 	base.state.attachments[attachment.ID] = &attachment
+	base.state.parts[transfer.ID] = map[int]*UploadPartRecord{
+		1: {UploadID: transfer.ID, PartNumber: 1, ByteSize: 7, SHA256: strings.Repeat("a", 64), CreatedAt: at.Add(-time.Hour), UpdatedAt: at.Add(-time.Hour)},
+		9: {UploadID: transfer.ID, PartNumber: 9, ByteSize: 7, SHA256: strings.Repeat("b", 64), CreatedAt: at.Add(-time.Hour), UpdatedAt: at.Add(-time.Hour)},
+	}
 	repo := &maintenanceFileRepo{fakeFileRepo: base, records: []StaleUploadRecord{record}}
 	oldKey := "workspace/uploads/upload-terminal-maint/attempts/00000000-0000-0000-0000-000000000001"
 	freshKey := "workspace/uploads/upload-terminal-maint/attempts/00000000-0000-0000-0000-000000000002"
-	for _, key := range []string{stagingContentKey(transfer.ID), oldKey, freshKey} {
+	for _, key := range []string{stagingContentKey(transfer.ID), stagingPartKey(transfer.ID, 9), oldKey, freshKey} {
 		if _, err := store.Put(context.Background(), key, strings.NewReader("attempt"), int64(len("attempt")), ""); err != nil {
 			t.Fatalf("put terminal object: %v", err)
 		}
@@ -209,11 +213,123 @@ func TestRunUploadMaintenanceDeletesOnlyOldAttemptsForTerminalUpload(t *testing.
 	if result.TerminalUploadsInspected != 1 {
 		t.Fatalf("terminal result = %#v", result)
 	}
+	if _, exists := base.state.parts[transfer.ID]; exists {
+		t.Fatalf("terminal upload parts remain: %#v", base.state.parts[transfer.ID])
+	}
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(stagingPartKey(transfer.ID, 9)))); !os.IsNotExist(err) {
+		t.Fatalf("part collected before transactional delete was not cleaned, err=%v", err)
+	}
 	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(oldKey))); !os.IsNotExist(err) {
 		t.Fatalf("old terminal attempt remains, err=%v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(freshKey))); err != nil {
 		t.Fatalf("fresh terminal attempt was deleted: %v", err)
+	}
+	second, err := service.RunUploadMaintenance(context.Background(), UploadMaintenanceOptions{Now: at, IncludeTerminalArtifacts: true})
+	if err != nil || second.TerminalUploadsInspected != 1 {
+		t.Fatalf("idempotent terminal maintenance = %#v, err=%v", second, err)
+	}
+}
+
+func TestRunUploadMaintenanceRetainsFreshReservedUploadParts(t *testing.T) {
+	at := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	base := newFakeFileRepo()
+	transfer, attachment, record := maintenanceTestTransfer(string(TransferReserved), "upload-fresh-parts", at.Add(-time.Minute))
+	base.state.transfers[transfer.ID] = &transfer
+	base.state.attachments[attachment.ID] = &attachment
+	base.state.parts[transfer.ID] = map[int]*UploadPartRecord{
+		1: {UploadID: transfer.ID, PartNumber: 1, ByteSize: 7, SHA256: strings.Repeat("a", 64), CreatedAt: at.Add(-time.Minute), UpdatedAt: at.Add(-time.Minute)},
+	}
+	repo := &maintenanceFileRepo{fakeFileRepo: base, records: []StaleUploadRecord{record}}
+	service := NewService(ServiceOptions{Repository: repo, SpaceID: DefaultSpaceID, Now: func() time.Time { return at }})
+	result, err := service.RunUploadMaintenance(context.Background(), UploadMaintenanceOptions{Now: at, IncludeTerminalArtifacts: true})
+	if err != nil {
+		t.Fatalf("fresh reserved maintenance: %v", err)
+	}
+	if result.Scanned != 0 || result.StaleReservationsFailed != 0 || result.TerminalUploadsInspected != 0 {
+		t.Fatalf("fresh reserved upload was selected: %#v", result)
+	}
+	if transfer.Status != string(TransferReserved) || len(base.state.parts[transfer.ID]) != 1 {
+		t.Fatalf("fresh reserved upload changed: transfer=%#v parts=%#v", transfer, base.state.parts[transfer.ID])
+	}
+}
+
+func TestRunUploadMaintenanceTerminalPartDeleteRollsBack(t *testing.T) {
+	store, err := platformstorage.NewLocalBlobStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	base := newFakeFileRepo()
+	transfer, attachment, record := maintenanceTestTransfer(string(TransferCompleted), "upload-parts-rollback", at.Add(-time.Hour))
+	base.state.transfers[transfer.ID] = &transfer
+	base.state.attachments[attachment.ID] = &attachment
+	base.state.parts[transfer.ID] = map[int]*UploadPartRecord{
+		1: {UploadID: transfer.ID, PartNumber: 1, ByteSize: 7, SHA256: strings.Repeat("a", 64), CreatedAt: at.Add(-time.Hour), UpdatedAt: at.Add(-time.Hour)},
+	}
+	base.state.deletePartsErr = errors.New("synthetic part delete failure")
+	repo := &maintenanceFileRepo{fakeFileRepo: base, records: []StaleUploadRecord{record}}
+	service := NewService(ServiceOptions{Repository: repo, BlobStore: store, SpaceID: DefaultSpaceID, Now: func() time.Time { return at }})
+	result, err := service.RunUploadMaintenance(context.Background(), UploadMaintenanceOptions{Now: at, IncludeTerminalArtifacts: true})
+	if err == nil || result.TerminalUploadsInspected != 1 {
+		t.Fatalf("terminal part delete unexpectedly committed: result=%#v err=%v", result, err)
+	}
+	if len(base.state.parts[transfer.ID]) != 1 {
+		t.Fatalf("terminal part delete rollback lost rows: %#v", base.state.parts[transfer.ID])
+	}
+}
+
+func TestRunUploadMaintenanceRetainsTerminalPartMetadataAfterPhysicalFailure(t *testing.T) {
+	root := t.TempDir()
+	local, err := platformstorage.NewLocalBlobStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 9, 6, 12, 30, 0, 0, time.UTC)
+	base := newFakeFileRepo()
+	transfer, attachment, record := maintenanceTestTransfer(string(TransferCompleted), "upload-terminal-retry", at.Add(-time.Hour))
+	base.state.transfers[transfer.ID] = &transfer
+	base.state.attachments[attachment.ID] = &attachment
+	base.state.parts[transfer.ID] = map[int]*UploadPartRecord{
+		9: {UploadID: transfer.ID, PartNumber: 9, ByteSize: 7, SHA256: strings.Repeat("a", 64), CreatedAt: at.Add(-time.Hour), UpdatedAt: at.Add(-time.Hour)},
+	}
+	repo := &maintenanceFileRepo{fakeFileRepo: base, records: []StaleUploadRecord{record}}
+	legacyPartKey := stagingPartKey(transfer.ID, 9)
+	if _, err := local.Put(context.Background(), legacyPartKey, strings.NewReader("staging"), int64(len("staging")), ""); err != nil {
+		t.Fatal(err)
+	}
+	store := &failingMaintenanceBlobStore{inner: local, failOn: legacyPartKey}
+	service := NewService(ServiceOptions{Repository: repo, BlobStore: store, SpaceID: DefaultSpaceID, Now: func() time.Time { return at }})
+
+	first, err := service.RunUploadMaintenance(context.Background(), UploadMaintenanceOptions{Now: at, IncludeTerminalArtifacts: true})
+	if err == nil || first.ObjectFailures == 0 {
+		t.Fatalf("expected physical cleanup failure: result=%#v err=%v", first, err)
+	}
+	if len(base.state.parts[transfer.ID]) != 1 {
+		t.Fatalf("physical failure discarded legacy part metadata: %#v", base.state.parts[transfer.ID])
+	}
+	opened, err := local.Open(context.Background(), platformstorage.Object{Key: legacyPartKey, ByteSize: int64(len("staging"))}, int64(len("staging")))
+	if opened.Body != nil {
+		_ = opened.Body.Close()
+	}
+	if err != nil {
+		t.Fatalf("legacy staging object disappeared after failed cleanup: %v", err)
+	}
+
+	store.failOn = ""
+	second, err := service.RunUploadMaintenance(context.Background(), UploadMaintenanceOptions{Now: at, IncludeTerminalArtifacts: true})
+	if err != nil {
+		t.Fatalf("retry terminal cleanup: %v", err)
+	}
+	if _, exists := base.state.parts[transfer.ID]; exists {
+		t.Fatalf("successful retry left terminal part metadata: %#v", base.state.parts[transfer.ID])
+	}
+	opened, err = local.Open(context.Background(), platformstorage.Object{Key: legacyPartKey, ByteSize: int64(len("staging"))}, int64(len("staging")))
+	if opened.Body != nil {
+		_ = opened.Body.Close()
+	}
+	if err == nil {
+		t.Fatalf("successful retry left legacy staging object: result=%#v", second)
 	}
 }
 

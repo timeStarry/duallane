@@ -59,6 +59,10 @@ type Tx interface {
 	CreateTransfer(ctx context.Context, transfer TransferRecord) error
 	CreateAttachment(ctx context.Context, attachment AttachmentRecord) error
 	UpsertUploadPart(ctx context.Context, part UploadPartRecord) (bool, error)
+	// DeleteUploadParts is used only after maintenance has re-read the
+	// transfer under its upload lock and established that it is an expired
+	// terminal upload. It must execute on the caller's transaction.
+	DeleteUploadParts(ctx context.Context, uploadID string) error
 	TouchUpload(ctx context.Context, uploadID string, at time.Time) error
 	CompleteUpload(ctx context.Context, spaceID, userID, transferID, attachmentID string, completedAt time.Time) (bool, error)
 	FailUpload(ctx context.Context, spaceID, userID, transferID, attachmentID, reason string, failedAt time.Time) (bool, error)

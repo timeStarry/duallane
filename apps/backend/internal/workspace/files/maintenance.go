@@ -193,6 +193,15 @@ func (s *Service) RunUploadMaintenance(ctx context.Context, options UploadMainte
 		if cleanupErr != nil {
 			recordError(cleanupErr)
 		}
+		if cleanupErr == nil && plan.terminal && s.blobStore != nil && runCtx.Err() == nil {
+			// Keep the part rows until all physical staging keys have been
+			// handled. A later cycle can then re-read legacy part metadata when
+			// storage cleanup is partial or unavailable. The final delete is
+			// still guarded by the upload lock and a fresh terminal/age check.
+			if err := s.finalizeTerminalUploadParts(runCtx, plan, cutoff, options.MaxRetries); err != nil {
+				recordError(normalizeRepositoryError(err))
+			}
+		}
 		if runCtx.Err() != nil {
 			break
 		}
@@ -317,7 +326,15 @@ func (s *Service) confirmUploadMaintenance(ctx context.Context, candidate StaleU
 			if !includeTerminal || !isTerminalUploadStatus(current.Status) || !activity.Before(cutoff) {
 				return nil
 			}
-			plan = maintenancePlan{uploadID: current.ID, userID: current.UserID, byteSize: current.ByteSize, terminal: true}
+			// Preserve legacy part numbers for physical staging cleanup before
+			// the later transactional delete removes this retry metadata.
+			// The transfer was re-read while holding its upload lock, so a fresh
+			// reserved upload cannot be mistaken for this cleanup target.
+			parts, listErr := tx.ListUploadParts(ctx, current.ID)
+			if listErr != nil {
+				return listErr
+			}
+			plan = maintenancePlan{uploadID: current.ID, userID: current.UserID, byteSize: current.ByteSize, parts: parts, terminal: true}
 			if current.AttachmentID != nil {
 				plan.attachmentID = strings.TrimSpace(*current.AttachmentID)
 			}
@@ -326,6 +343,33 @@ func (s *Service) confirmUploadMaintenance(ctx context.Context, candidate StaleU
 	}
 	err := retryMaintenance(ctx, maxRetries, operation)
 	return plan, err
+}
+
+func (s *Service) finalizeTerminalUploadParts(ctx context.Context, plan maintenancePlan, cutoff time.Time, maxRetries int) error {
+	if s == nil || s.repo == nil {
+		return internalError("cleanup terminal workspace upload parts", errors.New("repository is required"))
+	}
+	if normalizeUploadID(plan.uploadID) == "" || strings.TrimSpace(plan.userID) == "" {
+		return internalError("cleanup terminal workspace upload parts", errors.New("terminal upload identity is invalid"))
+	}
+	return retryMaintenance(ctx, maxRetries, func() error {
+		return s.repo.WithTx(ctx, func(tx Tx) error {
+			if tx == nil {
+				return errors.New("maintenance transaction is required")
+			}
+			if err := tx.Lock(ctx, uploadLockKey(plan.uploadID)); err != nil {
+				return err
+			}
+			current, err := tx.GetTransfer(ctx, s.space(), plan.userID, plan.uploadID, TransferUpload)
+			if err != nil {
+				return err
+			}
+			if current == nil || !isTerminalUploadStatus(current.Status) || !transferActivity(*current).Before(cutoff) {
+				return nil
+			}
+			return tx.DeleteUploadParts(ctx, current.ID)
+		})
+	})
 }
 
 func (s *Service) cleanupMaintenanceArtifacts(ctx context.Context, plan maintenancePlan, cutoff time.Time, objectTimeout time.Duration, maxRetries int, attemptCursor string) (int, int, string, error) {
