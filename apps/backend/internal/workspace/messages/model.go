@@ -622,6 +622,12 @@ func firstNonEmptyPtr(value *string, fallback string) string {
 	return fallback
 }
 
+// ProjectPlainText derives the public summary from already projected blocks.
+// HTTP and event projections share this function so previews cannot drift.
+func ProjectPlainText(blocks []Block) string {
+	return strings.TrimSpace(buildPlainText(blocks))
+}
+
 func buildPlainText(blocks []Block) string {
 	parts := make([]string, 0, len(blocks))
 	for _, block := range blocks {

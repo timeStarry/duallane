@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
+	workspaceMessages "github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 )
 
 type ServiceOptions struct {
@@ -616,12 +618,16 @@ func safeMessage(value any, viewerID string) (map[string]any, bool) {
 	if !ok || message == nil {
 		return nil, false
 	}
-	result := stringFields(message, "id", "conversationId", "authorName", "authorNickname", "authorRemark", "authorGithubLogin", "authorAvatarUrl", "authorKind", "kind", "plainText", "createdAt")
+	result := stringFields(message, "id", "conversationId", "authorName", "authorNickname", "authorRemark", "authorGithubLogin", "authorAvatarUrl", "authorKind", "kind", "createdAt")
+	result["plainText"] = publicString(message["plainText"])
 	for _, key := range []string{"authorId", "clientMessageId", "replyToMessageId", "editedAt", "deletedAt", "recalledAt", "recallReason"} {
 		copyNullableStringField(result, message, key)
 	}
 	if content, ok := safeContent(message["content"]); ok {
 		result["content"] = content
+		if plainText, ok := content["plainText"].(string); ok && plainText != "" {
+			result["plainText"] = plainText
+		}
 	}
 	if attachments, ok := message["attachments"].([]any); ok {
 		items := make([]any, 0, len(attachments))
@@ -653,15 +659,22 @@ func safeContent(value any) (map[string]any, bool) {
 	if !ok || content == nil {
 		return nil, false
 	}
-	result := stringFields(content, "format", "plainText")
+	result := map[string]any{
+		"format":    publicString(content["format"]),
+		"plainText": "",
+		"blocks":    []any{},
+	}
 	if blocks, ok := content["blocks"].([]any); ok {
 		publicBlocks := make([]any, 0, len(blocks))
+		projectedBlocks := make([]workspaceMessages.Block, 0, len(blocks))
 		for _, block := range blocks {
 			if safe, ok := safeBlock(block); ok {
 				publicBlocks = append(publicBlocks, safe)
+				projectedBlocks = append(projectedBlocks, messageBlockFromSafe(safe))
 			}
 		}
 		result["blocks"] = publicBlocks
+		result["plainText"] = workspaceMessages.ProjectPlainText(projectedBlocks)
 	}
 	return result, true
 }
@@ -671,27 +684,134 @@ func safeBlock(value any) (map[string]any, bool) {
 	if !ok || block == nil {
 		return nil, false
 	}
-	typeName := stringField(block, "type")
-	if typeName == "" {
+	typeName, ok := block["type"].(string)
+	if !ok || typeName == "" {
 		return nil, false
 	}
-	result := map[string]any{"type": typeName}
-	for _, key := range []string{"text", "userId", "label", "url", "shortcode", "attachmentId", "shareId", "topicId", "title", "fallbackText"} {
-		copyStringField(result, block, key)
+	switch typeName {
+	case "text":
+		return map[string]any{"type": typeName, "text": publicString(block["text"])}, true
+	case "mention":
+		return map[string]any{
+			"type":   typeName,
+			"userId": publicString(block["userId"]),
+			"label":  publicString(block["label"]),
+		}, true
+	case "link":
+		result := map[string]any{
+			"type": typeName,
+			"url":  publicString(block["url"]),
+		}
+		if label := publicString(block["label"]); label != "" {
+			result["label"] = label
+		}
+		return result, true
+	case "emoji":
+		return map[string]any{"type": typeName, "shortcode": publicString(block["shortcode"])}, true
+	case "attachment":
+		return map[string]any{"type": typeName, "attachmentId": publicString(block["attachmentId"])}, true
+	case "emote_collection":
+		result := map[string]any{
+			"type":    typeName,
+			"shareId": publicString(block["shareId"]),
+		}
+		if share, ok := safeEmoteCollectionShare(block["share"]); ok {
+			result["share"] = share
+		}
+		return result, true
+	case "topic_reference":
+		return map[string]any{
+			"type":    typeName,
+			"topicId": publicString(block["topicId"]),
+			"title":   publicString(block["title"]),
+		}, true
+	case "card":
+		return safeCardBlock(block)
+	default:
+		return nil, false
 	}
-	// Card blocks carry only the public reference needed to resolve the
-	// server-owned card; the card body remains outside the message event.
-	if typeName == "card" {
-		copyStringField(result, block, "cardId")
-		copyStringField(result, block, "cardType")
-		if schemaVersion, ok := safeIntField(block["schemaVersion"]); ok && schemaVersion > 0 {
-			result["schemaVersion"] = schemaVersion
+}
+
+func safeCardBlock(block map[string]any) (map[string]any, bool) {
+	schemaVersion, ok := cardSchemaVersion(block["schemaVersion"])
+	if ok {
+		normalized, err := cards.NormalizeCardBlock(cards.CardBlock{
+			Type:          cards.CardBlockType,
+			CardID:        publicString(block["cardId"]),
+			CardType:      publicString(block["cardType"]),
+			SchemaVersion: schemaVersion,
+			FallbackText:  publicString(block["fallbackText"]),
+		})
+		if err == nil {
+			return map[string]any{
+				"type":          normalized.Type,
+				"cardId":        normalized.CardID,
+				"cardType":      normalized.CardType,
+				"schemaVersion": normalized.SchemaVersion,
+				"fallbackText":  normalized.FallbackText,
+			}, true
 		}
 	}
-	if share, ok := safeEmoteCollectionShare(block["share"]); ok {
-		result["share"] = share
+
+	if fallbackText := strings.TrimSpace(publicString(block["fallbackText"])); fallbackText != "" {
+		return map[string]any{"type": "text", "text": fallbackText}, true
 	}
-	return result, true
+	return nil, false
+}
+
+func cardSchemaVersion(value any) (int, bool) {
+	const maxSchemaVersion = 1_000_000
+	switch number := value.(type) {
+	case float64:
+		if number < 1 || number > maxSchemaVersion || math.Trunc(number) != number {
+			return 0, false
+		}
+		return int(number), true
+	case float32:
+		if number < 1 || number > maxSchemaVersion || float32(math.Trunc(float64(number))) != number {
+			return 0, false
+		}
+		return int(number), true
+	case int:
+		if number < 1 || number > maxSchemaVersion {
+			return 0, false
+		}
+		return number, true
+	case int64:
+		if number < 1 || number > maxSchemaVersion {
+			return 0, false
+		}
+		return int(number), true
+	default:
+		return 0, false
+	}
+}
+
+func publicString(value any) string {
+	text, _ := value.(string)
+	return text
+}
+
+func messageBlockFromSafe(value map[string]any) workspaceMessages.Block {
+	block := workspaceMessages.Block{
+		Type:         publicString(value["type"]),
+		Text:         publicString(value["text"]),
+		UserID:       publicString(value["userId"]),
+		Label:        publicString(value["label"]),
+		URL:          publicString(value["url"]),
+		Shortcode:    publicString(value["shortcode"]),
+		AttachmentID: publicString(value["attachmentId"]),
+		ShareID:      publicString(value["shareId"]),
+		TopicID:      publicString(value["topicId"]),
+		Title:        publicString(value["title"]),
+		CardID:       publicString(value["cardId"]),
+		CardType:     publicString(value["cardType"]),
+		FallbackText: publicString(value["fallbackText"]),
+	}
+	if schemaVersion, ok := value["schemaVersion"].(int); ok {
+		block.SchemaVersion = schemaVersion
+	}
+	return block
 }
 
 func safeEmoteCollectionShare(value any) (map[string]any, bool) {

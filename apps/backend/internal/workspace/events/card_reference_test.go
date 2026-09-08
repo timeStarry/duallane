@@ -8,11 +8,17 @@ func TestSafeCardBlockKeepsOnlyReferenceAndPositiveIntegralVersion(t *testing.T)
 			"type": "card", "cardId": "card-fixture", "cardType": "echo.release", "schemaVersion": version,
 			"fallbackText": "synthetic", "payload": map[string]any{"private": "not an event field"}, "internal": "not an event field",
 		})
-		if !ok || block["cardId"] != "card-fixture" || block["cardType"] != "echo.release" {
-			t.Fatal("card reference was lost")
+		if !ok {
+			t.Fatal("card or its text fallback was lost")
 		}
-		if _, present := block["schemaVersion"]; present != (version == 1) {
-			t.Fatalf("schema version presence=%v for %v", present, version)
+		if version == 1 {
+			if block["type"] != "card" || block["cardId"] != "card-fixture" || block["cardType"] != "echo.release" || block["schemaVersion"] != 1 {
+				t.Fatal("valid card reference was lost")
+			}
+		} else {
+			if len(block) != 2 || block["type"] != "text" || block["text"] != "synthetic" {
+				t.Fatalf("invalid version %v must use Node's text fallback", version)
+			}
 		}
 		for _, key := range []string{"payload", "internal"} {
 			if _, leaked := block[key]; leaked {
