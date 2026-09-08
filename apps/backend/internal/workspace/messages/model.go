@@ -187,6 +187,15 @@ type Message struct {
 	Attachments         []Attachment    `json:"attachments"`
 	Reactions           []ReactionGroup `json:"reactions"`
 	HiddenByCurrentUser bool            `json:"hiddenByCurrentUser"`
+	Pin                 *MessagePin     `json:"pin,omitempty"`
+}
+
+// MessagePin is a viewer-scoped read projection. Pin mutation and authorization
+// remain owned by the conversations service; no write input accepts this DTO.
+type MessagePin struct {
+	PinnedByUserID string `json:"pinnedByUserId"`
+	PinnedAt       string `json:"pinnedAt"`
+	CanUnpin       bool   `json:"canUnpin"`
 }
 
 // MessageRecord is a storage projection and must not be returned directly by
@@ -215,6 +224,8 @@ type MessageRecord struct {
 	RecalledAt          *time.Time
 	RecallReason        *string
 	HiddenByCurrentUser bool
+	PinnedByUserID      *string
+	PinnedAt            *time.Time
 	// EmoteCollectionShares is populated only by an authorized read adapter.
 	// It is not persisted and is intentionally absent from write inputs.
 	EmoteCollectionShares map[string]EmoteCollectionShare
@@ -412,6 +423,14 @@ func projectMessage(record MessageRecord, attachments []AttachmentRecord, reacti
 	}
 	message.Content = content
 	message.PlainText = content.PlainText
+	if record.PinnedByUserID != nil && record.PinnedAt != nil && !record.PinnedAt.IsZero() {
+		message.Pin = &MessagePin{
+			PinnedByUserID: *record.PinnedByUserID,
+			PinnedAt:       formatTimestamp(*record.PinnedAt),
+			CanUnpin: viewer != nil && (viewer.Role == "owner" || viewer.Role == "admin" ||
+				(record.AuthorID != nil && viewer.ID == *record.AuthorID)),
+		}
+	}
 	for _, attachment := range attachments {
 		message.Attachments = append(message.Attachments, projectAttachment(attachment, viewer))
 	}

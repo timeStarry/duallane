@@ -771,10 +771,13 @@ const messageSelect = `
 			WHERE we.space_id = m.space_id
 			  AND we.type = 'message.created'
 			  AND we.target_id = m.id
-		), 0) AS event_seq
+		), 0) AS event_seq,
+		p.pinned_by_user_id,
+		p.created_at AS pinned_at
 	FROM messages m
 	LEFT JOIN users u ON u.id = m.author_id
 	LEFT JOIN user_remarks ur ON ur.owner_user_id = $4 AND ur.target_user_id = u.id
+	LEFT JOIN conversation_pinned_messages p ON p.message_id = m.id AND p.conversation_id = m.conversation_id
 `
 
 func findMessageByClientID(ctx context.Context, queryer pgQueryer, spaceID, conversationID, actorID, clientMessageID, viewerID string) (*MessageRecord, error) {
@@ -797,7 +800,7 @@ func scanMessage(row pgx.Row) (*MessageRecord, error) {
 	err := row.Scan(&record.ID, &record.SpaceID, &record.ConversationID, &authorID, &record.AuthorName,
 		&authorNickname, &authorRemark, &authorGitHub, &authorAvatar, &record.AuthorKind, &record.Kind,
 		&clientID, &contentJSON, &record.PlainText, &replyID, &record.CreatedAt, &editedAt, &deletedAt,
-		&recalledAt, &recallReasonText, &record.Revision, &record.EventSeq)
+		&recalledAt, &recallReasonText, &record.Revision, &record.EventSeq, &record.PinnedByUserID, &record.PinnedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -948,7 +951,7 @@ func scanMessageRows(rows pgx.Rows) (*MessageRecord, error) {
 	err := rows.Scan(&record.ID, &record.SpaceID, &record.ConversationID, &authorID, &record.AuthorName,
 		&authorNickname, &authorRemark, &authorGitHub, &authorAvatar, &record.AuthorKind, &record.Kind,
 		&clientID, &contentJSON, &record.PlainText, &replyID, &record.CreatedAt, &editedAt, &deletedAt,
-		&recalledAt, &recallReason, &record.Revision, &record.EventSeq)
+		&recalledAt, &recallReason, &record.Revision, &record.EventSeq, &record.PinnedByUserID, &record.PinnedAt)
 	if err != nil {
 		return nil, err
 	}
