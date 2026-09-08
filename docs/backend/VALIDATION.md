@@ -343,8 +343,12 @@ to be a no-op. Compare both migration names and `applied_at`, seed state,
 required schema and synthetic read/write behavior. Failure cases cover the
 first pending migration and a later 033 conflict: earlier 031/032 effects must
 also roll back, the original history/sentinel must remain intact, and Go must
-successfully retry after removing only the test-created conflict. A default
-run without the PostgreSQL opt-in is `SKIP`, not an ownership proof.
+successfully retry after removing only the test-created conflict. Require an
+ordinary nonzero process exit and the expected migration filename or exact
+SQLSTATE/conflict fingerprint; timeout, signal termination and wrong-phase
+errors do not prove rollback at the intended stage. Provider details remain
+internal to this comparison; exported failures contain only fixed safe labels.
+A default run without the PostgreSQL opt-in is `SKIP`, not an ownership proof.
 
 ## 8. Media Compatibility Gate
 

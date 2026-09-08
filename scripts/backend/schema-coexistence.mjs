@@ -15,9 +15,59 @@ const advisoryLockIdentity = "duallane:schema-migrations";
 const allowSchemaCreationVariable = "DUALLANE_SCHEMA_COEXISTENCE_ALLOW_SCHEMA_CREATION";
 const migrationTimeoutMs = 120_000;
 const lockWaitTimeoutMs = 10_000;
+const safeErrorDefinitions = Object.freeze({
+  provider: Object.freeze({
+    code: "DUALLANE_SCHEMA_COEXISTENCE_PROVIDER_FAILURE",
+    message: "schema coexistence provider command failed"
+  }),
+  migrationEvidence: Object.freeze({
+    code: "DUALLANE_SCHEMA_COEXISTENCE_MIGRATION_EVIDENCE_FAILURE",
+    message: "schema coexistence migration failure evidence was not accepted"
+  }),
+  rehearsal: Object.freeze({
+    code: "DUALLANE_SCHEMA_COEXISTENCE_REHEARSAL_FAILURE",
+    message: "schema coexistence rehearsal failed"
+  }),
+  cleanup: Object.freeze({
+    code: "DUALLANE_SCHEMA_COEXISTENCE_CLEANUP_FAILURE",
+    message: "schema coexistence cleanup failed"
+  }),
+  combined: Object.freeze({
+    code: "DUALLANE_SCHEMA_COEXISTENCE_REHEARSAL_CLEANUP_FAILURE",
+    message: "schema coexistence rehearsal and cleanup failed"
+  })
+});
+const migrationFailureFingerprints = Object.freeze({
+  31: Object.freeze({
+    sqlState: "42703",
+    // Node reports the first index's missing column, without a migration
+    // filename or table name. This is the exact synthetic 031 conflict.
+    conflictTerms: ['column "space_id" does not exist']
+  }),
+  33: Object.freeze({
+    sqlState: "42701",
+    conflictTerms: ["result_finalized_at"]
+  })
+});
 
 const require = createRequire(path.join(repoRoot, "apps/web/package.json"));
 const { Client } = require("pg");
+
+function createSafeError(kind) {
+  const definition = safeErrorDefinitions[kind] || safeErrorDefinitions.rehearsal;
+  const error = new Error(definition.message);
+  error.code = definition.code;
+  return error;
+}
+
+export function toSafeSchemaCoexistenceError(error, kind = "rehearsal") {
+  const knownKind = Object.keys(safeErrorDefinitions).find((key) => (
+    error?.code === safeErrorDefinitions[key].code && error?.message === safeErrorDefinitions[key].message
+  ));
+  // Rebuild even recognized errors: a provider may attach a cause, custom
+  // properties or a credential-bearing stack to an otherwise safe label.
+  return createSafeError(knownKind ?? kind);
+}
 
 export function validateRehearsalEnvironment(environment = process.env) {
   if (environment[allowSchemaCreationVariable] !== "true") {
@@ -80,6 +130,34 @@ export async function loadCanonicalMigrationManifest(directory = migrationRoot) 
 
 function migrationNamesThrough(manifest, maximumNumber) {
   return manifest.files.filter((file) => file.number <= maximumNumber).map((file) => file.name);
+}
+
+function migrationNameForNumber(manifest, number) {
+  const matches = manifest.files.filter((file) => file.number === number);
+  if (matches.length !== 1) throw createSafeError("migrationEvidence");
+  return matches[0].name;
+}
+
+export function assertMigrationFailureEvidence(outcome, expected) {
+  if (!outcome || outcome.timedOut || outcome.signal || !Number.isInteger(outcome.code) || outcome.code <= 0) {
+    throw createSafeError("migrationEvidence");
+  }
+
+  const providerText = `${String(outcome.stderr ?? "")}\n${String(outcome.stdout ?? "")}`;
+  const migrationMatched = typeof expected?.migrationName === "string"
+    && providerText.includes(expected.migrationName);
+  const sqlStateMatched = typeof expected?.sqlState === "string"
+    && new RegExp(`\\b${expected.sqlState}\\b`).test(providerText);
+  const conflictMatched = Array.isArray(expected?.conflictTerms)
+    && expected.conflictTerms.length > 0
+    && expected.conflictTerms.every((term) => providerText.includes(term));
+  if (!migrationMatched && !(sqlStateMatched && conflictMatched)) {
+    throw createSafeError("migrationEvidence");
+  }
+  return Object.freeze({
+    normalNonZeroExit: true,
+    evidence: migrationMatched ? "migration-name" : "sqlstate-conflict"
+  });
 }
 
 async function createMigrationSubset(directory, manifest, maximumNumber) {
@@ -178,13 +256,16 @@ function startOwnedCommand(command, args, options, timeoutMs, activeProcesses) {
   return { child, promise };
 }
 
-async function runOwnedCommand(command, args, options, timeoutMs, activeProcesses, label) {
-  const outcome = await startOwnedCommand(command, args, options, timeoutMs, activeProcesses).promise;
-  if (outcome.timedOut || outcome.code !== 0) {
-    const detail = outcome.stderr || outcome.stdout || "no provider output";
-    throw new Error(`${label} failed (code=${outcome.code ?? "null"}, signal=${outcome.signal ?? "none"}): ${detail}`);
+async function runOwnedCommand(command, args, options, timeoutMs, activeProcesses) {
+  try {
+    const outcome = await startOwnedCommand(command, args, options, timeoutMs, activeProcesses).promise;
+    if (outcome.timedOut || outcome.code !== 0) {
+      throw createSafeError("provider");
+    }
+    return outcome;
+  } catch (error) {
+    throw toSafeSchemaCoexistenceError(error, "provider");
   }
-  return outcome;
 }
 
 async function connect(databaseURL) {
@@ -655,9 +736,10 @@ async function rehearse(databaseURL, manifest, migrationDirectories, goBinary, a
     migrationTimeoutMs,
     activeProcesses
   ).promise;
-  if (rollbackAttempt.timedOut || rollbackAttempt.code === 0) {
-    throw new Error("Node rollback rehearsal unexpectedly completed migration 031/032");
-  }
+  assertMigrationFailureEvidence(rollbackAttempt, {
+    migrationName: migrationNameForNumber(manifest, 31),
+    ...migrationFailureFingerprints[31]
+  });
   await assertHistory(scenarioCDatabaseURL, through030, "Node failed upgrade rollback");
   await assertMigrationSnapshotUnchanged(scenarioCDatabaseURL, scenarioCBeforeFailure, "Node failed upgrade rollback");
   await assertUpgradeSentinel(scenarioCDatabaseURL, "Node failed upgrade rollback");
@@ -835,9 +917,10 @@ async function rehearse(databaseURL, manifest, migrationDirectories, goBinary, a
       migrationTimeoutMs,
       activeProcesses
     ).promise;
-    if (failedGoUpgrade.timedOut || failedGoUpgrade.code === null || failedGoUpgrade.code === 0) {
-      throw new Error("Go failed upgrade unexpectedly completed");
-    }
+    assertMigrationFailureEvidence(failedGoUpgrade, {
+      migrationName: migrationNameForNumber(manifest, 31),
+      ...migrationFailureFingerprints[31]
+    });
     await assertMigrationSnapshotUnchanged(scenarioFDatabaseURL, scenarioFBeforeFailure, "Go failed upgrade rollback");
     await assertHistory(scenarioFDatabaseURL, through030, "Go failed upgrade rollback");
     await assertUpgradeSentinel(scenarioFDatabaseURL, "Go failed upgrade rollback");
@@ -862,9 +945,10 @@ async function rehearse(databaseURL, manifest, migrationDirectories, goBinary, a
       migrationTimeoutMs,
       activeProcesses
     ).promise;
-    if (lateFailure.timedOut || lateFailure.code === null || lateFailure.code === 0) {
-      throw new Error("Go late-batch failure unexpectedly completed");
-    }
+    assertMigrationFailureEvidence(lateFailure, {
+      migrationName: migrationNameForNumber(manifest, 33),
+      ...migrationFailureFingerprints[33]
+    });
     await assertMigrationSnapshotUnchanged(scenarioFDatabaseURL, scenarioFBeforeFailure, "Go late-batch rollback");
     await assertNoLatestObjects(scenarioFDatabaseURL, "Go late-batch rollback", true);
     await withClient(scenarioFDatabaseURL, async (client) => {
@@ -915,7 +999,7 @@ async function rehearse(databaseURL, manifest, migrationDirectories, goBinary, a
   return report;
 }
 
-export async function runSchemaCoexistence(environment = process.env) {
+async function runSchemaCoexistenceInternal(environment = process.env) {
   const databaseURL = validateRehearsalEnvironment(environment);
   const manifest = await loadCanonicalMigrationManifest();
   const temporaryDirectory = await mkdtemp(path.join(tmpdir(), "duallane-schema-coexistence-"));
@@ -970,15 +1054,23 @@ export async function runSchemaCoexistence(environment = process.env) {
     process.removeListener("SIGINT", interrupt);
     process.removeListener("SIGTERM", interrupt);
   }
-  if (primaryError && cleanupError) throw new AggregateError([primaryError, cleanupError], "schema rehearsal and safe cleanup failed");
-  if (primaryError) throw primaryError;
-  if (cleanupError) throw cleanupError;
+  if (primaryError && cleanupError) throw createSafeError("combined");
+  if (primaryError) throw toSafeSchemaCoexistenceError(primaryError);
+  if (cleanupError) throw toSafeSchemaCoexistenceError(cleanupError, "cleanup");
   if (!report) throw new Error("schema rehearsal did not produce a result");
   const finalManifest = await loadCanonicalMigrationManifest();
   if (finalManifest.manifestSha256 !== manifest.manifestSha256) {
     throw new Error("canonical migration SQL changed during schema rehearsal");
   }
   return report;
+}
+
+export async function runSchemaCoexistence(environment = process.env) {
+  try {
+    return await runSchemaCoexistenceInternal(environment);
+  } catch (error) {
+    throw toSafeSchemaCoexistenceError(error);
+  }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
