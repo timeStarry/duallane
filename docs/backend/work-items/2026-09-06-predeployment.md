@@ -93,8 +93,17 @@ before refreshing. The strict regression accepts only Node's `items` list
 shape; it passed on Node (15.3s) and Go (16.6s), with complete lint passing.
 The original full flow with this fix and the pending event-text correction
 passed the prior 1605/1661 failures, including copied-emote image decoding,
-then failed at 1707 on the missing pinned-message indicator. The full flow
-remains open, without changed assertions, deadlines or retries.
+then failed at 1707 on the missing pinned-message indicator. Accepted
+`0fb9368` fixes the message-history read projection: it joins the pin by both
+conversation and message ID, includes viewer-specific `canUnpin`, and omits
+pins from recalled messages. The new real-PostgreSQL test failed on the old
+implementation (`pin=nil`); the fixed messages/conversations/events race
+packages passed (8.624s/5.049s/8.127s), with scoped staticcheck passing.
+Accepted `11328e9` adds an actual owner/member browser regression: Node passed
+in 10.4s, Go in 4.9s, while the old Go projection fails on the missing marker.
+The original full flow now passes in 42.1s (both Go cases: 56.0s total), without
+changed assertions, deadlines or retries. This is focused evidence, not yet
+the final whole-tree gate.
 
 The strengthened access-race test now proves removal is visible in React
 before releasing a previously fetched list. A real ahead-cursor hello triggers
@@ -106,12 +115,38 @@ assertion. The newer `9c57ec3` client already passes this case; that run is
 compatibility evidence, not a reproduced old failure. A prior attempted
 baseline was not restored due to Git's ownership guard and is excluded.
 
-Independent review found two further bounded contract gaps: custom-emote
-reordering must return the list envelope, and event message blocks require
-Node's per-type allowlist and derived plain text. Those fixes and their
-regressions remain in progress. The whitespace-only fix alone passed the
-events PostgreSQL/race package (19.578s) and staticcheck, but is not yet
-accepted as a complete projection-contract fix.
+Accepted `6709c00` restores the same canonical list envelope after emote
+reordering, including active emotes omitted from the requested ordering.
+The new regression failed against the old route (0.032s); all emote route
+race tests passed (1.073s) and scoped staticcheck passed.
+
+Independent event review additionally requires Node's per-type block allowlist,
+raw text bytes (including empty strings), invalid-card text fallback, and
+plain text derived from projected blocks. The projection fix is being accepted
+separately from Markdown parsing. The original whitespace-only fix passed the
+events PostgreSQL/race package (19.578s), but that alone is not full summary
+compatibility. On September 8 the user explicitly approved a pinned Markdown
+parser after Node characterization demonstrated lost link labels, fenced-code
+language leakage, intraword underscores and adjacent-text spacing differences.
+Goldmark implementation and final summary compatibility gates remain in progress;
+the decision changes no service topology, schema or production ownership.
+Accepted `623dc69` contains the per-type event projection and shared summary
+entry point. Parent's exact-source events package passed with
+`TEST_DATABASE_URL=<disposable fixture> go test -tags postgres_integration
+-race -count=1 ./internal/workspace/events` in 10.028s; scoped PostgreSQL-tagged
+staticcheck passed. Earlier untagged/pure runs are not PostgreSQL evidence.
+The old invalid-card test was corrected to assert Node's text fallback rather
+than preserve an invalid reference; private-field rejection remains covered.
+
+Parent's native Linux browser validation then passed all 18 Go Workspace cases
+in 2.3 minutes, including the original Echo and full-flow cases (the latter
+59.3s), the strengthened access races, strict upload response ordering and
+owner/member pin history. This copy uses base `8d27574` plus the reviewed
+schema/cleanup, client, emote-list, pin and event-projection overlays. Its
+private configuration changes only the test server ports (5698/9398); original
+assertions, timeouts and retries remain unchanged. The new reorder route and
+Markdown adapter were not part of this run. Final exact-commit aggregate/CI
+validation remains required, so this result does not mark the PR ready.
 
 Pushed `795eb94fa81d0e527cc17c5a8dc871f635c811d9` includes migration slice
 `55cf159` and terminal cleanup `cc30f75`. CI `34234929369` completed: Go quality,
