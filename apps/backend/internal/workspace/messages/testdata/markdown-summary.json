@@ -1,0 +1,361 @@
+{
+  "schemaVersion": 1,
+  "oracle": {
+    "source": "apps/web/server/services/markdown.mjs",
+    "sourceSHA256": "a718fb6f426c02527effc68b7d3e9efda24da37c3b48903e082d4d89a26235e4",
+    "workspaceSource": "apps/web/server/services/workspace.mjs",
+    "functions": {
+      "buildPlainText": "813695d9197c9cf153508189d2da6e6b050f9d37442f37ea98978f12707aacf8",
+      "fallbackTextSummary": "3403cafa9d57b86e9256ca9ad5c6f7339ce07762b73e9c8fff403bebcbf8ee7d",
+      "publicString": "2a9d9b3c839c9c0e895cc1344b03600a189dfd759d692e5db25828463863ec25"
+    },
+    "dependencies": {
+      "mdast-util-to-string": "4.0.0",
+      "remark-gfm": "4.0.1",
+      "remark-parse": "11.0.0",
+      "strip-markdown": "6.0.0",
+      "unified": "11.0.5"
+    }
+  },
+  "cases": [
+    {
+      "name": "empty",
+      "source": "",
+      "expected": ""
+    },
+    {
+      "name": "plain",
+      "source": "hello 世界 😀",
+      "expected": "hello 世界 😀"
+    },
+    {
+      "name": "leading space",
+      "source": " alpha",
+      "expected": " alpha"
+    },
+    {
+      "name": "trailing space",
+      "source": "alpha ",
+      "expected": "alpha "
+    },
+    {
+      "name": "both boundaries",
+      "source": " \t**alpha**\n",
+      "expected": " alpha "
+    },
+    {
+      "name": "only whitespace",
+      "source": " \t\r\n ",
+      "expected": " "
+    },
+    {
+      "name": "JS BOM whitespace",
+      "source": "﻿alpha﻿",
+      "expected": " alpha "
+    },
+    {
+      "name": "JS separators",
+      "source": " alpha ",
+      "expected": " alpha "
+    },
+    {
+      "name": "NBSP interior",
+      "source": "a b",
+      "expected": "a b"
+    },
+    {
+      "name": "NEXT LINE is not JS whitespace",
+      "source": "alpha",
+      "expected": "alpha"
+    },
+    {
+      "name": "ordinary underscore",
+      "source": "a_b",
+      "expected": "a_b"
+    },
+    {
+      "name": "formatting",
+      "source": "**bold** *italic* __strong__ _em_ ~~gone~~ ~single~",
+      "expected": "bold italic strong em gone single"
+    },
+    {
+      "name": "unmatched markers",
+      "source": "left *open and a_b then `open",
+      "expected": "left *open and a_b then `open"
+    },
+    {
+      "name": "escaped punctuation",
+      "source": "\\*literal\\* \\_word\\_ \\[label\\] \\\\",
+      "expected": "*literal* _word_ [label] \\"
+    },
+    {
+      "name": "entities",
+      "source": "&amp; &lt; &gt; &quot; &copy; &#65; &#x1F600;",
+      "expected": "& < > \" © A 😀"
+    },
+    {
+      "name": "entity single decoding",
+      "source": "\\&amp; &amp;lt; &notit; &copy &#0; &#128;",
+      "expected": "&amp; &lt; &notit; &copy � �"
+    },
+    {
+      "name": "inline link",
+      "source": "[label](https://x.test)",
+      "expected": "label"
+    },
+    {
+      "name": "formatted link",
+      "source": "[**bold** and `code`](https://x.test \"title\")",
+      "expected": "bold and code"
+    },
+    {
+      "name": "reference link",
+      "source": "[label][ref]\n\n[ref]: https://x.test \"title\"",
+      "expected": "label"
+    },
+    {
+      "name": "collapsed reference",
+      "source": "[ref][] and [ref]\n\n[ref]: https://x.test",
+      "expected": "ref and ref"
+    },
+    {
+      "name": "definition only fallback",
+      "source": "[ref]: https://x.test",
+      "expected": "[ref]: https://x.test"
+    },
+    {
+      "name": "undefined reference",
+      "source": "[label][missing]",
+      "expected": "[label][missing]"
+    },
+    {
+      "name": "URL autolink literal guard",
+      "source": "<https://x.test/a_b>",
+      "expected": "<https://x.test/a_b>"
+    },
+    {
+      "name": "email autolink literal guard",
+      "source": "<user@example.test>",
+      "expected": "<user@example.test>"
+    },
+    {
+      "name": "bare GFM autolinks",
+      "source": "https://x.test/a_b www.example.test user@example.test",
+      "expected": "https://x.test/a_b www.example.test user@example.test"
+    },
+    {
+      "name": "ATX heading",
+      "source": "## heading **bold** ##",
+      "expected": "heading bold"
+    },
+    {
+      "name": "setext heading",
+      "source": "heading\n=======",
+      "expected": "heading"
+    },
+    {
+      "name": "quote and list",
+      "source": "> quoted\n\n- first\n- second",
+      "expected": "quoted\nfirst\nsecond"
+    },
+    {
+      "name": "nested quote",
+      "source": "> outer\n>\n> > inner\n>\n> tail",
+      "expected": "outer\ninner\ntail"
+    },
+    {
+      "name": "nested list",
+      "source": "- outer\n  - inner\n  - last\n- end",
+      "expected": "outer\ninner\nlast\nend"
+    },
+    {
+      "name": "loose list",
+      "source": "1. first\n\n   second paragraph\n\n2. last",
+      "expected": "first\nsecond paragraph\nlast"
+    },
+    {
+      "name": "task list",
+      "source": "- [x] done\n- [ ] todo\n- [X] also done",
+      "expected": "done\ntodo\nalso done"
+    },
+    {
+      "name": "thematic break",
+      "source": "---",
+      "expected": "[分割线]"
+    },
+    {
+      "name": "thematic breaks in text",
+      "source": "above\n\n***\n\nbelow",
+      "expected": "above\n[分割线]\nbelow"
+    },
+    {
+      "name": "soft and hard breaks",
+      "source": "one\ntwo  \nthree\\\nfour",
+      "expected": "one\ntwo\nthree\nfour"
+    },
+    {
+      "name": "blank line collapse",
+      "source": "a\n\n\n\nb",
+      "expected": "a\nb"
+    },
+    {
+      "name": "CR normalization",
+      "source": "a\r\nb\rc",
+      "expected": "a\nb\nc"
+    },
+    {
+      "name": "inline code",
+      "source": "`a_b *literal* &amp;`",
+      "expected": "a_b *literal* &amp;"
+    },
+    {
+      "name": "inline code multiline",
+      "source": "`` a\nb ``",
+      "expected": "a\nb"
+    },
+    {
+      "name": "fenced Go code",
+      "source": "```go\nx := 1\n```",
+      "expected": "x := 1"
+    },
+    {
+      "name": "fenced literal code",
+      "source": "~~~txt\na_b **x** &amp;\n~~~",
+      "expected": "a_b **x** &amp;"
+    },
+    {
+      "name": "empty code fallback",
+      "source": "```\n```",
+      "expected": "```\n```"
+    },
+    {
+      "name": "indented code disabled",
+      "source": "    **bold** and [label](https://x.test)",
+      "expected": " bold and label"
+    },
+    {
+      "name": "indented continuation",
+      "source": "first\n\n    **second**\n    third",
+      "expected": "first\nsecond\nthird"
+    },
+    {
+      "name": "inline HTML literal",
+      "source": " **bold** <span>raw</span> ",
+      "expected": "**bold** <span>raw</span>"
+    },
+    {
+      "name": "multiline HTML literal",
+      "source": "<div\nclass=\"x\">**text**</div>",
+      "expected": "<div\nclass=\"x\">**text**</div>"
+    },
+    {
+      "name": "HTML comment removed",
+      "source": "before <!-- comment --> after",
+      "expected": "before after"
+    },
+    {
+      "name": "HTML comment only fallback",
+      "source": "<!-- comment -->",
+      "expected": "<!-- comment -->"
+    },
+    {
+      "name": "image literal",
+      "source": "before ![alt](https://x.test/a.png) **after**",
+      "expected": "before ![alt](https://x.test/a.png) **after**"
+    },
+    {
+      "name": "image reference omitted",
+      "source": "before ![alt][img] after\n\n[img]: https://x.test/a.png",
+      "expected": "before after"
+    },
+    {
+      "name": "image reference only fallback",
+      "source": "![alt][img]\n\n[img]: https://x.test/a.png",
+      "expected": "![alt][img]\n\n[img]: https://x.test/a.png"
+    },
+    {
+      "name": "table literal",
+      "source": "| a | b |\n|---|---|\n| c | d |",
+      "expected": "| a | b |\n|---|---|\n| c | d |"
+    },
+    {
+      "name": "table literal boundaries",
+      "source": " \n| a | b |\n| :--- | ---: |\n| c | d |\n ",
+      "expected": "| a | b |\n| :--- | ---: |\n| c | d |"
+    },
+    {
+      "name": "unclosed fence literal",
+      "source": "```go\na_b **x**",
+      "expected": "```go\na_b **x**"
+    },
+    {
+      "name": "short closing fence literal",
+      "source": "````js\na_b\n```",
+      "expected": "````js\na_b\n```"
+    },
+    {
+      "name": "mixed fence literal",
+      "source": "~~~js\na_b\n```",
+      "expected": "~~~js\na_b\n```"
+    },
+    {
+      "name": "quoted unclosed fence",
+      "source": "> ```go\n> a_b",
+      "expected": "a_b"
+    },
+    {
+      "name": "literal fallback preserves markers",
+      "source": "*** <tag> **x**",
+      "expected": "*** <tag> **x**"
+    },
+    {
+      "name": "null input character",
+      "source": "a\u0000b",
+      "expected": "a�b"
+    }
+  ],
+  "joins": [
+    {
+      "name": "adjacent boundaries",
+      "sources": [
+        "alpha ",
+        " beta"
+      ],
+      "expected": "alpha  beta"
+    },
+    {
+      "name": "whitespace separator",
+      "sources": [
+        "alpha",
+        " \t\n",
+        "beta"
+      ],
+      "expected": "alpha beta"
+    },
+    {
+      "name": "outer trim only",
+      "sources": [
+        " alpha ",
+        " beta "
+      ],
+      "expected": "alpha  beta"
+    },
+    {
+      "name": "formatting across blocks stays separate",
+      "sources": [
+        "**left",
+        "right**"
+      ],
+      "expected": "**leftright**"
+    },
+    {
+      "name": "literal fallback boundaries",
+      "sources": [
+        "alpha ",
+        " <tag> ",
+        " beta"
+      ],
+      "expected": "alpha <tag> beta"
+    }
+  ]
+}

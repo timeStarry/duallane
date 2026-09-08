@@ -471,7 +471,7 @@ func projectContent(raw []byte, fallbackPlainText string, shares map[string]Emot
 			content.Blocks = append(content.Blocks, normalized)
 		}
 	}
-	content.PlainText = strings.TrimSpace(buildPlainText(content.Blocks))
+	content.PlainText = ProjectPlainText(content.Blocks)
 	if content.PlainText == "" {
 		content.PlainText = normalizeString(fallbackPlainText)
 	}
@@ -625,7 +625,7 @@ func firstNonEmptyPtr(value *string, fallback string) string {
 // ProjectPlainText derives the public summary from already projected blocks.
 // HTTP and event projections share this function so previews cannot drift.
 func ProjectPlainText(blocks []Block) string {
-	return strings.TrimSpace(buildPlainText(blocks))
+	return nodeSummaryTrim(buildPlainText(blocks))
 }
 
 func buildPlainText(blocks []Block) string {
@@ -634,49 +634,32 @@ func buildPlainText(blocks []Block) string {
 		var part string
 		switch block.Type {
 		case "text":
-			part = markdownSummary(block.Text)
-			if part == "" && strings.TrimSpace(block.Text) != "" {
-				part = strings.TrimSpace(block.Text)
-			}
+			part = nodeMarkdownSummary(block.Text)
 		case "mention":
-			part = "@" + normalizeString(block.Label)
+			part = "@" + block.Label
 		case "link":
-			part = firstNonEmpty(block.Label, block.URL)
+			part = block.Label
+			if part == "" {
+				part = block.URL
+			}
 		case "emoji":
-			if strings.HasPrefix(strings.ToLower(normalizeString(block.Shortcode)), "custom:") {
+			if strings.HasPrefix(block.Shortcode, "custom:") {
 				part = "[表情]"
 			} else {
-				part = ":" + normalizeString(block.Shortcode) + ":"
+				part = ":" + block.Shortcode + ":"
 			}
 		case "attachment":
 			part = "[文件]"
 		case "emote_collection":
 			part = "[表情合集]"
 		case "topic_reference":
-			part = "#" + normalizeString(block.Title)
+			part = "#" + block.Title
 		case "card":
-			part = normalizeString(block.FallbackText)
+			part = block.FallbackText
 		}
 		parts = append(parts, part)
 	}
 	return strings.Join(parts, "")
-}
-
-// markdownSummary intentionally stays deterministic and dependency-free in
-// the domain package. It covers the common formatting markers used by the
-// message list preview while preserving literal text and line boundaries.
-func markdownSummary(value string) string {
-	value = strings.ReplaceAll(value, "\r\n", "\n")
-	value = strings.ReplaceAll(value, "\r", "\n")
-	value = strings.ReplaceAll(value, "\t", " ")
-	for _, marker := range []string{"```", "~~~", "**", "__", "~~", "`", "*", "_"} {
-		value = strings.ReplaceAll(value, marker, "")
-	}
-	lines := strings.Split(value, "\n")
-	for index := range lines {
-		lines[index] = strings.Join(strings.Fields(lines[index]), " ")
-	}
-	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func normalizeSpaceID(value string) string {

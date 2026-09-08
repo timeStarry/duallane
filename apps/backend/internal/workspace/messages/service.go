@@ -1034,7 +1034,7 @@ func (s *Service) normalizeContentWithValidator(ctx context.Context, repo ReadRe
 			}
 		}
 	}
-	normalized.PlainText = strings.TrimSpace(buildPlainText(normalized.Blocks))
+	normalized.PlainText = ProjectPlainText(normalized.Blocks)
 	if normalized.PlainText == "" {
 		return Content{}, nil, validationError(CodeMessageEmpty, MessageEmpty)
 	}
@@ -1236,7 +1236,7 @@ func canonicalStoredContent(raw []byte, fallback string) ([]byte, error) {
 		}
 		canonical.Blocks = append(canonical.Blocks, normalized)
 	}
-	canonical.PlainText = strings.TrimSpace(buildPlainText(canonical.Blocks))
+	canonical.PlainText = ProjectPlainText(canonical.Blocks)
 	if canonical.PlainText == "" {
 		canonical.PlainText = normalizeString(fallback)
 	}

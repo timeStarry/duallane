@@ -207,7 +207,7 @@ func TestSafeContentRebuildsPlainTextFromProjectedBlocks(t *testing.T) {
 	if got, want := projected["format"], "  duallane.message+json;v=1  "; got != want {
 		t.Fatalf("format = %#v, want %#v", got, want)
 	}
-	if got, want := projected["plainText"], "hello@Adadocs:wave:[文件][表情合集]#Topicfallback"; got != want {
+	if got, want := projected["plainText"], "hello @Adadocs:wave:[文件][表情合集]#Topicfallback"; got != want {
 		t.Fatalf("plainText = %#v, want %#v", got, want)
 	}
 	if got := projected["plainText"].(string); got == "PRIVATE-UNTRUSTED-PLAINTEXT" || got == "MUST-NOT-APPEAR" {

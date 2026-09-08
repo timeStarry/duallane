@@ -24,6 +24,7 @@ const expectedFixtureCommands = [
   'node scripts/backend/feishu-card-action-golden.mjs',
   'node scripts/backend/route-inventory.mjs --check',
   'node scripts/backend/workspace-core-contract.mjs --check',
+  'node scripts/backend/workspace-markdown-contract.mjs --check',
   'node scripts/backend/workspace-emotes-contract.mjs --check',
   'node scripts/backend/workspace-files-contract.mjs --check',
   'node scripts/backend/workspace-invites-contract.mjs --check',

@@ -84,6 +84,7 @@ Use these terms precisely in migration notes and evidence records:
 | Local objects | Standard `io`, `os`, and `path/filepath` behind `BlobStore` | Bounded streaming, atomic staging/rename, path containment, and reference-aware deletion |
 | SMTP | `github.com/wneessen/go-mail` behind `Mailer` | TLS/STARTTLS modes, authentication, deadlines, plain/HTML alternatives, and testability |
 | Image processing | `github.com/davidbyttow/govips/v2/vips` and libvips | Conditional on the compatibility spike in Section 5 |
+| Workspace Markdown summaries | `github.com/yuin/goldmark` v1.8.6 | AST-only adapter for the existing Node summary contract; never an HTML renderer or external service |
 | Configuration | Typed application structs and `os.LookupEnv` | Explicit defaults and fail-closed validation; no reflection-heavy configuration framework |
 | Cryptography | Go standard library | `crypto/rand`, SHA-256/HMAC, constant-time comparison, AES-256-GCM, and compatible encodings |
 | Logging | `log/slog` JSON handler with project-owned safe-field policy | Operational logs only; audit remains a separate Workspace database concern |
@@ -163,6 +164,32 @@ OpenAPI 3.2 is deferred until the selected stable generator supports the used
 features without an experimental toolchain. gRPC is not selected because the
 initial target has no required synchronous service-to-service API and the
 browser/Agent contracts are JSON.
+
+### Workspace Markdown Summary Decision
+
+The maintainer approved this bounded dependency on September 8, 2026 after
+actual Node characterization demonstrated that removing Markdown markers by
+string replacement loses link labels, keeps code-fence language names, deletes
+literal intraword underscores and merges adjacent text blocks. The selected
+[Goldmark v1.8.6](https://github.com/yuin/goldmark/releases/tag/v1.8.6) is pinned
+in the module and checksum manifests; its pinned source uses the
+[MIT license](https://github.com/yuin/goldmark/blob/v1.8.6/LICENSE) and standard
+library dependencies. This choice retains the established v1 API rather than
+combining this compatibility correction with the newly introduced v2 API.
+
+Goldmark supplies parsing, not the public behavior: the project-owned adapter
+must preserve the existing Node service's whitespace boundaries, GFM summary
+rules, thematic-break marker and literal fallback for unsupported or unfinished
+Markdown. HTTP and event projections share the same summary function. No HTML
+is rendered, remote reference fetched, schema changed or historical content
+rewritten. Existing message size limits continue to bound input. The parser is
+not imported by the P2P executable.
+
+Compatibility must be demonstrated using synthetic goldens produced by the
+actual Node service, plus Go regression/race and vulnerability checks. Upstream
+CommonMark conformance is not proof of equivalence to DualLane's customized
+Node pipeline. Dependency updates must repeat those checks; candidate selection
+does not authorize production routing or relax any cutover gate.
 
 ## 4. PostgreSQL And SQL Policy
 

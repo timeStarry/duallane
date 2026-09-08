@@ -85,6 +85,23 @@ registries, WebSocket fanout, event delivery, presence, worker loops, and shared
 caches. Pin tools through the Go module mechanism, never an unbounded `latest`
 installation in CI. Missing prerequisites are an explicit remaining gate.
 
+### Workspace Markdown Summary Compatibility
+
+Run `node scripts/backend/workspace-markdown-contract.mjs --check` from the
+repository root after installing the pinned Node dependencies. It checks
+synthetic goldens against the actual Node summary implementation; regenerating
+expectations from the Go adapter would hide migration defects. Go message
+tests consume these goldens, and event tests verify raw block bytes plus the
+shared derived summary. The normal Go race, static-analysis and vulnerability
+gates also apply to the pinned parser.
+
+Cover literal intraword markers, links and references, code-fence language
+labels, GFM syntax, unsupported/unfinished Markdown fallback, Unicode,
+whitespace-only input and boundaries between adjacent blocks. Never use
+production messages as fixtures. Updating the parser or Node Markdown pipeline
+requires rechecking the oracle before accepting changed goldens; see the
+[technology decision](TECHNOLOGY.md#workspace-markdown-summary-decision).
+
 ### Actual Node Legacy Emote Compatibility
 
 With the pinned Node/Go dependencies and an explicit disposable PostgreSQL
