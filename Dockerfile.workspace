@@ -53,6 +53,8 @@ COPY --from=build /out/release-check /usr/local/bin/duallane-release-check
 COPY --chmod=0644 apps/web/server/migrations/*.sql /app/migrations/
 COPY --chmod=0644 apps/web/shared/emote-packs.json /app/assets/emote-packs.json
 COPY --chmod=0644 apps/web/shared/echo-release-guides.json /app/assets/echo-release-guides.json
+# COPY also applies its mode to newly created destination directories.
+RUN chmod 0755 /app/migrations /app/assets
 ENV DUALLANE_MIGRATIONS_DIR=/app/migrations \
     DUALLANE_EMOTE_CATALOG_PATH=/app/assets/emote-packs.json \
     DUALLANE_ECHO_RELEASE_CATALOG_PATH=/app/assets/echo-release-guides.json

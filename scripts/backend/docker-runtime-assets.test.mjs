@@ -50,6 +50,13 @@ test("runtime images make baked-in non-secret files readable to their service us
     "candidate Nginx configuration must use an explicit non-secret asset mode",
   );
 
+  const lastAssetCopy = workspace.indexOf("COPY --chmod=0644 apps/web/shared/echo-release-guides.json");
+  const directoryMode = workspace.indexOf("RUN chmod 0755 /app/migrations /app/assets");
+  assert.ok(
+    directoryMode > lastAssetCopy && directoryMode < workspace.indexOf("USER 65532:65532"),
+    "COPY-created directories must regain traversal permission before switching to the service user",
+  );
+
   assert.doesNotMatch(
     workspace,
     /^COPY apps\/web\/server\/migrations \/app\/migrations$/mu,
