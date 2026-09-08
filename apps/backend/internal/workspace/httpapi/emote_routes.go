@@ -196,7 +196,7 @@ func reorderEmotes(w http.ResponseWriter, r *http.Request, actor *auth.Actor, op
 		return
 	}
 	result, err := options.Emotes.ReorderEmotes(r.Context(), emotes.ReorderInput{ActorID: actor.ID, IDs: body.EmoteIDs, Meta: requestMeta(r, options)})
-	writeResult(w, http.StatusOK, result, err)
+	writeResult(w, http.StatusOK, map[string]any{"items": result.Emotes, "usage": result.Usage, "limits": result.Limits}, err)
 }
 
 func createEmoteCollection(w http.ResponseWriter, r *http.Request, actor *auth.Actor, options RouterOptions) {

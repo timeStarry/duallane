@@ -27,6 +27,8 @@ type emoteRoutesStub struct {
 	favoriteInput  emotes.FavoriteFromMessageInput
 	favoriteResult *emotes.CustomEmote
 	importInput    emotes.ImportShareInput
+	reorderInput   emotes.ReorderInput
+	reorderResult  emotes.PublicLibrary
 	content        []byte
 	err            error
 	favoriteErr    error
@@ -93,8 +95,9 @@ func (*emoteRoutesStub) RemoveCollectionItem(context.Context, emotes.RemoveColle
 func (*emoteRoutesStub) ReorderLibrary(context.Context, emotes.ReorderInput) (emotes.PublicLibrary, error) {
 	return emotes.PublicLibrary{}, nil
 }
-func (*emoteRoutesStub) ReorderEmotes(context.Context, emotes.ReorderInput) (emotes.PublicLibrary, error) {
-	return emotes.PublicLibrary{}, nil
+func (s *emoteRoutesStub) ReorderEmotes(_ context.Context, input emotes.ReorderInput) (emotes.PublicLibrary, error) {
+	s.reorderInput = input
+	return s.reorderResult, s.err
 }
 func (*emoteRoutesStub) ReorderCollection(context.Context, emotes.ReorderInput, string) (emotes.Collection, error) {
 	return emotes.Collection{ID: "collection-1"}, nil
@@ -212,6 +215,113 @@ func TestListEmotesMatchesNodeFixtureTopLevelEnvelope(t *testing.T) {
 	if _, ok := actualBody["emotes"]; ok {
 		t.Fatalf("Go emote-list response contains non-canonical emotes field: %s", response.Body.String())
 	}
+}
+
+func TestReorderEmotesMatchesNodeFixtureTopLevelEnvelope(t *testing.T) {
+	fixturePath := nodeEmoteFixturePath(t)
+	fixtureBytes, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read Node emote fixture %q: %v", fixturePath, err)
+	}
+	var fixture struct {
+		Scenarios []struct {
+			Name    string `json:"name"`
+			Request struct {
+				Method string          `json:"method"`
+				Path   string          `json:"path"`
+				Body   json.RawMessage `json:"body"`
+			} `json:"request"`
+			Response struct {
+				Status int             `json:"status"`
+				Body   json.RawMessage `json:"body"`
+			} `json:"response"`
+		} `json:"scenarios"`
+	}
+	if err := json.Unmarshal(fixtureBytes, &fixture); err != nil {
+		t.Fatalf("decode Node emote fixture: %v", err)
+	}
+
+	var scenario struct {
+		Name    string
+		Request struct {
+			Method string
+			Path   string
+			Body   json.RawMessage
+		}
+		Response struct {
+			Status int
+			Body   json.RawMessage
+		}
+	}
+	for _, candidate := range fixture.Scenarios {
+		if candidate.Name == "emote-reorder" {
+			scenario.Name = candidate.Name
+			scenario.Request.Method = candidate.Request.Method
+			scenario.Request.Path = candidate.Request.Path
+			scenario.Request.Body = candidate.Request.Body
+			scenario.Response.Status = candidate.Response.Status
+			scenario.Response.Body = candidate.Response.Body
+			break
+		}
+	}
+	if scenario.Name == "" {
+		t.Fatal("Node emote fixture has no emote-reorder response")
+	}
+
+	var expectedEnvelope struct {
+		Items  []emotes.CustomEmote `json:"items"`
+		Usage  emotes.EmoteUsage    `json:"usage"`
+		Limits emotes.EmoteLimits   `json:"limits"`
+	}
+	if err := json.Unmarshal(scenario.Response.Body, &expectedEnvelope); err != nil {
+		t.Fatalf("decode Node emote-reorder response: %v", err)
+	}
+	var expectedBody map[string]any
+	if err := json.Unmarshal(scenario.Response.Body, &expectedBody); err != nil {
+		t.Fatalf("decode Node emote-reorder response map: %v", err)
+	}
+
+	service := &emoteRoutesStub{reorderResult: emotes.PublicLibrary{
+		Emotes: expectedEnvelope.Items,
+		Usage:  expectedEnvelope.Usage,
+		Limits: expectedEnvelope.Limits,
+	}}
+	request := httptest.NewRequest(scenario.Request.Method, scenario.Request.Path, bytes.NewReader(scenario.Request.Body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	emoteRoutesRouter(service).ServeHTTP(response, request)
+
+	if response.Code != scenario.Response.Status {
+		t.Fatalf("reorder status=%d, want Node fixture status=%d body=%s", response.Code, scenario.Response.Status, response.Body.String())
+	}
+	var actualBody map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &actualBody); err != nil {
+		t.Fatalf("decode Go emote-reorder response: %v", err)
+	}
+	if actualKeys := sortedJSONKeys(rawJSONMap(response.Body.Bytes(), t)); !reflect.DeepEqual(actualKeys, sortedJSONKeys(rawJSONMap(scenario.Response.Body, t))) {
+		t.Fatalf("Go emote-reorder top-level keys=%v, want Node fixture keys=%v; body=%s", actualKeys, sortedJSONKeys(rawJSONMap(scenario.Response.Body, t)), response.Body.String())
+	}
+	if !reflect.DeepEqual(actualBody, expectedBody) {
+		t.Fatalf("Go emote-reorder body=%s, want Node fixture body=%s", response.Body.String(), string(scenario.Response.Body))
+	}
+	if _, ok := actualBody["emotes"]; ok {
+		t.Fatalf("Go emote-reorder response contains non-canonical emotes field: %s", response.Body.String())
+	}
+	if _, ok := actualBody["entries"]; ok {
+		t.Fatalf("Go emote-reorder response contains library-only entries field: %s", response.Body.String())
+	}
+	if !reflect.DeepEqual(service.reorderInput.IDs, []string{"emote_builtin_01", "emote_custom_01"}) {
+		t.Fatalf("reorder input IDs=%v, want fixture order", service.reorderInput.IDs)
+	}
+}
+
+func rawJSONMap(body []byte, t *testing.T) map[string]json.RawMessage {
+	t.Helper()
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(body, &values); err != nil {
+		t.Fatalf("decode JSON object: %v", err)
+	}
+	return values
 }
 
 func nodeEmoteFixturePath(t *testing.T) string {
