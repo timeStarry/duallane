@@ -76,6 +76,43 @@ not substitute for a coordinated release rehearsal or authorize a deployment.
 
 ### September 8 Incremental Verification
 
+#### Reviewed Browser And Composition Follow-up
+
+Accepted `25d083e` restores the canonical `items, usage, limits` envelope for
+the custom-emote list. Its new Node-fixture comparison failed on the old Go
+route (0.458s). Parent then passed the complete HTTP API PostgreSQL/race package
+in 63.860s and scoped PostgreSQL-tagged staticcheck. Accepted `2e56e8f` adds the
+enabled application graph smoke; the complete Workspace command PostgreSQL/
+race package passed in 49.576s. It synchronizes with actual WebSocket handler
+completion and rejects null list fields. Exact source hashes matched the
+native Linux validation copy; this smoke is not positive parity for every
+mutation.
+
+Accepted `53e1e11` makes the picker consume its successful upload response
+before refreshing. The strict regression accepts only Node's `items` list
+shape; it passed on Node (15.3s) and Go (16.6s), with complete lint passing.
+The original full flow with this fix and the pending event-text correction
+passed the prior 1605/1661 failures, including copied-emote image decoding,
+then failed at 1707 on the missing pinned-message indicator. The full flow
+remains open, without changed assertions, deadlines or retries.
+
+The strengthened access-race test now proves removal is visible in React
+before releasing a previously fetched list. A real ahead-cursor hello triggers
+an independent HTTP sync; a subsequent hello using the actual server cursor
+resumes the live subscription, which Go pauses after `sync.required`.
+Node 2/2 passed in 56.4s and Go 2/2 in 38.9s; complete lint passed. Parent's
+old-client-only `d60f71c` overlay fails at the post-release restored-conversation
+assertion. The newer `9c57ec3` client already passes this case; that run is
+compatibility evidence, not a reproduced old failure. A prior attempted
+baseline was not restored due to Git's ownership guard and is excluded.
+
+Independent review found two further bounded contract gaps: custom-emote
+reordering must return the list envelope, and event message blocks require
+Node's per-type allowlist and derived plain text. Those fixes and their
+regressions remain in progress. The whitespace-only fix alone passed the
+events PostgreSQL/race package (19.578s) and staticcheck, but is not yet
+accepted as a complete projection-contract fix.
+
 Pushed `795eb94fa81d0e527cc17c5a8dc871f635c811d9` includes migration slice
 `55cf159` and terminal cleanup `cc30f75`. CI `34234929369` completed: Go quality,
 PostgreSQL/native parity, Node test/lint/build/Chromium and Go P2P jobs passed;

@@ -14,18 +14,6 @@ type WorkspaceMessage = {
   id: string;
 };
 
-type WorkspaceEvent = {
-  id: string;
-  spaceId: string;
-  seq: number;
-  type: string;
-  conversationId?: string;
-  targetType?: string;
-  targetId?: string;
-  payload?: Record<string, unknown>;
-  createdAt: string;
-};
-
 function createGate(): Gate {
   let release!: () => void;
   const promise = new Promise<void>((resolve) => {
@@ -116,40 +104,45 @@ async function closeOwnedMember(ownerPage: Page, memberId: string | null) {
   await ownerPage.request.delete(`/api/workspace/members/${encodeURIComponent(memberId)}`).catch(() => undefined);
 }
 
-async function hideConversationFromInitialBootstrap(page: Page, conversationId: string) {
+async function hideConversationFromInitialBootstrap(page: Page) {
   await page.route((url) => url.pathname === "/api/workspace/bootstrap", async (route) => {
     const response = await route.fetch();
     const payload = await response.json() as {
       conversations?: Array<{ id: string }>;
     };
+    const bootstrapWithoutConversations = { ...payload };
+    delete bootstrapWithoutConversations.conversations;
     await route.fulfill({
       response,
-      json: {
-        ...payload,
-        conversations: (payload.conversations ?? []).filter((conversation) => conversation.id !== conversationId)
-      }
+      json: bootstrapWithoutConversations
     });
   });
 }
 
 async function installWorkspaceEventProxy(context: BrowserContext) {
   const socketReady = createGate();
+  const recoveryReady = createGate();
   const memberRemoved = createGate();
-  let latestHelloSeq = 0;
-  let sendEvent: ((event: WorkspaceEvent) => void) | null = null;
+  let syncRecoveryRequested = false;
+  let recoveryHelloSent = false;
   let lastMemberRemoved: { conversationId?: string; userId?: string } | null = null;
+  let requestSyncRecovery: (() => void) | null = null;
 
   await context.routeWebSocket(/\/ws\/workspace$/, (webSocket) => {
     const server = webSocket.connectToServer();
-    sendEvent = (event) => {
-      webSocket.send(JSON.stringify({ version: 1, type: "event", event }));
+    requestSyncRecovery = () => {
+      // Send a valid second hello with a cursor ahead of the server. The
+      // server emits the real sync.required control response, so no domain
+      // event or client-side processing acknowledgement is fabricated.
+      syncRecoveryRequested = true;
+      server.send(JSON.stringify({
+        version: 1,
+        type: "hello",
+        lastSeq: Number.MAX_SAFE_INTEGER
+      }));
     };
 
     webSocket.onMessage((message) => {
-      const envelope = parseFrame(message);
-      if (envelope?.type === "hello") {
-        latestHelloSeq = Number(envelope.lastSeq) || 0;
-      }
       server.send(message);
     });
 
@@ -157,6 +150,20 @@ async function installWorkspaceEventProxy(context: BrowserContext) {
       const envelope = parseFrame(message);
       if (envelope?.type === "ready") {
         socketReady.release();
+        if (recoveryHelloSent) recoveryReady.release();
+      }
+      if (envelope?.type === "sync.required" && syncRecoveryRequested && !recoveryHelloSent) {
+        const currentSeq = Number(envelope.currentSeq);
+        if (!Number.isSafeInteger(currentSeq) || currentSeq < 0) {
+          throw new Error("Workspace sync response has an invalid cursor");
+        }
+        // An ahead-cursor hello pauses Go's live subscription. Resume from
+        // the actual server cursor while the independent HTTP sync is held,
+        // so the real removal event can still reach the browser.
+        recoveryHelloSent = true;
+        webSocket.send(message);
+        server.send(JSON.stringify({ version: 1, type: "hello", lastSeq: currentSeq }));
+        return;
       }
       if (envelope?.type === "event" && envelope.event && typeof envelope.event === "object") {
         const event = envelope.event as Record<string, unknown>;
@@ -177,37 +184,35 @@ async function installWorkspaceEventProxy(context: BrowserContext) {
 
   return {
     socketReady: socketReady.promise,
+    recoveryReady: recoveryReady.promise,
     memberRemoved: memberRemoved.promise,
     lastMemberRemoved: () => lastMemberRemoved,
-    sendRefreshEvent(conversationId: string) {
-      if (!sendEvent) {
+    requestSyncRecovery() {
+      if (!requestSyncRecovery) {
         throw new Error("Workspace WebSocket proxy is not connected");
       }
-      sendEvent({
-        id: `workspace-access-race-refresh-${randomUUID()}`,
-        spaceId: "spc_default",
-        seq: latestHelloSeq + 1,
-        type: "conversation.updated",
-        conversationId,
-        targetType: "conversation",
-        targetId: conversationId,
-        createdAt: new Date().toISOString()
-      });
+      requestSyncRecovery();
     }
   };
 }
 
-async function holdNextConversationList(page: Page, conversationId: string) {
+async function holdNextConversationList(page: Page, conversationId: string, skipResponses = 0) {
   const responseFetched = createGate();
   const releaseResponse = createGate();
   const responseFulfilled = createGate();
   let held = true;
+  let remainingResponsesToSkip = skipResponses;
   let responseContainsConversation = false;
 
   await page.route(
     (url) => url.pathname === "/api/workspace/conversations" && url.search === "",
     async (route) => {
       if (!held) {
+        await route.continue();
+        return;
+      }
+      if (remainingResponsesToSkip > 0) {
+        remainingResponsesToSkip -= 1;
         await route.continue();
         return;
       }
@@ -251,30 +256,33 @@ test("does not re-add a conversation after member removal beats a delayed list r
     await enterWorkspaceAsSeededOwner(ownerPage);
     memberId = await createSyntheticMember(ownerPage, memberPage, suffix);
     const conversation = await createGroup(ownerPage, memberId, suffix);
-    await hideConversationFromInitialBootstrap(memberPage, conversation.id);
+    await hideConversationFromInitialBootstrap(memberPage);
     const workspaceSocket = await installWorkspaceEventProxy(memberContext);
+    const delayedList = await holdNextConversationList(memberPage, conversation.id, 1);
 
     await memberPage.goto("/workspace");
     await expect(memberPage.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
-    await expect(memberPage.locator(".workspace-conversation-list button").filter({ hasText: `访问竞态群 ${suffix}` })).toHaveCount(0);
+    await expect(memberPage.locator(".workspace-conversation-list button").filter({ hasText: `访问竞态群 ${suffix}` })).toHaveCount(1);
     await workspaceSocket.socketReady;
 
-    const delayedList = await holdNextConversationList(memberPage, conversation.id);
     releaseList = delayedList.releaseResponse;
-    workspaceSocket.sendRefreshEvent(conversation.id);
+    workspaceSocket.requestSyncRecovery();
+    await expect.poll(() => delayedList.hasConversation()).toBe(true);
     await delayedList.responseFetched;
-    expect(delayedList.hasConversation()).toBe(true);
+    await workspaceSocket.recoveryReady;
 
     const removalResponse = await ownerPage.request.delete(
       `/api/workspace/groups/${encodeURIComponent(conversation.id)}/members/${encodeURIComponent(memberId)}`
     );
     expect(removalResponse.status()).toBe(200);
-    await workspaceSocket.memberRemoved;
-    expect(workspaceSocket.lastMemberRemoved()).toEqual({
+    await expect.poll(() => workspaceSocket.lastMemberRemoved()).toEqual({
       conversationId: conversation.id,
       userId: memberId
     });
-    await waitForTwoAnimationFrames(memberPage);
+    // The delayed GET is still held. This is the browser-visible state update
+    // caused by the actual member_removed event, not a WebSocket observation.
+    await expect(memberPage.locator(".workspace-conversation-list button").filter({ hasText: `访问竞态群 ${suffix}` })).toHaveCount(0);
+    await expect(memberPage.getByRole("region", { name: `访问竞态群 ${suffix}` })).toHaveCount(0);
 
     const deliveredListResponse = memberPage.waitForResponse((response) =>
       new URL(response.url()).pathname === "/api/workspace/conversations" && response.request().method() === "GET"
