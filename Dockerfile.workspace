@@ -49,9 +49,10 @@ COPY --from=build /out/storage /usr/local/bin/duallane-storage
 COPY --from=build /out/healthcheck /usr/local/bin/duallane-healthcheck
 COPY --from=build /out/permission-probe /usr/local/bin/duallane-permission-probe
 COPY --from=build /out/release-check /usr/local/bin/duallane-release-check
-COPY apps/web/server/migrations /app/migrations
-COPY apps/web/shared/emote-packs.json /app/assets/emote-packs.json
-COPY apps/web/shared/echo-release-guides.json /app/assets/echo-release-guides.json
+# Public immutable assets must remain readable after a restrictive checkout.
+COPY --chmod=0644 apps/web/server/migrations/*.sql /app/migrations/
+COPY --chmod=0644 apps/web/shared/emote-packs.json /app/assets/emote-packs.json
+COPY --chmod=0644 apps/web/shared/echo-release-guides.json /app/assets/echo-release-guides.json
 ENV DUALLANE_MIGRATIONS_DIR=/app/migrations \
     DUALLANE_EMOTE_CATALOG_PATH=/app/assets/emote-packs.json \
     DUALLANE_ECHO_RELEASE_CATALOG_PATH=/app/assets/echo-release-guides.json
