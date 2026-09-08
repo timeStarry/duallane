@@ -128,7 +128,7 @@ func listEmotes(w http.ResponseWriter, r *http.Request, actor *auth.Actor, optio
 		return
 	}
 	items, usage, limits, err := options.Emotes.List(r.Context(), actor.ID)
-	writeResult(w, http.StatusOK, map[string]any{"emotes": items, "usage": usage, "limits": limits}, err)
+	writeResult(w, http.StatusOK, map[string]any{"items": items, "usage": usage, "limits": limits}, err)
 }
 
 func getEmoteLibrary(w http.ResponseWriter, r *http.Request, actor *auth.Actor, options RouterOptions) {

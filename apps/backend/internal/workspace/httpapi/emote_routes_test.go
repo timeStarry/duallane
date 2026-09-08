@@ -3,10 +3,16 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
@@ -132,7 +138,7 @@ func TestEmoteSettingsListAndUploadContracts(t *testing.T) {
 
 	list := httptest.NewRecorder()
 	router.ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/api/workspace/me/emotes", nil))
-	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"emotes":[{"id":"emote-1"`) || !strings.Contains(list.Body.String(), `"maxInputBytes":10485760`) {
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"items":[{"id":"emote-1"`) || !strings.Contains(list.Body.String(), `"maxInputBytes":10485760`) {
 		t.Fatalf("list status=%d body=%s", list.Code, list.Body.String())
 	}
 
@@ -153,6 +159,77 @@ func TestEmoteSettingsListAndUploadContracts(t *testing.T) {
 	if upload.Code != http.StatusCreated || service.uploadInput.ActorID != "actor-1" || service.uploadInput.CollectionID != "collection-1" || service.uploadInput.AddToLibrary || service.uploadInput.Source.FileName != "表情+1.png" || service.uploadInput.Source.MIMEType != "image/png" || string(service.content) != "image bytes" {
 		t.Fatalf("upload status=%d input=%#v content=%q body=%s", upload.Code, service.uploadInput, service.content, upload.Body.String())
 	}
+}
+
+func TestListEmotesMatchesNodeFixtureTopLevelEnvelope(t *testing.T) {
+	fixturePath := nodeEmoteFixturePath(t)
+	fixtureBytes, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read Node emote fixture %q: %v", fixturePath, err)
+	}
+	var fixture struct {
+		Scenarios []struct {
+			Name     string `json:"name"`
+			Response struct {
+				Status int             `json:"status"`
+				Body   json.RawMessage `json:"body"`
+			} `json:"response"`
+		} `json:"scenarios"`
+	}
+	if err := json.Unmarshal(fixtureBytes, &fixture); err != nil {
+		t.Fatalf("decode Node emote fixture: %v", err)
+	}
+
+	var expectedStatus int
+	var expectedBody map[string]json.RawMessage
+	for _, scenario := range fixture.Scenarios {
+		if scenario.Name != "emote-list" {
+			continue
+		}
+		expectedStatus = scenario.Response.Status
+		if err := json.Unmarshal(scenario.Response.Body, &expectedBody); err != nil {
+			t.Fatalf("decode Node emote-list response: %v", err)
+		}
+		break
+	}
+	if expectedStatus == 0 || expectedBody == nil {
+		t.Fatal("Node emote fixture has no emote-list response")
+	}
+	expectedKeys := sortedJSONKeys(expectedBody)
+
+	response := httptest.NewRecorder()
+	emoteRoutesRouter(&emoteRoutesStub{}).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/workspace/me/emotes", nil))
+	if response.Code != expectedStatus {
+		t.Fatalf("list status=%d, want Node fixture status=%d body=%s", response.Code, expectedStatus, response.Body.String())
+	}
+	var actualBody map[string]json.RawMessage
+	if err := json.Unmarshal(response.Body.Bytes(), &actualBody); err != nil {
+		t.Fatalf("decode Go emote-list response: %v", err)
+	}
+	if actualKeys := sortedJSONKeys(actualBody); !reflect.DeepEqual(actualKeys, expectedKeys) {
+		t.Fatalf("Go emote-list top-level keys=%v, want Node fixture keys=%v; body=%s", actualKeys, expectedKeys, response.Body.String())
+	}
+	if _, ok := actualBody["emotes"]; ok {
+		t.Fatalf("Go emote-list response contains non-canonical emotes field: %s", response.Body.String())
+	}
+}
+
+func nodeEmoteFixturePath(t *testing.T) string {
+	t.Helper()
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	return filepath.Join(filepath.Dir(sourceFile), "..", "..", "workspacecontract", "testdata", "node-emotes.json")
+}
+
+func sortedJSONKeys(values map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func TestFavoriteEmotePassesEverySourceActorAndSafeRequestMeta(t *testing.T) {
