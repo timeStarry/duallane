@@ -57,6 +57,14 @@ test("runtime images make baked-in non-secret files readable to their service us
     "COPY-created directories must regain traversal permission before switching to the service user",
   );
 
+  const publicCopy = web.indexOf("COPY --from=build /app/apps/web/dist /usr/share/nginx/html");
+  const publicDirectories = web.indexOf("find /usr/share/nginx/html -type d -exec chmod 0755 {} +");
+  const publicFiles = web.indexOf("find /usr/share/nginx/html -type f -exec chmod 0644 {} +");
+  assert.ok(
+    publicCopy >= 0 && publicDirectories > publicCopy && publicFiles > publicDirectories,
+    "bundled and copied public static files must be readable independently of source modes",
+  );
+
   assert.doesNotMatch(
     workspace,
     /^COPY apps\/web\/server\/migrations \/app\/migrations$/mu,
