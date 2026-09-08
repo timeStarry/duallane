@@ -52,6 +52,28 @@ repair existing volumes; follow the [storage permission gate](STORAGE_OPERATOR.m
 No compiler, package manager cache, source tree, test fixture, or secret belongs
 in the final runtime layer.
 
+### Immutable public image resources
+
+The final image has an explicit permission contract for public or non-secret
+immutable resources only. It does not relax permissions for `/app/data`, named
+volumes, host bind mounts, `/run/secrets`, credentials, recovery artifacts, or
+Workspace user objects; those keep their existing owner and mode contracts.
+
+| Image | Baked-in resources | File mode | Directory mode | Required non-root reader |
+| --- | --- | --- | --- | --- |
+| Workspace | `/app/migrations/*.sql`, `/app/assets/emote-packs.json`, and `/app/assets/echo-release-guides.json` | `0644` | `/app/migrations` and `/app/assets`: `0755` | Go `migrate`, Workspace/catalog startup, and the release-drain path as applicable, under `65532:65532` |
+| Web | `/usr/share/nginx/html/**` regular files and candidate `/etc/nginx/nginx.conf` | `0644` | Every directory below `/usr/share/nginx/html`: `0755` | Nginx under its configured non-root user (`101:101` in the candidate Compose) |
+
+Image builds must not depend on checkout mode bits or checkout `umask`. Use
+explicit `COPY --chmod=0644` for individual immutable files/file globs, then
+restore `0755` on any destination directories that `COPY` created before the
+service user is selected. After the build-stage Web copy, normalize every
+published regular file and directory under `/usr/share/nginx/html`; Vite can
+preserve restrictive source modes in the copied output. Prove the resulting
+permissions from the exact image as the actual non-root reader, not from host
+source metadata. The required evidence is defined in the [immutable image
+resource gate](VALIDATION.md#immutable-image-resource-gate).
+
 ## 4. Ports And Routing
 
 The external Web binding and port remain controlled by the existing

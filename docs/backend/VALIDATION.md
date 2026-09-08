@@ -211,7 +211,7 @@ deployment, production routing or a completed cutover.
 | Storage/object registry | Local and S3-compatible contract tests, digest race, reference cleanup, signed delivery authorization, partial failure |
 | Avatar/emote | Media compatibility corpus and resource-limit/failure tests in Section 8 |
 | Migration | Clean bootstrap, upgrade from oldest supported state, active Node/Go compatibility, retry/refusal, forward recovery |
-| Compose/Nginx/image | Compose config, image build, non-root/runtime contents, health, route/body/header/WebSocket checks |
+| Compose/Nginx/image | Compose config, BuildKit exact-image build, immutable resource modes (`0644` files/`0755` directories) independent of checkout `umask`, non-root SQL/catalog/Web-asset reads, health, positive HTTP static smoke, and route/body/header/WebSocket checks |
 | Deployment script | Shell/static checks, candidate failure, migration failure, daemon restart restoration, application rollback rehearsal |
 
 ## 5. Contract Parity Harness
@@ -463,6 +463,56 @@ Correctness is measured from persisted cursor recovery; low-latency wake-up is
 secondary.
 
 ## 10. Deployment Acceptance
+
+### Immutable image resource gate
+
+The permission contract is limited to the public/non-secret resources listed in
+[Operations](OPERATIONS.md#immutable-public-image-resources). It must not be
+used to widen permissions on `/app/data`, named volumes, runtime bind mounts,
+`/run/secrets`, credentials, recovery artifacts, or user content. Those remain
+covered by the existing storage, secret, and rollback gates.
+
+The source-level guard is:
+
+```sh
+node --test scripts/backend/docker-runtime-assets.test.mjs
+```
+
+This test uses anchored static regex checks over the Dockerfiles and verifies
+directive order. It is useful non-image packaging evidence only: even when it
+exits zero, it does not inspect a built layer, effective modes, non-root reads,
+or HTTP responses. Record it separately from the real-image result; do not
+promote it to image or deployment evidence.
+
+The real-image evidence must use exact local image IDs from the reviewed commit,
+BuildKit, and the actual service users. It must show all of the following:
+
+- The Workspace image is built without relying on checkout mode bits or
+  checkout `umask`; `/app/migrations/*.sql` and both `/app/assets/*.json`
+  catalogs are regular `0644` files below `0755` directories.
+- Under `65532:65532`, the real Go migration path can read every SQL file and
+  the Workspace/catalog startup can read every catalog. Run the actual
+  `migrate` and release-drain/readiness paths from that immutable image, with no
+  data or secret mount hiding these image paths; a failed asset read remains a
+  blocker.
+- The Web image runs as its configured non-root user and can traverse every
+  directory and read every regular file under `/usr/share/nginx/html`; the
+  candidate Nginx configuration is also `0644`.
+- The bounded gateway smoke against that exact Web image positively retrieves
+  the SPA HTML, representative nested/public static assets, and the expected
+  health response. Use the existing [gateway smoke](../../scripts/backend/gateway-readonly-smoke.mjs)
+  contract; a static guard or a source-tree HTTP check is not a substitute.
+- The evidence records exact image IDs, full commit, BuildKit/build inputs,
+  effective UIDs, inspected paths/modes, SQL/catalog/Web read counts, and HTTP
+  smoke results. `assets_unexpected_status` or any equivalent unreadable-asset
+  result fails pre-deployment acceptance even if automatic recovery succeeds.
+
+If any resource check is missing or fails, retain the previous exact images,
+image-pinned Compose, private recovery snapshots/sidecars, and the existing
+[rollback procedure](OPERATIONS.md#10-rolling-compatibility-and-rollback). This
+gate does not authorize owner fencing, route activation, production ownership,
+or deployment; those decisions still require the complete release gates and
+their existing rollback evidence.
 
 The release state-machine gate sources the real production helper with bounded
 synthetic Docker responses:
