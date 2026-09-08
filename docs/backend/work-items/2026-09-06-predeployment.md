@@ -50,7 +50,7 @@ that it passed. Each accepted slice records exact commits and commands below.
 Production observation and final legacy removal occur after this task's boundary;
 they remain explicit operator gates, never fabricated pre-deployment passes.
 
-## Current Closeout Map — 2026-09-07
+## Current Closeout Map — 2026-09-08
 
 This map supersedes earlier **open implementation** notes only where an
 accepted slice below records the fix. Historical failed checks remain useful
@@ -73,6 +73,49 @@ ownership is unchanged and is recorded only in the canonical ledger.
 The parallel fixes do not change frontend test assertions, retries or timeouts.
 Private browser diagnostics are not PR artifacts. Passing component checks do
 not substitute for a coordinated release rehearsal or authorize a deployment.
+
+### September 8 Incremental Verification
+
+Pushed `795eb94fa81d0e527cc17c5a8dc871f635c811d9` includes migration slice
+`55cf159` and terminal cleanup `cc30f75`. CI `34234929369` completed: Go quality,
+PostgreSQL/native parity, Node test/lint/build/Chromium and Go P2P jobs passed;
+the separate Go Workspace browser job remained 14/16 (5.5m), with the original
+Echo line 34 and full-flow line 1605 failures. This is not final acceptance.
+
+Parent reproduced the later full-flow line 1661 failure on the native Linux
+`8d27574` validation copy plus the accepted schema/cleanup changes and the
+pending two-line upload-response body-consumption fix. Read-only diagnostics
+proved the copied-emote message exists, is readable and arrives over WebSocket.
+Its emoji-plus-text projection loses the whitespace-only text block's required
+`text` value; the client then throws a `TypeError` while reading `replace`, and
+the Workspace shell unmounts. The initial list-overwrite hypothesis was ruled
+out: no list update removed the message. The Go event text-projection fix and
+focused regression are in progress. All private instrumentation was removed
+from the validation source afterward; original assertions/deadlines remain.
+
+The response-body ordering regression independently failed on the old client
+at its pre-release library-load assertion (2 loads, expected 0), then passed
+with the two-line body-consumption fix on Node (16.9s), with complete lint also
+passing. The Go run passed in 27.3s, but review identified a separate contract
+mismatch: `GET /api/workspace/me/emotes` must return Node's `items`, while Go
+currently returns `emotes`. The regression's temporary dual-shape acceptance
+has been removed; the focused route fix and strict Node/Go rerun remain pending.
+
+Independent review found that the migration failure rehearsal must identify
+the expected 031/033 failure, not just a nonzero process exit plus a rolled-back
+schema; a signal exit must also be rejected. Parent accepted the strengthened
+checks after 9/9 passed on real PostgreSQL, no skips, in 27.526s. The first
+attempt correctly refused an inaccurate Node conflict fingerprint; the Node
+runner reports the missing `space_id` column and SQLSTATE 42703, not a table
+name. The accepted gate uses that exact conflict and Go's migration identity.
+Safe errors are rebuilt from fixed labels, never preserving provider causes,
+custom properties or stacks. Source hashes matched the validated Linux copy.
+
+The enabled composition smoke reached its positive reads, mutation refusals,
+state snapshots and WebSocket ready on real PostgreSQL, but parent's focused
+race run failed in 5.690s because the final WebSocket route metric had not yet
+been recorded. The test must synchronize with server-side handler completion,
+and reject JSON `null` where an array is required, before acceptance.
 
 ### Additional Bounded Closeout Audit
 
