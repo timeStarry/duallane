@@ -76,6 +76,40 @@ not substitute for a coordinated release rehearsal or authorize a deployment.
 
 ### September 8 Incremental Verification
 
+#### Accepted Markdown Summary Adapter
+
+Clean native `077085b` subsequently passed `make -C apps/backend verify` and
+the complete `TEST_DATABASE_URL=<disposable fixture> make -C apps/backend
+integration-postgres` gate. Node passed 8 SDK tests and 732 Web tests (2 original
+skips), followed by lint and build. The unchanged complete Go Workspace browser
+suite finished 17/18 in 3.2 minutes: only the original Echo release card check at
+line 34 failed after its success confirmation; the long original full flow
+passed. Since `623dc69` CI `34245844380` and an earlier local full suite were
+green, this is an intermittent unresolved card-visibility defect, not a basis
+for erasing the failure or relaxing the test. A bounded luna-worker RCA is in
+progress, and final aggregate acceptance remains open.
+
+Accepted `077085b3c6e8267a3334023abbb5ff2b1bc95e68` pins Goldmark v1.8.6,
+adds the Node-derived 59 single-block/5 joined-block goldens and shares the
+summary path across message creation, stored retry comparison, HTTP and event
+read projection. Parent reproduced all five focused PostgreSQL summary
+failures on the old implementation (1.538s), then passed the new stored-retry
+and member-read regression with no rewritten content or duplicated audit/event
+rows. The Node check passed on 22.23.2. Native messages/events/conversations
+PostgreSQL/race packages passed in 10.690s/10.724s/6.795s; the final focused
+summary, mixed-block and bounded fuzz-seed race check passed in 1.274s.
+Scoped PostgreSQL staticcheck and `go mod verify` passed. These component
+results used the native validation copy plus the exact reviewed source files;
+the clean exact-commit aggregate is now being run separately.
+
+`go tool govulncheck ./...` and its verbose follow-up returned zero reachable
+symbol vulnerabilities. They also reported five imported-package findings
+(x/image and unused chi middleware) and three module-only x/crypto findings;
+Goldmark was not among the findings. This is not a claim that the entire
+dependency graph has zero advisories. P2P dependency listing contains no
+Goldmark or Workspace package. The pinned source's MIT license was inspected;
+the decision and ongoing oracle gate live in Technology and Validation.
+
 #### Reviewed Browser And Composition Follow-up
 
 Accepted `25d083e` restores the canonical `items, usage, limits` envelope for

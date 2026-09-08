@@ -82,7 +82,7 @@ a claim that every candidate capability is integrated, verified, or deployed.
 | Which candidate images exist? | [P2P image](../../Dockerfile.p2p) and [Workspace image](../../Dockerfile.workspace); image existence does not establish a Compose service or cutover |
 | Which contracts and migrations are present? | [Candidate API directory](../../apps/backend/api) and [canonical SQL migrations](../../apps/web/server/migrations); inspect coverage before assuming a whole API family is characterized |
 | Where is the foundation/contract slice evidence? | [2026-09-06 work record](work-items/2026-09-06-foundation-contracts.md); includes exact tested commits and excluded draft failures |
-| What remains before submitting the full candidate PR? | [Pre-deployment work record](work-items/2026-09-06-predeployment.md); acceptance queue, parallel ownership and reviewed evidence |
+| What remains before accepting the full candidate PR? | [Pre-deployment handoff](work-items/2026-09-08-predeployment-handoff.md) for current gates and artifact identities; [historical work record](work-items/2026-09-06-predeployment.md) for slice provenance and parallel ownership |
 
 The checked-in Compose and gateway still select Node `api`; the Go entry points
 are candidates. Repository configuration is not a live production inspection.
