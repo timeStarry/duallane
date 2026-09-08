@@ -59,20 +59,67 @@ ownership is unchanged and is recorded only in the canonical ledger.
 
 | Gate | Latest reviewed result | Remaining acceptance |
 | --- | --- | --- |
-| Go quality, PostgreSQL and native parity | CI `34058989500` on exact pushed `4b03dbae915b72b3a9eb6018a979089b6c034d60`: complete Go quality/PostgreSQL/native-parity job passed | Repeat on the final integrated candidate; this run is not an all-green aggregate |
-| Go P2P | The same `4b03dba` CI run's Go P2P job passed | Retain the result in the final integrated image/aggregate evidence |
+| Go quality, PostgreSQL and native parity | CI `34060931703` on exact pushed `8d275741058eb3ececdf89a9fd76e1cb7ba04776`: complete Go quality/PostgreSQL/native-parity job passed | Repeat on the final integrated candidate; this run is not an all-green aggregate |
+| Go P2P | The same `8d27574` CI run's Go P2P job passed | Retain the result in the final integrated image/aggregate evidence |
 | Actual native media | Clean `4b03dba` build target `sha256:44d0f595100abda6c3365d777403416ce652da1ad84439b68b9c0422bd714794`: 28 cases, 16 accepted, 12 rejected, 16 pixel checks, zero failures with native libvips 8.14.1 | Retain exact-source evidence with the final image set |
-| Workspace browser | `4b03dba` CI: 12/14; Echo failed at `workspace-echo-release.spec.ts:34`, and the original 240-second full flow reached `workspace.spec.ts:1605` but did not complete the custom-emote response body. Parent later passed both new access-race tests together on clean `682f473`; accepted as `58e93aa` | Diagnose the two original failures without changing assertions, deadlines or retries; final complete suite still required |
+| Workspace browser | `8d27574` CI: 14/16, including both added access-race tests. Echo still failed at `workspace-echo-release.spec.ts:34`, and the original full flow at `workspace.spec.ts:1605`. The private body-consumption fix passed that step but exposed a later image failure at 1661 | Finish the focused fix/regression and later media/Echo RCA without changing original assertions, deadlines or retries; final complete suite still required |
 | Workspace event projection | Accepted slice `17a3b73ec58c1863dc0bbdf4fa945d7d22a3f619` is included in pushed integration `4b03dba`; full events-package PostgreSQL/race `-count=1` passed in 7.767s and PostgreSQL-tagged scoped staticcheck passed | Rerun the clean integrated browser and aggregate gates after the new CI completes |
-| Node checks | Complete `4b03dba` CI Node test/lint/build/Chromium job passed. Parent native validation of accepted `682f473` passed 80 focused tests, lint and complete Web 732 PASS/2 original SKIP | Final integrated CI/build/browser remain separate gates |
+| Node checks | Complete `8d27574` CI Node test/lint/build/Chromium job passed. Parent native validation of accepted `682f473` passed 80 focused tests, lint and complete Web 732 PASS/2 original SKIP | Repeat after the current scoped fixes |
 | Release coordination | `6bc657f` fixes ERR-trap delegated status inheritance; `56bfc2c` records real positive/automatic-recovery 5/5 PASS and Go→Go→previous-Go→Node 1/1 PASS. Independently reviewed `ff2fac7` adds real passive preflight 1/1 PASS with exact images and unchanged PostgreSQL | Final integrated evidence; positive Go upgrade is not every possible upgrade fault timing |
 | Storage compatibility | Accepted bounded legacy reads, permission probes, read-only plan/verify, explicit S3 provisioning, backfill journal library and retained offline operator boundary | Prove final-image/same-authority recovery; no production copy or finalization |
 | Drain checks | The pinned CLI, private report/config, real one-shot runner and coordinated post-fence lifecycle/failure/recovery checks passed | Retain exact-source/final-image evidence; no live production drain is authorized |
-| Delivery | `682f473` is pushed, including `6bc657f` and `56bfc2c`; CI `34060397442` is running. Previous `4b03dba` CI completed with three successful jobs and the failed Workspace browser job; PR #2 remains draft | Browser RCA, final aggregate/CI, safe artifact cleanup and complete PR evidence before readiness |
+| Delivery | `8d27574` is pushed, including `58e93aa` and `ff2fac7`; CI `34060931703` completed with Go quality/PostgreSQL/native, Node and P2P PASS, but Workspace 14/16 with the same two original failures; PR #2 remains draft | Current scoped fixes, final aggregate/CI, safe artifact cleanup and complete PR evidence before readiness |
 
 The parallel fixes do not change frontend test assertions, retries or timeouts.
 Private browser diagnostics are not PR artifacts. Passing component checks do
 not substitute for a coordinated release rehearsal or authorize a deployment.
+
+### Additional Bounded Closeout Audit
+
+A composition/ownership audit identified three narrowly scoped follow-ups,
+separate from the known browser failures and final aggregate gate:
+
+- Terminal upload maintenance cleans physical staging artifacts but must also
+  remove legacy `workspace_upload_parts` rows under the existing upload lock
+  and transaction. Normal Go complete/fail already deletes those rows; that
+  does not cover pre-existing terminal leftovers. Preserve active/recent
+  uploads, canonical content-addressed objects, quotas and audit semantics.
+- The schema coexistence rehearsal races Node and Go upgrades under the same
+  advisory lock, so it does not deterministically prove which runner performed
+  the upgrade. Retain that concurrency test and add Go-only old-prefix to
+  dynamic-latest upgrade, Node no-op, and Go failure/rollback/retry evidence.
+- The route inventory proves registration and exact disabled behavior with an
+  empty service graph. Add a bounded enabled-graph wiring/smoke check; do not
+  misrepresent it as positive business parity for every endpoint.
+
+Upload cleanup is accepted as `cc30f75`; enabled-smoke implementation remains
+in progress. The cleanup retains legacy part metadata until physical staging
+cleanup succeeds, then rechecks terminal status and age under the upload lock
+before a transactional delete. Active/recent uploads and canonical objects are
+unchanged. Parent demonstrated two focused failures on the old production
+implementation, then passed the files package with `-count=1 -race` (1.507s),
+the full files PostgreSQL/race package (27.613s), PostgreSQL-tagged staticcheck,
+and all-module compile checks. All six source/test SHA-256 hashes matched the
+validated Linux copy before commit. The tests cover retained retry metadata,
+physical failure, concurrency, idempotency and transaction rollback.
+
+Schema slice `55cf1597baccf7aab3634cd646246570cd7e06cf` passed
+parent Linux-native real PostgreSQL validation:
+4/4, no skips, six scenarios in 14.629 seconds. It covers deterministic
+Go 029→030→dynamic-latest and Go 030→latest, exact Node no-op history/timestamps,
+and Go failures at both 031 and 033 followed by successful retry. Parent added
+the late 033 conflict to prove earlier 031/032 effects also roll back, not only
+the first pending migration. No canonical SQL was edited. This is an explicit
+remaining queue, not a new production-owner ledger or authorization for live
+data cleanup.
+
+An independent review of `58e93aa` found that the first access-race browser
+case can false-pass when its member-removal event is queued behind the held
+list request. Receiving the socket frame and waiting animation frames does not
+prove React applied that removal before response release. The case is being
+strengthened using an independent request trigger and an observable pre-release
+state; its earlier PASS remains execution evidence, not sufficient proof of
+that race. The second delayed-read/explicit-leave case was not affected.
 
 CI run [34056441588](https://github.com/timeStarry/duallane/actions/runs/34056441588)
 tested exact pushed commit `9c57ec3f80593c6c88cf92c2ce786f99ccc5672b` and
@@ -235,6 +282,20 @@ step and failed at line 1605 after the original 240-second deadline. Its respons
 waiter saw HTTP 201 but `response.json()` did not complete before test teardown.
 This observation does not distinguish a slow preceding flow from a stuck body;
 the timing/response investigation remains open. Private diagnostics are excluded.
+
+The later private `17a3b73` timing experiment narrowed the body stall: the
+picker's Fetch upload received HTTP 201 headers (425 bytes) about 53 ms after
+the trigger, but neither body nor finished completed in five seconds. A
+minimal XHR control finished in 178 ms; that is a different frontend path.
+The picker discarded the successful Fetch Response without consuming its body.
+With the sole private change of saving that Response and awaiting
+`response.arrayBuffer()`, the unchanged original full flow passed line 1605
+and reached line 1661 in 56.7 seconds. It then failed copied-emote image
+visibility after the original owner's deletion; this is not a full-flow pass.
+The private experiment was restored/cleaned. A focused delayed-body regression
+and the two-line picker fix are being prepared; the later image failure has
+its own investigation. No global Fetch/XHR behavior or test deadline changes
+are authorized by this evidence.
 
 ### Current Node Validation Boundary
 
