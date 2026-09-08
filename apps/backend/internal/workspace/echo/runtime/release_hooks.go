@@ -62,7 +62,15 @@ func (s InteractionHooks) finalizeReleaseCommand(ctx context.Context, input inte
 		return original
 	}
 
-	postCommitCtx, cancel := context.WithTimeout(ctx, releasePostCommitTimeout)
+	// Publication is already durable. A concurrent replay can freeze its
+	// pending counts while this request owns the delivery claim, so disconnecting
+	// this client must not cancel the only in-flight delivery. Retain both the
+	// existing post-commit bound and any earlier request deadline.
+	deadline := time.Now().Add(releasePostCommitTimeout)
+	if requestDeadline, ok := ctx.Deadline(); ok && requestDeadline.Before(deadline) {
+		deadline = requestDeadline
+	}
+	postCommitCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
 	defer cancel()
 	meta := input.Request.Meta.Safe()
 	if _, err := s.Delivery.SyncRelease(postCommitCtx, delivery.SyncInput{SpaceID: s.SpaceID, Version: version, Meta: meta}); err != nil {
