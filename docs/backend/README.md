@@ -20,8 +20,10 @@ Every backend task must first read:
 4. Only the topic documents routed below.
 
 The current implementation remains authoritative for runtime wiring while a
-capability is `planned` or `parity`. The product and security documents remain
-authoritative for behavior and invariants at every status.
+capability is `planned` or `parity`. The Go deployment-preparation candidate has
+reached `parity` with [recorded evidence](work-items/2026-09-08-predeployment-handoff.md);
+production routing and ownership remain Node. The product and security documents
+remain authoritative for behavior and invariants at every status.
 
 ## Document Map
 

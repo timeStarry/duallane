@@ -23,28 +23,30 @@ state; historical SQL migrations are immutable.
 
 ## Ordered Acceptance Queue
 
-Unchecked work is not complete, and a test command listed here is not evidence
-that it passed. Each accepted slice records exact commits and commands below.
+The deployment-preparation queue is accepted against runtime `205f470` and its
+[final evidence record](2026-09-08-predeployment-handoff.md). Historical slice
+results below are not silently promoted to final-image evidence. PR-head checks
+for the documentation-only closeout are recorded in PR #2.
 
-- [ ] Close P2P error/HTTP/WebSocket parity and privacy/lifecycle gaps.
+- [x] Close P2P error/HTTP/WebSocket parity and privacy/lifecycle gaps.
 - [x] Run browser P2P text/file/fallback/fragment acceptance against Go.
-- [ ] Complete and integrate Avatar, Emote, Bot Gateway and Echo candidates.
-- [ ] Inventory all active Node endpoints, jobs, maintenance operations and Go
+- [x] Complete and integrate Avatar, Emote, Bot Gateway and Echo candidates.
+- [x] Inventory all active Node endpoints, jobs, maintenance operations and Go
       composition; account for each capability without placeholder services.
-- [ ] Prove Workspace auth/read/write/realtime and extended-domain compatibility,
+- [x] Prove Workspace auth/read/write/realtime and extended-domain compatibility,
       including persisted effects, audit, retries, concurrency and permissions.
-- [ ] Prove local/S3 object and native media compatibility, failure cleanup and
+- [x] Prove local/S3 object and native media compatibility, failure cleanup and
       resource bounds.
-- [ ] Complete worker delivery/leases, cross-process presence, cleanup and
+- [x] Complete worker delivery/leases, cross-process presence, cleanup and
       maintenance command ownership; test with synthetic local providers.
-- [ ] Rehearse Node/Go bootstrap, upgrade, schema coexistence and rollback.
-- [ ] Build candidate images and validate private-container/gateway configuration,
+- [x] Rehearse Node/Go bootstrap, upgrade, schema coexistence and rollback.
+- [x] Build candidate images and validate private-container/gateway configuration,
       readiness, failure refusal, restoration and application rollback.
-- [ ] Restore a passing whole-tree baseline, run required Go/Node/PostgreSQL/
+- [x] Restore a passing whole-tree baseline, run required Go/Node/PostgreSQL/
       browser/container gates, and independently review the aggregate diff.
-- [ ] Update durable backend/Agent/operator guidance and release compatibility
+- [x] Update durable backend/Agent/operator guidance and release compatibility
       notes without claiming production is already Go.
-- [ ] Push split commits, submit the PR with exact evidence and review risks,
+- [x] Push split commits, submit the PR with exact evidence and review risks,
       and address actionable CI/review failures before readiness.
 
 Production observation and final legacy removal occur after this task's boundary;
@@ -53,28 +55,27 @@ they remain explicit operator gates, never fabricated pre-deployment passes.
 ## Current Closeout Map — 2026-09-09
 
 Use the concise [pre-deployment handoff](2026-09-08-predeployment-handoff.md)
-for the current exact-commit CI, native checks, image identities and open gates.
-It supersedes the older snapshot immediately below without erasing failed
-results. On clean `077085b`, Go aggregate/PostgreSQL, Node 23-case Chromium,
-P2P parity/Chromium and native-image media passed. Two acceptance issues remain:
-the intermittent Echo release card and restrictive-checkout file modes retained
-inside the new images. Neither old green CI nor older image rehearsals closes
-these failures. The PR remains draft; production ownership is unchanged.
+for the exact candidate, CI, native checks, runtime/upgrade image identities and
+replay commands. Runtime `205f470` passed all four CI jobs, original Go Workspace
+browser 18/18, native media 28 cases, fresh migration/drain 2/2, the complete
+selected Node-to-Go coordinator (6 passes; upgrade explicitly run separately),
+and real Go upgrade/previous-Go/Node recovery 1/1. Parent confirmed empty owned
+coordinator container/volume/network inventories after cleanup and preserved
+the pre-existing healthy validation stack.
 
-The exact-image coordinated rerun completed with two static passes, four
-lifecycle failures and one unselected upgrade case (266.654s). The separate
-fresh migration/drain gate had one static pass and one real-image failure
-(3.329s). Parent inspected root-owned `0600` canonical SQL/JSON in the Workspace
-image and the same mode on the candidate Nginx configuration; runtime users are
-65532 and 101. A dedicated packaging fix must normalize only immutable public
-image assets, never mounted data or secrets, and rerun the original gates.
-The coordinator's labeled resource inventory was empty after verified cleanup;
-the pre-existing healthy validation stack was preserved.
+The parent accepted `planned -> parity` in the canonical ledger only after these
+gates. No production route or owner switched. Actual deployment, observation and
+legacy retirement remain outside this task. The retained Node offline storage
+operators are an explicit compatibility boundary, not missing Go runtime wiring.
 
-Additional exact-`077` component evidence: the real Node/physical-volume
-authority pair passed 2/2 in 23.690s; real restart-policy fencing/restoration
-passed the parent and both policy cases (3/3, 6.859s). These component successes
-do not override the image startup or coordinated release failures.
+Echo's post-commit cancellation defect was reproduced with the same controlled
+browser fixture: old logic lost delivery and failed the card check; `a49afb0`
+preserved bounded delivery and passed. The original browser cases were not
+weakened. Immutable SQL/JSON, COPY-created directories and Vite-copied public
+assets received scoped permission fixes in `90ea1fc`, `88dd742` and `205f470`.
+Final non-root reads and gateway HTTP smoke pass without widening secrets or
+data permissions. The handoff retains failed `077`, `53`, and `88` image results
+as negative evidence; old passing components never override a failed lifecycle.
 
 ## Historical Closeout Map — Early 2026-09-08
 

@@ -23,10 +23,11 @@ A passing build does not advance status. Each change requires the evidence and
 route/rollback conditions below. A capability cannot be simultaneously written
 by Node and Go.
 
-## 3. Initial Capability Ledger
+## 3. Capability Ledger
 
-This ledger reflects the repository at approval of the target architecture.
-Update it in every cutover or rollback PR.
+The approval baseline below is historical. The ledger records the latest
+accepted candidate evidence and unchanged production owners. Update it in every
+parity, cutover or rollback PR.
 
 ### Ownership Is Not Implementation Progress
 
@@ -63,19 +64,46 @@ not test results for the current worktree.
 | Capability | Current owner | Target owner | Status | Required next gate |
 | --- | --- | --- | --- | --- |
 | Static Web and edge gateway | Nginx/Web image | Nginx/Web image | `active` | Add target upstreams without weakening headers/logging/body limits |
-| P2P room, ICE, and secure WebSocket relay | Node API | Go P2P | `planned` | Scaffold, parity tests, privacy gate, candidate route |
-| Workspace feature gate and health | Node API | Go Workspace | `planned` | Exact disabled behavior and release-health contract |
-| GitHub OAuth and Workspace sessions | Node API | Go Workspace | `planned` | Cookie/redirect/crypto/session parity and security review |
-| Workspace read APIs | Node API | Go Workspace | `planned` | OpenAPI characterization and authorization projection parity |
-| Workspace conversation/message mutations | Node API | Go Workspace | `planned` | PostgreSQL transaction/idempotency/audit/event parity |
-| Workspace realtime WebSocket | Node API | Go Workspace | `planned` | Persisted replay plus notification-loss and permission tests |
-| Quota, upload/download, and object registry | Node API | Go Workspace | `planned` | Concurrent quota/storage/reference and rollback evidence |
-| Avatar and custom-emote processing | Node/Sharp | Go Workspace/govips | `planned` | Conditional media compatibility gate |
-| Topics, cards, interactions, Agent Bots, and Echo | Node API | Go Workspace | `planned` | Capability-by-capability contract and workflow safety parity |
-| Email, ntfy, Bot delivery, cleanup/reconciliation | Node API workers | Go Worker | `planned` | Durable lease, eligibility, retry, presence, and provider tests |
-| PostgreSQL migration and seed runner | Node migrate command | Go migrate | `planned` | Existing history/bootstrap/upgrade compatibility |
+| P2P room, ICE, and secure WebSocket relay | Node API | Go P2P | `parity` | Authorized whole-lane routing and production privacy/health observation |
+| Workspace feature gate and health | Node API | Go Workspace | `parity` | Authorized release and exact enabled/disabled health verification |
+| GitHub OAuth and Workspace sessions | Node API | Go Workspace | `parity` | Operator configuration review and authorized real OAuth/session smoke |
+| Workspace read APIs | Node API | Go Workspace | `parity` | Authorized routing and current-membership projection observation |
+| Workspace conversation/message mutations | Node API | Go Workspace | `parity` | Single-writer cutover, drain and production data-integrity observation |
+| Workspace realtime WebSocket | Node API | Go Workspace | `parity` | Authorized cutover and replay/reconnect observation |
+| Quota, upload/download, and object registry | Node API | Go Workspace | `parity` | Staged authority/permissions proof and authorized single-writer handoff |
+| Avatar and custom-emote processing | Node/Sharp | Go Workspace/govips | `parity` | Authorized rollout of the verified native image and resource observation |
+| Topics, cards, interactions, Agent Bots, and Echo | Node API | Go Workspace | `parity` | Authorized complete write-unit cutover and critical workflow observation |
+| Email, ntfy, Bot delivery, cleanup/reconciliation | Node API workers | Go Worker | `parity` | Exclusive claimer handoff and separately authorized real-provider validation |
+| PostgreSQL migration and seed runner | Node migrate command | Go migrate | `parity` | Backup review and authorized single-runner production migration |
 | PostgreSQL database | PostgreSQL 17 deployment | PostgreSQL deployment | `active` | Preserve authoritative volume, backup, and supported upgrade path |
-| Local/S3 content-addressed storage | Node adapters and current stores | Go Workspace adapters and same stores | `planned` | Cross-implementation object compatibility and recovery tests |
+| Local/S3 content-addressed storage | Node adapters and current stores | Go Workspace adapters and same stores | `parity` | Staged full-byte/authority verification before authorized handoff; retain offline compatibility tools |
+
+### Candidate acceptance — 2026-09-09
+
+The twelve Go-target rows above advance from `planned` to `parity`, not
+`routed`. Parent integration review accepted runtime source
+`205f470f09852c9f36aeac37926b710e0f267940`, based on bounded luna-worker
+implementation/review slices, the complete four-job
+[CI run](https://github.com/timeStarry/duallane/actions/runs/34254215437), and
+the exact-image disposable rehearsals in the
+[final handoff](work-items/2026-09-08-predeployment-handoff.md). Maintainer PR
+review/merge and all production transitions remain separate decisions.
+
+Evidence includes actual Node-derived contract fixtures, Go unit/race/analysis
+and full PostgreSQL integration, the complete Node/Go browser suites, native
+media and legacy-object compatibility, single-runner schema coexistence, and
+coordinated passive/activation/failure/upgrade/rollback tests. The handoff records
+exact commands, coverage limits, image IDs, historical failures and unselected
+optional cases. It is not a claim of exhaustive equivalence for every possible
+input, real-provider interoperability or production observation.
+
+No checked-in default production route, running writer, claimer or migration
+owner changes with this acceptance. The Go candidate supports one P2P process
+and the documented Workspace/worker topology; it is not scale-out evidence.
+The [retained offline storage tools](STORAGE_OPERATOR.md#retained-offline-compatibility-tools)
+remain Node compatibility operators, not running Go-service dependencies or an
+implemented Go mutating backfill CLI. Do not remove them or legacy recovery
+because a capability is now `parity`.
 
 ### Approval Baseline
 
