@@ -50,7 +50,33 @@ that it passed. Each accepted slice records exact commits and commands below.
 Production observation and final legacy removal occur after this task's boundary;
 they remain explicit operator gates, never fabricated pre-deployment passes.
 
-## Current Closeout Map — 2026-09-08
+## Current Closeout Map — 2026-09-09
+
+Use the concise [pre-deployment handoff](2026-09-08-predeployment-handoff.md)
+for the current exact-commit CI, native checks, image identities and open gates.
+It supersedes the older snapshot immediately below without erasing failed
+results. On clean `077085b`, Go aggregate/PostgreSQL, Node 23-case Chromium,
+P2P parity/Chromium and native-image media passed. Two acceptance issues remain:
+the intermittent Echo release card and restrictive-checkout file modes retained
+inside the new images. Neither old green CI nor older image rehearsals closes
+these failures. The PR remains draft; production ownership is unchanged.
+
+The exact-image coordinated rerun completed with two static passes, four
+lifecycle failures and one unselected upgrade case (266.654s). The separate
+fresh migration/drain gate had one static pass and one real-image failure
+(3.329s). Parent inspected root-owned `0600` canonical SQL/JSON in the Workspace
+image and the same mode on the candidate Nginx configuration; runtime users are
+65532 and 101. A dedicated packaging fix must normalize only immutable public
+image assets, never mounted data or secrets, and rerun the original gates.
+The coordinator's labeled resource inventory was empty after verified cleanup;
+the pre-existing healthy validation stack was preserved.
+
+Additional exact-`077` component evidence: the real Node/physical-volume
+authority pair passed 2/2 in 23.690s; real restart-policy fencing/restoration
+passed the parent and both policy cases (3/3, 6.859s). These component successes
+do not override the image startup or coordinated release failures.
+
+## Historical Closeout Map — Early 2026-09-08
 
 This map supersedes earlier **open implementation** notes only where an
 accepted slice below records the fix. Historical failed checks remain useful
