@@ -15600,7 +15600,7 @@ function EmotePicker({
             const query = activeCollectionId
               ? `?collectionId=${encodeURIComponent(activeCollectionId)}&addToLibrary=false`
               : "";
-            await workspaceFetch(`/api/workspace/me/emotes${query}`, {
+            const uploadResponse = await workspaceFetch(`/api/workspace/me/emotes${query}`, {
               method: "POST",
               headers: {
                 "content-type": file.type || "application/octet-stream",
@@ -15608,6 +15608,7 @@ function EmotePicker({
               },
               body: file
             });
+            await uploadResponse.arrayBuffer();
           } catch (error) {
             failures.push(`${file.name}：${userFacingErrorMessage(error, "上传失败")}`);
           }
