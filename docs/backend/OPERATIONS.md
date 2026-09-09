@@ -450,6 +450,9 @@ endpoint policy. The [production preflight work record](work-items/2026-09-09-pr
 records the reproduction, threat review and remaining operator gates.
 The [Go Web image-identity work record](work-items/2026-09-09-go-web-image-identity.md)
 records why the Go-only Web composition requires an explicit release image tag.
+The [candidate network isolation record](work-items/2026-09-10-candidate-network-isolation.md)
+explains why P2P/Web candidate networks must replace the frozen activation
+networks rather than merge with them.
 
 Go private paths must return 404. The retained Node gateway may instead return
 its exact static SPA HTML; that is classified as no private endpoint exposure,
