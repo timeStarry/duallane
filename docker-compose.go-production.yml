@@ -53,6 +53,7 @@ services:
     profiles: [rollback]
 
   web:
+    image: duallane-go-web:${DUALLANE_GIT_COMMIT:?full release commit is required}
     build:
       dockerfile: deploy/candidate/Dockerfile.web
     user: "101:101"

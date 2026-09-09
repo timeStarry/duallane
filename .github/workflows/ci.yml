@@ -220,6 +220,11 @@ jobs:
             node -e "const c=JSON.parse(require('fs').readFileSync(0,'utf8')); const v=c.services.postgres.volumes.find((item) => item.target === '/var/lib/postgresql/data'); if (c.volumes?.[v?.source]?.name !== 'duallane-ci-postgres') throw new Error('production PostgreSQL volume override is ineffective'); for (const s of ['postgres','api','web','v2ray']) if (c.services[s].restart !== 'always') throw new Error(s + ' must restart after daemon recovery')"
           bash -n deploy/production/deploy.sh
 
+      - name: Validate Go release Compose image contract
+        env:
+          DUALLANE_REQUIRE_DOCKER_COMPOSE_CONTRACT: "true"
+        run: node --test scripts/backend/release-compose-image-contract.test.mjs
+
       - name: Build Docker images
         run: docker compose build web api migrate
 

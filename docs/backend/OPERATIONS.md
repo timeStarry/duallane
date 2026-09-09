@@ -448,6 +448,8 @@ interfaces and needs a separate ingress/firewall review. This address check
 does not change the edge listener, authentication, body limits or private
 endpoint policy. The [production preflight work record](work-items/2026-09-09-production-preflight.md)
 records the reproduction, threat review and remaining operator gates.
+The [Go Web image-identity work record](work-items/2026-09-09-go-web-image-identity.md)
+records why the Go-only Web composition requires an explicit release image tag.
 
 Go private paths must return 404. The retained Node gateway may instead return
 its exact static SPA HTML; that is classified as no private endpoint exposure,
