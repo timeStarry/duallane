@@ -99,12 +99,18 @@ Lead-run checks on Linux/WSL, using Node 22.23.2 and pnpm 10.30.3:
   `3f825f3` passed: SDK 8; Web 732, with two PostgreSQL environment skips
   (132.97 seconds).
 
-The new real-Docker success scenario initially failed in the mounted Windows
-checkout after reaching Go activation. It is not accepted as successful
-recovery evidence. The lead reran it from a native Linux checkout and retained
-the separate injected-failure scenario. Exact final Docker outcomes and fresh
-CI status are tracked in [PR #3](https://github.com/timeStarry/duallane/pull/3),
-not inferred from the earlier binding-only CI.
+The new real-Docker success scenario initially reached smoke/capture but
+exceeded the old six-minute coordinator-test budget. Permission scenarios now
+have the same bounded ten-minute coordinator/twelve-minute outer budget as the
+longer Go-upgrade rehearsal; production timeouts are unchanged. Overlapping
+validation processes also collided on the existing commit-scoped candidate
+names: the failure scenario correctly refused to count the other run's
+candidates as cleaned. Run this Docker gate serially, from a native Linux
+checkout, with no other same-commit candidate rehearsal. No unowned container
+was removed. These failed attempts are not recovery acceptance. Exact final
+Docker outcomes and fresh CI status are tracked in
+[PR #3](https://github.com/timeStarry/duallane/pull/3), not inferred from the
+earlier binding-only CI.
 
 The independent main-owned coordinator/canary review found no additional
 blocking issue. Lead review corrected draft backup-path/deadline defects,

@@ -660,7 +660,11 @@ async function rehearseCoordinator(t, scenario) {
       ...(upgrade ? { UPGRADE_GO_COMPOSE: paths.upgrade, UPGRADE_COMMIT: upgrade.commit, UPGRADE_VERSION: upgrade.version,
         UPGRADE_SNAPSHOT: paths.upgradeSnapshot, UPGRADE_RECOVERY: paths.upgradeRecovery,
         PREVIOUS_GO_SNAPSHOT: `${paths.recovery}.go-compose.snapshot.json` } : {}),
-    }, upgrade ? 600_000 : 360_000);
+    // The permission scenario adds a real dump, full copy/hash/fsync and UID
+    // canary before the existing candidate/activation/recovery cycle. Give
+    // that extra bounded stage the same rehearsal budget as a Go upgrade;
+    // production helper timeouts and fail-closed gates are unchanged.
+    }, upgrade || isPermissionScenario(scenario) ? 600_000 : 360_000);
     const phases = (await readFile(paths.phases, "utf8").catch(() => "")).trim().split("\n");
     const injectedFailure = ["after-backend", "after-capture", "permissions-failure"].includes(scenario);
     const expectedStatus = injectedFailure ? 74 : 0;
@@ -783,6 +787,6 @@ for (const [scenario, name] of [
       : isPermissionScenario(scenario) && (process.platform !== "linux" || process.getuid?.() !== 0)
       ? "permission scenarios are root-only Linux rehearsals because the real offline volume helper changes disposable volume metadata"
       : false,
-    timeout: scenario === "go-upgrade" ? 720_000 : 480_000,
+    timeout: scenario === "go-upgrade" || isPermissionScenario(scenario) ? 720_000 : 480_000,
   }, (t) => rehearseCoordinator(t, scenario));
 }
