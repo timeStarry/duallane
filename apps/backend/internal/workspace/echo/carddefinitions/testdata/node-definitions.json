@@ -1,0 +1,516 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "runtime": "apps/web/server/services/echo-runtime.mjs",
+    "definitions": "createEchoCardDefinitions"
+  },
+  "definitions": [
+    {
+      "cardType": "echo.request",
+      "schemaVersion": 1,
+      "allowPublicUrls": true,
+      "limits": {
+        "maxPayloadBytes": 20480,
+        "maxDepth": 8,
+        "maxNodes": 200,
+        "maxTextBytes": 14336
+      },
+      "actions": {
+        "collect": {
+          "id": "collect",
+          "limits": {
+            "maxPayloadBytes": 16384,
+            "maxDepth": 6,
+            "maxNodes": 100,
+            "maxTextBytes": 8192
+          }
+        },
+        "start": {
+          "id": "start",
+          "limits": {
+            "maxPayloadBytes": 16384,
+            "maxDepth": 6,
+            "maxNodes": 100,
+            "maxTextBytes": 8192
+          }
+        },
+        "progress": {
+          "id": "progress",
+          "limits": {
+            "maxPayloadBytes": 16384,
+            "maxDepth": 6,
+            "maxNodes": 100,
+            "maxTextBytes": 8192
+          }
+        },
+        "implement": {
+          "id": "implement",
+          "limits": {
+            "maxPayloadBytes": 16384,
+            "maxDepth": 6,
+            "maxNodes": 100,
+            "maxTextBytes": 8192
+          }
+        },
+        "reject": {
+          "id": "reject",
+          "limits": {
+            "maxPayloadBytes": 16384,
+            "maxDepth": 6,
+            "maxNodes": 100,
+            "maxTextBytes": 8192
+          }
+        },
+        "duplicate": {
+          "id": "duplicate",
+          "limits": {
+            "maxPayloadBytes": 16384,
+            "maxDepth": 6,
+            "maxNodes": 100,
+            "maxTextBytes": 8192
+          }
+        }
+      }
+    },
+    {
+      "cardType": "echo.request-status",
+      "schemaVersion": 1,
+      "allowPublicUrls": true,
+      "limits": {
+        "maxPayloadBytes": 12288,
+        "maxDepth": 8,
+        "maxNodes": 200,
+        "maxTextBytes": 8192
+      },
+      "actions": {}
+    },
+    {
+      "cardType": "echo.request-list",
+      "schemaVersion": 1,
+      "allowPublicUrls": false,
+      "limits": {
+        "maxPayloadBytes": 16384,
+        "maxDepth": 8,
+        "maxNodes": 200,
+        "maxTextBytes": 8192
+      },
+      "actions": {}
+    },
+    {
+      "cardType": "echo.solicitation",
+      "schemaVersion": 1,
+      "allowPublicUrls": false,
+      "limits": {
+        "maxPayloadBytes": 20480,
+        "maxDepth": 8,
+        "maxNodes": 200,
+        "maxTextBytes": 14336
+      },
+      "actions": {
+        "vote": {
+          "id": "vote",
+          "limits": {
+            "maxPayloadBytes": 16384,
+            "maxDepth": 6,
+            "maxNodes": 100,
+            "maxTextBytes": 8192
+          }
+        }
+      }
+    },
+    {
+      "cardType": "echo.release",
+      "schemaVersion": 1,
+      "allowPublicUrls": false,
+      "limits": {
+        "maxPayloadBytes": 65536,
+        "maxDepth": 8,
+        "maxNodes": 200,
+        "maxTextBytes": 16384
+      },
+      "actions": {}
+    }
+  ],
+  "validation": [
+    {
+      "name": "request-valid",
+      "cardType": "echo.request",
+      "payload": {
+        "publicId": "REQ-2026-0001",
+        "type": "requirement",
+        "title": "Synthetic Echo request",
+        "detail": "Synthetic private detail",
+        "scenario": "Synthetic scenario",
+        "expectedResult": "Synthetic result",
+        "state": "submitted",
+        "phase": "proposal",
+        "status": "pending_review",
+        "archiveOutcome": null,
+        "duplicateOfPublicId": null,
+        "revision": 1,
+        "response": null,
+        "createdAt": "2026-09-06T12:00:00.000Z",
+        "updatedAt": "2026-09-06T12:00:00.000Z"
+      },
+      "expected": {
+        "publicId": "REQ-2026-0001",
+        "type": "requirement",
+        "title": "Synthetic Echo request",
+        "detail": "Synthetic private detail",
+        "scenario": "Synthetic scenario",
+        "expectedResult": "Synthetic result",
+        "state": "submitted",
+        "phase": "proposal",
+        "status": "pending_review",
+        "archiveOutcome": null,
+        "duplicateOfPublicId": null,
+        "revision": 1,
+        "response": null,
+        "createdAt": "2026-09-06T12:00:00.000Z",
+        "updatedAt": "2026-09-06T12:00:00.000Z"
+      }
+    },
+    {
+      "name": "request-missing-detail",
+      "cardType": "echo.request",
+      "payload": {
+        "publicId": "REQ-2026-0001",
+        "type": "requirement",
+        "title": "Synthetic Echo request",
+        "detail": "",
+        "scenario": "Synthetic scenario",
+        "expectedResult": "Synthetic result",
+        "state": "submitted",
+        "phase": "proposal",
+        "status": "pending_review",
+        "archiveOutcome": null,
+        "duplicateOfPublicId": null,
+        "revision": 1,
+        "response": null,
+        "createdAt": "2026-09-06T12:00:00.000Z",
+        "updatedAt": "2026-09-06T12:00:00.000Z"
+      },
+      "error": {
+        "code": "card.domain_invalid",
+        "message": "需求卡片内容不完整"
+      }
+    },
+    {
+      "name": "status-valid",
+      "cardType": "echo.request-status",
+      "payload": {
+        "publicId": "REQ-2026-0001",
+        "type": "requirement",
+        "title": "Synthetic Echo request",
+        "state": "submitted",
+        "phase": "proposal",
+        "status": "pending_review",
+        "revision": 1,
+        "createdAt": "2026-09-06T12:00:00.000Z",
+        "updatedAt": "2026-09-06T12:00:00.000Z"
+      },
+      "expected": {
+        "publicId": "REQ-2026-0001",
+        "type": "requirement",
+        "title": "Synthetic Echo request",
+        "state": "submitted",
+        "phase": "proposal",
+        "status": "pending_review",
+        "revision": 1,
+        "createdAt": "2026-09-06T12:00:00.000Z",
+        "updatedAt": "2026-09-06T12:00:00.000Z"
+      }
+    },
+    {
+      "name": "list-valid",
+      "cardType": "echo.request-list",
+      "payload": {
+        "items": [
+          {
+            "publicId": "REQ-2026-0001",
+            "type": "requirement",
+            "title": "Synthetic Echo request",
+            "state": "submitted",
+            "phase": "proposal",
+            "status": "pending_review",
+            "revision": 1,
+            "createdAt": "2026-09-06T12:00:00.000Z",
+            "updatedAt": "2026-09-06T12:00:00.000Z"
+          }
+        ]
+      },
+      "expected": {
+        "items": [
+          {
+            "publicId": "REQ-2026-0001",
+            "type": "requirement",
+            "title": "Synthetic Echo request",
+            "state": "submitted",
+            "phase": "proposal",
+            "status": "pending_review",
+            "revision": 1,
+            "createdAt": "2026-09-06T12:00:00.000Z",
+            "updatedAt": "2026-09-06T12:00:00.000Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "solicitation-valid",
+      "cardType": "echo.solicitation",
+      "payload": {
+        "publicId": "SOL-2026-0001",
+        "title": "Synthetic solicitation",
+        "description": "Synthetic description",
+        "question": "Synthetic question?",
+        "status": "open",
+        "deadline": null,
+        "revision": 1,
+        "choiceMode": "single",
+        "minSelections": 1,
+        "maxSelections": 1,
+        "allowVoteChange": true,
+        "options": [
+          {
+            "id": "opt-a",
+            "label": "A",
+            "position": 0,
+            "count": 0
+          },
+          {
+            "id": "opt-b",
+            "label": "B",
+            "position": 1,
+            "count": 0
+          }
+        ],
+        "selectedOptionIds": [],
+        "owner": true,
+        "voteCount": 0
+      },
+      "expected": {
+        "publicId": "SOL-2026-0001",
+        "title": "Synthetic solicitation",
+        "description": "Synthetic description",
+        "question": "Synthetic question?",
+        "status": "open",
+        "deadline": null,
+        "revision": 1,
+        "choiceMode": "single",
+        "minSelections": 1,
+        "maxSelections": 1,
+        "allowVoteChange": true,
+        "options": [
+          {
+            "id": "opt-a",
+            "label": "A",
+            "position": 0,
+            "count": 0
+          },
+          {
+            "id": "opt-b",
+            "label": "B",
+            "position": 1,
+            "count": 0
+          }
+        ],
+        "selectedOptionIds": [],
+        "owner": true,
+        "voteCount": 0
+      }
+    },
+    {
+      "name": "solicitation-missing-options",
+      "cardType": "echo.solicitation",
+      "payload": {
+        "publicId": "SOL-2026-0001",
+        "title": "Synthetic solicitation",
+        "description": "Synthetic description",
+        "question": "Synthetic question?",
+        "status": "open",
+        "deadline": null,
+        "revision": 1,
+        "choiceMode": "single",
+        "minSelections": 1,
+        "maxSelections": 1,
+        "allowVoteChange": true,
+        "options": [],
+        "selectedOptionIds": [],
+        "owner": true,
+        "voteCount": 0
+      },
+      "error": {
+        "code": "card.domain_invalid",
+        "message": "征集卡片数据无效"
+      }
+    },
+    {
+      "name": "release-valid",
+      "cardType": "echo.release",
+      "payload": {
+        "version": "0.15.1",
+        "releasedAt": "2026-09-06",
+        "title": "Synthetic release",
+        "summary": "Synthetic summary",
+        "sections": [
+          {
+            "title": "Changes",
+            "items": [
+              {
+                "title": "Card definitions",
+                "description": "Synthetic description",
+                "location": "Workspace"
+              }
+            ]
+          }
+        ],
+        "publishedAt": "2026-09-06T12:34:56.789Z"
+      },
+      "expected": {
+        "version": "0.15.1",
+        "releasedAt": "2026-09-06",
+        "title": "Synthetic release",
+        "summary": "Synthetic summary",
+        "sections": [
+          {
+            "title": "Changes",
+            "items": [
+              {
+                "title": "Card definitions",
+                "description": "Synthetic description",
+                "location": "Workspace"
+              }
+            ]
+          }
+        ],
+        "publishedAt": "2026-09-06T12:34:56.789Z"
+      }
+    },
+    {
+      "name": "release-invalid-published-at",
+      "cardType": "echo.release",
+      "payload": {
+        "version": "0.15.1",
+        "releasedAt": "2026-09-06",
+        "title": "Synthetic release",
+        "summary": "Synthetic summary",
+        "sections": [
+          {
+            "title": "Changes",
+            "items": [
+              {
+                "title": "Card definitions",
+                "description": "Synthetic description",
+                "location": "Workspace"
+              }
+            ]
+          }
+        ],
+        "publishedAt": "not-a-time"
+      },
+      "error": {
+        "code": "echo.release_guide_invalid",
+        "message": "版本发布时间无效"
+      }
+    }
+  ],
+  "actions": {
+    "requirement": {
+      "transition": {
+        "actorId": "usr_fixture_owner",
+        "publicId": "REQ-2026-0001",
+        "phase": "formal",
+        "status": "planned",
+        "duplicateOfPublicId": null,
+        "response": "owner response",
+        "expectedRevision": 1,
+        "idempotencyKey": "runtime-domain-key",
+        "request": {
+          "requestId": "fixture-request"
+        }
+      },
+      "projection": {
+        "actorId": "usr_fixture_owner",
+        "publicId": "REQ-2026-0001",
+        "cardType": "echo.request",
+        "request": {
+          "requestId": "fixture-request"
+        }
+      },
+      "result": {
+        "publicId": "REQ-2026-0001",
+        "state": "collected",
+        "phase": "formal",
+        "status": "planned",
+        "archiveOutcome": null,
+        "duplicateOfPublicId": null,
+        "revision": 2
+      },
+      "resultKeys": [
+        "archiveOutcome",
+        "duplicateOfPublicId",
+        "phase",
+        "publicId",
+        "revision",
+        "state",
+        "status"
+      ],
+      "cardPayloadKeys": [
+        "createdAt",
+        "detail",
+        "phase",
+        "publicId",
+        "revision",
+        "state",
+        "status",
+        "title",
+        "type",
+        "updatedAt"
+      ]
+    },
+    "solicitation": {
+      "vote": {
+        "spaceId": "spc_fixture",
+        "actorId": "usr_fixture_member",
+        "publicId": "SOL-2026-0001",
+        "optionIds": [
+          "opt-a"
+        ],
+        "expectedRevision": 1,
+        "idempotencyKey": "runtime-vote-key",
+        "request": {
+          "requestId": "fixture-request"
+        }
+      },
+      "projection": {
+        "spaceId": "spc_fixture",
+        "actorId": "usr_fixture_member",
+        "publicId": "SOL-2026-0001",
+        "request": {
+          "requestId": "fixture-request"
+        }
+      },
+      "result": {
+        "publicId": "SOL-2026-0001",
+        "status": "open",
+        "revision": 2,
+        "selectedOptionIds": [
+          "opt-a"
+        ],
+        "counts": {
+          "opt-a": 1,
+          "opt-b": 0
+        },
+        "voteCount": 1
+      },
+      "resultKeys": [
+        "counts",
+        "publicId",
+        "revision",
+        "selectedOptionIds",
+        "status",
+        "voteCount"
+      ]
+    }
+  }
+}

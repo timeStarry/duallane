@@ -8,6 +8,8 @@ const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER === "tr
 
 export default defineConfig({
   testDir: "./e2e",
+  // The Go-only privacy suite owns a separate server and artifact policy.
+  testIgnore: "**/p2p-go-privacy.spec.ts",
   outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR || "test-results",
   fullyParallel: false,
   workers: 1,
@@ -21,7 +23,6 @@ export default defineConfig({
   reporter: process.env.CI ? [["line"], ["html", { open: "never" }]] : "list",
   use: {
     baseURL,
-    reducedMotion: "reduce",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure"

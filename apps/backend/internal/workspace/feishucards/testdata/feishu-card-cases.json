@@ -1,0 +1,108 @@
+{
+  "success": [
+    {
+      "name": "all-elements-and-button-styles",
+      "input": {
+        "config": {"version": "1.0", "wide_screen_mode": true},
+        "header": {
+          "title": {"tag": "plain_text", "content": "审阅卡片"},
+          "template": "blue"
+        },
+        "elements": [
+          {"tag": "div", "text": {"tag": "plain_text", "content": "纯文本"}},
+          {"tag": "div", "text": {"tag": "lark_md", "content": "内嵌 [公开说明](https://example.com/docs)"}},
+          {"tag": "markdown", "content": "[帮助](https://example.com/help)"},
+          {"tag": "note", "elements": [
+            {"tag": "plain_text", "content": "仅合成数据"},
+            {"tag": "lark_md", "content": "再次查看 [说明](https://example.com/note)"}
+          ]},
+          {"tag": "hr"},
+          {"tag": "action", "actions": [
+            {"tag": "button", "text": {"tag": "plain_text", "content": "确认"}, "type": "primary", "value": {"action_id": "confirm", "data": {"z": "last", "0": "zero", "a": "first"}}}
+          ]},
+          {"tag": "columns", "columns": [
+            {"tag": "column", "width": "weighted", "weight": 1, "elements": [
+              {"tag": "div", "text": {"tag": "plain_text", "content": "左列"}}
+            ]},
+            {"tag": "column", "width": "auto", "elements": [
+              {"tag": "markdown", "content": "[右列](https://example.com/right)"}
+            ]}
+          ]}
+        ]
+      }
+    },
+    {
+      "name": "button-list-and-button-styles",
+      "input": {
+        "elements": [
+          {"tag": "button_list", "buttons": [
+            {"tag": "button", "text": "取消", "value": {"action_id": "cancel"}},
+            {"tag": "button", "text": {"tag": "plain_text", "content": "刷新"}, "type": "danger", "value": {"action_id": "refresh", "data": {"mode": "synthetic"}}},
+            {"tag": "button", "text": "提交", "value": {"action_id": "submit", "data": null}}
+          ]}
+        ]
+      }
+    },
+    {
+      "name": "ordered-data-and-lone-surrogate",
+      "input": {
+        "elements": [
+          {"tag": "action", "actions": [
+            {"tag": "button", "text": "确认", "value": {"action_id": "confirm", "data": {"z": "first", "0": "zero", "z": "last", "a": "first", "surrogate": "\ud800"}}}
+          ]}
+        ]
+      }
+    },
+    {
+      "name": "nested-columns-and-reconstruction",
+      "input": {
+        "elements": [
+          {"tag": "column_set", "columns": [
+            {"tag": "column", "elements": [
+              {"tag": "action", "actions": [
+                {"tag": "button", "text": {"tag": "plain_text", "content": "确认"}, "value": {"action_id": "confirm", "data": {"choice": "yes"}}}
+              ]}
+            ]},
+            {"tag": "column", "elements": [
+              {"tag": "note", "elements": [{"tag": "plain_text", "content": "列内备注"}]}
+            ]}
+          ]}
+        ]
+      }
+    }
+  ],
+  "reconstruction": [
+    {
+      "name": "canonical-payload-reconstruction",
+      "payload": {
+        "format": "duallane.feishu-card.v1",
+        "config": {"version": "1.0", "wideScreen": false},
+        "header": {"title": "重建", "subtitle": "合成", "tone": "warning"},
+        "elements": [
+          {"type": "text", "format": "plain", "text": "正文"},
+          {"type": "text", "format": "markdown", "text": "[链接](https://example.com/rebuild)"},
+          {"type": "note", "parts": [{"format": "plain", "text": "备注"}]},
+          {"type": "divider"},
+          {"type": "actions", "buttons": [{"type": "button", "label": "提交", "actionId": "submit", "style": "default", "data": {"z": "first", "0": "zero", "z": "last", "a": "first", "surrogate": "\ud800"}}]},
+          {"type": "columns", "columns": [{"width": "weighted", "weight": 1, "elements": [{"type": "text", "format": "plain", "text": "列"}]}, {"width": "auto", "elements": [{"type": "divider"}]}]}
+        ]
+      }
+    }
+  ],
+  "errors": [
+    {"name": "invalid-root", "input": null, "code": "card.feishu_invalid"},
+    {"name": "missing-elements", "input": {}, "code": "card.feishu_elements_required"},
+    {"name": "unsafe-html", "input": {"elements": [{"tag": "div", "text": {"tag": "plain_text", "content": "<script>fixture</script>"}}]}, "code": "card.unsafe_content"},
+    {"name": "private-loopback", "input": {"elements": [{"tag": "markdown", "content": "[local](https://127.0.0.1/admin)"}]}, "code": "card.private_url"},
+    {"name": "private-host-suffix", "input": {"elements": [{"tag": "markdown", "content": "[local](https://service.internal/admin)"}]}, "code": "card.private_url"},
+    {"name": "cleartext-url", "input": {"elements": [{"tag": "markdown", "content": "[clear](http://example.com/)"}]}, "code": "card.url_forbidden"},
+    {"name": "unknown-action", "input": {"elements": [{"tag": "action", "actions": [{"tag": "button", "text": {"tag": "plain_text", "content": "运行"}, "value": {"action_id": "run_script"}}]}]}, "code": "card.unknown_action"},
+    {"name": "duplicate-action", "input": {"elements": [{"tag": "action", "actions": [{"tag": "button", "text": {"tag": "plain_text", "content": "确认"}, "value": {"action_id": "confirm"}}, {"tag": "button", "text": {"tag": "plain_text", "content": "再次确认"}, "value": {"action_id": "confirm"}}]}]}, "code": "card.feishu_duplicate_action"},
+    {"name": "unknown-element", "input": {"elements": [{"tag": "img", "img_key": "synthetic"}]}, "code": "card.feishu_unknown_element"},
+    {"name": "unknown-field", "input": {"style": {"color": "red"}, "elements": [{"tag": "hr"}]}, "code": "card.feishu_unknown_field"},
+    {"name": "unsupported-version", "input": {"config": {"version": "2.0"}, "elements": [{"tag": "hr"}]}, "code": "card.feishu_unsupported_version"},
+    {"name": "oversize-text", "input": {"elements": [{"tag": "div", "text": {"tag": "plain_text", "content": "__REPLACE_WITH_13K__"}}]}, "code": "card.text_too_large"},
+    {"name": "too-many-nodes", "input": {"elements": "__REPLACE_WITH_81_HR__"}, "code": "card.payload_too_complex"},
+    {"name": "private-mapped-ipv6", "input": {"elements": [{"tag": "markdown", "content": "[local](https://[::ffff:127.0.0.1]/admin)"}]}, "code": "card.private_url"}
+  ]
+}

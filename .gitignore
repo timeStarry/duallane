@@ -14,6 +14,7 @@ uploads/
 coverage/
 playwright-report/
 test-results/
+.private-test-results/
 *.tsbuildinfo
 *.log
 .DS_Store

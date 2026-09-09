@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://duallane.invalid/integrations/v1/p2p-realtime.schema.json",
+  "title": "DualLane P2P realtime frames",
+  "description": "Transient P2P system and secure-envelope frames. The server never decrypts secure payloads.",
+  "anyOf": [
+    { "$ref": "#/$defs/system" },
+    { "$ref": "#/$defs/inboundLeave" },
+    { "$ref": "#/$defs/inboundSecure" },
+    { "$ref": "#/$defs/outboundSecure" }
+  ],
+  "$defs": {
+    "peer": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64 }
+      },
+      "additionalProperties": false
+    },
+    "secureFields": {
+      "type": "object",
+      "required": ["type", "v", "channel", "nonce", "ciphertext"],
+      "properties": {
+        "type": { "const": "secure" },
+        "v": { "const": 1 },
+        "channel": { "enum": ["signal", "ws-chat", "profile"] },
+        "nonce": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$", "maxLength": 16384 },
+        "ciphertext": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$", "maxLength": 16384 }
+      }
+    },
+    "inboundLeave": {
+      "type": "object",
+      "required": ["type"],
+      "properties": { "type": { "const": "leave" } },
+      "additionalProperties": true
+    },
+    "inboundSecure": {
+      "allOf": [
+        { "$ref": "#/$defs/secureFields" }
+      ],
+      "additionalProperties": true
+    },
+    "outboundSecure": {
+      "allOf": [
+        { "$ref": "#/$defs/secureFields" },
+        {
+          "type": "object",
+          "required": ["from", "receivedAt"],
+          "properties": {
+            "from": { "$ref": "#/$defs/peer" },
+            "receivedAt": { "type": "string", "format": "date-time" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "system": {
+      "type": "object",
+      "required": ["type", "event"],
+      "properties": {
+        "type": { "const": "system" },
+        "event": {
+          "enum": ["room-not-found", "room-full", "invalid-message", "joined", "peer-joined", "peer-left", "peer-list"]
+        },
+        "peerId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "peers": {
+          "type": "array",
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/peer" }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

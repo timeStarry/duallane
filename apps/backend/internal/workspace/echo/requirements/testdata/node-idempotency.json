@@ -1,0 +1,372 @@
+[
+  {
+    "name": "plain",
+    "input": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "type": "requirement",
+      "title": "A small request",
+      "detail": "Synthetic detail",
+      "scenario": "Synthetic scenario",
+      "expectedResult": "Synthetic result",
+      "relatedLink": null,
+      "idempotencyKey": "plain"
+    },
+    "relatedLink": null,
+    "hash": "22afbdeb20c5290e2e454f9c11b4df84a326c86625dc547c181d61ae2c302f37",
+    "transition": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "publicId": "REQ-2026-0001",
+      "toState": "collected",
+      "expectedRevision": 1,
+      "response": "A < B & C line",
+      "idempotencyKey": "transition-plain"
+    },
+    "transitionHash": "d2171e61152fc0d1697dc59f76bba411a5343e6aa75bdcf137414f72aa0978a8"
+  },
+  {
+    "name": "html",
+    "input": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "type": "requirement",
+      "title": "A < B & B > C",
+      "detail": "Synthetic detail",
+      "scenario": "Synthetic scenario",
+      "expectedResult": "Synthetic result",
+      "relatedLink": "https://example.com/?a=1&b=2",
+      "idempotencyKey": "html"
+    },
+    "relatedLink": "https://example.com/?a=1&b=2",
+    "hash": "ff7533d9785b3482141c185f172ab152f60abbc8560c1feb67781c8674e24819",
+    "transition": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "publicId": "REQ-2026-0002",
+      "toState": "collected",
+      "expectedRevision": 1,
+      "response": "A < B & C line",
+      "idempotencyKey": "transition-html"
+    },
+    "transitionHash": "2e0096b5a444a86d202a888041df1611c551e9b26cd6a49fa4abcbe131dc0111"
+  },
+  {
+    "name": "unicode-separators",
+    "input": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "type": "requirement",
+      "title": "first second third",
+      "detail": "Synthetic detail",
+      "scenario": "Synthetic scenario",
+      "expectedResult": "Synthetic result",
+      "relatedLink": null,
+      "idempotencyKey": "unicode-separators"
+    },
+    "relatedLink": null,
+    "hash": "0be0623cdb6138a56f95ae1e7c809dba907000c035d4a566b5a45ed0fca1a2b4",
+    "transition": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "publicId": "REQ-2026-0003",
+      "toState": "collected",
+      "expectedRevision": 1,
+      "response": "A < B & C line",
+      "idempotencyKey": "transition-unicode-separators"
+    },
+    "transitionHash": "24298ef913c14da8fdfc318c41fb147d761fb44de52d08545f48b698a3b7c0a1"
+  },
+  {
+    "name": "literal-escapes",
+    "input": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "type": "requirement",
+      "title": "literal \\u2028 and \\\\u2029 and \\\"quote",
+      "detail": "Synthetic detail",
+      "scenario": "Synthetic scenario",
+      "expectedResult": "Synthetic result",
+      "relatedLink": null,
+      "idempotencyKey": "literal-escapes"
+    },
+    "relatedLink": null,
+    "hash": "f050cf1059d9abc0986ce816b924cc82f2d9448c0ba13ab40e7dd04edd9321d2",
+    "transition": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "publicId": "REQ-2026-0004",
+      "toState": "collected",
+      "expectedRevision": 1,
+      "response": "A < B & C line",
+      "idempotencyKey": "transition-literal-escapes"
+    },
+    "transitionHash": "791443f31dde3a69ea62df4a3ad1a1e22b1c216bed24e8f0219e600579dac5c4"
+  },
+  {
+    "name": "default-port",
+    "input": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "type": "requirement",
+      "title": "Synthetic request",
+      "detail": "Synthetic detail",
+      "scenario": "Synthetic scenario",
+      "expectedResult": "Synthetic result",
+      "relatedLink": "https://EXAMPLE.com:443",
+      "idempotencyKey": "default-port"
+    },
+    "relatedLink": "https://example.com/",
+    "hash": "0b56def611b75c7a9209655a51c253aacd56df7b2db5a5c666ad099e9f32df4d",
+    "transition": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "publicId": "REQ-2026-0005",
+      "toState": "collected",
+      "expectedRevision": 1,
+      "response": "A < B & C line",
+      "idempotencyKey": "transition-default-port"
+    },
+    "transitionHash": "b2ea6955612b2d19df57686195bb257e1afce97c74b3fa2ad903921cdc33d6ba"
+  },
+  {
+    "name": "idn",
+    "input": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "type": "requirement",
+      "title": "Synthetic request",
+      "detail": "Synthetic detail",
+      "scenario": "Synthetic scenario",
+      "expectedResult": "Synthetic result",
+      "relatedLink": "https://例子.测试/反馈",
+      "idempotencyKey": "idn"
+    },
+    "relatedLink": "https://xn--fsqu00a.xn--0zwm56d/%E5%8F%8D%E9%A6%88",
+    "hash": "6e79d74b99d7cd2aded3a6603559434a895a18af344bddbb123af9976d48151d",
+    "transition": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "publicId": "REQ-2026-0006",
+      "toState": "collected",
+      "expectedRevision": 1,
+      "response": "A < B & C line",
+      "idempotencyKey": "transition-idn"
+    },
+    "transitionHash": "2a074d2d6b9154aa1a770780150d85ba81fecd9668e3d6ea4a7b3f8adc894508"
+  },
+  {
+    "name": "dot-path",
+    "input": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "type": "requirement",
+      "title": "Synthetic request",
+      "detail": "Synthetic detail",
+      "scenario": "Synthetic scenario",
+      "expectedResult": "Synthetic result",
+      "relatedLink": "https://example.com/a/%2e%2e/b/./c",
+      "idempotencyKey": "dot-path"
+    },
+    "relatedLink": "https://example.com/b/c",
+    "hash": "35cd2d51b78ec3b847bc290d2c620b202f8926fccf19563d46db3d33bb526146",
+    "transition": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "publicId": "REQ-2026-0007",
+      "toState": "collected",
+      "expectedRevision": 1,
+      "response": "A < B & C line",
+      "idempotencyKey": "transition-dot-path"
+    },
+    "transitionHash": "e91c8b69b6d8c7f7b1e1832954fcf759bcfe3752d77a46bb24232f5f2cb31a41"
+  },
+  {
+    "name": "space-path",
+    "input": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "type": "requirement",
+      "title": "Synthetic request",
+      "detail": "Synthetic detail",
+      "scenario": "Synthetic scenario",
+      "expectedResult": "Synthetic result",
+      "relatedLink": "https://example.com/a b?q=a b",
+      "idempotencyKey": "space-path"
+    },
+    "relatedLink": "https://example.com/a%20b?q=a%20b",
+    "hash": "82628f6c3d5ad1fdeac37505bfc260adca683541477fb0f62983c24776a923f8",
+    "transition": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "publicId": "REQ-2026-0008",
+      "toState": "collected",
+      "expectedRevision": 1,
+      "response": "A < B & C line",
+      "idempotencyKey": "transition-space-path"
+    },
+    "transitionHash": "e0a2b52672a4c812dd3ddd6847c508d6fe3c8b80c311943324fa9a558d36249a"
+  },
+  {
+    "name": "special-slashes",
+    "input": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "type": "requirement",
+      "title": "Synthetic request",
+      "detail": "Synthetic detail",
+      "scenario": "Synthetic scenario",
+      "expectedResult": "Synthetic result",
+      "relatedLink": "https:\\\\example.com\\a",
+      "idempotencyKey": "special-slashes"
+    },
+    "relatedLink": "https://example.com/a",
+    "hash": "fcc5da738bbe09e352f24689e047a1a06a965db062427373305f29bfbcd3c1b3",
+    "transition": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "publicId": "REQ-2026-0009",
+      "toState": "collected",
+      "expectedRevision": 1,
+      "response": "A < B & C line",
+      "idempotencyKey": "transition-special-slashes"
+    },
+    "transitionHash": "be0075e7765868f3b5e0401334d964e494f11fbf40adfe64c61b2a1e7822b4ec"
+  },
+  {
+    "name": "bom-trimming",
+    "input": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "type": "requirement",
+      "title": "﻿ Synthetic request ﻿",
+      "detail": "Synthetic detail",
+      "scenario": "Synthetic scenario",
+      "expectedResult": "Synthetic result",
+      "relatedLink": null,
+      "idempotencyKey": "bom-trimming"
+    },
+    "relatedLink": null,
+    "hash": "b684274746bfdb28611ec242acc1ff4b9fe95388211f1d9babc6cbd4100234a8",
+    "transition": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "publicId": "REQ-2026-0010",
+      "toState": "collected",
+      "expectedRevision": 1,
+      "response": "A < B & C line",
+      "idempotencyKey": "transition-bom-trimming"
+    },
+    "transitionHash": "01ded07144acde8259f8498949887201dbfd4456b5e3da0d177f96f77e9e698c"
+  },
+  {
+    "name": "next-line-rejected",
+    "input": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "type": "requirement",
+      "title": "Synthetic request",
+      "detail": "Synthetic detail",
+      "scenario": "Synthetic scenario",
+      "expectedResult": "Synthetic result",
+      "relatedLink": null,
+      "idempotencyKey": "next-line-rejected"
+    },
+    "error": "echo.title_invalid"
+  },
+  {
+    "name": "private-numeric",
+    "input": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "type": "requirement",
+      "title": "Synthetic request",
+      "detail": "Synthetic detail",
+      "scenario": "Synthetic scenario",
+      "expectedResult": "Synthetic result",
+      "relatedLink": "http://2130706433/private",
+      "idempotencyKey": "private-numeric"
+    },
+    "error": "echo.related_link_invalid"
+  },
+  {
+    "name": "empty-duplicate",
+    "input": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "type": "requirement",
+      "title": "Synthetic request",
+      "detail": "Synthetic detail",
+      "scenario": "Synthetic scenario",
+      "expectedResult": "Synthetic result",
+      "relatedLink": null,
+      "idempotencyKey": "empty-duplicate"
+    },
+    "relatedLink": null,
+    "hash": "b684274746bfdb28611ec242acc1ff4b9fe95388211f1d9babc6cbd4100234a8",
+    "transition": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "publicId": "REQ-2026-0011",
+      "toState": "collected",
+      "expectedRevision": 1,
+      "response": "A < B & C line",
+      "idempotencyKey": "transition-empty-duplicate",
+      "duplicateOfPublicId": ""
+    },
+    "transitionHash": "5da5ed077e6027f4a048b64409e1cb839da554dcee1748983fd3ae02d3233638"
+  },
+  {
+    "name": "null-duplicate",
+    "input": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "type": "requirement",
+      "title": "Synthetic request",
+      "detail": "Synthetic detail",
+      "scenario": "Synthetic scenario",
+      "expectedResult": "Synthetic result",
+      "relatedLink": null,
+      "idempotencyKey": "null-duplicate"
+    },
+    "relatedLink": null,
+    "hash": "b684274746bfdb28611ec242acc1ff4b9fe95388211f1d9babc6cbd4100234a8",
+    "transition": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "publicId": "REQ-2026-0012",
+      "toState": "collected",
+      "expectedRevision": 1,
+      "response": "A < B & C line",
+      "idempotencyKey": "transition-null-duplicate",
+      "duplicateOfPublicId": null
+    },
+    "transitionHash": "a8ae01626a674cc0048a7cd8b4cc6de73cbe1b07d4a4e6ac27041cf2826db952"
+  },
+  {
+    "name": "private-ipv6",
+    "input": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "type": "requirement",
+      "title": "Synthetic request",
+      "detail": "Synthetic detail",
+      "scenario": "Synthetic scenario",
+      "expectedResult": "Synthetic result",
+      "relatedLink": "http://[::1]/private",
+      "idempotencyKey": "private-ipv6"
+    },
+    "relatedLink": "http://[::1]/private",
+    "hash": "d97ba9b8508b674e76cb6252d2db463972d405abe2b25b860dd76e11a18b39f3",
+    "transition": {
+      "actorId": "usr_owner",
+      "spaceId": "spc_default",
+      "publicId": "REQ-2026-0013",
+      "toState": "collected",
+      "expectedRevision": 1,
+      "response": "A < B & C line",
+      "idempotencyKey": "transition-private-ipv6"
+    },
+    "transitionHash": "289eedbaee479479062b08a01da3f7de6e720cbb00891f317a90e898675084a4"
+  }
+]

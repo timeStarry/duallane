@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "nodeRoutes": "apps/backend/api/node-routes.json",
+    "routeSource": "apps/web/server/index.mjs",
+    "fixtureRuntime": "apps/web/server/services/test-database.mjs"
+  },
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/api/workspace/invites",
+      "nodePath": "/api/workspace/invites",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/invites/{code}/accept",
+      "nodePath": "/api/workspace/invites/:code/accept",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/invites/{inviteId}/revoke",
+      "nodePath": "/api/workspace/invites/:inviteId/revoke",
+      "source": "apps/web/server/index.mjs"
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "create-requires-session",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/invites",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "defaultRole": "member"
+        }
+      },
+      "response": {
+        "status": 401,
+        "body": {
+          "error": {
+            "code": "auth.required",
+            "message": "请先登录共享空间"
+          }
+        }
+      }
+    },
+    {
+      "name": "create-member-invite",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/invites",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "code": "INVITE-CONTRACT-MEMBER",
+          "defaultRole": "member",
+          "maxUses": 1,
+          "expiresInHours": 168
+        }
+      },
+      "response": {
+        "status": 201,
+        "body": {
+          "invite": {
+            "id": "inv_generated",
+            "code": "INVITE-CONTRACT-MEMBER",
+            "codePreview": "INVI...MBER",
+            "defaultRole": "member",
+            "maxUses": 1,
+            "uses": 0,
+            "expiresAt": "2026-01-01T00:00:00.000Z",
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "inviteUrl": "https://workspace.example.test/workspace?invite=INVITE-CONTRACT-MEMBER"
+          }
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "invite.create",
+          "targetType": "invite",
+          "result": "success"
+        }
+      }
+    },
+    {
+      "name": "accept-invite",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/invites/INVITE-CONTRACT-MEMBER/accept",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "githubId": "github-invite-contract-member",
+          "githubLogin": "invite-contract-member",
+          "displayName": "Invite Contract Member"
+        }
+      },
+      "response": {
+        "status": 201,
+        "body": {
+          "user": {
+            "id": "usr_invite_contract_member",
+            "githubLogin": "invite-contract-member",
+            "displayName": "invite-contract-member",
+            "nickname": "invite-contract-member",
+            "avatarUrl": null,
+            "searchDiscoverable": false,
+            "kind": "human",
+            "role": "member",
+            "joinedAt": "2026-01-01T00:00:00.000Z"
+          }
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "invite.accept",
+          "targetType": "invite",
+          "result": "success"
+        }
+      }
+    },
+    {
+      "name": "revoke-invite",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/invites/inv_generated/revoke",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "invite": {
+            "id": "inv_generated",
+            "revokedAt": "2026-01-01T00:00:00.000Z"
+          }
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "invite.revoke",
+          "targetType": "invite",
+          "result": "success"
+        }
+      }
+    }
+  ]
+}

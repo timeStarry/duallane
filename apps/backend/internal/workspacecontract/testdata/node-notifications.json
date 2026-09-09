@@ -1,0 +1,496 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "nodeRoutes": "apps/backend/api/node-routes.json",
+    "routeSource": "apps/web/server/index.mjs",
+    "fixtureRuntime": "apps/web/server/services/test-database.mjs"
+  },
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/api/workspace/me/notification-email/challenges",
+      "nodePath": "/api/workspace/me/notification-email/challenges",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/me/notification-email/use-github",
+      "nodePath": "/api/workspace/me/notification-email/use-github",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/me/notification-email/verify",
+      "nodePath": "/api/workspace/me/notification-email/verify",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/me/notifications",
+      "nodePath": "/api/workspace/me/notifications",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/me/notifications",
+      "nodePath": "/api/workspace/me/notifications",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/me/ntfy",
+      "nodePath": "/api/workspace/me/ntfy",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/me/ntfy",
+      "nodePath": "/api/workspace/me/ntfy",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/me/ntfy/rotate",
+      "nodePath": "/api/workspace/me/ntfy/rotate",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/settings/email",
+      "nodePath": "/api/workspace/settings/email",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/settings/email",
+      "nodePath": "/api/workspace/settings/email",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/settings/email/test",
+      "nodePath": "/api/workspace/settings/email/test",
+      "source": "apps/web/server/index.mjs"
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "notifications-requires-session",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/me/notifications",
+        "headers": {}
+      },
+      "response": {
+        "status": 401,
+        "body": {
+          "error": {
+            "code": "auth.required",
+            "message": "请先登录共享空间"
+          }
+        }
+      }
+    },
+    {
+      "name": "notifications-get",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/me/notifications",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "notifications": {
+            "email": "owner@example.test",
+            "maskedEmail": "t******@qq.com",
+            "emailSource": "github",
+            "emailVerified": true,
+            "githubEmail": "owner@example.test",
+            "enabled": true,
+            "immediateEnabled": false,
+            "digestEnabled": true,
+            "mailAvailable": false
+          }
+        }
+      }
+    },
+    {
+      "name": "ntfy-get",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/me/ntfy",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ntfy": {
+            "enabled": true,
+            "topic": "duallane-owner-initial",
+            "serverUrl": "https://ntfy.example.test",
+            "subscriptionUrl": "https://ntfy.example.test/duallane-owner-initial",
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "rotatedAt": null,
+            "updatedAt": "2026-01-01T00:00:00.000Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "ntfy-patch-disabled",
+      "request": {
+        "method": "PATCH",
+        "path": "/api/workspace/me/ntfy",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "enabled": false
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ntfy": {
+            "enabled": false,
+            "topic": "duallane-owner-initial",
+            "serverUrl": "https://ntfy.example.test",
+            "subscriptionUrl": "https://ntfy.example.test/duallane-owner-initial",
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "rotatedAt": null,
+            "updatedAt": "2026-01-01T00:00:00.000Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "ntfy-patch-enabled",
+      "request": {
+        "method": "PATCH",
+        "path": "/api/workspace/me/ntfy",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "enabled": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ntfy": {
+            "enabled": true,
+            "topic": "duallane-owner-initial",
+            "serverUrl": "https://ntfy.example.test",
+            "subscriptionUrl": "https://ntfy.example.test/duallane-owner-initial",
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "rotatedAt": null,
+            "updatedAt": "2026-01-01T00:00:00.000Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "ntfy-rotate",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/me/ntfy/rotate",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ntfy": {
+            "enabled": true,
+            "topic": "duallane-owner-rotated",
+            "serverUrl": "https://ntfy.example.test",
+            "subscriptionUrl": "https://ntfy.example.test/duallane-owner-rotated",
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "rotatedAt": "2026-01-01T00:00:00.000Z",
+            "updatedAt": "2026-01-01T00:00:00.000Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "email-settings-get-before-config",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/settings/email",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "settings": {
+            "enabled": false,
+            "smtpHost": "",
+            "smtpPort": 587,
+            "encryption": "starttls",
+            "username": "",
+            "fromAddress": "",
+            "fromName": "DualLane",
+            "passwordConfigured": false,
+            "lastTestedAt": null,
+            "lastTestStatus": null,
+            "lastTestErrorCode": null,
+            "failedJobCount": 0,
+            "lastDeliveryAt": null
+          }
+        }
+      }
+    },
+    {
+      "name": "email-settings-test",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/settings/email/test",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "smtpHost": "smtp.example.test",
+          "smtpPort": 2525,
+          "encryption": "starttls",
+          "fromAddress": "noreply@example.test",
+          "fromName": "DualLane Contract"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "testedAt": "2026-01-01T00:00:00.000Z",
+          "testProof": "fixture-test-proof",
+          "recipient": "t******@qq.com"
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "email.smtp_test",
+          "targetType": "email_settings",
+          "result": "success"
+        }
+      }
+    },
+    {
+      "name": "email-settings-put",
+      "request": {
+        "method": "PUT",
+        "path": "/api/workspace/settings/email",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "smtpHost": "smtp.example.test",
+          "smtpPort": 2525,
+          "encryption": "starttls",
+          "fromAddress": "noreply@example.test",
+          "fromName": "DualLane Contract",
+          "enabled": true,
+          "testProof": "fixture-test-proof"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "settings": {
+            "enabled": true,
+            "smtpHost": "smtp.example.test",
+            "smtpPort": 2525,
+            "encryption": "starttls",
+            "username": "",
+            "fromAddress": "noreply@example.test",
+            "fromName": "DualLane Contract",
+            "passwordConfigured": false,
+            "activeFrom": "2026-01-01T00:00:00.000Z",
+            "lastTestedAt": "2026-01-01T00:00:00.000Z",
+            "lastTestStatus": "success",
+            "lastTestErrorCode": null,
+            "updatedAt": "2026-01-01T00:00:00.000Z",
+            "failedJobCount": 0,
+            "lastDeliveryAt": null
+          }
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "email.smtp_settings_update",
+          "targetType": "email_settings",
+          "result": "success"
+        }
+      }
+    },
+    {
+      "name": "email-settings-get",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/settings/email",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "settings": {
+            "enabled": true,
+            "smtpHost": "smtp.example.test",
+            "smtpPort": 2525,
+            "encryption": "starttls",
+            "username": "",
+            "fromAddress": "noreply@example.test",
+            "fromName": "DualLane Contract",
+            "passwordConfigured": false,
+            "activeFrom": "2026-01-01T00:00:00.000Z",
+            "lastTestedAt": "2026-01-01T00:00:00.000Z",
+            "lastTestStatus": "success",
+            "lastTestErrorCode": null,
+            "updatedAt": "2026-01-01T00:00:00.000Z",
+            "failedJobCount": 0,
+            "lastDeliveryAt": null
+          }
+        }
+      }
+    },
+    {
+      "name": "email-challenge-create",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/me/notification-email/challenges",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "email": "notify@example.test"
+        }
+      },
+      "response": {
+        "status": 201,
+        "body": {
+          "challengeId": "generated_challenge",
+          "pendingEmail": "n*****@example.test",
+          "expiresAt": "2026-01-01T00:00:00.000Z",
+          "resendAfterSeconds": 60
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "email.verification_send",
+          "targetType": "email_settings",
+          "result": "success"
+        }
+      }
+    },
+    {
+      "name": "email-challenge-verify",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/me/notification-email/verify",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "challengeId": "generated_challenge",
+          "code": "123456"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "notifications": {
+            "email": "notify@example.test",
+            "maskedEmail": "n*****@example.test",
+            "emailSource": "custom",
+            "emailVerified": true,
+            "githubEmail": "owner@example.test",
+            "enabled": true,
+            "immediateEnabled": false,
+            "digestEnabled": true,
+            "mailAvailable": true
+          }
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "email.verification_confirm",
+          "targetType": "email_settings",
+          "result": "success"
+        }
+      }
+    },
+    {
+      "name": "email-use-github",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/me/notification-email/use-github",
+        "headers": {
+          "x-workspace-user-id": "usr_owner"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "notifications": {
+            "email": "owner@example.test",
+            "maskedEmail": "t******@qq.com",
+            "emailSource": "github",
+            "emailVerified": true,
+            "githubEmail": "owner@example.test",
+            "enabled": true,
+            "immediateEnabled": false,
+            "digestEnabled": true,
+            "mailAvailable": true
+          }
+        }
+      }
+    },
+    {
+      "name": "notifications-patch",
+      "request": {
+        "method": "PATCH",
+        "path": "/api/workspace/me/notifications",
+        "headers": {
+          "x-workspace-user-id": "usr_owner",
+          "content-type": "application/json"
+        },
+        "body": {
+          "enabled": true,
+          "immediateEnabled": true,
+          "digestEnabled": false
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "notifications": {
+            "email": "owner@example.test",
+            "maskedEmail": "t******@qq.com",
+            "emailSource": "github",
+            "emailVerified": true,
+            "githubEmail": "owner@example.test",
+            "enabled": true,
+            "immediateEnabled": true,
+            "digestEnabled": false,
+            "mailAvailable": true
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+**
+!apps/
+!apps/backend/
+!apps/backend/**
+**/.env*
+**/.secrets/**
+**/node_modules/**
+**/data/**
+**/uploads/**
+**/backups/**
+**/*.log
+**/*.local
+apps/backend/bin/**

@@ -1,0 +1,69 @@
+{
+  "cases": [
+    {
+      "name": "nel-is-not-javascript-whitespace",
+      "kind": "wrapped",
+      "prefix": "\u0085",
+      "value": "feedback",
+      "suffix": "\u0085",
+      "expect": { "ok": true, "type": "requirement" }
+    },
+    {
+      "name": "bom-is-javascript-whitespace",
+      "kind": "wrapped",
+      "prefix": "\ufeff",
+      "value": "feedback",
+      "suffix": "\ufeff",
+      "expect": { "ok": true, "type": "problem" }
+    },
+    {
+      "name": "plain-utf8-4096",
+      "kind": "repeat",
+      "value": "x",
+      "count": 4096,
+      "expect": { "ok": true, "type": "requirement" }
+    },
+    {
+      "name": "plain-utf8-4097-rejected",
+      "kind": "repeat",
+      "value": "x",
+      "count": 4097,
+      "expect": { "ok": false, "code": "command.arguments_invalid" }
+    },
+    {
+      "name": "quoted-utf8-4097-skips-limit-check",
+      "kind": "quoted-repeat",
+      "value": "x",
+      "count": 4097,
+      "expect": { "ok": true, "type": "requirement" }
+    },
+    {
+      "name": "cjk-utf8-4095",
+      "kind": "repeat",
+      "value": "中",
+      "count": 1365,
+      "expect": { "ok": true, "type": "requirement" }
+    },
+    {
+      "name": "cjk-utf8-4098-rejected",
+      "kind": "repeat",
+      "value": "中",
+      "count": 1366,
+      "expect": { "ok": false, "code": "command.arguments_invalid" }
+    },
+    {
+      "name": "astral-utf8-4096",
+      "kind": "repeat",
+      "value": "𝄞",
+      "count": 1024,
+      "expect": { "ok": true, "type": "requirement" }
+    },
+    {
+      "name": "astral-utf8-4100-rejected",
+      "kind": "repeat",
+      "value": "𝄞",
+      "count": 1025,
+      "expect": { "ok": false, "code": "command.arguments_invalid" }
+    }
+  ]
+}

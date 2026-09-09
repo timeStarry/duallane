@@ -1,0 +1,515 @@
+[
+  {
+    "name": "created",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": " body \n text ",
+      "participantCount": 1,
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "expected": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": "body text",
+      "participantCount": 1,
+      "status": "open",
+      "allowSyncToGroup": true
+    }
+  },
+  {
+    "name": "strip private fields",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": " body \n text ",
+      "participantCount": 1,
+      "status": "open",
+      "allowSyncToGroup": 1,
+      "internalSecret": "synthetic-hidden"
+    },
+    "expected": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": "body text",
+      "participantCount": 1,
+      "status": "open",
+      "allowSyncToGroup": false
+    }
+  },
+  {
+    "name": "count 0",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": " body \n text ",
+      "participantCount": null,
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "expected": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": "body text",
+      "participantCount": 0,
+      "status": "open",
+      "allowSyncToGroup": true
+    }
+  },
+  {
+    "name": "count 1",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": " body \n text ",
+      "participantCount": true,
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "expected": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": "body text",
+      "participantCount": 1,
+      "status": "open",
+      "allowSyncToGroup": true
+    }
+  },
+  {
+    "name": "count 2",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": " body \n text ",
+      "participantCount": [],
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "expected": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": "body text",
+      "participantCount": 0,
+      "status": "open",
+      "allowSyncToGroup": true
+    }
+  },
+  {
+    "name": "count 3",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": " body \n text ",
+      "participantCount": [
+        null
+      ],
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "expected": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": "body text",
+      "participantCount": 0,
+      "status": "open",
+      "allowSyncToGroup": true
+    }
+  },
+  {
+    "name": "count 4",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": " body \n text ",
+      "participantCount": [
+        [
+          "2"
+        ]
+      ],
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "expected": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": "body text",
+      "participantCount": 2,
+      "status": "open",
+      "allowSyncToGroup": true
+    }
+  },
+  {
+    "name": "count 5",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": " body \n text ",
+      "participantCount": "0x10",
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "expected": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": "body text",
+      "participantCount": 16,
+      "status": "open",
+      "allowSyncToGroup": true
+    }
+  },
+  {
+    "name": "count 6",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": " body \n text ",
+      "participantCount": "1e3",
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "expected": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": "body text",
+      "participantCount": 1000,
+      "status": "open",
+      "allowSyncToGroup": true
+    }
+  },
+  {
+    "name": "count 7",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": " body \n text ",
+      "participantCount": 1000000,
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "expected": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": "body text",
+      "participantCount": 1000000,
+      "status": "open",
+      "allowSyncToGroup": true
+    }
+  },
+  {
+    "name": "count 8",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": " body \n text ",
+      "participantCount": 1000001,
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "error": {
+      "code": "card.domain_invalid",
+      "message": "话题卡片数据无效"
+    }
+  },
+  {
+    "name": "count 9",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": " body \n text ",
+      "participantCount": -1,
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "error": {
+      "code": "card.domain_invalid",
+      "message": "话题卡片数据无效"
+    }
+  },
+  {
+    "name": "count 10",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": " body \n text ",
+      "participantCount": 1.5,
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "error": {
+      "code": "card.domain_invalid",
+      "message": "话题卡片数据无效"
+    }
+  },
+  {
+    "name": "count 11",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": " body \n text ",
+      "participantCount": "1_0",
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "error": {
+      "code": "card.domain_invalid",
+      "message": "话题卡片数据无效"
+    }
+  },
+  {
+    "name": "count 12",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": " body \n text ",
+      "participantCount": "0x1p2",
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "error": {
+      "code": "card.domain_invalid",
+      "message": "话题卡片数据无效"
+    }
+  },
+  {
+    "name": "count 13",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": " body \n text ",
+      "participantCount": [
+        true
+      ],
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "error": {
+      "code": "card.domain_invalid",
+      "message": "话题卡片数据无效"
+    }
+  },
+  {
+    "name": "count 14",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": " body \n text ",
+      "participantCount": [
+        1,
+        2
+      ],
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "error": {
+      "code": "card.domain_invalid",
+      "message": "话题卡片数据无效"
+    }
+  },
+  {
+    "name": "missing count",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": " body \n text ",
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "error": {
+      "code": "card.domain_invalid",
+      "message": "话题卡片数据无效"
+    }
+  },
+  {
+    "name": "invalid title",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "[bad]",
+      "descriptionPreview": " body \n text ",
+      "participantCount": 1,
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "error": {
+      "code": "topic.invalid_title",
+      "message": "话题标题无效"
+    }
+  },
+  {
+    "name": "BOM and NEXT LINE preview",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "﻿标题﻿",
+      "descriptionPreview": "﻿ab﻿c﻿",
+      "participantCount": 1,
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "expected": {
+      "topicId": "top_fixture",
+      "title": "标题",
+      "descriptionPreview": "ab c",
+      "participantCount": 1,
+      "status": "open",
+      "allowSyncToGroup": true
+    }
+  },
+  {
+    "name": "truncate preview",
+    "cardType": "workspace.topic-created",
+    "payload": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "participantCount": 1,
+      "status": "open",
+      "allowSyncToGroup": true
+    },
+    "expected": {
+      "topicId": "top_fixture",
+      "title": "话题",
+      "descriptionPreview": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀…",
+      "participantCount": 1,
+      "status": "open",
+      "allowSyncToGroup": true
+    }
+  },
+  {
+    "name": "synced",
+    "cardType": "workspace.topic-message-synced",
+    "payload": {
+      "topicId": "top_fixture",
+      "topicMessageId": "message-fixture",
+      "projectionId": "projection-fixture",
+      "projectionType": "group_sync",
+      "title": "话题",
+      "messagePreview": " preview \n body ",
+      "status": "closed"
+    },
+    "expected": {
+      "topicId": "top_fixture",
+      "topicMessageId": "message-fixture",
+      "projectionId": "projection-fixture",
+      "projectionType": "group_sync",
+      "title": "话题",
+      "messagePreview": "preview body",
+      "status": "closed"
+    }
+  },
+  {
+    "name": "synced strips controls",
+    "cardType": "workspace.topic-message-synced",
+    "payload": {
+      "topicId": "top_fixture",
+      "topicMessageId": "message-fixture",
+      "projectionId": "projection-fixture",
+      "projectionType": "group_sync",
+      "title": "\u0001Title",
+      "messagePreview": " preview \n body ",
+      "status": "closed",
+      "secret": "synthetic-hidden"
+    },
+    "expected": {
+      "topicId": "top_fixture",
+      "topicMessageId": "message-fixture",
+      "projectionId": "projection-fixture",
+      "projectionType": "group_sync",
+      "title": "Title",
+      "messagePreview": "preview body",
+      "status": "closed"
+    }
+  },
+  {
+    "name": "bad projection type",
+    "cardType": "workspace.topic-message-synced",
+    "payload": {
+      "topicId": "top_fixture",
+      "topicMessageId": "message-fixture",
+      "projectionId": "projection-fixture",
+      "projectionType": "topic",
+      "title": "话题",
+      "messagePreview": " preview \n body ",
+      "status": "closed"
+    },
+    "error": {
+      "code": "card.domain_invalid",
+      "message": "话题同步卡片数据无效"
+    }
+  },
+  {
+    "name": "bad status",
+    "cardType": "workspace.topic-message-synced",
+    "payload": {
+      "topicId": "top_fixture",
+      "topicMessageId": "message-fixture",
+      "projectionId": "projection-fixture",
+      "projectionType": "group_sync",
+      "title": "话题",
+      "messagePreview": " preview \n body ",
+      "status": "deleted"
+    },
+    "error": {
+      "code": "card.domain_invalid",
+      "message": "话题同步卡片数据无效"
+    }
+  },
+  {
+    "name": "long sync title allowed",
+    "cardType": "workspace.topic-message-synced",
+    "payload": {
+      "topicId": "top_fixture",
+      "topicMessageId": "message-fixture",
+      "projectionId": "projection-fixture",
+      "projectionType": "group_sync",
+      "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "messagePreview": " preview \n body ",
+      "status": "closed"
+    },
+    "expected": {
+      "topicId": "top_fixture",
+      "topicMessageId": "message-fixture",
+      "projectionId": "projection-fixture",
+      "projectionType": "group_sync",
+      "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "messagePreview": "preview body",
+      "status": "closed"
+    }
+  },
+  {
+    "name": "long sync title rejected",
+    "cardType": "workspace.topic-message-synced",
+    "payload": {
+      "topicId": "top_fixture",
+      "topicMessageId": "message-fixture",
+      "projectionId": "projection-fixture",
+      "projectionType": "group_sync",
+      "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "messagePreview": " preview \n body ",
+      "status": "closed"
+    },
+    "error": {
+      "code": "card.domain_invalid",
+      "message": "话题同步卡片数据无效"
+    }
+  }
+]

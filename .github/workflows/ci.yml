@@ -17,6 +17,100 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  go-quality-gate:
+    name: Go test, race, analysis, build, and PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CGO_ENABLED: "1"
+      CC: gcc
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: duallane
+          POSTGRES_USER: duallane
+          POSTGRES_PASSWORD: duallane-ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U duallane -d duallane"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: apps/backend/go.mod
+          cache-dependency-path: apps/backend/go.sum
+
+      - name: Provision Go native dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y gcc libvips-dev pkg-config
+          command -v gcc
+          command -v pkg-config
+          pkg-config --exists vips
+          test "$(go env CGO_ENABLED)" = "1"
+          printf 'Go: %s\n' "$(go version)"
+          printf 'C compiler: %s\n' "$(gcc --version | sed -n '1p')"
+          printf 'pkg-config: %s\n' "$(pkg-config --version)"
+          printf 'libvips: %s\n' "$(pkg-config --modversion vips)"
+          printf 'CGO_ENABLED: %s\n' "$(go env CGO_ENABLED)"
+          printf 'CC: %s\n' "$(go env CC)"
+
+      - name: Run Go quality gate
+        working-directory: apps/backend
+        run: make verify
+
+      - name: Run PostgreSQL migration integration test
+        working-directory: apps/backend
+        env:
+          TEST_DATABASE_URL: postgres://duallane:duallane-ci-password@127.0.0.1:5432/duallane?sslmode=disable
+        run: make integration-postgres
+
+      - name: Set up pnpm for media owner parity
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+          run_install: false
+
+      - name: Set up Node.js for media owner parity
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install media owner dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Rehearse Node and Go migration owners on PostgreSQL
+        env:
+          TEST_DATABASE_URL: postgres://duallane:duallane-ci-password@127.0.0.1:5432/duallane?sslmode=disable
+          DUALLANE_SCHEMA_COEXISTENCE_ALLOW_SCHEMA_CREATION: "true"
+          DUALLANE_SCHEMA_COEXISTENCE_RUN_PG: "true"
+        run: node --test scripts/backend/schema-coexistence.test.mjs
+
+      - name: Compare actual Node and Go media owners
+        run: node --test scripts/backend/media-compatibility.test.mjs
+
+      - name: Verify shared Node and Go local storage layout
+        run: node scripts/backend/workspace-files-legacy-parity.mjs
+
+      - name: Verify actual Node legacy emotes through Go HTTP and PostgreSQL
+        env:
+          TEST_DATABASE_URL: postgres://duallane:duallane-ci-password@127.0.0.1:5432/duallane?sslmode=disable
+        run: |
+          node --test scripts/backend/workspace-emotes-legacy-parity.test.mjs
+          node scripts/backend/workspace-emotes-legacy-parity.mjs --go
+
   quality-gate:
     name: Test, lint, build, and Chromium E2E
     runs-on: ubuntu-latest
@@ -42,11 +136,65 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
+      - name: Validate backend tooling guards
+        run: node --test .github/tests/ci-go-native-dependencies.test.mjs .github/tests/ci-go-p2p-privacy.test.mjs .github/tests/ci-go-workspace-privacy.test.mjs .github/tests/ci-unit-fixtures.test.mjs scripts/backend/owned-process.test.mjs scripts/backend/p2p-parity.test.mjs scripts/backend/route-inventory.test.mjs scripts/backend/go-workspace-browser.test.mjs scripts/backend/gateway-readonly-smoke.test.mjs scripts/backend/storage-operator-retained.test.mjs
+
+      - name: Validate release ownership and rollback contracts
+        run: node --test scripts/backend/production-deploy.test.mjs scripts/backend/release-activation.test.mjs scripts/backend/release-cleanup.test.mjs scripts/backend/release-go-restore.test.mjs scripts/backend/release-trap-status.test.mjs scripts/backend/release-coordinator.docker.test.mjs scripts/backend/passive-candidate-fixture.test.mjs scripts/backend/go-production-workers.test.mjs scripts/backend/node-runtime-image.test.mjs
+
+      - name: Validate immutable runtime asset packaging
+        run: node --test scripts/backend/docker-runtime-assets.test.mjs
+
+      - name: Validate private Compose recovery snapshots
+        run: node --test scripts/backend/release-compose-snapshot.test.mjs scripts/backend/release-compose-snapshot.docker.test.mjs scripts/backend/release-external-files.test.mjs
+
+      - name: Validate private release checks and data authority
+        env:
+          DUALLANE_RELEASE_DRAIN_COMPOSE_ROUNDTRIP: "1"
+        run: node --test scripts/backend/release-drain-config.test.mjs scripts/backend/release-drain-run.test.mjs scripts/backend/release-node-authority.test.mjs scripts/backend/release-volume-authority.test.mjs
+
+      - name: Validate bounded permission rehearsal and owned cleanup
+        run: node --test scripts/backend/runtime-permissions.test.mjs
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Run tests
+        # SQLite unit doubles create hundreds of tiny WAL commits. Keep their
+        # disposable fixtures off the shared runner disk without changing
+        # SQLite semantics or test deadlines. Do not apply to Go executables,
+        # PostgreSQL, browser processes, builds or production storage.
+        env:
+          TMPDIR: /dev/shm
         run: pnpm test
+
+      - name: Verify Node persisted backend contracts
+        run: |
+          node scripts/backend/echo-requirement-fixtures.mjs --check
+          node scripts/backend/echo-release-fixtures.mjs --check
+          node scripts/backend/echo-solicitation-fixtures.mjs --check
+          node scripts/backend/echo-automation-fixtures.mjs --check
+          node scripts/backend/echo-parser-fixtures.mjs --check
+          node scripts/backend/echo-card-fixtures.mjs
+          node scripts/backend/bot-idempotency-fixtures.mjs
+          node scripts/backend/bot-message-dto-fixtures.mjs
+          node scripts/backend/bot-websocket-fixtures.mjs
+          node scripts/backend/bot-connection-fixtures.mjs
+          node scripts/backend/bot-contract-fixtures.mjs
+          node scripts/backend/bot-feishu-contract.mjs
+          node scripts/backend/bot-feishu-fallback-fixtures.mjs
+          node scripts/backend/feishu-card-converter-golden.mjs
+          node scripts/backend/feishu-card-action-golden.mjs
+          node scripts/backend/route-inventory.mjs --check
+          node scripts/backend/workspace-core-contract.mjs --check
+          node scripts/backend/workspace-markdown-contract.mjs --check
+          node scripts/backend/workspace-emotes-contract.mjs --check
+          node scripts/backend/workspace-files-contract.mjs --check
+          node scripts/backend/workspace-invites-contract.mjs --check
+          node scripts/backend/workspace-notifications-null-fixtures.mjs
+          node scripts/backend/workspace-notifications-contract.mjs --check
+          node scripts/backend/topic-parser-fixtures.mjs
+          node scripts/backend/topic-card-fixtures.mjs
 
       - name: Run type and lint checks
         run: pnpm lint
@@ -86,3 +234,114 @@ jobs:
             test-results/
           if-no-files-found: ignore
           retention-days: 7
+
+  go-workspace-browser:
+    name: Go Workspace Chromium integration and privacy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI: "true"
+      CGO_ENABLED: "1"
+      CC: gcc
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: duallane
+          POSTGRES_USER: duallane
+          POSTGRES_PASSWORD: duallane-ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U duallane -d duallane"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go from the backend module
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: apps/backend/go.mod
+          cache-dependency-path: apps/backend/go.sum
+
+      - name: Provision Go Workspace native dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y gcc libvips-dev pkg-config
+          command -v gcc
+          command -v pkg-config
+          pkg-config --exists vips
+          test "$(go env CGO_ENABLED)" = "1"
+          test "$(go env CC)" = "gcc"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium and system dependencies
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run complete Go Workspace browser gate
+        env:
+          TEST_DATABASE_URL: postgres://duallane:duallane-ci-password@127.0.0.1:5432/duallane?sslmode=disable
+          DUALLANE_GO_E2E_ALLOW_SCHEMA_CREATION: "true"
+        run: pnpm test:e2e:workspace-go
+
+  go-p2p-browser:
+    name: Go P2P Chromium privacy and transfer
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: "true"
+      CGO_ENABLED: "0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: apps/backend/go.mod
+          cache-dependency-path: apps/backend/go.sum
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium and system dependencies
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run Go P2P browser gate
+        run: pnpm test:e2e:p2p-go
+
+      # Do not upload traces, DOM snapshots, raw requests, or P2P content.
+      # The dedicated config disables recording and separates failure output.

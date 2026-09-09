@@ -1,0 +1,16 @@
+[
+  {
+    "name": "default-fallback-preserves-converted-order",
+    "requestJSON": "{\"conversationId\":\"conv-feishu-contract\",\"cardType\":\"feishu.adaptive.v1\",\"schemaVersion\":1,\"fallbackText\":\"审批\",\"payload\":{\"format\":\"duallane.feishu-card.v1\",\"config\":{\"version\":\"1.0\",\"wideScreen\":false},\"header\":{\"title\":\"审批\",\"tone\":\"neutral\"},\"elements\":[{\"type\":\"text\",\"format\":\"plain\",\"text\":\"原始 <&\"}]}}",
+    "requestHash": "d3bb1bcb7f48143ede564fc1b42e9460d244ad260877054085f5d279c3158d8e",
+    "payloadJSON": "{\"format\":\"duallane.feishu-card.v1\",\"config\":{\"version\":\"1.0\",\"wideScreen\":false},\"header\":{\"title\":\"审批\",\"tone\":\"neutral\"},\"elements\":[{\"type\":\"text\",\"format\":\"plain\",\"text\":\"原始 <&\"}]}",
+    "fallbackText": "审批"
+  },
+  {
+    "name": "explicit-fallback-overrides-converter",
+    "requestJSON": "{\"conversationId\":\"conv-feishu-contract\",\"cardType\":\"feishu.adaptive.v1\",\"schemaVersion\":1,\"fallbackText\":\"显式降级\",\"payload\":{\"format\":\"duallane.feishu-card.v1\",\"config\":{\"version\":\"1.0\",\"wideScreen\":true},\"header\":null,\"elements\":[{\"type\":\"text\",\"format\":\"markdown\",\"text\":\"请确认\"}]}}",
+    "requestHash": "a5d10c4aad22b0381087cce1124fda77676174f0bce86c6d667ef4ed4c2cb76c",
+    "payloadJSON": "{\"format\":\"duallane.feishu-card.v1\",\"config\":{\"version\":\"1.0\",\"wideScreen\":true},\"header\":null,\"elements\":[{\"type\":\"text\",\"format\":\"markdown\",\"text\":\"请确认\"}]}",
+    "fallbackText": "显式降级"
+  }
+]

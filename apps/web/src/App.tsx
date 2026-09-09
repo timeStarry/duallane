@@ -116,6 +116,14 @@ import { getWorkspaceEntryUrl, getWorkspaceLoginUrl } from "./workspace-url";
 import { formatWorkspaceConversationTime } from "./workspace-conversation-time";
 import { isPreviewableImageMimeType, renamePastedImageFiles } from "./workspace-image-files";
 import {
+  isWorkspaceBootstrapResponseCurrent,
+  isWorkspaceConversationAccessCurrent,
+  isWorkspaceConversationListResponseCurrent,
+  mergeWorkspaceMessageWindow,
+  shouldAdvanceWorkspaceConversationHistoryEpoch,
+  type WorkspaceMessageWindowMergeContext
+} from "./workspace-conversation-state";
+import {
   classifyWorkspaceFile,
   workspaceFileMatchesCategory,
   type WorkspaceFileCategory,
@@ -285,6 +293,20 @@ type WorkspacePermissions = {
   canDownload: boolean;
   canViewOperationRecords: boolean;
 };
+
+function workspacePermissionsChanged(previous: WorkspacePermissions, next: WorkspacePermissions) {
+  return previous.canCreateMemberInvite !== next.canCreateMemberInvite ||
+    previous.canCreatePrivilegedInvite !== next.canCreatePrivilegedInvite ||
+    previous.canManageMemberVisibility !== next.canManageMemberVisibility ||
+    previous.canManageEmailSettings !== next.canManageEmailSettings ||
+    previous.canReadConversations !== next.canReadConversations ||
+    previous.canCreateGroup !== next.canCreateGroup ||
+    previous.canCreateDirect !== next.canCreateDirect ||
+    previous.canUpload !== next.canUpload ||
+    previous.canDownload !== next.canDownload ||
+    previous.canViewOperationRecords !== next.canViewOperationRecords;
+}
+
 type WorkspacePolicy = {
   dailyQuotaBytes: number;
   usedTodayBytes?: number;
@@ -438,6 +460,16 @@ type WorkspaceConversation = {
   };
   members: WorkspaceUser[];
   latestMessages: WorkspaceMessage[];
+};
+type WorkspaceConversationMessageRequest = {
+  kind: "list" | "messages" | "around" | "read" | "history";
+  baselineMessages: WorkspaceMessage[];
+  requestRevision: number;
+  requestGeneration: number;
+  sessionEpoch: number;
+  accessEpoch: number;
+  membershipEpoch: number;
+  historyEpoch: number;
 };
 type WorkspaceFile = WorkspaceAttachment & {
   uploaderId: string;
@@ -1662,31 +1694,44 @@ function upsertWorkspaceMessageList(messages: WorkspaceMessage[], message: Works
   return messages.length > 20 ? next : next.slice(-20);
 }
 
-function mergeWorkspaceConversation(local: WorkspaceConversation, incoming: WorkspaceConversation) {
+function mergeWorkspaceConversation(
+  local: WorkspaceConversation,
+  incoming: WorkspaceConversation,
+  messageMergeContext?: WorkspaceMessageWindowMergeContext<WorkspaceMessage>
+) {
   return {
     ...incoming,
-    latestMessages:
-      local.latestMessages.length > incoming.latestMessages.length
-        ? local.latestMessages
-        : incoming.latestMessages
+    latestMessages: mergeWorkspaceMessageWindow(local.latestMessages, incoming.latestMessages, messageMergeContext)
   };
 }
 
-function upsertWorkspaceConversationList(conversations: WorkspaceConversation[], conversation: WorkspaceConversation) {
+function upsertWorkspaceConversationList(
+  conversations: WorkspaceConversation[],
+  conversation: WorkspaceConversation,
+  messageMergeContext?: WorkspaceMessageWindowMergeContext<WorkspaceMessage>
+) {
   const hasConversation = conversations.some((item) => item.id === conversation.id);
   return sortWorkspaceConversations(
     hasConversation
-      ? conversations.map((item) => item.id === conversation.id ? mergeWorkspaceConversation(item, conversation) : item)
+      ? conversations.map((item) => item.id === conversation.id
+        ? mergeWorkspaceConversation(item, conversation, messageMergeContext)
+        : item)
       : [conversation, ...conversations]
   );
 }
 
-function mergeWorkspaceConversationList(local: WorkspaceConversation[], incoming: WorkspaceConversation[]) {
+function mergeWorkspaceConversationList(
+  local: WorkspaceConversation[],
+  incoming: WorkspaceConversation[],
+  messageMergeContexts?: ReadonlyMap<string, WorkspaceMessageWindowMergeContext<WorkspaceMessage>>
+) {
   const localById = new Map(local.map((conversation) => [conversation.id, conversation]));
   return sortWorkspaceConversations(
     incoming.map((conversation) => {
       const existing = localById.get(conversation.id);
-      return existing ? mergeWorkspaceConversation(existing, conversation) : conversation;
+      return existing
+        ? mergeWorkspaceConversation(existing, conversation, messageMergeContexts?.get(conversation.id))
+        : conversation;
     })
   );
 }
@@ -2638,6 +2683,19 @@ export function App() {
   const workspaceSendingRef = useRef(false);
   const workspaceReactionLocksRef = useRef<Set<string>>(new Set());
   const workspaceReactionEventSeqRef = useRef<Map<string, number>>(new Map());
+  const workspaceSessionEpochRef = useRef(0);
+  const workspaceAccessEpochRef = useRef(0);
+  const workspaceBootstrapRequestGenerationRef = useRef(0);
+  const workspaceCanReadConversationsRef = useRef(false);
+  const workspaceCanDownloadRef = useRef(false);
+  const workspaceConversationsRef = useRef<WorkspaceConversation[]>([]);
+  const workspaceConversationMembershipEpochRef = useRef<Map<string, number>>(new Map());
+  const workspaceConversationHistoryEpochRef = useRef<Map<string, number>>(new Map());
+  const workspaceConversationMessageRevisionRef = useRef<Map<string, number>>(new Map());
+  const workspaceConversationListRequestTokenRef = useRef(0);
+  const workspaceConversationResponseGenerationRef = useRef<
+    Map<string, Map<WorkspaceConversationMessageRequest["kind"], number>>
+  >(new Map());
   const versionCheckInFlightRef = useRef(false);
   const versionCheckAbortControllerRef = useRef<AbortController | null>(null);
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
@@ -2747,6 +2805,173 @@ export function App() {
   const workspaceSelectedConversation = workspaceConversations.find(
     (conversation) => conversation.id === workspaceSelectedConversationId
   );
+
+  function currentWorkspaceConversationEpoch(
+    epochs: Map<string, number>,
+    conversationId: string
+  ) {
+    return epochs.get(conversationId) ?? 0;
+  }
+
+  function advanceWorkspaceConversationEpoch(
+    epochs: Map<string, number>,
+    conversationId: string
+  ) {
+    if (!conversationId) return;
+    epochs.set(conversationId, currentWorkspaceConversationEpoch(epochs, conversationId) + 1);
+  }
+
+  function advanceWorkspaceAccessEpoch() {
+    workspaceAccessEpochRef.current += 1;
+  }
+
+  function invalidateWorkspaceConversationAccess(conversationId?: string, removeConversation = true) {
+    advanceWorkspaceAccessEpoch();
+    if (conversationId) {
+      advanceWorkspaceConversationEpoch(workspaceConversationMembershipEpochRef.current, conversationId);
+      workspaceMarkReadInFlightRef.current.delete(conversationId);
+      setWorkspaceHistoryLoadingByConversation((current) => {
+        if (!(conversationId in current)) return current;
+        const { [conversationId]: _removed, ...rest } = current;
+        return rest;
+      });
+      if (removeConversation) {
+        workspaceConversationsRef.current = workspaceConversationsRef.current.filter((item) => item.id !== conversationId);
+      }
+      return;
+    }
+    for (const conversation of workspaceConversationsRef.current) {
+      advanceWorkspaceConversationEpoch(workspaceConversationMembershipEpochRef.current, conversation.id);
+    }
+    workspaceMarkReadInFlightRef.current.clear();
+    workspaceConversationsRef.current = [];
+  }
+
+  function clearWorkspaceConversationAccessState() {
+    invalidateWorkspaceConversationAccess();
+    for (const controller of workspaceUploadControllersRef.current.values()) {
+      controller.abort();
+    }
+    workspaceUploadControllersRef.current.clear();
+    for (const attachments of Object.values(workspaceComposerAttachmentsRef.current)) {
+      for (const attachment of attachments) {
+        if (attachment.previewUrl) {
+          URL.revokeObjectURL(attachment.previewUrl);
+        }
+      }
+    }
+    for (const message of workspaceLocalMessagesRef.current) {
+      workspaceCancelledLocalMessageIdsRef.current.add(message.id);
+      for (const attachment of message.pendingAttachments ?? []) {
+        if (attachment.previewUrl) {
+          URL.revokeObjectURL(attachment.previewUrl);
+        }
+      }
+    }
+    workspaceComposerAttachmentsRef.current = {};
+    workspaceLocalMessagesRef.current = [];
+    workspaceSelectedConversationIdRef.current = "";
+    setWorkspaceConversations([]);
+    setWorkspaceSelectedConversationId("");
+    setWorkspaceConversationTopicsById({});
+    setWorkspaceComposerTopicByConversation({});
+    setWorkspaceDraftByConversation({});
+    setWorkspaceReplyToMessageIdByConversation({});
+    setWorkspaceComposerAttachmentsByConversation({});
+    setWorkspacePinsByConversation({});
+    setWorkspacePinsExpandedByConversation({});
+    setWorkspaceHistoryTargetId("");
+    setWorkspaceMessageLocateTarget(null);
+    setWorkspaceReturningToLatestConversationId("");
+    setWorkspaceUnreadAnchorByConversation({});
+    setWorkspaceNewMessageCountByConversation({});
+    setWorkspaceAwayFromLatestByConversation({});
+    setWorkspaceLocalMessages([]);
+    setWorkspaceSelectedFileId("");
+    setWorkspaceImagePreview(null);
+    setWorkspaceHistoryLoadingByConversation({});
+    setWorkspaceHistoryExhaustedByConversation({});
+  }
+
+  function advanceWorkspaceConversationMessageRevision(conversationId: string) {
+    if (!conversationId) return;
+    const revision = workspaceConversationMessageRevisionRef.current.get(conversationId) ?? 0;
+    workspaceConversationMessageRevisionRef.current.set(conversationId, revision + 1);
+  }
+
+  function nextWorkspaceConversationResponseGeneration(
+    conversationId: string,
+    kind: WorkspaceConversationMessageRequest["kind"]
+  ) {
+    const generations = workspaceConversationResponseGenerationRef.current.get(conversationId) ??
+      new Map<WorkspaceConversationMessageRequest["kind"], number>();
+    const generation = (generations.get(kind) ?? 0) + 1;
+    generations.set(kind, generation);
+    workspaceConversationResponseGenerationRef.current.set(conversationId, generations);
+    return generation;
+  }
+
+  function beginWorkspaceConversationMessageRequest(
+    conversationId: string,
+    kind: WorkspaceConversationMessageRequest["kind"],
+    invalidatesHistory = false
+  ): WorkspaceConversationMessageRequest {
+    const generation = nextWorkspaceConversationResponseGeneration(conversationId, kind);
+    if (shouldAdvanceWorkspaceConversationHistoryEpoch(kind, invalidatesHistory)) {
+      advanceWorkspaceConversationEpoch(workspaceConversationHistoryEpochRef.current, conversationId);
+    }
+    const conversation = workspaceConversationsRef.current.find((item) => item.id === conversationId);
+    return {
+      kind,
+      baselineMessages: conversation ? [...conversation.latestMessages] : [],
+      requestRevision: workspaceConversationMessageRevisionRef.current.get(conversationId) ?? 0,
+      requestGeneration: generation,
+      sessionEpoch: workspaceSessionEpochRef.current,
+      accessEpoch: workspaceAccessEpochRef.current,
+      membershipEpoch: currentWorkspaceConversationEpoch(workspaceConversationMembershipEpochRef.current, conversationId),
+      historyEpoch: currentWorkspaceConversationEpoch(workspaceConversationHistoryEpochRef.current, conversationId)
+    };
+  }
+
+  function workspaceConversationMessageMergeContext(
+    conversationId: string,
+    request: WorkspaceConversationMessageRequest
+  ): WorkspaceMessageWindowMergeContext<WorkspaceMessage> {
+    return {
+      baselineMessages: request.baselineMessages,
+      requestRevision: request.requestRevision,
+      currentRevision: workspaceConversationMessageRevisionRef.current.get(conversationId) ?? 0,
+      requestGeneration: request.requestGeneration,
+      latestGeneration: workspaceConversationResponseGenerationRef.current.get(conversationId)?.get(request.kind) ?? request.requestGeneration
+    };
+  }
+
+  function isCurrentWorkspaceConversationMessageRequest(
+    conversationId: string,
+    request: WorkspaceConversationMessageRequest,
+    requireConversation = true
+  ) {
+    if (request.sessionEpoch !== workspaceSessionEpochRef.current) return false;
+    if (!isWorkspaceConversationAccessCurrent(request.accessEpoch, workspaceAccessEpochRef.current)) return false;
+    if (
+      request.membershipEpoch !== currentWorkspaceConversationEpoch(
+        workspaceConversationMembershipEpochRef.current,
+        conversationId
+      )
+    ) {
+      return false;
+    }
+    if (
+      (request.kind === "messages" || request.kind === "around" || request.kind === "history") &&
+      request.historyEpoch !== currentWorkspaceConversationEpoch(workspaceConversationHistoryEpochRef.current, conversationId)
+    ) {
+      return false;
+    }
+    if (requireConversation && !workspaceConversationsRef.current.some((item) => item.id === conversationId)) {
+      return false;
+    }
+    return workspaceConversationResponseGenerationRef.current.get(conversationId)?.get(request.kind) === request.requestGeneration;
+  }
 
   useEffect(() => {
     const userId = workspaceBootstrap?.auth.currentUser.id;
@@ -3147,6 +3372,17 @@ export function App() {
   useEffect(() => {
     workspaceLocalMessagesRef.current = workspaceLocalMessages;
   }, [workspaceLocalMessages]);
+
+  useEffect(() => {
+    const previousIds = new Set(workspaceConversationsRef.current.map((conversation) => conversation.id));
+    const nextIds = new Set(workspaceConversations.map((conversation) => conversation.id));
+    for (const conversationId of previousIds) {
+      if (!nextIds.has(conversationId)) {
+        advanceWorkspaceConversationEpoch(workspaceConversationMembershipEpochRef.current, conversationId);
+      }
+    }
+    workspaceConversationsRef.current = workspaceConversations;
+  }, [workspaceConversations]);
 
   useEffect(() => {
     workspaceSelectedConversationIdRef.current = workspaceSelectedConversationId;
@@ -4453,12 +4689,34 @@ export function App() {
 
   async function loadWorkspace() {
     if (workspaceLoadingRef.current) return;
+    const sessionEpoch = workspaceSessionEpochRef.current + 1;
+    workspaceSessionEpochRef.current = sessionEpoch;
+    const bootstrapRequestGeneration = workspaceBootstrapRequestGenerationRef.current + 1;
+    workspaceBootstrapRequestGenerationRef.current = bootstrapRequestGeneration;
+    advanceWorkspaceAccessEpoch();
+    const accessEpoch = workspaceAccessEpochRef.current;
+    workspaceCanReadConversationsRef.current = false;
+    workspaceCanDownloadRef.current = false;
+    workspaceConversationMembershipEpochRef.current.clear();
+    workspaceConversationHistoryEpochRef.current.clear();
+    workspaceConversationMessageRevisionRef.current.clear();
+    workspaceConversationListRequestTokenRef.current += 1;
+    workspaceConversationResponseGenerationRef.current.clear();
     workspaceLoadingRef.current = true;
     setWorkspaceStatus("loading");
     setWorkspaceError("");
     setWorkspaceNotice(null);
     try {
       const bootstrap = await workspaceJson<WorkspaceBootstrap>("/api/workspace/bootstrap");
+      if (
+        !isWorkspaceBootstrapResponseCurrent(
+          sessionEpoch,
+          workspaceSessionEpochRef.current,
+          bootstrapRequestGeneration,
+          workspaceBootstrapRequestGenerationRef.current
+        ) ||
+        !isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current)
+      ) return;
       workspaceRealtimeSeqRef.current = Math.max(0, Number(bootstrap.eventCursor) || 0);
       workspaceSeenEventIdsRef.current.clear();
       const [conversations, files, members] = await Promise.all([
@@ -4476,8 +4734,20 @@ export function App() {
           ? Promise.resolve({ members: bootstrap.members })
           : workspaceJson<{ members: WorkspaceUser[] }>("/api/workspace/members")
       ]);
+      if (
+        !isWorkspaceBootstrapResponseCurrent(
+          sessionEpoch,
+          workspaceSessionEpochRef.current,
+          bootstrapRequestGeneration,
+          workspaceBootstrapRequestGenerationRef.current
+        ) ||
+        !isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current)
+      ) return;
+      workspaceCanReadConversationsRef.current = bootstrap.permissions.canReadConversations;
+      workspaceCanDownloadRef.current = bootstrap.permissions.canDownload;
       setWorkspaceBootstrap({ ...bootstrap, members: members.members });
       setWorkspaceDirectoryMembers(members.members);
+      workspaceConversationsRef.current = conversations.conversations;
       setWorkspaceConversations(conversations.conversations);
       setWorkspaceFiles(files.files);
       setWorkspaceLibraryFiles(files.files);
@@ -4485,12 +4755,23 @@ export function App() {
       setWorkspaceHistoryExhaustedByConversation({});
       setWorkspaceStatus("ready");
     } catch (error) {
+      if (
+        !isWorkspaceBootstrapResponseCurrent(
+          sessionEpoch,
+          workspaceSessionEpochRef.current,
+          bootstrapRequestGeneration,
+          workspaceBootstrapRequestGenerationRef.current
+        ) ||
+        !isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current)
+      ) return;
       const message = userFacingErrorMessage(error, "共享空间暂时不可用");
       const code = error instanceof WorkspaceClientError ? error.code : "";
       setWorkspaceError(code === "auth.required" ? "" : message);
       setWorkspaceStatus(code === "workspace.disabled" ? "disabled" : code.startsWith("auth.") ? "auth" : "error");
     } finally {
-      workspaceLoadingRef.current = false;
+      if (sessionEpoch === workspaceSessionEpochRef.current) {
+        workspaceLoadingRef.current = false;
+      }
     }
   }
 
@@ -4526,7 +4807,80 @@ export function App() {
   }
 
   async function refreshWorkspaceBootstrap() {
-    const data = await workspaceJson<WorkspaceBootstrap>("/api/workspace/bootstrap");
+    const sessionEpoch = workspaceSessionEpochRef.current;
+    const accessEpoch = workspaceAccessEpochRef.current;
+    const bootstrapRequestGeneration = workspaceBootstrapRequestGenerationRef.current + 1;
+    workspaceBootstrapRequestGenerationRef.current = bootstrapRequestGeneration;
+    let data: WorkspaceBootstrap;
+    try {
+      data = await workspaceJson<WorkspaceBootstrap>("/api/workspace/bootstrap");
+    } catch (error) {
+      if (
+        !isWorkspaceBootstrapResponseCurrent(
+          sessionEpoch,
+          workspaceSessionEpochRef.current,
+          bootstrapRequestGeneration,
+          workspaceBootstrapRequestGenerationRef.current
+        ) ||
+        !isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current)
+      ) {
+        return null;
+      }
+      throw error;
+    }
+    if (!isWorkspaceBootstrapResponseCurrent(
+      sessionEpoch,
+      workspaceSessionEpochRef.current,
+      bootstrapRequestGeneration,
+      workspaceBootstrapRequestGenerationRef.current
+    ) || !isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current)) {
+      return null;
+    }
+    const previousPermissions = workspaceBootstrap?.permissions;
+    const previousRole = workspaceBootstrap?.auth.currentUser.role;
+    const readAccessRestored = Boolean(
+      !workspaceCanReadConversationsRef.current &&
+      data.permissions.canReadConversations
+    );
+    const downloadAccessRestored = Boolean(
+      !workspaceCanDownloadRef.current &&
+      data.permissions.canDownload
+    );
+    if (
+      previousPermissions &&
+      (workspacePermissionsChanged(previousPermissions, data.permissions) ||
+        previousRole !== data.auth.currentUser.role)
+    ) {
+      advanceWorkspaceAccessEpoch();
+    }
+    workspaceCanReadConversationsRef.current = data.permissions.canReadConversations;
+    workspaceCanDownloadRef.current = data.permissions.canDownload;
+    if (!data.permissions.canReadConversations) {
+      clearWorkspaceConversationAccessState();
+    }
+    if (!data.permissions.canDownload) {
+      setWorkspaceFiles([]);
+      setWorkspaceLibraryFiles([]);
+      setWorkspaceImagePreview(null);
+    }
+    if (readAccessRestored) {
+      if (data.conversations) {
+        workspaceConversationsRef.current = data.conversations;
+        setWorkspaceConversations(data.conversations);
+        setWorkspaceHistoryLoadingByConversation({});
+        setWorkspaceHistoryExhaustedByConversation({});
+      } else {
+        void refreshWorkspaceConversations().catch(() => undefined);
+      }
+    }
+    if (downloadAccessRestored) {
+      if (data.files) {
+        setWorkspaceFiles(data.files);
+        setWorkspaceLibraryFiles(data.files);
+      } else {
+        void refreshWorkspaceFiles().catch(() => undefined);
+      }
+    }
     setWorkspaceBootstrap(data);
     setWorkspaceDirectoryMembers(data.members);
     return data;
@@ -4675,6 +5029,12 @@ export function App() {
   }
 
   function clearWorkspaceClientState() {
+    workspaceSessionEpochRef.current += 1;
+    advanceWorkspaceAccessEpoch();
+    workspaceBootstrapRequestGenerationRef.current += 1;
+    workspaceLoadingRef.current = false;
+    workspaceCanReadConversationsRef.current = false;
+    workspaceCanDownloadRef.current = false;
     clearStoredWorkspaceEchoWorkflowDrafts();
     clearWorkspaceEmoteLibraryCache();
     setWorkspaceReplyAutoMention(false);
@@ -4703,6 +5063,13 @@ export function App() {
     workspaceSeenEventIdsRef.current.clear();
     workspaceRealtimeEventQueueRef.current = Promise.resolve();
     workspaceSendingRef.current = false;
+    workspaceMarkReadInFlightRef.current.clear();
+    workspaceConversationsRef.current = [];
+    workspaceConversationMembershipEpochRef.current.clear();
+    workspaceConversationHistoryEpochRef.current.clear();
+    workspaceConversationMessageRevisionRef.current.clear();
+    workspaceConversationListRequestTokenRef.current += 1;
+    workspaceConversationResponseGenerationRef.current.clear();
     setWorkspaceBootstrap(null);
     setWorkspaceStatistics(null);
     setWorkspaceStatisticsLoading(false);
@@ -4796,19 +5163,63 @@ export function App() {
   }
 
   async function refreshWorkspaceConversations() {
-    if (!workspaceBootstrap?.permissions.canReadConversations) {
+    const listRequestToken = workspaceConversationListRequestTokenRef.current + 1;
+    workspaceConversationListRequestTokenRef.current = listRequestToken;
+    if (!workspaceCanReadConversationsRef.current) {
+      invalidateWorkspaceConversationAccess();
       setWorkspaceConversations([]);
       return;
     }
+    const sessionEpoch = workspaceSessionEpochRef.current;
+    const accessEpoch = workspaceAccessEpochRef.current;
+    const requests = new Map(
+      workspaceConversationsRef.current.map((conversation) => [
+        conversation.id,
+        beginWorkspaceConversationMessageRequest(conversation.id, "list")
+      ])
+    );
     const data = await workspaceJson<{ conversations: WorkspaceConversation[] }>("/api/workspace/conversations");
-    setWorkspaceConversations((conversations) => mergeWorkspaceConversationList(conversations, data.conversations));
+    if (
+      sessionEpoch !== workspaceSessionEpochRef.current ||
+      !isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current) ||
+      !workspaceCanReadConversationsRef.current ||
+      !isWorkspaceConversationListResponseCurrent(
+        listRequestToken,
+        workspaceConversationListRequestTokenRef.current
+      )
+    ) {
+      return;
+    }
+    const currentConversations = data.conversations.filter((conversation) => {
+      const request = requests.get(conversation.id);
+      return !request || isCurrentWorkspaceConversationMessageRequest(conversation.id, request);
+    });
+    const returnedConversationIds = new Set(currentConversations.map((conversation) => conversation.id));
+    for (const conversation of workspaceConversationsRef.current) {
+      if (!returnedConversationIds.has(conversation.id)) {
+        advanceWorkspaceConversationEpoch(workspaceConversationMembershipEpochRef.current, conversation.id);
+        workspaceMarkReadInFlightRef.current.delete(conversation.id);
+      }
+    }
+    setWorkspaceConversations((conversations) => mergeWorkspaceConversationList(
+      conversations,
+      currentConversations,
+      new Map(
+        [...requests].map(([conversationId, request]) => [
+          conversationId,
+          workspaceConversationMessageMergeContext(conversationId, request)
+        ])
+      )
+    ));
   }
 
   async function refreshWorkspaceFiles() {
-    if (!workspaceBootstrap?.permissions.canDownload) {
+    if (!workspaceCanDownloadRef.current) {
       setWorkspaceLibraryFiles([]);
       return;
     }
+    const sessionEpoch = workspaceSessionEpochRef.current;
+    const accessEpoch = workspaceAccessEpochRef.current;
     const params = new URLSearchParams();
     if (workspaceFileFilter !== "all") {
       params.set("scope", workspaceFileFilter);
@@ -4818,30 +5229,59 @@ export function App() {
       params.set("q", query);
     }
     const data = await workspaceJson<{ files: WorkspaceFile[] }>(`/api/workspace/files${params.size ? `?${params.toString()}` : ""}`);
+    if (
+      sessionEpoch !== workspaceSessionEpochRef.current ||
+      !isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current) ||
+      !workspaceCanDownloadRef.current
+    ) return;
     setWorkspaceLibraryFiles(data.files);
   }
 
   async function refreshWorkspaceConversationMessages(conversationId: string) {
-    if (!workspaceBootstrap?.permissions.canReadConversations || !conversationId) {
+    if (!workspaceCanReadConversationsRef.current || !conversationId) {
       return;
     }
+    const request = beginWorkspaceConversationMessageRequest(conversationId, "messages", true);
     const params = new URLSearchParams({ limit: "40" });
     const data = await workspaceJson<{ messages: WorkspaceMessage[] }>(
       `/api/workspace/conversations/${encodeURIComponent(conversationId)}/messages?${params.toString()}`
     );
+    if (!isCurrentWorkspaceConversationMessageRequest(conversationId, request)) return;
     setWorkspaceConversations((conversations) =>
       conversations.map((conversation) =>
         conversation.id === conversationId
-          ? { ...conversation, latestMessages: data.messages }
+          ? {
+              ...conversation,
+              latestMessages: mergeWorkspaceMessageWindow(
+                conversation.latestMessages,
+                data.messages,
+                {
+                  ...workspaceConversationMessageMergeContext(conversationId, request),
+                  preserveLoadedHistory: false,
+                  authoritativeWindow: true,
+                  preservePostRequestMessages: true
+                }
+              )
+            }
           : conversation
       )
     );
   }
 
   async function refreshWorkspacePins(conversationId: string) {
+    if (!workspaceCanReadConversationsRef.current || !conversationId) {
+      return [];
+    }
+    const sessionEpoch = workspaceSessionEpochRef.current;
+    const accessEpoch = workspaceAccessEpochRef.current;
     const data = await workspaceJson<{ pins: WorkspacePinnedMessage[] }>(
       `/api/workspace/groups/${encodeURIComponent(conversationId)}/pins?limit=100`
     );
+    if (
+      sessionEpoch !== workspaceSessionEpochRef.current ||
+      !isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current) ||
+      !workspaceCanReadConversationsRef.current
+    ) return [];
     setWorkspacePinsByConversation((current) => ({ ...current, [conversationId]: data.pins }));
     return data.pins;
   }
@@ -4918,11 +5358,16 @@ export function App() {
     workspaceStickToBottomByConversationRef.current.set(conversationId, false);
     try {
       const alreadyLoaded = workspaceSelectedConversation.latestMessages.some((message) => message.id === messageId);
+      const request = alreadyLoaded ? null : beginWorkspaceConversationMessageRequest(conversationId, "around", true);
       if (!alreadyLoaded) {
         const data = await workspaceJson<{ messages: WorkspaceMessage[] }>(
           `/api/workspace/conversations/${encodeURIComponent(conversationId)}/messages?around=${encodeURIComponent(messageId)}&limit=41`
         );
-        if (workspaceSelectedConversationIdRef.current !== conversationId) return;
+        if (
+          workspaceSelectedConversationIdRef.current !== conversationId ||
+          !request ||
+          !isCurrentWorkspaceConversationMessageRequest(conversationId, request)
+        ) return;
         setWorkspaceHistoryExhaustedByConversation((current) => {
           if (!(conversationId in current)) return current;
           const { [conversationId]: _removed, ...rest } = current;
@@ -4930,7 +5375,21 @@ export function App() {
         });
         setWorkspaceHistoryTargetId(messageId);
         setWorkspaceConversations((conversations) => conversations.map((conversation) => conversation.id === conversationId
-          ? { ...conversation, latestMessages: data.messages }
+          ? {
+              ...conversation,
+              latestMessages: mergeWorkspaceMessageWindow(
+                conversation.latestMessages,
+                data.messages,
+                request
+                  ? {
+                      ...workspaceConversationMessageMergeContext(conversationId, request),
+                      preserveLoadedHistory: false,
+                      authoritativeWindow: true,
+                      preservePostRequestMessages: false
+                    }
+                  : undefined
+              )
+            }
           : conversation));
       }
       setWorkspaceMessageLocateTarget((current) => ({
@@ -4986,9 +5445,12 @@ export function App() {
   }
 
   async function syncWorkspaceRealtimeState(currentSeqValue?: number) {
+    const sessionEpoch = workspaceSessionEpochRef.current;
     setWorkspaceRealtimeState("syncing");
     try {
-      const [bootstrap] = await Promise.all([refreshWorkspaceBootstrap(), refreshWorkspaceConversations(), refreshWorkspaceFiles()]);
+      const bootstrap = await refreshWorkspaceBootstrap();
+      if (!bootstrap || sessionEpoch !== workspaceSessionEpochRef.current) return;
+      await Promise.all([refreshWorkspaceConversations(), refreshWorkspaceFiles()]);
       const nextCursor = Number.isFinite(currentSeqValue) ? Number(currentSeqValue) : Number(bootstrap.eventCursor);
       if (Number.isFinite(nextCursor)) {
         workspaceRealtimeSeqRef.current = Math.max(0, nextCursor);
@@ -5018,16 +5480,15 @@ export function App() {
       }
 
       if (event.type === "workspace.member_joined" || event.type === "workspace.member_updated") {
+        const changedUserId = payload.userId || payload.member?.id || "";
+        if (event.type === "workspace.member_updated" && changedUserId === workspaceCurrentUserIdRef.current) {
+          advanceWorkspaceAccessEpoch();
+          needsBootstrap = true;
+        }
         if (payload.member) {
           upsertWorkspaceMember(payload.member);
-          if (event.type === "workspace.member_updated" && payload.userId === workspaceCurrentUserIdRef.current) {
-            needsBootstrap = true;
-          }
         } else {
           needsMembers = true;
-          if (event.type === "workspace.member_updated" && payload.userId === workspaceCurrentUserIdRef.current) {
-            needsBootstrap = true;
-          }
         }
         continue;
       }
@@ -5067,6 +5528,7 @@ export function App() {
       if (event.type === "workspace.member_visibility_updated") {
         const viewerUserId = payload.userId || event.targetId || "";
         if (viewerUserId === workspaceCurrentUserIdRef.current) {
+          advanceWorkspaceAccessEpoch();
           needsMembers = true;
           needsBootstrap = true;
         }
@@ -5083,6 +5545,9 @@ export function App() {
       if (event.type === "workspace.member_removed") {
         if (payload.userId) {
           removeWorkspaceMemberFromClient(payload.userId);
+          if (payload.userId === workspaceCurrentUserIdRef.current) {
+            needsBootstrap = true;
+          }
         } else {
           needsMembers = true;
           needsConversations = true;
@@ -5223,6 +5688,14 @@ export function App() {
   }
 
   function upsertWorkspaceMember(member: WorkspaceUser) {
+    for (const conversation of workspaceConversationsRef.current) {
+      if (conversation.latestMessages.some((message) =>
+        message.authorId === member.id ||
+        message.reactions.some((reaction) => reaction.users.some((user) => user.id === member.id))
+      )) {
+        advanceWorkspaceConversationMessageRevision(conversation.id);
+      }
+    }
     setWorkspaceDirectoryMembers((members) => upsertById(members, member).sort(compareWorkspaceMembers));
     setWorkspaceBootstrap((current) =>
       current
@@ -5275,6 +5748,12 @@ export function App() {
   }
 
   function removeWorkspaceMemberFromClient(userId: string) {
+    const removedCurrentUser = userId === workspaceCurrentUserIdRef.current;
+    if (removedCurrentUser) {
+      workspaceCanReadConversationsRef.current = false;
+      workspaceCanDownloadRef.current = false;
+      clearWorkspaceConversationAccessState();
+    }
     setWorkspaceDirectoryMembers((members) => members.filter((member) => member.id !== userId));
     setWorkspaceBootstrap((current) =>
       current
@@ -5284,25 +5763,32 @@ export function App() {
           }
         : current
     );
-    setWorkspaceConversations((conversations) =>
-      sortWorkspaceConversations(
-        conversations
-          .map((conversation) => ({
-            ...conversation,
-            members: conversation.members.filter((member) => member.id !== userId)
-          }))
-          .filter((conversation) => conversation.members.length > 0)
-      )
-    );
-    setWorkspaceFiles((files) => files.filter((file) => file.uploaderId !== userId));
-    setWorkspaceLibraryFiles((files) => files.filter((file) => file.uploaderId !== userId));
+    if (!removedCurrentUser) {
+      setWorkspaceConversations((conversations) =>
+        sortWorkspaceConversations(
+          conversations
+            .map((conversation) => ({
+              ...conversation,
+              members: conversation.members.filter((member) => member.id !== userId)
+            }))
+            .filter((conversation) => conversation.members.length > 0)
+        )
+      );
+      setWorkspaceFiles((files) => files.filter((file) => file.uploaderId !== userId));
+      setWorkspaceLibraryFiles((files) => files.filter((file) => file.uploaderId !== userId));
+    } else {
+      setWorkspaceFiles([]);
+      setWorkspaceLibraryFiles([]);
+    }
   }
 
   function upsertWorkspaceConversation(conversation: WorkspaceConversation) {
+    if (!workspaceCanReadConversationsRef.current) return;
     setWorkspaceConversations((conversations) => upsertWorkspaceConversationList(conversations, conversation));
   }
 
   function upsertWorkspaceConversationMember(conversationId: string, member: WorkspaceUser) {
+    if (!workspaceCanReadConversationsRef.current) return;
     setWorkspaceConversations((conversations) =>
       sortWorkspaceConversations(
         conversations.map((conversation) =>
@@ -5320,6 +5806,9 @@ export function App() {
   function removeWorkspaceConversationMember(conversationId: string, userId: string) {
     const currentUserId = workspaceCurrentUserIdRef.current;
     const removedCurrentUser = userId === currentUserId;
+    if (removedCurrentUser) {
+      invalidateWorkspaceConversationAccess(conversationId);
+    }
     setWorkspaceConversations((conversations) =>
       sortWorkspaceConversations(
         conversations
@@ -5365,6 +5854,8 @@ export function App() {
   }
 
   function upsertWorkspaceMessage(message: WorkspaceMessage, conversation?: WorkspaceConversation | null) {
+    if (!workspaceCanReadConversationsRef.current) return;
+    advanceWorkspaceConversationMessageRevision(message.conversationId);
     if (message.clientMessageId) {
       setWorkspaceLocalMessages((messages) =>
         messages.filter((item) => item.clientMessageId !== message.clientMessageId)
@@ -5412,6 +5903,11 @@ export function App() {
       }
       workspaceReactionEventSeqRef.current.set(messageId, eventSeq);
     }
+    for (const conversation of workspaceConversationsRef.current) {
+      if (conversation.latestMessages.some((message) => message.id === messageId)) {
+        advanceWorkspaceConversationMessageRevision(conversation.id);
+      }
+    }
     setWorkspaceConversations((conversations) =>
       conversations.map((conversation) => ({
         ...conversation,
@@ -5424,6 +5920,11 @@ export function App() {
 
   function updateWorkspaceMessagesHidden(messageIds: string[], hidden: boolean) {
     const targetIds = new Set(messageIds);
+    for (const conversation of workspaceConversationsRef.current) {
+      if (conversation.latestMessages.some((message) => targetIds.has(message.id))) {
+        advanceWorkspaceConversationMessageRevision(conversation.id);
+      }
+    }
     setWorkspaceConversations((conversations) =>
       conversations.map((conversation) => ({
         ...conversation,
@@ -5578,6 +6079,11 @@ export function App() {
   }
 
   function removeWorkspaceFileFromClient(attachmentId: string) {
+    for (const conversation of workspaceConversationsRef.current) {
+      if (conversation.latestMessages.some((message) => message.attachments.some((attachment) => attachment.id === attachmentId))) {
+        advanceWorkspaceConversationMessageRevision(conversation.id);
+      }
+    }
     setWorkspaceFiles((files) => files.filter((file) => file.id !== attachmentId));
     setWorkspaceLibraryFiles((files) => files.filter((file) => file.id !== attachmentId));
     setWorkspaceConversations((conversations) =>
@@ -5594,20 +6100,34 @@ export function App() {
   }
 
   async function markWorkspaceConversationRead(conversationId: string) {
+    if (!workspaceCanReadConversationsRef.current) {
+      return;
+    }
     if (workspaceMarkReadInFlightRef.current.has(conversationId)) {
       return;
     }
     workspaceMarkReadInFlightRef.current.add(conversationId);
+    const request = beginWorkspaceConversationMessageRequest(conversationId, "read");
     try {
       const data = await workspaceJson<{ conversation: WorkspaceConversation }>(
         `/api/workspace/conversations/${encodeURIComponent(conversationId)}/read`,
         { method: "POST" }
       );
-      setWorkspaceConversations((conversations) => upsertWorkspaceConversationList(conversations, data.conversation));
+      if (!isCurrentWorkspaceConversationMessageRequest(conversationId, request)) return;
+      setWorkspaceConversations((conversations) => upsertWorkspaceConversationList(
+        conversations,
+        data.conversation,
+        workspaceConversationMessageMergeContext(conversationId, request)
+      ));
     } catch {
       // Read state is progressive UI; message access itself is handled by normal fetches.
     } finally {
-      workspaceMarkReadInFlightRef.current.delete(conversationId);
+      if (
+        request.sessionEpoch === workspaceSessionEpochRef.current &&
+        request.membershipEpoch === currentWorkspaceConversationEpoch(workspaceConversationMembershipEpochRef.current, conversationId)
+      ) {
+        workspaceMarkReadInFlightRef.current.delete(conversationId);
+      }
     }
   }
 
@@ -5692,15 +6212,34 @@ export function App() {
     if (!workspaceSelectedConversation || workspaceSelectedConversation.notificationLevel === level) {
       return;
     }
+    const conversationId = workspaceSelectedConversation.id;
+    const sessionEpoch = workspaceSessionEpochRef.current;
+    const accessEpoch = workspaceAccessEpochRef.current;
+    const membershipEpoch = currentWorkspaceConversationEpoch(
+      workspaceConversationMembershipEpochRef.current,
+      conversationId
+    );
     clearWorkspaceNotice();
     try {
       const data = await workspaceJson<{ conversation: WorkspaceConversation }>(
-        `/api/workspace/conversations/${encodeURIComponent(workspaceSelectedConversation.id)}/notification`,
+        `/api/workspace/conversations/${encodeURIComponent(conversationId)}/notification`,
         {
           method: "PATCH",
           body: JSON.stringify({ level })
         }
       );
+      if (
+        sessionEpoch !== workspaceSessionEpochRef.current ||
+        !isWorkspaceConversationAccessCurrent(accessEpoch, workspaceAccessEpochRef.current) ||
+        membershipEpoch !== currentWorkspaceConversationEpoch(
+          workspaceConversationMembershipEpochRef.current,
+          conversationId
+        ) ||
+        !workspaceCanReadConversationsRef.current ||
+        !workspaceConversationsRef.current.some((conversation) => conversation.id === conversationId)
+      ) {
+        return;
+      }
       setWorkspaceConversations((conversations) => upsertWorkspaceConversationList(conversations, data.conversation));
       showWorkspaceNotice("success", "会话提醒已更新");
     } catch (error) {
@@ -5709,11 +6248,12 @@ export function App() {
   }
 
   async function loadOlderWorkspaceMessages(conversationId: string) {
-    const conversation = workspaceConversations.find((item) => item.id === conversationId);
+    const conversation = workspaceConversationsRef.current.find((item) => item.id === conversationId);
     const before = conversation?.latestMessages[0]?.id;
     if (!conversation || !before || workspaceHistoryLoadingByConversation[conversationId]) {
       return;
     }
+    const request = beginWorkspaceConversationMessageRequest(conversationId, "history");
     setWorkspaceHistoryLoadingByConversation((current) => ({ ...current, [conversationId]: true }));
     clearWorkspaceNotice();
     try {
@@ -5721,6 +6261,7 @@ export function App() {
       const data = await workspaceJson<{ messages: WorkspaceMessage[] }>(
         `/api/workspace/conversations/${encodeURIComponent(conversationId)}/messages?${params.toString()}`
       );
+      if (!isCurrentWorkspaceConversationMessageRequest(conversationId, request)) return;
       if (data.messages.length === 0) {
         setWorkspaceHistoryExhaustedByConversation((current) => ({ ...current, [conversationId]: true }));
         return;
@@ -5731,6 +6272,7 @@ export function App() {
         setWorkspaceHistoryExhaustedByConversation((current) => ({ ...current, [conversationId]: true }));
         return;
       }
+      advanceWorkspaceConversationMessageRevision(conversationId);
       workspacePreviousScrollHeightRef.current = workspaceMessageListRef.current?.scrollHeight ?? 0;
       workspacePreserveScrollRef.current = true;
       setWorkspaceConversations((conversations) =>
@@ -5754,7 +6296,12 @@ export function App() {
     } catch (error) {
       showWorkspaceNotice("warning", userFacingErrorMessage(error, "历史消息加载失败"));
     } finally {
-      setWorkspaceHistoryLoadingByConversation((current) => ({ ...current, [conversationId]: false }));
+      if (
+        request.sessionEpoch === workspaceSessionEpochRef.current &&
+        request.membershipEpoch === currentWorkspaceConversationEpoch(workspaceConversationMembershipEpochRef.current, conversationId)
+      ) {
+        setWorkspaceHistoryLoadingByConversation((current) => ({ ...current, [conversationId]: false }));
+      }
     }
   }
 
@@ -6078,18 +6625,29 @@ export function App() {
     if (!workspaceSelectedConversation || workspaceSelectedConversation.type !== "group") {
       return;
     }
+    const conversationId = workspaceSelectedConversation.id;
     const title = workspaceConversationTitle(workspaceSelectedConversation, workspaceBootstrap?.auth.currentUser.id);
     if (!window.confirm(`离开「${title}」后，你将无法继续查看此群聊。确定离开吗？`)) {
       return;
     }
+    invalidateWorkspaceConversationAccess(conversationId, false);
     clearWorkspaceNotice();
     try {
       await workspaceJson<{ ok: boolean; conversationId: string }>(
-        `/api/workspace/groups/${encodeURIComponent(workspaceSelectedConversation.id)}/leave`,
+        `/api/workspace/groups/${encodeURIComponent(conversationId)}/leave`,
         { method: "POST" }
       );
+      invalidateWorkspaceConversationAccess(conversationId);
+      if (workspaceSelectedConversationIdRef.current === conversationId) {
+        workspaceSelectedConversationIdRef.current = "";
+      }
+      const outgoingMessages = workspaceLocalMessagesRef.current.filter((message) => message.conversationId === conversationId);
+      for (const message of outgoingMessages) {
+        void cancelWorkspaceLocalMessage(message.id);
+      }
+      setWorkspaceLocalMessages((messages) => messages.filter((message) => message.conversationId !== conversationId));
       setWorkspaceConversations((conversations) =>
-        conversations.filter((conversation) => conversation.id !== workspaceSelectedConversation.id)
+        conversations.filter((conversation) => conversation.id !== conversationId)
       );
       setWorkspaceSelectedConversationId("");
       setWorkspaceContextMode("conversation");
@@ -6812,8 +7370,7 @@ export function App() {
           return;
         }
         try {
-          const conversations = await workspaceJson<{ conversations: WorkspaceConversation[] }>("/api/workspace/conversations");
-          setWorkspaceConversations((current) => mergeWorkspaceConversationList(current, conversations.conversations));
+          await refreshWorkspaceConversations();
         } catch {
           // Realtime replay or the next bootstrap refresh will reconcile the conversation list.
         }
@@ -15043,7 +15600,7 @@ function EmotePicker({
             const query = activeCollectionId
               ? `?collectionId=${encodeURIComponent(activeCollectionId)}&addToLibrary=false`
               : "";
-            await workspaceFetch(`/api/workspace/me/emotes${query}`, {
+            const uploadResponse = await workspaceFetch(`/api/workspace/me/emotes${query}`, {
               method: "POST",
               headers: {
                 "content-type": file.type || "application/octet-stream",
@@ -15051,6 +15608,7 @@ function EmotePicker({
               },
               body: file
             });
+            await uploadResponse.arrayBuffer();
           } catch (error) {
             failures.push(`${file.name}：${userFacingErrorMessage(error, "上传失败")}`);
           }

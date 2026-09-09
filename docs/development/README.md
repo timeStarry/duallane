@@ -10,6 +10,7 @@ then open only the standards required by the change.
 | --- | --- |
 | [Workflow](WORKFLOW.md) | Issues, branches, bug fixes, commits, pull requests, review, ownership, and handoff |
 | [Architecture](ARCHITECTURE.md) | Technology choices, repository layout, dependency direction, service boundaries, migrations, and decisions |
+| [Backend architecture](../backend/README.md) | Approved Go target, live capability ownership, service/data contracts, operations, validation, and migration |
 | [Code standards](CODE_STANDARDS.md) | TypeScript, React, Fastify, SQL, storage, API/event contracts, CSS, dependencies, and test code |
 | [UI/UX standards](UI_UX_STANDARDS.md) | Information architecture, layout, components, states, mobile behavior, accessibility, and visual review |
 | [Security and data](SECURITY_AND_DATA.md) | Trust lanes, identity, authorization, audit, secrets, quotas, retention, uploads, and content-addressed storage |
@@ -49,9 +50,10 @@ confirmed.
 1. Complete [README: Start developing](../../README.md#start-developing).
 2. Read [Architecture](ARCHITECTURE.md) and the design document for the lane you
    will modify.
+   Backend work also reads the [backend architecture index](../backend/README.md)
+   and its live capability ledger.
 3. Read [Workflow](WORKFLOW.md), create a short-lived branch, and write acceptance
    criteria before implementation.
 4. Load the code, UI/UX, and security standards that match the task.
 5. Use [Testing and release](TESTING_AND_RELEASE.md) to choose the required gate
    before opening a pull request.
-

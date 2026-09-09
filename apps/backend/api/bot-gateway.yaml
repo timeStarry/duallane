@@ -1,0 +1,767 @@
+openapi: 3.1.2
+info:
+  title: DualLane Workspace Bot Gateway API
+  version: 1.0.0
+  description: >-
+    Contract projection of the existing Node Bot Gateway. REST operations use
+    a strict Bearer dl_bot_ token and are rechecked against active bot status,
+    token revocation, scope, membership, quota, audit, and idempotency rules.
+    The WebSocket operation is described with the x-websocket extension because
+    OpenAPI does not standardize the upgraded frame protocol.
+servers:
+  - url: /
+paths:
+  /api/bot-gateway/v1/me:
+    get:
+      operationId: botGatewayMe
+      security:
+        - botBearer: []
+      responses:
+        '200':
+          description: Safe Bot Gateway identity and non-secret runtime status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /api/bot-gateway/v1/events/ack:
+    post:
+      operationId: botGatewayAcknowledgeEvent
+      security:
+        - botBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AckRequest'
+      responses:
+        '200':
+          description: Idempotent event acknowledgement projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AckResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /api/bot-gateway/v1/conversations/{conversationId}/context:
+    parameters:
+      - $ref: '#/components/parameters/ConversationID'
+    get:
+      operationId: botGatewayConversationContext
+      security:
+        - botBearer: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: Explicitly authorized context projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContextResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /api/bot-gateway/v1/messages:
+    post:
+      operationId: botGatewaySendMessage
+      security:
+        - botBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageWriteRequest'
+      responses:
+        '201':
+          description: Node-compatible created-message DTO. The author field is omitted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageSendResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /api/bot-gateway/v1/cards:
+    post:
+      operationId: botGatewayCreateCard
+      security:
+        - botBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CardCreateRequest'
+      responses:
+        '201':
+          description: Created card and its message projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardSendResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /api/bot-gateway/v1/cards/{cardId}:
+    parameters:
+      - $ref: '#/components/parameters/CardID'
+    patch:
+      operationId: botGatewayUpdateCard
+      security:
+        - botBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CardUpdateRequest'
+      responses:
+        '200':
+          description: Updated or invalidated card projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /api/bot-gateway/v1/attachments/{attachmentId}:
+    parameters:
+      - $ref: '#/components/parameters/AttachmentID'
+    get:
+      operationId: botGatewayGetAttachmentMetadata
+      security:
+        - botBearer: []
+      responses:
+        '200':
+          description: Authorized attachment metadata only.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttachmentResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /api/bot-gateway/v1/attachments:
+    post:
+      operationId: botGatewayReserveAttachment
+      security:
+        - botBearer: []
+      description: >-
+        Reserves an upload through the explicit authenticated Agent Bot files
+        entry point. This contract does not imply Bot content completion or
+        content download authorization.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttachmentCreateRequest'
+      responses:
+        '201':
+          description: Quota-checked upload reservation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /api/bot-gateway/v1/typing:
+    post:
+      operationId: botGatewayTyping
+      security:
+        - botBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              required: [conversationId]
+              properties:
+                conversationId: { $ref: '#/components/schemas/Identifier' }
+      responses:
+        '200':
+          description: Short-lived typing indicator acceptance.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [accepted, expiresInMs]
+                properties:
+                  accepted: { type: boolean, const: true }
+                  expiresInMs: { type: integer, const: 5000 }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /api/bot-gateway/v1/setup/request:
+    post:
+      operationId: botGatewayRequestSetup
+      description: Public setup handoff endpoint; authorization is represented by the opaque setup session.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupRequest'
+      responses:
+        '200':
+          description: Setup session after the external client request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetupResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /api/bot-gateway/v1/setup/status:
+    get:
+      operationId: botGatewaySetupStatus
+      parameters:
+        - name: setupSessionId
+          in: query
+          required: true
+          schema: { $ref: '#/components/schemas/Identifier' }
+      responses:
+        '200':
+          description: Public setup session status projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetupResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /api/bot-gateway/v1/setup/exchange:
+    post:
+      operationId: botGatewayExchangeSetup
+      description: Public setup exchange; the raw Bot token is returned only in this one-time response.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupExchangeRequest'
+      responses:
+        '201':
+          description: One-time raw Bot token and safe setup session projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetupExchangeResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /ws/bot-gateway:
+    get:
+      operationId: botGatewayWebSocket
+      security:
+        - botBearer: []
+      x-websocket:
+        protocol: websocket
+        subprotocol: none
+        maxFrameBytes: 32768
+        authentication: strict-bearer-header
+        hello: hello/v1
+        serverMessages: [ready, event, sync_required, heartbeat, ack, error]
+      description: >-
+        WebSocket upgrade authenticated by the same strict Bearer token as the
+        REST Gateway. Frames are versioned JSON and the server rechecks token
+        revocation before operations; the detailed frame contract is maintained
+        by the Bot Gateway transport tests.
+      responses:
+        '101':
+          description: Switching Protocols.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+components:
+  securitySchemes:
+    botBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: dl_bot_
+      description: Strict `Bearer dl_bot_...` credential; raw tokens are never logged or persisted.
+
+  parameters:
+    ConversationID:
+      name: conversationId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Identifier' }
+    CardID:
+      name: cardId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Identifier' }
+    AttachmentID:
+      name: attachmentId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Identifier' }
+
+  responses:
+    BadRequest:
+      description: Safe validation error.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Unauthorized:
+      description: Missing, malformed, revoked, or expired Bot credential.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Forbidden:
+      description: Scope, membership, policy, or quota authorization failed.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    NotFound:
+      description: Conversation, card, attachment, or setup session is not available to this Bot.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Conflict:
+      description: Idempotency or stale-state conflict.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    UnprocessableEntity:
+      description: Payload failed the registered domain validator.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    PayloadTooLarge:
+      description: Quota or bounded payload limit rejected before transfer.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    ServiceUnavailable:
+      description: Workspace is disabled or a required composed domain service is unavailable.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  schemas:
+    Identifier:
+      type: string
+      minLength: 1
+      maxLength: 128
+    DateTime:
+      type: string
+      format: date-time
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+    GatewayBot:
+      type: object
+      additionalProperties: false
+      required: [id, botUserId, spaceId, mode, name, visibilityPolicy, conversationPolicy, triggerPolicy, status, kind, authenticationAllowed]
+      properties:
+        id: { $ref: '#/components/schemas/Identifier' }
+        botUserId: { $ref: '#/components/schemas/Identifier' }
+        spaceId: { $ref: '#/components/schemas/Identifier' }
+        mode: { type: string }
+        name: { type: string }
+        visibilityPolicy: { type: string }
+        conversationPolicy: { type: string }
+        triggerPolicy: { type: string }
+        status: { type: string, enum: [active, paused, deleting, deleted] }
+        kind: { type: string, const: bot }
+        authenticationAllowed: { type: boolean, const: false }
+    GatewayConnection:
+      type: object
+      additionalProperties: false
+      required: [status, adapterVersion, connectedAt, disconnectedAt, lastHeartbeatAt, lastProcessedAt, lastErrorCode, lastErrorAt, updatedAt]
+      properties:
+        status: { type: string, enum: [disconnected, connected, paused, revoked] }
+        adapterVersion: { type: [string, 'null'] }
+        connectedAt: { type: [string, 'null'], format: date-time }
+        disconnectedAt: { type: [string, 'null'], format: date-time }
+        lastHeartbeatAt: { type: [string, 'null'], format: date-time }
+        lastProcessedAt: { type: [string, 'null'], format: date-time }
+        lastErrorCode: { type: [string, 'null'] }
+        lastErrorAt: { type: [string, 'null'], format: date-time }
+        updatedAt: { $ref: '#/components/schemas/DateTime' }
+    GatewayContext:
+      type: object
+      additionalProperties: false
+      required: [maxMessages, maxChars, maxTokens, windowSeconds]
+      properties:
+        maxMessages: { type: integer, minimum: 1 }
+        maxChars: { type: integer, minimum: 1 }
+        maxTokens: { type: integer, minimum: 1 }
+        windowSeconds: { type: integer, minimum: 1 }
+        includeReplies: { type: boolean }
+        includeSystemEvents: { type: boolean }
+    MeResponse:
+      type: object
+      additionalProperties: false
+      required: [version, bot, spaceId, scopes, settings, connection]
+      properties:
+        version: { type: integer, const: 1 }
+        bot: { $ref: '#/components/schemas/GatewayBot' }
+        spaceId: { $ref: '#/components/schemas/Identifier' }
+        scopes:
+          type: array
+          items: { type: string }
+        settings:
+          type: [object, 'null']
+          additionalProperties: true
+        connection:
+          anyOf:
+            - $ref: '#/components/schemas/GatewayConnection'
+            - type: 'null'
+    MessageBlock:
+      type: object
+      additionalProperties: true
+      required: [type]
+      properties:
+        type: { type: string }
+    MessageContent:
+      type: object
+      additionalProperties: false
+      required: [format, plainText, blocks]
+      properties:
+        format: { type: string, const: duallane.message+json;v=1 }
+        plainText: { type: string, minLength: 1, maxLength: 30000 }
+        blocks:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/MessageBlock' }
+    MessageWriteRequest:
+      type: object
+      additionalProperties: true
+      required: [conversationId]
+      properties:
+        conversationId: { $ref: '#/components/schemas/Identifier' }
+        clientMessageId: { $ref: '#/components/schemas/Identifier' }
+        idempotencyKey: { $ref: '#/components/schemas/Identifier' }
+        text: { type: string, minLength: 1, maxLength: 30000 }
+        content:
+          anyOf:
+            - $ref: '#/components/schemas/MessageContent'
+            - type: 'null'
+        replyToMessageId:
+          anyOf:
+            - $ref: '#/components/schemas/Identifier'
+            - type: 'null'
+    GatewayMessage:
+      type: object
+      additionalProperties: false
+      required: [id, conversationId, plainText, content, createdAt]
+      properties:
+        id: { $ref: '#/components/schemas/Identifier' }
+        conversationId: { $ref: '#/components/schemas/Identifier' }
+        plainText: { type: string }
+        content: { $ref: '#/components/schemas/MessageContent' }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+    MessageSendResponse:
+      type: object
+      additionalProperties: false
+      required: [message, clientMessageId]
+      properties:
+        message: { $ref: '#/components/schemas/GatewayMessage' }
+        clientMessageId: { $ref: '#/components/schemas/Identifier' }
+    ContextMessage:
+      type: object
+      additionalProperties: true
+      required: [id, conversationId, authorId, authorKind, kind, contentFormat, plainText, content, replyToMessageId, createdAt]
+      properties:
+        id: { $ref: '#/components/schemas/Identifier' }
+        conversationId: { $ref: '#/components/schemas/Identifier' }
+        authorId: { type: [string, 'null'] }
+        authorKind: { type: string }
+        kind: { type: string }
+        contentFormat: { type: string }
+        plainText: { type: string }
+        content: { type: [object, 'null'], additionalProperties: true }
+        replyToMessageId: { type: [string, 'null'] }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+    ContextResponse:
+      type: object
+      additionalProperties: false
+      required: [conversation, messages, limits]
+      properties:
+        conversation:
+          type: object
+          additionalProperties: false
+          required: [id, type, title, createdAt]
+          properties:
+            id: { $ref: '#/components/schemas/Identifier' }
+            type: { type: string, enum: [direct, group] }
+            title: { type: string }
+            createdAt: { $ref: '#/components/schemas/DateTime' }
+        messages:
+          type: array
+          items: { $ref: '#/components/schemas/ContextMessage' }
+        limits:
+          type: object
+          additionalProperties: false
+          required: [maxMessages, maxChars, maxTokens, windowSeconds]
+          properties:
+            maxMessages: { type: integer, minimum: 1 }
+            maxChars: { type: integer, minimum: 1 }
+            maxTokens: { type: integer, minimum: 1 }
+            windowSeconds: { type: integer, minimum: 1 }
+    AckRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        sequence: { type: [integer, string] }
+        eventId: { type: [string, 'null'] }
+    AckResponse:
+      type: object
+      additionalProperties: false
+      required: [acknowledged, eventId, sequence]
+      properties:
+        acknowledged: { type: boolean }
+        eventId: { type: [string, 'null'] }
+        sequence: { type: integer, minimum: 0 }
+    CardCreateRequest:
+      type: object
+      additionalProperties: true
+      required: [conversationId]
+      properties:
+        conversationId: { $ref: '#/components/schemas/Identifier' }
+        clientMessageId: { $ref: '#/components/schemas/Identifier' }
+        idempotencyKey: { $ref: '#/components/schemas/Identifier' }
+        cardType: { type: string }
+        schemaVersion: { type: integer, minimum: 1 }
+        fallbackText: { type: string }
+        payload: { type: object, additionalProperties: true }
+        feishuCard: { type: object, additionalProperties: true }
+        format: { type: string }
+    CardUpdateRequest:
+      type: object
+      additionalProperties: true
+      properties:
+        expectedRevision: { type: integer, minimum: 1 }
+        status: { type: string }
+        fallbackText: { type: string }
+        payload: { type: object, additionalProperties: true }
+        feishuCard: { type: object, additionalProperties: true }
+        format: { type: string }
+    Card:
+      type: object
+      additionalProperties: true
+      required: [id, botId, spaceId, conversationId, cardType, schemaVersion, payload, fallbackText, revision, status, createdAt, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/Identifier' }
+        botId: { $ref: '#/components/schemas/Identifier' }
+        spaceId: { $ref: '#/components/schemas/Identifier' }
+        conversationId: { $ref: '#/components/schemas/Identifier' }
+        cardType: { type: string }
+        schemaVersion: { type: integer, minimum: 1 }
+        payload: { type: object, additionalProperties: true }
+        fallbackText: { type: string }
+        revision: { type: integer, minimum: 1 }
+        status: { type: string }
+        createdAt: { type: [string, 'null'], format: date-time }
+        updatedAt: { type: [string, 'null'], format: date-time }
+    CardResponse:
+      type: object
+      additionalProperties: false
+      required: [card]
+      properties:
+        card: { $ref: '#/components/schemas/Card' }
+    CardSendResponse:
+      type: object
+      additionalProperties: false
+      required: [card, message]
+      properties:
+        card: { $ref: '#/components/schemas/Card' }
+        message: { $ref: '#/components/schemas/GatewayMessage' }
+    AttachmentCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [fileName, mimeType, byteSize]
+      properties:
+        fileName: { type: string, minLength: 1, maxLength: 255 }
+        mimeType: { type: string, minLength: 1, maxLength: 255 }
+        byteSize: { type: integer, minimum: 0 }
+        visibility: { type: string, enum: [private_staging, conversation] }
+        conversationId: { $ref: '#/components/schemas/Identifier' }
+    UploadResponse:
+      type: object
+      additionalProperties: false
+      required: [upload]
+      properties:
+        upload:
+          type: object
+          additionalProperties: true
+    AttachmentResponse:
+      type: object
+      additionalProperties: false
+      required: [attachment]
+      properties:
+        attachment:
+          type: object
+          additionalProperties: true
+    SetupRequest:
+      type: object
+      additionalProperties: false
+      required: [setupSessionId]
+      properties:
+        setupSessionId: { $ref: '#/components/schemas/Identifier' }
+        requestedScopes:
+          type: array
+          maxItems: 10
+          items: { type: string }
+        conversationIds:
+          type: array
+          maxItems: 200
+          items: { $ref: '#/components/schemas/Identifier' }
+        clientName: { type: string, maxLength: 128 }
+        clientVersion: { type: string, maxLength: 128 }
+        protocolVersion: { type: string, maxLength: 16 }
+        capabilities:
+          type: array
+          maxItems: 32
+          items: { type: string }
+    SetupExchangeRequest:
+      type: object
+      additionalProperties: false
+      required: [setupSessionId]
+      properties:
+        setupSessionId: { $ref: '#/components/schemas/Identifier' }
+        clientName: { type: string, maxLength: 128 }
+        clientVersion: { type: string, maxLength: 128 }
+        protocolVersion: { type: string, maxLength: 16 }
+    SetupSession:
+      type: object
+      additionalProperties: true
+      required: [id, bot, status, requestedScopes, approvedScopes, requestedConversations, approvedConversations, expiresAt, createdAt, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/Identifier' }
+        bot: { type: [object, 'null'], additionalProperties: true }
+        status: { type: string }
+        requestedScopes: { type: array, items: { type: string } }
+        approvedScopes: { type: array, items: { type: string } }
+        requestedConversations: { type: array, items: { type: string } }
+        approvedConversations: { type: array, items: { type: string } }
+        expiresAt: { $ref: '#/components/schemas/DateTime' }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+        updatedAt: { $ref: '#/components/schemas/DateTime' }
+    SetupResponse:
+      type: object
+      additionalProperties: false
+      required: [setup]
+      properties:
+        setup: { $ref: '#/components/schemas/SetupSession' }
+    SetupExchangeResponse:
+      type: object
+      additionalProperties: false
+      required: [token, tokenRecord, session]
+      properties:
+        token: { type: string, pattern: '^dl_bot_[A-Za-z0-9_-]{32,}$' }
+        tokenRecord: { type: object, additionalProperties: true }
+        session: { $ref: '#/components/schemas/SetupSession' }

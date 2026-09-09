@@ -1,0 +1,1076 @@
+openapi: 3.1.2
+info:
+  title: DualLane Workspace Agent Bot owner API
+  version: 1.0.0
+  description: >-
+    Contract projection of the existing Node owner-facing Agent Bot routes.
+    Authentication is the opaque Workspace browser session; bot credentials,
+    connection nonces, and internal provider values are never owner DTO fields.
+servers:
+  - url: /
+paths:
+  /api/workspace/bots:
+    get:
+      operationId: workspaceListOwnedBots
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Bots owned by the authenticated Workspace member.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BotListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+    post:
+      operationId: workspaceCreateBot
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBotRequest'
+      responses:
+        '201':
+          description: Created owner-facing Bot projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BotResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/bots/{botId}:
+    parameters:
+      - $ref: '#/components/parameters/BotID'
+    get:
+      operationId: workspaceGetOwnedBot
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Owned Bot projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BotResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+    delete:
+      operationId: workspaceBeginBotDelete
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Bot moved into the deletion-confirmation state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BotResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/bots/{botId}/settings:
+    parameters:
+      - $ref: '#/components/parameters/BotID'
+    get:
+      operationId: workspaceGetBotSettings
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Current owner-controlled Bot settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+    patch:
+      operationId: workspaceUpdateBotSettings
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettingsPatch'
+      responses:
+        '200':
+          description: Updated owner-controlled Bot settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/bots/{botId}/group-policies:
+    parameters:
+      - $ref: '#/components/parameters/BotID'
+    get:
+      operationId: workspaceListBotGroupPolicies
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Owner-visible group policy projections.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GroupPolicyListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/bots/{botId}/group-policies/{conversationId}:
+    parameters:
+      - $ref: '#/components/parameters/BotID'
+      - $ref: '#/components/parameters/ConversationID'
+    patch:
+      operationId: workspaceUpdateBotGroupPolicy
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GroupPolicyPatch'
+      responses:
+        '200':
+          description: Updated group policy projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GroupPolicyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/bots/{botId}/context-grants/{conversationId}:
+    parameters:
+      - $ref: '#/components/parameters/BotID'
+      - $ref: '#/components/parameters/ConversationID'
+    patch:
+      operationId: workspaceUpdateBotContextGrant
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContextGrantPatch'
+      responses:
+        '200':
+          description: Updated direct-conversation context grant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContextGrantResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/bots/{botId}/tokens:
+    parameters:
+      - $ref: '#/components/parameters/BotID'
+    get:
+      operationId: workspaceListBotTokens
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Hashed-token metadata; returned token values are masked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+    post:
+      operationId: workspaceIssueBotToken
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenIssueRequest'
+      responses:
+        '201':
+          description: One-time raw token plus safe token metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssuedTokenResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/bots/{botId}/tokens/rotate:
+    parameters:
+      - $ref: '#/components/parameters/BotID'
+    post:
+      operationId: workspaceRotateBotToken
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenIssueRequest'
+      responses:
+        '201':
+          description: New one-time raw token after revoking active tokens.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssuedTokenResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/bots/{botId}/tokens/{tokenId}/revoke:
+    parameters:
+      - $ref: '#/components/parameters/BotID'
+      - $ref: '#/components/parameters/TokenID'
+    post:
+      operationId: workspaceRevokeBotToken
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Revoked token metadata without the raw credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/bots/{botId}/setup-sessions:
+    parameters:
+      - $ref: '#/components/parameters/BotID'
+    post:
+      operationId: workspaceCreateBotSetupSession
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupCreateRequest'
+      responses:
+        '201':
+          description: Owner-approved setup handoff descriptor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetupCreateResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/bot-setup/{sessionId}:
+    parameters:
+      - $ref: '#/components/parameters/SessionID'
+    get:
+      operationId: workspaceGetBotSetupSession
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Owner-scoped setup session projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetupResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/bot-setup/{sessionId}/approve:
+    parameters:
+      - $ref: '#/components/parameters/SessionID'
+    post:
+      operationId: workspaceApproveBotSetupSession
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupApprovalRequest'
+      responses:
+        '200':
+          description: Approved setup session projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetupResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/bot-setup/{sessionId}/deny:
+    parameters:
+      - $ref: '#/components/parameters/SessionID'
+    post:
+      operationId: workspaceDenyBotSetupSession
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Denied setup session projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetupResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/bots/{botId}/pause:
+    parameters:
+      - $ref: '#/components/parameters/BotID'
+    post:
+      operationId: workspacePauseBot
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Paused Bot projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BotResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/bots/{botId}/delete/confirm:
+    parameters:
+      - $ref: '#/components/parameters/BotID'
+    post:
+      operationId: workspaceConfirmBotDelete
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Permanently deleted Bot projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BotResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/bots/{botId}/resume:
+    parameters:
+      - $ref: '#/components/parameters/BotID'
+    post:
+      operationId: workspaceResumeBot
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Resumed Bot projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BotResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/bots/{botId}/connection:
+    parameters:
+      - $ref: '#/components/parameters/BotID'
+    get:
+      operationId: workspaceGetBotConnection
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Owner-visible persisted connection status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/bots/{botId}/connection/test:
+    parameters:
+      - $ref: '#/components/parameters/BotID'
+    post:
+      operationId: workspaceTestBotConnection
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            # The Node route has no body schema and intentionally ignores the
+            # body. Keep null, primitive, array, and omitted-body behavior
+            # compatible with that route rather than inventing an object gate.
+            schema: {}
+      responses:
+        '200':
+          description: Connection status after clearing the test error fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionTestResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+components:
+  securitySchemes:
+    workspaceSession:
+      type: apiKey
+      in: cookie
+      name: duallane_workspace
+      description: Opaque browser session cookie issued by the Workspace login flow.
+
+  parameters:
+    BotID:
+      name: botId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    TokenID:
+      name: tokenId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    SessionID:
+      name: sessionId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    ConversationID:
+      name: conversationId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+
+  responses:
+    BadRequest:
+      description: Safe validation error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: No active Workspace session.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Authenticated actor is not the Bot owner or active member.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: The Bot, setup session, token, or conversation was not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Lifecycle or optimistic state conflict.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    WorkspaceServiceUnavailable:
+      description: Workspace is disabled or unavailable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    Identifier:
+      type: string
+      minLength: 1
+      maxLength: 128
+    DateTime:
+      type: string
+      format: date-time
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+    CreateBotRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+    SettingsPatch:
+      type: object
+      additionalProperties: true
+      properties:
+        visibilityPolicy:
+          type: string
+          enum: [private, specified_members, space_members, groups]
+        allowedMemberIds:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/Identifier'
+        allowDirect: { type: boolean }
+        allowGroup: { type: boolean }
+        groupInviterPolicy: { type: string }
+        requireOwnerApproval: { type: boolean }
+        proactiveEnabled: { type: boolean }
+        triggerPolicy: { type: string }
+        welcomeMessage: { type: [string, 'null'] }
+        description: { type: [string, 'null'] }
+        avatarUrl: { type: [string, 'null'], format: uri-reference }
+        showCreator: { type: boolean }
+        maxContextMessages: { type: integer, minimum: 1 }
+        maxContextChars: { type: integer, minimum: 1 }
+        maxContextTokens: { type: integer, minimum: 1 }
+        contextWindowSeconds: { type: integer, minimum: 1 }
+        includeReplies: { type: boolean }
+        includeSystemEvents: { type: boolean }
+        includeAttachmentMetadata: { type: boolean }
+        allowAttachmentPreview: { type: boolean }
+        longTermSummaryEnabled: { type: boolean }
+    GroupPolicyPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum: [pending, active, rejected, removed]
+        allowTrigger: { type: boolean }
+        allowContext: { type: boolean }
+        maxMessages:
+          type: [integer, 'null']
+          minimum: 1
+          maximum: 200
+    ContextGrantPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        allowTrigger: { type: boolean }
+        allowContext: { type: boolean }
+        maxMessages:
+          type: [integer, 'null']
+          minimum: 1
+          maximum: 200
+    TokenIssueRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        scopes:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items:
+            type: string
+        expiresAt:
+          type: [string, 'null']
+          format: date-time
+    SetupCreateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        requestedScopes:
+          type: array
+          maxItems: 10
+          items: { type: string }
+        conversationIds:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/Identifier'
+    SetupApprovalRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        scopes:
+          type: array
+          maxItems: 10
+          items: { type: string }
+        conversationIds:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/Identifier'
+    Bot:
+      type: object
+      additionalProperties: false
+      required: [id, spaceId, ownerUserId, botUserId, mode, name, nameNormalized, visibilityPolicy, conversationPolicy, triggerPolicy, status, kind, authenticationAllowed, canJoinGroups, tokenPolicy, createdAt, updatedAt, deletingAt, deletedAt]
+      properties:
+        id: { $ref: '#/components/schemas/Identifier' }
+        spaceId: { $ref: '#/components/schemas/Identifier' }
+        ownerUserId: { $ref: '#/components/schemas/Identifier' }
+        botUserId: { $ref: '#/components/schemas/Identifier' }
+        mode: { type: string, const: external_agent }
+        name: { type: string }
+        nameNormalized: { type: string }
+        visibilityPolicy: { type: string, enum: [private, specified_members, space_members, groups] }
+        conversationPolicy: { type: string, enum: [direct-only, group-capable] }
+        triggerPolicy: { type: string, const: mention-or-command }
+        status: { type: string, enum: [active, paused, deleting, deleted] }
+        kind: { type: string, const: bot }
+        authenticationAllowed: { type: boolean, const: false }
+        canJoinGroups: { type: boolean }
+        tokenPolicy: { type: string, const: hashed-one-time }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+        updatedAt: { $ref: '#/components/schemas/DateTime' }
+        deletingAt: { type: [string, 'null'], format: date-time }
+        deletedAt: { type: [string, 'null'], format: date-time }
+    BotResponse:
+      type: object
+      additionalProperties: false
+      required: [bot]
+      properties:
+        bot: { $ref: '#/components/schemas/Bot' }
+    BotListResponse:
+      type: object
+      additionalProperties: false
+      required: [bots]
+      properties:
+        bots:
+          type: array
+          items: { $ref: '#/components/schemas/Bot' }
+    BotConnection:
+      type: object
+      additionalProperties: false
+      required: [id, botId, spaceId, status, adapterVersion, connectedAt, disconnectedAt, lastHeartbeatAt, lastProcessedAt, lastErrorCode, lastErrorAt, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/Identifier' }
+        botId: { $ref: '#/components/schemas/Identifier' }
+        spaceId: { $ref: '#/components/schemas/Identifier' }
+        status: { type: string, enum: [disconnected, connected, paused, revoked] }
+        adapterVersion: { type: [string, 'null'] }
+        connectedAt: { type: [string, 'null'], format: date-time }
+        disconnectedAt: { type: [string, 'null'], format: date-time }
+        lastHeartbeatAt: { type: [string, 'null'], format: date-time }
+        lastProcessedAt: { type: [string, 'null'], format: date-time }
+        lastErrorCode: { type: [string, 'null'] }
+        lastErrorAt: { type: [string, 'null'], format: date-time }
+        updatedAt: { $ref: '#/components/schemas/DateTime' }
+        testedAt: { type: [string, 'null'], format: date-time }
+    ConnectionResponse:
+      type: object
+      additionalProperties: false
+      required: [connection]
+      properties:
+        connection:
+          anyOf:
+            - $ref: '#/components/schemas/BotConnection'
+            - type: 'null'
+    ConnectionTestResponse:
+      type: object
+      additionalProperties: false
+      required: [connection]
+      properties:
+        connection:
+          allOf:
+            - $ref: '#/components/schemas/BotConnection'
+            - type: object
+              required: [testedAt]
+              properties:
+                testedAt: { $ref: '#/components/schemas/DateTime' }
+    BotContext:
+      type: object
+      additionalProperties: false
+      required: [maxMessages, maxChars, maxTokens, windowSeconds, includeReplies, includeSystemEvents, includeAttachmentMetadata, allowAttachmentPreview, longTermSummaryEnabled]
+      properties:
+        maxMessages: { type: integer, minimum: 1 }
+        maxChars: { type: integer, minimum: 1 }
+        maxTokens: { type: integer, minimum: 1 }
+        windowSeconds: { type: integer, minimum: 1 }
+        includeReplies: { type: boolean }
+        includeSystemEvents: { type: boolean }
+        includeAttachmentMetadata: { type: boolean }
+        allowAttachmentPreview: { type: boolean }
+        longTermSummaryEnabled: { type: boolean }
+    BotLimits:
+      type: [object, 'null']
+      additionalProperties: false
+      required: [requestsPerMinute, memberDailyRequests, inputTokenLimit, outputTokenLimit, maxConcurrency, eventBacklogLimit]
+      properties:
+        requestsPerMinute: { type: integer, minimum: 1 }
+        memberDailyRequests: { type: integer, minimum: 1 }
+        inputTokenLimit: { type: integer, minimum: 1 }
+        outputTokenLimit: { type: integer, minimum: 1 }
+        maxConcurrency: { type: integer, minimum: 1 }
+        eventBacklogLimit: { type: integer, minimum: 1 }
+    BotSettings:
+      type: object
+      additionalProperties: false
+      required: [botId, spaceId, visibilityPolicy, allowDirect, allowGroup, groupInviterPolicy, requireOwnerApproval, proactiveEnabled, triggerPolicy, welcomeMessage, description, avatarUrl, showCreator, allowedMemberIds, context, limits, updatedAt]
+      properties:
+        botId: { $ref: '#/components/schemas/Identifier' }
+        spaceId: { $ref: '#/components/schemas/Identifier' }
+        visibilityPolicy: { type: string, enum: [private, specified_members, space_members, groups] }
+        allowDirect: { type: boolean }
+        allowGroup: { type: boolean }
+        groupInviterPolicy: { type: string }
+        requireOwnerApproval: { type: boolean }
+        proactiveEnabled: { type: boolean }
+        triggerPolicy: { type: string }
+        welcomeMessage: { type: [string, 'null'] }
+        description: { type: [string, 'null'] }
+        avatarUrl: { type: [string, 'null'], format: uri-reference }
+        showCreator: { type: boolean }
+        allowedMemberIds:
+          type: array
+          items: { $ref: '#/components/schemas/Identifier' }
+        context: { $ref: '#/components/schemas/BotContext' }
+        limits: { $ref: '#/components/schemas/BotLimits' }
+        updatedAt: { $ref: '#/components/schemas/DateTime' }
+    SettingsResponse:
+      type: object
+      additionalProperties: false
+      required: [settings]
+      properties:
+        settings:
+          anyOf:
+            - $ref: '#/components/schemas/BotSettings'
+            - type: 'null'
+    GroupPolicy:
+      type: object
+      additionalProperties: false
+      required: [conversationId, status, invitedBy, approvedBy, maxContextMessages, createdAt, updatedAt, grantId, allowTrigger, allowContext, contextMaxMessages]
+      properties:
+        conversationId: { $ref: '#/components/schemas/Identifier' }
+        status: { type: string, enum: [pending, active, rejected, removed] }
+        invitedBy: { type: [string, 'null'] }
+        approvedBy: { type: [string, 'null'] }
+        maxContextMessages: { type: [integer, 'null'] }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+        updatedAt: { $ref: '#/components/schemas/DateTime' }
+        grantId: { type: [string, 'null'] }
+        allowTrigger: { type: boolean }
+        allowContext: { type: boolean }
+        contextMaxMessages: { type: [integer, 'null'] }
+    GroupPolicyListResponse:
+      type: object
+      additionalProperties: false
+      required: [policies]
+      properties:
+        policies:
+          type: array
+          items: { $ref: '#/components/schemas/GroupPolicy' }
+    GroupPolicyResponse:
+      type: object
+      additionalProperties: false
+      required: [policy]
+      properties:
+        policy:
+          anyOf:
+            - $ref: '#/components/schemas/GroupPolicy'
+            - type: 'null'
+    ContextGrant:
+      type: object
+      additionalProperties: false
+      required: [grantId, botId, conversationId, allowTrigger, allowContext, maxMessages, grantedBy, createdAt, updatedAt]
+      properties:
+        grantId: { $ref: '#/components/schemas/Identifier' }
+        botId: { $ref: '#/components/schemas/Identifier' }
+        conversationId: { $ref: '#/components/schemas/Identifier' }
+        allowTrigger: { type: boolean }
+        allowContext: { type: boolean }
+        maxMessages: { type: [integer, 'null'] }
+        grantedBy: { type: [string, 'null'] }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+        updatedAt: { $ref: '#/components/schemas/DateTime' }
+    ContextGrantResponse:
+      type: object
+      additionalProperties: false
+      required: [grant]
+      properties:
+        grant: { $ref: '#/components/schemas/ContextGrant' }
+    TokenRecord:
+      type: object
+      additionalProperties: false
+      required: [id, botId, scopes, expiresAt, revokedAt, lastUsedAt, createdAt, token]
+      properties:
+        id: { $ref: '#/components/schemas/Identifier' }
+        botId: { $ref: '#/components/schemas/Identifier' }
+        scopes:
+          type: array
+          items: { type: string }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        revokedAt: { type: [string, 'null'], format: date-time }
+        lastUsedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+        token:
+          type: string
+          description: One-time raw token on issuance, fixed mask on list/revoke projections.
+    IssuedTokenResponse:
+      type: object
+      additionalProperties: false
+      required: [token, tokenRecord]
+      properties:
+        token: { type: string, pattern: '^dl_bot_[A-Za-z0-9_-]{32,}$' }
+        tokenRecord:
+          $ref: '#/components/schemas/TokenRecord'
+    TokenResponse:
+      type: object
+      additionalProperties: false
+      required: [token]
+      properties:
+        token:
+          $ref: '#/components/schemas/TokenRecord'
+    TokenListResponse:
+      type: object
+      additionalProperties: false
+      required: [tokens]
+      properties:
+        tokens:
+          type: array
+          items: { $ref: '#/components/schemas/TokenRecord' }
+    SetupBot:
+      type: object
+      additionalProperties: false
+      required: [id, name, status]
+      properties:
+        id: { $ref: '#/components/schemas/Identifier' }
+        name: { type: string }
+        status: { type: string, enum: [active, paused, deleting, deleted] }
+    SetupSession:
+      type: object
+      additionalProperties: false
+      required: [id, bot, status, requestedScopes, approvedScopes, requestedConversations, approvedConversations, clientName, clientVersion, protocolVersion, capabilities, expiresAt, approvedAt, exchangedAt, deniedAt, createdAt, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/Identifier' }
+        bot:
+          anyOf:
+            - $ref: '#/components/schemas/SetupBot'
+            - type: 'null'
+        status: { type: string, enum: [created, awaiting_user, approved, exchanged, denied, expired, revoked] }
+        requestedScopes:
+          type: array
+          items: { type: string }
+        approvedScopes:
+          type: array
+          items: { type: string }
+        requestedConversations:
+          type: array
+          items: { $ref: '#/components/schemas/Identifier' }
+        approvedConversations:
+          type: array
+          items: { $ref: '#/components/schemas/Identifier' }
+        clientName: { type: [string, 'null'] }
+        clientVersion: { type: [string, 'null'] }
+        protocolVersion: { type: string }
+        capabilities:
+          type: array
+          items: { type: string }
+        expiresAt: { $ref: '#/components/schemas/DateTime' }
+        approvedAt: { type: [string, 'null'], format: date-time }
+        exchangedAt: { type: [string, 'null'], format: date-time }
+        deniedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { $ref: '#/components/schemas/DateTime' }
+        updatedAt: { $ref: '#/components/schemas/DateTime' }
+    SetupResponse:
+      type: object
+      additionalProperties: false
+      required: [session]
+      properties:
+        session: { $ref: '#/components/schemas/SetupSession' }
+    SetupCreateResponse:
+      type: object
+      additionalProperties: false
+      required: [session, setupUrl]
+      properties:
+        session: { $ref: '#/components/schemas/SetupSession' }
+        setupUrl:
+          type: string
+          pattern: '^/workspace/account/bot\\?setup='

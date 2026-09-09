@@ -9,36 +9,41 @@ readonly PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd -P)"
 readonly ENV_FILE="${DUALLANE_ENV_FILE:-${PROJECT_DIR}/.env}"
 readonly BACKUP_DIR="${DUALLANE_BACKUP_DIR:-${PROJECT_DIR}/backups/production}"
 readonly LOCK_FILE="${DUALLANE_DEPLOY_LOCK_FILE:-/tmp/duallane-production-deploy.lock}"
-readonly COMPOSE_FILES=(
+readonly BASE_COMPOSE_FILES=(
   --env-file "${ENV_FILE}"
   -f "${PROJECT_DIR}/docker-compose.yml"
   -f "${PROJECT_DIR}/docker-compose.production.yml"
 )
 
+source "${SCRIPT_DIR}/release-helper.sh"
+
 bootstrap=false
 expected_commit=""
+release_profile="node-default"
+go_upgrade=false
+previous_release_snapshot=""
 app_replaced=false
-rollback_api_id=""
-rollback_api_ref=""
-rollback_web_id=""
-rollback_web_ref=""
-candidate_api_name=""
-candidate_web_name=""
 buildx_builder=""
 buildx_builder_ready=false
 buildx_cache_max=""
 expected_app_version=""
+release_state_file=""
+release_recovery_file=""
 
 usage() {
   cat <<'EOF'
-Usage: deploy/production/deploy.sh [--bootstrap] --expected-commit <git-sha>
+Usage: deploy/production/deploy.sh [--bootstrap] --expected-commit <git-sha> [--release-profile node-default|go-full]
 
-Deploys API and Web through the production Compose override. The script refuses
-to switch an existing PostgreSQL container to a different volume. Use
---bootstrap only when creating the first production container for an already
-provisioned POSTGRES_VOLUME_NAME. The expected commit is mandatory so an
-operator cannot accidentally deploy a different checkout. The checkout must
-also match DUALLANE_PRODUCTION_DIR, which defaults to $HOME/duallane.
+Deploys the fixed Node default profile unless the explicit go-full profile is
+selected. The script refuses to switch an existing PostgreSQL container to a
+different volume. Use --bootstrap only when creating the first production
+container for an already provisioned POSTGRES_VOLUME_NAME. The expected commit
+is mandatory so an operator cannot accidentally deploy a different checkout.
+The checkout must also match DUALLANE_PRODUCTION_DIR, which defaults to
+$HOME/duallane. go-full additionally requires the parent-provided Go Compose,
+health, and candidate-runtime wiring; the manifest cannot satisfy those checks
+by itself. Go-to-Go upgrades require --previous-release-snapshot pointing at
+the mode-0600 snapshot from the last successful Go release.
 EOF
 }
 
@@ -56,6 +61,26 @@ while (($# > 0)); do
       expected_commit="$2"
       shift 2
       ;;
+    --release-profile)
+      if (($# < 2)); then
+        echo "Missing value for --release-profile" >&2
+        exit 2
+      fi
+      release_profile="$2"
+      shift 2
+      ;;
+    --go-upgrade)
+      go_upgrade=true
+      shift
+      ;;
+    --previous-release-snapshot)
+      if (($# < 2)); then
+        echo "Missing value for --previous-release-snapshot" >&2
+        exit 2
+      fi
+      previous_release_snapshot="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -68,8 +93,88 @@ while (($# > 0)); do
   esac
 done
 
+if [[ "${go_upgrade}" == true && "${release_profile}" != "go-full" ]]; then
+  echo "--go-upgrade requires the explicit go-full release profile" >&2
+  exit 2
+fi
+if [[ "${go_upgrade}" == true && -z "${previous_release_snapshot}" ]]; then
+  echo "--go-upgrade requires --previous-release-snapshot" >&2
+  exit 2
+fi
+if [[ "${go_upgrade}" != true && -n "${previous_release_snapshot}" ]]; then
+  echo "--previous-release-snapshot requires --go-upgrade" >&2
+  exit 2
+fi
+if [[ "${go_upgrade}" == true ]]; then
+  release_private_artifact_path "${previous_release_snapshot}" "previous Go snapshot" || exit 2
+fi
+export RELEASE_GO_UPGRADE="${go_upgrade}"
+export RELEASE_PREVIOUS_RELEASE_SNAPSHOT="${previous_release_snapshot}"
+
 compose() {
-  docker compose "${COMPOSE_FILES[@]}" "$@"
+  if [[ "${release_profile:-node-default}" == go-full && -n "${RELEASE_GO_ACTIVATION_COMPOSE_FILE:-}" ]]; then
+    docker compose --project-name "${RELEASE_GO_ACTIVATION_PROJECT}" \
+      --profile rollback -f "${RELEASE_GO_ACTIVATION_COMPOSE_FILE}" "$@"
+    return "$?"
+  fi
+  local compose_files=("${BASE_COMPOSE_FILES[@]}")
+  if [[ "${release_profile:-node-default}" == "go-full" ]]; then
+    compose_files+=(--profile rollback -f "${PROJECT_DIR}/docker-compose.go-production.yml")
+    if [[ -n "${RELEASE_GO_IMAGE_OVERRIDE_FILE:-}" ]]; then
+      compose_files+=(-f "${RELEASE_GO_IMAGE_OVERRIDE_FILE}")
+    fi
+  fi
+  docker compose "${compose_files[@]}" "$@"
+}
+
+candidate_compose() {
+  if [[ "${release_profile:-node-default}" != "go-full" ]]; then
+    compose "$@"
+    return "$?"
+  fi
+  if [[ -n "${RELEASE_GO_ACTIVATION_COMPOSE_FILE:-}" ]]; then
+    docker compose --project-name "${RELEASE_GO_ACTIVATION_PROJECT}" --profile rollback \
+      -f "${RELEASE_GO_ACTIVATION_COMPOSE_FILE}" \
+      -f "${PROJECT_DIR}/deploy/production/go-candidate.compose.yml" "$@"
+    return "$?"
+  fi
+  local compose_files=(
+    "${BASE_COMPOSE_FILES[@]}"
+    --profile rollback
+    -f "${PROJECT_DIR}/docker-compose.go-production.yml"
+    -f "${PROJECT_DIR}/deploy/production/go-candidate.compose.yml"
+  )
+  if [[ -n "${RELEASE_GO_IMAGE_OVERRIDE_FILE:-}" ]]; then
+    compose_files+=(-f "${RELEASE_GO_IMAGE_OVERRIDE_FILE}")
+  fi
+  docker compose "${compose_files[@]}" "$@"
+}
+
+rollback_compose() {
+  if [[ -n "${RELEASE_NODE_RECOVERY_COMPOSE_FILE:-}" ]]; then
+    docker compose --project-name "${RELEASE_NODE_RECOVERY_PROJECT}" \
+      -f "${RELEASE_NODE_RECOVERY_COMPOSE_FILE}" "$@"
+    return "$?"
+  fi
+  # Rollback must reconstruct the captured Node stack from the base files;
+  # the Go production override changes the Web image, user, dependencies, and
+  # filesystem policy and is never valid for the old Node owner.
+  docker compose "${BASE_COMPOSE_FILES[@]}" "$@"
+}
+
+go_upgrade_rollback_compose() {
+  [[ "${RELEASE_GO_UPGRADE:-false}" == true ]] || {
+    echo "Go-to-Go rollback Compose is only available for an explicit upgrade" >&2
+    return 1
+  }
+  [[ -n "${RELEASE_GO_UPGRADE_OLD_PROJECT}" && -n "${RELEASE_GO_UPGRADE_OLD_COMPOSE_FILE}" ]] || {
+    echo "Go-to-Go rollback Compose snapshot is unavailable" >&2
+    return 1
+  }
+  docker compose \
+    --project-name "${RELEASE_GO_UPGRADE_OLD_PROJECT}" \
+    -f "${RELEASE_GO_UPGRADE_OLD_COMPOSE_FILE}" \
+    "$@"
 }
 
 read_env_value() {
@@ -130,24 +235,6 @@ prune_buildx_cache() {
   fi
 }
 
-version_is_greater() {
-  local candidate="$1"
-  local current="$2"
-  local candidate_major candidate_minor candidate_patch
-  local current_major current_minor current_patch
-  IFS=. read -r candidate_major candidate_minor candidate_patch <<<"${candidate}"
-  IFS=. read -r current_major current_minor current_patch <<<"${current}"
-  if ((10#${candidate_major} != 10#${current_major})); then
-    ((10#${candidate_major} > 10#${current_major}))
-    return
-  fi
-  if ((10#${candidate_minor} != 10#${current_minor})); then
-    ((10#${candidate_minor} > 10#${current_minor}))
-    return
-  fi
-  ((10#${candidate_patch} > 10#${current_patch}))
-}
-
 read_running_app_version() {
   local container_id="$1"
   local image_ref version
@@ -158,7 +245,7 @@ read_running_app_version() {
   fi
   if [[ "$(docker inspect "${container_id}" --format '{{.State.Running}}')" == "true" ]]; then
     docker exec "${container_id}" node -p "require('/app/apps/web/package.json').version"
-    return
+    return "$?"
   fi
   image_ref="$(docker inspect "${container_id}" --format '{{.Image}}')"
   docker run --rm --entrypoint node "${image_ref}" -p "require('/app/apps/web/package.json').version"
@@ -185,13 +272,11 @@ wait_for_postgres() {
     fi
     if [[ "${status}" == "exited" || "${status}" == "dead" ]]; then
       echo "PostgreSQL container entered state ${status}" >&2
-      compose logs --tail 80 postgres >&2 || true
       return 1
     fi
     sleep 2
   done
   echo "PostgreSQL did not become healthy within 60 seconds" >&2
-  compose logs --tail 80 postgres >&2 || true
   return 1
 }
 
@@ -211,8 +296,6 @@ wait_for_app() {
     sleep 2
   done
   echo "Application health/version check failed: ${url} (expected ${expected_version})" >&2
-  compose ps >&2 || true
-  compose logs --tail 120 api web >&2 || true
   return 1
 }
 
@@ -239,117 +322,145 @@ wait_for_candidate() {
     fi
     if [[ "${status}" == "exited" || "${status}" == "dead" || "${status}" == "unhealthy" ]]; then
       echo "Candidate ${service_name} container entered state ${status}" >&2
-      docker logs --tail 120 "${container_name}" >&2 || true
       return 1
     fi
     sleep 2
   done
   echo "Candidate ${service_name} did not become healthy within 80 seconds" >&2
-  docker logs --tail 120 "${container_name}" >&2 || true
   return 1
 }
 
 cleanup_candidates() {
-  local container_name
-  for container_name in "${candidate_web_name}" "${candidate_api_name}"; do
-    if [[ -n "${container_name}" ]] && docker inspect "${container_name}" >/dev/null 2>&1; then
-      docker rm -f "${container_name}" >/dev/null || true
-    fi
-  done
-  candidate_api_name=""
-  candidate_web_name=""
+  release_cleanup_candidates || return 1
+  release_cleanup_candidate_network
 }
 
-preflight_api_candidate() {
-  candidate_api_name="duallane-api-candidate-${current_commit:0:12}"
-  docker rm -f "${candidate_api_name}" >/dev/null 2>&1 || true
-  compose run -d --no-deps \
-    --name "${candidate_api_name}" \
-    -e WORKSPACE_EMAIL_WORKER_ENABLED=false \
-    -e WORKSPACE_NTFY_WORKER_ENABLED=false \
-    api >/dev/null
-  verify_container_release "${candidate_api_name}" api
-  wait_for_candidate "${candidate_api_name}" api
-  docker rm -f "${candidate_api_name}" >/dev/null
-  candidate_api_name=""
-}
-
-preflight_web_candidate() {
-  candidate_web_name="duallane-web-candidate-${current_commit:0:12}"
-  docker rm -f "${candidate_web_name}" >/dev/null 2>&1 || true
-  compose run -d --no-deps --name "${candidate_web_name}" web >/dev/null
-  verify_container_release "${candidate_web_name}" web
-  wait_for_candidate "${candidate_web_name}" web
-  docker rm -f "${candidate_web_name}" >/dev/null
-  candidate_web_name=""
-}
-
-capture_rollback_image() {
-  local service="$1"
-  local container_id
-  container_id="$(compose ps -a -q "${service}" 2>/dev/null || true)"
-  if [[ -z "${container_id}" ]]; then
-    return 0
-  fi
-  if [[ "${service}" == "api" ]]; then
-    rollback_api_id="$(docker inspect "${container_id}" --format '{{.Image}}')"
-    rollback_api_ref="$(docker inspect "${container_id}" --format '{{.Config.Image}}')"
-  else
-    rollback_web_id="$(docker inspect "${container_id}" --format '{{.Image}}')"
-    rollback_web_ref="$(docker inspect "${container_id}" --format '{{.Config.Image}}')"
-  fi
+preflight_candidates() {
+  release_start_candidates
 }
 
 rollback_app() {
   if [[ "${app_replaced}" != true ]]; then
     return 0
   fi
-  echo "Deployment failed after replacing the application; restoring previous images" >&2
-  if [[ -n "${rollback_api_id}" && -n "${rollback_api_ref}" ]]; then
-    docker image tag "${rollback_api_id}" "${rollback_api_ref}"
-  fi
-  if [[ -n "${rollback_web_id}" && -n "${rollback_web_ref}" ]]; then
-    docker image tag "${rollback_web_id}" "${rollback_web_ref}"
-  fi
-  compose up -d --no-deps --force-recreate api web || true
+  echo "Deployment failed after replacing the application; fencing new owners and restoring the previous application state" >&2
+  release_rollback_application
 }
 
 restore_runtime_after_daemon_restart() {
-  local docker_started_after_failure postgres_id service service_id
-  if [[ -z "${docker_started_before:-}" ]]; then
-    return 0
-  fi
-  if ! wait_for_docker; then
-    return 0
-  fi
-  docker_started_after_failure="$(systemctl show docker -p ExecMainStartTimestampMonotonic --value 2>/dev/null || true)"
-  if [[ -z "${docker_started_after_failure}" || "${docker_started_after_failure}" == "${docker_started_before}" ]]; then
-    return 0
-  fi
+  release_restore_daemon_snapshot
+}
 
-  echo "Docker daemon restarted during deployment; restoring existing DualLane containers" >&2
-  postgres_id="$(compose ps -a -q postgres 2>/dev/null || true)"
-  if [[ -n "${postgres_id}" ]]; then
-    docker start "${postgres_id}" >/dev/null || true
-    wait_for_postgres "${postgres_id}" || true
-  fi
-  for service in v2ray api web; do
-    service_id="$(compose ps -a -q "${service}" 2>/dev/null || true)"
-    if [[ -n "${service_id}" ]]; then
-      docker start "${service_id}" >/dev/null || true
+restore_runtime_after_successful_deploy() {
+  release_restore_daemon_after_success
+}
+
+start_release_service() {
+  local service="$1"
+  local ids id running
+  if [[ "${RELEASE_PROFILE_NAME}" == go-full ]] && release_go_upgrade_service_is_managed "${service}"; then
+    if [[ "${RELEASE_GO_UPGRADE:-false}" == true ]]; then
+      release_go_upgrade_note_new_service_attempt "${service}" || return 1
     fi
+    compose up --no-start --pull never --no-build --no-deps --force-recreate "${service}" >/dev/null 2>&1 || return 1
+    ids="$(compose ps -a -q "${service}" 2>/dev/null)" || return 1
+    release_go_upgrade_require_single_current_id "${service}" "${ids}" || return 1
+    id="${REPLY}"
+    release_verify_fence_owner "${service}" "${id}" || return 1
+    verify_container_release "${id}" "${service}" || return 1
+    release_verify_go_service_image_id "${service}" || return 1
+    running="$(docker inspect "${id}" --format '{{.State.Running}}' 2>/dev/null)" || return 1
+    [[ "${running}" == false ]] || {
+      echo "Go owner was already running before activation verification" >&2
+      return 1
+    }
+    if [[ "${RELEASE_GO_UPGRADE:-false}" == true ]]; then
+      release_go_upgrade_record_new_owner "${service}" "${id}" || return 1
+    fi
+    docker start "${id}" >/dev/null 2>&1 || return 1
+    release_wait_container_ready "${id}" "${service}" || return 1
+    release_verify_go_service_image_id "${service}"
+    return "$?"
+  fi
+  compose up -d --no-deps --wait --wait-timeout 120 "${service}" >/dev/null || return 1
+  ids="$(compose ps -q "${service}")"
+  [[ -n "${ids}" ]] || {
+    echo "Compose did not return a container for ${service}" >&2
+    return 1
+  }
+  while IFS= read -r id; do
+    [[ -n "${id}" ]] || continue
+    verify_container_release "${id}" "${service}"
+    release_verify_go_service_image_id "${service}"
+  done <<<"${ids}"
+}
+
+stop_legacy_services_for_go() {
+  local service
+  for service in "${RELEASE_STOP_BEFORE_BACKEND[@]}"; do
+    release_stop_service_and_confirm "${service}" || return 1
+  done
+  echo "P2P in-memory sessions are interrupted by the whole-backend cutover" >&2
+}
+
+start_release_backend() {
+  local service
+  if [[ "${RELEASE_PROFILE_NAME}" == "go-full" ]]; then
+    release_snapshot_validate_for_go_cutover || return 1
+    app_replaced=true
+    if [[ "${RELEASE_GO_UPGRADE:-false}" == true ]]; then
+      release_go_upgrade_fence_old_services || return 1
+    else
+      stop_legacy_services_for_go || return 1
+    fi
+    release_require_drained_runtime activation || return 1
+  else
+    app_replaced=true
+  fi
+  for service in "${RELEASE_BACKEND_SERVICES[@]}"; do
+    start_release_service "${service}" || return 1
+  done
+  for service in "${RELEASE_WORKER_SERVICES[@]}"; do
+    start_release_service "${service}" || return 1
+  done
+}
+
+start_release_edge() {
+  local service
+  for service in "${RELEASE_EDGE_SERVICES[@]}"; do
+    start_release_service "${service}"
   done
 }
 
 on_error() {
   local exit_code=$?
+  local recovery_failed=false
+  local application_recovered=true
   trap - ERR
   if [[ -n "${backup_temporary:-}" ]]; then
     rm -f "${backup_temporary}" || true
   fi
-  cleanup_candidates || true
-  restore_runtime_after_daemon_restart || true
-  rollback_app || true
+  if ! cleanup_candidates; then
+    recovery_failed=true
+  fi
+  if ! rollback_app; then
+    recovery_failed=true
+    application_recovered=false
+  fi
+  # A failed fence/drain is not permission for the generic daemon-restorer
+  # to start the old writer. Leave ambiguous ownership stopped for review.
+  if [[ "${application_recovered}" == true ]]; then
+    if ! restore_runtime_after_daemon_restart; then
+      recovery_failed=true
+    fi
+  fi
+  if [[ "${recovery_failed}" == true ]]; then
+    echo "Production deployment failed and automatic runtime recovery was incomplete; operator review is required" >&2
+    exit 1
+  fi
+  # Recovery still needs the immutable current/previous Compose artifacts.
+  # Keep them for operator diagnosis if automatic recovery was incomplete.
+  release_cleanup_go_upgrade_artifacts || true
   echo "Production deployment failed with exit code ${exit_code}" >&2
   exit "${exit_code}"
 }
@@ -365,12 +476,16 @@ on_exit() {
 trap on_error ERR
 trap on_exit EXIT
 
-for command in docker curl git grep node realpath sed sha256sum flock; do
+for command in docker cmp curl find flock git grep node realpath sed sha256sum sort stat systemctl tail; do
   if ! command -v "${command}" >/dev/null 2>&1; then
     echo "Required command is unavailable: ${command}" >&2
     exit 1
   fi
 done
+
+if ! release_load_profile "${release_profile}"; then
+  exit 1
+fi
 
 if [[ ! -f "${ENV_FILE}" ]]; then
   echo "Production environment file does not exist: ${ENV_FILE}" >&2
@@ -473,10 +588,19 @@ fi
 
 wait_for_docker
 readonly docker_started_before="$(systemctl show docker -p ExecMainStartTimestampMonotonic --value 2>/dev/null || true)"
+if [[ -z "${docker_started_before}" ]]; then
+  echo "Could not capture the Docker daemon start marker" >&2
+  exit 1
+fi
 docker volume inspect "${postgres_volume}" >/dev/null
 compose config --quiet
+release_validate_resolved_compose
+release_pin_compose_project
 
-postgres_container="$(compose ps -a -q postgres 2>/dev/null || true)"
+if ! postgres_container="$(compose ps -a -q postgres 2>/dev/null)"; then
+  echo "Could not inspect the PostgreSQL Compose container" >&2
+  exit 1
+fi
 if [[ -n "${postgres_container}" ]]; then
   mounted_volume="$(container_volume "${postgres_container}")"
   if [[ "${mounted_volume}" != "${postgres_volume}" ]]; then
@@ -488,8 +612,11 @@ elif [[ "${bootstrap}" != true ]]; then
   exit 1
 fi
 
-running_api_container="$(compose ps -a -q api 2>/dev/null || true)"
-if [[ -n "${running_api_container}" ]]; then
+if ! running_api_container="$(compose ps -a -q api 2>/dev/null)"; then
+  echo "Could not inspect the API Compose container" >&2
+  exit 1
+fi
+if [[ "${go_upgrade}" != true && -n "${running_api_container}" ]]; then
   running_app_version="$(read_running_app_version "${running_api_container}")"
   running_app_commit="$(docker inspect "${running_api_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)"
   if [[ ! "${running_app_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -501,7 +628,27 @@ if [[ -n "${running_api_container}" ]]; then
     echo "Release version ${expected_app_version} must be newer than running version ${running_app_version}" >&2
     exit 1
   fi
+  if [[ "${release_profile}" == go-full ]]; then
+    [[ "${running_app_commit}" =~ ^[0-9a-f]{40}$ ]] || {
+      echo "Node-to-Go recovery requires a complete previous release revision" >&2
+      exit 1
+    }
+    RELEASE_PREVIOUS_NODE_VERSION="${running_app_version}"
+    RELEASE_PREVIOUS_NODE_COMMIT="${running_app_commit}"
+  fi
 fi
+
+mkdir -p "${BACKUP_DIR}"
+readonly timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+readonly backup_path="${BACKUP_DIR}/duallane-${timestamp}-${current_commit:0:12}.dump"
+readonly backup_temporary="${backup_path}.tmp"
+release_state_file="${BACKUP_DIR}/duallane-${timestamp}-${current_commit:0:12}.state"
+release_recovery_file="${BACKUP_DIR}/duallane-${timestamp}-${current_commit:0:12}.recovery"
+RELEASE_RECOVERY_FILE="${release_recovery_file}"
+: >"${release_recovery_file}"
+release_snapshot_app_state "${release_state_file}"
+release_snapshot_validate_for_go_cutover
+release_freeze_node_recovery_compose
 
 if [[ -z "${postgres_container}" || "$(container_health "${postgres_container}")" != "healthy" ]]; then
   compose up -d --no-deps postgres
@@ -509,10 +656,6 @@ if [[ -z "${postgres_container}" || "$(container_health "${postgres_container}")
   wait_for_postgres "${postgres_container}"
 fi
 
-mkdir -p "${BACKUP_DIR}"
-readonly timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-readonly backup_path="${BACKUP_DIR}/duallane-${timestamp}-${current_commit:0:12}.dump"
-readonly backup_temporary="${backup_path}.tmp"
 compose exec -T postgres sh -eu -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' >"${backup_temporary}"
 if [[ ! -s "${backup_temporary}" ]]; then
   echo "PostgreSQL backup is empty" >&2
@@ -524,22 +667,30 @@ mv "${backup_temporary}" "${backup_path}"
   sha256sum "$(basename "${backup_path}")" >"$(basename "${backup_path}").sha256"
 )
 
-capture_rollback_image api
-capture_rollback_image web
-
 export BUILDX_BUILDER="${buildx_builder}"
 export COMPOSE_PARALLEL_LIMIT="${COMPOSE_PARALLEL_LIMIT:-1}"
 ensure_buildx_builder "${buildx_builder}" "${buildkit_image}"
-compose build api web migrate
-compose run --rm --no-deps migrate
+compose build "${RELEASE_BUILD_SERVICES[@]}"
+release_verify_go_edge_images
+release_verify_go_image_identity
+release_freeze_go_activation_compose
+release_verify_activation_authority
+if [[ "${RELEASE_PROFILE_NAME}" == "go-full" ]]; then
+  release_run_go_migration_and_verify
+else
+  compose run --rm --no-deps migrate
+fi
 
-preflight_api_candidate
-app_replaced=true
-compose up -d --no-deps --wait --wait-timeout 120 api
-verify_container_release "$(compose ps -q api)" api
-preflight_web_candidate
-compose up -d --no-deps --wait --wait-timeout 120 web
-verify_container_release "$(compose ps -q web)" web
+if [[ "${RELEASE_PROFILE_NAME}" == "node-default" ]]; then
+  release_start_candidate api
+  start_release_backend
+  release_start_candidate web
+  start_release_edge
+else
+  preflight_candidates
+  start_release_backend
+  start_release_edge
+fi
 
 web_bind="$(read_env_value DUALLANE_WEB_BIND)"
 web_bind="${web_bind:-127.0.0.1}"
@@ -560,9 +711,17 @@ if [[ ! "${health_url}" =~ ^https?:// ]]; then
 fi
 wait_for_app "${health_url}" "${expected_app_version}"
 
-readonly docker_started_after="$(systemctl show docker -p ExecMainStartTimestampMonotonic --value 2>/dev/null || true)"
+readonly docker_started_after="$(systemctl show docker -p ExecMainStartTimestampMonotonic --value)"
+if [[ -z "${docker_started_after}" ]]; then
+  echo "Could not read the Docker daemon end marker" >&2
+  exit 1
+fi
 if [[ -n "${docker_started_before}" && "${docker_started_before}" != "${docker_started_after}" ]]; then
-  echo "WARNING: Docker daemon restarted during deployment; services are healthy but the host requires operator review" >&2
+  restore_runtime_after_successful_deploy
+fi
+if [[ "${RELEASE_PROFILE_NAME}" == go-full ]]; then
+  release_run_gateway_smoke go-full "${expected_app_version}" "${current_commit}"
+  release_capture_successful_go_snapshot
 fi
 
 app_replaced=false
@@ -573,6 +732,8 @@ stop_buildx_builder
 echo "Production deployment completed"
 echo "commit=${current_commit}"
 echo "version=${expected_app_version}"
+echo "release_profile=${RELEASE_PROFILE_NAME}"
 echo "postgres_volume=${postgres_volume}"
 echo "backup=${backup_path}"
+echo "state=${release_state_file}"
 echo "health=${health_url}"

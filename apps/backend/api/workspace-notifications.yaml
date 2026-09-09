@@ -1,0 +1,596 @@
+openapi: 3.1.2
+info:
+  title: DualLane Workspace notifications and email settings HTTP API
+  version: 1.0.0
+  description: >-
+    Strict pre-deployment projection of the existing Node Workspace personal
+    notification, ntfy topic, and owner-only SMTP settings routes. Secrets are
+    accepted only on write/test requests and are never returned by these DTOs.
+servers:
+  - url: /
+paths:
+  /api/workspace/me/notifications:
+    get:
+      operationId: workspaceGetNotificationPreferences
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Current member notification and email preference projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+    patch:
+      operationId: workspaceUpdateNotificationPreferences
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationPreferencesPatch'
+      responses:
+        '200':
+          description: Updated member notification and email preference projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/notification-email/challenges:
+    post:
+      operationId: workspaceCreateNotificationEmailChallenge
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailChallengeRequest'
+      responses:
+        '201':
+          description: Created masked email verification challenge.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailChallengeResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/notification-email/verify:
+    post:
+      operationId: workspaceVerifyNotificationEmail
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailChallengeVerifyRequest'
+      responses:
+        '200':
+          description: Verified notification email and current preferences.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/notification-email/use-github:
+    post:
+      operationId: workspaceUseGithubNotificationEmail
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Current GitHub email selected as the verified notification email.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/ntfy:
+    get:
+      operationId: workspaceGetNtfyPreferences
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Current personal ntfy topic projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NtfyResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+    patch:
+      operationId: workspaceUpdateNtfyPreferences
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NtfyPreferencesPatch'
+      responses:
+        '200':
+          description: Updated personal ntfy preference projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NtfyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/me/ntfy/rotate:
+    post:
+      operationId: workspaceRotateNtfyTopic
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Rotated personal ntfy topic; the previous topic is invalidated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NtfyResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/settings/email:
+    get:
+      operationId: workspaceGetEmailSettings
+      security:
+        - workspaceSession: []
+      responses:
+        '200':
+          description: Owner-only SMTP settings without the password.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailSettingsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+    put:
+      operationId: workspaceUpdateEmailSettings
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailSettingsUpdate'
+      responses:
+        '200':
+          description: Updated owner-only SMTP settings without the password.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailSettingsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+  /api/workspace/settings/email/test:
+    post:
+      operationId: workspaceTestEmailSettings
+      security:
+        - workspaceSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailSettingsDraft'
+      responses:
+        '200':
+          description: Successful synthetic/real SMTP test proof for the current owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailTestResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/WorkspaceServiceUnavailable'
+
+components:
+  securitySchemes:
+    workspaceSession:
+      type: apiKey
+      in: cookie
+      name: duallane_workspace
+  schemas:
+    EmptyObject:
+      type: object
+      additionalProperties: false
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/Error'
+    NotificationPreferences:
+      type: object
+      additionalProperties: false
+      required:
+        - email
+        - maskedEmail
+        - emailSource
+        - emailVerified
+        - githubEmail
+        - enabled
+        - immediateEnabled
+        - digestEnabled
+        - mailAvailable
+      properties:
+        email:
+          type: [string, 'null']
+          format: email
+        maskedEmail:
+          type: [string, 'null']
+        emailSource:
+          type: string
+          enum: [github, custom]
+        emailVerified:
+          type: boolean
+        githubEmail:
+          type: [string, 'null']
+          format: email
+        enabled:
+          type: boolean
+        immediateEnabled:
+          type: boolean
+        digestEnabled:
+          type: boolean
+        mailAvailable:
+          type: boolean
+    NotificationsResponse:
+      type: object
+      additionalProperties: false
+      required: [notifications]
+      properties:
+        notifications:
+          $ref: '#/components/schemas/NotificationPreferences'
+    NotificationPreferencesPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled:
+          type: [boolean, 'null']
+        immediateEnabled:
+          type: [boolean, 'null']
+        digestEnabled:
+          type: [boolean, 'null']
+    NtfyPreferences:
+      type: object
+      additionalProperties: false
+      required:
+        - enabled
+        - topic
+        - serverUrl
+        - subscriptionUrl
+        - createdAt
+        - rotatedAt
+        - updatedAt
+      properties:
+        enabled:
+          type: boolean
+        topic:
+          type: string
+        serverUrl:
+          type: string
+          format: uri
+        subscriptionUrl:
+          type: string
+          format: uri
+        createdAt:
+          type: string
+          format: date-time
+        rotatedAt:
+          type: [string, 'null']
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    NtfyResponse:
+      type: object
+      additionalProperties: false
+      required: [ntfy]
+      properties:
+        ntfy:
+          $ref: '#/components/schemas/NtfyPreferences'
+    NtfyPreferencesPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+    EmailSettingsDraft:
+      type: object
+      additionalProperties: false
+      required: [smtpHost, smtpPort, fromAddress]
+      properties:
+        smtpHost:
+          type: string
+          minLength: 1
+          maxLength: 253
+        smtpPort:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 65535
+        encryption:
+          type: string
+          enum: [starttls, tls, none]
+          default: starttls
+        username:
+          type: string
+          maxLength: 320
+        password:
+          type: string
+          maxLength: 4096
+          writeOnly: true
+        fromAddress:
+          type: string
+          format: email
+        fromName:
+          type: string
+          maxLength: 80
+          default: DualLane
+    EmailSettingsUpdate:
+      type: object
+      additionalProperties: false
+      required: [smtpHost, smtpPort, fromAddress, enabled]
+      properties:
+        smtpHost:
+          type: string
+          minLength: 1
+          maxLength: 253
+        smtpPort:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 65535
+        encryption:
+          type: string
+          enum: [starttls, tls, none]
+          default: starttls
+        username:
+          type: string
+          maxLength: 320
+        password:
+          type: string
+          maxLength: 4096
+          writeOnly: true
+        fromAddress:
+          type: string
+          format: email
+        fromName:
+          type: string
+          maxLength: 80
+          default: DualLane
+        enabled:
+          type: boolean
+        testProof:
+          type: string
+          writeOnly: true
+    SmtpSettings:
+      type: object
+      additionalProperties: false
+      required:
+        - enabled
+        - smtpHost
+        - smtpPort
+        - encryption
+        - username
+        - fromAddress
+        - fromName
+        - passwordConfigured
+        - lastTestedAt
+        - lastTestStatus
+        - lastTestErrorCode
+        - failedJobCount
+        - lastDeliveryAt
+      properties:
+        enabled:
+          type: boolean
+        smtpHost:
+          type: string
+        smtpPort:
+          type: integer
+          format: int32
+        encryption:
+          type: string
+          enum: [starttls, tls, none]
+        username:
+          type: string
+        fromAddress:
+          type: string
+        fromName:
+          type: string
+        passwordConfigured:
+          type: boolean
+        activeFrom:
+          type: [string, 'null']
+          format: date-time
+        lastTestedAt:
+          type: [string, 'null']
+          format: date-time
+        lastTestStatus:
+          type: [string, 'null']
+          enum: [success, failure, null]
+        lastTestErrorCode:
+          type: [string, 'null']
+        updatedAt:
+          type: string
+          format: date-time
+        failedJobCount:
+          type: integer
+          format: int64
+          minimum: 0
+        lastDeliveryAt:
+          type: [string, 'null']
+          format: date-time
+    EmailSettingsResponse:
+      type: object
+      additionalProperties: false
+      required: [settings]
+      properties:
+        settings:
+          $ref: '#/components/schemas/SmtpSettings'
+    EmailTestResponse:
+      type: object
+      additionalProperties: false
+      required: [ok, testedAt, testProof, recipient]
+      properties:
+        ok:
+          const: true
+        testedAt:
+          type: string
+          format: date-time
+        testProof:
+          type: string
+        recipient:
+          type: string
+    EmailChallengeRequest:
+      type: object
+      additionalProperties: false
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+    EmailChallengeResponse:
+      type: object
+      additionalProperties: false
+      required: [challengeId, pendingEmail, expiresAt, resendAfterSeconds]
+      properties:
+        challengeId:
+          type: string
+        pendingEmail:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        resendAfterSeconds:
+          type: integer
+          format: int32
+          const: 60
+    EmailChallengeVerifyRequest:
+      type: object
+      additionalProperties: false
+      required: [challengeId, code]
+      properties:
+        challengeId:
+          type: string
+        code:
+          type: string
+          pattern: '^[0-9]{6}$'
+  responses:
+    BadRequest:
+      description: User-safe notification or email validation error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: A Workspace session is required.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Only the owner can manage space SMTP settings.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    TooManyRequests:
+      description: Email test or verification rate limit.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    BadGateway:
+      description: SMTP provider failure normalized to a safe error code.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    WorkspaceServiceUnavailable:
+      description: Workspace or notification provider is unavailable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

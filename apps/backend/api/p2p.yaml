@@ -1,0 +1,223 @@
+openapi: 3.1.2
+info:
+  title: DualLane P2P API
+  version: 1.0.0
+  description: HTTP contract for the transient private one-to-one lane.
+servers:
+  - url: /
+paths:
+  /api/health:
+    get:
+      operationId: p2pHealth
+      responses:
+        '200':
+          description: P2P process health projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /api/p2p/rooms:
+    post:
+      operationId: createP2PRoom
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRoomRequest'
+      responses:
+        '201':
+          description: Created transient room.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedRoom'
+        '400':
+          description: Unsupported room shape or safe JSON parser rejection.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ErrorResponse'
+                  - $ref: '#/components/schemas/JSONParserError'
+        '413':
+          description: JSON request body exceeds the 1 MiB bound.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BodyTooLargeError'
+        '503':
+          description: Bounded in-memory room capacity is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/p2p/rooms/{roomId}:
+    get:
+      operationId: getP2PRoom
+      parameters:
+        - $ref: '#/components/parameters/RoomId'
+      responses:
+        '200':
+          description: Current transient room status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomStatus'
+        '404':
+          description: Unknown or expired room.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/p2p/ice-servers:
+    get:
+      operationId: getP2PIceServers
+      responses:
+        '200':
+          description: STUN/TURN configuration projection.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [iceServers]
+                properties:
+                  iceServers:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/IceServer'
+  /ws/p2p/{roomId}:
+    get:
+      operationId: p2pWebSocket
+      description: WebSocket upgrade endpoint. Frames follow realtime/p2p.schema.json.
+      parameters:
+        - $ref: '#/components/parameters/RoomId'
+      responses:
+        '101':
+          description: WebSocket upgrade.
+        '403':
+          description: Origin is not allowed.
+        '404':
+          description: Room does not exist; an accepted socket receives room-not-found.
+components:
+  parameters:
+    RoomId:
+      name: roomId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+  schemas:
+    CreateRoomRequest:
+      type: object
+      required: [maxPeers]
+      properties:
+        maxPeers:
+          type: integer
+          const: 2
+      additionalProperties: true
+    CreatedRoom:
+      type: object
+      required: [roomId, inviteLink, expiresAt, maxPeers]
+      properties:
+        roomId:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{22}$'
+        inviteLink:
+          type: string
+          format: uri-reference
+        expiresAt:
+          type: string
+          format: date-time
+        maxPeers:
+          type: integer
+          const: 2
+    RoomStatus:
+      type: object
+      required: [roomId, expiresAt, peerCount, maxPeers]
+      properties:
+        roomId:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{22}$'
+        expiresAt:
+          type: string
+          format: date-time
+        peerCount:
+          type: integer
+          minimum: 0
+          maximum: 2
+        maxPeers:
+          type: integer
+          const: 2
+    IceServer:
+      type: object
+      required: [urls]
+      properties:
+        urls:
+          oneOf:
+            - type: string
+            - type: array
+              minItems: 1
+              items:
+                type: string
+        username:
+          type: string
+        credential:
+          type: string
+    HealthResponse:
+      type: object
+      required: [ok, service, lane, appVersion]
+      properties:
+        ok:
+          const: true
+        service:
+          const: duallane
+        lane:
+          const: ready
+        appVersion:
+          type: string
+    ErrorResponse:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+    JSONParserError:
+      type: object
+      required: [statusCode, code, error, message]
+      additionalProperties: false
+      properties:
+        statusCode:
+          type: integer
+          const: 400
+        code:
+          type: string
+          enum: [FST_ERR_CTP_EMPTY_JSON_BODY, FST_ERR_CTP_INVALID_JSON_BODY]
+        error:
+          type: string
+          const: Bad Request
+        message:
+          type: string
+          enum:
+            - "Body cannot be empty when content-type is set to 'application/json'"
+            - "Body is not valid JSON but content-type is set to 'application/json'"
+    BodyTooLargeError:
+      type: object
+      required: [statusCode, code, error, message]
+      additionalProperties: false
+      properties:
+        statusCode:
+          type: integer
+          const: 413
+        code:
+          type: string
+          const: FST_ERR_CTP_BODY_TOO_LARGE
+        error:
+          type: string
+          const: Payload Too Large
+        message:
+          type: string
+          const: Request body is too large

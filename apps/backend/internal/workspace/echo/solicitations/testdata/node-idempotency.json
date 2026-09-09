@@ -1,0 +1,23 @@
+[
+  {
+    "name": "html-unicode-and-null-deadline",
+    "input": {
+      "actorId": "usr_sol_pg_owner",
+      "spaceId": "spc_default",
+      "title": "Node <&\u2028X",
+      "description": "Desc>&\u2029Z",
+      "question": "Q",
+      "options": ["A<&", "B"],
+      "idempotencyKey": "node-create-1"
+    },
+    "hash": "358fa84859461653424100082504aece92546387fb2a01e733257fe97be0e05c",
+    "transition": {
+      "actorId": "usr_sol_pg_owner",
+      "spaceId": "spc_default",
+      "publicId": "SOL-2026-0001",
+      "expectedRevision": 1,
+      "idempotencyKey": "node-publish-1"
+    },
+    "transitionHash": "d4163fb1539d0459eb8e75ac4e3ee1ec2e006b87672fe9a7860947351de42470"
+  }
+]

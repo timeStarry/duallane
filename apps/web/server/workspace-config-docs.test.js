@@ -87,13 +87,18 @@ describe("workspace configuration docs", () => {
 
   it("preflights production candidates and waits for health before each service replacement", async () => {
     const deploy = await readFile(path.join(repoRoot, "deploy", "production", "deploy.sh"), "utf8");
+    const helper = await readFile(path.join(repoRoot, "deploy", "production", "release-helper.sh"), "utf8");
+    const serviceStart = deploy.match(/^start_release_service\(\) \{\n([\s\S]*?)^\}/m)?.[1] ?? "";
+    const candidateStart = helper.match(/^release_start_candidate\(\) \{\n([\s\S]*?)^\}/m)?.[1] ?? "";
 
-    expect(deploy).toContain("preflight_api_candidate");
-    expect(deploy).toContain("preflight_web_candidate");
-    expect(deploy).toContain("compose up -d --no-deps --wait --wait-timeout 120 api");
-    expect(deploy).toContain("compose up -d --no-deps --wait --wait-timeout 120 web");
-    expect(deploy.indexOf("preflight_api_candidate")).toBeLessThan(deploy.lastIndexOf("compose up -d --no-deps --wait --wait-timeout 120 api"));
-    expect(deploy.indexOf("preflight_web_candidate")).toBeLessThan(deploy.lastIndexOf("compose up -d --no-deps --wait --wait-timeout 120 web"));
+    expect(deploy).toContain('source "${SCRIPT_DIR}/release-helper.sh"');
+    expect(serviceStart).toContain('compose up -d --no-deps --wait --wait-timeout 120 "${service}"');
+    expect(serviceStart).toContain('verify_container_release "${id}" "${service}"');
+    expect(candidateStart).toContain('release_wait_candidate "${candidate_name}" "${service}" || return 1');
+    expect(candidateStart).toContain('release_verify_candidate_mode "${candidate_name}" "${service}" || return 1');
+    // Assert executable call order, not an earlier function declaration.
+    expect(deploy).toMatch(/\nif \[\[ "\$\{RELEASE_PROFILE_NAME\}" == "node-default" \]\]; then\n\s+release_start_candidate api\n\s+start_release_backend\n\s+release_start_candidate web\n\s+start_release_edge\nelse\n\s+preflight_candidates\n\s+start_release_backend\n\s+start_release_edge\nfi/);
+    expect(deploy).toMatch(/^preflight_candidates\(\) \{\n\s+release_start_candidates\n\}/m);
   });
 
   it("gates production releases by commit and version, then releases build resources", async () => {

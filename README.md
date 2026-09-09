@@ -48,6 +48,11 @@ point. It links progressively to the detailed
 architecture, code, UI/UX, security/data, testing, release, and deployment. Only
 GitHub user **`timestarry`** may perform the final merge into `main`.
 
+The [backend architecture index](docs/backend/README.md) defines the approved Go
+target and the live migration ledger. The checked-in Node/Fastify runtime remains
+authoritative for each capability until that ledger and production routing show
+that ownership has moved.
+
 Product behavior is defined separately in [`DESIGN.md`](DESIGN.md), the
 [Workspace design index](docs/WORKSPACE_DESIGN_INDEX.md), and the
 [P2P product design](docs/O2O_PRODUCT_DESIGN.md). Read the smallest relevant

@@ -1,0 +1,2835 @@
+# Backend Pre-deployment Completion Work Record
+
+## Objective And Authority
+
+User request: complete the Go backend refactor's pre-deployment work and submit
+a pull request. Base `25121ae`, branch `codex/go-backend-architecture`; fetched
+`origin/main` is `b6dd0c66ed00a7c6a6f252cac537b43ef262e743` (already an ancestor).
+
+The acceptance boundary is a fully implemented, integrated, reviewed and tested
+candidate release, with deployment/rollback tooling and an accurate PR. No
+production deployment, merge, data import, external notification delivery or
+production ownership transition is authorized. Keep Node rollback support until
+the separately authorized cutover and observation window. The canonical owner
+ledger remains [Evolution](../EVOLUTION.md); this is implementation evidence and
+a work queue, not a second owner ledger.
+
+Observable behavior remains the existing P2P/Workspace/SDK contract. Every
+deviation requires an explicit compatibility/security decision and tests. P2P
+remains transient and isolated from database/storage credentials. Workspace
+retains server authorization, quota-before-body, retention, idempotency, audit,
+event and object-reference invariants. All rehearsals use disposable synthetic
+state; historical SQL migrations are immutable.
+
+## Ordered Acceptance Queue
+
+The deployment-preparation queue is accepted against runtime `205f470` and its
+[final evidence record](2026-09-08-predeployment-handoff.md). Historical slice
+results below are not silently promoted to final-image evidence. PR-head checks
+for the documentation-only closeout are recorded in PR #2.
+
+- [x] Close P2P error/HTTP/WebSocket parity and privacy/lifecycle gaps.
+- [x] Run browser P2P text/file/fallback/fragment acceptance against Go.
+- [x] Complete and integrate Avatar, Emote, Bot Gateway and Echo candidates.
+- [x] Inventory all active Node endpoints, jobs, maintenance operations and Go
+      composition; account for each capability without placeholder services.
+- [x] Prove Workspace auth/read/write/realtime and extended-domain compatibility,
+      including persisted effects, audit, retries, concurrency and permissions.
+- [x] Prove local/S3 object and native media compatibility, failure cleanup and
+      resource bounds.
+- [x] Complete worker delivery/leases, cross-process presence, cleanup and
+      maintenance command ownership; test with synthetic local providers.
+- [x] Rehearse Node/Go bootstrap, upgrade, schema coexistence and rollback.
+- [x] Build candidate images and validate private-container/gateway configuration,
+      readiness, failure refusal, restoration and application rollback.
+- [x] Restore a passing whole-tree baseline, run required Go/Node/PostgreSQL/
+      browser/container gates, and independently review the aggregate diff.
+- [x] Update durable backend/Agent/operator guidance and release compatibility
+      notes without claiming production is already Go.
+- [x] Push split commits, submit the PR with exact evidence and review risks,
+      and address actionable CI/review failures before readiness.
+
+Production observation and final legacy removal occur after this task's boundary;
+they remain explicit operator gates, never fabricated pre-deployment passes.
+
+## Current Closeout Map — 2026-09-09
+
+Use the concise [pre-deployment handoff](2026-09-08-predeployment-handoff.md)
+for the exact candidate, CI, native checks, runtime/upgrade image identities and
+replay commands. Runtime `205f470` passed all four CI jobs, original Go Workspace
+browser 18/18, native media 28 cases, fresh migration/drain 2/2, the complete
+selected Node-to-Go coordinator (6 passes; upgrade explicitly run separately),
+and real Go upgrade/previous-Go/Node recovery 1/1. Parent confirmed empty owned
+coordinator container/volume/network inventories after cleanup and preserved
+the pre-existing healthy validation stack.
+
+The parent accepted `planned -> parity` in the canonical ledger only after these
+gates. No production route or owner switched. Actual deployment, observation and
+legacy retirement remain outside this task. The retained Node offline storage
+operators are an explicit compatibility boundary, not missing Go runtime wiring.
+
+Echo's post-commit cancellation defect was reproduced with the same controlled
+browser fixture: old logic lost delivery and failed the card check; `a49afb0`
+preserved bounded delivery and passed. The original browser cases were not
+weakened. Immutable SQL/JSON, COPY-created directories and Vite-copied public
+assets received scoped permission fixes in `90ea1fc`, `88dd742` and `205f470`.
+Final non-root reads and gateway HTTP smoke pass without widening secrets or
+data permissions. The handoff retains failed `077`, `53`, and `88` image results
+as negative evidence; old passing components never override a failed lifecycle.
+
+## Historical Closeout Map — Early 2026-09-08
+
+This map supersedes earlier **open implementation** notes only where an
+accepted slice below records the fix. Historical failed checks remain useful
+regressions; they are not erased or silently turned into passes. Production
+ownership is unchanged and is recorded only in the canonical ledger.
+
+| Gate | Latest reviewed result | Remaining acceptance |
+| --- | --- | --- |
+| Go quality, PostgreSQL and native parity | CI `34060931703` on exact pushed `8d275741058eb3ececdf89a9fd76e1cb7ba04776`: complete Go quality/PostgreSQL/native-parity job passed | Repeat on the final integrated candidate; this run is not an all-green aggregate |
+| Go P2P | The same `8d27574` CI run's Go P2P job passed | Retain the result in the final integrated image/aggregate evidence |
+| Actual native media | Clean `4b03dba` build target `sha256:44d0f595100abda6c3365d777403416ce652da1ad84439b68b9c0422bd714794`: 28 cases, 16 accepted, 12 rejected, 16 pixel checks, zero failures with native libvips 8.14.1 | Retain exact-source evidence with the final image set |
+| Workspace browser | `8d27574` CI: 14/16, including both added access-race tests. Echo still failed at `workspace-echo-release.spec.ts:34`, and the original full flow at `workspace.spec.ts:1605`. The private body-consumption fix passed that step but exposed a later image failure at 1661 | Finish the focused fix/regression and later media/Echo RCA without changing original assertions, deadlines or retries; final complete suite still required |
+| Workspace event projection | Accepted slice `17a3b73ec58c1863dc0bbdf4fa945d7d22a3f619` is included in pushed integration `4b03dba`; full events-package PostgreSQL/race `-count=1` passed in 7.767s and PostgreSQL-tagged scoped staticcheck passed | Rerun the clean integrated browser and aggregate gates after the new CI completes |
+| Node checks | Complete `8d27574` CI Node test/lint/build/Chromium job passed. Parent native validation of accepted `682f473` passed 80 focused tests, lint and complete Web 732 PASS/2 original SKIP | Repeat after the current scoped fixes |
+| Release coordination | `6bc657f` fixes ERR-trap delegated status inheritance; `56bfc2c` records real positive/automatic-recovery 5/5 PASS and Go→Go→previous-Go→Node 1/1 PASS. Independently reviewed `ff2fac7` adds real passive preflight 1/1 PASS with exact images and unchanged PostgreSQL | Final integrated evidence; positive Go upgrade is not every possible upgrade fault timing |
+| Storage compatibility | Accepted bounded legacy reads, permission probes, read-only plan/verify, explicit S3 provisioning, backfill journal library and retained offline operator boundary | Prove final-image/same-authority recovery; no production copy or finalization |
+| Drain checks | The pinned CLI, private report/config, real one-shot runner and coordinated post-fence lifecycle/failure/recovery checks passed | Retain exact-source/final-image evidence; no live production drain is authorized |
+| Delivery | `8d27574` is pushed, including `58e93aa` and `ff2fac7`; CI `34060931703` completed with Go quality/PostgreSQL/native, Node and P2P PASS, but Workspace 14/16 with the same two original failures; PR #2 remains draft | Current scoped fixes, final aggregate/CI, safe artifact cleanup and complete PR evidence before readiness |
+
+The parallel fixes do not change frontend test assertions, retries or timeouts.
+Private browser diagnostics are not PR artifacts. Passing component checks do
+not substitute for a coordinated release rehearsal or authorize a deployment.
+
+### September 8 Incremental Verification
+
+#### Accepted Markdown Summary Adapter
+
+Clean native `077085b` subsequently passed `make -C apps/backend verify` and
+the complete `TEST_DATABASE_URL=<disposable fixture> make -C apps/backend
+integration-postgres` gate. Node passed 8 SDK tests and 732 Web tests (2 original
+skips), followed by lint and build. The unchanged complete Go Workspace browser
+suite finished 17/18 in 3.2 minutes: only the original Echo release card check at
+line 34 failed after its success confirmation; the long original full flow
+passed. Since `623dc69` CI `34245844380` and an earlier local full suite were
+green, this is an intermittent unresolved card-visibility defect, not a basis
+for erasing the failure or relaxing the test. A bounded luna-worker RCA is in
+progress, and final aggregate acceptance remains open.
+
+Accepted `077085b3c6e8267a3334023abbb5ff2b1bc95e68` pins Goldmark v1.8.6,
+adds the Node-derived 59 single-block/5 joined-block goldens and shares the
+summary path across message creation, stored retry comparison, HTTP and event
+read projection. Parent reproduced all five focused PostgreSQL summary
+failures on the old implementation (1.538s), then passed the new stored-retry
+and member-read regression with no rewritten content or duplicated audit/event
+rows. The Node check passed on 22.23.2. Native messages/events/conversations
+PostgreSQL/race packages passed in 10.690s/10.724s/6.795s; the final focused
+summary, mixed-block and bounded fuzz-seed race check passed in 1.274s.
+Scoped PostgreSQL staticcheck and `go mod verify` passed. These component
+results used the native validation copy plus the exact reviewed source files;
+the clean exact-commit aggregate is now being run separately.
+
+`go tool govulncheck ./...` and its verbose follow-up returned zero reachable
+symbol vulnerabilities. They also reported five imported-package findings
+(x/image and unused chi middleware) and three module-only x/crypto findings;
+Goldmark was not among the findings. This is not a claim that the entire
+dependency graph has zero advisories. P2P dependency listing contains no
+Goldmark or Workspace package. The pinned source's MIT license was inspected;
+the decision and ongoing oracle gate live in Technology and Validation.
+
+#### Reviewed Browser And Composition Follow-up
+
+Accepted `25d083e` restores the canonical `items, usage, limits` envelope for
+the custom-emote list. Its new Node-fixture comparison failed on the old Go
+route (0.458s). Parent then passed the complete HTTP API PostgreSQL/race package
+in 63.860s and scoped PostgreSQL-tagged staticcheck. Accepted `2e56e8f` adds the
+enabled application graph smoke; the complete Workspace command PostgreSQL/
+race package passed in 49.576s. It synchronizes with actual WebSocket handler
+completion and rejects null list fields. Exact source hashes matched the
+native Linux validation copy; this smoke is not positive parity for every
+mutation.
+
+Accepted `53e1e11` makes the picker consume its successful upload response
+before refreshing. The strict regression accepts only Node's `items` list
+shape; it passed on Node (15.3s) and Go (16.6s), with complete lint passing.
+The original full flow with this fix and the pending event-text correction
+passed the prior 1605/1661 failures, including copied-emote image decoding,
+then failed at 1707 on the missing pinned-message indicator. Accepted
+`0fb9368` fixes the message-history read projection: it joins the pin by both
+conversation and message ID, includes viewer-specific `canUnpin`, and omits
+pins from recalled messages. The new real-PostgreSQL test failed on the old
+implementation (`pin=nil`); the fixed messages/conversations/events race
+packages passed (8.624s/5.049s/8.127s), with scoped staticcheck passing.
+Accepted `11328e9` adds an actual owner/member browser regression: Node passed
+in 10.4s, Go in 4.9s, while the old Go projection fails on the missing marker.
+The original full flow now passes in 42.1s (both Go cases: 56.0s total), without
+changed assertions, deadlines or retries. This is focused evidence, not yet
+the final whole-tree gate.
+
+The strengthened access-race test now proves removal is visible in React
+before releasing a previously fetched list. A real ahead-cursor hello triggers
+an independent HTTP sync; a subsequent hello using the actual server cursor
+resumes the live subscription, which Go pauses after `sync.required`.
+Node 2/2 passed in 56.4s and Go 2/2 in 38.9s; complete lint passed. Parent's
+old-client-only `d60f71c` overlay fails at the post-release restored-conversation
+assertion. The newer `9c57ec3` client already passes this case; that run is
+compatibility evidence, not a reproduced old failure. A prior attempted
+baseline was not restored due to Git's ownership guard and is excluded.
+
+Accepted `6709c00` restores the same canonical list envelope after emote
+reordering, including active emotes omitted from the requested ordering.
+The new regression failed against the old route (0.032s); all emote route
+race tests passed (1.073s) and scoped staticcheck passed.
+
+Independent event review additionally requires Node's per-type block allowlist,
+raw text bytes (including empty strings), invalid-card text fallback, and
+plain text derived from projected blocks. The projection fix is being accepted
+separately from Markdown parsing. The original whitespace-only fix passed the
+events PostgreSQL/race package (19.578s), but that alone is not full summary
+compatibility. On September 8 the user explicitly approved a pinned Markdown
+parser after Node characterization demonstrated lost link labels, fenced-code
+language leakage, intraword underscores and adjacent-text spacing differences.
+Goldmark implementation and final summary compatibility gates remain in progress;
+the decision changes no service topology, schema or production ownership.
+Accepted `623dc69` contains the per-type event projection and shared summary
+entry point. Parent's exact-source events package passed with
+`TEST_DATABASE_URL=<disposable fixture> go test -tags postgres_integration
+-race -count=1 ./internal/workspace/events` in 10.028s; scoped PostgreSQL-tagged
+staticcheck passed. Earlier untagged/pure runs are not PostgreSQL evidence.
+The old invalid-card test was corrected to assert Node's text fallback rather
+than preserve an invalid reference; private-field rejection remains covered.
+
+Parent's native Linux browser validation then passed all 18 Go Workspace cases
+in 2.3 minutes, including the original Echo and full-flow cases (the latter
+59.3s), the strengthened access races, strict upload response ordering and
+owner/member pin history. This copy uses base `8d27574` plus the reviewed
+schema/cleanup, client, emote-list, pin and event-projection overlays. Its
+private configuration changes only the test server ports (5698/9398); original
+assertions, timeouts and retries remain unchanged. The new reorder route and
+Markdown adapter were not part of this run. Final exact-commit aggregate/CI
+validation remains required, so this result does not mark the PR ready.
+
+Pushed `795eb94fa81d0e527cc17c5a8dc871f635c811d9` includes migration slice
+`55cf159` and terminal cleanup `cc30f75`. CI `34234929369` completed: Go quality,
+PostgreSQL/native parity, Node test/lint/build/Chromium and Go P2P jobs passed;
+the separate Go Workspace browser job remained 14/16 (5.5m), with the original
+Echo line 34 and full-flow line 1605 failures. This is not final acceptance.
+
+Parent reproduced the later full-flow line 1661 failure on the native Linux
+`8d27574` validation copy plus the accepted schema/cleanup changes and the
+pending two-line upload-response body-consumption fix. Read-only diagnostics
+proved the copied-emote message exists, is readable and arrives over WebSocket.
+Its emoji-plus-text projection loses the whitespace-only text block's required
+`text` value; the client then throws a `TypeError` while reading `replace`, and
+the Workspace shell unmounts. The initial list-overwrite hypothesis was ruled
+out: no list update removed the message. The Go event text-projection fix and
+focused regression are in progress. All private instrumentation was removed
+from the validation source afterward; original assertions/deadlines remain.
+
+The response-body ordering regression independently failed on the old client
+at its pre-release library-load assertion (2 loads, expected 0), then passed
+with the two-line body-consumption fix on Node (16.9s), with complete lint also
+passing. The Go run passed in 27.3s, but review identified a separate contract
+mismatch: `GET /api/workspace/me/emotes` must return Node's `items`, while Go
+currently returns `emotes`. The regression's temporary dual-shape acceptance
+has been removed; the focused route fix and strict Node/Go rerun remain pending.
+
+Independent review found that the migration failure rehearsal must identify
+the expected 031/033 failure, not just a nonzero process exit plus a rolled-back
+schema; a signal exit must also be rejected. Parent accepted the strengthened
+checks after 9/9 passed on real PostgreSQL, no skips, in 27.526s. The first
+attempt correctly refused an inaccurate Node conflict fingerprint; the Node
+runner reports the missing `space_id` column and SQLSTATE 42703, not a table
+name. The accepted gate uses that exact conflict and Go's migration identity.
+Safe errors are rebuilt from fixed labels, never preserving provider causes,
+custom properties or stacks. Source hashes matched the validated Linux copy.
+
+The enabled composition smoke reached its positive reads, mutation refusals,
+state snapshots and WebSocket ready on real PostgreSQL, but parent's focused
+race run failed in 5.690s because the final WebSocket route metric had not yet
+been recorded. The test must synchronize with server-side handler completion,
+and reject JSON `null` where an array is required, before acceptance.
+
+### Additional Bounded Closeout Audit
+
+A composition/ownership audit identified three narrowly scoped follow-ups,
+separate from the known browser failures and final aggregate gate:
+
+- Terminal upload maintenance cleans physical staging artifacts but must also
+  remove legacy `workspace_upload_parts` rows under the existing upload lock
+  and transaction. Normal Go complete/fail already deletes those rows; that
+  does not cover pre-existing terminal leftovers. Preserve active/recent
+  uploads, canonical content-addressed objects, quotas and audit semantics.
+- The schema coexistence rehearsal races Node and Go upgrades under the same
+  advisory lock, so it does not deterministically prove which runner performed
+  the upgrade. Retain that concurrency test and add Go-only old-prefix to
+  dynamic-latest upgrade, Node no-op, and Go failure/rollback/retry evidence.
+- The route inventory proves registration and exact disabled behavior with an
+  empty service graph. Add a bounded enabled-graph wiring/smoke check; do not
+  misrepresent it as positive business parity for every endpoint.
+
+Upload cleanup is accepted as `cc30f75`; enabled-smoke implementation remains
+in progress. The cleanup retains legacy part metadata until physical staging
+cleanup succeeds, then rechecks terminal status and age under the upload lock
+before a transactional delete. Active/recent uploads and canonical objects are
+unchanged. Parent demonstrated two focused failures on the old production
+implementation, then passed the files package with `-count=1 -race` (1.507s),
+the full files PostgreSQL/race package (27.613s), PostgreSQL-tagged staticcheck,
+and all-module compile checks. All six source/test SHA-256 hashes matched the
+validated Linux copy before commit. The tests cover retained retry metadata,
+physical failure, concurrency, idempotency and transaction rollback.
+
+Schema slice `55cf1597baccf7aab3634cd646246570cd7e06cf` passed
+parent Linux-native real PostgreSQL validation:
+4/4, no skips, six scenarios in 14.629 seconds. It covers deterministic
+Go 029→030→dynamic-latest and Go 030→latest, exact Node no-op history/timestamps,
+and Go failures at both 031 and 033 followed by successful retry. Parent added
+the late 033 conflict to prove earlier 031/032 effects also roll back, not only
+the first pending migration. No canonical SQL was edited. This is an explicit
+remaining queue, not a new production-owner ledger or authorization for live
+data cleanup.
+
+An independent review of `58e93aa` found that the first access-race browser
+case can false-pass when its member-removal event is queued behind the held
+list request. Receiving the socket frame and waiting animation frames does not
+prove React applied that removal before response release. The case is being
+strengthened using an independent request trigger and an observable pre-release
+state; its earlier PASS remains execution evidence, not sufficient proof of
+that race. The second delayed-read/explicit-leave case was not affected.
+
+CI run [34056441588](https://github.com/timeStarry/duallane/actions/runs/34056441588)
+tested exact pushed commit `9c57ec3f80593c6c88cf92c2ce786f99ccc5672b` and
+completed with an overall failure. The Go quality/full-PostgreSQL/native-parity
+job and the Go P2P job passed. The Go Workspace Chromium job reported 13/14:
+Echo and the two new state-race cases passed, while the unchanged original
+240-second full flow failed at `e2e/workspace.spec.ts:865` on the old message
+lookup. The Node job reported 726 passed, 1 failed and 2 skipped; its
+sourceguard failure is the literal `latestMessages: data.messages` versus the
+event latest-message merge projection, and its later lint/build/browser steps
+were skipped, not passed. The event latest-message projection, conversation
+access epochs and browser access-race tests remain in progress. The combined
+accepted Go events slice, included in pushed integration `4b03dba`:
+`17a3b73ec58c1863dc0bbdf4fa945d7d22a3f619` passed the full events-package
+PostgreSQL/race check with `-count=1` in 7.767 seconds and PostgreSQL-tagged
+scoped staticcheck; new CI is pending. The combined
+`production-deploy`, `release-activation`, `release-cleanup` and
+`release-go-restore` checks are 75/75 PASS in 172.261 seconds with no skips.
+The coordinated slice is committed as `e97a131`, included in pushed integration
+`4b03dba`, and E's read-only review approved it. The default static
+network-boundary addition passed 2/2; its real Docker branch was SKIP. The
+positive runtime executed before that static case passed Node PG/API/Web, pin,
+Go migration, Node fence, drain, four healthy Go services, gateway, four
+`0600` snapshots, `release_rollback_application` and exact Node API/Web health
+in 2/2 cases with no skips (119.510 seconds wall time, 119.288 seconds actual
+case time); PostgreSQL identity was unchanged.
+The earlier `gateway_binding_invalid` was resolved by adding only Web to the
+second gateway network; PostgreSQL and the backend remain internal. Task-label
+cleanup inventory is 0 containers, 0 networks and 0 volumes. This is positive
+lifecycle evidence only: failure, passive-candidate and Go-to-Go validation
+remain open, and rollback is not yet complete. A newer uncommitted fault-gate
+run took 299.924 seconds across 5 cases with 3 passes, 2 failures and no
+skips: positive 118.565 seconds passed, after-backend 96.973 seconds failed,
+and after-capture 84.241 seconds failed; expected recovery did not occur.
+Normal Node-to-Go manual rollback still passed at that observation point.
+The later root-cause isolation and patch are recorded immediately below.
+Private logs, DOM/cookies and diagnostic artifacts are excluded from this
+record and the draft PR; they are not pass evidence. This CI result is not a
+final aggregate or a completed coordinator rehearsal.
+
+### Fault-Gate Recovery Observation
+
+The first uncommitted fault-gate run took 299.924 seconds and produced 3
+passes and 2 failures across 5 cases, with no skips. The positive case passed
+in 118.565 seconds; the after-backend case failed in 96.973 seconds and the
+after-capture case failed in 84.241 seconds. Expected recovery did not occur
+in either failing case. The normal Node-to-Go manual rollback still passed.
+
+Follow-up runs failed in 77.202 and 62.913 seconds. Content-free source-location
+diagnostics identified the first fencing inventory query. Parent reproduced
+the root cause independently: in a Bash `ERR` trap, `f(){ true; return; }`
+returns the triggering status 74, not the successful command's status. The
+actual `release_current_service_ids` had that bare return, so automatic recovery
+rejected an otherwise successful Compose query before stopping Go owners.
+Manual rollback outside the trap did not exercise this context.
+
+The parent changed delegated returns in `deploy.sh` and `release-helper.sh` to
+explicitly forward `$?`, preserving both success and genuine downstream failure.
+The runtime fix is committed as `6bc657f`; it is not included in `4b03dba`.
+Both shell syntax checks passed. Parent independently passed the two real-trap
+regressions in 0.182 seconds, and confirmed both fail with the exact `4b03dba`
+helper/deploy baseline (0.148 seconds). Success and downstream failure are tested
+under the actual ERR context, with the original trigger status preserved.
+The existing release component matrix passed 75/75 in 175.253 seconds.
+
+The real Docker test slice `56bfc2c` passed 5/5 with no skips in 332.087
+seconds: two static cases, positive lifecycle (119.702 seconds), after-backend
+automatic recovery (95.393 seconds), and after-capture recovery (116.875
+seconds). Both faults preserved exit status 74 and restored exact-image healthy
+Node API/Web with no remaining Go owners and the same PostgreSQL container.
+These use the Node `37ae061` / Go `469176d` immutable image set recorded below.
+
+### Real Go Upgrade And Previous-Release Recovery
+
+Parent passed the opt-in Go-to-Go case in `56bfc2c`: 1/1, no skips, 207.177
+seconds. It bootstrapped Node `37ae061`, activated Go `469176d` (0.16.0),
+upgraded to clean `4b03dba` with a synthetic 0.16.1 label, restored exact
+previous Go, then restored exact Node. PostgreSQL identity stayed unchanged
+and both four-file recovery bundles were mode 0600. The synthetic version is
+test-only metadata, not a published product version. A fresh inner Bash keeps
+upgrade state separate from the outer Node recovery context.
+
+The clean `4b03dba` upgrade images were P2P
+`sha256:ed0641aeb8aa6600a3bfbbb016265d9a9254437b65e87e926973fc538afa73b5`,
+Workspace/worker/migrate
+`sha256:12608add17b56e8624619a2a18fed93af55812c9f17cb8196d6b6b39ef450322`,
+and Web
+`sha256:95342a6d0471b9e5d95979ce1c2a2ee16771370b26692db3764bfe5958f57685`.
+The final coordinator label inventory was zero containers, networks and volumes.
+This positive upgrade/recovery result does not cover every upgrade failure
+timing, passive candidates, or the final aggregate candidate.
+
+### Real Passive-Candidate Preflight
+
+The parent integrated the pure fixture with the actual release coordinator and
+passed its real Docker case: 1/1, no skips, 156.738 seconds (156.613 actual
+case). It uses the same Node `37ae061` / Go `469176d` images as the recorded
+positive/fault lifecycle. `release_start_candidates` checks the actual modes,
+non-root/read-only runtime, read-only data, private aliases, no published ports
+and candidate cleanup before the exact old Node API/Web health checks. It then
+activates Go and restores Node with the same PostgreSQL container.
+
+The fixture writes a full candidate base before applying the canonical overlay;
+merging only a network override over the active fixture would wrongly retain
+active networks. The default real Linux Compose-resolution gate passed 4/4 in
+0.244 seconds. The test pre-creates an internal, uniquely owned candidate
+network and records creation intent for cleanup; it exercises verified reuse
+and cleanup, not the production helper's network-create branch. Existing
+commit-scoped candidate containers are refused before mutation. All provider
+flags are false; no production data or provider is contacted. Fixture review
+approved the shape and safety boundary. Coordinator review found that the
+test-only leftover-network guard used explicit `exit`, bypassing ERR. Parent
+changed it to a normal failure and added real Bash branch checks (2/2 static
+cases PASS in 0.244 seconds). Coordinator re-review approved the correction.
+The corrected full passive case passed 1/1 again, no skips, 151.332 seconds
+(151.175 actual case), and the final task-label inventory was zero containers,
+networks and volumes. The five-file slice is committed as
+`ff2fac7c62e4bcd3664a8cb90407e1f5352ac5f2`.
+
+### Independent Client Review And Browser Follow-up
+
+Independent review of the access-epoch slice found three remaining cases:
+a delayed notification-level response could reinsert revoked conversation
+data, restored read permission did not reload the conversation/file lists, and
+a failed leave could leave history loading locked after membership invalidation.
+A bounded implementation/test follow-up owns only those client surfaces; no
+browser deadline or existing assertion is changed.
+
+Accepted follow-up `682f47353397ba0fc72da51c1aed25daff67ec2f` guards the
+notification response by session/access/membership epochs, hydrates restored
+permissions from the current bootstrap, and releases only the invalidated
+history loading entry. Restoration reads current permission refs after the
+response-generation checks. Parent Linux-native validation passed 80 focused
+tests in 0.525 seconds, lint, and the complete Web suite: 732 passed, 2 original
+skips across 83 files in 140.25 seconds. An older source-string assertion was
+updated to the captured conversation ID; its behavioral boundary is unchanged.
+The added unit cases are source/wiring checks, not browser reproductions.
+
+The new access-race browser file was separately tested on clean `4b03dba` using
+the formal Go harness with only private ports 5398/9098 substituted. First
+combined run: explicit-leave passed (3.2 seconds), member-removal failed before
+the business assertion because the page did not reach `data-app-state=ready`.
+Focused member-removal then passed (3.5 seconds; 10.4 seconds whole run).
+These are separate case passes, not a 2/2 combined pass. Initialization failure
+is still being diagnosed and is not assumed to be harmless harness noise.
+The earlier Node-only runs are not Go evidence. All original deadlines and
+assertions remain intact; private diagnostics are excluded.
+
+Parent then independently ran the exact new file on clean `682f473` in a
+separate Linux-native clone, using the formal Go harness with only private
+ports 5698/9398. The first combined run passed 2/2 (1.7 minutes including
+startup/build, exit 0). Both ports were released afterward. SHA-256 of the
+validated and committed test matched:
+`de608e3ae810be1a42b4bc5ba1e137032aa567fe00d60e6c2fa00ee73a9cd3c0`.
+The regression file is committed separately as `58e93aa`; the earlier
+initialization failure and original full-suite failures remain recorded.
+
+A separate clean `17a3b73` original full-flow run also reached the custom-emote
+step and failed at line 1605 after the original 240-second deadline. Its response
+waiter saw HTTP 201 but `response.json()` did not complete before test teardown.
+This observation does not distinguish a slow preceding flow from a stuck body;
+the timing/response investigation remains open. Private diagnostics are excluded.
+
+The later private `17a3b73` timing experiment narrowed the body stall: the
+picker's Fetch upload received HTTP 201 headers (425 bytes) about 53 ms after
+the trigger, but neither body nor finished completed in five seconds. A
+minimal XHR control finished in 178 ms; that is a different frontend path.
+The picker discarded the successful Fetch Response without consuming its body.
+With the sole private change of saving that Response and awaiting
+`response.arrayBuffer()`, the unchanged original full flow passed line 1605
+and reached line 1661 in 56.7 seconds. It then failed copied-emote image
+visibility after the original owner's deletion; this is not a full-flow pass.
+The private experiment was restored/cleaned. A focused delayed-body regression
+and the two-line picker fix are being prepared; the later image failure has
+its own investigation. No global Fetch/XHR behavior or test deadline changes
+are authorized by this evidence.
+
+### Current Node Validation Boundary
+
+The mounted `/mnt/d` Node environment passed lint and all eight SDK checks.
+Its cold Web run reached only a partial result after about 79 seconds: 25
+tests passed and 6 failed, with no final aggregate because the parent stopped
+it with SIGINT. For example, `workspace-topics.test` took 13.7 seconds for
+the disabled contract, exceeding the original limit. That mounted run is a
+partial observation, separate from the final Linux-native unit gate. The
+final Linux-native validation copy is
+`/home/timestarry/.local/share/duallane-validation/20260907/parent-access-17a3b73`:
+base `17a3b73` plus four App patch files with parent-confirmed exact overlay
+hashes. Its offline frozen pnpm 10.30.3 install reused 403 packages. `pnpm
+test` passed all 8 SDK checks in 0.268 seconds and reported Web 730 passed, 2
+skipped across 83 files (82 files passed and 1 skipped) in 133.55 seconds;
+`pnpm lint`, sourceguard and its 55 permission checks passed. The 78 focused
+checks are included in these results, and the parent SHA-256 check confirmed
+that all four overlay files matched. No test or timeout was weakened. The
+separate release fault-gate outcome is recorded above and remains orthogonal
+to this completed Node native unit result; new CI and the final aggregate are
+still pending.
+
+### Historical CI observations
+
+These earlier failures remain part of the regression record and are not
+reclassified as passes:
+
+CI run [34050116344](https://github.com/timeStarry/duallane/actions/runs/34050116344)
+tested exact commit `3bb83919b490e492cc25395f261a3cbab201a598` and completed on
+2026-09-07 (Asia/Shanghai). The new complete Go Workspace job failed on Echo
+release-card visibility and on the long flow's custom-emote upload response at
+`e2e/workspace.spec.ts:1605` (the existing 240-second case deadline). Reaching
+that later step was not a complete browser pass and did not eliminate the
+separately identified client merge race. No failed-job DOM, cookies or private
+diagnostic artifacts are copied into this record or the PR.
+
+The next CI run
+[34051173383](https://github.com/timeStarry/duallane/actions/runs/34051173383)
+tested `0a093b28e17a5cc9407fc8dd425fed3e64c81dce`. Its complete Go Workspace
+job passed 11 cases, including Echo, and failed the long flow at the unchanged
+`workspace.spec.ts:728` newest-message visibility assertion. Go P2P passed.
+Node unit tests exposed one release-preparation omission: the health privacy
+test still expected `0.15.5` after the package changed to `0.16.0`. Parent
+reproduced that exact mismatch locally. Later Node lint/build/browser steps
+were skipped, not passed. The Go aggregate job was still running when these
+completed job results were inspected.
+
+## Parallel Ownership — Wave 1
+
+All workers read mandatory and owning product/security guides. Workers edit
+directly but never stage, commit, switch branches, push or deploy. The lead owns
+the shared index, contract decisions, schema, dependencies, command composition,
+shared routers, gateway/CI, and handbook integration. No overlapping writes.
+
+| Worker | Owned writes | Acceptance / parent dependency |
+| --- | --- | --- |
+| P2P safety | New P2P tests, room/envelope tests, parity runner/tests/fixtures | Bounded privacy/lifecycle coverage; parent owns transport error fix, schemas and Node route |
+| Avatar | Existing `internal/workspace/avatars` draft; new avatar HTTP/test files | Complete repository/service/transport and focused tests; return router/composition requirements |
+| Echo requirements | Existing `internal/workspace/echo/requirements` draft | Complete requirement domain and PG tests; report adjacent Echo integration needs |
+| Node emote baseline / schema check | First the emote test fixture only; then new read-only platform migration-check files | Preserve test volume/time limit; return read-only startup schema verification for parent composition |
+| Bot Gateway | `internal/workspace/botgateway` only | Real v1 WebSocket and domain adapters; parent owns HTTP/router/commands |
+| Emote subscriptions | `internal/workspace/emotes` only | Replace fixed 501 and prove source sync/detach/readonly/quota/reference/audit/event atomicity |
+
+The original Bot Gateway/router, Avatar and Echo drafts were preserved through
+the preceding foundation slice. This broader user request brings completion of
+those candidate domains into scope. Extend and review their existing intent;
+never silently discard drafts or present them as previously validated.
+
+### Parallel Ownership — Wave 2
+
+After parent acceptance of the first bounded slices, the same Luna workers
+continue on disjoint scopes: Go P2P browser acceptance; a read-only exhaustive
+capability audit; Echo solicitations; Echo releases; Bot Gateway atomic runtime
+adapters (including narrow typed message/card transaction seams); and Echo
+delivery. The parent now owns Avatar, Emote, files, shared HTTP/command wiring,
+dependencies and final validation. Returning a domain package does not establish
+that its HTTP route, registry, worker or container has been composed.
+
+## Validation Environment
+
+Use the toolchain and isolation guidance in the
+[foundation record](2026-09-06-foundation-contracts.md). Node startup/browser
+validation should use a Linux-native checkout in WSL. Do not weaken timeouts or
+assertions merely to hide the previous large-emote baseline timeout. Required
+database/provider/storage tests must not target a production account or instance.
+
+## Evidence And Handoff
+
+This work is in progress. No acceptance checkbox above is satisfied solely by
+the inherited foundation results. Append reviewed slice commits, exact fresh
+checks, failures, environment limitations and cleanup as work progresses.
+
+### Accepted Slices — 2026-09-06
+
+- `3998567`: Go now preserves the locked Fastify 5.8.5 safe empty/invalid/
+  oversize JSON error contract. The new regression failed before the fix;
+  scoped Go race and staticcheck, generated-contract freshness and conformance
+  passed after it. Node runtime is unchanged; five Node characterization cases
+  passed. Independent clean-process `pnpm backend:parity:p2p` passed 20 HTTP
+  and 19 WebSocket observations. Expanded privacy/lifecycle and browser gates
+  are still pending; this is not a full P2P acceptance claim.
+- `c575549`: composed the real catalog, bounded native processor and Emote
+  service in the Workspace command, reusing that service for message references.
+  `go test -tags=postgres_integration -count=1 -race ./cmd/workspace
+  ./internal/platform/config` passed on disposable PostgreSQL, including real
+  session-authenticated HTTP upload, libvips normalization, local read and audit.
+  Scoped staticcheck passed. No production writer changed.
+- `e58b30f`: bounded legacy local/S3/hybrid reads for pre-registry records,
+  without a canonical-key/digest bypass. Storage race tests passed, including
+  containment/symlink rejection, cancellation, overage-before-GET and missing-only
+  fallback. Staticcheck passed on the adapter before the final canonical-alias
+  rejection assertion; the final whole-tree gate remains required.
+- `bd9cdc6`: test-fixture-only SQLite batching removes 1,002 standalone writes
+  from the large-emote case; runtime, assertions, item/collection counts and
+  the five-second timeout are unchanged. Parent independently passed all 21
+  focused tests in both mounted and Linux-native checkouts. Clean `bd9cdc6`
+  `pnpm test` passed 8 SDK and 702 Web tests, with the two explicitly gated
+  PostgreSQL cases skipped. This resolves the previously recorded Node timeout;
+  skipped PostgreSQL checks still require their separate gate.
+- `e5c1141`: suppress raw native image diagnostics before first libvips startup.
+  A fresh-process regression reproduced unfiltered startup logs before the fix;
+  media `go test -count=1 -race` and staticcheck passed after it. Typed safe
+  domain errors and content-free audit remain the operational error surface.
+
+All PostgreSQL checks above used synthetic data in isolated schemas of the
+task-owned disposable database. No production credentials, volumes, providers,
+notifications or deployment were used. The original draft domains and new
+worker slices remain under review until separately accepted below.
+
+- `d3f12da`: private Workspace/worker readiness rechecks required dependencies
+  with a two-second request budget and refuses readiness during shutdown. Local
+  storage inspection performs no writes or directory recreation. Scoped race
+  and staticcheck passed. A mounted command integration attempt overlapped an
+  incomplete worker Emote edit and could not compile; independent clean
+  `34e5d5e` command PostgreSQL/race tests subsequently passed.
+- `34e5d5e`: expanded P2P privacy/dependency/lifecycle/oversize/header/ICE
+  coverage, parser assertions, storage-artifact checks and close-frame parity.
+  Parent corrected the worker's initial 1000 close-code assumption: real Node
+  sends an empty close frame, observed as 1005. Node characterization passed
+  while old Go failed; the corrected candidate independently passed 21 HTTP /
+  22 WebSocket observations, fresh P2P/contract race tests, staticcheck and all
+  eight parity-runner unit tests. Browser/fragment acceptance is delegated and
+  remains open.
+
+### PR And Independent Gates
+
+[Draft PR #2](https://github.com/timeStarry/duallane/pull/2) is open. The first
+remote CI at `1dca0d3` passed both Go/PostgreSQL and Node/lint/build/Chromium E2E
+jobs. Those existing browser tests run against Node, not the new Go browser
+candidate. Clean `e5c1141` also passed `make verify` and a fresh complete
+`make integration-postgres` against the disposable task database. These gates
+exclude uncommitted worker slices and must be repeated after final integration.
+
+The GitHub connector could not create the PR with its integration permissions;
+the already-authenticated local GitHub CLI successfully created the same scoped
+draft. No token/permission settings changed. The PR remains draft until every
+pre-deployment acceptance item and aggregate review is complete.
+
+### Further Reviewed Slices
+
+- `a048bca`: file promotion and physical deletion now hold the shared digest
+  advisory lock through the storage operation and registry mutation. Three real
+  PostgreSQL regressions failed before the fix (missing bytes, unlocked deletion,
+  premature tombstone); fresh files race/integration tests and scoped staticcheck
+  passed after it. Independent clean command integration also passed. Forward
+  promotion and detached failure cleanup have explicit two-minute budgets.
+- `4d20550`, `418a306`: pinned WHATWG URL normalization and implemented private
+  Echo requirements. Thirteen fixtures generated by the actual Node service
+  characterize normalization and persisted submit/transition hashes. Initial Go
+  JSON escaping and URL normalization failed those fixtures; corrected Go tests,
+  fresh PostgreSQL replay/concurrency/race tests, scoped staticcheck and the clean
+  fixture `--check` passed. Scoped govulncheck found no vulnerabilities. HTTP,
+  command/card registries and Echo delivery are still separate acceptance items.
+  **Intentional security difference:** Go rejects bracketed private IPv6 links
+  that the historical Node hostname check accepts; existing records are not
+  rewritten. This needs explicit release/cutover visibility.
+- `e2515e9`, `7d8cc71`: read-only schema compatibility checks run before enabled
+  Workspace startup and worker startup/claims, and during private readiness.
+  The expected migration set is frozen from the binary's catalog. The PG adapter
+  uses read-only transactions, never migration runners, DDL or seeds. Parent
+  corrected a test that ignored deferred `Rows.Err()` from PostgreSQL; fresh
+  migration/postgres/command integration and race tests passed, including missing
+  history refusal before object-directory creation and recovery before claims.
+- `a5e84ad`, `eee3fcc`: Emote source subscriptions now synchronize, disable and
+  detach with quota, read-only, reference and audit/event rules. Parent reproduced
+  an existing rejected-placement transaction retaining an Emote and physical
+  object; rejection now rolls back domain writes before a separate content-free
+  audit transaction. Canonical Put holds the digest lock and cleanup is bounded.
+  Declared upload overage reaches domain auditing without reading the body.
+  Fresh Emote PG/race, HTTP/command PG/race and scoped staticcheck passed. HTTP
+  checks used the shared working tree, so a clean aggregate rerun is still due.
+- `4fe9ebb`: Avatar domain preserves membership/visibility, exact legacy keys,
+  bounded native normalization, shared registry references, audit and events.
+  Parent corrected forward storage cancellation and removed unsafe direct object
+  deletion on bad Put metadata. A real PG regression proves another user's
+  shared object survives the rejected upload. Fresh Avatar PG/race and scoped
+  staticcheck passed. HTTP contract review and runtime wiring are not yet claimed.
+
+Remote CI for `a79254b` passed both existing jobs. These reviewed commits and
+worker slices postdate that run: its result does not validate the final candidate.
+All database evidence continues to use task-owned synthetic isolated schemas.
+
+- `702d8d1`: wired the existing Bot REST adapter into the root router, including
+  exact Workspace gating and Bearer-only credentials (never browser cookies or
+  query tokens). Its HTTP race suite and staticcheck passed independently against
+  committed domain code, excluding the worker's draft runtime adapters.
+- `0b9c6c1`: composed Avatar service and routes using the same bounded media
+  processor and local/S3/hybrid store. Real session-authenticated native-image
+  upload/read/remove and audit checks passed with PostgreSQL, as did HTTP/race
+  and scoped staticcheck. The actual Node raw-stream route returns
+  `400 avatar.invalid_size` on both declared and chunked overages; a new Node
+  characterization proves this, and the old Go 413 expectation failed before
+  correction. The fixture verifies chunked requests really omit Content-Length.
+- `91847ca`: introduced the narrow `ReserveAgentBotUpload` domain entry point.
+  It revalidates an active custom bot and active membership inside the quota
+  transaction; ordinary human file APIs still reject Bot identities. PG/race
+  covers concurrent quota contention, paused/removed identities, revocation
+  between preflight and reservation, atomic audit failure and refusal to grant
+  content completion. Unauthenticated reservations no longer trigger stale
+  cleanup. Scoped staticcheck passed. **Existing product limitation:** Node's
+  Bot endpoint reserves metadata/quota but does not provide a Bot content upload
+  channel. A refactor must not silently invent that permission or claim it works.
+- `e8bd0de`: preserves explicit empty `duplicateOfPublicId` versus omitted/null
+  in Echo transition hashes. The Node fixture set now contains 15 cases; the old
+  Go implementation failed the empty-string golden, and corrected unit/PG/race,
+  replay side-effect checks, staticcheck and independent Node `--check` passed.
+  Future HTTP/command adapters must carry string-field presence into the service.
+
+Independent clean `33ba294` passed fresh `make integration-postgres` and
+`make verify` (unit/race/vet/staticcheck/govulncheck/build). Govulncheck reported
+zero reachable vulnerabilities, with one imported-package and four required-module
+advisories without an apparent call path; do not describe this as zero advisories.
+Remote CI for that commit also passed both existing jobs. Newer commits and
+uncommitted workers still require the final aggregate gate.
+
+Echo releases' first draft is **not accepted**: parent review found persisted
+snapshot escaping, version-case and ID-prefix differences. The worker is revising
+it against the actual Node service. No release, solicitation, delivery or Bot
+runtime acceptance is implied by this work record until recorded separately.
+
+- `777fc84`: each file part/single/assembled upload now uses an independent
+  request-attempt object before publishing under the upload lock. Three real PG
+  regressions first failed: a failed duplicate deleted a committed part, a slow
+  conflicting part overwrote/deleted the winner, and concurrent whole uploads
+  shared staging so neither could complete. Fresh complete files PG/race and
+  scoped staticcheck passed after the fix. Revalidation follows the locks;
+  cleanup cannot remove a committed part or another request's staging. Forward
+  publication and detached cleanup have two-minute budgets. Crashes can still
+  leave attempt objects: bounded age cleanup excluding active uploads remains
+  an explicit maintenance gate, not a claimed completed feature.
+- `4fdf9ed`: four real Go P2P Chromium cases passed independently on the clean
+  validation clone with the exact reviewed browser patch (13.1 seconds): direct
+  text/file, encrypted fallback/ack, malformed fragment, and valid-format wrong
+  key. The initial wrong-key assertion expected a visible warning, but the
+  current chat UI does not render that internal error state; the corrected test
+  observes actual WebCrypto rejection, no delivered plaintext and disabled file
+  transfer, without changing application behavior. CI now runs a separate Go
+  browser job and excludes the suite from Node's default runner. No P2P failure
+  artifacts are uploaded. Thirteen tooling/runner tests and the three Playwright
+  files' TypeScript check passed. The check also corrected the existing default
+  config's `reducedMotion` placement into `contextOptions`. A new remote CI result
+  and final aggregate gate remain due; this is not deployment evidence.
+
+### Runtime Review And Browser Baseline Correction
+
+`0be0335` adds Bot domain adapters with typed card/message transactions. Parent
+independent fresh PostgreSQL/race tests passed for botgateway, messages and cards;
+staticcheck first found two unused message wrappers and passed after their
+removal. The fault tests cover card/message audit failure, the final idempotency
+insert failing, concurrent replay and token revocation before commit. Narrow Bot
+file reservation also passed with the runtime adapter. This does **not** accept
+the draft WebSocket, runtime command wiring, arbitrary JSON request hash parity
+or Node's Feishu conversion. Those remain explicit Bot integration gates.
+
+Remote CI for `f4ab6d9` passed Go/PostgreSQL and all four Go P2P browser cases,
+but the Node Chromium job failed on the topic unsync click; local whole-suite
+results were 16 passed / 1 failed. Fresh local `make verify` passed with cached
+unchanged package results and the same unreachable dependency advisories noted
+above. No full green result is claimed for this commit.
+
+The original default Playwright config used an unsupported top-level
+`use.reducedMotion` option. Moving it into `contextOptions` in `4fdf9ed`
+unintentionally changed the legacy browser environment. In reduce mode, the
+topic click failed three out of three diagnostic repetitions: pointer-down
+and pointer-up hit different rows, no DELETE request was sent, and adding an
+explicit hover did not fix it. Removing the newly effective option restored
+the previous default motion behavior; the unchanged test then passed three out
+of three repetitions. Keep the old gate's effective environment rather than
+altering application behavior in a backend test split. The reduced-motion
+topic interaction remains an identified UI/testing limitation, not a fixed
+backend issue. Go P2P keeps its own explicit reduce setting and passing gate.
+Temporary click diagnostics/hover experiments were confined to the disposable
+validation checkout and removed; no debug code or failure artifacts are committed.
+
+Remote CI for `36cc4d9` passed the full Node job (including Chromium) and the
+four Go P2P Chromium tests. Go unit/race passed, but staticcheck found two
+WebSocket-only error helpers accidentally included in the preceding runtime
+commit while their consumers remained uncommitted. The helpers now belong to
+the draft WebSocket file. Independent staticcheck on clean `36cc4d9` plus only
+this removal passed for botgateway, messages and cards. A new aggregate run is
+still required. The local whole-browser rerun also recorded a separate failure
+waiting for `workspace-e2e-history-27`; do not report it as a local full pass or
+hide it behind the successful remote run.
+
+### Release Domain Acceptance
+
+The reviewed release slice now preserves all six checked-in Node guide snapshots
+and hashes, a synthetic Unicode/escaping guide, version casing, ID prefixes and
+publication lock keys. The final independent Node fixture check passed (six
+catalog entries plus one synthetic guide); fresh PostgreSQL/race tests passed
+after removal of the standalone delivery-state mutator (8.606 seconds), and
+integration-tag staticcheck passed. Publication, pending recipient rows and
+metadata audit remain one transaction; duplicate publication is version-keyed.
+Delivery claiming, state transitions and message/card effects belong exclusively
+to the Echo delivery coordinator. This accepts the release domain foundation,
+not command wiring, delivery execution, production ownership or deployment.
+
+All three remote CI jobs passed for `50f8224`. Later worker changes and the
+Bot raw-JSON compatibility patch still require their own final aggregate gate.
+
+### Bot Persisted Idempotency Compatibility
+
+The Bot message/card HTTP adapters now carry bounded raw JSON subtrees into
+the hash boundary. The operation envelope keeps its fixed Node field order;
+client subtrees retain insertion order, integer-index ordering, duplicate-key
+semantics, binary64 formatting and UTF-16 string escaping. Raw inputs remain
+subject to domain validation and cannot hash one decoded value while writing
+another. Message trim/length now uses Node's ECMAScript trim and UTF-16 budget;
+an explicit empty/non-string reply ID is no longer treated as omitted.
+
+Independent actual Node service/SQLite characterization passed 18 operations
+and 266 JSON edge cases. Fresh Go PostgreSQL/race passed for botgateway and
+httpapi (15.725 / 3.183 seconds); the new PG regression imports Node hash
+records, retries twice, tests conflicting payloads, and verifies unchanged
+message/card/event/audit counts. Integration-tag staticcheck passed. The raw
+parser's deep-input regression and 15-second two-worker fuzz run passed
+(211,098 executions). Parser rendering uses one output buffer so container
+nesting does not multiply serialized copies. CI now also verifies the actual
+Node requirement, release and Bot persisted-contract fixtures.
+
+This is hash/replay evidence, not complete Bot HTTP/WS parity, Feishu conversion
+or runtime composition. In particular, lossless response/payload round-tripping
+of unpaired UTF-16 surrogates is not established by the hash tests; the Go domain
+uses Unicode scalar strings. Keep that distinction in aggregate compatibility
+review rather than treating matching hashes as proof of every DTO byte.
+
+### Cross-Process Presence Foundation
+
+The additive `031_workspace_presence_leases.sql` migration stores only short-lived
+connection metadata. Authenticated human realtime connections register after
+successful replay, renew on heartbeat, and remove their own random lease on
+disconnect. Current membership and expiry are checked in PostgreSQL; another
+connection cannot be removed by an old socket's cleanup. Lookup errors defer
+immediate email jobs instead of treating an uncertain result as offline.
+
+Independent fresh PostgreSQL/race checks passed for presence, realtime, email
+and migrations (12.249 / 11.049 / 4.300 / 10.944 seconds), including a real
+pre-031 schema upgraded with existing members, concurrent connections, revocation
+and bounded expiry cleanup. Integration-tag staticcheck passed. Runtime injection
+and worker scheduling are a subsequent composition slice, not accepted by these
+domain tests. The local Node aggregate rerun failed 12 tests and is being triaged;
+it is not counted as a passing gate.
+
+Remote CI for `30fc0ef` subsequently passed all three jobs, including Node
+unit/lint/build/Chromium, Go PostgreSQL/race/analysis, and Go P2P browser privacy.
+The separate local avatar characterization reproduced a default five-second
+test timeout; no contract assertion failed in that isolated result. The local
+aggregate remains a recorded failure, not a pass inferred from remote CI.
+
+The next composition slice injects PG presence into the actual Workspace
+realtime handler and email worker, and adds explicitly opted-in bounded expiry
+maintenance. Independent fresh PG/race passed for Workspace, worker and config
+(7.247 / 4.202 / 1.027 seconds). It tests two real WebSockets, independent lease
+cleanup, online email deferral, a failed presence-table lookup with job storage
+still available, and a 100-row sweep that preserves active leases. Initial
+config testing caught whitespace accepted by the generic environment helper;
+the new flag now compares the raw value with `true` and the exact-value
+regression passes. No external mail was sent, and no production worker was
+started. Deployment/Compose wiring remains a separate gate.
+Integration-tag staticcheck also passed for the three composition packages.
+
+### Local Node Gate Follow-up
+
+Remote CI for `d018bc6` passed all three jobs. Locally, the default WSL disk-backed
+temporary SQLite run was not usable as a passing gate: a four-file, one-worker
+rerun took 1,439.73 seconds and failed 67 of 227 tests, including timeouts,
+cleanup errors and downstream HTTP assertions. The same isolated avatar case
+failed its unchanged five-second budget with disk-backed temp files but passed
+in 779 ms with command-local `TMPDIR=/dev/shm`. This affects only synthetic
+temporary fixtures, not application storage or production configuration.
+
+The first full RAM-temp run passed 702 Web tests but exceeded one realtime
+replay test's existing 15-second budget while other validation was running.
+That case passed independently in 7.949 seconds. A fresh full
+`TMPDIR=/dev/shm pnpm test` then passed: SDK 8, Web 703, with the two optional
+PostgreSQL tests skipped by the default command. No timeout, assertion, retry
+or global environment setting was relaxed. This replaces the local unit gate
+failure with completed evidence, not the separate whole-browser or dedicated
+Node PostgreSQL gates.
+
+### Pinned SQL Generation Boundary
+
+`sqlc` v1.31.1 is pinned in the Go tool graph and generates the existing
+presence predicates from the canonical PostgreSQL migrations. No historical
+migration or production ownership changed. The generated package is nested
+inside presence so other domains cannot use its methods to bypass that service.
+The adapter retains stable authorization errors and validates the batch bound
+before conversion to the generated 32-bit parameter. Scoped LF attributes keep
+generation byte-stable across Windows and Linux.
+
+Independent Linux validation of the reviewed candidate plus this slice passed
+`make verify`: generation freshness, unit/race tests, vet, staticcheck,
+govulncheck and command builds. Govulncheck reported zero called vulnerable
+symbols, with one imported-package and four module-level advisories not reached
+by this program; this is not a claim of an advisory-free dependency graph.
+Fresh PostgreSQL/race tests passed for presence, auth, Workspace and worker
+(5.305 / 3.388 / 4.710 / 4.382 seconds), followed by integration-tag staticcheck.
+The final adapter input/UTC regressions passed separately with `-count=1 -race`.
+`go list -deps ./cmd/...` contained no sqlc, SQLite, MySQL or wazero package.
+The initial query-test setup exposed a missing OAuth checksum after adding the
+tool; `go mod tidy` repaired the manifest graph before the passing runs.
+
+These checks include the tool-induced OAuth v0.34.0 and protobuf v1.36.11
+updates, but exclude ongoing SMTP, Bot, Echo, Feishu and maintenance drafts.
+They establish this query/tool boundary only, not whole-candidate acceptance.
+
+### Executable Route Inventory
+
+The actual disabled Node application confirmed 164 literal public declarations
+from its entry point and six route modules. The generator captured 153 HTTP
+disabled responses, all the existing safe 503 envelope. Two inventory unit tests
+and a fresh actual-Node `--check` passed. CI now checks inventory freshness;
+implicit HEAD and static-plugin paths are explicitly outside its scope.
+
+An independent, not-yet-accepted Go registration test against the reviewed
+candidate reproduced 19 missing registrations: 16 Echo paths, two owner Bot
+connection paths and `/ws/bot-gateway`. A separate gate-response comparison
+passed 153 paths across five non-enabled flag values without actor resolution.
+This demonstrates why matching disabled responses alone cannot prove route
+composition. The failing registration regression remains in the integration
+queue until those worker slices are accepted; it is not hidden by an allowlist
+or counted as a passing candidate gate.
+
+### Bounded Upload Maintenance Foundation
+
+The reviewed cleanup slice adds a one-shot upload maintenance service with PG
+keyset pages, upload/quota locks, a decisive current-activity check, atomic
+failure/quota/event/audit updates and post-commit staging cleanup. Terminal
+artifact enumeration is explicit. Storage exposes only per-upload attempt
+paths and a separate age-bounded Workspace multipart abort operation; it does
+not scan or delete canonical CAS objects. No scheduler is started here.
+
+Parent review reproduced a local pagination bug: filesystem-order `ReadDir`
+followed by a lexical cursor returned only two of five synthetic attempt keys.
+The adapter now reads fixed-size chunks, keeps a bounded sorted page and checks
+cancellation during enumeration. The same regression passes. Parent review
+also prevented new storage operations after cancellation, pruned completed
+attempt cursors, made the age fixture independent of wall-clock date, and kept
+hybrid multipart cleanup exclusively on the primary store.
+
+Independent fresh PostgreSQL/race passed for files and storage (45.907 / 7.432
+seconds), including a barrier-controlled touch winning after candidate selection,
+quota release and exact audit/event counts. Integration-tag staticcheck passed.
+Additional S3 loopback regressions verify exact prefix, age, continuation,
+missing timestamp/cursor refusal and cross-upload deletion refusal; fresh storage
+race tests then passed in 3.109 seconds. These are synthetic local/S3-protocol
+checks, not cloud IAM or production bucket evidence.
+
+Worker scheduling, fair cursor continuation across bounded periods, and real
+candidate-container rehearsal remain separate composition gates. The default
+reservation age is 30 minutes and multipart age is seven days; a five-minute
+loop interval is not an object-age cutoff.
+
+### SMTP Transport And Lifetime
+
+The selected go-mail implementation is now pinned at v0.8.1 (MIT), with
+x/crypto v0.55.0 selected by the unified module graph. Parent review rejected
+the first cancellation adapter because the library's `Close` sends QUIT and
+cannot safely stand in for concurrent raw-socket cancellation. The corrected
+adapter tracks and closes its owned connection on cancellation and failed Dial,
+and clamps every phase's socket deadline to the absolute operation budget.
+
+Synthetic loopback regressions cover trusted/untrusted implicit TLS, mandatory
+STARTTLS, authentication only after encryption, multipart plain/HTML output,
+header rejection, safe provider errors, failed-Dial cleanup and indefinitely
+stalled greeting/TLS/auth/DATA/QUIT phases. Cancellation tests use barriers,
+not short provider sleeps that could finish within the assertion timeout.
+Independent fresh PostgreSQL/race tests passed for email, worker and Workspace
+(21.703 / 8.289 / 6.937 seconds); integration-tag staticcheck also passed.
+Scoped govulncheck for email and both composition commands found zero called
+vulnerable symbols, while reporting one imported-package and seven module-level
+advisories not reached by those programs; the dependency graph is not claimed
+to be advisory-free.
+No actual SMTP provider, production credential or external recipient was used.
+
+### Real Go Workspace Browser Harness
+
+The new browser harness builds the real Go migrate/Workspace commands, applies
+canonical migrations to its own random schema in explicitly opted-in disposable
+loopback PostgreSQL, and reuses the existing frontend assertions. Provider
+workers are disabled and runtime environment inheritance is allowlisted. Two
+harness guards passed. The first selected semantic-routes/OAuth/refresh/history
+case passed (21.7 seconds). A subsequent six-case run passed four and failed
+two: the emote share card lacked its live sharing projection, and the two-user
+flow timed out at the Beacon header's bounding-box observation after visibility
+passed. Neither assertion nor its timeout was weakened.
+
+The first failure was traced to Go message projection emitting only `shareId`
+where Node also emits relation-bound, viewer-specific share metadata. A worker
+is implementing and characterizing that projection. The second failure still
+requires diagnosis. After both runs the synthetic browser schema count was
+verified as zero; the first run's temporary directory and Go child processes
+were also verified absent. These partial results are not the full twelve-case
+Workspace browser gate. The harness guard is wired into CI; the actual Go
+Workspace browser job awaits successful full-suite integration.
+
+### Echo Solicitation Domain And Shared Transaction Review
+
+The solicitation domain now characterizes create/publish/close/withdraw/vote,
+owner-only voter/delivery projections, revision and idempotency behavior, and
+content-free audit/event effects. The actual Node persisted-contract generator
+passed all twenty cases. Independent fresh PostgreSQL/race initially passed
+requirements/releases/solicitations (15.253 / 8.472 / 28.993 seconds), but parent
+review found that the new transaction-scoped solicitation APIs still read
+conversation membership through another pool connection.
+
+A real PostgreSQL regression first reproduced that uncommitted conversation
+revocation still permitted projection and created a vote. Both paths now use
+the caller's typed transaction. Accepting membership reads hold share locks;
+all three Echo transaction adapters similarly pin actor membership and identity
+until completion. PostgreSQL NOWAIT regressions verify those protections.
+Fresh PostgreSQL/race then passed the three domains (7.875 / 4.806 / 17.350
+seconds). The shared card adapter now requires one typed solicitation view,
+avoiding conflicting card/domain method signatures and removing pool fallbacks.
+Its regression preserves the actual Node use of `card.revision`. After that
+change solicitation PostgreSQL/race passed again (14.139 seconds), followed by
+integration-tag staticcheck. Three unused delivery-write helpers left by the
+ownership separation were removed after staticcheck identified them.
+
+These are domain and adapter gates only. The HTTP routes, nonempty Echo
+automation registry, outer card rejection-audit policy, delivery worker and
+real composition still require separate acceptance. A domain rejection marker
+does not authorize committing unrelated prior writes in an outer transaction.
+
+### Echo Delivery Candidate Review
+
+The delivery coordinator and sixteen thin Echo HTTP declarations are now
+reviewed as a candidate foundation, not yet mounted in the application. Delivery
+claims, direct-conversation creation, typed card/message handoff, state and
+content-free evidence share the accepting transaction. Failed domain writes
+roll back before a separate failure record; a late failure cannot overwrite a
+concurrently completed delivery. The actual card/message writer remains a
+composition gate, not a success inferred from a fake writer.
+
+Parent review corrected three execution gaps: requirement recovery selected an
+empty submitter instead of all requirements; permanent first-page sent/exhausted
+rows could starve later work; and lease callbacks captured the outer context
+instead of the bounded lease context. Work now uses explicit ID cursors, returns
+partial progress, wraps at the end, and supports separately budgeted family
+processors. The worker must retain each family's cursor between periods. A
+single combined one-shot call is not a fairness guarantee between busy families.
+
+The accepting requirement delivery rechecks current owner-or-submitter access,
+and member/identity share locks protect authorization through commit. Existing
+conversation creation uses compatible share locks instead of lock upgrades;
+new deterministic IDs also include the space. Public operational JSON preserves
+Node's lower-case fields, publicId/version distinction, explicit successful null
+references and replay flag. It never includes the private card payload.
+
+Independent fresh PostgreSQL/race passed (6.467 seconds), including three pages
+for each delivery family and transaction-local role demotion. Unit regressions
+cover cancellation before an unfinished row, cursor continuation/wrap, separate
+family selection, the lease callback deadline and status-dependent public JSON.
+Echo HTTP/race passed (1.138 seconds), followed by integration-tag staticcheck
+for both HTTP and delivery. Six capitalization findings were corrected before
+the passing staticcheck run. Real command/router composition, actual Node/Go
+delivery effect fixtures and the full Workspace browser gate remain open.
+
+### Message Share And Bot Conversation Projection Review
+
+The message, conversation latest/pin, and realtime read paths now hydrate emote
+share previews from persisted message junctions and viewer-specific remarks.
+Client-supplied share metadata is discarded. The reader independently checks
+active Workspace and conversation membership, including uncommitted removal in
+the caller's transaction. Covers use only the trusted catalog or the authorized
+custom-emote content endpoint. Static custom covers retain Node's explicit
+`animated: false`; built-in covers omit that field. Invalid typed message JSON
+fails closed instead of falling back to untrusted raw content.
+
+Realtime direct-conversation projection now preserves `otherMember`, its Bot
+kind/description and viewer-facing title. This corrects the Beacon header
+replacement that the isolated two-user browser rerun reproduced at the missing
+BOT label, clarifying the earlier bounding-box timeout. The existing ordinary
+conversation Bot projection is also covered by a focused regression.
+
+Independent fresh PostgreSQL/race passed messages, conversations and events
+(8.031 / 2.983 / 2.931 seconds), followed by integration-tag staticcheck. These
+are read-projection gates; trusted catalog composition and the unchanged full
+Go Workspace browser suite remain separate acceptance steps. CI for the prior
+delivery commit `89b1449` passed all three existing jobs; it does not cover these
+new local changes or establish complete Go Workspace parity.
+
+### Native Media Owner Compatibility
+
+The differential corpus calls the actual Node avatar/custom-emote services,
+using Sharp only to generate synthetic inputs and inspect normalized output.
+The Go probe runs the real govips processor. Twenty-seven initial cases passed
+independently, including orientation, metadata stripping, transparency, GIF/
+WebP animation, BMP, declared-MIME mismatches, byte/pixel/edge/frame/duration
+limits and malformed data. Every accepted output receives sampled pixel and
+alpha comparison as well as format, dimensions and animation metadata checks.
+
+Parent review added a deterministic high-entropy 180-frame GIF which reaches
+the actual 2 MiB output-overage rejection after fallback compression. This
+first failed because Go's public rejection copy differed from Node. The copy
+was corrected without changing either runtime's limits or conversion settings;
+all 28 cases then passed (16 accepted, 12 rejected, 16 pixel comparisons;
+60.421 seconds). The test requires that this fixture reaches the named owner
+rejection, so two accidental acceptances cannot count as boundary evidence.
+
+Independent final media/race passed (2.312 seconds), followed by staticcheck.
+The corpus is now part of the native-dependency CI job. Local evidence used
+Node 22.23.2, Sharp 0.35.3 with bundled libvips 8.18.3, Go 1.26.8 and system
+libvips 8.15.1. Queue cancellation, slot release and output overage are covered;
+interrupting an already-running native libvips call is not claimed. Imported
+emote assets were untouched, and all generated media/database objects were
+synthetic and removed by the harness.
+
+### Upload And Multipart Maintenance Composition
+
+The opt-in worker now composes stale-upload/staging cleanup only when both
+Workspace and maintenance are enabled. It retains upload keyset and bounded
+attempt cursors across periods, advances past attempted transient failures,
+preserves unfinished work on cancellation, and wraps only at the end.
+
+Parent review split upload and multipart maintenance into independent
+processors so slow staging I/O cannot consume the multipart worker's entire
+budget indefinitely. Upload work keeps its 30-second cycle and 15-second object
+budgets; multipart keeps the existing six-hour cadence and a separate bounded
+provider call. S3 readiness is also bounded. A scheduler regression proves
+multipart runs while upload processing is blocked and both join on shutdown.
+The S3 adapter now returns its last finished record on mid-page cancellation,
+not the provider's whole-page successor, and starts no further provider I/O
+after cancellation. HTTP provider tests retain prefix/age/cursor coverage.
+
+The worker's initial PostgreSQL test was skipped by its author because the
+environment was not configured. Parent then independently ran the real
+disposable PostgreSQL tests, including two composed workers racing on one
+stale upload: exactly one failure event and one content-free audit persisted.
+After the review corrections, fresh PostgreSQL/race passed worker, files and
+storage (2.944 / 18.493 / 4.585 seconds), followed by integration-tag
+staticcheck. No production worker was started. Node's S3 multipart timer remains
+the current owner; the deployment handoff must disable it before enabling the
+candidate maintenance worker.
+
+### Card Action Transaction Isolation
+
+Card actions now run domain writes, payload validation, card revision CAS and
+events inside a savepoint on the original typed transaction. A controlled 4xx
+rejection rolls those effects back before the outer transaction records the
+failed action and content-free audit. Infrastructure errors, including a
+registered payload validator failing unexpectedly or a savepoint unwind
+failure, abort the entire transaction. Savepoint identifiers use a bounded
+digest of the action-run ID, avoiding PostgreSQL identifier truncation.
+
+Independent fresh PostgreSQL/race passed (4.856 seconds) and integration-tag
+staticcheck passed after parent review corrections. Regressions cover domain
+writes followed by rejection, revision conflict, invalid action output and
+unexpected validator failure. Trusted action executors can explicitly report
+that they already wrote the domain action event, avoiding a duplicate generic
+event; the original stored payload JSON is available to typed executors for
+order-sensitive adapters. This is the safety boundary, not evidence that all
+Echo or Feishu card definitions have been composed.
+
+### Bot Owner Connection API
+
+Owner connection reads and tests now expose a typed public projection without
+gateway nonces, credentials or socket state. Missing durable configuration is
+repaired as in the Node owner service. The test operation rechecks ownership
+inside the lifecycle transaction, clears only connection error state, and
+commits its content-free audit atomically. Audit failure preserves the previous
+error projection; removed members cannot mutate it.
+
+Parent ran the actual Node route/service fixture against disposable SQLite and
+corrected the initial Go request-body restriction: omitted or valid JSON bodies
+are ignored, including objects, null and scalars; malformed/empty declared JSON
+is rejected. Go retains its bounded JSON parser and established safe error
+envelope, not Fastify's framework-specific parser error shape. No request-body
+fields enter the typed owner operation. Fresh PostgreSQL/race passed the Bot
+package (4.170 seconds); focused HTTP/race passed (1.219 seconds), followed by
+integration-tag staticcheck. WebSocket shutdown and application composition
+remain independently validated changes.
+
+### Read-Only Storage Operator
+
+The candidate storage command can obtain one repeatable-read/read-only
+PostgreSQL snapshot and verify canonical objects through local or S3 read-only
+adapters. Parent review added explicit catalog row limits, cancellation-aware
+verification, signal handling and secret-safe flag diagnostics. Manifest
+assertions never mark a run mutation-ready; a live runtime fence remains a
+separate required integration. No backfill or finalization is enabled here.
+
+Independent fresh PostgreSQL/race passed storageops and its real command
+(5.618 / 1.310 seconds), followed by integration-tag staticcheck. A newly
+generated actual Node backfill/verify fixture then passed Go canonical-byte
+verification: one object, 37 bytes, zero failures and zero Go mutations.
+See [Storage operator](../STORAGE_OPERATOR.md) for the durable operating contract,
+including the distinction from Node's timestamp-writing dedupe verification.
+
+### Composed Bot Transport And Workspace Browser Gate
+
+Workspace now composes the actual Bot Gateway runtime adapters, shared card/
+message transaction bridges, owner connection provider and gated WebSocket
+transport. Trusted catalog lookup is wired into message/conversation/event
+share projections. Gateway shutdown closes admission, cancels operations and
+waits for admitted handlers plus nonce-scoped durable cleanup. Independent
+bounded cleanup contexts do not inherit the canceled application root; failures
+aggregate to a safe sentinel. The application waits before closing PostgreSQL.
+
+Parent independently ran fresh PostgreSQL/race for gateway and the actual
+application (9.003 / 3.177 seconds), followed by integration-tag staticcheck.
+The application test issues a real owner token, opens the routed Bot WebSocket,
+reads/tests its connected projection, calls application Close, then verifies the
+disconnected row through an independent connection after the pool is closed.
+The actual Node WebSocket fixture also passed its checked-in transport goldens.
+
+The unchanged full Go Workspace browser suite then completed: five of twelve
+tests passed, seven failed (2.2 minutes). Share preview, emote subscriptions,
+semantic navigation and focus checks passed. Open failures are four Echo
+command/workflow cases, gateway message creation returning 401, inline topic
+creation not producing a topic, and a durable unread count remaining two after
+the UI cleared it. The two-user test now passes the previously failing Beacon
+header and reaches the unread check. These failures are acceptance work, not
+waivers or reasons to relax browser assertions. The PR remains draft.
+
+### Validated Ordered Card Payloads
+
+The card registry now offers an explicit raw-JSON canonicalizer for registered
+order-sensitive card types. Both input and canonical output pass generic byte,
+depth, node, text, field-name and URL/content checks. Only the registered
+validator's cloned output is preserved; unknown types and definitions without
+the callback follow ordinary domain normalization instead of storing raw input.
+Create/update inputs accept this optional internal raw field without changing
+the public API. Status-only actions and invalidation preserve existing payload
+order; invalid persisted JSON fails instead of being silently replaced by an
+empty object.
+
+Independent fresh PostgreSQL/race passed (4.950 seconds), followed by
+integration-tag staticcheck after removing a redundant decode found by analysis.
+Tests exercise create, resolution, update, action and invalidation against real
+PostgreSQL, retaining member order and escaped lone UTF-16 code units. Unit tests
+cover input/output safety and mutable-buffer isolation. Actual Feishu conversion,
+gateway ingress and card-action bridge acceptance remain separate gates.
+
+### Inline Group Topic Transaction Bridge
+
+The normal message entry point now recognizes eligible leading topic syntax
+through a trusted adapter. The message and topic PostgreSQL adapters share one
+transaction, retaining their typed domain surfaces. Authorization and normalized
+content precede conversion; replies and mixed/non-text content remain ordinary
+messages. The original client key is acknowledged only in the response, while
+storage and events retain the topic-card key. Stable locks serialize ordinary
+versus topic-shaped requests and direct versus inline topic creation.
+
+Fresh independent PostgreSQL/race passed messageblocks, topics, messages and
+the application (6.114 / 3.766 / 13.295 / 5.728 seconds); focused staticcheck
+passed. Regressions cover eight concurrent retries, changed intent, mixed
+content/replies, competing request shapes and a late card-write failure that
+rolls back topic, member, message, event and success-audit effects. Twenty
+actual Node parser goldens verify whitespace, balanced parentheses, code-point
+limits and raw body byte limits. Topic creation intentionally retains Node's
+existing notification behavior; the transaction bridge does not add delivery.
+
+The unchanged two-member topic browser test now passes topic creation but stops
+at the group card display. Registry composition and the remainder of that full
+browser workflow remain required; this slice is not a topic parity completion.
+
+### Registered Topic Cards And Full Browser Workflow
+
+The actual Workspace application now registers the created-topic and synced-
+message card definitions. They project only the allowlisted Node fields, retain
+the generic no-public-URL limits, and rely on the existing card membership
+authorization. Twenty-seven actual Node validator goldens cover payload shape,
+numeric coercion, preview limits, control handling and invalid references.
+
+Fresh independent PostgreSQL/race passed topics, messageblocks and application
+composition (3.134 / 4.255 / 2.827 seconds); focused staticcheck and actual Node
+fixture verification passed. The unchanged two-member Chromium/Go Workspace
+test passed end to end (12.3 seconds, 27.8-second run): create, join, notification
+settings, sync, unsync, close and archive. It used only disposable synthetic
+data. This closes the browser failure recorded in the preceding slice, not the
+separate all-Workspace browser, complete contract or production-cutover gates.
+
+### Bot Message Service Composition Boundary
+
+The Gateway now receives a separate message service configured to accept Bot
+actors through its already authorized, shared transaction. The human HTTP
+service remains Bot-disabled; neither Bot Tokens on human routes nor inline
+topic conversion are enabled by this composition. Message jobs retain the
+same required scheduler and repository configuration.
+
+Fresh independent application PostgreSQL/race passed (3.058 seconds), including
+real token issuance, Bot send/replay, author identity and rejection of a Bot
+Token on the human message route. Integration-tag staticcheck passed. The
+unchanged Agent Bot Chromium/Go Workspace acceptance passed (9.7 seconds,
+19.2-second run), including Gateway REST authorization boundaries. Actual
+Feishu conversion/action integration is a separate remaining gate.
+
+### Core And Emote Contract Projections
+
+Two strict OpenAPI 3.1.2 documents describe the existing Node contract: 32
+auth/core operations with 29 actual Node scenarios, and 22 emote operations
+with 39 scenarios. The emote corpus exercises every declared emote route;
+the core inventory is broader than its first scenario set. Null versus omitted
+fields, closed response DTOs, binary content, private emote access and selected
+audit/event effects are explicitly represented. These tests validate actual
+Node fixtures against the schemas, not Go runtime equivalence or every OAuth
+response/header branch.
+
+Parent independently regenerated both fixtures in check-only mode against fresh
+synthetic SQLite (command-local RAM temp), then ran combined Go/race contract
+tests (5.077 seconds) and staticcheck. All completed successfully. ESLint is
+not a configured/installed project dependency; no ESLint pass is claimed.
+Family-by-family Go HTTP/PG replay, the remaining operations, complete security
+and response-header checks remain separate acceptance gates.
+
+### Echo HTTP Composition And Exhaustive Registration Gate
+
+All sixteen Echo requirements/solicitation HTTP declarations are now mounted
+inside the exact Workspace gate and receive the actual PostgreSQL domain
+services. Conversation checks reuse the existing message repository's read
+boundary. The Node-derived route inventory now verifies every Workspace public
+route is registered, and compares all disabled responses across five values
+that must not enable Workspace. Registration is not a response-parity claim.
+
+Fresh independent PostgreSQL/race passed application composition (4.470 seconds),
+HTTP (2.266 seconds), requirements (10.455 seconds) and solicitations (15.889
+seconds). The application test exercises unauthenticated rejection, durable
+requirement submission and replay, detail/list/history/statistics reads, and
+solicitation creation/publication with durable recipient rows. Focused
+integration-tag staticcheck passed. Card/message delivery, nonempty command and
+workflow registries, and delivery recovery remain separate composition gates.
+
+The preceding exact commit `2d5bfd4` completed all three CI jobs successfully
+in run `34029306873`, including actual Node fixture freshness checks. This does
+not extend that CI result to later commits or unaccepted worker changes.
+
+### Transaction-Bound Echo Card Refresh
+
+The cards domain now exposes a narrow internal Echo upsert with a fixed official
+author, conversation visibility, immutable recipient/resource binding and the
+Node revision floor. It reuses generic payload validation and card creation;
+updates use a typed PostgreSQL compare-and-swap extension, not generic SQL in
+the delivery coordinator. Replays do not write another event. Shared source
+locks serialize creation and refresh across processes.
+
+Independent fresh PostgreSQL/race passed the card package (11.455 seconds),
+including revision jumps, eight concurrent refreshes, source-rebinding rejection,
+forged-human Echo rejection and an outer failure rolling back the update/event.
+The existing card action and raw JSON tests also passed. Integration-tag
+staticcheck passed after correcting one capitalization diagnostic. This accepts
+the card write seam, not Echo's registered projection/action definitions.
+
+### Atomic Echo Message And Job Handoff
+
+The new runtime writer accepts only the fixed Echo identity, registered Echo
+card families, an active human recipient and a direct conversation. Configured
+typed card/message views share the delivery transaction; card references are
+validated against the newly written card inside that same transaction. The
+normal message service retains authorization, retention, idempotency, audit,
+event and required notification-job scheduling. No network sender is present.
+
+Node `index.mjs` and the real system-bot message writer establish that Echo
+enqueues preference-filtered email/ntfy work. The earlier delivery interface
+comment incorrectly prohibited that enqueue. `InternalOnly` now correctly means
+no external send in this transaction, not suppressed durable notification jobs.
+
+Independent fresh PostgreSQL/race passed runtime (3.647 seconds), delivery
+(9.383), messages (8.755) and application composition (4.549); focused staticcheck
+passed. A transaction-local synthetic scheduling probe verifies all writes roll
+back after a late scheduler failure, eight concurrent retries yield one message
+and one job, and a card revision refresh creates neither again. The probe cannot
+send notifications. Real notification preference fixtures, actual Node delivery
+effect comparisons, application registration and worker recovery remain gates.
+
+### Feishu Conversion Safety Foundation
+
+The restricted converter and registered action adapter preserve Node's ordered
+canonical JSON, duplicate-key semantics, UTF-16 payload units and error priority.
+Parent review required fixes for non-finite numbers, WHATWG private IPv4 aliases,
+IPv4-mapped IPv6 (including mapped public addresses), and ECMAScript whitespace.
+The existing approved WHATWG parser is reused; no dependency was added. Raw
+payload output is revalidated before it can cross the cards persistence seam.
+
+Independent Node converter/action/raw-boundary tests passed 31/31. Go/race
+passed Feishu (1.081 seconds) and cards (1.028 seconds), followed by staticcheck
+after removing six unused helpers/assignments. These accept the converter and
+typed action foundation, not the real action PostgreSQL bridge or Gateway/main
+registration. Final persisted fallback-text behavior for lone UTF-16 units is
+being characterized separately against the actual Node HTTP writer.
+
+### Bot Gateway Message DTO Compatibility
+
+The actual Node Gateway route plus SQLite message writer confirms that its
+message response omits the nested `author` property. The Go adapter no longer
+adds that incompatible field. Four actual Node cases cover text/content/nullish
+selection and client-key aliases; replay is also observed. The application test
+now checks the response omission and separately verifies the persisted Bot
+author identity, preserving the security assertion without inventing a DTO.
+
+Parent independently regenerated the fixture in check-only mode against fresh
+synthetic SQLite. PostgreSQL/race passed Gateway (10.985 seconds), HTTP (1.874)
+and application composition (3.896), followed by integration-tag staticcheck.
+The narrow projection golden does not replace full Go HTTP request parity.
+
+### Card Authorization Race Correction
+
+Parent PostgreSQL reproductions showed that a Bot removed from the space or
+changed to a human between preliminary checks and transaction entry could still
+update or invalidate a card. Both mutations now recheck the Bot writer in the
+accepting transaction. Card transaction reads pin user identity, space and
+conversation membership, and active custom-Bot state with compatible share locks
+until commit; read-only repository calls do not acquire those locks.
+
+Regressions cover update/invalidate after membership, identity and active-Bot
+revocation, unchanged cards/events on rejection, and a separate transaction
+unable to revoke any of four pinned authorization records before commit. A test
+fixture initially used an invalid Bot status; it was corrected to `paused` and
+now explicitly fails if establishing the revocation itself fails.
+
+Fresh independent PostgreSQL/race passed cards (22.063 seconds), Gateway
+(14.815), Echo runtime (3.030) and application composition (5.357), followed by
+integration-tag staticcheck. The four initial membership/identity reproductions
+failed before the fix. No public API or production ownership changed.
+
+### Disposable Node Unit Fixture Storage
+
+CI runs `34029982272` and `34030618278` passed the Go/PostgreSQL/media and P2P
+jobs but hit the existing five-second Node unit deadline in SQLite fixtures
+with hundreds of tiny WAL commits. The two affected files passed unchanged
+locally (120 tests, 78.76 seconds). Only the Node unit step now sets
+`TMPDIR=/dev/shm`; no test timeout, assertion, SQLite transaction, retry or
+production storage setting changed. A workflow guard confines this setting to
+that single step, excluding executable Go/browser and PostgreSQL fixtures.
+
+The parent reran the complete unchanged Node unit suite with that scoped
+environment: SDK 8 passed; web 703 passed and two explicit PostgreSQL cases
+skipped, in 25.48 seconds. The three CI guards passed. These local results are
+not a claim that the new commit passed remote CI or the dedicated Node
+PostgreSQL gate.
+
+### Bot Gateway Feishu Ingress
+
+The Gateway selects the existing Node Feishu branch using field presence and
+nullish source precedence, persists only validated converter output, and hashes
+the canonical converted payload. Native card hashing remains unchanged. Updates
+verify stored card ownership/type before conversion and retain the accepting
+cards transaction's authorization checks. Human routes do not accept Bot tokens.
+
+Parent added a successful real PostgreSQL update to the worker's create/hash,
+replay and non-owner rejection coverage; the update checks canonical payload,
+revision and fallback persistence. Fresh independent PostgreSQL/race passed
+Gateway (10.969 seconds) and HTTP (1.878), followed by integration-tag staticcheck
+and both Node hash-fixture tests. Main registry/action composition and the
+actual Node lone-surrogate fallback request-hash comparison remain separate
+gates; converter-only hash fixtures do not prove those boundaries.
+
+### Feishu Action PostgreSQL And Application Composition
+
+The Feishu action repository wraps the configured cards repository on one
+transaction and retains its ID factory and action savepoint. It derives the
+active Bot from the stored card creator/source/space, pins that Bot row through
+commit, and forwards canonical action data to the cards-owned event writer.
+Parent review added a caller-owned transaction factory and the active-Bot lock.
+
+Fresh independent PostgreSQL/race passed Feishu (7.019 seconds), covering
+successful action/replay, source/creator/space/inactive-Bot rejection with audit,
+savepoint and outer rollback, and blocked concurrent pause. Main now registers
+the definition and wrapper; its real HTTP/PG test passed (2.971 seconds) through
+Bot create, human resolution, action and replay with one canonical action event.
+Integration-tag staticcheck passed. This does not enable external Bot delivery
+or close the separate lone-surrogate request-hash compatibility gate.
+
+### Realtime Viewer Read State
+
+Conversation event projections incorrectly forced `unreadCount` to zero and
+omitted the read marker. They now reuse the conversations repository's visible
+record and its existing read-boundary calculation; the transport allowlist
+preserves nullable marker ID/time/sequence. The database mutation was already
+correct and was not changed. Synthetic tests cover system/other-author messages,
+own-message exclusion, marker progression and event replay.
+
+Independent PostgreSQL/race passed events (4.173 seconds) and conversations
+(3.670), followed by integration-tag staticcheck. The unchanged dual-user
+Chromium scenario advanced past its earlier unread failure, then failed at
+the remote member reaction display (line 983, 32.5 seconds). That is a new
+remaining realtime projection issue, not a full browser pass.
+
+### File, Invite And Notification Contracts
+
+Strict OpenAPI 3.1.2 schemas cover 11 file, three invitation and 11 notification
+operations. Actual Node fixtures characterize 16/4/14 scenarios, including
+multipart/local-object flows, invitation acceptance/revocation, SMTP test-proof
+configuration and email verification. SMTP is an injected synthetic sender;
+background external delivery is disabled. These fixtures do not establish full
+Go response parity or exhaustive denied-resource coverage.
+
+Parent independently regenerated all three fixtures in check-only mode,
+passed combined Go/race contract tests (6.625 seconds) and staticcheck. Parent
+also added failure-path cleanup for each owned temporary database/directory
+and disabled fixture request logging; all three check-only producers passed
+again after those changes. No live credentials or external sends were used.
+
+Remote CI run `34032028949` completed all three jobs successfully on exact
+commit `5ba8a90`, including the scoped tmpfs Node unit step, Node browser,
+Go quality/PostgreSQL/media, and Go P2P browser checks. It does not cover later
+read-state, reaction, contract or unaccepted automation changes.
+
+### Reaction Runtime Composition And Replay
+
+Two missing runtime links were found while following the unchanged browser
+scenario: reaction events lacked the current viewer's groups, and the human
+message service had no reaction catalog validator, rejecting valid reactions
+after the client's optimistic display. Main now reuses the immutable imported
+catalog: additions require visible entries; removal permits known hidden entries.
+Replay reconstructs the viewer's names and selected state from current rows,
+never stored caller projections. No imported asset changed.
+
+The PostgreSQL projection regression failed before the fix. Fresh independent
+PostgreSQL/race then passed events (4.628 seconds) and application composition
+(4.471); staticcheck passed. Real HTTP tests cover visible add/remove, unknown
+and hidden-add rejection; the adapter unit test preserves hidden removal.
+Browser reruns still failed: once at the earlier reaction display before the
+catalog was connected, then twice at rapid history-message catch-up (line 728,
+20.5/22.6 seconds). No complete browser pass is claimed. Catch-up remains a
+separate active investigation; assertions and deadlines are unchanged.
+
+### Shared Echo And Feishu Card Transaction Composition
+
+The candidate Echo runtime now provides a cards repository that preserves
+Feishu's typed action/savepoint extension and adds requirement and solicitation
+views over the same accepting PostgreSQL transaction. It retains each configured
+repository's ID factory. This adapter is not yet selected by the application;
+registered Echo definitions and end-to-end action wiring remain separate gates.
+
+Independent PostgreSQL/race passed runtime (2.620 seconds), including a one-
+connection-pool regression: a late failure rolls back both domain writes, and
+the cards-owned savepoint rolls back both views before successful retry using
+the same configured IDs. Integration-tag staticcheck passed. An initial test
+placement polluted the existing writer fixture's zero-audit assertion; moving
+the independent subtest after those assertions fixed only fixture isolation.
+
+### Realtime Projection Pool Exhaustion
+
+Conversation/member and message/attachment projection held a pool connection
+while issuing a nested pool query. Both now collect IDs and close rows before
+hydration. The regression reserves a listener connection in a two-connection
+pool and concurrently replays 28 durable events for two actors. Worker observed
+failure before the fix and a pass afterwards. Parent made synthetic-schema
+cleanup failures visible and independently passed PostgreSQL/race events
+(9.349 seconds), realtime (4.893), and integration-tag staticcheck.
+
+The unchanged dual-user browser still failed at history-27 catch-up, line 728
+(31.9 seconds), so this is a verified pool bug fix, not closure of browser parity.
+Actual WebSocket/cursor recovery remains under investigation. Remote CI run
+`34032657515` passed all three jobs on `9367d5f`; later changes are not covered.
+
+### Echo Delivery Construction And Release Snapshot Binding
+
+A shared runtime constructor binds the already-configured message scheduler,
+base cards transaction (including Echo revision extension), domain projectors
+and atomic writer. It starts no worker and sends no external notification.
+The release adapter carries the recipient, space, version and immutable
+publication ID; release projection rejects mismatched IDs while preserving
+existing version-only reads for other internal callers.
+
+Independent PostgreSQL/race passed runtime (2.936 seconds) and releases (4.565),
+followed by integration-tag staticcheck. Unit tests check input mapping and
+failure propagation; the PG release test rejects another publication identity.
+Application registration, worker recovery and real delivery through those
+entry points remain the next integration gate.
+
+### Interaction Infrastructure Rollback
+
+The generic interaction executor now distinguishes expected input/business
+rejections from infrastructure failures before retaining a failed-run/audit.
+Unknown failures, 5xx, cancellation, savepoint failures and joined error graphs
+roll back the outer transaction. Caller-owned workflow cancellation and a
+configured PG transaction factory support Echo's shared transaction without
+extra pool reads; transaction authorization pins the active actor membership.
+
+Parent review additionally rejected unknown errors with empty `Unwrap`, bounded
+cyclic graphs, and invalid server-generated command/workflow results. Generated
+output failures now return internal 500 and roll back, rather than incorrectly
+committing partial domain state as a client 4xx. Actual invalid client/domain
+input still retains its normal rejection contract and content-free audit.
+
+Fresh independent PostgreSQL/race passed interactions (19.512 seconds) and the
+uncommitted automation consumer (7.917); integration-tag staticcheck passed.
+PG cases cover late event/output failure, empty-unwrap failure, savepoint
+rollback/release failure, and legitimate 4xx with no partial domain writes.
+
+### Echo Command And Workflow Definitions
+
+Echo's 11 commands and two workflows now have candidate definitions and a PG
+repository that supplies configured interaction/requirement/solicitation/release
+views over one transaction. Solicitation create/publish share their existing
+mutation implementations with caller-owned `InTx` entry points. Multi-step
+publish and requirement operations use savepoints and preserve only safe
+rejection evidence after rollback; adapters inspect all error leaves before
+converting domain 4xx errors.
+
+Parent removed an unused helper and added no-cause 503/typed-nil error tests.
+Independent PostgreSQL/race passed automation (7.917 seconds), interactions
+(19.512), and solicitations in the earlier combined run (25.030); staticcheck
+passed after cleanup. Both Node automation and parser fixture checks passed.
+Parser fixtures include JavaScript whitespace and the current Node quoted-token
+behavior, without pretending that pre-parsing in the generic command registry
+is already characterized. Application composition, post-commit delivery, generic
+parser parity and the unchanged Echo browser scenarios remain integration gates.
+
+### Echo Card Definitions And Provenance
+
+The five Echo card definitions now bind requirement transitions and solicitation
+votes to the same accepting card transaction. Requirement projection can reuse
+that transaction, including its membership checks and content-free rejection
+audit. Before either mutation, the adapter checks the stored card's source,
+space, type/version, ID and resource binding; a custom Bot's Echo-shaped payload
+cannot authorize a mutation of an unrelated resource.
+
+Independent PostgreSQL/race passed carddefinitions (1.071 seconds), requirements
+(11.614) and runtime (3.292); staticcheck and the Node five-definition fixture
+check passed. A real application test subsequently passed requirement create,
+card delivery, collect/replay and solicitation delivery. Full command/workflow,
+vote and browser acceptance remains separate from these focused checks.
+
+### Echo Request Runtime Composition
+
+Workspace now registers the 11 commands, two workflows, five card definitions,
+shared accepting transactions and the configured durable-message delivery
+writer. Enabled startup validates the canonical release asset before opening
+dependencies; disabled startup remains dependency-free. Successful domain/card
+operations trigger post-commit projection delivery, without converting a
+durable success into a retryable rejection when delivery fails. Recovery worker
+composition remains a separate gate.
+
+Integration found that blindly copying Node's Echo action adapter injected an
+idempotency key into Feishu's empty-input action contract. The candidate narrows
+injection to actor-authorized Echo requirement/solicitation card types. Generic
+card execution still rechecks authorization and stored provenance in its own
+transaction; non-Echo inputs are unchanged. This intentional correction avoids
+weakening Feishu's arbitrary-input rejection.
+
+Independent PostgreSQL/race passed application composition (4.632 seconds) and
+runtime (2.766), including real HTTP collect/vote/replay, release invocation/
+replay and sent delivery rows. Integration-tag staticcheck passed. Three of four
+unchanged Echo browser scenarios passed (StrictMode, guided workflow and release
+viewports); the release scenario still failed waiting for its card after the
+success title appeared. The PG test confirms durable release delivery, but live
+browser projection is not yet accepted. Release result-counter parity and
+durable recovery are also open; this commit is not whole-Echo parity.
+
+### Feishu Fallback Hash Compatibility
+
+Feishu conversion now retains a validated hash-only UTF-16 representation for
+its generated fallback. The HTTP boundary also preserves explicit fallback
+presence/raw JSON through validation, including lone surrogate units and
+JavaScript trimming. Only canonical validated values enter the hash; database,
+message and public fallback strings still use replacement-safe Unicode. Native
+card hashing is unchanged.
+
+Independent PostgreSQL/race passed botgateway (38.754 seconds), HTTP API (12.723),
+Feishu (23.972) and application composition (11.211). Integration-tag staticcheck
+and seven actual Node fixture cases passed. Parent added Go rejection assertions
+for the fixture's empty/null cases and made synthetic schema cleanup errors
+visible; focused PostgreSQL/race then passed gateway (4.002) and HTTP (4.402).
+
+### Generic Command Whitespace Compatibility
+
+The generic registry now uses ECMAScript whitespace for command recognition
+and command/workflow names: BOM and JavaScript Unicode spaces are recognized;
+U+0085 is not a delimiter and is retained in arguments. The 4096-code-point
+pre-recognition limit remains unchanged. Parent review corrected the command
+name boundary so skipping delimiters cannot append those delimiters to the
+name. Independent PostgreSQL/race passed interactions (42.636 seconds), Echo
+automation (18.208) and application composition (10.541); staticcheck passed.
+
+### Storage Backfill Journal And Safety Review
+
+The additive `032` journal and backfill library bind canonical objects, logical
+references and completed items in one transaction. Review added full-stream
+digest verification including maximum-size EOF, private-schema isolation,
+bounded clone chains, run/item fence and revision checks, late-created cleanup
+deadlines, panic rollback and rejection of unbound completion. Concurrent
+reference-only changes are rejected against the captured target snapshot.
+
+Independent PostgreSQL/race passed storageops (9.136 seconds); integration-tag
+staticcheck and the actual Node backfill/replay contract passed. Parent then
+corrected report-only logical bytes to include completed clone references like
+Node, with an explicit deduplicated-byte regression. The corrected PostgreSQL/
+race rerun passed in 12.307 seconds. Trusted owner coordination,
+CLI mutation admission and recovery remain separate uncompleted gates. No
+production schema, reference, object or quota was modified.
+
+### Candidate Health Probe And Build Inputs
+
+The loopback-only health helper passed independent race (4.030 seconds),
+CGO-disabled tests (3.017) and staticcheck. Both Go Dockerfiles build/copy it;
+per-image context allowlists exclude local environments, runtime data and
+dependencies. The first local legacy-builder attempt was stopped after it
+ignored the per-file context restriction. Installing only Ubuntu's buildx
+package required no daemon restart; the BuildKit P2P context was 5.44 MB.
+
+The first BuildKit build failed reaching the default Go module proxy. With the
+new build-only public `GOPROXY` override, the P2P image built and its real health
+probe exited zero in a non-root, read-only, network-none disposable container.
+Workspace image and full candidate gateway readiness remain uncompleted; no
+production container, daemon configuration or persistent volume was changed.
+
+### Echo Card References In Realtime Projection
+
+The real PostgreSQL listener/hub/WebSocket test isolated the missing release
+card: message events arrived, but the strict block allowlist dropped `cardId`,
+`cardType` and `schemaVersion`. Only these public reference fields are restored
+for card blocks, with a positive integral schema version; card bodies remain
+excluded. Parent added negative allowlist/version tests.
+
+Independent PostgreSQL/race passed events (9.094 seconds), realtime (9.608),
+focused allowlist race (1.026) and integration-tag staticcheck. All four unchanged
+Echo browser scenarios now pass (32.8 seconds total), including mobile release
+delivery/replay, StrictMode, viewport workflow and complete/cancel behavior.
+The Vite harness logged an ECONNRESET during page teardown; assertions still
+passed. Full Workspace browser, release result finalization and worker recovery
+remain separate gates.
+
+### Bot API Contract Inventory
+
+The owner and Gateway OpenAPI documents now cover 35 HTTP/WebSocket route
+operations and distinguish browser-session, Bot-token and public setup
+boundaries. Two executable response scenarios cover owner creation and Gateway
+message DTOs; this is not full behavioral coverage of those 35 operations.
+Parent replaced the handwritten owner response with actual Node Fastify,
+service and synthetic SQLite execution. Its output matches the existing golden;
+no token is issued. The Gateway scenario consumes the separate actual Node
+message-writer golden. Go OpenAPI/race validation passed (13.009 seconds), and
+the updated Node fixture freshness check passed. Negative schema validation
+rejects an extra author field in the deliberately smaller Gateway message DTO.
+
+### Member Post-Commit Echo Delivery
+
+Successful invite-backed GitHub authentication and human role updates now
+request a bounded five-second Echo member sync after the underlying transaction
+commits. The adapter does not forward GitHub profiles, invite hashes or secrets,
+and an ordinary login does not repeat invite delivery. Delivery failure cannot
+undo or misreport durable authentication/membership success. The independently
+composed member-reconciliation worker repairs missed hooks.
+
+Independent PostgreSQL/race passed application composition (7.221 seconds) and
+runtime (4.358); staticcheck and focused post-commit/failure tests passed. The
+worker recovery evidence is recorded separately; this hook does not grant any
+new production job ownership.
+
+### Migration Coexistence And CI Contract Gates
+
+The isolated schema rehearsal executes the actual Node and Go migration
+commands against loopback PostgreSQL, with generated owned schemas and explicit
+opt-in. It covers bootstrap through 029, both owners waiting on the same
+advisory migration lock, current-history no-op, exactly-once seeds and a failing
+031 upgrade rolling the full pending batch back to 030. Canonical SQL hashes
+are checked before/after; the existing history table still stores only names
+and applied times, not checksums. Parent independently passed all seven CI/
+schema tests with PostgreSQL enabled (7.475 seconds; 33 files in the reviewed
+worktree, including the pending additive command-finalization migration).
+
+The CI Node contract step now runs 23 actual fixture/check scripts with their
+supported flags. Parent independently reran all 23 successfully, including the
+new actual-owner Bot creation fixture. The PostgreSQL coexistence rehearsal is
+also in the Go CI job. No Go Workspace browser gate is enabled yet: the latest
+full browser run passed 9/12, with Bot card update 404, intermittent release
+card visibility and reaction-removal projection failures still under review.
+
+### Echo Worker Recovery Composition
+
+Four default-off bounded processors now compose the actual repositories,
+delivery service, five card definitions and durable message-jobs scheduler.
+Separate cursors cover requirement/solicitation/release queues and active-human
+member reconciliation. The latter repairs a join whose HTTP hook never ran,
+without broadcasting historical releases. Errors/cancellation retain the
+previous page cursor; successful short pages wrap.
+
+Independent PostgreSQL/race passed worker/config (4.245/1.020 seconds). Parent
+corrected staticcheck error-string findings, then staticcheck passed. The
+expanded real worker test passed in 4.068 seconds: reconstruction retains one
+message/card/delivery and one pending email/ntfy job each, with zero provider
+attempts. Schema cleanup failures are reported. No notification was sent and
+no production worker was enabled.
+
+### Composed Bot Card Authorization
+
+The full browser failure exposed a lost optional interface: Gateway card
+creation used the base transaction, but updates entered the Echo/Feishu action
+repository whose embedded read interface hid `CustomBotActive`. The adapter
+now forwards the base repository check and the same-transaction authorization
+view. It does not bypass inactive-Bot checks or open a nested transaction.
+
+An actual application HTTP regression now creates, acts on and updates the
+Feishu card through the composed Gateway. Independent PostgreSQL/race passed
+application/runtime (11.124/7.008 seconds), integration-tag staticcheck passed,
+and the unchanged full Bot owner/Gateway browser scenario passed (19.5 seconds;
+45.7 including startup). Existing Vite teardown ECONNRESET was observed. This
+fix does not claim the remaining Workspace browser failures are resolved.
+
+### PostgreSQL File And Invite HTTP Contracts
+
+The shared disposable fixture now exercises actual authentication, domain
+services, PostgreSQL repositories and HTTP routing. File cases cover reserved
+upload, completion/list projection, early quota rejection without orphan objects,
+and auditor denial. Invite cases cover unauthenticated access, null-body creation,
+hash-only persistence, member denial, owner revocation and missing-resource audit.
+Cleanup errors fail the test. Parent independently passed the frozen fixture,
+file and invite tests with PostgreSQL and race detection (8.008 seconds).
+These focused cases do not claim exhaustive parity for every route or status.
+
+### Stable Release Delivery Result
+
+Migration 033 adds a nullable finalization timestamp without changing Node's
+history or result contract. The interaction service revalidates original command
+recognition/hash, actor and membership under the existing invocation lock, then
+freezes only the five delivery counts of a successful `release-published`
+result. Non-count identity cannot change; counts must be nonnegative JavaScript
+safe integers with a consistent total. Concurrent finalizers and crash replay
+return the first persisted result. Failed post-commit work preserves the accepted
+command and remains retryable, rather than returning an ambiguous command failure.
+
+The runtime now reads the all-recipient publication summary after delivery and
+wires the finalizer in the actual Workspace application. Parent independently
+passed PostgreSQL/race interactions (36.829 seconds), runtime (6.397), application
+(10.335), and tagged staticcheck. HTTP first/replay assertions verify one sent
+recipient, no pending recipient and a durable frozen timestamp. A fresh browser
+run passed 11/12, including release, Bot and Strict Mode; the dual-user latest
+message visibility failure remains open and is not attributed to finalization.
+
+### Passive Candidate Dependency Validation
+
+The real Workspace application now validates its entire graph on a read-only
+PostgreSQL connection with business admission and background listeners absent.
+The worker validates all eight local-storage processors against the same
+read-only mode and leaves a pending email job unchanged. No provider is invoked.
+Local store construction in these modes never provisions or chmods the root;
+the health helper requires the exact runtime mode when requested.
+
+Independent PostgreSQL/race passed Workspace (10.335 seconds), health helper
+(4.083), local storage (4.142), gate (1.022), and, after correcting raw exact-flag
+parsing and the test's missing catalog path, worker/config (7.522/1.017).
+Tagged staticcheck passed. Full container mode proof and deployment harness
+integration are separate gates and are not claimed by these tests.
+
+### Real HTTP Writer And Dual WebSocket Regressions
+
+Two synthetic PostgreSQL tests now exercise the actual message/reaction HTTP
+services with two authenticated WebSockets and a live PostgreSQL listener.
+They verify a 28-message burst, ordered durable replay, viewer-specific
+reaction add/remove snapshots and reconnect after removal. Messages and event
+rows are created through the API, not directly inserted. Parent independently
+passed the realtime package with PostgreSQL/race (19.604 seconds). These focused
+regressions passed while the full browser visibility issue remained open; they
+are stronger writer/transport evidence, not a claim that the issue is resolved.
+
+### Notification Null Compatibility
+
+Actual Node characterization found that explicitly null email preference flags
+mean false, while omitted flags retain their value. The Go HTTP adapter now
+preserves this distinction without changing the shared optional-field decoder
+or ntfy's boolean-only contract. The three email PATCH fields also accept null
+in OpenAPI. The seven-case actual Node fixture and three schema cases retain
+their source links; PostgreSQL tests prime true values before testing null and
+omission, verify persistence, and assert no provider calls.
+
+Parent independently passed the Node fixture (7 cases), PostgreSQL/race HTTP
+package (9.624 seconds), complete contract/race package (11.687), and three CI
+wiring tests. CI now runs 24 Node fixture commands. This review separately
+identified logical file-not-found 400/404 drift; its fix is tracked with the
+file-owner slice and is not claimed here.
+
+### Isolated Six-Service Gateway Candidate
+
+The candidate Compose project isolates Web, P2P, Workspace, worker, migration
+and PostgreSQL with project-owned synthetic volumes and one loopback Web port.
+Go processes run as 65532 and Web as 101; the Nginx cache tmpfs has explicit
+owner permissions. Only migration is one-shot. P2P has no database/storage
+configuration, secrets or mounts. Notifications default off. Public gateway
+routes explicitly deny all three private health/metrics paths.
+
+Parent independently passed the six-service Compose guard and started project
+`duallane-predeployment-stack-20260906`: five long-running containers became
+healthy and migration exited zero. Gateway smoke passed ten assertions on
+loopback port 18788, including the protocol-correct unauthenticated hello error
+and close 1008, security headers, private endpoint denial, and a content-free
+transient P2P room. The new gateway Web image ID is
+`sha256:6c3c24cc083a0f3a36e52603188c2098962df8b95e3b45db722cca750e38fcf8`.
+These are preliminary container checks: the backend image was an earlier
+candidate snapshot. Final full-commit images, passive mode, data permissions,
+worker behavior and rollback still require their separate rehearsal evidence.
+
+### Private Metrics And Transport Observation
+
+A private Prometheus registry now accepts fixed service/operation categories
+and a static allowlist derived from the real HTTP router. It rejects request
+identifiers as labels. Realtime instrumentation counts accepted sockets and
+durable replay batches; event age and query duration are separate observations.
+PostgreSQL cumulative counters use per-field high-watermarks so late concurrent
+snapshots cannot double-count. Unavailable lease acquisition timestamps do not
+create misleading zero-valued lease-age gauges. Go/process collectors remain
+private, and the candidate gateway denies their public path.
+
+Parent independently passed PostgreSQL/race metrics (1.407 seconds), realtime
+(23.057) and HTTP (25.609), plus tagged staticcheck. A focused actual WebSocket
+upgrade regression passed and recorded HTTP 101 through the metrics middleware;
+route tests retain templates rather than resource IDs or query values. Command
+composition and worker queue collection are accepted in separate slices.
+
+### Worker Queue Collection And Metrics Wiring
+
+The worker now exposes private process/pool metrics and actual per-cycle result
+counts. A separate 30-second loop reads seven durable queue families in a
+500-millisecond read-only PostgreSQL transaction; scrapes never query queues.
+Collection failure retains the previous successful samples and emits only a
+fixed warning code. Echo counts describe recovery/reconciliation candidates,
+not necessarily pending sends. No provider is called to collect metrics; the
+tables lack lease acquisition time, so lease-age samples remain unavailable.
+
+Parent independently passed the worker PostgreSQL/race suite (15.186 seconds)
+and tagged staticcheck. A focused composition test passed (1.210 seconds),
+checking partial cycle counts, private GET/POST handling, raw-error/query
+exclusion and absence of invented backlog samples without a database.
+
+### Authorized Legacy Attachment Reads
+
+The files service now supports explicitly injected local/S3 legacy readers
+after authorization and download-grant validation. Only recognized keys derived
+from the attachment's own namespace are tried; canonical reads remain first,
+and only physical absence allows fallback. Tombstoned/inconsistent bindings,
+provider failures and size/key mismatches fail closed. A known canonical hash
+must match the fallback; metadata-free S3 streams are verified at EOF without
+buffering the object. Early close is not an integrity proof.
+
+Logical `file.not_found` now preserves Node's 400 status; physical object
+absence remains 404. Parent independently passed files PostgreSQL/race (47.750
+seconds), HTTP PostgreSQL/race (25.609), file schema regressions (2.201), actual
+Node legacy fixture creation, and tagged staticcheck. The runtime legacy-reader
+injection and full Node-to-Go physical fixture read are separate integration
+checks. The latter exposed a local-root layout mismatch (`workspace-files`
+under Node's data directory), now tracked for a command-composition correction;
+these domain tests alone do not establish existing-volume compatibility.
+
+### Workspace Command Observation And Legacy Reader Injection
+
+Workspace command composition now supplies the concrete legacy reader to the
+file service, shares one private registry with HTTP/realtime observers, and
+exposes `/metrics` only on its private service surface. Scrapes read pool/process
+snapshots without issuing business SQL. Both active and health-only applications
+use the private handler; public health is unchanged. Parent independently
+passed the command PostgreSQL/race suite (8.180 seconds), tagged staticcheck,
+and identifier-exclusion/private-method unit coverage. The separately identified
+data-root compatibility correction remains required before a final image.
+
+### Shared Local Root — Reproduced And Corrected
+
+Node's actual fixture demonstrated that `DUALLANE_DATA_DIR` names the parent
+application directory, while the object root is its `workspace-files` child.
+Both Go runtime factories now use one pure configuration resolver for that
+layout, including passive and local/hybrid construction. No files are moved,
+no production volume is changed, and the generic BlobStore's explicit-root API
+is unchanged. Operator `--object-root` remains the physical subdirectory.
+
+Parent reproduced all three new factory regressions against the old factory:
+canonical bytes were absent at Node's path, actual Node legacy content returned
+`file.storage_missing`, and the passive worker could not read Node's layout.
+After the fix they passed with race (Workspace 1.138 seconds, worker 1.037).
+Full command/config PostgreSQL/race passed (3.653/4.287/1.015), as did tagged
+staticcheck. The four-stage parity runner now creates a Node fixture, reads it
+through Go's authorized files service and actual passive Workspace factory,
+then rechecks Node's bytes/grant/audit. It passed and removed its own synthetic
+directory. CI runs that explicit parity step rather than silently skipping the
+environment-gated tests. Image permission/layout rehearsal remains separate.
+
+### Encoded Reaction Removal — HTTP Boundary Regression
+
+The unchanged dual-user browser flow reached reaction removal and exposed a
+400 for `feishu%3Aok`. Chi uses the escaped `RawPath` when present; otherwise
+Go's URL parser has already decoded `Path`. The route now decodes the key only
+in the former case, preserving literal percent sequences and plus signs.
+Unconditional decoding would incorrectly turn a double-encoded key into a
+valid catalog entry. Authorization and the domain validation remain unchanged.
+
+Parent reproduced five failures in the new nine-case route matrix before the
+fix; afterward the focused race check passed (1.082 seconds). A real HTTP
+server plus disposable PostgreSQL test passed (2.072): encoded removal succeeds,
+replay produces only one durable `reaction.removed` event, and a double-encoded
+key is rejected. The full HTTP PostgreSQL/race suite passed (6.964), as did
+tagged staticcheck. The original full browser flow is being rerun without
+altering its assertions, timeout or viewport. The earlier history right-click
+timeout was not reproduced in this diagnostic; no root-cause claim is made.
+
+### Explicit Release Profiles And Passive Candidate Preflight
+
+The release script now keeps `node-default` unchanged unless `go-full` is
+explicitly selected. The Go overlay preserves the existing database/data
+authority and reserves Node for rollback. Candidate P2P/Web use an owned private
+network; Workspace/worker reach PostgreSQL without publishing production
+upstream aliases and mount `/app/data` read-only. Actual container inspection
+must prove the passive runtime mode, UID, read-only mount/rootfs, release labels,
+and absence of published ports. Candidate health failure precedes owner handoff.
+
+Parent independently passed all 18 synthetic release-helper tests (19.154
+seconds), including actual Node `candidate_compose` function composition,
+candidate-name collisions, inventory/ps failures, permission denial, writable
+mount/rootfs rejection, Node rollback fencing, replacement IDs, and Docker
+restart recovery. Actual resolved Compose checks passed for Node/Go dependencies,
+candidate RO versus active RW on the same volume, shared Workspace/worker/migrate
+image reference, and P2P secret/mount isolation. No release script, real rollback,
+daemon restart or production operation was executed. The separate image-ID
+equality gate, durable Go-to-Go upgrade protocol and upload drain/fence checks
+remain follow-up work; this slice intentionally refuses an already active Go
+owner. A resolved image reference alone is not immutable-image proof.
+
+### Bounded Storage Observations And Runtime Composition
+
+Local/S3/hybrid adapters now expose fixed operation/outcome observations without
+losing optional legacy/maintenance interfaces. Handle acquisition and stream
+completion are separate; cancellation, early close and corrupt streams cannot
+produce successful verify observations. Review corrected a blocked-read/close
+deadlock and a close-race branch that could bypass the S3 returned-byte bound.
+Concurrent close now reaches the underlying reader, and even payload returned
+after close is clipped to the expected remaining bytes.
+
+Parent independently passed storage PostgreSQL/race (3.531 seconds), files
+PostgreSQL/race (20.063), tagged staticcheck, and the close-race ReadAll/Copy test
+100 times with race (1.062). No keys, URLs or raw provider errors enter labels.
+Command composition is separately reviewed: Workspace/worker configure only
+the outermost store, retain the Node-compatible root and passive no-provisioning
+path, and use their process-local private registry. Twelve provider/mode cases
+cover local/S3/hybrid with active/passive construction and exact single counters.
+Full command PostgreSQL/race passed (6.384/7.685). The actual Node-to-Go-to-Node
+legacy attachment/factory parity runner also passed after this integration and
+cleaned its own synthetic fixture. No production objects were read or modified.
+
+### Aggregate Go Gate And P2P Base Image
+
+After accepting through `17129e4`, the parent's Linux-native validation copy
+completed `go test -tags=postgres_integration -race -count=1 ./...` with the
+explicit disposable PostgreSQL DSN. All packages passed. The copy additionally
+contained the bounded permission-probe candidate; it did not contain the still
+unreviewed favorite/provision/next-release-tooling drafts. This is a point-in-time
+gate and must be repeated after those slices are integrated.
+
+The P2P Dockerfile now pins Go/Debian base digests and direct certificate/timezone
+package versions. An allowlisted HTTPS APT mirror can bootstrap from the build
+image's CA bundle while retaining signed Debian metadata checks. Parent built
+`duallane-predeployment-p2p:pinned-base-check` (local inspected image index
+`cdd4b425c0357fa0ea851ce7f69ba08ca22f3b3ceb6844e1516510f4d067b846`), then started
+an isolated owned container and passed its actual health binary. Inspection
+proved UID/GID 65532, read-only rootfs, network none, and zero mounts. The exact
+owned `--rm` container was stopped and removed; no volume was created. These
+diagnostic release labels are not final release metadata. Transitive APT package
+resolution remains repository-dependent; a release must record and reuse the
+exact built image digest rather than assume later rebuilds are byte-identical.
+
+### Release Contract CI Follow-up
+
+CI at `17129e4` exposed the former static test's references to removed candidate
+function names. The test now inspects the actual shared helper and the executed
+Node/Go release branches: healthy candidates must still precede replacement,
+and passive mode remains mandatory. Parent passed all 15 focused configuration
+tests, then the full Node gate using CI's SQLite-only tmpfs setting: SDK 8/8 and
+Web 703 passed, 2 PostgreSQL tests explicitly skipped (24.36 seconds). No timeout
+or assertions were relaxed. Synthetic release ownership/rollback tests are now
+an explicit CI step rather than a local-only check.
+
+### Workspace Image And Effective Permission Rehearsal
+
+Parent built the pinned Workspace runtime with storage and permission-probe
+commands (local image ID `cdaa6cbe1805b61cfe574091831f827766051cf97ae076f84603aa7525daaec8`).
+The new image passed all six actual Docker permission cases: root-owned data
+denial, Go-owned success, root-owned secret denial, exact 2 MiB acceptance,
+over-limit rejection and symlink rejection. Both initialization and probe used
+this explicit image. Fixture mounts disable volume copy-up and explicitly set
+root/Go ownership, avoiding an image-layer ownership false positive. The probe
+runs as 65532 with read-only data/rootfs and no network or database access.
+
+Run `mtq0cbj7-8a0c8efbafed434c98632f9123a51abe` passed in 8.10 seconds and
+removed its 18 label-verified synthetic volumes; all 12 `--rm` containers were
+already absent. The optional fake-S3 Docker stage was not run. The separate
+runner gate passed 14 tests with one explicit Docker opt-in skip; probe race
+tests and the earlier aggregate Go PostgreSQL/race gate also passed. CI now runs
+the runner's ownership/cleanup tests. No existing or production volume was
+modified. This image has diagnostic labels and predates the next favorite and
+provision slices, so it is not a final release artifact.
+
+### Node Rollback Provisioning Policy Guard
+
+Independent review of the Go provisioning candidate found an inherited Node
+policy gap: inspecting only `Allow.Principal` ignored `Allow.NotPrincipal`,
+which cannot prove anonymous access is excluded. The retained Node provisioner
+now conservatively rejects that shape with its existing safe public-policy
+error before any bucket write. `Deny` semantics and private principal handling
+are unchanged. Parent independently passed all five focused Node provisioning
+tests (31 ms); the added regression proves only HeadBucket/GetBucketPolicy run
+before refusal. No external bucket or policy was read or modified. Equivalent
+Go policy/invalid-JSON/report fixes remain under review in the separate slice.
+
+### Active Go Background Ownership Defaults
+
+The explicit full-Go profile now defaults Echo and maintenance on in its worker,
+matching the work previously executed by Node; explicit false overrides are
+preserved and the Workspace HTTP process keeps both off. Parent passed all three
+source/config guard tests and actual Docker Compose resolution for defaults and
+explicit false overrides, plus the Go race regression proving validate-only
+never invokes configured processors (1.031 seconds). The mount-only candidate
+overlay is not passive by itself: the guarded release helper still supplies and
+inspects its passive environment overrides. No providers or active containers
+were started by these checks. The new defaults test is included in CI.
+
+Remote CI `34044699666` passed all three jobs at `fce77df`; later commits require
+their own aggregate gate and this result does not include uncommitted drafts.
+
+### Explicit Go S3 Provisioning
+
+The storage command now implements read-only-default bucket planning and an
+explicit apply path, with bounded AWS SDK requests, private-policy checks,
+versioning/CORS/lifecycle verification, and independent cancelled-canary cleanup.
+Independent review corrected inherited `Allow.NotPrincipal` handling, invalid
+top-level/null policy acceptance and a report that previously claimed Enabled
+before verification. Parent re-ran the revised complete command race suite
+(1.072 seconds) and staticcheck successfully. Tests use the actual AWS SDK
+against local synthetic HTTP as well as typed failure/partial/cancellation
+fixtures; no external S3 or production database was accessed.
+
+The operator runbook explicitly describes whole-configuration replacement,
+provider fallback limits, bucket-policy versus ACL scope, and the bucket-only
+configuration boundary. Backfill/finalization coordination and the old archive
+tools are not claimed as completed by this provisioning slice.
+
+### Message-Scoped Emote Favorites
+
+The emote domain now validates a visible source message and exactly one builtin,
+image-attachment or custom-emote source. Attachment processing uses a bounded
+authorized read, and custom favorites reuse canonical objects without creating
+duplicate physical bytes. Read-only subscription entries cannot masquerade as
+local reusable favorites. Parent review added a fresh source read inside the
+mutation and the same canonical-object advisory lock used by cleanup, covering
+the reference insertion and placement transaction.
+
+Parent independently passed the final emotes PostgreSQL/race suite (15.624
+seconds) and tagged staticcheck. The PostgreSQL regression proves an independent
+lock attempt is denied while favorite holds the object, cleanup completes after
+release, a stale source label is refreshed, and the target remains readable
+after source removal. Reference counts are derived from logical rows, not a
+separate counter column. Message visibility follows Node's pre-mutation check;
+this does not claim new same-transaction membership fencing. Legacy StorageKey-only
+emote delivery is a separate follow-up, not proved by canonical favorite tests.
+
+The separately reviewed HTTP/runtime slice removes the favorite 501/builtin-only
+shortcut. The handler forwards all source fields to the domain; the composition
+adapter calls the files authorized inline reader, preserves safe status/code and
+does not create a download reservation. Real enabled-application regression
+covers reserve/upload, message attachment association, favorite/media processing,
+WebP delivery, unchanged download ledger and revoked message access returning
+404. Parent passed complete Workspace command PostgreSQL/race (9.956 seconds),
+HTTP PostgreSQL/race (14.985) and tagged staticcheck with this final domain slice.
+
+### Mark-Read Attachment Projection
+
+The full browser diagnostic showed successful image requests and a visible
+preview before the mark-read response replaced the latest message with missing
+attachment metadata. Conversation projection passed no attachments to the
+shared message projector. It now loads a space-bounded batch for the authorized
+latest-message IDs, preserving public attachment metadata without storage keys.
+Parent compared the source to the exact tested snapshot and passed complete
+conversation PostgreSQL/race (2.598 seconds), HTTP PostgreSQL/race (8.834) and
+tagged staticcheck. New fake, real PostgreSQL and HTTP route regressions cover
+the read response; this is not yet a full-browser pass.
+
+Independent review identified adjacent reaction/hidden-state/pin projection
+and attachment DTO parity gaps. They remain separate follow-ups; this focused
+fix does not claim those message projections are already complete.
+
+### Viewer-Bound Message Attachment DTO
+
+The messages owner now returns Node's full public attachment shape, including
+uploader identity/display name, conversation and timestamps, and status/actor
+capabilities. The PostgreSQL batch query binds remarks to the requesting viewer
+and the space; no object keys, digests or transfer internals enter the DTO.
+Message list/create/idempotent/recall responses pass their authenticated actor to
+the shared projector. Conversation/pin consumers are a separately reviewed slice.
+Parent independently passed the frozen messages PostgreSQL/race suite (6.421
+seconds) and tagged staticcheck. This result does not establish the remaining
+full Workspace browser gate.
+
+### Native Image Media Check
+
+Parent built the Workspace Dockerfile's build target from the accepted snapshot
+through `a99f781`, then passed its complete media race suite (2.390 seconds) with
+network disabled and no host mounts. The inspected local image ID is
+`863eb448c66da8ce73dd587d9c495f1a2fb255190102dc6f7c6d1d6ba74c6bb9`.
+This uses the same pinned libvips 8.14.1 package version as the runtime Dockerfile,
+instead of relying only on the host's 8.15.1. The owned `--rm` test container exited
+successfully. This is a build-target test, not yet actual Node/image media corpus
+parity or final runtime-image authenticated HTTP evidence.
+
+Remote CI `34046105967` passed all three jobs at `a99f781`; later commits and
+uncommitted drafts remain subject to their own final gate.
+
+### Node Passive Startup Regression
+
+Parent independently passed the real Node `createApp` passive-candidate test
+(1/1, 328 ms). With Workspace and auto-migration disabled, all delivery workers
+off and a private temporary data directory, an intentionally invalid database
+URL is never opened. Health/version and P2P remain usable, Workspace/Bot HTTP
+and WebSocket entry points reject access, and the temporary data directory stays
+empty. This proves the application startup mode only; release-helper environment
+wiring and its inspection gate are still a separate pending change. It does not
+claim Workspace database or object-store readiness from the Node health response.
+
+### Pre-execution Migration Image Identity
+
+Parent passed the complete synthetic release suite (38/38, 52.181 seconds) and
+shell syntax checks. The Go image is frozen in a private ID-pinned Compose
+override before execution; migration is created stopped, checked for actual ID
+and exact project/service/run ownership, then started/waited and checked again.
+Cleanup refuses invalid IDs or another run's container. Failure cases include
+tag drift, wrong pre-start ID, failed exit and post-wait mismatch. Go-to-Go
+upgrades still fail closed until their full previous-configuration snapshot is
+implemented; this slice does not claim that gate or Node passive wiring.
+
+A separate real Docker create/inspect check confirmed that the local container's
+`Image` equals the inspected image ID on this daemon. That empty, never-started,
+network-isolated probe was removed by its verified exact ID. No database or
+production container was accessed by that check.
+
+### Bounded Legacy Emote Delivery
+
+The emote owner now reads exact identity-derived historical keys through the
+read-only legacy interface, retaining clone-chain/null-metadata compatibility.
+Only canonical absence permits fallback; canonical tombstones, identity/size/
+digest mismatches, malformed keys and provider failures do not. Parent review
+changed the first streaming draft to bounded complete verification before HTTP
+delivery and preserved removed-but-still-referenced library content, distinct
+from a deleted storage object. No-resource and invalid-key responses follow the
+actual Node owner; new integrity failures use safe content-free errors.
+
+Parent independently passed the final emotes PostgreSQL/race suite (14.206
+seconds), Workspace command PostgreSQL/race (5.842) and tagged staticcheck.
+The real Node/Go fixture and runtime injection are accepted separately below;
+the domain alone does not claim application wiring or a production transition.
+
+The composition/fixture slice injects the real factory's legacy reader into
+emotes. Parent ran Node creation -> real Go PostgreSQL/session-authenticated
+HTTP -> Node recheck twice, including the final removed-entry compatibility
+correction. All five scenarios/seven records passed and each owned fixture was
+cleaned. The final three runner tests passed (4.564 seconds); a missing database
+is an error for the opt-in Go path, not a silent skip. CI now runs this same full
+sequence. These synthetic files contain no real user content.
+
+### Conversation And Pin Relation Projection
+
+Conversation/read responses and pin list/mutation responses now hydrate the
+same viewer-bound attachment, reaction and hidden-state relations as message
+responses. The transaction adapter uses the already-open transaction, not a
+separate pool query. Hidden latest messages do not become the conversation
+preview; recalled messages omit their pin metadata. Parent independently passed
+complete conversation PostgreSQL/race (4.673 seconds), HTTP PostgreSQL/race
+(10.062) and tagged staticcheck. Review also corrected the new integration
+fixture's cleanup order so schema removal runs before closing its connection
+and failures are reported. The original full Workspace browser suite remains
+a separate required gate, now being rerun against the integrated candidate.
+
+### Integrated Quality Gate And Passive Node Release Wiring
+
+At `37ae061`, parent passed the complete uncached PostgreSQL/race gate with an
+explicit disposable database, `make verify`, Node lint, 8 SDK/705 Web tests
+(2 PostgreSQL-specific tests skipped in that unit command), and the frontend
+build. Remote CI `34047601787` passed all three jobs, including Node Chromium
+and Go P2P Chromium. The Go vulnerability scan found no reachable vulnerable
+calls; its uncalled dependency advisories are not evidence that all dependencies
+or native OS packages are vulnerability-free.
+
+The Node release candidate now explicitly disables Workspace, migration and all
+delivery workers and uses a private container-layer data path. Runtime inspection
+requires exactly one safe value for each environment key and refuses a mount
+covering the private path. Parent independently passed all 41 release-harness
+tests (34.236 seconds) and shell syntax. This synthetic Docker harness does not
+replace real runtime checks or the still-pending Go upgrade/drain gates.
+
+### Offline Node Rollback Image Startup
+
+A real network-isolated Node image failed before application startup: its runtime
+Corepack tried to download pnpm, whose cache existed only in the build stage.
+The runtime now starts the existing Node entry point directly from the same Web
+working directory as the package script, and carries the build's pnpm cache for
+retained migration/storage commands. No application/data contract changed.
+
+Parent rebuilt the image and confirmed default startup with no network, mounts,
+or usable database URL. Health/version and the actual P2P ICE route passed;
+Workspace bootstrap and Bot identity rejected with `workspace.disabled`, and
+the private data directory remained empty. `pnpm --version` also returned
+10.30.3 with `COREPACK_ENABLE_NETWORK=0`. The guard test passed and is in CI.
+The reviewed diagnostic image ID is
+`e5e42b53d293a942ba8e541b34d9ea7bfa83990e1619272ad057858d300c2c6f`;
+its base labels precede this fix, so this is not the final release artifact.
+
+### Private Complete Compose Snapshot Component
+
+Parent independently passed five snapshot tests (540 ms): complete immutable
+owner image identities, private exclusive files, symlink/FIFO/size/mode rejection,
+safe CLI output and an actual Docker Compose configuration round trip with a
+changed environment. Review corrected a double-escape bug: canonical Compose
+JSON already protects literal dollar values, and re-escaping it changes recovered
+credentials/commands. The fixed helper preserves canonical serialization.
+
+These checks only parse synthetic configuration and private fixtures; they do
+not start a container or inspect production secrets. The component is not yet
+the Go-to-Go release/rollback integration, and does not freeze external file
+contents or prove a live writer fence.
+
+### Exact-Image Media Corpus Runner And Remaining Failure
+
+The runner now accepts only an explicit exact local image ID for a native
+build-target probe and verifies its actual image/run identity before starting.
+Parent passed all eight host/runner tests (49.468 seconds; 28 media cases,
+16 accepted, 12 rejected, all pixel checks passing), then six focused tests
+after correcting the executable temporary-directory requirement.
+
+Actual native execution initially failed because Docker's tmpfs prevented the
+Go test binary from executing. After isolating and correcting that test-only
+configuration, the 8.14.1 probe completed: all 12 rejection contracts matched,
+but all 16 accepted outputs failed the unchanged metadata-stripping assertions.
+This is a real native compatibility/privacy failure, not a passing media gate.
+It is being fixed separately in the media owner; no tolerance or privacy
+assertion was relaxed. Owned probe containers and generated fixtures were
+removed. The tested build image remains the exact `863eb448...` image above,
+not a final release image.
+
+### Read-Only Durable Drain Observation
+
+Parent independently passed the final releasecheck PostgreSQL/race suite (5.239
+seconds) and tagged staticcheck. It checks real canonical schema fixtures,
+reserved/stale uploads, malformed/null states, email/ntfy sending/lease shapes,
+digest leases and queued/Echo observations. The lock regression demonstrates
+the statement and caller deadline bounds, safe errors and fail-closed readiness.
+Review corrected the stale-upload cutoff and setup-failure cleanup ordering.
+All database fixtures are isolated schemas, removed before closing their
+connections. The package explicitly reports writer fencing as not proven and
+provider state as not checked; it does not authorize the actual cutover.
+
+The separate command boundary passed parent unit/race (1.011 seconds),
+CGO-disabled compilation/tests and tagged staticcheck. Real execution against
+the disposable database's empty public schema returned `blocked`/exit 2; an
+invalid synthetic connection string returned only `snapshot_failed`/exit 1,
+without repeating credentials. Dockerfile build/copy wiring is present; the
+final rebuilt image and coordinator integration still require verification.
+
+### Bounded Read-Only Gateway Smoke
+
+Parent independently passed all four grouped tests (280 ms), including exact
+Workspace enabled/disabled behavior, Node SPA-only private paths, unsafe inputs,
+redirect/body limits, and unauthorized ready frames immediately followed by a
+close (including asynchronous Blob conversion). Frame validation completes
+before an otherwise acceptable close can pass the check.
+
+The existing owned six-service diagnostic gateway passed 13 read-only
+observations: HTML, five assets, health, ICE, unauthenticated bootstrap, three
+private paths and unauthenticated Workspace WebSocket. Its runtime version is
+`candidate`; the intentional first run with expected `0.15.5` failed the version
+gate. This verifies probe behavior on the diagnostic stack, not a final release
+or immutable commit match. No business data was created; real Node gateway and
+final-image release-coordinator smoke remain integration work.
+
+### Independent Workspace Browser CI Gate
+
+The dedicated CI job now runs the complete original Go Workspace Chromium
+command against its own PostgreSQL service, with no test filtering, retry or
+timeout changes and no private artifact upload. Parent independently passed
+all 28 tooling/privacy guards (325 ms), including the four new Workspace CI
+guards and four read-only gateway smoke groups. The browser job is new wiring,
+not evidence that the full browser suite passed: the latest full local run
+remains 10 passed and 2 failed (Echo release delivery and continuous-message
+realtime), each under separate diagnosis. The existing Node/P2P CI passes do
+not cover those failures.
+
+### Native Metadata Privacy Fix And Independent Corpus Pass
+
+The media owner now strips ancillary metadata from the freshly encoded WebP
+container, retaining encoded pixels, alpha and animation structures. Exact
+VP8X length/reserved-byte checks, bounded integer arithmetic, regenerated
+padding and immutable-input tests guard the container rewrite. No public
+media limits, rejection contract, corpus assertion or dependency was relaxed.
+
+Parent independently passed host media race (2.209 seconds) and staticcheck,
+then rebuilt the Workspace build target with the three reviewed media files
+and the accepted release-check command. Exact local image
+`sha256:3710143330bdf0840715d09e16b097815c326426bb5ed999d477454bb506e012`
+passed the actual Node/native corpus: 28 cases, 16 accepted, 12 rejected,
+16 pixel checks, zero failures; Go 1.26.8, native libvips 8.14.1, Node 22.23.2,
+Sharp 0.35.3/libvips 8.18.3. This closes the preceding native metadata failure.
+The probe used only its generated synthetic corpus and cleaned its owned
+container. Its build context was the independently copied accepted candidate
+plus this explicit media patch, not an asserted clean Git release; the final
+same-commit runtime images and aggregate acceptance remain required.
+
+### Restart-Policy Fence And Recovery
+
+Parent independently passed all 51 release harness tests (60.027 seconds) and
+shell syntax after review of the canonical Docker identity, Compose ownership,
+single-instance and partial-failure handling. A Node-only original snapshot
+followed by failed Go activation/daemon recovery no longer revives the failed
+Go writers. The helper records the old policy before mutation, verifies
+`restart=no`, stops the exact owner and confirms it is not running. Only a
+completed fence can restore a selected known-good owner. This does not yet
+enable Go-to-Go upgrades or integrate the database/provider drain gate.
+
+### Product Version And Release Guidance Preparation
+
+Root and Web package versions are aligned at `0.16.0`, a compatible minor
+release for the optional Go backend composition. The public release entry and
+Echo guide use the same date, title and summary. They preserve the existing
+entry points and trust-lane promises, explicitly require operator enablement,
+and do not claim a live production switch. The Agent SDK version is unchanged.
+
+Parent validation against the exact six copied release files in the Linux
+validation checkout passed: release-history and actual Node Echo service tests
+(11 tests); actual Node fixture regeneration and `--check` (7 catalog entries
+plus the Unicode/escaping synthetic case); and Go Echo releases with explicit
+disposable PostgreSQL, uncached race tests (5.265 seconds). The generated
+fixture retains the actual Node snapshot/hash and publication-ID behavior.
+These checks do not resolve the separate full-browser Echo visibility failure
+or constitute final-image/build/visual acceptance.
+
+### Retained Offline Storage Compatibility Boundary
+
+The storage runbook now distinguishes all actual Node one-shot operator modes
+from the candidate Go plan/verify/provision commands and backfill library.
+Node archive/backfill/verification/finalize compatibility tools remain present,
+profile-gated and outside the Go runtime/worker startup path. This does not add
+a Go mutation executor or authorize a production storage operation. Finalize
+requires an explicit compatibility-window decision and recoverable coordinated
+backup; deletion invalidates any rollback dependent on those live legacy bytes.
+
+Parent independently ran the new static entrypoint guard: 4/4 passed on Node
+22 in the Linux validation checkout (122.852 ms). The same guard is included
+in CI. No database, provider, production process or object was changed.
+
+### Private External-File Recovery Fingerprints
+
+The accepted external-files helper binds a private complete Go canonical Compose
+configuration to the exact secret/config/read-only regular-file references and
+their file identities, owner/mode, size and hash. It never copies or repairs the
+source files. Old versioned files must remain immutable through recovery; an
+in-place rotation, missing file, symlink or changed configuration fails closed.
+Parent review corrected swallowed close errors, post-write path/parent checks,
+and both capture and verification read budgets (32 files / 8 MiB each / 32 MiB
+total). The trusted-parent-directory limitation is explicit.
+
+Parent independently ran the frozen helper's Linux Node 22 suite: 9/9 passed,
+0 skipped (1.190 seconds), including a near-total-limit manifest whose final
+small file grows to 8 MiB. The test joins CI's private recovery snapshot step.
+This is a recovery-file component gate; coordinated Go-to-Go release and
+same-authority rollback still require separate integration and rehearsal.
+
+### Read-Only Database And S3 Release Check
+
+`duallane-release-check --check-provider` now composes the accepted read-only
+PostgreSQL check with a bounded whole-bucket S3 multipart observation. The
+default command and help remain provider-free. A database blocker stops before
+provider access; local storage reports multipart state as not applicable. One
+signed S3 GET (`MaxUploads=1`, no prefix or retry, two seconds, 64 KiB plus one
+overflow-probe byte) proves only a complete empty snapshot. Existing uploads
+block, and incomplete, oversized, denied or unavailable responses fail closed.
+It does not abort uploads or start any runtime worker. Writer/provider limits
+remain explicit in the separate database and provider report fields.
+
+Parent independent checks passed on the exact seven candidate files in the
+Linux validation checkout: uncached race tests for command/storage (1.056 /
+5.470 seconds), command invalid-state additions (1.042 seconds), tagged
+PostgreSQL/race for command/releasecheck/storage (8.197 / 6.047 / 3.194 seconds),
+tagged staticcheck, and CGO-disabled command tests. The command integration
+exercises five real PostgreSQL plus synthetic HTTP-provider scenarios; seeded
+row counts and upload/attachment statuses remain unchanged, and a reserved
+upload produces no S3 request. All temporary schemas and credential fixtures
+belong to the tests. No actual provider or production state was accessed.
+
+This accepted component must still be integrated after the release writer fence
+and into the appropriate recovery path. It is not itself a deployment,
+admission fence or proof that an external email/notification was never delivered.
+
+The parent's separate real-Docker test then passed both restart-policy cases
+and mismatched-owner refusal (3 Node test results, 8.261 seconds). It used the
+rebuilt Workspace runtime image
+`sha256:27baa15853dc52b72b03faa3cd526f4996c6204ff61e56750e5568ecfd5041c0`,
+with observed UID `65532:65532` and revision label `78e43c6`. Both exact owned
+containers were removed and a label inventory found no remaining probes.
+There was no Docker daemon restart, mounted data or production application
+operation. This is policy-mechanics evidence, not a completed release rehearsal.
+
+### Version-Aware Health Privacy Regression And Candidate Runtime
+
+The Node health privacy regression now reads the Web package version, matching
+the established passive-candidate test pattern. Its exact response-object
+assertion still forbids extra storage paths or fields. Parent first reproduced
+the stale `0.15.5` expectation against `0.16.0`, then independently passed the
+complete 99-case Workspace route file on Linux Node 22 (96.90 seconds).
+Runtime health behavior and the original browser assertions are unchanged.
+
+Parent also built the Workspace runtime from a clean detached clone of exact
+`97a75c4258d58bfffccd6aa547f2e370bdbcbdaa`. Observed Docker image ID is
+`sha256:881a3bb401e4d166a90e2f8aa574d107002a3881fb086af07c90b90066bd047e`,
+with UID/GID `65532:65532`, version `0.16.0` and that complete revision label.
+Real no-network, read-only, capability-dropped executions passed `--help`
+(exit 0) and safe invalid-database refusal with `--check-provider` (exit 1,
+fixed `snapshot_failed` code only). No mounts, database access or provider calls
+were used, and both disposable containers were removed automatically. This
+verifies the newly packaged command, not the still-pending aggregate release
+coordinator, frontend patch or final same-commit multi-image rehearsal.
+
+### Explicit P2P Acceptance Exceptions
+
+The independent worker audit found no concrete P2P persistence, secret-injection
+or envelope/logging defect within its inspected scope. It identified a serial
+close-handshake shutdown risk, now assigned for a focused implementation and
+real unresponsive-peer regression; that finding is not closed by earlier
+cooperative-peer shutdown tests.
+
+Parent documented three existing Go safety tightenings rather than falsely
+claiming identical acceptance of all Node inputs: browser Origin host checks,
+the full-message default 64 KiB transport budget (including ignored fields),
+and fail-closed configured TURN TTL bounds. No runtime security check was
+relaxed. New real-socket tests prove that an exact-limit valid opaque envelope
+with ignored padding is relayed without that padding, while a one-byte-over
+valid envelope closes with 1009. Same-host and absent Origin join; cross-host
+Origin receives 403. Nine configuration scenarios cover unset/blank defaults,
+valid TTL endpoints and malformed/out-of-range refusal.
+
+Parent uncached P2P/config race suites passed (1.330 / 1.020 seconds) in the
+Linux validation checkout with the two exact added/updated test files. These
+are explicitly documented compatibility exceptions, not a new Node/Go
+differential-process parity result. Final P2P shutdown and aggregate browser
+acceptance remain separate gates.
+
+### Public Release-Page Visual Review
+
+Parent rendered the accepted `0.16.0` release content in Chromium at desktop
+1440x1000 and mobile 390x844, and inspected both full-page screenshots. Version,
+date, trust-lane copy and operator-enable/recovery guidance are readable with
+no observed clipping or overlap. The current version is marked correctly and
+history remains collapsed. This was unauthenticated Vite-only public-page QA;
+no backend was running, so expected health proxy refusals are not a backend
+health pass. The owned Vite process was stopped. Screenshots remain in the
+ignored Linux validation `workspace-qa-artifacts/release-0.16.0` directory;
+they contain only public copy and are not committed. This does not replace
+the final integrated authenticated browser or image checks.
+
+After the earlier status inspection, CI `34051173383` completed: its Go
+quality/race/analysis/build/PostgreSQL/media job passed. The run remains failed
+because of the already recorded Node assertion and Workspace browser failures.
+The successor `ea9f017` run is tracked separately, not assumed to pass.
+
+### Persisted Contract Version Refresh
+
+CI [34051836003](https://github.com/timeStarry/duallane/actions/runs/34051836003)
+on `ea9f01744d1030e10e6d507a706a035ffe38ceaa` passed the Go aggregate and P2P
+jobs. Node unit tests passed, then the actual Node persisted-contract step
+correctly detected an additional version-preparation omission: bootstrap in
+`node-core.json` still contained `0.15.5`. Parent ran the actual Node generator,
+compared its output and confirmed that the only difference was bootstrap
+`appVersion: 0.16.0`; no authorization/data contract was rewritten.
+
+After updating that generated field, parent independently passed all 24 commands
+from CI's complete persisted-contract step on Linux Node 22 (9.42 seconds),
+including core's 29 scenarios/32 routes and the 164-route inventory. Go's
+uncached Workspace contract race suite also passed (8.024 seconds). The
+unmodified Node P2P/ICE/HTTP-error tests passed 16/16, and the candidate P2P/config
+staticcheck passed separately.
+
+The same CI run's original Go Workspace suite remained 11/12: Echo passed,
+but the long flow timed out clicking the newest history message at line 734.
+Later Node lint/build/browser steps were skipped after contract failure. These
+results do not close the pending frontend race or release-coordinator gates.
+
+### Retained Node Gateway Verification
+
+The delegated verification worker ran the committed read-only gateway probe
+against real isolated Node Web/API/PostgreSQL stacks in both Workspace-disabled
+and Workspace-enabled modes: 13 observations passed in each. It reported exact
+API image `sha256:e5e42b53d293a942ba8e541b34d9ea7bfa83990e1619272ad057858d300c2c6f`
+and Web image `sha256:603491aaa6f5324659a7306f65e4fccbb30d1bd5415416a206b72cc44dd5b6c9`.
+These are diagnostic images, not the final candidate release. The worker
+removed its two uniquely named stack resource sets, including their synthetic
+data volumes, without touching the parent's stacks. Parent reviewed the
+already independently tested probe and this evidence; the two Node stack runs
+are worker-executed, not a claim of a second parent browser or deployment run.
+
+### Bounded P2P Peer Shutdown
+
+The P2P shutdown finding is now addressed: graceful peer closes share a
+two-second batch budget, followed by raw-socket force-close to interrupt the
+WebSocket library's handshake wait. Each phase has at most 32 callbacks (64
+while phases overlap). Concurrent manager shutdown callers wait for the same
+batch; expired-room close does not hold the global room lock. No payload is
+stored, and normal close codes and envelope validation remain unchanged.
+
+Parent reviewed the worker's three-file implementation, added failure-path test
+cleanup and independently passed uncached race checks for the complete P2P,
+P2P-contract and command packages (7.504 / 1.958 seconds), plus staticcheck.
+Regressions include 40 real unresponsive sockets, concurrent shutdown and
+expired-room isolation. The worker's focused 40-peer test took 2.07 seconds;
+the old serial implementation was inspected, not run as a timing baseline.
+
+CI [34052776038](https://github.com/timeStarry/duallane/actions/runs/34052776038)
+on exact `7ce4c6704bfb4465977bdbf753e7910410a9d2a5` passed the complete Node
+test/lint/build/Chromium job, Go quality/PostgreSQL job and Go P2P browser job.
+Its original Go Workspace suite remained 10/12 (Echo visibility and the history
+message click). That commit predates this shutdown patch and the pending
+frontend fix; it is not a final all-green candidate.
+
+### Real Read-Only Release-Check Runtime
+
+Parent reviewed and independently ran
+`scripts/backend/release-drain-runtime.docker.test.mjs` with the exact
+`97a75c4` Workspace image `sha256:881a3bb401e4d166a90e2f8aa574d107002a3881fb086af07c90b90066bd047e`:
+six test results passed in 4.013 seconds. Actual CLI exits were 0 for local
+ready, 2 for a reserved upload, 2 for an absent schema, and 1 for a nonexistent
+synthetic database. Container identity, non-root UID, read-only root filesystem,
+capability removal, no-new-privileges and absence of data mounts were checked.
+Before/after table fingerprints were unchanged. The tests removed their exact
+owned containers and isolated schema; no production data or real provider was
+accessed. The no-image invocation is explicitly skipped, not a runtime pass.
+This is a command/runtime gate, not a substitute for the pending coordinated
+cutover and recovery rehearsal.
+
+### Private Drain Configuration And Report Validation
+
+Parent reviewed the configuration builder and independently passed all nine
+Linux cases, including an explicit real `docker compose config` dollar-value
+roundtrip (0.635 seconds; no resources started). The generated service excludes
+business/data-volume capabilities and references only existing named bridge
+networks. Unsupported secret/PG forms fail closed; report acceptance requires
+the canonical expected storage driver and consistent zero blocking counts.
+Private file operations are bounded and exclusive, with no-follow and pre/post
+metadata checks under the documented trusted-parent assumption.
+
+The real runtime test was then rerun with the actual JSON passed through that
+validator: six results passed in 3.858 seconds. Local success was also rejected
+when deliberately paired with an expected S3 driver. Coordinator lifecycle,
+writer fencing and final recovery remain separate pending integration gates.
+
+### Latest Aggregate And Unaccepted Integration Checks
+
+CI [34053717337](https://github.com/timeStarry/duallane/actions/runs/34053717337)
+completed on exact `d60f71ca22fa48fa3f753b2dd1dc550a36b22401`. The complete
+Node, Go quality/PostgreSQL and P2P browser jobs passed. Workspace remained
+10/12: Echo release-card visibility at line 34, and the long flow's existing
+240-second deadline during the emote response at line 1605. This is not an
+all-green candidate.
+
+The independent Go verification worker also passed `make verify` and explicit,
+uncached `make integration-postgres` on a private Linux checkout based on
+`7ce4c67` with exactly the three accepted `db1f535` P2P files overlaid. Its
+environment was Go 1.26.8, CGO, GCC 13.3 and host libvips 8.15.1. This is
+worker-executed overlay evidence, not a final-commit check or the pinned
+8.14.1 runtime-image media gate.
+
+Parent's latest uncommitted frontend response-ordering draft passed its 21
+focused tests and `pnpm lint`, but the unchanged original Go browser suite
+remained 10/12: Echo at line 34 and the group reaction trigger at line 969.
+The earlier history step passed in that run; this alone does not prove that
+all message-window races are fixed. The draft remains under investigation.
+
+The release-coordinator draft passed 59 lifecycle/model tests before the
+additional partial-Node-fence check. After correcting its test fixture to retain
+the stopped Node API (the real first cutover replaces Web, not Node API), the
+five affected rollback/daemon tests and nine activation/order tests passed.
+These models do not execute a coordinated real release. Private volume,
+Node-authority and one-shot drain integration still require independent review
+and an isolated container rehearsal before acceptance.
+
+### Node Recovery External-File Fingerprints
+
+The reviewed external-file helper now accepts the exact Node `api,web` set in
+addition to the existing Go five-service set. It retains the Go manifest
+format/version and all private-file limits; mixed, partial and duplicate sets
+are rejected. Parent independently passed all 11 Linux tests (0.997 seconds),
+including Node secret/read-only bind capture, CLI verification and drift
+rejection. Sources are fingerprinted in place, never copied or repaired.
+Frozen Node configuration/image integration remains part of the coordinator
+gate, not a claim that the first cutover was rehearsed.
+
+### Bounded One-Shot Drain Runner Component
+
+Parent reviewed the runner and passed its 24 Linux cases (0.715 seconds),
+covering owned create/start/wait/cleanup, ready/blocked reports, private outputs,
+image/secret-source/environment mismatches and bounded command failures. Parent
+added exact checks for the three asset-path environment variables baked into
+the Workspace image and refusal of an already-started checker.
+
+A real, never-started disposable Docker container confirmed that created
+containers have empty endpoint network IDs. The runner checks their exact
+network names/mode before start and IDs when running; fast-exited containers
+retain the name/mode proof. The probe container was removed by its exact owned
+ID and had no data mounts. This was a Docker lifecycle observation, not a
+successful end-to-end drain run; the new runner's real isolated PostgreSQL
+rehearsal and the complete release coordinator remain pending.
+
+### First-Cutover Node Authority Component
+
+Parent reviewed the Node authority verifier and independently passed its 17
+Linux results (0.234 seconds). Cases cover the retained stopped singleton,
+database/user/migration agreement, local/S3 authority, physical volume names,
+read-only credential binding, fixed path-style behavior, literal dollar values
+and private inputs. Docker calls are limited to read-only `ps`/`inspect` with
+bounded output and fixed errors. This is fake-runner component evidence; the
+actual container-mount check and integrated first-cutover/recovery rehearsal
+are still required.
+
+### Physical Volume Authority Component
+
+Parent reviewed the read-only volume verifier and independently passed its 17
+Linux cases (0.518 seconds, no skips). Capture requires unique running holders;
+verification accepts stopped or absent Workspace/worker holders only with the
+same named-volume identity/metadata and canonical database, storage and secret
+authority. Missing PostgreSQL, rebuilt volumes and changed credentials fail
+closed. Real Docker coverage and coordinator integration remain separate gates.
+
+### Actual Node Authority And Read-Only Bind Metadata
+
+Parent executed the opt-in Node authority Docker test against exact Node image
+`sha256:e5e42b53d293a942ba8e541b34d9ea7bfa83990e1619272ad057858d300c2c6f`
+and PostgreSQL image
+`sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73`:
+one result passed in 1.280 seconds, without skips. The test used uniquely owned,
+never-started containers, private synthetic credentials and task-only volumes;
+it verified real mount identity and rejected canonical authority drift. It
+removed its exact owned resources and did not contact a provider.
+
+A separate never-started Docker probe confirmed `--mount ...,readonly` reports
+`RW=false` with an empty `Mode`. The drain runner now accepts that representation
+while still requiring the exact credential source/target and `RW=false`, and
+rejecting contradictory nonempty modes. Its 25 focused results passed in
+0.630 seconds, including writable and contradictory-mode regressions. The probe
+was removed; its bind source was a checked-in public example, unchanged.
+
+### Actual Volume Authority Lifecycle
+
+Parent ran the reviewed volume Docker gate with exact Workspace image
+`sha256:881a3bb401e4d166a90e2f8aa574d107002a3881fb086af07c90b90066bd047e`
+and PostgreSQL image `18cfe3ef...` identified above. One result passed in
+24.979 seconds, without skips. Local and S3 configurations were captured while
+harmless holders ran, then verified after those holders stopped and were
+removed. Database, physical-volume, credential-source and S3 endpoint drift
+were rejected. The local-to-S3 expected error was corrected to the earlier
+credential-authority rejection; the separate S3 endpoint assertion remained.
+All exact task-owned containers, volumes, network and private fixture files
+were removed. No business writer, PostgreSQL server or provider ran in this gate.
+
+### Real One-Shot Drain And Compose Command Compatibility
+
+Parent's real Docker rehearsal exposed two fixture/runtime distinctions:
+hand-made Compose labels were not sufficient for Compose service discovery,
+and `docker compose create` does not accept `--no-deps`. PostgreSQL now uses
+real Compose creation, while the dependency-free checker uses supported
+`create --pull never --no-build`. The production-coordinator draft uses
+`up --no-start --no-deps` for dependency-bearing services; its complete gate
+remains pending. The runner's 25 focused tests passed in 0.733 seconds.
+
+The PostgreSQL readiness probe also needed TCP explicitly: its temporary
+Unix-only initialization server can answer the default probe before migration
+clients can connect. With that corrected, parent passed both real drain Docker
+results in 7.726 seconds, without skips, using exact newly built Workspace
+`sha256:27faeccce635d52fb094d8946f35114be1779f886d053026574a8b2ddeeaab09`
+from clean `469176d34d05df0bb38c6f6e7ad6dbcffb2ec084` (0.16.0) and PostgreSQL
+`sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73`.
+Canonical migration, actual checker execution, private ready report acceptance
+and exact owned cleanup completed. No production resources were touched.
+
+### Workspace Response-Ordering Fix And Browser Regression
+
+The client no longer chooses an incoming message window by array length alone.
+Request generations, session/membership epochs and history epochs distinguish
+stale responses from authoritative around/history changes, preserving newer
+local message changes without reviving removed conversations. Focused tests
+cover loaded history, post-request messages, permission changes and removal
+states. This does not change server authorization or retention policy.
+
+Parent confirmed the three frozen source/test files exactly matched the private
+Linux validation copy, reran all 21 focused tests (0.447 seconds), and completed
+`pnpm lint`. Parent also reviewed and independently ran both added Chromium
+regressions against the real Go server: 2/2 passed in 21.4 seconds, with only
+private harness ports changed to 6198/9898. The harness created its own schema;
+those ports were confirmed released afterward.
+
+The worker's separate `d60f71c` baseline failed the delayed-read/removal case;
+the around/read case also passed on that baseline and is compatibility coverage,
+not a demonstrated old failure. The removal assertion waits for the actual HTTP
+response to finish and two animation frames before checking React state. The
+unchanged original 12-case suite remains a separate open gate: latest completed
+CI on `469176d` is 10/12 (Echo visibility and the long-flow deadline at line
+1605), while all three other jobs passed. Private diagnostic files are excluded
+from this change.
+
+### Coordinated Pinned Activation And Recovery Helper Slice
+
+Accepted component commit `685e757`, now included in pushed integration
+`4b03dba`, adds the coordinated pinned Go
+activation/recovery helper and deploy changes, 75 tests, CI updates and three
+durable documents across 10 files (`3587+`, `95-`). The combined
+`production-deploy`, `release-activation`, `release-cleanup` and
+`release-go-restore` checks passed 75/75 in 172.261 seconds with no skips. The
+separate worker-ownership/runtime checks passed 4/4 in 0.104 seconds, and both
+`bash -n` checks passed.
+
+The `6/30` `authority_model=ready` correction is explicitly a fakeDocker
+lifecycle model stub; it does not establish real file or volume authority.
+Those real authority gates remain separate evidence. An earlier companion real
+coordinator run, before the dual-network correction, was still uncommitted: it
+reached four healthy Go services and then rejected `gateway_binding_invalid`
+because the internal network exposed no `NetworkSettings.Ports`; its gateway
+smoke and rollback remained incomplete.
+This accepted component slice is not an all-green aggregate or deployment
+authorization.
+
+### Positive Real Coordinator Lifecycle Observation
+
+The positive runtime associated with the committed coordinator slice
+`e97a131` passed 2/2 cases with no skips in 119.510 seconds wall time (119.288
+seconds actual case time). It used Node ref
+`37ae06131a7bb38e6d2e77599f48aabc78e0492e` and Go ref
+`469176d34d05df0bb38c6f6e7ad6dbcffb2ec084`,
+then completed migration, fencing, drain, four healthy Go services, gateway
+checks, four `0600` snapshots, `release_rollback_application` and exact
+retained Node API/Web health; PostgreSQL identity remained unchanged. E's
+read-only review approved the slice. The default static network-boundary
+addition passed 2/2, while its real Docker branch was SKIP. The dual-network
+correction adds only Web to the gateway network; PostgreSQL and the backend
+remain on the internal network. Task-label cleanup inventory is 0 containers,
+0 networks and 0 volumes.
+
+This is positive lifecycle evidence only. It does not establish failure-path,
+passive-candidate or Go-to-Go behavior, and it is not an all-green aggregate.
+The coordinator is not marked complete.
+
+### Event Latest-Message Projection Slice
+
+Accepted commit `17a3b73ec58c1863dc0bbdf4fa945d7d22a3f619`, now included in
+pushed integration `4b03dba`, corrects the Go event
+latest-message projection. A clean `9c57ec3` overlay with the new regression
+failed before the fix in 1.358 seconds (`latestMessages` count 0, expected 20).
+The corrected events package passed its isolated PostgreSQL/race suite with
+`-count=1` in 7.767 seconds, including bounded 20-message windows,
+hidden/recalled handling, attachment authorization, HTTP DTO parity and
+membership-revocation coverage; PostgreSQL-tagged scoped staticcheck also
+passed. New CI is pending; this slice does not claim a full browser or
+aggregate pass.

@@ -1,0 +1,2941 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "nodeRoutes": "apps/backend/api/node-routes.json",
+    "routeSource": "apps/web/server/index.mjs",
+    "fixtureRuntime": "apps/web/server/services/test-database.mjs"
+  },
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/auth/github/start",
+      "nodePath": "/api/auth/github/start",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/github/callback",
+      "nodePath": "/api/auth/github/callback",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/logout",
+      "nodePath": "/api/auth/logout",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/bootstrap",
+      "nodePath": "/api/workspace/bootstrap",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/statistics",
+      "nodePath": "/api/workspace/statistics",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/members",
+      "nodePath": "/api/workspace/members",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/me/profile",
+      "nodePath": "/api/workspace/me/profile",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/member-visibility/{userId}",
+      "nodePath": "/api/workspace/member-visibility/:userId",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/member-visibility/{userId}",
+      "nodePath": "/api/workspace/member-visibility/:userId",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/members/{userId}/role",
+      "nodePath": "/api/workspace/members/:userId/role",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/members/{userId}",
+      "nodePath": "/api/workspace/members/:userId",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/members/{userId}/remark",
+      "nodePath": "/api/workspace/members/:userId/remark",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/members/{userId}/remark",
+      "nodePath": "/api/workspace/members/:userId/remark",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/conversations",
+      "nodePath": "/api/workspace/conversations",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/conversations",
+      "nodePath": "/api/workspace/conversations",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/conversations/{conversationId}",
+      "nodePath": "/api/workspace/conversations/:conversationId",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/conversations/{conversationId}/messages",
+      "nodePath": "/api/workspace/conversations/:conversationId/messages",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/conversations/{conversationId}/read",
+      "nodePath": "/api/workspace/conversations/:conversationId/read",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/conversations/{conversationId}/notification",
+      "nodePath": "/api/workspace/conversations/:conversationId/notification",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/groups/{conversationId}",
+      "nodePath": "/api/workspace/groups/:conversationId",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/groups/{conversationId}/leave",
+      "nodePath": "/api/workspace/groups/:conversationId/leave",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/groups/{conversationId}/members",
+      "nodePath": "/api/workspace/groups/:conversationId/members",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/groups/{conversationId}/members/{userId}",
+      "nodePath": "/api/workspace/groups/:conversationId/members/:userId",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/groups/{conversationId}/pins",
+      "nodePath": "/api/workspace/groups/:conversationId/pins",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/groups/{conversationId}/pins",
+      "nodePath": "/api/workspace/groups/:conversationId/pins",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/groups/{conversationId}/pins/{messageId}",
+      "nodePath": "/api/workspace/groups/:conversationId/pins/:messageId",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/messages",
+      "nodePath": "/api/workspace/messages",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/messages/{messageId}/reactions",
+      "nodePath": "/api/workspace/messages/:messageId/reactions",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/messages/{messageId}/reactions/{emoteKey}",
+      "nodePath": "/api/workspace/messages/:messageId/reactions/:emoteKey",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/messages/{messageId}/recall",
+      "nodePath": "/api/workspace/messages/:messageId/recall",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workspace/messages/{messageId}/hidden",
+      "nodePath": "/api/workspace/messages/:messageId/hidden",
+      "source": "apps/web/server/index.mjs"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/messages/{messageId}/hidden",
+      "nodePath": "/api/workspace/messages/:messageId/hidden",
+      "source": "apps/web/server/index.mjs"
+    }
+  ],
+  "excludedRoutes": [
+    "/api/workspace/me/notifications",
+    "/api/workspace/me/ntfy",
+    "/api/workspace/me/emotes",
+    "/api/workspace/me/avatar",
+    "/api/workspace/settings/email"
+  ],
+  "scenarios": [
+    {
+      "name": "auth-required-bootstrap",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/bootstrap",
+        "headers": {}
+      },
+      "response": {
+        "status": 401,
+        "body": {
+          "error": {
+            "code": "auth.required",
+            "message": "请先登录共享空间"
+          }
+        }
+      }
+    },
+    {
+      "name": "login-rejected-not-invited",
+      "request": {
+        "method": "GET",
+        "path": "/api/auth/github/callback?format=json&githubLogin=workspace-core-outsider&displayName=Workspace%20Core%20Outsider",
+        "headers": {}
+      },
+      "response": {
+        "status": 401,
+        "body": {
+          "error": {
+            "code": "auth.not_invited",
+            "message": "该 GitHub 用户尚未被邀请"
+          }
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "login.rejected",
+          "targetType": "user",
+          "result": "rejected"
+        },
+        "persistence": {
+          "messages": 0,
+          "workspaceEvents": 1,
+          "auditLogs": 2
+        }
+      }
+    },
+    {
+      "name": "login-success-json",
+      "request": {
+        "method": "GET",
+        "path": "/api/auth/github/callback?format=json&githubId=workspace-core-owner&githubLogin=timeStarry&displayName=timeStarry",
+        "headers": {}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "user": {
+            "id": "usr_owner",
+            "githubLogin": "timeStarry",
+            "displayName": "timeStarry",
+            "nickname": "timeStarry",
+            "avatarUrl": null,
+            "searchDiscoverable": false,
+            "kind": "human",
+            "role": "owner",
+            "joinedAt": "2026-01-01T00:00:00.000Z"
+          },
+          "session": {
+            "expiresAt": "2026-01-01T00:00:00.000Z"
+          }
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "login.success",
+          "targetType": "user",
+          "result": "success"
+        },
+        "persistence": {
+          "messages": 0,
+          "workspaceEvents": 1,
+          "auditLogs": 3
+        }
+      }
+    },
+    {
+      "name": "bootstrap-read",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/bootstrap",
+        "headers": {
+          "cookie": "duallane_workspace=fixture-session"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "auth": {
+            "mode": "development",
+            "inviteOnly": true,
+            "currentUser": {
+              "id": "usr_owner",
+              "githubLogin": "timeStarry",
+              "displayName": "timeStarry",
+              "nickname": "timeStarry",
+              "avatarUrl": "",
+              "searchDiscoverable": false,
+              "recallReason": "内容有误",
+              "kind": "human",
+              "role": "owner",
+              "roleLabel": "空间主人",
+              "capabilities": {
+                "canStartDirectConversation": false,
+                "canJoinGroups": true,
+                "canManage": true
+              },
+              "joinedAt": "2026-01-01T00:00:00.000Z"
+            }
+          },
+          "space": {
+            "id": "spc_default",
+            "name": "默认空间",
+            "slug": "default",
+            "createdBy": "usr_owner",
+            "createdAt": "2026-01-01T00:00:00.000Z"
+          },
+          "policy": {
+            "dailyQuotaBytes": 2147483648,
+            "usedTodayBytes": 0,
+            "remainingQuotaBytes": 2147483648,
+            "messageRetentionCount": 10000,
+            "memberVisibilityBasis": "direct_contacts"
+          },
+          "permissions": {
+            "canCreateMemberInvite": true,
+            "canCreatePrivilegedInvite": true,
+            "canManageMemberVisibility": true,
+            "canManageEmailSettings": true,
+            "canReadConversations": true,
+            "canCreateGroup": true,
+            "canCreateDirect": true,
+            "canUpload": true,
+            "canDownload": true,
+            "canViewOperationRecords": false
+          },
+          "members": [
+            {
+              "id": "usr_owner",
+              "githubLogin": "timeStarry",
+              "displayName": "timeStarry",
+              "nickname": "timeStarry",
+              "avatarUrl": "",
+              "searchDiscoverable": false,
+              "recallReason": "内容有误",
+              "kind": "human",
+              "role": "owner",
+              "roleLabel": "空间主人",
+              "capabilities": {
+                "canStartDirectConversation": false,
+                "canJoinGroups": true,
+                "canManage": true
+              },
+              "joinedAt": "2026-01-01T00:00:00.000Z"
+            },
+            {
+              "id": "usr_core_contract_peer",
+              "githubLogin": "core-contract-peer",
+              "displayName": "core-contract-peer",
+              "nickname": null,
+              "avatarUrl": "",
+              "kind": "human",
+              "role": "member",
+              "roleLabel": "成员",
+              "capabilities": {
+                "canStartDirectConversation": true,
+                "canJoinGroups": true,
+                "canManage": true
+              },
+              "joinedAt": "2026-01-01T00:00:00.000Z"
+            },
+            {
+              "id": "usr_core_contract_second",
+              "githubLogin": "core-contract-second",
+              "displayName": "core-contract-second",
+              "nickname": null,
+              "avatarUrl": "",
+              "kind": "human",
+              "role": "member",
+              "roleLabel": "成员",
+              "capabilities": {
+                "canStartDirectConversation": true,
+                "canJoinGroups": true,
+                "canManage": true
+              },
+              "joinedAt": "2026-01-01T00:00:00.000Z"
+            },
+            {
+              "id": "usr_system_beacon",
+              "displayName": "信标",
+              "description": "文件传输助手",
+              "avatarUrl": "/assets/beacon-avatar.png",
+              "kind": "bot",
+              "role": "member",
+              "roleLabel": "成员",
+              "capabilities": {
+                "canStartDirectConversation": true,
+                "canJoinGroups": false,
+                "canManage": false
+              },
+              "joinedAt": "2026-01-01T00:00:00.000Z"
+            },
+            {
+              "id": "usr_system_echo",
+              "displayName": "回声",
+              "description": "需求与反馈助手",
+              "avatarUrl": "/assets/echo-avatar.svg",
+              "kind": "bot",
+              "role": "member",
+              "roleLabel": "成员",
+              "capabilities": {
+                "canStartDirectConversation": true,
+                "canJoinGroups": false,
+                "canManage": false
+              },
+              "joinedAt": "2026-01-01T00:00:00.000Z"
+            }
+          ],
+          "conversations": [],
+          "files": [],
+          "invites": [],
+          "inviteSummary": {
+            "total": 0,
+            "active": 0,
+            "history": 0,
+            "acceptedUses": 0,
+            "availableUses": 0
+          },
+          "eventCursor": 1,
+          "appVersion": "0.16.0"
+        }
+      }
+    },
+    {
+      "name": "statistics-read",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/statistics",
+        "headers": {
+          "cookie": "duallane_workspace=fixture-session"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "statistics": {
+            "asOf": "2026-01-01T00:00:00.000Z",
+            "dayStartedAt": "2026-01-01T00:00:00.000Z",
+            "totals": {
+              "members": 5,
+              "conversations": 0,
+              "messages": 0,
+              "files": 0,
+              "uploadedBytes": 0
+            },
+            "today": {
+              "members": 5,
+              "conversations": 0,
+              "messages": 0,
+              "files": 0,
+              "uploadedBytes": 0
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "members-read",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/members?limit=50",
+        "headers": {
+          "cookie": "duallane_workspace=fixture-session"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "members": [
+            {
+              "id": "usr_owner",
+              "githubLogin": "timeStarry",
+              "displayName": "timeStarry",
+              "nickname": "timeStarry",
+              "avatarUrl": "",
+              "searchDiscoverable": false,
+              "recallReason": "内容有误",
+              "kind": "human",
+              "role": "owner",
+              "roleLabel": "空间主人",
+              "capabilities": {
+                "canStartDirectConversation": false,
+                "canJoinGroups": true,
+                "canManage": true
+              },
+              "joinedAt": "2026-01-01T00:00:00.000Z"
+            },
+            {
+              "id": "usr_core_contract_peer",
+              "githubLogin": "core-contract-peer",
+              "displayName": "core-contract-peer",
+              "nickname": null,
+              "avatarUrl": "",
+              "kind": "human",
+              "role": "member",
+              "roleLabel": "成员",
+              "capabilities": {
+                "canStartDirectConversation": true,
+                "canJoinGroups": true,
+                "canManage": true
+              },
+              "joinedAt": "2026-01-01T00:00:00.000Z"
+            },
+            {
+              "id": "usr_core_contract_second",
+              "githubLogin": "core-contract-second",
+              "displayName": "core-contract-second",
+              "nickname": null,
+              "avatarUrl": "",
+              "kind": "human",
+              "role": "member",
+              "roleLabel": "成员",
+              "capabilities": {
+                "canStartDirectConversation": true,
+                "canJoinGroups": true,
+                "canManage": true
+              },
+              "joinedAt": "2026-01-01T00:00:00.000Z"
+            },
+            {
+              "id": "usr_system_beacon",
+              "displayName": "信标",
+              "description": "文件传输助手",
+              "avatarUrl": "/assets/beacon-avatar.png",
+              "kind": "bot",
+              "role": "member",
+              "roleLabel": "成员",
+              "capabilities": {
+                "canStartDirectConversation": true,
+                "canJoinGroups": false,
+                "canManage": false
+              },
+              "joinedAt": "2026-01-01T00:00:00.000Z"
+            },
+            {
+              "id": "usr_system_echo",
+              "displayName": "回声",
+              "description": "需求与反馈助手",
+              "avatarUrl": "/assets/echo-avatar.svg",
+              "kind": "bot",
+              "role": "member",
+              "roleLabel": "成员",
+              "capabilities": {
+                "canStartDirectConversation": true,
+                "canJoinGroups": false,
+                "canManage": false
+              },
+              "joinedAt": "2026-01-01T00:00:00.000Z"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "profile-update-write",
+      "request": {
+        "method": "PATCH",
+        "path": "/api/workspace/me/profile",
+        "headers": {
+          "content-type": "application/json",
+          "cookie": "duallane_workspace=fixture-session"
+        },
+        "body": {
+          "nickname": "Core Owner",
+          "searchDiscoverable": true,
+          "recallReason": "修正"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "user": {
+            "id": "usr_owner",
+            "githubLogin": "timeStarry",
+            "displayName": "Core Owner",
+            "nickname": "Core Owner",
+            "avatarUrl": "",
+            "searchDiscoverable": true,
+            "recallReason": "修正",
+            "kind": "human",
+            "role": "owner",
+            "roleLabel": "空间主人",
+            "capabilities": {
+              "canStartDirectConversation": false,
+              "canJoinGroups": true,
+              "canManage": true
+            },
+            "joinedAt": "2026-01-01T00:00:00.000Z"
+          }
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "profile.update",
+          "targetType": "user",
+          "result": "success"
+        },
+        "persistence": {
+          "messages": 0,
+          "workspaceEvents": 2,
+          "auditLogs": 4
+        }
+      }
+    },
+    {
+      "name": "member-visibility-read",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/member-visibility/usr_core_contract_peer",
+        "headers": {
+          "cookie": "duallane_workspace=fixture-session"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "visibility": {
+            "basis": "direct_contacts",
+            "viewerUserId": "usr_core_contract_peer",
+            "automaticUserIds": [
+              "usr_system_beacon",
+              "usr_system_echo"
+            ],
+            "grantedUserIds": [],
+            "visibleUserIds": [
+              "usr_core_contract_peer",
+              "usr_system_beacon",
+              "usr_system_echo"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "member-visibility-write",
+      "request": {
+        "method": "PUT",
+        "path": "/api/workspace/member-visibility/usr_core_contract_peer",
+        "headers": {
+          "content-type": "application/json",
+          "cookie": "duallane_workspace=fixture-session"
+        },
+        "body": {
+          "visibleUserIds": [
+            "usr_core_contract_second"
+          ]
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "visibility": {
+            "basis": "direct_contacts",
+            "viewerUserId": "usr_core_contract_peer",
+            "automaticUserIds": [
+              "usr_system_beacon",
+              "usr_system_echo"
+            ],
+            "grantedUserIds": [
+              "usr_core_contract_second"
+            ],
+            "visibleUserIds": [
+              "usr_core_contract_peer",
+              "usr_system_beacon",
+              "usr_system_echo",
+              "usr_core_contract_second"
+            ]
+          }
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "member.visibility_update",
+          "targetType": "member",
+          "result": "success"
+        },
+        "event": {
+          "type": "workspace.member_visibility_updated",
+          "targetType": "user"
+        },
+        "persistence": {
+          "messages": 0,
+          "workspaceEvents": 3,
+          "auditLogs": 5
+        }
+      }
+    },
+    {
+      "name": "conversation-create-write",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/conversations",
+        "headers": {
+          "content-type": "application/json",
+          "cookie": "duallane_workspace=fixture-session"
+        },
+        "body": {
+          "type": "group",
+          "title": "Core Contract Group",
+          "memberIds": [
+            "usr_core_contract_peer"
+          ]
+        }
+      },
+      "response": {
+        "status": 201,
+        "body": {
+          "conversation": {
+            "id": "conv_01",
+            "spaceId": "spc_default",
+            "type": "group",
+            "title": "Core Contract Group",
+            "avatarEmoji": null,
+            "displayTitle": "Core Contract Group",
+            "otherMember": null,
+            "retentionCount": 10000,
+            "retentionText": "保留最近 10000 条消息",
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "lastActivityAt": "2026-01-01T00:00:00.000Z",
+            "messageCount": 0,
+            "memberCount": 2,
+            "lastMessagePlainText": "",
+            "lastMessageAt": null,
+            "unreadCount": 0,
+            "lastReadMessageId": null,
+            "lastReadAt": null,
+            "lastReadSeq": null,
+            "notificationLevel": "all",
+            "capabilities": {
+              "canSendMessage": true,
+              "canUploadFile": true,
+              "canManageMembers": true
+            },
+            "members": [
+              {
+                "id": "usr_core_contract_peer",
+                "githubLogin": "core-contract-peer",
+                "displayName": "core-contract-peer",
+                "nickname": null,
+                "avatarUrl": "",
+                "kind": "human",
+                "role": "member",
+                "roleLabel": "成员",
+                "capabilities": {
+                  "canStartDirectConversation": true,
+                  "canJoinGroups": true,
+                  "canManage": true
+                },
+                "joinedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "usr_owner",
+                "githubLogin": "timeStarry",
+                "displayName": "Core Owner",
+                "nickname": "Core Owner",
+                "avatarUrl": "",
+                "searchDiscoverable": false,
+                "recallReason": "修正",
+                "kind": "human",
+                "role": "owner",
+                "roleLabel": "空间主人",
+                "capabilities": {
+                  "canStartDirectConversation": false,
+                  "canJoinGroups": true,
+                  "canManage": true
+                },
+                "joinedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "latestMessages": []
+          }
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "conversation.create",
+          "targetType": "conversation",
+          "result": "success"
+        },
+        "event": {
+          "type": "conversation.created",
+          "targetType": "conversation"
+        },
+        "persistence": {
+          "messages": 1,
+          "workspaceEvents": 6,
+          "auditLogs": 6
+        }
+      }
+    },
+    {
+      "name": "conversation-read",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/conversations/conv_01",
+        "headers": {
+          "cookie": "duallane_workspace=fixture-session"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "conversation": {
+            "id": "conv_01",
+            "spaceId": "spc_default",
+            "type": "group",
+            "title": "Core Contract Group",
+            "avatarEmoji": null,
+            "displayTitle": "Core Contract Group",
+            "otherMember": null,
+            "retentionCount": 10000,
+            "retentionText": "保留最近 10000 条消息",
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "lastActivityAt": "2026-01-01T00:00:00.000Z",
+            "messageCount": 1,
+            "memberCount": 2,
+            "lastMessagePlainText": "timeStarry 创建了群聊「Core Contract Group」",
+            "lastMessageAt": "2026-01-01T00:00:00.000Z",
+            "unreadCount": 1,
+            "lastReadMessageId": null,
+            "lastReadAt": null,
+            "lastReadSeq": null,
+            "notificationLevel": "all",
+            "capabilities": {
+              "canSendMessage": true,
+              "canUploadFile": true,
+              "canManageMembers": true
+            },
+            "members": [
+              {
+                "id": "usr_core_contract_peer",
+                "githubLogin": "core-contract-peer",
+                "displayName": "core-contract-peer",
+                "nickname": null,
+                "avatarUrl": "",
+                "kind": "human",
+                "role": "member",
+                "roleLabel": "成员",
+                "capabilities": {
+                  "canStartDirectConversation": true,
+                  "canJoinGroups": true,
+                  "canManage": true
+                },
+                "joinedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "usr_owner",
+                "githubLogin": "timeStarry",
+                "displayName": "Core Owner",
+                "nickname": "Core Owner",
+                "avatarUrl": "",
+                "searchDiscoverable": false,
+                "recallReason": "修正",
+                "kind": "human",
+                "role": "owner",
+                "roleLabel": "空间主人",
+                "capabilities": {
+                  "canStartDirectConversation": false,
+                  "canJoinGroups": true,
+                  "canManage": true
+                },
+                "joinedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "latestMessages": [
+              {
+                "id": "generated_01",
+                "conversationId": "conv_01",
+                "authorId": null,
+                "authorName": null,
+                "authorAvatarUrl": "",
+                "authorKind": "system",
+                "kind": "system",
+                "clientMessageId": null,
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "timeStarry 创建了群聊「Core Contract Group」",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "timeStarry 创建了群聊「Core Contract Group」"
+                    }
+                  ]
+                },
+                "plainText": "timeStarry 创建了群聊「Core Contract Group」",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "conversations-read",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/conversations",
+        "headers": {
+          "cookie": "duallane_workspace=fixture-session"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "conversations": [
+            {
+              "id": "conv_01",
+              "spaceId": "spc_default",
+              "type": "group",
+              "title": "Core Contract Group",
+              "avatarEmoji": null,
+              "displayTitle": "Core Contract Group",
+              "otherMember": null,
+              "retentionCount": 10000,
+              "retentionText": "保留最近 10000 条消息",
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "lastActivityAt": "2026-01-01T00:00:00.000Z",
+              "messageCount": 1,
+              "memberCount": 2,
+              "lastMessagePlainText": "timeStarry 创建了群聊「Core Contract Group」",
+              "lastMessageAt": "2026-01-01T00:00:00.000Z",
+              "unreadCount": 1,
+              "lastReadMessageId": null,
+              "lastReadAt": null,
+              "lastReadSeq": null,
+              "notificationLevel": "all",
+              "capabilities": {
+                "canSendMessage": true,
+                "canUploadFile": true,
+                "canManageMembers": true
+              },
+              "members": [
+                {
+                  "id": "usr_core_contract_peer",
+                  "githubLogin": "core-contract-peer",
+                  "displayName": "core-contract-peer",
+                  "nickname": null,
+                  "avatarUrl": "",
+                  "kind": "human",
+                  "role": "member",
+                  "roleLabel": "成员",
+                  "capabilities": {
+                    "canStartDirectConversation": true,
+                    "canJoinGroups": true,
+                    "canManage": true
+                  },
+                  "joinedAt": "2026-01-01T00:00:00.000Z"
+                },
+                {
+                  "id": "usr_owner",
+                  "githubLogin": "timeStarry",
+                  "displayName": "Core Owner",
+                  "nickname": "Core Owner",
+                  "avatarUrl": "",
+                  "searchDiscoverable": false,
+                  "recallReason": "修正",
+                  "kind": "human",
+                  "role": "owner",
+                  "roleLabel": "空间主人",
+                  "capabilities": {
+                    "canStartDirectConversation": false,
+                    "canJoinGroups": true,
+                    "canManage": true
+                  },
+                  "joinedAt": "2026-01-01T00:00:00.000Z"
+                }
+              ],
+              "latestMessages": [
+                {
+                  "id": "generated_01",
+                  "conversationId": "conv_01",
+                  "authorId": null,
+                  "authorName": null,
+                  "authorAvatarUrl": "",
+                  "authorKind": "system",
+                  "kind": "system",
+                  "clientMessageId": null,
+                  "content": {
+                    "format": "duallane.message+json;v=1",
+                    "plainText": "timeStarry 创建了群聊「Core Contract Group」",
+                    "blocks": [
+                      {
+                        "type": "text",
+                        "text": "timeStarry 创建了群聊「Core Contract Group」"
+                      }
+                    ]
+                  },
+                  "plainText": "timeStarry 创建了群聊「Core Contract Group」",
+                  "replyToMessageId": null,
+                  "createdAt": "2026-01-01T00:00:00.000Z",
+                  "editedAt": null,
+                  "deletedAt": null,
+                  "recalledAt": null,
+                  "recallReason": null,
+                  "attachments": [],
+                  "reactions": [],
+                  "hiddenByCurrentUser": false
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "group-update-write",
+      "request": {
+        "method": "PATCH",
+        "path": "/api/workspace/groups/conv_01",
+        "headers": {
+          "content-type": "application/json",
+          "cookie": "duallane_workspace=fixture-session"
+        },
+        "body": {
+          "title": "Core Contract Group Renamed",
+          "avatarEmoji": "📚"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "conversation": {
+            "id": "conv_01",
+            "spaceId": "spc_default",
+            "type": "group",
+            "title": "Core Contract Group Renamed",
+            "avatarEmoji": "📚",
+            "displayTitle": "Core Contract Group Renamed",
+            "otherMember": null,
+            "retentionCount": 10000,
+            "retentionText": "保留最近 10000 条消息",
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "lastActivityAt": "2026-01-01T00:00:00.000Z",
+            "messageCount": 3,
+            "memberCount": 2,
+            "lastMessagePlainText": "timeStarry 将群头像改为 📚",
+            "lastMessageAt": "2026-01-01T00:00:00.000Z",
+            "unreadCount": 3,
+            "lastReadMessageId": null,
+            "lastReadAt": null,
+            "lastReadSeq": null,
+            "notificationLevel": "all",
+            "capabilities": {
+              "canSendMessage": true,
+              "canUploadFile": true,
+              "canManageMembers": true
+            },
+            "members": [
+              {
+                "id": "usr_core_contract_peer",
+                "githubLogin": "core-contract-peer",
+                "displayName": "core-contract-peer",
+                "nickname": null,
+                "avatarUrl": "",
+                "kind": "human",
+                "role": "member",
+                "roleLabel": "成员",
+                "capabilities": {
+                  "canStartDirectConversation": true,
+                  "canJoinGroups": true,
+                  "canManage": true
+                },
+                "joinedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "usr_owner",
+                "githubLogin": "timeStarry",
+                "displayName": "Core Owner",
+                "nickname": "Core Owner",
+                "avatarUrl": "",
+                "searchDiscoverable": false,
+                "recallReason": "修正",
+                "kind": "human",
+                "role": "owner",
+                "roleLabel": "空间主人",
+                "capabilities": {
+                  "canStartDirectConversation": false,
+                  "canJoinGroups": true,
+                  "canManage": true
+                },
+                "joinedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "latestMessages": [
+              {
+                "id": "generated_01",
+                "conversationId": "conv_01",
+                "authorId": null,
+                "authorName": null,
+                "authorAvatarUrl": "",
+                "authorKind": "system",
+                "kind": "system",
+                "clientMessageId": null,
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "timeStarry 创建了群聊「Core Contract Group」",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "timeStarry 创建了群聊「Core Contract Group」"
+                    }
+                  ]
+                },
+                "plainText": "timeStarry 创建了群聊「Core Contract Group」",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              },
+              {
+                "id": "generated_02",
+                "conversationId": "conv_01",
+                "authorId": null,
+                "authorName": null,
+                "authorAvatarUrl": "",
+                "authorKind": "system",
+                "kind": "system",
+                "clientMessageId": null,
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "timeStarry 将群聊名称改为「Core Contract Group Renamed」",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "timeStarry 将群聊名称改为「Core Contract Group Renamed」"
+                    }
+                  ]
+                },
+                "plainText": "timeStarry 将群聊名称改为「Core Contract Group Renamed」",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              },
+              {
+                "id": "generated_03",
+                "conversationId": "conv_01",
+                "authorId": null,
+                "authorName": null,
+                "authorAvatarUrl": "",
+                "authorKind": "system",
+                "kind": "system",
+                "clientMessageId": null,
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "timeStarry 将群头像改为 📚",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "timeStarry 将群头像改为 📚"
+                    }
+                  ]
+                },
+                "plainText": "timeStarry 将群头像改为 📚",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "message-create-write",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/messages",
+        "headers": {
+          "content-type": "application/json",
+          "cookie": "duallane_workspace=fixture-session"
+        },
+        "body": {
+          "conversationId": "conv_01",
+          "clientMessageId": "workspace-core-contract-message-1",
+          "content": {
+            "format": "duallane.message+json;v=1",
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Core contract message"
+              }
+            ]
+          },
+          "replyToMessageId": null
+        }
+      },
+      "response": {
+        "status": 201,
+        "body": {
+          "message": {
+            "id": "msg_01",
+            "conversationId": "conv_01",
+            "authorId": "usr_owner",
+            "authorName": "Core Owner",
+            "authorNickname": "Core Owner",
+            "authorRemark": null,
+            "authorGithubLogin": "timeStarry",
+            "authorAvatarUrl": "",
+            "authorKind": "human",
+            "kind": "user",
+            "clientMessageId": "workspace-core-contract-message-1",
+            "content": {
+              "format": "duallane.message+json;v=1",
+              "plainText": "Core contract message",
+              "blocks": [
+                {
+                  "type": "text",
+                  "text": "Core contract message"
+                }
+              ]
+            },
+            "plainText": "Core contract message",
+            "replyToMessageId": null,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "editedAt": null,
+            "deletedAt": null,
+            "recalledAt": null,
+            "recallReason": null,
+            "attachments": [],
+            "reactions": [],
+            "hiddenByCurrentUser": false
+          }
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "message.create",
+          "targetType": "conversation",
+          "result": "success"
+        },
+        "event": {
+          "type": "message.created",
+          "targetType": "message"
+        },
+        "persistence": {
+          "messages": 4,
+          "workspaceEvents": 10,
+          "auditLogs": 8
+        }
+      }
+    },
+    {
+      "name": "messages-read",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/conversations/conv_01/messages?limit=20",
+        "headers": {
+          "cookie": "duallane_workspace=fixture-session"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "messages": [
+            {
+              "id": "generated_01",
+              "conversationId": "conv_01",
+              "authorId": null,
+              "authorName": null,
+              "authorAvatarUrl": "",
+              "authorKind": "system",
+              "kind": "system",
+              "clientMessageId": null,
+              "content": {
+                "format": "duallane.message+json;v=1",
+                "plainText": "timeStarry 创建了群聊「Core Contract Group」",
+                "blocks": [
+                  {
+                    "type": "text",
+                    "text": "timeStarry 创建了群聊「Core Contract Group」"
+                  }
+                ]
+              },
+              "plainText": "timeStarry 创建了群聊「Core Contract Group」",
+              "replyToMessageId": null,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "editedAt": null,
+              "deletedAt": null,
+              "recalledAt": null,
+              "recallReason": null,
+              "attachments": [],
+              "reactions": [],
+              "hiddenByCurrentUser": false
+            },
+            {
+              "id": "generated_02",
+              "conversationId": "conv_01",
+              "authorId": null,
+              "authorName": null,
+              "authorAvatarUrl": "",
+              "authorKind": "system",
+              "kind": "system",
+              "clientMessageId": null,
+              "content": {
+                "format": "duallane.message+json;v=1",
+                "plainText": "timeStarry 将群聊名称改为「Core Contract Group Renamed」",
+                "blocks": [
+                  {
+                    "type": "text",
+                    "text": "timeStarry 将群聊名称改为「Core Contract Group Renamed」"
+                  }
+                ]
+              },
+              "plainText": "timeStarry 将群聊名称改为「Core Contract Group Renamed」",
+              "replyToMessageId": null,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "editedAt": null,
+              "deletedAt": null,
+              "recalledAt": null,
+              "recallReason": null,
+              "attachments": [],
+              "reactions": [],
+              "hiddenByCurrentUser": false
+            },
+            {
+              "id": "generated_03",
+              "conversationId": "conv_01",
+              "authorId": null,
+              "authorName": null,
+              "authorAvatarUrl": "",
+              "authorKind": "system",
+              "kind": "system",
+              "clientMessageId": null,
+              "content": {
+                "format": "duallane.message+json;v=1",
+                "plainText": "timeStarry 将群头像改为 📚",
+                "blocks": [
+                  {
+                    "type": "text",
+                    "text": "timeStarry 将群头像改为 📚"
+                  }
+                ]
+              },
+              "plainText": "timeStarry 将群头像改为 📚",
+              "replyToMessageId": null,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "editedAt": null,
+              "deletedAt": null,
+              "recalledAt": null,
+              "recallReason": null,
+              "attachments": [],
+              "reactions": [],
+              "hiddenByCurrentUser": false
+            },
+            {
+              "id": "msg_01",
+              "conversationId": "conv_01",
+              "authorId": "usr_owner",
+              "authorName": "Core Owner",
+              "authorNickname": "Core Owner",
+              "authorRemark": null,
+              "authorGithubLogin": "timeStarry",
+              "authorAvatarUrl": "",
+              "authorKind": "human",
+              "kind": "user",
+              "clientMessageId": "workspace-core-contract-message-1",
+              "content": {
+                "format": "duallane.message+json;v=1",
+                "plainText": "Core contract message",
+                "blocks": [
+                  {
+                    "type": "text",
+                    "text": "Core contract message"
+                  }
+                ]
+              },
+              "plainText": "Core contract message",
+              "replyToMessageId": null,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "editedAt": null,
+              "deletedAt": null,
+              "recalledAt": null,
+              "recallReason": null,
+              "attachments": [],
+              "reactions": [],
+              "hiddenByCurrentUser": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "conversation-read-marker-write",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/conversations/conv_01/read",
+        "headers": {
+          "cookie": "duallane_workspace=fixture-session"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "conversation": {
+            "id": "conv_01",
+            "spaceId": "spc_default",
+            "type": "group",
+            "title": "Core Contract Group Renamed",
+            "avatarEmoji": "📚",
+            "displayTitle": "Core Contract Group Renamed",
+            "otherMember": null,
+            "retentionCount": 10000,
+            "retentionText": "保留最近 10000 条消息",
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "lastActivityAt": "2026-01-01T00:00:00.000Z",
+            "messageCount": 4,
+            "memberCount": 2,
+            "lastMessagePlainText": "Core contract message",
+            "lastMessageAt": "2026-01-01T00:00:00.000Z",
+            "unreadCount": 0,
+            "lastReadMessageId": "msg_01",
+            "lastReadAt": "2026-01-01T00:00:00.000Z",
+            "lastReadSeq": 10,
+            "notificationLevel": "all",
+            "capabilities": {
+              "canSendMessage": true,
+              "canUploadFile": true,
+              "canManageMembers": true
+            },
+            "members": [
+              {
+                "id": "usr_core_contract_peer",
+                "githubLogin": "core-contract-peer",
+                "displayName": "core-contract-peer",
+                "nickname": null,
+                "avatarUrl": "",
+                "kind": "human",
+                "role": "member",
+                "roleLabel": "成员",
+                "capabilities": {
+                  "canStartDirectConversation": true,
+                  "canJoinGroups": true,
+                  "canManage": true
+                },
+                "joinedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "usr_owner",
+                "githubLogin": "timeStarry",
+                "displayName": "Core Owner",
+                "nickname": "Core Owner",
+                "avatarUrl": "",
+                "searchDiscoverable": false,
+                "recallReason": "修正",
+                "kind": "human",
+                "role": "owner",
+                "roleLabel": "空间主人",
+                "capabilities": {
+                  "canStartDirectConversation": false,
+                  "canJoinGroups": true,
+                  "canManage": true
+                },
+                "joinedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "latestMessages": [
+              {
+                "id": "generated_01",
+                "conversationId": "conv_01",
+                "authorId": null,
+                "authorName": null,
+                "authorAvatarUrl": "",
+                "authorKind": "system",
+                "kind": "system",
+                "clientMessageId": null,
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "timeStarry 创建了群聊「Core Contract Group」",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "timeStarry 创建了群聊「Core Contract Group」"
+                    }
+                  ]
+                },
+                "plainText": "timeStarry 创建了群聊「Core Contract Group」",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              },
+              {
+                "id": "generated_02",
+                "conversationId": "conv_01",
+                "authorId": null,
+                "authorName": null,
+                "authorAvatarUrl": "",
+                "authorKind": "system",
+                "kind": "system",
+                "clientMessageId": null,
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "timeStarry 将群聊名称改为「Core Contract Group Renamed」",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "timeStarry 将群聊名称改为「Core Contract Group Renamed」"
+                    }
+                  ]
+                },
+                "plainText": "timeStarry 将群聊名称改为「Core Contract Group Renamed」",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              },
+              {
+                "id": "generated_03",
+                "conversationId": "conv_01",
+                "authorId": null,
+                "authorName": null,
+                "authorAvatarUrl": "",
+                "authorKind": "system",
+                "kind": "system",
+                "clientMessageId": null,
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "timeStarry 将群头像改为 📚",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "timeStarry 将群头像改为 📚"
+                    }
+                  ]
+                },
+                "plainText": "timeStarry 将群头像改为 📚",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              },
+              {
+                "id": "msg_01",
+                "conversationId": "conv_01",
+                "authorId": "usr_owner",
+                "authorName": "Core Owner",
+                "authorNickname": "Core Owner",
+                "authorRemark": null,
+                "authorGithubLogin": "timeStarry",
+                "authorAvatarUrl": "",
+                "authorKind": "human",
+                "kind": "user",
+                "clientMessageId": "workspace-core-contract-message-1",
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "Core contract message",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "Core contract message"
+                    }
+                  ]
+                },
+                "plainText": "Core contract message",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "conversation-notification-write",
+      "request": {
+        "method": "PATCH",
+        "path": "/api/workspace/conversations/conv_01/notification",
+        "headers": {
+          "content-type": "application/json",
+          "cookie": "duallane_workspace=fixture-session"
+        },
+        "body": {
+          "level": "mentions"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "conversation": {
+            "id": "conv_01",
+            "spaceId": "spc_default",
+            "type": "group",
+            "title": "Core Contract Group Renamed",
+            "avatarEmoji": "📚",
+            "displayTitle": "Core Contract Group Renamed",
+            "otherMember": null,
+            "retentionCount": 10000,
+            "retentionText": "保留最近 10000 条消息",
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "lastActivityAt": "2026-01-01T00:00:00.000Z",
+            "messageCount": 4,
+            "memberCount": 2,
+            "lastMessagePlainText": "Core contract message",
+            "lastMessageAt": "2026-01-01T00:00:00.000Z",
+            "unreadCount": 0,
+            "lastReadMessageId": "msg_01",
+            "lastReadAt": "2026-01-01T00:00:00.000Z",
+            "lastReadSeq": 10,
+            "notificationLevel": "mentions",
+            "capabilities": {
+              "canSendMessage": true,
+              "canUploadFile": true,
+              "canManageMembers": true
+            },
+            "members": [
+              {
+                "id": "usr_core_contract_peer",
+                "githubLogin": "core-contract-peer",
+                "displayName": "core-contract-peer",
+                "nickname": null,
+                "avatarUrl": "",
+                "kind": "human",
+                "role": "member",
+                "roleLabel": "成员",
+                "capabilities": {
+                  "canStartDirectConversation": true,
+                  "canJoinGroups": true,
+                  "canManage": true
+                },
+                "joinedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "usr_owner",
+                "githubLogin": "timeStarry",
+                "displayName": "Core Owner",
+                "nickname": "Core Owner",
+                "avatarUrl": "",
+                "searchDiscoverable": false,
+                "recallReason": "修正",
+                "kind": "human",
+                "role": "owner",
+                "roleLabel": "空间主人",
+                "capabilities": {
+                  "canStartDirectConversation": false,
+                  "canJoinGroups": true,
+                  "canManage": true
+                },
+                "joinedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "latestMessages": [
+              {
+                "id": "generated_01",
+                "conversationId": "conv_01",
+                "authorId": null,
+                "authorName": null,
+                "authorAvatarUrl": "",
+                "authorKind": "system",
+                "kind": "system",
+                "clientMessageId": null,
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "timeStarry 创建了群聊「Core Contract Group」",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "timeStarry 创建了群聊「Core Contract Group」"
+                    }
+                  ]
+                },
+                "plainText": "timeStarry 创建了群聊「Core Contract Group」",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              },
+              {
+                "id": "generated_02",
+                "conversationId": "conv_01",
+                "authorId": null,
+                "authorName": null,
+                "authorAvatarUrl": "",
+                "authorKind": "system",
+                "kind": "system",
+                "clientMessageId": null,
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "timeStarry 将群聊名称改为「Core Contract Group Renamed」",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "timeStarry 将群聊名称改为「Core Contract Group Renamed」"
+                    }
+                  ]
+                },
+                "plainText": "timeStarry 将群聊名称改为「Core Contract Group Renamed」",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              },
+              {
+                "id": "generated_03",
+                "conversationId": "conv_01",
+                "authorId": null,
+                "authorName": null,
+                "authorAvatarUrl": "",
+                "authorKind": "system",
+                "kind": "system",
+                "clientMessageId": null,
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "timeStarry 将群头像改为 📚",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "timeStarry 将群头像改为 📚"
+                    }
+                  ]
+                },
+                "plainText": "timeStarry 将群头像改为 📚",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              },
+              {
+                "id": "msg_01",
+                "conversationId": "conv_01",
+                "authorId": "usr_owner",
+                "authorName": "Core Owner",
+                "authorNickname": "Core Owner",
+                "authorRemark": null,
+                "authorGithubLogin": "timeStarry",
+                "authorAvatarUrl": "",
+                "authorKind": "human",
+                "kind": "user",
+                "clientMessageId": "workspace-core-contract-message-1",
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "Core contract message",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "Core contract message"
+                    }
+                  ]
+                },
+                "plainText": "Core contract message",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "group-member-add-write",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/groups/conv_01/members",
+        "headers": {
+          "content-type": "application/json",
+          "cookie": "duallane_workspace=fixture-session"
+        },
+        "body": {
+          "userId": "usr_core_contract_second"
+        }
+      },
+      "response": {
+        "status": 201,
+        "body": {
+          "conversation": {
+            "id": "conv_01",
+            "spaceId": "spc_default",
+            "type": "group",
+            "title": "Core Contract Group Renamed",
+            "avatarEmoji": "📚",
+            "displayTitle": "Core Contract Group Renamed",
+            "otherMember": null,
+            "retentionCount": 10000,
+            "retentionText": "保留最近 10000 条消息",
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "lastActivityAt": "2026-01-01T00:00:00.000Z",
+            "messageCount": 5,
+            "memberCount": 3,
+            "lastMessagePlainText": "timeStarry 邀请 Core Contract Second 加入群聊",
+            "lastMessageAt": "2026-01-01T00:00:00.000Z",
+            "unreadCount": 1,
+            "lastReadMessageId": "msg_01",
+            "lastReadAt": "2026-01-01T00:00:00.000Z",
+            "lastReadSeq": 10,
+            "notificationLevel": "mentions",
+            "capabilities": {
+              "canSendMessage": true,
+              "canUploadFile": true,
+              "canManageMembers": true
+            },
+            "members": [
+              {
+                "id": "usr_core_contract_peer",
+                "githubLogin": "core-contract-peer",
+                "displayName": "core-contract-peer",
+                "nickname": null,
+                "avatarUrl": "",
+                "kind": "human",
+                "role": "member",
+                "roleLabel": "成员",
+                "capabilities": {
+                  "canStartDirectConversation": true,
+                  "canJoinGroups": true,
+                  "canManage": true
+                },
+                "joinedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "usr_core_contract_second",
+                "githubLogin": "core-contract-second",
+                "displayName": "core-contract-second",
+                "nickname": null,
+                "avatarUrl": "",
+                "kind": "human",
+                "role": "member",
+                "roleLabel": "成员",
+                "capabilities": {
+                  "canStartDirectConversation": true,
+                  "canJoinGroups": true,
+                  "canManage": true
+                },
+                "joinedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "usr_owner",
+                "githubLogin": "timeStarry",
+                "displayName": "Core Owner",
+                "nickname": "Core Owner",
+                "avatarUrl": "",
+                "searchDiscoverable": false,
+                "recallReason": "修正",
+                "kind": "human",
+                "role": "owner",
+                "roleLabel": "空间主人",
+                "capabilities": {
+                  "canStartDirectConversation": false,
+                  "canJoinGroups": true,
+                  "canManage": true
+                },
+                "joinedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "latestMessages": [
+              {
+                "id": "generated_01",
+                "conversationId": "conv_01",
+                "authorId": null,
+                "authorName": null,
+                "authorAvatarUrl": "",
+                "authorKind": "system",
+                "kind": "system",
+                "clientMessageId": null,
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "timeStarry 创建了群聊「Core Contract Group」",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "timeStarry 创建了群聊「Core Contract Group」"
+                    }
+                  ]
+                },
+                "plainText": "timeStarry 创建了群聊「Core Contract Group」",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              },
+              {
+                "id": "generated_02",
+                "conversationId": "conv_01",
+                "authorId": null,
+                "authorName": null,
+                "authorAvatarUrl": "",
+                "authorKind": "system",
+                "kind": "system",
+                "clientMessageId": null,
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "timeStarry 将群聊名称改为「Core Contract Group Renamed」",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "timeStarry 将群聊名称改为「Core Contract Group Renamed」"
+                    }
+                  ]
+                },
+                "plainText": "timeStarry 将群聊名称改为「Core Contract Group Renamed」",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              },
+              {
+                "id": "generated_03",
+                "conversationId": "conv_01",
+                "authorId": null,
+                "authorName": null,
+                "authorAvatarUrl": "",
+                "authorKind": "system",
+                "kind": "system",
+                "clientMessageId": null,
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "timeStarry 将群头像改为 📚",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "timeStarry 将群头像改为 📚"
+                    }
+                  ]
+                },
+                "plainText": "timeStarry 将群头像改为 📚",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              },
+              {
+                "id": "msg_01",
+                "conversationId": "conv_01",
+                "authorId": "usr_owner",
+                "authorName": "Core Owner",
+                "authorNickname": "Core Owner",
+                "authorRemark": null,
+                "authorGithubLogin": "timeStarry",
+                "authorAvatarUrl": "",
+                "authorKind": "human",
+                "kind": "user",
+                "clientMessageId": "workspace-core-contract-message-1",
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "Core contract message",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "Core contract message"
+                    }
+                  ]
+                },
+                "plainText": "Core contract message",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              },
+              {
+                "id": "generated_04",
+                "conversationId": "conv_01",
+                "authorId": null,
+                "authorName": null,
+                "authorAvatarUrl": "",
+                "authorKind": "system",
+                "kind": "system",
+                "clientMessageId": null,
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "timeStarry 邀请 Core Contract Second 加入群聊",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "timeStarry 邀请 Core Contract Second 加入群聊"
+                    }
+                  ]
+                },
+                "plainText": "timeStarry 邀请 Core Contract Second 加入群聊",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "group-member-remove-write",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/workspace/groups/conv_01/members/usr_core_contract_second",
+        "headers": {
+          "cookie": "duallane_workspace=fixture-session"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "conversation": {
+            "id": "conv_01",
+            "spaceId": "spc_default",
+            "type": "group",
+            "title": "Core Contract Group Renamed",
+            "avatarEmoji": "📚",
+            "displayTitle": "Core Contract Group Renamed",
+            "otherMember": null,
+            "retentionCount": 10000,
+            "retentionText": "保留最近 10000 条消息",
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "lastActivityAt": "2026-01-01T00:00:00.000Z",
+            "messageCount": 6,
+            "memberCount": 2,
+            "lastMessagePlainText": "timeStarry 将 Core Contract Second 移出群聊",
+            "lastMessageAt": "2026-01-01T00:00:00.000Z",
+            "unreadCount": 2,
+            "lastReadMessageId": "msg_01",
+            "lastReadAt": "2026-01-01T00:00:00.000Z",
+            "lastReadSeq": 10,
+            "notificationLevel": "mentions",
+            "capabilities": {
+              "canSendMessage": true,
+              "canUploadFile": true,
+              "canManageMembers": true
+            },
+            "members": [
+              {
+                "id": "usr_core_contract_peer",
+                "githubLogin": "core-contract-peer",
+                "displayName": "core-contract-peer",
+                "nickname": null,
+                "avatarUrl": "",
+                "kind": "human",
+                "role": "member",
+                "roleLabel": "成员",
+                "capabilities": {
+                  "canStartDirectConversation": true,
+                  "canJoinGroups": true,
+                  "canManage": true
+                },
+                "joinedAt": "2026-01-01T00:00:00.000Z"
+              },
+              {
+                "id": "usr_owner",
+                "githubLogin": "timeStarry",
+                "displayName": "Core Owner",
+                "nickname": "Core Owner",
+                "avatarUrl": "",
+                "searchDiscoverable": false,
+                "recallReason": "修正",
+                "kind": "human",
+                "role": "owner",
+                "roleLabel": "空间主人",
+                "capabilities": {
+                  "canStartDirectConversation": false,
+                  "canJoinGroups": true,
+                  "canManage": true
+                },
+                "joinedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "latestMessages": [
+              {
+                "id": "generated_01",
+                "conversationId": "conv_01",
+                "authorId": null,
+                "authorName": null,
+                "authorAvatarUrl": "",
+                "authorKind": "system",
+                "kind": "system",
+                "clientMessageId": null,
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "timeStarry 创建了群聊「Core Contract Group」",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "timeStarry 创建了群聊「Core Contract Group」"
+                    }
+                  ]
+                },
+                "plainText": "timeStarry 创建了群聊「Core Contract Group」",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              },
+              {
+                "id": "generated_02",
+                "conversationId": "conv_01",
+                "authorId": null,
+                "authorName": null,
+                "authorAvatarUrl": "",
+                "authorKind": "system",
+                "kind": "system",
+                "clientMessageId": null,
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "timeStarry 将群聊名称改为「Core Contract Group Renamed」",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "timeStarry 将群聊名称改为「Core Contract Group Renamed」"
+                    }
+                  ]
+                },
+                "plainText": "timeStarry 将群聊名称改为「Core Contract Group Renamed」",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              },
+              {
+                "id": "generated_03",
+                "conversationId": "conv_01",
+                "authorId": null,
+                "authorName": null,
+                "authorAvatarUrl": "",
+                "authorKind": "system",
+                "kind": "system",
+                "clientMessageId": null,
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "timeStarry 将群头像改为 📚",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "timeStarry 将群头像改为 📚"
+                    }
+                  ]
+                },
+                "plainText": "timeStarry 将群头像改为 📚",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              },
+              {
+                "id": "msg_01",
+                "conversationId": "conv_01",
+                "authorId": "usr_owner",
+                "authorName": "Core Owner",
+                "authorNickname": "Core Owner",
+                "authorRemark": null,
+                "authorGithubLogin": "timeStarry",
+                "authorAvatarUrl": "",
+                "authorKind": "human",
+                "kind": "user",
+                "clientMessageId": "workspace-core-contract-message-1",
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "Core contract message",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "Core contract message"
+                    }
+                  ]
+                },
+                "plainText": "Core contract message",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              },
+              {
+                "id": "generated_04",
+                "conversationId": "conv_01",
+                "authorId": null,
+                "authorName": null,
+                "authorAvatarUrl": "",
+                "authorKind": "system",
+                "kind": "system",
+                "clientMessageId": null,
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "timeStarry 邀请 Core Contract Second 加入群聊",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "timeStarry 邀请 Core Contract Second 加入群聊"
+                    }
+                  ]
+                },
+                "plainText": "timeStarry 邀请 Core Contract Second 加入群聊",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              },
+              {
+                "id": "generated_05",
+                "conversationId": "conv_01",
+                "authorId": null,
+                "authorName": null,
+                "authorAvatarUrl": "",
+                "authorKind": "system",
+                "kind": "system",
+                "clientMessageId": null,
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "timeStarry 将 Core Contract Second 移出群聊",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "timeStarry 将 Core Contract Second 移出群聊"
+                    }
+                  ]
+                },
+                "plainText": "timeStarry 将 Core Contract Second 移出群聊",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "hiddenByCurrentUser": false
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "pins-read-empty",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/groups/conv_01/pins?limit=20",
+        "headers": {
+          "cookie": "duallane_workspace=fixture-session"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "pins": []
+        }
+      }
+    },
+    {
+      "name": "pin-write",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/groups/conv_01/pins",
+        "headers": {
+          "content-type": "application/json",
+          "cookie": "duallane_workspace=fixture-session"
+        },
+        "body": {
+          "messageId": "msg_01"
+        }
+      },
+      "response": {
+        "status": 201,
+        "body": {
+          "pin": {
+            "messageId": "msg_01",
+            "pinnedByUserId": "usr_owner",
+            "pinnedAt": "2026-01-01T00:00:00.000Z",
+            "canUnpin": true,
+            "message": {
+              "id": "msg_01",
+              "conversationId": "conv_01",
+              "authorId": "usr_owner",
+              "authorName": "Core Owner",
+              "authorNickname": "Core Owner",
+              "authorRemark": null,
+              "authorGithubLogin": "timeStarry",
+              "authorAvatarUrl": "",
+              "authorKind": "human",
+              "kind": "user",
+              "clientMessageId": "workspace-core-contract-message-1",
+              "content": {
+                "format": "duallane.message+json;v=1",
+                "plainText": "Core contract message",
+                "blocks": [
+                  {
+                    "type": "text",
+                    "text": "Core contract message"
+                  }
+                ]
+              },
+              "plainText": "Core contract message",
+              "replyToMessageId": null,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "editedAt": null,
+              "deletedAt": null,
+              "recalledAt": null,
+              "recallReason": null,
+              "attachments": [],
+              "reactions": [],
+              "pin": {
+                "pinnedByUserId": "usr_owner",
+                "pinnedAt": "2026-01-01T00:00:00.000Z",
+                "canUnpin": true
+              },
+              "hiddenByCurrentUser": false
+            }
+          }
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "message.pin",
+          "targetType": "message",
+          "result": "success"
+        },
+        "event": {
+          "type": "message.pinned",
+          "targetType": "message"
+        },
+        "persistence": {
+          "messages": 6,
+          "workspaceEvents": 16,
+          "auditLogs": 11
+        }
+      }
+    },
+    {
+      "name": "pins-read",
+      "request": {
+        "method": "GET",
+        "path": "/api/workspace/groups/conv_01/pins?limit=20",
+        "headers": {
+          "cookie": "duallane_workspace=fixture-session"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "pins": [
+            {
+              "messageId": "msg_01",
+              "pinnedByUserId": "usr_owner",
+              "pinnedAt": "2026-01-01T00:00:00.000Z",
+              "canUnpin": true,
+              "message": {
+                "id": "msg_01",
+                "conversationId": "conv_01",
+                "authorId": "usr_owner",
+                "authorName": "Core Owner",
+                "authorNickname": "Core Owner",
+                "authorRemark": null,
+                "authorGithubLogin": "timeStarry",
+                "authorAvatarUrl": "",
+                "authorKind": "human",
+                "kind": "user",
+                "clientMessageId": "workspace-core-contract-message-1",
+                "content": {
+                  "format": "duallane.message+json;v=1",
+                  "plainText": "Core contract message",
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "Core contract message"
+                    }
+                  ]
+                },
+                "plainText": "Core contract message",
+                "replyToMessageId": null,
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "editedAt": null,
+                "deletedAt": null,
+                "recalledAt": null,
+                "recallReason": null,
+                "attachments": [],
+                "reactions": [],
+                "pin": {
+                  "pinnedByUserId": "usr_owner",
+                  "pinnedAt": "2026-01-01T00:00:00.000Z",
+                  "canUnpin": true
+                },
+                "hiddenByCurrentUser": false
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "pin-delete-write",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/workspace/groups/conv_01/pins/msg_01",
+        "headers": {
+          "cookie": "duallane_workspace=fixture-session"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "messageId": "msg_01",
+          "removed": true
+        }
+      }
+    },
+    {
+      "name": "reaction-add-write",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/messages/msg_01/reactions",
+        "headers": {
+          "content-type": "application/json",
+          "cookie": "duallane_workspace=fixture-session"
+        },
+        "body": {
+          "emoteKey": "feishu:ok"
+        }
+      },
+      "response": {
+        "status": 201,
+        "body": {
+          "messageId": "msg_01",
+          "reactions": [
+            {
+              "emoteKey": "feishu:ok",
+              "count": 1,
+              "reactedByCurrentUser": true,
+              "users": [
+                {
+                  "id": "usr_owner",
+                  "displayName": "Core Owner",
+                  "githubLogin": "timeStarry",
+                  "createdAt": "2026-01-01T00:00:00.000Z"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "reaction-delete-write",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/workspace/messages/msg_01/reactions/feishu%3Aok",
+        "headers": {
+          "cookie": "duallane_workspace=fixture-session"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "messageId": "msg_01",
+          "reactions": []
+        }
+      }
+    },
+    {
+      "name": "message-hide-write",
+      "request": {
+        "method": "PUT",
+        "path": "/api/workspace/messages/msg_01/hidden",
+        "headers": {
+          "cookie": "duallane_workspace=fixture-session"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "messageId": "msg_01",
+          "hidden": true,
+          "changed": true
+        }
+      }
+    },
+    {
+      "name": "message-unhide-write",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/workspace/messages/msg_01/hidden",
+        "headers": {
+          "cookie": "duallane_workspace=fixture-session"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "messageId": "msg_01",
+          "hidden": false,
+          "changed": true
+        }
+      }
+    },
+    {
+      "name": "message-recall-write",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/messages/msg_01/recall",
+        "headers": {
+          "cookie": "duallane_workspace=fixture-session"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "message": {
+            "id": "msg_01",
+            "conversationId": "conv_01",
+            "authorId": "usr_owner",
+            "authorName": "Core Owner",
+            "authorNickname": "Core Owner",
+            "authorRemark": null,
+            "authorGithubLogin": "timeStarry",
+            "authorAvatarUrl": "",
+            "authorKind": "human",
+            "kind": "user",
+            "clientMessageId": "workspace-core-contract-message-1",
+            "content": {
+              "format": "duallane.message+json;v=1",
+              "plainText": "",
+              "blocks": []
+            },
+            "plainText": "Core Owner因修正撤回了一条消息",
+            "replyToMessageId": null,
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "editedAt": null,
+            "deletedAt": null,
+            "recalledAt": "2026-01-01T00:00:00.000Z",
+            "recallReason": "修正",
+            "attachments": [],
+            "reactions": [],
+            "hiddenByCurrentUser": false,
+            "conversation": {
+              "id": "conv_01",
+              "spaceId": "spc_default",
+              "type": "group",
+              "title": "Core Contract Group Renamed",
+              "avatarEmoji": "📚",
+              "displayTitle": "Core Contract Group Renamed",
+              "otherMember": null,
+              "retentionCount": 10000,
+              "retentionText": "保留最近 10000 条消息",
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "lastActivityAt": "2026-01-01T00:00:00.000Z",
+              "messageCount": 6,
+              "memberCount": 2,
+              "lastMessagePlainText": "timeStarry 将 Core Contract Second 移出群聊",
+              "lastMessageAt": "2026-01-01T00:00:00.000Z",
+              "unreadCount": 2,
+              "lastReadMessageId": "msg_01",
+              "lastReadAt": "2026-01-01T00:00:00.000Z",
+              "lastReadSeq": 10,
+              "notificationLevel": "mentions",
+              "capabilities": {
+                "canSendMessage": true,
+                "canUploadFile": true,
+                "canManageMembers": true
+              },
+              "members": [
+                {
+                  "id": "usr_core_contract_peer",
+                  "githubLogin": "core-contract-peer",
+                  "displayName": "core-contract-peer",
+                  "nickname": null,
+                  "avatarUrl": "",
+                  "kind": "human",
+                  "role": "member",
+                  "roleLabel": "成员",
+                  "capabilities": {
+                    "canStartDirectConversation": true,
+                    "canJoinGroups": true,
+                    "canManage": true
+                  },
+                  "joinedAt": "2026-01-01T00:00:00.000Z"
+                },
+                {
+                  "id": "usr_owner",
+                  "githubLogin": "timeStarry",
+                  "displayName": "Core Owner",
+                  "nickname": "Core Owner",
+                  "avatarUrl": "",
+                  "searchDiscoverable": false,
+                  "recallReason": "修正",
+                  "kind": "human",
+                  "role": "owner",
+                  "roleLabel": "空间主人",
+                  "capabilities": {
+                    "canStartDirectConversation": false,
+                    "canJoinGroups": true,
+                    "canManage": true
+                  },
+                  "joinedAt": "2026-01-01T00:00:00.000Z"
+                }
+              ],
+              "latestMessages": [
+                {
+                  "id": "generated_01",
+                  "conversationId": "conv_01",
+                  "authorId": null,
+                  "authorName": null,
+                  "authorAvatarUrl": "",
+                  "authorKind": "system",
+                  "kind": "system",
+                  "clientMessageId": null,
+                  "content": {
+                    "format": "duallane.message+json;v=1",
+                    "plainText": "timeStarry 创建了群聊「Core Contract Group」",
+                    "blocks": [
+                      {
+                        "type": "text",
+                        "text": "timeStarry 创建了群聊「Core Contract Group」"
+                      }
+                    ]
+                  },
+                  "plainText": "timeStarry 创建了群聊「Core Contract Group」",
+                  "replyToMessageId": null,
+                  "createdAt": "2026-01-01T00:00:00.000Z",
+                  "editedAt": null,
+                  "deletedAt": null,
+                  "recalledAt": null,
+                  "recallReason": null,
+                  "attachments": [],
+                  "reactions": [],
+                  "hiddenByCurrentUser": false
+                },
+                {
+                  "id": "generated_02",
+                  "conversationId": "conv_01",
+                  "authorId": null,
+                  "authorName": null,
+                  "authorAvatarUrl": "",
+                  "authorKind": "system",
+                  "kind": "system",
+                  "clientMessageId": null,
+                  "content": {
+                    "format": "duallane.message+json;v=1",
+                    "plainText": "timeStarry 将群聊名称改为「Core Contract Group Renamed」",
+                    "blocks": [
+                      {
+                        "type": "text",
+                        "text": "timeStarry 将群聊名称改为「Core Contract Group Renamed」"
+                      }
+                    ]
+                  },
+                  "plainText": "timeStarry 将群聊名称改为「Core Contract Group Renamed」",
+                  "replyToMessageId": null,
+                  "createdAt": "2026-01-01T00:00:00.000Z",
+                  "editedAt": null,
+                  "deletedAt": null,
+                  "recalledAt": null,
+                  "recallReason": null,
+                  "attachments": [],
+                  "reactions": [],
+                  "hiddenByCurrentUser": false
+                },
+                {
+                  "id": "generated_03",
+                  "conversationId": "conv_01",
+                  "authorId": null,
+                  "authorName": null,
+                  "authorAvatarUrl": "",
+                  "authorKind": "system",
+                  "kind": "system",
+                  "clientMessageId": null,
+                  "content": {
+                    "format": "duallane.message+json;v=1",
+                    "plainText": "timeStarry 将群头像改为 📚",
+                    "blocks": [
+                      {
+                        "type": "text",
+                        "text": "timeStarry 将群头像改为 📚"
+                      }
+                    ]
+                  },
+                  "plainText": "timeStarry 将群头像改为 📚",
+                  "replyToMessageId": null,
+                  "createdAt": "2026-01-01T00:00:00.000Z",
+                  "editedAt": null,
+                  "deletedAt": null,
+                  "recalledAt": null,
+                  "recallReason": null,
+                  "attachments": [],
+                  "reactions": [],
+                  "hiddenByCurrentUser": false
+                },
+                {
+                  "id": "msg_01",
+                  "conversationId": "conv_01",
+                  "authorId": "usr_owner",
+                  "authorName": "Core Owner",
+                  "authorNickname": "Core Owner",
+                  "authorRemark": null,
+                  "authorGithubLogin": "timeStarry",
+                  "authorAvatarUrl": "",
+                  "authorKind": "human",
+                  "kind": "user",
+                  "clientMessageId": "workspace-core-contract-message-1",
+                  "content": {
+                    "format": "duallane.message+json;v=1",
+                    "plainText": "",
+                    "blocks": []
+                  },
+                  "plainText": "Core Owner因修正撤回了一条消息",
+                  "replyToMessageId": null,
+                  "createdAt": "2026-01-01T00:00:00.000Z",
+                  "editedAt": null,
+                  "deletedAt": null,
+                  "recalledAt": "2026-01-01T00:00:00.000Z",
+                  "recallReason": "修正",
+                  "attachments": [],
+                  "reactions": [],
+                  "hiddenByCurrentUser": false
+                },
+                {
+                  "id": "generated_04",
+                  "conversationId": "conv_01",
+                  "authorId": null,
+                  "authorName": null,
+                  "authorAvatarUrl": "",
+                  "authorKind": "system",
+                  "kind": "system",
+                  "clientMessageId": null,
+                  "content": {
+                    "format": "duallane.message+json;v=1",
+                    "plainText": "timeStarry 邀请 Core Contract Second 加入群聊",
+                    "blocks": [
+                      {
+                        "type": "text",
+                        "text": "timeStarry 邀请 Core Contract Second 加入群聊"
+                      }
+                    ]
+                  },
+                  "plainText": "timeStarry 邀请 Core Contract Second 加入群聊",
+                  "replyToMessageId": null,
+                  "createdAt": "2026-01-01T00:00:00.000Z",
+                  "editedAt": null,
+                  "deletedAt": null,
+                  "recalledAt": null,
+                  "recallReason": null,
+                  "attachments": [],
+                  "reactions": [],
+                  "hiddenByCurrentUser": false
+                },
+                {
+                  "id": "generated_05",
+                  "conversationId": "conv_01",
+                  "authorId": null,
+                  "authorName": null,
+                  "authorAvatarUrl": "",
+                  "authorKind": "system",
+                  "kind": "system",
+                  "clientMessageId": null,
+                  "content": {
+                    "format": "duallane.message+json;v=1",
+                    "plainText": "timeStarry 将 Core Contract Second 移出群聊",
+                    "blocks": [
+                      {
+                        "type": "text",
+                        "text": "timeStarry 将 Core Contract Second 移出群聊"
+                      }
+                    ]
+                  },
+                  "plainText": "timeStarry 将 Core Contract Second 移出群聊",
+                  "replyToMessageId": null,
+                  "createdAt": "2026-01-01T00:00:00.000Z",
+                  "editedAt": null,
+                  "deletedAt": null,
+                  "recalledAt": null,
+                  "recallReason": null,
+                  "attachments": [],
+                  "reactions": [],
+                  "hiddenByCurrentUser": false
+                }
+              ]
+            }
+          }
+        }
+      },
+      "sideEffects": {
+        "audit": {
+          "action": "message.recall",
+          "targetType": "message",
+          "result": "success"
+        },
+        "event": {
+          "type": "message.recalled",
+          "targetType": "message"
+        },
+        "persistence": {
+          "messages": 6,
+          "workspaceEvents": 20,
+          "auditLogs": 13
+        }
+      }
+    },
+    {
+      "name": "logout",
+      "request": {
+        "method": "POST",
+        "path": "/api/auth/logout",
+        "headers": {
+          "cookie": "duallane_workspace=fixture-session"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true
+        }
+      }
+    }
+  ]
+}

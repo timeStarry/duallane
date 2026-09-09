@@ -1,0 +1,25 @@
+ARG NODE_IMAGE=docker.m.daocloud.io/library/node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+ARG NGINX_IMAGE=docker.m.daocloud.io/library/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+
+FROM ${NODE_IMAGE} AS build
+WORKDIR /app
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/web/package.json apps/web/package.json
+RUN pnpm install --frozen-lockfile
+COPY apps/web apps/web
+RUN pnpm --filter @duallane/web build
+
+FROM ${NGINX_IMAGE} AS runtime
+ARG DUALLANE_APP_VERSION=candidate
+ARG DUALLANE_GIT_COMMIT=working-tree
+LABEL org.opencontainers.image.title="DualLane Candidate Web" \
+      org.opencontainers.image.version="${DUALLANE_APP_VERSION}" \
+      org.opencontainers.image.revision="${DUALLANE_GIT_COMMIT}"
+# Preserve non-root startup independently of the build checkout's umask.
+COPY --chmod=0644 deploy/candidate/nginx.conf /etc/nginx/nginx.conf
+COPY --from=build /app/apps/web/dist /usr/share/nginx/html
+# Vite preserves source modes for copied public assets as well as bundles.
+RUN find /usr/share/nginx/html -type d -exec chmod 0755 {} + \
+    && find /usr/share/nginx/html -type f -exec chmod 0644 {} +
+EXPOSE 8080

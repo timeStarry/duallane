@@ -1,0 +1,250 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "health",
+      "method": "GET",
+      "path": "/api/health",
+      "expectedStatus": 200,
+      "projection": "health"
+    },
+    {
+      "name": "ice-servers-configured-variants",
+      "method": "GET",
+      "path": "/api/p2p/ice-servers",
+      "expectedStatus": 200,
+      "projection": "ice"
+    },
+    {
+      "name": "create-valid",
+      "method": "POST",
+      "path": "/api/p2p/rooms",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "{\"maxPeers\":2}",
+      "expectedStatus": 201,
+      "projection": "created",
+      "captureRoom": "primary"
+    },
+    {
+      "name": "room-status-existing",
+      "method": "GET",
+      "path": "/api/p2p/rooms/{primary}",
+      "expectedStatus": 200,
+      "projection": "room-status"
+    },
+    {
+      "name": "create-missing-body",
+      "method": "POST",
+      "path": "/api/p2p/rooms",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "expectedStatus": 400,
+      "projection": "parser-error",
+      "errorContract": {
+        "statusCode": 400,
+        "error": "Bad Request",
+        "code": "FST_ERR_CTP_EMPTY_JSON_BODY",
+        "message": "Body cannot be empty when content-type is set to 'application/json'"
+      }
+    },
+    {
+      "name": "create-empty-object-default",
+      "method": "POST",
+      "path": "/api/p2p/rooms",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "{}",
+      "expectedStatus": 400,
+      "projection": "error"
+    },
+    {
+      "name": "create-null-body",
+      "method": "POST",
+      "path": "/api/p2p/rooms",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "null",
+      "expectedStatus": 400,
+      "projection": "error"
+    },
+    {
+      "name": "create-root-number",
+      "method": "POST",
+      "path": "/api/p2p/rooms",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "2",
+      "expectedStatus": 400,
+      "projection": "error"
+    },
+    {
+      "name": "create-root-array",
+      "method": "POST",
+      "path": "/api/p2p/rooms",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "[]",
+      "expectedStatus": 400,
+      "projection": "error"
+    },
+    {
+      "name": "create-root-boolean",
+      "method": "POST",
+      "path": "/api/p2p/rooms",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "false",
+      "expectedStatus": 400,
+      "projection": "error"
+    },
+    {
+      "name": "create-root-string",
+      "method": "POST",
+      "path": "/api/p2p/rooms",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "\"2\"",
+      "expectedStatus": 400,
+      "projection": "error"
+    },
+    {
+      "name": "create-null-max-peers",
+      "method": "POST",
+      "path": "/api/p2p/rooms",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "{\"maxPeers\":null}",
+      "expectedStatus": 400,
+      "projection": "error"
+    },
+    {
+      "name": "create-fractional-max-peers",
+      "method": "POST",
+      "path": "/api/p2p/rooms",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "{\"maxPeers\":2.1}",
+      "expectedStatus": 400,
+      "projection": "error"
+    },
+    {
+      "name": "create-invalid-json",
+      "method": "POST",
+      "path": "/api/p2p/rooms",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "{\"maxPeers\":",
+      "expectedStatus": 400,
+      "projection": "parser-error",
+      "errorContract": {
+        "statusCode": 400,
+        "error": "Bad Request",
+        "code": "FST_ERR_CTP_INVALID_JSON_BODY",
+        "message": "Body is not valid JSON but content-type is set to 'application/json'"
+      }
+    },
+    {
+      "name": "create-trailing-json",
+      "method": "POST",
+      "path": "/api/p2p/rooms",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "{\"maxPeers\":2}{\"unknown\":true}",
+      "expectedStatus": 400,
+      "projection": "parser-error",
+      "errorContract": {
+        "statusCode": 400,
+        "error": "Bad Request",
+        "code": "FST_ERR_CTP_INVALID_JSON_BODY",
+        "message": "Body is not valid JSON but content-type is set to 'application/json'"
+      }
+    },
+    {
+      "name": "create-oversize-json",
+      "method": "POST",
+      "path": "/api/p2p/rooms",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "bodyGenerator": {
+        "prefix": "{\"maxPeers\":2,\"padding\":\"",
+        "repeat": "x",
+        "count": 1048576,
+        "suffix": "\"}"
+      },
+      "expectedStatus": 413,
+      "projection": "parser-error",
+      "errorContract": {
+        "statusCode": 413,
+        "error": "Payload Too Large",
+        "code": "FST_ERR_CTP_BODY_TOO_LARGE",
+        "message": "Request body is too large"
+      }
+    },
+    {
+      "name": "create-number-decimal",
+      "method": "POST",
+      "path": "/api/p2p/rooms",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "{\"maxPeers\":2.0}",
+      "expectedStatus": 201,
+      "projection": "created"
+    },
+    {
+      "name": "create-number-exponent",
+      "method": "POST",
+      "path": "/api/p2p/rooms",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "{\"maxPeers\":2e0}",
+      "expectedStatus": 201,
+      "projection": "created"
+    },
+    {
+      "name": "create-unknown-field",
+      "method": "POST",
+      "path": "/api/p2p/rooms",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "{\"maxPeers\":2,\"unknown\":{\"nested\":true}}",
+      "expectedStatus": 201,
+      "projection": "created"
+    },
+    {
+      "name": "create-websocket-room",
+      "method": "POST",
+      "path": "/api/p2p/rooms",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "{\"maxPeers\":2,\"fixture\":\"websocket\"}",
+      "expectedStatus": 201,
+      "projection": "created",
+      "captureRoom": "websocket"
+    },
+    {
+      "name": "room-status-missing",
+      "method": "GET",
+      "path": "/api/p2p/rooms/not-found",
+      "expectedStatus": 404,
+      "projection": "error"
+    }
+  ]
+}

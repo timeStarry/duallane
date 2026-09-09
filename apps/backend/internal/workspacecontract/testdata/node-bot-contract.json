@@ -1,0 +1,372 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "nodeRoutes": "apps/backend/api/node-routes.json",
+    "ownerRouteSource": "apps/web/server/routes/workspace-bots.mjs",
+    "gatewayRouteSource": "apps/web/server/routes/workspace-bot-gateway.mjs",
+    "messageRuntime": "scripts/backend/bot-message-dto-fixtures.mjs"
+  },
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/api/bot-gateway/v1/attachments",
+      "nodePath": "/api/bot-gateway/v1/attachments",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "GET",
+      "path": "/api/bot-gateway/v1/attachments/{attachmentId}",
+      "nodePath": "/api/bot-gateway/v1/attachments/:attachmentId",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "POST",
+      "path": "/api/bot-gateway/v1/cards",
+      "nodePath": "/api/bot-gateway/v1/cards",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/bot-gateway/v1/cards/{cardId}",
+      "nodePath": "/api/bot-gateway/v1/cards/:cardId",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "GET",
+      "path": "/api/bot-gateway/v1/conversations/{conversationId}/context",
+      "nodePath": "/api/bot-gateway/v1/conversations/:conversationId/context",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "POST",
+      "path": "/api/bot-gateway/v1/events/ack",
+      "nodePath": "/api/bot-gateway/v1/events/ack",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "GET",
+      "path": "/api/bot-gateway/v1/me",
+      "nodePath": "/api/bot-gateway/v1/me",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "POST",
+      "path": "/api/bot-gateway/v1/messages",
+      "nodePath": "/api/bot-gateway/v1/messages",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "POST",
+      "path": "/api/bot-gateway/v1/setup/exchange",
+      "nodePath": "/api/bot-gateway/v1/setup/exchange",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "POST",
+      "path": "/api/bot-gateway/v1/setup/request",
+      "nodePath": "/api/bot-gateway/v1/setup/request",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "GET",
+      "path": "/api/bot-gateway/v1/setup/status",
+      "nodePath": "/api/bot-gateway/v1/setup/status",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "POST",
+      "path": "/api/bot-gateway/v1/typing",
+      "nodePath": "/api/bot-gateway/v1/typing",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/bots",
+      "nodePath": "/api/workspace/bots",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bots",
+      "nodePath": "/api/workspace/bots",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workspace/bots/{botId}",
+      "nodePath": "/api/workspace/bots/:botId",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/bots/{botId}",
+      "nodePath": "/api/workspace/bots/:botId",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/bots/{botId}/connection",
+      "nodePath": "/api/workspace/bots/:botId/connection",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bots/{botId}/connection/test",
+      "nodePath": "/api/workspace/bots/:botId/connection/test",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/bots/{botId}/context-grants/{conversationId}",
+      "nodePath": "/api/workspace/bots/:botId/context-grants/:conversationId",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bots/{botId}/delete/confirm",
+      "nodePath": "/api/workspace/bots/:botId/delete/confirm",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/bots/{botId}/group-policies",
+      "nodePath": "/api/workspace/bots/:botId/group-policies",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/bots/{botId}/group-policies/{conversationId}",
+      "nodePath": "/api/workspace/bots/:botId/group-policies/:conversationId",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bots/{botId}/pause",
+      "nodePath": "/api/workspace/bots/:botId/pause",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bots/{botId}/resume",
+      "nodePath": "/api/workspace/bots/:botId/resume",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/bots/{botId}/settings",
+      "nodePath": "/api/workspace/bots/:botId/settings",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workspace/bots/{botId}/settings",
+      "nodePath": "/api/workspace/bots/:botId/settings",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bots/{botId}/setup-sessions",
+      "nodePath": "/api/workspace/bots/:botId/setup-sessions",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/bots/{botId}/tokens",
+      "nodePath": "/api/workspace/bots/:botId/tokens",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bots/{botId}/tokens",
+      "nodePath": "/api/workspace/bots/:botId/tokens",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bots/{botId}/tokens/rotate",
+      "nodePath": "/api/workspace/bots/:botId/tokens/rotate",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bots/{botId}/tokens/{tokenId}/revoke",
+      "nodePath": "/api/workspace/bots/:botId/tokens/:tokenId/revoke",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workspace/bot-setup/{sessionId}",
+      "nodePath": "/api/workspace/bot-setup/:sessionId",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bot-setup/{sessionId}/approve",
+      "nodePath": "/api/workspace/bot-setup/:sessionId/approve",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workspace/bot-setup/{sessionId}/deny",
+      "nodePath": "/api/workspace/bot-setup/:sessionId/deny",
+      "source": "apps/web/server/routes/workspace-bots.mjs",
+      "transport": "http",
+      "lane": "workspace"
+    },
+    {
+      "method": "GET",
+      "path": "/ws/bot-gateway",
+      "nodePath": "/ws/bot-gateway",
+      "source": "apps/web/server/routes/workspace-bot-gateway.mjs",
+      "transport": "websocket",
+      "lane": "workspace"
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "owner-bot-create",
+      "document": "workspace-bots",
+      "request": {
+        "method": "POST",
+        "path": "/api/workspace/bots",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "name": "Contract Fixture Bot"
+        }
+      },
+      "response": {
+        "status": 201,
+        "body": {
+          "bot": {
+            "id": "bot_fixture",
+            "spaceId": "spc_default",
+            "ownerUserId": "usr_owner",
+            "botUserId": "usr_bot_fixture",
+            "mode": "external_agent",
+            "name": "Contract Fixture Bot",
+            "nameNormalized": "contract fixture bot",
+            "visibilityPolicy": "private",
+            "conversationPolicy": "direct-only",
+            "triggerPolicy": "mention-or-command",
+            "status": "active",
+            "kind": "bot",
+            "authenticationAllowed": false,
+            "canJoinGroups": false,
+            "tokenPolicy": "hashed-one-time",
+            "createdAt": "2026-09-06T09:10:11.123Z",
+            "updatedAt": "2026-09-06T09:10:11.123Z",
+            "deletingAt": null,
+            "deletedAt": null
+          }
+        }
+      }
+    },
+    {
+      "name": "gateway-message-node-golden",
+      "document": "bot-gateway",
+      "request": {
+        "method": "POST",
+        "path": "/api/bot-gateway/v1/messages",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "conversationId": "conv_message_dto",
+          "clientMessageId": "client_text_alias",
+          "idempotencyKey": "idem_text_alias",
+          "text": "Hello <& "
+        }
+      },
+      "response": {
+        "status": 201,
+        "body": {
+          "message": {
+            "id": "message_fixture",
+            "conversationId": "conv_message_dto",
+            "plainText": "Hello <&",
+            "content": {
+              "format": "duallane.message+json;v=1",
+              "plainText": "Hello <&",
+              "blocks": [
+                {
+                  "type": "text",
+                  "text": "Hello <&"
+                }
+              ]
+            },
+            "createdAt": "2026-09-06T09:10:11.123Z"
+          },
+          "clientMessageId": "client_text_alias"
+        }
+      }
+    }
+  ]
+}

@@ -24,7 +24,11 @@ export function openTestDatabase(dataDir) {
   db.exec("PRAGMA foreign_keys = ON");
   const initialized = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'").get();
   if (!initialized) {
-    for (const fileName of readdirSync(migrationsDir).filter((name) => /^\d+.*\.sql$/.test(name)).sort()) {
+    // Runtime uses PostgreSQL. This SQLite database is only a fast unit-test
+    // double and cannot install the PostgreSQL LISTEN/NOTIFY trigger.
+    for (const fileName of readdirSync(migrationsDir)
+      .filter((name) => /^\d+.*\.sql$/.test(name) && name !== "030_workspace_event_notifications.sql")
+      .sort()) {
       db.exec(readFileSync(path.join(migrationsDir, fileName), "utf8"));
     }
   }
