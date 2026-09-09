@@ -15,12 +15,15 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const baseComposeFile = path.join(root, "docker-compose.yml");
 const productionComposeFile = path.join(root, "docker-compose.production.yml");
 const goComposeFile = path.join(root, "docker-compose.go-production.yml");
+const candidateOverlayComposeFile = path.join(root, "deploy/production/go-candidate.compose.yml");
 const syntheticProject = "duallane-compose-image-contract";
 const syntheticVersion = "0.0.0-compose-contract";
 const syntheticCommit = "a".repeat(40);
+const syntheticCandidateNetwork = `${syntheticProject}-candidate-network`;
 const allowLocalSkipVariable = "DUALLANE_ALLOW_DOCKER_COMPOSE_CONTRACT_SKIP";
 const requireDockerVariable = "DUALLANE_REQUIRE_DOCKER_COMPOSE_CONTRACT";
 const goServices = Object.freeze(["p2p", "web", "workspace", "worker", "migrate"]);
+const candidateServices = Object.freeze(["p2p", "workspace", "worker", "web"]);
 const expectedGoImages = Object.freeze({
   p2p: `duallane-go-p2p:${syntheticCommit}`,
   web: `duallane-go-web:${syntheticCommit}`,
@@ -162,10 +165,118 @@ function composeConfig(environment, files) {
   }
 }
 
+async function writeExclusiveFile(directory, filename, contents) {
+  const destination = path.join(directory, filename);
+  assert.equal(
+    path.dirname(path.resolve(destination)),
+    path.resolve(directory),
+    "synthetic Compose artifact must stay inside its bounded temporary directory",
+  );
+  await writeFile(destination, contents, { encoding: "utf8", flag: "wx", mode: 0o600 });
+  return destination;
+}
+
+async function writeExclusiveJSON(directory, filename, value) {
+  return writeExclusiveFile(directory, filename, `${JSON.stringify(value)}\n`);
+}
+
 function service(config, name) {
   const value = config.services?.[name];
   assert.ok(value && typeof value === "object", `missing Compose service ${name}`);
   return value;
+}
+
+function candidateNetworkPolicy(config) {
+  return Object.fromEntries(candidateServices.map((name) => {
+    const configured = service(config, name);
+    const dataMount = configured.volumes?.find(
+      (volume) => volume?.source === "duallane-data" && volume?.target === "/app/data",
+    );
+    return [name, {
+      networks: structuredClone(configured.networks),
+      dataMount: dataMount ? {
+        source: dataMount.source,
+        target: dataMount.target,
+        read_only: dataMount.read_only,
+      } : null,
+    }];
+  }));
+}
+
+function assertCandidateNetworkContract(config) {
+  const candidateNetwork = config.networks?.candidate;
+  assert.ok(candidateNetwork && typeof candidateNetwork === "object", "candidate network must be resolved");
+  assert.equal(candidateNetwork.external, true, "candidate network must remain external");
+  assert.equal(candidateNetwork.name, syntheticCandidateNetwork, "candidate network identity changed");
+
+  for (const name of ["p2p", "web"]) {
+    const networks = service(config, name).networks;
+    assert.deepEqual(
+      Object.keys(networks ?? {}).sort(),
+      ["candidate"],
+      `${name} candidate network must replace the production default network`,
+    );
+    assert.deepEqual(
+      networks.candidate?.aliases,
+      [name],
+      `${name} must publish its alias only on the candidate network`,
+    );
+  }
+
+  for (const name of ["workspace", "worker"]) {
+    const configured = service(config, name);
+    const networks = configured.networks;
+    assert.deepEqual(
+      Object.keys(networks ?? {}).sort(),
+      ["candidate", "default"],
+      `${name} must retain PostgreSQL default and candidate networks`,
+    );
+    assert.deepEqual(
+      networks.candidate?.aliases,
+      [name],
+      `${name} must publish its alias on the candidate network`,
+    );
+    assert.equal(
+      networks.default?.aliases,
+      undefined,
+      `${name} must not publish its alias on the PostgreSQL default network`,
+    );
+    const dataMount = configured.volumes?.find(
+      (volume) => volume?.source === "duallane-data" && volume?.target === "/app/data",
+    );
+    assert.ok(dataMount, `${name} must retain the shared data mount`);
+    assert.equal(dataMount.read_only, true, `${name} shared data mount must be read-only`);
+  }
+
+  return candidateNetworkPolicy(config);
+}
+
+function assertCanonicalGoDefaultNetworks(config) {
+  for (const name of ["p2p", "workspace", "worker", "web"]) {
+    assert.deepEqual(
+      service(config, name).networks,
+      { default: null },
+      `${name} must be checked from the actual frozen Compose default-network shape`,
+    );
+  }
+}
+
+async function writePreFixCandidateOverlay(directory) {
+  let source = await readFile(candidateOverlayComposeFile, "utf8");
+  for (const name of ["p2p", "web"]) {
+    const marker = new RegExp(`(^  ${name}:\\r?\\n    networks): !override`, "mu");
+    const withoutOverride = source.replace(marker, "$1:");
+    assert.notEqual(withoutOverride, source, `${name} fixed overlay marker was not found`);
+    source = withoutOverride;
+  }
+  return writeExclusiveFile(directory, "go-candidate.before-network-override.compose.yml", source);
+}
+
+async function freezeActualGoCompose(directory, environment) {
+  const config = composeConfig(environment, [baseComposeFile, productionComposeFile, goComposeFile]);
+  assertCanonicalGoDefaultNetworks(config);
+  const filename = await writeExclusiveJSON(directory, "go-activation.compose.json", config);
+  return { config, filename };
 }
 
 function normalizedDockerfile(value) {
@@ -284,6 +395,55 @@ test("real Compose contract detects the pre-fix missing Go Web image", async (t)
       () => assertGoImageContract(preFix),
       /web must have an explicit image/u,
       "the contract must catch the original missing Web image defect",
+    );
+  });
+});
+
+test("real frozen Go Compose JSON keeps candidate aliases isolated and data mounts read-only", async (t) => {
+  if (!requireDockerCompose(t)) return;
+
+  await withSyntheticFiles(async ({ directory, environment }) => {
+    const { filename: canonicalComposeFile } = await freezeActualGoCompose(directory, environment);
+    const candidateEnvironment = {
+      ...environment,
+      DUALLANE_GO_CANDIDATE_NETWORK: syntheticCandidateNetwork,
+    };
+    const resolved = composeConfig(candidateEnvironment, [canonicalComposeFile, candidateOverlayComposeFile]);
+    const canonicalPolicy = assertCandidateNetworkContract(resolved);
+
+    // Keep a direct YAML check as a supplementary parity signal; the frozen
+    // JSON round trip above is the production cutover contract.
+    const direct = composeConfig(candidateEnvironment, [
+      baseComposeFile,
+      productionComposeFile,
+      goComposeFile,
+      candidateOverlayComposeFile,
+    ]);
+    assert.deepEqual(assertCandidateNetworkContract(direct), canonicalPolicy);
+  });
+});
+
+test("real frozen Go Compose JSON catches the pre-fix candidate default-network leak", async (t) => {
+  if (!requireDockerCompose(t)) return;
+
+  await withSyntheticFiles(async ({ directory, environment }) => {
+    const { filename: canonicalComposeFile } = await freezeActualGoCompose(directory, environment);
+    const preFixOverlayFile = await writePreFixCandidateOverlay(directory);
+    const candidateEnvironment = {
+      ...environment,
+      DUALLANE_GO_CANDIDATE_NETWORK: syntheticCandidateNetwork,
+    };
+    const leaked = composeConfig(candidateEnvironment, [canonicalComposeFile, preFixOverlayFile]);
+
+    for (const name of ["p2p", "web"]) {
+      const networks = service(leaked, name).networks;
+      assert.deepEqual(Object.keys(networks).sort(), ["candidate", "default"]);
+      assert.deepEqual(networks.candidate?.aliases, [name]);
+    }
+    assert.throws(
+      () => assertCandidateNetworkContract(leaked),
+      /p2p candidate network must replace the production default network/u,
+      "the regression contract must reject the original default-network leak",
     );
   });
 });
