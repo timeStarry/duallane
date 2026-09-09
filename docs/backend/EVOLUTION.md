@@ -26,7 +26,7 @@ by Node and Go.
 ## 3. Capability Ledger
 
 The approval baseline below is historical. The ledger records the latest
-accepted candidate evidence and unchanged production owners. Update it in every
+accepted evidence and inspected production owners. Update it in every
 parity, cutover or rollback PR.
 
 ### Ownership Is Not Implementation Progress
@@ -63,24 +63,42 @@ not test results for the current worktree.
 
 | Capability | Current owner | Target owner | Status | Required next gate |
 | --- | --- | --- | --- | --- |
-| Static Web and edge gateway | Nginx/Web image | Nginx/Web image | `active` | Add target upstreams without weakening headers/logging/body limits |
-| P2P room, ICE, and secure WebSocket relay | Node API | Go P2P | `parity` | Authorized whole-lane routing and production privacy/health observation |
-| Workspace feature gate and health | Node API | Go Workspace | `parity` | Authorized release and exact enabled/disabled health verification |
-| GitHub OAuth and Workspace sessions | Node API | Go Workspace | `parity` | Operator configuration review and authorized real OAuth/session smoke |
-| Workspace read APIs | Node API | Go Workspace | `parity` | Authorized routing and current-membership projection observation |
-| Workspace conversation/message mutations | Node API | Go Workspace | `parity` | Single-writer cutover, drain and production data-integrity observation |
-| Workspace realtime WebSocket | Node API | Go Workspace | `parity` | Authorized cutover and replay/reconnect observation |
-| Quota, upload/download, and object registry | Node API | Go Workspace | `parity` | Staged authority/permissions proof and authorized single-writer handoff |
-| Avatar and custom-emote processing | Node/Sharp | Go Workspace/govips | `parity` | Authorized rollout of the verified native image and resource observation |
-| Topics, cards, interactions, Agent Bots, and Echo | Node API | Go Workspace | `parity` | Authorized complete write-unit cutover and critical workflow observation |
-| Email, ntfy, Bot delivery, cleanup/reconciliation | Node API workers | Go Worker | `parity` | Exclusive claimer handoff and separately authorized real-provider validation |
-| PostgreSQL migration and seed runner | Node migrate command | Go migrate | `parity` | Backup review and authorized single-runner production migration |
+| Static Web and edge gateway | Nginx/Go Web image | Nginx/Web image | `active` | Preserve verified Go upstreams, private paths and security headers |
+| P2P room, ICE, and secure WebSocket relay | Go P2P | Go P2P | `routed` | Longer observation and real two-browser WebRTC/transfer acceptance |
+| Workspace feature gate and health | Go Workspace | Go Workspace | `routed` | Retain exact feature-gate tests; observe enabled production |
+| GitHub OAuth and Workspace sessions | Go Workspace | Go Workspace | `routed` | Normal authorized real OAuth/session smoke |
+| Workspace read APIs | Go Workspace | Go Workspace | `routed` | Authenticated current-membership projection observation |
+| Workspace conversation/message mutations | Go Workspace | Go Workspace | `routed` | Dedicated synthetic conversation and production data-integrity observation |
+| Workspace realtime WebSocket | Go Workspace | Go Workspace | `routed` | Authenticated replay/reconnect observation |
+| Quota, upload/download, and object registry | Go Workspace | Go Workspace | `routed` | Authorized synthetic upload/download and legacy-byte acceptance |
+| Avatar and custom-emote processing | Go Workspace/govips | Go Workspace/govips | `routed` | Authorized real legacy/media reads and resource observation |
+| Topics, cards, interactions, Agent Bots, and Echo | Go Workspace | Go Workspace | `routed` | Dedicated critical workflow observation without real-recipient test notifications |
+| Email, ntfy, Bot delivery, cleanup/reconciliation | Go Worker | Go Worker | `routed` | Longer exclusive-claimer observation and authorized real-provider validation |
+| PostgreSQL migration and seed runner | Go migrate | Go migrate | `routed` | Retain verified schema-33 compatibility and recovery artifacts |
 | PostgreSQL database | PostgreSQL 17 deployment | PostgreSQL deployment | `active` | Preserve authoritative volume, backup, and supported upgrade path |
-| Local/S3 content-addressed storage | Node adapters and current stores | Go Workspace adapters and same stores | `parity` | Staged full-byte/authority verification before authorized handoff; retain offline compatibility tools |
+| Local/S3 content-addressed storage | Go Workspace adapters and same stores | Go Workspace adapters and same stores | `routed` | Real S3/legacy read acceptance; retain offline Node compatibility tools |
+
+### Production routing — 2026-09-10
+
+The authorized guarded cutover activated release 0.16.0 at
+`76e579f6887f3abcfe4cee45a4eaf3929c3ea6ae`. All four candidate services passed;
+Node admission/claims were fenced and drained before Go activation, with Web
+replaced last. Exact-image/runtime checks confirm Go-only routing and worker
+ownership, retained stopped Node with restart disabled, unchanged database/
+storage authority, and a verified private recovery snapshot. The
+[cutover record](work-items/2026-09-10-go-production-cutover.md) separates passing
+public/P2P/permission checks from pending authenticated/provider and full S3
+acceptance. The preceding failed attempt exercised actual same-authority Node
+recovery after schema and permission preparation.
+
+This advances twelve rows from `parity` to `routed`, not `active` or `complete`.
+It is not a claim that real OAuth, authenticated business flows, every S3 byte
+or a sustained observation window passed. Keep Node images, code, tests,
+offline operators and recovery until a separately validated later release.
 
 ### Candidate acceptance — 2026-09-09
 
-The twelve Go-target rows above advance from `planned` to `parity`, not
+At this historical acceptance, the twelve Go-target rows advanced from `planned` to `parity`, not
 `routed`. Parent integration review accepted runtime source
 `205f470f09852c9f36aeac37926b710e0f267940`, based on bounded luna-worker
 implementation/review slices, the complete four-job

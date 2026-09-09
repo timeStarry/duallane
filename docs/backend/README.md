@@ -2,8 +2,8 @@
 
 This directory is the progressive-disclosure entry point for the DualLane Go
 backend transition and for backend development after that transition completes.
-It defines an approved target architecture. Candidate code can exist before
-production ownership moves. Use the status and evidence in
+Go release 0.16.0 is now routed in production, with Node retained for rollback
+and offline compatibility. Use the status and evidence in
 [Evolution and migration](EVOLUTION.md) to distinguish implementation progress
 from production routing; `routed`, `active`, and `complete` are different gates.
 
@@ -19,11 +19,11 @@ Every backend task must first read:
    current implementation owner.
 4. Only the topic documents routed below.
 
-The current implementation remains authoritative for runtime wiring while a
-capability is `planned` or `parity`. The Go deployment-preparation candidate has
-reached `parity` with [recorded evidence](work-items/2026-09-08-predeployment-handoff.md);
-production routing and ownership remain Node. The product and security documents
-remain authoritative for behavior and invariants at every status.
+The [production cutover record](work-items/2026-09-10-go-production-cutover.md)
+identifies the exact deployed commit/images, single-owner checks, recovery
+artifacts and remaining authenticated/provider acceptance. Go-target capabilities
+are `routed`, not `active` or `complete`; Node removal is deferred. The product
+and security documents remain authoritative for behavior at every status.
 
 ## Document Map
 
@@ -56,16 +56,13 @@ remain authoritative for behavior and invariants at every status.
 
 ## Current And Target Shape
 
-The current backend is the Node.js 22 and Fastify service under
-`apps/web/server`. Nginx serves the frontend and proxies `/api` and `/ws` to
-that service. PostgreSQL and the local or S3-compatible object store retain
-Workspace data. Several realtime registries and workers still depend on
-in-process state.
-
-The approved target is one Go module containing separate P2P, Workspace,
-worker, and migration commands. Nginx remains the only public application
-gateway. PostgreSQL remains the Workspace system of record. P2P remains a
-physically and logically separate no-persistence lane.
+Production uses one Go module containing separate P2P, Workspace, worker and
+migration commands. Nginx is the only public application gateway; it routes
+P2P to `p2p` and authenticated Workspace/auth/Bot traffic to `workspace`.
+PostgreSQL remains the Workspace system of record, with the same S3 primary
+and local mirror. P2P remains a separate no-persistence lane. Node/Fastify
+under `apps/web/server` is retained for rollback, compatibility tests, canonical
+migration SQL and offline operators, not as a running production API/claimer.
 
 See [Evolution and migration](EVOLUTION.md) for the live owner of each
 capability. A directory, binary, image, or passing test is not sufficient to
@@ -86,10 +83,12 @@ a claim that every candidate capability is integrated, verified, or deployed.
 | Where is the foundation/contract slice evidence? | [2026-09-06 work record](work-items/2026-09-06-foundation-contracts.md); includes exact tested commits and excluded draft failures |
 | What remains before accepting the full candidate PR? | [Pre-deployment handoff](work-items/2026-09-08-predeployment-handoff.md) for current gates and artifact identities; [historical work record](work-items/2026-09-06-predeployment.md) for slice provenance and parallel ownership |
 
-The checked-in Compose and gateway still select Node `api`; the Go entry points
-are candidates. Repository configuration is not a live production inspection.
-A cutover record must additionally identify the deployed release and operator
-evidence. Update this map in the same change that moves an entry point.
+The base Compose pair still selects the retained Node default. Live production
+explicitly selects [Go production](../../docker-compose.go-production.yml) and
+the [Go gateway](../../deploy/candidate/nginx.conf) through the guarded release
+entry point. Do not infer the live owner from the default pair or run it to
+replace Go. Consult the cutover record and inspect the current release before
+an upgrade; subsequent Go upgrades require the prior private recovery snapshot.
 
 ## Authority And Conflict Resolution
 
