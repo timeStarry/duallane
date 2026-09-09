@@ -61,7 +61,7 @@ function syntheticEnvironment(credentialsFile, subscriptionFile) {
     "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH",
   ]);
   const environment = {
-    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => hostKeys.has(key))),
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => hostKeys.has(key) || hostKeys.has(key.toUpperCase()))),
     COMPOSE_DISABLE_ENV_FILE: "1",
     COMPOSE_PROJECT_NAME: syntheticProject,
     DUALLANE_APP_VERSION: syntheticVersion,
