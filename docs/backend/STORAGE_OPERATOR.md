@@ -7,7 +7,7 @@ before operating on Workspace storage. P2P content is never an input.
 
 ## Current Executable Surface
 
-`apps/backend/cmd/storage` provides candidate **read-only** `plan` and `verify`
+`apps/backend/cmd/storage` provides **read-only** `plan` and `verify`
 commands, plus the separately scoped `provision` command below. Neither `plan`
 nor `verify` performs backfill, migration, provisioning, legacy deletion, quota
 changes, or a writer handoff. They reject `--apply`. Use a
@@ -16,17 +16,18 @@ No production execution is implied by a passing candidate test.
 
 ## Retained Offline Compatibility Tools
 
-These are retained one-shot operator tools for the current Node owner and for
-rollback preparation. They are not request handlers, continuous processes, or
-Go startup hooks. The current production owner remains Node; the table records
-the actual commands without authorizing a writer handoff.
+These are retained one-shot Node compatibility and rollback-preparation tools,
+not request handlers, continuous processes or Go startup hooks. Production now
+routes to Go, as recorded in the [cutover evidence](work-items/2026-09-10-go-production-cutover.md).
+The table records executable operator boundaries, not authorization to replace
+or run alongside that Go owner.
 
-| Capability | Retained Node command and behavior | Go candidate status |
+| Capability | Retained Node command and behavior | Go executable/ownership status |
 | --- | --- | --- |
-| Schema migration | `pnpm --filter @duallane/web db:migrate` runs `server/migrate.mjs`. The default Compose `migrate` service runs this one-shot command before `api`. | `apps/backend/cmd/migrate` runs the Go numbered migration runner and seed in the separate Go candidate composition, but does not transfer the current production migration owner. |
+| Schema migration | `pnpm --filter @duallane/web db:migrate` runs `server/migrate.mjs`. The retained Node-default Compose `migrate` service runs it before `api`. | `apps/backend/cmd/migrate` is the routed production one-shot runner, completed through schema 33. Never run the retained Node migrator concurrently. |
 | S3 migration and archive | `pnpm --filter @duallane/web storage:migrate` runs `server/storage-migrate.mjs` with `backfill` or `verify`. Its inventory uploads active attachment/avatar records and treats unconsumed local keys as `archive` records under the run-specific archive prefix. There is no separate Node `archive` executable. | Go `storage plan` and `storage verify` can produce/read evidence; there is no Go archive or S3 migration executor. |
 | Canonical backfill | `pnpm --filter @duallane/web storage:dedupe` with `WORKSPACE_STORAGE_DEDUPE_MODE=backfill` creates/reuses canonical objects and binds attachment, avatar, and emote references while retaining legacy bytes. | `internal/workspace/storageops.RunBackfill` plus `PGJournal` is a coordinator-supplied candidate library only. It has no executable, scheduler, owner transition, or Compose service and must not be described or operated as a Go backfill command. |
-| Verification | Node `storage:migrate` supports `verify`; Node `storage:dedupe` supports `verify` and records its verification timestamps. | `duallane-storage plan` and `duallane-storage verify` are candidate read-only checks for PostgreSQL and local/S3 bytes; they do not perform Node verification writes or replace the Node owner. |
+| Verification | Node `storage:migrate` supports `verify`; Node `storage:dedupe` supports `verify` and records its verification timestamps. | `duallane-storage plan` and `duallane-storage verify` are read-only checks for PostgreSQL and local/S3 bytes; they do not perform Node verification writes or change runtime ownership. |
 | Legacy finalization | Node `storage:dedupe` with `WORKSPACE_STORAGE_DEDUPE_MODE=finalize` verifies the inventory and then deletes legacy objects under the Node registry's object lock. | No Go finalize command exists. The Go backfill library cannot delete legacy bytes or finalize the compatibility window. |
 | S3 provisioning | `pnpm --filter @duallane/web storage:provision` runs the retained Node bucket provisioner. | `duallane-storage provision` is a separate candidate tool and is read-only by default. This runbook does not add or recommend a production `--apply` command, and no provisioning is attached to Go startup or the default Compose file. |
 
@@ -130,10 +131,12 @@ revalidation. Inspect action outcomes and the exit status after a partial error.
 
 ## Permission transition runbook: Node root to Go `65532`
 
-This section is a deployment gate and rehearsal procedure, not an instruction
-to mutate a production volume. Node remains the active Workspace storage
-owner until an explicitly approved handoff. There must be one authoritative
-writer for the database/object registry and the bytes it references.
+This section is the first Node-to-Go deployment gate and rehearsal procedure,
+not an instruction to mutate a production volume. That handoff is already
+recorded for the current installation; its subsequent releases use the Go-to-Go
+snapshot procedure, not this first-cutover sequence. For a separate Node-owned
+installation, Node remains owner until the explicitly approved handoff. There
+must be one authoritative writer for the registry and the bytes it references.
 
 The target permission posture preserves private storage: data directories are
 normally `0700`, regular object and legacy files are normally `0600`, and the

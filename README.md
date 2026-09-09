@@ -48,10 +48,12 @@ point. It links progressively to the detailed
 architecture, code, UI/UX, security/data, testing, release, and deployment. Only
 GitHub user **`timestarry`** may perform the final merge into `main`.
 
-The [backend architecture index](docs/backend/README.md) defines the approved Go
-target and the live migration ledger. The checked-in Node/Fastify runtime remains
-authoritative for each capability until that ledger and production routing show
-that ownership has moved.
+The [backend architecture index](docs/backend/README.md) is the Go backend
+handbook and live migration ledger. Production release 0.16.0 now routes to Go;
+Node/Fastify remains for rollback, development/parity harnesses and offline
+compatibility. `pnpm dev` above still selects that retained Node harness, not
+the live Go topology. See the [cutover record](docs/backend/work-items/2026-09-10-go-production-cutover.md)
+for deployed identities and acceptance still outstanding.
 
 Product behavior is defined separately in [`DESIGN.md`](DESIGN.md), the
 [Workspace design index](docs/WORKSPACE_DESIGN_INDEX.md), and the
@@ -135,10 +137,16 @@ only in the browser key derivation and is not sent to the backend.
 
 ## Production Shape
 
-Production uses the tracked override in `docker-compose.production.yml`. Set
+Current production explicitly uses `docker-compose.go-production.yml` through
+the official `go-full` release profile: Nginx/Web, Go P2P, Go Workspace, Go worker,
+the one-shot Go migrator and PostgreSQL. Node API is retained stopped with
+restart disabled. See [runtime and upgrade operations](docs/backend/OPERATIONS.md)
+before changing this live deployment.
+
+The retained **Node-default installation** uses `docker-compose.production.yml`. Set
 `POSTGRES_VOLUME_NAME` to a pre-provisioned authoritative volume; never rely on
 an untracked recovery override or a project-generated default volume. For a
-first installation:
+first Node-default installation only (not an upgrade or recovery of live Go):
 
 ```bash
 cd "${HOME}/duallane"
@@ -155,19 +163,18 @@ from the development checkout. Other installations may set a different
 absolute `DUALLANE_PRODUCTION_DIR`; when it is empty, the script defaults to
 `${HOME}/duallane` and verifies the physical path before touching Docker.
 
-Routine upgrades use the same guarded entry point:
-
-```bash
-cd "${HOME}/duallane"
-git pull --ff-only
-release_commit="$(git rev-parse origin/main)"
-test "$(git rev-parse HEAD)" = "${release_commit}"
-bash deploy/production/deploy.sh --expected-commit "${release_commit}"
-```
+Routine upgrades of this live installation use the same guarded entry point
+with `--release-profile go-full --go-upgrade --previous-release-snapshot` and
+the last successful private snapshot, following the
+[Go upgrade procedure](docs/backend/OPERATIONS.md#guarded-go-activation-and-upgrade-inputs).
+Pull exact `origin/main` as the checkout owner before the privileged release;
+verify a clean checkout and pass the full `--expected-commit`. Do not use the
+Node-default form or first-cutover `--prepare-go-permissions` for this upgrade.
 
 Before pushing a release, increment the root and Web package versions together,
 add the matching user-facing release entry, and run `pnpm test`, `pnpm lint`,
-and `pnpm build`. Push the validated commit to `origin/main`, then update the
+and `pnpm build`. Merge the validated release through its authorized PR into
+`origin/main`, then update the
 production checkout with `git pull --ff-only`. The deployment entry point
 requires a clean `main` worktree whose HEAD exactly matches the fetched
 `origin/main`; it also requires a full `--expected-commit` and rejects a new
@@ -178,34 +185,42 @@ Do not use a bare `docker compose up` for an existing production deployment.
 The deployment script validates that the configured PostgreSQL volume matches
 the current container, creates a private logical backup with a SHA-256 sidecar,
 builds through an isolated `docker-container` BuildKit instance, runs
-migrations, starts API/Web without refreshing unrelated services, and checks
-the bound web gateway directly. Before replacing either service it starts an
-unpublished candidate from the exact production image and waits for its health
-check; the live API is then replaced and verified before the Web candidate and
-live Web service are started. It preserves the previous API/Web images for
-automatic application rollback. If the Docker daemon restarts during a failed
-deployment, the script restores the existing containers before returning the
-error. Database volume switches remain an explicit recovery operation outside
-the routine script.
+migrations and passive candidates from exact image IDs, and checks the bound
+web gateway. For Go upgrades it verifies the previous snapshot, fences/drains
+old owners, activates new backends/worker and replaces Web last. Recovery keeps
+the same database/storage authority and uses captured immutable images; an
+ambiguous fence/drain fails closed for operator review. Database volume switches
+remain an explicit recovery operation outside the routine script.
 
-The production Compose pair exposes only the `web` service on
-`DUALLANE_WEB_BIND:DUALLANE_WEB_PORT` and keeps the API service inside the Docker
-network. The web container serves the built frontend through Nginx and forwards
-`/api` plus `/ws` to the private API container, including WebSocket upgrade
-headers.
+Only `web` publishes `DUALLANE_WEB_BIND:DUALLANE_WEB_PORT`. Its Go gateway
+forwards P2P API/WebSockets to `p2p` and Workspace/auth/Bot API/WebSockets to
+`workspace`; private health/metrics endpoints are not public. Neither backend
+nor worker publishes a host port. The retained Node-default gateway is not the
+current live route.
 
 The script provisions `DUALLANE_BUILDX_BUILDER` on first use with the configured
 `DUALLANE_BUILDKIT_IMAGE`. It starts that builder only for the image build,
 constrains retained cache to `DUALLANE_BUILDX_CACHE_MAX` after a successful
 release, and stops the builder on every exit path so it does not retain memory
-between releases. Production services use `restart: always`, so a daemon restart
-does not leave the database, proxy, API, or web gateway stopped. Their Docker
+between releases. Active production services use `restart: always`; the retained
+Node API deliberately stays `restart: no` and must not be started alongside Go.
+The database, proxy, Go services and Web resume through guarded restoration. Their Docker
 JSON logs rotate at `DUALLANE_LOG_MAX_SIZE` and retain at most
 `DUALLANE_LOG_MAX_FILE` files per service.
 Public HTTPS smoke checks should run from an external client; the application
 host may not support hairpin access through the public gateway.
 
-Compose starts PostgreSQL, waits for its health check, runs the one-shot
+### Retained Node-default and offline storage reference
+
+The following Node-default bootstrap and mutating storage commands are retained
+for compatibility, not routine operations on active Go. Before using any of
+them, follow the [Go storage operator safety boundary](docs/backend/STORAGE_OPERATOR.md)
+and the owning migration runbook: obtain the appropriate operator authorization,
+fence every writer/claimer, preserve current-authority backups and verify the
+exact target. Do not enable Node beside Go, run backfill/finalize to silence a
+read-only verifier, or change storage drivers as an unguarded Go rollback.
+
+Node-default Compose starts PostgreSQL, waits for its health check, runs the one-shot
 `migrate` service, and only then starts the API. Set a strong
 `POSTGRES_PASSWORD` before deployment. Back up both the `duallane-postgres`
 database volume and the `duallane-data` file volume. The local storage driver
@@ -217,10 +232,12 @@ registry.
 
 For S3-compatible storage, keep the bucket private and mount a JSON credential
 file containing only `accessKey` and `secretKey`. Set its host path through
-`WORKSPACE_S3_CREDENTIALS_FILE`; Compose exposes it to the API as a `0600`
-secret. The API uploads bytes only after Workspace quota and permission checks,
-and authenticated download or preview requests receive a short-lived signed
-URL. Internal object keys never use the original file name.
+`WORKSPACE_S3_CREDENTIALS_FILE`. Compose bind-backed secrets retain host
+ownership/modes: the Go deployment requires the verified UID/GID 65532, mode-0600
+file, mounted read-only. Both runtimes authorize and enforce quota before upload.
+The retained Node S3 delivery path returns short-lived signed URLs; the current
+Go HTTP boundary streams authorized objects without exposing the provider
+locator. Internal object keys never use the original file name.
 
 Workspace attachment reservations advertise a 4 MiB application part size.
 Larger files are uploaded as independently hashed, idempotent parts and are
@@ -245,7 +262,7 @@ preflight origin.
 MinIO releases that reject the S3 incomplete-multipart lifecycle rule use an
 application cleanup fallback. Provisioning creates and immediately aborts a
 canary multipart upload to verify the limited credential can list and abort
-uploads. The API then removes incomplete uploads older than seven days at
+uploads. The retained Node API then removes incomplete uploads older than seven days at
 startup and every six hours; an access failure still blocks startup.
 
 For an existing local volume, choose a stable run ID and preserve it when
@@ -270,8 +287,9 @@ change.
 
 Migration 025 adds a shared SHA-256 object namespace for Workspace attachments,
 profile avatars, and personal emotes. Both local and S3 storage drivers support
-the maintenance flow. Use one stable run ID and run `backfill`, `verify`, then
-`finalize` in that order:
+the retained offline maintenance flow. With the separate operator approval and
+fencing described above, use one stable run ID for `backfill` and `verify`.
+`finalize` is a separate destructive operation, not their routine next step:
 
 ```bash
 WORKSPACE_STORAGE_DEDUPE_RUN_ID=dedupe-YYYYMMDD \
@@ -280,14 +298,19 @@ WORKSPACE_STORAGE_DEDUPE_MODE=backfill \
   --profile storage-dedupe run --rm storage-dedupe
 ```
 
-Repeat the command with `WORKSPACE_STORAGE_DEDUPE_MODE=verify`, validate the
-private `0600` report and deployment health, then repeat it with
-`WORKSPACE_STORAGE_DEDUPE_MODE=finalize`. Backfill creates canonical objects and
-binds references while retaining legacy bytes. Verify reads and hashes complete
-canonical objects without depending on legacy bytes. Finalize first verifies
-the entire inventory and only then deletes legacy objects. Keep database and
-storage backups through the compatibility window; rerunning the same phase with
-the same run ID is the recovery path. The
+Repeat the command with `WORKSPACE_STORAGE_DEDUPE_MODE=verify` and validate its
+private `0600` report and deployment health; stop there while the compatibility
+window is open. Backfill creates canonical objects and binds references while
+retaining legacy bytes. Verify reads and hashes complete canonical objects.
+
+The current Go rollout still has an open Node/legacy compatibility window and
+outstanding full S3/legacy verification. Do **not** run `finalize` for this
+rollout. Only a separately authorized later operation may explicitly close
+that window, verify an independent recoverable database/object backup and its
+restore path, complete the required full inventory verification, and fence
+every writer/claimer before deleting legacy objects. Deletion removes the
+rollback path that depended on those bytes. Keep database and storage backups;
+resume only the same authorized phase with its stable run ID. The
 [content-addressed storage runbook](docs/WORKSPACE_CONTENT_ADDRESSED_STORAGE.md)
 contains the full cutover and rollback procedure.
 

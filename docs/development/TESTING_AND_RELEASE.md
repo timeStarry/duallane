@@ -119,24 +119,29 @@ Production deploys happen only in:
 /home/timestarry/duallane
 ```
 
-Use the local Docker daemon; do not SSH or SCP for this host. After validation,
-merge authorization, commit, and push:
+Use the local Docker daemon; do not SSH or SCP for this host. After
+validation and authorized PR merge, pull with `git pull --ff-only` as the
+checkout owner, verify clean `main` and exact `origin/main`, and pass the full
+`--expected-commit` to the guarded entry point.
 
-```bash
-cd /home/timestarry/duallane
-git pull --ff-only
-release_commit="$(git rev-parse origin/main)"
-test "$(git rev-parse HEAD)" = "${release_commit}"
-bash deploy/production/deploy.sh --expected-commit "${release_commit}"
-```
+The [current Go production release](../backend/work-items/2026-09-10-go-production-cutover.md)
+has already completed first cutover. Its next application release must follow
+the [Go-to-Go upgrade procedure](../backend/OPERATIONS.md#guarded-go-activation-and-upgrade-inputs),
+using `--release-profile go-full --go-upgrade --previous-release-snapshot` with
+the previous successful private snapshot and sidecars. Do not select Node-default
+or first-cutover permission preparation for an active Go deployment. Run the
+coordinator with the privileges needed for its private artifacts; keep any Git
+trust exception process-local and prevent optional root-owned index refreshes.
 
 The production `.env` must keep
 `DUALLANE_PRODUCTION_DIR=/home/timestarry/duallane`. Never run the production
 script from the development checkout and never substitute a bare
 `docker compose up` for an existing production deployment.
 
-The guarded script must build/start candidates, confirm API and Web health, then
-replace the running application. If Docker must restart, record all running
+The guarded script must verify exact images, passive candidates, authority and
+old-owner fence/drain before activation, then replace the gateway last. The
+first-cutover offline permission option deliberately fences Node before passive
+candidates; subsequent upgrades use their previous Go snapshot. If Docker must restart, record all running
 application containers first and restore them afterward.
 
 ## 8. Health Check And Rollback
