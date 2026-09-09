@@ -287,8 +287,9 @@ change.
 
 Migration 025 adds a shared SHA-256 object namespace for Workspace attachments,
 profile avatars, and personal emotes. Both local and S3 storage drivers support
-the maintenance flow. Use one stable run ID and run `backfill`, `verify`, then
-`finalize` in that order:
+the retained offline maintenance flow. With the separate operator approval and
+fencing described above, use one stable run ID for `backfill` and `verify`.
+`finalize` is a separate destructive operation, not their routine next step:
 
 ```bash
 WORKSPACE_STORAGE_DEDUPE_RUN_ID=dedupe-YYYYMMDD \
@@ -297,14 +298,19 @@ WORKSPACE_STORAGE_DEDUPE_MODE=backfill \
   --profile storage-dedupe run --rm storage-dedupe
 ```
 
-Repeat the command with `WORKSPACE_STORAGE_DEDUPE_MODE=verify`, validate the
-private `0600` report and deployment health, then repeat it with
-`WORKSPACE_STORAGE_DEDUPE_MODE=finalize`. Backfill creates canonical objects and
-binds references while retaining legacy bytes. Verify reads and hashes complete
-canonical objects without depending on legacy bytes. Finalize first verifies
-the entire inventory and only then deletes legacy objects. Keep database and
-storage backups through the compatibility window; rerunning the same phase with
-the same run ID is the recovery path. The
+Repeat the command with `WORKSPACE_STORAGE_DEDUPE_MODE=verify` and validate its
+private `0600` report and deployment health; stop there while the compatibility
+window is open. Backfill creates canonical objects and binds references while
+retaining legacy bytes. Verify reads and hashes complete canonical objects.
+
+The current Go rollout still has an open Node/legacy compatibility window and
+outstanding full S3/legacy verification. Do **not** run `finalize` for this
+rollout. Only a separately authorized later operation may explicitly close
+that window, verify an independent recoverable database/object backup and its
+restore path, complete the required full inventory verification, and fence
+every writer/claimer before deleting legacy objects. Deletion removes the
+rollback path that depended on those bytes. Keep database and storage backups;
+resume only the same authorized phase with its stable run ID. The
 [content-addressed storage runbook](docs/WORKSPACE_CONTENT_ADDRESSED_STORAGE.md)
 contains the full cutover and rollback procedure.
 
