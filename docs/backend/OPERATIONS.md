@@ -2,16 +2,17 @@
 
 ## 1. Runtime Status
 
-The commands and Compose services in this document are the approved target.
-The checked-in Compose files remain the executable source of truth until a
-migration PR adds each service and updates
-[Evolution and migration](EVOLUTION.md).
+The Go service set is routed in production as release 0.16.0. See the
+[cutover record](work-items/2026-09-10-go-production-cutover.md) for exact deployed
+identities and outstanding acceptance, and [Evolution and migration](EVOLUTION.md)
+for ownership. The base Compose pair remains Node-default for retained
+compatibility; it does not describe the current live selection.
 
 Production deployment remains single-host Docker Compose through the guarded
 script in `deploy/production`. This architecture does not authorize direct
 production deployment from the development checkout.
 
-## 2. Target Containers
+## 2. Go Containers
 
 | Compose service | Command/image role | Public exposure |
 | --- | --- | --- |
@@ -24,9 +25,10 @@ production deployment from the development checkout.
 | Storage maintenance profiles | Provision, backfill, dedupe, or verification commands | None |
 | Optional GitHub proxy | Existing explicit profile | Docker network only |
 
-During migration, the existing Node `api` service may coexist with target
-services. Nginx routes only the capabilities identified in `EVOLUTION.md` to a
-Go service. Removing `api` is a final cutover action, not an initial rename.
+The retained Node `api` container is stopped with restart disabled. Nginx routes
+the capabilities identified in `EVOLUTION.md` to Go; only Go may write/claim.
+Removing `api`, its images, code or offline operators is deferred to a later
+validated release. Never start it beside active Go writers.
 
 ## 3. Images
 
@@ -459,9 +461,9 @@ its exact static SPA HTML; that is classified as no private endpoint exposure,
 not backend readiness. These unauthenticated read-only probes cannot replace
 the disposable authenticated browser, upload, provider and recovery gates.
 
-The guarded `deploy/production/deploy.sh` is an executable candidate workflow,
-not evidence that a full production rehearsal has passed and not deployment
-authorization. An explicitly authorized operator must still use the required
+The guarded `deploy/production/deploy.sh` performed the recorded first cutover;
+that historical success is not authorization for another deployment or proof
+that a future release passed. An explicitly authorized operator must use the required
 production checkout and release procedure. The coordinator's release sequence
 is:
 
@@ -537,6 +539,16 @@ private image-pinned Go activation artifact and, for the first Node-to-Go
 cutover, a private image-pinned Node recovery artifact. All post-freeze Compose
 operations use those artifacts; later `.env` or tag changes must not silently
 move authority.
+
+The live installation has already completed first-cutover permission preparation.
+Its next application release uses the Go-to-Go upgrade form above, with the
+last successful snapshot, not `--prepare-go-permissions` or Node-default.
+Pull as the checkout owner before running the privileged coordinator. For a
+root coordinator inspecting an ordinary-user checkout, use process-scoped
+`GIT_OPTIONAL_LOCKS=0` to avoid ownership-changing index refreshes; any required
+Git trust exception must remain scoped to the exact production checkout.
+Documentation-only commits do not require a runtime redeployment or change the
+deployed commit recorded in the release evidence.
 
 Fencing records each original restart policy and retry limit, temporarily sets
 `restart=no`, and verifies the owner is stopped. A known-good replacement gets
