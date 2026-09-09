@@ -70,8 +70,9 @@ must remain distinct from synthetic test success.
 
 Implementation was split into `19cb8a2` (filesystem primitive and tests),
 `cd7dbe2` (coordinator/canary/rehearsal/CI) and `3f825f3` (existing deployment
-contract updated for the explicit maintenance window). No runtime image build
-input or application implementation changed.
+contract updated for the explicit maintenance window). No runtime implementation,
+dependency, Dockerfile or Compose definition changed. The retained Node Dockerfile
+copies server tests, so the test-only change is still an image-context change.
 
 Lead-run checks on Linux/WSL, using Node 22.23.2 and pnpm 10.30.3:
 
@@ -91,6 +92,12 @@ Lead-run checks on Linux/WSL, using Node 22.23.2 and pnpm 10.30.3:
 - `bash -n` for both changed shell scripts and `git diff --check`: passed.
 - Go 1.26.8 `go test -count=1 ./internal/platform/storage`: passed. These unit
   tests are not a production S3-provider or real UID mirror-write proof.
+- At `0002317`, the compiled storage test binary also ran under real UID/GID
+  `65532:65532` with cleared groups and no-new-privileges: all 14 selected
+  `TestHybrid`, `TestLocal` and `TestS3Blob` cases passed. Local filesystem cases
+  use real temporary files; S3 uses an in-process synthetic provider and hybrid
+  writes use test doubles. This does not prove the live provider or the combined
+  production S3-primary/local-mirror path.
 - In a clean native WSL validation checkout, `pnpm lint` and `pnpm build`
   completed at `cd7dbe2`. The existing large-chunk warning remains. The first
   full test run found one old static deployment-order assertion; it was
@@ -111,6 +118,33 @@ was removed. These failed attempts are not recovery acceptance. Exact final
 Docker outcomes and fresh CI status are tracked in
 [PR #3](https://github.com/timeStarry/duallane/pull/3), not inferred from the
 earlier binding-only CI.
+
+At code commit `000231710f69d67058435d85a00f21cd7ff6961f`, all four jobs in
+[CI run 34368253855](https://github.com/timeStarry/duallane/actions/runs/34368253855)
+passed: Go quality/PostgreSQL, Node quality/image build/Chromium, Go Workspace
+Chromium/privacy and Go P2P Chromium/privacy/transfer. Later evidence-only
+documentation updates do not substitute for the PR's latest check status.
+
+### Disposable image inputs
+
+The lead used existing local immutable images, with no registry pull or
+production configuration. Go runtime source is `205f470f09852c9f36aeac37926b710e0f267940`
+(0.16.0); retained Node fixtures are `37ae06131a7bb38e6d2e77599f48aabc78e0492e`
+(0.15.5). These prove the current coordinator against those runtime artifacts,
+not an exact new production build. From the tested native Linux development
+checkout, on its disposable Docker daemon, run one process at a time:
+
+```bash
+export DUALLANE_RELEASE_COORDINATOR_DOCKER_TEST=true
+export DUALLANE_RELEASE_COORDINATOR_NODE_IMAGE=sha256:e5e42b53d293a942ba8e541b34d9ea7bfa83990e1619272ad057858d300c2c6f
+export DUALLANE_RELEASE_COORDINATOR_NODE_WEB_IMAGE=sha256:46d94eb4a6befc0af8bc3c3765fbe0512099cf88863a38c9e20e903c79d2327b
+export DUALLANE_RELEASE_COORDINATOR_GO_IMAGE=sha256:e7828cbd42627a3e4607744d13ca9ae9909d21ec2ef016ba5b33cfd8003b6853
+export DUALLANE_RELEASE_COORDINATOR_P2P_IMAGE=sha256:7ff62e9ee93462628a802a880023ba389b07d5a229016a25787ef87fc16cb1dc
+export DUALLANE_RELEASE_COORDINATOR_WEB_IMAGE=sha256:2d6ce9232c7405c864c0cd354698bdc3c0e987d33bafd4404940f72e7a25905f
+export DUALLANE_RELEASE_COORDINATOR_POSTGRES_IMAGE=sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+node --test --test-name-pattern='root-only permission preparation' \
+  scripts/backend/release-coordinator.docker.test.mjs
+```
 
 The independent main-owned coordinator/canary review found no additional
 blocking issue. Lead review corrected draft backup-path/deadline defects,
