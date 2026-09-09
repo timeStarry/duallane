@@ -3,6 +3,8 @@ import { request as httpRequest } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { normalizeLocalGatewayURL } from "./local-gateway-binding.mjs";
+
 const TOTAL_TIMEOUT_MS = 10_000;
 const REQUEST_TIMEOUT_MS = 3_000;
 const MAX_HTML_BYTES = 512 * 1024;
@@ -50,40 +52,12 @@ function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function isLoopbackHostname(hostname) {
-  if (hostname === "localhost" || hostname === "[::1]") return true;
-  const parts = hostname.split(".");
-  if (parts.length !== 4 || parts[0] !== "127") return false;
-  return parts.slice(1).every((part) => /^(?:0|[1-9][0-9]{0,2})$/.test(part) && Number(part) <= 255);
-}
-
 function normalizeBaseURL(value) {
-  if (typeof value !== "string" || value.trim() !== value || value.length === 0) {
-    throw smokeError("invalid_base_url", "input");
-  }
-  let parsed;
   try {
-    parsed = new URL(value);
+    return normalizeLocalGatewayURL(value);
   } catch {
     throw smokeError("invalid_base_url", "input");
   }
-  if (
-    parsed.protocol !== "http:" ||
-    !isLoopbackHostname(parsed.hostname) ||
-    !parsed.port ||
-    parsed.pathname !== "/" ||
-    parsed.search ||
-    parsed.hash ||
-    parsed.username ||
-    parsed.password
-  ) {
-    throw smokeError("invalid_base_url", "input");
-  }
-  const port = Number(parsed.port);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw smokeError("invalid_base_url", "input");
-  }
-  return parsed;
 }
 
 function normalizeExpectedVersion(value) {

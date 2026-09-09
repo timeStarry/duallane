@@ -491,18 +491,15 @@ release_run_gateway_smoke() {
   # Resolve the actual local published port, not an operator-controlled URL
   # that could point to another release. The probe cannot follow redirects.
   base_url="$(docker inspect "${web_id}" --format '{{json .NetworkSettings.Ports}}' 2>/dev/null | node -e '
-    try {
-      const ports = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
-      const bindings = ports["8080/tcp"];
-      if (!Array.isArray(bindings) || bindings.length !== 1) process.exit(1);
-      const { HostIp, HostPort } = bindings[0];
-      if (!/^[0-9]+$/.test(HostPort) || Number(HostPort) < 1 || Number(HostPort) > 65535) process.exit(1);
-      const host = HostIp === "0.0.0.0" || HostIp === "127.0.0.1" ? "127.0.0.1" :
-        HostIp === "::" || HostIp === "::1" ? "[::1]" : null;
-      if (!host) process.exit(1);
-      process.stdout.write(`http://${host}:${HostPort}`);
-    } catch { process.exit(1); }
-  ')" || {
+    const input = require("node:fs").readFileSync(0, "utf8");
+    import(process.argv[1]).then(({ resolveLocalGatewayURL }) => {
+      try {
+        process.stdout.write(resolveLocalGatewayURL(JSON.parse(input)));
+      } catch {
+        process.exitCode = 1;
+      }
+    }, () => { process.exitCode = 1; });
+  ' "${RELEASE_HELPER_DIR}/../../scripts/backend/local-gateway-binding.mjs")" || {
     echo "gateway smoke requires one supported local application binding" >&2
     return 1
   }
