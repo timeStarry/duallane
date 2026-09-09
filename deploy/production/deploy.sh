@@ -22,6 +22,7 @@ expected_commit=""
 release_profile="node-default"
 go_upgrade=false
 previous_release_snapshot=""
+prepare_go_permissions=false
 app_replaced=false
 buildx_builder=""
 buildx_builder_ready=false
@@ -32,7 +33,7 @@ release_recovery_file=""
 
 usage() {
   cat <<'EOF'
-Usage: deploy/production/deploy.sh [--bootstrap] --expected-commit <git-sha> [--release-profile node-default|go-full]
+Usage: deploy/production/deploy.sh [--bootstrap] --expected-commit <git-sha> [--release-profile node-default|go-full] [--prepare-go-permissions]
 
 Deploys the fixed Node default profile unless the explicit go-full profile is
 selected. The script refuses to switch an existing PostgreSQL container to a
@@ -44,6 +45,10 @@ $HOME/duallane. go-full additionally requires the parent-provided Go Compose,
 health, and candidate-runtime wiring; the manifest cannot satisfy those checks
 by itself. Go-to-Go upgrades require --previous-release-snapshot pointing at
 the mode-0600 snapshot from the last successful Go release.
+--prepare-go-permissions is a root-only first Node-to-Go cutover option. It
+backs up the private credential before snapshotting, then fences Node and
+verifies a quiescent backup before tightening existing data-volume permissions.
+It introduces a maintenance outage before passive candidates are checked.
 EOF
 }
 
@@ -81,6 +86,10 @@ while (($# > 0)); do
       previous_release_snapshot="$2"
       shift 2
       ;;
+    --prepare-go-permissions)
+      prepare_go_permissions=true
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -92,6 +101,13 @@ while (($# > 0)); do
       ;;
   esac
 done
+
+if [[ "${prepare_go_permissions}" == true ]]; then
+  if [[ "${release_profile}" != go-full || "${go_upgrade}" == true || "${bootstrap}" == true || "${EUID}" != 0 ]]; then
+    echo "--prepare-go-permissions requires root and a first non-bootstrap go-full release" >&2
+    exit 2
+  fi
+fi
 
 if [[ "${go_upgrade}" == true && "${release_profile}" != "go-full" ]]; then
   echo "--go-upgrade requires the explicit go-full release profile" >&2
@@ -638,6 +654,7 @@ if [[ "${go_upgrade}" != true && -n "${running_api_container}" ]]; then
   fi
 fi
 
+release_preflight_permission_tools
 mkdir -p "${BACKUP_DIR}"
 readonly timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 readonly backup_path="${BACKUP_DIR}/duallane-${timestamp}-${current_commit:0:12}.dump"
@@ -648,6 +665,7 @@ RELEASE_RECOVERY_FILE="${release_recovery_file}"
 : >"${release_recovery_file}"
 release_snapshot_app_state "${release_state_file}"
 release_snapshot_validate_for_go_cutover
+release_prepare_permission_inputs
 release_freeze_node_recovery_compose
 
 if [[ -z "${postgres_container}" || "$(container_health "${postgres_container}")" != "healthy" ]]; then
@@ -687,6 +705,14 @@ if [[ "${RELEASE_PROFILE_NAME}" == "node-default" ]]; then
   release_start_candidate web
   start_release_edge
 else
+  if [[ "${prepare_go_permissions}" == true ]]; then
+    # The snapshot records the genuinely running Node owner. From this point
+    # any failure must recover that owner through the normal fences.
+    app_replaced=true
+    stop_legacy_services_for_go
+    release_require_drained_runtime activation
+    release_prepare_offline_data_permissions
+  fi
   preflight_candidates
   start_release_backend
   start_release_edge

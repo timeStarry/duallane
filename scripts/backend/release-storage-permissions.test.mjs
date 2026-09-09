@@ -521,3 +521,31 @@ test("small injected limits are test-only API inputs and still retain a failure 
   assert.equal(phase.status, "failed");
   assert.equal(report.errorCode, "tree_bytes_exceeded");
 });
+
+test("fresh volume metadata drift after backup prevents ownership mutation", async (t) => {
+  const root = await fixture(t);
+  if (!root) return;
+  for (const changed of ["CreatedAt", "Labels"]) {
+    const name = `duallane-drift-${changed.toLowerCase()}`;
+    const volume = await makeVolume(root, name);
+    await writeFile(path.join(volume.volumeRoot, "object"), "synthetic", { mode: 0o600 });
+    const runner = mockDocker({ dockerRoot: volume.dockerRoot, volumeRoot: volume.volumeRoot, volumeName: name });
+    const inspectVolume = runner.volumeInspect;
+    let inspections = 0;
+    runner.volumeInspect = async () => {
+      const result = await inspectVolume();
+      if (++inspections >= 4) {
+        if (changed === "CreatedAt") result[0].CreatedAt = "synthetic-replacement";
+        else result[0].Labels = { ...result[0].Labels, synthetic: "replacement" };
+      }
+      return result;
+    };
+    await expectCode(prepareVolume({ volumeName: name, project: PROJECT, backupDir: volume.backupDir, runner,
+      runId: `run-${changed.toLowerCase()}` }), "volume_identity_changed");
+    assert.equal((await lstat(volume.volumeRoot)).uid, 0);
+    assert.equal((await lstat(path.join(volume.volumeRoot, "object"))).uid, 0);
+    const { manifest, phase } = await readRun(root, `run-${changed.toLowerCase()}`);
+    assert.equal(manifest.status, "verified_original");
+    assert.equal(phase.status, "failed");
+  }
+});

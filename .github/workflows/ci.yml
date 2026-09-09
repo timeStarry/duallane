@@ -156,6 +156,11 @@ jobs:
       - name: Validate bounded permission rehearsal and owned cleanup
         run: node --test scripts/backend/runtime-permissions.test.mjs
 
+      - name: Validate offline permission preparation and canary guards
+        # Root is limited to this disposable runner's synthetic filesystem tests.
+        # The CLI has no production path or daemon override in its arguments.
+        run: sudo env "PATH=$PATH" "$(command -v node)" --test scripts/backend/release-storage-permissions.test.mjs scripts/backend/release-permission-stage.test.mjs
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
