@@ -8,8 +8,10 @@ networks:
     name: ${DUALLANE_GO_CANDIDATE_NETWORK:?candidate network is required}
 
 services:
+  # Frozen activation JSON explicitly includes the default network. Replace
+  # that list so --use-aliases cannot expose candidate upstreams to production.
   p2p:
-    networks:
+    networks: !override
       candidate:
         aliases:
           - p2p
@@ -33,7 +35,7 @@ services:
       - duallane-data:/app/data:ro
 
   web:
-    networks:
+    networks: !override
       candidate:
         aliases:
           - web
