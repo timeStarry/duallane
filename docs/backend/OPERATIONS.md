@@ -497,6 +497,15 @@ mandatory and the profile must be explicit:
 deploy/production/deploy.sh --expected-commit <40-hex-commit> --release-profile go-full
 ```
 
+For an explicitly authorized first cutover from root-owned Node storage,
+`--prepare-go-permissions` adds the coordinated offline preparation in the
+[storage operator runbook](STORAGE_OPERATOR.md#explicit-same-volume-first-cutover-preparation).
+It uses the same authoritative volume and guarded recovery, not an alternate
+deployment entry point. It requires a privileged host coordinator, private
+credential/data backups, a root-compatible retained Node owner and an outage
+before passive candidates. Default releases do not change permissions. Do not
+manually stop Node or change credential fingerprints mid-release.
+
 A Go-to-Go upgrade additionally requires the base snapshot from the last
 successful Go release:
 

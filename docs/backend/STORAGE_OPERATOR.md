@@ -268,7 +268,7 @@ configured write paths and directory ownership as the actual Go UID in the
 approved isolated/quiescent rehearsal, as well as full legacy readability.
 Do not disable mirroring or change its authority merely to pass readiness.
 
-Permission preparation is not a supported mid-script repair hook. The first
+Ad hoc permission preparation is not a supported mid-script repair hook. The first
 cutover freezes recovery from an actually running Node API and Web before
 building; pre-stopping Node and then invoking `deploy.sh` cannot reconstruct
 that earlier running state. Never forge the snapshot or source internal release
@@ -276,13 +276,84 @@ helpers as an alternate entry point. If permission work needs an outage or a
 staged authority switch, the administrator must first define and validate its
 separate maintenance/recovery sequence under the rules below. A failed proof
 leaves ownership with Node; it is not an invitation to run a bare Compose
-replacement or revive two writers.
+replacement or revive two writers. The explicit first-cutover option below is
+the coordinated exception; it is not an arbitrary command hook.
 
 If an independent maintenance workflow returns Node to service before the Go
 release, prove that subsequent Node mirror writes still leave Go-readable bytes
 and Go-writable directories. Root-owned files or newly created private
 directories can invalidate an earlier permission proof. A one-time successful
 copy followed by unrestricted old-owner writes is not a stable cutover gate.
+
+### Explicit same-volume first-cutover preparation
+
+An authorized root operator can select the following option on the official
+entry point, only from clean exact `origin/main` in the production checkout:
+
+```text
+deploy/production/deploy.sh --expected-commit <40-hex-commit> \
+  --release-profile go-full --prepare-go-permissions
+```
+
+It rejects Node-default, bootstrap, Go-to-Go upgrade and non-root invocations.
+It is not enabled by an environment variable. Root runs only the trusted host
+coordinator; Go services and the canary remain UID/GID `65532:65532`. This mode
+requires the retained Node API to run as root without dropped capabilities so
+that recovery can read the tightened permissions. Database, volume and S3
+authority are compared against actual Node and PostgreSQL containers first.
+
+The mode deliberately introduces an outage before passive candidate readiness:
+
+1. Capture the genuinely running Node state. For S3, back up and verify the
+   private source credential before changing its owner to `65532:65532`, keeping
+   `0600` and identical bytes/inode. Freeze both Node recovery and Go activation
+   external-file fingerprints only after this transition. A failed later release
+   keeps the prepared credential owner; the host deployment reader must remain
+   privileged. No frozen fingerprint is rewritten to ignore drift.
+2. Build immutable candidates and run the existing migration/authority gates.
+   Mark the application as needing guarded recovery before fencing Node and
+   observing the fresh runtime drain. Do not return Node to service between
+   permission preparation and Go activation.
+3. Take an additional quiescent PostgreSQL archive, verify its archive listing,
+   and checksum it. This is archive readability evidence, not a full database
+   restore rehearsal. Retain the original pre-migration backup too.
+4. Resolve the existing local Docker volume. Reject active writable named/bind
+   mounts, symlinks, hardlinks, special files, cross-device entries, drift and
+   unsupported daemon/volume layouts. Copy all bytes plus original metadata to
+   a new private backup, then fully verify that backup and unchanged source
+   before any data-volume ownership/mode change. The bounded operator primitive
+   refuses more than 20,000 entries, 8 GiB of file bytes or a five-minute
+   operation budget; credentials have a separate 1 MiB cap. These limits
+   cannot be raised through CLI flags. The immutable `manifest.json` records
+   verified original metadata and full hashes before mutation. Atomic
+   `phase.json` updates and `report.json` describe the outcome without
+   overwriting that original evidence.
+5. Tighten only filesystem metadata on that same offline volume: owner
+   `65532:65532`, directories `0700`, files `0600`. Recheck complete byte hashes
+   and metadata; no business bytes, registry rows or object keys change. Then
+   run a network-free immutable-image canary as the real Go UID, creating,
+   replacing and deleting only its private synthetic temporary files.
+6. Check passive candidates, then repeat normal authority/fence/drain gates
+   before Go activation. All failures after fencing use the existing guarded
+   Node recovery path against the same current physical volume and credential.
+
+This is an explicit **offline metadata conversion with a verified backup**,
+not a staged-volume swap or a live recursive `chown`. It preserves the same
+Node/Go storage authority, including Go writes after activation. The separate
+staged-copy procedure below still applies if a deployment changes volumes.
+Neither the backup nor its original ownership is automatically restored on an
+application failure. Partial tightening remains readable to the retained root
+Node; a subsequent Go attempt must repeat the offline gate because Node may
+have created new root-owned entries. If fencing or authority is ambiguous,
+leave writers stopped for operator review rather than attempting a stale-copy
+recovery. Forced interruption can leave private recovery material or a synthetic
+canary directory; inspect ownership before cleanup, never delete by a guessed
+prefix. Keep all backup/recovery artifacts outside Git and public logs.
+
+The filesystem backup proves byte preservation, not database-to-object registry
+consistency or S3-provider compatibility. Those storage verification and online
+business gates remain separate. The implementation and its validation state
+are recorded in the [root cutover work item](work-items/2026-09-09-root-cutover-preparation.md).
 
 ### Offline quiescent copy
 

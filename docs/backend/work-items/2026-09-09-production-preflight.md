@@ -136,3 +136,8 @@ fencing, drain, candidate and recovery gates pass; then the coordinator builds
 and activates the exact merged commit. Keep Node and its recovery material for
 the rollback window. Any permission, provider, authority or smoke failure is a
 stop condition, not permission to bypass the guarded workflow.
+
+The maintainer subsequently enabled root-key access. The
+[root cutover continuation](2026-09-09-root-cutover-preparation.md) records the
+explicit offline preparation mode and its new validation evidence. The checks
+above remain evidence for the earlier binding-only correction.
