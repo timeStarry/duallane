@@ -85,7 +85,7 @@ describe("workspace configuration docs", () => {
     expect(nginx).toContain("expires 7d;");
   });
 
-  it("preflights production candidates and waits for health before each service replacement", async () => {
+  it("preflights candidates before replacement and explicitly gates offline permission maintenance", async () => {
     const deploy = await readFile(path.join(repoRoot, "deploy", "production", "deploy.sh"), "utf8");
     const helper = await readFile(path.join(repoRoot, "deploy", "production", "release-helper.sh"), "utf8");
     const serviceStart = deploy.match(/^start_release_service\(\) \{\n([\s\S]*?)^\}/m)?.[1] ?? "";
@@ -97,7 +97,23 @@ describe("workspace configuration docs", () => {
     expect(candidateStart).toContain('release_wait_candidate "${candidate_name}" "${service}" || return 1');
     expect(candidateStart).toContain('release_verify_candidate_mode "${candidate_name}" "${service}" || return 1');
     // Assert executable call order, not an earlier function declaration.
-    expect(deploy).toMatch(/\nif \[\[ "\$\{RELEASE_PROFILE_NAME\}" == "node-default" \]\]; then\n\s+release_start_candidate api\n\s+start_release_backend\n\s+release_start_candidate web\n\s+start_release_edge\nelse\n\s+preflight_candidates\n\s+start_release_backend\n\s+start_release_edge\nfi/);
+    expect(deploy).toMatch(/\nif \[\[ "\$\{RELEASE_PROFILE_NAME\}" == "node-default" \]\]; then\n\s+release_start_candidate api\n\s+start_release_backend\n\s+release_start_candidate web\n\s+start_release_edge\nelse\n/);
+    // The documented root-only option fences Node before candidate readiness;
+    // it must never bypass those candidates or the subsequent activation gate.
+    const cutover = deploy.slice(deploy.lastIndexOf('  if [[ "${prepare_go_permissions}" == true ]]'));
+    const commands = cutover.split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#"));
+    expect(commands.slice(0, 10)).toEqual([
+      'if [[ "${prepare_go_permissions}" == true ]]; then',
+      "app_replaced=true",
+      "stop_legacy_services_for_go",
+      "release_require_drained_runtime activation",
+      "release_prepare_offline_data_permissions",
+      "fi",
+      "preflight_candidates",
+      "start_release_backend",
+      "start_release_edge",
+      "fi"
+    ]);
     expect(deploy).toMatch(/^preflight_candidates\(\) \{\n\s+release_start_candidates\n\}/m);
   });
 

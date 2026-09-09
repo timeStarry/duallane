@@ -64,6 +64,8 @@ RELEASE_GO_UPGRADE_TEMP_FILES=()
 RELEASE_GO_UPGRADE_NEW_SNAPSHOT_FILES=()
 RELEASE_GO_UPGRADE_SNAPSHOT_PUBLISHED=false
 RELEASE_GO_UPGRADE_DAEMON_RECOVERY_DONE=false
+RELEASE_PERMISSION_VOLUME=""
+RELEASE_PERMISSION_SECRET=""
 RELEASE_STOP_TIMEOUT="${DUALLANE_DEPLOY_STOP_TIMEOUT:-30}"
 RELEASE_STOP_ATTEMPTS="${DUALLANE_DEPLOY_STOP_ATTEMPTS:-30}"
 RELEASE_HEALTH_ATTEMPTS="${DUALLANE_DEPLOY_HEALTH_ATTEMPTS:-40}"
@@ -491,18 +493,15 @@ release_run_gateway_smoke() {
   # Resolve the actual local published port, not an operator-controlled URL
   # that could point to another release. The probe cannot follow redirects.
   base_url="$(docker inspect "${web_id}" --format '{{json .NetworkSettings.Ports}}' 2>/dev/null | node -e '
-    try {
-      const ports = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
-      const bindings = ports["8080/tcp"];
-      if (!Array.isArray(bindings) || bindings.length !== 1) process.exit(1);
-      const { HostIp, HostPort } = bindings[0];
-      if (!/^[0-9]+$/.test(HostPort) || Number(HostPort) < 1 || Number(HostPort) > 65535) process.exit(1);
-      const host = HostIp === "0.0.0.0" || HostIp === "127.0.0.1" ? "127.0.0.1" :
-        HostIp === "::" || HostIp === "::1" ? "[::1]" : null;
-      if (!host) process.exit(1);
-      process.stdout.write(`http://${host}:${HostPort}`);
-    } catch { process.exit(1); }
-  ')" || {
+    const input = require("node:fs").readFileSync(0, "utf8");
+    import(process.argv[1]).then(({ resolveLocalGatewayURL }) => {
+      try {
+        process.stdout.write(resolveLocalGatewayURL(JSON.parse(input)));
+      } catch {
+        process.exitCode = 1;
+      }
+    }, () => { process.exitCode = 1; });
+  ' "${RELEASE_HELPER_DIR}/../../scripts/backend/local-gateway-binding.mjs")" || {
     echo "gateway smoke requires one supported local application binding" >&2
     return 1
   }
@@ -3134,4 +3133,119 @@ release_rollback_application() {
   done
   release_run_previous_gateway_smoke || return 1
   release_verify_activation_authority
+}
+
+# Optional root-only first-cutover preparation, called only by deploy.sh under
+# its exact-main, live snapshot and deployment lock gates.
+release_preflight_permission_tools() {
+  [[ "${prepare_go_permissions:-false}" == true ]] || return 0
+  local file endpoint
+  command -v chmod >/dev/null || return 1
+  for file in release-storage-permissions.mjs release-permission-probe.mjs; do
+    [[ -f "${RELEASE_HELPER_DIR}/${file}" && ! -L "${RELEASE_HELPER_DIR}/${file}" ]] || return 1
+    node --check "${RELEASE_HELPER_DIR}/${file}" >/dev/null 2>&1 || return 1
+  done
+  endpoint="${DOCKER_HOST:-}"
+  if [[ -n "${DOCKER_CONTEXT:-}" ]]; then
+    # Docker gives an explicit context precedence over DOCKER_HOST.
+    endpoint="$(docker context inspect "${DOCKER_CONTEXT}" --format '{{(index .Endpoints "docker").Host}}')" || return 1
+  elif [[ -z "${endpoint}" ]]; then
+    endpoint="$(docker context inspect --format '{{(index .Endpoints "docker").Host}}')" || return 1
+  fi
+  [[ "${endpoint}" == unix:///* && -S "${endpoint#unix://}" ]] || {
+    echo "permission preparation requires the local Unix Docker daemon" >&2
+    return 1
+  }
+  docker info --format '{{json .SecurityOptions}}' | node -e '
+    try {
+      const options = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+      if (!Array.isArray(options) || options.some(v => typeof v !== "string" || /rootless|userns/.test(v))) process.exitCode = 1;
+    } catch { process.exitCode = 1; }
+  ' || return 1
+  compose exec -T postgres sh -eu -c 'pg_dump --version >/dev/null; pg_restore --version >/dev/null' >/dev/null 2>&1 || {
+    echo "permission preparation requires PostgreSQL backup tools before maintenance" >&2
+    return 1
+  }
+}
+
+release_prepare_permission_inputs() {
+  [[ "${prepare_go_permissions:-false}" == true ]] || return 0
+  [[ "${EUID}" == 0 && "${RELEASE_PROFILE_NAME}" == go-full && "${RELEASE_GO_UPGRADE:-false}" != true ]] || return 1
+  release_snapshot_was_running api || return 1
+  release_snapshot_was_running web || return 1
+  release_run_previous_gateway_smoke || return 1
+  local go_input="${RELEASE_RECOVERY_FILE}.permission-go.compose.json"
+  local node_input="${RELEASE_RECOVERY_FILE}.permission-node.compose.json"
+  local api_id runtime_user cap_drop values
+  release_prepare_current_go_compose_artifact "${go_input}" || return 1
+  release_private_new_artifact_path "${node_input}" "permission Node Compose" || return 1
+  release_rollback_compose config --format json >"${node_input}" || return 1
+  chmod 600 -- "${node_input}" || return 1
+  node "${RELEASE_HELPER_DIR}/release-node-authority.mjs" verify \
+    --compose "${go_input}" --node-compose "${node_input}" >/dev/null || return 1
+  api_id="$(compose ps -a -q api)" || return 1
+  [[ "${api_id}" =~ ^[0-9a-f]{64}$ ]] || return 1
+  runtime_user="$(docker inspect "${api_id}" --format '{{.Config.User}}')" || return 1
+  cap_drop="$(docker inspect "${api_id}" --format '{{json .HostConfig.CapDrop}}')" || return 1
+  case "${runtime_user}" in ""|0|0:0|root|root:root) ;; *) echo "permission preparation requires a root-compatible retained Node owner" >&2; return 1 ;; esac
+  case "${cap_drop}" in null|'[]') ;; *) echo "retained Node capabilities are unsupported for permission recovery" >&2; return 1 ;; esac
+  values="$(RELEASE_PRIVATE_JSON_HELPER="${RELEASE_HELPER_DIR}/release-drain-config.mjs" node --input-type=module - "${go_input}" <<'NODE'
+import { pathToFileURL } from "node:url";
+try {
+  const { readPrivateJSON } = await import(pathToFileURL(process.env.RELEASE_PRIVATE_JSON_HELPER));
+  const c = await readPrivateJSON(process.argv[2], "permission_compose");
+  const service = c.services.workspace;
+  const mounts = service.volumes.filter(m => m.type === "volume" && m.target === "/app/data" && !m.read_only);
+  if (mounts.length !== 1) throw new Error();
+  const volume = c.volumes[mounts[0].source]?.name;
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/.test(volume ?? "")) throw new Error();
+  let secret = "-";
+  if (service.environment.WORKSPACE_STORAGE_DRIVER === "s3") {
+    const refs = service.secrets.filter(s => s.target === "workspace-s3");
+    if (refs.length !== 1) throw new Error();
+    secret = c.secrets[refs[0].source]?.file;
+    if (typeof secret !== "string" || !secret.startsWith("/") || /[\x00-\x1f\x7f]/.test(secret)) throw new Error();
+  }
+  process.stdout.write(volume + "\n" + secret);
+} catch { process.stderr.write("permission authority input invalid\n"); process.exitCode = 1; }
+NODE
+  )" || return 1
+  local -a fields
+  mapfile -t fields <<<"${values}"
+  [[ "${#fields[@]}" == 2 ]] || return 1
+  RELEASE_PERMISSION_VOLUME="${fields[0]}"
+  RELEASE_PERMISSION_SECRET="${fields[1]}"
+  if [[ "${RELEASE_PERMISSION_SECRET}" != - ]]; then
+    node "${RELEASE_HELPER_DIR}/release-storage-permissions.mjs" credential \
+      --path "${RELEASE_PERMISSION_SECRET}" \
+      --backup-dir "${RELEASE_RECOVERY_FILE}.credential-backup" || return 1
+  fi
+  # Both external-file snapshots are created after this intentional credential
+  # metadata transition. No frozen fingerprint is rewritten or disabled.
+  release_append_recovery_record "permission_credential=prepared" || return 1
+}
+
+release_prepare_offline_data_permissions() {
+  [[ "${prepare_go_permissions:-false}" == true ]] || return 0
+  [[ "${EUID}" == 0 && "${app_replaced:-false}" == true && -n "${RELEASE_PERMISSION_VOLUME}" ]] || return 1
+  release_verify_activation_authority || return 1
+  local database_backup="${RELEASE_RECOVERY_FILE}.quiescent.dump"
+  release_private_new_artifact_path "${database_backup}" "quiescent PostgreSQL backup" || return 1
+  # Node is fenced and a fresh drain passed. Retain the initial online backup
+  # too; neither archive is automatically restored on application error.
+  compose exec -T postgres sh -eu -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' >"${database_backup}" 2>/dev/null || return 1
+  [[ -s "${database_backup}" ]] || return 1
+  compose exec -T postgres pg_restore --exit-on-error --list <"${database_backup}" >/dev/null 2>&1 || return 1
+  (cd -- "$(dirname -- "${database_backup}")" && \
+    sha256sum "$(basename -- "${database_backup}")" >"$(basename -- "${database_backup}").sha256" && \
+    sha256sum --check --status "$(basename -- "${database_backup}").sha256") || return 1
+  release_verify_activation_authority || return 1
+  node "${RELEASE_HELPER_DIR}/release-storage-permissions.mjs" volume \
+    --volume "${RELEASE_PERMISSION_VOLUME}" --project "$(release_compose_project_name)" \
+    --backup-dir "${RELEASE_RECOVERY_FILE}.data-backup" || return 1
+  node "${RELEASE_HELPER_DIR}/release-permission-probe.mjs" \
+    --volume "${RELEASE_PERMISSION_VOLUME}" --image "${RELEASE_GO_IMAGE_ID}" \
+    --secret "${RELEASE_PERMISSION_SECRET}" || return 1
+  release_verify_activation_authority || return 1
+  release_append_recovery_record "permission_volume=verified" || return 1
 }
