@@ -435,6 +435,20 @@ stage/count results. The immutable commit must be checked against actual image
 and container identities separately: public health exposes version, not commit,
 and the smoke report explicitly says `publicCommit: not-exposed`.
 
+The release coordinator derives the smoke URL from the exact current Web
+container's single published `8080/tcp` binding, after checking its Compose
+ownership and release labels. Wildcard bindings are probed through loopback;
+an explicitly bound non-loopback address must be a literal IPv4 address assigned
+to the host running the checker. Non-loopback IPv6 remains unsupported. Merely
+belonging to a private subnet is not
+evidence that an address is local. An unassigned address or arbitrary DNS name
+must fail before a request is sent. Keep the existing narrow production bind
+when possible; changing it to `0.0.0.0` can expose the gateway on additional
+interfaces and needs a separate ingress/firewall review. This address check
+does not change the edge listener, authentication, body limits or private
+endpoint policy. The [production preflight work record](work-items/2026-09-09-production-preflight.md)
+records the reproduction, threat review and remaining operator gates.
+
 Go private paths must return 404. The retained Node gateway may instead return
 its exact static SPA HTML; that is classified as no private endpoint exposure,
 not backend readiness. These unauthenticated read-only probes cannot replace

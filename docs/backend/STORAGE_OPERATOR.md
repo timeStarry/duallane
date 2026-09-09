@@ -236,6 +236,54 @@ is not the owner handoff.
    This gate is independent even when S3 is the primary store and the local
    mirror/fallback is disabled.
 
+### Deployment-reader and mirror-write prerequisites
+
+The credential has two distinct readers: the Go process under UID 65532 and
+the trusted host deployment identity. The latter reads the source file when
+`release-external-files.mjs` captures and verifies its fingerprint. A `0600`
+file owned by UID 65532 does not automatically remain readable by an unrelated
+unprivileged deployment account. Prove both readers before starting the release;
+do not finish a host ownership change and discover this only after migration.
+An authorized administrator or approved secret-backend arrangement is required
+when the host account cannot satisfy both checks. Preserve `0600`; do not add
+group/world read bits, disable fingerprint validation, run the active Go service
+as root, or mount the host root/Docker socket into a helper to bypass missing
+administrator authentication. Never ask an operator to paste a password into
+a task, PR or log.
+
+If the operator can run `sudo` interactively, provide scoped commands for that
+terminal and identify whether each is a read-only precheck or an offline change.
+A successful `sudo -v` there does not grant another terminal or agent session
+administrator access. Do not request a broad passwordless rule. A privileged
+deployment identity also needs its own verified Git checkout access, required
+tools, local Docker context and release lock; do not assume the unprivileged
+account's shell or Docker configuration carries over. Changing the identity is
+not a substitute for the offline storage and same-authority recovery gates.
+
+Local read fallback and local mirror writes are independent settings. With
+`WORKSPACE_STORAGE_LOCAL_READ_FALLBACK=false` and
+`WORKSPACE_STORAGE_LOCAL_MIRROR_WRITE=true`, successful legacy reads still do
+not prove that Go can create, replace or clean mirror objects. Verify the
+configured write paths and directory ownership as the actual Go UID in the
+approved isolated/quiescent rehearsal, as well as full legacy readability.
+Do not disable mirroring or change its authority merely to pass readiness.
+
+Permission preparation is not a supported mid-script repair hook. The first
+cutover freezes recovery from an actually running Node API and Web before
+building; pre-stopping Node and then invoking `deploy.sh` cannot reconstruct
+that earlier running state. Never forge the snapshot or source internal release
+helpers as an alternate entry point. If permission work needs an outage or a
+staged authority switch, the administrator must first define and validate its
+separate maintenance/recovery sequence under the rules below. A failed proof
+leaves ownership with Node; it is not an invitation to run a bare Compose
+replacement or revive two writers.
+
+If an independent maintenance workflow returns Node to service before the Go
+release, prove that subsequent Node mirror writes still leave Go-readable bytes
+and Go-writable directories. Root-owned files or newly created private
+directories can invalidate an earlier permission proof. A one-time successful
+copy followed by unrestricted old-owner writes is not a stable cutover gate.
+
 ### Offline quiescent copy
 
 Take a snapshot or copy only after the old writers and upload finalizers are
