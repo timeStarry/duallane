@@ -43,11 +43,9 @@ type Repository interface {
 // SettingsRecord is kept separate from EmoteSettings because stored pack IDs
 // are untrusted JSON and booleans are nullable during rolling migrations.
 type SettingsRecord struct {
-	EnabledPackIDsJSON       string
-	ClickImageEmoteToSend    bool
-	ReplyAutoMention         bool
-	AutoHideMessages         bool
-	AutoHideMessageTypesJSON string
+	EnabledPackIDsJSON    string
+	ClickImageEmoteToSend bool
+	ReplyAutoMention      bool
 }
 
 type CollectionItemRecord struct {
@@ -75,7 +73,7 @@ type StorageCleanup struct {
 type Tx interface {
 	ReadRepository
 	Lock(ctx context.Context, key string) error
-	UpsertSettings(ctx context.Context, userID, enabledPackIDsJSON string, clickImageEmoteToSend, replyAutoMention, autoHideMessages bool, autoHideMessageTypesJSON string, at time.Time) error
+	UpsertSettings(ctx context.Context, userID, enabledPackIDsJSON string, clickImageEmoteToSend, replyAutoMention bool, at time.Time) error
 	AcquireStorageObject(ctx context.Context, record StorageObjectRecord) (*StorageObjectRecord, error)
 	BindStorageObject(ctx context.Context, emoteID, storageObjectID string) error
 	InsertCustomEmote(ctx context.Context, record CustomEmoteRecord) (bool, error)

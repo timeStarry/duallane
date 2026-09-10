@@ -694,6 +694,7 @@ release_verify_go_image_identity
 release_freeze_go_activation_compose
 release_verify_activation_authority
 if [[ "${RELEASE_PROFILE_NAME}" == "go-full" ]]; then
+  release_verify_schema_upgrade_compatibility
   release_run_go_migration_and_verify
 else
   compose run --rm --no-deps migrate

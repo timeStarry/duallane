@@ -9,7 +9,6 @@ import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext
 import { forwardRef, useEffect, useImperativeHandle, useRef, type ClipboardEvent, type KeyboardEvent, type ReactNode } from "react";
 import { renderMessageParts, type EmoteItem } from "./emotes";
 import { CachedEmoteImage } from "./emote-image-cache";
-import { isImeCompositionEnter } from "./workspace-composer-ime";
 
 export type WorkspaceComposerBlock =
   | { type: "text"; text: string }
@@ -260,21 +259,7 @@ export const WorkspaceComposerEditor = forwardRef<WorkspaceComposerEditorHandle,
   }}>
     <div className={expanded ? "workspace-lexical-editor expanded" : "workspace-lexical-editor"}>
       <PlainTextPlugin
-        contentEditable={(
-          <ContentEditable
-            aria-label="输入消息"
-            onKeyDownCapture={(event) => {
-              // Keep Lexical and outer send handlers out of IME confirmation,
-              // but leave the browser's native composition commit unprevented.
-              if (isImeCompositionEnter(event.nativeEvent)) event.stopPropagation();
-            }}
-            onKeyDown={(event) => {
-              if (isImeCompositionEnter(event.nativeEvent)) return;
-              onKeyDown(event);
-            }}
-            onPaste={onPaste}
-          />
-        )}
+        contentEditable={<ContentEditable aria-label="输入消息" onKeyDown={onKeyDown} onPaste={onPaste} />}
         placeholder={<span className="workspace-lexical-placeholder">输入消息</span>}
         ErrorBoundary={LexicalErrorBoundary}
       />

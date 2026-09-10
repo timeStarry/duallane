@@ -265,6 +265,15 @@ Never edit a migration that may have shipped. Use expand-contract changes so
 the active Node and Go versions required during rollout and rollback can both
 operate safely.
 
+Application-read compatibility is distinct from migration ownership. A reviewed
+bridge may opt into an immutable, explicitly named compatible-future migration
+policy; missing required history and every undeclared migration remain errors.
+The 0.16.2 bridge supports only the 033-to-034 additive chat-preference change.
+It never applies that future SQL, and the regular migrator stays strict. Exact
+old/new image SQL hashes are checked before production migration. Do not infer
+rollback safety from additive columns or successful new-version tests alone;
+exercise the actual recovery owner against the expanded schema.
+
 ## 11. Object Storage
 
 Logical Workspace resources own authorization and metadata; the object registry

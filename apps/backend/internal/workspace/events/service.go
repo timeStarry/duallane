@@ -376,8 +376,6 @@ func projectPayload(eventType string, payload map[string]any, actor *auth.Actor)
 			result["conversation"] = conversation
 		}
 		return result
-	case "emote.settings.updated":
-		return stringFields(payload, "userId")
 	case "emote.library.updated":
 		result := stringFields(payload, "userId", "collectionId", "status")
 		if value, ok := safeIntField(payload["sourceRevision"]); ok {

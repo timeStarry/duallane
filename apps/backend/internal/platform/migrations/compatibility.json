@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "baseMigration": "033_workspace_command_result_finalization.sql",
+  "compatibleMigrations": [
+    {
+      "name": "034_workspace_chat_auto_hide.sql",
+      "sha256": "b5c6ed855f9ca76a06f14ac590a8dd96fdec9cd2ec88c75dc5814990669658cb"
+    }
+  ]
+}

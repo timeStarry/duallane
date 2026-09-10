@@ -101,7 +101,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	if err != nil {
 		return nil, err
 	}
-	checker := migrations.SchemaChecker{Queryer: postgres.NewMigrationReadOnlyQueryer(pool), Directory: runtimeConfig.MigrationsDir}
+	checker := migrations.SchemaChecker{Queryer: postgres.NewMigrationReadOnlyQueryer(pool), Directory: runtimeConfig.MigrationsDir, AllowReleaseCompatibility: true}
 	schemaCtx, cancelSchema := context.WithTimeout(ctx, 10*time.Second)
 	report, schemaErr := checker.Check(schemaCtx)
 	cancelSchema()

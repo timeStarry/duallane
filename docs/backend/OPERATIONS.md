@@ -235,6 +235,14 @@ Workspace or idle worker does not connect to the database for this check.
 Worker cycles also check compatibility before claiming jobs; an incompatible
 schema suspends claims until a compatible state is restored.
 
+The 0.16.2 compatibility bridge opts Workspace and worker into an immutable
+release policy for the specifically reviewed 033-to-034 expansion. Schema 33
+remains required; only `034_workspace_chat_auto_hide.sql` may additionally be
+present. The policy cannot make required SQL optional or admit arbitrary future
+migrations, and the migration runner remains strict. Once 034 belongs to a
+release's canonical directory, that release requires it normally. See the
+[bridge decision and evidence](work-items/2026-09-10-schema-034-bridge.md).
+
 File canonical promotion (after bounded staging) and physical cleanup hold the
 shared digest advisory lock through storage I/O and registry changes. The
 server-side mutation has a two-minute ceiling, shortened by the caller's
@@ -549,6 +557,15 @@ root coordinator inspecting an ordinary-user checkout, use process-scoped
 Git trust exception must remain scoped to the exact production checkout.
 Documentation-only commits do not require a runtime redeployment or change the
 deployed commit recorded in the release evidence.
+
+Before a Go-to-Go migration, `release-schema-compatibility.mjs` checks the actual
+previous and target Workspace images with isolated, read-only inspection. Every
+previous migration must retain its exact bytes. Additions require matching SQL
+SHA-256 declarations in the previous image's immutable compatibility policy;
+an image without that policy only supports identical schema. Unsupported
+expansion fails before the migration container starts. The policy asset is
+public/non-secret and mode `0644`; it is the same JSON embedded in the Go
+checker, not an operator-editable configuration or a backup substitute.
 
 Fencing records each original restart policy and retry limit, temporarily sets
 `restart=no`, and verifies the owner is stopped. A known-good replacement gets

@@ -18,9 +18,10 @@ type Queryer interface {
 }
 
 var (
-	ErrSchemaCompatibility = errors.New("schema compatibility check failed")
-	ErrMissingMigrations   = errors.New("required migrations are missing")
-	ErrUnknownMigrations   = errors.New("applied migrations are unknown")
+	ErrSchemaCompatibility       = errors.New("schema compatibility check failed")
+	ErrMissingMigrations         = errors.New("required migrations are missing")
+	ErrUnknownMigrations         = errors.New("applied migrations are unknown")
+	ErrCompatibleMigrationSchema = errors.New("compatible migration schema is incompatible")
 )
 
 // SchemaChecker verifies the schema_migrations contract without changing the
@@ -28,17 +29,20 @@ var (
 // migration directory, or set RequiredNames in a caller that already owns the
 // discovered canonical set. The two sources cannot be mixed.
 type SchemaChecker struct {
-	Queryer       Queryer
-	Directory     string
-	RequiredNames []string
+	Queryer                   Queryer
+	Directory                 string
+	RequiredNames             []string
+	AllowReleaseCompatibility bool
 }
 
 type CompatibilityReport struct {
-	RequiredNames []string
-	AppliedCount  int
-	MissingNames  []string
-	UnknownNames  []string
-	UnknownCount  int
+	RequiredNames   []string
+	AppliedCount    int
+	MissingNames    []string
+	UnknownNames    []string
+	UnknownCount    int
+	CompatibleNames []string
+	CompatibleCount int
 }
 
 // Check issues only the fixed schema metadata SELECTs used by the current
@@ -61,6 +65,13 @@ func (c SchemaChecker) Check(ctx context.Context) (CompatibilityReport, error) {
 		return report, err
 	}
 	report.RequiredNames = required
+	var policy CompatibilityPolicy
+	if c.AllowReleaseCompatibility {
+		policy, err = EmbeddedReleaseCompatibilityPolicy()
+		if err != nil {
+			return report, errors.Join(ErrSchemaCompatibility, err)
+		}
+	}
 
 	if err := inspectSchemaMigrations(ctx, c.Queryer); err != nil {
 		return report, err
@@ -76,9 +87,20 @@ func (c SchemaChecker) Check(ctx context.Context) (CompatibilityReport, error) {
 		requiredSet[name] = struct{}{}
 	}
 	appliedSet := make(map[string]struct{}, len(applied))
+	compatibilityBaseline := c.AllowReleaseCompatibility && isCanonicalReleaseCompatibilityBaseline(required)
+	var compatibleApplied []string
 	for _, name := range applied {
 		appliedSet[name] = struct{}{}
 		if _, ok := requiredSet[name]; ok {
+			if c.AllowReleaseCompatibility && policy.allows(name) {
+				compatibleApplied = append(compatibleApplied, name)
+			}
+			continue
+		}
+		if compatibilityBaseline && policy.allows(name) {
+			report.CompatibleCount++
+			report.CompatibleNames = append(report.CompatibleNames, name)
+			compatibleApplied = append(compatibleApplied, name)
 			continue
 		}
 		report.UnknownCount++
@@ -94,6 +116,12 @@ func (c SchemaChecker) Check(ctx context.Context) (CompatibilityReport, error) {
 		}
 	}
 	sort.Strings(report.UnknownNames)
+	sort.Strings(report.CompatibleNames)
+	if len(compatibleApplied) > 0 {
+		if err := inspectCompatibleMigrationSchema(ctx, c.Queryer, compatibleApplied); err != nil {
+			return report, err
+		}
+	}
 
 	var issues []error
 	if len(report.MissingNames) > 0 {
@@ -107,6 +135,79 @@ func (c SchemaChecker) Check(ctx context.Context) (CompatibilityReport, error) {
 		return report, errors.Join(issues...)
 	}
 	return report, nil
+}
+
+const compatibleMigrationColumnsSQL = `SELECT column_name, data_type, is_nullable, COALESCE(column_default, '')
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'workspace_emote_preferences'
+  AND column_name IN ('auto_hide_messages', 'auto_hide_message_types_json')
+ORDER BY column_name`
+
+type compatibleSchemaColumn struct {
+	Name     string
+	DataType string
+	Nullable string
+	Default  string
+}
+
+func inspectCompatibleMigrationSchema(ctx context.Context, queryer Queryer, applied []string) error {
+	allowed := map[string]struct{}{
+		ReleaseCompatibilityMigrationName: {},
+	}
+	for _, name := range applied {
+		if _, ok := allowed[name]; !ok {
+			return errors.Join(ErrSchemaCompatibility, ErrCompatibleMigrationSchema)
+		}
+	}
+
+	var columns []compatibleSchemaColumn
+	err := readCompatibilityRows(ctx, queryer, compatibleMigrationColumnsSQL, "compatible migration columns", func(rows Rows) error {
+		for rows.Next() {
+			var column compatibleSchemaColumn
+			if err := rows.Scan(&column.Name, &column.DataType, &column.Nullable, &column.Default); err != nil {
+				return err
+			}
+			columns = append(columns, column)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	expected := map[string]compatibleSchemaColumn{
+		"auto_hide_messages": {
+			Name:     "auto_hide_messages",
+			DataType: "boolean",
+			Nullable: "NO",
+			Default:  "false",
+		},
+		"auto_hide_message_types_json": {
+			Name:     "auto_hide_message_types_json",
+			DataType: "text",
+			Nullable: "NO",
+			Default:  `'["image","emote","long"]'::text`,
+		},
+	}
+	if len(columns) != len(expected) {
+		return errors.Join(ErrSchemaCompatibility, ErrCompatibleMigrationSchema)
+	}
+	for _, actual := range columns {
+		want, ok := expected[actual.Name]
+		if !ok || actual.DataType != want.DataType || !strings.EqualFold(actual.Nullable, want.Nullable) || normalizeColumnDefault(actual.Default) != normalizeColumnDefault(want.Default) {
+			return errors.Join(ErrSchemaCompatibility, ErrCompatibleMigrationSchema)
+		}
+		delete(expected, actual.Name)
+	}
+	if len(expected) != 0 {
+		return errors.Join(ErrSchemaCompatibility, ErrCompatibleMigrationSchema)
+	}
+	return nil
+}
+
+func normalizeColumnDefault(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 }
 
 func (c SchemaChecker) requiredNames() ([]string, error) {

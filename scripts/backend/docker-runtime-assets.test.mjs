@@ -28,6 +28,14 @@ test("runtime images make baked-in non-secret files readable to their service us
   assert.match(
     workspace,
     copyDirective(
+      "apps/backend/internal/platform/migrations/compatibility.json",
+      "/app/schema-compatibility.json",
+    ),
+    "the embedded schema policy must also be inspectable as a read-only image asset",
+  );
+  assert.match(
+    workspace,
+    copyDirective(
       "apps/web/shared/emote-packs.json",
       "/app/assets/emote-packs.json",
     ),

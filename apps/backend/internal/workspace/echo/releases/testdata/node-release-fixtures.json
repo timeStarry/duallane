@@ -4,47 +4,37 @@
   "publishedAt": "2026-09-06T12:34:56.789Z",
   "catalog": [
     {
-      "version": "0.17.0",
+      "version": "0.16.2",
       "guide": {
-        "version": "0.17.0",
+        "version": "0.16.2",
         "releasedAt": "2026-09-10",
-        "title": "按你的习惯显示消息",
-        "summary": "聊天设置新增自动隐藏选项，修复输入法确认时误发消息，并让话题操作更紧凑。",
+        "title": "兼容性维护",
+        "summary": "本次为兼容性维护，保留现有聊天、头像和个人设置，不增加新的操作步骤。",
         "sections": [
           {
-            "title": "消息显示",
+            "title": "日常使用",
             "items": [
               {
-                "title": "选择自动隐藏的内容",
-                "description": "开启后可分别选择图片、表情和长消息，默认关闭。隐藏的内容可以展开，不删除消息，也不影响其他成员。关闭后保留选择。",
-                "location": "个人设置 -> 聊天 -> 消息显示"
-              }
-            ]
-          },
-          {
-            "title": "输入与话题",
-            "items": [
-              {
-                "title": "更稳妥地确认输入",
-                "description": "输入法确认候选内容的回车不会同时发送消息，确认后再次回车即可发送。话题消息使用回复和同步图标，保留状态提示。",
-                "location": "私密直连 -> 输入框；共享空间 -> 聊天与话题"
+                "title": "沿用现有功能",
+                "description": "继续使用原有聊天入口、头像和个人设置，无需重新设置。本次不增加新的聊天选项，两条通道的隐私规则保持不变。",
+                "location": "首页 -> 私密直连；首页 -> 共享空间；关于 -> 版本历史"
               }
             ]
           }
         ]
       },
-      "guideJSON": "{\"version\":\"0.17.0\",\"releasedAt\":\"2026-09-10\",\"title\":\"按你的习惯显示消息\",\"summary\":\"聊天设置新增自动隐藏选项，修复输入法确认时误发消息，并让话题操作更紧凑。\",\"sections\":[{\"title\":\"消息显示\",\"items\":[{\"title\":\"选择自动隐藏的内容\",\"description\":\"开启后可分别选择图片、表情和长消息，默认关闭。隐藏的内容可以展开，不删除消息，也不影响其他成员。关闭后保留选择。\",\"location\":\"个人设置 -> 聊天 -> 消息显示\"}]},{\"title\":\"输入与话题\",\"items\":[{\"title\":\"更稳妥地确认输入\",\"description\":\"输入法确认候选内容的回车不会同时发送消息，确认后再次回车即可发送。话题消息使用回复和同步图标，保留状态提示。\",\"location\":\"私密直连 -> 输入框；共享空间 -> 聊天与话题\"}]}]}",
-      "guideHash": "72fa126ccc6fd82e93126d0cebef90c20e48ce3af6314afe9d4627b27e4b3099",
+      "guideJSON": "{\"version\":\"0.16.2\",\"releasedAt\":\"2026-09-10\",\"title\":\"兼容性维护\",\"summary\":\"本次为兼容性维护，保留现有聊天、头像和个人设置，不增加新的操作步骤。\",\"sections\":[{\"title\":\"日常使用\",\"items\":[{\"title\":\"沿用现有功能\",\"description\":\"继续使用原有聊天入口、头像和个人设置，无需重新设置。本次不增加新的聊天选项，两条通道的隐私规则保持不变。\",\"location\":\"首页 -> 私密直连；首页 -> 共享空间；关于 -> 版本历史\"}]}]}",
+      "guideHash": "4d42fdfb8af6852c7162eca4db6c1c71c005025943a4250a1ea5efe4bda02583",
       "publicationID": "echo_release_node-catalog-001",
       "deliveryIDs": [
         "echo_release_delivery_node-catalog-002",
         "echo_release_delivery_node-catalog-003"
       ],
-      "lockKey": "duallane:echo-release:spc_fixture:0.17.0",
+      "lockKey": "duallane:echo-release:spc_fixture:0.16.2",
       "summary": {
         "id": "echo_release_node-catalog-001",
-        "version": "0.17.0",
-        "title": "按你的习惯显示消息",
+        "version": "0.16.2",
+        "title": "兼容性维护",
         "publishedAt": "2026-09-06T12:34:56.789Z",
         "recipientCount": 2,
         "pendingCount": 2,
@@ -55,8 +45,8 @@
       },
       "getPublication": {
         "id": "echo_release_node-catalog-001",
-        "version": "0.17.0",
-        "title": "按你的习惯显示消息",
+        "version": "0.16.2",
+        "title": "兼容性维护",
         "publishedAt": "2026-09-06T12:34:56.789Z",
         "recipientCount": 2,
         "pendingCount": 2,

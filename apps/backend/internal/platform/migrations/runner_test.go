@@ -24,15 +24,16 @@ func (b *fakeBeginner) Begin(context.Context) (Tx, error) {
 }
 
 type fakeTx struct {
-	schemaColumns [][]any
-	primaryKey    [][]any
-	applied       [][]any
-	execCalls     []fakeExec
-	queryCalls    []string
-	rollbackCalls int
-	commitCalls   int
-	failExecPart  string
-	commitErr     error
+	schemaColumns     [][]any
+	primaryKey        [][]any
+	applied           [][]any
+	compatibleColumns [][]any
+	execCalls         []fakeExec
+	queryCalls        []string
+	rollbackCalls     int
+	commitCalls       int
+	failExecPart      string
+	commitErr         error
 }
 
 type fakeExec struct {
@@ -47,6 +48,10 @@ func newFakeTx() *fakeTx {
 			{"applied_at", "timestamp with time zone", "NO"},
 		},
 		primaryKey: [][]any{{"name"}},
+		compatibleColumns: [][]any{
+			{"auto_hide_message_types_json", "text", "NO", `'["image","emote","long"]'::text`},
+			{"auto_hide_messages", "boolean", "NO", "false"},
+		},
 	}
 }
 
@@ -67,6 +72,8 @@ func (tx *fakeTx) Query(_ context.Context, query string, _ ...any) (Rows, error)
 		return &fakeRows{rows: tx.primaryKey}, nil
 	case appliedSQL:
 		return &fakeRows{rows: tx.applied}, nil
+	case compatibleMigrationColumnsSQL:
+		return &fakeRows{rows: tx.compatibleColumns}, nil
 	default:
 		return nil, fmt.Errorf("unexpected query %q", query)
 	}

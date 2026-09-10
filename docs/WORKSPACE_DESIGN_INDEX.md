@@ -52,7 +52,6 @@ The system-level boundary remains in [DualLane Design Document](../DESIGN.md).
 | [WORKSPACE_SPACE_SETTINGS_DESIGN.md](WORKSPACE_SPACE_SETTINGS_DESIGN.md) | Space information/settings, invites, roles, capacity/history settings | Public login or chat composer behavior |
 | [WORKSPACE_SEARCH_DISCOVERY_DESIGN.md](WORKSPACE_SEARCH_DISCOVERY_DESIGN.md) | Search, filtering, and discovery for conversations, members, files, and later messages | Storage indexes as an implementation detail |
 | [WORKSPACE_NOTIFICATION_UNREAD_DESIGN.md](WORKSPACE_NOTIFICATION_UNREAD_DESIGN.md) | Local notices, unread state, mentions, and notification preferences | Browser push implementation details |
-| [WORKSPACE_CHAT_PREFERENCES.md](WORKSPACE_CHAT_PREFERENCES.md) | Personal automatic-hide preferences, API fields, compatibility and display boundaries | Message deletion, access restrictions or P2P persistence |
 | [WORKSPACE_MOBILE_ACCESSIBILITY_DESIGN.md](WORKSPACE_MOBILE_ACCESSIBILITY_DESIGN.md) | Mobile pane model, responsive behavior, keyboard/focus/accessibility | Backend schema |
 | [WORKSPACE_MESSAGE_PROTOCOL.md](WORKSPACE_MESSAGE_PROTOCOL.md) | Structured messages, blocks, idempotency, bot compatibility | Visual layout |
 | [WORKSPACE_ECHO_BOT_DESIGN.md](WORKSPACE_ECHO_BOT_DESIGN.md) | Echo bot product behavior, reusable cards, commands, guided workflows, voting, and requirement processing | Core message transport or unrelated bot behavior |

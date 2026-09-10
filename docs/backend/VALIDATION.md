@@ -355,6 +355,16 @@ only database success.
 
 ### Migration Ownership And Rollback Rehearsal
 
+Schema-expanding Go upgrades additionally require the old application to remain
+ready and operational on the new schema, including worker pre-claim checks.
+For the 033-to-034 bridge, run the schema checker unit and real PostgreSQL tests,
+then `node --test scripts/backend/release-schema-compatibility.test.mjs
+scripts/backend/release-schema-upgrade-gate.test.mjs`. Cover unchanged SQL,
+explicitly supported addition, changed SQL, missing/renamed history, undeclared
+future migration, malformed policy, and refusal before migration. Inspect the
+exact built old/new images and rehearse same-database application rollback;
+tests of old SQL queries alone are insufficient.
+
 Run the real Node/Go migrators only against explicitly disposable loopback
 PostgreSQL. The harness creates and removes its own uniquely named schemas,
 does not edit canonical SQL, and reports cleanup failure as a failed gate:

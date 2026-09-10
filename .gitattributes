@@ -4,3 +4,6 @@ apps/backend/sqlc.yaml text eol=lf
 apps/backend/internal/workspace/presence/queries.sql text eol=lf
 apps/backend/internal/workspace/presence/internal/presencequeries/*.go text eol=lf
 deploy/production/*.sh text eol=lf
+# The release policy compares the reviewed fixture's exact Git SQL bytes.
+apps/web/server/migrations/*.sql text eol=lf
+apps/backend/internal/platform/migrations/testdata/*.sql text eol=lf

@@ -58,6 +58,8 @@ RELEASE_GO_UPGRADE_OLD_WORKER_IMAGE_ID=""
 RELEASE_GO_UPGRADE_OLD_WEB_IMAGE_ID=""
 RELEASE_GO_UPGRADE_OLD_MIGRATE_IMAGE_ID=""
 RELEASE_GO_UPGRADE_VALIDATED=false
+RELEASE_GO_SCHEMA_COMPATIBLE_PREVIOUS_IMAGE_ID=""
+RELEASE_GO_SCHEMA_COMPATIBLE_TARGET_IMAGE_ID=""
 RELEASE_GO_UPGRADE_CURRENT_COMPOSE_FILE=""
 RELEASE_GO_UPGRADE_NEW_ATTEMPTED_SERVICES=()
 RELEASE_GO_UPGRADE_TEMP_FILES=()
@@ -147,6 +149,8 @@ release_load_profile() {
   RELEASE_GO_UPGRADE_OLD_WEB_IMAGE_ID=""
   RELEASE_GO_UPGRADE_OLD_MIGRATE_IMAGE_ID=""
   RELEASE_GO_UPGRADE_VALIDATED=false
+  RELEASE_GO_SCHEMA_COMPATIBLE_PREVIOUS_IMAGE_ID=""
+  RELEASE_GO_SCHEMA_COMPATIBLE_TARGET_IMAGE_ID=""
   RELEASE_GO_UPGRADE_CURRENT_COMPOSE_FILE=""
   RELEASE_GO_UPGRADE_NEW_ATTEMPTED_SERVICES=()
   RELEASE_GO_UPGRADE_TEMP_FILES=()
@@ -1159,6 +1163,27 @@ release_remove_owned_migration_container() {
   fi
 }
 
+release_verify_schema_upgrade_compatibility() {
+  RELEASE_GO_SCHEMA_COMPATIBLE_PREVIOUS_IMAGE_ID=""
+  RELEASE_GO_SCHEMA_COMPATIBLE_TARGET_IMAGE_ID=""
+  [[ "${RELEASE_PROFILE_NAME}" == go-full && "${RELEASE_GO_UPGRADE:-false}" == true ]] || return 0
+  [[ "${RELEASE_GO_UPGRADE_VALIDATED}" == true ]] || {
+    echo "schema compatibility requires a validated previous Go release" >&2
+    return 1
+  }
+  [[ "${RELEASE_GO_UPGRADE_OLD_WORKSPACE_IMAGE_ID}" =~ ^sha256:[0-9a-f]{64}$ &&
+     "${RELEASE_GO_IMAGE_ID}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo "schema compatibility requires exact previous and target image IDs" >&2
+    return 1
+  }
+  node "${RELEASE_HELPER_DIR}/release-schema-compatibility.mjs" verify \
+    --previous-image "${RELEASE_GO_UPGRADE_OLD_WORKSPACE_IMAGE_ID}" \
+    --target-image "${RELEASE_GO_IMAGE_ID}" || return 1
+  release_append_recovery_record 'go_schema_upgrade_compatibility_verified=true' || return 1
+  RELEASE_GO_SCHEMA_COMPATIBLE_PREVIOUS_IMAGE_ID="${RELEASE_GO_UPGRADE_OLD_WORKSPACE_IMAGE_ID}"
+  RELEASE_GO_SCHEMA_COMPATIBLE_TARGET_IMAGE_ID="${RELEASE_GO_IMAGE_ID}"
+}
+
 release_run_go_migration_and_verify() {
   RELEASE_GO_MIGRATION_VERIFIED=false
   [[ "${RELEASE_PROFILE_NAME}" == "go-full" ]] || {
@@ -1169,6 +1194,18 @@ release_run_go_migration_and_verify() {
     echo "Go migration image identity was not verified before migration" >&2
     return 1
   }
+  # Bind the proof to both immutable owners, including alternate test adapters.
+  # A later image change or failed recheck must not reuse an earlier success.
+  if [[ "${RELEASE_GO_UPGRADE:-false}" == true ]]; then
+    [[ "${RELEASE_GO_UPGRADE_VALIDATED}" == true &&
+       "${RELEASE_GO_SCHEMA_COMPATIBLE_PREVIOUS_IMAGE_ID}" =~ ^sha256:[0-9a-f]{64}$ &&
+       "${RELEASE_GO_SCHEMA_COMPATIBLE_TARGET_IMAGE_ID}" =~ ^sha256:[0-9a-f]{64}$ &&
+       "${RELEASE_GO_SCHEMA_COMPATIBLE_PREVIOUS_IMAGE_ID}" == "${RELEASE_GO_UPGRADE_OLD_WORKSPACE_IMAGE_ID}" &&
+       "${RELEASE_GO_SCHEMA_COMPATIBLE_TARGET_IMAGE_ID}" == "${RELEASE_GO_IMAGE_ID}" ]] || {
+      echo "Go upgrade schema compatibility was not verified for these images" >&2
+      return 1
+    }
+  fi
   local existing migration_id migration_running migration_status actual_image_id
   if ! existing="$(compose ps -a -q migrate 2>/dev/null)"; then
     echo "could not inspect existing Go migration containers" >&2

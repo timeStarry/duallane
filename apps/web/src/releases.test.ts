@@ -31,7 +31,7 @@ const INTERNAL_CHANGELOG_TERMS = [
 describe("release history", () => {
   it("is unique, complete, and sorted newest first", () => {
     expect(new Set(DUAL_LANE_RELEASES.map((release) => release.version)).size).toBe(DUAL_LANE_RELEASES.length);
-    expect(DUAL_LANE_RELEASES.map((release) => release.version)).toEqual(["0.17.0", "0.16.1", "0.16.0", "0.15.5", "0.15.4", "0.15.3", "0.15.2", "0.15.1", "0.15.0", "0.14.3", "0.14.2", "0.14.1", "0.14.0", "0.13.2", "0.13.1", "0.13.0", "0.12.0", "0.11.0", "0.10.0", "0.9.0", "0.8.0", "0.7.0", "0.6.0", "0.5.0", "0.4.0", "0.3.0", "0.2.0", "0.1.0"]);
+    expect(DUAL_LANE_RELEASES.map((release) => release.version)).toEqual(["0.16.2", "0.16.1", "0.16.0", "0.15.5", "0.15.4", "0.15.3", "0.15.2", "0.15.1", "0.15.0", "0.14.3", "0.14.2", "0.14.1", "0.14.0", "0.13.2", "0.13.1", "0.13.0", "0.12.0", "0.11.0", "0.10.0", "0.9.0", "0.8.0", "0.7.0", "0.6.0", "0.5.0", "0.4.0", "0.3.0", "0.2.0", "0.1.0"]);
     for (const release of DUAL_LANE_RELEASES) {
       expect(release.releasedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       expect(release.title.trim()).not.toBe("");
@@ -42,8 +42,8 @@ describe("release history", () => {
   });
 
   it("matches both published package versions", () => {
-    expect(rootPackage.version).toBe("0.17.0");
-    expect(webPackage.version).toBe("0.17.0");
+    expect(rootPackage.version).toBe("0.16.2");
+    expect(webPackage.version).toBe("0.16.2");
     expect(DUAL_LANE_RELEASES[0].version).toBe(rootPackage.version);
     expect(DUAL_LANE_RELEASES[0].version).toBe(webPackage.version);
   });
@@ -78,6 +78,13 @@ describe("release history", () => {
     expect(latest.summary).toContain("自定义头像");
     expect(latest.summary).toContain("无需重新上传");
     expect(JSON.stringify(latest)).toContain("访问权限");
+  });
+
+  it("keeps the bridge release separate from deferred chat settings", () => {
+    const latest = DUAL_LANE_RELEASES.find((release) => release.version === "0.16.2")!;
+    expect(latest.summary).toContain("兼容性维护");
+    expect(JSON.stringify(latest)).toContain("不增加新的聊天选项");
+    expect(JSON.stringify(latest)).not.toContain("自动隐藏");
   });
 
   it("contains only changes ordinary users can understand and observe", () => {

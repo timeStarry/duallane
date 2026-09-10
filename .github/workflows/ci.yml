@@ -145,6 +145,9 @@ jobs:
       - name: Validate immutable runtime asset packaging
         run: node --test scripts/backend/docker-runtime-assets.test.mjs
 
+      - name: Validate schema compatibility before migration
+        run: node --test scripts/backend/release-schema-compatibility.test.mjs scripts/backend/release-schema-upgrade-gate.test.mjs
+
       - name: Validate private Compose recovery snapshots
         run: node --test scripts/backend/release-compose-snapshot.test.mjs scripts/backend/release-compose-snapshot.docker.test.mjs scripts/backend/release-external-files.test.mjs
 
