@@ -64,5 +64,57 @@ and unavailable checks distinctly from passes. Synthetic composition events do
 not establish native macOS/browser/IME acceptance. Do not use production
 messages, credentials or real-recipient test notifications as fixtures.
 
-At document creation these 0.17.0 gates, PR and deployment are pending. The
-completed 0.16.2 record is prerequisite evidence, not a substitute for them.
+## Completed release evidence
+
+[PR #10](https://github.com/timeStarry/duallane/pull/10) was normally merged by
+`timeStarry` on 2026-09-10 after review and all four CI jobs passed. Merge
+`8d346a04317d0d3396293caca14ca1c65c7b5163` has the exact tree of tested head
+`6ebc0f6858d67cf2be516d19ecf062c3ae75b505`.
+
+The lead's clean Linux checkout passed frozen install, actual Node golden
+freshness, SDK8 and Web747 tests (2 explicit PostgreSQL-only skips), lint/build,
+full Go verify/PostgreSQL gates, Node Chromium27, Go Workspace21 and Go P2P5.
+Release contracts passed105 with7 explicitly unselected optional Docker tests;
+actual Compose contracts passed4. Actual target images built, immutable33→34
+SQL comparison passed, and real expanded-schema upgrade/old-Go rollback with
+unchanged database/data authority and owned cleanup passed (199.36 seconds).
+The old images were imported from production and raw config SHA-256 verified
+against production identities; containerd manifest IDs are not config IDs.
+
+Failures remain part of the evidence: the first local Go Workspace run passed17
+and failed4 (two initial-login waits, topic reveal, About navigation/reload).
+Those4 and then all21 passed in fresh isolated fixtures without changes to
+source, assertions, retries or timeouts. The cause is unproven; the CI Go suite
+passed initially. General CI initially hit the unchanged Docker spawn deadline;
+the exact fixture passed locally and one normal same-head job rerun passed the
+complete gate. Neither is described as a demonstrated code fix.
+
+Desktop/mobile synthetic settings and reply/sync icon layouts were inspected.
+An unchanged pre-existing desktop topic-header grid can clip the title/stretch
+the status badge; it is not claimed fixed. Native macOS IME remains unverified.
+
+The official production-directory Go upgrade completed at the merged revision.
+Schema34 is present, all four application containers are healthy/non-root/
+read-only-rootfs with zero restarts and restart-always. Node is stopped with
+restart disabled. PostgreSQL identity, S3 primary/local mirror, data volume and
+Web binding are unchanged. No Docker restart or unrelated-container cleanup.
+
+Production image IDs:
+
+- P2P: `sha256:3f06acd46b95d1ccfad1125a34034df853d01fd10307b1f01237c3ecf6d706e7`.
+- Workspace/worker/migrate: `sha256:428c8b4df7fb3dc413977f0e48e4211e648f7362b6f855513c2c156168bf496e`.
+- Web: `sha256:3d6898731c93b4ea3253ca5893f550a303815dee1d58a3f2098def4b3874ddb6`.
+
+Official13-stage gateway smoke and independent TLS public version/assets/ICE,
+security headers, anonymous401/WSS1008 denial and private-endpoint404 checks
+passed. Active readiness, backup SHA-256, private snapshot/external/volume
+manifests and old→new authority comparison passed. Exact0.16.2 rollback images
+remain available. Short redacted log observation found no warn/error entries.
+Logged-in production UI was not verified because browser control failed twice;
+no user preferences or messages were modified.
+
+The next upgrade must use the private successful snapshot under
+`backups/production/duallane-20260910T080211Z-8d346a04317d.recovery.go-compose.snapshot.json`
+and its verified sidecars. Do not publish private contents. Deployment log:
+`backups/production/chat-0170-8d346a0-deploy-zUvdZH.log`. Node retirement is a
+separate release and is not implied complete by this record.
