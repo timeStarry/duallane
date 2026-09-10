@@ -1,0 +1,19 @@
+{
+  "source": "apps/web/server/services/workspace-object-store.mjs#workspaceAvatarObjectKey",
+  "cases": [
+    {
+      "name": "seeded-user",
+      "userId": "usr_owner",
+      "version": "legacy-version",
+      "localKey": "profile-avatars/usr_owner/legacy-version.webp",
+      "s3Key": "workspace/profile-avatars/usr_owner/legacy-version.webp"
+    },
+    {
+      "name": "uuid-user",
+      "userId": "00000000-0000-4000-8000-000000000001",
+      "version": "00000000-0000-4000-8000-000000000002",
+      "localKey": "profile-avatars/00000000-0000-4000-8000-000000000001/00000000-0000-4000-8000-000000000002.webp",
+      "s3Key": "workspace/profile-avatars/00000000-0000-4000-8000-000000000001/00000000-0000-4000-8000-000000000002.webp"
+    }
+  ]
+}

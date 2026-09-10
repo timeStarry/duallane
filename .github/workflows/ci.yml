@@ -193,6 +193,7 @@ jobs:
           node scripts/backend/route-inventory.mjs --check
           node scripts/backend/workspace-core-contract.mjs --check
           node scripts/backend/workspace-markdown-contract.mjs --check
+          node --test scripts/backend/workspace-avatar-key-contract.test.mjs
           node scripts/backend/workspace-emotes-contract.mjs --check
           node scripts/backend/workspace-files-contract.mjs --check
           node scripts/backend/workspace-invites-contract.mjs --check
