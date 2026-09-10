@@ -7,7 +7,9 @@ import {
   ChevronDown,
   Hash,
   MessageSquare,
+  Reply,
   Send,
+  Share2,
   UsersRound,
   X
 } from "lucide-react";
@@ -815,8 +817,8 @@ export function WorkspaceTopicPage({
                     {message.localState && <div className={`message-local-state ${message.localState}`} role="status"><span>{message.localState === "sending" ? "发送中" : message.failureReason || "发送失败"}</span></div>}
                   </div>
                   <div className="workspace-message-actions workspace-topic-message-actions">
-                    {!message.localState && <button type="button" onClick={() => { setReplyToMessageId(message.id); window.requestAnimationFrame(() => editorRef.current?.focus()); }}>回复</button>}
-                    {topic.allowSyncToGroup && !message.localState && <button type="button" disabled={busyAction === `sync:${message.id}`} aria-pressed={synced} onClick={() => void toggleProjection(message.id)}>{synced ? "已同步" : "同步到群聊"}</button>}
+                    {!message.localState && <button type="button" aria-label="回复" title="回复" onClick={() => { setReplyToMessageId(message.id); window.requestAnimationFrame(() => editorRef.current?.focus()); }}><Reply size={14} aria-hidden="true" /></button>}
+                    {topic.allowSyncToGroup && !message.localState && <button type="button" aria-label={synced ? "已同步" : "同步到群聊"} title={synced ? "已同步（点击取消同步）" : "同步到群聊"} disabled={busyAction === `sync:${message.id}`} aria-pressed={synced} onClick={() => void toggleProjection(message.id)}>{synced ? <Check size={14} aria-hidden="true" /> : <Share2 size={14} aria-hidden="true" />}</button>}
                   </div>
                 </article>
               );
