@@ -139,8 +139,6 @@ type EmoteSettings struct {
 	EnabledPackIDs        []string            `json:"enabledPackIds"`
 	ClickImageEmoteToSend bool                `json:"clickImageEmoteToSend"`
 	ReplyAutoMention      bool                `json:"replyAutoMention"`
-	AutoHideMessages      bool                `json:"autoHideMessages"`
-	AutoHideMessageTypes  []string            `json:"autoHideMessageTypes"`
 	MinimumEnabled        int                 `json:"minimumEnabled"`
 }
 
@@ -148,8 +146,6 @@ type UpdateSettingsInput struct {
 	EnabledPackIDs        *[]string
 	ClickImageEmoteToSend *bool
 	ReplyAutoMention      *bool
-	AutoHideMessages      *bool
-	AutoHideMessageTypes  *[]string
 }
 
 type LibraryEntryRecord struct {

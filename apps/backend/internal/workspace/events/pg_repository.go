@@ -274,7 +274,7 @@ func (r *PGRepository) EventVisible(ctx context.Context, actor *auth.Actor, even
 		}
 		return r.removedMemberVisible(ctx, event.SpaceID, actor.ID, targetID)
 	}
-	if event.Type == "conversation.notification_updated" || event.Type == "emote.library.updated" || event.Type == "emote.settings.updated" {
+	if event.Type == "conversation.notification_updated" || event.Type == "emote.library.updated" {
 		return pointerString(event.TargetType) == "user" && pointerString(event.TargetID) == actor.ID, nil
 	}
 	if pointerString(event.TargetType) == "attachment" && pointerString(event.TargetID) != "" {

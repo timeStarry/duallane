@@ -10285,7 +10285,6 @@ small,
   min-height: 30px;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 2px;
   opacity: 0;
   transition: opacity var(--motion-fast) var(--motion-ease);
@@ -10297,36 +10296,18 @@ small,
 }
 
 .workspace-topic-message-actions button {
-  width: 30px;
-  min-width: 30px;
-  height: 30px;
   min-height: 30px;
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
   padding: 3px 6px;
   color: var(--muted);
   background: transparent;
   cursor: pointer;
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
-  line-height: 1.2;
-  white-space: nowrap;
-}
-
-.workspace-topic-message-actions button > svg {
-  flex: 0 0 auto;
 }
 
 .workspace-topic-message-actions button:hover,
 .workspace-topic-message-actions button[aria-pressed="true"] {
   color: var(--relay-dark);
-}
-
-.workspace-topic-message-actions button[aria-pressed="true"] {
-  background: var(--surface-tint);
 }
 
 .workspace-topic-composer-dock {
@@ -12187,11 +12168,7 @@ small,
   }
 
   .workspace-topic-message-actions button {
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
-    min-height: 44px;
-    padding-inline: 8px;
+    min-height: 34px;
   }
 
   .workspace-topic-composer-dock {

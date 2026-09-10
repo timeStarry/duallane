@@ -122,13 +122,9 @@ func (r *PGRepository) GetSettings(ctx context.Context, userID string) (Settings
 func getSettings(ctx context.Context, queryer pgQueryer, userID string) (SettingsRecord, error) {
 	var record SettingsRecord
 	err := queryer.QueryRow(ctx, `
-		SELECT enabled_pack_ids_json, click_image_emote_to_send, reply_auto_mention,
-			auto_hide_messages, auto_hide_message_types_json
+		SELECT enabled_pack_ids_json, click_image_emote_to_send, reply_auto_mention
 		FROM workspace_emote_preferences WHERE user_id = $1
-	`, userID).Scan(
-		&record.EnabledPackIDsJSON, &record.ClickImageEmoteToSend, &record.ReplyAutoMention,
-		&record.AutoHideMessages, &record.AutoHideMessageTypesJSON,
-	)
+	`, userID).Scan(&record.EnabledPackIDsJSON, &record.ClickImageEmoteToSend, &record.ReplyAutoMention)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return record, nil
 	}
@@ -869,23 +865,20 @@ func (t *pgTx) Lock(ctx context.Context, key string) error {
 	return err
 }
 
-func (t *pgTx) UpsertSettings(ctx context.Context, userID, enabledPackIDsJSON string, clickImageEmoteToSend, replyAutoMention, autoHideMessages bool, autoHideMessageTypesJSON string, at time.Time) error {
-	if !json.Valid([]byte(enabledPackIDsJSON)) || !json.Valid([]byte(autoHideMessageTypesJSON)) {
+func (t *pgTx) UpsertSettings(ctx context.Context, userID, enabledPackIDsJSON string, clickImageEmoteToSend, replyAutoMention bool, at time.Time) error {
+	if !json.Valid([]byte(enabledPackIDsJSON)) {
 		return errors.New("emote settings are not valid JSON")
 	}
 	_, err := t.tx.Exec(ctx, `
 		INSERT INTO workspace_emote_preferences (
-			user_id, enabled_pack_ids_json, click_image_emote_to_send, reply_auto_mention,
-			auto_hide_messages, auto_hide_message_types_json, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7)
+			user_id, enabled_pack_ids_json, click_image_emote_to_send, reply_auto_mention, updated_at
+		) VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (user_id) DO UPDATE SET
 			enabled_pack_ids_json = EXCLUDED.enabled_pack_ids_json,
 			click_image_emote_to_send = EXCLUDED.click_image_emote_to_send,
 			reply_auto_mention = EXCLUDED.reply_auto_mention,
-			auto_hide_messages = EXCLUDED.auto_hide_messages,
-			auto_hide_message_types_json = EXCLUDED.auto_hide_message_types_json,
 			updated_at = EXCLUDED.updated_at
-	`, userID, enabledPackIDsJSON, clickImageEmoteToSend, replyAutoMention, autoHideMessages, autoHideMessageTypesJSON, at.UTC())
+	`, userID, enabledPackIDsJSON, clickImageEmoteToSend, replyAutoMention, at.UTC())
 	return err
 }
 
