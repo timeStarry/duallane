@@ -46,6 +46,14 @@ with the existing private `0700` directory / `0600` file contract. Do not put
 credentials, database URLs, or production report contents in source control,
 process arguments, or logs.
 
+The feature-scoped S3 migration report retains historical source locators for
+operator reconciliation; unlike the dedupe report, it may include a legacy
+filename in a private `sourceStorageKey`. Do not publish either report. The
+S3 report directory is tightened to `0700` on both new and resumed runs.
+These compatibility operators retain historical filesystem assumptions: use
+only a reviewed, owned data tree, with no untrusted symlink layout. They are not
+an untrusted-upload API, and are never imported by the Go online services.
+
 The repository root owns workspace dependency installation and the lockfile.
 After this package is connected to the workspace, install from the repository
 root with `pnpm install --frozen-lockfile`; do not run a separate package

@@ -310,7 +310,8 @@ async function listLocalStorageKeys(dataDir) {
 }
 
 async function writePrivateReport(directory, report) {
-  await mkdir(directory, { recursive: true });
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
   const targetPath = path.join(directory, `${report.runId}.json`);
   const temporaryPath = `${targetPath}.${randomUUID()}.tmp`;
   try {

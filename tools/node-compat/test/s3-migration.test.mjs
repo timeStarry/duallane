@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, test } from "node:test";
@@ -66,6 +66,13 @@ test("S3 migration backfills active records, archives unconsumed keys, verifies 
   assert.ok(objects.has(`workspace/migration-archive/run-20260807/${archiveDigest}`));
   assert.ok(!JSON.stringify([...objects.values()]).includes("report.txt"));
 
+  const reportDirectory = path.join(dataDir, "workspace-s3-migration-reports");
+  if (process.platform !== "win32") {
+    assert.equal((await stat(reportDirectory)).mode & 0o777, 0o700);
+    // An old operator run may have created this directory with the prior
+    // permissive default. A resumed report must restore the private boundary.
+    await chmod(reportDirectory, 0o755);
+  }
   const resumed = await runWorkspaceS3Migration({
     db,
     dataDir,
@@ -79,7 +86,10 @@ test("S3 migration backfills active records, archives unconsumed keys, verifies 
   assert.equal(resumed.counts.verified, 3);
   const reportPath = path.join(dataDir, "workspace-s3-migration-reports", "run-20260807.json");
   assert.equal(JSON.parse(await readFile(reportPath, "utf8")).status, "completed");
-  if (process.platform !== "win32") assert.equal((await stat(reportPath)).mode & 0o077, 0);
+  if (process.platform !== "win32") {
+    assert.equal((await stat(reportPath)).mode & 0o777, 0o600);
+    assert.equal((await stat(reportDirectory)).mode & 0o777, 0o700);
+  }
 });
 
 test("S3 migration fails closed on a remote body hash mismatch and writes a private failure report", async () => {
