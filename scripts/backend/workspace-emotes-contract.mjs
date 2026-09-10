@@ -327,6 +327,21 @@ async function createFixture() {
     assertError(invalidSettings, 400, "emote.pack_required");
     addScenario(scenarios, "settings-invalid-pack-selection", invalidSettingsRequest, invalidSettings);
 
+    for (const [name, payload, status] of [
+      ["auto-hide-enable", { autoHideMessages: true, autoHideMessageTypes: ["image", "long", "image"] }, 200],
+      ["auto-hide-disable-preserves-types", { autoHideMessages: false }, 200],
+      ["auto-hide-empty-types", { autoHideMessageTypes: [] }, 200],
+      ["auto-hide-invalid-type", { autoHideMessageTypes: ["other"] }, 400],
+      ["auto-hide-null-types", { autoHideMessageTypes: null }, 400],
+      ["auto-hide-invalid-enabled", { autoHideMessages: "true" }, 400]
+    ]) {
+      const request = jsonRequest("PUT", "/api/workspace/me/emote-settings", payload, OWNER_ID);
+      const response = await app.inject(request);
+      assert.equal(response.statusCode, status);
+      if (status === 400) assertError(response, status, "emote.invalid_settings");
+      addScenario(scenarios, name, request, response);
+    }
+
     const builtinMessage = {
       format: "duallane.message+json;v=1",
       plainText: imageEmote.token,

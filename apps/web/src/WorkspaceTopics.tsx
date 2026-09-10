@@ -7,7 +7,9 @@ import {
   ChevronDown,
   Hash,
   MessageSquare,
+  Reply,
   Send,
+  Share2,
   UsersRound,
   X
 } from "lucide-react";
@@ -26,6 +28,7 @@ import {
   type WorkspaceComposerEditorHandle
 } from "./WorkspaceComposerEditor";
 import { WorkspaceMarkdown } from "./WorkspaceMarkdown";
+import { WorkspaceAutoHiddenContent, type WorkspaceAutoHidePreferences } from "./workspace-auto-hide";
 import { createWorkspaceJsonHeaders } from "./workspace-http";
 
 export type WorkspaceTopic = {
@@ -380,6 +383,7 @@ export function WorkspaceConversationTopicsSection({
 }
 
 export function WorkspaceTopicPage({
+  autoHidePreferences,
   topicId,
   currentUserId,
   currentUserDisplayName,
@@ -391,6 +395,7 @@ export function WorkspaceTopicPage({
   onOpenConversation,
   onNotice
 }: {
+  autoHidePreferences?: WorkspaceAutoHidePreferences | null;
   topicId: string;
   currentUserId: string;
   currentUserDisplayName: string;
@@ -811,12 +816,18 @@ export function WorkspaceTopicPage({
                   <div className="workspace-message-content">
                     <div className="workspace-message-meta"><strong>{message.author.displayName}</strong><time>{formatTopicMessageTime(message.createdAt)}</time></div>
                     {reply && <button className="reply-preview workspace-reply-jump" type="button" onClick={() => jumpToMessage(reply.id)}><strong>{reply.author.displayName}</strong><span>{reply.plainText}</span></button>}
-                    <TopicMessageBody message={message} />
+                    <WorkspaceAutoHiddenContent
+                      preferences={autoHidePreferences}
+                      blocks={message.content.blocks.length ? message.content.blocks : [{ type: "text", text: message.plainText }]}
+                      fallbackText={message.plainText}
+                    >
+                      <TopicMessageBody message={message} />
+                    </WorkspaceAutoHiddenContent>
                     {message.localState && <div className={`message-local-state ${message.localState}`} role="status"><span>{message.localState === "sending" ? "发送中" : message.failureReason || "发送失败"}</span></div>}
                   </div>
                   <div className="workspace-message-actions workspace-topic-message-actions">
-                    {!message.localState && <button type="button" onClick={() => { setReplyToMessageId(message.id); window.requestAnimationFrame(() => editorRef.current?.focus()); }}>回复</button>}
-                    {topic.allowSyncToGroup && !message.localState && <button type="button" disabled={busyAction === `sync:${message.id}`} aria-pressed={synced} onClick={() => void toggleProjection(message.id)}>{synced ? "已同步" : "同步到群聊"}</button>}
+                    {!message.localState && <button type="button" aria-label="回复" title="回复" onClick={() => { setReplyToMessageId(message.id); window.requestAnimationFrame(() => editorRef.current?.focus()); }}><Reply size={14} aria-hidden="true" /></button>}
+                    {topic.allowSyncToGroup && !message.localState && <button type="button" aria-label={synced ? "已同步" : "同步到群聊"} title={synced ? "已同步（点击取消同步）" : "同步到群聊"} disabled={busyAction === `sync:${message.id}`} aria-pressed={synced} onClick={() => void toggleProjection(message.id)}>{synced ? <Check size={14} aria-hidden="true" /> : <Share2 size={14} aria-hidden="true" />}</button>}
                   </div>
                 </article>
               );

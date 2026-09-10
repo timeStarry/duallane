@@ -110,7 +110,7 @@ func TestPostgresSchemaCheckerIsReadOnlyAgainstCurrentHistory(t *testing.T) {
 	}
 }
 
-func TestPostgresSchemaCheckerAllowsReviewed034AndOldWriterPreservesNewPreferences(t *testing.T) {
+func TestPostgresSchemaCheckerAllowsReviewed034AndCurrentWriterWritesPreferences(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL is not set")
@@ -190,30 +190,24 @@ func TestPostgresSchemaCheckerAllowsReviewed034AndOldWriterPreservesNewPreferenc
 	}
 	defer pool.Close()
 	emoteRepository := workspaceemotes.NewPGRepository(pool)
-	upsertSettings := func(enabledPackIDsJSON string, clickImageEmoteToSend, replyAutoMention bool, at time.Time) {
+	upsertSettings := func(enabledPackIDsJSON string, clickImageEmoteToSend, replyAutoMention, autoHideMessages bool, autoHideMessageTypesJSON string, at time.Time) {
 		t.Helper()
 		if err := emoteRepository.WithTx(ctx, func(tx workspaceemotes.Tx) error {
-			return tx.UpsertSettings(ctx, "compat-user", enabledPackIDsJSON, clickImageEmoteToSend, replyAutoMention, at)
+			return tx.UpsertSettings(ctx, "compat-user", enabledPackIDsJSON, clickImageEmoteToSend, replyAutoMention, autoHideMessages, autoHideMessageTypesJSON, at)
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	oldWriteAt := time.Date(2026, 9, 10, 1, 3, 0, 0, time.UTC)
-	upsertSettings(`["legacy"]`, false, false, oldWriteAt)
-	if _, err := conn.Exec(ctx, `
-		UPDATE workspace_emote_preferences
-		SET auto_hide_messages = TRUE, auto_hide_message_types_json = $2
-		WHERE user_id = $1`, "compat-user", `["custom"]`); err != nil {
-		t.Fatal(err)
-	}
-	newWriteAt := time.Date(2026, 9, 10, 1, 4, 0, 0, time.UTC)
-	upsertSettings(`["updated-by-old-writer"]`, true, true, newWriteAt)
+	firstWriteAt := time.Date(2026, 9, 10, 1, 3, 0, 0, time.UTC)
+	upsertSettings(`["legacy"]`, false, false, false, `["image","emote","long"]`, firstWriteAt)
+	currentWriteAt := time.Date(2026, 9, 10, 1, 4, 0, 0, time.UTC)
+	upsertSettings(`["updated-by-current-writer"]`, true, true, true, `["custom"]`, currentWriteAt)
 	settings, err := emoteRepository.GetSettings(ctx, "compat-user")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.EnabledPackIDsJSON != `["updated-by-old-writer"]` || !settings.ClickImageEmoteToSend || !settings.ReplyAutoMention {
-		t.Fatalf("Go emotes repository did not update legacy settings: %#v", settings)
+	if settings.EnabledPackIDsJSON != `["updated-by-current-writer"]` || !settings.ClickImageEmoteToSend || !settings.ReplyAutoMention {
+		t.Fatalf("Go emotes repository did not update legacy preference columns: %#v", settings)
 	}
 
 	var autoHide bool
@@ -224,7 +218,7 @@ func TestPostgresSchemaCheckerAllowsReviewed034AndOldWriterPreservesNewPreferenc
 		t.Fatal(err)
 	}
 	if !autoHide || autoHideTypes != `["custom"]` {
-		t.Fatalf("old writer changed 034 preferences: auto_hide=%v types=%q", autoHide, autoHideTypes)
+		t.Fatalf("current writer did not update 034 preference columns: auto_hide=%v types=%q", autoHide, autoHideTypes)
 	}
 
 	before, err := readMigrationHistory(ctx, conn)

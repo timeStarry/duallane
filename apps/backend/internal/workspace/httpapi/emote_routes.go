@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"mime"
 	"net/http"
@@ -42,9 +44,57 @@ type emoteService interface {
 }
 
 type emoteSettingsRequest struct {
-	EnabledPackIDs        optional[[]string] `json:"enabledPackIds"`
-	ClickImageEmoteToSend optional[bool]     `json:"clickImageEmoteToSend"`
-	ReplyAutoMention      optional[bool]     `json:"replyAutoMention"`
+	EnabledPackIDs        optional[[]string]                  `json:"enabledPackIds"`
+	ClickImageEmoteToSend optional[bool]                      `json:"clickImageEmoteToSend"`
+	ReplyAutoMention      optional[bool]                      `json:"replyAutoMention"`
+	AutoHideMessages      optional[emoteSettingsBool]         `json:"autoHideMessages"`
+	AutoHideMessageTypes  optional[emoteSettingsMessageTypes] `json:"autoHideMessageTypes"`
+}
+
+type emoteSettingsBool struct {
+	Value   bool
+	Invalid bool
+}
+
+func (value *emoteSettingsBool) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		value.Invalid = true
+		return nil
+	}
+	var decoded bool
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		value.Invalid = true
+		return nil
+	}
+	value.Value = decoded
+	return nil
+}
+
+type emoteSettingsMessageTypes struct {
+	Values  []string
+	Invalid bool
+}
+
+func (value *emoteSettingsMessageTypes) UnmarshalJSON(data []byte) error {
+	var rawValues []json.RawMessage
+	if err := json.Unmarshal(data, &rawValues); err != nil || rawValues == nil {
+		value.Invalid = true
+		return nil
+	}
+	value.Values = make([]string, 0, len(rawValues))
+	for _, raw := range rawValues {
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			value.Invalid = true
+			return nil
+		}
+		var decoded string
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			value.Invalid = true
+			return nil
+		}
+		value.Values = append(value.Values, decoded)
+	}
+	return nil
 }
 
 type emoteIDsRequest struct {
@@ -116,9 +166,25 @@ func updateEmoteSettings(w http.ResponseWriter, r *http.Request, actor *auth.Act
 	if !decodeBody(w, r, &body) {
 		return
 	}
+	if (body.AutoHideMessages.Set && (body.AutoHideMessages.Value == nil || body.AutoHideMessages.Value.Invalid)) ||
+		(body.AutoHideMessageTypes.Set && (body.AutoHideMessageTypes.Value == nil || body.AutoHideMessageTypes.Value.Invalid)) {
+		writeError(w, emotes.NewError(emotes.CodeEmoteInvalidSettings, emotes.MessageEmoteInvalidSettings, http.StatusBadRequest))
+		return
+	}
+	var autoHideMessages *bool
+	if body.AutoHideMessages.Value != nil {
+		value := body.AutoHideMessages.Value.Value
+		autoHideMessages = &value
+	}
+	var autoHideMessageTypes *[]string
+	if body.AutoHideMessageTypes.Value != nil {
+		value := append([]string(nil), body.AutoHideMessageTypes.Value.Values...)
+		autoHideMessageTypes = &value
+	}
 	result, err := options.Emotes.UpdateSettings(r.Context(), actor.ID, emotes.UpdateSettingsInput{
 		EnabledPackIDs: body.EnabledPackIDs.Value, ClickImageEmoteToSend: body.ClickImageEmoteToSend.Value,
-		ReplyAutoMention: body.ReplyAutoMention.Value,
+		ReplyAutoMention: body.ReplyAutoMention.Value, AutoHideMessages: autoHideMessages,
+		AutoHideMessageTypes: autoHideMessageTypes,
 	}, requestMeta(r, options))
 	writeResult(w, http.StatusOK, map[string]any{"settings": result}, err)
 }

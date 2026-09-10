@@ -613,8 +613,11 @@ func (tx *fakeTx) StorageObjectReferenceCount(_ context.Context, objectID string
 
 func (tx *fakeTx) Lock(context.Context, string) error { return nil }
 
-func (tx *fakeTx) UpsertSettings(_ context.Context, userID, ids string, click, reply bool, _ time.Time) error {
-	tx.state.settings[userID] = SettingsRecord{EnabledPackIDsJSON: ids, ClickImageEmoteToSend: click, ReplyAutoMention: reply}
+func (tx *fakeTx) UpsertSettings(_ context.Context, userID, ids string, click, reply, autoHideMessages bool, autoHideMessageTypesJSON string, _ time.Time) error {
+	tx.state.settings[userID] = SettingsRecord{
+		EnabledPackIDsJSON: ids, ClickImageEmoteToSend: click, ReplyAutoMention: reply,
+		AutoHideMessages: autoHideMessages, AutoHideMessageTypesJSON: autoHideMessageTypesJSON,
+	}
 	return nil
 }
 
@@ -1469,6 +1472,75 @@ func TestServiceConcurrentSettingsUpdatesSerialize(t *testing.T) {
 	settings, err := service.GetSettings(context.Background(), "usr-owner")
 	if err != nil || len(settings.EnabledPackIDs) != 1 || settings.EnabledPackIDs[0] != "bili" {
 		t.Fatalf("concurrent settings = %#v, %v", settings, err)
+	}
+}
+
+func TestServiceAutoHideSettingsDefaultsNormalizeAndPreserve(t *testing.T) {
+	repo := newFakeRepo()
+	seedFakeActor(repo, "usr-owner", "owner")
+	service := testService(t, repo, newFakeBlobStore())
+
+	defaults, err := service.GetSettings(context.Background(), "usr-owner")
+	if err != nil {
+		t.Fatalf("default settings: %v", err)
+	}
+	if defaults.AutoHideMessages || strings.Join(defaults.AutoHideMessageTypes, ",") != "image,emote,long" {
+		t.Fatalf("default auto-hide settings = %#v", defaults)
+	}
+
+	enabled := true
+	duplicateTypes := []string{"image", "image", "long"}
+	updated, err := service.UpdateSettings(context.Background(), "usr-owner", UpdateSettingsInput{
+		AutoHideMessages:     &enabled,
+		AutoHideMessageTypes: &duplicateTypes,
+	}, auth.RequestMeta{})
+	if err != nil || !updated.AutoHideMessages || strings.Join(updated.AutoHideMessageTypes, ",") != "image,long" {
+		t.Fatalf("normalized auto-hide settings = %#v, %v", updated, err)
+	}
+
+	emptyTypes := []string{}
+	updated, err = service.UpdateSettings(context.Background(), "usr-owner", UpdateSettingsInput{AutoHideMessageTypes: &emptyTypes}, auth.RequestMeta{})
+	if err != nil || !updated.AutoHideMessages || updated.AutoHideMessageTypes == nil || len(updated.AutoHideMessageTypes) != 0 {
+		t.Fatalf("empty auto-hide types = %#v, %v", updated, err)
+	}
+
+	disabled := false
+	updated, err = service.UpdateSettings(context.Background(), "usr-owner", UpdateSettingsInput{AutoHideMessages: &disabled}, auth.RequestMeta{})
+	if err != nil || updated.AutoHideMessages || updated.AutoHideMessageTypes == nil || len(updated.AutoHideMessageTypes) != 0 {
+		t.Fatalf("disabled auto-hide settings = %#v, %v", updated, err)
+	}
+
+	invalidTypes := []string{"image", "video"}
+	if _, err := service.UpdateSettings(context.Background(), "usr-owner", UpdateSettingsInput{AutoHideMessageTypes: &invalidTypes}, auth.RequestMeta{}); !isCode(err, CodeEmoteInvalidSettings) {
+		t.Fatalf("invalid auto-hide types = %v", err)
+	}
+	invalidState, err := service.GetSettings(context.Background(), "usr-owner")
+	if err != nil || invalidState.AutoHideMessages || len(invalidState.AutoHideMessageTypes) != 0 {
+		t.Fatalf("state after rejected auto-hide types = %#v, %v", invalidState, err)
+	}
+}
+
+func TestServiceConcurrentAutoHideFirstInsertPreservesPartialUpdates(t *testing.T) {
+	repo := newFakeRepo()
+	seedFakeActor(repo, "usr-owner", "owner")
+	service := testService(t, repo, newFakeBlobStore())
+	enabled := true
+	types := []string{"image"}
+	var wait sync.WaitGroup
+	wait.Add(2)
+	go func() {
+		defer wait.Done()
+		_, _ = service.UpdateSettings(context.Background(), "usr-owner", UpdateSettingsInput{AutoHideMessages: &enabled}, auth.RequestMeta{})
+	}()
+	go func() {
+		defer wait.Done()
+		_, _ = service.UpdateSettings(context.Background(), "usr-owner", UpdateSettingsInput{AutoHideMessageTypes: &types}, auth.RequestMeta{})
+	}()
+	wait.Wait()
+
+	settings, err := service.GetSettings(context.Background(), "usr-owner")
+	if err != nil || !settings.AutoHideMessages || strings.Join(settings.AutoHideMessageTypes, ",") != "image" {
+		t.Fatalf("concurrent first insert settings = %#v, %v", settings, err)
 	}
 }
 
