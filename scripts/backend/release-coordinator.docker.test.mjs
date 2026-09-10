@@ -677,7 +677,7 @@ async function rehearseCoordinator(t, scenario) {
       expectedPhases.push(...(candidate ? ["candidates"] : []), "activate");
       if (scenario !== "after-backend") expectedPhases.push("smoke", "capture");
     }
-    if (upgrade) expectedPhases.push(...["validate", "snapshot", "pin", "freeze", "migrate", "fence_drain_activate", "edge", "smoke", "capture", "rollback", "complete"].map((name) => `upgrade_${name}`));
+    if (upgrade) expectedPhases.push(...["validate", "snapshot", "pin", "freeze", "schema_compatibility", "migrate", "fence_drain_activate", "edge", "smoke", "capture", "rollback", "complete"].map((name) => `upgrade_${name}`));
     if (scenario !== "permissions-failure") expectedPhases.push(...(injectedFailure ? ["injected_failure"] : ["rollback", "complete"]));
     assert.deepEqual(phases, expectedPhases);
     if (injectedFailure) assert.ok(result.codes.includes("deployment_failed_74"), "actual ERR handler must preserve the injected failure status");
