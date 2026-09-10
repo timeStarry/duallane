@@ -48,16 +48,16 @@ describe("release history", () => {
     expect(DUAL_LANE_RELEASES[0].version).toBe(webPackage.version);
   });
 
-  it("describes 0.18.0 as a Go-only online service with offline Node storage retained", () => {
+  it("keeps 0.18.0 public release copy about existing member behavior, not operator internals", () => {
     const latest = DUAL_LANE_RELEASES.find((release) => release.version === "0.18.0")!;
     const publicCopy = JSON.stringify(latest);
     expect(latest.releasedAt).toBe("2026-09-10");
-    expect(latest.title).toBe("在线服务统一由 Go 提供");
-    expect(publicCopy).toContain("唯一的在线服务");
-    expect(publicCopy).toContain("独立离线 Node 存储工具继续保留");
-    expect(publicCopy).toContain("SQL 结构和数据保持不变");
-    expect(publicCopy).not.toContain("删除前端 Node");
-    expect(echoReleaseGuides.some((guide) => guide.version === latest.version)).toBe(true);
+    expect(latest.title).toBe("日常功能保持兼容");
+    expect(publicCopy).toContain("无需重新设置");
+    expect(publicCopy).toContain("成员权限");
+    const guide = echoReleaseGuides.find((entry) => entry.version === latest.version);
+    expect(guide).toBeDefined();
+    expect(publicCopy + JSON.stringify(guide)).not.toMatch(/\b(?:Go|Node|SQL)\b|离线工具|运维|Storage operator/);
   });
 
   it("describes the 0.15.5 user-facing scope and release date", () => {

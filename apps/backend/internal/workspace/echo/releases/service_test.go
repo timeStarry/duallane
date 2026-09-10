@@ -57,7 +57,7 @@ func TestLoadGuideCatalogFromCanonicalSharedAsset(t *testing.T) {
 	if !ok {
 		t.Fatal("canonical catalog does not contain current release 0.18.0")
 	}
-	if guide.Version != "0.18.0" || guide.ReleasedAt != "2026-09-10" || guide.Title != "在线服务统一由 Go 提供" || guide.Summary != "Go 现在是唯一的在线服务，独立离线 Node 存储工具继续保留；现有 SQL 结构和数据保持不变，无需额外处理。" || len(guide.Sections) != 2 || guide.Sections[0].Items[0].Location == "" {
+	if guide.Version != "0.18.0" || guide.ReleasedAt != "2026-09-10" || guide.Title != "日常功能保持兼容" || guide.Summary != "本次为维护更新，保留聊天、文件、头像和个人设置；沿用原有入口，无需重新设置。" || len(guide.Sections) != 2 || guide.Sections[0].Items[0].Location == "" {
 		t.Fatalf("incomplete canonical guide: %#v", guide)
 	}
 	guide.Sections[0].Items[0].Title = "mutated test copy"
