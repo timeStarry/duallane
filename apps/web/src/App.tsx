@@ -90,6 +90,7 @@ import {
   type WorkspaceComposerEditorHandle
 } from "./WorkspaceComposerEditor";
 import { WorkspaceMarkdown } from "./WorkspaceMarkdown";
+import { isImeCompositionEnter } from "./workspace-composer-ime";
 import { WorkspaceInteractiveCard, supportsWorkspaceInteractiveCard } from "./WorkspaceInteractiveCard";
 import {
   P2P_FILE_CHUNK_SIZE,
@@ -14288,6 +14289,7 @@ function WorkspaceChatPanel({
     items[nextIndex]?.focus();
   };
   const handleDraftKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (isImeCompositionEnter(event.nativeEvent)) return;
     if (mentionPanelOpen && filteredMentionMembers.length > 0 && ["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) {
       event.preventDefault();
       event.stopPropagation();
@@ -15140,6 +15142,7 @@ function ChatPanel({
   }, [toolPanelOpen]);
   const sendDisabled = sending || !draft.trim();
   const handleDraftKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (isImeCompositionEnter(event.nativeEvent)) return;
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
