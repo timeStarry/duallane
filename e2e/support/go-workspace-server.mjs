@@ -40,7 +40,7 @@ async function main() {
   const webOrigin = "http://127.0.0.1:5198";
   const schema = `duallane_go_browser_${randomUUID().replaceAll("-", "")}`;
   const qualifiedSchema = `"${schema}"`;
-  const require = createRequire(path.join(repoRoot, "apps/web/package.json"));
+  const require = createRequire(path.join(repoRoot, "package.json"));
   const { Client } = require("pg");
   const temporaryDirectory = await mkdtemp(path.join(tmpdir(), "duallane-workspace-go-browser-"));
   let schemaCreated = false;

@@ -73,19 +73,11 @@ test("go-full keeps background ownership out of the HTTP process", async () => {
   assert.match(worker, /WORKER_VALIDATE_ONLY:\s+"false"/);
 });
 
-test("the active Node defaults and Go passive guard are preserved", async () => {
-  const [nodeIndex, emailService, ntfyService, goConfig, goWorker] = await Promise.all([
-    read("apps/web/server/index.mjs"),
-    read("apps/web/server/services/workspace-email.mjs"),
-    read("apps/web/server/services/workspace-ntfy.mjs"),
+test("Go passive guard and dedicated background owners are preserved", async () => {
+  const [goConfig, goWorker] = await Promise.all([
     read("apps/backend/internal/platform/config/workspace.go"),
     read("apps/backend/cmd/worker/main.go")
   ]);
-
-  assert.match(emailService, /env\.WORKSPACE_EMAIL_WORKER_ENABLED === "false"/);
-  assert.match(ntfyService, /env\.WORKSPACE_NTFY_WORKER_ENABLED === "false"/);
-  assert.match(nodeIndex, /const echoDeliveryWorker = workspaceEnabled && echoDelivery/);
-  assert.match(nodeIndex, /const workspaceChunkCleanupTimer = workspaceChunkUploads/);
 
   assert.match(goConfig, /WorkspaceMaintenanceWorkerEnv\s*=\s*"WORKSPACE_MAINTENANCE_WORKER_ENABLED"/);
   assert.match(goConfig, /WorkspaceEchoWorkerEnv\s*=\s*"WORKSPACE_ECHO_WORKER_ENABLED"/);

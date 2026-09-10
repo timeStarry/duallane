@@ -34,8 +34,10 @@ const profiles = Object.freeze({
     snapshot: Object.freeze(["postgres", "api", "web", "p2p", "workspace", "worker", "v2ray"]),
     restoreOrder: Object.freeze(["postgres", "v2ray", "api", "p2p", "workspace", "worker", "web"]),
     rollbackOrder: Object.freeze(["api", "web"]),
+    // Historical recovery still checks a retained API if one exists; it is no
+    // longer a required/current Compose service after runtime retirement.
     healthRequired: Object.freeze(["postgres", "api", "p2p", "workspace", "worker", "web"]),
-    requiredServices: Object.freeze(["postgres", "migrate", "api", "p2p", "workspace", "worker", "web"]),
+    requiredServices: Object.freeze(["postgres", "migrate", "p2p", "workspace", "worker", "web"]),
   }),
 });
 
@@ -155,6 +157,7 @@ function validateResolvedCompose(profile, compose) {
   }
   for (const serviceName of profile.healthRequired) {
     const service = compose.services[serviceName];
+    if (profile.name === "go-full" && serviceName === "api" && !service) continue;
     if (!service.healthcheck || !Array.isArray(service.healthcheck.test)) {
       fail(`${profile.name} requires a healthcheck for ${serviceName}`);
     }

@@ -53,15 +53,15 @@ func TestLoadGuideCatalogFromCanonicalSharedAsset(t *testing.T) {
 	if catalog.Empty() {
 		t.Fatal("canonical release catalog is empty")
 	}
-	guide, ok := catalog.Guide("v0.15.1")
+	guide, ok := catalog.Guide("v0.18.0")
 	if !ok {
-		t.Fatal("canonical catalog does not contain v0.15.1")
+		t.Fatal("canonical catalog does not contain current release 0.18.0")
 	}
-	if guide.Version != "0.15.1" || guide.Title == "" || len(guide.Sections) == 0 || guide.Sections[0].Items[0].Location == "" {
+	if guide.Version != "0.18.0" || guide.ReleasedAt != "2026-09-10" || guide.Title != "在线服务统一由 Go 提供" || guide.Summary != "Go 现在是唯一的在线服务，独立离线 Node 存储工具继续保留；现有 SQL 结构和数据保持不变，无需额外处理。" || len(guide.Sections) != 2 || guide.Sections[0].Items[0].Location == "" {
 		t.Fatalf("incomplete canonical guide: %#v", guide)
 	}
 	guide.Sections[0].Items[0].Title = "mutated test copy"
-	fresh, ok := catalog.Guide("0.15.1")
+	fresh, ok := catalog.Guide("0.18.0")
 	if !ok || fresh.Sections[0].Items[0].Title == "mutated test copy" {
 		t.Fatal("catalog returned mutable internal state")
 	}

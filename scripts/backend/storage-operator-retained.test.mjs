@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 function read(relativePath) {
-  return readFileSync(path.join(repositoryRoot, relativePath), "utf8");
+  return readFileSync(path.join(repositoryRoot, relativePath), "utf8").replaceAll("\r\n", "\n");
 }
 
 function requireText(source, text, label) {
@@ -15,7 +15,8 @@ function requireText(source, text, label) {
 }
 
 function serviceBlock(source, name) {
-  const lines = source.split(/\r?\n/);
+  const startOfServices = source.indexOf("\nservices:");
+  const lines = source.slice(startOfServices < 0 ? 0 : startOfServices + 1).split(/\r?\n/);
   const start = lines.indexOf(`  ${name}:`);
   assert.notEqual(start, -1, `Compose service ${name} is missing`);
   let end = lines.length;
@@ -30,27 +31,26 @@ function serviceBlock(source, name) {
 }
 
 test("retained Node storage commands and modes remain explicit", () => {
-  const scripts = JSON.parse(read("apps/web/package.json")).scripts;
+  const scripts = JSON.parse(read("tools/node-compat/package.json")).scripts;
   const expectedScripts = {
-    "db:migrate": "node server/migrate.mjs",
-    "storage:provision": "node server/storage-provision.mjs",
-    "storage:migrate": "node server/storage-migrate.mjs",
-    "storage:dedupe": "node server/storage-dedupe.mjs"
+    "storage:provision": "node storage-provision.mjs",
+    "storage:migrate": "node storage-migrate.mjs",
+    "storage:dedupe": "node storage-dedupe.mjs"
   };
   for (const [name, command] of Object.entries(expectedScripts)) {
-    assert.equal(scripts[name], command, `@duallane/web ${name} entrypoint changed`);
+    assert.equal(scripts[name], command, `offline tools ${name} entrypoint changed`);
   }
 
-  requireText(read("apps/web/server/migrate.mjs"), "openDatabase(env.DATABASE_URL", "Node schema migration runner");
-  requireText(read("apps/web/server/storage-provision.mjs"), "provisionWorkspaceS3Bucket({ env: process.env })", "Node S3 provisioner");
+  assert.equal(scripts["db:migrate"], undefined);
+  requireText(read("tools/node-compat/commands/storage-provision.mjs"), "provisionWorkspaceS3Bucket", "offline S3 provisioner");
 
-  const storageMigration = read("apps/web/server/services/workspace-s3-migration.mjs");
+  const storageMigration = read("tools/node-compat/lib/s3-migration.mjs");
   requireText(storageMigration, 'if (!["backfill", "verify"].includes(mode))', "Node S3 migration modes");
   requireText(storageMigration, 'record.kind === "archive"', "Node S3 archive inventory");
   requireText(storageMigration, "store.ensureObject(record)", "Node S3 migration backfill");
   requireText(storageMigration, "store.verifyObject(record)", "Node S3 migration verification");
 
-  const storageDedupe = read("apps/web/server/services/workspace-storage-dedupe.mjs");
+  const storageDedupe = read("tools/node-compat/lib/storage-dedupe.mjs");
   requireText(storageDedupe, 'const MODES = new Set(["backfill", "verify", "finalize"]);', "Node dedupe modes");
   requireText(storageDedupe, "registry.withObjectLock(record.storageObjectId", "Node dedupe object lock");
   requireText(storageDedupe, "store.deleteLegacyObject(record)", "Node dedupe finalization");
@@ -72,17 +72,21 @@ test("default Compose keeps retained storage commands profile-gated and one-shot
   for (const [name, profile, command] of services) {
     const block = serviceBlock(compose, name);
     requireText(block, `profiles: ["${profile}"]`, `${name} profile`);
-    requireText(block, `command: ["pnpm", "--filter", "@duallane/web", "${command}"]`, `${name} command`);
+    requireText(block, `command: ["node", "${command.replace(":", "-")}.mjs"]`, `${name} command`);
+    requireText(block, "dockerfile: tools/node-compat/Dockerfile", `${name} isolated image`);
+    requireText(block, 'user: "65532:65532"', `${name} non-root user`);
+    requireText(block, "read_only: true", `${name} root filesystem`);
     requireText(block, 'restart: "no"', `${name} restart policy`);
   }
 
-  const migrate = serviceBlock(compose, "migrate");
-  requireText(migrate, 'command: ["pnpm", "--filter", "@duallane/web", "db:migrate"]', "default schema migration command");
+  const goCompose = read("docker-compose.go-production.yml");
+  const migrate = serviceBlock(goCompose, "migrate");
+  requireText(migrate, 'entrypoint: ["/usr/local/bin/duallane-migrate"]', "default Go schema migration command");
   assert.equal(migrate.includes("profiles:"), false, "default schema migration unexpectedly became profile-gated");
 
-  const api = serviceBlock(compose, "api");
-  for (const command of ["storage:provision", "storage:migrate", "storage:dedupe"]) {
-    assert.equal(api.includes(command), false, `api service unexpectedly invokes ${command}`);
+  for (const name of ["p2p", "workspace", "worker", "web", "migrate"]) {
+    const runtime = serviceBlock(goCompose, name);
+    assert.doesNotMatch(runtime, /node-compat|storage-(?:provision|migrate|dedupe)\.mjs/);
   }
 });
 

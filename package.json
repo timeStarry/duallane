@@ -1,6 +1,6 @@
 {
   "name": "duallane",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "private": true,
   "description": "DualLane self-hosted split-lane communication tool.",
   "type": "module",
@@ -11,23 +11,22 @@
     "backend:check": "make -C apps/backend verify",
     "backend:generate": "make -C apps/backend generate",
     "backend:check-generated": "make -C apps/backend check-generated",
-    "backend:parity:p2p": "make -C apps/backend parity-p2p",
     "backend:lint": "make -C apps/backend vet staticcheck",
     "backend:test": "make -C apps/backend test",
     "backend:test:race": "make -C apps/backend test-race",
     "backend:vuln": "make -C apps/backend vuln",
-    "start": "pnpm --filter @duallane/web start",
     "storage:dedupe": "pnpm --filter @duallane/node-compat-tools storage:dedupe",
+    "storage:migrate": "pnpm --filter @duallane/node-compat-tools storage:migrate",
+    "storage:provision": "pnpm --filter @duallane/node-compat-tools storage:provision",
     "test": "pnpm --filter @duallane/agent-sdk test && pnpm --filter @duallane/web test && pnpm --filter @duallane/node-compat-tools test",
     "test:e2e": "playwright test",
     "test:e2e:p2p-go": "playwright test --config=playwright.p2p-go.config.ts",
     "test:e2e:workspace-go": "playwright test --config=playwright.workspace-go.config.ts",
-    "lint": "pnpm --filter @duallane/agent-sdk lint && pnpm --filter @duallane/web lint",
-    "storage:migrate": "pnpm --filter @duallane/node-compat-tools storage:migrate",
-    "storage:provision": "pnpm --filter @duallane/node-compat-tools storage:provision"
+    "lint": "pnpm --filter @duallane/agent-sdk lint && pnpm --filter @duallane/web lint"
   },
   "packageManager": "pnpm@10.30.3",
   "devDependencies": {
-    "@playwright/test": "^1.62.0"
+    "@playwright/test": "^1.62.0",
+    "pg": "8.22.0"
   }
 }

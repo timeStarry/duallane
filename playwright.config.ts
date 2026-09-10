@@ -4,13 +4,13 @@ const webPort = Number(process.env.E2E_WEB_PORT || 5173);
 const apiPort = Number(process.env.E2E_API_PORT || 8787);
 const baseURL = `http://127.0.0.1:${webPort}`;
 const apiURL = `http://127.0.0.1:${apiPort}`;
-const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER === "true";
 
 export default defineConfig({
   testDir: "./e2e",
-  // The Go-only privacy suite owns a separate server and artifact policy.
-  testIgnore: "**/p2p-go-privacy.spec.ts",
-  outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR || "test-results",
+  // The default gate keeps the original P2P assertions, but its server is the
+  // Go P2P candidate. Workspace has a separate complete Go browser job.
+  testMatch: ["p2p.spec.ts", "p2p-ime.spec.ts"],
+  outputDir: ".private-test-results/p2p-go-default",
   fullyParallel: false,
   workers: 1,
   timeout: 45_000,
@@ -20,12 +20,15 @@ export default defineConfig({
   forbidOnly: Boolean(process.env.CI),
   failOnFlakyTests: Boolean(process.env.CI),
   retries: 0,
-  reporter: process.env.CI ? [["line"], ["html", { open: "never" }]] : "list",
+  reporter: "list",
   use: {
     baseURL,
-    trace: "retain-on-failure",
-    screenshot: "only-on-failure",
-    video: "retain-on-failure"
+    contextOptions: {
+      reducedMotion: "reduce"
+    },
+    trace: "off",
+    screenshot: "off",
+    video: "off"
   },
   projects: [
     {
@@ -41,7 +44,8 @@ export default defineConfig({
         E2E_API_PORT: String(apiPort),
         E2E_WEB_PORT: String(webPort)
       },
-      reuseExistingServer,
+      reuseExistingServer: false,
+      gracefulShutdown: { signal: "SIGTERM", timeout: 10_000 },
       timeout: 120_000
     },
     {
@@ -50,7 +54,8 @@ export default defineConfig({
       env: {
         DUALLANE_API_ORIGIN: apiURL
       },
-      reuseExistingServer,
+      reuseExistingServer: false,
+      gracefulShutdown: { signal: "SIGTERM", timeout: 10_000 },
       timeout: 120_000
     }
   ]

@@ -75,42 +75,6 @@ jobs:
           TEST_DATABASE_URL: postgres://duallane:duallane-ci-password@127.0.0.1:5432/duallane?sslmode=disable
         run: make integration-postgres
 
-      - name: Set up pnpm for media owner parity
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.30.3
-          run_install: false
-
-      - name: Set up Node.js for media owner parity
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-
-      - name: Install media owner dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Rehearse Node and Go migration owners on PostgreSQL
-        env:
-          TEST_DATABASE_URL: postgres://duallane:duallane-ci-password@127.0.0.1:5432/duallane?sslmode=disable
-          DUALLANE_SCHEMA_COEXISTENCE_ALLOW_SCHEMA_CREATION: "true"
-          DUALLANE_SCHEMA_COEXISTENCE_RUN_PG: "true"
-        run: node --test scripts/backend/schema-coexistence.test.mjs
-
-      - name: Compare actual Node and Go media owners
-        run: node --test scripts/backend/media-compatibility.test.mjs
-
-      - name: Verify shared Node and Go local storage layout
-        run: node scripts/backend/workspace-files-legacy-parity.mjs
-
-      - name: Verify actual Node legacy emotes through Go HTTP and PostgreSQL
-        env:
-          TEST_DATABASE_URL: postgres://duallane:duallane-ci-password@127.0.0.1:5432/duallane?sslmode=disable
-        run: |
-          node --test scripts/backend/workspace-emotes-legacy-parity.test.mjs
-          node scripts/backend/workspace-emotes-legacy-parity.mjs --go
-
   quality-gate:
     name: Test, lint, build, and Chromium E2E
     runs-on: ubuntu-latest
@@ -118,10 +82,19 @@ jobs:
     env:
       CI: "true"
       TEST_DATABASE_URL: ""
+      DUALLANE_APP_VERSION: "0.18.0"
+      DUALLANE_GIT_COMMIT: ${{ github.sha }}
+      POSTGRES_PASSWORD: duallane-ci-password
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: apps/backend/go.mod
+          cache-dependency-path: apps/backend/go.sum
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -137,7 +110,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Validate backend tooling guards
-        run: node --test .github/tests/ci-go-native-dependencies.test.mjs .github/tests/ci-go-p2p-privacy.test.mjs .github/tests/ci-go-workspace-privacy.test.mjs .github/tests/ci-unit-fixtures.test.mjs scripts/backend/owned-process.test.mjs scripts/backend/p2p-parity.test.mjs scripts/backend/route-inventory.test.mjs scripts/backend/go-workspace-browser.test.mjs scripts/backend/local-gateway-binding.test.mjs scripts/backend/gateway-readonly-smoke.test.mjs scripts/backend/storage-operator-retained.test.mjs
+        run: node --test .github/tests/ci-go-native-dependencies.test.mjs .github/tests/ci-go-p2p-privacy.test.mjs .github/tests/ci-go-workspace-privacy.test.mjs .github/tests/ci-unit-fixtures.test.mjs scripts/dev/go-dev.test.mjs scripts/backend/schema-coexistence.test.mjs scripts/backend/owned-process.test.mjs scripts/backend/go-workspace-browser.test.mjs scripts/backend/local-gateway-binding.test.mjs scripts/backend/gateway-readonly-smoke.test.mjs scripts/backend/storage-operator-retained.test.mjs scripts/backend/p2p-frozen-contract.test.mjs scripts/backend/frozen-legacy-contract.harness.test.mjs
 
       - name: Validate release ownership and rollback contracts
         run: node --test scripts/backend/production-deploy.test.mjs scripts/backend/release-activation.test.mjs scripts/backend/release-cleanup.test.mjs scripts/backend/release-go-restore.test.mjs scripts/backend/release-trap-status.test.mjs scripts/backend/release-coordinator.docker.test.mjs scripts/backend/passive-candidate-fixture.test.mjs scripts/backend/go-production-workers.test.mjs scripts/backend/node-runtime-image.test.mjs
@@ -176,34 +149,13 @@ jobs:
           TMPDIR: /dev/shm
         run: pnpm test
 
-      - name: Verify Node persisted backend contracts
-        run: |
-          node scripts/backend/echo-requirement-fixtures.mjs --check
-          node scripts/backend/echo-release-fixtures.mjs --check
-          node scripts/backend/echo-solicitation-fixtures.mjs --check
-          node scripts/backend/echo-automation-fixtures.mjs --check
-          node scripts/backend/echo-parser-fixtures.mjs --check
-          node scripts/backend/echo-card-fixtures.mjs
-          node scripts/backend/bot-idempotency-fixtures.mjs
-          node scripts/backend/bot-message-dto-fixtures.mjs
-          node scripts/backend/bot-websocket-fixtures.mjs
-          node scripts/backend/bot-connection-fixtures.mjs
-          node scripts/backend/bot-contract-fixtures.mjs
-          node scripts/backend/bot-feishu-contract.mjs
-          node scripts/backend/bot-feishu-fallback-fixtures.mjs
-          node scripts/backend/feishu-card-converter-golden.mjs
-          node scripts/backend/feishu-card-action-golden.mjs
-          node scripts/backend/route-inventory.mjs --check
-          node scripts/backend/workspace-core-contract.mjs --check
-          node scripts/backend/workspace-markdown-contract.mjs --check
-          node --test scripts/backend/workspace-avatar-key-contract.test.mjs
-          node scripts/backend/workspace-emotes-contract.mjs --check
-          node scripts/backend/workspace-files-contract.mjs --check
-          node scripts/backend/workspace-invites-contract.mjs --check
-          node scripts/backend/workspace-notifications-null-fixtures.mjs
-          node scripts/backend/workspace-notifications-contract.mjs --check
-          node scripts/backend/topic-parser-fixtures.mjs
-          node scripts/backend/topic-card-fixtures.mjs
+      - name: Verify frozen Node artifact provenance
+        run: node --test .github/tests/frozen-node-artifacts.test.mjs
+
+      - name: Run frozen Go P2P contract
+        env:
+          CGO_ENABLED: "0"
+        run: node scripts/backend/p2p-frozen-contract.mjs
 
       - name: Run type and lint checks
         run: pnpm lint
@@ -214,14 +166,23 @@ jobs:
       - name: Validate Docker Compose
         run: docker compose config
 
+      - name: Build offline storage tools image
+        env:
+          COMPOSE_PROFILES: storage-migration
+        run: docker compose --profile storage-migration build storage-provision
+
       - name: Validate production deployment config
         env:
+          DUALLANE_APP_VERSION: "0.18.0"
+          DUALLANE_GIT_COMMIT: ${{ github.sha }}
           POSTGRES_VOLUME_NAME: duallane-ci-postgres
+          POSTGRES_PASSWORD: duallane-ci-password
           COMPOSE_PROFILES: github-proxy
+          WORKSPACE_ENABLED: "true"
         run: |
           docker compose -f docker-compose.yml -f docker-compose.production.yml config --quiet
           docker compose -f docker-compose.yml -f docker-compose.production.yml config --format json |
-            node -e "const c=JSON.parse(require('fs').readFileSync(0,'utf8')); const v=c.services.postgres.volumes.find((item) => item.target === '/var/lib/postgresql/data'); if (c.volumes?.[v?.source]?.name !== 'duallane-ci-postgres') throw new Error('production PostgreSQL volume override is ineffective'); for (const s of ['postgres','api','web','v2ray']) if (c.services[s].restart !== 'always') throw new Error(s + ' must restart after daemon recovery')"
+            node -e "const c=JSON.parse(require('fs').readFileSync(0,'utf8')); const v=c.services.postgres.volumes.find((item) => item.target === '/var/lib/postgresql/data'); if (c.volumes?.[v?.source]?.name !== 'duallane-ci-postgres') throw new Error('production PostgreSQL volume override is ineffective'); for (const s of ['postgres','p2p','workspace','worker','web','v2ray']) if (c.services[s].restart !== 'always') throw new Error(s + ' must restart after daemon recovery')"
           bash -n deploy/production/deploy.sh
 
       - name: Validate Go release Compose image contract
@@ -230,24 +191,13 @@ jobs:
         run: node --test scripts/backend/release-compose-image-contract.test.mjs
 
       - name: Build Docker images
-        run: docker compose build web api migrate
+        run: docker compose build web p2p workspace worker migrate
 
       - name: Install Chromium and system dependencies
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Run Playwright E2E tests
         run: pnpm test:e2e
-
-      - name: Upload Playwright failure artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report-${{ github.run_id }}
-          path: |
-            playwright-report/
-            test-results/
-          if-no-files-found: ignore
-          retention-days: 7
 
   go-workspace-browser:
     name: Go Workspace Chromium integration and privacy
@@ -308,6 +258,15 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Run frozen Go legacy fixture gates
+        env:
+          TEST_DATABASE_URL: postgres://duallane:duallane-ci-password@127.0.0.1:5432/duallane?sslmode=disable
+          NODE_COMPAT_TEST_POSTGRES: "true"
+        run: |
+          node scripts/backend/frozen-legacy-contract.test.mjs --files
+          node scripts/backend/frozen-legacy-contract.test.mjs --emotes
+          node --test tools/node-compat/test/database.postgres.test.mjs
 
       - name: Install Chromium and system dependencies
         run: pnpm exec playwright install --with-deps chromium

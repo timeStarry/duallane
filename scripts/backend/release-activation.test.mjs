@@ -447,7 +447,7 @@ test("gateway smoke rejects stale metadata and unsupported published bindings be
 });
 
 test("gateway smoke uses the published mapping of the checked-in Nginx port", async () => {
-  for (const file of ["Dockerfile.web", "deploy/candidate/Dockerfile.web"]) {
+  for (const file of ["deploy/candidate/Dockerfile.web"]) {
     assert.match(await readFile(path.join(root, file), "utf8"), /^EXPOSE 8080$/m);
   }
   await withTempDirectory(async (directory) => {

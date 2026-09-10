@@ -4,7 +4,6 @@ import {
   assertMigrationFailureEvidence,
   createRehearsalSchemaName,
   loadCanonicalMigrationManifest,
-  runSchemaCoexistence,
   toSafeSchemaCoexistenceError,
   validateRehearsalEnvironment
 } from "./schema-coexistence.mjs";
@@ -127,30 +126,16 @@ test("expected migration failures require ordinary exit and the exact conflict",
   assert.throws(() => assertMigrationFailureEvidence({ code: 1, stderr: 'error: column "user_id" does not exist; code: 42703' }, node031));
 });
 
-test("PostgreSQL rehearsal is opt-in and executes the real Node/Go owners", { timeout: 600_000 }, async (t) => {
-  if (process.env.DUALLANE_SCHEMA_COEXISTENCE_RUN_PG !== "true") {
-    t.skip("set DUALLANE_SCHEMA_COEXISTENCE_RUN_PG=true with the explicit rehearsal gate to run PostgreSQL");
-    return;
-  }
-  const report = await runSchemaCoexistence();
-  assert.equal(report.scenarios.length, 6);
-  assert.equal(report.scenarios[0].advisoryLockWait, true);
-  assert.equal(report.scenarios[2].partialObjects, false);
-  assert.equal(report.scenarios[3].name, "Go 029 -> Go 030 -> Go latest -> Node no-op");
-  assert.equal(report.scenarios[3].goIncremental, true);
-  assert.equal(report.scenarios[3].nodeNoop, true);
-  assert.deepEqual(report.scenarios[3].verification, {
-    history: true,
-    seed: true,
-    schema: true,
-    readWrite: true
-  });
-  assert.equal(report.scenarios[4].name, "Go 030 -> Go latest -> Node no-op");
-  assert.equal(report.scenarios[4].goIncremental, true);
-  assert.equal(report.scenarios[4].nodeNoop, true);
-  assert.equal(report.scenarios[5].expectedFailure, true);
-  assert.equal(report.scenarios[5].transactionRollback, true);
-  assert.equal(report.scenarios[5].lateBatchRollback, true);
-  assert.equal(report.scenarios[5].retrySucceeded, true);
-  assert.equal(report.scenarios[5].partialObjects, false);
+test("the retired Node/Go rehearsal producer is not part of the safety helper module", async () => {
+  const module = await import("./schema-coexistence.mjs");
+  assert.deepEqual(
+    Object.keys(module).sort(),
+    [
+      "assertMigrationFailureEvidence",
+      "createRehearsalSchemaName",
+      "loadCanonicalMigrationManifest",
+      "toSafeSchemaCoexistenceError",
+      "validateRehearsalEnvironment"
+    ]
+  );
 });

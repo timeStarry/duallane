@@ -1,23 +1,30 @@
 # Production release tooling
 
-`deploy.sh` has exactly two release profiles:
+The 0.18 `deploy.sh` path is Go-to-Go only. It requires a clean `main`
+checkout, a full `--expected-commit`, verified release metadata, the
+authoritative PostgreSQL volume, and a verified logical backup. It rejects
+`node-default`, `--bootstrap`, and `--prepare-go-permissions`; it does not
+provide a current-tree first-install or permission-bootstrap command.
 
-- `node-default` is the default and preserves the existing Node `api`/`web`/
-  `migrate` order.
-- `go-full` is opt-in with `--release-profile go-full`. It is a whole-backend
-  handoff, not a mixed-owner rollout: the existing Node `api` is stopped and
-  confirmed not running before Go Workspace or worker containers start.
+An existing 0.17 installation's first migration and permission preparation
+must be completed from the retained 0.17 checkout and its approved runbook.
+That historical procedure is not recreated in this tree.
 
-The script still requires a clean `main` checkout, a full
-`--expected-commit`, the authoritative PostgreSQL volume, and a verified
-logical backup. It never reverses a migration or restores PostgreSQL
+The coordinator never reverses a migration or restores PostgreSQL
 automatically.
 
-`node-default` resolves only `docker-compose.yml` and
-`docker-compose.production.yml`. `go-full` additionally resolves
-`docker-compose.go-production.yml` and enables only the `rollback` Compose
-profile so the overlaid Node `api` remains available for rollback without
-being started as part of the Go release.
+The root `docker-compose.yml` extends `docker-compose.go-production.yml` and is
+Go-only by default. It has no online `api` service. Production uses
+`--release-profile go-full --go-upgrade --previous-release-snapshot`; historical
+release-helper/immutable-image material remains only for exact old-image
+recovery and synthetic tests, not as a current Node Compose profile.
+
+For the next upgrade, use the private base snapshot
+`backups/production/duallane-20260910T080211Z-8d346a04317d.recovery.go-compose.snapshot.json`
+and its `.compose.json`, `.external.json`, and `.volumes.json` sidecars. The
+base is the 0.17 Go release at
+`8d346a04317d0d3396293caca14ca1c65c7b5163`; rollback never targets schema 34
+on 0.16.1 or a stale database copy.
 
 The Go candidate rehearsal additionally uses the fixed
 `deploy/production/go-candidate.compose.yml` overlay. The script creates one
@@ -39,8 +46,7 @@ network and refuses an existing network with mismatched labels.
 The Go production override must make `docker compose config --format json`
 prove all of the following before `go-full` can proceed:
 
-- services `api`, `p2p`, `workspace`, `worker`, `web`, `migrate`, and `postgres`
-  exist;
+- services `p2p`, `workspace`, `worker`, `web`, `migrate`, and `postgres` exist;
 - `p2p`, `workspace`, and `worker` have the parent-provided read-only
   `/usr/local/bin/duallane-healthcheck` healthcheck;
 - Workspace and worker wait for healthy PostgreSQL and completed `migrate`;
@@ -96,26 +102,6 @@ requested mode. Candidate containers have no published host port. The script
 does not treat a manifest field as proof that a candidate is passive; runtime
 flags, the actual health result, and parent-owned runtime tests are required.
 
-The `node-default` API candidate has a separate passive-environment contract.
-Its effective environment must contain each of these values exactly once:
-
-```text
-WORKSPACE_ENABLED=false
-DATABASE_AUTO_MIGRATE=false
-WORKSPACE_EMAIL_WORKER_ENABLED=false
-WORKSPACE_NTFY_WORKER_ENABLED=false
-WORKSPACE_ECHO_DELIVERY_WORKER_ENABLED=false
-DUALLANE_DATA_DIR=/tmp/duallane-candidate-api
-```
-
-The API candidate uses the private container path under `/tmp`; the release
-helper rejects any host or named mount covering `/tmp` (or a higher path), and
-the data directory is never the live `/app/data` volume. The candidate is
-removed after its health and version check. The Node candidate keeps the Node
-health and P2P surfaces available, but proves only basic API/version and health
-availability. It does not prove Workspace dependencies, persistence, or worker
-readiness.
-
 P2P candidates use the internal `/api/health` healthcheck and have no database,
 storage, Workspace, OAuth, SMTP, or provider secrets. Replacing the single
 P2P process interrupts in-memory direct sessions; the release output records
@@ -124,9 +110,9 @@ that expected interruption.
 ## Legacy local-data permission preflight
 
 The Go Workspace and worker containers deliberately run as `65532:65532`.
-Before selecting `go-full`, the operator must identify the exact legacy data
-volume and complete an offline, read-only permission inventory for the entire
-tree, including objects written by the current root-running Node API. The
+Before selecting `go-full`, the operator must identify the exact authoritative
+data volume and complete an offline, read-only permission inventory for the
+entire tree, including objects written by the former root-running 0.17 owner. The
 inventory must prove that this UID can traverse directories and read every
 legacy object that the Go compatibility reader may open. Record the volume
 identity, image/release used for the check, and the result with the release
@@ -143,10 +129,9 @@ preflight.
 The unpublished Workspace candidate mounts the same data volume and its
 readiness path must exercise the non-mutating existing-store open as
 `65532:65532`. A permission/readiness failure removes only that candidate and
-aborts before the Node API is stopped or any Go writer is handed ownership.
-Passing this candidate check is evidence for the checked state only; it does
-not waive the full-tree operator inventory or prove future root-owned Node
-writes will be readable by Go.
+aborts before any Go writer is handed ownership. Passing this candidate check is
+evidence for the checked state only; it does not waive the full-tree operator
+inventory.
 
 ## Recovery contract
 
@@ -160,8 +145,9 @@ If Docker restarts during a successful release, the script waits for the daemon,
 restores only captured services that were running before the release but are
 outside the selected profile and were not deliberately fenced for the handoff,
 then verifies every health-required service in the selected profile. It never
-starts a captured old `api` as part of this success path. A missing container,
-failed start, or failed required healthcheck is a hard recovery failure.
+starts a captured retired Node service as part of this success path. A missing
+container, failed start, or failed required healthcheck is a hard recovery
+failure.
 
 If Docker restarts during a failed release, the script waits for the daemon and
 restores all captured running containers in dependency order after rollback;
@@ -183,20 +169,18 @@ owner; multiple matches fail closed. Daemon recovery skips a completed fenced
 Go owner and fails closed on an incomplete fence.
 
 If application replacement fails, `go-full` first stops and confirms all new Go
-services are not running, then retags captured images and restores the previous
-Node application state. Rollback restores application images only and never
-issues a down migration or database restore. Edge replacement is last, after
-backend readiness. Rollback reconstruction uses the base Node Compose files,
-not the Go override; if Compose replaces the captured Node IDs, the replacement
-IDs are recorded so a later Docker-daemon recovery does not try to resurrect
-removed containers. The current fixed `go-full` profile is intentionally
-Node-to-Go first-cutover only and refuses an already active Go owner; a
-durable Go-to-Go upgrade protocol is not claimed by this tooling.
+services are not running, then restores the previous verified Go image IDs and
+the same database/storage authority. Rollback restores application images only
+and never issues a down migration or database restore. Edge replacement is
+last, after backend readiness. The four current owners (`p2p`, `workspace`,
+`worker`, and `web`) are re-identified and fenced on every rollback retry,
+including owners not yet recreated. A candidate rehearsal or test result does
+not authorize deployment or a ledger transition.
 
-`node-default` also refuses to proceed when a running `p2p`, `workspace`, or
-`worker` container belonging to the production Compose project is detected.
-This prevents an implicit Node release from creating a second Go owner; use a
-future explicit owner-transition procedure instead.
+The current tree has no Node online rollback Compose. Historical
+`release-helper.sh` and immutable old images are retained only for the exact
+0.17 recovery procedure; that procedure must use its retained checkout/runbook
+and must not be started beside Go.
 
 The fake-Docker test harness is synthetic and isolated. It must be run before
 any real operator invocation; no test uses the production `.env`, SSH, a real

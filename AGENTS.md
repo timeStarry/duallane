@@ -34,9 +34,20 @@ behavior, but do not override higher-level safety requirements.
   message retention, idempotency/concurrency behavior, and audit logging.
 - Reject upload overages before accepting the transfer. Rejected sensitive
   operations must create content-free audit records where the domain requires it.
-- Do not weaken Fastify redaction, response security headers, secret handling, or
-  object access control without a written threat analysis and maintainer approval.
+- Do not weaken redaction, response security headers, secret handling, or object
+  access control without a written threat analysis and maintainer approval.
 - Do not modify imported emote assets unless the task is specifically about them.
+
+For the 0.18.0 Node online-runtime retirement, Go is the only online backend
+topology. `apps/web/server/migrations` remains the canonical SQL path;
+`tools/node-compat` is an explicitly invoked, profile-only offline package for
+storage maintenance and does not start with Go services, run migrations, or seed
+data automatically. The 0.17 production evidence is recorded in
+[`2026-09-10-chat-0170-after-bridge.md`](docs/backend/work-items/2026-09-10-chat-0170-after-bridge.md)
+and is a prerequisite baseline, not 0.18.0 retirement or deployment
+acceptance; the retirement gates remain pending until the linked
+[work item](docs/backend/work-items/2026-09-10-node-runtime-retirement.md)
+records them as passed.
 
 Read [Security and data](docs/development/SECURITY_AND_DATA.md) before changing
 authentication, authorization, P2P, Workspace persistence, uploads, quotas,
@@ -49,7 +60,7 @@ notifications, audit, logs, or deployment configuration.
 | Branches, bugs, commits, reviews, or pull requests | [Workflow](docs/development/WORKFLOW.md) |
 | Module ownership, dependencies, API boundaries, migrations | [Architecture](docs/development/ARCHITECTURE.md) |
 | Go backend architecture, capability migration, services, or containers | [Backend architecture index](docs/backend/README.md) |
-| TypeScript, React, Fastify, SQL, events, CSS, tests | [Code standards](docs/development/CODE_STANDARDS.md) |
+| TypeScript, React, Go, SQL, events, CSS, tests | [Code standards](docs/development/CODE_STANDARDS.md) |
 | Layout, components, copy, responsive behavior, accessibility | [UI/UX standards](docs/development/UI_UX_STANDARDS.md) and the linked Workspace visual specifications |
 | Validation, versions, release notes, Docker, production | [Testing and release](docs/development/TESTING_AND_RELEASE.md) |
 | Workspace product or protocol behavior | [Workspace design index](docs/WORKSPACE_DESIGN_INDEX.md) |
@@ -79,9 +90,10 @@ The complete lifecycle and PR contract are in
   refactors in the same change.
 - Preserve public API and persisted-data compatibility unless the change includes
   a documented migration or version transition.
-- During the backend transition, use the capability ledger to identify the
-  current owner. Never enable duplicate production writers, job claimers, or
-  migration runners.
+- Use the capability ledger to identify the current owner. Never enable duplicate
+  production writers, job claimers, or migration runners. Online request-serving
+  and worker behavior is Go-owned for 0.18.0; retained Node code is limited to
+  explicitly documented offline compatibility or historical recovery material.
 - Keep routes thin, domain rules in services, and persistence details behind the
   database or storage boundary. Validate and authorize on the server.
 - Treat retries, duplicate delivery, concurrent writes, stale revisions, aborted
@@ -103,6 +115,14 @@ pnpm test
 pnpm build
 pnpm test:e2e
 ```
+
+`pnpm dev` starts the Go P2P/Workspace processes and Vite on loopback through
+`scripts/dev/go-dev.mjs` (defaults `8897`, `8898`, and `5173`). It does not start
+the retired Node API, a worker, a migration runner, Docker, or a database. Set
+`DUALLANE_API_ORIGIN` only for an explicitly selected single-origin test
+harness; normal development follows the split Go origins. Run migration or
+worker commands separately against disposable data when a test specifically
+requires them.
 
 Run the smallest relevant check while iterating, then the required gate from
 [Testing and release](docs/development/TESTING_AND_RELEASE.md). Do not claim a

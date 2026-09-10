@@ -4,35 +4,7 @@ import test from 'node:test';
 
 const workflow = (await readFile(new URL('../workflows/ci.yml', import.meta.url), 'utf8')).replace(/\r\n?/g, '\n');
 const fixtureStep = workflow.split(/(?=^      - name: )/m)
-  .find((step) => step.startsWith('      - name: Verify Node persisted backend contracts'));
-
-const expectedFixtureCommands = [
-  'node scripts/backend/echo-requirement-fixtures.mjs --check',
-  'node scripts/backend/echo-release-fixtures.mjs --check',
-  'node scripts/backend/echo-solicitation-fixtures.mjs --check',
-  'node scripts/backend/echo-automation-fixtures.mjs --check',
-  'node scripts/backend/echo-parser-fixtures.mjs --check',
-  'node scripts/backend/echo-card-fixtures.mjs',
-  'node scripts/backend/bot-idempotency-fixtures.mjs',
-  'node scripts/backend/bot-message-dto-fixtures.mjs',
-  'node scripts/backend/bot-websocket-fixtures.mjs',
-  'node scripts/backend/bot-connection-fixtures.mjs',
-  'node scripts/backend/bot-contract-fixtures.mjs',
-  'node scripts/backend/bot-feishu-contract.mjs',
-  'node scripts/backend/bot-feishu-fallback-fixtures.mjs',
-  'node scripts/backend/feishu-card-converter-golden.mjs',
-  'node scripts/backend/feishu-card-action-golden.mjs',
-  'node scripts/backend/route-inventory.mjs --check',
-  'node scripts/backend/workspace-core-contract.mjs --check',
-  'node scripts/backend/workspace-markdown-contract.mjs --check',
-  'node scripts/backend/workspace-emotes-contract.mjs --check',
-  'node scripts/backend/workspace-files-contract.mjs --check',
-  'node scripts/backend/workspace-invites-contract.mjs --check',
-  'node scripts/backend/workspace-notifications-null-fixtures.mjs',
-  'node scripts/backend/workspace-notifications-contract.mjs --check',
-  'node scripts/backend/topic-parser-fixtures.mjs',
-  'node scripts/backend/topic-card-fixtures.mjs'
-];
+  .find((step) => step.startsWith('      - name: Verify frozen Node artifact provenance'));
 
 test('only the Node unit step moves disposable SQLite fixtures to tmpfs', () => {
   const steps = workflow.split(/(?=^      - name: )/m);
@@ -44,25 +16,49 @@ test('only the Node unit step moves disposable SQLite fixtures to tmpfs', () => 
   assert.doesNotMatch(usingTmpfs[0], /testTimeout|--test-timeout|--retry|continue-on-error/);
 });
 
-test('Node fixture freshness runs every persisted contract with its real check interface', () => {
-  assert.ok(fixtureStep, 'Node persisted backend contract step is missing');
-  const commands = [...fixtureStep.matchAll(/^          (node scripts\/backend\/[^\n]+)$/gm)]
-    .map((match) => match[1]);
-  assert.deepEqual(commands, expectedFixtureCommands);
+test('frozen Node provenance is checked without invoking retired generators', () => {
+  assert.ok(fixtureStep, 'frozen Node artifact provenance step is missing');
+  assert.match(fixtureStep, /run: node --test \.github\/tests\/frozen-node-artifacts\.test\.mjs\n/);
+  for (const retiredCommand of [
+    'Rehearse Node and Go migration owners',
+    'DUALLANE_SCHEMA_COEXISTENCE_RUN_PG',
+    'media-compatibility',
+    'workspace-files-legacy-contract.mjs',
+    'workspace-emotes-legacy-contract.mjs',
+    'workspace-files-legacy-parity',
+    'workspace-emotes-legacy-parity',
+    'storage-operator-contract.mjs',
+    'storage-operator-backfill-contract.mjs',
+    'route-inventory.mjs --check',
+    'p2p-parity.mjs'
+  ]) {
+    assert.doesNotMatch(workflow, new RegExp(retiredCommand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
 });
 
-test('schema coexistence rehearsal is an explicit PostgreSQL service step', () => {
+test('frozen Go P2P and legacy fixture gates are registered explicitly', () => {
+  assert.match(workflow, /- name: Run frozen Go P2P contract\n        env:\n          CGO_ENABLED: "0"\n        run: node scripts\/backend\/p2p-frozen-contract\.mjs\n/);
+  assert.match(workflow, /scripts\/backend\/p2p-frozen-contract\.test\.mjs/);
+  assert.match(workflow, /scripts\/backend\/frozen-legacy-contract\.harness\.test\.mjs/);
+  const workspaceStart = workflow.indexOf('\n  go-workspace-browser:');
+  assert.ok(workspaceStart >= 0, 'Go Workspace browser job boundary is missing');
+  const workspaceJob = workflow.slice(workspaceStart);
+  assert.match(workspaceJob, /Run frozen Go legacy fixture gates/);
+  assert.match(workspaceJob, /TEST_DATABASE_URL: postgres:\/\/duallane:duallane-ci-password@127\.0\.0\.1:5432\/duallane\?sslmode=disable/);
+  assert.match(workspaceJob, /NODE_COMPAT_TEST_POSTGRES: "true"/);
+  assert.match(workspaceJob, /node scripts\/backend\/frozen-legacy-contract\.test\.mjs --files/);
+  assert.match(workspaceJob, /node scripts\/backend\/frozen-legacy-contract\.test\.mjs --emotes/);
+  assert.match(workspaceJob, /node --test tools\/node-compat\/test\/database\.postgres\.test\.mjs/);
+  assert.doesNotMatch(workspaceJob, /apps\/web\/server\/index\.mjs/);
+});
+
+test('Go migration quality remains independent of retired Node coexistence rehearsal', () => {
   const start = workflow.indexOf('\n  go-quality-gate:');
   const end = workflow.indexOf('\n  quality-gate:');
   assert.ok(start >= 0 && end > start, 'Go quality job boundary is missing');
   const goQualityJob = workflow.slice(start, end);
-  const schemaStep = goQualityJob.split(/(?=^      - name: )/m)
-    .find((step) => step.startsWith('      - name: Rehearse Node and Go migration owners on PostgreSQL'));
-  assert.ok(schemaStep, 'schema coexistence PostgreSQL step is missing from Go quality job');
   assert.match(goQualityJob, /services:\n      postgres:/);
-  assert.match(schemaStep, /TEST_DATABASE_URL: postgres:\/\/duallane:duallane-ci-password@127\.0\.0\.1:5432\/duallane\?sslmode=disable/);
-  assert.match(schemaStep, /DUALLANE_SCHEMA_COEXISTENCE_ALLOW_SCHEMA_CREATION: "true"/);
-  assert.match(schemaStep, /DUALLANE_SCHEMA_COEXISTENCE_RUN_PG: "true"/);
-  assert.match(schemaStep, /run: node --test scripts\/backend\/schema-coexistence\.test\.mjs/);
-  assert.doesNotMatch(schemaStep, /go-workspace-browser|test:e2e:workspace-go/);
+  assert.match(goQualityJob, /run: make verify/);
+  assert.match(goQualityJob, /run: make integration-postgres/);
+  assert.doesNotMatch(goQualityJob, /schema-coexistence|apps\/web\/server|Node and Go migration owners/);
 });

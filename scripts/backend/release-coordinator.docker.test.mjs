@@ -624,6 +624,10 @@ async function rehearseCoordinator(t, scenario) {
       candidateComposePath: paths.candidate, candidateOverlayPath: candidate.candidateOverlayPath });
     const upgradeCompose = upgrade && buildReleaseFixtures({ ...fixtureOptions, images: { ...images, ...upgradeImages },
       versions: { node: node.version, go: upgrade.version }, commits: { node: node.commit, go: upgrade.commit } }).goCompose;
+    // The retired release no longer configures API. Keep the actual stopped
+    // fixture container so the production helper must discover its ownership
+    // by project/service labels, not by a current Compose service declaration.
+    if (upgradeCompose) delete upgradeCompose.services.api;
     for (const compose of [fixtures.nodeCompose, fixtures.goCompose, ...(upgradeCompose ? [upgradeCompose] : []),
       ...(candidate ? [candidate.candidateCompose] : [])]) {
       for (const service of Object.values(compose.services)) service.labels = { ...service.labels, [ownerLabel]: runID };

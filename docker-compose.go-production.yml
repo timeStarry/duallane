@@ -1,5 +1,5 @@
-# Opt-in only through deploy/production/deploy.sh --release-profile go-full.
-# Never add this file to the default Node release or run a bare compose up.
+# Shared Go runtime definitions; docker-compose.yml extends these services.
+# Production must use the guarded Go-to-Go deploy.sh coordinator.
 x-go-logging: &go-logging
   driver: json-file
   options:
@@ -49,24 +49,34 @@ x-workspace-dependencies: &workspace-dependencies
     condition: service_completed_successfully
 
 services:
-  api:
-    profiles: [rollback]
-
   web:
     image: duallane-go-web:${DUALLANE_GIT_COMMIT:?full release commit is required}
     build:
+      context: .
       dockerfile: deploy/candidate/Dockerfile.web
+      args:
+        DUALLANE_APP_VERSION: ${DUALLANE_APP_VERSION:?release version is required}
+        DUALLANE_GIT_COMMIT: ${DUALLANE_GIT_COMMIT:?full release commit is required}
     user: "101:101"
     read_only: true
     tmpfs:
       - /tmp
       - /var/cache/nginx:uid=101,gid=101,mode=0700
-    # Requires Compose 2.24.4+: remove the legacy api dependency completely.
-    depends_on: !override
+    ports:
+      - "${DUALLANE_WEB_BIND:-127.0.0.1}:${DUALLANE_WEB_PORT:-8787}:8080"
+    depends_on:
       p2p:
         condition: service_healthy
       workspace:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/api/health | grep -q '\"ok\":true'"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    logging: *go-logging
+    restart: always
 
   p2p:
     image: duallane-go-p2p:${DUALLANE_GIT_COMMIT:?full release commit is required}
@@ -183,4 +193,15 @@ services:
     tmpfs: [/tmp]
     environment:
       DUALLANE_MIGRATIONS_DIR: /app/migrations
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${POSTGRES_DB:-duallane}
+      PGUSER: ${POSTGRES_USER:-duallane}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?database password is required}
+      DATABASE_POOL_MAX: "2"
+      DATABASE_SSL: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
     logging: *go-logging

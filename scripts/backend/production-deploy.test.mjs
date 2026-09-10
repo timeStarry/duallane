@@ -150,7 +150,7 @@ async function writeGoUpgradeSnapshotArtifacts(directory) {
   return { snapshotPath, composePath, externalPath };
 }
 
-test("release manifest exposes only the fixed profiles and preserves Node default", () => {
+test("release manifest retains historical Node recovery without requiring its service in Go Compose", () => {
   assert.deepEqual(profileNames, ["node-default", "go-full"]);
   assert.deepEqual(profiles["node-default"].services, ["postgres", "migrate", "api", "web"]);
   assert.deepEqual(profiles["node-default"].build, ["api", "web", "migrate"]);
@@ -160,6 +160,10 @@ test("release manifest exposes only the fixed profiles and preserves Node defaul
   assert.deepEqual(profiles["go-full"].healthRequired, ["postgres", "api", "p2p", "workspace", "worker", "web"]);
   assert.equal(validateProfile(profiles["node-default"]).name, "node-default");
   assert.equal(validateProfile(profiles["go-full"]).name, "go-full");
+  assert.equal(profiles["go-full"].requiredServices.includes("api"), false);
+  const retired = validGoCompose();
+  delete retired.services.api;
+  assert.equal(validateResolvedCompose(profiles["go-full"], retired), true);
 });
 
 test("candidate overlay keeps upstream aliases off the PostgreSQL network", async () => {

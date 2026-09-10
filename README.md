@@ -16,8 +16,13 @@ The user-facing product has two lanes:
 
 ## Start Developing
 
-Prerequisites are Node.js 22, Corepack/pnpm 10, and Git. Create a short-lived
-branch from current `origin/main`, then install and start:
+Prerequisites are Node.js 22, Corepack/pnpm 10, the pinned Go 1.26/toolchain
+1.26.8 backend toolchain, Git, and (for host-run Workspace/media work) a CGO
+compiler, `pkg-config`, and libvips headers/runtime. See the [backend validation
+prerequisites](docs/backend/VALIDATION.md#3-candidate-go-gates-and-evidence)
+before running host Go gates. Create a short-lived branch from current
+`origin/main`, then install the JavaScript workspace and start the Go-only local
+runner:
 
 ```bash
 git fetch origin
@@ -28,10 +33,11 @@ pnpm dev
 ```
 
 Replace the example topic with the scope of the change. Codex-created branches
-use `codex/<short-topic>`. The frontend runs at
-`http://127.0.0.1:5173` and proxies API/WebSocket traffic to
-`http://127.0.0.1:8787`. Workspace is disabled by default, so this starts the
-P2P-only path without a database.
+use `codex/<short-topic>`. `pnpm dev` starts Go P2P on `127.0.0.1:8897`, Go
+Workspace on `127.0.0.1:8898`, and Vite on `127.0.0.1:5173`. It does not start
+the retired Node API/worker, Docker, a database, or an automatic migration or
+seed. `DUALLANE_API_ORIGIN` is an explicit single-origin Go/external test
+harness override; normal development uses the split Go origins.
 
 Before opening a pull request, run the gate required for the affected code. The
 common full checks are:
@@ -49,11 +55,12 @@ architecture, code, UI/UX, security/data, testing, release, and deployment. Only
 GitHub user **`timestarry`** may perform the final merge into `main`.
 
 The [backend architecture index](docs/backend/README.md) is the Go backend
-handbook and live migration ledger. Production release 0.16.0 now routes to Go;
-Node/Fastify remains for rollback, development/parity harnesses and offline
-compatibility. `pnpm dev` above still selects that retained Node harness, not
-the live Go topology. See the [cutover record](docs/backend/work-items/2026-09-10-go-production-cutover.md)
-for deployed identities and acceptance still outstanding.
+handbook and live migration ledger. The stable 0.18 architecture is Go-only for
+online P2P, Workspace, Web, and worker paths; the exact 0.17 production
+evidence is recorded in the [bridge/release record](docs/backend/work-items/2026-09-10-chat-0170-after-bridge.md).
+The 0.18 Node-runtime retirement remains pending only the gates in its
+[retirement work item](docs/backend/work-items/2026-09-10-node-runtime-retirement.md);
+retired Node online code is not a development or production owner.
 
 Product behavior is defined separately in [`DESIGN.md`](DESIGN.md), the
 [Workspace design index](docs/WORKSPACE_DESIGN_INDEX.md), and the
@@ -74,19 +81,33 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-The frontend runs at `http://127.0.0.1:5173` and proxies API/WebSocket traffic to
-`http://127.0.0.1:8787`.
+The frontend runs at `http://127.0.0.1:5173`. The default Vite proxy routes
+P2P traffic to `http://127.0.0.1:8897` and Workspace/auth traffic to
+`http://127.0.0.1:8898`; set `DUALLANE_API_ORIGIN` only when a focused browser
+harness intentionally uses one backend origin.
 
-Run the browser-level P2P and Workspace core flows with Playwright:
+Run the default Go P2P browser gate with Playwright:
 
 ```bash
 pnpm exec playwright install chromium
 pnpm test:e2e
 ```
 
-The E2E suite starts isolated local services and uses a temporary SQLite test
-double for Workspace, so it does not require PostgreSQL. Keep PostgreSQL
-integration coverage separate through `TEST_DATABASE_URL` and `test:postgres`.
+The default `pnpm test:e2e` suite is P2P-only. The complete Go Workspace browser
+gate is separate and requires an explicit loopback disposable PostgreSQL URL and
+schema-creation opt-in:
+
+```bash
+DUALLANE_GO_E2E_ALLOW_SCHEMA_CREATION=true \
+TEST_DATABASE_URL=postgresql://<user>:<password>@127.0.0.1:<port>/<disposable-db> \
+pnpm test:e2e:workspace-go
+```
+
+Use a non-default database name; the harness creates and drops a temporary
+schema and rejects non-loopback or provider-override URLs. Do not substitute the
+retired Node API or an implicit SQLite compatibility service. Keep PostgreSQL
+integration coverage separate through `TEST_DATABASE_URL` and the repository's
+PostgreSQL gate.
 
 Agent Bot runtimes use the versioned JavaScript client in
 `packages/agent-sdk`. A running deployment publishes reviewed, secret-free
@@ -105,7 +126,7 @@ the external Bot token cannot change this policy.
 When testing Workspace locally, set `WORKSPACE_FRONTEND_URL=http://127.0.0.1:5173`
 so the GitHub login fallback returns to the frontend dev server. Use the same
 host in the browser, preferably `127.0.0.1`, so the workspace session cookie is
-sent back to the API proxy.
+sent back through the Go Workspace proxy.
 
 Shared space is disabled unless `WORKSPACE_ENABLED=true` is set exactly. A
 misspelled value such as `ture` keeps it disabled. For local debugging, the
@@ -115,12 +136,19 @@ minimum shared-space settings are:
 - `WORKSPACE_FRONTEND_URL=http://127.0.0.1:5173`
 - `DATABASE_URL=postgresql://...`
 
-Workspace persistence requires PostgreSQL. When running the API directly,
-`DATABASE_AUTO_MIGRATE=true` applies pending versioned migrations at startup.
-Use `pnpm --filter @duallane/web db:migrate` to run them explicitly. P2P-only
-development does not require a database while Workspace remains disabled.
-The migration runner initializes PostgreSQL schemas; it does not import legacy
-`duallane.sqlite` data automatically.
+Workspace persistence requires PostgreSQL. The Go runner never migrates or
+seeds a database at startup. Run the explicit Go migrator against a disposable
+development database when needed:
+
+```bash
+(cd apps/backend && go run ./cmd/migrate)
+```
+
+P2P-only development does not require a database while Workspace remains
+disabled. The canonical SQL remains under `apps/web/server/migrations`; the
+migrator does not import legacy `duallane.sqlite` data automatically. The
+isolated `tools/node-compat` package is an offline storage operator, not a
+startup migration path.
 
 `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` can be left empty outside
 production. In that mode, the GitHub login route uses the seeded owner fallback:
@@ -137,24 +165,20 @@ only in the browser key derivation and is not sent to the backend.
 
 ## Production Shape
 
-Current production explicitly uses `docker-compose.go-production.yml` through
-the official `go-full` release profile: Nginx/Web, Go P2P, Go Workspace, Go worker,
-the one-shot Go migrator and PostgreSQL. Node API is retained stopped with
-restart disabled. See [runtime and upgrade operations](docs/backend/OPERATIONS.md)
+The 0.17 production baseline is Go-only: Web, Go P2P, Go Workspace, Go worker,
+the one-shot Go migrator, and PostgreSQL. The root `docker-compose.yml` extends
+`docker-compose.go-production.yml` and is Go-only by default; it has no `api`
+service. The Go Compose contract requires `DUALLANE_APP_VERSION` and
+`DUALLANE_GIT_COMMIT`. `.env.example` supplies local-build values
+(`0.18.0`/`development`); production deployment overwrites them from verified
+release metadata. See [runtime and upgrade operations](docs/backend/OPERATIONS.md)
 before changing this live deployment.
 
-The retained **Node-default installation** uses `docker-compose.production.yml`. Set
-`POSTGRES_VOLUME_NAME` to a pre-provisioned authoritative volume; never rely on
-an untracked recovery override or a project-generated default volume. For a
-first Node-default installation only (not an upgrade or recovery of live Go):
-
-```bash
-cd "${HOME}/duallane"
-cp .env.example .env
-docker volume create duallane-postgres-production
-# Set DUALLANE_PRODUCTION_DIR, POSTGRES_VOLUME_NAME, and all secrets in .env.
-bash deploy/production/deploy.sh --bootstrap --expected-commit "$(git rev-parse HEAD)"
-```
+The 0.18 Node-runtime retirement is still pending its final gates. The current
+tree has no Node online API/worker/gateway or Node production bootstrap path.
+An existing 0.17 installation's first migration and permission preparation must
+follow the retained 0.17 checkout and its approved runbook; do not invent or
+copy a bootstrap command from this tree.
 
 On this host, development happens in `/home/timestarry/projects/duallane` and
 the only production checkout is `/home/timestarry/duallane`. Deployment uses
@@ -163,13 +187,16 @@ from the development checkout. Other installations may set a different
 absolute `DUALLANE_PRODUCTION_DIR`; when it is empty, the script defaults to
 `${HOME}/duallane` and verifies the physical path before touching Docker.
 
-Routine upgrades of this live installation use the same guarded entry point
+Routine upgrades of this live installation use the guarded Go-to-Go entry point
 with `--release-profile go-full --go-upgrade --previous-release-snapshot` and
 the last successful private snapshot, following the
 [Go upgrade procedure](docs/backend/OPERATIONS.md#guarded-go-activation-and-upgrade-inputs).
-Pull exact `origin/main` as the checkout owner before the privileged release;
-verify a clean checkout and pass the full `--expected-commit`. Do not use the
-Node-default form or first-cutover `--prepare-go-permissions` for this upgrade.
+For the 0.18 rehearsal/release, the previous private base is
+`backups/production/duallane-20260910T080211Z-8d346a04317d.recovery.go-compose.snapshot.json`
+with its three adjacent private sidecars. Pull exact `origin/main` as the
+checkout owner before the privileged release; verify a clean checkout and pass
+the full `--expected-commit`. The current entry point rejects Node-default,
+bootstrap, and `--prepare-go-permissions` forms.
 
 Before pushing a release, increment the root and Web package versions together,
 add the matching user-facing release entry, and run `pnpm test`, `pnpm lint`,
@@ -195,49 +222,48 @@ remain an explicit recovery operation outside the routine script.
 Only `web` publishes `DUALLANE_WEB_BIND:DUALLANE_WEB_PORT`. Its Go gateway
 forwards P2P API/WebSockets to `p2p` and Workspace/auth/Bot API/WebSockets to
 `workspace`; private health/metrics endpoints are not public. Neither backend
-nor worker publishes a host port. The retained Node-default gateway is not the
-current live route.
+nor worker publishes a host port. There is no current Node gateway route.
 
 The script provisions `DUALLANE_BUILDX_BUILDER` on first use with the configured
 `DUALLANE_BUILDKIT_IMAGE`. It starts that builder only for the image build,
 constrains retained cache to `DUALLANE_BUILDX_CACHE_MAX` after a successful
 release, and stops the builder on every exit path so it does not retain memory
-between releases. Active production services use `restart: always`; the retained
-Node API deliberately stays `restart: no` and must not be started alongside Go.
-The database, proxy, Go services and Web resume through guarded restoration. Their Docker
-JSON logs rotate at `DUALLANE_LOG_MAX_SIZE` and retain at most
-`DUALLANE_LOG_MAX_FILE` files per service.
+between releases. Active production services use `restart: always`; no Node
+service may be started alongside Go. The database, proxy, Go services and Web
+resume through guarded restoration. Their Docker JSON logs rotate at
+`DUALLANE_LOG_MAX_SIZE` and retain at most `DUALLANE_LOG_MAX_FILE` files per
+service.
 Public HTTPS smoke checks should run from an external client; the application
 host may not support hairpin access through the public gateway.
 
-### Retained Node-default and offline storage reference
+### Offline compatibility and storage reference
 
-The following Node-default bootstrap and mutating storage commands are retained
-for compatibility, not routine operations on active Go. Before using any of
-them, follow the [Go storage operator safety boundary](docs/backend/STORAGE_OPERATOR.md)
-and the owning migration runbook: obtain the appropriate operator authorization,
-fence every writer/claimer, preserve current-authority backups and verify the
-exact target. Do not enable Node beside Go, run backfill/finalize to silence a
-read-only verifier, or change storage drivers as an unguarded Go rollback.
+The isolated `tools/node-compat` package retains only the explicitly invoked
+offline storage operators (`storage:provision`, `storage:migrate`, and
+`storage:dedupe`). It is not an online API, worker, startup hook, or complete Go
+replacement. Before using any operator, follow the [Go storage operator safety
+boundary](docs/backend/STORAGE_OPERATOR.md): obtain authorization, identify the
+exact authority, fence every writer/claimer/finalizer, preserve and verify
+backups, and validate the target. Do not run Node beside Go, run backfill or
+finalize to silence a read-only verifier, or change storage drivers as an
+unguarded rollback.
 
-Node-default Compose starts PostgreSQL, waits for its health check, runs the one-shot
-`migrate` service, and only then starts the API. Set a strong
-`POSTGRES_PASSWORD` before deployment. Back up both the `duallane-postgres`
-database volume and the `duallane-data` file volume. The local storage driver
-keeps Workspace attachment, avatar, and personal emote bytes in `duallane-data`; the production
-S3 driver uses a private S3-compatible bucket while the local volume remains
-available for staged migration and rollback. `POSTGRES_IMAGE` defaults to the
-DaoCloud mirror and can be changed to another trusted PostgreSQL 17 image
-registry.
+The Go Compose path starts PostgreSQL, the one-shot Go `migrate` service, and
+then Go Workspace/worker. Set a strong `POSTGRES_PASSWORD` before deployment.
+Back up both the `duallane-postgres` database volume and the `duallane-data`
+file volume. The local storage driver keeps Workspace attachment, avatar, and
+personal emote bytes in `duallane-data`; the production S3 driver uses a
+private S3-compatible bucket while the local volume remains available for
+staged migration and rollback. `POSTGRES_IMAGE` defaults to the DaoCloud mirror
+and can be changed to another trusted PostgreSQL 17 image registry.
 
 For S3-compatible storage, keep the bucket private and mount a JSON credential
 file containing only `accessKey` and `secretKey`. Set its host path through
 `WORKSPACE_S3_CREDENTIALS_FILE`. Compose bind-backed secrets retain host
 ownership/modes: the Go deployment requires the verified UID/GID 65532, mode-0600
-file, mounted read-only. Both runtimes authorize and enforce quota before upload.
-The retained Node S3 delivery path returns short-lived signed URLs; the current
-Go HTTP boundary streams authorized objects without exposing the provider
-locator. Internal object keys never use the original file name.
+file, mounted read-only. The Go HTTP boundary authorizes quota before upload
+and streams authorized objects without exposing the provider locator. Internal
+object keys never use the original file name.
 
 Workspace attachment reservations advertise a 4 MiB application part size.
 Larger files are uploaded as independently hashed, idempotent parts and are
@@ -259,11 +285,10 @@ private policy verification, and multipart cleanup to pass; use the bundled
 `deploy/caddy/fs.tsio.top.caddy` rules to restrict public paths, methods, and
 preflight origin.
 
-MinIO releases that reject the S3 incomplete-multipart lifecycle rule use an
-application cleanup fallback. Provisioning creates and immediately aborts a
+MinIO releases that reject the S3 incomplete-multipart lifecycle rule remain an
+operator-managed cleanup concern. Provisioning creates and immediately aborts a
 canary multipart upload to verify the limited credential can list and abort
-uploads. The retained Node API then removes incomplete uploads older than seven days at
-startup and every six hours; an access failure still blocks startup.
+uploads; it does not install an online cleanup loop or change Go startup.
 
 For an existing local volume, choose a stable run ID and preserve it when
 resuming. The backfill uploads active attachments and current avatars to their
@@ -314,9 +339,9 @@ resume only the same authorized phase with its stable run ID. The
 [content-addressed storage runbook](docs/WORKSPACE_CONTENT_ADDRESSED_STORAGE.md)
 contains the full cutover and rollback procedure.
 
-`SERVE_STATIC=false` is set for the API container in compose so static assets are
-served only by the web gateway. Running `pnpm start` directly still supports the
-single-process static server unless `SERVE_STATIC=false` is set.
+The Go Web image serves the Vite build and the Go gateway proxies only the
+declared P2P and Workspace paths. There is no Node single-process static/API
+fallback in the 0.18 tree.
 
 For a public deployment, point your outer Nginx/TLS virtual host at
 `127.0.0.1:${DUALLANE_WEB_PORT:-8787}` and set `PUBLIC_BASE_URL` to the final
@@ -367,9 +392,10 @@ and parse. A failed refresh leaves the last-known-good config untouched and
 must not restart the running proxy. Never store the subscription URL in `.env`,
 Git, or command output; only the secret file path belongs in `.env`.
 
-The default deployment runs one API instance. PostgreSQL supports concurrent
-requests, but scaling the API horizontally also requires shared attachment
-storage and a cross-instance realtime event transport.
+The default deployment runs separate Go P2P, Workspace, worker, and Web
+services. PostgreSQL supports concurrent requests; scaling Workspace or worker
+replicas still requires the documented shared storage, realtime, and job-lease
+contracts.
 
 For PostgreSQL integration tests, point `TEST_DATABASE_URL` at a disposable
 database and run `pnpm --filter @duallane/web test:postgres`. Each run creates
@@ -392,8 +418,8 @@ path-only access logs and suppress raw request-line error logs specifically for
 `/api/auth/github/callback`, because its query contains one-time OAuth secrets.
 
 The shared space lane is intentionally disabled by default. Shared space UI
-entry points and `/api/workspace/*` return a "功能正在开发中" state until
-`WORKSPACE_ENABLED=true` is set for controlled Workspace MVP testing.
+entry points and `/api/workspace/*` remain unavailable until
+`WORKSPACE_ENABLED=true` is set for controlled Workspace testing.
 
 ## Release convention
 

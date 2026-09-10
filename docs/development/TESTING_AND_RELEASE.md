@@ -10,11 +10,11 @@ part of the change.
 | Documentation only | `git diff --check`; validate local links and executable examples |
 | Frontend behavior or styling | focused Vitest/Playwright coverage, `pnpm lint`, `pnpm build`, desktop and 390×844 visual review |
 | Service or API logic | focused regression tests, `pnpm test`, `pnpm lint` |
-| Go backend or Node-to-Go migration slice | The applicable current gate plus [backend validation](../backend/VALIDATION.md); run repository-pinned Go gates once the module exists |
+| Go backend or Node-retirement slice | The applicable current gate plus [backend validation](../backend/VALIDATION.md); run repository-pinned Go gates once the module exists |
 | P2P, Workspace, auth, quota, audit, database, storage, realtime, or deployment | `pnpm test`, `pnpm lint`, `pnpm build`, plus focused failure/concurrency coverage |
-| PostgreSQL-sensitive behavior | the above plus `pnpm --filter @duallane/web test:postgres` with a disposable `TEST_DATABASE_URL` |
+| PostgreSQL-sensitive behavior | the above plus the applicable Go `make -C apps/backend integration-postgres` gate with a disposable loopback `TEST_DATABASE_URL` |
 | Docker, Nginx, Caddy, or Compose | the above plus `docker compose config` for affected profiles and build the affected image |
-| User-critical end-to-end flow | focused Playwright flow; full `pnpm test:e2e` when shared chat/auth/navigation behavior changes |
+| User-critical end-to-end flow | focused Playwright flow; use `pnpm test:e2e:workspace-go` with explicit disposable PostgreSQL when Workspace/auth/navigation behavior changes |
 
 If a required environment is unavailable, do not report the gate as passed. Say
 exactly what was not run, why, and what remains for the PR owner or CI.
@@ -26,8 +26,8 @@ exactly what was not run, why, and what remains for the PR owner or CI.
   concurrency, storage reference behavior, and event targeting.
 - Route tests cover authentication, boundary validation, public status/error shape,
   disabled Workspace behavior, and safe projection.
-- PostgreSQL tests cover SQL, constraints, locks, migrations, and behavior the
-  SQLite test double cannot prove.
+- PostgreSQL tests cover SQL, constraints, locks, migrations, and behavior a
+  local test double cannot prove.
 - Component tests cover render states, interaction, keyboard/focus, retry, and
   Strict Mode lifecycle.
 - Playwright covers complete user-visible flows, responsive layout, integration
@@ -44,18 +44,26 @@ Install the repository browser once:
 pnpm exec playwright install chromium
 ```
 
-Run all or a focused specification:
+Run the default P2P gate or the separate complete Go Workspace gate:
 
 ```bash
 pnpm test:e2e
-pnpm exec playwright test e2e/workspace-agent-bot.spec.ts --project=chromium
+DUALLANE_GO_E2E_ALLOW_SCHEMA_CREATION=true \
+TEST_DATABASE_URL=postgresql://<user>:<password>@127.0.0.1:<port>/<disposable-db> \
+  pnpm test:e2e:workspace-go
 ```
 
-Replace the focused spec path with the flow being changed.
+Use a non-default loopback database for the Workspace command; the harness
+creates and drops an isolated schema. Replace the command with a focused
+Playwright specification only when the changed flow needs one.
 
-Playwright starts isolated API and Vite services with a temporary SQLite Workspace
-test database. When another process owns the defaults, assign non-conflicting
-ports with `E2E_API_PORT` and `E2E_WEB_PORT`; do not terminate an unknown process.
+The default E2E path is Go P2P-only. The Workspace browser gate uses the Go
+Workspace service and Vite with the explicit disposable PostgreSQL environment
+above. Do not start or depend on the retired Node API, Node worker, or an
+implicit SQLite compatibility service. When a focused harness must target one
+origin, set the documented `DUALLANE_API_ORIGIN` single-origin Go/external test
+override; do not terminate an unknown process or silently fall back to a Node
+endpoint.
 
 Tests wait on observable state or responses, not arbitrary sleeps. Capture traces
 or screenshots only when useful, remove personal data, and keep generated output
@@ -124,8 +132,8 @@ validation and authorized PR merge, pull with `git pull --ff-only` as the
 checkout owner, verify clean `main` and exact `origin/main`, and pass the full
 `--expected-commit` to the guarded entry point.
 
-The [current Go production release](../backend/work-items/2026-09-10-go-production-cutover.md)
-has already completed first cutover. Its next application release must follow
+The [0.17 bridge/release record](../backend/work-items/2026-09-10-chat-0170-after-bridge.md)
+records the current Go production evidence. Its next application release must follow
 the [Go-to-Go upgrade procedure](../backend/OPERATIONS.md#guarded-go-activation-and-upgrade-inputs),
 using `--release-profile go-full --go-upgrade --previous-release-snapshot` with
 the previous successful private snapshot and sidecars. Do not select Node-default
@@ -140,19 +148,26 @@ script from the development checkout and never substitute a bare
 
 The guarded script must verify exact images, passive candidates, authority and
 old-owner fence/drain before activation, then replace the gateway last. The
-first-cutover offline permission option deliberately fences Node before passive
-candidates; subsequent upgrades use their previous Go snapshot. If Docker must restart, record all running
-application containers first and restore them afterward.
+first-cutover permission/bootstrap procedure is historical 0.17 material and
+must be run from the retained 0.17 checkout and runbook only. The 0.18 tree
+rejects Node-default/bootstrap/permission-preparation entry points; subsequent
+releases use the previous Go snapshot. If Docker must restart, record all
+running application containers first and restore them afterward.
 
 ## 8. Health Check And Rollback
 
-After deployment, verify the deployed commit/version, public Web response, API
-health, authentication boundary, Workspace enabled/disabled expectation, static
-assets, WebSocket connection, and the critical changed path. Inspect redacted logs
-for migration, storage, and startup errors.
+After deployment, verify the deployed commit/version, public Web response,
+P2P and Workspace gateway health, authentication boundary, Workspace
+enabled/disabled expectation, static assets, WebSocket connection, and the
+critical changed path. Inspect redacted logs for migration, storage, and
+startup errors.
 
-Rollback uses the repository's guarded deployment procedure and a known-good
-compatible commit/image. Before rollback, check schema and data compatibility;
+Rollback uses the repository's guarded procedure and the exact known-good Go
+images captured in the previous release snapshot. For the 0.18 retirement,
+the approved rollback target is the 0.17 Go release at commit
+`8d346a04317d0d3396293caca14ca1c65c7b5163` with the private snapshot and
+sidecars; it is not a schema-34 rollback to 0.16.1 or a stale database copy.
+Before rollback, check schema/data compatibility and retain the same authority;
 never revert code across a destructive migration blindly. Record the reason,
 affected interval, data implications, and follow-up fix in the release issue.
 

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import test from "node:test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,7 +13,6 @@ import {
   loadCanonicalMigrationManifest,
   validateRehearsalEnvironment,
 } from "./schema-coexistence.mjs";
-import { migrateDatabase, openDatabase } from "../../apps/web/server/services/db.mjs";
 import { validateReport } from "../../deploy/production/release-drain-config.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -21,10 +22,13 @@ const caseLabel = "com.duallane.release-drain-case";
 const expectedImage = image;
 const expectedEntrypoint = ["/usr/local/bin/duallane-release-check"];
 const expectedCommand = ["--check-provider"];
+const migrationEntrypoint = ["/usr/local/bin/duallane-migrate"];
 const commandTimeoutMs = 20_000;
+const migrationTimeoutMs = 60_000;
 const migrationStatementTimeoutMs = 15_000;
+const imageMigrationDirectory = "/app/migrations";
 
-const require = createRequire(path.join(repoRoot, "apps/web/package.json"));
+const require = createRequire(path.join(repoRoot, "package.json"));
 const { Client } = require("pg");
 
 function validateImage(value) {
@@ -142,23 +146,6 @@ async function dropOwnedSchema(databaseURL, schema) {
   });
 }
 
-async function applyCanonicalMigrations(databaseURL, schema, manifest) {
-  const scopedURL = scopedDatabaseURL(databaseURL, schema, "migrate");
-  const db = await openDatabase(scopedURL, { migrate: false, seed: false, maxConnections: 1 });
-  try {
-    await migrateDatabase(db);
-  } finally {
-    await db.close();
-  }
-
-  const names = await withClient(scopedURL, async (client) => {
-    const result = await client.query("SELECT name FROM schema_migrations ORDER BY name");
-    return result.rows.map((row) => row.name);
-  });
-  assert.deepEqual(names, manifest.files.map((file) => file.name), "Node rehearsal did not apply the canonical migration set");
-  return scopedURL;
-}
-
 async function seedReservedUpload(databaseURL) {
   await withClient(databaseURL, async (client) => {
     await client.query(`
@@ -266,7 +253,15 @@ function singleLineOutput(result, operation) {
   return lines[0];
 }
 
-function inspectContainer(containerID, runID, caseName) {
+function resolveContainerInspectionExpectations(runtime = {}) {
+  return {
+    entrypoint: runtime.entrypoint ?? expectedEntrypoint,
+    command: Object.hasOwn(runtime, "command") ? runtime.command : expectedCommand,
+  };
+}
+
+function inspectContainer(containerID, runID, caseName, runtime) {
+  const { entrypoint, command } = resolveContainerInspectionExpectations(runtime);
   const result = dockerCommand(["inspect", containerID]);
   requireDockerSuccess(result, "container inspection");
   const source = result.stdout.trim();
@@ -285,11 +280,12 @@ function inspectContainer(containerID, runID, caseName) {
   const container = containers[0];
   assert.equal(container.Id, containerID);
   assert.equal(container.Image, expectedImage);
+  assert.equal(container.Config?.Image, expectedImage);
   assert.equal(container.Config?.Labels?.[imageLabel], runID);
   assert.equal(container.Config?.Labels?.[caseLabel], caseName);
   assert.equal(container.Config?.User, "65532:65532");
-  assert.deepEqual(container.Config?.Entrypoint, expectedEntrypoint);
-  assert.deepEqual(container.Config?.Cmd, expectedCommand);
+  assert.deepEqual(container.Config?.Entrypoint, entrypoint);
+  if (command !== undefined) assert.deepEqual(container.Config?.Cmd, command);
   assert.equal(container.HostConfig?.ReadonlyRootfs, true);
   assert.equal(container.HostConfig?.NetworkMode, "host");
   assert.deepEqual(container.Mounts ?? [], []);
@@ -318,19 +314,56 @@ function parseJSONOnly(stdout, stderr, operation) {
   return value;
 }
 
-async function removeOwnedContainer(containerID, runID, caseName) {
-  inspectContainer(containerID, runID, caseName);
+function listOwnedContainerIDs(runID, caseName) {
+  const result = dockerCommand([
+    "container",
+    "ls",
+    "--all",
+    "--no-trunc",
+    "--filter",
+    `label=${imageLabel}=${runID}`,
+    "--filter",
+    `label=${caseLabel}=${caseName}`,
+    "--format",
+    "{{.ID}}",
+  ]);
+  requireDockerSuccess(result, "owned container lookup");
+  const ids = result.stdout.trim() === ""
+    ? []
+    : result.stdout.trim().split(/\r?\n/).filter(Boolean);
+  if (ids.some((id) => !/^[0-9a-f]{64}$/.test(id))) {
+    throw new Error("release drain Docker returned an invalid owned container ID");
+  }
+  return ids;
+}
+
+async function removeOwnedContainer(containerID, runID, caseName, runtime) {
+  inspectContainer(containerID, runID, caseName, runtime);
   const removed = dockerCommand(["rm", "--force", containerID]);
   requireDockerSuccess(removed, "owned container removal");
   const remaining = dockerCommand(["inspect", containerID]);
-  if (!remaining.error && remaining.status === 0) {
+  if (remaining.error) {
+    throw new Error("release drain owned container removal could not be verified");
+  }
+  if (remaining.status === 0) {
     throw new Error("release drain owned container remained after removal");
   }
 }
 
-async function runContainer(databaseURL, caseName, runID) {
-  const containerName = `duallane-release-drain-${runID.slice(0, 12)}-${caseName}`;
-  const create = dockerCommand([
+async function cleanupOwnedContainer(containerID, runID, caseName, runtime) {
+  let candidateID = containerID;
+  if (!candidateID) {
+    const candidates = listOwnedContainerIDs(runID, caseName);
+    if (candidates.length > 1) {
+      throw new Error("release drain cleanup found multiple owned containers");
+    }
+    candidateID = candidates[0];
+  }
+  if (candidateID) await removeOwnedContainer(candidateID, runID, caseName, runtime);
+}
+
+function migrationContainerArguments(databaseURL, containerName, runID, caseName, imageID = expectedImage) {
+  return [
     "create",
     "--pull=never",
     "--name", containerName,
@@ -342,18 +375,119 @@ async function runContainer(databaseURL, caseName, runID) {
     "--security-opt", "no-new-privileges:true",
     "--network", "host",
     "--env", `DATABASE_URL=${databaseURL}`,
-    "--env", "WORKSPACE_STORAGE_DRIVER=local",
-    "--entrypoint", expectedEntrypoint[0],
-    expectedImage,
-    ...expectedCommand,
-  ]);
-  const containerID = singleLineOutput(create, "container creation");
-  if (!/^[0-9a-f]{64}$/.test(containerID)) {
-    throw new Error("release drain Docker returned an invalid container ID");
-  }
+    "--env", `DUALLANE_MIGRATIONS_DIR=${imageMigrationDirectory}`,
+    "--entrypoint", migrationEntrypoint[0],
+    imageID,
+  ];
+}
 
+async function assertImageCanonicalSQL(containerID, manifest) {
+  const temporaryDirectory = await mkdtemp(path.join(tmpdir(), "duallane-release-drain-image-sql-"));
+  try {
+    const copied = dockerCommand([
+      "cp",
+      `${containerID}:${imageMigrationDirectory}/.`,
+      temporaryDirectory,
+    ]);
+    requireDockerSuccess(copied, "migration SQL copy");
+
+    const entries = await readdir(temporaryDirectory, { withFileTypes: true });
+    const names = entries.map((entry) => entry.name).sort((left, right) => left.localeCompare(right));
+    const canonicalNames = manifest.files.map((file) => file.name);
+    assert.deepEqual(names, canonicalNames, "Go image migration names differ from canonical SQL");
+    for (const file of manifest.files) {
+      const entry = entries.find((candidate) => candidate.name === file.name);
+      assert.ok(entry?.isFile(), `Go image migration ${file.name} is not a regular file`);
+      const contents = await readFile(path.join(temporaryDirectory, file.name));
+      const sha256 = createHash("sha256").update(contents).digest("hex");
+      assert.equal(sha256, file.sha256, `Go image migration ${file.name} differs from canonical SQL`);
+    }
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+}
+
+async function runGoMigration(databaseURL, schema, manifest) {
+  const runID = randomUUID();
+  const caseName = "go-migrate";
+  const containerName = `duallane-release-drain-${runID.slice(0, 12)}-${caseName}`;
+  const runtime = { entrypoint: migrationEntrypoint, command: undefined };
+  let containerID;
   let primaryError;
   try {
+    const create = dockerCommand(migrationContainerArguments(
+      scopedDatabaseURL(databaseURL, schema, "migrate"),
+      containerName,
+      runID,
+      caseName,
+    ));
+    containerID = singleLineOutput(create, "migration container creation");
+    if (!/^[0-9a-f]{64}$/.test(containerID)) {
+      throw new Error("release drain Docker returned an invalid migration container ID");
+    }
+    inspectContainer(containerID, runID, caseName, runtime);
+    await assertImageCanonicalSQL(containerID, manifest);
+
+    const started = dockerCommand(["start", containerID]);
+    requireDockerSuccess(started, "migration container start");
+    const waited = dockerCommand(["wait", containerID], migrationTimeoutMs);
+    const exitCodeText = singleLineOutput(waited, "migration container wait");
+    if (!/^\d+$/.test(exitCodeText)) {
+      throw new Error("release drain Docker returned an invalid migration exit status");
+    }
+    const exitCode = Number(exitCodeText);
+    const container = inspectContainer(containerID, runID, caseName, runtime);
+    assert.equal(container.State?.ExitCode, exitCode);
+    if (exitCode !== 0) throw new Error("release drain Go migration failed");
+  } catch (error) {
+    primaryError = error;
+    throw error;
+  } finally {
+    try {
+      await cleanupOwnedContainer(containerID, runID, caseName, runtime);
+    } catch (cleanupError) {
+      if (primaryError) {
+        throw new AggregateError([primaryError, cleanupError], "release drain migration and cleanup failed");
+      }
+      throw cleanupError;
+    }
+  }
+
+  const scopedURL = scopedDatabaseURL(databaseURL, schema, "migrate");
+  const names = await withClient(scopedURL, async (client) => {
+    const result = await client.query("SELECT name FROM schema_migrations ORDER BY name");
+    return result.rows.map((row) => row.name);
+  });
+  assert.deepEqual(names, manifest.files.map((file) => file.name), "Go image did not apply the canonical migration set");
+  return scopedURL;
+}
+
+async function runContainer(databaseURL, caseName, runID) {
+  const containerName = `duallane-release-drain-${runID.slice(0, 12)}-${caseName}`;
+  let containerID;
+  let primaryError;
+  try {
+    const create = dockerCommand([
+      "create",
+      "--pull=never",
+      "--name", containerName,
+      "--label", `${imageLabel}=${runID}`,
+      "--label", `${caseLabel}=${caseName}`,
+      "--user", "65532:65532",
+      "--read-only",
+      "--cap-drop=ALL",
+      "--security-opt", "no-new-privileges:true",
+      "--network", "host",
+      "--env", `DATABASE_URL=${databaseURL}`,
+      "--env", "WORKSPACE_STORAGE_DRIVER=local",
+      "--entrypoint", expectedEntrypoint[0],
+      expectedImage,
+      ...expectedCommand,
+    ]);
+    containerID = singleLineOutput(create, "container creation");
+    if (!/^[0-9a-f]{64}$/.test(containerID)) {
+      throw new Error("release drain Docker returned an invalid container ID");
+    }
     inspectContainer(containerID, runID, caseName);
     const started = dockerCommand(["start", containerID]);
     requireDockerSuccess(started, "owned container start");
@@ -374,7 +508,7 @@ async function runContainer(databaseURL, caseName, runID) {
     throw error;
   } finally {
     try {
-      await removeOwnedContainer(containerID, runID, caseName);
+      await cleanupOwnedContainer(containerID, runID, caseName);
     } catch (cleanupError) {
       if (primaryError) {
         throw new AggregateError([primaryError, cleanupError], "release drain case and cleanup failed");
@@ -459,7 +593,7 @@ test("release drain runtime uses the exact read-only CLI image against isolated 
   const missingSchema = createRehearsalSchemaName();
   await createOwnedSchema(databaseURL, schema);
   try {
-    const scopedURL = await applyCanonicalMigrations(databaseURL, schema, manifest);
+    const scopedURL = await runGoMigration(databaseURL, schema, manifest);
     await seedReleaseCheckBase(scopedURL);
 
     await t.test("local storage is ready with exit 0", async () => {
@@ -511,4 +645,32 @@ test("release drain inputs reject mutable images and non-task PostgreSQL targets
   assert.throws(() => validateTestDatabaseURL({
     TEST_DATABASE_URL: "postgres://test:test@127.0.0.1:55439/duallane?sslmode=disable&options=-c%20search_path%3Dpublic",
   }), /loopback disposable database/);
+});
+
+test("release drain migration stays on the exact Go image entrypoint", () => {
+  const runID = randomUUID();
+  const args = migrationContainerArguments(
+    "redacted-test-database-url",
+    "duallane-release-drain-test-migrate",
+    runID,
+    "go-migrate",
+    `sha256:${"a".repeat(64)}`,
+  );
+  assert.equal(args[args.indexOf("--entrypoint") + 1], "/usr/local/bin/duallane-migrate");
+  assert.ok(args.includes(`${imageLabel}=${runID}`));
+  assert.ok(args.includes("com.duallane.release-drain-case=go-migrate"));
+  assert.ok(args.includes("DUALLANE_MIGRATIONS_DIR=/app/migrations"));
+  assert.equal(args.at(-1), `sha256:${"a".repeat(64)}`);
+});
+
+test("release drain migration inspection does not inherit the release-check command", () => {
+  const releaseCheck = resolveContainerInspectionExpectations();
+  const migration = resolveContainerInspectionExpectations({
+    entrypoint: migrationEntrypoint,
+    command: undefined,
+  });
+  assert.deepEqual(releaseCheck.entrypoint, expectedEntrypoint);
+  assert.deepEqual(releaseCheck.command, expectedCommand);
+  assert.deepEqual(migration.entrypoint, migrationEntrypoint);
+  assert.equal(migration.command, undefined);
 });

@@ -13,6 +13,16 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.18.0",
+    releasedAt: "2026-09-10",
+    title: "在线服务统一由 Go 提供",
+    summary: "Go 现在是唯一的在线服务，独立离线 Node 存储工具继续保留；现有 SQL 结构和数据保持不变，无需额外处理。",
+    categories: [
+      { title: "在线服务", items: ["共享空间的在线服务统一由 Go 提供，聊天、文件和成员入口保持不变", "私密直连继续不保存聊天和文件内容，共享空间继续按成员权限保存与访问内容"] },
+      { title: "离线工具与数据", items: ["独立离线 Node 存储工具继续保留，可按运维指引执行存储检查和兼容性操作；它不作为在线服务运行", "现有 SQL 结构和数据保持不变，升级时无需额外处理既有内容"] }
+    ]
+  },
+  {
     version: "0.17.0",
     releasedAt: "2026-09-10",
     title: "按你的习惯显示消息",

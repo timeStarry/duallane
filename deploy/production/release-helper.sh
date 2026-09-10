@@ -1329,6 +1329,15 @@ release_current_service_ids() {
     inventory_status=$?
   fi
   if ((inventory_status == 1)); then
+    # Retirement removes API from Compose, not necessarily from the daemon.
+    # Continue to discover and fence a retained legacy owner by exact project
+    # and service labels; an active orphan must never bypass the mixed-owner gate.
+    if [[ "${service}" == api ]]; then
+      docker ps -a --no-trunc \
+        --filter "label=com.docker.compose.project=$(release_compose_project_name)" \
+        --filter "label=com.docker.compose.service=api" --format '{{.ID}}'
+      return "$?"
+    fi
     return 0
   fi
   return 1

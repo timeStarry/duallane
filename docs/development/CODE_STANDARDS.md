@@ -16,10 +16,11 @@
   may use their established character set.
 
 Go backend code follows the [backend agent guide](../backend/AGENT_GUIDE.md) and
-[technology decisions](../backend/TECHNOLOGY.md). During the transition, read the
-[capability ledger](../backend/EVOLUTION.md) before selecting Node or Go as the
-edit target. The language-specific sections below remain authoritative for the
-current frontend and Node implementation.
+[technology decisions](../backend/TECHNOLOGY.md). Read the
+[capability ledger](../backend/EVOLUTION.md) and the
+[Node-runtime retirement work item](../backend/work-items/2026-09-10-node-runtime-retirement.md)
+before changing online runtime or compatibility tooling. Go is the only online
+backend target for 0.18.0; the retirement gates are still pending.
 
 ## 2. TypeScript And React
 
@@ -39,20 +40,30 @@ current frontend and Node implementation.
 - Avoid introducing another global state mechanism unless existing React context,
   route state, API cache, and events cannot express the lifecycle.
 
-## 3. Node, Fastify, And Services
+## 3. Go Backend And Offline Compatibility Services
 
-- Use native ESM and the existing `.mjs` conventions in server code.
-- Validate request params, query, body, content type, and size at the boundary.
+- Keep `cmd/*` as composition and lifecycle wiring; keep domain rules in the
+  owning Go service.
+- Validate request params, query, body, content type, and size at the HTTP
+  boundary.
 - Authentication identifies the actor. Authorization separately proves access to
   the specific space, conversation, Bot, file, or object.
 - Return stable domain errors and intentional HTTP codes. Unexpected errors are
   logged through the redacted logger and return a generic response.
 - Pass request metadata to sensitive mutations for audit. Never log tokens,
   cookies, invite fragments, plaintext P2P content, message bodies, or file data.
-- Await or deliberately supervise every promise. Background work needs an owner,
-  retry policy, and observable failure path.
+- Use `context.Context` and bounded deadlines for database, storage, delivery,
+  worker, and shutdown operations. Do not run unowned background loops.
 - Use injected clocks, IDs, storage, and database adapters in tests rather than
   environment-dependent globals.
+
+The isolated `tools/node-compat` package is not an online service. Keep it
+native ESM and limited to its explicit PostgreSQL and AWS SDK storage operators
+(`storage:migrate`, `storage:dedupe`, and `storage:provision`). Importing it must
+not open a database, contact a provider, start a listener, run migrations, or
+seed data. Mutating phases, especially `finalize`, require the operator
+authorization, backup, single-authority, and writer-fence checks in the storage
+runbook; they must never become a default Compose or startup hook.
 
 ## 4. SQL, Transactions, And Concurrency
 

@@ -8,6 +8,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/package.json
 RUN pnpm install --frozen-lockfile
 COPY apps/web apps/web
+COPY scripts/dev/go-dev-config.mjs scripts/dev/go-dev-config.mjs
 RUN pnpm --filter @duallane/web build
 
 FROM ${NGINX_IMAGE} AS runtime

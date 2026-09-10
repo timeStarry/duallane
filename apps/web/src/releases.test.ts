@@ -31,7 +31,7 @@ const INTERNAL_CHANGELOG_TERMS = [
 describe("release history", () => {
   it("is unique, complete, and sorted newest first", () => {
     expect(new Set(DUAL_LANE_RELEASES.map((release) => release.version)).size).toBe(DUAL_LANE_RELEASES.length);
-    expect(DUAL_LANE_RELEASES.map((release) => release.version)).toEqual(["0.17.0", "0.16.2", "0.16.1", "0.16.0", "0.15.5", "0.15.4", "0.15.3", "0.15.2", "0.15.1", "0.15.0", "0.14.3", "0.14.2", "0.14.1", "0.14.0", "0.13.2", "0.13.1", "0.13.0", "0.12.0", "0.11.0", "0.10.0", "0.9.0", "0.8.0", "0.7.0", "0.6.0", "0.5.0", "0.4.0", "0.3.0", "0.2.0", "0.1.0"]);
+    expect(DUAL_LANE_RELEASES.map((release) => release.version)).toEqual(["0.18.0", "0.17.0", "0.16.2", "0.16.1", "0.16.0", "0.15.5", "0.15.4", "0.15.3", "0.15.2", "0.15.1", "0.15.0", "0.14.3", "0.14.2", "0.14.1", "0.14.0", "0.13.2", "0.13.1", "0.13.0", "0.12.0", "0.11.0", "0.10.0", "0.9.0", "0.8.0", "0.7.0", "0.6.0", "0.5.0", "0.4.0", "0.3.0", "0.2.0", "0.1.0"]);
     for (const release of DUAL_LANE_RELEASES) {
       expect(release.releasedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       expect(release.title.trim()).not.toBe("");
@@ -42,10 +42,22 @@ describe("release history", () => {
   });
 
   it("matches both published package versions", () => {
-    expect(rootPackage.version).toBe("0.17.0");
-    expect(webPackage.version).toBe("0.17.0");
+    expect(rootPackage.version).toBe("0.18.0");
+    expect(webPackage.version).toBe("0.18.0");
     expect(DUAL_LANE_RELEASES[0].version).toBe(rootPackage.version);
     expect(DUAL_LANE_RELEASES[0].version).toBe(webPackage.version);
+  });
+
+  it("describes 0.18.0 as a Go-only online service with offline Node storage retained", () => {
+    const latest = DUAL_LANE_RELEASES.find((release) => release.version === "0.18.0")!;
+    const publicCopy = JSON.stringify(latest);
+    expect(latest.releasedAt).toBe("2026-09-10");
+    expect(latest.title).toBe("在线服务统一由 Go 提供");
+    expect(publicCopy).toContain("唯一的在线服务");
+    expect(publicCopy).toContain("独立离线 Node 存储工具继续保留");
+    expect(publicCopy).toContain("SQL 结构和数据保持不变");
+    expect(publicCopy).not.toContain("删除前端 Node");
+    expect(echoReleaseGuides.some((guide) => guide.version === latest.version)).toBe(true);
   });
 
   it("describes the 0.15.5 user-facing scope and release date", () => {

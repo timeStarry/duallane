@@ -11,7 +11,7 @@ then open only the standards required by the change.
 | [Workflow](WORKFLOW.md) | Issues, branches, bug fixes, commits, pull requests, review, ownership, and handoff |
 | [Architecture](ARCHITECTURE.md) | Technology choices, repository layout, dependency direction, service boundaries, migrations, and decisions |
 | [Backend architecture](../backend/README.md) | Approved Go target, live capability ownership, service/data contracts, operations, validation, and migration |
-| [Code standards](CODE_STANDARDS.md) | TypeScript, React, Fastify, SQL, storage, API/event contracts, CSS, dependencies, and test code |
+| [Code standards](CODE_STANDARDS.md) | Go, TypeScript, React, SQL, storage, API/event contracts, CSS, dependencies, and test code |
 | [UI/UX standards](UI_UX_STANDARDS.md) | Information architecture, layout, components, states, mobile behavior, accessibility, and visual review |
 | [Security and data](SECURITY_AND_DATA.md) | Trust lanes, identity, authorization, audit, secrets, quotas, retention, uploads, and content-addressed storage |
 | [Testing and release](TESTING_AND_RELEASE.md) | Validation matrix, Playwright, PostgreSQL, versions, release notes, deployment, health checks, and rollback |
@@ -44,6 +44,14 @@ confirmed.
   than copying paragraphs that can drift.
 - Examples must reflect executable commands, real paths, and current APIs. Remove
   obsolete guidance in the same PR that changes the behavior.
+
+For 0.18.0, the online backend is Go-only. The old Node server tree is not a
+current request-serving or worker implementation; only canonical SQL migrations
+remain under `apps/web/server/migrations`, while the small `tools/node-compat`
+package is disclosed from the backend storage runbook as an offline, profile-only
+operator surface. Keep the retirement status and its pending gates in
+[Evolution and migration](../backend/EVOLUTION.md) and the
+[retirement work item](../backend/work-items/2026-09-10-node-runtime-retirement.md).
 
 ## New Contributor Path
 

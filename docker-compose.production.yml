@@ -7,14 +7,6 @@ services:
         max-size: "${DUALLANE_LOG_MAX_SIZE:-10m}"
         max-file: "${DUALLANE_LOG_MAX_FILE:-5}"
 
-  api:
-    restart: always
-    logging:
-      driver: json-file
-      options:
-        max-size: "${DUALLANE_LOG_MAX_SIZE:-10m}"
-        max-file: "${DUALLANE_LOG_MAX_FILE:-5}"
-
   v2ray:
     restart: always
     logging:
