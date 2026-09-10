@@ -5,10 +5,12 @@ import { pipeline } from "node:stream/promises";
 import sharp from "sharp";
 import { getReactionEmote, listVisibleEmotePacks } from "./emote-catalog.mjs";
 import { DEFAULT_SPACE_ID } from "./db.mjs";
+import { writeAudit } from "./audit.mjs";
 import {
   WorkspaceError,
   WorkspacePermissionError,
   WorkspaceValidationError,
+  runWorkspaceTransaction,
   writeWorkspaceEvent
 } from "./workspace.mjs";
 
@@ -25,6 +27,15 @@ const CUSTOM_EMOTE_MAX_FRAMES = 180;
 const CUSTOM_EMOTE_MAX_DURATION_MS = 30000;
 const SUPPORTED_FORMATS = new Set(["jpeg", "png", "webp", "gif", "bmp"]);
 const SUPPORTED_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp"]);
+const AUTO_HIDE_MESSAGE_TYPES = ["image", "emote", "long"];
+
+function normalizeAutoHideTypes(value) {
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed) && parsed.every((type) => AUTO_HIDE_MESSAGE_TYPES.includes(type))) return [...new Set(parsed)];
+  } catch { /* Legacy or damaged preferences fall back to the documented defaults. */ }
+  return [...AUTO_HIDE_MESSAGE_TYPES];
+}
 
 export function createWorkspaceCustomEmoteService({ db, objectStore, storageObjects, now = () => new Date() }) {
   if (!storageObjects) throw new TypeError("Workspace custom emotes require a storage object registry");
@@ -209,7 +220,9 @@ export function createWorkspaceCustomEmoteService({ db, objectStore, storageObje
       SELECT
         enabled_pack_ids_json AS enabledPackIdsJson,
         click_image_emote_to_send AS clickImageEmoteToSend,
-        reply_auto_mention AS replyAutoMention
+        reply_auto_mention AS replyAutoMention,
+        auto_hide_messages AS autoHideMessages,
+        auto_hide_message_types_json AS autoHideMessageTypesJson
       FROM workspace_emote_preferences WHERE user_id = ?
     `).get(actorId);
     return {
@@ -217,6 +230,8 @@ export function createWorkspaceCustomEmoteService({ db, objectStore, storageObje
       enabledPackIds: normalizeEnabledPackIds(row?.enabledPackIdsJson, availablePacks),
       clickImageEmoteToSend: Boolean(row?.clickImageEmoteToSend),
       replyAutoMention: Boolean(row?.replyAutoMention),
+      autoHideMessages: Boolean(row?.autoHideMessages),
+      autoHideMessageTypes: normalizeAutoHideTypes(row?.autoHideMessageTypesJson),
       minimumEnabled: 1
     };
   };
@@ -228,46 +243,84 @@ export function createWorkspaceCustomEmoteService({ db, objectStore, storageObje
     },
 
     async updateSettings(actorId, input) {
-      await requireHumanActor(db, actorId);
-      const availablePacks = listVisibleEmotePacks();
-      const current = await readSettings(actorId);
+      const actor = await requireHumanActor(db, actorId);
       const settings = Array.isArray(input) ? { enabledPackIds: input } : input ?? {};
       const updatesEnabledPacks = Object.prototype.hasOwnProperty.call(settings, "enabledPackIds");
       const updatesDirectSend = Object.prototype.hasOwnProperty.call(settings, "clickImageEmoteToSend");
       const updatesReplyAutoMention = Object.prototype.hasOwnProperty.call(settings, "replyAutoMention");
-      const allowed = new Set(availablePacks.map((pack) => pack.id));
-      let normalized = current.enabledPackIds;
-      if (updatesEnabledPacks) {
-        const requestedPackIds = Array.isArray(settings.enabledPackIds) ? settings.enabledPackIds.map(String) : [];
-        normalized = [...new Set(requestedPackIds)].filter((id) => allowed.has(id));
-        if (normalized.length < 1 || normalized.length !== new Set(requestedPackIds).size) {
-          throw new WorkspaceValidationError("emote.pack_required", "至少保留一个表情包");
+      const updatesAutoHide = Object.prototype.hasOwnProperty.call(settings, "autoHideMessages");
+      const updatesAutoHideTypes = Object.prototype.hasOwnProperty.call(settings, "autoHideMessageTypes");
+      if ((updatesAutoHide && typeof settings.autoHideMessages !== "boolean") ||
+          (updatesAutoHideTypes && (!Array.isArray(settings.autoHideMessageTypes) || settings.autoHideMessageTypes.some((type) => typeof type !== "string")))) {
+        throw new WorkspaceValidationError("emote.invalid_settings", "消息自动隐藏设置无效");
+      }
+      const hasUnsupportedAutoHideTypes = updatesAutoHideTypes && settings.autoHideMessageTypes.some((type) => !AUTO_HIDE_MESSAGE_TYPES.includes(type));
+      const unsupportedAutoHideError = hasUnsupportedAutoHideTypes
+        ? new WorkspaceValidationError("emote.invalid_settings", "消息自动隐藏设置无效")
+        : null;
+      try {
+        return await runWorkspaceTransaction(db, async () => {
+          await db.lock(`duallane:emote-settings:${actorId}`);
+          await requireHumanActor(db, actorId);
+          const availablePacks = listVisibleEmotePacks();
+          const current = await readSettings(actorId);
+          if (unsupportedAutoHideError) throw unsupportedAutoHideError;
+          const allowed = new Set(availablePacks.map((pack) => pack.id));
+          let normalized = current.enabledPackIds;
+          if (updatesEnabledPacks) {
+            const requestedPackIds = Array.isArray(settings.enabledPackIds) ? settings.enabledPackIds.map(String) : [];
+            normalized = [...new Set(requestedPackIds)].filter((id) => allowed.has(id));
+            if (normalized.length < 1 || normalized.length !== new Set(requestedPackIds).size) {
+              throw new WorkspaceValidationError("emote.pack_required", "至少保留一个表情包");
+            }
+          }
+          if (updatesDirectSend && typeof settings.clickImageEmoteToSend !== "boolean") {
+            throw new WorkspaceValidationError("emote.invalid_settings", "图片表情发送设置无效");
+          }
+          if (updatesReplyAutoMention && typeof settings.replyAutoMention !== "boolean") {
+            throw new WorkspaceValidationError("emote.invalid_settings", "回复提及设置无效");
+          }
+          const clickImageEmoteToSend = updatesDirectSend
+            ? settings.clickImageEmoteToSend
+            : current.clickImageEmoteToSend;
+          const replyAutoMention = updatesReplyAutoMention
+            ? settings.replyAutoMention
+            : current.replyAutoMention;
+          const updatedAt = now().toISOString();
+          const autoHideMessages = updatesAutoHide ? settings.autoHideMessages : current.autoHideMessages;
+          const autoHideMessageTypes = updatesAutoHideTypes ? [...new Set(settings.autoHideMessageTypes)] : current.autoHideMessageTypes;
+          await db.prepare(`
+            INSERT INTO workspace_emote_preferences (
+              user_id, enabled_pack_ids_json, click_image_emote_to_send, reply_auto_mention, auto_hide_messages, auto_hide_message_types_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (user_id) DO UPDATE SET
+              enabled_pack_ids_json = excluded.enabled_pack_ids_json,
+              click_image_emote_to_send = excluded.click_image_emote_to_send,
+              reply_auto_mention = excluded.reply_auto_mention,
+              auto_hide_messages = excluded.auto_hide_messages,
+              auto_hide_message_types_json = excluded.auto_hide_message_types_json,
+              updated_at = excluded.updated_at
+          `).run(actorId, JSON.stringify(normalized), clickImageEmoteToSend ? 1 : 0, replyAutoMention ? 1 : 0, autoHideMessages ? 1 : 0, JSON.stringify(autoHideMessageTypes), updatedAt);
+          await writeAudit(db, { spaceId: DEFAULT_SPACE_ID, actorUserId: actorId, action: "emote.settings.update", targetType: "user", targetId: actorId, result: "success", createdAt: updatedAt });
+          await writeWorkspaceEvent(db, { type: "emote.settings.updated", actorId, targetType: "user", targetId: actorId, payload: { userId: actorId } });
+          return { availablePacks, enabledPackIds: normalized, clickImageEmoteToSend, replyAutoMention, autoHideMessages, autoHideMessageTypes, minimumEnabled: 1 };
+        });
+      } catch (error) {
+        if (error === unsupportedAutoHideError) {
+          await db.transaction(async () => {
+            await writeAudit(db, {
+              spaceId: DEFAULT_SPACE_ID,
+              actorUserId: actor.id,
+              action: "emote.settings.update",
+              targetType: "user",
+              targetId: actor.id,
+              result: "rejected",
+              reason: error.code
+            });
+          });
         }
+        throw error;
       }
-      if (updatesDirectSend && typeof settings.clickImageEmoteToSend !== "boolean") {
-        throw new WorkspaceValidationError("emote.invalid_settings", "图片表情发送设置无效");
-      }
-      if (updatesReplyAutoMention && typeof settings.replyAutoMention !== "boolean") {
-        throw new WorkspaceValidationError("emote.invalid_settings", "回复提及设置无效");
-      }
-      const clickImageEmoteToSend = updatesDirectSend
-        ? settings.clickImageEmoteToSend
-        : current.clickImageEmoteToSend;
-      const replyAutoMention = updatesReplyAutoMention
-        ? settings.replyAutoMention
-        : current.replyAutoMention;
-      const updatedAt = now().toISOString();
-      await db.prepare(`
-        INSERT INTO workspace_emote_preferences (
-          user_id, enabled_pack_ids_json, click_image_emote_to_send, reply_auto_mention, updated_at
-        ) VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT (user_id) DO UPDATE SET
-          enabled_pack_ids_json = excluded.enabled_pack_ids_json,
-          click_image_emote_to_send = excluded.click_image_emote_to_send,
-          reply_auto_mention = excluded.reply_auto_mention,
-          updated_at = excluded.updated_at
-      `).run(actorId, JSON.stringify(normalized), clickImageEmoteToSend ? 1 : 0, replyAutoMention ? 1 : 0, updatedAt);
-      return { availablePacks, enabledPackIds: normalized, clickImageEmoteToSend, replyAutoMention, minimumEnabled: 1 };
     },
 
     async list(actorId) {

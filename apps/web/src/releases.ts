@@ -13,6 +13,16 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.17.0",
+    releasedAt: "2026-09-10",
+    title: "按你的习惯显示消息",
+    summary: "聊天设置新增自动隐藏选项，修复输入法确认时误发消息，并让话题操作更紧凑。",
+    categories: [
+      { title: "消息显示", items: ["在个人设置的聊天页面开启自动隐藏，可分别选择图片、表情和长消息，默认关闭", "隐藏的内容可手动展开，只影响自己的聊天和话题页面，不删除消息；关闭后保留选择"] },
+      { title: "输入与话题", items: ["使用输入法时，回车确认候选内容不再同时发送消息，确认后可再次回车发送", "话题消息的回复和同步到群聊改为图标操作，保留同步状态提示"] }
+    ]
+  },
+  {
     version: "0.16.1",
     releasedAt: "2026-09-10",
     title: "恢复已有头像显示",

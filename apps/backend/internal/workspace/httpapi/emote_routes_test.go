@@ -42,7 +42,9 @@ func (s *emoteRoutesStub) CheckUploadLength(_ context.Context, _ string, length 
 }
 
 func (*emoteRoutesStub) GetSettings(context.Context, string) (emotes.EmoteSettings, error) {
-	return emotes.EmoteSettings{EnabledPackIDs: []string{"builtin"}, MinimumEnabled: 1}, nil
+	return emotes.EmoteSettings{
+		EnabledPackIDs: []string{"builtin"}, AutoHideMessageTypes: []string{"image", "emote", "long"}, MinimumEnabled: 1,
+	}, nil
 }
 func (s *emoteRoutesStub) UpdateSettings(_ context.Context, _ string, input emotes.UpdateSettingsInput, _ auth.RequestMeta) (emotes.EmoteSettings, error) {
 	s.settingsInput = input
@@ -161,6 +163,44 @@ func TestEmoteSettingsListAndUploadContracts(t *testing.T) {
 	router.ServeHTTP(upload, request)
 	if upload.Code != http.StatusCreated || service.uploadInput.ActorID != "actor-1" || service.uploadInput.CollectionID != "collection-1" || service.uploadInput.AddToLibrary || service.uploadInput.Source.FileName != "表情+1.png" || service.uploadInput.Source.MIMEType != "image/png" || string(service.content) != "image bytes" {
 		t.Fatalf("upload status=%d input=%#v content=%q body=%s", upload.Code, service.uploadInput, service.content, upload.Body.String())
+	}
+}
+
+func TestEmoteSettingsAutoHideRouteRejectsInvalidJSONTypes(t *testing.T) {
+	for _, body := range []string{
+		`{"autoHideMessages":null}`,
+		`{"autoHideMessages":"yes"}`,
+		`{"autoHideMessageTypes":null}`,
+		`{"autoHideMessageTypes":["image",null]}`,
+		`{"autoHideMessageTypes":["image",7]}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			service := &emoteRoutesStub{}
+			request := httptest.NewRequest(http.MethodPut, "/api/workspace/me/emote-settings", strings.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			emoteRoutesRouter(service).ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"`+emotes.CodeEmoteInvalidSettings+`"`) {
+				t.Fatalf("invalid settings response = %d %s", response.Code, response.Body.String())
+			}
+			if service.settingsInput.AutoHideMessages != nil || service.settingsInput.AutoHideMessageTypes != nil {
+				t.Fatalf("invalid settings reached service = %#v", service.settingsInput)
+			}
+		})
+	}
+}
+
+func TestEmoteSettingsAutoHideRoutePassesPartialValues(t *testing.T) {
+	service := &emoteRoutesStub{}
+	request := httptest.NewRequest(http.MethodPut, "/api/workspace/me/emote-settings", strings.NewReader(`{"autoHideMessages":true,"autoHideMessageTypes":["image","image","long"]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	emoteRoutesRouter(service).ServeHTTP(response, request)
+	if response.Code != http.StatusOK || service.settingsInput.AutoHideMessages == nil || !*service.settingsInput.AutoHideMessages || service.settingsInput.AutoHideMessageTypes == nil {
+		t.Fatalf("partial settings response = %d input=%#v body=%s", response.Code, service.settingsInput, response.Body.String())
+	}
+	if strings.Join(*service.settingsInput.AutoHideMessageTypes, ",") != "image,image,long" {
+		t.Fatalf("route should preserve input for service normalization = %#v", service.settingsInput)
 	}
 }
 
