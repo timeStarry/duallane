@@ -115,5 +115,72 @@ The WSL fixture needs a foreground owner while validations run; the lead
 verified its exact container ID/label, restored only that fixture, waited for
 readiness, and reran successfully. No production container was touched.
 
-Target immutable-image/recovery rehearsal, PR CI and production activation
-results are still pending at this point.
+## Completed image, CI and production evidence
+
+[PR #9](https://github.com/timeStarry/duallane/pull/9) was normally merged by
+`timeStarry` after verification. Tested head
+`8aaa934f81c3e879958f6116b8130be00d1b73f1` and merge
+`c15d5569ccc5f8a169b3ef2e8e6952c76e84b1fd` have identical trees.
+The [four-job CI run](https://github.com/timeStarry/duallane/actions/runs/34446951547)
+passed. The first Go Workspace browser job failed with a disabled group-send
+button after editor input; the same-head diagnostic rerun passed all 18 cases
+without code, timeout, retry or assertion changes. Local Go Workspace also
+passed 18/18. This intermittent composer boundary is not a proven backend
+cause or native macOS IME acceptance; retain that limitation when restoring
+the feature release.
+
+The lead built real Linux images at tested head 8aaa934, preserving pinned
+dependencies and using the supported Go/ Debian mirror arguments after the
+default Go module proxy timed out. Exact Workspace image
+`sha256:ab1b753c2643647ed252c0cddb4f1f618b5f5f6f440cfb9010c00c02b9341b5e`
+passed the old-to-target 33/33 SQL hash check. The real Docker Go-to-Go
+coordinator test passed (one selected test, 188.2 seconds), including exact
+previous Go restoration, exact retained Node restoration, private snapshots,
+same disposable PostgreSQL/storage authority, and owned-resource cleanup.
+The initial invocation selected an obsolete Node image lacking its offline
+pnpm cache and failed before migration; the successful invocation used the
+documented offline-ready image from the predeployment handoff. No guard was
+relaxed. This 33-to-33 rehearsal is not the subsequent 33-to-34 proof.
+
+The official production `go-full --go-upgrade` deployment completed on
+2026-09-10 around 07:22 UTC from the exact merge commit above, in the production
+checkout with the previous successful 0.16.1 private snapshot. The first build
+attempt timed out at `proxy.golang.org`, before migrations, fencing or service
+replacement. The second used existing `DUALLANE_GO_BUILD_PROXY` and
+`DUALLANE_DEBIAN_BUILD_MIRROR` process arguments; it did not change `.env`,
+dependency versions, checksum verification, Docker daemon configuration or
+network bindings. All passive candidates and the 13-check gateway smoke passed.
+
+| Service | Production 0.16.2 image ID |
+| --- | --- |
+| P2P | `sha256:848e337a586e17f43c1dac7cd05f9b7952852532ac0f5c70b2e91b361ab339ef` |
+| Workspace, worker, migrate | `sha256:c6b6b98505d5e9935554e8ea7953653fa4bc13f4c0d6756fb97dbdc1b5268926` |
+| Web | `sha256:845d4a41fe9793265d154a82b123a6ed68b9a90d0cf7b233d2886706786e013e` |
+
+Independent verification confirmed matching image/container labels, healthy
+services with zero restarts, restored `always` policies, non-root users and
+read-only roots. Workspace/worker active readiness passed; Node remains stopped
+with restart disabled. PostgreSQL container/volume and Workspace data/S3
+authority are unchanged. History remains exactly 33 migrations. No production
+034 has been applied by this release. Old recovery images remain present.
+
+The new private artifact basename is
+`backups/production/duallane-20260910T071832Z-c15d5569ccc5` in the production
+checkout. The `.recovery.go-compose.snapshot.json` plus `.compose.json`,
+`.external.json` and `.volumes.json` sidecars verified as regular mode-0600
+artifacts. Both new snapshot authority and old-to-new authority verification
+passed. Do not commit their contents or edit them for the next rollout.
+
+Independent public HTTPS/WSS verification passed: version 0.16.2, home/security
+headers, referenced JS/CSS, ICE, anonymous Workspace denial, private endpoint
+404s and unauthenticated WebSocket close 1008. Curl TLS reset attempts were not
+passing evidence; the bounded verified-TLS Node probe passed. An initial
+hand-written readiness probe used the wrong P2P path; the corrected probe used
+its actual `/api/health` contract, not Workspace's `/readyz`. Bounded redacted
+Go log samples had no warnings/errors. The production checkout remained clean
+with its index owned by `timestarry`; the official cache cap left about 9.4 GB
+free. No data, private backup, retained image or unrelated container was removed.
+
+The bridge prerequisite is now deployed and verified. Feature 0.17.0 still
+requires its own current-source checks, exact-image expanded-schema rollback
+rehearsal, PR and production evidence; Node retirement remains separate.
