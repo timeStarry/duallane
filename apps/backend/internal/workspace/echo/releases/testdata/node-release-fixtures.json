@@ -4,6 +4,59 @@
   "publishedAt": "2026-09-06T12:34:56.789Z",
   "catalog": [
     {
+      "version": "0.16.2",
+      "guide": {
+        "version": "0.16.2",
+        "releasedAt": "2026-09-10",
+        "title": "兼容性维护",
+        "summary": "本次为兼容性维护，保留现有聊天、头像和个人设置，不增加新的操作步骤。",
+        "sections": [
+          {
+            "title": "日常使用",
+            "items": [
+              {
+                "title": "沿用现有功能",
+                "description": "继续使用原有聊天入口、头像和个人设置，无需重新设置。本次不增加新的聊天选项，两条通道的隐私规则保持不变。",
+                "location": "首页 -> 私密直连；首页 -> 共享空间；关于 -> 版本历史"
+              }
+            ]
+          }
+        ]
+      },
+      "guideJSON": "{\"version\":\"0.16.2\",\"releasedAt\":\"2026-09-10\",\"title\":\"兼容性维护\",\"summary\":\"本次为兼容性维护，保留现有聊天、头像和个人设置，不增加新的操作步骤。\",\"sections\":[{\"title\":\"日常使用\",\"items\":[{\"title\":\"沿用现有功能\",\"description\":\"继续使用原有聊天入口、头像和个人设置，无需重新设置。本次不增加新的聊天选项，两条通道的隐私规则保持不变。\",\"location\":\"首页 -> 私密直连；首页 -> 共享空间；关于 -> 版本历史\"}]}]}",
+      "guideHash": "4d42fdfb8af6852c7162eca4db6c1c71c005025943a4250a1ea5efe4bda02583",
+      "publicationID": "echo_release_node-catalog-001",
+      "deliveryIDs": [
+        "echo_release_delivery_node-catalog-002",
+        "echo_release_delivery_node-catalog-003"
+      ],
+      "lockKey": "duallane:echo-release:spc_fixture:0.16.2",
+      "summary": {
+        "id": "echo_release_node-catalog-001",
+        "version": "0.16.2",
+        "title": "兼容性维护",
+        "publishedAt": "2026-09-06T12:34:56.789Z",
+        "recipientCount": 2,
+        "pendingCount": 2,
+        "sentCount": 0,
+        "failedCount": 0,
+        "skippedCount": 0,
+        "replayed": false
+      },
+      "getPublication": {
+        "id": "echo_release_node-catalog-001",
+        "version": "0.16.2",
+        "title": "兼容性维护",
+        "publishedAt": "2026-09-06T12:34:56.789Z",
+        "recipientCount": 2,
+        "pendingCount": 2,
+        "sentCount": 0,
+        "failedCount": 0,
+        "skippedCount": 0,
+        "replayed": false
+      }
+    },
+    {
       "version": "0.16.1",
       "guide": {
         "version": "0.16.1",
@@ -25,14 +78,14 @@
       },
       "guideJSON": "{\"version\":\"0.16.1\",\"releasedAt\":\"2026-09-10\",\"title\":\"恢复已有头像显示\",\"summary\":\"修复部分成员已有自定义头像无法显示的问题，无需重新上传头像。\",\"sections\":[{\"title\":\"成员头像\",\"items\":[{\"title\":\"继续使用已有头像\",\"description\":\"聊天、成员列表和个人资料中的已有自定义头像恢复显示，保留现有头像和访问权限，无需重新设置。\",\"location\":\"共享空间 -> 聊天；共享空间 -> 成员；个人设置 -> 公开资料\"}]}]}",
       "guideHash": "4c0be3f9996de4aa80869c103de6a76a333067eaaaa15193279dfdbc73c8acd4",
-      "publicationID": "echo_release_node-catalog-001",
+      "publicationID": "echo_release_node-catalog-004",
       "deliveryIDs": [
-        "echo_release_delivery_node-catalog-002",
-        "echo_release_delivery_node-catalog-003"
+        "echo_release_delivery_node-catalog-005",
+        "echo_release_delivery_node-catalog-006"
       ],
       "lockKey": "duallane:echo-release:spc_fixture:0.16.1",
       "summary": {
-        "id": "echo_release_node-catalog-001",
+        "id": "echo_release_node-catalog-004",
         "version": "0.16.1",
         "title": "恢复已有头像显示",
         "publishedAt": "2026-09-06T12:34:56.789Z",
@@ -44,7 +97,7 @@
         "replayed": false
       },
       "getPublication": {
-        "id": "echo_release_node-catalog-001",
+        "id": "echo_release_node-catalog-004",
         "version": "0.16.1",
         "title": "恢复已有头像显示",
         "publishedAt": "2026-09-06T12:34:56.789Z",
@@ -93,14 +146,14 @@
       },
       "guideJSON": "{\"version\":\"0.16.0\",\"releasedAt\":\"2026-09-07\",\"title\":\"为后台更新做好准备\",\"summary\":\"保留熟悉的聊天入口和两条通道的隐私规则，为维护者加入新的后台运行方案与更新前检查。\",\"sections\":[{\"title\":\"日常使用\",\"items\":[{\"title\":\"沿用原有入口\",\"description\":\"私密直连与共享空间继续使用原有入口，无需更换聊天链接。私密直连仍不保存聊天和文件内容，共享空间继续按成员权限保存与访问内容。\",\"location\":\"首页 -> 私密直连；首页 -> 共享空间\"}]},{\"title\":\"维护更新\",\"items\":[{\"title\":\"由维护者检查并启用\",\"description\":\"维护者可按运维指引选择新后台，启用前核对版本、存储和恢复条件。保留上一版本的恢复支持，不会自动切换。\",\"location\":\"项目 README -> 后端架构指引 -> Runtime and operations；deploy/production/README.md\"},{\"title\":\"查看版本说明\",\"description\":\"可以在关于页面查看当前版本及历史变化；页面版本不表示维护者已经切换后台方案。\",\"location\":\"关于 -> 版本历史\"}]}]}",
       "guideHash": "bb8aab803c26d7aaf41a6adadf67582f282d297d1d44043f8b236055c9746a33",
-      "publicationID": "echo_release_node-catalog-004",
+      "publicationID": "echo_release_node-catalog-007",
       "deliveryIDs": [
-        "echo_release_delivery_node-catalog-005",
-        "echo_release_delivery_node-catalog-006"
+        "echo_release_delivery_node-catalog-008",
+        "echo_release_delivery_node-catalog-009"
       ],
       "lockKey": "duallane:echo-release:spc_fixture:0.16.0",
       "summary": {
-        "id": "echo_release_node-catalog-004",
+        "id": "echo_release_node-catalog-007",
         "version": "0.16.0",
         "title": "为后台更新做好准备",
         "publishedAt": "2026-09-06T12:34:56.789Z",
@@ -112,7 +165,7 @@
         "replayed": false
       },
       "getPublication": {
-        "id": "echo_release_node-catalog-004",
+        "id": "echo_release_node-catalog-007",
         "version": "0.16.0",
         "title": "为后台更新做好准备",
         "publishedAt": "2026-09-06T12:34:56.789Z",
@@ -176,14 +229,14 @@
       },
       "guideJSON": "{\"version\":\"0.15.5\",\"releasedAt\":\"2026-08-29\",\"title\":\"更清楚的个人 Bot 设置\",\"summary\":\"个人 Bot 页面统一使用设置菜单的布局和间距，连接、自动保存与危险操作的状态更容易确认。\",\"sections\":[{\"title\":\"设置布局\",\"items\":[{\"title\":\"页面分组统一\",\"description\":\"Bot 页面改为与个人设置一致的平面分组，标题、说明和操作使用统一间距；群聊策略和访问 Token 也改为更清晰的分隔行。\",\"location\":\"个人设置 -> 我的 Bot -> 身份与发现；个人设置 -> 我的 Bot -> 群聊策略；个人设置 -> 我的 Bot -> 访问 Token\"},{\"title\":\"顶部查看状态\",\"description\":\"Bot 的运行状态、连接状态和最近心跳集中显示在页面顶部，不需要在多个区域来回查找。\",\"location\":\"个人设置 -> 我的 Bot -> 页面顶部\"}]},{\"title\":\"自动保存\",\"items\":[{\"title\":\"修改后自动保存\",\"description\":\"身份与发现、群聊策略修改后会自动保存，设置项旁会显示正在保存、已自动保存或失败重试。\",\"location\":\"个人设置 -> 我的 Bot -> 身份与发现；个人设置 -> 我的 Bot -> 群聊策略\"}]},{\"title\":\"连接与停用\",\"items\":[{\"title\":\"连接 Agent\",\"description\":\"可以直接复制 Skill 链接和配置指令，并在页面中查看当前连接进度。\",\"location\":\"个人设置 -> 我的 Bot -> 连接 Agent\"},{\"title\":\"停用前确认\",\"description\":\"暂停和恢复保留在页面顶部，停用移至底部危险区域，并要求输入完整 Bot 名称确认。\",\"location\":\"个人设置 -> 我的 Bot -> 页面底部 -> 停用 Bot\"}]}]}",
       "guideHash": "3dbc4cd7136ba0e4dffe6c3ff7a14813df5b8b4566f53cfa502b06d837158fb7",
-      "publicationID": "echo_release_node-catalog-007",
+      "publicationID": "echo_release_node-catalog-010",
       "deliveryIDs": [
-        "echo_release_delivery_node-catalog-008",
-        "echo_release_delivery_node-catalog-009"
+        "echo_release_delivery_node-catalog-011",
+        "echo_release_delivery_node-catalog-012"
       ],
       "lockKey": "duallane:echo-release:spc_fixture:0.15.5",
       "summary": {
-        "id": "echo_release_node-catalog-007",
+        "id": "echo_release_node-catalog-010",
         "version": "0.15.5",
         "title": "更清楚的个人 Bot 设置",
         "publishedAt": "2026-09-06T12:34:56.789Z",
@@ -195,7 +248,7 @@
         "replayed": false
       },
       "getPublication": {
-        "id": "echo_release_node-catalog-007",
+        "id": "echo_release_node-catalog-010",
         "version": "0.15.5",
         "title": "更清楚的个人 Bot 设置",
         "publishedAt": "2026-09-06T12:34:56.789Z",
@@ -249,14 +302,14 @@
       },
       "guideJSON": "{\"version\":\"0.15.4\",\"releasedAt\":\"2026-08-29\",\"title\":\"更容易连接个人 Agent\",\"summary\":\"个人 Bot 提供统一接入入口，Agent 可在你的确认下完成连接，权限范围更清楚。\",\"sections\":[{\"title\":\"个人 Bot\",\"items\":[{\"title\":\"连接 Agent\",\"description\":\"在个人 Bot 页面复制统一的 Skill 链接和说明文字，发送给任意 Agent 即可开始连接。\",\"location\":\"个人设置 -> Agent Bot -> 连接 Agent\"},{\"title\":\"确认能力和会话范围\",\"description\":\"Agent 会先说明需要的能力，你可以逐项确认私聊、群聊、上下文和文件范围。\",\"location\":\"个人设置 -> Agent Bot -> 连接 Agent -> 打开授权配置\"},{\"title\":\"查看连接状态\",\"description\":\"完成确认后，Bot 页面会显示连接状态和最近心跳；短时连接入口完成或失效后不能重复使用。\",\"location\":\"个人设置 -> Agent Bot -> 连接状态\"}]},{\"title\":\"安全\",\"items\":[{\"title\":\"连接内容不包含完整凭据\",\"description\":\"复制的说明文字和连接链接不会携带完整凭据，只有用户确认后 Agent 才能完成一次交换。\",\"location\":\"个人设置 -> Agent Bot -> 连接 Agent\"}]}]}",
       "guideHash": "1a44da931e29b42c82d2efe115421a0588af63fad4520f90f70ca549ed411c1b",
-      "publicationID": "echo_release_node-catalog-010",
+      "publicationID": "echo_release_node-catalog-013",
       "deliveryIDs": [
-        "echo_release_delivery_node-catalog-011",
-        "echo_release_delivery_node-catalog-012"
+        "echo_release_delivery_node-catalog-014",
+        "echo_release_delivery_node-catalog-015"
       ],
       "lockKey": "duallane:echo-release:spc_fixture:0.15.4",
       "summary": {
-        "id": "echo_release_node-catalog-010",
+        "id": "echo_release_node-catalog-013",
         "version": "0.15.4",
         "title": "更容易连接个人 Agent",
         "publishedAt": "2026-09-06T12:34:56.789Z",
@@ -268,7 +321,7 @@
         "replayed": false
       },
       "getPublication": {
-        "id": "echo_release_node-catalog-010",
+        "id": "echo_release_node-catalog-013",
         "version": "0.15.4",
         "title": "更容易连接个人 Agent",
         "publishedAt": "2026-09-06T12:34:56.789Z",
@@ -317,14 +370,14 @@
       },
       "guideJSON": "{\"version\":\"0.15.3\",\"releasedAt\":\"2026-08-21\",\"title\":\"更清楚的群聊通知与媒体加载\",\"summary\":\"话题通知会直接打开对应话题，图片预览兼容性得到改善，话题内的输入体验继续保持稳定。\",\"sections\":[{\"title\":\"群聊话题\",\"items\":[{\"title\":\"通知直达话题\",\"description\":\"话题消息提醒会显示话题名称，点击提醒后直接进入对应话题，不会落到普通群聊通知列表。\",\"location\":\"设备通知 -> 话题消息提醒；点击提醒进入对应话题\"},{\"title\":\"话题内输入保持稳定\",\"description\":\"话题内的头像、消息列表和发送区域与普通聊天保持一致，发送后可以继续输入。\",\"location\":\"群聊 -> 话题 -> 话题消息列表和底部输入框\"}]},{\"title\":\"图片与文件\",\"items\":[{\"title\":\"图片预览兼容性改善\",\"description\":\"上传到消息中的图片可以正常显示并打开查看。\",\"location\":\"聊天消息中的图片预览；点击图片进入图片查看器\"}]}]}",
       "guideHash": "2c9a4fa816b4048eef8a677fececf1fd372df8cfbf5e06b31800ec1f8a173c77",
-      "publicationID": "echo_release_node-catalog-013",
+      "publicationID": "echo_release_node-catalog-016",
       "deliveryIDs": [
-        "echo_release_delivery_node-catalog-014",
-        "echo_release_delivery_node-catalog-015"
+        "echo_release_delivery_node-catalog-017",
+        "echo_release_delivery_node-catalog-018"
       ],
       "lockKey": "duallane:echo-release:spc_fixture:0.15.3",
       "summary": {
-        "id": "echo_release_node-catalog-013",
+        "id": "echo_release_node-catalog-016",
         "version": "0.15.3",
         "title": "更清楚的群聊通知与媒体加载",
         "publishedAt": "2026-09-06T12:34:56.789Z",
@@ -336,7 +389,7 @@
         "replayed": false
       },
       "getPublication": {
-        "id": "echo_release_node-catalog-013",
+        "id": "echo_release_node-catalog-016",
         "version": "0.15.3",
         "title": "更清楚的群聊通知与媒体加载",
         "publishedAt": "2026-09-06T12:34:56.789Z",
@@ -410,14 +463,14 @@
       },
       "guideJSON": "{\"version\":\"0.15.2\",\"releasedAt\":\"2026-08-21\",\"title\":\"更顺手的空间聊天\",\"summary\":\"修正 Bot 设置、表情加载、移动端图片和群聊话题的使用体验，并加入回复时自动提及设置。\",\"sections\":[{\"title\":\"Bot 设置\",\"items\":[{\"title\":\"设置项自动保存\",\"description\":\"身份与发现、群聊策略修改后会自动保存；设置项下方会显示正在保存、已自动保存或失败重试状态。\",\"location\":\"空间设置 -> Agent Bot -> 身份与发现；空间设置 -> Agent Bot -> 群聊策略\"},{\"title\":\"停用前确认影响\",\"description\":\"停用会撤销 Token 并移除 Bot 的空间成员身份，确认行会在执行前展示这些影响。\",\"location\":\"空间设置 -> Agent Bot -> 停用 Bot -> 确认停用\"}]},{\"title\":\"聊天与表情\",\"items\":[{\"title\":\"表情面板加载更快\",\"description\":\"首次加载表情库后，聊天表情面板和我的表情管理会复用当前页面的数据，重复打开不再重新等待完整列表。\",\"location\":\"群聊输入框 -> 表情；个人设置 -> 聊天与表情 -> 我的表情\"},{\"title\":\"回复时自动提及\",\"description\":\"开启后，回复群消息会在输入框前面自动带入被回复者的提及；默认关闭。\",\"location\":\"个人设置 -> 聊天与表情 -> 回复群消息时自动提及对方\"},{\"title\":\"移动端图片完整显示\",\"description\":\"竖向图片和长截图会按原比例缩放，发送后可以点击图片查看完整内容。\",\"location\":\"移动端群聊 -> 图片消息；点击图片进入图片查看器\"}]},{\"title\":\"群聊话题\",\"items\":[{\"title\":\"话题消息使用统一聊天布局\",\"description\":\"话题内头像、消息间距和发送区域与普通聊天保持一致；只有提及成员的消息也会正常发送。\",\"location\":\"群聊 -> 话题 -> 话题消息列表和底部输入框\"},{\"title\":\"从群聊进入已有话题\",\"description\":\"在群聊输入框选择已有话题后发送，消息会直接进入该话题；消息中的话题标签可以点击打开话题。\",\"location\":\"群聊输入框 -> 话题图标 -> 选择已有话题；点击消息中的 #话题标签\"}]}]}",
       "guideHash": "1adc042bd2fa7310a44f6d103a20ceef4372e0c6c8537d33c6339ca0b65343b8",
-      "publicationID": "echo_release_node-catalog-016",
+      "publicationID": "echo_release_node-catalog-019",
       "deliveryIDs": [
-        "echo_release_delivery_node-catalog-017",
-        "echo_release_delivery_node-catalog-018"
+        "echo_release_delivery_node-catalog-020",
+        "echo_release_delivery_node-catalog-021"
       ],
       "lockKey": "duallane:echo-release:spc_fixture:0.15.2",
       "summary": {
-        "id": "echo_release_node-catalog-016",
+        "id": "echo_release_node-catalog-019",
         "version": "0.15.2",
         "title": "更顺手的空间聊天",
         "publishedAt": "2026-09-06T12:34:56.789Z",
@@ -429,7 +482,7 @@
         "replayed": false
       },
       "getPublication": {
-        "id": "echo_release_node-catalog-016",
+        "id": "echo_release_node-catalog-019",
         "version": "0.15.2",
         "title": "更顺手的空间聊天",
         "publishedAt": "2026-09-06T12:34:56.789Z",
@@ -493,14 +546,14 @@
       },
       "guideJSON": "{\"version\":\"0.15.1\",\"releasedAt\":\"2026-08-20\",\"title\":\"更灵活的表情合集\",\"summary\":\"表情合集不再受数量限制，可选择跟随原作者更新，并让重复文件复用同一份存储内容。\",\"sections\":[{\"title\":\"表情合集订阅\",\"items\":[{\"title\":\"添加时跟随原作者更新\",\"description\":\"添加他人分享的整套表情时，可以开启订阅；名称、表情增删、顺序和短名称会随原作者同步。\",\"location\":\"共享空间 -> 打开表情合集分享卡片 -> 添加整套 -> 订阅源作者变更\"},{\"title\":\"管理或关闭订阅\",\"description\":\"订阅合集保持内容只读，但可以调整合集位置、分享当前快照、关闭订阅或删除自己的合集。\",\"location\":\"个人设置 -> 我的表情 -> 打开合集详情 -> 订阅源作者变更\"}]},{\"title\":\"容量与数量\",\"items\":[{\"title\":\"合集和表情总数不再设上限\",\"description\":\"个人可创建的合集数和表情总数不再限制；单个合集仍最多 100 张。\",\"location\":\"个人设置 -> 我的表情；合集详情中可查看单合集数量\"},{\"title\":\"个人表情容量提升至 1 GiB\",\"description\":\"本地添加的表情计入容量，正在订阅的表情不计入；超出容量时会阻止继续添加本地表情。\",\"location\":\"个人设置 -> 我的表情 -> 页面顶部用量\"}]},{\"title\":\"重复文件复用\",\"items\":[{\"title\":\"相同内容只保留一份活动存储\",\"description\":\"共享空间中的相同附件、头像和自定义表情会自动复用内容；上传和使用方式不变。\",\"location\":\"无需设置；共享空间中的附件上传、头像设置和表情上传入口保持不变\"}]}]}",
       "guideHash": "adf0314b1a1a3b785c42e4b305f43be5938cf17e4812856d15f8014d89847881",
-      "publicationID": "echo_release_node-catalog-019",
+      "publicationID": "echo_release_node-catalog-022",
       "deliveryIDs": [
-        "echo_release_delivery_node-catalog-020",
-        "echo_release_delivery_node-catalog-021"
+        "echo_release_delivery_node-catalog-023",
+        "echo_release_delivery_node-catalog-024"
       ],
       "lockKey": "duallane:echo-release:spc_fixture:0.15.1",
       "summary": {
-        "id": "echo_release_node-catalog-019",
+        "id": "echo_release_node-catalog-022",
         "version": "0.15.1",
         "title": "更灵活的表情合集",
         "publishedAt": "2026-09-06T12:34:56.789Z",
@@ -512,7 +565,7 @@
         "replayed": false
       },
       "getPublication": {
-        "id": "echo_release_node-catalog-019",
+        "id": "echo_release_node-catalog-022",
         "version": "0.15.1",
         "title": "更灵活的表情合集",
         "publishedAt": "2026-09-06T12:34:56.789Z",
@@ -571,14 +624,14 @@
       },
       "guideJSON": "{\"version\":\"0.15.0\",\"releasedAt\":\"2026-08-14\",\"title\":\"更有序的共享空间协作\",\"summary\":\"回声需求征集、群聊话题和自定义 Agent Bot 让成员可以收集意见、同步进展并连接自己的工具。\",\"sections\":[{\"title\":\"回声需求与征集\",\"items\":[{\"title\":\"向回声提交需求或反馈\",\"description\":\"成员可以通过引导提交需求和问题，并在状态变化时收到回声通知。\",\"location\":\"成员列表或会话搜索 -> 回声 -> 输入 /need 或 /feedback\"},{\"title\":\"发布全员征集并处理需求\",\"description\":\"空间主人可以发布选择题征集，并将需求转为正式计划、开始处理、交付或驳回。\",\"location\":\"回声会话 -> 输入 /publish；空间设置 -> 需求与反馈\"}]},{\"title\":\"群聊话题\",\"items\":[{\"title\":\"从群聊创建独立话题\",\"description\":\"围绕一项内容建立独立讨论，并把重要消息同步回原群聊。\",\"location\":\"群聊输入框 -> 输入 #[标题](正文)；或打开群聊的话题入口\"}]},{\"title\":\"自定义 Agent Bot\",\"items\":[{\"title\":\"连接自己的自动化工具\",\"description\":\"创建带独立身份的 Bot，配置可发现范围、私聊与群聊策略，并通过受控凭证连接。\",\"location\":\"空间设置 -> Agent Bot\"}]}]}",
       "guideHash": "2a431cb29f4c69db9bd5b0d26bf16d5ba01bb1534f9c0855515ba00934df34c1",
-      "publicationID": "echo_release_node-catalog-022",
+      "publicationID": "echo_release_node-catalog-025",
       "deliveryIDs": [
-        "echo_release_delivery_node-catalog-023",
-        "echo_release_delivery_node-catalog-024"
+        "echo_release_delivery_node-catalog-026",
+        "echo_release_delivery_node-catalog-027"
       ],
       "lockKey": "duallane:echo-release:spc_fixture:0.15.0",
       "summary": {
-        "id": "echo_release_node-catalog-022",
+        "id": "echo_release_node-catalog-025",
         "version": "0.15.0",
         "title": "更有序的共享空间协作",
         "publishedAt": "2026-09-06T12:34:56.789Z",
@@ -590,7 +643,7 @@
         "replayed": false
       },
       "getPublication": {
-        "id": "echo_release_node-catalog-022",
+        "id": "echo_release_node-catalog-025",
         "version": "0.15.0",
         "title": "更有序的共享空间协作",
         "publishedAt": "2026-09-06T12:34:56.789Z",
