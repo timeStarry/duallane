@@ -17,12 +17,14 @@
     "backend:test:race": "make -C apps/backend test-race",
     "backend:vuln": "make -C apps/backend vuln",
     "start": "pnpm --filter @duallane/web start",
-    "storage:dedupe": "pnpm --filter @duallane/web storage:dedupe",
-    "test": "pnpm --filter @duallane/agent-sdk test && pnpm --filter @duallane/web test",
+    "storage:dedupe": "pnpm --filter @duallane/node-compat-tools storage:dedupe",
+    "test": "pnpm --filter @duallane/agent-sdk test && pnpm --filter @duallane/web test && pnpm --filter @duallane/node-compat-tools test",
     "test:e2e": "playwright test",
     "test:e2e:p2p-go": "playwright test --config=playwright.p2p-go.config.ts",
     "test:e2e:workspace-go": "playwright test --config=playwright.workspace-go.config.ts",
-    "lint": "pnpm --filter @duallane/agent-sdk lint && pnpm --filter @duallane/web lint"
+    "lint": "pnpm --filter @duallane/agent-sdk lint && pnpm --filter @duallane/web lint",
+    "storage:migrate": "pnpm --filter @duallane/node-compat-tools storage:migrate",
+    "storage:provision": "pnpm --filter @duallane/node-compat-tools storage:provision"
   },
   "packageManager": "pnpm@10.30.3",
   "devDependencies": {

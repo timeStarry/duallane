@@ -1,5 +1,6 @@
 packages:
   - apps/*
   - packages/*
+  - tools/node-compat
 allowBuilds:
   esbuild: true
