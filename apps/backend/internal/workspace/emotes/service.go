@@ -283,6 +283,42 @@ func (s *Service) visiblePacks() []PublicCatalogPack {
 	return s.catalog.VisiblePacks()
 }
 
+var defaultAutoHideMessageTypes = []string{"image", "emote", "long"}
+
+var allowedAutoHideMessageTypes = map[string]struct{}{
+	"image": {},
+	"emote": {},
+	"long":  {},
+}
+
+func normalizeAutoHideMessageTypes(values []string) ([]string, *Error) {
+	normalized := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if _, ok := allowedAutoHideMessageTypes[value]; !ok {
+			return nil, validationError(CodeEmoteInvalidSettings, MessageEmoteInvalidSettings)
+		}
+		if _, duplicate := seen[value]; duplicate {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+	return normalized, nil
+}
+
+func storedAutoHideMessageTypes(encoded string) []string {
+	if strings.TrimSpace(encoded) != "" {
+		var requested []string
+		if json.Unmarshal([]byte(encoded), &requested) == nil && requested != nil {
+			if normalized, err := normalizeAutoHideMessageTypes(requested); err == nil {
+				return normalized
+			}
+		}
+	}
+	return append([]string(nil), defaultAutoHideMessageTypes...)
+}
+
 func (s *Service) settingsFromRecord(record SettingsRecord) EmoteSettings {
 	available := s.visiblePacks()
 	fallback := make([]string, 0, len(available))
@@ -321,7 +357,10 @@ func (s *Service) settingsFromRecord(record SettingsRecord) EmoteSettings {
 	return EmoteSettings{
 		AvailablePacks: available, EnabledPackIDs: enabled,
 		ClickImageEmoteToSend: record.ClickImageEmoteToSend,
-		ReplyAutoMention:      record.ReplyAutoMention, MinimumEnabled: 1,
+		ReplyAutoMention:      record.ReplyAutoMention,
+		AutoHideMessages:      record.AutoHideMessages,
+		AutoHideMessageTypes:  storedAutoHideMessageTypes(record.AutoHideMessageTypesJSON),
+		MinimumEnabled:        1,
 	}
 }
 
@@ -339,6 +378,9 @@ func (s *Service) GetSettings(ctx context.Context, actorID string) (EmoteSetting
 func (s *Service) UpdateSettings(ctx context.Context, actorID string, input UpdateSettingsInput, meta auth.RequestMeta) (EmoteSettings, error) {
 	evidence := mutationEvidence{action: "emote.settings.update", eventType: "emote.settings.updated", targetType: "user", targetID: strings.TrimSpace(actorID), payload: map[string]any{"userId": strings.TrimSpace(actorID)}}
 	result, err := s.mutate(ctx, actorID, meta, evidence, func(tx Tx, actor *auth.Actor, now time.Time) (any, *Error, error) {
+		if err := tx.Lock(ctx, "duallane:emote-settings:"+actor.ID); err != nil {
+			return nil, nil, normalizeError(err)
+		}
 		currentRecord, err := tx.GetSettings(ctx, actor.ID)
 		if err != nil {
 			return nil, nil, normalizeError(err)
@@ -375,19 +417,32 @@ func (s *Service) UpdateSettings(ctx context.Context, actorID string, input Upda
 		if input.ReplyAutoMention != nil {
 			reply = *input.ReplyAutoMention
 		}
+		autoHideMessages := current.AutoHideMessages
+		if input.AutoHideMessages != nil {
+			autoHideMessages = *input.AutoHideMessages
+		}
+		autoHideMessageTypes := append([]string{}, current.AutoHideMessageTypes...)
+		if input.AutoHideMessageTypes != nil {
+			normalized, settingsErr := normalizeAutoHideMessageTypes(*input.AutoHideMessageTypes)
+			if settingsErr != nil {
+				return nil, settingsErr, nil
+			}
+			autoHideMessageTypes = normalized
+		}
 		encoded, err := json.Marshal(nextIDs)
 		if err != nil {
 			return nil, nil, internalError("encode emote settings", err)
 		}
-		if err := tx.UpsertSettings(ctx, actor.ID, string(encoded), click, reply, now); err != nil {
+		encodedAutoHideMessageTypes, err := json.Marshal(autoHideMessageTypes)
+		if err != nil {
+			return nil, nil, internalError("encode auto-hide emote settings", err)
+		}
+		if err := tx.UpsertSettings(ctx, actor.ID, string(encoded), click, reply, autoHideMessages, string(encodedAutoHideMessageTypes), now); err != nil {
 			return nil, nil, normalizeError(err)
 		}
-		updated := current
-		updated.EnabledPackIDs = nextIDs
-		updated.ClickImageEmoteToSend = click
-		updated.ReplyAutoMention = reply
 		return s.settingsFromRecord(SettingsRecord{
 			EnabledPackIDsJSON: string(encoded), ClickImageEmoteToSend: click, ReplyAutoMention: reply,
+			AutoHideMessages: autoHideMessages, AutoHideMessageTypesJSON: string(encodedAutoHideMessageTypes),
 		}), nil, nil
 	})
 	if err != nil {

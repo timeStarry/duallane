@@ -116,7 +116,7 @@ func TestSchemaCheckerOptInKeepsCleanBaselineValidWithout034(t *testing.T) {
 func TestSchemaCheckerKeeps034RequiredWhenCanonicalSetIncludesIt(t *testing.T) {
 	t.Parallel()
 	tx := newFakeTx()
-	required := append(append([]string(nil), canonicalReleaseCompatibilityBaseline[:]...), ReleaseCompatibilityMigrationName)
+	required := canonicalReleaseCompatibilityNamesWith034()
 	tx.applied = appendMigrationRows(canonicalReleaseCompatibilityBaseline[:])
 
 	report, err := (SchemaChecker{
@@ -129,6 +129,78 @@ func TestSchemaCheckerKeeps034RequiredWhenCanonicalSetIncludesIt(t *testing.T) {
 	}
 	if !equalStrings(report.MissingNames, []string{ReleaseCompatibilityMigrationName}) || report.CompatibleCount != 0 || report.UnknownCount != 0 {
 		t.Fatalf("unexpected required-034 report: %#v", report)
+	}
+}
+
+func TestSchemaCheckerAcceptsCanonical034AsRequiredFromDirectory(t *testing.T) {
+	t.Parallel()
+	tx := newFakeTx()
+	required := canonicalReleaseCompatibilityNamesWith034()
+	tx.applied = appendMigrationRows(required)
+
+	report, err := (SchemaChecker{
+		Queryer:                   tx,
+		Directory:                 writeMigrations(t, required...),
+		AllowReleaseCompatibility: true,
+	}).Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.AppliedCount != len(required) || len(report.MissingNames) != 0 || report.UnknownCount != 0 || report.CompatibleCount != 0 || len(report.CompatibleNames) != 0 {
+		t.Fatalf("unexpected canonical-034 report: %#v", report)
+	}
+	if !equalStrings(tx.queryCalls, []string{columnsSQL, primaryKeySQL, appliedSQL, compatibleMigrationColumnsSQL}) {
+		t.Fatalf("queries = %#v, want required-034 schema validation", tx.queryCalls)
+	}
+	if len(tx.execCalls) != 0 {
+		t.Fatalf("schema check executed %d write statements", len(tx.execCalls))
+	}
+}
+
+func TestSchemaCheckerRejectsMissingCanonical034FromDirectory(t *testing.T) {
+	t.Parallel()
+	tx := newFakeTx()
+	required := canonicalReleaseCompatibilityNamesWith034()
+	tx.applied = appendMigrationRows(canonicalReleaseCompatibilityBaseline[:])
+
+	report, err := (SchemaChecker{
+		Queryer:                   tx,
+		Directory:                 writeMigrations(t, required...),
+		AllowReleaseCompatibility: true,
+	}).Check(context.Background())
+	if err == nil || !errors.Is(err, ErrMissingMigrations) {
+		t.Fatalf("error = %v, want missing required canonical 034", err)
+	}
+	if !equalStrings(report.MissingNames, []string{ReleaseCompatibilityMigrationName}) || report.CompatibleCount != 0 || report.UnknownCount != 0 {
+		t.Fatalf("unexpected missing canonical-034 report: %#v", report)
+	}
+	if !equalStrings(tx.queryCalls, []string{columnsSQL, primaryKeySQL, appliedSQL}) {
+		t.Fatalf("queries = %#v, want no compatible-column query for missing required 034", tx.queryCalls)
+	}
+	if len(tx.execCalls) != 0 {
+		t.Fatalf("schema check executed %d write statements", len(tx.execCalls))
+	}
+}
+
+func TestSchemaCheckerRejects035WhenCanonical034IsRequired(t *testing.T) {
+	t.Parallel()
+	tx := newFakeTx()
+	required := canonicalReleaseCompatibilityNamesWith034()
+	tx.applied = appendMigrationRows(required, "035_future_workspace_change.sql")
+
+	report, err := (SchemaChecker{
+		Queryer:                   tx,
+		Directory:                 writeMigrations(t, required...),
+		AllowReleaseCompatibility: true,
+	}).Check(context.Background())
+	if err == nil || !errors.Is(err, ErrUnknownMigrations) {
+		t.Fatalf("error = %v, want unknown 035 rejection", err)
+	}
+	if report.UnknownCount != 1 || !equalStrings(report.UnknownNames, []string{"035_future_workspace_change.sql"}) || report.CompatibleCount != 0 {
+		t.Fatalf("unexpected canonical-034 unknown report: %#v", report)
+	}
+	if len(tx.execCalls) != 0 {
+		t.Fatalf("schema check executed %d write statements", len(tx.execCalls))
 	}
 }
 
@@ -258,6 +330,10 @@ func appendMigrationRows(names []string, extra ...string) [][]any {
 		rows = append(rows, []any{name})
 	}
 	return rows
+}
+
+func canonicalReleaseCompatibilityNamesWith034() []string {
+	return append(append([]string(nil), canonicalReleaseCompatibilityBaseline[:]...), ReleaseCompatibilityMigrationName)
 }
 
 type errorQueryer struct {

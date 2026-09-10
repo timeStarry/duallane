@@ -118,8 +118,17 @@ func TestWorkspaceEmoteFixturesValidateAgainstOpenAPI(t *testing.T) {
 				t.Fatalf("route fixture request: %v", err)
 			}
 			seen[emoteRouteTemplate(scenario.Request.Method, scenario.Request.Path)] = true
-			if err := openapi3filter.ValidateRequest(context.Background(), input); err != nil {
-				t.Fatalf("Node request does not conform: %v", err)
+			requestErr := openapi3filter.ValidateRequest(context.Background(), input)
+			switch scenario.Name {
+			case "auto-hide-invalid-type", "auto-hide-null-types", "auto-hide-invalid-enabled":
+				// These fixtures deliberately violate the new strict preference schema.
+				if requestErr == nil || scenario.Response.Status != http.StatusBadRequest {
+					t.Fatalf("invalid settings must fail schema validation and return HTTP 400")
+				}
+			default:
+				if requestErr != nil {
+					t.Fatalf("Node request does not conform: %v", requestErr)
+				}
 			}
 			if err := validateEmoteResponse(input, scenario.Response); err != nil {
 				t.Fatalf("Node response does not conform: %v", err)

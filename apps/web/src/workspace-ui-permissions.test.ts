@@ -662,7 +662,7 @@ describe("workspace UI permission boundaries", () => {
     expect(structuredSource).toContain("const hasUnknownBlock = blocks.some((block) => !isKnownWorkspaceMessageBlock(block));");
     expect(structuredSource).toContain("blocks.length === 0 || hasUnknownBlock");
     expect(structuredSource).toContain("return <MessageBody body={message.body} />;");
-    expect(structuredSource).toContain("function isKnownWorkspaceMessageBlock");
+    expect(source).toContain("isWorkspaceDisplayBlock as isKnownWorkspaceMessageBlock");
     expect(structuredSource).toContain('block.type === "attachment"');
     expect(structuredSource).not.toContain("return null;");
   });

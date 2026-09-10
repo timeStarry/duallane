@@ -4641,7 +4641,7 @@ async function canSeeEvent(db, actor, event) {
   if (event.type === "conversation.notification_updated") {
     return event.targetType === "user" && event.targetId === actor.id;
   }
-  if (event.type === "emote.library.updated") {
+  if (event.type === "emote.library.updated" || event.type === "emote.settings.updated") {
     return event.targetType === "user" && event.targetId === actor.id;
   }
   if (event.targetType === "attachment" && event.targetId) {
@@ -4786,6 +4786,9 @@ async function publicWorkspaceEventPayload(db, actor, type, payload) {
       notificationLevel: normalizeString(payload.notificationLevel),
       conversation: await publicConversationPayloadForActor(db, actor, payload.conversation || payload.conversationId)
     });
+  }
+  if (type === "emote.settings.updated") {
+    return removeUndefinedValues({ userId: normalizeString(payload.userId) });
   }
   if (type === "emote.library.updated") {
     return removeUndefinedValues({

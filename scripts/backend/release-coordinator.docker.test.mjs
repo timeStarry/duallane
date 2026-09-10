@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { verifySchemaCompatibility } from "../../deploy/production/release-schema-compatibility.mjs";
 import { buildGoUpgradeCycle } from "./testdata/go-upgrade-coordinator.mjs";
 import { buildPassiveCandidateComposeAdapter, buildPassiveCandidateFixture } from "./testdata/passive-candidate-fixture.mjs";
 
@@ -16,6 +17,7 @@ const idPattern = /^[0-9a-f]{64}$/u;
 const ownerLabel = "com.duallane.release-coordinator-test";
 const selected = process.env.DUALLANE_RELEASE_COORDINATOR_DOCKER_TEST === "true";
 const upgradeSelected = process.env.DUALLANE_RELEASE_COORDINATOR_UPGRADE_TEST === "true";
+const expectReviewedSchemaExpansion = process.env.DUALLANE_RELEASE_COORDINATOR_EXPECT_SCHEMA_033_TO_034 === "true";
 const imageVariables = {
   node: "DUALLANE_RELEASE_COORDINATOR_NODE_IMAGE",
   nodeWeb: "DUALLANE_RELEASE_COORDINATOR_NODE_WEB_IMAGE",
@@ -233,6 +235,24 @@ function exactImage(image) {
   return value.Config?.Labels ?? {};
 }
 
+async function inspectSchemaPair(previousImage, targetImage) {
+  let result;
+  try {
+    result = await verifySchemaCompatibility({ previousImage, targetImage });
+  } catch {
+    reject("image_schema_compatibility_inspection_failed");
+  }
+  if (result?.status !== "compatible" ||
+      !Number.isSafeInteger(result.previousMigrationCount) || result.previousMigrationCount < 1 ||
+      !Number.isSafeInteger(result.targetMigrationCount) || result.targetMigrationCount < 1 ||
+      result.commonMigrationCount !== result.previousMigrationCount ||
+      result.removedMigrationCount !== 0 ||
+      result.targetMigrationCount !== result.commonMigrationCount + result.addedMigrationCount) {
+    reject("image_schema_compatibility_report_invalid");
+  }
+  return result;
+}
+
 function releaseMetadata(labels) {
   const commit = labels["org.opencontainers.image.revision"];
   const version = labels["org.opencontainers.image.version"];
@@ -299,6 +319,25 @@ function coordinatorScript(deploySource, scenario = "success", candidateAdapter 
   const passiveScenario = isPassiveScenario(scenario);
   return [
     "set -Eeuo pipefail", "umask 077", 'source "$ROOT/deploy/production/release-helper.sh"',
+    // The initial Node-to-Go rehearsal must derive the captured schema from
+    // the exact old Go image. This shadows only the outer test shell's helper;
+    // the Go-upgrade child sources release-helper.sh again below and must keep
+    // scanning the current checkout for the new release schema.
+    "release_current_schema_version() {",
+    "  [[ \"${RELEASE_PROFILE_NAME}\" == go-full && \"${RELEASE_GO_UPGRADE:-false}\" == false && \"${RELEASE_GO_MIGRATION_VERIFIED}\" == true ]] || { printf '%s\\n' old_image_schema_inventory_not_ready >&2; return 1; }",
+    "  [[ \"${RELEASE_GO_IMAGE_ID}\" =~ ^sha256:[0-9a-f]{64}$ ]] || { printf '%s\\n' old_image_schema_image_invalid >&2; return 1; }",
+    "  local report schema_version",
+    "  if ! report=\"$(node \"${ROOT}/deploy/production/release-schema-compatibility.mjs\" verify --previous-image \"${RELEASE_GO_IMAGE_ID}\" --target-image \"${RELEASE_GO_IMAGE_ID}\" 2>/dev/null)\"; then",
+    "    printf '%s\\n' old_image_schema_inspection_failed >&2",
+    "    return 1",
+    "  fi",
+    "  if ! schema_version=\"$(printf '%s\\n' \"${report}\" | node -e 'const fs=require(\"node:fs\"); const input=fs.readFileSync(0); if (input.byteLength > 4096) process.exit(1); let result; try { result=JSON.parse(input.toString(\"utf8\")); } catch { process.exit(1); } if (result.status !== \"compatible\" || !Number.isSafeInteger(result.previousMigrationCount) || result.previousMigrationCount < 1 || result.previousMigrationCount !== result.targetMigrationCount || result.commonMigrationCount !== result.previousMigrationCount || result.removedMigrationCount !== 0 || result.targetMigrationCount !== result.commonMigrationCount + result.addedMigrationCount) process.exit(1); process.stdout.write(String(result.previousMigrationCount)+\"\\n\");')\"; then",
+    "    printf '%s\\n' old_image_schema_report_invalid >&2",
+    "    return 1",
+    "  fi",
+    "  [[ \"${schema_version}\" =~ ^[1-9][0-9]*$ ]] || { printf '%s\\n' old_image_schema_version_invalid >&2; return 1; }",
+    "  printf '%s\\n' \"${schema_version}\"",
+    "}",
     ...functions,
     // Only the Compose input adapter differs from production: all lifecycle,
     // authority, drain, migration, smoke and recovery functions are real.
@@ -450,6 +489,14 @@ test("coordinator gate rejects mutable images and extracts only scoped release f
   const script = coordinatorScript(source);
   assert.match(script, /release_rollback_application/u);
   assert.match(script, /trap on_error ERR/u);
+  assert.match(script, /release_current_schema_version\(\)/u);
+  assert.match(script, /release-schema-compatibility\.mjs" verify --previous-image/u);
+  assert.match(script, /previousMigrationCount/u);
+  assert.match(script, /old_image_schema_inspection_failed/u);
+  assert.match(script, /old_image_schema_report_invalid/u);
+  assert.doesNotMatch(script, /docker run --rm/u);
+  assert.doesNotMatch(script, /export -f release_current_schema_version/u);
+  assert.ok(script.indexOf("release_current_schema_version() {") < script.indexOf("phase capture; release_capture_successful_go_snapshot"));
   for (const scenario of ["after-backend", "after-capture"]) {
     const failureScript = coordinatorScript(source, scenario);
     assert.match(failureScript, /\ninject_failure\n/u);
@@ -490,6 +537,9 @@ test("coordinator gate rejects mutable images and extracts only scoped release f
   const upgradeScript = coordinatorScript(source, "go-upgrade");
   assert.match(upgradeScript, /exec bash --noprofile --norc -s/u);
   assert.ok(upgradeScript.indexOf("release_capture_successful_go_snapshot") < upgradeScript.indexOf("exec bash --noprofile --norc -s"));
+  assert.ok(upgradeScript.indexOf('source "${ROOT}/deploy/production/release-helper.sh"') > upgradeScript.indexOf("exec bash --noprofile --norc -s"));
+  assert.match(upgradeScript, /export PROJECT_DIR="\$\{ROOT\}"/u);
+  assert.doesNotMatch(upgradeScript, /export -f release_current_schema_version/u);
   const catalog = releaseErrorCatalog('  echo "cannot inspect ${private_path} (owner)" >&2', "fixture");
   assert.equal(catalog[0].pattern.test("cannot inspect secret-value (owner)"), true);
   assert.equal(catalog[0].code, "fixture_1");
@@ -546,6 +596,12 @@ async function rehearseCoordinator(t, scenario) {
     const before = go.version.split(".").map(BigInt), after = upgrade.version.split(".").map(BigInt);
     const different = after.findIndex((value, index) => value !== before[index]);
     if (upgrade.commit === go.commit || different < 0 || after[different] <= before[different]) reject("upgrade_requires_newer_distinct_release");
+  }
+  let schemaProof;
+  if (scenario === "success") {
+    schemaProof = await inspectSchemaPair(images.goWorkspace, images.goWorkspace);
+  } else if (scenario === "go-upgrade") {
+    schemaProof = await inspectSchemaPair(images.goWorkspace, upgradeImages.goWorkspace);
   }
   const runID = randomBytes(24).toString("hex"), project = `dl-release-${runID.slice(0, 20)}`;
   const names = { network: `${project}-private`, gatewayNetwork: `${project}-gateway`,
@@ -690,6 +746,27 @@ async function rehearseCoordinator(t, scenario) {
     }
     if (scenario === "permissions-failure" && await stat(`${paths.recovery}.go-compose.snapshot.json`).then(() => true).catch(() => false)) {
       reject("preactivation_go_snapshot_present");
+    }
+    if (scenario === "success" || scenario === "go-upgrade") {
+      const oldSchemaVersion = schemaProof.previousMigrationCount;
+      let initialSnapshot;
+      try { initialSnapshot = JSON.parse(await readFile(`${paths.recovery}.go-compose.snapshot.json`, "utf8")); } catch { reject("initial_go_snapshot_invalid"); }
+      if (initialSnapshot.schemaVersion !== oldSchemaVersion || initialSnapshot.imageIDs?.workspace !== images.goWorkspace ||
+          initialSnapshot.imageIDs?.worker !== images.goWorkspace || initialSnapshot.imageIDs?.migrate !== images.goWorkspace) {
+        reject("initial_go_snapshot_schema_not_from_old_image");
+      }
+      if (scenario === "go-upgrade") {
+        const newSchemaVersion = schemaProof.targetMigrationCount;
+        if (expectReviewedSchemaExpansion && (oldSchemaVersion !== 33 || newSchemaVersion !== 34)) {
+          reject("expected_schema_expansion_not_033_to_034");
+        }
+        let upgradeSnapshot;
+        try { upgradeSnapshot = JSON.parse(await readFile(`${paths.upgradeRecovery}.go-compose.snapshot.json`, "utf8")); } catch { reject("upgrade_go_snapshot_invalid"); }
+        if (upgradeSnapshot.schemaVersion !== newSchemaVersion || upgradeSnapshot.imageIDs?.workspace !== upgradeImages.goWorkspace ||
+            upgradeSnapshot.imageIDs?.worker !== upgradeImages.goWorkspace || upgradeSnapshot.imageIDs?.migrate !== upgradeImages.goWorkspace) {
+          reject("upgrade_go_snapshot_schema_not_from_new_image");
+        }
+      }
     }
     const current = ownedContainers(project, runID, allowedImages);
     if (candidate) {
