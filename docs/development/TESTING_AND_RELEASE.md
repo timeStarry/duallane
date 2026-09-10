@@ -133,13 +133,17 @@ checkout owner, verify clean `main` and exact `origin/main`, and pass the full
 `--expected-commit` to the guarded entry point.
 
 The [0.17 bridge/release record](../backend/work-items/2026-09-10-chat-0170-after-bridge.md)
-records the current Go production evidence. Its next application release must follow
-the [Go-to-Go upgrade procedure](../backend/OPERATIONS.md#guarded-go-activation-and-upgrade-inputs),
+documents the verified 0.17.0 baseline and rollback authority. It is historical
+release evidence, not a timeless current-version label. The [0.18 Node-runtime retirement work item](../backend/work-items/2026-09-10-node-runtime-retirement.md)
+is the acceptance ledger for validation and activation status, including the
+lead's final browser diagnosis. The next application release must follow the
+[Go-to-Go upgrade procedure](../backend/OPERATIONS.md#guarded-go-activation-and-upgrade-inputs),
 using `--release-profile go-full --go-upgrade --previous-release-snapshot` with
-the previous successful private snapshot and sidecars. Do not select Node-default
-or first-cutover permission preparation for an active Go deployment. Run the
-coordinator with the privileges needed for its private artifacts; keep any Git
-trust exception process-local and prevent optional root-owned index refreshes.
+the latest verified private snapshot from the preceding successful release and
+its sidecars. Do not select Node-default or first-cutover permission preparation
+for an active Go deployment. Run the coordinator with the privileges needed for
+its private artifacts; keep any Git trust exception process-local and prevent
+optional root-owned index refreshes.
 
 The production `.env` must keep
 `DUALLANE_PRODUCTION_DIR=/home/timestarry/duallane`. Never run the production
@@ -163,8 +167,8 @@ critical changed path. Inspect redacted logs for migration, storage, and
 startup errors.
 
 Rollback uses the repository's guarded procedure and the exact known-good Go
-images captured in the previous release snapshot. For the 0.18 retirement,
-the approved rollback target is the 0.17 Go release at commit
+images captured in the previous release snapshot. For the historical 0.18
+transition, the documented rollback example is the 0.17.0 Go release at commit
 `8d346a04317d0d3396293caca14ca1c65c7b5163` with the private snapshot and
 sidecars; it is not a schema-34 rollback to 0.16.1 or a stale database copy.
 Before rollback, check schema/data compatibility and retain the same authority;

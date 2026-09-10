@@ -1,11 +1,12 @@
 # Backend Architecture Guide
 
 This directory is the progressive-disclosure entry point for the DualLane Go
-backend and the 0.18 Node-runtime retirement. The 0.17 production baseline is
-Go-only for online P2P, Workspace, Web, worker, and migration ownership. The
-0.18 retirement is still pending its declared gates; use the status and
-evidence in [Evolution and migration](EVOLUTION.md) to distinguish a checked-in
-candidate, an iteration result, and a completed release.
+backend and the 0.18 Node-runtime retirement. The verified 0.17.0 baseline is
+recorded in the bridge/release record; the checked-in 0.18 online architecture is Go-only for P2P,
+Workspace, Web, worker, and migration ownership. Use [Evolution and migration](EVOLUTION.md)
+for ownership and the [retirement work item](work-items/2026-09-10-node-runtime-retirement.md)
+for validation and activation status; these records distinguish a checked-in
+target from a deployed release.
 
 ## Start Here
 
@@ -20,12 +21,11 @@ Every backend task must first read:
 4. Only the topic documents routed below.
 
 The [0.17 bridge/release record](work-items/2026-09-10-chat-0170-after-bridge.md)
-identifies the deployed commit/images, schema-34 evidence, single-owner checks,
-recovery artifacts, and remaining authenticated/provider acceptance. The
-[0.18 retirement work item](work-items/2026-09-10-node-runtime-retirement.md)
-records the new owner boundary, pending gates, and rollback contract. The 0.17
-evidence does not mark 0.18 gates complete; the product and security documents
-remain authoritative for behavior at every status.
+identifies the historical deployed commit/images, schema-34 evidence,
+single-owner checks, and recovery artifacts. The [0.18 retirement work item](work-items/2026-09-10-node-runtime-retirement.md)
+records the new owner boundary, validation/activation ledger, and rollback
+contract. The product and security documents remain authoritative for behavior
+throughout the transition.
 
 ## Document Map
 
@@ -87,7 +87,7 @@ a claim that every candidate capability is integrated, verified, or deployed.
 | Which candidate images exist? | [P2P image](../../Dockerfile.p2p) and [Workspace image](../../Dockerfile.workspace); image existence does not establish a Compose service or cutover |
 | Which contracts and migrations are present? | [Candidate API directory](../../apps/backend/api) and [canonical SQL migrations](../../apps/web/server/migrations); inspect coverage before assuming a whole API family is characterized |
 | Where is the foundation/contract slice evidence? | [2026-09-06 work record](work-items/2026-09-06-foundation-contracts.md); includes exact tested commits and excluded draft failures |
-| What remains before accepting the full candidate PR? | [Pre-deployment handoff](work-items/2026-09-08-predeployment-handoff.md) for current gates and artifact identities; [historical work record](work-items/2026-09-06-predeployment.md) for slice provenance and parallel ownership |
+| What records retirement validation and activation status? | [0.18 Node-runtime retirement work item](work-items/2026-09-10-node-runtime-retirement.md) for the acceptance ledger and artifact identities; [historical work record](work-items/2026-09-06-predeployment.md) for slice provenance and parallel ownership |
 
 The root Compose pair is Go-only by default: `docker-compose.yml` extends
 `docker-compose.go-production.yml` and has no online `api` service. Live
@@ -124,9 +124,9 @@ These documents are deliberately written as durable backend support material:
   validation, and agent documents remain in place.
 - `EVOLUTION.md` retains the completed migration record and becomes the entry
   point for later architecture changes and compatibility transitions.
-- The current tree may remove retired online Node source before the ledger is
-  `complete`; the remaining retirement gates and final-head evidence still live
-  in the work item. Historical Node material may remain only as frozen
+- The current tree may remove retired online Node source before the acceptance
+  ledger records final status; final-head evidence and activation status live in
+  the work item. Historical Node material may remain only as frozen
   release-helper/immutable-image recovery, synthetic tests, golden provenance,
   or the isolated offline storage package.
 

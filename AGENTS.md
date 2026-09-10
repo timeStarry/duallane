@@ -38,16 +38,15 @@ behavior, but do not override higher-level safety requirements.
   access control without a written threat analysis and maintainer approval.
 - Do not modify imported emote assets unless the task is specifically about them.
 
-For the 0.18.0 Node online-runtime retirement, Go is the only online backend
-topology. `apps/web/server/migrations` remains the canonical SQL path;
-`tools/node-compat` is an explicitly invoked, profile-only offline package for
-storage maintenance and does not start with Go services, run migrations, or seed
-data automatically. The 0.17 production evidence is recorded in
-[`2026-09-10-chat-0170-after-bridge.md`](docs/backend/work-items/2026-09-10-chat-0170-after-bridge.md)
-and is a prerequisite baseline, not 0.18.0 retirement or deployment
-acceptance; the retirement gates remain pending until the linked
-[work item](docs/backend/work-items/2026-09-10-node-runtime-retirement.md)
-records them as passed.
+The checked-in 0.18.0 online architecture is Go-only. `apps/web/server/migrations`
+remains the canonical SQL path; `tools/node-compat` is an explicitly invoked,
+profile-only offline package for storage maintenance and does not start with Go
+services, run migrations, or seed data automatically. The verified 0.17.0
+baseline is recorded in
+[`2026-09-10-chat-0170-after-bridge.md`](docs/backend/work-items/2026-09-10-chat-0170-after-bridge.md).
+Use the [Node-runtime retirement work item](docs/backend/work-items/2026-09-10-node-runtime-retirement.md)
+for validation and activation status; retained Node material is offline or
+historical recovery support, not an online owner.
 
 Read [Security and data](docs/development/SECURITY_AND_DATA.md) before changing
 authentication, authorization, P2P, Workspace persistence, uploads, quotas,

@@ -91,8 +91,9 @@ transparent and are not converted into 0.18 completion evidence.
 
 The 0.18 architecture is Go-only online: the root Compose, local runner,
 gateway, request handlers, workers, and migration owner do not use Node online
-code. The final Node-runtime retirement remains pending only the gates listed in
-[the retirement work item](work-items/2026-09-10-node-runtime-retirement.md).
+code. Validation, tested revisions and production activation are recorded in
+[the retirement work item](work-items/2026-09-10-node-runtime-retirement.md)
+and its linked release PR.
 The current tree retains canonical SQL, the isolated offline storage operators,
 historical release-helper/immutable-image recovery, and frozen Node golden
 provenance where required; none is an online owner. Iterative tooling and clean
@@ -261,7 +262,7 @@ Exit: all request-serving Workspace capabilities are `active` in Go.
 Exit: worker and migration commands are `active`; no Node background loop can
 claim the same job.
 
-### Phase 8: 0.18 Node Runtime Retirement And Documentation Conversion (Pending)
+### Phase 8: 0.18 Node Runtime Retirement And Documentation Conversion
 
 - Remove remaining Node online source, image inputs, gateway configuration, and
   obsolete test doubles only after the work item's deletion and frozen-golden
@@ -272,13 +273,15 @@ claim the same job.
   README, and release notes for the final service set.
 - Run the full Go-only validation, actual new-Compose orphan-owner rehearsal,
   and exact 0.17 Go-image rollback rehearsal.
-- Keep the retirement status pending until the final head passes every declared
-  gate; do not infer `complete` from the 0.17 production evidence or iterative
-  tooling passes.
+- Record acceptance in the retirement work item and its release PR, including
+  exact tested revisions, documentation-only follow-ups, production activation
+  and environment-dependent limits. Do not infer `complete` from the 0.17
+  baseline or iterative tooling passes.
 
-Exit: the retirement work item records every required gate as passed by the
-same final head, and this documentation suite describes the accepted current
-architecture.
+Exit: the retirement work item and release PR record the required gates and
+activation against the reviewed source, and this documentation suite describes
+the accepted current architecture. Any unverified environment-dependent path
+remains explicit rather than being relabeled as passed.
 
 ## 6. Slice Cutover Checklist
 

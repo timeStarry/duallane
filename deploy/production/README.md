@@ -19,12 +19,15 @@ Go-only by default. It has no online `api` service. Production uses
 release-helper/immutable-image material remains only for exact old-image
 recovery and synthetic tests, not as a current Node Compose profile.
 
-For the next upgrade, use the private base snapshot
-`backups/production/duallane-20260910T080211Z-8d346a04317d.recovery.go-compose.snapshot.json`
+Use the latest verified private snapshot from the preceding successful release
 and its `.compose.json`, `.external.json`, and `.volumes.json` sidecars. The
-base is the 0.17 Go release at
+0.18 transition's historical 0.17 base is
+`backups/production/duallane-20260910T080211Z-8d346a04317d.recovery.go-compose.snapshot.json`
+from the Go release at
 `8d346a04317d0d3396293caca14ca1c65c7b5163`; rollback never targets schema 34
-on 0.16.1 or a stale database copy.
+on 0.16.1 or a stale database copy. Do not indefinitely reuse this example for
+subsequent releases; consult the [retirement acceptance record](../../docs/backend/work-items/2026-09-10-node-runtime-retirement.md)
+and the latest release's activation evidence.
 
 The Go candidate rehearsal additionally uses the fixed
 `deploy/production/go-candidate.compose.yml` overlay. The script creates one

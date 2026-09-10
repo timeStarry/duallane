@@ -45,13 +45,13 @@ confirmed.
 - Examples must reflect executable commands, real paths, and current APIs. Remove
   obsolete guidance in the same PR that changes the behavior.
 
-For 0.18.0, the online backend is Go-only. The old Node server tree is not a
-current request-serving or worker implementation; only canonical SQL migrations
-remain under `apps/web/server/migrations`, while the small `tools/node-compat`
-package is disclosed from the backend storage runbook as an offline, profile-only
-operator surface. Keep the retirement status and its pending gates in
-[Evolution and migration](../backend/EVOLUTION.md) and the
-[retirement work item](../backend/work-items/2026-09-10-node-runtime-retirement.md).
+For the checked-in 0.18.0 target, the online backend is Go-only. The old Node
+server tree is not a current request-serving or worker implementation; only
+canonical SQL migrations remain under `apps/web/server/migrations`, while the
+small `tools/node-compat` package is disclosed from the backend storage runbook
+as an offline, profile-only operator surface. Use [Evolution and migration](../backend/EVOLUTION.md)
+for ownership and the [retirement work item](../backend/work-items/2026-09-10-node-runtime-retirement.md)
+for validation and activation status.
 
 ## New Contributor Path
 

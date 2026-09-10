@@ -5,9 +5,9 @@
 The Go service set is the current online architecture. The exact 0.17
 production identities and checks are recorded in the
 [bridge/release record](work-items/2026-09-10-chat-0170-after-bridge.md); its
-logged-in UI and native macOS IME limitations remain transparent. The 0.18
-retirement is pending only the gates in the
-[retirement work item](work-items/2026-09-10-node-runtime-retirement.md).
+logged-in UI and native macOS IME limitations remain transparent. The
+[retirement work item](work-items/2026-09-10-node-runtime-retirement.md)
+and linked release PR record 0.18 validation and production activation.
 The root Compose pair is Go-only and does not describe a Node fallback.
 
 Production deployment remains single-host Docker Compose through the guarded
@@ -511,10 +511,15 @@ profile, upgrade marker, and previous snapshot are mandatory:
 ```text
 deploy/production/deploy.sh --expected-commit <40-hex-commit> \
   --release-profile go-full --go-upgrade \
-  --previous-release-snapshot backups/production/duallane-20260910T080211Z-8d346a04317d.recovery.go-compose.snapshot.json
+  --previous-release-snapshot <latest-verified-successful-go-snapshot>
 ```
 
-That argument names one of four matching private mode-0600 artifacts, kept
+For the 0.18 transition, the previous 0.17 snapshot is
+`backups/production/duallane-20260910T080211Z-8d346a04317d.recovery.go-compose.snapshot.json`.
+This is a historical transition example: each later upgrade uses the latest
+verified snapshot from its preceding successful release, not this fixed path.
+
+The snapshot argument names one of four matching private mode-0600 artifacts, kept
 outside Git and normal logs:
 
 1. `go-compose.snapshot.json` — profile/project, commit/version, schema, five
@@ -565,10 +570,10 @@ If authority, fencing, drain, readiness, or smoke fails, the coordinator fails
 closed: confirmed fences stay in place and ambiguous writer state requires
 manual review; a failed stop is never reported as a stopped owner. It does not
 infer an ownership change or let generic daemon recovery bypass a failed
-application-recovery gate. Rollback uses only the pinned old 0.17 Go artifact
+application-recovery gate. Rollback uses only the pinned previous Go artifact
 after the same authority and drain gates. A successful candidate check or
-synthetic rehearsal does not constitute the pending full rehearsal or grant
-deployment authority.
+synthetic rehearsal does not substitute for the release's required complete
+rehearsal or grant deployment authority.
 
 For a Go-to-Go rollback retry, recovery is exhaustive: it re-identifies and
 re-fences all four current owners (`p2p`, `workspace`, `worker`, and `web`),

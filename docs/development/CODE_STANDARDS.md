@@ -20,7 +20,8 @@ Go backend code follows the [backend agent guide](../backend/AGENT_GUIDE.md) and
 [capability ledger](../backend/EVOLUTION.md) and the
 [Node-runtime retirement work item](../backend/work-items/2026-09-10-node-runtime-retirement.md)
 before changing online runtime or compatibility tooling. Go is the only online
-backend target for 0.18.0; the retirement gates are still pending.
+backend target for the checked-in 0.18.0 architecture; the work item records
+validation and activation status.
 
 ## 2. TypeScript And React
 
@@ -143,8 +144,8 @@ Detailed presentation rules live in [UI/UX standards](UI_UX_STANDARDS.md).
 - Keep tests deterministic: control clocks and IDs, await events, and avoid fixed
   sleeps or dependence on public services.
 - Exercise failure and rollback paths for sensitive mutations, not only success.
-- The SQLite test double must preserve the PostgreSQL semantics the test relies on;
-  database-sensitive behavior also needs PostgreSQL coverage.
+- Database-sensitive behavior needs PostgreSQL coverage; a local test double is
+  not evidence for PostgreSQL semantics.
 - Keep fixtures minimal, non-sensitive, and locally owned. Clean temporary files,
   database rows, servers, and browser contexts.
 

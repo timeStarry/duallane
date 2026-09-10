@@ -55,12 +55,12 @@ architecture, code, UI/UX, security/data, testing, release, and deployment. Only
 GitHub user **`timestarry`** may perform the final merge into `main`.
 
 The [backend architecture index](docs/backend/README.md) is the Go backend
-handbook and live migration ledger. The stable 0.18 architecture is Go-only for
-online P2P, Workspace, Web, and worker paths; the exact 0.17 production
-evidence is recorded in the [bridge/release record](docs/backend/work-items/2026-09-10-chat-0170-after-bridge.md).
-The 0.18 Node-runtime retirement remains pending only the gates in its
-[retirement work item](docs/backend/work-items/2026-09-10-node-runtime-retirement.md);
-retired Node online code is not a development or production owner.
+handbook and live migration ledger. The checked-in 0.18 architecture is Go-only
+for online P2P, Workspace, Web, and worker paths. The verified 0.17.0 baseline
+is recorded in the [bridge/release record](docs/backend/work-items/2026-09-10-chat-0170-after-bridge.md);
+the [Node-runtime retirement work item](docs/backend/work-items/2026-09-10-node-runtime-retirement.md)
+is the canonical record for validation and activation status. Retired Node
+online code is not a development or production owner.
 
 Product behavior is defined separately in [`DESIGN.md`](DESIGN.md), the
 [Workspace design index](docs/WORKSPACE_DESIGN_INDEX.md), and the
@@ -165,7 +165,7 @@ only in the browser key derivation and is not sent to the backend.
 
 ## Production Shape
 
-The 0.17 production baseline is Go-only: Web, Go P2P, Go Workspace, Go worker,
+The verified 0.17.0 Go baseline comprises Web, Go P2P, Go Workspace, Go worker,
 the one-shot Go migrator, and PostgreSQL. The root `docker-compose.yml` extends
 `docker-compose.go-production.yml` and is Go-only by default; it has no `api`
 service. The Go Compose contract requires `DUALLANE_APP_VERSION` and
@@ -174,11 +174,13 @@ service. The Go Compose contract requires `DUALLANE_APP_VERSION` and
 release metadata. See [runtime and upgrade operations](docs/backend/OPERATIONS.md)
 before changing this live deployment.
 
-The 0.18 Node-runtime retirement is still pending its final gates. The current
-tree has no Node online API/worker/gateway or Node production bootstrap path.
-An existing 0.17 installation's first migration and permission preparation must
-follow the retained 0.17 checkout and its approved runbook; do not invent or
-copy a bootstrap command from this tree.
+The checked-in 0.18 tree preserves this Go-only online topology and has no Node
+online API/worker/gateway or Node production bootstrap path. The [Node-runtime
+retirement work item](docs/backend/work-items/2026-09-10-node-runtime-retirement.md)
+records validation and activation status. An installation based on 0.17.0 must
+perform its first migration and permission preparation from the retained 0.17
+checkout and its approved runbook; do not invent or copy a bootstrap command
+from this tree.
 
 On this host, development happens in `/home/timestarry/projects/duallane` and
 the only production checkout is `/home/timestarry/duallane`. Deployment uses
@@ -189,14 +191,17 @@ absolute `DUALLANE_PRODUCTION_DIR`; when it is empty, the script defaults to
 
 Routine upgrades of this live installation use the guarded Go-to-Go entry point
 with `--release-profile go-full --go-upgrade --previous-release-snapshot` and
-the last successful private snapshot, following the
+the latest verified private snapshot from the preceding successful release,
+following the
 [Go upgrade procedure](docs/backend/OPERATIONS.md#guarded-go-activation-and-upgrade-inputs).
-For the 0.18 rehearsal/release, the previous private base is
+For the historical 0.18 transition example, the 0.17.0 private base was
 `backups/production/duallane-20260910T080211Z-8d346a04317d.recovery.go-compose.snapshot.json`
-with its three adjacent private sidecars. Pull exact `origin/main` as the
-checkout owner before the privileged release; verify a clean checkout and pass
-the full `--expected-commit`. The current entry point rejects Node-default,
-bootstrap, and `--prepare-go-permissions` forms.
+with its three adjacent private sidecars. Future upgrades must use the latest
+verified snapshot captured by the preceding successful release, not this
+historical example. Pull exact `origin/main` as the checkout owner before the
+privileged release; verify a clean checkout and pass the full
+`--expected-commit`. The current entry point rejects Node-default, bootstrap,
+and `--prepare-go-permissions` forms.
 
 Before pushing a release, increment the root and Web package versions together,
 add the matching user-facing release entry, and run `pnpm test`, `pnpm lint`,
@@ -397,9 +402,16 @@ services. PostgreSQL supports concurrent requests; scaling Workspace or worker
 replicas still requires the documented shared storage, realtime, and job-lease
 contracts.
 
-For PostgreSQL integration tests, point `TEST_DATABASE_URL` at a disposable
-database and run `pnpm --filter @duallane/web test:postgres`. Each run creates
-and removes an isolated schema.
+For PostgreSQL integration tests, set `TEST_DATABASE_URL` to a non-default,
+loopback disposable database and run the Go gate:
+
+```bash
+TEST_DATABASE_URL=postgresql://<user>:<password>@127.0.0.1:<port>/<disposable-db> \
+  make -C apps/backend integration-postgres
+```
+
+The gate creates and removes isolated schemas; never point it at production or
+reuse a shared database.
 
 For private-lane reliability, configure TURN fallback with either
 `DUALLANE_TURN_SHARED_SECRET` for coturn REST credentials or static

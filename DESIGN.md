@@ -364,12 +364,14 @@ Suggested services:
   avatars; the Go Workspace boundary remains the authenticated upload boundary.
 - Optional future `turn`: coturn for improved private-direct connection success.
 
-The 0.18 deployment assumption:
+The checked-in 0.18 online architecture and deployment boundary:
 
 The root Compose file extends the Go production definitions and must not gain a
-Node `api` service or a second online writer. Node runtime retirement is a
-pending migration gate, not a claim that every release or authenticated UI
-acceptance has completed. Keep the canonical SQL at
+Node `api` service or a second online writer. The online architecture is Go-only
+in this tree. The verified 0.17.0 baseline is recorded in the [bridge/release
+record](docs/backend/work-items/2026-09-10-chat-0170-after-bridge.md), while the
+[Node-runtime retirement work item](docs/backend/work-items/2026-09-10-node-runtime-retirement.md)
+records validation and activation status. Keep the canonical SQL at
 `apps/web/server/migrations`; the Go migrator is explicit and the offline
 compatibility package does not connect during online startup.
 
