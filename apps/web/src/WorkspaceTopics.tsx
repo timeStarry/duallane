@@ -28,6 +28,7 @@ import {
   type WorkspaceComposerEditorHandle
 } from "./WorkspaceComposerEditor";
 import { WorkspaceMarkdown } from "./WorkspaceMarkdown";
+import { WorkspaceAutoHiddenContent, type WorkspaceAutoHidePreferences } from "./workspace-auto-hide";
 import { createWorkspaceJsonHeaders } from "./workspace-http";
 
 export type WorkspaceTopic = {
@@ -382,6 +383,7 @@ export function WorkspaceConversationTopicsSection({
 }
 
 export function WorkspaceTopicPage({
+  autoHidePreferences,
   topicId,
   currentUserId,
   currentUserDisplayName,
@@ -393,6 +395,7 @@ export function WorkspaceTopicPage({
   onOpenConversation,
   onNotice
 }: {
+  autoHidePreferences?: WorkspaceAutoHidePreferences | null;
   topicId: string;
   currentUserId: string;
   currentUserDisplayName: string;
@@ -813,7 +816,13 @@ export function WorkspaceTopicPage({
                   <div className="workspace-message-content">
                     <div className="workspace-message-meta"><strong>{message.author.displayName}</strong><time>{formatTopicMessageTime(message.createdAt)}</time></div>
                     {reply && <button className="reply-preview workspace-reply-jump" type="button" onClick={() => jumpToMessage(reply.id)}><strong>{reply.author.displayName}</strong><span>{reply.plainText}</span></button>}
-                    <TopicMessageBody message={message} />
+                    <WorkspaceAutoHiddenContent
+                      preferences={autoHidePreferences}
+                      blocks={message.content.blocks.length ? message.content.blocks : [{ type: "text", text: message.plainText }]}
+                      fallbackText={message.plainText}
+                    >
+                      <TopicMessageBody message={message} />
+                    </WorkspaceAutoHiddenContent>
                     {message.localState && <div className={`message-local-state ${message.localState}`} role="status"><span>{message.localState === "sending" ? "发送中" : message.failureReason || "发送失败"}</span></div>}
                   </div>
                   <div className="workspace-message-actions workspace-topic-message-actions">

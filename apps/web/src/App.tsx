@@ -139,6 +139,13 @@ import { installWorkspaceUnreadFavicon } from "./workspace-unread-favicon";
 import { isServerVersionNewer } from "./app-version";
 import { groupHiddenWorkspaceMessages } from "./workspace-hidden-messages";
 import {
+  AUTO_HIDE_LABELS, AUTO_HIDE_MESSAGE_TYPES, DEFAULT_AUTO_HIDE_PREFERENCES,
+  isWorkspaceDisplayBlock as isKnownWorkspaceMessageBlock,
+  normalizeAutoHidePreferences, shouldCollapseWorkspaceMessageText,
+  WorkspaceAutoHiddenContent, type WorkspaceAutoHidePreferences
+} from "./workspace-auto-hide";
+export { shouldCollapseWorkspaceMessageText } from "./workspace-auto-hide";
+import {
   getPreferredEmotePickerPack,
   rememberEmotePickerPackOnClose,
   rememberPreferredEmotePickerPack,
@@ -537,7 +544,7 @@ type WorkspaceNtfyPreferences = {
   rotatedAt: string | null;
   updatedAt: string;
 };
-type WorkspaceEmoteSettings = {
+type WorkspaceEmoteSettings = WorkspaceAutoHidePreferences & {
   availablePacks: Array<{ id: Exclude<EmotePack["id"], "custom">; label: string; defaultEnabled: boolean }>;
   enabledPackIds: Array<Exclude<EmotePack["id"], "custom">>;
   clickImageEmoteToSend: boolean;
@@ -2576,7 +2583,13 @@ export function App() {
   const [copyState, setCopyState] = useState<CopyState>("idle");
   const [roomDetailsOpen, setRoomDetailsOpen] = useState(false);
   const [workspaceBootstrap, setWorkspaceBootstrap] = useState<WorkspaceBootstrap | null>(null);
-  const [workspaceReplyAutoMention, setWorkspaceReplyAutoMention] = useState(false);
+  const [workspaceChatSettings, setWorkspaceChatSettings] = useState<{
+    userId: string; preferences: WorkspaceAutoHidePreferences; replyAutoMention: boolean;
+  } | null>(null);
+  const currentChatSettings = workspaceChatSettings?.userId === workspaceBootstrap?.auth.currentUser.id ? workspaceChatSettings : null;
+  const workspaceReplyAutoMention = currentChatSettings?.replyAutoMention ?? false;
+  const workspaceAutoHidePreferences = currentChatSettings?.preferences ?? null;
+  const [workspaceChatSettingsRevision, setWorkspaceChatSettingsRevision] = useState(0);
   const [workspaceStatistics, setWorkspaceStatistics] = useState<WorkspaceStatistics | null>(null);
   const [workspaceStatisticsLoading, setWorkspaceStatisticsLoading] = useState(false);
   const [workspaceStatisticsError, setWorkspaceStatisticsError] = useState("");
@@ -2977,15 +2990,25 @@ export function App() {
   useEffect(() => {
     const userId = workspaceBootstrap?.auth.currentUser.id;
     if (!userId) {
-      setWorkspaceReplyAutoMention(false);
+      setWorkspaceChatSettings(null);
       return;
     }
     let cancelled = false;
     void workspaceJson<{ settings: WorkspaceEmoteSettings }>("/api/workspace/me/emote-settings")
-      .then((data) => { if (!cancelled) setWorkspaceReplyAutoMention(Boolean(data.settings.replyAutoMention)); })
-      .catch(() => { if (!cancelled) setWorkspaceReplyAutoMention(false); });
+      .then((data) => {
+        if (!cancelled) {
+          setWorkspaceChatSettings({ userId, preferences: normalizeAutoHidePreferences(data.settings), replyAutoMention: Boolean(data.settings.replyAutoMention) });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setWorkspaceChatSettings((current) => current?.userId === userId ? current : {
+            userId, preferences: DEFAULT_AUTO_HIDE_PREFERENCES, replyAutoMention: false
+          });
+        }
+      });
     return () => { cancelled = true; };
-  }, [workspaceBootstrap?.auth.currentUser.id]);
+  }, [workspaceBootstrap?.auth.currentUser.id, workspaceChatSettingsRevision]);
   useEffect(() => {
     const conversation = workspaceSelectedConversation;
     if (!conversation || conversation.type !== "group") {
@@ -5038,7 +5061,7 @@ export function App() {
     workspaceCanDownloadRef.current = false;
     clearStoredWorkspaceEchoWorkflowDrafts();
     clearWorkspaceEmoteLibraryCache();
-    setWorkspaceReplyAutoMention(false);
+    setWorkspaceChatSettings(null);
     for (const controller of workspaceUploadControllersRef.current.values()) {
       controller.abort();
     }
@@ -5523,6 +5546,13 @@ export function App() {
         }
         // A card mutation changes only its projection. Keep the message list
         // stable and let the card component refetch the actor-scoped payload.
+        continue;
+      }
+
+      if (event.type === "emote.settings.updated") {
+        if ((payload.userId || event.actorId) === workspaceCurrentUserIdRef.current) {
+          setWorkspaceChatSettingsRevision((revision) => revision + 1);
+        }
         continue;
       }
 
@@ -9250,6 +9280,7 @@ export function App() {
                   {!workspaceCreateMode && workspaceView === "chat" && (
                     workspaceSelectedConversation ? (
                       <WorkspaceChatPanel
+                        autoHidePreferences={workspaceAutoHidePreferences}
                         title={workspaceConversationTitle(workspaceSelectedConversation, workspaceBootstrap.auth.currentUser.id)}
                         titleKind={workspaceSelectedConversation.otherMember?.kind}
                         avatar={
@@ -9433,6 +9464,7 @@ export function App() {
 
                   {!workspaceCreateMode && workspaceView === "topics" && (
                     <WorkspaceTopicPage
+                      autoHidePreferences={workspaceAutoHidePreferences}
                       topicId={workspaceSelectedTopicId}
                       currentUserId={workspaceBootstrap.auth.currentUser.id}
                       currentUserDisplayName={workspaceBootstrap.auth.currentUser.displayName}
@@ -9739,6 +9771,12 @@ export function App() {
                     ) : (
                       <>
                         <WorkspaceAccountSettings
+                          key={workspaceBootstrap.auth.currentUser.id}
+                          onChatSettingsUpdated={(userId, settings) => {
+                            if (userId !== workspaceCurrentUserIdRef.current) return;
+                            setWorkspaceChatSettings({ userId, preferences: normalizeAutoHidePreferences(settings), replyAutoMention: Boolean(settings.replyAutoMention) });
+                            setWorkspaceChatSettingsRevision((revision) => revision + 1);
+                          }}
                           currentUser={workspaceBootstrap.auth.currentUser}
                           section={workspaceAccountSection}
                           onBack={() => setWorkspaceMobilePane("list")}
@@ -10931,6 +10969,7 @@ function WorkspaceSettingsRow({
 }
 
 function WorkspaceAccountSettings({
+  onChatSettingsUpdated,
   currentUser,
   section,
   onBack,
@@ -10940,6 +10979,7 @@ function WorkspaceAccountSettings({
   onManageEmotes,
   onLogout
 }: {
+  onChatSettingsUpdated: (userId: string, settings: WorkspaceEmoteSettings) => void;
   currentUser: WorkspaceUser;
   section: WorkspaceRouteAccountSection;
   onBack: () => void;
@@ -10958,7 +10998,9 @@ function WorkspaceAccountSettings({
   const [discoverySaving, setDiscoverySaving] = useState(false);
   const [emoteSettings, setEmoteSettings] = useState<WorkspaceEmoteSettings | null>(null);
   const [emoteSettingsLoading, setEmoteSettingsLoading] = useState(true);
+  const [emoteSettingsLoadRevision, setEmoteSettingsLoadRevision] = useState(0);
   const [emoteSettingsSaving, setEmoteSettingsSaving] = useState(false);
+  const emoteSettingsRequestRef = useRef(0);
   const [emoteLibrarySummary, setEmoteLibrarySummary] = useState<WorkspaceEmoteLibrary | null>(null);
   const [notifications, setNotifications] = useState<WorkspaceNotificationPreferences | null>(null);
   const [notificationsLoading, setNotificationsLoading] = useState(true);
@@ -10979,6 +11021,11 @@ function WorkspaceAccountSettings({
   const nicknameSaveSequenceRef = useRef(0);
   const lastSavedRecallReasonRef = useRef(currentUser.recallReason ?? "内容有误");
   const recallReasonSaveSequenceRef = useRef(0);
+
+  useEffect(() => {
+    emoteSettingsRequestRef.current += 1;
+    return () => { emoteSettingsRequestRef.current += 1; };
+  }, []);
 
   useEffect(() => {
     setNickname(currentUser.nickname ?? "");
@@ -11050,6 +11097,7 @@ function WorkspaceAccountSettings({
   useEffect(() => {
     let cancelled = false;
     setEmoteSettingsLoading(true);
+    setEmoteSettings(null);
     void Promise.all([
       workspaceJson<{ settings: WorkspaceEmoteSettings }>("/api/workspace/me/emote-settings"),
       loadWorkspaceEmoteLibrary()
@@ -11058,6 +11106,7 @@ function WorkspaceAccountSettings({
         if (!cancelled) {
           setEmoteSettings(data.settings);
           setEmoteLibrarySummary(library);
+          onChatSettingsUpdated(currentUser.id, data.settings);
         }
       })
       .catch((error) => {
@@ -11067,7 +11116,7 @@ function WorkspaceAccountSettings({
         if (!cancelled) setEmoteSettingsLoading(false);
       });
     return () => { cancelled = true; };
-  }, [currentUser.id]);
+  }, [currentUser.id, emoteSettingsLoadRevision]);
 
   useEffect(() => {
     let cancelled = false;
@@ -11239,61 +11288,43 @@ function WorkspaceAccountSettings({
 
   async function updateEmoteSettings(packId: WorkspaceEmoteSettings["availablePacks"][number]["id"], enabled: boolean) {
     if (!emoteSettings) return;
-    const previous = emoteSettings;
     const nextEnabledPackIds = enabled
       ? [...emoteSettings.enabledPackIds, packId]
       : emoteSettings.enabledPackIds.filter((id) => id !== packId);
-    setEmoteSettings({ ...emoteSettings, enabledPackIds: nextEnabledPackIds });
-    setEmoteSettingsSaving(true);
-    try {
-      const data = await workspaceJson<{ settings: WorkspaceEmoteSettings }>("/api/workspace/me/emote-settings", {
-        method: "PUT",
-        body: JSON.stringify({ enabledPackIds: nextEnabledPackIds })
-      });
-      setEmoteSettings(data.settings);
-    } catch (error) {
-      setEmoteSettings(previous);
-      onNotice("warning", userFacingErrorMessage(error, "表情设置保存失败"));
-    } finally {
-      setEmoteSettingsSaving(false);
-    }
+    await saveChatSettings({ enabledPackIds: nextEnabledPackIds }, "表情设置保存失败");
   }
 
   async function updateImageEmoteDirectSend(enabled: boolean) {
-    if (!emoteSettings) return;
-    const previous = emoteSettings;
-    setEmoteSettings({ ...emoteSettings, clickImageEmoteToSend: enabled });
-    setEmoteSettingsSaving(true);
-    try {
-      const data = await workspaceJson<{ settings: WorkspaceEmoteSettings }>("/api/workspace/me/emote-settings", {
-        method: "PUT",
-        body: JSON.stringify({ clickImageEmoteToSend: enabled })
-      });
-      setEmoteSettings(data.settings);
-    } catch (error) {
-      setEmoteSettings(previous);
-      onNotice("warning", userFacingErrorMessage(error, "表情发送方式保存失败"));
-    } finally {
-      setEmoteSettingsSaving(false);
-    }
+    await saveChatSettings({ clickImageEmoteToSend: enabled }, "表情发送方式保存失败");
   }
 
   async function updateReplyAutoMention(enabled: boolean) {
-    if (!emoteSettings) return;
+    await saveChatSettings({ replyAutoMention: enabled }, "回复提及设置保存失败");
+  }
+
+  async function updateAutoHidePreferences(patch: Partial<WorkspaceAutoHidePreferences>) {
+    await saveChatSettings(patch, "消息显示设置保存失败");
+  }
+
+  async function saveChatSettings(patch: Partial<WorkspaceEmoteSettings>, failureMessage: string) {
+    if (!emoteSettings || emoteSettingsSaving) return;
+    const requestSequence = ++emoteSettingsRequestRef.current;
     const previous = emoteSettings;
-    setEmoteSettings({ ...emoteSettings, replyAutoMention: enabled });
+    setEmoteSettings({ ...emoteSettings, ...normalizeAutoHidePreferences(emoteSettings), ...patch });
     setEmoteSettingsSaving(true);
     try {
       const data = await workspaceJson<{ settings: WorkspaceEmoteSettings }>("/api/workspace/me/emote-settings", {
-        method: "PUT",
-        body: JSON.stringify({ replyAutoMention: enabled })
+        method: "PUT", body: JSON.stringify(patch)
       });
+      if (requestSequence !== emoteSettingsRequestRef.current) return;
       setEmoteSettings(data.settings);
+      onChatSettingsUpdated(currentUser.id, data.settings);
     } catch (error) {
+      if (requestSequence !== emoteSettingsRequestRef.current) return;
       setEmoteSettings(previous);
-      onNotice("warning", userFacingErrorMessage(error, "回复提及设置保存失败"));
+      onNotice("warning", userFacingErrorMessage(error, failureMessage));
     } finally {
-      setEmoteSettingsSaving(false);
+      if (requestSequence === emoteSettingsRequestRef.current) setEmoteSettingsSaving(false);
     }
   }
 
@@ -11515,13 +11546,31 @@ function WorkspaceAccountSettings({
 
       {visibleSection === "chat" && (
         <div className="workspace-settings-detail-stack">
+          <section className="workspace-settings-detail" aria-labelledby="workspace-auto-hide-title" aria-busy={emoteSettingsLoading}>
+            <div className="workspace-settings-detail-intro"><h3 id="workspace-auto-hide-title">消息显示</h3><p>只影响你在聊天和话题中看到的内容，不删除消息，也不影响其他成员。</p></div>
+            {emoteSettingsLoading ? <WorkspaceSkeletonRows variant="setting" count={1} /> : !emoteSettings ? <div className="workspace-empty-inline"><p>聊天设置暂时无法加载。</p><button type="button" onClick={() => setEmoteSettingsLoadRevision((revision) => revision + 1)}>重试加载聊天设置</button></div> : <>
+              <div className="workspace-setting-list">
+                <WorkspaceSwitch checked={emoteSettings.autoHideMessages === true} disabled={emoteSettingsSaving} label="在聊天中自动隐藏消息" description="默认关闭。开启后，包含所选内容的消息会折叠，可随时手动展开。" onChange={(checked) => void updateAutoHidePreferences({ autoHideMessages: checked })} />
+              </div>
+              {emoteSettings.autoHideMessages === true && <>
+                <div className="workspace-emote-pack-settings" role="group" aria-label="自动隐藏的消息类型">
+                  {AUTO_HIDE_MESSAGE_TYPES.map((type) => {
+                    const types = normalizeAutoHidePreferences(emoteSettings).autoHideMessageTypes;
+                    const checked = types.includes(type);
+                    return <button key={type} type="button" aria-pressed={checked} disabled={emoteSettingsSaving} onClick={() => void updateAutoHidePreferences({ autoHideMessageTypes: checked ? types.filter((item) => item !== type) : [...types, type] })}><span className="workspace-emote-pack-check" aria-hidden="true">{checked && <Check size={14} />}</span><span>{AUTO_HIDE_LABELS[type]}</span></button>;
+                  })}
+                </div>
+                <p className="workspace-settings-footnote">长消息指超过 700 字或 10 行的消息。未选择类型时不会自动隐藏；关闭后保留选择。</p>
+              </>}
+            </>}
+          </section>
           <section className="workspace-settings-detail" aria-labelledby="workspace-recall-settings-title">
             <div className="workspace-settings-detail-intro"><h3 id="workspace-recall-settings-title">撤回提示</h3><p>这段原因会显示在你之后撤回的消息中。</p></div>
             <label className="workspace-settings-field"><span>撤回原因</span><input value={recallReason} maxLength={16} onChange={(event) => setRecallReason(event.target.value)} onBlur={() => { if (!recallReason.trim()) setRecallReason(lastSavedRecallReasonRef.current); }} aria-label="自定义撤回原因" /><small>消息中将显示“你因{recallReason || "..."}撤回了一条消息”。</small></label>
           </section>
           <section className="workspace-settings-detail" aria-labelledby="workspace-emote-panel-title" aria-busy={emoteSettingsLoading}>
             <div className="workspace-settings-detail-intro"><h3 id="workspace-emote-panel-title">表情面板</h3><p>选择聊天时显示的内置表情包，至少保留一个。</p></div>
-            {emoteSettingsLoading || !emoteSettings ? <WorkspaceSkeletonRows variant="setting" count={3} /> : (
+            {emoteSettingsLoading ? <WorkspaceSkeletonRows variant="setting" count={3} /> : !emoteSettings ? <p className="workspace-settings-footnote">请重试加载聊天设置。</p> : (
               <>
                 <div className="workspace-emote-pack-settings">
                   {emoteSettings.availablePacks.map((pack) => {
@@ -13714,29 +13763,6 @@ export function WorkspaceStructuredMessage({
   );
 }
 
-export function shouldCollapseWorkspaceMessageText(blocks: WorkspaceContentBlock[]) {
-  const visible = blocks.map((block) => {
-    if (block.type === "text") return block.text;
-    if (block.type === "mention") return `@${block.label}`;
-    if (block.type === "link") return block.label || block.url;
-    if (block.type === "emoji") return block.shortcode.startsWith("custom:") ? "[表情]" : `:${block.shortcode}:`;
-    if (block.type === "emote_collection") return `[表情合集] ${block.share?.name || ""}`;
-    if (block.type === "topic_reference") return `#${block.title}`;
-    if (block.type === "card") return block.fallbackText;
-    return "";
-  }).join("");
-  return Array.from(visible).length > 700 || visible.split(/\r?\n/).length > 10;
-}
-function isKnownWorkspaceMessageBlock(block: WorkspaceContentBlock) {
-  return block.type === "text" ||
-    block.type === "mention" ||
-    block.type === "link" ||
-    block.type === "emoji" ||
-    block.type === "attachment" ||
-    block.type === "emote_collection" ||
-    block.type === "topic_reference" ||
-    block.type === "card";
-}
 
 function WorkspaceEmoteCollectionMessageCard({
   block,
@@ -13957,6 +13983,7 @@ function WorkspaceReactionBar({
   );
 }
 function WorkspaceChatPanel({
+  autoHidePreferences,
   title,
   titleKind,
   avatar,
@@ -14017,6 +14044,7 @@ function WorkspaceChatPanel({
   selectedTopic,
   onSelectTopic
 }: {
+  autoHidePreferences: WorkspaceAutoHidePreferences | null;
   title: string;
   titleKind?: WorkspaceUser["kind"];
   avatar?: ReactNode;
@@ -14566,6 +14594,7 @@ function WorkspaceChatPanel({
                         <span>{message.body}</span>
                       </div>
                     ) : (
+                      <WorkspaceAutoHiddenContent preferences={autoHidePreferences} blocks={message.content?.blocks ?? []} fallbackText={message.body} attachments={message.attachments}>
                       <WorkspaceStructuredMessage
                         message={message}
                         onOpenAttachment={onOpenAttachment}
@@ -14575,6 +14604,7 @@ function WorkspaceChatPanel({
                         cardRevisionById={cardRevisionById}
                         mentionMembers={mentionMembers}
                       />
+                      </WorkspaceAutoHiddenContent>
                     )}
                     {message.pendingAttachments && message.pendingAttachments.length > 0 && (
                       <WorkspacePendingAttachmentList attachments={message.pendingAttachments} />
