@@ -7,3 +7,7 @@ deploy/production/*.sh text eol=lf
 # The release policy compares the reviewed fixture's exact Git SQL bytes.
 apps/web/server/migrations/*.sql text eol=lf
 apps/backend/internal/platform/migrations/testdata/*.sql text eol=lf
+# Public Prompt manifests verify deployed bytes, including line endings.
+apps/web/public/integrations/**/*.md text eol=lf
+apps/web/public/integrations/*.md text eol=lf
+apps/backend/internal/platform/media/testdata/frozen-node-media.json text eol=lf
