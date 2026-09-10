@@ -6,7 +6,7 @@ Migration is complete by behavioral evidence, not by equivalent-looking code.
 Tests scale with the affected trust lane, data invariant, concurrency risk,
 external side effect, and deployment blast radius.
 
-The Go candidate and its repository-native commands now exist, but a manifest,
+The Go implementation and its repository-native commands exist, but a manifest,
 Make target, CI definition, or candidate image is not a passing result. Record
 the exact command, commit, environment, and status for every gate. Production
 ownership and parity still require the separate migration evidence in
@@ -20,8 +20,8 @@ For documentation-only work:
 git diff --check
 ```
 
-Also validate local links and executable examples. For changes that characterize
-or modify the active Node implementation, use the existing gate from
+Also validate local links and executable examples. For changes to the active
+Go services, frontend, SDK, or retained offline tools, use the gate from
 `docs/development/TESTING_AND_RELEASE.md`, including as applicable:
 
 ```bash
@@ -87,27 +87,25 @@ installation in CI. Missing prerequisites are an explicit remaining gate.
 
 ### Workspace Markdown Summary Compatibility
 
-Run `node scripts/backend/workspace-markdown-contract.mjs --check` from the
-repository root after installing the pinned Node dependencies. It checks
-synthetic goldens against the actual Node summary implementation; regenerating
-expectations from the Go adapter would hide migration defects. Go message
-tests consume these goldens, and event tests verify raw block bytes plus the
-shared derived summary. The normal Go race, static-analysis and vulnerability
+Run `node --test .github/tests/frozen-node-artifacts.test.mjs` to verify the
+historical Node oracle's provenance and immutable hashes. Go message tests
+consume those goldens, and event tests verify raw block bytes plus the shared
+derived summary. Regenerating historical expectations from the Go adapter
+would hide a regression. The normal Go race, static-analysis and vulnerability
 gates also apply to the pinned parser.
 
 Cover literal intraword markers, links and references, code-fence language
 labels, GFM syntax, unsupported/unfinished Markdown fallback, Unicode,
 whitespace-only input and boundaries between adjacent blocks. Never use
-production messages as fixtures. Updating the parser or Node Markdown pipeline
-requires rechecking the oracle before accepting changed goldens; see the
+production messages as fixtures. Updating the parser requires replaying the
+frozen oracle and explicitly reviewing any contract change; see the
 [technology decision](TECHNOLOGY.md#workspace-markdown-summary-decision).
 
 ### Legacy Avatar Provider Layout
 
-Run `node --test scripts/backend/workspace-avatar-key-contract.test.mjs` with
-the pinned Node dependencies. The test calls the actual retained Node
-`workspaceAvatarObjectKey` producer and checks the synthetic fixture shared
-with Go avatar S3-reader tests. Go's normal avatar tests must exercise the
+The frozen `node-legacy-avatar-keys.json` preserves the historical Node
+`workspaceAvatarObjectKey` producer's synthetic outputs. Its provenance is
+checked with the other frozen artifacts. Go's normal avatar tests exercise the
 real S3 adapter against a bounded loopback HTTP fixture, not just an injected
 reader that accepts whichever key the service passes. Cover legacy-only and
 canonical reads, local and hybrid policies, authorization, missing objects,
@@ -117,24 +115,28 @@ in these fixtures. This regression addresses the
 
 ### Actual Node Legacy Emote Compatibility
 
-With the pinned Node/Go dependencies and an explicit disposable PostgreSQL
-`TEST_DATABASE_URL`, run:
+With the pinned Node/Go dependencies, CGO/libvips, and an explicit disposable
+loopback PostgreSQL `TEST_DATABASE_URL`, run:
 
-```sh
-node --test scripts/backend/workspace-emotes-legacy-parity.test.mjs
-node scripts/backend/workspace-emotes-legacy-parity.mjs --go
+```bash
+node scripts/backend/frozen-legacy-contract.test.mjs --files
+TEST_DATABASE_URL=postgres://test:test@127.0.0.1:5432/disposable_test node scripts/backend/frozen-legacy-contract.test.mjs --emotes
 ```
 
-The Node owner creates synthetic historical files and a small metadata manifest.
-The Go probe imports those rows into its own temporary PostgreSQL schema and
-uses the real Workspace application, session cookie and HTTP delivery path.
-Node then rechecks the same fixture. Cases cover a null-metadata clone chain,
-missing-canonical fallback, no-resource deletion, malformed keys and denied
-access. The runner cleans only its own temporary directory and reports success
-after cleanup. `--go` refuses a missing test database; without `--go`, the output
-explicitly says Go was not run. Neither mode uses production content or proves
-S3-provider interoperability. CI runs the full `--go` path separately from
-ordinary Go tests, where the fixture-dependent test is intentionally skipped.
+Record exact results in the
+[retirement record](work-items/2026-09-10-node-runtime-retirement.md).
+The fixture contains genuine historical Node-generated synthetic bytes and
+metadata, not newly invented Go expectations. The Go probe imports the rows
+into its own temporary PostgreSQL schema and uses the real Workspace
+application, session cookie and HTTP delivery path. Preserve the original
+null-metadata clone chain, missing-canonical fallback, no-resource deletion,
+malformed-key and denied-access assertions.
+
+The files gate likewise preserves legacy preview/download and exact physical
+storage-layout checks. Materialize only the owned temporary fixture paths,
+verify hashes before use, and report success only after cleanup. Missing
+PostgreSQL is a skipped emote gate, not a full compatibility pass. Neither
+fixture uses production content or proves S3-provider interoperability.
 
 ### OpenAPI 3.1.2 generation gate
 
@@ -201,7 +203,7 @@ or counts. Traces, videos and screenshots are disabled. Failure DOM context
 stays under ignored `.private-test-results/`, outside normal CI artifact paths;
 never upload it or copy raw browser requests into evidence.
 
-The Node suite deliberately excludes this spec. CI has a separate Go P2P job
+The default Go P2P suite retains the original P2P cases; CI also has a separate Go P2P privacy job
 without artifact uploads. Run
 `node --test .github/tests/ci-go-p2p-privacy.test.mjs scripts/backend/owned-process.test.mjs`
 when changing its configuration or process helper. These guards verify isolation
@@ -223,100 +225,72 @@ deployment, production routing or a completed cutover.
 | Worker | Claim race, lease expiry, retry schedule, current-eligibility recheck, cancellation, ambiguous provider result, safe errors |
 | Storage/object registry | Local and S3-compatible contract tests, digest race, reference cleanup, signed delivery authorization, partial failure |
 | Avatar/emote | Media compatibility corpus and resource-limit/failure tests in Section 8 |
-| Migration | Clean bootstrap, upgrade from oldest supported state, active Node/Go compatibility, retry/refusal, forward recovery |
+| Migration | Clean bootstrap, upgrade from oldest supported state, old/new Go compatibility, retry/refusal, forward recovery |
 | Compose/Nginx/image | Compose config, BuildKit exact-image build, immutable resource modes (`0644` files/`0755` directories) independent of checkout `umask`, non-root SQL/catalog/Web-asset reads, health, positive HTTP static smoke, and route/body/header/WebSocket checks |
 | Deployment script | Shell/static checks, candidate failure, migration failure, daemon restart restoration, application rollback rehearsal |
 
 ## 5. Contract Parity Harness
 
+The online Node runtime and its live-oracle generators are retired. Preserve
+historical outputs as immutable, synthetic fixtures rather than silently
+removing their Go consumers. The provenance gate is:
+
+```sh
+node --test .github/tests/frozen-node-artifacts.test.mjs
+```
+
+The manifest records the last regenerable source commit, the exact artifact
+set and SHA-256 over UTF-8/LF-normalized JSON. The verifier must fail for an
+omitted, extra, duplicate or changed artifact. Shared live release catalogs are
+not frozen Node oracles. New frozen binary fixtures retain exact bytes and
+source/output hashes under their dedicated compatibility gates.
+
 ### Executable P2P slice
 
-Run `pnpm backend:parity:p2p` (or `make -C apps/backend parity-p2p`) with
-Node 22+, Go and GNU Make on the same OS. On Windows, use WSL and prefer a
-Linux-native checkout with its own frozen-lockfile dependency install; cold
-imports on a Windows-mounted checkout may exhaust the startup bound. The Make
-target builds a disposable CGO-free P2P executable and removes it after the run.
-To reuse an explicitly built local binary:
+Run the Go-only frozen P2P runner and its safety tests:
 
 ```bash
-node scripts/backend/p2p-parity.mjs --go-binary /absolute/path/to/p2p
-node --test scripts/backend/p2p-parity.test.mjs
+node --test scripts/backend/p2p-frozen-contract.test.mjs
+node scripts/backend/p2p-frozen-contract.mjs
 ```
 
-The runner starts the actual Node server and Go candidate sequentially on the
-same ephemeral loopback port. It uses isolated temporary directories, synthetic
-fixtures, a minimal child environment and `WORKSPACE_ENABLED=false`. It does not
-accept a remote API endpoint or inherit database/provider credentials. Startup,
-request, frame-read and total-run waits are bounded; signals trigger child and
-temporary-data cleanup. Child logs are discarded, not retained as privacy proof.
+Record results in the
+[retirement record](work-items/2026-09-10-node-runtime-retirement.md). The gate
+retains the required 20 HTTP and 19 WebSocket observations, plus the health
+response and three close-event observations (21/22 total): default ICE,
+room creation/status/input boundaries, two peers, presence, secure relay,
+plaintext/invalid-envelope rejection, leave, and full/missing rooms.
 
-The initial fixture suite observes 20 HTTP responses and 19 WebSocket frames:
-health/default ICE, room creation/status/input boundaries, two peers, presence,
-secure relay, plaintext/invalid-envelope rejection, leave, full/missing rooms.
-The full JSON body/frame is compared, including error fields and omissions.
-Only generated room/peer identities (with relationships preserved), timestamps
-and release versions are normalized. Object key ordering is ignored, array
-ordering is retained. HTTP headers, close codes, expiry/reconnect, oversized
-input, TURN variants, browser fragments and log/storage absence are not covered
-by this initial suite; the gates below still apply.
+Compare the complete normalized public bodies and frames, not status-only
+checks. Normalize only generated identities with their relationships,
+timestamps and release metadata. Preserve field omission, error objects and
+array order. The runner uses an owned local Go binary and ephemeral loopback
+service, bounded deadlines, no inherited Workspace/provider credentials, and
+content-free failure diagnostics. Hashing the old fixture files alone does
+not execute this gate or prove P2P compatibility.
 
-Exit zero means these observations match, not permission to route traffic.
-Any mismatch exits nonzero and reports case/field paths without response values.
-Do not replace error bodies with status-only assertions to make parity pass.
-The runner's unit guards run in CI; the cross-implementation command is separate
-from `make verify` while compatibility differences remain unresolved. Record
-observed differences and the exact tested source in the slice's evidence record;
-a working runner is not a blanket parity claim.
+Browser fragments, close codes, origin and oversized-frame rejection, expiry,
+TURN variants and log/storage absence retain their independent Go security,
+race and browser coverage. A contract pass does not authorize deployment.
 
-### Extending coverage
+### Workspace contract coverage
 
-The first strict Workspace schema slices describe auth/core and emote routes.
-Run their actual Node characterization checks after dependency installation:
+Go schema, parser and domain tests consume frozen Node auth/core, emote, topic,
+Bot, Echo, notification, Markdown and storage-layout evidence. Run the relevant
+packages as well as the real PostgreSQL and enabled command-composition tests.
+Schema tests alone do not execute HTTP handlers or prove resource-level
+authorization.
 
-```bash
-node scripts/backend/workspace-core-contract.mjs --check
-node scripts/backend/workspace-emotes-contract.mjs --check
-node scripts/backend/topic-parser-fixtures.mjs --check
-node scripts/backend/topic-card-fixtures.mjs --check
-cd apps/backend
-go test -race ./internal/workspacecontract ./internal/workspace/topics
-```
+The frozen `apps/backend/api/node-routes.json` is historical transport coverage
+input, not a current Node registration check. Prefix-level disabled middleware
+can return 503 for an unwired route: separately check Go registration and
+enabled authorization, DTOs, persistence, audit and event effects.
 
-CI rechecks these fixtures against Node; Go tests verify the checked-in schema
-and parser/card results. The contract package does not execute Go HTTP handlers.
-Prove Go route behavior separately with enabled HTTP/PostgreSQL and browser
-tests. The core route inventory exceeds its initial scenario set: redirect
-headers, remaining cases and remaining families are not implicitly covered.
-
-`node scripts/backend/route-inventory.mjs --check` checks the generated
-`apps/backend/api/node-routes.json` against current literal route declarations
-and the actual Node application's registration/disabled responses. Regenerate
-with `--write` only after reviewing changes. The script creates and removes a
-unique synthetic directory, disables Workspace, uses no database, and makes no
-external provider calls. It currently inventories 164 declarations and 153
-disabled HTTP responses. Static-file plugin routes and implicit HEAD routes
-are outside this explicit API inventory.
-
-This inventory is a transport coverage input, not complete OpenAPI schemas or
-proof that a Go route has real dependencies. Prefix-level disabled middleware
-can return 503 even for an unwired route. Check registration separately, then
-prove enabled authorization, DTOs and persisted effects through owning-domain
-fixtures and command-composition tests.
-
-Build parity fixtures by capability, not one snapshot for the entire API. Each
-fixture contains synthetic input, prepared database/object state, expected
-public response, persisted changes, audit rows, event projections, and safe
-log expectations.
-
-The same fixture runs against the active Node implementation and the Go
-candidate where technically possible. Normalize only values explicitly defined
-as nondeterministic, such as generated IDs and timestamps. Do not normalize
-field omission, order where a contract defines it, status codes, error codes,
-or authorization visibility.
-
-Read-only comparisons may run side by side against disposable data. Production
-shadow writes and Node/Go dual writes are prohibited. Mutation parity uses
-separate resettable PostgreSQL databases or transactions and compares outcomes.
+For new behavior, add capability-scoped synthetic cases containing inputs,
+prepared database/object state, expected public results and durable effects.
+Do not rewrite a historical golden to match a new implementation. A deliberate
+contract change needs an explicit version/compatibility decision and separate
+new expectations. Never use production content or dual writers for parity.
 
 ## 6. P2P Privacy Gate
 
@@ -365,30 +339,24 @@ future migration, malformed policy, and refusal before migration. Inspect the
 exact built old/new images and rehearse same-database application rollback;
 tests of old SQL queries alone are insufficient.
 
-Run the real Node/Go migrators only against explicitly disposable loopback
-PostgreSQL. The harness creates and removes its own uniquely named schemas,
-does not edit canonical SQL, and reports cleanup failure as a failed gate:
+The current release has one Go migrator. Run `make -C apps/backend
+integration-postgres` with an explicitly disposable PostgreSQL target to
+exercise canonical SQL, advisory locks, upgrade, rollback and retry behavior.
+Keep the migration history and prior `applied_at` values unchanged. A failed
+migration must leave earlier pending changes and the original sentinel/history
+in their expected transactional state; timeout or signal termination is not
+evidence of the intended SQL failure.
 
-```sh
-DUALLANE_SCHEMA_COEXISTENCE_RUN_PG=true \
-DUALLANE_SCHEMA_COEXISTENCE_ALLOW_SCHEMA_CREATION=true \
-TEST_DATABASE_URL="postgres://<test-user>:<test-password>@127.0.0.1:<test-port>/<disposable-db>?sslmode=disable" \
-  node --test scripts/backend/schema-coexistence.test.mjs
-```
+Historical Node/Go coexistence generation belongs to the retained 0.17.0 source
+and archived work-item evidence. The current `schema-coexistence.mjs` provides
+only bounded test-target/schema/SQL-manifest helpers for release tests; it no
+longer starts a Node migrator. Do not present its pure unit tests as an executed
+PostgreSQL ownership rehearsal.
 
-Keep the advisory-lock race, but do not infer which runner upgraded from its
-final history. Separate deterministic cases bootstrap Go at 029 or 030, let
-only Go advance to the current manifest's latest migration, then require Node
-to be a no-op. Compare both migration names and `applied_at`, seed state,
-required schema and synthetic read/write behavior. Failure cases cover the
-first pending migration and a later 033 conflict: earlier 031/032 effects must
-also roll back, the original history/sentinel must remain intact, and Go must
-successfully retry after removing only the test-created conflict. Require an
-ordinary nonzero process exit and the expected migration filename or exact
-SQLSTATE/conflict fingerprint; timeout, signal termination and wrong-phase
-errors do not prove rollback at the intended stage. Provider details remain
-internal to this comparison; exported failures contain only fixed safe labels.
-A default run without the PostgreSQL opt-in is `SKIP`, not an ownership proof.
+Use the immutable-image Go-to-Go rehearsal in Section 10 for release acceptance.
+It must compare exact old/new SQL and restore the previous application against
+the same database. Node recovery fixtures remain only to exercise historical
+owner fencing and rollback paths, never as current startup code.
 
 ## 8. Media Compatibility Gate
 
@@ -410,29 +378,30 @@ deduplication or an existing externally observable contract.
 Run media tests with bounded concurrency and observe peak memory. Imported emote
 assets and production user content are not test fixtures.
 
-`node --test scripts/backend/media-compatibility.test.mjs` runs the actual
-Node owners against the host Go/libvips toolchain. A host pass is not the native
-image gate. On a Linux Docker host, build the Workspace Dockerfile's `build`
-target from the reviewed snapshot, inspect its exact local image ID, then run
-`node scripts/backend/media-compatibility.mjs --go-image sha256:<64-hex-image-id>`.
-Tags are rejected. The runner checks the created container's ID, image and unique
-run label before starting it and removes only that owned container.
+Run `go test -count=1 ./internal/platform/media` from `apps/backend`
+with Go/CGO/libvips. The frozen corpus must execute genuine historical Node
+inputs and expectations, including metadata stripping, per-frame pixel
+tolerances, animation, rejections and all resource-limit assertions.
+Regeneration from the Go adapter is not a valid oracle.
 
-The native probe has no network, capabilities or production mounts. Only its
-generated corpus directory is mounted read/write with the invoking Linux UID/GID;
-Go compiles in a bounded executable tmpfs. This build-target test does not loosen
-the production runtime's filesystem policy. The report reads actual Go/CGO and
-libvips versions from bounded container evidence files. It compares all existing
-metadata stripping, pixel, animation, rejection and resource-limit assertions
-without adjusting them for the native version. Record a mismatch as a failed
-image compatibility gate, even if the host tests passed.
+A host pass is not the native image gate. Build the Workspace Dockerfile's
+`build` target from the reviewed commit and record its exact local image ID.
+Run the same Go package tests inside that image with networking disabled, a
+read-only root filesystem, an executable bounded `/tmp` for `GOCACHE`, dropped
+capabilities and a non-root user. Use only baked-in synthetic fixtures; mount
+no production data, credentials, Docker socket or host repository. Keep the
+build-target test distinct from the production runtime container.
+
+Record actual Go/CGO/libvips versions and the complete executed case counts.
+Do not adjust pixel/error/limit expectations for a differing native version;
+a mismatch fails image acceptance even when host tests passed.
 
 The processor normalizes the freshly encoded WebP container after native
 export: only structural image/alpha/animation chunks survive, metadata feature
 bits are cleared, and lengths/padding are reconstructed without modifying the
 encoded pixel payloads. This is a defense against native saver version drift,
 not a general sanitizer for an arbitrary user-supplied WebP. Keep the real
-Node/native-image corpus as the acceptance gate; a parser unit test alone does
+frozen Node/native-image corpus as the acceptance gate; a parser unit test alone does
 not establish color, orientation, transparency or animation preservation.
 
 ## 9. Realtime And Failure Injection
@@ -457,7 +426,7 @@ and temporary files. Failure details remain in the ignored
 artifacts. Guard tests run with
 `node --test scripts/backend/go-workspace-browser.test.mjs`.
 
-This is a separate gate from the active Node browser suite and the Go P2P
+This is a separate gate from the default Go P2P suite and the Go P2P privacy
 browser suite. A harness commit or passing guards does not mean all Workspace
 browser cases passed; record the complete selected test count and any failure.
 
@@ -636,6 +605,14 @@ Go entrypoints. This is a static entrypoint contract, not a whole-program
 proof or permission to execute a data-changing operator command. The canonical
 boundary and destructive-finalization conditions are in
 [Storage operator](STORAGE_OPERATOR.md#retained-offline-compatibility-tools).
+
+The package's functional tests run with `pnpm --filter @duallane/node-compat-tools
+test`. They cover local/S3 synthetic object hashes, references, clone chains,
+resume, private failure reports and refusal before destructive finalization.
+Run its PostgreSQL opt-in adapter tests when database behavior changes. Build
+the separate offline image and prove its entrypoints can be imported without
+network, database, credentials or mounted data and without starting an operation.
+These tests do not authorize an actual production migration/provision/finalize.
 
 The opt-in coordinated Node-to-Go rehearsal uses six already-local immutable
 image IDs, with one consistent release identity for each Node and Go image set:

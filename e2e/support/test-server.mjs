@@ -1,46 +1,44 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { createApp } from "../../apps/web/server/index.mjs";
-import { openTestDatabase } from "../../apps/web/server/services/test-database.mjs";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
-const host = "127.0.0.1";
-const port = Number(process.env.E2E_API_PORT || 8787);
-const frontendPort = Number(process.env.E2E_WEB_PORT || 5173);
-const frontendUrl = `http://127.0.0.1:${frontendPort}`;
-const dataDir = await mkdtemp(path.join(tmpdir(), "duallane-e2e-"));
-const db = openTestDatabase(dataDir);
+// The default browser gate is P2P-only. Keep this entry point as a small
+// process supervisor so Playwright never starts the retired Node business
+// server or a SQLite Workspace double.
+const apiPort = Number(process.env.E2E_API_PORT || 8787);
+const webPort = Number(process.env.E2E_WEB_PORT || 5173);
+const goServer = fileURLToPath(new URL("./go-p2p-server.mjs", import.meta.url));
 
-const app = await createApp({
-  dataDir,
-  db,
+const child = spawn(process.execPath, [goServer], {
   env: {
-    WORKSPACE_ENABLED: "true",
-    NODE_ENV: "test",
-    SERVE_STATIC: "false",
-    PUBLIC_BASE_URL: frontendUrl,
-    WORKSPACE_FRONTEND_URL: frontendUrl,
-    WORKSPACE_NTFY_WORKER_ENABLED: "false",
-    SESSION_SECRET: "duallane-e2e-session-secret"
+    ...process.env,
+    E2E_GO_P2P_API_PORT: String(apiPort),
+    E2E_GO_P2P_WEB_ORIGIN: `http://127.0.0.1:${webPort}`
   },
-  logger: false
+  stdio: "ignore"
 });
 
-app.addHook("onClose", async () => {
-  db.close();
-  await rm(dataDir, { recursive: true, force: true });
-});
-
-let closing = false;
-async function close() {
-  if (closing) {
+let stopping = false;
+function stop(signal) {
+  if (stopping) {
     return;
   }
-  closing = true;
-  await app.close();
+  stopping = true;
+  if (child.exitCode === null) {
+    child.kill(signal);
+  }
 }
 
-process.once("SIGINT", () => void close());
-process.once("SIGTERM", () => void close());
+process.once("SIGINT", () => stop("SIGINT"));
+process.once("SIGTERM", () => stop("SIGTERM"));
 
-await app.listen({ host, port });
+const result = await new Promise((resolve) => {
+  child.once("exit", (code, signal) => resolve({ code, signal }));
+  child.once("error", () => resolve({ code: 1, signal: null }));
+});
+
+process.removeAllListeners("SIGINT");
+process.removeAllListeners("SIGTERM");
+if (!stopping && result.code !== 0) {
+  console.error("Go P2P browser server did not start safely");
+  process.exitCode = result.code ?? 1;
+}

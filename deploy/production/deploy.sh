@@ -19,7 +19,7 @@ source "${SCRIPT_DIR}/release-helper.sh"
 
 bootstrap=false
 expected_commit=""
-release_profile="node-default"
+release_profile="go-full"
 go_upgrade=false
 previous_release_snapshot=""
 prepare_go_permissions=false
@@ -33,22 +33,19 @@ release_recovery_file=""
 
 usage() {
   cat <<'EOF'
-Usage: deploy/production/deploy.sh [--bootstrap] --expected-commit <git-sha> [--release-profile node-default|go-full] [--prepare-go-permissions]
+Usage: deploy/production/deploy.sh --expected-commit <git-sha> [--release-profile go-full] --go-upgrade --previous-release-snapshot <path>
 
-Deploys the fixed Node default profile unless the explicit go-full profile is
-selected. The script refuses to switch an existing PostgreSQL container to a
-different volume. Use --bootstrap only when creating the first production
-container for an already provisioned POSTGRES_VOLUME_NAME. The expected commit
-is mandatory so an operator cannot accidentally deploy a different checkout.
-The checkout must also match DUALLANE_PRODUCTION_DIR, which defaults to
-$HOME/duallane. go-full additionally requires the parent-provided Go Compose,
-health, and candidate-runtime wiring; the manifest cannot satisfy those checks
-by itself. Go-to-Go upgrades require --previous-release-snapshot pointing at
-the mode-0600 snapshot from the last successful Go release.
---prepare-go-permissions is a root-only first Node-to-Go cutover option. It
-backs up the private credential before snapshotting, then fences Node and
-verifies a quiescent backup before tightening existing data-volume permissions.
-It introduces a maintenance outage before passive candidates are checked.
+Deploys only the Go runtime after the Node implementation retirement.
+This coordinator upgrades an existing Go deployment; initial provisioning,
+first Node-to-Go cutover and permission preparation use the retained 0.17.0
+checkout and transition runbook. The retired Node profile is rejected here.
+The script refuses a PostgreSQL volume switch. A full expected commit and the
+matching DUALLANE_PRODUCTION_DIR checkout are mandatory. The previous-release
+snapshot must be the verified mode-0600 artifact from the last successful Go
+release, together with its external-file and volume-authority sidecars.
+Candidates, immutable image/SQL checks, writer fencing, drain checks and
+gateway-last activation remain mandatory. Rollback restores the pinned old Go
+application images without restoring stale data or reversing migrations.
 EOF
 }
 
@@ -101,6 +98,11 @@ while (($# > 0)); do
       ;;
   esac
 done
+
+if [[ "${release_profile}" != go-full || "${go_upgrade}" != true || "${prepare_go_permissions}" == true || "${bootstrap}" == true ]]; then
+  echo "Node runtime retired: only Go-to-Go upgrades with a verified previous snapshot are supported; use the 0.17.0 transition runbook for an earlier owner" >&2
+  exit 2
+fi
 
 if [[ "${prepare_go_permissions}" == true ]]; then
   if [[ "${release_profile}" != go-full || "${go_upgrade}" == true || "${bootstrap}" == true || "${EUID}" != 0 ]]; then
@@ -628,7 +630,7 @@ elif [[ "${bootstrap}" != true ]]; then
   exit 1
 fi
 
-if ! running_api_container="$(compose ps -a -q api 2>/dev/null)"; then
+if ! running_api_container="$(release_current_service_ids api)"; then
   echo "Could not inspect the API Compose container" >&2
   exit 1
 fi

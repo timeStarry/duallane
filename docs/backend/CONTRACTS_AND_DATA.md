@@ -32,7 +32,7 @@ product requirements.
 The current Workspace schema slices are
 [`workspace-core.yaml`](../../apps/backend/api/workspace-core.yaml) and
 [`workspace-emotes.yaml`](../../apps/backend/api/workspace-emotes.yaml).
-Their actual Node characterization fixtures and strict schema tests live in
+Their frozen Node characterization fixtures and strict schema tests live in
 `internal/workspacecontract`. These are contract projections, not evidence that
 every Go handler or service matches them. See the validation guide for the
 check-only commands; do not regenerate goldens to conceal a runtime mismatch.
@@ -62,8 +62,8 @@ control is never authorization.
 
 ### P2P JSON Parser Compatibility
 
-The lockfile's Fastify 5.8.5 parser converts invalid JSON to a fixed error, not a
-raw JavaScript parser diagnostic. The Go candidate must preserve that safe
+The historical Fastify 5.8.5 parser converted invalid JSON to a fixed error, not a
+raw JavaScript parser diagnostic. Go must preserve that safe
 response rather than replacing it with the room-domain validation error:
 
 | Input to room creation with JSON content type | HTTP status | Stable code |
@@ -76,8 +76,8 @@ These parser responses retain `statusCode`, `code`, `error` and the fixed
 content-free `message`. Valid JSON with an unsupported room shape continues to
 return the existing domain `{error: ...}` response. Never copy a raw decoder
 error, body excerpt or offset-dependent diagnostic into Go responses or logs.
-This is candidate compatibility with the active pinned Node parser, not a Node
-protocol change. Synthetic route and schema tests must lock the full objects.
+This is compatibility with the frozen Node parser contract, not a dependency
+on a current Node runtime. Synthetic route and schema tests lock the full objects.
 
 ## 4. Authentication And Sessions
 
@@ -122,8 +122,8 @@ Node's room-full, room-not-found and explicit-leave paths use `ws.close()`
 without a status. Preserve that empty wire close frame: browser clients observe
 1005 (no status received), not an explicit normal-close 1000 or policy-close
 1008. The Go library's `StatusNoStatusRcvd` requests an empty frame; reserved
-status 1005 must never be encoded as an on-wire close code. The candidate parity
-runner asserts these observations independently against both implementations.
+status 1005 must never be encoded as an on-wire close code. Go transport tests
+retain these observations against the historical Node contract.
 
 The Go candidate deliberately narrows three permissive Node behaviors; these
 are compatibility exceptions, not claims of byte-for-byte acceptance parity:
@@ -221,8 +221,9 @@ Job claims are durable, bounded, and safe with more than one worker:
 - keep message bodies, credentials, signed URLs, and tokens out of job errors.
 
 Presence-dependent notification suppression cannot use a process-local map from
-another container. Until cross-process presence is implemented and validated,
-keep that worker capability with its active owner.
+another container. The active Go implementation uses shared PostgreSQL-backed
+presence with bounded expiry; preserve its current-eligibility and concurrency
+tests when changing Workspace or worker delivery.
 
 ## 9. Data Classification And Ownership
 
@@ -236,7 +237,7 @@ keep that worker capability with its active owner.
 | Workspace events | Workspace | PostgreSQL, permission-filtered projection and bounded retention |
 | Audit evidence | Workspace | PostgreSQL, content-free safe metadata, separate retention |
 | Delivery jobs | Workspace | PostgreSQL with leases and safe failure metadata |
-| Presence | Workspace | Ephemeral process state initially; later short-TTL coordination only after approval |
+| Presence | Workspace | Bounded-expiry PostgreSQL coordination shared by Workspace and worker |
 | Logs/metrics | Operational | Safe metadata only; never an alternate content store |
 
 P2P data must not enter Workspace tables, object storage, backups, job queues,
@@ -248,9 +249,10 @@ Existing numbered SQL files and `schema_migrations(name, applied_at)` are a
 persisted compatibility contract. The transition must preserve their names,
 ordering, and applied state.
 
-During coexistence, one migration command owns schema changes. A Go-compatible
-runner must prove clean bootstrap and upgrade from an existing Node-managed
-database before it becomes active. It must:
+The Go migration command is the only current schema owner. Historical Node
+ownership remains a recovery/compatibility record, not an executable startup
+path. The active runner must preserve clean bootstrap and supported upgrade
+behavior. It must:
 
 - discover only the canonical numbered SQL files;
 - serialize execution with the existing advisory-lock identity;
@@ -262,7 +264,7 @@ database before it becomes active. It must:
 - keep seeding/reconciliation idempotent and separate from user data import.
 
 Never edit a migration that may have shipped. Use expand-contract changes so
-the active Node and Go versions required during rollout and rollback can both
+the old and new Go releases required during rollout and rollback can both
 operate safely.
 
 Application-read compatibility is distinct from migration ownership. A reviewed

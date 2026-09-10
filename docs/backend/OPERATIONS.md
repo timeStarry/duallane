@@ -2,11 +2,13 @@
 
 ## 1. Runtime Status
 
-The Go service set is routed in production as release 0.16.0. See the
-[cutover record](work-items/2026-09-10-go-production-cutover.md) for exact deployed
-identities and outstanding acceptance, and [Evolution and migration](EVOLUTION.md)
-for ownership. The base Compose pair remains Node-default for retained
-compatibility; it does not describe the current live selection.
+The Go service set is the current online architecture. The exact 0.17
+production identities and checks are recorded in the
+[bridge/release record](work-items/2026-09-10-chat-0170-after-bridge.md); its
+logged-in UI and native macOS IME limitations remain transparent. The
+[retirement work item](work-items/2026-09-10-node-runtime-retirement.md)
+and linked release PR record 0.18 validation and production activation.
+The root Compose pair is Go-only and does not describe a Node fallback.
 
 Production deployment remains single-host Docker Compose through the guarded
 script in `deploy/production`. This architecture does not authorize direct
@@ -22,13 +24,14 @@ production deployment from the development checkout.
 | `worker` | Go `worker` command | Docker network only; private health/metrics only |
 | `migrate` | Go `migrate` one-shot command | None |
 | `postgres` | Authoritative PostgreSQL | Docker network only |
-| Storage maintenance profiles | Provision, backfill, dedupe, or verification commands | None |
+| Storage maintenance profiles | Explicit `tools/node-compat` provision, migrate, or dedupe commands | None |
 | Optional GitHub proxy | Existing explicit profile | Docker network only |
 
-The retained Node `api` container is stopped with restart disabled. Nginx routes
-the capabilities identified in `EVOLUTION.md` to Go; only Go may write/claim.
-Removing `api`, its images, code or offline operators is deferred to a later
-validated release. Never start it beside active Go writers.
+Nginx routes the capabilities identified in `EVOLUTION.md` to Go; only Go may
+write/claim online. The retired Node API, worker, gateway, and Dockerfile are
+not current Compose services. Historical release-helper/immutable-image
+recovery and the isolated offline compatibility package remain separate
+support surfaces and must never be started beside Go writers.
 
 ## 3. Images
 
@@ -181,7 +184,8 @@ reconciliation has a 15-second cycle budget and does not publish old releases.
 Messages/cards and configured email/ntfy jobs use the same durable transactional
 writer as HTTP requests. Enabling this switch does not enable external
 notification sending; those providers retain their own switches and ownership.
-Do not enable Node and Go Echo claimers together.
+Do not add a Node Echo claimer or any other Node background owner to the online
+topology. The offline storage package has no worker loop.
 
 ## 6. Startup And Readiness
 
@@ -255,9 +259,9 @@ were deleted.
 The explicit `go-full` active profile defaults email, ntfy, Echo and maintenance
 processors on in the separate worker; their explicit `false` overrides remain
 available to operators. The Workspace HTTP process keeps these loops off.
-These defaults do not enable Go in the Node-default deployment. Candidate
-launches must still use the guarded release helper's passive environment; the
-read-only mount overlay alone does not disable processors.
+These defaults describe the Go worker only. Candidate launches must still use
+the guarded release helper's passive environment; the read-only mount overlay
+alone does not disable processors.
 
 An unpublished port does not make a candidate passive. Startup hooks, job
 claimers, retention, object cleanup, seed reconciliation, and migration runners
@@ -416,15 +420,12 @@ exact container ID, image and run/project/service labels. Ambiguous ownership
 is left for operator review, never removed by a guessed name. This component
 does not stop writers or authorize a handoff; the coordinator must do so first.
 
-For the first Node-to-Go cutover, `release-node-authority.mjs verify --compose
-<private-go.json> --node-compose <private-node.json>` compares the resolved
-database, local/S3 storage and physical named-volume authority with the actual
-retained Node API and PostgreSQL containers. The Node API may be stopped but
-must remain a unique identifiable owner. The supported database form is the
-standard Compose `PGHOST=postgres`, port 5432, database and user shared by every
-client/migration process; unsupported connection overrides fail closed. The
-credential mount must point to the same file and remain read-only. This is a
-read-only identity check, not backup, data migration or a writer fence.
+The historical `release-node-authority.mjs verify --compose
+<private-go.json> --node-compose <private-node.json>` check remains only for the
+retained 0.17 first-cutover recovery record. It is not a current 0.18
+owner-transition or deployment command. Current upgrades compare the four Go
+owners, physical database/storage authority, and the previous Go
+snapshot/sidecars; they do not expect a Node API or Node Compose input.
 
 The database snapshot still reports `writers: not_proven` and
 `provider: not_checked`; the additional provider observation is a separate
@@ -437,8 +438,10 @@ Running this command by itself is not a deployment or cleanup procedure.
 
 `scripts/backend/gateway-readonly-smoke.mjs` checks an explicit local HTTP
 gateway without credentials or mutations. Supply `--base-url`,
-`--expected-version`, `--full-commit`, `--profile node-default|go-full` and
-`--workspace-enabled true|false` (Go full requires true). It bounds requests,
+`--expected-version`, `--full-commit`, `--profile go-full`, and
+`--workspace-enabled true` for the current Go topology. A historical 0.17
+recovery check may retain the old profile value in private evidence, but the
+current coordinator rejects it. The smoke test bounds requests,
 HTML/assets and WebSocket frames, refuses redirects and external targets, checks
 unauthenticated Workspace denial and private endpoints, and prints only safe
 stage/count results. The immutable commit must be checked against actual image
@@ -464,29 +467,26 @@ The [candidate network isolation record](work-items/2026-09-10-candidate-network
 explains why P2P/Web candidate networks must replace the frozen activation
 networks rather than merge with them.
 
-Go private paths must return 404. The retained Node gateway may instead return
-its exact static SPA HTML; that is classified as no private endpoint exposure,
-not backend readiness. These unauthenticated read-only probes cannot replace
+Go private paths must return 404. These unauthenticated read-only probes cannot replace
 the disposable authenticated browser, upload, provider and recovery gates.
 
-The guarded `deploy/production/deploy.sh` performed the recorded first cutover;
+The guarded `deploy/production/deploy.sh` performed the recorded 0.17 release;
 that historical success is not authorization for another deployment or proof
-that a future release passed. An explicitly authorized operator must use the required
-production checkout and release procedure. The coordinator's release sequence
-is:
+that a future release passed. An explicitly authorized operator must use the
+required production checkout and current Go-to-Go release procedure. The
+coordinator's release sequence is:
 
 1. Verify clean `main`, the exact requested `origin/main` commit, semantic version, production
    path, authoritative PostgreSQL volume, and required tools.
 2. Capture a private logical database backup and checksum plus the application
-   state needed for recovery. Before building, freeze the previous Node API/Web
-   recovery Compose and external-file manifest for a first Node-to-Go cutover,
-   or verify the previous Go snapshot and all three sidecars for an upgrade.
+   state needed for recovery. Verify the previous Go snapshot and all three
+   sidecars before building.
 3. Build the exact image IDs, then freeze the image-pinned activation Compose.
 4. Verify physical database/storage authority before the one-shot migration.
 5. Start unpublished candidates and wait for their private readiness checks.
-6. Fence the old writers and claimers: Node `api` for the first Node-to-Go
-   cutover, or every previous Go owner for a Go-to-Go upgrade. Disable their
-   restart policies and confirm they are stopped.
+6. Fence every previous Go owner and claimer (`p2p`, `workspace`, `worker`,
+   and `web` as applicable). Disable restart policies and confirm exact
+   identities are stopped.
 7. Run the bounded drain observation and recheck authority; the observation is
    not itself a writer fence.
 8. Start Go backend and worker services, then replace the Web/Nginx gateway
@@ -505,32 +505,21 @@ step. Unpublished candidates remain passive throughout this sequence.
 
 ### Guarded Go activation and upgrade inputs
 
-The first candidate invocation has the following shape; the expected commit is
-mandatory and the profile must be explicit:
-
-```text
-deploy/production/deploy.sh --expected-commit <40-hex-commit> --release-profile go-full
-```
-
-For an explicitly authorized first cutover from root-owned Node storage,
-`--prepare-go-permissions` adds the coordinated offline preparation in the
-[storage operator runbook](STORAGE_OPERATOR.md#explicit-same-volume-first-cutover-preparation).
-It uses the same authoritative volume and guarded recovery, not an alternate
-deployment entry point. It requires a privileged host coordinator, private
-credential/data backups, a root-compatible retained Node owner and an outage
-before passive candidates. Default releases do not change permissions. Do not
-manually stop Node or change credential fingerprints mid-release.
-
-A Go-to-Go upgrade additionally requires the base snapshot from the last
-successful Go release:
+The current release invocation is Go-to-Go only; the expected commit, explicit
+profile, upgrade marker, and previous snapshot are mandatory:
 
 ```text
 deploy/production/deploy.sh --expected-commit <40-hex-commit> \
   --release-profile go-full --go-upgrade \
-  --previous-release-snapshot /absolute/private/go-compose.snapshot.json
+  --previous-release-snapshot <latest-verified-successful-go-snapshot>
 ```
 
-That argument names one of four matching private mode-0600 artifacts, kept
+For the 0.18 transition, the previous 0.17 snapshot is
+`backups/production/duallane-20260910T080211Z-8d346a04317d.recovery.go-compose.snapshot.json`.
+This is a historical transition example: each later upgrade uses the latest
+verified snapshot from its preceding successful release, not this fixed path.
+
+The snapshot argument names one of four matching private mode-0600 artifacts, kept
 outside Git and normal logs:
 
 1. `go-compose.snapshot.json` — profile/project, commit/version, schema, five
@@ -543,14 +532,15 @@ outside Git and normal logs:
 
 The base path is the CLI value; the three sidecars must remain beside it,
 unchanged, regular non-symlink 0600 files. The coordinator also creates a
-private image-pinned Go activation artifact and, for the first Node-to-Go
-cutover, a private image-pinned Node recovery artifact. All post-freeze Compose
-operations use those artifacts; later `.env` or tag changes must not silently
-move authority.
+private image-pinned Go activation artifact. All post-freeze Compose operations
+use those artifacts; later `.env` or tag changes must not silently move
+authority.
 
-The live installation has already completed first-cutover permission preparation.
-Its next application release uses the Go-to-Go upgrade form above, with the
-last successful snapshot, not `--prepare-go-permissions` or Node-default.
+The 0.17 installation has completed its first-cutover preparation. Its next
+application release uses the Go-to-Go upgrade form above with the last
+successful snapshot. The current tree rejects `--prepare-go-permissions`,
+`--bootstrap`, and Node-default forms; old-install first migration/permission
+work belongs to the retained 0.17 checkout and runbook.
 Pull as the checkout owner before running the privileged coordinator. For a
 root coordinator inspecting an ordinary-user checkout, use process-scoped
 `GIT_OPTIONAL_LOCKS=0` to avoid ownership-changing index refreshes; any required
@@ -579,10 +569,11 @@ present in the old snapshot is not an unowned cleanup target.
 If authority, fencing, drain, readiness, or smoke fails, the coordinator fails
 closed: confirmed fences stay in place and ambiguous writer state requires
 manual review; a failed stop is never reported as a stopped owner. It does not
-infer that Node ownership changed or let generic daemon recovery bypass a
-failed application-recovery gate. Node recovery uses only the pinned old artifact after the same
-authority and drain gates. A successful candidate check or synthetic rehearsal
-does not constitute the pending full rehearsal or grant deployment authority.
+infer an ownership change or let generic daemon recovery bypass a failed
+application-recovery gate. Rollback uses only the pinned previous Go artifact
+after the same authority and drain gates. A successful candidate check or
+synthetic rehearsal does not substitute for the release's required complete
+rehearsal or grant deployment authority.
 
 For a Go-to-Go rollback retry, recovery is exhaustive: it re-identifies and
 re-fences all four current owners (`p2p`, `workspace`, `worker`, and `web`),
@@ -645,10 +636,10 @@ This private sidecar complements the external-file fingerprint; neither check
 proves quiescence, data contents or backup recoverability.
 
 Schema and contracts use expand-contract evolution. The new migration must be
-safe for every Node/Go version that can run during rollout or automatic
+safe for the previous and target Go releases that can run during rollout or
 application rollback. Destructive cleanup occurs only after the old owner is
-removed, the migration is `complete`, backups are verified, and rollback no
-longer needs the old shape.
+removed, the migration is accepted by the retirement ledger, backups are
+verified, and rollback no longer needs the old shape.
 
 Rollback first fences the failed writer/claimer and verifies that the selected
 known-good owner can read the current schema, stored data, objects, cursors, and
@@ -660,7 +651,8 @@ must prove those conditions. Database restoration is a separate operator
 decision and is never an automatic response to an application failure.
 
 If Docker restarts during a failed deployment, record and restore all previously
-running DualLane application containers, not only Web and one API container.
+running DualLane application containers, including every member of the four
+owner set, not only Web or a single backend.
 
 ## 11. Scaling And Capacity
 

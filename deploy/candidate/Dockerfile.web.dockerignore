@@ -5,6 +5,9 @@
 !apps/
 !apps/web/
 !apps/web/**
+!scripts/
+!scripts/dev/
+!scripts/dev/go-dev-config.mjs
 !deploy/
 !deploy/candidate/
 !deploy/candidate/nginx.conf

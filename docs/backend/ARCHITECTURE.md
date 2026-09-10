@@ -1,13 +1,13 @@
-# Target Backend Architecture
+# Backend Architecture
 
 ## 1. Status And Scope
 
-This document defines the approved target backend architecture. The migration
-status in [Evolution and migration](EVOLUTION.md) determines production
-ownership, not whether candidate code exists. Target diagrams must not be used
-to infer that a Go service already owns traffic. Use the
+This document defines the Go backend architecture selected by the current
+Compose and gateway. The status and release evidence in
+[Evolution and migration](EVOLUTION.md) identify the actual production version
+and outstanding gates. A topology diagram does not prove a release passed. Use the
 [executable evidence map](README.md#find-the-executable-evidence) to locate
-candidate wiring and the checked-in deployment independently.
+service wiring and the guarded deployment entrypoint.
 
 The architecture is sized for personal and small-team self-hosting on one
 Docker host. It improves ownership, failure isolation, testability, and future
@@ -20,8 +20,8 @@ containers, and the existing Nginx edge gateway as the single public entry.
 ## 2. Goals
 
 - Make the P2P and Workspace trust lanes separate runtime responsibilities.
-- Replace the Node backend incrementally with maintainable Go packages and
-  commands while preserving external behavior.
+- Keep the Go packages and commands maintainable while preserving the
+  historical public and persisted-data contracts.
 - Keep Workspace authorization, quota, audit, idempotency, event, and data
   mutations inside explicit PostgreSQL transaction boundaries.
 - Separate retryable external work from request handling without adding an
@@ -43,7 +43,7 @@ containers, and the existing Nginx edge gateway as the single public entry.
 - Stronger P2P privacy or end-to-end identity claims than the product currently
   implements.
 
-## 4. Target Topology
+## 4. Runtime Topology
 
 ```text
 public client
@@ -178,11 +178,11 @@ instance uses PostgreSQL `LISTEN/NOTIFY` only to wake local subscribers; it
 queries and permission-filters persisted events before delivery. Reconnect and
 missed notifications recover through the existing cursor/replay contract.
 
-Presence is ephemeral and cannot be inferred from the event log. It stays
-in-process while the Workspace command has one replica. Before multiple
-Workspace replicas or a separate presence-dependent email worker are enabled,
-an approved short-TTL presence lease design must provide cross-process answers
-without becoming authorization evidence.
+Presence is short-lived and cannot be inferred from the event log. Workspace
+and worker share bounded-expiry PostgreSQL presence leases; current membership
+and expiry predicates remain mandatory. Presence is a delivery-suppression
+hint, never authorization evidence. Multiple Workspace replicas still require
+explicit scale-out, replay, pool-budget and failure acceptance.
 
 P2P room membership remains in process for the initial target. Sticky routing
 alone is insufficient unless room creation, reconnect, ownership, and instance
@@ -208,7 +208,7 @@ failure semantics are all defined and tested.
 
 | Stage | Supported shape | Required coordination |
 | --- | --- | --- |
-| Initial Go target | One P2P, one Workspace, one worker | In-process P2P/presence; PostgreSQL jobs and events |
+| Current single-host deployment | One P2P, one Workspace, one worker | In-process P2P; PostgreSQL presence leases, jobs and events |
 | Worker scale-out | Multiple workers | Durable leases, idempotent delivery, stable claim order |
 | Workspace scale-out | Multiple Workspace instances | Database event wake-up, replay tests, cross-instance presence, pool budget |
 | P2P scale-out | Multiple P2P instances | Explicit room ownership/routing and non-persistent cross-instance relay design |

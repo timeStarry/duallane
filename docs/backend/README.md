@@ -1,11 +1,12 @@
 # Backend Architecture Guide
 
 This directory is the progressive-disclosure entry point for the DualLane Go
-backend transition and for backend development after that transition completes.
-Go release 0.16.0 is now routed in production, with Node retained for rollback
-and offline compatibility. Use the status and evidence in
-[Evolution and migration](EVOLUTION.md) to distinguish implementation progress
-from production routing; `routed`, `active`, and `complete` are different gates.
+backend and the 0.18 Node-runtime retirement. The verified 0.17.0 baseline is
+recorded in the bridge/release record; the checked-in 0.18 online architecture is Go-only for P2P,
+Workspace, Web, worker, and migration ownership. Use [Evolution and migration](EVOLUTION.md)
+for ownership and the [retirement work item](work-items/2026-09-10-node-runtime-retirement.md)
+for validation and activation status; these records distinguish a checked-in
+target from a deployed release.
 
 ## Start Here
 
@@ -19,11 +20,12 @@ Every backend task must first read:
    current implementation owner.
 4. Only the topic documents routed below.
 
-The [production cutover record](work-items/2026-09-10-go-production-cutover.md)
-identifies the exact deployed commit/images, single-owner checks, recovery
-artifacts and remaining authenticated/provider acceptance. Go-target capabilities
-are `routed`, not `active` or `complete`; Node removal is deferred. The product
-and security documents remain authoritative for behavior at every status.
+The [0.17 bridge/release record](work-items/2026-09-10-chat-0170-after-bridge.md)
+identifies the historical deployed commit/images, schema-34 evidence,
+single-owner checks, and recovery artifacts. The [0.18 retirement work item](work-items/2026-09-10-node-runtime-retirement.md)
+records the new owner boundary, validation/activation ledger, and rollback
+contract. The product and security documents remain authoritative for behavior
+throughout the transition.
 
 ## Document Map
 
@@ -60,9 +62,13 @@ Production uses one Go module containing separate P2P, Workspace, worker and
 migration commands. Nginx is the only public application gateway; it routes
 P2P to `p2p` and authenticated Workspace/auth/Bot traffic to `workspace`.
 PostgreSQL remains the Workspace system of record, with the same S3 primary
-and local mirror. P2P remains a separate no-persistence lane. Node/Fastify
-under `apps/web/server` is retained for rollback, compatibility tests, canonical
-migration SQL and offline operators, not as a running production API/claimer.
+and local mirror. P2P remains a separate no-persistence lane. The online owner
+is Go; the old Node API/worker/gateway is retired from the current tree. Keep
+only canonical SQL under `apps/web/server/migrations`, the shared/frontend
+contract assets, package SDK code, and the isolated `tools/node-compat`
+offline storage operators. Historical release-helper/immutable-image recovery
+and frozen Node golden evidence remain compatibility records, not startup code
+or a second writer.
 
 See [Evolution and migration](EVOLUTION.md) for the live owner of each
 capability. A directory, binary, image, or passing test is not sufficient to
@@ -75,20 +81,22 @@ a claim that every candidate capability is integrated, verified, or deployed.
 
 | Question | Inspect |
 | --- | --- |
-| Which backend does the checked-in deployment select? | [Compose](../../docker-compose.yml), [production override](../../docker-compose.production.yml), and [Nginx routes](../../deploy/nginx/default.conf) |
+| Which backend does the checked-in deployment select? | [root Go-only Compose](../../docker-compose.yml), [Go runtime definitions](../../docker-compose.go-production.yml), [production override](../../docker-compose.production.yml), and [candidate gateway](../../deploy/candidate/nginx.conf) |
 | Where is a Go candidate composed? | [P2P](../../apps/backend/cmd/p2p/main.go), [Workspace](../../apps/backend/cmd/workspace/main.go), [worker](../../apps/backend/cmd/worker/main.go), or [migration](../../apps/backend/cmd/migrate/main.go) |
 | Which versions and checks are executable? | [Go module](../../apps/backend/go.mod), [Makefile](../../apps/backend/Makefile), [root scripts](../../package.json), and [CI](../../.github/workflows/ci.yml); see [Validation](VALIDATION.md) for the required evidence |
 | Which candidate images exist? | [P2P image](../../Dockerfile.p2p) and [Workspace image](../../Dockerfile.workspace); image existence does not establish a Compose service or cutover |
 | Which contracts and migrations are present? | [Candidate API directory](../../apps/backend/api) and [canonical SQL migrations](../../apps/web/server/migrations); inspect coverage before assuming a whole API family is characterized |
 | Where is the foundation/contract slice evidence? | [2026-09-06 work record](work-items/2026-09-06-foundation-contracts.md); includes exact tested commits and excluded draft failures |
-| What remains before accepting the full candidate PR? | [Pre-deployment handoff](work-items/2026-09-08-predeployment-handoff.md) for current gates and artifact identities; [historical work record](work-items/2026-09-06-predeployment.md) for slice provenance and parallel ownership |
+| What records retirement validation and activation status? | [0.18 Node-runtime retirement work item](work-items/2026-09-10-node-runtime-retirement.md) for the acceptance ledger and artifact identities; [historical work record](work-items/2026-09-06-predeployment.md) for slice provenance and parallel ownership |
 
-The base Compose pair still selects the retained Node default. Live production
-explicitly selects [Go production](../../docker-compose.go-production.yml) and
-the [Go gateway](../../deploy/candidate/nginx.conf) through the guarded release
-entry point. Do not infer the live owner from the default pair or run it to
-replace Go. Consult the cutover record and inspect the current release before
-an upgrade; subsequent Go upgrades require the prior private recovery snapshot.
+The root Compose pair is Go-only by default: `docker-compose.yml` extends
+`docker-compose.go-production.yml` and has no online `api` service. Live
+production uses the same Go service topology and the
+[candidate gateway](../../deploy/candidate/nginx.conf) through the guarded
+release entry point. Do not infer exact deployed commit/image state from a
+Compose file or iteration test; consult the 0.17 bridge/release record and the
+0.18 retirement work item before an upgrade. Subsequent Go upgrades require the
+prior private recovery snapshot.
 
 ## Authority And Conflict Resolution
 
@@ -116,8 +124,11 @@ These documents are deliberately written as durable backend support material:
   validation, and agent documents remain in place.
 - `EVOLUTION.md` retains the completed migration record and becomes the entry
   point for later architecture changes and compatibility transitions.
-- Historical Node implementation details are removed only when the matching
-  migration is `complete` and rollback no longer depends on them.
+- The current tree may remove retired online Node source before the acceptance
+  ledger records final status; final-head evidence and activation status live in
+  the work item. Historical Node material may remain only as frozen
+  release-helper/immutable-image recovery, synthetic tests, golden provenance,
+  or the isolated offline storage package.
 
 ## Canonical Terms
 

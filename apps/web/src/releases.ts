@@ -13,6 +13,16 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.18.0",
+    releasedAt: "2026-09-10",
+    title: "日常功能保持兼容",
+    summary: "本次为维护更新，保留聊天、文件、头像和个人设置；沿用原有入口，无需重新设置。",
+    categories: [
+      { title: "继续使用", items: ["聊天、文件和成员入口保持不变，无需重新上传已有内容", "自动隐藏消息、输入法确认和话题操作继续按现有设置使用"] },
+      { title: "隐私与访问", items: ["私密直连仍不保存聊天和文件内容", "共享空间继续按成员权限保存与访问内容"] }
+    ]
+  },
+  {
     version: "0.17.0",
     releasedAt: "2026-09-10",
     title: "按你的习惯显示消息",

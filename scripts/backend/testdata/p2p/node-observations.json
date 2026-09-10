@@ -1,0 +1,614 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "lastRegenerableCommit": "8d346a04317d0d3396293caca14ca1c65c7b5163",
+    "characterizationTree": "6ebc0f6858d67cf2be516d19ecf062c3ae75b505",
+    "runnerBlobSha256": "2cc0e0573bbf53b43facd414f1e6f5a5d0f2b6dd60b636428c8127513cad57e2",
+    "regeneration": "disabled",
+    "normalization": "Node characterization output with room/peer IDs, timestamps, and the ephemeral localhost port normalized; values were captured before Go comparison and were not generated from Go."
+  },
+  "fixtureSources": {
+    "scripts/backend/testdata/p2p/http.json": "9c466db9ffa16eb9bd9ddd510f9bc37974e3be344601797a7d9b07f4cb6f66eb",
+    "scripts/backend/testdata/p2p/websocket.json": "22df8be8893d167f65a18d67488a17b134e832d3113a120ce01de32530a48a42"
+  },
+  "requiredObservationCounts": {
+    "http": 20,
+    "websocket": 19
+  },
+  "observationCounts": {
+    "http": 21,
+    "websocket": 22
+  },
+  "observationSha256": "4c27e5f0dcf895ec001fccf05bdc65833ca86e95609c695c57f82a4b9c75f7ee",
+  "documentedExtras": {
+    "http": [
+      "health"
+    ],
+    "websocket": [
+      "leave-close",
+      "room-full-close",
+      "room-not-found-close"
+    ]
+  },
+  "http": [
+    {
+      "name": "health",
+      "value": {
+        "status": 200,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "ok": true,
+          "service": "duallane",
+          "lane": "ready",
+          "appVersion": "<release-version>"
+        }
+      }
+    },
+    {
+      "name": "ice-servers-configured-variants",
+      "value": {
+        "status": 200,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "iceServers": [
+            {
+              "urls": "stun:one.example"
+            },
+            {
+              "urls": "stun:two.example"
+            },
+            {
+              "urls": [
+                "turn:one.example",
+                "turns:two.example"
+              ],
+              "username": "synthetic-turn-user",
+              "credential": "synthetic-turn-credential"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "create-valid",
+      "value": {
+        "status": 201,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "roomId": "<room-1>",
+          "inviteLink": "http://127.0.0.1:<port>/direct/%3Croom-1%3E",
+          "expiresAt": "<timestamp>",
+          "maxPeers": 2
+        }
+      }
+    },
+    {
+      "name": "room-status-existing",
+      "value": {
+        "status": 200,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "roomId": "<room-1>",
+          "expiresAt": "<timestamp>",
+          "peerCount": 0,
+          "maxPeers": 2
+        }
+      }
+    },
+    {
+      "name": "create-missing-body",
+      "value": {
+        "status": 400,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "statusCode": 400,
+          "code": "FST_ERR_CTP_EMPTY_JSON_BODY",
+          "error": "Bad Request",
+          "message": "Body cannot be empty when content-type is set to 'application/json'"
+        }
+      }
+    },
+    {
+      "name": "create-empty-object-default",
+      "value": {
+        "status": 400,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "error": "maxPeers must be 2 for p2p rooms"
+        }
+      }
+    },
+    {
+      "name": "create-null-body",
+      "value": {
+        "status": 400,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "error": "maxPeers must be 2 for p2p rooms"
+        }
+      }
+    },
+    {
+      "name": "create-root-number",
+      "value": {
+        "status": 400,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "error": "maxPeers must be 2 for p2p rooms"
+        }
+      }
+    },
+    {
+      "name": "create-root-array",
+      "value": {
+        "status": 400,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "error": "maxPeers must be 2 for p2p rooms"
+        }
+      }
+    },
+    {
+      "name": "create-root-boolean",
+      "value": {
+        "status": 400,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "error": "maxPeers must be 2 for p2p rooms"
+        }
+      }
+    },
+    {
+      "name": "create-root-string",
+      "value": {
+        "status": 400,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "error": "maxPeers must be 2 for p2p rooms"
+        }
+      }
+    },
+    {
+      "name": "create-null-max-peers",
+      "value": {
+        "status": 400,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "error": "maxPeers must be 2 for p2p rooms"
+        }
+      }
+    },
+    {
+      "name": "create-fractional-max-peers",
+      "value": {
+        "status": 400,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "error": "maxPeers must be 2 for p2p rooms"
+        }
+      }
+    },
+    {
+      "name": "create-invalid-json",
+      "value": {
+        "status": 400,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "statusCode": 400,
+          "code": "FST_ERR_CTP_INVALID_JSON_BODY",
+          "error": "Bad Request",
+          "message": "Body is not valid JSON but content-type is set to 'application/json'"
+        }
+      }
+    },
+    {
+      "name": "create-trailing-json",
+      "value": {
+        "status": 400,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "statusCode": 400,
+          "code": "FST_ERR_CTP_INVALID_JSON_BODY",
+          "error": "Bad Request",
+          "message": "Body is not valid JSON but content-type is set to 'application/json'"
+        }
+      }
+    },
+    {
+      "name": "create-oversize-json",
+      "value": {
+        "status": 413,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "statusCode": 413,
+          "code": "FST_ERR_CTP_BODY_TOO_LARGE",
+          "error": "Payload Too Large",
+          "message": "Request body is too large"
+        }
+      }
+    },
+    {
+      "name": "create-number-decimal",
+      "value": {
+        "status": 201,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "roomId": "<room-2>",
+          "inviteLink": "http://127.0.0.1:<port>/direct/%3Croom-2%3E",
+          "expiresAt": "<timestamp>",
+          "maxPeers": 2
+        }
+      }
+    },
+    {
+      "name": "create-number-exponent",
+      "value": {
+        "status": 201,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "roomId": "<room-3>",
+          "inviteLink": "http://127.0.0.1:<port>/direct/%3Croom-3%3E",
+          "expiresAt": "<timestamp>",
+          "maxPeers": 2
+        }
+      }
+    },
+    {
+      "name": "create-unknown-field",
+      "value": {
+        "status": 201,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "roomId": "<room-4>",
+          "inviteLink": "http://127.0.0.1:<port>/direct/%3Croom-4%3E",
+          "expiresAt": "<timestamp>",
+          "maxPeers": 2
+        }
+      }
+    },
+    {
+      "name": "create-websocket-room",
+      "value": {
+        "status": 201,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "roomId": "<room-5>",
+          "inviteLink": "http://127.0.0.1:<port>/direct/%3Croom-5%3E",
+          "expiresAt": "<timestamp>",
+          "maxPeers": 2
+        }
+      }
+    },
+    {
+      "name": "room-status-missing",
+      "value": {
+        "status": 404,
+        "headers": {
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer"
+        },
+        "body": {
+          "error": "room not found"
+        }
+      }
+    }
+  ],
+  "websocket": [
+    {
+      "name": "first-joined",
+      "value": {
+        "type": "system",
+        "event": "joined",
+        "peerId": "<peer-1>",
+        "peers": [
+          {
+            "id": "<peer-1>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "first-peer-list",
+      "value": {
+        "type": "system",
+        "event": "peer-list",
+        "peers": [
+          {
+            "id": "<peer-1>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "second-joined",
+      "value": {
+        "type": "system",
+        "event": "joined",
+        "peerId": "<peer-2>",
+        "peers": [
+          {
+            "id": "<peer-1>"
+          },
+          {
+            "id": "<peer-2>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "first-peer-joined",
+      "value": {
+        "type": "system",
+        "event": "peer-joined",
+        "peers": [
+          {
+            "id": "<peer-1>"
+          },
+          {
+            "id": "<peer-2>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "first-peer-list-after-second",
+      "value": {
+        "type": "system",
+        "event": "peer-list",
+        "peers": [
+          {
+            "id": "<peer-1>"
+          },
+          {
+            "id": "<peer-2>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "second-peer-list",
+      "value": {
+        "type": "system",
+        "event": "peer-list",
+        "peers": [
+          {
+            "id": "<peer-1>"
+          },
+          {
+            "id": "<peer-2>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "plaintext-rejected",
+      "value": {
+        "type": "system",
+        "event": "invalid-message"
+      }
+    },
+    {
+      "name": "secure-relay",
+      "value": {
+        "type": "secure",
+        "v": 1,
+        "channel": "ws-chat",
+        "nonce": "fixture_nonce_-",
+        "ciphertext": "fixture_ciphertext_-",
+        "from": {
+          "id": "<peer-1>"
+        },
+        "receivedAt": "<timestamp>"
+      }
+    },
+    {
+      "name": "invalid-envelope-rejected",
+      "value": {
+        "type": "system",
+        "event": "invalid-message"
+      }
+    },
+    {
+      "name": "peer-left",
+      "value": {
+        "type": "system",
+        "event": "peer-left",
+        "peers": [
+          {
+            "id": "<peer-2>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "peer-list-after-leave",
+      "value": {
+        "type": "system",
+        "event": "peer-list",
+        "peers": [
+          {
+            "id": "<peer-2>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "leave-close",
+      "value": {
+        "code": 1005
+      }
+    },
+    {
+      "name": "full-first-joined",
+      "value": {
+        "type": "system",
+        "event": "joined",
+        "peerId": "<peer-3>",
+        "peers": [
+          {
+            "id": "<peer-3>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "full-first-peer-list-initial",
+      "value": {
+        "type": "system",
+        "event": "peer-list",
+        "peers": [
+          {
+            "id": "<peer-3>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "full-second-joined",
+      "value": {
+        "type": "system",
+        "event": "joined",
+        "peerId": "<peer-4>",
+        "peers": [
+          {
+            "id": "<peer-3>"
+          },
+          {
+            "id": "<peer-4>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "full-first-peer-joined",
+      "value": {
+        "type": "system",
+        "event": "peer-joined",
+        "peers": [
+          {
+            "id": "<peer-3>"
+          },
+          {
+            "id": "<peer-4>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "full-first-peer-list-after-second",
+      "value": {
+        "type": "system",
+        "event": "peer-list",
+        "peers": [
+          {
+            "id": "<peer-3>"
+          },
+          {
+            "id": "<peer-4>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "full-second-peer-list",
+      "value": {
+        "type": "system",
+        "event": "peer-list",
+        "peers": [
+          {
+            "id": "<peer-3>"
+          },
+          {
+            "id": "<peer-4>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "room-full",
+      "value": {
+        "type": "system",
+        "event": "room-full"
+      }
+    },
+    {
+      "name": "room-full-close",
+      "value": {
+        "code": 1005
+      }
+    },
+    {
+      "name": "room-not-found",
+      "value": {
+        "type": "system",
+        "event": "room-not-found"
+      }
+    },
+    {
+      "name": "room-not-found-close",
+      "value": {
+        "code": 1005
+      }
+    }
+  ]
+}

@@ -103,11 +103,11 @@ test("the canary CLI emits fixed codes and does not echo input secrets", () => {
   assert.equal(JSON.parse(result.stderr).status, "FAIL");
 });
 
-test("permission opt-in is restricted to root first-cutover and is disabled by default", { skip: process.platform === "win32" }, () => {
+test("current deployment rejects the retired first-cutover permission entrypoint", { skip: process.platform === "win32" }, () => {
   for (const args of [[], ["--go-upgrade"], ["--bootstrap"]]) {
     const result = spawnSync("bash", [path.join(root, "deploy/production/deploy.sh"), "--prepare-go-permissions", ...args], { encoding: "utf8", timeout: 10_000 });
     assert.equal(result.status, 2);
-    assert.match(result.stderr, /requires root and a first non-bootstrap go-full release/u);
+    assert.match(result.stderr, /Node runtime retired: only Go-to-Go upgrades/u);
   }
   const noop = spawnSync("bash", ["-euc", 'source "$1/deploy/production/release-helper.sh"; release_preflight_permission_tools; release_prepare_permission_inputs; release_prepare_offline_data_permissions', "probe-test", root], { encoding: "utf8", timeout: 10_000 });
   assert.equal(noop.status, 0, noop.stderr);
@@ -176,7 +176,7 @@ release_preflight_permission_tools
   assert.equal(result.stdout.includes("unexpected-maintenance"), false);
 });
 
-test("official entrypoint snapshots live Node before its opt-in offline fence and keeps candidates before activation", async () => {
+test("historical first-cutover helpers keep snapshot, offline fence and candidate ordering", async () => {
   const source = await readFile(path.join(root, "deploy/production/deploy.sh"), "utf8");
   const sequence = ["release_snapshot_app_state \"${release_state_file}\"", "release_prepare_permission_inputs\n", "release_freeze_node_recovery_compose\n", "compose build \"${RELEASE_BUILD_SERVICES[@]}\""];
   let cursor = 0;

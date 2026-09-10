@@ -6,7 +6,7 @@ A process boundary is justified by a trust boundary, independent failure mode,
 or independently retryable workload. A package boundary is preferred when the
 behavior needs the same transaction, authorization decision, or release unit.
 
-The target has four commands, not a service per domain noun:
+The online deployment has four process roles, not a service per domain noun:
 
 | Command | Process role | Persistent/external dependencies |
 | --- | --- | --- |
@@ -15,7 +15,12 @@ The target has four commands, not a service per domain noun:
 | `worker` | Retryable notifications, Bot deliveries, cleanup, reconciliation | PostgreSQL and approved external targets |
 | `migrate` | Ordered schema migration and required seed reconciliation | PostgreSQL |
 
-## 2. Target Source Layout
+Additional one-shot commands (`storage`, `release-check`, `permission-probe`,
+`healthcheck`) are operator/probe entrypoints, not extra business services.
+The separate `tools/node-compat` package retains explicit offline storage
+operators only; it is never an API, worker, migrator, or background startup hook.
+
+## 2. Source Placement Map
 
 ```text
 apps/backend/
@@ -34,8 +39,6 @@ apps/backend/
       postgres/
       storage/
     p2p/
-      application/
-      transport/
     workspace/
       auth/
       members/
@@ -47,20 +50,25 @@ apps/backend/
       topics/
       echo/
       events/
-    worker/
       email/
       ntfy/
-      botdelivery/
-      cleanup/
+      botgateway/
+      presence/
+      storageops/
+    worker/
+      metrics/
   api/
-    openapi.yaml
+    p2p.yaml
+    workspace-core.yaml
+    workspace-emotes.yaml
     realtime/
-  db/
-    queries/
 ```
 
-This is a placement map, not a requirement to create empty packages. Add a
-package only with the first capability it owns.
+This is a selective placement map, not a requirement to create empty packages.
+Worker delivery adapters live with their owning Workspace domain and are wired
+by `cmd/worker`. Generated presence SQL lives under the presence package. Add a
+package only with the first capability it owns; do not introduce a second
+generic worker-domain hierarchy merely to match a diagram.
 
 ## 3. Dependency Direction
 
@@ -206,7 +214,7 @@ interface accepting bounded bytes/streams and returning normalized metadata plus
 content. Authorization, quota/storage policy, logical records, and object
 references stay in the Workspace domain.
 
-The adapter may use govips only after the compatibility gate in
+The adapter uses govips and must preserve the compatibility gate in
 [Technology decisions](TECHNOLOGY.md). It must bound input bytes, decoded pixels,
 dimensions, frames, duration, processing concurrency, and output bytes before
 the normalized object is committed.

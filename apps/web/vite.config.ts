@@ -1,8 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import webPackage from "./package.json";
-
-const apiOrigin = process.env.DUALLANE_API_ORIGIN || "http://127.0.0.1:8787";
+import { createDevProxy } from "../../scripts/dev/go-dev-config.mjs";
 
 export default defineConfig({
   plugins: [react()],
@@ -10,15 +9,10 @@ export default defineConfig({
     __DUALLANE_APP_VERSION__: JSON.stringify(webPackage.version)
   },
   server: {
+    host: "127.0.0.1",
     port: 5173,
-    proxy: {
-      "/api": apiOrigin,
-      "/auth": apiOrigin,
-      "/ws": {
-        target: apiOrigin.replace(/^http/, "ws"),
-        ws: true
-      }
-    }
+    strictPort: true,
+    proxy: createDevProxy(process.env)
   },
   preview: {
     port: 4173

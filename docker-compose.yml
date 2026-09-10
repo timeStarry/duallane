@@ -1,97 +1,40 @@
+# Go is the only online implementation. Production upgrades must use deploy.sh;
+# a bare Compose up is for disposable/local installations only.
 services:
   web:
-    build:
-      context: .
-      dockerfile: Dockerfile.web
-      args:
-        DUALLANE_APP_VERSION: ${DUALLANE_APP_VERSION:-0.0.0}
-        DUALLANE_GIT_COMMIT: ${DUALLANE_GIT_COMMIT:-unknown}
-    ports:
-      - "${DUALLANE_WEB_BIND:-127.0.0.1}:${DUALLANE_WEB_PORT:-8787}:8080"
-    depends_on:
-      - api
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/api/health | grep -q '\"ok\":true'"]
-      interval: 3s
-      timeout: 3s
-      retries: 20
-      start_period: 5s
-    restart: unless-stopped
+    extends:
+      file: docker-compose.go-production.yml
+      service: web
 
-  api:
-    build:
-      context: .
-      dockerfile: Dockerfile.api
-      args:
-        DUALLANE_APP_VERSION: ${DUALLANE_APP_VERSION:-0.0.0}
-        DUALLANE_GIT_COMMIT: ${DUALLANE_GIT_COMMIT:-unknown}
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    expose:
-      - "8787"
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/health').then(r=>{if(!r.ok)process.exit(1);return r.json()}).then(v=>{if(v.ok!==true)process.exit(1)}).catch(()=>process.exit(1))"]
-      interval: 3s
-      timeout: 3s
-      retries: 20
-      start_period: 5s
-    environment:
-      HOST: 0.0.0.0
-      PORT: 8787
-      DUALLANE_DATA_DIR: /app/data
-      PGHOST: postgres
-      PGPORT: 5432
-      PGDATABASE: ${POSTGRES_DB:-duallane}
-      PGUSER: ${POSTGRES_USER:-duallane}
-      PGPASSWORD: ${POSTGRES_PASSWORD:-replace-this-before-production}
-      DATABASE_AUTO_MIGRATE: "false"
-      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
-      DATABASE_SSL: "false"
-      SESSION_SECRET: ${SESSION_SECRET:-replace-this-before-production}
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8787}
-      WORKSPACE_ENABLED: ${WORKSPACE_ENABLED:-false}
-      WORKSPACE_SMTP_ENCRYPTION_KEY: ${WORKSPACE_SMTP_ENCRYPTION_KEY:-}
-      WORKSPACE_EMAIL_WORKER_ENABLED: ${WORKSPACE_EMAIL_WORKER_ENABLED:-true}
-      WORKSPACE_NTFY_BASE_URL: ${WORKSPACE_NTFY_BASE_URL:-https://ntfy.tsio.top}
-      WORKSPACE_NTFY_WORKER_ENABLED: ${WORKSPACE_NTFY_WORKER_ENABLED:-true}
-      WORKSPACE_STORAGE_DRIVER: ${WORKSPACE_STORAGE_DRIVER:-local}
-      WORKSPACE_S3_ENDPOINT: ${WORKSPACE_S3_ENDPOINT:-http://100.99.0.4:9000}
-      WORKSPACE_S3_PUBLIC_ENDPOINT: ${WORKSPACE_S3_PUBLIC_ENDPOINT:-https://fs.tsio.top}
-      WORKSPACE_S3_BUCKET: ${WORKSPACE_S3_BUCKET:-duallane}
-      WORKSPACE_S3_REGION: ${WORKSPACE_S3_REGION:-us-east-1}
-      WORKSPACE_S3_CREDENTIALS_FILE: /run/secrets/workspace-s3
-      WORKSPACE_S3_SIGNED_URL_TTL_SECONDS: ${WORKSPACE_S3_SIGNED_URL_TTL_SECONDS:-300}
-      WORKSPACE_STORAGE_LOCAL_READ_FALLBACK: ${WORKSPACE_STORAGE_LOCAL_READ_FALLBACK:-true}
-      WORKSPACE_STORAGE_LOCAL_MIRROR_WRITE: ${WORKSPACE_STORAGE_LOCAL_MIRROR_WRITE:-true}
-      WORKSPACE_FRONTEND_URL: ${WORKSPACE_FRONTEND_URL:-}
-      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
-      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
-      GITHUB_OAUTH_TIMEOUT_MS: ${GITHUB_OAUTH_TIMEOUT_MS:-8000}
-      GITHUB_PROXY_URL: ${GITHUB_PROXY_URL:-}
-      TRUST_PROXY: ${TRUST_PROXY:-true}
-      SERVE_STATIC: "false"
-      DUALLANE_STUN_URLS: ${DUALLANE_STUN_URLS:-stun:stun.l.google.com:19302}
-      DUALLANE_TURN_URLS: ${DUALLANE_TURN_URLS:-}
-      DUALLANE_TURN_SHARED_SECRET: ${DUALLANE_TURN_SHARED_SECRET:-}
-      DUALLANE_TURN_TTL_SECONDS: ${DUALLANE_TURN_TTL_SECONDS:-600}
-      DUALLANE_TURN_USERNAME: ${DUALLANE_TURN_USERNAME:-}
-      DUALLANE_TURN_CREDENTIAL: ${DUALLANE_TURN_CREDENTIAL:-}
-      DUALLANE_EMPTY_ROOM_GRACE_MS: ${DUALLANE_EMPTY_ROOM_GRACE_MS:-10000}
-    volumes:
-      - duallane-data:/app/data
-    secrets:
-      - source: workspace-s3
-        target: workspace-s3
-        mode: 0600
-    restart: unless-stopped
+  p2p:
+    extends:
+      file: docker-compose.go-production.yml
+      service: p2p
+
+  workspace:
+    extends:
+      file: docker-compose.go-production.yml
+      service: workspace
+
+  worker:
+    extends:
+      file: docker-compose.go-production.yml
+      service: worker
+
+  migrate:
+    extends:
+      file: docker-compose.go-production.yml
+      service: migrate
 
   storage-provision:
     profiles: ["storage-migration"]
     build:
       context: .
-      dockerfile: Dockerfile.api
-    command: ["pnpm", "--filter", "@duallane/web", "storage:provision"]
+      dockerfile: tools/node-compat/Dockerfile
+    command: ["node", "storage-provision.mjs"]
+    user: "65532:65532"
+    read_only: true
+    tmpfs: [/tmp]
     environment:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8787}
       WORKSPACE_S3_ENDPOINT: ${WORKSPACE_S3_ENDPOINT:-http://100.99.0.4:9000}
@@ -110,8 +53,11 @@ services:
     profiles: ["storage-migration"]
     build:
       context: .
-      dockerfile: Dockerfile.api
-    command: ["pnpm", "--filter", "@duallane/web", "storage:migrate"]
+      dockerfile: tools/node-compat/Dockerfile
+    command: ["node", "storage-migrate.mjs"]
+    user: "65532:65532"
+    read_only: true
+    tmpfs: [/tmp]
     depends_on:
       postgres:
         condition: service_healthy
@@ -144,11 +90,14 @@ services:
     profiles: ["storage-dedupe"]
     build:
       context: .
-      dockerfile: Dockerfile.api
-    command: ["pnpm", "--filter", "@duallane/web", "storage:dedupe"]
+      dockerfile: tools/node-compat/Dockerfile
+    command: ["node", "storage-dedupe.mjs"]
+    user: "65532:65532"
+    read_only: true
+    tmpfs: [/tmp]
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
     environment:
       DUALLANE_DATA_DIR: /app/data
       PGHOST: postgres
@@ -199,27 +148,6 @@ services:
     volumes:
       - duallane-v2ray-config:/etc/v2ray:ro
     restart: unless-stopped
-
-  migrate:
-    build:
-      context: .
-      dockerfile: Dockerfile.api
-      args:
-        DUALLANE_APP_VERSION: ${DUALLANE_APP_VERSION:-0.0.0}
-        DUALLANE_GIT_COMMIT: ${DUALLANE_GIT_COMMIT:-unknown}
-    command: ["pnpm", "--filter", "@duallane/web", "db:migrate"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      PGHOST: postgres
-      PGPORT: 5432
-      PGDATABASE: ${POSTGRES_DB:-duallane}
-      PGUSER: ${POSTGRES_USER:-duallane}
-      PGPASSWORD: ${POSTGRES_PASSWORD:-replace-this-before-production}
-      DATABASE_POOL_MAX: "2"
-      DATABASE_SSL: "false"
-    restart: "no"
 
   postgres:
     image: ${POSTGRES_IMAGE:-docker.m.daocloud.io/library/postgres:17-alpine}

@@ -339,23 +339,43 @@ Recommended MVP stack:
 - Frontend: React, Vite, TypeScript.
 - Styling: local CSS design system with responsive layout.
 - Icons: `lucide-react`.
-- Backend: Node/Fastify.
-- Realtime: WebSocket.
+- Online backend: Go services for P2P, Workspace, and worker processes.
+- Realtime: Go WebSocket handlers with the existing versioned contracts.
 - Private direct: WebRTC DataChannel plus WebSocket signaling.
 - Database: PostgreSQL with versioned migrations.
 - File storage: private S3-compatible object storage, with a local adapter for development and rollback.
-- Deployment: Docker Compose.
+- Deployment: Docker Compose with the Go-only default and verified release
+  metadata.
 
 Suggested services:
 
 - `web`: Nginx frontend gateway and reverse proxy.
-- `api`: private Node/Fastify service.
+- `p2p`: Go private-lane signaling and encrypted-envelope relay without
+  PostgreSQL or Workspace dependencies.
+- `workspace`: Go authenticated Workspace/auth/Bot HTTP and WebSocket boundary.
+- `worker`: Go delivery and maintenance claimant, enabled only by explicit
+  configuration.
 - `postgres`: persistent Workspace metadata, messages, quotas, events, and audits.
-- `migrate`: one-shot schema migration and seed service.
-- `storage`: private S3-compatible bucket for Workspace attachments and profile avatars; the API remains the authenticated upload boundary.
+- `migrate`: one-shot Go schema migration service; it never seeds or runs as an
+  application startup hook.
+- `tools/node-compat`: isolated offline `pg`/AWS storage operators only; it is
+  not an online service or a complete Go replacement.
+- `storage`: private S3-compatible bucket for Workspace attachments and profile
+  avatars; the Go Workspace boundary remains the authenticated upload boundary.
 - Optional future `turn`: coturn for improved private-direct connection success.
 
-MVP deployment assumption:
+The checked-in 0.18 online architecture and deployment boundary:
+
+The root Compose file extends the Go production definitions and must not gain a
+Node `api` service or a second online writer. The online architecture is Go-only
+in this tree. The verified 0.17.0 baseline is recorded in the [bridge/release
+record](docs/backend/work-items/2026-09-10-chat-0170-after-bridge.md), while the
+[Node-runtime retirement work item](docs/backend/work-items/2026-09-10-node-runtime-retirement.md)
+records validation and activation status. Keep the canonical SQL at
+`apps/web/server/migrations`; the Go migrator is explicit and the offline
+compatibility package does not connect during online startup.
+
+Historical MVP deployment assumption:
 
 - Small trusted deployment.
 - HTTPS required for production WebRTC and secure OAuth callbacks.

@@ -2,9 +2,9 @@
 
 ## 1. Purpose
 
-This document is the canonical source for backend capability ownership during
-the Node-to-Go transition. After final cutover it remains the architecture
-evolution process and historical migration record.
+This document is the canonical source for backend capability ownership after
+the Go online transition and during the 0.18 Node-runtime retirement. It
+remains the architecture evolution process and historical migration record.
 
 Target documents describe where the system is going. This status ledger says
 which implementation may be changed, routed, and trusted today.
@@ -15,9 +15,9 @@ which implementation may be changed, routed, and trusted today.
 | --- | --- |
 | `planned` | Target boundary is approved; active behavior remains entirely with the current owner |
 | `parity` | Go implementation and disposable-environment evidence exist, but it receives no production writes |
-| `routed` | The complete capability is routed to Go; Go is the only writer for any mutation and tested legacy rollback remains available |
-| `active` | Go or retained infrastructure is canonical; normal development targets it and legacy routing/claiming is removed |
-| `complete` | Go remains canonical and the legacy implementation, tests, config, and rollback dependency are removed or archived |
+| `routed` | The complete capability is routed to Go; Go is the only writer/claimer and tested rollback material remains available |
+| `active` | Go is the canonical online owner; normal development targets it and retained compatibility material cannot start online |
+| `complete` | The declared 0.18 retirement gates, final-head evidence, and cleanup are accepted; no online Node implementation remains |
 
 A passing build does not advance status. Each change requires the evidence and
 route/rollback conditions below. A capability cannot be simultaneously written
@@ -64,37 +64,40 @@ not test results for the current worktree.
 | Capability | Current owner | Target owner | Status | Required next gate |
 | --- | --- | --- | --- | --- |
 | Static Web and edge gateway | Nginx/Go Web image | Nginx/Web image | `active` | Preserve verified Go upstreams, private paths and security headers |
-| P2P room, ICE, and secure WebSocket relay | Go P2P | Go P2P | `routed` | Longer observation and real two-browser WebRTC/transfer acceptance |
-| Workspace feature gate and health | Go Workspace | Go Workspace | `routed` | Retain exact feature-gate tests; observe enabled production |
-| GitHub OAuth and Workspace sessions | Go Workspace | Go Workspace | `routed` | Normal authorized real OAuth/session smoke |
-| Workspace read APIs | Go Workspace | Go Workspace | `routed` | Authenticated current-membership projection observation |
-| Workspace conversation/message mutations | Go Workspace | Go Workspace | `routed` | Dedicated synthetic conversation and production data-integrity observation |
-| Workspace realtime WebSocket | Go Workspace | Go Workspace | `routed` | Authenticated replay/reconnect observation |
-| Quota, upload/download, and object registry | Go Workspace | Go Workspace | `routed` | Authorized synthetic upload/download and legacy-byte acceptance |
-| Avatar and custom-emote processing | Go Workspace/govips | Go Workspace/govips | `routed` | Authorized real legacy/media reads and resource observation |
-| Topics, cards, interactions, Agent Bots, and Echo | Go Workspace | Go Workspace | `routed` | Dedicated critical workflow observation without real-recipient test notifications |
-| Email, ntfy, Bot delivery, cleanup/reconciliation | Go Worker | Go Worker | `routed` | Longer exclusive-claimer observation and authorized real-provider validation |
-| PostgreSQL migration and seed runner | Go migrate | Go migrate | `routed` | Retain verified schema-33 compatibility and recovery artifacts |
+| P2P room, ICE, and secure WebSocket relay | Go P2P | Go P2P | `active` | Retain real two-browser WebRTC/transfer acceptance as a transparent production gap |
+| Workspace feature gate and health | Go Workspace | Go Workspace | `active` | Retain exact feature-gate tests; observe enabled production |
+| GitHub OAuth and Workspace sessions | Go Workspace | Go Workspace | `active` | Normal authorized real OAuth/session smoke remains an acceptance gap |
+| Workspace read APIs | Go Workspace | Go Workspace | `active` | Authenticated current-membership projection observation |
+| Workspace conversation/message mutations | Go Workspace | Go Workspace | `active` | Dedicated synthetic conversation and production data-integrity observation |
+| Workspace realtime WebSocket | Go Workspace | Go Workspace | `active` | Authenticated replay/reconnect observation |
+| Quota, upload/download, and object registry | Go Workspace | Go Workspace | `active` | Authorized synthetic upload/download and legacy-byte acceptance |
+| Avatar and custom-emote processing | Go Workspace/govips | Go Workspace/govips | `active` | Authorized real legacy/media reads and resource observation |
+| Topics, cards, interactions, Agent Bots, and Echo | Go Workspace | Go Workspace | `active` | Dedicated critical workflow observation without real-recipient test notifications |
+| Email, ntfy, Bot delivery, cleanup/reconciliation | Go Worker | Go Worker | `active` | Longer exclusive-claimer observation and authorized real-provider validation |
+| PostgreSQL migration and seed runner | Go migrate | Go migrate | `active` | Retain verified schema-34 compatibility and recovery artifacts |
 | PostgreSQL database | PostgreSQL 17 deployment | PostgreSQL deployment | `active` | Preserve authoritative volume, backup, and supported upgrade path |
-| Local/S3 content-addressed storage | Go Workspace adapters and same stores | Go Workspace adapters and same stores | `routed` | Real S3/legacy read acceptance; retain offline Node compatibility tools |
+| Local/S3 content-addressed storage | Go Workspace adapters and same stores | Go Workspace adapters and same stores | `active` | Real S3/legacy read acceptance; retain offline Node compatibility tools |
 
-### Production routing — 2026-09-10
+### Production baseline and 0.18 retirement — 2026-09-10
 
-The authorized guarded cutover activated release 0.16.0 at
-`76e579f6887f3abcfe4cee45a4eaf3929c3ea6ae`. All four candidate services passed;
-Node admission/claims were fenced and drained before Go activation, with Web
-replaced last. Exact-image/runtime checks confirm Go-only routing and worker
-ownership, retained stopped Node with restart disabled, unchanged database/
-storage authority, and a verified private recovery snapshot. The
-[cutover record](work-items/2026-09-10-go-production-cutover.md) separates passing
-public/P2P/permission checks from pending authenticated/provider and full S3
-acceptance. The preceding failed attempt exercised actual same-authority Node
-recovery after schema and permission preparation.
+The maintainer-accepted Go baseline is `active`. The exact 0.17 production
+release evidence is recorded in
+[2026-09-10-chat-0170-after-bridge.md](work-items/2026-09-10-chat-0170-after-bridge.md):
+commit `8d346a04317d0d3396293caca14ca1c65c7b5163`, schema 34, official and
+independent public/TLS/health/snapshot/volume checks, and the exact recovery
+authority. Logged-in UI acceptance was not verified because the browser
+connection failed, and native macOS IME was not verified; those gaps remain
+transparent and are not converted into 0.18 completion evidence.
 
-This advances twelve rows from `parity` to `routed`, not `active` or `complete`.
-It is not a claim that real OAuth, authenticated business flows, every S3 byte
-or a sustained observation window passed. Keep Node images, code, tests,
-offline operators and recovery until a separately validated later release.
+The 0.18 architecture is Go-only online: the root Compose, local runner,
+gateway, request handlers, workers, and migration owner do not use Node online
+code. Validation, tested revisions and production activation are recorded in
+[the retirement work item](work-items/2026-09-10-node-runtime-retirement.md)
+and its linked release PR.
+The current tree retains canonical SQL, the isolated offline storage operators,
+historical release-helper/immutable-image recovery, and frozen Node golden
+provenance where required; none is an online owner. Iterative tooling and clean
+Linux results are evidence for review, not an automatic `complete` transition.
 
 ### Candidate acceptance — 2026-09-09
 
@@ -163,6 +166,11 @@ error; record later scope changes in the capability ledger and their own PRs.
 
 ## 5. Migration Phases
 
+Phases 0–7 below are historical migration records. They do not authorize a
+current Node writer, worker, claimer, gateway, or startup hook. The current
+online owner is Go; remaining work is evaluated against the 0.18 retirement
+work item and its final-head gates.
+
 ### Phase 0: Architecture And Baseline
 
 - Approve this documentation suite.
@@ -203,8 +211,10 @@ the migration `complete`.
 - Implement exact Workspace feature gating, PostgreSQL access, actor/session
   resolution, OAuth, invites, and safe errors.
 - Migrate bootstrap and bounded read APIs in coherent authorization slices.
-- Keep Node as writer where mutation slices are not yet migrated.
-- Prove that mixed Node/Go releases read the same additive schema safely.
+- Historical phase rule: keep the then-current owner as writer where a mutation
+  slice had not yet migrated; do not apply this as a current dual-runtime plan.
+- Historical mixed-release compatibility evidence remains useful only for
+  rollback review and does not authorize a new Node writer.
 
 Exit: foundation/read capabilities are individually `active`; mutations remain
 with their recorded owner.
@@ -226,7 +236,8 @@ transaction.
   logical objects, signed/local delivery, and cleanup.
 - Prove local and S3-compatible object behavior and content-addressed races.
 - Complete the govips compatibility gate before routing avatars/emotes.
-- Retain Node/Sharp ownership for media until that independent gate passes.
+- Historical Node/Sharp ownership ended with the Go online transition; retain
+  only the frozen compatibility evidence required by the rollback window.
 
 Exit: each file/media capability is `active`, or a documented remaining Node
 owner is explicit rather than hidden.
@@ -251,18 +262,26 @@ Exit: all request-serving Workspace capabilities are `active` in Go.
 Exit: worker and migration commands are `active`; no Node background loop can
 claim the same job.
 
-### Phase 8: Final Cutover And Documentation Conversion
+### Phase 8: 0.18 Node Runtime Retirement And Documentation Conversion
 
-- Remove Node API routes, workers, server dependencies, image, and obsolete test
-  doubles only after every capability is `active` and rollback no longer needs
-  them.
+- Remove remaining Node online source, image inputs, gateway configuration, and
+  obsolete test doubles only after the work item's deletion and frozen-golden
+  gates are independently checked. Keep canonical migrations, the isolated
+  offline storage operators, historical release-helper/immutable-image
+  recovery, and synthetic old-image tests where their contracts require them.
 - Update Compose, deployment restoration, version checks, backups, runbooks,
   README, and release notes for the final service set.
-- Run the full validation and production rollback rehearsal.
-- Convert the backend index from target wording to current architecture wording.
+- Run the full Go-only validation, actual new-Compose orphan-owner rehearsal,
+  and exact 0.17 Go-image rollback rehearsal.
+- Record acceptance in the retirement work item and its release PR, including
+  exact tested revisions, documentation-only follow-ups, production activation
+  and environment-dependent limits. Do not infer `complete` from the 0.17
+  baseline or iterative tooling passes.
 
-Exit: every backend migration is `complete`; this documentation suite is the
-active backend handbook.
+Exit: the retirement work item and release PR record the required gates and
+activation against the reviewed source, and this documentation suite describes
+the accepted current architecture. Any unverified environment-dependent path
+remains explicit rather than being relabeled as passed.
 
 ## 6. Slice Cutover Checklist
 
@@ -315,9 +334,10 @@ recovery action because it can discard valid writes. Record routed duration,
 affected capabilities, possible external duplicate effects, and reconciliation
 required.
 
-## 9. Documentation Conversion At Completion
+## 9. Documentation Conversion At Retirement Completion
 
-Final cutover is incomplete until documentation reflects the new current state:
+The 0.18 retirement is incomplete until documentation reflects the accepted
+current state:
 
 - `docs/backend/README.md` states that the Go architecture is current and routes
   all backend tasks directly to its durable guides.

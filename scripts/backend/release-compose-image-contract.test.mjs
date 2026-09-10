@@ -323,22 +323,11 @@ function dependencyNames(value) {
   return Object.keys(value ?? {});
 }
 
-function assertNodeDefaultContract(config) {
-  const web = service(config, "web");
-  const api = service(config, "api");
-  const migrate = service(config, "migrate");
-
-  assert.equal(web.image, undefined, "Node-default Web must not gain a Go image");
-  assert.equal(api.image, undefined, "Node-default API must remain build-selected");
-  assert.equal(migrate.image, undefined, "Node-default migrate must remain build-selected");
-  assert.equal(normalizedDockerfile(web.build?.dockerfile), "Dockerfile.web");
-  assert.equal(normalizedDockerfile(api.build?.dockerfile), "Dockerfile.api");
-  assert.equal(normalizedDockerfile(migrate.build?.dockerfile), "Dockerfile.api");
-  assert.ok(dependencyNames(web.depends_on).includes("api"), "Node-default Web must still depend on API");
-  for (const name of ["p2p", "workspace", "worker"]) {
-    assert.equal(config.services?.[name], undefined, `Node-default must not add Go service ${name}`);
-  }
-  assert.doesNotMatch(JSON.stringify(config), /duallane-go-/u, "Node-default config must not contain Go image identities");
+function assertGoDefaultContract(config) {
+  assertGoImageContract(config);
+  assert.equal(config.services.api, undefined, "the retired API is not a current service");
+  assert.doesNotMatch(JSON.stringify(config), /Dockerfile\.api|server\/index\.mjs/u);
+  assert.equal(dependencyNames(service(config, "web").depends_on).includes("api"), false);
 }
 
 async function withSyntheticFiles(callback) {
@@ -366,21 +355,23 @@ async function writePreFixGoComposeFixture(directory) {
   );
   assert.ok(imageLine, "the real Go Compose file must contain the fixed Web image line");
   const fixture = path.join(directory, "docker-compose.go-production.before-web-image.yml");
-  const withoutWebImage = source.slice(0, imageLine.index) + source.slice(imageLine.index + imageLine[0].length);
+  // Default Compose now extends the canonical Go file. Reset the effective
+  // image as well so this negative case cannot inherit a healthy base image.
+  const withoutWebImage = source.slice(0, imageLine.index) + "    image: !reset null\n" + source.slice(imageLine.index + imageLine[0].length);
   await writeFile(fixture, withoutWebImage, { mode: 0o600 });
   return fixture;
 }
 
-test("real go-full Compose image contract preserves Node default and build metadata", async (t) => {
+test("real default and production Compose both select Go images and build metadata", async (t) => {
   if (!requireDockerCompose(t)) return;
 
   await withSyntheticFiles(({ environment }) => {
-    const nodeDefault = composeConfig(environment, [baseComposeFile, productionComposeFile]);
-    assertNodeDefaultContract(nodeDefault);
+    const goDefault = composeConfig(environment, [baseComposeFile, productionComposeFile]);
+    assertGoDefaultContract(goDefault);
 
     const goFull = composeConfig(environment, [baseComposeFile, productionComposeFile, goComposeFile]);
     assertGoImageContract(goFull);
-    assert.notEqual(goFull.services.web.image, nodeDefault.services.web.image);
+    assert.equal(goFull.services.web.image, goDefault.services.web.image);
   });
 });
 

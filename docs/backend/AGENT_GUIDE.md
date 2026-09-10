@@ -41,11 +41,11 @@ evidence for the next contributor.
 
 | Status | Normal edit target |
 | --- | --- |
-| `planned` | Active Node/retained owner; Go work only inside an approved migration slice |
-| `parity` | Candidate Go code and parity tests; production behavior remains with current owner |
-| `routed` | Go owns production traffic and is the only writer for mutations; legacy changes are rollback compatibility only |
-| `active` | Go or retained infrastructure is canonical; legacy code may remain only for tested rollback |
-| `complete` | Go is canonical and legacy code/rollback dependencies are removed; do not restore them without a new approved architecture decision |
+| `planned` | Target boundary is approved; the current active owner remains unchanged |
+| `parity` | Candidate implementation and disposable evidence exist, but it receives no production writes |
+| `routed` | Go owns the declared production route and is the only writer/claimer for that capability; rollback material remains tested |
+| `active` | Go is the canonical online owner; retained compatibility material is frozen and cannot start as an online service |
+| `complete` | The declared retirement gates, final-head evidence, and cleanup are accepted; do not restore retired online code without a new architecture decision |
 
 If code, routes, workers, and ledger disagree, stop the mutation, preserve
 security/data invariants, and report the mismatch. Do not fix the ledger to match
@@ -146,7 +146,8 @@ owning domain instead of `platform` or `common`.
 - Characterize before rewriting.
 - Implement and test one vertical capability at a time.
 - Do not dual-write, mirror production content, or split one transaction across
-  Node and Go.
+  Node and Go. For 0.18, Node is not an online owner; compatibility tooling is
+  offline and explicitly invoked only.
 - Preserve current schema/object compatibility; use additive migrations.
 - Add candidate health and rollback before changing the edge route.
 - Update the capability ledger in the same PR that changes production ownership.
@@ -178,9 +179,13 @@ preserve confirmed fences and require manual review of ambiguous writer state;
 a candidate check, synthetic rehearsal, or agent handoff does not authorize
 deployment or an ownership-ledger transition.
 
-See [Runtime and operations](OPERATIONS.md) for the operator command shape,
-artifact names, and recovery details. Do not duplicate those facts in the
-historical work record or infer production ownership from repository artifacts.
+The current 0.18 entry point rejects Node-default/bootstrap/permission-
+preparation forms. Any first-install migration or permission conversion for an
+existing 0.17 installation belongs to the retained 0.17 checkout and runbook;
+do not invent a current-tree bootstrap command. See [Runtime and operations](OPERATIONS.md)
+for the operator command shape, artifact names, and recovery details. Do not
+duplicate those facts in the historical work record or infer production
+ownership from repository artifacts.
 
 ## 9. Validation And Review
 

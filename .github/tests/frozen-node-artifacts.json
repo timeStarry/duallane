@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 1,
+  "artifactKind": "frozen-node-provenance",
+  "lastRegenerableSourceCommit": "8d346a04317d0d3396293caca14ca1c65c7b5163",
+  "regeneration": "disabled",
+  "hashAlgorithm": "sha256",
+  "hashEncoding": "UTF-8",
+  "lineEndings": "LF",
+  "hashSource": "git blob at lastRegenerableSourceCommit after UTF-8 LF normalization",
+  "artifacts": [
+    {
+      "path": "apps/backend/api/node-routes.json",
+      "sha256": "7b75bbe9f8760443c6db01a5ac9026fce3ea8ea5efcca6431263dd1771c764fc",
+      "provenance": "Node route inventory at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspace/avatars/testdata/node-legacy-avatar-keys.json",
+      "sha256": "c3f94e4b1d44a6e139b6e7ec6dfa538d8e58611c16cc070c11b2cfe4a806eea9",
+      "provenance": "Node avatar compatibility golden at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspace/botgateway/testdata/node-feishu-fallback.json",
+      "sha256": "d3095dcec415d7acb17d9b82ff015bb5f8b4cfc0312d70b593e04be59b8feb73",
+      "provenance": "Node bot Feishu fallback golden at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspace/botgateway/testdata/node-idempotency.json",
+      "sha256": "48da4752ad67e8407ef0936e4641fc053c6b5f8f936bdbc0f1e486e947fe4629",
+      "provenance": "Node bot idempotency golden at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspace/botgateway/testdata/node-message-dto.json",
+      "sha256": "30f3b611a7fa6dfeb5c55cf4d853ad1d71f2c79794417cf9bf3724c0befcb761",
+      "provenance": "Node bot message DTO golden at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspace/echo/automation/testdata/node-parser-boundaries.json",
+      "sha256": "f1259e522f14b0e5fc0bf1e36a43829e71a83f03272deea30a1547e7eac84e40",
+      "provenance": "Node Echo automation parser boundary golden at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspace/echo/automation/testdata/node-runtime.json",
+      "sha256": "da03e55f4eeacde5211bf91f3f40b37f45ef1881dee32d3aeaf86a74056aac13",
+      "provenance": "Node Echo automation runtime golden at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspace/echo/carddefinitions/testdata/node-definitions.json",
+      "sha256": "a6270655663f74805704c243207a232115bad46b0d019138241bf660174175d7",
+      "provenance": "Node Echo card definitions golden at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspace/echo/releases/testdata/node-release-fixtures.json",
+      "sha256": "27093357928aafb6360de4101aa1edd33a9b4fe84b8873a1e3a25fb08d714081",
+      "provenance": "Node Echo release fixture golden at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspace/echo/requirements/testdata/node-idempotency.json",
+      "sha256": "ec615fa91a6c72de0988ba844713e9b91590828f18c43733d70666c2c681d272",
+      "provenance": "Node Echo requirement idempotency golden at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspace/echo/solicitations/testdata/node-idempotency.json",
+      "sha256": "0c28621e5b6e708aad33be8cb3d3aa67afe3d1511a7dfb221af19f018ae74cc4",
+      "provenance": "Node Echo solicitation idempotency golden at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspace/messages/testdata/markdown-summary.json",
+      "sha256": "6160299e1f70b2023b23e1ba4af00f6665329b63da0b97223d6aeb2da3304241",
+      "provenance": "Node message markdown summary golden at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspace/topics/testdata/cards-node.json",
+      "sha256": "f77292a05e68b5540ed6176b93640938312a09f61873070beacec2fdb1538d85",
+      "provenance": "Node topic card golden at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspace/topics/testdata/parser-node.json",
+      "sha256": "df34b554cc112775bf073eaf4fa4fe46c228dc0640fcbc0a0f3950b27f1cee4f",
+      "provenance": "Node topic parser golden at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspacecontract/testdata/node-bot-contract.json",
+      "sha256": "1b90d07b3f8754c6d5e00bb6ca124d689473c5913213256e0254821840d37ff5",
+      "provenance": "Node Workspace bot contract at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspacecontract/testdata/node-core.json",
+      "sha256": "9145c0bd4c27ac827403fe2ddc84f165024b98b9c543004e3223f8137fb7fd15",
+      "provenance": "Node Workspace core contract at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspacecontract/testdata/node-emotes.json",
+      "sha256": "95bddbc5b1ad6f1f56ea470036a8eab698c6c3a39b819c467914459688e1ec69",
+      "provenance": "Node Workspace emotes contract at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspacecontract/testdata/node-files.json",
+      "sha256": "d19ea3df2123244fa631c869a64a4dab225c624b454dedf2d551425997f238a3",
+      "provenance": "Node Workspace files contract at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspacecontract/testdata/node-invites.json",
+      "sha256": "942014b0ed44edcf76fcc8fc08ae0e1dfdb46de318ac21516d2fc540f314a29a",
+      "provenance": "Node Workspace invites contract at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspacecontract/testdata/node-notifications-null-schema.json",
+      "sha256": "56a8edcf8f318bd23bc3bf95400a64c5dea994abfe6fe2eaaf121d9dacfc9c6e",
+      "provenance": "Node Workspace nullable notification schema at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspacecontract/testdata/node-notifications.json",
+      "sha256": "c93baa4bbb539036afe784fb893efbdc143c515b1217b5c8c6b7b0d0a4c728e4",
+      "provenance": "Node Workspace notifications contract at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspace/feishucards/testdata/feishu-card-action-golden.json",
+      "sha256": "05f80f5c6eb21d80b3116fe1db578f22b9eb4cd0764936dfc02ba04736a4d2c9",
+      "provenance": "Node Feishu card action golden at last regenerable source commit"
+    },
+    {
+      "path": "apps/backend/internal/workspace/feishucards/testdata/feishu-card-golden.json",
+      "sha256": "bdd76fc9fb96653f3b1eb1eaaab6e25f8f7291f02354452cc787438d621b797a",
+      "provenance": "Node Feishu card conversion golden at last regenerable source commit"
+    },
+    {
+      "path": "scripts/backend/bot-feishu-contract-golden.json",
+      "sha256": "c7cad9cdb13c25220a7d34c3f232e93ae6ed5a9133221bdf817e02ce5be7f0fe",
+      "provenance": "Node Feishu bot contract golden at last regenerable source commit"
+    },
+    {
+      "path": "scripts/backend/testdata/bot-websocket-goldens.json",
+      "sha256": "61e2cefa9ba1ce6f016d5984f0c7c8e97751b71c1f9f8ab6dd6badd2ba670419",
+      "provenance": "Node bot WebSocket golden at last regenerable source commit"
+    },
+    {
+      "path": "scripts/backend/testdata/p2p/http.json",
+      "sha256": "9c466db9ffa16eb9bd9ddd510f9bc37974e3be344601797a7d9b07f4cb6f66eb",
+      "provenance": "Node P2P HTTP characterization fixture at last regenerable source commit"
+    },
+    {
+      "path": "scripts/backend/testdata/p2p/websocket.json",
+      "sha256": "22df8be8893d167f65a18d67488a17b134e832d3113a120ce01de32530a48a42",
+      "provenance": "Node P2P WebSocket characterization fixture at last regenerable source commit"
+    },
+    {
+      "path": "scripts/backend/testdata/workspace-notifications-null.json",
+      "sha256": "94faa530539c32cbfe21ed67dc54052f276f2b3b48b1b5332b26cbaa4c2dcc4d",
+      "provenance": "Node nullable Workspace notification golden at last regenerable source commit"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+**
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tools/
+!tools/node-compat/
+!tools/node-compat/**
+**/node_modules/**
+**/.env*
+**/.secrets/**
+**/data/**
+**/uploads/**
+**/backups/**
+**/*.log

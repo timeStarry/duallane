@@ -2,18 +2,20 @@
 
 ## 1. Supported Stack
 
-DualLane is a pnpm workspace targeting Node.js 22. The current implementation
-uses:
+DualLane is a pnpm workspace with Node.js 22 for frontend/tooling and Go for the
+online backend. The 0.18.0 runtime contract is Go-only; retirement acceptance is
+still pending its recorded gates. The current product stack uses:
 
 - React 19, TypeScript in strict mode, and Vite for the Web client;
-- Fastify and native ESM (`.mjs`) for the API and WebSocket services;
+- Go HTTP/WebSocket services for P2P, Workspace, workers, and migrations;
 - PostgreSQL 17 with ordered SQL migrations for Workspace persistence;
-- an in-process SQLite database as a deterministic Workspace test double;
 - local filesystem or S3-compatible storage behind the content-addressed object
   store;
 - Playwright for browser flows and Vitest for unit/integration tests;
 - the versioned `@duallane/agent-sdk` package for Agent Bot integrations;
-- Docker Compose, Nginx, and Caddy-facing deployment configuration for production.
+- Docker Compose, Nginx, and Caddy-facing deployment configuration for production;
+- the isolated `tools/node-compat` Node package for explicitly invoked offline
+  storage maintenance only.
 
 Use the versions declared in `package.json`, `pnpm-lock.yaml`, container files,
 and workspace package manifests. Do not introduce a parallel framework, state
@@ -23,22 +25,21 @@ decision and maintainer approval.
 ### Approved Go Backend Target
 
 The [backend architecture index](../backend/README.md) defines the approved Go
-target, durable service/data/operations rules, and the Node-to-Go migration
-process. The Node/Fastify topology above remains the current implementation for
-each capability until the linked [capability ledger](../backend/EVOLUTION.md)
-and production route agree that ownership has moved. Backend tasks must read
-that ledger before choosing an implementation target.
+runtime, durable service/data/operations rules, and the remaining Node-retirement
+process. The online route and background ownership are Go-only for 0.18.0.
+Backend tasks must read the [capability ledger](../backend/EVOLUTION.md) and the
+[retirement work item](../backend/work-items/2026-09-10-node-runtime-retirement.md)
+before changing runtime, compatibility, or release behavior. A pending gate is
+not evidence of a completed retirement.
 
 ## 2. Repository Map
 
 | Path | Responsibility |
 | --- | --- |
 | `apps/web/src` | React application, routes, shared UI, client state, and styles |
-| `apps/web/server/routes` | HTTP/WebSocket boundary: parse, authenticate, call a service, project response |
-| `apps/web/server/services` | Workspace domain rules, authorization, transactions, audit, events, storage coordination |
-| `apps/web/server/services/db.mjs` | Production PostgreSQL adapter |
-| `apps/web/server/services/test-database.mjs` | SQLite Workspace test double |
-| `apps/web/server/migrations` | Ordered PostgreSQL schema migrations |
+| `apps/backend` | Go P2P, Workspace, worker, migration, health, and offline diagnostic commands |
+| `apps/web/server/migrations` | Canonical ordered PostgreSQL schema migrations retained at the historical path |
+| `tools/node-compat` | Minimal offline `pg`/AWS compatibility operators for explicit storage migrate, dedupe, and provision phases |
 | `packages/agent-sdk` | Public versioned Agent Bot client and protocol helpers |
 | `e2e` | Browser acceptance flows and isolated test-server fixtures |
 | `docs` | Product, protocol, data, visual, operations, and development contracts |
@@ -50,17 +51,23 @@ Keep new code with the component that owns the behavior. A route is not a domain
 service, a React component is not a persistence layer, and product documentation
 is not a substitute for executable validation.
 
+The retired Node API, online Node worker, old Node gateway, and their Dockerfile
+are not current architecture components. Historical immutable-image recovery,
+frozen Node goldens, and the offline compatibility package are separate support
+surfaces; none may be started by the default Compose or local development runner.
+The compatibility package never runs migration or seed work automatically.
+
 ## 3. Trust-Lane Boundary
 
 The architecture has two independent data paths:
 
 ```text
 P2P private lane
-browser -> signaling validation -> peer
+browser -> Go P2P validation -> peer
          no plaintext persistence
 
 Workspace relay lane
-authenticated client -> Fastify route -> authorized domain service
+authenticated client -> Go HTTP route -> authorized domain service
                      -> PostgreSQL / object storage / audit / realtime event
 ```
 
@@ -108,6 +115,10 @@ transactional must be designed for retry and reconciliation.
   physical storage keys.
 - Legacy-read compatibility may remain during migration, but new writes use the
   canonical path and cleanup is reference-aware.
+- The Go migration command is a guarded one-shot service. Online application
+  startup does not auto-migrate or seed. The Node compatibility package uses
+  PostgreSQL and AWS SDK storage access only, is profile-only, and is never a
+  startup dependency or a second production writer.
 
 ## 5. Frontend Boundaries
 

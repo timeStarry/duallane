@@ -16,29 +16,30 @@ No production execution is implied by a passing candidate test.
 
 ## Retained Offline Compatibility Tools
 
-These are retained one-shot Node compatibility and rollback-preparation tools,
-not request handlers, continuous processes or Go startup hooks. Production now
-routes to Go, as recorded in the [cutover evidence](work-items/2026-09-10-go-production-cutover.md).
-The table records executable operator boundaries, not authorization to replace
-or run alongside that Go owner.
+These are retained one-shot Node compatibility tools, not request handlers,
+continuous processes, Go startup hooks, or a complete Go replacement. The
+exact 0.17 production evidence is recorded in the
+[bridge/release record](work-items/2026-09-10-chat-0170-after-bridge.md). The
+table records executable operator boundaries, not authorization to replace or
+run alongside the Go owner.
 
 | Capability | Retained Node command and behavior | Go executable/ownership status |
 | --- | --- | --- |
-| Schema migration | `pnpm --filter @duallane/web db:migrate` runs `server/migrate.mjs`. The retained Node-default Compose `migrate` service runs it before `api`. | `apps/backend/cmd/migrate` is the routed production one-shot runner, completed through schema 33. Never run the retained Node migrator concurrently. |
-| S3 migration and archive | `pnpm --filter @duallane/web storage:migrate` runs `server/storage-migrate.mjs` with `backfill` or `verify`. Its inventory uploads active attachment/avatar records and treats unconsumed local keys as `archive` records under the run-specific archive prefix. There is no separate Node `archive` executable. | Go `storage plan` and `storage verify` can produce/read evidence; there is no Go archive or S3 migration executor. |
-| Canonical backfill | `pnpm --filter @duallane/web storage:dedupe` with `WORKSPACE_STORAGE_DEDUPE_MODE=backfill` creates/reuses canonical objects and binds attachment, avatar, and emote references while retaining legacy bytes. | `internal/workspace/storageops.RunBackfill` plus `PGJournal` is a coordinator-supplied candidate library only. It has no executable, scheduler, owner transition, or Compose service and must not be described or operated as a Go backfill command. |
-| Verification | Node `storage:migrate` supports `verify`; Node `storage:dedupe` supports `verify` and records its verification timestamps. | `duallane-storage plan` and `duallane-storage verify` are read-only checks for PostgreSQL and local/S3 bytes; they do not perform Node verification writes or change runtime ownership. |
-| Legacy finalization | Node `storage:dedupe` with `WORKSPACE_STORAGE_DEDUPE_MODE=finalize` verifies the inventory and then deletes legacy objects under the Node registry's object lock. | No Go finalize command exists. The Go backfill library cannot delete legacy bytes or finalize the compatibility window. |
-| S3 provisioning | `pnpm --filter @duallane/web storage:provision` runs the retained Node bucket provisioner. | `duallane-storage provision` is a separate candidate tool and is read-only by default. This runbook does not add or recommend a production `--apply` command, and no provisioning is attached to Go startup or the default Compose file. |
+| Schema migration | No Node-compat migration command is retained. Canonical SQL remains at `apps/web/server/migrations`; the current `apps/backend/cmd/migrate` service is the explicit Go one-shot runner. | Go owns the online migration runner; it is not invoked by application startup. Never add a second Node migrator. |
+| S3 migration and archive | `pnpm --filter @duallane/node-compat-tools storage:migrate` is an explicitly invoked offline operator with `backfill` or `verify`. Its inventory uploads active attachment/avatar records and treats unconsumed local keys as run-specific archive records. | Go `storage plan` and `storage verify` can produce/read evidence; there is no Go S3 migration executor. |
+| Canonical backfill | `pnpm --filter @duallane/node-compat-tools storage:dedupe` with `WORKSPACE_STORAGE_DEDUPE_MODE=backfill` creates/reuses canonical objects and binds attachment, avatar, and emote references while retaining legacy bytes. | `internal/workspace/storageops.RunBackfill` plus `PGJournal` is a coordinator-supplied candidate library only; it has no executable, scheduler, owner transition, or Compose service. |
+| Verification | Node-compat `storage:migrate` supports `verify`; `storage:dedupe` supports `verify` and records its operator report. | `duallane-storage plan` and `duallane-storage verify` are read-only checks for PostgreSQL and local/S3 bytes; they do not perform mutating verification or change runtime ownership. |
+| Legacy finalization | Node-compat `storage:dedupe` with `WORKSPACE_STORAGE_DEDUPE_MODE=finalize` verifies the inventory and then deletes legacy objects under the reviewed object lock. | No Go finalize command exists. The Go backfill library cannot delete legacy bytes or close the compatibility window. |
+| S3 provisioning | `pnpm --filter @duallane/node-compat-tools storage:provision` provisions and verifies the private bucket controls when separately authorized. | No provisioning is attached to Go startup, health checks, or default Compose startup. |
 
 The corresponding current Compose services are opt-in: `storage-provision` and
 `storage-migrate` use profile `storage-migration`, while `storage-dedupe` uses
-profile `storage-dedupe`; each is `restart: "no"`. The default `migrate` service
-has no profile and runs only `db:migrate`; `api` does not invoke any
-`storage:*` command. Do not change these profiles or add them to default
-startup as part of a compatibility rehearsal.
+profile `storage-dedupe`; each uses the `tools/node-compat` image and is
+`restart: "no"`. The default `migrate` service is the Go one-shot runner and
+does not invoke any `storage:*` command. Do not change these profiles or add
+them to default startup as part of a compatibility rehearsal.
 
-Before any retained Node storage command, obtain explicit operator approval,
+Before any retained Node-compat storage command, obtain explicit operator approval,
 take and verify the required database/object-volume or bucket backup, drain
 and fence Node API writers, Go Workspace/worker writers, upload finalizers,
 and other storage maintenance, and identify one database/object authority and
@@ -53,11 +54,11 @@ that independent backup and the matching database/object authority. A window
 still being open is not permission to finalize.
 
 The Go workspace and worker entrypoints do not spawn Node or invoke these
-offline scripts; the Go storage command is manually invoked and does not
+offline scripts; the Go storage diagnostic is manually invoked and does not
 attach itself to runtime or worker startup. This is an entrypoint contract,
 not a claim that every Go package has been whole-program audited. Retain the
-Node scripts and their rollback authority until the handoff and same-authority
-rollback gates in this document are independently accepted.
+Node-compat package and its rollback authority until the handoff and
+same-authority rollback gates in this document are independently accepted.
 
 Build from `apps/backend` with `go build -o storage ./cmd/storage`. Supply
 `DATABASE_URL` through the operator's private environment; do not put its value
@@ -89,24 +90,22 @@ prove that an existing Node volume has been copied or reconciled correctly.
 
 ## S3 Bucket Provisioning
 
-`duallane-storage provision` is a separate, explicitly invoked bucket-control
-command. It never runs during Workspace/worker startup or passive health checks.
-With no `--apply`, it only reads bucket existence, policy, versioning, CORS and
-multipart lifecycle settings and reports the planned changes. Supply existing
-Workspace S3 environment configuration and a private credentials file:
+`storage:provision` in `tools/node-compat` is a separate, explicitly invoked
+bucket-control operation. It never runs during Workspace/worker startup or
+passive health checks. After the operator has approved the target, backed it up,
+and fenced writers, run it from the isolated environment with the existing
+Workspace S3 variables and private credentials file:
 
 ```sh
-duallane-storage provision --s3-credentials-file /run/secrets/workspace-s3 \
-  --public-base-url https://your-workspace.example --timeout 30s
+pnpm --filter @duallane/node-compat-tools storage:provision
 ```
 
-An operator-approved `--apply` enables versioning, restricts CORS to GET/HEAD
-from the chosen HTTPS origin and configures seven-day incomplete multipart
-cleanup. Like the existing Node provisioner, apply replaces the complete CORS
-and lifecycle configurations, including unrelated rules. Inspect/export the
-current bucket configuration and approve those replacements before applying.
-Apply re-reads the configured values; partial failures produce a safe report
-and nonzero exit, without an automatic rollback or a database/owner change.
+The operation enables versioning, restricts CORS to GET/HEAD from the chosen
+HTTPS origin, and configures seven-day incomplete multipart cleanup. It replaces
+the complete CORS and lifecycle configurations, including unrelated rules;
+inspect/export the current bucket configuration and approve that replacement
+before running it. Partial failures produce a safe report and nonzero exit,
+without an automatic rollback or a database/owner change.
 
 An unsupported CORS API reports `gateway` fallback. Unsupported lifecycle
 configuration reports `application` cleanup and, only during apply, verifies
@@ -122,21 +121,20 @@ bucket-access assessment; prove those separately for the provider. Credentials,
 endpoint URLs, policy bodies and raw provider errors are excluded from reports.
 No external S3 provisioning is implied by the synthetic candidate tests.
 
-This is a bucket-only tool: it uses the private S3 endpoint, not the Node signed
-delivery configuration's public endpoint. It does not certify Node/Go application
-configuration, signed delivery, gateway CORS or worker readiness. `versioning`
-starts as `not_checked`; plan records the actual provider status (which may be
-empty for a never-enabled bucket), and apply reports `Enabled` only after
-revalidation. Inspect action outcomes and the exit status after a partial error.
+This is a bucket-only offline tool: it uses the private S3 endpoint, not an
+online delivery route. It does not certify Go application configuration, signed
+delivery, gateway CORS or worker readiness. Inspect action outcomes and the exit
+status after a partial error.
 
-## Permission transition runbook: Node root to Go `65532`
+## Historical 0.17 permission transition: Node root to Go `65532`
 
-This section is the first Node-to-Go deployment gate and rehearsal procedure,
-not an instruction to mutate a production volume. That handoff is already
-recorded for the current installation; its subsequent releases use the Go-to-Go
-snapshot procedure, not this first-cutover sequence. For a separate Node-owned
-installation, Node remains owner until the explicitly approved handoff. There
-must be one authoritative writer for the registry and the bytes it references.
+This section records the retained 0.17 first-cutover gate and rehearsal
+procedure; it is not a current 0.18 command path. The current 0.18 tree uses
+the Go-to-Go snapshot procedure in [Runtime and operations](OPERATIONS.md).
+For a separate old Node-owned installation, perform first migration and
+permission preparation from the retained 0.17 checkout and runbook. There is
+no current-tree bootstrap or `--prepare-go-permissions` command. There must be
+one authoritative writer for the registry and the bytes it references.
 
 The target permission posture preserves private storage: data directories are
 normally `0700`, regular object and legacy files are normally `0600`, and the
@@ -271,16 +269,15 @@ configured write paths and directory ownership as the actual Go UID in the
 approved isolated/quiescent rehearsal, as well as full legacy readability.
 Do not disable mirroring or change its authority merely to pass readiness.
 
-Ad hoc permission preparation is not a supported mid-script repair hook. The first
-cutover freezes recovery from an actually running Node API and Web before
-building; pre-stopping Node and then invoking `deploy.sh` cannot reconstruct
-that earlier running state. Never forge the snapshot or source internal release
-helpers as an alternate entry point. If permission work needs an outage or a
-staged authority switch, the administrator must first define and validate its
-separate maintenance/recovery sequence under the rules below. A failed proof
-leaves ownership with Node; it is not an invitation to run a bare Compose
-replacement or revive two writers. The explicit first-cutover option below is
-the coordinated exception; it is not an arbitrary command hook.
+Ad hoc permission preparation is not a supported mid-script repair hook. The
+historical first cutover froze recovery from an actually running Node API and
+Web before building; pre-stopping the old owner could not reconstruct that
+state. Never forge the snapshot or source internal release helpers as an
+alternate entry point. If an old installation needs an outage or staged
+authority switch, define and validate that separate maintenance/recovery
+sequence from the retained 0.17 checkout. A failed proof leaves ownership with
+the old installation; it is not an invitation to run a bare Compose replacement
+or revive two writers.
 
 If an independent maintenance workflow returns Node to service before the Go
 release, prove that subsequent Node mirror writes still leave Go-readable bytes
@@ -288,22 +285,15 @@ and Go-writable directories. Root-owned files or newly created private
 directories can invalidate an earlier permission proof. A one-time successful
 copy followed by unrestricted old-owner writes is not a stable cutover gate.
 
-### Explicit same-volume first-cutover preparation
+### Historical same-volume first-cutover preparation
 
-An authorized root operator can select the following option on the official
-entry point, only from clean exact `origin/main` in the production checkout:
-
-```text
-deploy/production/deploy.sh --expected-commit <40-hex-commit> \
-  --release-profile go-full --prepare-go-permissions
-```
-
-It rejects Node-default, bootstrap, Go-to-Go upgrade and non-root invocations.
-It is not enabled by an environment variable. Root runs only the trusted host
-coordinator; Go services and the canary remain UID/GID `65532:65532`. This mode
-requires the retained Node API to run as root without dropped capabilities so
-that recovery can read the tightened permissions. Database, volume and S3
-authority are compared against actual Node and PostgreSQL containers first.
+The exact first-cutover command is intentionally not reproduced here. It
+belongs to the retained 0.17 checkout and runbook; the current 0.18
+`deploy.sh` rejects `--prepare-go-permissions`, `--bootstrap`, and Node-default
+forms. The historical mode required the old Node API to be running as root
+without dropped capabilities while the trusted coordinator compared database,
+volume, and S3 authority. Go services and the canary remained UID/GID
+`65532:65532`.
 
 The mode deliberately introduces an outage before passive candidate readiness:
 
@@ -441,7 +431,7 @@ manifest does **not** prove runtime fencing or backup restoration. In particular
 Mutations require a separately acquired, live exclusive guard and the approved
 backup/rollback procedure.
 
-Node's existing dedupe `verify` also updates verification timestamps; this Go
+The retained offline Node dedupe `verify` also updates verification timestamps; this Go
 read-only diagnostic deliberately does not. It is not a substitute for a
 mutating finalization gate. Legacy-only or invalid references block canonical
 verification and require the separately reviewed migration path.
@@ -452,10 +442,14 @@ Run unit/race plus `postgres_integration` tests for `internal/workspace/storageo
 and `cmd/storage` with `TEST_DATABASE_URL` pointing at disposable PostgreSQL.
 Tests cover the real command, local and HTTP S3 providers, bounded catalog
 failure, no-write behavior, cancellation and secret-safe flag errors.
-`scripts/backend/storage-operator-contract.mjs` generates a synthetic fixture
-through the actual Node storage owner. Run Go `verify` against the returned
-manifest/object-root and remove only that generated fixture directory afterward.
-This fixture proves canonical-byte compatibility, not production owner safety.
+The historical Node storage fixture generator was retired with the online
+implementation. Current command tests use synthetic manifests, exact digest
+and byte-size assertions, and real disposable PostgreSQL; they do not claim
+to regenerate Node observations. For historical file/emote byte compatibility,
+use the frozen legacy gates in [Validation](VALIDATION.md#actual-node-legacy-emote-compatibility).
+The retained offline operators have separate package tests, including the
+explicit `NODE_COMPAT_TEST_POSTGRES=true` adapter test. None of these tests
+proves production writer fencing or authorizes finalization.
 
 ## Candidate Backfill Library
 

@@ -16,6 +16,7 @@ type nodeReleaseFixture struct {
 }
 
 type nodeCatalogFixture struct {
+	Guide         Guide    `json:"guide"`
 	Version       string   `json:"version"`
 	GuideJSON     string   `json:"guideJSON"`
 	GuideHash     string   `json:"guideHash"`
@@ -66,9 +67,9 @@ func loadNodeReleaseFixture(t *testing.T) nodeReleaseFixture {
 
 func TestNodeCatalogGuideSnapshotsAndHashesMatch(t *testing.T) {
 	fixture := loadNodeReleaseFixture(t)
-	catalog := sharedReleaseCatalog(t)
+	catalog := frozenNodeReleaseCatalog(t, fixture)
 	if len(fixture.Catalog) != len(catalog.List()) {
-		t.Fatalf("Node catalog versions=%d Go catalog versions=%d", len(fixture.Catalog), len(catalog.List()))
+		t.Fatalf("frozen Node catalog versions=%d parsed historical catalog versions=%d", len(fixture.Catalog), len(catalog.List()))
 	}
 	for _, expected := range fixture.Catalog {
 		guide, ok := catalog.Guide("V" + expected.Version)
@@ -101,6 +102,25 @@ func TestNodeCatalogGuideSnapshotsAndHashesMatch(t *testing.T) {
 			t.Fatalf("Node lock key for %s = %q, want %q", expected.Version, expected.LockKey, wantLock)
 		}
 	}
+}
+
+// The Node fixture is the historical catalog used for parity. Keep it
+// independent from the current shared catalog so a Go-only release does not
+// require regenerating frozen Node JSON or pretending that Node served it.
+func frozenNodeReleaseCatalog(t *testing.T, fixture nodeReleaseFixture) GuideCatalog {
+	t.Helper()
+	guides := make([]Guide, 0, len(fixture.Catalog))
+	for _, expected := range fixture.Catalog {
+		if expected.Guide.Version == "" {
+			t.Fatalf("frozen Node catalog entry %s has no guide snapshot", expected.Version)
+		}
+		guides = append(guides, expected.Guide)
+	}
+	catalog, err := NewGuideCatalog(guides)
+	if err != nil {
+		t.Fatalf("parse frozen Node catalog: %v", err)
+	}
+	return catalog
 }
 
 func TestNodeNormalizationAndEdgeGuideSnapshotMatch(t *testing.T) {

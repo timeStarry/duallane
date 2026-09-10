@@ -44,8 +44,8 @@ Tests must prove the boundary where regression would be severe.
 - Audit records describe actor, action, target identity, outcome, safe metadata,
   and time. They do not store message bodies, file bytes, tokens, invite secrets,
   authorization codes, or unnecessary personal data.
-- Preserve Fastify redaction and security headers. Adding a header exception or
-  log field requires a threat analysis and focused test.
+- Preserve the shared redaction and security-header invariants. Adding a header
+  exception or log field requires a threat analysis and focused test.
 - Application logs are operational, not an alternate message store. Avoid raw
   request bodies and signed object URLs; log stable request/error identifiers.
 - Public errors use stable codes and safe details. Stack traces, SQL, filesystem

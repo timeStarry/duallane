@@ -1,0 +1,21 @@
+{
+  "name": "@duallane/node-compat-tools",
+  "version": "0.18.0",
+  "private": true,
+  "type": "module",
+  "description": "Explicitly invoked offline Node compatibility operators for Workspace storage.",
+  "scripts": {
+    "storage:migrate": "node storage-migrate.mjs",
+    "storage:dedupe": "node storage-dedupe.mjs",
+    "storage:provision": "node storage-provision.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1105.0",
+    "@aws-sdk/lib-storage": "^3.1105.0",
+    "pg": "^8.16.3"
+  }
+}
