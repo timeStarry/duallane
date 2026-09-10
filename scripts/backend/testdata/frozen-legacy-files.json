@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "kind": "frozen-node-legacy-files",
+  "synthetic": true,
+  "provenance": {
+    "sourceCommit": "8d346a04317d0d3396293caca14ca1c65c7b5163",
+    "materializedClone": "/home/timestarry/.local/share/duallane-validation/chat-0170-after-bridge-mN5ND8",
+    "materializedCloneHead": "6ebc0f6858d67cf2be516d19ecf062c3ae75b505",
+    "sourcePath": "scripts/backend/workspace-files-legacy-contract.mjs",
+    "sourceGitBlob": "6ddaf95fa213a9636beb15db5c0942ee4ca458a5",
+    "sourceSha256": "efed9f2a31fcbdb4a8c9ad133eaecb02db93f72aefaae59de4cbe8fbdf841df4",
+    "verifiedBlobEquality": true,
+    "generator": "Node v22.23.2: node scripts/backend/workspace-files-legacy-contract.mjs --fixture-dir <owned synthetic fixture> (create, then --check)",
+    "excluded": ["SQLite database", "SQLite WAL/SHM files", "private temporary reports"]
+  },
+  "manifest": {
+    "contractVersion": 1,
+    "source": "node.workspace.files.legacy-read",
+    "owner": "node",
+    "attachment": {
+      "id": "att-files-legacy-contract",
+      "spaceId": "spc_default",
+      "uploaderId": "usr_owner",
+      "fileName": "legacy report😀.txt",
+      "mimeType": "text/plain",
+      "byteSize": 29,
+      "status": "available",
+      "storageObjectId": null,
+      "legacyStorageKey": "workspace/spc_default/att-files-legacy-contract/legacy_report__.txt",
+      "deterministicStorageKey": "workspace/attachments/spc_default/att-files-legacy-contract/content"
+    },
+    "downloadTransferId": "8ec25b60-b41a-4ceb-8de1-2ec704f59d2f",
+    "contentSha256": "f106faeec1e824d59d3b6c7fab9bdad2119e272ae0cc29475eedc00feaead052"
+  },
+  "content": [
+    {
+      "path": "workspace-files/workspace/spc_default/att-files-legacy-contract/legacy_report__.txt",
+      "byteSize": 29,
+      "sha256": "f106faeec1e824d59d3b6c7fab9bdad2119e272ae0cc29475eedc00feaead052",
+      "base64": "Tm9kZSBsZWdhY3kgYXR0YWNobWVudCBieXRlcwo="
+    }
+  ]
+}

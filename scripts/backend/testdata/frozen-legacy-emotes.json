@@ -1,0 +1,253 @@
+{
+  "schemaVersion": 1,
+  "kind": "frozen-node-legacy-emotes",
+  "synthetic": true,
+  "provenance": {
+    "sourceCommit": "8d346a04317d0d3396293caca14ca1c65c7b5163",
+    "materializedClone": "/home/timestarry/.local/share/duallane-validation/chat-0170-after-bridge-mN5ND8",
+    "materializedCloneHead": "6ebc0f6858d67cf2be516d19ecf062c3ae75b505",
+    "sourcePath": "scripts/backend/workspace-emotes-legacy-contract.mjs",
+    "sourceGitBlob": "263b1e08e720280ebebf7122eb4afacbf8f155e6",
+    "sourceSha256": "538b260e81c586a030f96c62fb9e3c89339e6be68cdf422a627f98802ab4b236",
+    "verifiedBlobEquality": true,
+    "generator": "Node v22.23.2: node scripts/backend/workspace-emotes-legacy-contract.mjs --fixture-dir <owned synthetic fixture> (create, then --check)",
+    "excluded": ["SQLite database", "SQLite WAL/SHM files", "private temporary reports"]
+  },
+  "manifest": {
+    "contractVersion": 1,
+    "source": "node.workspace.custom-emotes.legacy-read",
+    "synthetic": true,
+    "content": {
+      "sha256": "f18952fe8bbf698e3944e3ec818bc5427afc8636bdd2cce8b95c578638b2ea1d",
+      "byteSize": 68,
+      "contentType": "image/webp"
+    },
+    "records": [
+      {
+        "id": "a8311345-3ef1-401c-a3d3-f4125f5dc5e3",
+        "ownerId": "usr_owner",
+        "sourceType": "upload",
+        "sourceCustomEmoteId": null,
+        "storageKey": "custom-emotes/usr_owner/a8311345-3ef1-401c-a3d3-f4125f5dc5e3/content.webp",
+        "storageObjectId": null,
+        "byteSize": 68,
+        "sha256": "f18952fe8bbf698e3944e3ec818bc5427afc8636bdd2cce8b95c578638b2ea1d",
+        "metadata": {
+          "originalFileName": "legacy-root.webp",
+          "originalMimeType": "image/bmp",
+          "normalizedMimeType": "image/webp",
+          "width": 1,
+          "height": 1,
+          "frameCount": 1,
+          "durationMs": 0
+        },
+        "removed": false
+      },
+      {
+        "id": "legacy-clone-one",
+        "ownerId": "usr_owner",
+        "sourceType": "custom",
+        "sourceCustomEmoteId": "a8311345-3ef1-401c-a3d3-f4125f5dc5e3",
+        "storageKey": null,
+        "storageObjectId": null,
+        "byteSize": null,
+        "sha256": null,
+        "metadata": {
+          "originalFileName": null,
+          "originalMimeType": null,
+          "normalizedMimeType": null,
+          "width": null,
+          "height": null,
+          "frameCount": null,
+          "durationMs": null
+        },
+        "removed": false
+      },
+      {
+        "id": "legacy-clone-two",
+        "ownerId": "usr_owner",
+        "sourceType": "custom",
+        "sourceCustomEmoteId": "legacy-clone-one",
+        "storageKey": null,
+        "storageObjectId": null,
+        "byteSize": null,
+        "sha256": null,
+        "metadata": {
+          "originalFileName": null,
+          "originalMimeType": null,
+          "normalizedMimeType": null,
+          "width": null,
+          "height": null,
+          "frameCount": null,
+          "durationMs": null
+        },
+        "removed": false
+      },
+      {
+        "id": "62befc5e-1b41-42f9-9573-9ff7a69ead9d",
+        "ownerId": "usr_owner",
+        "sourceType": "upload",
+        "sourceCustomEmoteId": null,
+        "storageKey": "custom-emotes/usr_owner/62befc5e-1b41-42f9-9573-9ff7a69ead9d/content.webp",
+        "storageObjectId": "wso_da4eec1142726757a4d53a3149ce09981e2aa1e018fca0b67c4b390fc6e27aa4",
+        "byteSize": 68,
+        "sha256": "da4eec1142726757a4d53a3149ce09981e2aa1e018fca0b67c4b390fc6e27aa4",
+        "metadata": {
+          "originalFileName": "canonical-missing.webp",
+          "originalMimeType": "image/bmp",
+          "normalizedMimeType": "image/webp",
+          "width": 1,
+          "height": 1,
+          "frameCount": 1,
+          "durationMs": 0
+        },
+        "removed": false,
+        "canonicalObjectKey": "workspace/objects/sha256/da/da4eec1142726757a4d53a3149ce09981e2aa1e018fca0b67c4b390fc6e27aa4"
+      },
+      {
+        "id": "c1ba5ecf-13c9-4957-8d39-9e8134f81b0f",
+        "ownerId": "usr_owner",
+        "sourceType": "upload",
+        "sourceCustomEmoteId": null,
+        "storageKey": "custom-emotes/usr_owner/c1ba5ecf-13c9-4957-8d39-9e8134f81b0f/content.webp",
+        "storageObjectId": null,
+        "byteSize": 64,
+        "sha256": "e6d9a5b1609aa7b7eab3a1dc3a7bb741c5316ab79887c766e8468d444656ee9c",
+        "metadata": {
+          "originalFileName": "private-legacy.webp",
+          "originalMimeType": "image/bmp",
+          "normalizedMimeType": "image/webp",
+          "width": 1,
+          "height": 1,
+          "frameCount": 1,
+          "durationMs": 0
+        },
+        "removed": false
+      },
+      {
+        "id": "9c2f3fea-eb7d-4c9a-b177-67f35a661d42",
+        "ownerId": "usr_owner",
+        "sourceType": "upload",
+        "sourceCustomEmoteId": null,
+        "storageKey": null,
+        "storageObjectId": null,
+        "byteSize": 66,
+        "sha256": "808209c183236cf9929e16f913f786c4be5c902525b78b0415f0a6676364cad2",
+        "metadata": {
+          "originalFileName": "tombstone.webp",
+          "originalMimeType": "image/bmp",
+          "normalizedMimeType": "image/webp",
+          "width": 1,
+          "height": 1,
+          "frameCount": 1,
+          "durationMs": 0
+        },
+        "removed": true
+      },
+      {
+        "id": "legacy-malformed-emote",
+        "ownerId": "usr_owner",
+        "sourceType": "upload",
+        "sourceCustomEmoteId": null,
+        "storageKey": "../escape.webp",
+        "storageObjectId": null,
+        "byteSize": 1,
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "metadata": {
+          "originalFileName": null,
+          "originalMimeType": null,
+          "normalizedMimeType": "image/webp",
+          "width": null,
+          "height": null,
+          "frameCount": null,
+          "durationMs": null
+        },
+        "removed": false
+      }
+    ],
+    "cases": [
+      {
+        "name": "legacy-clone-chain",
+        "actorId": "usr_owner",
+        "recordIds": [
+          "a8311345-3ef1-401c-a3d3-f4125f5dc5e3",
+          "legacy-clone-one",
+          "legacy-clone-two"
+        ],
+        "expected": {
+          "outcome": "read",
+          "sha256": "f18952fe8bbf698e3944e3ec818bc5427afc8636bdd2cce8b95c578638b2ea1d",
+          "byteSize": 68
+        }
+      },
+      {
+        "name": "canonical-missing-fallback",
+        "actorId": "usr_owner",
+        "recordIds": [
+          "62befc5e-1b41-42f9-9573-9ff7a69ead9d"
+        ],
+        "expected": {
+          "outcome": "read",
+          "sha256": "da4eec1142726757a4d53a3149ce09981e2aa1e018fca0b67c4b390fc6e27aa4",
+          "byteSize": 68
+        }
+      },
+      {
+        "name": "tombstone",
+        "actorId": "usr_owner",
+        "recordIds": [
+          "9c2f3fea-eb7d-4c9a-b177-67f35a661d42"
+        ],
+        "expected": {
+          "outcome": "reject",
+          "code": "emote.not_found",
+          "statusCode": 404
+        }
+      },
+      {
+        "name": "malformed",
+        "actorId": "usr_owner",
+        "recordIds": [
+          "legacy-malformed-emote"
+        ],
+        "expected": {
+          "outcome": "reject",
+          "code": "file.invalid_storage_key",
+          "statusCode": 500
+        }
+      },
+      {
+        "name": "permission",
+        "actorId": "usr_legacy_denied",
+        "recordIds": [
+          "c1ba5ecf-13c9-4957-8d39-9e8134f81b0f"
+        ],
+        "expected": {
+          "outcome": "reject",
+          "code": "permission.denied",
+          "statusCode": 403
+        }
+      }
+    ]
+  },
+  "content": [
+    {
+      "path": "workspace-files/custom-emotes/usr_owner/a8311345-3ef1-401c-a3d3-f4125f5dc5e3/content.webp",
+      "byteSize": 68,
+      "sha256": "f18952fe8bbf698e3944e3ec818bc5427afc8636bdd2cce8b95c578638b2ea1d",
+      "base64": "UklGRjwAAABXRUJQVlA4IDAAAAAQAgCdASoBAAEAAUAiJaACdLoB+AH4AAPIAP7qZf/9tDOqEv9Yf/69EHiDfqaAAAA="
+    },
+    {
+      "path": "workspace-files/custom-emotes/usr_owner/62befc5e-1b41-42f9-9573-9ff7a69ead9d/content.webp",
+      "byteSize": 68,
+      "sha256": "da4eec1142726757a4d53a3149ce09981e2aa1e018fca0b67c4b390fc6e27aa4",
+      "base64": "UklGRjwAAABXRUJQVlA4IDAAAAAQAgCdASoBAAEAAUAiJaACdLoB+AH4AAPIAP7kAX/00UYUx9gD/7xne9C//OAAAAA="
+    },
+    {
+      "path": "workspace-files/custom-emotes/usr_owner/c1ba5ecf-13c9-4957-8d39-9e8134f81b0f/content.webp",
+      "byteSize": 64,
+      "sha256": "e6d9a5b1609aa7b7eab3a1dc3a7bb741c5316ab79887c766e8468d444656ee9c",
+      "base64": "UklGRjgAAABXRUJQVlA4ICwAAABwAQCdASoBAAEAAUAiJaACdAF1AAD+9pWX/wpr//Cmv/8Ka/4U1gSVqzCAAA=="
+    }
+  ]
+}
