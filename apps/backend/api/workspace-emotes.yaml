@@ -782,7 +782,7 @@ components:
     EmoteSettings:
       type: object
       additionalProperties: false
-      required: [availablePacks, enabledPackIds, clickImageEmoteToSend, replyAutoMention, minimumEnabled]
+      required: [availablePacks, enabledPackIds, clickImageEmoteToSend, replyAutoMention, autoHideMessages, autoHideMessageTypes, minimumEnabled]
       properties:
         availablePacks:
           type: array
@@ -800,6 +800,15 @@ components:
           type: boolean
         replyAutoMention:
           type: boolean
+        autoHideMessages:
+          type: boolean
+          default: false
+        autoHideMessageTypes:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum: [image, emote, long]
         minimumEnabled:
           type: integer
           const: 1
@@ -827,6 +836,13 @@ components:
               type: boolean
             replyAutoMention:
               type: boolean
+            autoHideMessages:
+              type: boolean
+            autoHideMessageTypes:
+              type: array
+              items:
+                type: string
+                enum: [image, emote, long]
           minProperties: 1
         - type: array
           minItems: 1

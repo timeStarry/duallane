@@ -53,6 +53,66 @@ describe("workspace custom emotes", () => {
       .rejects.toMatchObject({ code: "emote.invalid_settings" });
   });
 
+  it("persists actor-local auto-hide choices and serializes concurrent partial updates", async () => {
+    const { service, db } = await fixture({ member: true });
+    expect(await service.getSettings("usr_owner")).toMatchObject({ autoHideMessages: false, autoHideMessageTypes: ["image", "emote", "long"] });
+    await Promise.all([
+      service.updateSettings("usr_owner", { autoHideMessages: true }),
+      service.updateSettings("usr_owner", { autoHideMessageTypes: ["long", "image", "long"] })
+    ]);
+    expect(await service.getSettings("usr_owner")).toMatchObject({ autoHideMessages: true, autoHideMessageTypes: ["long", "image"] });
+    await service.updateSettings("usr_owner", { autoHideMessages: false });
+    expect(await service.getSettings("usr_owner")).toMatchObject({ autoHideMessages: false, autoHideMessageTypes: ["long", "image"] });
+    await service.updateSettings("usr_owner", { autoHideMessageTypes: [] });
+    await service.updateSettings("usr_owner", { clickImageEmoteToSend: true });
+    expect(await service.getSettings("usr_owner")).toMatchObject({ autoHideMessages: false, autoHideMessageTypes: [] });
+    const rejectedAuditCountBeforeInvalidCategory = db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'emote.settings.update' AND result = 'rejected'").get().count;
+    await expect(service.updateSettings("usr_missing", { autoHideMessageTypes: ["unknown"] }))
+      .rejects.toMatchObject({ code: "permission.denied" });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'emote.settings.update' AND result = 'rejected'").get().count)
+      .toBe(rejectedAuditCountBeforeInvalidCategory);
+    for (const input of [{ autoHideMessages: "true" }, { autoHideMessages: null }, { autoHideMessageTypes: null }, { autoHideMessageTypes: "image" }, { autoHideMessageTypes: [1] }]) {
+      await expect(service.updateSettings("usr_owner", input)).rejects.toMatchObject({ code: "emote.invalid_settings" });
+    }
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'emote.settings.update' AND result = 'rejected'").get().count)
+      .toBe(rejectedAuditCountBeforeInvalidCategory);
+    const settingsBeforeInvalidCategory = await service.getSettings("usr_owner");
+    const eventCountBeforeInvalidCategory = db.prepare("SELECT COUNT(*) AS count FROM workspace_events WHERE type = 'emote.settings.updated'").get().count;
+    const rejectedAuditCountBeforeDomainReject = db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'emote.settings.update' AND result = 'rejected'").get().count;
+    await expect(service.updateSettings("usr_owner", { autoHideMessageTypes: ["unknown"] }))
+      .rejects.toMatchObject({ code: "emote.invalid_settings" });
+    expect(await service.getSettings("usr_owner")).toEqual(settingsBeforeInvalidCategory);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_events WHERE type = 'emote.settings.updated'").get().count)
+      .toBe(eventCountBeforeInvalidCategory);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'emote.settings.update' AND result = 'rejected'").get().count)
+      .toBe(rejectedAuditCountBeforeDomainReject + 1);
+    const rejectedAudit = db.prepare(`
+      SELECT *
+      FROM audit_logs
+      WHERE action = 'emote.settings.update' AND result = 'rejected'
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+    `).get();
+    expect(rejectedAudit).toMatchObject({
+      action: "emote.settings.update",
+      actor_user_id: "usr_owner",
+      target_type: "user",
+      target_id: "usr_owner",
+      result: "rejected",
+      reason: "emote.invalid_settings"
+    });
+    expect(JSON.stringify(rejectedAudit)).not.toContain("unknown");
+    expect(JSON.stringify(rejectedAudit)).not.toContain("autoHideMessageTypes");
+    expect(await service.getSettings("usr_owner")).toMatchObject({ autoHideMessages: false, autoHideMessageTypes: [] });
+    const event = db.prepare("SELECT target_type, target_id, payload_json FROM workspace_events WHERE type = 'emote.settings.updated' ORDER BY seq DESC LIMIT 1").get();
+    expect(event).toMatchObject({ target_type: "user", target_id: "usr_owner", payload_json: JSON.stringify({ userId: "usr_owner" }) });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'emote.settings.update' AND result = 'success'").get().count).toBe(5);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM message_hidden_states").get().count).toBe(0);
+    expect(await service.getSettings("usr_member")).toMatchObject({ autoHideMessages: false, autoHideMessageTypes: ["image", "emote", "long"] });
+    expect((await listWorkspaceEvents(db, "usr_member", 0)).some((event) => event.type === "emote.settings.updated")).toBe(false);
+    expect((await listWorkspaceEvents(db, "usr_owner", 0)).filter((event) => event.type === "emote.settings.updated").at(-1).payload).toEqual({ userId: "usr_owner" });
+  });
+
   it("normalizes uploaded images to WebP, deduplicates them, and removes the owned copy", async () => {
     const { service, db, stored, removed, storedBytesFor, storageObjectIdFor } = await fixture();
     const png = await sharp({
