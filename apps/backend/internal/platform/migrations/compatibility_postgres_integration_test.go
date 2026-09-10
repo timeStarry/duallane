@@ -93,15 +93,118 @@ func (f *compatibilityPGFixture) readOnlyQueryer(t *testing.T) migrations.Querye
 	return postgres.NewMigrationReadOnlyQueryer(pool)
 }
 
-func compatibilityBaselineDirectory(t *testing.T) string {
+func canonicalCompatibilityDirectory(t *testing.T) string {
 	t.Helper()
 	_, sourceFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
-	canonicalDirectory := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "../../../../web/server/migrations"))
+	return filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "../../../../web/server/migrations"))
+}
+
+func canonical034Directory(t *testing.T) string {
+	t.Helper()
+	directory := canonicalCompatibilityDirectory(t)
+	files := assertCanonicalCompatibilityInventory(t, directory)
+	if len(files) != len(expectedCompatibilityBaselineNames)+1 {
+		t.Fatalf("canonical 034 is required for this test; discovered %d migrations", len(files))
+	}
+	return directory
+}
+
+func compatibilityBaselineDirectory(t *testing.T) string {
+	t.Helper()
+	canonicalDirectory := canonicalCompatibilityDirectory(t)
 	canonicalFiles := assertCanonicalCompatibilityInventory(t, canonicalDirectory)
 	return copyCanonicalCompatibilityBaseline(t, canonicalFiles)
+}
+
+func TestPostgresSchemaCheckerAcceptsCanonical034AsRequired(t *testing.T) {
+	directory := canonical034Directory(t)
+	fixture := newCompatibilityPGFixture(t)
+
+	result, err := (migrations.Runner{
+		Beginner:  postgres.NewMigrationBeginner(fixture.conn),
+		Directory: directory,
+	}).Run(fixture.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Applied != len(expectedCompatibilityBaselineNames)+1 {
+		t.Fatalf("canonical 034 runner applied %d migrations, want %d", result.Applied, len(expectedCompatibilityBaselineNames)+1)
+	}
+
+	report, err := (migrations.SchemaChecker{
+		Queryer:                   fixture.readOnlyQueryer(t),
+		Directory:                 directory,
+		AllowReleaseCompatibility: true,
+	}).Check(fixture.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.AppliedCount != len(expectedCompatibilityBaselineNames)+1 || len(report.MissingNames) != 0 || report.UnknownCount != 0 || report.CompatibleCount != 0 || len(report.CompatibleNames) != 0 {
+		t.Fatalf("unexpected required canonical-034 report: %#v", report)
+	}
+}
+
+func TestPostgresSchemaCheckerRejectsMissingCanonical034(t *testing.T) {
+	directory := canonical034Directory(t)
+	fixture := newCompatibilityPGFixture(t)
+	baselineDirectory := compatibilityBaselineDirectory(t)
+
+	result, err := (migrations.Runner{
+		Beginner:  postgres.NewMigrationBeginner(fixture.conn),
+		Directory: baselineDirectory,
+	}).Run(fixture.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Applied != len(expectedCompatibilityBaselineNames) {
+		t.Fatalf("baseline runner applied %d migrations, want %d", result.Applied, len(expectedCompatibilityBaselineNames))
+	}
+
+	report, err := (migrations.SchemaChecker{
+		Queryer:                   fixture.readOnlyQueryer(t),
+		Directory:                 directory,
+		AllowReleaseCompatibility: true,
+	}).Check(fixture.ctx)
+	if err == nil || !errors.Is(err, migrations.ErrMissingMigrations) {
+		t.Fatalf("error = %v, want missing required canonical 034", err)
+	}
+	if report.AppliedCount != len(expectedCompatibilityBaselineNames) || !equalMigrationNames(report.MissingNames, []string{migrations.ReleaseCompatibilityMigrationName}) || report.CompatibleCount != 0 || report.UnknownCount != 0 {
+		t.Fatalf("unexpected missing canonical-034 report: %#v", report)
+	}
+}
+
+func TestPostgresSchemaCheckerRejects035WhenCanonical034IsRequired(t *testing.T) {
+	directory := canonical034Directory(t)
+	fixture := newCompatibilityPGFixture(t)
+
+	result, err := (migrations.Runner{
+		Beginner:  postgres.NewMigrationBeginner(fixture.conn),
+		Directory: directory,
+	}).Run(fixture.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Applied != len(expectedCompatibilityBaselineNames)+1 {
+		t.Fatalf("canonical 034 runner applied %d migrations, want %d", result.Applied, len(expectedCompatibilityBaselineNames)+1)
+	}
+	if _, err := fixture.conn.Exec(fixture.ctx, "INSERT INTO schema_migrations (name, applied_at) VALUES ($1, $2)", "035_future_workspace_change.sql", time.Date(2026, 9, 10, 1, 5, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := (migrations.SchemaChecker{
+		Queryer:                   fixture.readOnlyQueryer(t),
+		Directory:                 directory,
+		AllowReleaseCompatibility: true,
+	}).Check(fixture.ctx)
+	if err == nil || !errors.Is(err, migrations.ErrUnknownMigrations) {
+		t.Fatalf("error = %v, want unknown 035 rejection", err)
+	}
+	if report.UnknownCount != 1 || !equalMigrationNames(report.UnknownNames, []string{"035_future_workspace_change.sql"}) || report.CompatibleCount != 0 {
+		t.Fatalf("unexpected canonical-034 unknown report: %#v", report)
+	}
 }
 
 func TestPostgresSchemaCheckerRejectsMissingReviewed034Columns(t *testing.T) {
@@ -145,6 +248,48 @@ func TestPostgresSchemaCheckerRejectsReviewed034DefaultDrift(t *testing.T) {
 	}
 }
 
+func TestPostgresSchemaCheckerRejectsReviewed034TypeDrift(t *testing.T) {
+	fixture := newCompatibilityPGFixture(t)
+	fixture.createHistory(t, migrations.ReleaseCompatibilityMigrationName)
+	if _, err := fixture.conn.Exec(fixture.ctx, `
+		CREATE TABLE workspace_emote_preferences (
+			auto_hide_messages TEXT NOT NULL DEFAULT 'false',
+			auto_hide_message_types_json TEXT NOT NULL DEFAULT '["image","emote","long"]'
+		)`); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := (migrations.SchemaChecker{
+		Queryer:                   fixture.readOnlyQueryer(t),
+		Directory:                 compatibilityBaselineDirectory(t),
+		AllowReleaseCompatibility: true,
+	}).Check(fixture.ctx)
+	if err == nil || !errors.Is(err, migrations.ErrCompatibleMigrationSchema) {
+		t.Fatalf("error = %v, want 034 type drift rejection", err)
+	}
+}
+
+func TestPostgresSchemaCheckerRejectsReviewed034NullabilityDrift(t *testing.T) {
+	fixture := newCompatibilityPGFixture(t)
+	fixture.createHistory(t, migrations.ReleaseCompatibilityMigrationName)
+	if _, err := fixture.conn.Exec(fixture.ctx, `
+		CREATE TABLE workspace_emote_preferences (
+			auto_hide_messages BOOLEAN DEFAULT FALSE,
+			auto_hide_message_types_json TEXT NOT NULL DEFAULT '["image","emote","long"]'
+		)`); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := (migrations.SchemaChecker{
+		Queryer:                   fixture.readOnlyQueryer(t),
+		Directory:                 compatibilityBaselineDirectory(t),
+		AllowReleaseCompatibility: true,
+	}).Check(fixture.ctx)
+	if err == nil || !errors.Is(err, migrations.ErrCompatibleMigrationSchema) {
+		t.Fatalf("error = %v, want 034 nullability drift rejection", err)
+	}
+}
+
 func TestPostgresSchemaCheckerRejectsUnknown035(t *testing.T) {
 	fixture := newCompatibilityPGFixture(t)
 	fixture.createHistory(t, "035_future_workspace_change.sql")
@@ -176,4 +321,16 @@ func TestPostgresRunnerStrictlyRejectsApplied034(t *testing.T) {
 	if result.Applied != 0 {
 		t.Fatalf("strict runner applied %d migrations before rejecting history", result.Applied)
 	}
+}
+
+func equalMigrationNames(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			return false
+		}
+	}
+	return true
 }
