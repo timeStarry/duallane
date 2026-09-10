@@ -13,6 +13,15 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.16.1",
+    releasedAt: "2026-09-10",
+    title: "恢复已有头像显示",
+    summary: "修复部分成员已有自定义头像无法显示的问题，无需重新上传头像。",
+    categories: [
+      { title: "成员头像", items: ["聊天、成员列表和个人资料中的已有自定义头像恢复显示", "保留现有头像和访问权限，无需重新设置"] }
+    ]
+  },
+  {
     version: "0.16.0",
     releasedAt: "2026-09-07",
     title: "为后台更新做好准备",

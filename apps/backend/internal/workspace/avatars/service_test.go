@@ -189,8 +189,12 @@ func TestServiceUsesLegacyReadWhenCanonicalObjectIsMissing(t *testing.T) {
 	}
 	defer opened.Body.Close()
 	content, err := io.ReadAll(opened.Body)
-	if err != nil || string(content) != "legacy-webp" || legacy.calls != 1 || legacy.maxBytes != AvatarMaxOutputBytes {
-		t.Fatalf("legacy read content=%q err=%v calls=%d max=%d", content, err, legacy.calls, legacy.maxBytes)
+	wantLegacyKeys := []string{
+		"workspace/profile-avatars/usr_owner/legacy-version.webp",
+		"profile-avatars/usr_owner/legacy-version.webp",
+	}
+	if err != nil || string(content) != "legacy-webp" || legacy.calls != 2 || legacy.maxBytes != AvatarMaxOutputBytes || len(legacy.keys) != len(wantLegacyKeys) || legacy.keys[0] != wantLegacyKeys[0] || legacy.keys[1] != wantLegacyKeys[1] {
+		t.Fatalf("legacy read content=%q err=%v calls=%d keys=%v max=%d", content, err, legacy.calls, legacy.keys, legacy.maxBytes)
 	}
 	if opened.ContentType != AvatarContentType {
 		t.Fatalf("legacy content type = %q", opened.ContentType)
@@ -344,13 +348,15 @@ type avatarFakeLegacyReader struct {
 	content  []byte
 	calls    int
 	maxBytes int64
+	keys     []string
 }
 
 func (r *avatarFakeLegacyReader) OpenLegacy(_ context.Context, key string, maxBytes int64) (platformstorage.OpenedObject, error) {
 	r.calls++
+	r.keys = append(r.keys, key)
 	r.maxBytes = maxBytes
 	if key != r.key || int64(len(r.content)) > maxBytes {
-		return platformstorage.OpenedObject{}, errors.New("legacy object unavailable")
+		return platformstorage.OpenedObject{}, &platformstorage.Error{Code: "file.storage_missing", Message: "missing", StatusCode: 404}
 	}
 	return platformstorage.OpenedObject{Object: platformstorage.Object{Key: key, ByteSize: int64(len(r.content)), ContentType: AvatarContentType}, Body: io.NopCloser(bytes.NewReader(r.content))}, nil
 }

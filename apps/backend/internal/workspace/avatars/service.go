@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/media"
@@ -67,6 +68,12 @@ type Service struct {
 }
 
 var avatarVersionPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
+
+const (
+	legacyAvatarStoragePrefix          = "profile-avatars/"
+	deterministicAvatarStoragePrefix   = "workspace/profile-avatars/"
+	legacyAvatarStorageSegmentMaxBytes = 128
+)
 
 var defaultAvatarIDFactory = func() (string, error) {
 	id, err := uuid.NewRandom()
@@ -383,26 +390,39 @@ func (s *Service) OpenProfileAvatar(ctx context.Context, input GetProfileAvatarI
 		maxBytes = AvatarMaxOutputBytes
 	}
 	if record.StorageObject != nil && record.StorageObject.DeletedAt == nil {
+		object := record.StorageObject
 		if s.blobStore == nil {
 			return platformstorage.OpenedObject{}, NewError(CodeAvatarStorageFailed, MessageAvatarStorageFailed, 500)
 		}
-		opened, err := s.blobStore.Open(ctx, record.StorageObject.BlobObject(), maxBytes)
+		opened, err := s.blobStore.Open(ctx, object.BlobObject(), maxBytes)
 		if err == nil {
-			return validateOpenedAvatar(opened)
+			return validateOpenedAvatar(opened, object.ObjectKey)
 		}
+		closeAvatarOpenedObject(opened)
 		if !isMissingObjectError(err) {
 			return platformstorage.OpenedObject{}, normalizeOpenError(err)
 		}
 	}
-	legacyKey := strings.TrimSpace(record.StorageKey)
-	if legacyKey == "" || legacyKey != expectedLegacyAvatarStorageKey(record) || s.legacyReader == nil {
+	return s.openLegacyAvatar(ctx, record, maxBytes)
+}
+
+func (s *Service) openLegacyAvatar(ctx context.Context, record AvatarRecord, maxBytes int64) (platformstorage.OpenedObject, error) {
+	keys, valid := legacyAvatarStorageKeys(record)
+	if !valid || len(keys) == 0 || s.legacyReader == nil {
 		return platformstorage.OpenedObject{}, avatarNotFoundError()
 	}
-	opened, err := s.legacyReader.OpenLegacy(ctx, legacyKey, maxBytes)
-	if err != nil {
-		return platformstorage.OpenedObject{}, normalizeOpenError(err)
+	for _, key := range keys {
+		opened, err := s.legacyReader.OpenLegacy(ctx, key, maxBytes)
+		if err != nil {
+			closeAvatarOpenedObject(opened)
+			if isMissingObjectError(err) {
+				continue
+			}
+			return platformstorage.OpenedObject{}, normalizeOpenError(err)
+		}
+		return validateOpenedAvatar(opened, key)
 	}
-	return validateOpenedAvatar(opened)
+	return platformstorage.OpenedObject{}, avatarNotFoundError()
 }
 
 func (s *Service) readActor(ctx context.Context, actorID string) (*auth.Actor, error) {
@@ -559,10 +579,50 @@ func avatarResourceLock(userID string) string {
 }
 
 func expectedLegacyAvatarStorageKey(record AvatarRecord) string {
-	if strings.TrimSpace(record.UserID) == "" || !avatarVersionPattern.MatchString(record.Version) {
+	if !validLegacyAvatarSegment(record.UserID) || !avatarVersionPattern.MatchString(record.Version) {
 		return ""
 	}
-	return fmt.Sprintf("profile-avatars/%s/%s.webp", record.UserID, record.Version)
+	return legacyAvatarStoragePrefix + record.UserID + "/" + record.Version + ".webp"
+}
+
+// legacyAvatarStorageKeys returns only the two physical keys that the Node
+// avatar service can derive from an authorized user/version identity. The
+// stored logical key is an allow-list selector only; the Node S3 key is always
+// tried first so a local mirror cannot hide the source-of-truth object.
+func legacyAvatarStorageKeys(record AvatarRecord) ([]string, bool) {
+	if !validLegacyAvatarSegment(record.UserID) || !validLegacyAvatarSegment(record.Version) {
+		return nil, false
+	}
+	if record.StorageKey == "" {
+		return nil, true
+	}
+	if record.StorageKey != strings.TrimSpace(record.StorageKey) {
+		return nil, false
+	}
+	localKey := legacyAvatarStoragePrefix + record.UserID + "/" + record.Version + ".webp"
+	s3Key := deterministicAvatarStoragePrefix + record.UserID + "/" + record.Version + ".webp"
+	switch record.StorageKey {
+	case localKey:
+		return []string{s3Key, localKey}, true
+	case s3Key:
+		return []string{s3Key, localKey}, true
+	default:
+		return nil, false
+	}
+}
+
+func validLegacyAvatarSegment(value string) bool {
+	if value == "" || len(value) > legacyAvatarStorageSegmentMaxBytes || strings.TrimSpace(value) != value || !utf8.ValidString(value) {
+		return false
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') || character == '_' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func storageObjectLock(objectID string) string {
@@ -671,16 +731,23 @@ func isMissingObjectError(err error) bool {
 	return errors.As(err, &value) && value != nil && value.Code == "file.storage_missing"
 }
 
-func validateOpenedAvatar(opened platformstorage.OpenedObject) (platformstorage.OpenedObject, error) {
-	if opened.Body == nil {
-		return platformstorage.OpenedObject{}, internalError("open workspace avatar", errors.New("storage returned an empty body"))
+func validateOpenedAvatar(opened platformstorage.OpenedObject, expectedKey string) (platformstorage.OpenedObject, error) {
+	if opened.Body == nil || (expectedKey != "" && opened.Key != expectedKey) {
+		closeAvatarOpenedObject(opened)
+		return platformstorage.OpenedObject{}, NewError(CodeAvatarStorageFailed, MessageAvatarStorageFailed, 500)
 	}
 	if opened.ByteSize <= 0 || opened.ByteSize > AvatarMaxOutputBytes {
-		_ = opened.Body.Close()
+		closeAvatarOpenedObject(opened)
 		return platformstorage.OpenedObject{}, NewError(CodeAvatarStorageFailed, MessageAvatarStorageFailed, 500)
 	}
 	if strings.TrimSpace(opened.ContentType) == "" {
 		opened.ContentType = AvatarContentType
 	}
 	return opened, nil
+}
+
+func closeAvatarOpenedObject(opened platformstorage.OpenedObject) {
+	if opened.Body != nil {
+		_ = opened.Body.Close()
+	}
 }

@@ -102,6 +102,19 @@ production messages as fixtures. Updating the parser or Node Markdown pipeline
 requires rechecking the oracle before accepting changed goldens; see the
 [technology decision](TECHNOLOGY.md#workspace-markdown-summary-decision).
 
+### Legacy Avatar Provider Layout
+
+Run `node --test scripts/backend/workspace-avatar-key-contract.test.mjs` with
+the pinned Node dependencies. The test calls the actual retained Node
+`workspaceAvatarObjectKey` producer and checks the synthetic fixture shared
+with Go avatar S3-reader tests. Go's normal avatar tests must exercise the
+real S3 adapter against a bounded loopback HTTP fixture, not just an injected
+reader that accepts whichever key the service passes. Cover legacy-only and
+canonical reads, local and hybrid policies, authorization, missing objects,
+provider failure and unsafe paths. No production bytes or credentials belong
+in these fixtures. This regression addresses the
+[0.16.1 avatar compatibility work item](work-items/2026-09-10-avatar-s3-compatibility.md).
+
 ### Actual Node Legacy Emote Compatibility
 
 With the pinned Node/Go dependencies and an explicit disposable PostgreSQL

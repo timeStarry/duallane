@@ -283,6 +283,23 @@ owns canonical physical bytes. Go adapters preserve:
 Original filenames are logical resource metadata only and never form internal
 paths or object keys.
 
+Legacy profile avatars have different physical layouts: Node used
+`profile-avatars/<user>/<version>.webp` below the local object root, but
+`workspace/profile-avatars/<user>/<version>.webp` in S3. The nullable legacy
+database key retains the local form even when S3 is primary. A Go read must
+preserve both identity-derived layouts after avatar authorization; do not use
+the database key verbatim as the only S3 locator. Canonical objects remain the
+first choice. Only explicit missing-object errors permit compatibility reads;
+provider failures, invalid paths and resource-limit errors must fail closed.
+This is read compatibility, not a data backfill or permission to enable global
+local-read fallback. Keep provider locators out of public responses and logs.
+The compatibility candidates still pass through the configured generic reader:
+in hybrid mode a missing prefixed key followed by a 403 on the unprefixed S3
+key fails closed, even if a local copy exists. This patch does not introduce a
+provider-aware local-only fallback or reinterpret access denial as absence.
+The shared Node key oracle and real Go S3-reader regression are described in
+[Validation](VALIDATION.md#legacy-avatar-provider-layout).
+
 Legacy emote reads use the read-only `LegacyReader`, not a canonical-object
 identity bypass. After actor/resource authorization, accept only the exact
 `custom-emotes/<owner>/<emote>/content.webp` or historical
