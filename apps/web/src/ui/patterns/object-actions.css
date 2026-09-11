@@ -1,0 +1,107 @@
+/* Object actions share one reserved hit target in lists and media cards. */
+.dl-object-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 2px;
+}
+
+.dl-object-more {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 44px;
+  align-self: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.dl-object-more:hover,
+.dl-object-more[aria-expanded="true"] {
+  color: var(--text);
+  background: var(--soft);
+}
+
+.dl-object-more:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.dl-conversation-object > .conversation {
+  min-width: 0;
+  padding-inline: 8px;
+}
+
+.workspace-file-row.dl-file-object {
+  grid-template-columns: minmax(0, 1fr) 44px 44px;
+  gap: 2px;
+}
+
+.dl-file-object > .workspace-file-download,
+.dl-member-object > .icon-button {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+}
+
+.workspace-member-card.dl-member-object {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.dl-member-object > .workspace-member-main { flex: 1; min-width: 0; }
+
+.workspace-file-row.media-card.dl-file-object > .dl-object-more,
+.workspace-file-row.media-card.dl-file-object > .workspace-file-download {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  border: 1px solid var(--line);
+  background: var(--elevated);
+  box-shadow: var(--shadow-input);
+}
+
+.workspace-file-row.media-card.dl-file-object > .workspace-file-download { right: 52px; }
+
+@media (max-width: 760px) {
+  .dl-file-object:not(.media-card) > .workspace-file-row-main { column-gap: 6px; }
+}
+
+.p2p-object-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 44px;
+  margin: -8px -8px 4px 0;
+}
+
+.p2p-object-heading > .message-meta { min-width: 0; flex: 1; flex-wrap: wrap; margin: 0; }
+.p2p-object-heading > .dl-object-more { margin-inline-start: auto; }
+.p2p-object-heading:empty { display: none; }
+
+.p2p-object-feedback {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  margin: 0 12px;
+  padding: 0 4px 0 12px;
+  border-radius: var(--radius-control);
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: 13px;
+}
+
+.p2p-object-feedback[data-copied="false"] { background: var(--warning-soft); color: var(--warning); }
+.p2p-object-feedback > span { min-width: 0; flex: 1; }

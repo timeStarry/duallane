@@ -1,0 +1,22 @@
+.workspace-bot-settings .dl-bot-chapters { min-width: 0; }
+.workspace-bot-settings button.workspace-bot-header-connection {
+  min-height: 44px;
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  text-align: start;
+  cursor: pointer;
+}
+.workspace-bot-settings button.workspace-bot-header-connection:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.workspace-bot-settings .dl-bot-chapters > .dl-tab-list { margin-block: 8px 16px; gap: 4px; }
+.workspace-bot-settings .dl-bot-chapters > .dl-tab-list > .dl-selection { flex: 0 0 auto; }
+.workspace-bot-settings .dl-bot-chapters > .dl-tab-panel { padding: 0 0 24px; }
+.workspace-bot-settings .dl-bot-chapters > .dl-tab-panel[hidden] { display: none; }
+.workspace-bot-settings .dl-bot-chapters > .dl-tab-panel > .workspace-bot-section:first-child { border-top: 0; padding-top: 0; }
+.workspace-bot-settings .dl-bot-chapters > .dl-tab-panel > .workspace-bot-section + .workspace-bot-section { margin-top: 24px; }
+.workspace-bot-settings .dl-bot-chapters > .dl-tab-panel > .workspace-bot-danger-section { margin-top: 32px; }
+@media (max-width: 760px) {
+  .workspace-bot-settings .dl-bot-chapters > .dl-tab-list { justify-content: space-between; }
+  .workspace-bot-settings .dl-bot-chapters > .dl-tab-list > .dl-selection { min-width: 44px; }
+  .workspace-bot-settings .dl-bot-chapters > .dl-tab-list .dl-selection-surface { padding-inline: 9px; }
+}

@@ -11,12 +11,12 @@
   align-items: center;
   gap: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-tag);
   padding: 1px 3px;
   color: var(--ink);
   background: transparent;
   font: inherit;
-  font-size: 0.82rem;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   transition: color var(--motion-fast) var(--motion-ease), background-color var(--motion-fast) var(--motion-ease);
@@ -65,7 +65,7 @@
   }
   8%, 42%, 76% {
     background-color: color-mix(in srgb, var(--relay) 13%, var(--panel));
-    box-shadow: inset 3px 0 0 var(--relay);
+    box-shadow: none;
   }
 }
 
@@ -83,12 +83,12 @@
 
 .workspace-image-zoom-value {
   min-width: 54px;
-  height: 34px;
-  border: 1px solid rgb(255 255 255 / 14%);
-  border-radius: 6px;
+  height: 44px;
+  border: 1px solid var(--control);
+  border-radius: var(--radius-control);
   padding: 0 8px;
-  color: #f4f7f5;
-  background: rgb(255 255 255 / 9%);
+  color: var(--text);
+  background: var(--soft);
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
   cursor: pointer;
@@ -139,7 +139,7 @@
   .workspace-system-message-row.message-locate {
     animation: none;
     background-color: color-mix(in srgb, var(--relay) 13%, var(--panel));
-    box-shadow: inset 3px 0 0 var(--relay);
+    box-shadow: none;
   }
 
   .workspace-message-author-mention,

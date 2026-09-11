@@ -12,6 +12,11 @@ Internal engineering name: `Workspace`
 
 ## 2. Reading Order
 
+For the complete redesign, start with the [UI/UX rewrite plan](design/ui-ux-rewrite/README.md).
+Its target navigation, visual system, flows and coverage supersede older presentation
+defaults below. Implementation is pending; domain permissions, storage and protocol
+contracts continue to apply.
+
 Use this order when starting or reviewing Workspace work:
 
 1. [Shared Space Workspace Product Design](WORKSPACE_PRODUCT_DESIGN.md)
@@ -33,6 +38,7 @@ The system-level boundary remains in [DualLane Design Document](../DESIGN.md).
 
 | Document | Use for | Do not use for |
 | --- | --- | --- |
+| [UI/UX rewrite plan](design/ui-ux-rewrite/README.md) | Approved next-version experience, themes, all-screen coverage, implementation and acceptance | Claiming the current application is already rewritten or changing domain invariants |
 | [WORKSPACE_PRODUCT_DESIGN.md](WORKSPACE_PRODUCT_DESIGN.md) | Product definition, tone, trust model, high-level scope | Endpoint-level implementation details |
 | [WORKSPACE_MVP_DEVELOPMENT_CONTRACT.md](WORKSPACE_MVP_DEVELOPMENT_CONTRACT.md) | First full-loop required scope, API/data requirements, validation | Long-term product exploration |
 | [WORKSPACE_UI_INTERACTION_DESIGN.md](WORKSPACE_UI_INTERACTION_DESIGN.md) | Component/window behavior, mobile/desktop interaction, complexity control | Database schema details |

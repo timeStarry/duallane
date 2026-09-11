@@ -167,6 +167,7 @@ type ReactionGroup struct {
 type Message struct {
 	ID                  string          `json:"id"`
 	ConversationID      string          `json:"conversationId"`
+	TopicID             string          `json:"topicId,omitempty"`
 	AuthorID            *string         `json:"authorId"`
 	AuthorName          string          `json:"authorName"`
 	AuthorNickname      string          `json:"authorNickname,omitempty"`
@@ -206,6 +207,7 @@ type MessageRecord struct {
 	ID                  string
 	SpaceID             string
 	ConversationID      string
+	TopicID             string
 	AuthorID            *string
 	AuthorName          string
 	AuthorNickname      string
@@ -255,6 +257,7 @@ type ListOptions struct {
 type CreateInput struct {
 	ActorID          string
 	ConversationID   string
+	TopicID          string
 	ClientMessageID  string
 	Content          Content
 	ReplyToMessageID string
@@ -376,6 +379,7 @@ func projectMessage(record MessageRecord, attachments []AttachmentRecord, reacti
 	message := Message{
 		ID:                  record.ID,
 		ConversationID:      record.ConversationID,
+		TopicID:             record.TopicID,
 		AuthorID:            stringPointer(record.AuthorID),
 		AuthorName:          authorName,
 		AuthorNickname:      record.AuthorNickname,

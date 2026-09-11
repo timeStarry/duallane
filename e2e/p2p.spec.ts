@@ -30,10 +30,9 @@ function recordWebSocketPayloads(page: Page, payloads: string[]) {
 async function createPrivateRoom(page: Page, displayName: string) {
   await openPrivateLane(page, displayName);
   await page.getByRole("button", { name: "开始会话" }).click();
-  await expect(page.getByRole("heading", { name: "分享这个邀请链接。" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "邀请对方，开始交流" })).toBeVisible();
 
-  const inviteLink = (await page.locator(".copy-box > span").textContent())?.trim() ?? "";
-  await page.getByRole("button", { name: "进入聊天" }).click();
+  const inviteLink = (await page.locator(".p2p-waiting-invite .copy-box > span").textContent())?.trim() ?? "";
   return inviteLink;
 }
 
@@ -42,6 +41,27 @@ async function joinPrivateRoom(page: Page, inviteLink: string, displayName: stri
   await page.getByLabel("显示名称").fill(displayName);
   await page.getByRole("button", { name: "加入会话" }).click();
 }
+
+test("private conversation cancellation preserves its draft and explicit discard completes once", async ({ page }) => {
+  await createPrivateRoom(page, "离开回归");
+  const composer = page.getByLabel("输入消息");
+  await composer.fill("仍在当前会话中的草稿");
+  await page.getByRole("button", { name: "结束", exact: true }).click();
+  const confirmation = page.getByRole("dialog", { name: "结束当前会话？" });
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole("button", { name: "继续留在这里" }).click();
+  await expect(composer).toHaveValue("仍在当前会话中的草稿");
+  await composer.press("Enter");
+  await expect(page.locator("article.message").filter({ hasText: "仍在当前会话中的草稿" })).toHaveCount(1);
+  await expect(page.getByRole("heading", { name: "本次会话已结束。" })).toHaveCount(0);
+  await page.getByRole("button", { name: "结束", exact: true }).click();
+  await confirmation.getByRole("button", { name: "结束会话", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "本次会话已结束。" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "导出本次记录" })).toBeVisible();
+  await page.getByRole("button", { name: "不保存并关闭" }).click();
+  await expect(page.getByRole("heading", { name: "选择沟通方式" })).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+});
 
 function privateMessage(page: Page, body: string) {
   return page.locator("article.message").filter({ hasText: body });

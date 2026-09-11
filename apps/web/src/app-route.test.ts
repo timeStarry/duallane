@@ -11,6 +11,9 @@ describe("application routes", () => {
     expect(parseAppRoute("/workspace/files/file-1").route).toMatchObject({ view: "files", fileId: "file-1" });
     expect(parseAppRoute("/workspace/members/user-1").route).toMatchObject({ view: "members", memberId: "user-1" });
     expect(parseAppRoute("/workspace/account").route).toMatchObject({ view: "account" });
+    expect(parseAppRoute("/workspace/account/appearance").route).toMatchObject({ view: "account", accountSection: "appearance" });
+    expect(getAppRouteUrl(workspaceRoute({ view: "account", accountSection: "appearance" }))).toBe("/workspace/account/appearance");
+    expect(normalizeWorkspaceReturnTo("/workspace/account/appearance")).toBe("/workspace/account/appearance");
     expect(parseAppRoute("/workspace/account/profile").route).toMatchObject({ view: "account", accountSection: "profile" });
     expect(parseAppRoute("/workspace/account/privacy").route).toMatchObject({ view: "account", accountSection: "privacy" });
     expect(parseAppRoute("/workspace/account/chat").route).toMatchObject({ view: "account", accountSection: "chat" });

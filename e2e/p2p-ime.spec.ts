@@ -51,8 +51,7 @@ test("P2P textarea leaves an IME confirmation in the draft", async ({ page }) =>
   await page.getByRole("button", { name: /一对一直连/ }).click();
   await page.getByLabel("显示名称").fill(`IME P2P ${suffix}`);
   await page.getByRole("button", { name: "开始会话" }).click();
-  await expect(page.getByRole("heading", { name: "分享这个邀请链接。" })).toBeVisible();
-  await page.getByRole("button", { name: "进入聊天" }).click();
+  await expect(page.getByRole("heading", { name: "邀请对方，开始交流" })).toBeVisible();
 
   const input = page.getByLabel("输入消息");
   const p2pHttpWrites: string[] = [];

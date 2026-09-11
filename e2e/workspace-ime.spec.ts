@@ -156,7 +156,7 @@ test("Workspace chat and topic editors keep IME confirmation out of send and men
     const memberTopic = memberPage.getByRole("region", { name: `话题 ${topicTitle}` });
     await expect(memberTopic).toBeVisible();
     await memberTopic.getByRole("button", { name: "加入话题", exact: true }).click();
-    await expect(memberTopic.getByRole("button", { name: "退出话题", exact: true })).toBeVisible();
+    await expect(memberTopic.getByRole("textbox", { name: "输入消息", exact: true })).toHaveAttribute("contenteditable", "true");
 
     await page.goto(`/workspace/topics/${topic!.id}`);
     const topicRegion = page.getByRole("region", { name: `话题 ${topicTitle}` });
@@ -170,7 +170,7 @@ test("Workspace chat and topic editors keep IME confirmation out of send and men
     });
 
     await topicInput.fill("@");
-    const topicMentionMenu = topicRegion.locator(".workspace-topic-mention-menu");
+    const topicMentionMenu = topicRegion.getByRole("dialog", { name: "提及成员", exact: true });
     await expect(topicMentionMenu).toBeVisible();
     const topicImeKey = await dispatchSafariImeEnter(topicInput);
     expect(topicImeKey).toEqual({ dispatched: true, defaultPrevented: false });

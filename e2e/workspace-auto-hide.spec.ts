@@ -98,10 +98,10 @@ test("chat auto-hide preferences persist and reveal locally without persisting m
     const topic = topics.find((candidate: { title: string }) => candidate.title === topicTitle);
     expect(topic).toBeTruthy();
     await page.goto(`/workspace/topics/${topic.id}`);
-    const topicBody = page.locator("article.workspace-topic-message").first();
+    const topicBody = page.locator(".workspace-topic-page article.workspace-message").first();
     await expect(topicBody.getByRole("button", { name: "展开消息", exact: true })).toBeVisible();
     await topicBody.getByRole("button", { name: "展开消息", exact: true }).click();
-    await expect(topicBody.locator(".workspace-topic-message-body")).toContainText("😀");
+    await expect(topicBody.locator(".message-body")).toContainText("😀");
     await page.goto(`/workspace/chat/${groupId}`);
     await expect(row("emote").getByRole("button", { name: "展开消息", exact: true })).toBeVisible();
     await row("plain").getByTitle("隐藏消息", { exact: true }).click();

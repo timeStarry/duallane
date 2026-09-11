@@ -1,0 +1,31 @@
+<section id="context-actions" class="section">
+  <div class="section-head"><div><div class="section-index">05 / CONTEXT ACTIONS</div><h2>操作跟着对象走。</h2><p class="section-lead">桌面右键，手机长按空白处，也可以点“更多”。文字保留自由选择，每一个动作都说明它会影响什么。</p></div></div>
+  <div class="ux-lab-toolbar"><span class="small muted">本页虚构样例 · 不影响真实消息</span><div class="segmented" id="ux-presentation" aria-label="操作面板演示形态"><button type="button" data-presentation="auto" aria-pressed="true">自动</button><button type="button" data-presentation="desktop" aria-pressed="false">桌面菜单</button><button type="button" data-presentation="phone" aria-pressed="false">手机面板</button></div></div>
+  <div class="ux-lab-grid">
+    <div class="ux-conversation">
+      <header class="ux-conversation-head"><span class="avatar entity">山</span><div><strong>山间周末</strong><small>共享空间 · 消息由空间保存</small></div><span class="pill">交互草稿</span></header>
+      <div id="ux-object-list" class="ux-object-list" aria-label="可操作的消息样例"></div>
+      <div class="ux-composer"><div id="ux-reply" hidden></div><label class="sr-only" for="ux-draft">消息草稿</label><textarea id="ux-draft" placeholder="试试从消息菜单发起回复…" rows="2"></textarea><span class="small muted">切换菜单或设置后，这里的草稿仍然保留。</span></div>
+    </div>
+    <aside class="ux-explanation" aria-label="对象操作规则">
+      <div><span class="component-label">01 / 可发现</span><h3>每条消息都有“更多”</h3><p>右键与长按是快捷入口。键盘可聚焦消息后按 Shift+F10，手机也能直接点击按钮。</p></div>
+      <div><span class="component-label">02 / 有边界</span><h3>保留文字的原生手感</h3><p>正文与链接可以选择、复制；拖动、滚动或第二根手指会取消长按。不会全局接管浏览器菜单。</p></div>
+      <div><span class="component-label">03 / 说清影响</span><h3>隐藏、撤回、移除各有含义</h3><p>隐藏只影响自己。撤回影响共享消息；移除文件影响可用性。菜单先展示动作，重要操作再确认。</p></div>
+      <button class="btn quiet" id="ux-reset" type="button">重置消息样例</button>
+    </aside>
+  </div>
+  <p id="ux-feedback" class="ux-feedback" role="status" aria-live="polite">试试对消息空白处右键，或使用“更多”按钮。</p>
+</section>
+
+<section id="personal-settings" class="section">
+  <div class="section-head"><div><div class="section-index">06 / PERSONAL SETTINGS</div><h2>找到自己的设置，<br>然后自然地回去。</h2><p class="section-lead">桌面用稳定的目录承载分类，手机按层级进入。常用偏好即时反馈，编辑资料有明确提交，敏感动作单独确认。</p></div></div>
+  <div class="ux-lab-toolbar"><span class="small muted">全部改动仅留在本页，不写入账号、不发送邮件、不申请通知权限。</span><button class="btn" type="button" id="prefs-fail-next" aria-pressed="false">模拟下一次保存失败</button></div>
+  <div id="prefs-shell" class="prefs-shell" data-page="appearance">
+    <nav id="prefs-nav" class="prefs-nav" aria-label="个人设置分类"></nav>
+    <div id="prefs-pane" class="prefs-pane" tabindex="-1"></div>
+  </div>
+  <div class="preview-callouts"><div><strong>目录稳定</strong><p>外观、聊天、通知各有归属；空间权限和容量进入空间设置。</p></div><div><strong>层级有尽头</strong><p>通知下进入邮件或手机推送。返回恢复上一级，避免弹窗套弹窗。</p></div><div><strong>结果留在原位</strong><p>试试保存失败、重试，以及编辑资料后切换分类。草稿会先得到妥善处理。</p></div></div>
+</section>
+<div id="ux-context-menu" class="ux-action-menu" role="menu" aria-label="对象操作" hidden></div>
+<dialog id="ux-action-sheet" class="ux-action-sheet" aria-labelledby="ux-sheet-title"></dialog>
+<dialog id="ux-confirm" class="ux-confirm" aria-labelledby="ux-confirm-title"></dialog>

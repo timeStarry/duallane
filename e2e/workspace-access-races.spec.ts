@@ -352,12 +352,12 @@ test("does not re-add a conversation after explicit leave beats a delayed read r
     await memberPage.setViewportSize({ width: 1280, height: 900 });
     await memberPage.getByTitle("查看详情").click();
     await memberPage.getByRole("tab", { name: "设置", exact: true }).click();
-    memberPage.once("dialog", (dialog) => dialog.accept());
     const leaveResponse = memberPage.waitForResponse((response) =>
       new URL(response.url()).pathname === `/api/workspace/groups/${encodeURIComponent(conversation.id)}/leave` &&
       response.request().method() === "POST"
     );
     await memberPage.getByRole("button", { name: "离开群聊", exact: true }).click();
+    await memberPage.getByRole("dialog", { name: "确认操作", exact: true }).getByRole("button", { name: "确认操作", exact: true }).click();
     const leaveResult = await leaveResponse;
     expect(leaveResult.status()).toBe(200);
     await leaveResult.finished();

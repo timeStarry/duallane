@@ -1,5 +1,9 @@
 # Workspace Information Architecture
 
+> Next-version navigation and layout are defined by the [UI/UX rewrite experience](design/ui-ux-rewrite/EXPERIENCE.md).
+> The application rewrite is pending. This document remains a reference for earlier
+> behavior; it does not override the new target or change domain permissions.
+
 ## 1. Purpose
 
 This document defines the Workspace information hierarchy, layout, and window

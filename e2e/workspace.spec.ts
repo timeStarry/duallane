@@ -16,6 +16,10 @@ async function enterWorkspaceAsSeededOwner(page: Page) {
 }
 
 async function chooseMessageAction(page: Page, message: Locator, actionName: string) {
+  // These flows act on delivered messages. A local sending row can offer Copy,
+  // but its menu correctly closes when acknowledgement replaces the local ID.
+  await expect(message).toBeVisible();
+  await expect(message).not.toHaveAttribute("data-message-id", /^wlm/);
   await message.getByTitle("更多消息操作").click();
   const menu = page.getByRole("menu", { name: "消息操作" });
   await expect(menu).toBeVisible();
@@ -23,8 +27,7 @@ async function chooseMessageAction(page: Page, message: Locator, actionName: str
 }
 
 async function openWorkspaceFiles(page: Page) {
-  await page.locator(".workspace-user-trigger").click();
-  await page.getByRole("menu", { name: "账号菜单" }).getByRole("menuitem", { name: "文件", exact: true }).click();
+  await page.getByRole("navigation", { name: "共享空间视图" }).getByRole("button", { name: "文件", exact: true }).click();
   await expect(page).toHaveURL(/\/workspace\/files$/);
   await expect(page.getByRole("heading", { name: "共享文件" })).toBeVisible();
 }
@@ -78,8 +81,7 @@ test("workspace semantic routes survive OAuth, refresh, history, and invalid res
   await page.reload();
   await expect(page).toHaveURL(new RegExp(`/workspace/chat/${conversation.conversation.id}$`));
 
-  await page.locator(".workspace-user-trigger").click();
-  await page.getByRole("menu", { name: "账号菜单" }).getByRole("menuitem", { name: "文件", exact: true }).click();
+  await page.getByRole("navigation", { name: "共享空间视图" }).getByRole("button", { name: "文件", exact: true }).click();
   await expect(page).toHaveURL(/\/workspace\/files$/);
   await page.reload();
   await expect(page.getByRole("heading", { name: "共享文件" })).toBeVisible();
@@ -92,8 +94,7 @@ test("workspace semantic routes survive OAuth, refresh, history, and invalid res
   await page.goForward();
   await expect(page).toHaveURL(/\/workspace\/members$/);
 
-  await page.locator(".workspace-user-trigger").click();
-  await page.locator(".workspace-user-menu").getByRole("menuitem", { name: "个人设置", exact: true }).click();
+  await page.getByRole("navigation", { name: "共享空间视图" }).getByRole("button", { name: "个人", exact: true }).click();
   await expect(page).toHaveURL(/\/workspace\/account$/);
     await page.reload();
     await expect(page.getByRole("heading", { name: "个人设置" })).toBeVisible();
@@ -120,7 +121,7 @@ test("workspace emote surfaces keep their layout, scroll, and chat context", asy
   await enterWorkspaceAsSeededOwner(page);
 
   const conversationSearch = page.getByLabel("查找会话");
-  const rail = page.getByLabel("共享空间导航");
+  const rail = page.locator(".workspace-rail-content");
   const [searchBox, railBox] = await Promise.all([conversationSearch.boundingBox(), rail.boundingBox()]);
   expect(searchBox).toBeTruthy();
   expect(railBox).toBeTruthy();
@@ -172,6 +173,7 @@ test("workspace emote surfaces keep their layout, scroll, and chat context", asy
   });
   await page.goto("/workspace/account/emotes");
   await expect(page.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
+  await page.getByRole("button", { name: /^管理我的表情/ }).click();
   const manager = page.getByRole("dialog", { name: "我的表情" });
   await manager.getByRole("button", { name: "打开合集 可滚动合集", exact: true }).click();
   const managerBody = manager.locator(".workspace-emote-manager-body");
@@ -202,7 +204,7 @@ test("workspace emote surfaces keep their layout, scroll, and chat context", asy
   const shareDialog = page.getByRole("dialog", { name: "分享表情合集" });
   await expect(shareDialog).toBeVisible();
   const shareSelect = shareDialog.getByLabel("发送到会话");
-  await expect(shareSelect).toHaveCSS("height", "42px");
+  expect((await shareSelect.boundingBox())!.height).toBeGreaterThanOrEqual(44);
   await expect(shareDialog.getByLabel("登录后链接")).toHaveValue(/\/workspace\/emotes\/share\/fixture-share$/);
   await page.screenshot({ path: testInfo.outputPath("emote-share-dialog-desktop.png") });
   await page.setViewportSize({ width: 390, height: 844 });
@@ -224,6 +226,9 @@ test("workspace emote surfaces keep their layout, scroll, and chat context", asy
   expect(conversationResponse.ok()).toBe(true);
   const conversationPayload = await conversationResponse.json() as { conversation: { id: string; displayTitle?: string; title?: string } };
   const conversation = conversationPayload.conversation;
+  const libraryBeforeEmote = await page.request.get("/api/workspace/me/emote-library");
+  expect(libraryBeforeEmote.ok()).toBe(true);
+  const existingEmoteIds = new Set((await libraryBeforeEmote.json() as { emotes: Array<{ id: string }> }).emotes.map((item) => item.id));
   const emoteBytes = await readFile("apps/web/public/favicon-32x32.png");
   const emoteResponse = await page.request.post("/api/workspace/me/emotes", {
     headers: {
@@ -238,8 +243,12 @@ test("workspace emote surfaces keep their layout, scroll, and chat context", asy
   expect(libraryAfterEmote.ok()).toBe(true);
   const libraryAfterEmotePayload = await libraryAfterEmote.json() as {
     entries: Array<{ type: string; emote?: { id: string } }>;
+    emotes: Array<{ id: string }>;
   };
-  expect(libraryAfterEmotePayload.entries[0]).toMatchObject({ type: "emote", emote: { id: emote.emote.id } });
+  expect(libraryAfterEmotePayload.emotes).toEqual(expect.arrayContaining([expect.objectContaining({ id: emote.emote.id })]));
+  // Reusing the image in a persistent test database returns its existing item
+  // without moving a user's ordering. A newly created item still starts first.
+  if (!existingEmoteIds.has(emote.emote.id)) expect(libraryAfterEmotePayload.entries[0]).toMatchObject({ type: "emote", emote: { id: emote.emote.id } });
   const collectionResponse = await page.request.post("/api/workspace/me/emote-collections", {
     data: { name: "聊天内预览", emoteIds: [emote.emote.id] }
   });
@@ -260,13 +269,26 @@ test("workspace emote surfaces keep their layout, scroll, and chat context", asy
     }
   });
   expect(messageResponse.ok()).toBe(true);
+  const shareMessage = await messageResponse.json() as { message: { id: string } };
 
   await page.goto(`/workspace/chat/${conversation.id}`);
   const chatRegion = page.getByRole("region", { name: conversation.displayTitle || "信标" });
   await expect(chatRegion).toBeVisible();
-  const shareCard = chatRegion.locator("button.workspace-emote-share-card").filter({ hasText: share.share.name });
+  const shareCard = chatRegion.locator(`article[data-message-id="${shareMessage.message.id}"]`).locator("button.workspace-emote-share-card");
   await expect(shareCard).toBeVisible();
   const chatUrl = page.url();
+  const draft = chatRegion.getByRole("textbox", { name: "输入消息", exact: true });
+  await draft.fill("管理表情后继续编辑的草稿");
+  await chatRegion.getByRole("button", { name: "插入表情", exact: true }).click();
+  const manageFromChat = chatRegion.getByRole("button", { name: "管理我的表情", exact: true });
+  await manageFromChat.click();
+  await expect(manager).toBeVisible();
+  await expect(page).toHaveURL(chatUrl);
+  await manager.getByRole("button", { name: "关闭我的表情管理", exact: true }).click();
+  await expect(manager).toHaveCount(0);
+  await expect(page).toHaveURL(chatUrl);
+  await expect(draft).toHaveText("管理表情后继续编辑的草稿");
+  await expect(draft).toBeFocused();
   await shareCard.click();
   const previewDialog = page.getByRole("dialog", { name: "表情合集预览" });
   await expect(previewDialog).toBeVisible();
@@ -331,13 +353,13 @@ test("workspace emote surfaces keep their layout, scroll, and chat context", asy
 });
 
 async function openWorkspaceCreateMenu(page: Page, action: "发起私聊" | "创建群聊") {
+  await page.getByRole("navigation", { name: "共享空间视图" }).getByRole("button", { name: "聊天", exact: true }).click();
   await page.getByTitle("新建").click();
   await page.locator(".workspace-create-menu").getByRole("menuitem", { name: action, exact: true }).click();
 }
 
 async function openWorkspaceSpaceSettings(page: Page) {
-  await page.locator(".workspace-user-trigger").click();
-  await page.locator(".workspace-user-menu").getByRole("menuitem", { name: "空间信息与设置", exact: true }).click();
+  await page.getByRole("navigation", { name: "共享空间视图" }).getByRole("button", { name: "空间", exact: true }).click();
 }
 
 async function sendWorkspaceComposer(page: Page | Locator) {
@@ -459,6 +481,7 @@ test("workspace loading, navigation and menu focus semantics are stable", async 
   await expect(memberTab).toHaveAttribute("aria-current", "page");
   await expect(chatTab).not.toHaveAttribute("aria-current", "page");
 
+  await chatTab.click();
   const createTrigger = page.getByTitle("新建");
   await createTrigger.click();
   const createMenu = page.getByRole("menu", { name: "新建菜单" });
@@ -478,14 +501,14 @@ test("workspace loading, navigation and menu focus semantics are stable", async 
   const userTrigger = page.locator(".workspace-user-trigger");
   await userTrigger.click();
   const userMenu = page.getByRole("menu", { name: "账号菜单" });
-  await expect(userMenu.getByRole("menuitem", { name: "文件", exact: true })).toBeFocused();
+  await expect(userMenu.getByRole("menuitem", { name: "重新同步", exact: true })).toBeFocused();
   await page.keyboard.press("End");
   await expect(userMenu.getByRole("menuitem", { name: "退出共享空间" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(userTrigger).toBeFocused();
 
   await page.setViewportSize({ width: 390, height: 844 });
-  const mobileNavigation = page.getByRole("navigation", { name: "共享空间移动导航" });
+  const mobileNavigation = page.getByRole("navigation", { name: "共享空间视图" });
   await expect(mobileNavigation).toBeVisible();
   const mobileChat = mobileNavigation.getByRole("button", { name: "聊天", exact: true });
   const mobileChatBox = await mobileChat.boundingBox();
@@ -691,6 +714,8 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     const ownerWorkspaceNavigation = ownerPage.getByRole("navigation", { name: "共享空间视图" });
     await openWorkspaceSpaceSettings(ownerPage);
     await ownerPage.getByRole("tablist", { name: "空间设置" }).getByRole("tab", { name: "可见范围", exact: true }).click();
+    await ownerPage.getByRole("combobox", { name: /查看者/ }).click();
+    await ownerPage.getByRole("option", { name: new RegExp(memberDisplayName) }).click();
     const automaticOwnerContact = ownerPage.locator(".workspace-visibility-row").filter({ hasText: "timeStarry" });
     await expect(automaticOwnerContact.getByText("已有私聊", { exact: false })).toBeVisible();
     await expect(automaticOwnerContact.locator('input[type="checkbox"]')).toBeChecked();
@@ -731,10 +756,11 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(memberDirectRegion.getByLabel("输入消息")).toBeInViewport();
 
     const latestHistoryMessage = memberDirectRegion.locator('[data-message-id]').filter({ hasText: "workspace-e2e-history-27" });
-    await latestHistoryMessage.click({ button: "right" });
+    // The message padding opens object actions; its selectable body keeps the browser menu.
+    await latestHistoryMessage.click({ button: "right", position: { x: 8, y: 8 } });
     const contextMenu = memberPage.getByRole("menu", { name: "消息操作" });
     await expect(contextMenu).toBeVisible();
-    await contextMenu.getByRole("menuitem", { name: "回复" }).click();
+    await contextMenu.getByRole("menuitem", { name: "回复", exact: true }).click();
     await expect(memberDirectRegion.locator(".composer-reply")).toBeVisible();
     await expect(memberDirectRegion.getByLabel("输入消息")).toBeFocused();
     await expect(memberDirectRegion.getByLabel("输入消息")).toBeInViewport();
@@ -762,8 +788,8 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await memberDirectRegion.getByRole("button", { name: "取消回复" }).click();
     await memberPage.setViewportSize({ width: 1280, height: 720 });
 
-    await memberDirectRegion.locator('[data-message-id]').filter({ hasText: "workspace-e2e-history-25" }).getByTitle("隐藏消息").click();
-    await memberDirectRegion.locator('[data-message-id]').filter({ hasText: "workspace-e2e-history-26" }).getByTitle("隐藏消息").click();
+    await chooseMessageAction(memberPage, memberDirectRegion.locator('[data-message-id]').filter({ hasText: "workspace-e2e-history-25" }), "隐藏消息");
+    await chooseMessageAction(memberPage, memberDirectRegion.locator('[data-message-id]').filter({ hasText: "workspace-e2e-history-26" }), "隐藏消息");
     const hiddenRun = memberDirectRegion.locator(".workspace-hidden-message-run");
     await expect(hiddenRun).toContainText("已隐藏 2 条消息");
     await hiddenRun.getByRole("button", { name: "恢复" }).click();
@@ -958,8 +984,8 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await ownerGroupRegion.getByLabel("输入消息").fill(recalledMessageText);
     await sendWorkspaceComposer(ownerGroupRegion);
     const recalledMessage = ownerGroupRegion.locator("article.workspace-message").filter({ hasText: recalledMessageText });
-    await ownerPage.once("dialog", (dialog) => dialog.accept());
     await chooseMessageAction(ownerPage, recalledMessage, "撤回消息");
+    await ownerPage.getByRole("dialog", { name: "确认操作", exact: true }).getByRole("button", { name: "确认操作", exact: true }).click();
     await expect(ownerGroupRegion.locator(".workspace-message-list").getByText(recalledMessageText, { exact: true })).toHaveCount(0);
     await expect(ownerGroupRegion.locator(".workspace-message-list").getByText("timeStarry因内容有误撤回了一条消息", { exact: true })).toBeVisible();
     await expect(memberGroupRegion.locator(".workspace-message-list").getByText("timeStarry因内容有误撤回了一条消息", { exact: true })).toBeVisible();
@@ -1055,10 +1081,20 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       list.scrollHeight - list.scrollTop - list.clientHeight
     )).toBeLessThanOrEqual(2);
 
-    await directMessageList.evaluate((list) => {
+    const readingAnchor = await directMessageList.evaluate((list) => {
       list.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -120 }));
       list.scrollTop = 0;
       list.dispatchEvent(new Event("scroll"));
+      const bounds = list.getBoundingClientRect();
+      const message = [...list.querySelectorAll<HTMLElement>("article.workspace-message")]
+        .find((row) => {
+          const content = row.querySelector<HTMLElement>(".workspace-message-text, .message-body") ?? row;
+          const rect = content.getBoundingClientRect();
+          return rect.top >= bounds.top && rect.top < bounds.bottom;
+        });
+      if (!message?.dataset.messageId) throw new Error("Missing visible history reading anchor");
+      const content = message.querySelector<HTMLElement>(".workspace-message-text, .message-body") ?? message;
+      return { id: message.dataset.messageId, offset: content.getBoundingClientRect().top - bounds.top };
     });
     const historyMessage = "workspace-e2e-new-message-while-reading-history";
     const historyMessageResponse = await ownerPage.request.post("/api/workspace/messages", {
@@ -1077,7 +1113,16 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(memberDirectRegion.getByText("以下为未读消息", { exact: true })).toBeVisible();
     const jumpToLatest = memberDirectRegion.getByRole("button", { name: "1 条新消息", exact: true });
     await expect(jumpToLatest).toBeVisible();
-    expect(await directMessageList.evaluate((list) => list.scrollTop)).toBeLessThanOrEqual(2);
+    // Loading earlier history may legitimately increase scrollTop. The message
+    // being read must stay in place when either a prepend or a live append lands.
+    await expect.poll(() => directMessageList.evaluate((list, anchor) => {
+      const message = [...list.querySelectorAll<HTMLElement>("article.workspace-message")]
+        .find((row) => row.dataset.messageId === anchor.id);
+      if (!message) throw new Error("History reading anchor disappeared");
+      const content = message.querySelector<HTMLElement>(".workspace-message-text, .message-body") ?? message;
+      return Math.abs(content.getBoundingClientRect().top - list.getBoundingClientRect().top - anchor.offset);
+    }, readingAnchor)).toBeLessThanOrEqual(2);
+    expect(await directMessageList.evaluate((list) => list.scrollHeight - list.scrollTop - list.clientHeight)).toBeGreaterThan(80);
     await jumpToLatest.click();
     await expect(jumpToLatest).toHaveCount(0);
     await expect.poll(() => workspaceConversationUnreadCount(memberPage, directConversationId)).toBe(0);
@@ -1222,20 +1267,20 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     const memberNavigation = memberPage.getByRole("navigation", { name: "共享空间视图" });
     await openWorkspaceFiles(memberPage);
     const fileCategoryTabs = memberPage.getByLabel("文件类型筛选", { exact: true });
-    await fileCategoryTabs.getByRole("button", { name: "图片", exact: true }).click();
+    await fileCategoryTabs.getByRole("radio", { name: "图片", exact: true }).click();
     const imageLibraryRow = memberPage.locator(".workspace-file-row").filter({ hasText: pastedImageName });
     const imageLibraryThumbnail = imageLibraryRow.locator(".workspace-file-thumbnail img");
     await expect(imageLibraryThumbnail).toBeVisible();
     await expect.poll(() => imageLibraryThumbnail.evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
     await expect(memberPage.locator(".workspace-file-row").filter({ hasText: fileName })).toHaveCount(0);
-    await memberPage.getByRole("button", { name: "方格视图", exact: true }).click();
-    await expect(memberPage.getByRole("button", { name: "方格视图", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await memberPage.getByRole("radio", { name: "卡片视图", exact: true }).click();
+    await expect(memberPage.getByRole("radio", { name: "卡片视图", exact: true })).toHaveAttribute("aria-checked", "true");
     await expect(imageLibraryRow).toHaveClass(/media-card/);
-    await memberPage.getByRole("button", { name: "列表视图", exact: true }).click();
-    await fileCategoryTabs.getByRole("button", { name: "其它", exact: true }).click();
+    await memberPage.getByRole("radio", { name: "列表视图", exact: true }).click();
+    await fileCategoryTabs.getByRole("radio", { name: "其它", exact: true }).click();
     await expect(memberPage.locator(".workspace-file-row").filter({ hasText: fileName })).toBeVisible();
     await expect(memberPage.locator(".workspace-file-row").filter({ hasText: pastedImageName })).toHaveCount(0);
-    await fileCategoryTabs.getByRole("button", { name: "全部", exact: true }).click();
+    await fileCategoryTabs.getByRole("radio", { name: "全部", exact: true }).click();
     await memberNavigation.getByRole("button", { name: "聊天", exact: true }).click();
     await expect(memberGroupRegion).toBeVisible();
 
@@ -1339,7 +1384,8 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       { width: 360, height: 800 }
     ]) {
       await memberPage.setViewportSize(viewport);
-      const mobileNavigation = memberPage.getByRole("navigation", { name: "共享空间移动导航" });
+      await memberGroupRegion.getByTitle("返回会话列表").click();
+      const mobileNavigation = memberPage.getByRole("navigation", { name: "共享空间视图" });
       await expect(mobileNavigation).toBeVisible();
       await mobileNavigation.getByRole("button", { name: "聊天", exact: true }).click();
       await expect(memberPage.getByLabel("共享空间导航")).toBeVisible();
@@ -1374,8 +1420,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     }
 
     await memberPage.setViewportSize({ width: 1280, height: 720 });
-    await memberPage.locator(".workspace-user-trigger").click();
-    await memberPage.getByRole("menuitem", { name: "个人设置" }).click();
+    await memberPage.getByRole("navigation", { name: "共享空间视图" }).getByRole("button", { name: "个人", exact: true }).click();
     await expect(memberPage.getByRole("heading", { name: "个人设置" })).toBeVisible();
     await memberPage.getByRole("button", { name: /通知/ }).click();
     await memberPage.getByRole("button", { name: /邮件通知/ }).click();
@@ -1412,7 +1457,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(ntfyHelpTrigger).toBeFocused();
     await memberPage.getByRole("button", { name: "返回通知" }).click();
     await memberPage.getByRole("button", { name: "返回个人设置" }).click();
-    await memberPage.getByRole("button", { name: /账户与资料/ }).click();
+    await memberPage.getByRole("navigation", { name: "个人设置分类" }).getByRole("button", { name: /个人资料/ }).click();
 
     await memberPage.locator('input[type="file"][accept="image/jpeg,image/png,image/webp"]').setInputFiles({
       name: "workspace-avatar.png",
@@ -1450,9 +1495,10 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       response.url().endsWith("/api/workspace/me/profile") && response.request().method() === "PATCH"
     );
     await memberPage.getByRole("textbox", { name: "公开昵称", exact: true }).fill(publicNickname);
+    await memberPage.getByRole("button", { name: "保存资料", exact: true }).click();
     expect((await nicknameResponse).status()).toBe(200);
     await memberPage.getByRole("button", { name: "返回个人设置" }).click();
-    await memberPage.getByRole("button", { name: /隐私与发现/ }).click();
+    await memberPage.getByRole("navigation", { name: "个人设置分类" }).getByRole("button", { name: /隐私/ }).click();
     const discoverabilityToggle = memberPage.getByRole("switch", { name: /允许其他成员搜索到我/ });
     await expect(discoverabilityToggle).toHaveAttribute("aria-checked", "false");
     const discoverabilityResponse = memberPage.waitForResponse((response) =>
@@ -1460,7 +1506,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     );
     await discoverabilityToggle.click();
     expect((await discoverabilityResponse).status()).toBe(200);
-    await expect(memberPage.locator(".workspace-user-trigger").getByText(publicNickname, { exact: true })).toBeVisible();
+    await expect(memberPage.locator(".workspace-user-trigger strong")).toHaveText(publicNickname);
     await expect(discoverabilityToggle).toHaveAttribute("aria-checked", "true");
 
     const outsiderInviteResponse = await ownerPage.request.post("/api/workspace/invites", {
@@ -1496,7 +1542,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(outsiderPage.getByRole("region", { name: publicNickname })).toBeVisible();
 
     await memberPage.setViewportSize({ width: 390, height: 844 });
-    await expect(memberPage.getByRole("heading", { name: "隐私与发现" })).toBeVisible();
+    await expect(memberPage.getByRole("heading", { name: "隐私", exact: true })).toBeVisible();
     expect(await memberPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     await ownerPage.setViewportSize({ width: 1280, height: 720 });
@@ -1539,7 +1585,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     });
     expect(mentionProjectionResponse.status()).toBe(201);
 
-    await ownerPage.getByRole("button", { name: "聊天", exact: true }).click();
+    await ownerPage.getByRole("navigation", { name: "共享空间视图" }).getByRole("button", { name: "聊天", exact: true }).click();
     await ownerPage.getByLabel("共享空间导航").locator("button.conversation").filter({ hasText: groupTitle }).first().click();
     const ownerProjectedMention = ownerPage.getByRole("region", { name: groupTitle })
       .locator("article.workspace-message")
@@ -1547,7 +1593,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     await expect(ownerProjectedMention.locator(".message-mention")).toHaveText(`@${privateRemark}`);
 
     await memberPage.setViewportSize({ width: 1280, height: 720 });
-    await memberPage.getByRole("button", { name: "聊天", exact: true }).click();
+    await memberPage.getByRole("navigation", { name: "共享空间视图" }).getByRole("button", { name: "聊天", exact: true }).click();
     await memberPage.getByLabel("共享空间导航").locator("button.conversation").filter({ hasText: groupTitle }).first().click();
     const memberProjectedMention = memberPage.getByRole("region", { name: groupTitle })
       .locator("article.workspace-message")
@@ -1556,7 +1602,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
 
     await memberPage.goto("/workspace/account");
     await expect(memberPage.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
-    await memberPage.getByRole("button", { name: /聊天与表情/ }).click();
+    await memberPage.getByRole("navigation", { name: "个人设置分类" }).getByRole("button", { name: /聊天/ }).click();
     const emoteSettingsSection = memberPage.locator("section.workspace-settings-detail").filter({
       has: memberPage.getByRole("heading", { name: "表情面板", exact: true })
     });
@@ -1582,7 +1628,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     expect((await directSendUpdate).status()).toBe(200);
     await expect(imageEmoteDirectSend).toHaveAttribute("aria-checked", "true");
 
-    await memberPage.getByRole("button", { name: "聊天", exact: true }).click();
+    await memberPage.getByRole("navigation", { name: "共享空间视图" }).getByRole("button", { name: "聊天", exact: true }).click();
     await memberPage.getByLabel("共享空间导航").locator("button.conversation").filter({ hasText: groupTitle }).first().click();
     await memberGroupRegion.getByTitle("插入表情").click();
     const memberComposerEmotePicker = memberPage.getByRole("dialog", { name: "选择表情" });
@@ -1595,7 +1641,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
     const customEmoteUploadResponse = memberPage.waitForResponse((response) =>
       response.url().endsWith("/api/workspace/me/emotes") && response.request().method() === "POST"
     );
-    await memberComposerEmotePicker.getByLabel("上传收藏表情").setInputFiles({
+    await memberComposerEmotePicker.getByLabel("批量上传收藏表情", { exact: true }).setInputFiles({
       name: customEmoteFileName,
       mimeType: "image/png",
       buffer: pastedImageBytes
@@ -1624,6 +1670,7 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
 
     await memberPage.goto("/workspace/account/emotes");
     await expect(memberPage.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
+    await memberPage.getByRole("button", { name: /^管理我的表情/ }).click();
     const memberEmoteManager = memberPage.getByRole("dialog", { name: "我的表情" });
     await expect(memberEmoteManager).toBeVisible();
     await memberEmoteManager.getByRole("button", {
@@ -1636,12 +1683,12 @@ test("two workspace users complete direct, group, file, unread, and reconnect fl
       response.url().endsWith(`/api/workspace/me/emotes/${uploadedCustomEmotePayload.emote.id}`)
         && response.request().method() === "DELETE"
     );
-    memberPage.once("dialog", (dialog) => void dialog.accept());
     await memberEmoteDetail.getByRole("button", { name: "从我的表情删除", exact: true }).click();
+    await memberPage.getByRole("dialog", { name: "确认操作", exact: true }).getByRole("button", { name: "确认操作", exact: true }).click();
     expect((await deleteOriginalCustomEmote).status()).toBe(200);
     await memberEmoteManager.getByRole("button", { name: "关闭我的表情管理", exact: true }).click();
     await expect(memberEmoteManager).toHaveCount(0);
-    await memberPage.getByRole("button", { name: "聊天", exact: true }).click();
+    await memberPage.getByRole("navigation", { name: "共享空间视图" }).getByRole("button", { name: "聊天", exact: true }).click();
     await memberPage.getByLabel("共享空间导航").locator("button.conversation").filter({ hasText: groupTitle }).first().click();
     await expect(memberGroupRegion).toBeVisible();
 

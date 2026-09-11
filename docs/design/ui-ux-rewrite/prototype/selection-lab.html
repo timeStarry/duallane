@@ -1,0 +1,28 @@
+<div class="component selection-study" id="selection-patterns">
+  <div class="selection-study-heading"><div class="component-label">Tab / 两种方向，同一轮廓</div><h3>把强调留在边缘。</h3><p>从“清晰双轨”标识框衍生：等宽细条与圆角底面各占自己的位置。细条不沿圆角转弯，也不压住内容；侧边与底部只改变方向。</p></div>
+  <div class="selection-studies">
+    <div><p class="selection-study-label">侧边 · 分类与纵向视图</p><div class="selection-example selection-side" data-selection-example="side">
+      <div role="tablist" aria-label="侧边样式预览" aria-orientation="vertical">
+        <button type="button" class="selection-demo-tab" role="tab" id="selection-side-appearance" aria-controls="selection-panel-side-appearance" aria-selected="true" tabindex="0"><i data-selection-icon="Palette"></i>外观</button>
+        <button type="button" class="selection-demo-tab" role="tab" id="selection-side-chat" aria-controls="selection-panel-side-chat" aria-selected="false" tabindex="-1"><i data-selection-icon="MessageCircle"></i>聊天</button>
+        <button type="button" class="selection-demo-tab" role="tab" id="selection-side-notifications" aria-controls="selection-panel-side-notifications" aria-selected="false" tabindex="-1"><i data-selection-icon="Bell"></i>通知</button>
+      </div>
+      <div>
+        <div role="tabpanel" id="selection-panel-side-appearance" aria-labelledby="selection-side-appearance" tabindex="0"><h4>熟悉的样子，自己的偏好</h4><p>色彩、明暗与内容密度，集中在外观里。</p><p class="selection-summary">原色 · 铜橙与青蓝</p></div>
+        <div role="tabpanel" id="selection-panel-side-chat" aria-labelledby="selection-side-chat" tabindex="0" hidden><h4>让交流顺手一点</h4><p>显示、回复与发送习惯，都服务于当前会话。</p><p class="selection-summary">保留熟悉的编辑位置</p></div>
+        <div role="tabpanel" id="selection-panel-side-notifications" aria-labelledby="selection-side-notifications" tabindex="0" hidden><h4>选择提醒的方式</h4><p>邮件和手机推送分别设置，按自己的节奏接收。</p><p class="selection-summary">渠道与会话提醒各有归属</p></div>
+      </div>
+    </div></div>
+    <div><p class="selection-study-label">底部 · 横向页签与紧凑导航</p><div class="selection-example selection-bottom" data-selection-example="bottom">
+      <div role="tablist" aria-label="底部样式预览" aria-orientation="horizontal">
+        <button type="button" class="selection-demo-tab" role="tab" id="selection-bottom-chat" aria-controls="selection-panel-bottom-chat" aria-selected="true" tabindex="0">聊天</button>
+        <button type="button" class="selection-demo-tab" role="tab" id="selection-bottom-files" aria-controls="selection-panel-bottom-files" aria-selected="false" tabindex="-1">文件</button>
+        <button type="button" class="selection-demo-tab" role="tab" id="selection-bottom-members" aria-controls="selection-panel-bottom-members" aria-selected="false" tabindex="-1">成员</button>
+      </div>
+      <div role="tabpanel" id="selection-panel-bottom-chat" aria-labelledby="selection-bottom-chat" tabindex="0"><h4>山间周末</h4><p>小林：周末去山里走走吧。</p><p class="selection-summary">讨论从这里继续</p></div>
+      <div role="tabpanel" id="selection-panel-bottom-files" aria-labelledby="selection-bottom-files" tabindex="0" hidden><h4>周末计划.txt</h4><p>路线与集合时间，留在空间里方便找回。</p><p class="selection-summary">共享文件 · 示例</p></div>
+      <div role="tabpanel" id="selection-panel-bottom-members" aria-labelledby="selection-bottom-members" tabindex="0" hidden><h4>一起出发的人</h4><p>小林、小周，还有你。</p><p class="selection-summary">3 位成员 · 示例</p></div>
+    </div></div>
+  </div>
+  <p class="selection-study-note">可点击切换，也可用方向键、Home / End 操作。选中位置由细条标记；键盘焦点仍有独立外框。</p>
+</div>

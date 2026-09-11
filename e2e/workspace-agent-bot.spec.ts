@@ -47,7 +47,7 @@ test("owner configures an Agent Bot and its Gateway REST authorization boundarie
     await enterWorkspaceAsSeededOwner(page);
     await page.goto("/workspace/account/bot");
     await expect(page.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
-    await expect(page.getByRole("heading", { name: "我的 Bot", level: 2 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Bot 与连接", level: 2 })).toBeVisible();
 
     await page.getByLabel("Bot 名称", { exact: true }).fill(botName);
     const createResponsePromise = page.waitForResponse((response) =>
@@ -64,7 +64,12 @@ test("owner configures an Agent Bot and its Gateway REST authorization boundarie
       response.url().endsWith(`/api/workspace/bots/${bot!.id}/settings`) &&
       response.request().method() === "PATCH"
     );
-    await page.getByRole("combobox", { name: /^成员发现/u }).selectOption("space_members");
+    const discovery = page.getByRole("radiogroup", { name: "成员发现", exact: true });
+    if (await discovery.isVisible()) await discovery.getByRole("radio", { name: "空间成员", exact: true }).click();
+    else {
+      await page.getByRole("combobox", { name: /^成员发现/u }).click();
+      await page.getByRole("option", { name: "空间成员", exact: true }).click();
+    }
     await page.getByLabel("简介", { exact: true }).fill("用于验证受控私聊、群聊和卡片 Gateway。 ");
     const identityResponse = await identityResponsePromise;
     expect(identityResponse.status()).toBe(200);
@@ -77,7 +82,9 @@ test("owner configures an Agent Bot and its Gateway REST authorization boundarie
       response.url().endsWith(`/api/workspace/bots/${bot!.id}/settings`) &&
       response.request().method() === "PATCH"
     );
-    await page.getByRole("radio", { name: /允许群聊/u }).check();
+    await page.getByRole("tab", { name: "授权", exact: true }).click();
+    await page.getByRole("combobox", { name: /^群聊策略/u }).click();
+    await page.getByRole("option", { name: /^允许群聊/u }).click();
     const groupSettingsResponse = await groupSettingsResponsePromise;
     expect(groupSettingsResponse.status()).toBe(200);
     expect(await groupSettingsResponse.json()).toMatchObject({
@@ -89,6 +96,7 @@ test("owner configures an Agent Bot and its Gateway REST authorization boundarie
       response.url().endsWith(`/api/workspace/bots/${bot!.id}/tokens`) &&
       response.request().method() === "POST"
     );
+    await page.getByRole("tab", { name: "凭据", exact: true }).click();
     await page.getByRole("button", { name: "生成 Token", exact: true }).click();
     const limitedTokenResponse = await limitedTokenResponsePromise;
     expect(limitedTokenResponse.status()).toBe(201);
@@ -261,6 +269,7 @@ test("owner configures an Agent Bot and its Gateway REST authorization boundarie
 
     await page.goto("/workspace/account/bot");
     await expect(page.getByRole("heading", { name: botName, level: 2 })).toBeVisible();
+    await page.getByRole("tab", { name: "凭据", exact: true }).click();
     const authorizedTokenRow = page.locator(".workspace-bot-token-row").filter({ hasText: "cards:write" });
     await expect(authorizedTokenRow).toHaveCount(1);
     const revokeResponsePromise = page.waitForResponse((response) =>

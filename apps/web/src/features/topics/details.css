@@ -1,0 +1,26 @@
+.dl-topic-details-trigger { display:inline-flex; flex:none; }
+.dl-topic-banner-heading .dl-topic-details-trigger { margin-inline-start:auto; }
+.dl-topic-details-trigger .dl-button { padding-inline:10px; }
+.dl-topic-details { position:fixed; inset:0 0 0 auto; margin:0; width:min(360px,100vw); max-width:100vw; height:100dvh; max-height:100dvh; padding:0; border:0; border-left:1px solid var(--line); border-radius:0; background:var(--surface); color:var(--text); box-shadow:var(--shadow-overlay); overflow:hidden; }
+.dl-topic-details[open] { display:grid; grid-template-rows:auto minmax(0,1fr); }
+.dl-topic-details::backdrop { background:color-mix(in srgb,var(--bg) 60%,transparent); }
+.dl-topic-details-header { display:flex; justify-content:space-between; align-items:center; gap:16px; min-height:68px; padding:12px 16px; border-bottom:1px solid var(--line); }
+.dl-topic-details-header h2 { margin:0; font-size:18px; font-weight:600; }
+.dl-topic-details-body { min-height:0; overflow:auto; overscroll-behavior:contain; padding:0 20px max(20px,env(safe-area-inset-bottom)); }
+.dl-topic-details-body > section { min-width:0; padding:24px 0; border-bottom:1px solid var(--line); }
+.dl-topic-details-body > section:last-of-type { border-bottom:0; }
+.dl-topic-details-body h3 { margin:0 0 14px; color:var(--text); font-size:14px; font-weight:600; line-height:1.5; overflow-wrap:anywhere; }
+.dl-topic-details-overview h3 { font-size:18px; margin-bottom:8px; }
+.dl-topic-details-status { color:var(--muted); font-size:12px; }
+.dl-topic-details-overview p { margin:18px 0; font-size:14px; line-height:1.75; overflow-wrap:anywhere; white-space:pre-wrap; }
+.dl-topic-details-overview dl { display:grid; gap:12px; margin:20px 0; font-size:13px; }
+.dl-topic-details-overview dl > div { display:grid; grid-template-columns:72px minmax(0,1fr); gap:12px; }
+.dl-topic-details-overview dt { color:var(--muted); }
+.dl-topic-details-overview dd { margin:0; overflow-wrap:anywhere; }
+.dl-topic-details-parent { width:100%; justify-content:flex-start; text-align:left; }
+.dl-topic-details-actions { display:grid; gap:10px; }
+.dl-topic-details-actions .dl-button { width:100%; justify-content:flex-start; }
+@media(max-width:760px) {
+  .dl-topic-details { inset:0; width:100vw; border:0; box-shadow:none; }
+  .dl-topic-details-header { padding-top:max(10px,env(safe-area-inset-top)); }
+}

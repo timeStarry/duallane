@@ -2,6 +2,9 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { THEMES, type ThemeId } from "./ui/theme/tokens";
+import { appearanceCssVariables, resolveAppearance, DEFAULT_SYSTEM_APPEARANCE } from "./ui/theme/appearance";
+import { DEFAULT_APPEARANCE } from "./ui/theme/preferences";
 
 const sourcePath = join(dirname(fileURLToPath(import.meta.url)), "App.tsx");
 const stylesPath = join(dirname(fileURLToPath(import.meta.url)), "styles.css");
@@ -11,7 +14,8 @@ function normalizeLineEndings(content: string) {
 }
 
 function readSource() {
-  return normalizeLineEndings(readFileSync(sourcePath, "utf8"));
+  return [sourcePath, join(dirname(sourcePath), "features/conversation/WorkspaceChatPanel.tsx"), join(dirname(sourcePath), "features/conversation/ConversationIdentity.tsx")]
+    .map((path) => normalizeLineEndings(readFileSync(path, "utf8"))).join("\n");
 }
 
 function readStyles() {
@@ -28,7 +32,7 @@ describe("workspace UI permission boundaries", () => {
     const workspaceRenderSource = source.slice(renderStart, renderEnd);
 
     expect(source).toContain('type WorkspaceMobilePane = "list" | "main" | "details";');
-    expect(workspaceRenderSource).toContain('<WorkspaceShell mobilePane={workspaceMobilePane} contextVisible={workspaceContextVisible}>');
+    expect(workspaceRenderSource).toContain('<WorkspaceShell mobilePane={workspaceMobilePane} contextVisible={workspaceContextVisible} railCollapsed={workspaceRailCollapsed}');
     expect(source).toContain("const [workspaceContextCollapsed, setWorkspaceContextCollapsed] = useState(() =>");
     expect(source).toContain('localStorage.getItem(WORKSPACE_CONTEXT_STORAGE_KEY) !== "true"');
     expect(source).toContain("localStorage.setItem(WORKSPACE_CONTEXT_STORAGE_KEY, String(!workspaceContextCollapsed));");
@@ -51,24 +55,21 @@ describe("workspace UI permission boundaries", () => {
     expect(mobileStyles).toContain("grid-template-columns: 1fr;");
     expect(mobileStyles).toContain(".workspace-product-shell.mobile-pane-list .workspace-main");
     expect(mobileStyles).toContain(".workspace-product-shell.mobile-pane-list .workspace-context");
-    expect(mobileStyles).toContain(".workspace-product-shell.mobile-pane-main .workspace-rail");
+    expect(mobileStyles).toContain(".workspace-product-shell.mobile-pane-main :is(.workspace-rail-header, .workspace-rail-content, .workspace-rail-footer)");
     expect(mobileStyles).toContain(".workspace-product-shell.mobile-pane-main .workspace-context");
-    expect(mobileStyles).toContain(".workspace-product-shell.mobile-pane-details .workspace-rail");
+    expect(mobileStyles).toContain(".workspace-product-shell.mobile-pane-details :is(.workspace-rail-header, .workspace-rail-content, .workspace-rail-footer)");
     expect(mobileStyles).toContain(".workspace-product-shell.mobile-pane-details .workspace-main");
     expect(mobileStyles).toContain("display: none;");
     expect(mobileStyles).toContain(".mobile-only {\n    display: inline-flex;");
     expect(mobileStyles).toContain(".workspace-shell {\n    width: 100%;");
-    expect(mobileStyles).toContain(".theme-switch {\n    top: 12px;");
-    expect(mobileStyles).toContain("grid-template-columns: repeat(3, 34px);");
-    expect(mobileStyles).toContain(".theme-switch button {\n    width: 34px;");
-    expect(mobileStyles).toContain("min-width: 34px;");
+    // Entry mode geometry is covered by verify-appearance.mjs, including
+    // 44px targets and no overlap with entry, About or P2P headers.
     expect(mobileStyles).toContain(".workspace-status {\n    width: 100%;");
     expect(mobileStyles).toContain(".workspace-status-summary {\n    width: 100%;\n    display: grid;");
     expect(mobileStyles).toContain("grid-template-columns: minmax(0, 1fr) auto 36px;");
     expect(mobileStyles).toContain(".workspace-status-meta {\n    display: none;");
     expect(mobileStyles).toContain(".workspace-create-actions .secondary {\n    width: 100%;");
     expect(mobileStyles).toContain("@media (max-width: 520px)");
-    expect(mobileStyles).toContain("grid-template-columns: repeat(3, 32px);");
     expect(mobileStyles).toContain(".topbar {\n    padding-right: 112px;");
   });
 
@@ -77,8 +78,9 @@ describe("workspace UI permission boundaries", () => {
     const styles = readStyles();
 
     expect(source).toContain('className={`workspace-rail-content ${workspaceView}`}');
-    expect(source).toContain("<WorkspaceFileRail");
-    expect(source).toContain("<WorkspaceMemberRail");
+    expect(source).not.toContain("<WorkspaceFileRail");
+    expect(source).not.toContain("<WorkspaceMemberRail");
+    expect(source).toContain('hasObjectList={workspaceView === "chat" || workspaceView === "topics"}');
     expect(source).toContain('className={organizing ? "workspace-emote-library-grid organizing" : "workspace-emote-library-grid"}');
     expect(source).toContain("function EmoteLibraryTile(");
     expect(source).toContain("function EmoteCollectionTile(");
@@ -111,17 +113,17 @@ describe("workspace UI permission boundaries", () => {
     expect(styles).toContain("background: var(--surface-tint);");
   });
 
-  it("uses a project-styled conversation selector in the emote share dialog", () => {
+  it("uses the shared accessible selector for choosing an emote-share conversation", () => {
     const source = readSource();
-    const styles = readStyles();
-
+    const select = normalizeLineEndings(readFileSync(join(dirname(sourcePath), "ui/primitives/Select.tsx"), "utf8"));
     expect(source).toContain('className="workspace-emote-share-dialog workspace-emote-share-panel"');
-    expect(source).toContain('className="workspace-emote-share-select"');
-    expect(source).toContain('<ChevronDown size={17} aria-hidden="true" />');
-    expect(source).toContain('<label htmlFor="workspace-emote-share-conversation">发送到会话</label>');
-    expect(styles).toMatch(/\.workspace-emote-share-select select\s*\{[^}]*appearance:\s*none;[^}]*height:\s*42px;/s);
-    expect(styles).toMatch(/\.workspace-emote-share-body\s*\{[^}]*gap:\s*16px;[^}]*margin-top:\s*18px;/s);
-    expect(styles).toContain(".workspace-emote-share-select option");
+    expect(source).toContain('<Select id="workspace-emote-share-conversation" label="发送到会话" value={shareConversationId} onValueChange={setShareConversationId}');
+    expect(source).toContain('disabled={!shareConversationId || busy}');
+    expect(source).toContain('onSendShare(shareConversationId, share)');
+    expect(select).toContain('role="combobox"');
+    expect(select).toContain('aria-expanded={open}');
+    expect(select).toContain('role="listbox"');
+    expect(select).toContain('createPortal(');
   });
 
   it("checks the health version on an interval and when the page becomes active", () => {
@@ -136,17 +138,24 @@ describe("workspace UI permission boundaries", () => {
     expect(source).toContain('aria-label="关闭新版本提示"');
   });
 
-  it("keeps workspace surfaces warm and reserves teal for interaction accents", () => {
+  it("uses the selected semantic palette across every theme and mode", () => {
     const styles = readStyles();
-
-    expect(styles).toMatch(
-      /\.workspace-mode\s*\{[^}]*--bg:\s*#f5f2ec;[^}]*--panel:\s*#fffdf8;[^}]*--surface-soft:\s*#f2eee7;[^}]*--surface-tint:\s*#ebe6dc;[^}]*--accent-soft:\s*#e6f0f1;/s
-    );
-    expect(styles).toMatch(/\.workspace-rail\s*\{[^}]*background:\s*var\(--panel-2\);/s);
-    expect(styles).toMatch(
-      /\.workspace-tabs button\.active\s*\{[^}]*background:\s*var\(--surface-soft\);[^}]*box-shadow:\s*inset 0 -2px 0 var\(--relay\);/s
-    );
-    expect(styles).not.toContain("--surface-tint: #e4f0f1;");
+    for (const themeId of Object.keys(THEMES) as ThemeId[]) {
+      for (const mode of ["light", "dark"] as const) {
+        const colors = THEMES[themeId][mode];
+        const variables = appearanceCssVariables(resolveAppearance({ ...DEFAULT_APPEARANCE, themeId, mode }, DEFAULT_SYSTEM_APPEARANCE));
+        expect(variables["--bg"]).toBe(colors.bg);
+        expect(variables["--panel"]).toBe(colors.surface);
+        expect(variables["--panel-2"]).toBe(colors.soft);
+        expect(variables["--relay"]).toBe(colors.shared);
+        expect(variables["--surface-tint"]).toBe(colors["shared-soft"]);
+        expect(variables["--direct"]).toBe(colors.direct);
+      }
+    }
+    expect(styles).not.toMatch(/\.workspace-mode\s*\{[^}]*--(?:bg|panel|surface-soft|surface-tint|accent-soft):\s*#/s);
+    expect(styles).toMatch(/\.workspace-primary-navigation\s*\{[^}]*background:\s*var\(--surface\);/s);
+    expect(styles).toMatch(/\.workspace-rail-header\s*\{[^}]*background:\s*var\(--soft\);/s);
+    expect(styles).toMatch(/\.workspace-tabs button\.active::before\s*\{[^}]*background:\s*var\(--shared\)/s);
   });
 
   it("keeps Workspace formatting optional and the mobile composer viewport-safe", () => {
@@ -510,7 +519,8 @@ describe("workspace UI permission boundaries", () => {
     const eventProjectorSource = source.slice(eventProjectorStart, eventProjectorEnd);
 
     expect(eventProjectorSource).toContain('if (event.type === "message.created" || event.type === "message.recalled")');
-    expect(eventProjectorSource).toContain("upsertWorkspaceMessage(payload.message, payload.conversation)");
+    expect(eventProjectorSource).toContain("upsertWorkspaceMessage(payload.message, payload.conversation?.capabilities ? payload.conversation : undefined)");
+    expect(eventProjectorSource).toContain("if (payload.conversation && !payload.conversation.capabilities) needsConversations = true");
     expect(eventProjectorSource).toContain("payload.conversationId && payload.conversationId === workspaceSelectedConversationIdRef.current");
     expect(eventProjectorSource).toContain("tasks.push(refreshWorkspaceConversationMessages(payload.conversationId));");
     expect(eventProjectorSource).toContain("needsConversations = true;");
@@ -560,7 +570,8 @@ describe("workspace UI permission boundaries", () => {
 
     const roleChangeSource = source.slice(roleChangeStart, roleChangeEnd);
     expect(roleChangeSource).toContain("const confirmation =");
-    expect(roleChangeSource).toContain("window.confirm(confirmation)");
+    expect(roleChangeSource).toContain("!await confirm(confirmation)");
+    expect(roleChangeSource.indexOf("await confirm(")).toBeLessThan(roleChangeSource.indexOf("await workspaceJson"));
     expect(roleChangeSource).toContain('role === "owner"');
     expect(roleChangeSource).toContain('member.role === "owner"');
 
@@ -571,7 +582,7 @@ describe("workspace UI permission boundaries", () => {
   it("requires at least one selected member before creating a group", () => {
     const source = readSource();
     const createGroupStart = source.indexOf("async function createWorkspaceGroup");
-    const createGroupEnd = source.indexOf("async function addWorkspaceGroupMember", createGroupStart);
+    const createGroupEnd = source.indexOf("async function inviteWorkspaceGroupMembers", createGroupStart);
     expect(createGroupStart).toBeGreaterThan(-1);
     expect(createGroupEnd).toBeGreaterThan(createGroupStart);
     const createGroupSource = source.slice(createGroupStart, createGroupEnd);
@@ -602,7 +613,8 @@ describe("workspace UI permission boundaries", () => {
       const end = source.indexOf("\n  async function", start + 1);
       expect(start, `${action} should exist`).toBeGreaterThan(-1);
       const actionSource = source.slice(start, end > start ? end : undefined);
-      expect(actionSource, `${action} should confirm before mutating`).toContain("window.confirm");
+      expect(actionSource, `${action} should await confirmation before mutating`).toContain("!await confirm(");
+      expect(actionSource.indexOf("await confirm(")).toBeLessThan(actionSource.indexOf("await workspaceJson"));
     }
   });
 
@@ -654,7 +666,7 @@ describe("workspace UI permission boundaries", () => {
   it("falls back to server plainText when structured message blocks are unknown", () => {
     const source = readSource();
     const structuredStart = source.indexOf("function WorkspaceStructuredMessage");
-    const structuredEnd = source.indexOf("function ChatPanel", structuredStart);
+    const structuredEnd = source.indexOf("function WorkspaceEmoteCollectionMessageCard", structuredStart);
     expect(structuredStart).toBeGreaterThan(-1);
     expect(structuredEnd).toBeGreaterThan(structuredStart);
     const structuredSource = source.slice(structuredStart, structuredEnd);
@@ -669,15 +681,10 @@ describe("workspace UI permission boundaries", () => {
 
   it("renders workspace system messages with system author semantics", () => {
     const source = readSource();
-    const messageMapStart = source.indexOf("const serverMessages = rawMessages.map((message) => {");
-    const messageMapEnd = source.indexOf("const localMessages = workspaceLocalMessages", messageMapStart);
-    expect(messageMapStart).toBeGreaterThan(-1);
-    expect(messageMapEnd).toBeGreaterThan(messageMapStart);
-    const messageMapSource = source.slice(messageMapStart, messageMapEnd);
-
-    expect(messageMapSource).toContain('message.kind === "system" || message.authorKind === "system"');
-    expect(messageMapSource).toContain('? "系统"');
-    expect(messageMapSource).toContain("author,");
+    const projection = readFileSync(new URL("./features/conversation/message-projection.ts", import.meta.url), "utf8");
+    expect(source).toContain("workspaceMessagesForChat([...rawMessages, ...localMessages]");
+    expect(projection).toContain('message.kind === "system" || message.authorKind === "system"');
+    expect(projection).toContain('author: system ? "系统"');
 
     const chatPanelStart = source.indexOf("function ChatPanel");
     const chatPanelEnd = source.indexOf("function MentionPicker", chatPanelStart);
@@ -782,9 +789,9 @@ describe("workspace UI permission boundaries", () => {
     expect(source).toContain("body: JSON.stringify({ level })");
     expect(source).toContain('if (event.type === "conversation.notification_updated")');
     expect(settingsSource).toContain("会话提醒");
-    expect(settingsSource).toContain('aria-label="会话提醒设置"');
-    expect(settingsSource).toContain('(["all", "mentions", "muted"] as WorkspaceNotificationLevel[]).map((level)');
-    expect(settingsSource).toContain("workspaceNotificationLevelLabel(level)");
+    expect(settingsSource).toContain('label="会话提醒设置"');
+    expect(settingsSource).toContain('(["all", "mentions", "muted"] as const).map((value)');
+    expect(settingsSource).toContain("workspaceNotificationLevelLabel(value)");
     expect(settingsSource).toContain("workspaceNotificationLevelDescription(workspaceSelectedConversation.notificationLevel)");
   });
 
@@ -837,7 +844,9 @@ describe("workspace UI permission boundaries", () => {
     expect(source).toContain('if (!workspaceSelectedConversation || !workspaceCanManageSelectedGroup) {');
     expect(source).toContain('workspaceSelectedConversation.type === "group" && workspaceCanManageSelectedGroup');
     expect(source).toContain('workspaceBootstrap.permissions.canCreateDirect && member.capabilities?.canStartDirectConversation === true');
-    expect(source).toContain('workspaceSelectedConversation.type === "group" && workspaceCanManageSelectedGroup && (');
+    expect(source).toContain('open={workspaceMemberPickerOpen && workspaceCanManageSelectedGroup}');
+    expect(source).toContain('!workspaceCanManageSelectedGroup || !context.isCurrent()');
+    expect(source).toContain('if (!context.isAvailable(userId)) continue;');
     expect(source).toContain('{workspaceCanManageSelectedGroup ? (');
   });
 
@@ -949,7 +958,7 @@ describe("workspace UI permission boundaries", () => {
     expect(localTypeSource).toContain("attachments?: WorkspaceAttachment[];");
 
     const localMessagesStart = source.indexOf("const localMessages = workspaceLocalMessages");
-    const localMessagesEnd = source.indexOf("return [...serverMessages, ...localMessages]", localMessagesStart);
+    const localMessagesEnd = source.indexOf("return workspaceMessagesForChat(", localMessagesStart);
     expect(localMessagesStart).toBeGreaterThan(-1);
     expect(localMessagesEnd).toBeGreaterThan(localMessagesStart);
     const localMessagesSource = source.slice(localMessagesStart, localMessagesEnd);
@@ -989,13 +998,11 @@ describe("workspace UI permission boundaries", () => {
     expect(sendSource).toContain("void deliverWorkspaceLocalMessage(localMessage)");
     expect(sendSource).not.toContain("setWorkspaceSending");
 
-    const chatStart = source.indexOf("function WorkspaceChatPanel");
-    const chatEnd = source.indexOf("function MentionPicker", chatStart);
-    expect(chatStart).toBeGreaterThan(-1);
-    expect(chatEnd).toBeGreaterThan(chatStart);
-    const chatSource = source.slice(chatStart, chatEnd);
-    expect(chatSource).toContain("const sendDisabled = !draft.trim() && stagedAttachments.length === 0");
-    expect(chatSource).toContain("readOnly={false}");
+    const chatSource = normalizeLineEndings(readFileSync(join(dirname(sourcePath), "features/conversation/WorkspaceChatPanel.tsx"), "utf8"));
+    expect(chatSource).toContain("const sendDisabled = externalSendDisabled || editingDisabled || (!draft.trim() && stagedAttachments.length === 0)");
+    expect(chatSource).toContain("const editingDisabled = readOnly || composerDisabled");
+    expect(chatSource).toContain("readOnly={editingDisabled}");
+    expect(chatSource).not.toContain("const editingDisabled = externalSendDisabled");
     expect(source).toContain('aria-label="后台上传附件"');
     expect(chatSource).toContain("后台上传 ${getWorkspacePendingAttachmentProgress(message.pendingAttachments ?? [])}%");
     expect(chatSource).toContain("onCancelMessage(message.id)");
@@ -1088,7 +1095,7 @@ describe("workspace UI permission boundaries", () => {
   it("uses server-created invite links when showing new invites", () => {
     const source = readSource();
     const typeStart = source.indexOf("type WorkspaceInvite = {");
-    const typeEnd = source.indexOf("type WorkspaceContentBlock", typeStart);
+    const typeEnd = source.indexOf("type WorkspacePinnedMessage", typeStart);
     expect(typeStart).toBeGreaterThan(-1);
     expect(typeEnd).toBeGreaterThan(typeStart);
     const typeSource = source.slice(typeStart, typeEnd);
@@ -1121,11 +1128,18 @@ describe("workspace UI permission boundaries", () => {
     expect(listEnd).toBeGreaterThan(listStart);
     const fileListSource = source.slice(listStart, listEnd);
 
-    expect(fileListSource).toContain('const quotaWarning = getWorkspaceTransferQuotaWarning(file.byteSize, "download", workspaceBootstrap.policy);');
-    expect(fileListSource).toContain("!workspaceBootstrap.permissions.canDownload");
-    expect(fileListSource).toContain("Boolean(quotaWarning)");
-    expect(fileListSource).toContain('file.status !== "available"');
-    expect(fileListSource).toContain("Boolean(file.localUpload)");
+    const guardStart = source.indexOf("function workspaceFileDownloadDisabledReason(");
+    const guardEnd = source.indexOf("function workspaceFileMenuActions(", guardStart);
+    expect(guardStart).toBeGreaterThan(-1);
+    const guardSource = source.slice(guardStart, guardEnd);
+    expect(guardSource).toContain("!workspaceBootstrap?.permissions.canDownload");
+    expect(guardSource).toContain("file.capabilities?.canDownload === false");
+    expect(guardSource).toContain('file.status !== "available"');
+    expect(guardSource).toContain("file.localUpload");
+    expect(guardSource).toContain('getWorkspaceTransferQuotaWarning(file.byteSize, "download", workspaceBootstrap.policy)');
+    expect(fileListSource).toContain("const downloadReason = workspaceFileDownloadDisabledReason(file)");
+    expect(fileListSource).toContain("disabled={Boolean(downloadReason)}");
+    expect(source.slice(guardEnd, source.indexOf("async function reserveWorkspaceDownload(", guardEnd))).toContain("disabledReason: downloadReason");
     expect(fileListSource).toContain('className="workspace-file-row-main"');
     expect(fileListSource).toContain('className="icon-button workspace-file-download"');
     expect(fileListSource).toContain("onClick={() => void reserveWorkspaceDownload(file)}");
@@ -1156,13 +1170,12 @@ describe("workspace UI permission boundaries", () => {
   it("provides private ntfy topic controls and an accessible subscription guide", () => {
     const source = readSource();
     const styles = readStyles();
-    const accountStart = source.indexOf("function WorkspaceAccountSettings");
-    const accountEnd = source.indexOf("function WorkspaceMemberDetail", accountStart);
-    expect(accountStart).toBeGreaterThan(-1);
-    expect(accountEnd).toBeGreaterThan(accountStart);
-    const accountSource = source.slice(accountStart, accountEnd);
+    const accountSource = normalizeLineEndings(readFileSync(join(dirname(sourcePath), "features/settings/WorkspaceAccountSettings.tsx"), "utf8"));
+    const controlsSource = normalizeLineEndings(readFileSync(join(dirname(sourcePath), "features/settings/SettingsControls.tsx"), "utf8"));
+    expect(source).toContain('from "./features/settings/WorkspaceAccountSettings"');
+    expect(accountSource).toContain("export function WorkspaceAccountSettings");
 
-    expect(accountSource).toContain('workspaceJson<{ ntfy: WorkspaceNtfyPreferences }>("/api/workspace/me/ntfy")');
+    expect(accountSource).toContain('workspaceJson<{ ntfy: SettingsNtfyPreferences }>("/api/workspace/me/ntfy")');
     expect(accountSource).toContain('"/api/workspace/me/ntfy/rotate"');
     expect(accountSource).toContain("重新生成推送凭据");
     expect(accountSource).toContain("所有已订阅设备将停止接收");
@@ -1180,7 +1193,8 @@ describe("workspace UI permission boundaries", () => {
     expect(accountSource).toContain("updateNotifications");
     expect(source).toContain("installWorkspaceUnreadFavicon");
     expect(styles).toContain(".workspace-ntfy-dialog");
-    expect(styles).toContain(".workspace-setting-switch");
+    expect(controlsSource).toContain("<Switch checked={checked}");
+    expect(controlsSource).toContain("onCheckedChange={onChange}");
   });
 
   it("releases read and history request state after permission epochs change", () => {

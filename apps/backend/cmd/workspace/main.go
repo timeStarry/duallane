@@ -345,6 +345,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 				Cards: cardService, Emotes: emoteService, Topics: topicService,
 			}),
 		})
+		topicService.SetMessagePipeline(messageblocks.NewTopicMessagePipeline(messageService, messageRepository, topicService))
 		// Bot identities enter only through the scoped Gateway. Keep the human
 		// API's service closed to bots, and do not install inline topic creation
 		// on this separate, transaction-bound writer.

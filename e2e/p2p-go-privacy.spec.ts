@@ -174,9 +174,8 @@ async function openPrivateLane(page: Page, displayName: string) {
 async function createPrivateRoom(page: Page, displayName: string) {
   await openPrivateLane(page, displayName);
   await page.getByRole("button", { name: "开始会话" }).click();
-  await expect(page.getByRole("heading", { name: "分享这个邀请链接。" })).toBeVisible();
-  const inviteLink = (await page.locator(".copy-box > span").textContent())?.trim() ?? "";
-  await page.getByRole("button", { name: "进入聊天" }).click();
+  await expect(page.getByRole("heading", { name: "邀请对方，开始交流" })).toBeVisible();
+  const inviteLink = (await page.locator(".p2p-waiting-invite .copy-box > span").textContent())?.trim() ?? "";
   return inviteLink;
 }
 

@@ -300,7 +300,7 @@ func (r *PGRepository) FindMessageForPin(ctx context.Context, spaceID, conversat
 	if r == nil || r.pool == nil {
 		return nil, internalError("find pin message", errors.New("workspace postgres pool is required"))
 	}
-	row := r.pool.QueryRow(ctx, messageSelect+`WHERE m.space_id = $1 AND m.conversation_id = $2 AND m.id = $4 AND m.topic_id IS NULL AND m.deleted_at IS NULL`, spaceID, conversationID, "", messageID)
+	row := r.pool.QueryRow(ctx, messageSelect+`WHERE m.space_id = $1 AND m.conversation_id = $2 AND m.id = $4 AND m.deleted_at IS NULL`, spaceID, conversationID, "", messageID)
 	record, err := scanMessageRecord(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -315,7 +315,7 @@ func (r *PGRepository) FindPin(ctx context.Context, spaceID, conversationID, mes
 	if r == nil || r.pool == nil {
 		return nil, internalError("find message pin", errors.New("workspace postgres pool is required"))
 	}
-	row := r.pool.QueryRow(ctx, pinSelect+`WHERE p.conversation_id = $1 AND p.message_id = $2 AND m.space_id = $4`, conversationID, messageID, viewerID, spaceID)
+	row := r.pool.QueryRow(ctx, pinSelect+`WHERE p.conversation_id = $1 AND p.message_id = $2 AND m.space_id = $4 AND `+topicPinVisibleSQL, conversationID, messageID, viewerID, spaceID)
 	pin, err := scanPinRecord(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -331,7 +331,7 @@ func (r *PGRepository) ListPins(ctx context.Context, spaceID, conversationID, vi
 		return nil, internalError("list message pins", errors.New("workspace postgres pool is required"))
 	}
 	limit = boundedLimit(limit, 20, 100)
-	rows, err := r.pool.Query(ctx, pinSelect+`WHERE p.conversation_id = $1 AND m.space_id = $2 AND m.deleted_at IS NULL
+	rows, err := r.pool.Query(ctx, pinSelect+`WHERE p.conversation_id = $1 AND m.space_id = $2 AND m.deleted_at IS NULL AND `+topicPinVisibleSQL+`
 		ORDER BY p.created_at DESC, p.message_id DESC LIMIT $4`, conversationID, spaceID, viewerID, limit)
 	if err != nil {
 		return nil, internalError("list message pins", err)
@@ -516,7 +516,7 @@ func (t *pgTx) CountActiveConversationMembers(ctx context.Context, spaceID, conv
 }
 
 func (t *pgTx) FindMessageForPin(ctx context.Context, spaceID, conversationID, messageID string) (*MessageRecord, error) {
-	row := t.tx.QueryRow(ctx, messageSelect+`WHERE m.space_id = $1 AND m.conversation_id = $2 AND m.id = $4 AND m.topic_id IS NULL AND m.deleted_at IS NULL`, spaceID, conversationID, "", messageID)
+	row := t.tx.QueryRow(ctx, messageSelect+`WHERE m.space_id = $1 AND m.conversation_id = $2 AND m.id = $4 AND m.deleted_at IS NULL`, spaceID, conversationID, "", messageID)
 	record, err := scanMessageRecord(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -528,7 +528,7 @@ func (t *pgTx) FindMessageForPin(ctx context.Context, spaceID, conversationID, m
 }
 
 func (t *pgTx) FindPin(ctx context.Context, spaceID, conversationID, messageID, viewerID string) (*PinRecord, error) {
-	row := t.tx.QueryRow(ctx, pinSelect+`WHERE p.conversation_id = $1 AND p.message_id = $2 AND m.space_id = $4`, conversationID, messageID, viewerID, spaceID)
+	row := t.tx.QueryRow(ctx, pinSelect+`WHERE p.conversation_id = $1 AND p.message_id = $2 AND m.space_id = $4 AND `+topicPinVisibleSQL, conversationID, messageID, viewerID, spaceID)
 	pin, err := scanPinRecord(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -541,7 +541,7 @@ func (t *pgTx) FindPin(ctx context.Context, spaceID, conversationID, messageID, 
 
 func (t *pgTx) ListPins(ctx context.Context, spaceID, conversationID, viewerID string, limit int) ([]PinRecord, error) {
 	limit = boundedLimit(limit, 20, 100)
-	rows, err := t.tx.Query(ctx, pinSelect+`WHERE p.conversation_id = $1 AND m.space_id = $2 AND m.deleted_at IS NULL
+	rows, err := t.tx.Query(ctx, pinSelect+`WHERE p.conversation_id = $1 AND m.space_id = $2 AND m.deleted_at IS NULL AND `+topicPinVisibleSQL+`
 		ORDER BY p.created_at DESC, p.message_id DESC LIMIT $4`, conversationID, spaceID, viewerID, limit)
 	if err != nil {
 		return nil, internalError("list message pins", err)
@@ -851,7 +851,7 @@ LEFT JOIN user_remarks ur ON ur.owner_user_id = $3 AND ur.target_user_id = u.id
 `
 
 const messageSelect = `SELECT
-	m.id, m.conversation_id, m.author_id,
+	m.id, m.conversation_id, COALESCE(m.topic_id, ''), m.author_id,
 	COALESCE(ur.remark, u.nickname, u.github_login, u.display_name, '成员') AS author_name,
 	u.nickname, ur.remark, u.github_login, u.avatar_url,
 	m.author_kind, m.kind, m.client_message_id, m.content_json, m.plain_text,
@@ -865,7 +865,7 @@ LEFT JOIN conversation_pinned_messages p ON p.message_id = m.id AND p.conversati
 
 const pinSelect = `SELECT
 	p.message_id, p.pinned_by_user_id, p.created_at,
-	m.id, m.conversation_id, m.author_id,
+	m.id, m.conversation_id, COALESCE(m.topic_id, ''), m.author_id,
 	COALESCE(ur.remark, u.nickname, u.github_login, u.display_name, '成员') AS author_name,
 	u.nickname, ur.remark, u.github_login, u.avatar_url,
 	m.author_kind, m.kind, m.client_message_id, m.content_json, m.plain_text,
@@ -984,7 +984,7 @@ func scanMessageRecord(row rowScanner) (MessageRecord, error) {
 	var authorID, clientID, replyID, authorNickname, authorRemark, authorLogin, avatarURL, pinBy *string
 	var pinAt *time.Time
 	var content string
-	if err := row.Scan(&record.ID, &record.ConversationID, &authorID, &record.AuthorName, &authorNickname, &authorRemark, &authorLogin, &avatarURL, &record.AuthorKind, &record.Kind, &clientID, &content, &record.PlainText, &replyID, &record.CreatedAt, &record.EditedAt, &record.DeletedAt, &record.RecalledAt, &record.RecallReason, &pinBy, &pinAt); err != nil {
+	if err := row.Scan(&record.ID, &record.ConversationID, &record.TopicID, &authorID, &record.AuthorName, &authorNickname, &authorRemark, &authorLogin, &avatarURL, &record.AuthorKind, &record.Kind, &clientID, &content, &record.PlainText, &replyID, &record.CreatedAt, &record.EditedAt, &record.DeletedAt, &record.RecalledAt, &record.RecallReason, &pinBy, &pinAt); err != nil {
 		return MessageRecord{}, err
 	}
 	record.ContentJSON = []byte(content)
@@ -1020,7 +1020,7 @@ func scanPinRecord(row rowScanner) (PinRecord, error) {
 	var pin PinRecord
 	var authorID, clientID, replyID, authorNickname, authorRemark, authorLogin, avatarURL *string
 	var content string
-	if err := row.Scan(&pin.MessageID, &pin.PinnedByUserID, &pin.CreatedAt, &pin.Message.ID, &pin.Message.ConversationID, &authorID, &pin.Message.AuthorName, &authorNickname, &authorRemark, &authorLogin, &avatarURL, &pin.Message.AuthorKind, &pin.Message.Kind, &clientID, &content, &pin.Message.PlainText, &replyID, &pin.Message.CreatedAt, &pin.Message.EditedAt, &pin.Message.DeletedAt, &pin.Message.RecalledAt, &pin.Message.RecallReason); err != nil {
+	if err := row.Scan(&pin.MessageID, &pin.PinnedByUserID, &pin.CreatedAt, &pin.Message.ID, &pin.Message.ConversationID, &pin.Message.TopicID, &authorID, &pin.Message.AuthorName, &authorNickname, &authorRemark, &authorLogin, &avatarURL, &pin.Message.AuthorKind, &pin.Message.Kind, &clientID, &content, &pin.Message.PlainText, &replyID, &pin.Message.CreatedAt, &pin.Message.EditedAt, &pin.Message.DeletedAt, &pin.Message.RecalledAt, &pin.Message.RecallReason); err != nil {
 		return PinRecord{}, err
 	}
 	pin.Message.ContentJSON = []byte(content)

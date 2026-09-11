@@ -86,7 +86,8 @@ test("a subscriber follows author changes, keeps snapshots, and sees detached st
     await expect(subscribeOnImport).toBeVisible();
     await expect(subscribeOnImport).toHaveAttribute("aria-checked", "false");
     const importToggleBox = await subscribeOnImport.boundingBox();
-    expect(importToggleBox?.height).toBeGreaterThanOrEqual(44);
+    // DOMRect can represent a 44px target as 43.999992px during fractional layout.
+    expect(Math.round((importToggleBox?.height ?? 0) * 1000) / 1000).toBeGreaterThanOrEqual(44);
     await subscribeOnImport.click();
     await expect(subscribeOnImport).toHaveAttribute("aria-checked", "true");
 
@@ -103,6 +104,7 @@ test("a subscriber follows author changes, keeps snapshots, and sees detached st
     });
 
     await memberPage.goto("/workspace/account/emotes");
+    await memberPage.getByRole("button", { name: /^管理我的表情/ }).click();
     const manager = memberPage.getByRole("dialog", { name: "我的表情" });
     await expect(manager).toBeVisible();
     await manager.getByRole("button", { name: `打开合集 ${sourceName}`, exact: true }).click();

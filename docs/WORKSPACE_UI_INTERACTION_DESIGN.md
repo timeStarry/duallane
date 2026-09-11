@@ -1,5 +1,9 @@
 # Workspace UI Interaction Design
 
+> The complete redesign follows the [new experience specification](design/ui-ux-rewrite/EXPERIENCE.md)
+> and [acceptance matrix](design/ui-ux-rewrite/ACCEPTANCE.md). Application implementation
+> is pending; the earlier presentation defaults below do not override that target.
+
 ## 1. Purpose
 
 This document defines the productized Workspace interaction model at the

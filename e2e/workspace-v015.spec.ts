@@ -79,52 +79,53 @@ test("two members create, join, sync, close, and archive a group topic", async (
     await memberPage.goto(`/workspace/topics/${topic!.id}`);
     await expect(memberPage.locator(".workspace-shell")).toHaveAttribute("data-app-state", "ready");
     const memberTopic = memberPage.getByRole("region", { name: `话题 ${topicTitle}` });
-    await expect(memberTopic.getByText(topicDescription, { exact: true })).toBeVisible();
+    await memberTopic.getByRole("button", { name: "话题详情", exact: true }).click();
+    const memberDetails = memberPage.getByRole("dialog", { name: "话题详情", exact: true });
+    await expect(memberDetails.getByText(topicDescription, { exact: true })).toBeVisible();
+    await memberDetails.getByRole("button", { name: "关闭话题详情", exact: true }).click();
     await expect(memberTopic.getByText("加入后参与讨论", { exact: true })).toBeVisible();
     await memberTopic.getByRole("button", { name: "加入话题", exact: true }).click();
-    await expect(memberTopic.getByRole("button", { name: "退出话题", exact: true })).toBeVisible();
-    await expect(memberTopic.getByRole("group", { name: "话题提醒" })).toBeVisible();
-    await memberTopic.getByRole("button", { name: "仅提及", exact: true }).click();
-    await expect(memberTopic.getByRole("button", { name: "仅提及", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await memberTopic.getByRole("button", { name: "话题详情", exact: true }).click();
+    await expect(memberDetails.getByRole("button", { name: "退出话题", exact: true })).toBeVisible();
+    await expect(memberDetails.getByRole("radiogroup", { name: "话题提醒" })).toBeVisible();
+    await memberDetails.getByRole("radio", { name: "仅提及", exact: true }).click();
+    await expect(memberDetails.getByRole("radio", { name: "仅提及", exact: true })).toHaveAttribute("aria-checked", "true");
+    await memberDetails.getByRole("button", { name: "关闭话题详情", exact: true }).click();
 
-    const firstTopicMessage = memberTopic.locator("article.workspace-topic-message").first();
-    const replyAction = firstTopicMessage.getByRole("button", { name: "回复", exact: true });
-    await expect(replyAction).toHaveAttribute("aria-label", "回复");
-    await expect(replyAction).toHaveAttribute("title", "回复");
-    await expect(replyAction.locator("svg")).toHaveCount(1);
-    await expect(replyAction.locator("svg")).toHaveAttribute("aria-hidden", "true");
-    await replyAction.focus();
-    await replyAction.press("Enter");
+    const firstTopicMessage = memberTopic.locator("article.workspace-message").first();
+    await firstTopicMessage.getByRole("button", { name: "更多消息操作", exact: true }).click();
+    const topicMenu = memberPage.getByRole("menu", { name: "消息操作", exact: true });
+    await expect(topicMenu.getByRole("menuitem", { name: "同步到群聊", exact: true })).toBeEnabled();
+    await expect(topicMenu.getByRole("menuitem", { name: /撤回|常驻/ })).toHaveCount(0);
+    await expect(topicMenu.getByRole("menuitem", { name: "添加表情回复", exact: true })).toBeEnabled();
+    await expect(topicMenu.getByRole("menuitem", { name: "隐藏消息", exact: true })).toBeEnabled();
+    await topicMenu.getByRole("menuitem", { name: "回复", exact: true }).click();
     await expect(memberTopic.locator(".composer-reply")).toContainText(topicDescription);
-    const initialSyncAction = firstTopicMessage.getByRole("button", { name: "同步到群聊", exact: true });
-    await expect(initialSyncAction).toHaveAttribute("aria-label", "同步到群聊");
-    await expect(initialSyncAction).toHaveAttribute("title", "同步到群聊");
-    await expect(initialSyncAction).toHaveAttribute("aria-pressed", "false");
-    await expect(initialSyncAction.locator("svg")).toHaveCount(1);
-    await expect(initialSyncAction.locator("svg")).toHaveAttribute("aria-hidden", "true");
+    await expect(memberTopic.getByTitle("上传文件", { exact: true })).toHaveCount(0);
 
     const topicEditor = memberTopic.getByLabel("输入消息");
     await topicEditor.click();
     await memberPage.keyboard.insertText(topicMessageText);
     await expect(topicEditor).toHaveText(topicMessageText);
-    await memberTopic.locator("label.workspace-topic-sync-toggle").click();
-    await expect(memberTopic.getByRole("checkbox", { name: "同步到群聊", exact: true })).toBeChecked();
+    await memberTopic.getByRole("switch", { name: "同步到群聊", exact: true }).click();
+    await expect(memberTopic.getByRole("switch", { name: "同步到群聊", exact: true })).toHaveAttribute("aria-checked", "true");
     const topicMessageResponse = memberPage.waitForResponse((response) =>
       response.url().endsWith(`/api/workspace/topics/${topic!.id}/messages`) &&
       response.request().method() === "POST"
     );
-    await memberTopic.getByTitle("发送话题消息").click();
+    await memberTopic.getByTitle("发送消息").click();
     expect((await topicMessageResponse).status()).toBe(201);
     await expect(topicEditor).toHaveText("");
     await expect(topicEditor).toBeFocused();
-    const memberMessage = memberTopic.locator("article.workspace-topic-message").filter({ hasText: topicMessageText });
+    const memberMessage = memberTopic.locator("article.workspace-message").filter({ hasText: topicMessageText });
     await expect(memberMessage).toBeVisible();
-    const syncedAction = memberMessage.getByRole("button", { name: "已同步", exact: true });
-    await expect(syncedAction).toHaveAttribute("aria-label", "已同步");
-    await expect(syncedAction).toHaveAttribute("aria-pressed", "true");
-    await expect(syncedAction).toHaveAttribute("title", "已同步（点击取消同步）");
-    await expect(syncedAction.locator("svg")).toHaveCount(1);
-    await expect(syncedAction.locator("svg")).toHaveAttribute("aria-hidden", "true");
+    const moreAction = memberMessage.getByRole("button", { name: "更多消息操作", exact: true });
+    await expect(moreAction).toBeEnabled();
+    await expect(moreAction).toHaveAttribute("aria-haspopup", "menu");
+    await moreAction.click();
+    const syncedAction = topicMenu.getByRole("menuitem", { name: "取消同步到群聊", exact: true });
+    await expect(syncedAction).toBeEnabled();
+    await expect(topicMenu.getByRole("menuitem", { name: "回复", exact: true })).toBeEnabled();
     if (process.env.DUALLANE_UI_REVIEW_DIR) {
       await memberMessage.hover();
       await memberPage.screenshot({ path: `${process.env.DUALLANE_UI_REVIEW_DIR}/topic-actions-desktop.png` });
@@ -135,35 +136,58 @@ test("two members create, join, sync, close, and archive a group topic", async (
       .getByRole("group", { name: `群聊同步话题 ${topicTitle}` })).toBeVisible();
 
     await syncedAction.click();
-    const unsyncedAction = memberMessage.getByRole("button", { name: "同步到群聊", exact: true });
-    await expect(unsyncedAction).toHaveAttribute("aria-label", "同步到群聊");
-    await expect(unsyncedAction).toHaveAttribute("aria-pressed", "false");
-    await expect(unsyncedAction).toHaveAttribute("title", "同步到群聊");
+    await moreAction.click();
+    await expect(topicMenu.getByRole("menuitem", { name: "同步到群聊", exact: true })).toBeEnabled();
+    await memberPage.keyboard.press("Escape");
     await expect(ownerPage.getByRole("region", { name: groupTitle })
       .getByRole("group", { name: `群聊同步话题 ${topicTitle}` })).toHaveCount(0);
 
     await memberPage.setViewportSize({ width: 390, height: 844 });
     await memberPage.reload();
     const mobileTopic = memberPage.getByRole("region", { name: `话题 ${topicTitle}` });
-    const mobileMessage = mobileTopic.locator("article.workspace-topic-message").filter({ hasText: topicMessageText });
+    const mobileMessage = mobileTopic.locator("article.workspace-message").filter({ hasText: topicMessageText });
     await expect(mobileMessage).toBeVisible();
-    await mobileMessage.hover();
-    const mobileActionButtons = mobileMessage.locator(".workspace-topic-message-actions > button");
-    await expect(mobileActionButtons).toHaveCount(2);
-    const mobileActionGeometry = await mobileActionButtons.evaluateAll((buttons) => buttons.map((button) => {
-      const rect = button.getBoundingClientRect();
-      return { width: rect.width, height: rect.height, right: rect.right };
-    }));
-    expect(mobileActionGeometry.every(({ width, height, right }) => width >= 44 && height >= 44 && right <= 390)).toBe(true);
+    const mobileMore = mobileMessage.getByRole("button", { name: "更多消息操作", exact: true });
+    await expect(mobileMore).toBeVisible();
+    await expect(mobileMessage.getByRole("button", { name: "回复", exact: true })).toHaveCount(0);
+    await expect(mobileMessage.getByRole("button", { name: "同步到群聊", exact: true })).toHaveCount(0);
+    const moreGeometry = await mobileMore.boundingBox();
+    expect(moreGeometry).toBeTruthy();
+    expect(moreGeometry!.width).toBeGreaterThanOrEqual(44);
+    expect(moreGeometry!.height).toBeGreaterThanOrEqual(44);
+    expect(moreGeometry!.x).toBeGreaterThanOrEqual(0);
+    expect(moreGeometry!.x + moreGeometry!.width).toBeLessThanOrEqual(390);
+    await mobileMore.click();
+    const mobileMenu = memberPage.getByRole("menu", { name: "消息操作", exact: true });
+    const mobileReply = mobileMenu.getByRole("menuitem", { name: "回复", exact: true });
+    const mobileSync = mobileMenu.getByRole("menuitem", { name: "同步到群聊", exact: true });
+    await expect(mobileReply).toBeEnabled();
+    await expect(mobileSync).toBeEnabled();
+    for (const action of [mobileReply, mobileSync]) {
+      const bounds = await action.boundingBox();
+      expect(bounds).toBeTruthy();
+      expect(bounds!.width).toBeGreaterThanOrEqual(44);
+      expect(bounds!.height).toBeGreaterThanOrEqual(44);
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+    }
+    await memberPage.keyboard.press("Escape");
+    await expect(mobileMenu).toHaveCount(0);
+    await expect(mobileMore).toBeFocused();
     expect(await memberPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     if (process.env.DUALLANE_UI_REVIEW_DIR) await memberPage.screenshot({ path: `${process.env.DUALLANE_UI_REVIEW_DIR}/topic-actions-mobile.png` });
 
     await ownerPage.goto(`/workspace/topics/${topic!.id}`);
     const ownerTopic = ownerPage.getByRole("region", { name: `话题 ${topicTitle}` });
     await expect(ownerTopic).toBeVisible();
-    await ownerTopic.getByRole("button", { name: "关闭", exact: true }).click();
+    await ownerTopic.getByRole("button", { name: "话题详情", exact: true }).click();
+    const ownerDetails = ownerPage.getByRole("dialog", { name: "话题详情", exact: true });
+    await ownerDetails.getByRole("button", { name: "关闭话题", exact: true }).click();
+    await ownerDetails.getByRole("button", { name: "关闭话题详情", exact: true }).click();
     await expect(ownerTopic.getByText("话题已关闭，当前为只读状态。", { exact: true })).toBeVisible();
-    await ownerTopic.getByRole("button", { name: "归档", exact: true }).click();
+    await ownerTopic.getByRole("button", { name: "话题详情", exact: true }).click();
+    await ownerDetails.getByRole("button", { name: "归档话题", exact: true }).click();
+    await ownerDetails.getByRole("button", { name: "关闭话题详情", exact: true }).click();
     await expect(ownerTopic.getByText("已归档", { exact: true })).toBeVisible();
 
     await memberPage.reload();
@@ -215,8 +239,10 @@ test("Echo commands preserve ordinary messages and complete or cancel guided wor
     response.url().endsWith("/api/workspace/messages") && response.request().method() === "POST"
   );
   await chat.locator("form.workspace-composer button.workspace-send-button").click();
-  expect((await ordinaryResponse).status()).toBe(201);
-  await expect(chat.locator(".workspace-message-list").getByText("/not-a-command", { exact: true })).toBeVisible();
+  const ordinaryMessageResponse = await ordinaryResponse;
+  expect(ordinaryMessageResponse.status()).toBe(201);
+  const ordinaryMessage = await ordinaryMessageResponse.json() as { message: { id: string } };
+  await expect(chat.locator(`[data-message-id="${ordinaryMessage.message.id}"]`).getByText("/not-a-command", { exact: true })).toBeVisible();
 
   await composer.fill("/need");
   const needCommandResponse = page.waitForResponse((response) =>

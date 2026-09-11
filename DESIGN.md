@@ -51,6 +51,14 @@ DualLane is designed for personal use, familiar small groups, and self-hosted de
 
 ## 5. Product Documents
 
+The complete UI/UX rewrite follows the [清晰双轨 V2 plan](docs/design/ui-ux-rewrite/README.md).
+It defines the unified visual language, interaction flows, theme architecture and
+all-screen acceptance. The current branch contains the production implementation;
+the [page refinement record](docs/design/ui-ux-rewrite/PAGE_REFINEMENT.md) tracks
+structural changes after the first styling pass. Complete acceptance and production
+release remain separate and unfinished. These presentation decisions supersede
+older visual guidance, while this document's trust and data boundaries remain binding.
+
 This document is the system-level design. Product details are split into lane-specific documents:
 
 - [Workspace Design Index](docs/WORKSPACE_DESIGN_INDEX.md)

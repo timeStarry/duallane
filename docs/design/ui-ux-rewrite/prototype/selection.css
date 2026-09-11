@@ -1,0 +1,107 @@
+/* One selection surface; the indicator has its own reserved gutter. */
+:root {
+  --selection-thickness: 2px;
+  --selection-gap: 5px;
+  --selection-gutter: calc(var(--selection-thickness) + var(--selection-gap));
+  --selection-end-inset: 10px;
+  --selection-radius: 10px;
+}
+:is(.sidebar nav a, .prefs-category, .conversation, .rail-nav button, .segmented button, .selection-demo-tab) {
+  position: relative;
+  isolation: isolate;
+  background: transparent;
+  box-shadow: none;
+  border: 0;
+  border-radius: var(--selection-radius);
+  color: var(--muted);
+  min-height: 44px;
+}
+:is(.sidebar nav a, .prefs-category, .conversation, .rail-nav button, .segmented button, .selection-demo-tab)::before,
+:is(.sidebar nav a, .prefs-category, .conversation, .rail-nav button, .segmented button, .selection-demo-tab)::after {
+  content: "";
+  position: absolute;
+  display: block;
+  pointer-events: none;
+  z-index: -1;
+  opacity: 0;
+  transition: opacity 120ms ease, background-color 120ms ease;
+}
+:is(.sidebar nav a, .prefs-category, .conversation, .rail-nav button, .segmented button, .selection-demo-tab)::before {
+  inset: 0 0 0 var(--selection-gutter);
+  width: auto;
+  height: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--selection-radius);
+}
+:is(.sidebar nav a, .prefs-category, .conversation, .rail-nav button, .segmented button, .selection-demo-tab)::after {
+  inset: var(--selection-end-inset) auto var(--selection-end-inset) 0;
+  width: var(--selection-thickness);
+  height: auto;
+  background: var(--shared);
+  border-radius: 1px;
+}
+:is(.sidebar nav a, .prefs-category, .conversation, .selection-demo-tab) {
+  padding-inline-start: calc(12px + var(--selection-gutter));
+}
+:is(.sidebar nav a, .prefs-category, .conversation, .rail-nav button, .segmented button, .selection-demo-tab):hover::before {
+  opacity: 1;
+  background: var(--soft);
+  border-color: transparent;
+}
+:is(.sidebar nav a, .prefs-category, .conversation, .rail-nav button, .segmented button, .selection-demo-tab):is([aria-current], [aria-pressed=true], [aria-selected=true]) {
+  color: var(--shared);
+  background: transparent;
+  box-shadow: none;
+}
+:is(.sidebar nav a, .prefs-category, .conversation, .rail-nav button, .segmented button, .selection-demo-tab):is([aria-current], [aria-pressed=true], [aria-selected=true])::before {
+  opacity: 1;
+  background: var(--surface);
+  border-color: var(--line);
+}
+:is(.sidebar nav a, .prefs-category, .conversation, .rail-nav button, .segmented button, .selection-demo-tab):is([aria-current], [aria-pressed=true], [aria-selected=true])::after { opacity: 1; }
+.conversation[aria-pressed=true] .conversation-title { color: var(--text); }
+:is(.rail-nav button, .segmented button, .selection-bottom .selection-demo-tab)::before {
+  inset: 0 0 var(--selection-gutter);
+}
+:is(.rail-nav button, .segmented button, .selection-bottom .selection-demo-tab)::after {
+  inset: auto var(--selection-end-inset) 0;
+  height: var(--selection-thickness);
+  width: auto;
+}
+.rail-nav button { padding-bottom: calc(8px + var(--selection-gutter)); }
+.segmented button, .prefs-pane .segmented button { padding: 8px 12px calc(8px + var(--selection-gutter)); }
+.segmented { padding: 0; gap: 6px; background: transparent; border-radius: 0; }
+.selection-study { margin-bottom: 32px; scroll-margin-top: 100px; }
+.selection-study-heading { margin-bottom: 22px; }
+.selection-study-heading h3 { font-size: 21px; margin-bottom: 10px; }
+.selection-study-heading p { max-width: 660px; color: var(--muted); font-size: 13px; line-height: 1.9; }
+.selection-studies { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+.selection-study-label { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+.selection-example { background: var(--soft); padding: 18px; border-radius: 16px; min-width: 0; min-height: 242px; }
+.selection-side { display: grid; grid-template-columns: 126px minmax(0, 1fr); align-items: start; gap: 20px; }
+.selection-side [role=tablist] { display: grid; gap: 8px; }
+.selection-demo-tab { display: flex; align-items: center; gap: 8px; padding: 12px; font-size: 13px; text-align: left; }
+.selection-demo-tab .ico { width: 17px; height: 17px; }
+.selection-side .selection-demo-tab { padding-inline-start: calc(10px + var(--selection-gutter)); }
+.selection-bottom [role=tablist] { display: flex; gap: 8px; margin-bottom: 24px; }
+.selection-bottom .selection-demo-tab { flex: 1; justify-content: center; padding: 10px 8px calc(10px + var(--selection-gutter)); }
+.selection-example [role=tabpanel] { font-size: 13px; line-height: 1.9; outline-offset: 5px; min-width: 0; }
+.selection-example [role=tabpanel]:focus-visible { outline: 2px solid var(--focus); }
+.selection-example [role=tabpanel] h4 { margin: 9px 0 12px; font-size: 15px; }
+.selection-example [role=tabpanel] p { color: var(--muted); margin-bottom: 8px; }
+.selection-example [role=tabpanel] .selection-summary { font-size: 12px; color: var(--shared); }
+.selection-study-note { color: var(--muted); font-size: 12px; margin: 16px 0 0; line-height: 1.9; }
+@media (max-width: 1100px) { .selection-studies { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .selection-side { grid-template-columns: 112px minmax(0, 1fr); gap: 14px; } .selection-example { padding: 14px; } }
+@media (max-width: 360px) { .selection-side { grid-template-columns: 94px minmax(0, 1fr); gap: 10px; } .selection-demo-tab { font-size: 12px; gap: 6px; } .selection-demo-tab .ico { width: 15px; height: 15px; } }
+html[data-motion=reduce] :is(.sidebar nav a, .prefs-category, .conversation, .rail-nav button, .segmented button, .selection-demo-tab)::before,
+html[data-motion=reduce] :is(.sidebar nav a, .prefs-category, .conversation, .rail-nav button, .segmented button, .selection-demo-tab)::after { transition: none; }
+@media (prefers-reduced-motion: reduce) {
+  :is(.sidebar nav a, .prefs-category, .conversation, .rail-nav button, .segmented button, .selection-demo-tab)::before,
+  :is(.sidebar nav a, .prefs-category, .conversation, .rail-nav button, .segmented button, .selection-demo-tab)::after { transition: none; }
+}
+@media (forced-colors: active) {
+  :is(.sidebar nav a, .prefs-category, .conversation, .rail-nav button, .segmented button, .selection-demo-tab)::before { background: Canvas; border-color: ButtonText; }
+  :is(.sidebar nav a, .prefs-category, .conversation, .rail-nav button, .segmented button, .selection-demo-tab)::after { background: Highlight; forced-color-adjust: none; }
+}

@@ -101,6 +101,8 @@ type ConversationRecord struct {
 type MemberRecord = workspaceMembers.MemberRecord
 
 type MessageRecord struct {
+	TopicID             string
+	TopicReadOnly       bool
 	ID                  string
 	ConversationID      string
 	AuthorID            *string

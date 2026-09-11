@@ -187,7 +187,8 @@ func listTopicMessages(response http.ResponseWriter, request *http.Request, acto
 	query := request.URL.Query()
 	result, err := options.Topics.ListMessages(request.Context(), topics.MessageListInput{
 		ActorID: actor.ID, TopicID: chi.URLParam(request, "topicId"), Before: query.Get("before"), After: query.Get("after"),
-		Limit: parseLimit(query.Get("limit")), Meta: requestMeta(request, options),
+		Around: query.Get("around"),
+		Limit:  parseLimit(query.Get("limit")), Meta: requestMeta(request, options),
 	})
 	writeResult(response, http.StatusOK, map[string]any{"messages": result}, err)
 }

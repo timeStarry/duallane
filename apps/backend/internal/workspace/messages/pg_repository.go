@@ -164,7 +164,7 @@ func (s *PGRepository) FindMessageForViewer(ctx context.Context, spaceID, conver
 	if s == nil || s.pool == nil {
 		return nil, errors.New("workspace messages postgres pool is required")
 	}
-	return s.findMessage(ctx, s.pool, spaceID, conversationID, messageID, viewerID)
+	return findVisibleMessage(ctx, s.pool, spaceID, conversationID, messageID, viewerID)
 }
 
 func (s *PGRepository) FindMessageByClientID(ctx context.Context, spaceID, conversationID, actorID, clientMessageID string) (*MessageRecord, error) {
@@ -294,7 +294,7 @@ func (t *pgTx) FindMessage(ctx context.Context, spaceID, conversationID, message
 }
 
 func (t *pgTx) FindMessageForViewer(ctx context.Context, spaceID, conversationID, messageID, viewerID string) (*MessageRecord, error) {
-	return t.findMessage(ctx, spaceID, conversationID, messageID, viewerID)
+	return findVisibleMessage(ctx, t.tx, spaceID, conversationID, messageID, viewerID)
 }
 
 func (t *pgTx) findMessage(ctx context.Context, spaceID, conversationID, messageID, viewerID string) (*MessageRecord, error) {
@@ -488,7 +488,6 @@ func (t *pgTx) RecallMessage(ctx context.Context, spaceID, messageID string, exp
 		    recall_reason = $4
 		WHERE space_id = $5
 		  AND id = $6
-		  AND topic_id IS NULL
 		  AND deleted_at IS NULL
 		  AND recalled_at IS NULL
 		  AND ($7 <= 0 OR $7 = 1)
@@ -568,7 +567,7 @@ func (t *pgTx) HideMessage(ctx context.Context, spaceID, messageID, userID strin
 		INSERT INTO message_hidden_states (user_id, message_id, hidden_at)
 		SELECT $1, m.id, $4
 		FROM messages m
-		WHERE m.id = $2 AND m.space_id = $3 AND m.topic_id IS NULL AND m.deleted_at IS NULL
+		WHERE m.id = $2 AND m.space_id = $3 AND m.deleted_at IS NULL
 		ON CONFLICT (user_id, message_id) DO NOTHING
 	`, userID, messageID, spaceID, normalizeTimestamp(now))
 	return result.RowsAffected() > 0, err
@@ -589,7 +588,7 @@ func (t *pgTx) AddReaction(ctx context.Context, spaceID, messageID, userID, emot
 		INSERT INTO message_reactions (message_id, user_id, emote_key, created_at)
 		SELECT m.id, $3, $4, $5
 		FROM messages m
-		WHERE m.id = $1 AND m.space_id = $2 AND m.topic_id IS NULL AND m.deleted_at IS NULL
+		WHERE m.id = $1 AND m.space_id = $2 AND m.deleted_at IS NULL AND m.recalled_at IS NULL
 		ON CONFLICT (message_id, user_id, emote_key) DO NOTHING
 	`, messageID, spaceID, userID, emoteKey, normalizeTimestamp(now))
 	return result.RowsAffected() > 0, err
@@ -773,7 +772,8 @@ const messageSelect = `
 			  AND we.target_id = m.id
 		), 0) AS event_seq,
 		p.pinned_by_user_id,
-		p.created_at AS pinned_at
+		p.created_at AS pinned_at,
+		COALESCE(m.topic_id, '') AS topic_id
 	FROM messages m
 	LEFT JOIN users u ON u.id = m.author_id
 	LEFT JOIN user_remarks ur ON ur.owner_user_id = $4 AND ur.target_user_id = u.id
@@ -800,7 +800,7 @@ func scanMessage(row pgx.Row) (*MessageRecord, error) {
 	err := row.Scan(&record.ID, &record.SpaceID, &record.ConversationID, &authorID, &record.AuthorName,
 		&authorNickname, &authorRemark, &authorGitHub, &authorAvatar, &record.AuthorKind, &record.Kind,
 		&clientID, &contentJSON, &record.PlainText, &replyID, &record.CreatedAt, &editedAt, &deletedAt,
-		&recalledAt, &recallReasonText, &record.Revision, &record.EventSeq, &record.PinnedByUserID, &record.PinnedAt)
+		&recalledAt, &recallReasonText, &record.Revision, &record.EventSeq, &record.PinnedByUserID, &record.PinnedAt, &record.TopicID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -951,7 +951,7 @@ func scanMessageRows(rows pgx.Rows) (*MessageRecord, error) {
 	err := rows.Scan(&record.ID, &record.SpaceID, &record.ConversationID, &authorID, &record.AuthorName,
 		&authorNickname, &authorRemark, &authorGitHub, &authorAvatar, &record.AuthorKind, &record.Kind,
 		&clientID, &contentJSON, &record.PlainText, &replyID, &record.CreatedAt, &editedAt, &deletedAt,
-		&recalledAt, &recallReason, &record.Revision, &record.EventSeq, &record.PinnedByUserID, &record.PinnedAt)
+		&recalledAt, &recallReason, &record.Revision, &record.EventSeq, &record.PinnedByUserID, &record.PinnedAt, &record.TopicID)
 	if err != nil {
 		return nil, err
 	}
@@ -1122,13 +1122,14 @@ func listMessageEmoteCollectionShares(ctx context.Context, queryer pgQueryer, sp
 			COALESCE(orr.remark, ou.nickname, ou.github_login, ou.display_name, ou.id)
 		FROM message_emote_collection_shares mes
 		INNER JOIN messages m ON m.id = mes.message_id
-			AND m.space_id = $1 AND m.topic_id IS NULL AND m.deleted_at IS NULL
+			AND m.space_id = $1 AND m.deleted_at IS NULL
 		INNER JOIN workspace_emote_collection_shares s ON s.id = mes.share_id
 		INNER JOIN users su ON su.id = s.shared_by_user_id
 		INNER JOIN users ou ON ou.id = s.original_creator_user_id
 		LEFT JOIN user_remarks sr ON sr.owner_user_id = $2 AND sr.target_user_id = su.id
 		LEFT JOIN user_remarks orr ON orr.owner_user_id = $2 AND orr.target_user_id = ou.id
 		WHERE mes.message_id = ANY($3::text[])
+			AND (m.topic_id IS NULL OR EXISTS (SELECT 1 FROM topic_members tm WHERE tm.topic_id = m.topic_id AND tm.user_id = $2 AND tm.left_at IS NULL))
 			AND EXISTS (
 				SELECT 1 FROM conversation_members cm
 				INNER JOIN space_members sm ON sm.user_id = cm.user_id

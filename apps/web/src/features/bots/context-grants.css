@@ -1,0 +1,15 @@
+.dl-bot-context { min-width: 0; }
+.dl-bot-context-note { color: var(--muted); font-size: 13px; line-height: 1.65; }
+.dl-bot-context-detail { display: grid; gap: 16px; padding-top: 20px; }
+.dl-bot-context-detail h4, .dl-bot-context-detail p { margin: 0; }
+.dl-bot-context-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0; }
+.dl-bot-context-summary div { padding: 12px; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 12px; }
+.dl-bot-context-summary dt { color: var(--muted); font-size: 12px; }
+.dl-bot-context-summary dd { margin: 6px 0 0; font-weight: 600; }
+.dl-bot-context fieldset { display: grid; gap: 18px; min-width: 0; padding: 20px 0; border: 0; }
+.dl-bot-context legend { font-size: 13px; font-weight: 600; }
+.dl-bot-context-limit { display: grid; gap: 8px; max-width: 360px; }
+.dl-bot-context-limit input { width: 100%; }
+.dl-bot-context-limit small { color: var(--muted); }
+.dl-bot-context-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+@media (max-width: 760px) { .dl-bot-context-summary { grid-template-columns: 1fr; } .dl-bot-context-actions > button { flex: 1; } }

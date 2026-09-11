@@ -17,15 +17,21 @@ import {
   X
 } from "lucide-react";
 import { createWorkspaceJsonHeaders } from "./workspace-http";
+import { SegmentedControl, Select, Switch, Tabs } from "./ui/primitives";
+import "./workspace-bot-chapters.css";
+import { BotContextGrants } from "./features/bots/BotContextGrants";
+import type { BotGrantNavigationGuard, BotGroupPolicy } from "./features/bots/context-grants";
 
 export type WorkspaceBotNoticeTone = "success" | "warning" | "info";
 
 export type WorkspaceBotSettingsProps = {
   onBack: () => void;
+  embedded?: boolean;
   onNotice: (tone: WorkspaceBotNoticeTone, text: string) => void;
   botId?: string;
   setupSessionId?: string;
   fetchImpl?: typeof fetch;
+  registerNavigationGuard?: (guard: BotGrantNavigationGuard | null) => void;
 };
 
 export type BotGroupPolicyMode = "direct_only" | "allow_group" | "approval_required";
@@ -42,6 +48,8 @@ export const BOT_GROUP_POLICY_OPTIONS: ReadonlyArray<{
 
 type WorkspaceBot = {
   id: string;
+  botUserId: string;
+  ownerUserId: string;
   name: string;
   mode?: string;
   status: "active" | "paused" | "deleting" | "deleted" | string;
@@ -113,16 +121,6 @@ type BotConnection = {
   lastProcessedAt?: string | null;
   lastErrorCode?: string | null;
   lastErrorAt?: string | null;
-  updatedAt?: string;
-};
-
-type BotGroupPolicy = {
-  conversationId: string;
-  status?: "pending" | "active" | "rejected" | "removed" | string;
-  invitedBy?: string | null;
-  approvedBy?: string | null;
-  maxContextMessages?: number | null;
-  createdAt?: string;
   updatedAt?: string;
 };
 
@@ -255,7 +253,9 @@ function operationError(error: unknown, fallback: string) {
   return fallback;
 }
 
-export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, setupSessionId, fetchImpl = fetch }: WorkspaceBotSettingsProps) {
+export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, setupSessionId, fetchImpl = fetch, embedded = false, registerNavigationGuard }: WorkspaceBotSettingsProps) {
+  const [chapter, setChapter] = useState("profile");
+  const panelClassName = embedded ? "workspace-bot-settings workspace-bot-embedded" : "workspace-bot-settings workspace-content-panel";
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [bot, setBot] = useState<WorkspaceBot | null>(null);
@@ -288,6 +288,7 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
   const [setupConversations, setSetupConversations] = useState<string[]>([]);
   const savedIdentitySignatureRef = useRef("");
   const savedGroupPolicyRef = useRef<BotGroupPolicyMode | null>(null);
+  const grantJson = useCallback(<T,>(path: string, options?: RequestInit) => requestJson<T>(fetchImpl, path, options), [fetchImpl]);
 
   const loadBot = useCallback(async (preferredBotId?: string) => {
     setLoading(true);
@@ -675,11 +676,11 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
 
   if (loading) {
     return (
-      <section className="workspace-bot-settings workspace-content-panel" aria-busy="true">
-        <header className="workspace-bot-header workspace-panel-header">
+      <section className={panelClassName} aria-busy="true">
+        {!embedded && <header className="workspace-bot-header workspace-panel-header">
           <button className="icon-button" type="button" aria-label="返回个人设置" title="返回" onClick={onBack}><ArrowLeft size={17} /></button>
           <div><p className="eyebrow">个人 · Bot</p><h2>我的 Bot</h2></div>
-        </header>
+        </header>}
         <div className="workspace-bot-state workspace-bot-loading" role="status"><RefreshCw size={18} className="workspace-bot-spin" />读取 Bot 设置...</div>
       </section>
     );
@@ -687,11 +688,11 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
 
   if (error) {
     return (
-      <section className="workspace-bot-settings workspace-content-panel" aria-live="polite">
-        <header className="workspace-bot-header workspace-panel-header">
+      <section className={panelClassName} aria-live="polite">
+        {!embedded && <header className="workspace-bot-header workspace-panel-header">
           <button className="icon-button" type="button" aria-label="返回个人设置" title="返回" onClick={onBack}><ArrowLeft size={17} /></button>
           <div><p className="eyebrow">个人 · Bot</p><h2>我的 Bot</h2></div>
-        </header>
+        </header>}
         <div className="workspace-bot-state workspace-bot-error" role="alert"><AlertTriangle size={20} /><p>{error}</p><button className="secondary" type="button" onClick={() => void loadBot(requestedBotId)}><RefreshCw size={16} />重试</button></div>
       </section>
     );
@@ -699,11 +700,11 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
 
   if (!bot) {
     return (
-      <section className="workspace-bot-settings workspace-content-panel">
-        <header className="workspace-bot-header workspace-panel-header">
+      <section className={panelClassName}>
+        {!embedded && <header className="workspace-bot-header workspace-panel-header">
           <button className="icon-button" type="button" aria-label="返回个人设置" title="返回" onClick={onBack}><ArrowLeft size={17} /></button>
           <div><p className="eyebrow">个人 · Bot</p><h2>我的 Bot</h2></div>
-        </header>
+        </header>}
         <div className="workspace-bot-empty" role="status">
           <BotIcon size={30} aria-hidden="true" />
           <h3>创建你的 Bot</h3>
@@ -727,9 +728,9 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
     const requestedScopes = setup.requestedScopes.length > 0 ? setup.requestedScopes : DEFAULT_TOKEN_SCOPES;
     const requestedConversations = setup.requestedConversations;
     return (
-      <section className="workspace-bot-settings workspace-content-panel" aria-busy={setupBusy}>
-        <header className="workspace-bot-header workspace-panel-header">
-          <button className="icon-button" type="button" aria-label="返回 Bot 设置" title="返回" onClick={onBack}><ArrowLeft size={17} /></button>
+      <section className={panelClassName} aria-busy={setupBusy}>
+        <header className={embedded ? "workspace-bot-header" : "workspace-bot-header workspace-panel-header"}>
+          {!embedded && <button className="icon-button" type="button" aria-label="返回 Bot 设置" title="返回" onClick={onBack}><ArrowLeft size={17} /></button>}
           <div className="workspace-bot-title"><p className="eyebrow">连接 Agent</p><h2>{bot.name}</h2><span className="workspace-bot-status"><span aria-hidden="true" />{setupStatusLabel(setup.status)}</span></div>
         </header>
         <section className="workspace-bot-section workspace-bot-setup-section" aria-labelledby="workspace-bot-setup-title">
@@ -770,22 +771,22 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
   }
 
   return (
-    <section className="workspace-bot-settings workspace-content-panel" aria-busy={savingSettings || savingGroupPolicy || tokenBusy || connectionBusy || deleteBusy}>
-      <header className="workspace-bot-header workspace-panel-header">
-        <button className="icon-button" type="button" aria-label="返回个人设置" title="返回" onClick={onBack}><ArrowLeft size={17} /></button>
+    <section className={panelClassName} aria-busy={savingSettings || savingGroupPolicy || tokenBusy || connectionBusy || deleteBusy}>
+      <header className={embedded ? "workspace-bot-header" : "workspace-bot-header workspace-panel-header"}>
+        {!embedded && <button className="icon-button" type="button" aria-label="返回个人设置" title="返回" onClick={onBack}><ArrowLeft size={17} /></button>}
         <div className="workspace-bot-title">
-          <p className="eyebrow">个人 · Bot</p>
+          {!embedded && <p className="eyebrow">个人 · Bot</p>}
           <div className="workspace-bot-heading-line">
             <h2>{bot.name}</h2>
             <span className={`workspace-bot-status workspace-bot-status-${bot.status}`}><span aria-hidden="true" />{statusLabel(bot.status)}</span>
           </div>
         </div>
         <div className="workspace-bot-header-side">
-          <div className="workspace-bot-header-connection" aria-label="Bot 连接摘要">
+          <button className="workspace-bot-header-connection" type="button" aria-label="查看 Bot 连接状态" onClick={() => setChapter("connection")}>
             <span className={`workspace-bot-connection-dot workspace-bot-connection-dot-${connection?.status || "disconnected"}`} aria-hidden="true" />
             <span>{statusLabel(connection?.status || "disconnected")}</span>
             <small>{connection?.lastHeartbeatAt ? `最近心跳 ${formatDate(connection.lastHeartbeatAt)}` : "尚未报告心跳"}</small>
-          </div>
+          </button>
           <div className="workspace-bot-header-actions">
             {isActive && <button className="secondary compact" type="button" disabled={deleteBusy} onClick={() => void changeLifecycle("pause")}><Pause size={15} />暂停</button>}
             {isPaused && <button className="secondary compact" type="button" disabled={deleteBusy} onClick={() => void changeLifecycle("resume")}><Play size={15} />恢复</button>}
@@ -797,16 +798,8 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
       {isDeleted && <div className="workspace-bot-confirm workspace-bot-confirm-muted" role="status"><ShieldCheck size={18} /><span>此 Bot 已停用，设置与凭据均不可再使用。</span></div>}
 
       {!isDeleted && settings && (
-        <div className="workspace-bot-sections">
-          <section className="workspace-bot-section workspace-bot-connect-section" aria-labelledby="workspace-bot-connect-title">
-            <div className="workspace-bot-section-intro"><h3 id="workspace-bot-connect-title">连接 Agent</h3><p>把下面的配置指令发送给任意 Agent。它会读取通用 Skill，并在需要选择或授权时引导你打开 DualLane 页面。</p></div>
-            <div className="workspace-bot-skill-row"><div><span>DualLane Agent Skill</span><code>{DUALLANE_AGENT_SKILL_URL}</code></div><button className="icon-button" type="button" title="复制 Skill 链接" aria-label="复制 DualLane Agent Skill 链接" onClick={() => void copySetupText(DUALLANE_AGENT_SKILL_URL, "Skill 链接")}><Clipboard size={16} /></button></div>
-            <div className="workspace-bot-connect-actions"><button className="primary" type="button" disabled={setupBusy || !isActive} onClick={() => void copyAgentSetup()}>{setupBusy ? <RefreshCw size={16} className="workspace-bot-spin" /> : <Clipboard size={16} />}复制配置指令</button>{setup && !["exchanged", "denied", "expired", "revoked"].includes(setup.status) && <button className="secondary" type="button" disabled={setupBusy} onClick={() => void copySetupText(setup.id, "一次性配置码")}><KeyRound size={16} />复制一次性配置码</button>}{setup && <button className="secondary" type="button" disabled={setupBusy} onClick={() => window.location.assign(setupUrlFor(setup))}><ExternalLink size={16} />打开授权配置</button>}</div>
-            <div className="workspace-bot-setup-status" role="status"><span className={`workspace-bot-status-dot workspace-bot-status-dot-${setup?.status || "idle"}`} aria-hidden="true" /><span>{setup ? setupStatusLabel(setup.status) : "尚未开始配置"}</span>{setup?.expiresAt && <small>有效期至 {formatDate(setup.expiresAt)}</small>}</div>
-            <small className="workspace-bot-security-note">配置链接不包含 Bot Token。Token 只会在用户确认后由 Agent 通过一次性交换获得。</small>
-          </section>
-
-          <section className="workspace-bot-section" aria-labelledby="workspace-bot-identity-title">
+        <Tabs className="dl-bot-chapters" label="Bot 设置章节" value={chapter} onValueChange={setChapter} items={[
+          { value: "profile", label: "资料", content: <><section className="workspace-bot-section" aria-labelledby="workspace-bot-identity-title">
             <div className="workspace-bot-section-intro"><h3 id="workspace-bot-identity-title">身份与发现</h3><p>控制 Bot 的公开资料、触发入口和可见范围。</p></div>
             <form className="workspace-bot-form" onSubmit={(event) => { event.preventDefault(); void saveIdentityAndDiscovery(); }}>
               <div className="workspace-bot-form-grid">
@@ -815,54 +808,53 @@ export function WorkspaceBotSettings({ onBack, onNotice, botId: requestedBotId, 
               </div>
               <label><span>简介</span><textarea value={description} maxLength={4000} rows={3} disabled={!isActive && !isPaused} onChange={(event) => setDescription(event.target.value)} placeholder="告诉成员这个 Bot 负责什么" /></label>
               <label><span>欢迎语</span><textarea value={welcomeMessage} maxLength={4000} rows={2} disabled={!isActive && !isPaused} onChange={(event) => setWelcomeMessage(event.target.value)} placeholder="可选，在 Bot 首次响应时显示" /></label>
-              <label className="workspace-bot-select-field"><span>成员发现</span><select value={visibilityPolicy} disabled={!isActive && !isPaused} onChange={(event) => setVisibilityPolicy(event.target.value as BotSettings["visibilityPolicy"])}><option value="private">仅自己可发现</option><option value="specified_members">指定成员</option><option value="space_members">空间成员</option><option value="groups">已授权群聊</option></select><small>{visibilityLabel(visibilityPolicy)}</small></label>
+              <SegmentedControl label="成员发现" value={visibilityPolicy} disabled={!isActive && !isPaused} onValueChange={(value) => { if (value === "private" || value === "specified_members" || value === "space_members" || value === "groups") setVisibilityPolicy(value); }} options={[{ value: "private", label: "仅自己可发现" }, { value: "specified_members", label: "指定成员" }, { value: "space_members", label: "空间成员" }, { value: "groups", label: "已授权群聊" }]} description={visibilityLabel(visibilityPolicy)} />
               {visibilityPolicy === "specified_members" && <label><span>指定成员 ID</span><textarea value={memberIds} maxLength={4000} rows={2} disabled={!isActive && !isPaused} onChange={(event) => setMemberIds(event.target.value)} placeholder="每行一个成员 ID" /><small>仅保存成员 ID，不会读取或显示成员消息。</small></label>}
-              <label className="workspace-bot-switch"><input type="checkbox" checked={showCreator} disabled={!isActive && !isPaused} onChange={(event) => setShowCreator(event.target.checked)} /><span><strong>显示创建者</strong><small>在 Bot 资料中显示你的空间身份。</small></span></label>
+              <label className="workspace-bot-switch"><Switch label="显示创建者" checked={showCreator} disabled={!isActive && !isPaused} onCheckedChange={setShowCreator} /><span><strong>显示创建者</strong><small>在 Bot 资料中显示你的空间身份。</small></span></label>
               <div className="workspace-bot-auto-save-row" role="status" aria-live="polite">
                 {identitySaveState === "saving" ? <RefreshCw size={14} className="workspace-bot-spin" /> : identitySaveState === "saved" ? <Check size={14} /> : <ShieldCheck size={14} />}
                 <span>{identitySaveState === "saving" ? "正在保存" : identitySaveState === "saved" ? "已自动保存" : identitySaveState === "error" ? "保存失败，请继续修改后重试" : "修改后自动保存"}</span>
                 {identitySaveState === "error" && <button className="text-button" type="submit" disabled={savingSettings}>重试</button>}
               </div>
             </form>
-          </section>
-
-          <section className="workspace-bot-section" aria-labelledby="workspace-bot-group-title">
+          </section><section className="workspace-bot-section workspace-bot-danger-section" aria-labelledby="workspace-bot-danger-title">
+            <div className="workspace-bot-section-intro"><h3 id="workspace-bot-danger-title">停用 Bot</h3><p>停用会撤销所有 Token，并移除 Bot 的空间成员身份。此操作不可恢复。</p></div>
+            {!isDeleting && !deleteConfirm && <button className="danger" type="button" disabled={deleteBusy || !isActive && !isPaused} onClick={requestDisable}><Trash2 size={16} />停用 Bot</button>}
+          </section></> },
+          { value: "connection", label: "连接", content: <><section className="workspace-bot-section workspace-bot-connect-section" aria-labelledby="workspace-bot-connect-title">
+            <div className="workspace-bot-section-intro"><h3 id="workspace-bot-connect-title">连接 Agent</h3><p>把下面的配置指令发送给任意 Agent。它会读取通用 Skill，并在需要选择或授权时引导你打开 DualLane 页面。</p></div>
+            <div className="workspace-bot-skill-row"><div><span>DualLane Agent Skill</span><code>{DUALLANE_AGENT_SKILL_URL}</code></div><button className="icon-button" type="button" title="复制 Skill 链接" aria-label="复制 DualLane Agent Skill 链接" onClick={() => void copySetupText(DUALLANE_AGENT_SKILL_URL, "Skill 链接")}><Clipboard size={16} /></button></div>
+            <div className="workspace-bot-connect-actions"><button className="primary" type="button" disabled={setupBusy || !isActive} onClick={() => void copyAgentSetup()}>{setupBusy ? <RefreshCw size={16} className="workspace-bot-spin" /> : <Clipboard size={16} />}复制配置指令</button>{setup && !["exchanged", "denied", "expired", "revoked"].includes(setup.status) && <button className="secondary" type="button" disabled={setupBusy} onClick={() => void copySetupText(setup.id, "一次性配置码")}><KeyRound size={16} />复制一次性配置码</button>}{setup && <button className="secondary" type="button" disabled={setupBusy} onClick={() => window.location.assign(setupUrlFor(setup))}><ExternalLink size={16} />打开授权配置</button>}</div>
+            <div className="workspace-bot-setup-status" role="status"><span className={`workspace-bot-status-dot workspace-bot-status-dot-${setup?.status || "idle"}`} aria-hidden="true" /><span>{setup ? setupStatusLabel(setup.status) : "尚未开始配置"}</span>{setup?.expiresAt && <small>有效期至 {formatDate(setup.expiresAt)}</small>}</div>
+            <small className="workspace-bot-security-note">配置链接不包含 Bot Token。Token 只会在用户确认后由 Agent 通过一次性交换获得。</small>
+          </section><section className="workspace-bot-section" aria-labelledby="workspace-bot-connection-title">
+            <div className="workspace-bot-section-intro"><h3 id="workspace-bot-connection-title">连接状态</h3><p>连接器只接收经过授权的事件，不会把 Token 写入页面日志。</p></div>
+            <div className="workspace-bot-connection-card"><div className="workspace-bot-connection-status"><Wifi size={19} /><strong>{statusLabel(connection?.status)}</strong><span>{connection?.adapterVersion ? `适配器 ${connection.adapterVersion}` : "尚未报告适配器"}</span></div><dl><div><dt>最近心跳</dt><dd>{formatDate(connection?.lastHeartbeatAt)}</dd></div><div><dt>最近处理</dt><dd>{formatDate(connection?.lastProcessedAt)}</dd></div><div><dt>最近错误</dt><dd>{connection?.lastErrorCode || "无"}</dd></div></dl></div>
+            <div className="workspace-bot-form-actions"><button className="secondary" type="button" disabled={connectionBusy || isDeleted} onClick={() => void testConnection()}>{connectionBusy ? <RefreshCw size={16} className="workspace-bot-spin" /> : <RefreshCw size={16} />}刷新连接状态</button></div>
+          </section><section className="workspace-bot-section" aria-labelledby="workspace-bot-quota-title">
+            <div className="workspace-bot-section-intro"><h3 id="workspace-bot-quota-title">限额</h3><p>这些额度由空间策略控制，超过限额的请求会在执行前被拒绝。</p></div>
+            <div className="workspace-bot-quota-grid"><div><span>每分钟请求</span><strong>{formatLimit(settings.limits?.requestsPerMinute)}</strong></div><div><span>成员每日请求</span><strong>{formatLimit(settings.limits?.memberDailyRequests)}</strong></div><div><span>输入 Token</span><strong>{formatLimit(settings.limits?.inputTokenLimit)}</strong></div><div><span>输出 Token</span><strong>{formatLimit(settings.limits?.outputTokenLimit)}</strong></div><div><span>最大并发</span><strong>{formatLimit(settings.limits?.maxConcurrency)}</strong></div><div><span>事件积压</span><strong>{formatLimit(settings.limits?.eventBacklogLimit)}</strong></div></div>
+          </section></> },
+          { value: "authorization", label: "授权", content: <><section className="workspace-bot-section" aria-labelledby="workspace-bot-group-title">
             <div className="workspace-bot-section-intro"><h3 id="workspace-bot-group-title">群聊策略</h3><p>私聊始终受发现范围控制；群聊需要单独开启。</p></div>
-            <fieldset className="workspace-bot-policy-options" disabled={!isActive && !isPaused}>
-              <legend className="sr-only">群聊策略</legend>
-              {BOT_GROUP_POLICY_OPTIONS.map((option) => <label key={option.value} className={groupPolicyMode === option.value ? "workspace-bot-policy-option is-selected" : "workspace-bot-policy-option"}><input type="radio" name="workspace-bot-group-policy" value={option.value} checked={groupPolicyMode === option.value} onChange={() => setGroupPolicyMode(option.value)} /><span><strong>{option.label}</strong><small>{option.description}</small></span></label>)}
-            </fieldset>
+            <Select label="群聊策略" name="workspace-bot-group-policy" value={groupPolicyMode} disabled={!isActive && !isPaused} onValueChange={(value) => { if (value === "direct_only" || value === "allow_group" || value === "approval_required") setGroupPolicyMode(value); }} options={[...BOT_GROUP_POLICY_OPTIONS]} description={BOT_GROUP_POLICY_OPTIONS.find((option) => option.value === groupPolicyMode)?.description} />
             <div className="workspace-bot-policy-meta"><span>已授权群聊</span><strong>{visibleGroupPolicyCount} 个</strong><span>邀请策略</span><strong>{settings.groupInviterPolicy === "group_admin" ? "群管理员" : settings.groupInviterPolicy === "any_member" ? "任意成员" : "Bot 所有者"}</strong></div>
             <div className="workspace-bot-auto-save-row" role="status" aria-live="polite">
               {groupSaveState === "saving" ? <RefreshCw size={14} className="workspace-bot-spin" /> : groupSaveState === "saved" ? <Check size={14} /> : <ShieldCheck size={14} />}
               <span>{groupSaveState === "saving" ? "正在保存" : groupSaveState === "saved" ? "已自动保存" : groupSaveState === "error" ? "保存失败，请重试" : "选择后自动保存"}</span>
               {groupSaveState === "error" && <button className="text-button" type="button" disabled={savingGroupPolicy} onClick={() => void saveGroupPolicy()}>重试</button>}
             </div>
-          </section>
-
-          <section className="workspace-bot-section" aria-labelledby="workspace-bot-quota-title">
-            <div className="workspace-bot-section-intro"><h3 id="workspace-bot-quota-title">限额</h3><p>这些额度由空间策略控制，超过限额的请求会在执行前被拒绝。</p></div>
-            <div className="workspace-bot-quota-grid"><div><span>每分钟请求</span><strong>{formatLimit(settings.limits?.requestsPerMinute)}</strong></div><div><span>成员每日请求</span><strong>{formatLimit(settings.limits?.memberDailyRequests)}</strong></div><div><span>输入 Token</span><strong>{formatLimit(settings.limits?.inputTokenLimit)}</strong></div><div><span>输出 Token</span><strong>{formatLimit(settings.limits?.outputTokenLimit)}</strong></div><div><span>最大并发</span><strong>{formatLimit(settings.limits?.maxConcurrency)}</strong></div><div><span>事件积压</span><strong>{formatLimit(settings.limits?.eventBacklogLimit)}</strong></div></div>
-          </section>
-
-          <section className="workspace-bot-section" aria-labelledby="workspace-bot-connection-title">
-            <div className="workspace-bot-section-intro"><h3 id="workspace-bot-connection-title">连接状态</h3><p>连接器只接收经过授权的事件，不会把 Token 写入页面日志。</p></div>
-            <div className="workspace-bot-connection-card"><div className="workspace-bot-connection-status"><Wifi size={19} /><strong>{statusLabel(connection?.status)}</strong><span>{connection?.adapterVersion ? `适配器 ${connection.adapterVersion}` : "尚未报告适配器"}</span></div><dl><div><dt>最近心跳</dt><dd>{formatDate(connection?.lastHeartbeatAt)}</dd></div><div><dt>最近处理</dt><dd>{formatDate(connection?.lastProcessedAt)}</dd></div><div><dt>最近错误</dt><dd>{connection?.lastErrorCode || "无"}</dd></div></dl></div>
-            <div className="workspace-bot-form-actions"><button className="secondary" type="button" disabled={connectionBusy || isDeleted} onClick={() => void testConnection()}>{connectionBusy ? <RefreshCw size={16} className="workspace-bot-spin" /> : <RefreshCw size={16} />}刷新连接状态</button></div>
-          </section>
-
-          <section className="workspace-bot-section" aria-labelledby="workspace-bot-token-title">
+          </section><BotContextGrants key={bot.id} bot={bot} settings={settings} policies={groupPolicies} json={grantJson}
+            hasContextScope={tokens.some(token => !token.revokedAt && (!token.expiresAt || Date.parse(token.expiresAt) > Date.now()) && token.scopes.includes("messages:read_context"))}
+            onPolicyUpdated={policy => setGroupPolicies(current => current.map(item => item.conversationId === policy.conversationId ? policy : item))}
+            registerNavigationGuard={registerNavigationGuard} /></> },
+          { value: "credentials", label: "凭据", content: <><section className="workspace-bot-section" aria-labelledby="workspace-bot-token-title">
             <div className="workspace-bot-section-intro"><h3 id="workspace-bot-token-title">访问 Token</h3><p>Token 只在生成或轮换时展示一次；服务器只保存不可逆摘要。</p></div>
             {revealedToken && <div className="workspace-bot-token-reveal" role="alert"><KeyRound size={18} /><div><strong>请立即保存这个 Token</strong><code>{revealedToken}</code><small>离开此页后不会再次显示完整值。</small></div><button className="icon-button" type="button" title="复制 Token" aria-label="复制 Token" onClick={() => void copyToken()}><Clipboard size={16} /></button><button className="icon-button" type="button" title="关闭 Token" aria-label="关闭 Token 提示" onClick={() => setRevealedToken(null)}><X size={16} /></button></div>}
             <div className="workspace-bot-token-actions"><button className="primary" type="button" disabled={tokenBusy || !isActive} onClick={() => void issueToken(false)}><KeyRound size={16} />生成 Token</button><button className="secondary" type="button" disabled={tokenBusy || !isActive} onClick={() => void issueToken(true)}><RotateCcw size={16} />轮换 Token</button></div>
             <div className="workspace-bot-token-list">{tokens.length === 0 ? <p className="workspace-bot-muted">尚未生成 Token。</p> : tokens.map((token) => <div className="workspace-bot-token-row" key={token.id}><div><code>{token.token || "dl_bot_••••••••"}</code><small>{token.revokedAt ? "已撤销" : `创建于 ${formatDate(token.createdAt)}`} · {token.scopes.join(", ")}</small></div><div><span>{token.lastUsedAt ? `上次使用 ${formatDate(token.lastUsedAt)}` : "尚未使用"}</span>{!token.revokedAt && <button className="icon-button danger-action" type="button" disabled={tokenBusy || !isActive} title="撤销 Token" aria-label="撤销 Token" onClick={() => void revokeToken(token.id)}><Trash2 size={16} /></button>}</div></div>)}</div>
-          </section>
-
-          <section className="workspace-bot-section workspace-bot-danger-section" aria-labelledby="workspace-bot-danger-title">
-            <div className="workspace-bot-section-intro"><h3 id="workspace-bot-danger-title">停用 Bot</h3><p>停用会撤销所有 Token，并移除 Bot 的空间成员身份。此操作不可恢复。</p></div>
-            {!isDeleting && !deleteConfirm && <button className="danger" type="button" disabled={deleteBusy || !isActive && !isPaused} onClick={requestDisable}><Trash2 size={16} />停用 Bot</button>}
-          </section>
-        </div>
+          </section></> }
+        ]} />
       )}
     </section>
   );

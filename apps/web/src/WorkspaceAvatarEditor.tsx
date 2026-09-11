@@ -1,7 +1,8 @@
-import { Camera, Minus, Plus, Trash2, X } from "lucide-react";
+import { Camera, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState, type ComponentType } from "react";
 import CropperComponent, { type Area } from "react-easy-crop";
 import { WorkspaceAvatar } from "./WorkspaceAvatar";
+import { Slider } from "./ui/primitives";
 
 const CLIENT_MAX_BYTES = 10 * 1024 * 1024;
 const ACCEPTED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -172,12 +173,7 @@ export function WorkspaceAvatarEditor({
                 onCropComplete={(_area: Area, pixels: Area) => setCroppedArea(pixels)}
               />
             </div>
-            <label className="workspace-avatar-zoom">
-              <Minus size={15} aria-hidden="true" />
-              <span className="sr-only">缩放头像</span>
-              <input type="range" min="1" max="4" step="0.05" value={zoom} onChange={(event) => setZoom(Number(event.target.value))} />
-              <Plus size={15} aria-hidden="true" />
-            </label>
+            <Slider label="缩放头像" min={1} max={4} step={0.05} value={zoom} onValueChange={setZoom} unit="倍" disabled={busy} />
             <footer>
               <button className="secondary" type="button" onClick={closeEditor}>取消</button>
               <button className="primary" type="button" disabled={busy || !croppedArea} onClick={() => void saveCrop()}>

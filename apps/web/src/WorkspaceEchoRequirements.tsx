@@ -15,8 +15,10 @@ import {
   UsersRound,
   X
 } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createWorkspaceJsonHeaders } from "./workspace-http";
+import { SegmentedControl, Select, Switch, Tabs } from "./ui/primitives";
+import "./workspace-echo-management.css";
 
 type RequirementPhase = "proposal" | "formal" | "archived";
 type RequirementStatus = "pending_review" | "planned" | "in_progress" | "delivered" | "archived";
@@ -129,6 +131,10 @@ export function WorkspaceEchoRequirements({
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState("");
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const [view, setView] = useState("requirements");
+  const [moreFilters, setMoreFilters] = useState(false);
+  const detailRef = useRef<HTMLDivElement>(null);
+  const moreFilterCount = [filters.archiveOutcome, filters.type, filters.submitterUserId, filters.createdFrom, filters.createdTo].filter(Boolean).length;
 
   const queryString = useMemo(() => buildRequirementQuery(filters, offset), [filters, offset]);
   const submitters = useMemo(() => {
@@ -178,6 +184,13 @@ export function WorkspaceEchoRequirements({
         if (cancelled) return;
         setSelected(detailResult.requirement);
         setHistory(historyResult.history);
+        // A single page scroll can leave a newly selected detail above a long list.
+        requestAnimationFrame(() => {
+          const detail = detailRef.current;
+          if (cancelled || !detail?.getClientRects().length) return;
+          detail.scrollIntoView({ block: "nearest" });
+          detail.focus({ preventScroll: true });
+        });
       })
       .catch((caught) => {
         if (!cancelled) {
@@ -202,16 +215,15 @@ export function WorkspaceEchoRequirements({
   }
 
   return (
-    <section className={`workspace-echo-page${selectedPublicId ? " detail-open" : ""}`} aria-label="回声需求管理">
+    <section className={`workspace-echo-page dl-echo-management${selectedPublicId ? " detail-open" : ""}`} aria-label="回声需求管理">
       <header className="workspace-echo-header">
         <button className="icon-button" type="button" title="返回空间设置" onClick={onBack}><ArrowLeft size={17} /></button>
         <span className="workspace-echo-heading-icon" aria-hidden="true"><ClipboardList size={19} /></span>
-        <div><p className="eyebrow">回声</p><h2>需求列表</h2><span>查看提案、正式需求和归档结果</span></div>
+        <div><p className="eyebrow">回声</p><h2>需求与征集</h2><span>处理成员反馈与公开投票</span></div>
         <button className="icon-button" type="button" title="刷新需求" disabled={loading} onClick={reload}><RefreshCw size={16} /></button>
       </header>
 
-      <WorkspaceEchoSolicitations onNotice={onNotice} />
-
+      <Tabs className="dl-echo-views" label="回声管理视图" value={view} onValueChange={setView} items={[{ value: "requirements", label: "需求", content: <>
       <div className="workspace-echo-stats" aria-label="需求统计">
         <EchoStat label="全部" value={stats?.total} icon={<Inbox size={16} />} />
         <EchoStat label="待审核" value={stats?.byStatus.pending_review} icon={<Clock3 size={16} />} />
@@ -220,14 +232,17 @@ export function WorkspaceEchoRequirements({
       </div>
 
       <div className="workspace-echo-filters" aria-label="筛选需求">
-        <label><span>阶段</span><select value={filters.phase} onChange={(event) => updateFilter("phase", event.target.value as EchoFilters["phase"])}><option value="">全部</option><option value="proposal">需求提案</option><option value="formal">正式需求</option><option value="archived">归档需求</option></select></label>
-        <label><span>状态</span><select value={filters.status} onChange={(event) => updateFilter("status", event.target.value as EchoFilters["status"])}><option value="">全部</option><option value="pending_review">待审核</option><option value="planned">已计划</option><option value="in_progress">进行中</option><option value="delivered">已交付</option><option value="archived">已归档</option></select></label>
-        <label><span>结果</span><select value={filters.archiveOutcome} onChange={(event) => updateFilter("archiveOutcome", event.target.value as EchoFilters["archiveOutcome"])}><option value="">全部</option><option value="implemented">已实现</option><option value="rejected">已驳回</option><option value="duplicate">重复提案</option><option value="withdrawn">已撤回</option><option value="cancelled">已取消</option></select></label>
-        <label><span>类型</span><select value={filters.type} onChange={(event) => updateFilter("type", event.target.value as EchoFilters["type"])}><option value="">全部</option><option value="requirement">需求</option><option value="suggestion">建议</option><option value="problem">问题</option></select></label>
-        <label><span>提交者</span><select value={filters.submitterUserId} onChange={(event) => updateFilter("submitterUserId", event.target.value)}><option value="">全部</option>{submitters.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
+        <SegmentedControl className="dl-echo-phase-filter" label="阶段" value={filters.phase} onValueChange={(value) => { if (value === "" || value === "proposal" || value === "formal" || value === "archived") updateFilter("phase", value); }} options={[{ value: "", label: "全部" }, { value: "proposal", label: "需求提案" }, { value: "formal", label: "正式需求" }, { value: "archived", label: "归档需求" }]} />
+        <Select label="状态" value={filters.status} onValueChange={(value) => { if (value === "" || value === "pending_review" || value === "planned" || value === "in_progress" || value === "delivered" || value === "archived") updateFilter("status", value); }} options={[{ value: "", label: "全部" }, { value: "pending_review", label: "待审核" }, { value: "planned", label: "已计划" }, { value: "in_progress", label: "进行中" }, { value: "delivered", label: "已交付" }, { value: "archived", label: "已归档" }]} />
+        <button className="secondary dl-echo-more-filters" type="button" aria-expanded={moreFilters} aria-controls="echo-more-filters" onClick={() => setMoreFilters((current) => !current)}>更多筛选{moreFilterCount > 0 ? ` · ${moreFilterCount}` : ""}</button>
+        <button className="workspace-echo-clear-filter" type="button" disabled={!hasActiveFilters(filters)} onClick={() => { setFilters(EMPTY_FILTERS); setOffset(0); }}><FilterX size={15} />清除</button>
+      </div>
+      <div id="echo-more-filters" className="workspace-echo-filters dl-echo-more-filter-fields" hidden={!moreFilters} aria-label="更多需求筛选">
+        <Select label="结果" value={filters.archiveOutcome} onValueChange={(value) => { if (value === "" || value === "implemented" || value === "rejected" || value === "duplicate" || value === "withdrawn" || value === "cancelled") updateFilter("archiveOutcome", value); }} options={[{ value: "", label: "全部" }, { value: "implemented", label: "已实现" }, { value: "rejected", label: "已驳回" }, { value: "duplicate", label: "重复提案" }, { value: "withdrawn", label: "已撤回" }, { value: "cancelled", label: "已取消" }]} />
+        <SegmentedControl label="类型" value={filters.type} onValueChange={(value) => { if (value === "" || value === "requirement" || value === "suggestion" || value === "problem") updateFilter("type", value); }} options={[{ value: "", label: "全部" }, { value: "requirement", label: "需求" }, { value: "suggestion", label: "建议" }, { value: "problem", label: "问题" }]} />
+        <Select label="提交者" value={filters.submitterUserId} onValueChange={(value) => updateFilter("submitterUserId", value)} options={[{ value: "", label: "全部" }, ...submitters.map(([value, label]) => ({ value, label }))]} />
         <label><span>开始日期</span><input type="date" value={filters.createdFrom} onChange={(event) => updateFilter("createdFrom", event.target.value)} /></label>
         <label><span>结束日期</span><input type="date" value={filters.createdTo} onChange={(event) => updateFilter("createdTo", event.target.value)} /></label>
-        <button className="workspace-echo-clear-filter" type="button" disabled={!hasActiveFilters(filters)} onClick={() => { setFilters(EMPTY_FILTERS); setOffset(0); }}><FilterX size={15} />清除</button>
       </div>
 
       <div className="workspace-echo-body">
@@ -251,7 +266,7 @@ export function WorkspaceEchoRequirements({
           )}
         </div>
 
-        <div className="workspace-echo-detail">
+        <div className="workspace-echo-detail" ref={detailRef} tabIndex={-1}>
           {detailLoading ? <EchoDetailSkeleton /> : selected ? (
             <EchoRequirementDetail
               requirement={selected}
@@ -269,6 +284,7 @@ export function WorkspaceEchoRequirements({
           )}
         </div>
       </div>
+      </> }, { value: "solicitations", label: "公开征集", content: <WorkspaceEchoSolicitations onNotice={onNotice} /> }]} />
     </section>
   );
 }
@@ -343,13 +359,16 @@ function WorkspaceEchoSolicitations({ onNotice }: { onNotice: (tone: NoticeTone,
   return <section className="workspace-echo-solicitations" aria-labelledby="echo-solicitations-heading">
     <header><div><p className="eyebrow">公开征集</p><h3 id="echo-solicitations-heading">面向所有成员的投票</h3></div><button className="secondary compact" type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}><Plus size={15} />新建征集</button></header>
     {expanded && <form className="workspace-echo-solicitation-form" onSubmit={(event) => void createDraft(event)}>
+      <fieldset className="dl-echo-solicitation-fields" disabled={busy === "create"}>
+      <legend className="sr-only">征集草稿</legend>
       <label><span>标题</span><input required maxLength={120} value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} /></label>
       <label><span>说明</span><textarea required maxLength={10000} value={draft.description} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} /></label>
       <label><span>投票问题</span><input required maxLength={2000} value={draft.question} onChange={(event) => setDraft((current) => ({ ...current, question: event.target.value }))} /></label>
       <div className="workspace-echo-option-grid">{draft.options.map((option, index) => <label key={index}><span>选项 {index + 1}</span><input required value={option} maxLength={256} onChange={(event) => setDraft((current) => ({ ...current, options: current.options.map((value, itemIndex) => itemIndex === index ? event.target.value : value) }))} /></label>)}</div>
       <button className="workspace-echo-add-option" type="button" disabled={draft.options.length >= 20} onClick={() => setDraft((current) => ({ ...current, options: [...current.options, ""] }))}>添加选项</button>
-      <div className="workspace-echo-solicitation-policy"><label><span>投票方式</span><select value={draft.choiceMode} onChange={(event) => setDraft((current) => ({ ...current, choiceMode: event.target.value as "single" | "multiple" }))}><option value="single">单选</option><option value="multiple">多选</option></select></label><label><span>截止时间</span><input type="datetime-local" value={draft.deadline} onChange={(event) => setDraft((current) => ({ ...current, deadline: event.target.value }))} /></label><label><input type="checkbox" checked={draft.allowVoteChange} onChange={(event) => setDraft((current) => ({ ...current, allowVoteChange: event.target.checked }))} />允许改票</label><label><input type="checkbox" checked={draft.resultVisibility === "aggregate"} onChange={(event) => setDraft((current) => ({ ...current, resultVisibility: event.target.checked ? "aggregate" : "owner" }))} />展示汇总结果</label></div>
+      <div className="workspace-echo-solicitation-policy"><SegmentedControl label="投票方式" value={draft.choiceMode} onValueChange={(choiceMode) => { if (choiceMode === "single" || choiceMode === "multiple") setDraft((current) => ({ ...current, choiceMode })); }} options={[{ value: "single", label: "单选" }, { value: "multiple", label: "多选" }]} /><label><span>截止时间</span><input type="datetime-local" value={draft.deadline} onChange={(event) => setDraft((current) => ({ ...current, deadline: event.target.value }))} /></label><label><Switch label="允许改票" checked={draft.allowVoteChange} onCheckedChange={(allowVoteChange) => setDraft((current) => ({ ...current, allowVoteChange }))} />允许改票</label><label><Switch label="展示汇总结果" checked={draft.resultVisibility === "aggregate"} onCheckedChange={(checked) => setDraft((current) => ({ ...current, resultVisibility: checked ? "aggregate" : "owner" }))} />展示汇总结果</label></div>
       <div className="workspace-echo-solicitation-form-actions"><button className="secondary" type="button" onClick={() => setExpanded(false)}>取消</button><button className="primary" type="submit" disabled={busy === "create"}>{busy === "create" ? "正在创建" : "创建预览"}</button></div>
+      </fieldset>
     </form>}
     <div className="workspace-echo-solicitation-list" aria-busy={loading}>{loading ? <p className="saved-empty">正在加载征集。</p> : items.length === 0 ? <p className="saved-empty">尚未创建公开征集。</p> : items.map((item) => <article key={item.publicId}><div><span><em>{item.publicId}</em><small>{solicitationStatusLabel(item.status)}</small></span><strong>{item.title}</strong><p>{item.question}</p><small>{item.ownerProjection?.deliverySummary ? `投递 ${Object.values(item.ownerProjection.deliverySummary).reduce((sum, value) => sum + value, 0)} 人` : "尚未投递"}</small></div><div className="workspace-echo-solicitation-actions">{item.status === "draft" && <button className="primary compact" type="button" disabled={Boolean(busy)} onClick={() => void transition(item, "publish")}>{busy === `publish:${item.publicId}` ? "发布中" : "发布"}</button>}{item.status === "open" && <button className="secondary compact" type="button" disabled={Boolean(busy)} onClick={() => void transition(item, "close")}>{busy === `close:${item.publicId}` ? "关闭中" : "关闭"}</button>}{(item.status === "draft" || item.status === "open") && <button className="secondary compact danger-action" type="button" disabled={Boolean(busy)} onClick={() => void transition(item, "withdraw")}>撤回</button>}<button className="icon-button" type="button" title="查看投票和投递明细" disabled={Boolean(busy)} onClick={() => void openDetail(item)}><UsersRound size={15} /></button></div></article>)}</div>
     {detail && <div className="workspace-echo-solicitation-detail" role="region" aria-label={`${detail.publicId} 投递和投票明细`}><header><strong>{detail.publicId} 明细</strong><span><button className="secondary compact" type="button" disabled={Boolean(busy)} onClick={() => void retryDeliveries(detail.publicId)}>{busy === `retry:${detail.publicId}` ? "重试中" : "重试投递"}</button><button className="icon-button" type="button" title="关闭明细" onClick={() => setDetail(null)}><X size={15} /></button></span></header><div><section><h4>投递状态</h4>{detail.deliveries.length ? <ul>{detail.deliveries.map((delivery) => <li key={delivery.id}><span>{delivery.recipientDisplayName || delivery.recipientUserId}</span><small>{delivery.status}{delivery.attemptCount > 1 ? ` · 已尝试 ${delivery.attemptCount} 次` : ""}{delivery.lastErrorCode ? ` · ${delivery.lastErrorCode}` : ""}</small></li>)}</ul> : <p>暂无投递记录。</p>}</section><section><h4>投票明细</h4>{detail.votes.length ? <ul>{detail.votes.map((vote) => <li key={vote.voterUserId}><span>{vote.voterDisplayName || vote.voterUserId}</span><small>{vote.optionIds.join("、")}</small></li>)}</ul> : <p>暂无成员投票。</p>}</section></div></div>}
@@ -425,7 +444,7 @@ function EchoRequirementDetail({
 
       {actions.length > 0 && (
         <form className="workspace-echo-transition" onSubmit={(event) => void submitTransition(event)}>
-          <label><span>下一步</span><select value={transition} onChange={(event) => setTransition(event.target.value as typeof transition)}><option value="">选择操作</option>{actions.map((action) => <option key={action} value={action}>{transitionLabel(action)}</option>)}</select></label>
+          <Select label="下一步" value={transition} onValueChange={(value) => { const action = actions.find((entry) => entry === value); if (action || value === "") setTransition(action ?? ""); }} options={[{ value: "", label: "选择操作" }, ...actions.map((value) => ({ value, label: transitionLabel(value) }))]} />
           {transition === "duplicate" && <label><span>重复提案编号</span><input value={duplicateOfPublicId} onChange={(event) => setDuplicateOfPublicId(event.target.value)} placeholder="REQ-2026-0001" required pattern="REQ-\d{4}-\d{4}" /></label>}
           {(transition === "rejected" || transition === "duplicate" || transition === "withdrawn" || transition === "cancelled") && <label className="workspace-echo-transition-response"><span>处理说明</span><textarea value={response} onChange={(event) => setResponse(event.target.value)} maxLength={4000} required={transition === "rejected"} placeholder="向提交者说明处理结果" /></label>}
           <button className="primary" type="submit" disabled={!transition || busy || (transition === "duplicate" && !duplicateOfPublicId.trim())}>{busy ? "正在更新" : "确认更新"}</button>

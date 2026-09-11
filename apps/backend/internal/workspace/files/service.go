@@ -1386,6 +1386,15 @@ func (s *Service) ListFiles(ctx context.Context, input ListFilesInput) ([]Attach
 		if record.Status != string(AttachmentAvailable) {
 			continue
 		}
+		if record.Visibility == string(VisibilityPrivateStaging) {
+			visible, _, err := s.attachmentVisible(ctx, s.repo, actor, record)
+			if err != nil {
+				return nil, err
+			}
+			if !visible {
+				continue
+			}
+		}
 		if !strings.Contains(strings.ToLower(record.FileName+" "+record.UploaderName+" "+record.ConversationTitle+" "+record.MIMEType+" "+record.Visibility), strings.ToLower(query)) {
 			continue
 		}
@@ -1493,6 +1502,15 @@ func (s *Service) attachmentVisible(ctx context.Context, repo ReadRepository, ac
 	case string(VisibilitySpace):
 		return true, "", nil
 	case string(VisibilityPrivateStaging):
+		if topics, ok := repo.(TopicAttachmentReader); ok {
+			linked, visible, err := topics.TopicAttachmentAccess(ctx, s.space(), record.ID, actor.ID)
+			if err != nil {
+				return false, "", normalizeRepositoryError(err)
+			}
+			if linked {
+				return visible, "file not visible", nil
+			}
+		}
 		if record.UploaderID == actor.ID {
 			return true, "", nil
 		}

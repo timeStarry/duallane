@@ -639,7 +639,15 @@ func emoteVisibleTo(ctx context.Context, queryer pgQueryer, spaceID, actorID, em
 			INNER JOIN messages m ON m.id = mce.message_id AND m.space_id = $1
 			INNER JOIN conversation_members cm ON cm.conversation_id = m.conversation_id
 			WHERE mce.custom_emote_id = $3 AND cm.user_id = $2 AND cm.removed_at IS NULL
-			  AND m.deleted_at IS NULL
+			  AND m.deleted_at IS NULL AND m.recalled_at IS NULL
+			  AND (m.topic_id IS NULL OR EXISTS (
+				SELECT 1 FROM topics t
+				JOIN topic_members tm ON tm.topic_id = t.id AND tm.user_id = $2 AND tm.left_at IS NULL
+				JOIN space_members sm ON sm.space_id = t.space_id AND sm.user_id = $2 AND sm.removed_at IS NULL
+				JOIN users viewer ON viewer.id = sm.user_id AND viewer.kind = 'human'
+				WHERE t.id = m.topic_id AND t.space_id = m.space_id AND t.conversation_id = m.conversation_id
+				  AND sm.role IN ('owner', 'admin', 'member')
+			  ))
 		)
 	`, spaceID, actorID, emoteID).Scan(&visible)
 	return visible, err
