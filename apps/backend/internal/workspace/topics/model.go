@@ -1,6 +1,7 @@
 package topics
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
@@ -97,36 +98,51 @@ type Content struct {
 }
 
 type Block struct {
-	Type          string `json:"type"`
-	Text          string `json:"text,omitempty"`
-	UserID        string `json:"userId,omitempty"`
-	Label         string `json:"label,omitempty"`
-	URL           string `json:"url,omitempty"`
-	Shortcode     string `json:"shortcode,omitempty"`
-	AttachmentID  string `json:"attachmentId,omitempty"`
-	CardID        string `json:"cardId,omitempty"`
-	CardType      string `json:"cardType,omitempty"`
-	SchemaVersion int    `json:"schemaVersion,omitempty"`
-	FallbackText  string `json:"fallbackText,omitempty"`
+	Type          string          `json:"type"`
+	Text          string          `json:"text,omitempty"`
+	UserID        string          `json:"userId,omitempty"`
+	Label         string          `json:"label,omitempty"`
+	URL           string          `json:"url,omitempty"`
+	Shortcode     string          `json:"shortcode,omitempty"`
+	AttachmentID  string          `json:"attachmentId,omitempty"`
+	CardID        string          `json:"cardId,omitempty"`
+	CardType      string          `json:"cardType,omitempty"`
+	SchemaVersion int             `json:"schemaVersion,omitempty"`
+	FallbackText  string          `json:"fallbackText,omitempty"`
+	ShareID       string          `json:"shareId,omitempty"`
+	Share         json.RawMessage `json:"share,omitempty"`
+	TopicID       string          `json:"topicId,omitempty"`
+	Title         string          `json:"title,omitempty"`
 }
 
 type TopicMessage struct {
-	ID               string     `json:"id"`
-	SpaceID          string     `json:"spaceId"`
-	ConversationID   string     `json:"conversationId"`
-	TopicID          string     `json:"topicId"`
-	AuthorID         *string    `json:"authorId"`
-	AuthorKind       string     `json:"authorKind"`
-	Kind             string     `json:"kind"`
-	ClientMessageID  *string    `json:"clientMessageId"`
-	ContentFormat    string     `json:"contentFormat"`
-	Content          Content    `json:"content"`
-	PlainText        string     `json:"plainText"`
-	ReplyToMessageID *string    `json:"replyToMessageId"`
-	CreatedAt        string     `json:"createdAt"`
-	EditedAt         *string    `json:"editedAt"`
-	DeletedAt        *string    `json:"deletedAt"`
-	Author           TopicActor `json:"author"`
+	ID                  string            `json:"id"`
+	SpaceID             string            `json:"spaceId"`
+	ConversationID      string            `json:"conversationId"`
+	TopicID             string            `json:"topicId"`
+	AuthorID            *string           `json:"authorId"`
+	AuthorKind          string            `json:"authorKind"`
+	Kind                string            `json:"kind"`
+	ClientMessageID     *string           `json:"clientMessageId"`
+	ContentFormat       string            `json:"contentFormat"`
+	Content             Content           `json:"content"`
+	PlainText           string            `json:"plainText"`
+	ReplyToMessageID    *string           `json:"replyToMessageId"`
+	CreatedAt           string            `json:"createdAt"`
+	EditedAt            *string           `json:"editedAt"`
+	DeletedAt           *string           `json:"deletedAt"`
+	Author              TopicActor        `json:"author"`
+	AuthorName          string            `json:"authorName"`
+	AuthorNickname      string            `json:"authorNickname,omitempty"`
+	AuthorRemark        string            `json:"authorRemark,omitempty"`
+	AuthorGitHubLogin   string            `json:"authorGithubLogin,omitempty"`
+	AuthorAvatarURL     string            `json:"authorAvatarUrl,omitempty"`
+	Attachments         []json.RawMessage `json:"attachments"`
+	Reactions           []json.RawMessage `json:"reactions"`
+	HiddenByCurrentUser bool              `json:"hiddenByCurrentUser"`
+	RecalledAt          *string           `json:"recalledAt"`
+	RecallReason        *string           `json:"recallReason"`
+	Pin                 json.RawMessage   `json:"pin,omitempty"`
 }
 
 type Projection struct {
@@ -212,6 +228,7 @@ type MessageListInput struct {
 	TopicID string
 	Before  string
 	After   string
+	Around  string
 	Limit   int
 	Meta    auth.RequestMeta
 }
@@ -310,6 +327,7 @@ type TopicMessageRecord struct {
 	CreatedAt         time.Time
 	EditedAt          *time.Time
 	DeletedAt         *time.Time
+	RecalledAt        *time.Time
 	AuthorDisplayName string
 	AuthorNickname    *string
 	AuthorGitHubLogin string

@@ -44,11 +44,13 @@ type Service struct {
 	now                Clock
 	idFactory          IDFactory
 	requireMessageJobs bool
+	messagePipeline    MessagePipeline
 }
 
 type rejection struct {
-	err   *Error
-	audit AuditInput
+	err     *Error
+	audit   AuditInput
+	audited bool
 }
 
 func NewService(options ServiceOptions) *Service {
@@ -151,7 +153,7 @@ func (s *Service) withTransactionUsing(ctx context.Context, external Tx, actorID
 		if err != nil {
 			return err
 		}
-		if rejected == nil {
+		if rejected == nil || rejected.audited {
 			return nil
 		}
 		audit, err := s.auditFor(actor, meta, rejected.audit, now)

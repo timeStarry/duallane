@@ -153,6 +153,10 @@ func (s *Service) CreateMessage(ctx context.Context, input CreateMessageInput) (
 		if validationErr != nil {
 			return nil, rejected(validationErr, "topic.message.create", topic.ID, validationErr.Code), nil
 		}
+		if s.messagePipeline != nil {
+			input.ClientMessageID = clientID
+			return s.createSharedMessage(ctx, tx, actor, *topic, input, now)
+		}
 		contentInput := input.Content
 		if contentInput.Format == "" && strings.TrimSpace(input.Body) != "" {
 			contentInput = Content{Format: MessageContentFormat, Blocks: []Block{{Type: "text", Text: input.Body}}}
@@ -302,6 +306,38 @@ func (s *Service) ListMessages(ctx context.Context, input MessageListInput) ([]T
 	if validationErr != nil {
 		return nil, validationErr
 	}
+	if around := strings.TrimSpace(input.Around); around != "" {
+		if input.Before != "" || input.After != "" {
+			return nil, topicValidationError(CodeTopicInvalidCursor, MessageTopicInvalidCursor)
+		}
+		anchor, err := s.repo.GetTopicMessage(ctx, s.space(), record.ID, around)
+		if err != nil {
+			return nil, err
+		}
+		if anchor == nil || anchor.DeletedAt != nil {
+			return []TopicMessage{}, nil
+		}
+		side := (limit - 1) / 2
+		if side < 1 {
+			side = 1
+		}
+		older, err := s.ListMessages(ctx, MessageListInput{ActorID: actor.ID, TopicID: record.ID, Before: around, Limit: side, Meta: input.Meta})
+		if err != nil {
+			return nil, err
+		}
+		newer, err := s.ListMessages(ctx, MessageListInput{ActorID: actor.ID, TopicID: record.ID, After: around, Limit: side, Meta: input.Meta})
+		if err != nil {
+			return nil, err
+		}
+		center := []TopicMessage{s.projectTopicMessage(*anchor)}
+		if s.messagePipeline != nil {
+			center, err = s.messagePipeline.ProjectMessages(ctx, actor.ID, center)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return append(append(older, center...), newer...), nil
+	}
 	before, err := s.messageCursor(ctx, s.repo, record.ID, input.Before)
 	if err != nil {
 		return nil, err
@@ -329,6 +365,12 @@ func (s *Service) ListMessages(ctx context.Context, input MessageListInput) ([]T
 	result := make([]TopicMessage, 0, len(rows))
 	for _, row := range rows {
 		result = append(result, s.projectTopicMessage(row))
+	}
+	if s.messagePipeline != nil {
+		result, err = s.messagePipeline.ProjectMessages(ctx, actor.ID, result)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if before != nil {
 		for left, right := 0, len(result)-1; left < right; left, right = left+1, right-1 {
@@ -658,7 +700,7 @@ func (s *Service) syncTopicMessageTx(ctx context.Context, tx Tx, actor *auth.Act
 	if err != nil {
 		return nil, normalizeRepositoryError(err)
 	}
-	if message == nil || message.DeletedAt != nil {
+	if message == nil || message.DeletedAt != nil || message.RecalledAt != nil {
 		return nil, topicValidationError(CodeTopicMessageNotFound, MessageTopicMessageNotFound)
 	}
 	existing, err := tx.GetActiveProjection(ctx, s.space(), topic.ID, message.ID)
@@ -769,6 +811,13 @@ func (s *Service) SyncMessage(ctx context.Context, input SyncInput) (ProjectionR
 		if denied := s.requireRole(actor, capabilityTopicSync); denied != nil {
 			return nil, rejected(denied, "topic.message.sync", topic.ID, "permission.denied"), nil
 		}
+		topic, denied, err = s.lockWritableTopic(ctx, tx, actor, *topic)
+		if err != nil {
+			return nil, nil, err
+		}
+		if denied != nil {
+			return nil, rejected(denied, "topic.message.sync", auditTarget(input.TopicID), denied.Code), nil
+		}
 		messageID := strings.TrimSpace(input.MessageID)
 		if !validReferenceID(messageID) {
 			return nil, rejected(topicValidationError(CodeTopicMessageRequired, MessageTopicMessageRequired), "topic.message.sync", topic.ID, CodeTopicMessageRequired), nil
@@ -814,6 +863,13 @@ func (s *Service) UnsyncMessage(ctx context.Context, input SyncInput) (Projectio
 		}
 		if denied := s.requireRole(actor, capabilityTopicSync); denied != nil {
 			return nil, rejected(denied, "topic.message.unsync", topic.ID, "permission.denied"), nil
+		}
+		topic, denied, err = s.lockWritableTopic(ctx, tx, actor, *topic)
+		if err != nil {
+			return nil, nil, err
+		}
+		if denied != nil {
+			return nil, rejected(denied, "topic.message.unsync", auditTarget(input.TopicID), denied.Code), nil
 		}
 		messageID := strings.TrimSpace(input.MessageID)
 		if !validReferenceID(messageID) {

@@ -50,6 +50,10 @@ type GroupTopicCreator interface {
 	CreateGroupTopic(context.Context, Tx, CreateInput, Content) (*MessageRecord, *GroupTopicRejection, error)
 }
 
+type TopicMessageLifecycle interface {
+	RecallTopicMessage(context.Context, Tx, MessageRecord, string, time.Time) error
+}
+
 type GroupTopicRejection struct {
 	Err     *Error
 	Audited bool
@@ -493,6 +497,9 @@ func (s *Service) CreateMessageInTx(ctx context.Context, tx Tx, input CreateInpu
 				return Message{}, internalError("write message rejection audit", err)
 			}
 		}
+		if input.TopicID != "" {
+			return Message{}, &TransactionRejection{Err: rejected.err}
+		}
 		return Message{}, rejected.err
 	}
 	message, ok := value.(Message)
@@ -528,7 +535,7 @@ func (s *Service) createMessageInTransaction(ctx context.Context, tx Tx, actor *
 	if err != nil {
 		return nil, nil, internalError("canonicalize message content", err)
 	}
-	inlineTopics := s.groupTopicCreator != nil && conversation.Type == "group" && (actor.Kind == "" || actor.Kind == "human")
+	inlineTopics := input.TopicID == "" && s.groupTopicCreator != nil && conversation.Type == "group" && (actor.Kind == "" || actor.Kind == "human")
 	if inlineTopics {
 		// Ordinary and topic-shaped messages share the original client key.
 		// Lock before both lookups so concurrent requests cannot create one of each.
@@ -720,6 +727,11 @@ func (s *Service) RecallMessage(ctx context.Context, input RecallInput) (Message
 		if denied != nil {
 			return nil, rejectedError(denied, "message.recall", messageTargetType, messageID, auditReason(denied)), nil
 		}
+		if topicDenied, err := s.authorizeMessageTopic(ctx, tx, actor, target, true); err != nil {
+			return nil, nil, err
+		} else if topicDenied != nil {
+			return nil, rejectedError(topicDenied, "message.recall", messageTargetType, messageID, topicDenied.Code), nil
+		}
 		if target.AuthorID == nil || *target.AuthorID != actor.ID {
 			err := permissionDeniedError()
 			return nil, rejectedError(err, "message.recall", messageTargetType, messageID, "insufficient permission"), nil
@@ -780,6 +792,15 @@ func (s *Service) RecallMessage(ctx context.Context, input RecallInput) (Message
 		if err := tx.DeleteMessagePins(ctx, s.space(), messageID); err != nil {
 			return nil, nil, err
 		}
+		if target.TopicID != "" {
+			lifecycle, ok := s.groupTopicCreator.(TopicMessageLifecycle)
+			if !ok {
+				return nil, nil, internalError("recall topic message", errors.New("topic lifecycle adapter is required"))
+			}
+			if err := lifecycle.RecallTopicMessage(ctx, tx, *target, actor.ID, now); err != nil {
+				return nil, nil, err
+			}
+		}
 		current, err := findMessageForViewer(ctx, tx, s.space(), conversation.ID, messageID, actor.ID)
 		if err != nil {
 			return nil, nil, err
@@ -791,13 +812,13 @@ func (s *Service) RecallMessage(ctx context.Context, input RecallInput) (Message
 		if err != nil {
 			return nil, nil, err
 		}
-		payload, err := json.Marshal(map[string]string{"messageId": messageID, "conversationId": conversation.ID})
+		eventType, payload, err := messageMutationEvent("message.recalled", target)
 		if err != nil {
 			return nil, nil, internalError("encode recall event", err)
 		}
 		if err := s.writeEvent(ctx, tx, EventInput{
 			SpaceID:        s.space(),
-			Type:           "message.recalled",
+			Type:           eventType,
 			ActorID:        actor.ID,
 			ConversationID: conversation.ID,
 			TargetType:     messageTargetType,
@@ -852,6 +873,11 @@ func (s *Service) setHidden(ctx context.Context, input HideInput, hidden bool) (
 		}
 		if denied != nil {
 			return nil, rejectedError(denied, hiddenAction(hidden), messageTargetType, messageID, auditReason(denied)), nil
+		}
+		if topicDenied, err := s.authorizeMessageTopic(ctx, tx, actor, target, false); err != nil {
+			return nil, nil, err
+		} else if topicDenied != nil {
+			return nil, rejectedError(topicDenied, hiddenAction(hidden), messageTargetType, messageID, topicDenied.Code), nil
 		}
 		var changed bool
 		if hidden {
@@ -935,6 +961,11 @@ func (s *Service) setReaction(ctx context.Context, input ReactionInput, add bool
 		if denied != nil {
 			return nil, rejectedError(denied, action, messageTargetType, messageID, auditReason(denied)), nil
 		}
+		if topicDenied, err := s.authorizeMessageTopic(ctx, tx, actor, target, true); err != nil {
+			return nil, nil, err
+		} else if topicDenied != nil {
+			return nil, rejectedError(topicDenied, action, messageTargetType, messageID, topicDenied.Code), nil
+		}
 		if target.Kind != "user" && target.Kind != "bot" {
 			err := NewError(CodeReactionUnsupported, MessageReactionUnsupported, 400)
 			return nil, rejectedError(err, action, messageTargetType, messageID, CodeReactionUnsupported), nil
@@ -954,13 +985,13 @@ func (s *Service) setReaction(ctx context.Context, input ReactionInput, add bool
 		}
 		groups := cloneReactionGroups(reactionsByMessage[messageID])
 		if changed {
-			payload, err := json.Marshal(map[string]string{"messageId": messageID, "conversationId": target.ConversationID})
-			if err != nil {
-				return nil, nil, internalError("encode reaction event", err)
-			}
 			eventType := "reaction.removed"
 			if add {
 				eventType = "reaction.added"
+			}
+			eventType, payload, err := messageMutationEvent(eventType, target)
+			if err != nil {
+				return nil, nil, internalError("encode reaction event", err)
 			}
 			if err := s.writeEvent(ctx, tx, EventInput{
 				SpaceID:        s.space(),

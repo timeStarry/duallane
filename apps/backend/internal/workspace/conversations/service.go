@@ -493,6 +493,7 @@ func projectMessage(record MessageRecord, actor *auth.Actor) (Message, error) {
 	canonical := workspaceMessages.MessageRecord{
 		ID:                    record.ID,
 		ConversationID:        record.ConversationID,
+		TopicID:               record.TopicID,
 		AuthorID:              nullableString(record.AuthorID),
 		AuthorName:            record.AuthorName,
 		AuthorNickname:        record.AuthorNickname,
@@ -533,7 +534,7 @@ func projectMessage(record MessageRecord, actor *auth.Actor) (Message, error) {
 		message.Pin = &MessagePin{
 			PinnedByUserID: record.Pin.PinnedByUserID,
 			PinnedAt:       formatTime(record.Pin.CreatedAt),
-			CanUnpin:       actorCanUnpin(actor, record.AuthorID),
+			CanUnpin:       !record.TopicReadOnly && actorCanUnpin(actor, record.AuthorID),
 		}
 	}
 	return message, nil
@@ -1722,6 +1723,17 @@ func (s *Service) ListPins(ctx context.Context, input ConversationInput) ([]PinL
 	if err != nil {
 		return nil, normalizeRepositoryError(err)
 	}
+	visiblePins := pins[:0]
+	for _, pin := range pins {
+		denied, err := s.topicPinAccess(ctx, s.repo, actor, &pin.Message, false)
+		if err != nil {
+			return nil, normalizeRepositoryError(err)
+		}
+		if denied == nil {
+			visiblePins = append(visiblePins, pin)
+		}
+	}
+	pins = visiblePins
 	pinMessages := make([]MessageRecord, len(pins))
 	for index := range pins {
 		pinMessages[index] = pins[index].Message
@@ -1738,7 +1750,7 @@ func (s *Service) ListPins(ctx context.Context, input ConversationInput) ([]PinL
 		if err != nil {
 			return nil, err
 		}
-		items = append(items, PinListItem{MessageID: pin.MessageID, PinnedByUserID: pin.PinnedByUserID, PinnedAt: formatTime(pin.CreatedAt), CanUnpin: actorCanUnpin(actor, pin.Message.AuthorID), Message: message})
+		items = append(items, PinListItem{MessageID: pin.MessageID, PinnedByUserID: pin.PinnedByUserID, PinnedAt: formatTime(pin.CreatedAt), CanUnpin: !pin.Message.TopicReadOnly && actorCanUnpin(actor, pin.Message.AuthorID), Message: message})
 	}
 	return items, nil
 }
@@ -1785,6 +1797,11 @@ func (s *Service) Pin(ctx context.Context, input PinInput) (PinListItem, error) 
 			err := messageNotFoundError()
 			return nil, rejectedError(err, "message.pin", messageTargetType, messageID, CodeMessageNotFound), nil
 		}
+		if denied, err := s.topicPinAccess(ctx, tx, actor, message, true); err != nil {
+			return nil, nil, err
+		} else if denied != nil {
+			return nil, rejectedError(denied, "message.pin", messageTargetType, messageID, denied.Code), nil
+		}
 		if message.Kind != "user" || message.AuthorID == nil || *message.AuthorID != actor.ID {
 			err := NewError(CodePinNotAuthor, MessagePinNotAuthor, 400)
 			return nil, rejectedError(err, "message.pin", messageTargetType, messageID, CodePinNotAuthor), nil
@@ -1808,7 +1825,7 @@ func (s *Service) Pin(ctx context.Context, input PinInput) (PinListItem, error) 
 					return nil, rejectedError(err, "message.pin", messageTargetType, messageID, CodePinLimitReached), nil
 				}
 			} else {
-				if err := s.writeEvent(ctx, tx, EventInput{SpaceID: s.space(), Type: "message.pinned", ActorID: actor.ID, ConversationID: conversationID, TargetType: messageTargetType, TargetID: messageID, PayloadJSON: mustJSON(map[string]any{"conversationId": conversationID, "messageId": messageID}), CreatedAt: now}); err != nil {
+				if err := s.writeEvent(ctx, tx, pinEvent(s.space(), actor.ID, *message, false, now)); err != nil {
 					return nil, nil, err
 				}
 				if err := tx.WriteAudit(ctx, s.auditFor(actor, input.Meta, AuditInput{Action: "message.pin", TargetType: messageTargetType, TargetID: messageID, Result: "success"}, now)); err != nil {
@@ -1888,6 +1905,11 @@ func (s *Service) Unpin(ctx context.Context, input PinInput) (UnpinResult, error
 			err := messageNotFoundError()
 			return nil, rejectedError(err, "message.unpin", messageTargetType, messageID, CodeMessageNotFound), nil
 		}
+		if denied, err := s.topicPinAccess(ctx, tx, actor, message, true); err != nil {
+			return nil, nil, err
+		} else if denied != nil {
+			return nil, rejectedError(denied, "message.unpin", messageTargetType, messageID, denied.Code), nil
+		}
 		if !actorCanUnpin(actor, message.AuthorID) {
 			err := pinPermissionDeniedError()
 			return nil, rejectedError(err, "message.unpin", messageTargetType, messageID, "insufficient permission"), nil
@@ -1906,7 +1928,7 @@ func (s *Service) Unpin(ctx context.Context, input PinInput) (UnpinResult, error
 		if !removed {
 			return UnpinResult{MessageID: messageID, Removed: false}, nil, nil
 		}
-		if err := s.writeEvent(ctx, tx, EventInput{SpaceID: s.space(), Type: "message.unpinned", ActorID: actor.ID, ConversationID: conversationID, TargetType: messageTargetType, TargetID: messageID, PayloadJSON: mustJSON(map[string]any{"conversationId": conversationID, "messageId": messageID}), CreatedAt: now}); err != nil {
+		if err := s.writeEvent(ctx, tx, pinEvent(s.space(), actor.ID, *message, true, now)); err != nil {
 			return nil, nil, err
 		}
 		if err := tx.WriteAudit(ctx, s.auditFor(actor, input.Meta, AuditInput{Action: "message.unpin", TargetType: messageTargetType, TargetID: messageID, Result: "success"}, now)); err != nil {

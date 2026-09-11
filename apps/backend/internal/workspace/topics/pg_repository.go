@@ -20,6 +20,10 @@ type PGRepository struct {
 	jobScheduler messagejobs.PGScheduler
 }
 
+// SharedMessageTransaction exposes the existing transaction only to the
+// message/topic composition adapter. The topic operation keeps commit ownership.
+func (t *pgTx) SharedMessageTransaction() pgx.Tx { return t.tx }
+
 func NewPGRepository(pool *pgxpool.Pool, idFactories ...IDFactory) *PGRepository {
 	idFactory := IDFactory(func() (string, error) {
 		id, err := uuid.NewRandom()
@@ -444,7 +448,7 @@ const topicMessageSelect = `
 	SELECT m.id, m.space_id, m.conversation_id, m.topic_id, m.author_id,
 	       m.author_kind, m.kind, m.client_message_id, m.content_format,
 	       m.content_json, m.plain_text, m.reply_to_message_id, m.created_at,
-	       m.edited_at, m.deleted_at,
+	       m.edited_at, m.deleted_at, m.recalled_at,
 	       u.display_name, u.nickname, u.github_login, u.avatar_url, ur.remark,
 	       COALESCE((SELECT MAX(we.seq) FROM workspace_events we WHERE we.space_id = m.space_id AND we.target_id = m.id AND we.type IN ('topic.message.created', 'message.created')), 0)
 	FROM messages m
@@ -481,7 +485,7 @@ func scanTopicMessage(row rowScanner) (TopicMessageRecord, error) {
 	var authorID, clientID, replyID *string
 	var topicID *string
 	var authorNickname, authorAvatar, authorRemark *string
-	err := row.Scan(&record.ID, &record.SpaceID, &record.ConversationID, &topicID, &authorID, &record.AuthorKind, &record.Kind, &clientID, &record.ContentFormat, &record.ContentJSON, &record.PlainText, &replyID, &record.CreatedAt, &record.EditedAt, &record.DeletedAt, &record.AuthorDisplayName, &authorNickname, &record.AuthorGitHubLogin, &authorAvatar, &authorRemark, &record.EventSeq)
+	err := row.Scan(&record.ID, &record.SpaceID, &record.ConversationID, &topicID, &authorID, &record.AuthorKind, &record.Kind, &clientID, &record.ContentFormat, &record.ContentJSON, &record.PlainText, &replyID, &record.CreatedAt, &record.EditedAt, &record.DeletedAt, &record.RecalledAt, &record.AuthorDisplayName, &authorNickname, &record.AuthorGitHubLogin, &authorAvatar, &authorRemark, &record.EventSeq)
 	if err != nil {
 		return TopicMessageRecord{}, err
 	}
@@ -583,15 +587,19 @@ func listTopicProjections(ctx context.Context, queryer pgQueryer, spaceID, topic
 	return result, nil
 }
 
-func getActiveProjection(ctx context.Context, queryer pgQueryer, spaceID, topicID, messageID string) (*ProjectionRecord, error) {
+func getActiveProjection(ctx context.Context, queryer pgQueryer, spaceID, topicID, messageID string, includeRemoved ...bool) (*ProjectionRecord, error) {
+	active := " AND p.removed_at IS NULL"
+	if len(includeRemoved) > 0 && includeRemoved[0] {
+		active = ""
+	}
 	var item ProjectionRecord
 	err := queryer.QueryRow(ctx, `
 		SELECT p.id, p.topic_id, p.topic_message_id, p.group_conversation_id,
 		       p.group_message_id, p.projection_type, p.created_at, p.updated_at, p.removed_at
 		FROM topic_group_projections p
 		INNER JOIN topics t ON t.id = p.topic_id AND t.space_id = $1
-		WHERE p.topic_id = $2 AND p.topic_message_id = $3 AND p.removed_at IS NULL
-	`, spaceID, topicID, messageID).Scan(&item.ID, &item.TopicID, &item.TopicMessageID, &item.GroupConversationID, &item.GroupMessageID, &item.ProjectionType, &item.CreatedAt, &item.UpdatedAt, &item.RemovedAt)
+		WHERE p.topic_id = $2 AND p.topic_message_id = $3
+	`+active, spaceID, topicID, messageID).Scan(&item.ID, &item.TopicID, &item.TopicMessageID, &item.GroupConversationID, &item.GroupMessageID, &item.ProjectionType, &item.CreatedAt, &item.UpdatedAt, &item.RemovedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -651,6 +659,10 @@ func (t *pgTx) ListTopicProjections(ctx context.Context, spaceID, topicID, viewe
 }
 func (t *pgTx) GetActiveProjection(ctx context.Context, spaceID, topicID, messageID string) (*ProjectionRecord, error) {
 	return getActiveProjection(ctx, t.tx, spaceID, topicID, messageID)
+}
+
+func (t *pgTx) GetMessageProjectionIncludingRemoved(ctx context.Context, spaceID, topicID, messageID string) (*ProjectionRecord, error) {
+	return getActiveProjection(ctx, t.tx, spaceID, topicID, messageID, true)
 }
 
 func (t *pgTx) Lock(ctx context.Context, key string) error {
@@ -738,7 +750,7 @@ func (t *pgTx) EnforceTopicRetention(ctx context.Context, topicID string, retent
 	if retentionCount < 1 {
 		return nil, nil
 	}
-	rows, err := t.tx.Query(ctx, `SELECT m.id, p.id, p.group_message_id FROM messages m LEFT JOIN topic_group_projections p ON p.topic_message_id = m.id AND p.removed_at IS NULL WHERE m.topic_id = $1 AND m.deleted_at IS NULL AND m.id NOT IN (SELECT recent.id FROM messages recent WHERE recent.topic_id = $1 AND recent.deleted_at IS NULL ORDER BY recent.created_at DESC, recent.id DESC LIMIT $2)`, topicID, retentionCount)
+	rows, err := t.tx.Query(ctx, `SELECT m.id, p.id, p.group_message_id FROM messages m LEFT JOIN topic_group_projections p ON p.topic_message_id = m.id AND p.removed_at IS NULL WHERE m.topic_id = $1 AND m.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM conversation_pinned_messages pin WHERE pin.message_id = m.id) AND m.id NOT IN (SELECT recent.id FROM messages recent WHERE recent.topic_id = $1 AND recent.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM conversation_pinned_messages pin WHERE pin.message_id = recent.id) ORDER BY recent.created_at DESC, recent.id DESC LIMIT $2)`, topicID, retentionCount)
 	if err != nil {
 		return nil, err
 	}
@@ -847,12 +859,12 @@ func (t *pgTx) InvalidateCard(ctx context.Context, projectionID string, now time
 		return CardRecord{}, false, err
 	}
 	current.CreatedByUserID = createdBy
-	if current.Status != "active" {
+	if current.Status != "active" && current.FallbackText == "话题消息已移除" {
 		return current, false, nil
 	}
 	var updated CardRecord
 	var updatedBy *string
-	err = t.tx.QueryRow(ctx, `UPDATE workspace_cards SET status = 'invalidated', revision = revision + 1, updated_at = $2 WHERE id = $1 AND status = 'active' RETURNING id, space_id, COALESCE(conversation_id, ''), card_type, schema_version, payload_json, fallback_text, source_kind, COALESCE(source_id, ''), COALESCE(resource_type, ''), COALESCE(resource_id, ''), visibility_scope, created_by_user_id, status, revision, created_at, updated_at`, cardID, now.UTC()).Scan(&updated.ID, &updated.SpaceID, &updated.ConversationID, &updated.CardType, &updated.SchemaVersion, &updated.PayloadJSON, &updated.FallbackText, &updated.SourceKind, &updated.SourceID, &updated.ResourceType, &updated.ResourceID, &updated.VisibilityScope, &updatedBy, &updated.Status, &updated.Revision, &updated.CreatedAt, &updated.UpdatedAt)
+	err = t.tx.QueryRow(ctx, `UPDATE workspace_cards SET status = 'invalidated', payload_json = jsonb_set(payload_json::jsonb, '{messagePreview}', '""'::jsonb)::text, fallback_text = '话题消息已移除', revision = revision + 1, updated_at = $2 WHERE id = $1 AND status IN ('active', 'invalidated') RETURNING id, space_id, COALESCE(conversation_id, ''), card_type, schema_version, payload_json, fallback_text, source_kind, COALESCE(source_id, ''), COALESCE(resource_type, ''), COALESCE(resource_id, ''), visibility_scope, created_by_user_id, status, revision, created_at, updated_at`, cardID, now.UTC()).Scan(&updated.ID, &updated.SpaceID, &updated.ConversationID, &updated.CardType, &updated.SchemaVersion, &updated.PayloadJSON, &updated.FallbackText, &updated.SourceKind, &updated.SourceID, &updated.ResourceType, &updated.ResourceID, &updated.VisibilityScope, &updatedBy, &updated.Status, &updated.Revision, &updated.CreatedAt, &updated.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return current, false, nil
 	}

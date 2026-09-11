@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/topics"
@@ -77,3 +78,11 @@ func (a *GroupTopicCreator) CreateGroupTopic(ctx context.Context, tx messages.Tx
 }
 
 var _ messages.GroupTopicCreator = (*GroupTopicCreator)(nil)
+
+func (a *GroupTopicCreator) RecallTopicMessage(ctx context.Context, tx messages.Tx, message messages.MessageRecord, actorID string, now time.Time) error {
+	provider, ok := tx.(interface{ TopicTransaction() topics.Tx })
+	if !ok || provider.TopicTransaction() == nil {
+		return errors.New("topic lifecycle transaction is required")
+	}
+	return a.service.InvalidateMessageProjection(ctx, provider.TopicTransaction(), message.TopicID, message.ID, actorID, now)
+}
