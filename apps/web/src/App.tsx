@@ -13287,6 +13287,7 @@ function EmotePicker({
       className="emote-picker"
       id={id}
       role="dialog"
+      tabIndex={-1}
       aria-label={label}
       onKeyDown={(event) => {
         if (event.key === "Escape") {

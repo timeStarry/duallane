@@ -8163,19 +8163,6 @@ button:disabled {
   font-size: 1rem;
 }
 
-.workspace-reaction-picker-anchor {
-  position: relative;
-}
-
-.workspace-reaction-picker-anchor > .emote-picker {
-  right: 0;
-  left: auto;
-  bottom: auto;
-  top: calc(100% + 6px);
-  width: min(384px, calc(100vw - 28px));
-  z-index: 60;
-}
-
 @media (max-width: 760px) {
   .workspace-message-avatar-slot {
     width: 30px;
@@ -8211,14 +8198,6 @@ button:disabled {
 
   .message-image-grid.multiple .message-image-preview {
     max-height: min(56dvh, 420px);
-  }
-
-  .workspace-reaction-picker-anchor > .emote-picker {
-    position: fixed;
-    inset: auto 8px calc(74px + env(safe-area-inset-bottom)) 8px;
-    width: auto;
-    max-height: 40dvh;
-    box-shadow: none;
   }
 }
 

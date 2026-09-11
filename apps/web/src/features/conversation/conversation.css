@@ -3,3 +3,19 @@
 .workspace-chat-panel[data-conversation-banner="true"][data-composer-hidden="true"] { grid-template-rows: auto auto minmax(0, 1fr); }
 .workspace-conversation-banner { min-width: 0; }
 .workspace-composer-disabled-reason { margin-bottom: 10px; color: var(--muted); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+
+.workspace-reaction-popover {
+  position: fixed;
+  z-index: 1000;
+  width: min(384px, calc(100vw - 24px));
+  height: min(280px, 42dvh);
+}
+
+.workspace-reaction-popover > .emote-picker {
+  position: static;
+  inset: auto;
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  margin: 0;
+}

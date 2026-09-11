@@ -25,24 +25,24 @@ test("space owner broadcasts one detailed mobile release guide through Echo", as
 
   const chat = page.getByRole("region", { name: "回声" });
   const composer = chat.getByLabel("输入消息");
-  await composer.fill("/release 0.19.0");
+  await composer.fill("/release 0.19.1");
   await chat.locator("form.workspace-composer button.workspace-send-button").click();
 
   const interaction = chat.getByRole("region", { name: "回声交互" });
-  await expect(interaction.getByText("v0.19.0 更新已发布", { exact: true })).toBeVisible();
-  const card = chat.getByRole("group", { name: /DualLane v0\.19\.0 版本更新/ });
+  await expect(interaction.getByText("v0.19.1 更新已发布", { exact: true })).toBeVisible();
+  const card = chat.getByRole("group", { name: /DualLane v0\.19\.1 版本更新/ });
   await expect(card).toBeVisible();
-  await expect(card.getByText("五套主题与独立明暗模式", { exact: true })).toBeVisible();
-  await expect(card.getByText("在话题中使用完整消息", { exact: true })).toBeVisible();
-  await expect(card.getByText("个人 -> 外观", { exact: true })).toBeVisible();
+  await expect(card.getByText("在底部消息上选择表情", { exact: true })).toBeVisible();
+  await expect(card.getByText("打开消息的表情回复面板后，面板会按屏幕可用空间调整位置，避免向下或左右越界。群聊、私聊和话题使用同样的方式，无需重新设置。", { exact: true })).toBeVisible();
+  await expect(card.getByText("聊天或话题 -> 消息 -> 添加表情回复", { exact: true })).toBeVisible();
   const bounds = await card.boundingBox();
   expect(bounds).not.toBeNull();
   expect(bounds!.x).toBeGreaterThanOrEqual(0);
   expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
 
   await interaction.getByRole("button", { name: "完成" }).click();
-  await composer.fill("/release v0.19.0");
+  await composer.fill("/release v0.19.1");
   await chat.locator("form.workspace-composer button.workspace-send-button").click();
-  await expect(interaction.getByText("v0.19.0 更新已发布", { exact: true })).toBeVisible();
-  await expect(chat.getByRole("group", { name: /DualLane v0\.19\.0 版本更新/ })).toHaveCount(1);
+  await expect(interaction.getByText("v0.19.1 更新已发布", { exact: true })).toBeVisible();
+  await expect(chat.getByRole("group", { name: /DualLane v0\.19\.1 版本更新/ })).toHaveCount(1);
 });

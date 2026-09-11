@@ -13,6 +13,15 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.19.1",
+    releasedAt: "2026-09-12",
+    title: "表情回复面板保持可见",
+    summary: "修复消息靠近底部或屏幕较窄时表情回复面板显示不全的问题，群聊、私聊和话题保持一致。",
+    categories: [
+      { title: "表情回复", items: ["表情回复面板按可用空间调整位置，避免超出屏幕边界", "继续从消息的“添加表情回复”入口选择表情，原有使用方式保持不变"] }
+    ]
+  },
+  {
     version: "0.19.0",
     releasedAt: "2026-09-11",
     title: "清晰双轨，全新一致体验",
