@@ -4,7 +4,7 @@ import test from "node:test";
 
 test("Go P2P browser gate owns its server and never uploads private failure output", async () => {
   const root = new URL("../../", import.meta.url);
-  const read = (name) => readFile(new URL(name, root), "utf8");
+  const read = async (name) => (await readFile(new URL(name, root), "utf8")).replace(/\r\n?/g, "\n");
   const [workflow, config, nodeConfig, server, manifest] = await Promise.all([
     read(".github/workflows/ci.yml"), read("playwright.p2p-go.config.ts"), read("playwright.config.ts"), read("e2e/support/test-server.mjs"), read("package.json")
   ]);
@@ -22,7 +22,7 @@ test("Go P2P browser gate owns its server and never uploads private failure outp
   assert.doesNotMatch(server, /apps\/web\/server|openTestDatabase|createApp/);
   assert.match(server, /go-p2p-server\.mjs/);
   assert.match(qualityGate, /- name: Set up Go\n        uses: actions\/setup-go@v7\n        with:\n          go-version-file: apps\/backend\/go\.mod\n          cache-dependency-path: apps\/backend\/go\.sum/);
-  assert.match(qualityGate, /DUALLANE_APP_VERSION: "0\.18\.0"/);
+  assert.equal(qualityGate.match(/DUALLANE_APP_VERSION: "([^"]+)"/)?.[1], JSON.parse(manifest).version);
   assert.match(qualityGate, /docker compose --profile storage-migration build storage-provision/);
   assert.match(config, /testMatch:\s*\[\s*"p2p-go-privacy\.spec\.ts",\s*"p2p-ime\.spec\.ts"\s*\]/);
   assert.match(config, /outputDir: "\.private-test-results\/p2p-go-browser"/);
