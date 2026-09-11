@@ -42,6 +42,13 @@ commands, such as topic sync. Local IDs never receive the server-backed hide act
 Replacing a pending object's ID with a confirmed ID closes its old menu and restores
 focus to the list, rather than retaining an action bound to the removed object.
 
+`ReactionPickerPopover` portals the existing emote picker out of the history
+scroller and reuses the shared viewport placement policy. Bottom messages open
+upwards when below-space is insufficient; narrow viewports constrain width and
+height while the emote grid scrolls internally. Opening, selecting and Escape
+preserve the reading position; selection and Escape return focus to the source.
+The same wrapper serves direct actions and the menu/sheet entry in every adapter.
+
 `readOnly` and `composerDisabled` stop editing/sending and guard interactive composer
 tools. `composerDisabledReason` explains that state. `sendDisabled` represents an explicit submission block, not whether another
 message is uploading. Each submission captures and releases only its current
@@ -81,3 +88,10 @@ or fails. It follows visible message bodies when pagination changes group header
 The P2P fixture ensures helper extraction preserves its existing
 private conversation behavior and no-content-persistence boundary. These fixtures
 do not replace the real Go Workspace/topic authorization and concurrency tests.
+
+The Go-backed `e2e/workspace-reaction-picker.spec.ts` covers group/topic bottom
+messages at 1440/390/320 px, real reaction submission, viewport bounds and hit
+testing, reading position, keyboard focus, delayed pack settings, window resizing,
+and right-click/long-press on an expanded message taller than the viewport.
+Run it with the disposable Workspace environment described in the repository's
+[testing guide](../../../../../docs/development/TESTING_AND_RELEASE.md#3-browser-tests).

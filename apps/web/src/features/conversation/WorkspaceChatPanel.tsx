@@ -7,6 +7,8 @@ import { isImeCompositionEnter } from "../../workspace-composer-ime";
 import { renamePastedImageFiles } from "../../workspace-image-files";
 import { groupHiddenWorkspaceMessages } from "../../workspace-hidden-messages";
 import { ObjectActionMenu, type ObjectAction } from "../../ui/primitives";
+import type { PopupAnchor } from "../../ui/primitives/popup";
+import { ReactionPickerPopover } from "./ReactionPickerPopover";
 import { useMessageActions } from "./useMessageActions";
 import { getMessageGroupPositions } from "./message-grouping";
 import { WorkspaceIdentityName, MentionPicker } from "./ConversationIdentity";
@@ -125,6 +127,7 @@ export function WorkspaceChatPanel<TMessage extends WorkspaceConversationMessage
   const emoteTriggerRef = useRef<HTMLButtonElement | null>(null);
   const mentionTriggerRef = useRef<HTMLButtonElement | null>(null);
   const reactionPickerTriggerRef = useRef<HTMLElement | null>(null);
+  const reactionPickerAnchorRef = useRef<PopupAnchor | null>(null);
   const historySentinelRef = useRef<HTMLDivElement | null>(null);
   const canMention = mentionMembers.length > 0 && !editingDisabled;
   const filteredMentionMembers = useMemo(() => {
@@ -354,7 +357,7 @@ export function WorkspaceChatPanel<TMessage extends WorkspaceConversationMessage
     if (onReply && !editingDisabled && message.authorKind !== "system" && !message.recalledAt && !message.localState) actions.push({ id: "reply", label: "回复", icon: <MessageSquare size={16} />, onSelect: () => startReply(message.id) });
     if (onCopyMessage) actions.push({ id: "copy", label: "复制消息", icon: <Copy size={16} />, onSelect: () => onCopyMessage(message) });
     if (onHideMessage && !message.localState) actions.push({ id: "hide", label: "隐藏消息", icon: <EyeOff size={16} />, onSelect: () => { onHideMessage(message.id); window.requestAnimationFrame(() => editorRef.current?.focus()); } });
-    if (onToggleReaction && renderEmotePicker && !readOnly && !message.localState && !message.recalledAt && message.authorKind !== "system") actions.push({ id: "react", label: "添加表情回复", icon: <Smile size={16} />, onSelect: () => { reactionPickerTriggerRef.current = messageActions.menuProps.returnFocus ?? null; setReactionPickerMessageId(message.id); } });
+    if (onToggleReaction && renderEmotePicker && !readOnly && !message.localState && !message.recalledAt && message.authorKind !== "system") actions.push({ id: "react", label: "添加表情回复", icon: <Smile size={16} />, onSelect: () => { reactionPickerTriggerRef.current = messageActions.menuProps.returnFocus ?? null; reactionPickerAnchorRef.current = messageActions.menuProps.anchor; setReactionPickerMessageId(message.id); } });
     if (onFavoriteEmote && canFavoriteMessage?.(message)) actions.push({ id: "favorite", label: "收藏表情", icon: <Heart size={16} />, onSelect: () => onFavoriteEmote(message) });
     if (onTogglePin && !readOnly && !message.localState && !message.recalledAt && conversationType === "group" && (message.pin?.canUnpin || (message.self && !message.pin))) actions.push({ id: "pin", label: message.pin ? "取消常驻" : "设为常驻消息", icon: <Pin size={16} />, onSelect: () => onTogglePin(message) });
     if (onRecall && !readOnly && message.self && !message.recalledAt && !message.localState) actions.push({ id: "recall", label: "撤回消息", icon: <Undo2 size={16} />, danger: true, onSelect: () => onRecall(message) });
@@ -612,7 +615,7 @@ export function WorkspaceChatPanel<TMessage extends WorkspaceConversationMessage
                             if (event.key === "Escape" && reactionPickerMessageId === message.id) {
                               event.preventDefault();
                               setReactionPickerMessageId("");
-                              window.requestAnimationFrame(() => reactionPickerTriggerRef.current?.focus());
+                              window.requestAnimationFrame(() => reactionPickerTriggerRef.current?.focus({ preventScroll: true }));
                             }
                           }}
                         >
@@ -625,20 +628,23 @@ export function WorkspaceChatPanel<TMessage extends WorkspaceConversationMessage
                             aria-controls={"workspace-reaction-picker-" + message.id}
                             onClick={(event) => {
                               reactionPickerTriggerRef.current = event.currentTarget;
+                              reactionPickerAnchorRef.current = event.currentTarget;
                               setReactionPickerMessageId((current) => current === message.id ? "" : message.id);
                             }}
                           >
                             <Smile size={15} />
                           </button>
                           {reactionPickerMessageId === message.id && (
-                            renderEmotePicker?.({ id: "workspace-reaction-picker-" + message.id, label: "选择消息表情回复", workspaceFeatures: "reaction", onEscape: () => {
+                            <ReactionPickerPopover anchor={reactionPickerTriggerRef.current} placementAnchor={reactionPickerAnchorRef.current} messageId={message.id} onDismiss={() => setReactionPickerMessageId("")}>
+                              {renderEmotePicker?.({ id: "workspace-reaction-picker-" + message.id, label: "选择消息表情回复", workspaceFeatures: "reaction", onEscape: () => {
                                 setReactionPickerMessageId("");
-                                window.requestAnimationFrame(() => reactionPickerTriggerRef.current?.focus());
+                                window.requestAnimationFrame(() => reactionPickerTriggerRef.current?.focus({ preventScroll: true }));
                               }, onSelect: (item, packId) => {
                                 onToggleReaction(message.id, getReactionEmoteKey(packId, item));
                                 setReactionPickerMessageId("");
-                                window.requestAnimationFrame(() => reactionPickerTriggerRef.current?.focus());
-                              } })
+                                window.requestAnimationFrame(() => reactionPickerTriggerRef.current?.focus({ preventScroll: true }));
+                              } })}
+                            </ReactionPickerPopover>
                           )}
                         </div>
                       )}
