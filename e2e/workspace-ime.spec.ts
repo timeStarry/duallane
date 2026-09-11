@@ -125,7 +125,11 @@ test("Workspace chat and topic editors keep IME confirmation out of send and men
     await expect(chatInput).toHaveText("");
     expect(workspaceMessageWrites).toHaveLength(1);
 
-    await chatInput.fill("@");
+    // The IME scenario starts with a user typing at the cleared editor's caret.
+    // fill() instead selects all and inserts text through a separate DOM path.
+    await chatInput.click();
+    await chatInput.pressSequentially("@");
+    await expect(chatInput).toHaveText("@");
     const mentionPicker = page.getByRole("dialog", { name: "提及成员" });
     await expect(mentionPicker).toBeVisible();
     const mentionKey = await dispatchSafariImeEnter(chatInput);
@@ -169,7 +173,9 @@ test("Workspace chat and topic editors keep IME confirmation out of send and men
       }
     });
 
-    await topicInput.fill("@");
+    await topicInput.click();
+    await topicInput.pressSequentially("@");
+    await expect(topicInput).toHaveText("@");
     const topicMentionMenu = topicRegion.getByRole("dialog", { name: "提及成员", exact: true });
     await expect(topicMentionMenu).toBeVisible();
     const topicImeKey = await dispatchSafariImeEnter(topicInput);
