@@ -1,5 +1,9 @@
 # Workspace Screen And Component Specification
 
+> The next complete redesign uses the [all-screen coverage ledger](design/ui-ux-rewrite/COVERAGE.md)
+> and [design system](design/ui-ux-rewrite/DESIGN_SYSTEM.md). The application rewrite
+> is pending; this earlier inventory is not a limit on current capability coverage.
+
 ## 1. Purpose
 
 This document turns the Workspace product design into screen-level and

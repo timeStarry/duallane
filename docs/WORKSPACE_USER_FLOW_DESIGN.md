@@ -1,5 +1,9 @@
 # Workspace Core User Flow Design
 
+> The [complete UI/UX rewrite](design/ui-ux-rewrite/EXPERIENCE.md) defines the
+> next-version task flows. Application implementation is pending; this document's
+> earlier navigation defaults do not override the new target or domain contracts.
+
 ## 1. Purpose
 
 This document defines the core shared-space user flows for DualLane Workspace.

@@ -1,5 +1,9 @@
 # Workspace Visual System Design
 
+> Rewrite target: [清晰双轨 V2](design/ui-ux-rewrite/DESIGN_SYSTEM.md) supersedes
+> the visual values in this document for the complete redesign. The application
+> rewrite is pending; this document retains the earlier visual reference.
+
 ## 1. Purpose
 
 This document defines the visual and component system for DualLane shared

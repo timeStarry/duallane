@@ -1,5 +1,10 @@
 # O2O Private Direct Product Design
 
+> The next UI/UX version adopts the continuous invite/wait/chat and unified leave
+> flows in the [rewrite experience specification](design/ui-ux-rewrite/EXPERIENCE.md).
+> Application implementation is pending. The privacy, encryption, invitation and
+> explicit local-save boundaries in this document remain binding.
+
 ## 1. Product Definition
 
 **External name:** 私密直连

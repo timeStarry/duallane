@@ -60,7 +60,7 @@ notifications, audit, logs, or deployment configuration.
 | Module ownership, dependencies, API boundaries, migrations | [Architecture](docs/development/ARCHITECTURE.md) |
 | Go backend architecture, capability migration, services, or containers | [Backend architecture index](docs/backend/README.md) |
 | TypeScript, React, Go, SQL, events, CSS, tests | [Code standards](docs/development/CODE_STANDARDS.md) |
-| Layout, components, copy, responsive behavior, accessibility | [UI/UX standards](docs/development/UI_UX_STANDARDS.md) and the linked Workspace visual specifications |
+| Layout, components, copy, responsive behavior, accessibility | [UI/UX standards](docs/development/UI_UX_STANDARDS.md) and the [current UI/UX specification](docs/design/ui-ux-rewrite/README.md), including all adopted rewrite follow-ups |
 | Validation, versions, release notes, Docker, production | [Testing and release](docs/development/TESTING_AND_RELEASE.md) |
 | Workspace product or protocol behavior | [Workspace design index](docs/WORKSPACE_DESIGN_INDEX.md) |
 | P2P product behavior | [P2P product design](docs/O2O_PRODUCT_DESIGN.md) and `DESIGN.md` |

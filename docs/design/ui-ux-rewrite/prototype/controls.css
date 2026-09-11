@@ -1,0 +1,57 @@
+/* Keep native scrolling, selection and range semantics beneath the shared skin. */
+:is(html, body, .sidebar nav, .messages, .conversation-list, .prefs-pane, .prefs-nav, .ux-action-menu, .ux-action-sheet, .ux-confirm, .controls-scroll, .coverage-wrap, .dialog-content, .details-body) {
+  scrollbar-color: var(--control) transparent;
+  scrollbar-width: thin;
+}
+:is(.prefs-pane, .prefs-nav, .controls-scroll) { scrollbar-gutter: stable; }
+:is(.prefs-pane, .prefs-nav, .controls-scroll):hover { scrollbar-color: var(--muted) transparent; }
+select { color-scheme: light; }
+html[data-theme=dark] select { color-scheme: dark; }
+.control-select { min-height: 44px; padding: 10px 12px; font: inherit; font-size: 14px; color: var(--text); background: var(--surface); border: 1px solid var(--control); border-radius: 10px; max-width: 100%; }
+@supports (appearance: base-select) {
+  select, select::picker(select) { appearance: base-select; }
+  select { cursor: pointer; }
+  select::picker(select) { margin-block: 6px; min-width: 160px; max-height: min(300px, 50dvh); padding: 6px; overflow: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--elevated); color: var(--text); box-shadow: var(--elevation-high); scrollbar-width: thin; scrollbar-color: var(--control) transparent; }
+  select::picker(select) { min-width: max(160px, anchor-size(width)); }
+  select::picker-icon { color: var(--muted); width: 16px; height: 16px; align-self: center; content: ""; background: currentColor; mask: var(--control-chevron) center / contain no-repeat; }
+  select:open::picker-icon { rotate: 180deg; }
+  select option { min-height: 44px; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 0; border-radius: 8px; font: inherit; font-size: 14px; background: transparent; color: var(--text); }
+  select option:checked { background: var(--shared-soft); color: var(--shared); font-weight: 500; }
+  select option:hover { background: var(--soft); }
+  select option:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+  select option:disabled { opacity: .55; cursor: not-allowed; }
+  select option::checkmark { order: 1; margin-inline-start: auto; color: var(--shared); }
+  .theme-select select { gap: 8px; padding-inline-end: 10px; }
+}
+.controls-study { margin-bottom: 28px; scroll-margin-top: 100px; }
+.controls-study > h3 { font-size: 21px; margin: 4px 0 12px; }
+.controls-intro { font-size: 13px; color: var(--muted); max-width: 680px; line-height: 1.9; }
+.controls-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+.controls-example { min-width: 0; padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
+.controls-example h4 { font-size: 15px; margin-bottom: 14px; }
+.controls-example label { display: block; font-size: 13px; margin-bottom: 10px; }
+.controls-example .control-select { width: 100%; }
+.controls-example .controls-help { color: var(--muted); font-size: 12px; line-height: 1.8; margin: 12px 0 0; }
+.controls-scroll { height: 174px; overflow: auto; padding: 0 14px 0 0; outline-offset: 4px; }
+.controls-scroll:focus-visible { outline: 2px solid var(--focus); }
+.controls-scroll p { padding: 12px 0; margin: 0; border-bottom: 1px solid var(--line); font-size: 13px; line-height: 1.8; color: var(--muted); }
+.controls-range-row { display: flex; align-items: center; gap: 16px; margin: 10px 0 12px; }
+.control-range { --range-fill: 37.5%; appearance: none; height: 44px; min-width: 44px; width: 100%; min-height: 44px; background: transparent; padding: 0; margin: 0; cursor: pointer; border-radius: 8px; accent-color: var(--shared); }
+.control-range::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--shared) 0 var(--range-fill), var(--control) var(--range-fill) 100%); }
+.control-range::-moz-range-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--shared) 0 var(--range-fill), var(--control) var(--range-fill) 100%); }
+.control-range::-webkit-slider-thumb { appearance: none; width: 16px; height: 16px; margin-top: -6px; border: 2px solid var(--surface); border-radius: 50%; background: var(--shared); box-shadow: 0 0 0 1px var(--shared); }
+.control-range::-moz-range-thumb { width: 12px; height: 12px; border: 2px solid var(--surface); border-radius: 50%; background: var(--shared); box-shadow: 0 0 0 1px var(--shared); }
+.controls-number { width: 72px; min-width: 72px; min-height: 44px; padding: 8px; background: var(--surface); color: var(--text); border: 1px solid var(--control); border-radius: 10px; font-size: 14px; }
+.controls-number[aria-invalid=true] { border-color: var(--danger); }
+.controls-type-preview { padding: 18px; margin: 0; background: var(--soft); border-radius: 10px; line-height: 1.8; overflow-wrap: anywhere; }
+#controls-size-help { min-height: 22px; }
+@media (max-width: 1000px) { .controls-grid { grid-template-columns: 1fr; } }
+@media (pointer: coarse) { :is(html, body, .messages, .conversation-list, .prefs-pane, .prefs-nav, .controls-scroll) { scrollbar-width: auto; } }
+@media (forced-colors: active) {
+  :is(html, body, .messages, .conversation-list, .prefs-pane, .prefs-nav, .controls-scroll) { scrollbar-color: auto; scrollbar-width: auto; }
+  .control-range { appearance: auto; }
+  .control-range::-webkit-slider-runnable-track { background: CanvasText; }
+  .control-range::-moz-range-track { background: CanvasText; }
+  .control-range::-webkit-slider-thumb { background: Highlight; border-color: Canvas; box-shadow: none; }
+  .control-range::-moz-range-thumb { background: Highlight; border-color: Canvas; box-shadow: none; }
+}

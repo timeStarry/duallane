@@ -1,5 +1,9 @@
 # Workspace Mobile And Accessibility Design
 
+> The next layout and navigation model follows the [UI/UX rewrite experience](design/ui-ux-rewrite/EXPERIENCE.md).
+> Existing accessibility obligations remain binding. See the [new acceptance matrix](design/ui-ux-rewrite/ACCEPTANCE.md)
+> for the full rewrite, which is not yet implemented in the application.
+
 ## 1. Purpose
 
 This document defines responsive behavior, mobile navigation, keyboard access,

@@ -22,6 +22,12 @@ Development standards explain how to make a change. Product and protocol
 documents define what the product should do:
 
 - [`DESIGN.md`](../../DESIGN.md) defines the split-lane product and system model.
+- [Current UI/UX specification](../design/ui-ux-rewrite/README.md) assigns one
+  canonical owner to visual, interaction, theme and layout rules, including all
+  adopted follow-up changes. Its coverage ledger maps pages and feedback to tests.
+  Production frontend code is implemented; [PR verification](../design/ui-ux-rewrite/PR_VERIFICATION.md)
+  records completed checks and remaining release work. Historical prototypes and
+  stage records do not override the current specification.
 - [Workspace design index](../WORKSPACE_DESIGN_INDEX.md) routes to Workspace
   product, protocol, data, visual, accessibility, and acceptance documents.
 - [P2P product design](../O2O_PRODUCT_DESIGN.md) defines the private direct lane.

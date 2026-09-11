@@ -160,6 +160,9 @@ jobs:
       - name: Run type and lint checks
         run: pnpm lint
 
+      - name: Validate current UI/UX documentation links
+        run: node docs/design/ui-ux-rewrite/verify-docs.mjs
+
       - name: Build
         run: pnpm build
 

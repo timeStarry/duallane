@@ -39,6 +39,12 @@ the retired Node API/worker, Docker, a database, or an automatic migration or
 seed. `DUALLANE_API_ORIGIN` is an explicit single-origin Go/external test
 harness override; normal development uses the split Go origins.
 
+The development-only `/__design` route is the live component workbench for the
+new UI. It imports production components and supports theme and interaction
+review. See the [implemented frontend architecture](docs/design/ui-ux-rewrite/ARCHITECTURE.md)
+and [verification record](docs/design/ui-ux-rewrite/PRODUCTION_VERIFICATION.md)
+for the current branch's implementation and acceptance status.
+
 Before opening a pull request, run the gate required for the affected code. The
 common full checks are:
 
@@ -69,6 +75,7 @@ contract before changing behavior.
 
 ## Product Documentation
 
+- [Current UI/UX Specification — 清晰双轨](docs/design/ui-ux-rewrite/README.md)
 - [System and trust-lane design](DESIGN.md)
 - [Workspace Design Index](docs/WORKSPACE_DESIGN_INDEX.md)
 - [O2O Private Direct Product Design](docs/O2O_PRODUCT_DESIGN.md)
