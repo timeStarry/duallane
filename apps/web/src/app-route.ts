@@ -3,6 +3,7 @@ export type WorkspaceRouteSpaceTab = "overview" | "invites" | "roles" | "visibil
 export type WorkspaceRouteCreateMode = "" | "direct" | "group";
 export type WorkspaceRouteAccountSection =
   | ""
+  | "appearance"
   | "profile"
   | "privacy"
   | "chat"
@@ -255,7 +256,7 @@ function spaceTabPath(tab: WorkspaceRouteSpaceTab) {
 
 function parseAccountSection(segments: string[]): WorkspaceRouteAccountSection {
   if (segments.length === 0) return "";
-  if (segments.length === 1 && ["profile", "privacy", "chat", "notifications", "bot", "emotes"].includes(segments[0])) {
+  if (segments.length === 1 && ["profile", "appearance", "privacy", "chat", "notifications", "bot", "emotes"].includes(segments[0])) {
     return segments[0] as WorkspaceRouteAccountSection;
   }
   if (segments.length === 2 && segments[0] === "notifications" && segments[1] === "email") return "email";

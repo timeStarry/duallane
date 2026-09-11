@@ -6,18 +6,19 @@
   gap: 8px;
   min-height: 36px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .workspace-auto-hidden-summary > svg { flex-shrink: 0; }
 .workspace-auto-hidden-summary > button {
   border: 0;
-  border-radius: 6px;
+  min-height: 44px;
+  border-radius: var(--radius-control);
   background: transparent;
   color: var(--relay);
   padding: 6px 8px;
   white-space: nowrap;
   cursor: pointer;
 }
-@media (max-width: 720px) {
+@media (max-width: 760px) {
   .workspace-auto-hidden-summary > button { min-height: 44px; min-width: 44px; }
 }

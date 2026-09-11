@@ -1,0 +1,5 @@
+.workspace-chat-panel[data-conversation-banner="true"] { grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.workspace-chat-panel[data-composer-hidden="true"] { grid-template-rows: auto minmax(0, 1fr); }
+.workspace-chat-panel[data-conversation-banner="true"][data-composer-hidden="true"] { grid-template-rows: auto auto minmax(0, 1fr); }
+.workspace-conversation-banner { min-width: 0; }
+.workspace-composer-disabled-reason { margin-bottom: 10px; color: var(--muted); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }

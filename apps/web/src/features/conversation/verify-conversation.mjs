@@ -1,0 +1,140 @@
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { chromium, expect } from "@playwright/test";
+const require = createRequire(new URL("../../../package.json", import.meta.url));
+const { createServer } = await import(pathToFileURL(require.resolve("vite")));
+const server = await createServer({ root: fileURLToPath(new URL("../../../", import.meta.url)), cacheDir: "node_modules/.vite-conversation-test", server: { host: "127.0.0.1", port: 0, strictPort: false, watch: null, hmr: false }, logLevel: "error" });
+await server.listen();
+const browser = await chromium.launch();
+const control = (page, detail) => page.evaluate((value) => window.dispatchEvent(new CustomEvent("test:conversation", { detail: value })), detail);
+const state = async (page) => JSON.parse(await page.locator("#conversation-test-state").textContent());
+try {
+  for (const width of [1440, 390, 320]) {
+    const page = await browser.newPage({ viewport: { width, height: 900 } });
+    const errors = [], requests = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.route("**/api/**", (route) => { requests.push(new URL(route.request().url()).pathname); return route.abort(); });
+    await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/src/features/conversation/conversation-harness.html`);
+    const panel = page.locator(".workspace-chat-panel");
+    const row = (id) => panel.locator(`[data-message-id="${id}"]`);
+    const more = (id) => row(id).getByTitle("更多消息操作", { exact: true });
+    const menu = page.getByRole("menu", { name: "消息操作", exact: true });
+    const editor = panel.getByRole("textbox", { name: "输入消息", exact: true });
+    await expect(row("grouped")).toHaveClass(/grouped/);
+    await expect(row("grouped").locator(".workspace-message-meta")).toHaveCount(0);
+    await expect(panel.locator(".message-day-separator")).toHaveCount(1);
+    await expect(row("other")).toHaveAttribute("data-message-group", "start");
+    await expect(row("grouped")).toHaveAttribute("data-message-group", "end");
+    const stableRow = await row("grouped").elementHandle();
+    await control(page, { unreadBoundary: true });
+    await expect(panel.locator(".workspace-unread-divider")).toBeVisible();
+    await expect(row("other")).toHaveAttribute("data-message-group", "single");
+    await expect(row("grouped")).toHaveAttribute("data-message-group", "single");
+    await expect(row("grouped").locator(".workspace-message-meta")).toBeVisible();
+    assert.equal(await row("grouped").evaluate((element, previous) => element === previous, stableRow), true, 'a new group boundary must not remount the message');
+    await control(page, { unreadBoundary: false });
+    await expect(row("grouped")).toHaveAttribute("data-message-group", "end");
+    await expect(panel.locator(".workspace-unread-divider")).toHaveCount(0);
+    await stableRow.dispose();
+    await expect(panel.locator('input[type="file"]')).toHaveCount(1);
+    await more("self").click();
+    await expect(menu.getByRole("menuitem", { name: "设为常驻消息", exact: true })).toBeVisible();
+    await expect(menu.getByRole("menuitem", { name: "撤回消息", exact: true })).toBeVisible();
+    await menu.getByRole("menuitem", { name: "回复", exact: true }).click();
+    await expect(panel.locator(".composer-reply")).toContainText("自己的消息");
+    await expect(editor).toBeFocused();
+    await panel.getByTitle("取消回复", { exact: true }).click();
+    await row("reply").getByRole("button", { name: "跳转到 林予 的原消息" }).click();
+    assert((await state(page)).events.includes("jump:self"));
+    await more("failed").click();
+    await expect(menu.getByRole("menuitem", { name: "隐藏消息", exact: true })).toHaveCount(0);
+    await expect(row("failed").getByTitle("隐藏消息", { exact: true })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    const body = row("other").locator("[data-native-context]");
+    assert.equal(await body.evaluate((element) => element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }))), true);
+    await expect(menu).toHaveCount(0);
+
+    // A delayed image-send completion must not focus another conversation or
+    // reclaim focus from an intentional details action in the same conversation.
+    for (const changeScope of [true, false]) {
+      await panel.getByTitle("插入表情", { exact: true }).click();
+      await page.getByRole("button", { name: "选择合成图片表情", exact: true }).click();
+      await expect(editor).toBeFocused();
+      if (changeScope) await control(page, { scope: "conversation:image-next" });
+      const details = panel.getByRole("button", { name: "查看详情", exact: true });
+      await details.click();
+      await expect(details).toBeFocused();
+      const before = (await state(page)).events.filter((event) => event === "image-consumed").length;
+      await control(page, { resolveImage: true });
+      await expect.poll(async () => (await state(page)).events.filter((event) => event === "image-consumed").length).toBe(before + 1);
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      await expect(details).toBeFocused();
+    }
+
+    await control(page, { mode: "topic" });
+    await expect(panel.locator(".workspace-conversation-banner")).toContainText("跨端交互讨论");
+    await expect(panel.locator('input[type="file"]')).toHaveCount(0);
+    await expect(panel.getByTitle("插入表情", { exact: true })).toHaveCount(0);
+    await expect(panel.getByTitle("添加表情回复", { exact: true })).toHaveCount(0);
+    await more("self").click();
+    for (const label of ["设为常驻消息", "撤回消息", "隐藏消息", "添加表情回复"]) await expect(menu.getByRole("menuitem", { name: label, exact: true })).toHaveCount(0);
+    await menu.getByRole("menuitem", { name: "同步到群聊", exact: true }).click();
+    assert((await state(page)).events.includes("sync:self"));
+    await more("failed").click();
+    await menu.getByRole("menuitem", { name: "重试发送", exact: true }).click();
+    assert((await state(page)).events.includes("retry:failed"));
+    await control(page, { busy: true });
+    await expect(panel.getByTitle("发送消息", { exact: true })).toBeDisabled();
+    await expect(row("failed").getByRole("button", { name: "重试发送", exact: true })).toBeDisabled();
+    await more("failed").click();
+    await expect(menu.getByRole("menuitem", { name: "重试发送", exact: true })).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await editor.fill("发送旧消息期间继续编辑的新草稿");
+    await expect.poll(async () => (await state(page)).draft).toBe("发送旧消息期间继续编辑的新草稿");
+    await editor.press("Enter");
+    assert.equal((await state(page)).events.filter((event) => event.startsWith("send:")).length, 0);
+    await control(page, { busy: false });
+    await panel.getByTitle("发送消息", { exact: true }).click();
+    assert((await state(page)).events.includes("send:发送旧消息期间继续编辑的新草稿"));
+    await expect(editor).toContainText("发送旧消息期间继续编辑的新草稿");
+
+    await more("failed").click();
+    await control(page, { replaceId: "failed" });
+    await expect(row("confirmed-failed")).toBeVisible();
+    await expect(row("failed")).toHaveCount(0);
+    await expect(menu).toHaveCount(0);
+    await expect(panel.locator(".workspace-message-list")).toBeFocused();
+
+    await more("other").click();
+    await control(page, { scope: "conversation:b" });
+    await expect(menu).toHaveCount(0);
+    await control(page, { mode: "readOnly" });
+    await expect(editor).toHaveAttribute("contenteditable", "false");
+    await expect(panel.getByTitle("发送消息", { exact: true })).toBeDisabled();
+    await expect(panel.getByRole("button", { name: "显示格式工具栏", exact: true })).toBeDisabled();
+    await expect(panel.getByTitle("提及成员", { exact: true })).toHaveCount(0);
+    await expect(row("other").getByRole("button", { name: "提及 安宁", exact: true })).toHaveCount(0);
+    await more("other").click();
+    await expect(menu.getByRole("menuitem")).toHaveCount(1);
+    await expect(menu.getByRole("menuitem", { name: "复制消息", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(more("other")).toBeFocused();
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    const layout = await panel.evaluate((element) => {
+      const list = element.querySelector(".workspace-message-list").getBoundingClientRect();
+      const dock = element.querySelector(".workspace-composer-dock").getBoundingClientRect();
+      const banner = element.querySelector(".workspace-conversation-banner").getBoundingClientRect();
+      return { listTop: list.top, listBottom: list.bottom, dockTop: dock.top, dockBottom: dock.bottom, bannerBottom: banner.bottom };
+    });
+    assert(layout.listTop >= layout.bannerBottom && layout.listBottom <= layout.dockTop && layout.dockBottom <= 900);
+    await control(page, { mode: "unjoined" });
+    await expect(panel.locator(".workspace-message")).toHaveCount(0);
+    await expect(panel.locator(".workspace-composer-dock")).toHaveCount(0);
+    await expect(panel.getByText("加入后参与讨论", { exact: true })).toBeVisible();
+    assert.deepEqual(requests, [], "pure renderer must not issue domain API calls");
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  console.log("Shared conversation passed at 1440/390/320: grouping/dates/replies/native text, capability-driven menus, local hide exclusion/failed retry, target replacement and scope close/focus, delayed image-send focus guard, editable next draft during send, read-only gates, banner/composer layout, no-history unjoined state and no domain API calls.");
+} finally { await browser.close(); await server.close(); }

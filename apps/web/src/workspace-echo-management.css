@@ -1,0 +1,85 @@
+.workspace-echo-page.dl-echo-management {
+  display: block;
+  height: 100%;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  container: echo-management / inline-size;
+  padding-inline: 4px;
+}
+.workspace-echo-page.dl-echo-management .dl-tab-panel[hidden],
+.workspace-echo-page.dl-echo-management [hidden] { display: none; }
+.workspace-echo-page.dl-echo-management > .workspace-echo-header { padding-block: 8px 12px; }
+.workspace-echo-page.dl-echo-management .dl-echo-views > .dl-tab-list { margin-block: 8px; }
+.workspace-echo-page.dl-echo-management .dl-echo-views > .dl-tab-panel { padding: 4px 0 24px; }
+.workspace-echo-page.dl-echo-management .workspace-echo-filters {
+  grid-template-columns: repeat(2, minmax(140px, 220px)) auto auto;
+  justify-content: start;
+  overflow: visible;
+  gap: 12px;
+  padding-block: 16px;
+}
+.workspace-echo-page.dl-echo-management .workspace-echo-filters :is(input, button) { min-height: 44px; }
+.workspace-echo-page.dl-echo-management .dl-echo-more-filter-fields {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+  padding-top: 0;
+}
+.workspace-echo-page.dl-echo-management .workspace-echo-body {
+  grid-template-columns: minmax(0, .9fr) minmax(0, 1.25fr);
+  overflow: visible;
+  align-items: start;
+  padding-block: 8px;
+}
+.workspace-echo-page.dl-echo-management .workspace-echo-body .workspace-echo-list {
+  display: grid;
+  overflow: visible;
+  padding: 4px 12px 12px 0;
+}
+.workspace-echo-page.dl-echo-management .workspace-echo-body .workspace-echo-detail {
+  display: block;
+  min-width: 0;
+  overflow: visible;
+  padding: 0 0 12px 20px;
+}
+.workspace-echo-page.dl-echo-management .workspace-echo-solicitations { border: 0; padding-top: 8px; }
+.workspace-echo-page.dl-echo-management .workspace-echo-solicitation-form {
+  display: block;
+  padding: 16px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.workspace-echo-page.dl-echo-management .dl-echo-solicitation-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
+  gap: 12px;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+.workspace-echo-page.dl-echo-management .dl-echo-solicitation-fields > label,
+.workspace-echo-page.dl-echo-management .dl-echo-solicitation-fields > .workspace-echo-option-grid,
+.workspace-echo-page.dl-echo-management .dl-echo-solicitation-fields > .workspace-echo-solicitation-policy,
+.workspace-echo-page.dl-echo-management .dl-echo-solicitation-fields > .workspace-echo-solicitation-form-actions { grid-column: 1 / -1; }
+.workspace-echo-page.dl-echo-management .workspace-echo-solicitation-form :is(input:not([type=checkbox]), button),
+.workspace-echo-page.dl-echo-management .workspace-echo-transition :is(input, button) { min-height: 44px; }
+.workspace-echo-page.dl-echo-management .workspace-echo-solicitation-form textarea { min-height: 100px; }
+.workspace-echo-page.dl-echo-management .workspace-echo-transition { overflow: visible; }
+@container echo-management (max-width: 850px) {
+  .workspace-echo-page.dl-echo-management .workspace-echo-body { grid-template-columns: minmax(0, 1fr); }
+  .workspace-echo-page.dl-echo-management .workspace-echo-body .workspace-echo-list { border: 0; padding-inline: 0; }
+  .workspace-echo-page.dl-echo-management .workspace-echo-body .workspace-echo-detail { display: none; padding-inline: 0; }
+  .workspace-echo-page.dl-echo-management.detail-open .workspace-echo-body .workspace-echo-list { display: none; }
+  .workspace-echo-page.dl-echo-management.detail-open .workspace-echo-body .workspace-echo-detail { display: block; }
+}
+@container echo-management (max-width: 540px) {
+  .workspace-echo-page.dl-echo-management .workspace-echo-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .workspace-echo-page.dl-echo-management .workspace-echo-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .workspace-echo-page.dl-echo-management .workspace-echo-solicitation-form,
+  .workspace-echo-page.dl-echo-management .dl-echo-solicitation-fields,
+  .workspace-echo-page.dl-echo-management .workspace-echo-solicitation-policy,
+  .workspace-echo-page.dl-echo-management .workspace-echo-option-grid,
+  .workspace-echo-page.dl-echo-management .workspace-echo-solicitation-detail > div { grid-template-columns: minmax(0, 1fr); }
+  .workspace-echo-page.dl-echo-management .workspace-echo-solicitations > header { flex-wrap: wrap; }
+}

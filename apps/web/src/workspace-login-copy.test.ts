@@ -46,7 +46,7 @@ describe("workspace login entry copy", () => {
   it("uses shared-space product language instead of internal workspace relay copy", () => {
     const source = readFileSync(sourcePath, "utf8");
 
-    expect(source).toContain("选择沟通方式");
+    expect(readFileSync(join(dirname(sourcePath), "features/entry/EntryPage.tsx"), "utf8")).toContain("选择沟通方式");
     expect(source).not.toContain("开始加密对话");
     expect(source).not.toContain("仅使用服务器做信令协调");
     expect(source).not.toContain("工作区中转");

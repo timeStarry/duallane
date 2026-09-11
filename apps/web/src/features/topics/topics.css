@@ -1,0 +1,67 @@
+/* Topics share the production chat panel; only the domain banner and sync choice differ. */
+.workspace-topic-page.dl-topic-conversation { display:grid; grid-template-rows:minmax(0,1fr); min-height:0; overflow:hidden; }
+.dl-topic-avatar { display:inline-flex; align-items:center; justify-content:center; flex:0 0 40px; width:40px; height:40px; border-radius:12px; color:var(--shared); background:var(--surface-soft); }
+.dl-topic-banner { position:relative; padding:10px 18px; display:grid; gap:8px; border-bottom:1px solid var(--line); background:var(--surface); }
+.dl-topic-banner-heading { display:flex; align-items:center; flex-wrap:wrap; gap:6px 14px; min-width:0; font-size:12px; color:var(--muted); }
+.dl-topic-banner-heading > span,.dl-topic-parent { display:inline-flex; align-items:center; gap:6px; min-width:0; }
+.dl-topic-parent { max-width:100%; border:0; padding:4px 0; background:transparent; color:var(--shared); text-align:left; font:inherit; overflow-wrap:anywhere; cursor:pointer; }
+.dl-topic-parent > svg { flex:none; }
+.dl-topic-description { margin-left:auto; }
+.dl-topic-description summary { cursor:pointer; padding:4px 0; color:var(--muted); }
+.dl-topic-description > div { position:absolute; z-index:8; top:100%; inset-inline:12px; max-height:min(280px,36dvh); overflow:auto; padding:16px; border:1px solid var(--line); border-radius:var(--radius-control); background:var(--surface); box-shadow:var(--shadow-overlay); }
+.dl-topic-description p { margin:0 0 12px; color:var(--text); font-size:13px; line-height:1.65; white-space:pre-wrap; overflow-wrap:anywhere; }
+.dl-topic-description small { color:var(--muted); font-size:12px; }
+.dl-topic-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-width:0; }
+.dl-topic-toolbar button { min-height:34px; padding:6px 9px; display:inline-flex; align-items:center; justify-content:center; gap:5px; font-size:12px; }
+.dl-topic-management-actions { margin-left:auto; display:flex; align-items:center; gap:6px; }
+.dl-topic-management-actions:empty { display:none; }
+.dl-topic-notification { display:flex; gap:2px; padding:2px; border-radius:10px; background:var(--soft); }
+.dl-topic-notification button { border:0; border-radius:8px; color:var(--muted); background:transparent; font:inherit; font-size:12px; white-space:nowrap; cursor:pointer; }
+.dl-topic-notification button[aria-pressed=true] { color:var(--text); background:var(--surface); }
+.dl-topic-conversation .workspace-topic-status { flex:none; width:max-content; max-width:100%; white-space:nowrap; }
+.dl-topic-composer-context { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 18px; margin-bottom:8px; }
+.dl-topic-target { min-width:0; margin:0; color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
+.dl-topic-target strong { color:var(--shared); font-weight:550; }
+.dl-topic-sync-field { display:flex; align-items:center; gap:8px; margin:0; font-size:12px; color:var(--text); }
+.workspace-topic-rail .workspace-topic-list { padding-top:12px; }
+.workspace-topic-rail .workspace-topic-row { align-items:center; padding-block:12px; }
+.workspace-topic-rail .workspace-topic-row-main { min-width:0; }
+.dl-topic-create-dialog { width:min(600px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); overflow:auto; padding:28px; border:1px solid var(--line); border-radius:var(--radius-dialog); background:var(--surface); color:var(--text); box-shadow:var(--shadow-overlay); }
+.dl-topic-create-dialog::backdrop { background:color-mix(in srgb,var(--bg) 72%,transparent); backdrop-filter:blur(var(--material-blur)); }
+.dl-topic-create-dialog > header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:24px; }
+.dl-topic-create-dialog h2 { margin:0; font-size:22px; }
+.dl-topic-create-dialog header p { margin:0 0 6px; color:var(--muted); font-size:12px; }
+.dl-topic-create-dialog form { display:grid; gap:14px; }
+.dl-topic-create-dialog form > label:not(.dl-topic-create-sync) { display:grid; gap:8px; font-size:14px; }
+.dl-topic-create-dialog input,.dl-topic-create-dialog textarea { width:100%; min-width:0; padding:12px; border:1px solid var(--control); border-radius:var(--radius-control); background:var(--surface); color:var(--text); font:inherit; }
+.dl-topic-create-dialog textarea { resize:vertical; min-height:140px; line-height:1.6; }
+.dl-topic-create-dialog form > small { margin-top:-8px; color:var(--muted); font-size:12px; }
+.dl-topic-create-sync { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:14px 0; border-block:1px solid var(--line); }
+.dl-topic-create-sync strong { display:block; font-size:14px; font-weight:550; }
+.dl-topic-create-sync small { display:block; margin-top:5px; color:var(--muted); font-size:12px; line-height:1.6; }
+.dl-topic-create-help { margin:0; color:var(--muted); font-size:12px; line-height:1.7; }
+.dl-topic-create-dialog footer,.dl-topic-create-discard { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:10px; }
+.dl-topic-create-discard p { flex-basis:100%; margin:0; }
+.dl-topic-create-rail { padding:8px 0; }
+.dl-topic-create-trigger { display:contents; }
+.dl-topic-create-rail button { width:100%; }
+.dl-topic-create-groups { min-width:0; margin:0; padding:0; border:0; }
+.dl-topic-create-groups legend { margin-bottom:8px; font-size:14px; }
+.dl-topic-create-groups p { margin:0; padding:12px; border-radius:var(--radius-control); background:var(--soft); }
+.dl-topic-create-groups > div { display:grid; gap:4px; max-height:168px; overflow:auto; padding:2px; }
+@media(max-width:760px) {
+  .dl-topic-avatar { width:36px; height:36px; flex-basis:36px; }
+  .dl-topic-banner { padding:8px 12px; gap:6px; }
+  .dl-topic-banner-heading { gap:4px 12px; }
+  .dl-topic-parent,.dl-topic-description summary { min-height:44px; display:inline-flex; align-items:center; }
+  .dl-topic-toolbar { gap:6px; }
+  .dl-topic-toolbar button { min-height:44px; padding-inline:8px; }
+  .dl-topic-notification { flex:1 0 228px; }
+  .dl-topic-notification button { flex:1; }
+  .dl-topic-management-actions { margin-left:auto; }
+  .dl-topic-composer-context { gap:6px; }
+  .dl-topic-target { flex-basis:100%; }
+  .dl-topic-sync-field { min-height:44px; }
+  .dl-topic-create-dialog { padding:24px 20px; }
+  .dl-topic-create-dialog footer > button { flex:1; }
+}

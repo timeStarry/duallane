@@ -13,6 +13,7 @@ import {
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { WorkspaceInteractiveCard, type WorkspaceCardBlock } from "./WorkspaceInteractiveCard";
 import { createWorkspaceJsonHeaders } from "./workspace-http";
+import { SegmentedControl, Switch } from "./ui/primitives";
 
 export const ECHO_BOT_USER_ID = "usr_system_echo";
 
@@ -570,15 +571,7 @@ function EchoWorkflowFields({
   const field = step.field ?? "";
   if (workflow.type === "echo.requirement" && field === "type") {
     return (
-      <div className="workspace-echo-workflow-segments" role="group" aria-label="反馈类型">
-        {[
-          ["requirement", "需求"],
-          ["suggestion", "建议"],
-          ["problem", "问题反馈"]
-        ].map(([value, label]) => (
-          <label key={value}><input type="radio" name="type" value={value} checked={(fields.type ?? "requirement") === value} onChange={() => onDraftField("type", value)} /><span>{label}</span></label>
-        ))}
-      </div>
+      <SegmentedControl label="反馈类型" name="type" value={stringField(fields.type) || "requirement"} onValueChange={(value) => onDraftField("type", value)} options={[{ value: "requirement", label: "需求" }, { value: "suggestion", label: "建议" }, { value: "problem", label: "问题反馈" }]} />
     );
   }
   if (workflow.type === "echo.publish" && field === "options") {
@@ -589,11 +582,11 @@ function EchoWorkflowFields({
           <textarea name="options" required maxLength={step.maxLength} value={stringArrayValue(fields.options).join("\n")} onChange={(event) => onDraftField("options", event.target.value.split(/\r?\n/u))} placeholder={step.placeholder} />
         </label>
         <div className="workspace-echo-workflow-policy">
-          <label><span>投票方式</span><select name="choiceMode" value={stringField(fields.choiceMode) || "single"} onChange={(event) => onDraftField("choiceMode", event.target.value)}><option value="single">单选</option><option value="multiple">多选</option></select></label>
+          <SegmentedControl label="投票方式" name="choiceMode" value={stringField(fields.choiceMode) || "single"} onValueChange={(value) => onDraftField("choiceMode", value)} options={[{ value: "single", label: "单选" }, { value: "multiple", label: "多选" }]} />
           <label><span>多选上限</span><input name="maxSelections" type="number" min="1" max="20" value={numberField(fields.maxSelections) || 2} onChange={(event) => onDraftField("maxSelections", Number(event.target.value))} /></label>
           <label><span>截止时间</span><input name="deadline" type="datetime-local" value={dateTimeLocalValue(fields.deadline)} onChange={(event) => onDraftField("deadline", event.target.value)} /></label>
-          <label className="workspace-echo-workflow-check"><input name="allowVoteChange" type="checkbox" checked={fields.allowVoteChange !== false} onChange={(event) => onDraftField("allowVoteChange", event.target.checked)} /><span>允许改票</span></label>
-          <label className="workspace-echo-workflow-check"><input name="showAggregate" type="checkbox" checked={fields.resultVisibility !== "owner"} onChange={(event) => onDraftField("resultVisibility", event.target.checked ? "aggregate" : "owner")} /><span>展示汇总</span></label>
+          <label className="workspace-echo-workflow-check"><Switch label="允许改票" name="allowVoteChange" checked={fields.allowVoteChange !== false} onCheckedChange={(checked) => onDraftField("allowVoteChange", checked)} /><span>允许改票</span></label>
+          <label className="workspace-echo-workflow-check"><Switch label="展示汇总" name="showAggregate" checked={fields.resultVisibility !== "owner"} onCheckedChange={(checked) => onDraftField("resultVisibility", checked ? "aggregate" : "owner")} /><span>展示汇总</span></label>
         </div>
       </div>
     );
@@ -602,14 +595,7 @@ function EchoWorkflowFields({
   return (
     <div className="workspace-echo-workflow-inputs">
       {workflow.type === "echo.requirement" && field === "title" && (
-        <label>
-          <span>类型</span>
-          <select name="type" value={stringField(fields.type) || "requirement"} onChange={(event) => onDraftField("type", event.target.value)}>
-            <option value="requirement">需求</option>
-            <option value="suggestion">建议</option>
-            <option value="problem">问题反馈</option>
-          </select>
-        </label>
+        <SegmentedControl label="类型" name="type" value={stringField(fields.type) || "requirement"} onValueChange={(value) => onDraftField("type", value)} options={[{ value: "requirement", label: "需求" }, { value: "suggestion", label: "建议" }, { value: "problem", label: "问题反馈" }]} />
       )}
       <label>
         <span>{step.label}</span>
