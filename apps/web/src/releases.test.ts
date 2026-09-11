@@ -31,7 +31,7 @@ const INTERNAL_CHANGELOG_TERMS = [
 describe("release history", () => {
   it("is unique, complete, and sorted newest first", () => {
     expect(new Set(DUAL_LANE_RELEASES.map((release) => release.version)).size).toBe(DUAL_LANE_RELEASES.length);
-    expect(DUAL_LANE_RELEASES.map((release) => release.version)).toEqual(["0.18.0", "0.17.0", "0.16.2", "0.16.1", "0.16.0", "0.15.5", "0.15.4", "0.15.3", "0.15.2", "0.15.1", "0.15.0", "0.14.3", "0.14.2", "0.14.1", "0.14.0", "0.13.2", "0.13.1", "0.13.0", "0.12.0", "0.11.0", "0.10.0", "0.9.0", "0.8.0", "0.7.0", "0.6.0", "0.5.0", "0.4.0", "0.3.0", "0.2.0", "0.1.0"]);
+    expect(DUAL_LANE_RELEASES.map((release) => release.version)).toEqual(["0.19.0", "0.18.0", "0.17.0", "0.16.2", "0.16.1", "0.16.0", "0.15.5", "0.15.4", "0.15.3", "0.15.2", "0.15.1", "0.15.0", "0.14.3", "0.14.2", "0.14.1", "0.14.0", "0.13.2", "0.13.1", "0.13.0", "0.12.0", "0.11.0", "0.10.0", "0.9.0", "0.8.0", "0.7.0", "0.6.0", "0.5.0", "0.4.0", "0.3.0", "0.2.0", "0.1.0"]);
     for (const release of DUAL_LANE_RELEASES) {
       expect(release.releasedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       expect(release.title.trim()).not.toBe("");
@@ -42,8 +42,8 @@ describe("release history", () => {
   });
 
   it("matches both published package versions", () => {
-    expect(rootPackage.version).toBe("0.18.0");
-    expect(webPackage.version).toBe("0.18.0");
+    expect(rootPackage.version).toBe("0.19.0");
+    expect(webPackage.version).toBe("0.19.0");
     expect(DUAL_LANE_RELEASES[0].version).toBe(rootPackage.version);
     expect(DUAL_LANE_RELEASES[0].version).toBe(webPackage.version);
   });
@@ -108,6 +108,7 @@ describe("release history", () => {
 
   it("keeps every Echo usage guide aligned with the public release facts", () => {
     const releases = new Map(DUAL_LANE_RELEASES.map((release) => [release.version, release]));
+    expect(echoReleaseGuides.some((guide) => guide.version === rootPackage.version)).toBe(true);
     for (const guide of echoReleaseGuides) {
       const release = releases.get(guide.version);
       expect(release).toMatchObject({
