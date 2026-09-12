@@ -42,6 +42,37 @@ async function joinPrivateRoom(page: Page, inviteLink: string, displayName: stri
   await page.getByRole("button", { name: "加入会话" }).click();
 }
 
+test("private active sends return to latest while incoming messages preserve history", async ({ page, browser }) => {
+  const guestContext = await browser.newContext();
+  const guest = await guestContext.newPage();
+  try {
+    const inviteLink = await createPrivateRoom(page, "阅读用户甲");
+    await joinPrivateRoom(guest, inviteLink, "阅读用户乙");
+    await expect(page.locator("button.p2p-status-trigger").getByText("浏览器直连", { exact: true })).toBeVisible({ timeout: 20_000 });
+    for (let index = 0; index < 35; index += 1) {
+      const text = `供阅读的直连历史 ${index}`;
+      await guest.getByLabel("输入消息").fill(text);
+      await guest.getByLabel("输入消息").press("Enter");
+      await expect(page.getByText(text, { exact: true })).toHaveCount(1);
+    }
+    const list = page.locator(".message-list");
+    const gap = () => list.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop);
+    await expect.poll(gap).toBeLessThanOrEqual(1);
+    await list.hover();
+    await page.mouse.wheel(0, -650);
+    await expect.poll(gap).toBeGreaterThan(300);
+    const top = await list.evaluate(element => element.scrollTop);
+    await guest.getByLabel("输入消息").fill("阅读期间对方的新消息");
+    await guest.getByLabel("输入消息").press("Enter");
+    await expect(page.getByText("阅读期间对方的新消息", { exact: true })).toHaveCount(1);
+    await expect.poll(() => list.evaluate(element => element.scrollTop)).toBe(top);
+    await page.getByLabel("输入消息").fill("主动发送后看最新消息");
+    await page.getByLabel("输入消息").press("Enter");
+    await expect.poll(gap).toBeLessThanOrEqual(1);
+    await expect(guest.getByText("主动发送后看最新消息", { exact: true })).toHaveCount(1);
+  } finally { await guestContext.close(); }
+});
+
 test("private conversation cancellation preserves its draft and explicit discard completes once", async ({ page }) => {
   await createPrivateRoom(page, "离开回归");
   const composer = page.getByLabel("输入消息");

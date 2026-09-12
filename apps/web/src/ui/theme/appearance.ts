@@ -64,6 +64,8 @@ export function appearanceCssVariables(appearance: ResolvedAppearance): Record<s
     "--status-dot": colors.muted,
     "--progress-track": colors.soft,
     "--message-self": colors["shared-soft"],
+    "--object-list-selected": "color-mix(in srgb, var(--shared) 18%, var(--surface))",
+    "--object-list-selected-muted": "color-mix(in srgb, var(--muted) 88%, var(--text))",
     "--transfer-active": colors["shared-soft"],
     "--transfer-complete": colors["success-soft"],
     "--transfer-rejected": colors["danger-soft"],

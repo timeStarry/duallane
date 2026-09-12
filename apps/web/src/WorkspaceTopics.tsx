@@ -11,6 +11,7 @@ import {
 import {
   type FormEvent,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState
@@ -435,6 +436,7 @@ export function WorkspaceTopicPage({
   const { confirm } = useConfirmation();
   const cancelledMessagesRef = useRef(new Set<string>());
   const [historyTargetId, setHistoryTargetId] = useState("");
+  const [messageLocateTarget, setMessageLocateTarget] = useState<{ messageId: string; generation: number; readingIntent: number } | null>(null);
   const [newMessageCount, setNewMessageCount] = useState(0);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyAvailable, setHistoryAvailable] = useState(false);
@@ -469,6 +471,7 @@ export function WorkspaceTopicPage({
   const refreshInFlightRef = useRef(false);
   const refreshQueuedRef = useRef(false);
   const stickToBottomRef = useRef(true);
+  const readingIntentRef = useRef(0);
   const documentVisibleRef = useRef(documentVisible);
   documentVisibleRef.current = documentVisible;
   const lastReadMessageIdRef = useRef("");
@@ -632,13 +635,52 @@ export function WorkspaceTopicPage({
   }
 
   function scrollTopicMessagesToBottom(acknowledge = false) {
+    if (acknowledge) {
+      readingIntentRef.current += 1;
+      stickToBottomRef.current = true;
+    }
     const generation = loadGenerationRef.current;
+    const readingIntent = readingIntentRef.current;
     window.requestAnimationFrame(() => {
-      if (generation !== loadGenerationRef.current) return;
+      if (generation !== loadGenerationRef.current || readingIntent !== readingIntentRef.current || !stickToBottomRef.current) return;
       if (messageListRef.current) messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
       if (acknowledge) acknowledgeVisibleTopicMessages();
     });
   }
+
+  function revealTopicSubmission() {
+    stickToBottomRef.current = true;
+    setHistoryTargetId("");
+    setNewMessageCount(0);
+    sessionStore.update(topicId, (current) => ({ ...current, scrollTop: null, nearBottom: true }));
+    scrollTopicMessagesToBottom(true);
+  }
+
+  useLayoutEffect(() => {
+    // Pending attachment changes and their confirmed message use the same
+    // follow state; a response cannot pull back someone who scrolled away.
+    if (stickToBottomRef.current && messageListRef.current) {
+      messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
+    }
+  }, [displayMessages]);
+
+  useLayoutEffect(() => {
+    if (!messageLocateTarget) return;
+    const { messageId, generation, readingIntent } = messageLocateTarget;
+    if (generation !== loadGenerationRef.current || readingIntent !== readingIntentRef.current) {
+      setMessageLocateTarget(null);
+      return;
+    }
+    const element = messageListRef.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`);
+    if (!element) return;
+    stickToBottomRef.current = false;
+    element.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    element.classList.remove("workspace-message-locate-flash");
+    window.requestAnimationFrame(() => {
+      if (generation === loadGenerationRef.current && readingIntent === readingIntentRef.current && element.isConnected) element.classList.add("workspace-message-locate-flash");
+    });
+    setMessageLocateTarget(null);
+  }, [displayMessages, messageLocateTarget]);
 
   useEffect(() => {
     const generation = loadGenerationRef.current + 1;
@@ -806,6 +848,7 @@ export function WorkspaceTopicPage({
       };
       pending.replyToMessageId = snapshot.replyToMessageId || null;
       if (!sessionStore.enqueue(topic.id, pending)) return;
+      revealTopicSubmission();
       if (!immediate) chatRuntime.takeStagedAttachments();
       await submitTopicMessage(pending);
     } catch (caught) { onNotice("warning", topicErrorMessage(caught)); }
@@ -895,6 +938,7 @@ export function WorkspaceTopicPage({
   async function loadOlderMessages() {
     if (historyLoading || !historyAvailable || !messages.length) return;
     const generation = loadGenerationRef.current;
+    const readingIntent = readingIntentRef.current;
     const list = messageListRef.current;
     const anchor = list?.querySelector<HTMLElement>("[data-message-id]");
     const offset = anchor?.getBoundingClientRect().top;
@@ -904,7 +948,7 @@ export function WorkspaceTopicPage({
       if (generation !== loadGenerationRef.current) return;
       setMessages((current) => mergeWorkspaceTopicMessages(current, result.messages));
       setHistoryAvailable(result.messages.length >= 100);
-      window.requestAnimationFrame(() => { if (generation === loadGenerationRef.current && list && anchor?.isConnected && offset !== undefined) list.scrollTop += anchor.getBoundingClientRect().top - offset; });
+      window.requestAnimationFrame(() => { if (generation === loadGenerationRef.current && readingIntent === readingIntentRef.current && !stickToBottomRef.current && list && anchor?.isConnected && offset !== undefined) list.scrollTop += anchor.getBoundingClientRect().top - offset; });
     } catch (caught) { if (generation === loadGenerationRef.current) onNotice("warning", topicErrorMessage(caught)); }
     finally { if (generation === loadGenerationRef.current) setHistoryLoading(false); }
   }
@@ -934,25 +978,21 @@ export function WorkspaceTopicPage({
 
   async function jumpToMessage(messageId: string) {
     const generation = loadGenerationRef.current;
-    let element = messageListRef.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`);
+    const readingIntent = ++readingIntentRef.current;
+    // Stop following before an around response renders, not after its frame.
+    stickToBottomRef.current = false;
+    const element = messageListRef.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`);
     if (!element) {
       try {
         const result = await topicJson<{ messages: WorkspaceTopicMessage[] }>(`/api/workspace/topics/${encodeURIComponent(topicId)}/messages?around=${encodeURIComponent(messageId)}&limit=41`);
-        if (generation !== loadGenerationRef.current) return;
+        if (generation !== loadGenerationRef.current || readingIntent !== readingIntentRef.current) return;
         if (!result.messages.some((message) => message.id === messageId)) { onNotice("info", "引用消息已不可用。"); return; }
         setMessages((current) => mergeWorkspaceTopicMessages(current, result.messages));
         setHistoryAvailable(true);
         setHistoryTargetId(messageId);
-        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-        if (generation !== loadGenerationRef.current) return;
-        element = messageListRef.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`);
       } catch (caught) { if (generation === loadGenerationRef.current) onNotice("warning", topicErrorMessage(caught)); return; }
     }
-    if (!element) return;
-    stickToBottomRef.current = false;
-    element.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
-    element.classList.remove("workspace-message-locate-flash");
-    window.requestAnimationFrame(() => { if (generation === loadGenerationRef.current) element?.classList.add("workspace-message-locate-flash"); });
+    setMessageLocateTarget({ messageId, generation, readingIntent });
   }
 
   if (!topicId) {

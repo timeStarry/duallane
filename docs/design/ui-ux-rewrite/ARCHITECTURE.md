@@ -11,7 +11,7 @@ main.tsx
   ├─ ConfirmationProvider：可取消且绑定当前会话的命令确认
   ├─ App：既有领域状态、权限投影、路由及实时生命周期
   │   ├─ features/entry/EntryPage
-  │   ├─ shell/WorkspaceNavigation + useNavigationGuard
+  │   ├─ shell/WorkspaceShell + WorkspaceNavigation + useNavigationGuard
   │   ├─ features/conversation/useMessageActions
   │   ├─ features/conversation/WorkspaceChatPanel：群聊与话题共用消息行和输入区
   │   ├─ features/settings：资料、外观、通知、隐私、邮件配置
@@ -52,6 +52,10 @@ App 提供同一个完整 Workspace 会话适配，话题通过有类型的 `Top
 日常导航为聊天、话题、文件、成员、个人；owner/admin 额外显示空间，普通 member/guest 呈现为五项。
 这是入口投影，不是新的授权机制；旧空间深链接保留按服务端能力显示只读摘要或安全受限状态的兼容。
 桌面使用窄导航轨；只有聊天和话题保留可折叠的中间列表，折叠不清除草稿。文件和成员使用单一主内容，保留禁用的折叠按钮槽位，导航按钮位置稳定。
+`shell/WorkspaceShell.tsx` 管理中栏调宽与响应式限制，`duallane-workspace-list-width` 只存本机宽度，
+不包含账号、消息或草稿，也不进入服务端配置。拖动过程不逐帧写存储，取消恢复原值。
+中栏会话按钮直接绑定共用对象动作控制器，不常驻三点按钮；其余对象入口按对象操作规范保留。
+中栏会话／话题选中底色来自主题派生变量 `object-list-selected`，与背景和未选中悬停分离。
 桌面详情宽 360px，标题及正文分别组织，正文独立滚动；手机详情是整页。未选对象时不显示先前会话的详情。
 手机根页面显示同一份底部导航，进入会话或详情后优先显示内容和返回入口。
 个人设置拥有固定分类轨及独立滚动内容，手机按目录、类别、子页逐级进入；个人首页提供退出登录。
