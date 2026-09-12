@@ -4,15 +4,27 @@ export type PopupPosition = { left: number; top: number; maxHeight: number; widt
 export function popupPosition(anchor: { left: number; top: number; bottom: number; width: number }, popup: { width: number; height: number }, viewport: { left: number; top: number; width: number; height: number }, matchWidth = false): PopupPosition {
   const gap = 6;
   const inset = 12;
-  const width = Math.min(matchWidth ? Math.max(anchor.width, popup.width) : popup.width, Math.max(0, viewport.width - inset * 2));
-  const below = viewport.top + viewport.height - inset - anchor.bottom - gap;
-  const above = anchor.top - viewport.top - inset - gap;
+  const insetX = Math.min(inset, Math.max(0, viewport.width / 2));
+  const insetY = Math.min(inset, Math.max(0, viewport.height / 2));
+  const availableHeight = Math.max(0, viewport.height - insetY * 2);
+  const minY = viewport.top + insetY;
+  const maxY = minY + availableHeight;
+  const clampY = (value: number) => Math.max(minY, Math.min(value, maxY));
+  const width = Math.min(matchWidth ? Math.max(anchor.width, popup.width) : popup.width, Math.max(0, viewport.width - insetX * 2));
+  // A programmatic history scroll may retain the object while moving its
+  // anchor off screen. Use its visible edge; a tall message is a point anchor.
+  const anchorTop = clampY(anchor.top);
+  const anchorBottom = anchor.bottom - anchor.top > viewport.height / 2 ? anchorTop : clampY(anchor.bottom);
+  const below = maxY - anchorBottom - gap;
+  const above = anchorTop - minY - gap;
   const useAbove = below < Math.min(popup.height, 240) && above > below;
-  const maxHeight = Math.max(44, useAbove ? above : below);
+  const maxHeight = Math.min(availableHeight, Math.max(44, useAbove ? above : below));
+  const height = Math.min(popup.height, maxHeight);
+  const preferredTop = useAbove ? anchorTop - gap - height : anchorBottom + gap;
   return {
-    left: Math.max(viewport.left + inset, Math.min(anchor.left, viewport.left + viewport.width - inset - width)),
-    top: useAbove ? Math.max(viewport.top + inset, anchor.top - gap - Math.min(popup.height, maxHeight)) : Math.max(viewport.top + inset, anchor.bottom + gap),
-    maxHeight: Math.min(maxHeight, viewport.height - inset * 2),
+    left: Math.max(viewport.left + insetX, Math.min(anchor.left, viewport.left + viewport.width - insetX - width)),
+    top: Math.max(minY, Math.min(preferredTop, maxY - height)),
+    maxHeight,
     width
   };
 }
@@ -20,7 +32,8 @@ export function popupPosition(anchor: { left: number; top: number; bottom: numbe
 export function measurePopup(anchor: PopupAnchor, element: HTMLElement, matchWidth = false): PopupPosition {
   const rectangle = anchor instanceof HTMLElement ? anchor.getBoundingClientRect() : { left: anchor.x, top: anchor.y, bottom: anchor.y, width: 0 };
   const viewport = window.visualViewport;
-  return popupPosition(rectangle, { width: element.offsetWidth, height: element.scrollHeight }, { left: viewport?.offsetLeft ?? 0, top: viewport?.offsetTop ?? 0, width: viewport?.width ?? window.innerWidth, height: viewport?.height ?? window.innerHeight }, matchWidth);
+  const height = element.scrollHeight + element.offsetHeight - element.clientHeight;
+  return popupPosition(rectangle, { width: element.offsetWidth, height }, { left: viewport?.offsetLeft ?? 0, top: viewport?.offsetTop ?? 0, width: viewport?.width ?? window.innerWidth, height: viewport?.height ?? window.innerHeight }, matchWidth);
 }
 
 export function isNativeContent(target: EventTarget | null, actionRoot?: Element): boolean {

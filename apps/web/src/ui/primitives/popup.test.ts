@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { popupPosition, trackPopupScroll } from "./popup";
+import { measurePopup, popupPosition, trackPopupScroll } from "./popup";
 
 describe("popup viewport placement", () => {
   it("keeps a right-bottom menu inside the visible viewport", () => {
@@ -13,6 +13,56 @@ describe("popup viewport placement", () => {
     expect(result.width).toBe(216);
     expect(result.left).toBe(32);
     expect(result.maxHeight).toBeLessThanOrEqual(336);
+  });
+
+  it.each([
+    { top: 1600, bottom: 1644 },
+    { top: -700, bottom: -656 },
+    { top: -200, bottom: 1500 }
+  ])("keeps a menu visible when a retained anchor is outside the viewport: $top / $bottom", ({ top, bottom }) => {
+    const viewport = { left: 20, top: 40, width: 800, height: 600 };
+    const result = popupPosition({ left: 300, top, bottom, width: 44 }, { width: 256, height: 320 }, viewport);
+    expect(result.top).toBeGreaterThanOrEqual(52);
+    expect(result.top + Math.min(320, result.maxHeight)).toBeLessThanOrEqual(628);
+    expect(result.maxHeight).toBeGreaterThan(0);
+  });
+
+  it("uses the visible edge of an oversized message rather than a 44px menu slit", () => {
+    const result = popupPosition({ left: 80, top: -200, bottom: 1500, width: 500 }, { width: 256, height: 320 }, { left: 0, top: 0, width: 800, height: 600 });
+    expect(result.maxHeight).toBeGreaterThanOrEqual(320);
+    expect(result.top + 320).toBeLessThanOrEqual(588);
+  });
+
+  it("bounds a tall menu in a short visual viewport so its own content can scroll", () => {
+    const result = popupPosition({ left: 850, top: 780, bottom: 824, width: 44 }, { width: 256, height: 720 }, { left: 80, top: 160, width: 220, height: 240 });
+    expect(result.left).toBe(92);
+    expect(result.width).toBe(196);
+    expect(result.top).toBeGreaterThanOrEqual(172);
+    expect(result.top + result.maxHeight).toBeLessThanOrEqual(388);
+  });
+
+  it.each([0, 16, 24, 48])("never returns negative dimensions in a %ipx visual viewport", (size) => {
+    const result = popupPosition({ left: 800, top: 1600, bottom: 1644, width: 44 }, { width: 256, height: 320 }, { left: 40, top: 80, width: size, height: size });
+    expect(result.maxHeight).toBeGreaterThanOrEqual(0);
+    expect(result.width).toBeGreaterThanOrEqual(0);
+    expect(result.top).toBeGreaterThanOrEqual(80);
+    expect(result.top + result.maxHeight).toBeLessThanOrEqual(80 + size);
+    expect(result.left + (result.width ?? 0)).toBeLessThanOrEqual(40 + size);
+  });
+});
+
+describe("popup DOM measurement", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("includes the border box when placing an unconstrained menu above its anchor", () => {
+    class ElementStub {
+      getBoundingClientRect() { return { left: 100, top: 540, bottom: 584, width: 44 }; }
+    }
+    vi.stubGlobal("HTMLElement", ElementStub);
+    vi.stubGlobal("window", { visualViewport: { offsetLeft: 40, offsetTop: 80, width: 600, height: 480 } });
+    const popup = { offsetWidth: 256, offsetHeight: 100, clientHeight: 98, scrollHeight: 200 } as HTMLElement;
+    const result = measurePopup(new ElementStub() as unknown as HTMLElement, popup);
+    expect(result.top).toBe(332);
   });
 });
 
