@@ -178,7 +178,7 @@ describe("workspace configuration docs", () => {
     expect(goCompose).toContain("DUALLANE_APP_VERSION: ${DUALLANE_APP_VERSION:?release version is required}");
     expect(goCompose).toContain("DUALLANE_GIT_COMMIT: ${DUALLANE_GIT_COMMIT:?full release commit is required}");
     expect(goCompose).toContain("image: duallane-go-workspace:${DUALLANE_GIT_COMMIT:?full release commit is required}");
-    expect(envExample).toContain("DUALLANE_APP_VERSION=0.19.1");
+    expect(envExample).toContain("DUALLANE_APP_VERSION=0.19.2");
     expect(envExample).toContain("DUALLANE_GIT_COMMIT=development");
     expect(readme).toMatch(/verified\s+release metadata/);
     expect(readme).toContain("/home/timestarry/duallane");

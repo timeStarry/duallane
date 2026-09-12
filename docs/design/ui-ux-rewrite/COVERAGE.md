@@ -154,6 +154,9 @@
 | 侧边／底部导航细条；图文分段单选；长选项下拉；定制滑块／Select | [设计系统](DESIGN_SYSTEM.md) | `ui/primitives/verify-segmented-control.mjs`、`verify-view-mode.mjs`、工作台跨浏览器检查 |
 | 群侧栏结构与搜索多选邀请 | [体验与流程](EXPERIENCE.md) | W13、M02、[真实邀请流程](../../../e2e/workspace-group-invite-ui.spec.ts) |
 | 普通成员隐藏空间入口、账号菜单去重、中栏折叠及禁用槽位 | [体验与流程](EXPERIENCE.md) | W03、G04、导航与页面精修脚本 |
+| 主动发送回到最新、阅读历史时被动追加保位、迟到响应尊重新阅读意图 | [体验与流程](EXPERIENCE.md) | [Workspace 发送与阅读](../../../e2e/workspace-send-scroll.spec.ts)、[P2P 双用户回归](../../../e2e/p2p.spec.ts) |
+| 中栏右边界调宽、本机记忆、选中背景与悬停分离 | [设计系统](DESIGN_SYSTEM.md)、[体验与流程](EXPERIENCE.md) | [中栏布局、存储失败、主题与断点回归](../../../e2e/workspace-middle-pane.spec.ts) |
+| 中栏移除三点入口，右键／长按／键盘操作不误导航 | [对象操作](CONTEXT_AND_SETTINGS.md) | [中栏桌面及触控菜单回归](../../../e2e/workspace-middle-pane.spec.ts) |
 | 话题完整消息、内容宽度状态、按需详情、发送目标隔离 | [体验与流程](EXPERIENCE.md) | T01–T04、完整消息／详情／IME／路由回归 |
 | 本人／他人背景、短消息连续表面、行内透明动作、悬浮输入器 | [设计系统](DESIGN_SYSTEM.md) | W07–W12、T03、`verify-message-surfaces.mjs`、`verify-workspace-history.mjs` |
 | 五主题产品缩略窗、标题无描述、横向浏览、系统／浅色／深色图文选择 | [设计系统](DESIGN_SYSTEM.md) | A08、`features/settings/verify-appearance.mjs`、主题偏好测试 |

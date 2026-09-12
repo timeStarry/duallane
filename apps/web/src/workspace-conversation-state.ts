@@ -22,6 +22,7 @@ export type WorkspaceMessageWindowMergeContext<T extends WorkspaceConversationMe
   preserveLoadedHistory?: boolean;
   authoritativeWindow?: boolean;
   preservePostRequestMessages?: boolean;
+  preserveOlderReadingHistory?: boolean;
 };
 
 export type WorkspaceConversationMessageRequestKind =
@@ -286,7 +287,16 @@ function appendPostRequestMessages<T extends WorkspaceConversationMessageLike>(
   const baselineKeys = new Set((options.baselineMessages ?? []).map(messageKey));
   const incomingLastLocalIndex = localIndexes.get(messageKey(incoming[incoming.length - 1]));
   if (incomingLastLocalIndex === undefined) {
-    return [...merged];
+    // Around-history and the latest window can be disjoint. A send confirmed
+    // after this request is still newer than its snapshot even without an
+    // overlapping ID; unrelated older history must not be appended here.
+    const newestIncomingTime = Date.parse(incoming[incoming.length - 1].createdAt ?? "");
+    const concurrentSuffix = local.filter((message) => {
+      const key = messageKey(message);
+      return !baselineKeys.has(key) && !incomingKeys.has(key) &&
+        Date.parse(message.createdAt ?? "") >= newestIncomingTime;
+    });
+    return [...merged, ...concurrentSuffix];
   }
   const concurrentSuffix = local.slice(incomingLastLocalIndex + 1).filter((message) => {
     const key = messageKey(message);
@@ -296,9 +306,9 @@ function appendPostRequestMessages<T extends WorkspaceConversationMessageLike>(
 }
 
 // Keep this small function separate from the React store so the ordering
-// contract can be tested without mounting the application. It only combines
-// an overlapping, ordered suffix with already loaded history; unrelated
-// windows remain authoritative instead of forming an unbounded union.
+// contract can be tested without mounting the application. Normal refreshes
+// retain overlapping history; an automatic latest recovery can additionally
+// keep the current older window if the user has resumed reading it.
 export function mergeWorkspaceMessageWindow<T extends WorkspaceConversationMessageLike>(
   local: readonly T[],
   incoming: readonly T[],
@@ -324,9 +334,22 @@ export function mergeWorkspaceMessageWindow<T extends WorkspaceConversationMessa
   if (local.length === 0) return [...incoming];
   if (options.authoritativeWindow) {
     const merged = mergeIncomingWindow(local, incoming, options, localRevisionChanged);
-    return localRevisionChanged && preservePostRequest
+    const latestWindow = localRevisionChanged && preservePostRequest
       ? appendPostRequestMessages(merged, local, incoming, options)
       : merged;
+    if (options.preserveOlderReadingHistory) {
+      // Automatic return-to-latest may finish after the reader scrolls away.
+      // Retain only current rows older than this authoritative latest window;
+      // omissions within it still expire, and removed local rows stay removed.
+      const oldestIncomingTime = Date.parse(incoming[0].createdAt ?? "");
+      const latestKeys = new Set(latestWindow.map(messageKey));
+      const olderHistory = local.filter((message) =>
+        !latestKeys.has(messageKey(message)) &&
+        Date.parse(message.createdAt ?? "") < oldestIncomingTime
+      );
+      return [...olderHistory, ...latestWindow];
+    }
+    return latestWindow;
   }
   if (
     relation === "incoming-newer" &&

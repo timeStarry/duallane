@@ -248,6 +248,36 @@ describe("workspace conversation message windows", () => {
     }]);
   });
 
+  it("retains an actively read older window only for an automatic latest refresh", () => {
+    const older = [message("older", { createdAt: "2026-09-07T00:00:00.000Z" })];
+    const latest = [message("latest", { createdAt: "2026-09-07T00:10:00.000Z" })];
+    expect(messageIds(mergeWorkspaceMessageWindow(older, latest, {
+      authoritativeWindow: true,
+      preserveOlderReadingHistory: true
+    }))).toEqual(["older", "latest"]);
+    expect(messageIds(mergeWorkspaceMessageWindow(older, latest, {
+      authoritativeWindow: true
+    }))).toEqual(["latest"]);
+  });
+
+  it("does not restore omitted latest rows or obsolete attachment state while retaining reading history", () => {
+    const older = message("older", { createdAt: "2026-09-07T00:00:00.000Z" });
+    const baseline = [older, message("first", { createdAt: "2026-09-07T00:10:00.000Z" }),
+      message("omitted", { createdAt: "2026-09-07T00:11:00.000Z" }),
+      message("changed", { createdAt: "2026-09-07T00:12:00.000Z", attachments: [{ id: "file", status: "available", canDownload: true }] })];
+    const local = baseline.map(item => item.id === "changed" ? {
+      ...item, hiddenByCurrentUser: true, recalledAt: "2026-09-07T00:13:00.000Z",
+      attachments: [{ id: "file", status: "removed", canDownload: false }]
+    } : item);
+    const merged = mergeWorkspaceMessageWindow(local, [baseline[1], baseline[3]], {
+      baselineMessages: baseline, requestRevision: 1, currentRevision: 2,
+      authoritativeWindow: true, preserveOlderReadingHistory: true
+    });
+    expect(messageIds(merged)).toEqual(["older", "first", "changed"]);
+    expect(merged[2]).toMatchObject({ hiddenByCurrentUser: true, recalledAt: "2026-09-07T00:13:00.000Z", attachments: [{ id: "file", status: "removed", canDownload: false }] });
+    expect(mergeWorkspaceMessageWindow(local, [], { authoritativeWindow: true, preserveOlderReadingHistory: true })).toEqual([]);
+  });
+
   it("applies an authoritative recall without restoring narrowed attachment permissions", () => {
     const baseline = [message("history-50", {
       attachments: [{ id: "attachment-50", status: "available", canDownload: true, canPreview: true }]
@@ -406,5 +436,18 @@ describe("workspace conversation message windows", () => {
     });
 
     expect(messageIds(merged)).toEqual(messageIds(messageWindow(1, 21)));
+  });
+
+  it("keeps a confirmed send newer than a disjoint latest snapshot without appending older history", () => {
+    const baseline = [message("around", { createdAt: "2026-09-07T00:00:00.000Z" })];
+    const local = [...baseline,
+      message("older-page", { createdAt: "2026-09-06T23:59:00.000Z" }),
+      message("confirmed", { createdAt: "2026-09-07T00:11:00.000Z" })];
+    const incoming = [message("latest", { createdAt: "2026-09-07T00:10:00.000Z" })];
+    const merged = mergeWorkspaceMessageWindow(local, incoming, {
+      baselineMessages: baseline, requestRevision: 1, currentRevision: 2,
+      authoritativeWindow: true, preservePostRequestMessages: true
+    });
+    expect(messageIds(merged)).toEqual(["latest", "confirmed"]);
   });
 });

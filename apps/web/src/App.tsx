@@ -21,6 +21,7 @@ import { useAppearance } from "./ui/theme";
 import { useNavigationGuard, type NavigationGuard } from "./shell/useNavigationGuard";
 import { EntryPage } from "./features/entry/EntryPage";
 import { WorkspaceNavigation } from "./shell/WorkspaceNavigation";
+import { WorkspaceShell } from "./shell/WorkspaceShell";
 import { MemberPickerDialog, type MemberPickerSubmission } from "./features/members/MemberPickerDialog";
 import {
   AlertCircle,
@@ -2536,6 +2537,8 @@ export function App() {
   const incomingFilesRef = useRef<Map<string, IncomingFileBuffer>>(new Map());
   const p2pDownloadUrlsRef = useRef<Map<string, string>>(new Map());
   const p2pMessageListRef = useRef<HTMLDivElement | null>(null);
+  const p2pStickToBottomRef = useRef(true);
+  const p2pRenderedMessagesRef = useRef({ roomId: "", count: 0 });
   const workspaceMessageListRef = useRef<HTMLDivElement | null>(null);
   const workspaceCreateSearchInputRef = useRef<HTMLInputElement | null>(null);
   const workspaceCreateMenuRef = useRef<HTMLDivElement | null>(null);
@@ -3408,12 +3411,24 @@ export function App() {
   }, [workspaceContextCollapsed]);
 
 
+  useLayoutEffect(() => {
+    const list = p2pMessageListRef.current;
+    if (!list) return;
+    const previous = p2pRenderedMessagesRef.current;
+    const newSession = previous.roomId !== roomId || previous.count > p2pMessages.length;
+    const submitted = p2pMessages.slice(newSession ? 0 : previous.count).some((message) => message.self);
+    p2pRenderedMessagesRef.current = { roomId, count: p2pMessages.length };
+    if (newSession || submitted) p2pStickToBottomRef.current = true;
+    if (p2pStickToBottomRef.current) list.scrollTo({ top: list.scrollHeight, behavior: "auto" });
+  }, [p2pMessages.length, p2pStep, roomId]);
+
   useEffect(() => {
-    p2pMessageListRef.current?.scrollTo({
-      top: p2pMessageListRef.current.scrollHeight,
-      behavior: "smooth"
-    });
-  }, [p2pMessages.length]);
+    const list = p2pMessageListRef.current;
+    if (!list) return;
+    const onScroll = () => { p2pStickToBottomRef.current = list.scrollHeight - list.clientHeight - list.scrollTop <= 80; };
+    list.addEventListener("scroll", onScroll);
+    return () => list.removeEventListener("scroll", onScroll);
+  }, [lane, p2pStep, roomId]);
 
   useLayoutEffect(() => {
     const list = workspaceMessageListRef.current;
@@ -5095,7 +5110,7 @@ export function App() {
     setWorkspaceLibraryFiles(data.files);
   }
 
-  async function refreshWorkspaceConversationMessages(conversationId: string) {
+  async function refreshWorkspaceConversationMessages(conversationId: string, preserveResumedReading = false) {
     if (!workspaceCanReadConversationsRef.current || !conversationId) {
       return;
     }
@@ -5117,7 +5132,10 @@ export function App() {
                   ...workspaceConversationMessageMergeContext(conversationId, request),
                   preserveLoadedHistory: false,
                   authoritativeWindow: true,
-                  preservePostRequestMessages: true
+                  preservePostRequestMessages: true,
+                  preserveOlderReadingHistory: preserveResumedReading &&
+                    workspaceSelectedConversationIdRef.current === conversationId &&
+                    !workspaceStickToBottomRef.current
                 }
               )
             }
@@ -6079,6 +6097,35 @@ export function App() {
     handleWorkspaceMessageListScroll(list);
   }
 
+  function revealWorkspaceSubmission(conversationId: string) {
+    if (workspaceSelectedConversationIdRef.current !== conversationId) return;
+    const restoreLatestWindow = Boolean(workspaceHistoryTargetId);
+    const sessionEpoch = workspaceSessionEpochRef.current;
+    workspacePrependScrollRef.current = null;
+    workspaceScrollIntentUntilRef.current = 0;
+    workspaceStickToBottomRef.current = true;
+    workspaceStickToBottomByConversationRef.current.set(conversationId, true);
+    workspaceScrollPositionsRef.current.delete(conversationId);
+    setWorkspaceHistoryTargetId("");
+    setWorkspaceMessageLocateTarget(null);
+    setWorkspaceNewMessageCountByConversation((counts) => ({ ...counts, [conversationId]: 0 }));
+    setWorkspaceReturningToLatestConversationId(conversationId);
+    setWorkspaceScrollToLatestRequest((request) => request + 1);
+    // Only an around window lacks the latest timeline. Do not wait for this
+    // fetch or a send receipt before showing the optimistic message. A later
+    // response updates its own conversation and respects any new scroll intent.
+    if (restoreLatestWindow) {
+      void refreshWorkspaceConversationMessages(conversationId, true).catch((error) => {
+        if (sessionEpoch === workspaceSessionEpochRef.current && workspaceSelectedConversationIdRef.current === conversationId) {
+          showWorkspaceNotice("warning", userFacingErrorMessage(error, "返回最新消息失败"));
+        }
+      });
+    } else {
+      // A history prepend begun before the submit must not restore its anchor.
+      advanceWorkspaceConversationEpoch(workspaceConversationHistoryEpochRef.current, conversationId);
+    }
+  }
+
   async function updateWorkspaceConversationNotification(level: WorkspaceNotificationLevel) {
     if (!workspaceSelectedConversation || workspaceSelectedConversation.notificationLevel === level) {
       return;
@@ -6772,6 +6819,7 @@ export function App() {
       ...messages.filter((message) => message.clientMessageId !== clientMessageId),
       localMessage
     ]);
+    revealWorkspaceSubmission(conversation.id);
     setWorkspaceConversationDraft(conversation.id, "");
     setWorkspaceConversationReplyToMessageId(conversation.id, "");
     if (stagedAttachments.length > 0) {
@@ -6811,6 +6859,7 @@ export function App() {
         }
       ]);
 
+    revealWorkspaceSubmission(conversation.id);
     try {
       await submitWorkspaceMessage({
         conversationId: conversation.id,
@@ -8904,12 +8953,11 @@ export function App() {
                       <div className="conversation-list workspace-conversation-list" ref={workspaceConversationListRef} tabIndex={-1} aria-label="会话列表">
                         {workspaceFilteredConversations.length === 0 ? <p className="saved-empty">{workspaceConversations.length === 0 ? "还没有会话。可以从成员列表发起私聊。" : "没有找到匹配的会话。"}</p> : workspaceFilteredConversations.map((conversation) => (
                           <div className="dl-object-row dl-conversation-object" key={conversation.id}>
-                          <button {...workspaceConversationActions.bindObject(conversation.id)} data-object-action-root className={conversation.id === workspaceSelectedConversationId ? "conversation active" : "conversation"} type="button" aria-current={conversation.id === workspaceSelectedConversationId ? "true" : undefined} onClick={() => selectWorkspaceConversation(conversation.id)}>
+                          <button {...workspaceConversationActions.bindObject(conversation.id)} data-object-action-root className={conversation.id === workspaceSelectedConversationId ? "conversation active" : "conversation"} type="button" aria-current={conversation.id === workspaceSelectedConversationId ? "true" : undefined} aria-haspopup="menu" aria-keyshortcuts="Shift+F10 ContextMenu" aria-description="右键或长按打开会话操作；键盘使用 Shift+F10 或菜单键。" onClick={() => selectWorkspaceConversation(conversation.id)}>
                             <WorkspaceConversationAvatar conversation={conversation} currentUserId={workspaceBootstrap.auth.currentUser.id} className="conversation-icon" />
                             <span><strong><WorkspaceIdentityName name={workspaceConversationTitle(conversation, workspaceBootstrap.auth.currentUser.id)} kind={conversation.otherMember?.kind} /></strong><small>{workspaceConversationPreview(conversation)}</small></span>
                             <span className="conversation-side"><time>{workspaceConversationTime(conversation)}</time>{(conversation.unreadCount ?? 0) > 0 ? <em className="unread-badge">{conversation.unreadCount}</em> : conversation.notificationLevel === "muted" ? <BellOff className="conversation-muted" size={14} aria-label="已免打扰" /> : null}</span>
                           </button>
-                          <button className="dl-object-more" type="button" aria-label={`更多会话操作：${workspaceConversationTitle(conversation, workspaceBootstrap.auth.currentUser.id)}`} title="更多会话操作" aria-haspopup="menu" aria-expanded={workspaceConversationActions.menuProps.open && workspaceConversationActions.targetId === conversation.id} onClick={(event) => workspaceConversationActions.openFromTrigger(conversation.id, event.currentTarget)}><Ellipsis size={18} /></button>
                           </div>
                         ))}
                         {workspaceActionConversation && <ObjectActionMenu {...workspaceConversationActions.menuProps} label="会话操作" summary={workspaceConversationTitle(workspaceActionConversation, workspaceBootstrap.auth.currentUser.id)} actions={[
@@ -12546,26 +12594,6 @@ function WorkspaceShellSkeleton() {
         <div className="workspace-skeleton-chat-header" />
         <WorkspaceSkeletonRows variant="setting" count={5} />
       </aside>
-    </div>
-  );
-}
-
-function WorkspaceShell({
-  mobilePane,
-  contextVisible,
-  railCollapsed,
-  hasObjectList = true,
-  children
-}: {
-  mobilePane: WorkspaceMobilePane;
-  contextVisible: boolean;
-  railCollapsed?: boolean;
-  hasObjectList?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <div className={`workspace-product-shell mobile-pane-${mobilePane}${contextVisible ? "" : " context-hidden"}${railCollapsed ? " rail-collapsed" : ""}${hasObjectList ? "" : " object-list-hidden"}`}>
-      {children}
     </div>
   );
 }

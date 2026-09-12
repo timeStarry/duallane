@@ -53,15 +53,15 @@ func TestLoadGuideCatalogFromCanonicalSharedAsset(t *testing.T) {
 	if catalog.Empty() {
 		t.Fatal("canonical release catalog is empty")
 	}
-	guide, ok := catalog.Guide("v0.19.1")
+	guide, ok := catalog.Guide("v0.19.2")
 	if !ok {
-		t.Fatal("canonical catalog does not contain current release 0.19.1")
+		t.Fatal("canonical catalog does not contain current release 0.19.2")
 	}
-	if guide.Version != "0.19.1" || guide.ReleasedAt != "2026-09-12" || guide.Title != "表情回复面板保持可见" || guide.Summary != "修复消息靠近底部或屏幕较窄时表情回复面板显示不全的问题，群聊、私聊和话题保持一致。" || len(guide.Sections) != 1 || guide.Sections[0].Items[0].Location == "" {
+	if guide.Version != "0.19.2" || guide.ReleasedAt != "2026-09-12" || guide.Title != "更顺手的会话导航" || guide.Summary != "发送后回到最新消息，会话列表更简洁，桌面中栏可按习惯调整宽度。" || len(guide.Sections) != 2 || guide.Sections[0].Items[0].Location == "" {
 		t.Fatalf("incomplete canonical guide: %#v", guide)
 	}
 	guide.Sections[0].Items[0].Title = "mutated test copy"
-	fresh, ok := catalog.Guide("0.19.1")
+	fresh, ok := catalog.Guide("0.19.2")
 	if !ok || fresh.Sections[0].Items[0].Title == "mutated test copy" {
 		t.Fatal("catalog returned mutable internal state")
 	}
