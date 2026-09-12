@@ -195,6 +195,7 @@ for (const width of [390, 320]) test(`中栏在 ${width}px 通过长按操作，
   const context = await browser.newContext({ baseURL, viewport: { width, height: 844 }, hasTouch: true, isMobile: true });
   const page = await context.newPage();
   try {
+    await page.clock.install();
     await fixture(page);
     await page.goto("/workspace");
     const row = page.locator(".workspace-conversation-list .conversation").nth(1);
@@ -204,8 +205,14 @@ for (const width of [390, 320]) test(`中栏在 ${width}px 通过长按操作，
     const box = (await row.boundingBox())!;
     const cdp = await context.newCDPSession(page);
     await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: box.x + box.width / 2, y: box.y + box.height / 2, id: 1 }] });
+    await page.clock.runFor(500);
     await expect(page.getByRole("dialog", { name: "会话操作" })).toBeVisible();
+    // Keep holding after recognition, beyond the former 900ms suppression
+    // window. Releasing this same finger must not click the new sheet backdrop.
+    await page.clock.runFor(1200);
     await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await cdp.detach();
+    await expect(page.getByRole("dialog", { name: "会话操作" })).toBeVisible();
     await expect(page).toHaveURL(/\/workspace$/);
     await page.screenshot({ path: testInfo.outputPath(`middle-pane-menu-${width}.png`) });
     await page.getByRole("button", { name: "关闭操作面板", exact: true }).click();

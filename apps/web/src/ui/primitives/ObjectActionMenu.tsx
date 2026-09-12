@@ -140,39 +140,61 @@ export type ObjectActionsController = {
 export function useObjectActions(objectId: string): ObjectActionsController {
   const [state, setState] = useState<{ objectId: string; open: boolean; anchor: PopupAnchor | null; trigger: HTMLElement | null; touch: boolean }>({ objectId, open: false, anchor: null, trigger: null, touch: false });
   const candidate = useRef<{ pointerId: number; x: number; y: number; target: HTMLElement; timer: ReturnType<typeof setTimeout> } | null>(null);
-  const suppress = useRef<{ target: HTMLElement; until: number } | null>(null);
+  const suppress = useRef<{ target: HTMLElement; pointerId: number; released: boolean } | null>(null);
   const cancel = useCallback(() => { if (candidate.current) clearTimeout(candidate.current.timer); candidate.current = null; }, []);
   const show = useCallback((target: HTMLElement, anchor: PopupAnchor, touch = false) => { cancel(); setState({ objectId, open: true, anchor, trigger: target, touch }); }, [cancel, objectId]);
+  const consumeReleaseClick = useCallback((event: MouseEvent) => {
+    const current = suppress.current;
+    if (!current?.released || event.detail === 0) return false;
+    if (event instanceof PointerEvent && event.pointerId !== current.pointerId) return false;
+    suppress.current = null;
+    return true;
+  }, []);
   useEffect(() => {
     const move = (event: PointerEvent) => { const current = candidate.current; if (current && current.pointerId === event.pointerId && Math.hypot(event.clientX - current.x, event.clientY - current.y) > 10) cancel(); };
     const second = (event: PointerEvent) => {
       if (candidate.current && candidate.current.pointerId !== event.pointerId) cancel();
-      // A new physical press is a deliberate interaction with the open sheet.
-      // The click synthesized from the original long press has no new pointerdown.
-      if (suppress.current) suppress.current = null;
+      // A new press after release is deliberate. A second finger while the
+      // original press is still held must not unprotect its eventual release.
+      if (suppress.current?.released || event.pointerType !== "touch" || (event.isPrimary && event.pointerId !== suppress.current?.pointerId)) suppress.current = null;
+    };
+    const releaseMouseDown = (event: MouseEvent) => {
+      // The compatibility mousedown precedes click and would otherwise move
+      // focus from the first menu item to the sheet/backdrop under the finger.
+      if (suppress.current?.released && event.detail !== 0) event.preventDefault();
     };
     const releaseClick = (event: MouseEvent) => {
-      if (!suppress.current || suppress.current.until <= Date.now() || event.detail === 0) return;
+      if (!consumeReleaseClick(event)) return;
       event.preventDefault();
       event.stopPropagation();
     };
+    const release = (event: PointerEvent) => {
+      if (candidate.current?.pointerId === event.pointerId) cancel();
+      if (suppress.current?.pointerId === event.pointerId) suppress.current.released = true;
+    };
+    const cancelPointer = (event: PointerEvent) => {
+      if (candidate.current?.pointerId === event.pointerId) cancel();
+      if (suppress.current?.pointerId === event.pointerId) suppress.current = null;
+    };
+    const abandon = () => { cancel(); suppress.current = null; };
     document.addEventListener("pointermove", move, { passive: true });
     document.addEventListener("pointerdown", second, { passive: true });
+    document.addEventListener("mousedown", releaseMouseDown, true);
     document.addEventListener("click", releaseClick, true);
-    document.addEventListener("pointerup", cancel);
-    document.addEventListener("pointercancel", cancel);
+    document.addEventListener("pointerup", release);
+    document.addEventListener("pointercancel", cancelPointer);
     document.addEventListener("scroll", cancel, true);
-    document.addEventListener("visibilitychange", cancel);
-    window.addEventListener("blur", cancel);
-    return () => { cancel(); document.removeEventListener("pointermove", move); document.removeEventListener("pointerdown", second); document.removeEventListener("click", releaseClick, true); document.removeEventListener("pointerup", cancel); document.removeEventListener("pointercancel", cancel); document.removeEventListener("scroll", cancel, true); document.removeEventListener("visibilitychange", cancel); window.removeEventListener("blur", cancel); };
-  }, [objectId, cancel]);
+    document.addEventListener("visibilitychange", abandon);
+    window.addEventListener("blur", abandon);
+    return () => { cancel(); document.removeEventListener("pointermove", move); document.removeEventListener("pointerdown", second); document.removeEventListener("mousedown", releaseMouseDown, true); document.removeEventListener("click", releaseClick, true); document.removeEventListener("pointerup", release); document.removeEventListener("pointercancel", cancelPointer); document.removeEventListener("scroll", cancel, true); document.removeEventListener("visibilitychange", abandon); window.removeEventListener("blur", abandon); };
+  }, [objectId, cancel, consumeReleaseClick]);
   return {
     cancelPending: cancel,
     openFromTrigger: (trigger) => show(trigger, trigger),
     menuProps: { open: state.open && state.objectId === objectId, onOpenChange: (open) => setState((current) => ({ ...current, open })), anchor: state.anchor, returnFocus: state.trigger, presentation: state.touch ? "sheet" : "auto" },
     bind: {
       onContextMenu: (event) => {
-        if (suppress.current && suppress.current.until > Date.now() && suppress.current.target.contains(event.target as Node)) { event.preventDefault(); return; }
+        if (suppress.current?.target.contains(event.target as Node)) { event.preventDefault(); return; }
         if (!canOpenObjectActions(event.target, event.currentTarget)) return;
         event.preventDefault();
         show(event.currentTarget, { x: event.clientX, y: event.clientY });
@@ -184,13 +206,15 @@ export function useObjectActions(objectId: string): ObjectActionsController {
         const target = event.currentTarget;
         const timer = setTimeout(() => {
           if (!target.isConnected) return;
-          suppress.current = { target, until: Date.now() + 900 };
+          // The compatibility click can target the sheet/backdrop now covering
+          // the finger. Suppress that release, however long the finger stays down.
+          suppress.current = { target, pointerId: event.pointerId, released: false };
           show(target, target, true);
         }, 450);
         candidate.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, target, timer };
       },
       onClickCapture: (event) => {
-        if (suppress.current && suppress.current.until > Date.now() && suppress.current.target.contains(event.target as Node)) { event.preventDefault(); event.stopPropagation(); suppress.current = null; }
+        if (consumeReleaseClick(event.nativeEvent)) { event.preventDefault(); event.stopPropagation(); }
       }
     }
   };
