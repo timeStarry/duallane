@@ -103,6 +103,7 @@ type EmailService interface {
 }
 
 type RouterOptions struct {
+	MobileRelease       http.Handler
 	ObserveHTTP         HTTPObserver
 	Gate                gate.Gate
 	Health              http.Handler
@@ -143,6 +144,9 @@ func NewRouter(options RouterOptions) http.Handler {
 	if options.ObserveHTTP != nil {
 		router.Use(observeHTTP(options.ObserveHTTP))
 	}
+	if options.MobileRelease != nil {
+		router.Get("/api/mobile/release-policy", options.MobileRelease.ServeHTTP)
+	}
 	if options.Health != nil {
 		router.Handle("/api/health", options.Health)
 	}
@@ -150,6 +154,11 @@ func NewRouter(options RouterOptions) http.Handler {
 		router.Handle("/readyz", options.Readiness)
 	}
 	if options.AuthRoutes != nil {
+		router.Post("/api/auth/mobile/github/start", options.AuthRoutes.HandleMobileStart)
+		router.Get("/api/auth/mobile/github/authorize", options.AuthRoutes.HandleMobileAuthorize)
+		router.Post("/api/auth/mobile/github/exchange", options.AuthRoutes.HandleMobileExchange)
+		router.Post("/api/auth/mobile/refresh", options.AuthRoutes.HandleMobileRefresh)
+		router.Post("/api/auth/mobile/logout", options.AuthRoutes.HandleMobileLogout)
 		router.Get("/api/auth/github/start", options.AuthRoutes.HandleGitHubStart)
 		router.Get("/api/auth/github/callback", options.AuthRoutes.HandleGitHubCallback)
 		router.Post("/api/auth/logout", options.AuthRoutes.HandleLogout)

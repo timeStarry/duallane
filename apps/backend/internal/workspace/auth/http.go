@@ -23,6 +23,7 @@ const (
 // domain handlers should resolve the actor with Service.ResolveActor and keep
 // their own authorization checks.
 type HTTPHandler struct {
+	Mobile        *MobileService
 	Service       *Service
 	GitHub        *GitHubOAuth
 	Environment   string
@@ -182,6 +183,9 @@ func (h *HTTPHandler) HandleGitHubCallback(w http.ResponseWriter, r *http.Reques
 		writeError(w, err)
 		return
 	}
+	if h.completeMobile(w, r, actor) {
+		return
+	}
 	session, err := h.Service.CreateSession(r.Context(), actor.ID)
 	if err != nil {
 		writeError(w, err)
@@ -313,6 +317,9 @@ func decodeAuthJSON(w http.ResponseWriter, r *http.Request, target any) error {
 func (h *HTTPHandler) ResolveActor(ctx context.Context, r *http.Request) (*Actor, error) {
 	if h == nil || h.Service == nil {
 		return nil, requiredError()
+	}
+	if r.Header.Get("Authorization") != "" {
+		return h.resolveMobile(ctx, r)
 	}
 	if !h.IsProduction() {
 		if userID := strings.TrimSpace(r.Header.Get("X-Workspace-User-ID")); userID != "" {
