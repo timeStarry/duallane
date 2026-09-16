@@ -505,6 +505,11 @@ step. Unpublished candidates remain passive throughout this sequence.
 
 ### Guarded Go activation and upgrade inputs
 
+The [Android activation work item](work-items/2026-09-16-mobile-production-release.md)
+records the schema-34 bridge required before the reviewed mobile schema-35
+expansion and the internal APK distribution. Do not upgrade directly from an
+image whose immutable policy does not authorize that migration.
+
 The current release invocation is Go-to-Go only; the expected commit, explicit
 profile, upgrade marker, and previous snapshot are mandatory:
 

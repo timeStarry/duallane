@@ -207,7 +207,7 @@ func TestPostgresSchemaCheckerRejects035WhenCanonical034IsRequired(t *testing.T)
 	}
 }
 
-func TestPostgresHistorical034CheckerRejectsMobile035(t *testing.T) {
+func TestPostgresStrict034CheckerRejectsMobile035(t *testing.T) {
 	fixture := newCompatibilityPGFixture(t)
 	directory := canonical034Directory(t)
 	if _, err := (migrations.Runner{Beginner: postgres.NewMigrationBeginner(fixture.conn), Directory: directory}).Run(fixture.ctx); err != nil {
@@ -218,10 +218,10 @@ func TestPostgresHistorical034CheckerRejectsMobile035(t *testing.T) {
 		t.Fatal(err)
 	}
 	report, err := (migrations.SchemaChecker{
-		Queryer: fixture.readOnlyQueryer(t), Directory: directory, AllowReleaseCompatibility: true,
+		Queryer: fixture.readOnlyQueryer(t), Directory: directory,
 	}).Check(fixture.ctx)
 	if !errors.Is(err, migrations.ErrUnknownMigrations) || report.UnknownCount != 1 || !equalMigrationNames(report.UnknownNames, []string{mobileMigration}) || report.CompatibleCount != 0 {
-		t.Fatalf("historical schema-34 checker accepted mobile migration: report=%#v, err=%v", report, err)
+		t.Fatalf("strict schema-34 checker accepted mobile migration: report=%#v, err=%v", report, err)
 	}
 }
 

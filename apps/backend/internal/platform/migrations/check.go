@@ -87,7 +87,6 @@ func (c SchemaChecker) Check(ctx context.Context) (CompatibilityReport, error) {
 		requiredSet[name] = struct{}{}
 	}
 	appliedSet := make(map[string]struct{}, len(applied))
-	compatibilityBaseline := c.AllowReleaseCompatibility && isCanonicalReleaseCompatibilityBaseline(required)
 	var compatibleApplied []string
 	for _, name := range applied {
 		appliedSet[name] = struct{}{}
@@ -97,7 +96,7 @@ func (c SchemaChecker) Check(ctx context.Context) (CompatibilityReport, error) {
 			}
 			continue
 		}
-		if compatibilityBaseline && policy.allows(name) {
+		if c.AllowReleaseCompatibility && policy.allowsAfter(required, name) {
 			report.CompatibleCount++
 			report.CompatibleNames = append(report.CompatibleNames, name)
 			compatibleApplied = append(compatibleApplied, name)
@@ -152,15 +151,24 @@ type compatibleSchemaColumn struct {
 }
 
 func inspectCompatibleMigrationSchema(ctx context.Context, queryer Queryer, applied []string) error {
-	allowed := map[string]struct{}{
-		ReleaseCompatibilityMigrationName: {},
-	}
 	for _, name := range applied {
-		if _, ok := allowed[name]; !ok {
+		var err error
+		switch name {
+		case ReleaseCompatibilityMigrationName:
+			err = inspectReviewed034Schema(ctx, queryer)
+		case ReleaseCompatibilityMobileMigrationName:
+			err = inspectReviewed035Schema(ctx, queryer)
+		default:
 			return errors.Join(ErrSchemaCompatibility, ErrCompatibleMigrationSchema)
 		}
+		if err != nil {
+			return err
+		}
 	}
+	return nil
+}
 
+func inspectReviewed034Schema(ctx context.Context, queryer Queryer) error {
 	var columns []compatibleSchemaColumn
 	err := readCompatibilityRows(ctx, queryer, compatibleMigrationColumnsSQL, "compatible migration columns", func(rows Rows) error {
 		for rows.Next() {

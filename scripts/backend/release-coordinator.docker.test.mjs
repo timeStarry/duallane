@@ -18,6 +18,7 @@ const ownerLabel = "com.duallane.release-coordinator-test";
 const selected = process.env.DUALLANE_RELEASE_COORDINATOR_DOCKER_TEST === "true";
 const upgradeSelected = process.env.DUALLANE_RELEASE_COORDINATOR_UPGRADE_TEST === "true";
 const expectReviewedSchemaExpansion = process.env.DUALLANE_RELEASE_COORDINATOR_EXPECT_SCHEMA_033_TO_034 === "true";
+const expectMobileSchemaExpansion = process.env.DUALLANE_RELEASE_COORDINATOR_EXPECT_SCHEMA_034_TO_035 === "true";
 const imageVariables = {
   node: "DUALLANE_RELEASE_COORDINATOR_NODE_IMAGE",
   nodeWeb: "DUALLANE_RELEASE_COORDINATOR_NODE_WEB_IMAGE",
@@ -763,6 +764,9 @@ async function rehearseCoordinator(t, scenario) {
         const newSchemaVersion = schemaProof.targetMigrationCount;
         if (expectReviewedSchemaExpansion && (oldSchemaVersion !== 33 || newSchemaVersion !== 34)) {
           reject("expected_schema_expansion_not_033_to_034");
+        }
+        if (expectMobileSchemaExpansion && (oldSchemaVersion !== 34 || newSchemaVersion !== 35)) {
+          reject("expected_schema_expansion_not_034_to_035");
         }
         let upgradeSnapshot;
         try { upgradeSnapshot = JSON.parse(await readFile(`${paths.upgradeRecovery}.go-compose.snapshot.json`, "utf8")); } catch { reject("upgrade_go_snapshot_invalid"); }

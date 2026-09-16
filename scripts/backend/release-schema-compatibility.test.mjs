@@ -15,6 +15,8 @@ import {
   REVIEWED_BASE_MIGRATION,
   REVIEWED_COMPATIBLE_MIGRATION,
   REVIEWED_COMPATIBLE_MIGRATION_SHA256,
+  REVIEWED_MOBILE_MIGRATION,
+  REVIEWED_MOBILE_MIGRATION_SHA256,
   SCHEMA_COMPATIBILITY_LABEL,
   SCHEMA_COMPATIBILITY_USER,
   SCHEMA_INSPECTION_SCRIPT,
@@ -55,6 +57,16 @@ function reviewedPolicy() {
     REVIEWED_BASE_MIGRATION,
     [{ name: REVIEWED_COMPATIBLE_MIGRATION, sha256: REVIEWED_COMPATIBLE_MIGRATION_SHA256 }],
   );
+}
+
+function mobileBridgePolicy() {
+  const result = reviewedPolicy();
+  result.compatibleMigrations.push({ name: REVIEWED_MOBILE_MIGRATION, sha256: REVIEWED_MOBILE_MIGRATION_SHA256 });
+  return result;
+}
+
+function mobileMigrations() {
+  return [...reviewedMigrations(true), { name: REVIEWED_MOBILE_MIGRATION, sha256: REVIEWED_MOBILE_MIGRATION_SHA256 }];
 }
 
 function reviewedMigrations(includeCompatible = false, compatibleHash = REVIEWED_COMPATIBLE_MIGRATION_SHA256) {
@@ -231,6 +243,70 @@ test("compareSchemaInventories rejects modified common SQL bytes", () => {
   const target = structuredClone(previous);
   target.migrations[1].sha256 = hash("f");
   expectCode(() => compareSchemaInventories(previous, target), "common_migration_hash_mismatch");
+});
+
+test("schema 034 bridge accepts the immutable historical policy without migrating", () => {
+  const previous = inventory(reviewedMigrations(true), reviewedPolicy());
+  const bridge = inventory(reviewedMigrations(true), mobileBridgePolicy());
+  assert.deepEqual(compareSchemaInventories(previous, bridge), {
+    status: "compatible", previousMigrationCount: 34, targetMigrationCount: 34,
+    commonMigrationCount: 34, addedMigrationCount: 0, removedMigrationCount: 0, policyUsed: false,
+  });
+});
+
+test("035 requires the exact mobile declaration in the previous bridge image", () => {
+  const oldRelease = inventory(reviewedMigrations(true), reviewedPolicy());
+  const bridge = inventory(reviewedMigrations(true), mobileBridgePolicy());
+  const mobile = inventory(mobileMigrations(), mobileBridgePolicy());
+  expectCode(() => compareSchemaInventories(oldRelease, mobile), "migration_not_authorized");
+  const result = compareSchemaInventories(bridge, mobile);
+  assert.equal(result.commonMigrationCount, 34);
+  assert.equal(result.addedMigrationCount, 1);
+  assert.equal(result.targetMigrationCount, 35);
+  assert.equal(result.policyUsed, true);
+  const altered = structuredClone(mobile);
+  altered.migrations[34].sha256 = hash("f");
+  expectCode(() => compareSchemaInventories(bridge, altered), "target_policy_hash_mismatch");
+  const staleTarget = inventory(mobileMigrations(), reviewedPolicy());
+  expectCode(() => compareSchemaInventories(oldRelease, staleTarget), "target_policy_inventory_mismatch");
+});
+
+test("mobile bridge declarations reject changed, renamed, reordered and future allowances", () => {
+  const bridge = inventory(reviewedMigrations(true), mobileBridgePolicy());
+  const schema33WithNewPolicy = inventory(reviewedMigrations(), mobileBridgePolicy());
+  expectCode(() => compareSchemaInventories(schema33WithNewPolicy, bridge), "previous_policy_mobile_baseline_missing");
+  for (const mutate of [
+    (p) => { p.compatibleMigrations[1].sha256 = hash("e"); },
+    (p) => { p.compatibleMigrations[1].name = "035_renamed.sql"; },
+    (p) => { p.compatibleMigrations.reverse(); },
+    (p) => { p.compatibleMigrations.shift(); },
+    (p) => { p.compatibleMigrations.push({ name: "036_future.sql", sha256: hash("f") }); },
+  ]) {
+    const bad = structuredClone(bridge);
+    mutate(bad.policy);
+    assert.throws(() => compareSchemaInventories(bridge, bad), SchemaCompatibilityError);
+  }
+  const future = inventory([...mobileMigrations(), migration(36, "future", hash("e"))], mobileBridgePolicy());
+  expectCode(() => compareSchemaInventories(bridge, future), "target_policy_inventory_mismatch");
+});
+
+test("exact-image inspection preserves the 034 bridge and 035 prior-policy boundary", async () => {
+  const bridge = inventory(reviewedMigrations(true), mobileBridgePolicy());
+  const mobile = inventory(mobileMigrations(), mobileBridgePolicy());
+  for (const [previous, target, expected] of [
+    [inventory(reviewedMigrations(true), reviewedPolicy()), bridge, 0],
+    [bridge, mobile, 1],
+  ]) {
+    const docker = fakeDocker(new Map([[previousImage, previous], [targetImage, target]]));
+    const result = await verifySchemaCompatibility({ previousImage, targetImage, dockerRunner: docker.runner });
+    assert.equal(result.addedMigrationCount, expected);
+    assert.equal(docker.containers.size, 0);
+  }
+  const docker = fakeDocker(new Map([
+    [previousImage, inventory(reviewedMigrations(true), reviewedPolicy())], [targetImage, mobile],
+  ]));
+  await expectAsyncCode(() => verifySchemaCompatibility({ previousImage, targetImage, dockerRunner: docker.runner }), "migration_not_authorized");
+  assert.equal(docker.containers.size, 0);
 });
 
 test("the reviewed 033-to-034 expansion is accepted only with its exact prior policy", () => {

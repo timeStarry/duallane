@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
@@ -245,7 +244,8 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		}})
 		authHandler = auth.NewHTTPHandler(auth.HTTPHandler{
 			Service: authService, GitHub: github, Environment: runtimeConfig.Environment,
-			Mobile:        &auth.MobileService{Repository: auth.NewMobilePGStore(pool)},
+			// Schema 035 is enabled only after this compatibility bridge has a
+			// verified production rollback snapshot. Mobile handlers fail closed.
 			PublicBaseURL: runtimeConfig.PublicBaseURL, FrontendURL: runtimeConfig.FrontendURL,
 			TrustProxy: runtimeConfig.TrustProxy, WorkspaceEnabled: workspaceGate.Enabled,
 		})
@@ -476,11 +476,6 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			ObserveHTTP: workspaceHTTPObserver(metricSet),
 			Gate:        workspaceGate, Health: gate.HealthHandler(healthInput), Readiness: readinessHandler(healthInput, databaseProbe, storageProbe),
 			AuthRoutes: authHandler, ActorResolver: authHandler, Invites: inviteService,
-			MobileRelease: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				w.Header().Set("Cache-Control", "no-store")
-				_ = json.NewEncoder(w).Encode(runtimeConfig.MobileRelease)
-			}),
 			Members: echoruntime.MemberHooks{Service: memberService, Delivery: echoDelivery, SpaceID: auth.DefaultSpaceID}, Conversations: conversationService, Messages: messageService,
 			Avatars:             avatarService,
 			Cards:               echoruntime.CardHooks{CardService: cardService, Delivery: echoDelivery, SpaceID: auth.DefaultSpaceID},

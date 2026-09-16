@@ -5,6 +5,10 @@
     {
       "name": "034_workspace_chat_auto_hide.sql",
       "sha256": "b5c6ed855f9ca76a06f14ac590a8dd96fdec9cd2ec88c75dc5814990669658cb"
+    },
+    {
+      "name": "035_mobile_sessions.sql",
+      "sha256": "479d042a0a5f4d07886d3557901b5d8152b8714fe9dfeeceddfba94121e58061"
     }
   ]
 }
