@@ -298,27 +298,35 @@ func assertCanonicalCompatibilityInventory(t *testing.T, directory string) []mig
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != len(expectedCompatibilityBaselineNames) && len(files) != len(expectedCompatibilityBaselineNames)+1 {
-		t.Fatalf("canonical migration count = %d, want %d or %d", len(files), len(expectedCompatibilityBaselineNames), len(expectedCompatibilityBaselineNames)+1)
+	if len(files) < len(expectedCompatibilityBaselineNames) {
+		t.Fatalf("canonical migration count = %d, missing the %d-migration compatibility baseline", len(files), len(expectedCompatibilityBaselineNames))
 	}
 	for index, want := range expectedCompatibilityBaselineNames {
 		if files[index].Name != want {
 			t.Fatalf("canonical baseline migration[%d] = %q, want %q", index, files[index].Name, want)
 		}
 	}
-	if len(files) == len(expectedCompatibilityBaselineNames)+1 {
+	if len(files) > len(expectedCompatibilityBaselineNames) {
 		if files[len(expectedCompatibilityBaselineNames)].Name != migrations.ReleaseCompatibilityMigrationName {
 			t.Fatalf("canonical future migration = %q, want %q", files[len(expectedCompatibilityBaselineNames)].Name, migrations.ReleaseCompatibilityMigrationName)
 		}
 		assertMigrationSHA256(t, files[len(expectedCompatibilityBaselineNames)].Path, migrations.ReleaseCompatibilityMigrationSHA256)
+		// These tests model immutable schema-33/34 binaries. Later canonical
+		// migrations must not silently become required by their fixtures.
+		return files[:len(expectedCompatibilityBaselineNames)+1]
 	}
 	return files
 }
 
 func copyCanonicalCompatibilityBaseline(t *testing.T, files []migrations.File) string {
 	t.Helper()
+	return copyCompatibilityFiles(t, files[:len(expectedCompatibilityBaselineNames)])
+}
+
+func copyCompatibilityFiles(t *testing.T, files []migrations.File) string {
+	t.Helper()
 	directory := t.TempDir()
-	for _, file := range files[:len(expectedCompatibilityBaselineNames)] {
+	for _, file := range files {
 		content, err := os.ReadFile(file.Path)
 		if err != nil {
 			t.Fatal(err)
