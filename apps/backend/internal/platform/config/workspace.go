@@ -45,6 +45,7 @@ const (
 // audited lane. Secrets are kept only as values for dependency construction;
 // this type deliberately has no String or logging projection.
 type WorkspaceConfig struct {
+	MobileRelease       MobileReleasePolicy
 	Host                string
 	Port                int
 	AppVersion          string
@@ -87,6 +88,10 @@ func LoadWorkspaceFrom(lookup func(string) (string, bool)) (WorkspaceConfig, err
 	if lookup == nil {
 		return WorkspaceConfig{}, errors.New("configuration lookup is required")
 	}
+	mobileRelease, mobileErr := LoadMobileRelease(lookup)
+	if mobileErr != nil {
+		return WorkspaceConfig{}, mobileErr
+	}
 	appVersion := valueOr(lookup, "DUALLANE_APP_VERSION", "")
 	if appVersion == "" {
 		appVersion = valueOr(lookup, "APP_VERSION", DefaultAppVersion)
@@ -97,6 +102,7 @@ func LoadWorkspaceFrom(lookup func(string) (string, bool)) (WorkspaceConfig, err
 	candidateHealthValue, _ := lookup(WorkspaceCandidateHealthEnv)
 	validateOnlyValue, _ := lookup(WorkerValidateOnlyEnv)
 	config := WorkspaceConfig{
+		MobileRelease:       mobileRelease,
 		Host:                valueOr(lookup, "HOST", DefaultHost),
 		Port:                DefaultPort,
 		AppVersion:          appVersion,

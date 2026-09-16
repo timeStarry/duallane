@@ -175,11 +175,13 @@ type UploadResult struct {
 }
 
 type UploadStatus struct {
-	UploadID  string             `json:"uploadId"`
-	Mode      string             `json:"mode"`
-	PartSize  int64              `json:"partSize"`
-	PartCount int                `json:"partCount"`
-	Parts     []UploadPartRecord `json:"parts"`
+	Status     string             `json:"status"`
+	UploadID   string             `json:"uploadId"`
+	Mode       string             `json:"mode"`
+	PartSize   int64              `json:"partSize"`
+	PartCount  int                `json:"partCount"`
+	Parts      []UploadPartRecord `json:"parts"`
+	Attachment *Attachment        `json:"attachment,omitempty"`
 }
 
 type UploadPartResult struct {

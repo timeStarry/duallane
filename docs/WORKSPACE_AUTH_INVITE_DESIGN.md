@@ -375,3 +375,61 @@ P2:
   OAuth payloads.
 - Private direct `#k=` invite fragments remain browser-only and are not mixed
   with Workspace invite handling.
+
+## 16. Android Session Contract
+
+Android uses the same GitHub identity, invite and current Workspace membership
+checks, with opaque bearer credentials kept in the device's secure storage.
+The browser cookie session remains a separate transport. Starting a browser
+login clears abandoned mobile context; each mobile context is bound to its
+provider OAuth state and cleared on callback, including rejection.
+
+| Endpoint | Request | Result |
+| --- | --- | --- |
+| `POST /api/auth/mobile/github/start` | `codeChallenge` (S256), `redirectUri`, random `state`, optional `inviteCode` | `authorizationUrl` to open in the system browser |
+| `GET /api/auth/mobile/github/authorize?flow=...` | URL returned by start | Existing GitHub OAuth flow with browser state validation |
+| `POST /api/auth/mobile/github/exchange` | One-time `code`, `codeVerifier`, `redirectUri` | `accessToken`, `refreshToken`, `accessTokenExpiresAt`, `refreshTokenExpiresAt` |
+| `POST /api/auth/mobile/refresh` | `refreshToken` | Rotated credentials and their deadlines |
+| `POST /api/auth/mobile/logout` | Current or previous `refreshToken` | `204`; revoke the whole device session family |
+
+The only allowed callback is `com.timestarry.duallane://oauth`. The callback
+query contains a one-minute, one-use authorization code and the original client
+state, never access or refresh credentials. The client must verify state before
+exchanging the code and prove its original PKCE verifier. Initial login flows
+expire after ten minutes. Tokens are stored as SHA-256 hashes; access lasts
+fifteen minutes, while the family has a fixed thirty-day deadline. Refresh
+rotation does not extend that deadline. Reusing a consumed refresh token
+revokes the entire family, including a concurrently issued descendant; clients
+must serialize refresh and must not blindly replay it after an uncertain result.
+
+HTTP and native WebSocket clients send access credentials only in
+`Authorization: Bearer ...`. Actor resolution checks current human membership,
+token expiry and family revocation. Missing, expired, removed or revoked actors
+receive `401 auth.required`, including bootstrap. Invalid mobile exchange or
+refresh credentials receive `401 auth.mobile_invalid` and a content-free
+`auth.mobile.rejected` audit row. Temporary infrastructure failures receive
+`500 internal.error`; clients retain credentials for recovery. The mobile
+endpoints remain unavailable while Workspace is disabled.
+
+`GET /api/mobile/release-policy` is public and returns schema version 1 with
+Android internal-channel latest/minimum versions, recommendation, optional APK
+URL and supported protocol. Configure the six `DUALLANE_MOBILE_*` variables in
+[the environment example](../.env.example); Compose passes them to Workspace.
+
+### Schema 35 rollout and rollback
+
+Migration `035_mobile_sessions.sql` adds only mobile authentication tables and
+indexes. Run the canonical Go migrator explicitly; no service performs schema
+or seed work at startup. Existing web sessions, Workspace content and the P2P
+lane keep their existing storage contracts.
+
+The schema-34 recovery images currently declare compatibility only through
+migration 34. The guarded Go-to-Go deployment therefore rejects a direct
+upgrade to schema 35. Before production activation, ship and validate a
+schema-34 bridge whose immutable policy allows the exact SHA-256 of migration
+35 and prove old-image behavior against the expanded schema. Then use that
+bridge as the verified previous release for the normal guarded deployment.
+Do not change the new image's policy to bypass the previous-image check.
+Rollback restores those exact compatible bridge images while leaving additive
+tables and migration history intact; down-migration is not an image rollback.
+This source change does not itself authorize or establish production activation.

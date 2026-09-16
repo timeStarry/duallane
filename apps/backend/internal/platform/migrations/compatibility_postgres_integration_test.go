@@ -109,7 +109,7 @@ func canonical034Directory(t *testing.T) string {
 	if len(files) != len(expectedCompatibilityBaselineNames)+1 {
 		t.Fatalf("canonical 034 is required for this test; discovered %d migrations", len(files))
 	}
-	return directory
+	return copyCompatibilityFiles(t, files)
 }
 
 func compatibilityBaselineDirectory(t *testing.T) string {
@@ -204,6 +204,24 @@ func TestPostgresSchemaCheckerRejects035WhenCanonical034IsRequired(t *testing.T)
 	}
 	if report.UnknownCount != 1 || !equalMigrationNames(report.UnknownNames, []string{"035_future_workspace_change.sql"}) || report.CompatibleCount != 0 {
 		t.Fatalf("unexpected canonical-034 unknown report: %#v", report)
+	}
+}
+
+func TestPostgresHistorical034CheckerRejectsMobile035(t *testing.T) {
+	fixture := newCompatibilityPGFixture(t)
+	directory := canonical034Directory(t)
+	if _, err := (migrations.Runner{Beginner: postgres.NewMigrationBeginner(fixture.conn), Directory: directory}).Run(fixture.ctx); err != nil {
+		t.Fatal(err)
+	}
+	const mobileMigration = "035_mobile_sessions.sql"
+	if _, err := fixture.conn.Exec(fixture.ctx, "INSERT INTO schema_migrations (name, applied_at) VALUES ($1, $2)", mobileMigration, time.Date(2026, 9, 16, 1, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	report, err := (migrations.SchemaChecker{
+		Queryer: fixture.readOnlyQueryer(t), Directory: directory, AllowReleaseCompatibility: true,
+	}).Check(fixture.ctx)
+	if !errors.Is(err, migrations.ErrUnknownMigrations) || report.UnknownCount != 1 || !equalMigrationNames(report.UnknownNames, []string{mobileMigration}) || report.CompatibleCount != 0 {
+		t.Fatalf("historical schema-34 checker accepted mobile migration: report=%#v, err=%v", report, err)
 	}
 }
 

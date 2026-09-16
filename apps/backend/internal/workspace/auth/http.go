@@ -23,6 +23,7 @@ const (
 // domain handlers should resolve the actor with Service.ResolveActor and keep
 // their own authorization checks.
 type HTTPHandler struct {
+	Mobile        *MobileService
 	Service       *Service
 	GitHub        *GitHubOAuth
 	Environment   string
@@ -48,6 +49,10 @@ func (h *HTTPHandler) IsProduction() bool {
 }
 
 func (h *HTTPHandler) HandleGitHubStart(w http.ResponseWriter, r *http.Request) {
+	h.startGitHub(w, r, "")
+}
+
+func (h *HTTPHandler) startGitHub(w http.ResponseWriter, r *http.Request, mobileFlowID string) {
 	if h == nil {
 		writeError(w, wrapInternal("github handler", errors.New("handler is nil")))
 		return
@@ -63,6 +68,15 @@ func (h *HTTPHandler) HandleGitHubStart(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	setCookie(w, OAuthCookie(OAuthStateCookieName, state, secure, time.Time{}))
+	// A fresh browser login replaces any abandoned mobile flow. Bind mobile
+	// context to this OAuth state so separate starts cannot mix their callbacks.
+	if mobileFlowID == "" {
+		setCookie(w, ClearOAuthCookie(mobileFlowCookie, secure))
+	} else {
+		cookie := OAuthCookie(mobileFlowCookie, mobileFlowID+"."+HashSecret(state), secure, time.Time{})
+		cookie.MaxAge = 600
+		setCookie(w, cookie)
+	}
 
 	query := r.URL.Query()
 	pendingInvite := NormalizeInviteCode(query.Get("invite"))
@@ -134,6 +148,7 @@ func (h *HTTPHandler) HandleGitHubCallback(w http.ResponseWriter, r *http.Reques
 	// external or database call, including a rejected callback.
 	setCookie(w, ClearOAuthCookie(OAuthStateCookieName, secure))
 	setCookie(w, ClearOAuthCookie(OAuthReturnCookieName, secure))
+	setCookie(w, ClearOAuthCookie(mobileFlowCookie, secure))
 
 	query := r.URL.Query()
 	code := strings.TrimSpace(query.Get("code"))
@@ -182,13 +197,16 @@ func (h *HTTPHandler) HandleGitHubCallback(w http.ResponseWriter, r *http.Reques
 		writeError(w, err)
 		return
 	}
+	setCookie(w, ClearOAuthCookie(PendingInviteCookieName, secure))
+	if h.completeMobile(w, r, actor, cookieValue(stateCookie)) {
+		return
+	}
 	session, err := h.Service.CreateSession(r.Context(), actor.ID)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	setCookie(w, SessionCookie(session, secure))
-	setCookie(w, ClearOAuthCookie(PendingInviteCookieName, secure))
 
 	if wantsJSON(r) || query.Get("format") == "json" {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -313,6 +331,9 @@ func decodeAuthJSON(w http.ResponseWriter, r *http.Request, target any) error {
 func (h *HTTPHandler) ResolveActor(ctx context.Context, r *http.Request) (*Actor, error) {
 	if h == nil || h.Service == nil {
 		return nil, requiredError()
+	}
+	if r.Header.Get("Authorization") != "" {
+		return h.resolveMobile(ctx, r)
 	}
 	if !h.IsProduction() {
 		if userID := strings.TrimSpace(r.Header.Get("X-Workspace-User-ID")); userID != "" {

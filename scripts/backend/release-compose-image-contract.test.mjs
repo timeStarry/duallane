@@ -21,6 +21,14 @@ const syntheticVersion = "0.0.0-compose-contract";
 const syntheticCommit = "a".repeat(40);
 const syntheticCandidateNetwork = `${syntheticProject}-candidate-network`;
 const allowLocalSkipVariable = "DUALLANE_ALLOW_DOCKER_COMPOSE_CONTRACT_SKIP";
+const mobileReleaseEnvironment = Object.freeze({
+  DUALLANE_MOBILE_LATEST_VERSION: "0.2.0",
+  DUALLANE_MOBILE_LATEST_CODE: "2",
+  DUALLANE_MOBILE_MIN_VERSION: "0.1.0",
+  DUALLANE_MOBILE_MIN_CODE: "1",
+  DUALLANE_MOBILE_RECOMMENDATION: "soft",
+  DUALLANE_MOBILE_APK_URL: "https://downloads.example.test/duallane.apk",
+});
 const requireDockerVariable = "DUALLANE_REQUIRE_DOCKER_COMPOSE_CONTRACT";
 const goServices = Object.freeze(["p2p", "web", "workspace", "worker", "migrate"]);
 const candidateServices = Object.freeze(["p2p", "workspace", "worker", "web"]);
@@ -64,6 +72,7 @@ function syntheticEnvironment(credentialsFile, subscriptionFile) {
     "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH",
   ]);
   const environment = {
+    ...mobileReleaseEnvironment,
     ...Object.fromEntries(Object.entries(process.env).filter(([key]) => hostKeys.has(key) || hostKeys.has(key.toUpperCase()))),
     COMPOSE_DISABLE_ENV_FILE: "1",
     COMPOSE_PROJECT_NAME: syntheticProject,
@@ -314,6 +323,9 @@ function assertGoImageContract(config) {
   assert.equal(normalizedDockerfile(web.build?.dockerfile), "deploy/candidate/Dockerfile.web");
 
   const workspaceImage = service(config, "workspace").image;
+  for (const [name, value] of Object.entries(mobileReleaseEnvironment)) {
+    assert.equal(service(config, "workspace").environment[name], value, `Workspace must receive ${name}`);
+  }
   assert.equal(service(config, "worker").image, workspaceImage);
   assert.equal(service(config, "migrate").image, workspaceImage);
 }

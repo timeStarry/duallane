@@ -14,6 +14,15 @@ import { spawnOwnedProcess, stopOwnedProcess } from "../../e2e/support/owned-pro
 
 const syntheticOptions = parseArguments([], {});
 
+test("mobile release policy reaches Workspace without widening the mobile route", () => {
+  const proxy = createDevProxy({});
+  const target = url => Object.entries(proxy).find(([pattern]) => new RegExp(pattern).test(url))?.[1];
+  assert.equal(target("/api/mobile/release-policy"), "http://127.0.0.1:8898");
+  assert.equal(target("/api/mobile/release-policy?platform=android"), "http://127.0.0.1:8898");
+  assert.equal(target("/api/mobile/release-policy/extra"), undefined);
+  assert.equal(target("/api/mobile/release-policy-extra"), undefined);
+});
+
 test("default Go development plan uses separate loopback owners", () => {
   const plan = createProcessPlan(syntheticOptions, {
     WORKSPACE_ENABLED: "false",
