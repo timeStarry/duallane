@@ -53,15 +53,15 @@ func TestLoadGuideCatalogFromCanonicalSharedAsset(t *testing.T) {
 	if catalog.Empty() {
 		t.Fatal("canonical release catalog is empty")
 	}
-	guide, ok := catalog.Guide("v0.19.3")
+	guide, ok := catalog.Guide("v0.20.0")
 	if !ok {
-		t.Fatal("canonical catalog does not contain current release 0.19.3")
+		t.Fatal("canonical catalog does not contain current release 0.20.0")
 	}
-	if guide.Version != "0.19.3" || guide.ReleasedAt != "2026-09-16" || guide.Title != "兼容性维护" || guide.Summary != "改善文件重试时的恢复，已有聊天、文件和个人设置继续可用。" || len(guide.Sections) != 1 || guide.Sections[0].Items[0].Location == "" {
+	if guide.Version != "0.20.0" || guide.ReleasedAt != "2026-09-16" || guide.Title != "Android 内部测试版接入" || guide.Summary != "Android 内部测试版支持 GitHub 登录共享空间，并可查看版本与更新提示。" || len(guide.Sections) != 2 || guide.Sections[0].Items[0].Location == "" {
 		t.Fatalf("incomplete canonical guide: %#v", guide)
 	}
 	guide.Sections[0].Items[0].Title = "mutated test copy"
-	fresh, ok := catalog.Guide("0.19.3")
+	fresh, ok := catalog.Guide("0.20.0")
 	if !ok || fresh.Sections[0].Items[0].Title == "mutated test copy" {
 		t.Fatal("catalog returned mutable internal state")
 	}

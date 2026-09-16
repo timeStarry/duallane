@@ -51,15 +51,6 @@ func mobileIntegrationPool(t *testing.T) *pgxpool.Pool {
 	if _, err := runner.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// The bridge does not ship schema 035 as an executable migration. Its
-	// deferred mobile implementation is tested only in this disposable schema.
-	mobileSQL, err := os.ReadFile(filepath.Join(filepath.Dir(source), "../../platform/migrations/testdata/035_mobile_sessions.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := conn.Exec(ctx, string(mobileSQL)); err != nil {
-		t.Fatal(err)
-	}
 	for _, query := range []string{
 		`INSERT INTO users(id,github_login,display_name,kind,created_at,last_login_at) VALUES('usr_owner','timeStarry','Owner','human',now(),now())`,
 		`INSERT INTO spaces(id,name,slug,created_by,created_at) VALUES('spc_default','Test','test','usr_owner',now())`,

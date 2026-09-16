@@ -1,5 +1,25 @@
 [
   {
+    "version": "0.20.0",
+    "releasedAt": "2026-09-16",
+    "title": "Android 内部测试版接入",
+    "summary": "Android 内部测试版支持 GitHub 登录共享空间，并可查看版本与更新提示。",
+    "sections": [
+      {
+        "title": "登录与使用",
+        "items": [
+          { "title": "登录共享空间", "description": "已有成员可直接使用 GitHub 登录，新成员可先填写空间邀请链接。重新打开应用时保持有效登录状态，也可主动退出登录。", "location": "Android 内部测试版 -> 登录 -> 使用 GitHub 登录" }
+        ]
+      },
+      {
+        "title": "版本与更新",
+        "items": [
+          { "title": "查看更新提示", "description": "在应用中查看当前版本和更新提示，按提示前往下载页面获取安装包。", "location": "Android 内部测试版 -> 更新提示" }
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.19.3",
     "releasedAt": "2026-09-16",
     "title": "兼容性维护",

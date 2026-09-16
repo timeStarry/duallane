@@ -13,6 +13,16 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.20.0",
+    releasedAt: "2026-09-16",
+    title: "Android 内部测试版接入",
+    summary: "Android 内部测试版支持 GitHub 登录共享空间，并可查看版本与更新提示。",
+    categories: [
+      { title: "登录与使用", items: ["已有成员可在 Android 内部测试版中直接使用 GitHub 登录，新成员可填写空间邀请链接", "重新打开应用时保持有效登录状态，也可主动退出登录"] },
+      { title: "版本与更新", items: ["在应用中查看当前版本和更新提示，按提示前往下载页面获取安装包"] }
+    ]
+  },
+  {
     version: "0.19.3",
     releasedAt: "2026-09-16",
     title: "兼容性维护",
