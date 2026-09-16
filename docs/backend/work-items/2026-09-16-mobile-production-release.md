@@ -70,6 +70,21 @@ release notes explain the resulting loss of local app state.
 
 ## Validation and activation record
 
-Bridge code checks, immutable image rehearsal, production activation and final
-mobile API verification are pending. Append evidence only after each operation
+- The 0.19.3 bridge was merged through
+  [PR17](https://github.com/timeStarry/duallane/pull/17) at
+  `dbd41969f9952523b1ca570773c7857c2f9b4341`.
+  All four required jobs in
+  [CI run 35115555945](https://github.com/timeStarry/duallane/actions/runs/35115555945)
+  passed. The real immutable-image coordinator rehearsal also passed, including
+  the complete upgrade and exact-image recovery cycle on disposable data.
+- The separate 0.20.0 change restores the reviewed 035 SQL to the canonical
+  migration directory byte for byte, retains the bridge fixture and compatibility
+  checks, and reconnects the mobile authentication and public release-policy
+  handlers. Mobile PostgreSQL tests now use the canonical migration runner.
+- Bridge production activation is in progress. The 0.20.0 release still requires
+  its own validation, the real schema-34-to-35 upgrade and exact bridge-image
+  rollback rehearsal, a successful bridge production snapshot, and final public
+  mobile API verification. No service activation is claimed by this record.
+
+Append exact deployment and validation evidence only after each operation
 completes successfully. Package distribution alone is not service activation.
