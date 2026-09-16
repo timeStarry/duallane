@@ -108,6 +108,19 @@ func TestPGFilesServiceUsesIsolatedSchemaAndAtomicStorageLifecycle(t *testing.T)
 	if completed.Attachment == nil || completed.Attachment.Status != string(AttachmentAvailable) {
 		t.Fatalf("complete result = %#v", completed)
 	}
+	for i := 0; i < 2; i++ {
+		recovered, statusErr := service.GetUploadStatus(ctx, UploadStatusInput{ActorID: "usr_file_owner", UploadID: reserved.ID})
+		if statusErr != nil || recovered.Status != "completed" || recovered.Attachment == nil || recovered.Attachment.ID != completed.Attachment.ID || recovered.Attachment.ByteSize != 5 || len(recovered.Parts) != 0 {
+			t.Fatalf("recover lost completion = %#v, err = %v", recovered, statusErr)
+		}
+	}
+	if _, statusErr := service.GetUploadStatus(ctx, UploadStatusInput{ActorID: "usr_file_member", UploadID: reserved.ID}); errorCode(statusErr) != CodeUploadInvalid {
+		t.Fatalf("other member recovered owned upload: %v", statusErr)
+	}
+	used, err := repository.UsedTransferBytes(ctx, DefaultSpaceID, "usr_file_owner", dayStart(now))
+	if err != nil || used != 5 {
+		t.Fatalf("recovery changed upload accounting: used = %d, err = %v", used, err)
+	}
 	attachment, err := repository.GetAttachment(ctx, DefaultSpaceID, completed.Attachment.ID)
 	if err != nil || attachment == nil || attachment.StorageObject == nil {
 		t.Fatalf("registered attachment = %#v, err = %v", attachment, err)

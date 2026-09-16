@@ -598,6 +598,18 @@ Rules:
 - The status endpoint returns received part numbers and hashes so the browser
   can skip parts already accepted during the current upload task. Part activity
   refreshes the stale reservation deadline.
+- Status responses also include `status: "reserved"`. If completion succeeded
+  but its response was lost, the same GET returns `status: "completed"`, the
+  original public `attachment` with `status: "available"`, and `parts: []`.
+  `uploadId`, `mode`, `partSize`, and `partCount` remain present. Clients verify
+  the upload and attachment identities before marking their local task complete;
+  they must not reserve a second upload or retransmit completed content.
+  Recovery is read-only and does not change transfer quota, events or audit
+  records. Only the currently active uploader may recover their own task;
+  current conversation/topic access and the original transfer-to-attachment
+  binding are required. Removed/failed files and other users' uploads retain
+  the existing safe `upload.invalid` rejection. PUT and `complete` still require
+  a reserved transfer with a pending attachment.
 - Actual stored size must match the reservation.
 - `complete` with `{ "mode": "chunked" }` fails if any part is missing, then
   assembles parts in order and verifies the final object before marking it

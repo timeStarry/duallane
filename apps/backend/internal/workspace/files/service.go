@@ -919,18 +919,29 @@ func uploadLockKey(uploadID string) string {
 }
 
 func (s *Service) loadOwnedUpload(ctx context.Context, repo ReadRepository, actorID, uploadID string) (*TransferRecord, *AttachmentRecord, error) {
+	transfer, attachment, err := s.loadUploaderRecords(ctx, repo, actorID, uploadID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if transfer.Status != string(TransferReserved) || attachment.Status != string(AttachmentPending) {
+		return nil, nil, uploadInvalidError()
+	}
+	return transfer, attachment, nil
+}
+
+func (s *Service) loadUploaderRecords(ctx context.Context, repo ReadRepository, actorID, uploadID string) (*TransferRecord, *AttachmentRecord, error) {
 	transfer, err := repo.GetTransfer(ctx, s.space(), actorID, uploadID, TransferUpload)
 	if err != nil {
 		return nil, nil, normalizeRepositoryError(err)
 	}
-	if transfer == nil || transfer.Status != string(TransferReserved) || transfer.AttachmentID == nil || *transfer.AttachmentID == "" {
+	if transfer == nil || transfer.AttachmentID == nil || *transfer.AttachmentID == "" {
 		return nil, nil, uploadInvalidError()
 	}
 	attachment, err := repo.GetAttachment(ctx, s.space(), *transfer.AttachmentID)
 	if err != nil {
 		return nil, nil, normalizeRepositoryError(err)
 	}
-	if attachment == nil || attachment.UploaderID != actorID || attachment.Status != string(AttachmentPending) || attachment.UploadTransferID != transfer.ID {
+	if attachment == nil || attachment.UploaderID != actorID || attachment.UploadTransferID != transfer.ID {
 		return nil, nil, uploadInvalidError()
 	}
 	return transfer, attachment, nil
@@ -945,13 +956,44 @@ func (s *Service) GetUploadStatus(ctx context.Context, input UploadStatusInput) 
 	if uploadID == "" {
 		return UploadStatus{}, uploadInvalidError()
 	}
-	transfer, _, err := s.loadOwnedUpload(ctx, s.repo, actor.ID, uploadID)
+	transfer, attachment, err := s.loadUploaderRecords(ctx, s.repo, actor.ID, uploadID)
 	if err != nil {
 		return UploadStatus{}, err
+	}
+	if transfer.Status == string(TransferReserved) && attachment.Status == string(AttachmentAvailable) {
+		// Completion can commit between the two reads. Once the available
+		// attachment is visible, re-read its atomically completed transfer.
+		transfer, attachment, err = s.loadUploaderRecords(ctx, s.repo, actor.ID, uploadID)
+		if err != nil {
+			return UploadStatus{}, err
+		}
 	}
 	mode, partCount, err := uploadContract(transfer.ByteSize)
 	if err != nil {
 		return UploadStatus{}, err
+	}
+	result := UploadStatus{Status: transfer.Status, UploadID: uploadID, Mode: mode, PartSize: UploadPartSize, PartCount: partCount, Parts: []UploadPartRecord{}}
+	if transfer.Status == string(TransferCompleted) && attachment.Status == string(AttachmentAvailable) {
+		visible, _, visibilityErr := s.attachmentVisible(ctx, s.repo, actor, *attachment)
+		if visibilityErr != nil {
+			return UploadStatus{}, visibilityErr
+		}
+		// Recovery is still a resource read: upload ownership cannot restore
+		// access after the uploader has left the destination conversation.
+		if visible && attachment.Visibility == string(VisibilityConversation) && attachment.ConversationID != nil {
+			visible, err = s.repo.ConversationMemberActive(ctx, s.space(), *attachment.ConversationID, actor.ID)
+			if err != nil {
+				return UploadStatus{}, normalizeRepositoryError(err)
+			}
+		}
+		if !visible {
+			return UploadStatus{}, uploadInvalidError()
+		}
+		result.Attachment = ptrAttachment(projectAttachment(*attachment, actor))
+		return result, nil
+	}
+	if transfer.Status != string(TransferReserved) || attachment.Status != string(AttachmentPending) {
+		return UploadStatus{}, uploadInvalidError()
 	}
 	parts, err := s.repo.ListUploadParts(ctx, uploadID)
 	if err != nil {
@@ -961,7 +1003,8 @@ func (s *Service) GetUploadStatus(ctx context.Context, input UploadStatusInput) 
 		parts = make([]UploadPartRecord, 0)
 	}
 	sort.Slice(parts, func(i, j int) bool { return parts[i].PartNumber < parts[j].PartNumber })
-	return UploadStatus{UploadID: uploadID, Mode: mode, PartSize: UploadPartSize, PartCount: partCount, Parts: parts}, nil
+	result.Parts = parts
+	return result, nil
 }
 
 func (s *Service) UploadContent(ctx context.Context, actorID, uploadID string, content io.Reader, meta auth.RequestMeta) (UploadResult, error) {
