@@ -16,7 +16,7 @@ single-writer rules remain unchanged. No production data enters rehearsals.
 
 ## Verified starting point
 
-- The active production release is 0.19.2, commit
+- The production release at the start of this task was 0.19.2, commit
   `182a6bf95b5ec8eba2974852590dd3541ec6ca50`, with schema 34.
 - The previous successful private snapshot is
   `backups/production/duallane-20260912T101017Z-182a6bf95b5e.recovery.go-compose.snapshot.json`.
@@ -81,10 +81,85 @@ release notes explain the resulting loss of local app state.
   migration directory byte for byte, retains the bridge fixture and compatibility
   checks, and reconnects the mobile authentication and public release-policy
   handlers. Mobile PostgreSQL tests now use the canonical migration runner.
-- Bridge production activation is in progress. The 0.20.0 release still requires
-  its own validation, the real schema-34-to-35 upgrade and exact bridge-image
-  rollback rehearsal, a successful bridge production snapshot, and final public
-  mobile API verification. No service activation is claimed by this record.
+- Production 0.19.3 completed successfully on 2026-09-17 (local date), at the
+  exact PR17 merge commit above. All four application containers were healthy;
+  the guarded gateway smoke passed all 13 checks. The new verified snapshot is
+  `backups/production/duallane-20260916T160548Z-dbd41969f995.recovery.go-compose.snapshot.json`.
+  The snapshot and three sidecars are root-owned regular mode-0600 files. Its
+  reader verified schema 34, version 0.19.3 and the exact commit.
+- [PR18](https://github.com/timeStarry/duallane/pull/18) merged the 0.20.0
+  activation at `ce7f1619c61dc515e50c6bc16a6d63cae0369536`. The merge tree is
+  identical to tested head `7bae680ecd635f8f1f3a8e983b76b2d663049782`.
+  All four jobs in
+  [CI run 35118197248](https://github.com/timeStarry/duallane/actions/runs/35118197248)
+  passed. Local pnpm tests/lint/build, 34 focused Node checks, and Go 1.26.8 /
+  PostgreSQL 17.11 full-package race/integration tests plus vet also passed.
+- The final real-image rehearsal used the actual production 0.19.3 images,
+  verified by their original config digests after transfer. It passed with
+  `DUALLANE_RELEASE_COORDINATOR_EXPECT_SCHEMA_034_TO_035=true`: schema 34 to 35,
+  successful 0.20.0 activation and gateway smoke, then exact production bridge
+  image recovery on the same disposable database. An independent read-only
+  probe confirmed that the recovered database still had all 35 migrations,
+  including 035. Final historical fixture recovery and owned-resource cleanup
+  passed; all 13 pre-existing test-host containers retained their identities and
+  running states. The complete test returned exit 0, 1/1 passed, no skips, in
+  632.775 seconds.
 
-Append exact deployment and validation evidence only after each operation
-completes successfully. Package distribution alone is not service activation.
+## Build transport during this activation
+
+The server could not reach the default Go module proxy, so the guarded builds
+used the existing `DUALLANE_GO_BUILD_PROXY=https://goproxy.cn,direct` and
+`DUALLANE_DEBIAN_BUILD_MIRROR=https://mirrors.ustc.edu.cn` inputs. Go checksum
+verification, pinned base images and package versions were retained.
+
+The pinned pnpm 10.30.3 downloader could wait indefinitely for a response body
+after receiving headers. A temporary CONNECT transport, restricted to
+`registry.npmjs.org:443`, closed connections after 30 seconds of inactivity or
+180 seconds total so the original downloader could retry. TLS remained end to
+end. Only `docker compose build` received the predefined proxy build arguments;
+the Dockerfiles, lockfile, application runtime environment, daemon and production
+network configuration were unchanged. A running Workspace container was checked
+to confirm the build proxy was absent. The guarded coordinator retained the
+same candidate, schema, authority, fence, drain, smoke and snapshot checks.
+
+The temporary download helpers were stopped after validation and deployment;
+all four production application containers were checked to have no build proxy
+configuration and no restarts.
+
+## Final production activation
+
+The guarded 0.20.0 deployment completed with exit 0 on 2026-09-17 (local date),
+using the exact merge commit `ce7f1619c61dc515e50c6bc16a6d63cae0369536` and
+the successful 0.19.3 snapshot above. The new successful snapshot is
+`backups/production/duallane-20260916T162556Z-ce7f1619c61d.recovery.go-compose.snapshot.json`.
+It and all three sidecars are root-owned regular mode-0600 files; the snapshot
+reader verified schema 35, version 0.20.0 and the exact commit. The authoritative
+PostgreSQL and object-store identities were retained.
+
+All four application containers were healthy with the expected version/revision.
+The production image IDs are:
+
+| Service | Image ID |
+| --- | --- |
+| P2P | `sha256:959ad79e17da91e2295100f7123891997cf867043c7753b88ed388d36f39e53e` |
+| Workspace, worker, migrate | `sha256:07439bbc5b13f83e3ebff75e3f1003025b506443eb3de39226b345ddd8261163` |
+| Web | `sha256:60f126e586b832d2642f307ad0344acf789ecc17450eb2e2e59e98e48bc4002a` |
+
+The guarded gateway smoke passed all 13 checks. Additional HTTPS checks used
+the production domain/SNI and verified certificate through the existing tailnet
+gateway. They confirmed the 0.20.0 health response, anonymous Workspace denial,
+mobile release policy, protocol compatibility and the exact published APK URL.
+Latest/minimum remain 0.1.0 / code 1 with recommendation `none`.
+
+A fresh PKCE start request successfully reached the mobile flow repository,
+returned the correct HTTPS authorization origin with `no-store`, and redirected
+to GitHub with the configured HTTPS callback. The mobile-flow cookie retained
+Secure and HttpOnly. The probe did not follow the GitHub account login or mint
+a user session; its pending flow expires within ten minutes. No flow value,
+OAuth state, cookie, credential or production user data was retained in the
+verification report. Real-account login, physical-device background notifications
+and OTA remain outside this verification.
+
+The public APK/AAB asset sizes and SHA-256 values were rechecked against the
+tested files. This documentation-only evidence update does not require another
+runtime deployment or change the deployed commit above.
