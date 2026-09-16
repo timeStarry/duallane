@@ -37,6 +37,7 @@ type MobileRepository interface {
 	Rotate(context.Context, string, *MobileTokens, time.Time) error
 	Revoke(context.Context, string, time.Time) error
 	Resolve(context.Context, string, time.Time) (*Actor, error)
+	RecordRejection(context.Context, string, RequestMeta, time.Time) error
 }
 type MobileService struct {
 	Repository MobileRepository
@@ -58,6 +59,18 @@ func (s *MobileService) tokens() (MobileTokens, error) {
 }
 func mobileInvalid() error {
 	return NewError("auth.mobile_invalid", "登录已失效，请重试", http.StatusUnauthorized)
+}
+
+func (h *HTTPHandler) writeMobileError(w http.ResponseWriter, r *http.Request, operation string, err error) {
+	if !errors.Is(err, errMobileInvalid) {
+		writeError(w, wrapInternal("mobile "+operation, err))
+		return
+	}
+	if auditErr := h.Mobile.Repository.RecordRejection(r.Context(), operation, RequestMetaFromRequest(r, h.TrustProxy), h.Mobile.now()); auditErr != nil {
+		writeError(w, wrapInternal("record mobile rejection", auditErr))
+		return
+	}
+	writeError(w, mobileInvalid())
 }
 func verifyPKCE(verifier, challenge string) bool {
 	if !pkceVerifierPattern.MatchString(verifier) {
@@ -104,7 +117,7 @@ func (h *HTTPHandler) HandleMobileStart(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if body.RedirectURI != MobileRedirectURI || !challengePattern.MatchString(body.CodeChallenge) || len(body.State) < 16 || len(body.State) > 128 || containsControl(body.State) {
-		writeError(w, mobileInvalid())
+		h.writeMobileError(w, r, "start", errMobileInvalid)
 		return
 	}
 	flowID, err := NewSessionToken()
@@ -133,24 +146,29 @@ func (h *HTTPHandler) HandleMobileAuthorize(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	flowID := r.URL.Query().Get("flow")
-	if _, err := h.Mobile.Repository.GetFlow(r.Context(), flowID, h.Mobile.now()); err != nil {
-		writeError(w, mobileInvalid())
+	if !challengePattern.MatchString(flowID) {
+		h.writeMobileError(w, r, "authorize", errMobileInvalid)
 		return
 	}
-	cookie := OAuthCookie(mobileFlowCookie, flowID, RequestIsSecure(r, h.TrustProxy), time.Time{})
-	cookie.MaxAge = 600
-	setCookie(w, cookie)
+	if _, err := h.Mobile.Repository.GetFlow(r.Context(), flowID, h.Mobile.now()); err != nil {
+		h.writeMobileError(w, r, "authorize", err)
+		return
+	}
 	// The existing provider flow owns its state cookie and invite checks.
-	h.HandleGitHubStart(w, r)
+	h.startGitHub(w, r, flowID)
 }
-func (h *HTTPHandler) completeMobile(w http.ResponseWriter, r *http.Request, actor *Actor) bool {
+func (h *HTTPHandler) completeMobile(w http.ResponseWriter, r *http.Request, actor *Actor, oauthState string) bool {
 	cookie, err := r.Cookie(mobileFlowCookie)
 	if err != nil {
 		return false
 	}
-	setCookie(w, ClearOAuthCookie(mobileFlowCookie, RequestIsSecure(r, h.TrustProxy)))
-	if h.Mobile == nil {
+	if h.Mobile == nil || h.Mobile.Repository == nil {
 		writeError(w, mobileInvalid())
+		return true
+	}
+	flowID, stateHash, ok := strings.Cut(cookie.Value, ".")
+	if !ok || oauthState == "" || !EqualSecret(stateHash, HashSecret(oauthState)) {
+		h.writeMobileError(w, r, "callback", errMobileInvalid)
 		return true
 	}
 	code, err := NewSessionToken()
@@ -158,9 +176,9 @@ func (h *HTTPHandler) completeMobile(w http.ResponseWriter, r *http.Request, act
 		writeError(w, wrapInternal("mobile code", err))
 		return true
 	}
-	flow, err := h.Mobile.Repository.AuthorizeFlow(r.Context(), cookie.Value, actor.ID, HashSecret(code), h.Mobile.now())
+	flow, err := h.Mobile.Repository.AuthorizeFlow(r.Context(), flowID, actor.ID, HashSecret(code), h.Mobile.now())
 	if err != nil {
-		writeError(w, mobileInvalid())
+		h.writeMobileError(w, r, "callback", err)
 		return true
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -180,8 +198,8 @@ func (h *HTTPHandler) HandleMobileExchange(w http.ResponseWriter, r *http.Reques
 		writeError(w, err)
 		return
 	}
-	if body.RedirectURI != MobileRedirectURI || len(body.Code) > 128 || !pkceVerifierPattern.MatchString(body.CodeVerifier) {
-		writeError(w, mobileInvalid())
+	if body.RedirectURI != MobileRedirectURI || !challengePattern.MatchString(body.Code) || !pkceVerifierPattern.MatchString(body.CodeVerifier) {
+		h.writeMobileError(w, r, "exchange", errMobileInvalid)
 		return
 	}
 	tokens, err := h.Mobile.tokens()
@@ -189,8 +207,7 @@ func (h *HTTPHandler) HandleMobileExchange(w http.ResponseWriter, r *http.Reques
 		err = h.Mobile.Repository.Exchange(r.Context(), HashSecret(body.Code), body.CodeVerifier, body.RedirectURI, tokens, h.Mobile.now())
 	}
 	if err != nil {
-		_ = h.Service.RecordGitHubLoginRejection(r.Context(), "exchange", RequestMetaFromRequest(r, h.TrustProxy))
-		writeError(w, mobileInvalid())
+		h.writeMobileError(w, r, "exchange", err)
 		return
 	}
 	writeJSON(w, 200, tokens)
@@ -206,8 +223,8 @@ func (h *HTTPHandler) HandleMobileRefresh(w http.ResponseWriter, r *http.Request
 		writeError(w, err)
 		return
 	}
-	if len(body.RefreshToken) < 16 || len(body.RefreshToken) > 128 {
-		writeError(w, mobileInvalid())
+	if !challengePattern.MatchString(body.RefreshToken) {
+		h.writeMobileError(w, r, "refresh", errMobileInvalid)
 		return
 	}
 	tokens, err := h.Mobile.tokens()
@@ -215,8 +232,7 @@ func (h *HTTPHandler) HandleMobileRefresh(w http.ResponseWriter, r *http.Request
 		err = h.Mobile.Repository.Rotate(r.Context(), HashSecret(body.RefreshToken), &tokens, h.Mobile.now())
 	}
 	if err != nil {
-		_ = h.Service.RecordGitHubLoginRejection(r.Context(), "exchange", RequestMetaFromRequest(r, h.TrustProxy))
-		writeError(w, mobileInvalid())
+		h.writeMobileError(w, r, "refresh", err)
 		return
 	}
 	writeJSON(w, 200, tokens)
@@ -232,8 +248,8 @@ func (h *HTTPHandler) HandleMobileLogout(w http.ResponseWriter, r *http.Request)
 		writeError(w, err)
 		return
 	}
-	if len(body.RefreshToken) > 128 {
-		writeError(w, mobileInvalid())
+	if !challengePattern.MatchString(body.RefreshToken) {
+		h.writeMobileError(w, r, "logout", errMobileInvalid)
 		return
 	}
 	if err := h.Mobile.Repository.Revoke(r.Context(), HashSecret(body.RefreshToken), h.Mobile.now()); err != nil {
