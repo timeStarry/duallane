@@ -52,6 +52,7 @@ export function createDevProxy(environment = process.env) {
   return {
     "^/api/p2p(?:/|\\?|$)": p2pOrigin,
     "^/api/auth(?:/|\\?|$)": workspaceOrigin,
+    "^/api/mobile/release-policy(?:\\?.*)?$": workspaceOrigin,
     "^/api/workspace(?:/|\\?|$)": workspaceOrigin,
     "^/api/bot-gateway(?:/|\\?|$)": workspaceOrigin,
     "^/api/health(?:\\?.*)?$": workspaceOrigin,
