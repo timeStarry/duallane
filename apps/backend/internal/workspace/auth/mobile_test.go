@@ -54,6 +54,27 @@ func mobileTestHandler() (*HTTPHandler, *mobileTestRepository) {
 		Mobile: &MobileService{Repository: repository}, PublicBaseURL: "https://duallane.example.test"}), repository
 }
 
+func TestMobileHandlersRejectDeferredBridgeWithoutRepository(t *testing.T) {
+	handler, _ := mobileTestHandler()
+	handler.Mobile = nil
+	for name, handle := range map[string]http.HandlerFunc{
+		"start": handler.HandleMobileStart, "authorize": handler.HandleMobileAuthorize,
+		"exchange": handler.HandleMobileExchange, "refresh": handler.HandleMobileRefresh,
+		"logout": handler.HandleMobileLogout,
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handle(response, httptest.NewRequest(http.MethodPost, "/api/auth/mobile/"+name, strings.NewReader(`{}`)))
+			if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), `"mobile.not_configured"`) {
+				t.Fatalf("deferred mobile handler: status=%d", response.Code)
+			}
+			if response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatal("deferred mobile response must not be cached")
+			}
+		})
+	}
+}
+
 func applyMobileTestCookies(jar map[string]*http.Cookie, response *httptest.ResponseRecorder) {
 	for _, cookie := range response.Result().Cookies() {
 		if cookie.MaxAge < 0 {

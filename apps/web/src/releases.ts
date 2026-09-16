@@ -13,6 +13,15 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.19.3",
+    releasedAt: "2026-09-16",
+    title: "兼容性维护",
+    summary: "改善文件重试时的恢复，已有聊天、文件和个人设置继续可用。",
+    categories: [
+      { title: "文件与聊天", items: ["已完成的文件上传可以恢复原有结果，重试时避免重复占用容量", "继续从原有入口使用聊天、文件和个人设置"] }
+    ]
+  },
+  {
     version: "0.19.2",
     releasedAt: "2026-09-12",
     title: "更顺手的会话导航",

@@ -12,10 +12,12 @@ import (
 )
 
 const (
-	ReleaseCompatibilityPolicyVersion   = 1
-	ReleaseCompatibilityBaseMigration   = "033_workspace_command_result_finalization.sql"
-	ReleaseCompatibilityMigrationName   = "034_workspace_chat_auto_hide.sql"
-	ReleaseCompatibilityMigrationSHA256 = "b5c6ed855f9ca76a06f14ac590a8dd96fdec9cd2ec88c75dc5814990669658cb"
+	ReleaseCompatibilityPolicyVersion         = 1
+	ReleaseCompatibilityBaseMigration         = "033_workspace_command_result_finalization.sql"
+	ReleaseCompatibilityMigrationName         = "034_workspace_chat_auto_hide.sql"
+	ReleaseCompatibilityMigrationSHA256       = "b5c6ed855f9ca76a06f14ac590a8dd96fdec9cd2ec88c75dc5814990669658cb"
+	ReleaseCompatibilityMobileMigrationName   = "035_mobile_sessions.sql"
+	ReleaseCompatibilityMobileMigrationSHA256 = "479d042a0a5f4d07886d3557901b5d8152b8714fe9dfeeceddfba94121e58061"
 
 	maxReleaseCompatibilityPolicyBytes = 16 << 10
 	maxReleaseCompatibilityJSONDepth   = 32
@@ -150,16 +152,20 @@ func validateReleaseCompatibilityPolicy(policy CompatibilityPolicy) error {
 	if policy.BaseMigration != ReleaseCompatibilityBaseMigration || !IsCanonicalName(policy.BaseMigration) {
 		return fmt.Errorf("%w: base migration is not the reviewed canonical baseline", ErrInvalidCompatibilityPolicy)
 	}
-	if len(policy.CompatibleMigrations) != 1 {
-		return fmt.Errorf("%w: compatibility allow-list must contain exactly one migration", ErrInvalidCompatibilityPolicy)
+	if len(policy.CompatibleMigrations) != 1 && len(policy.CompatibleMigrations) != 2 {
+		return fmt.Errorf("%w: compatibility allow-list is not a reviewed sequence", ErrInvalidCompatibilityPolicy)
+	}
+	reviewed := [...]CompatibleMigration{
+		{Name: ReleaseCompatibilityMigrationName, SHA256: ReleaseCompatibilityMigrationSHA256},
+		{Name: ReleaseCompatibilityMobileMigrationName, SHA256: ReleaseCompatibilityMobileMigrationSHA256},
 	}
 	seen := make(map[string]struct{}, len(policy.CompatibleMigrations))
-	for _, migration := range policy.CompatibleMigrations {
+	for index, migration := range policy.CompatibleMigrations {
 		if _, exists := seen[migration.Name]; exists {
 			return fmt.Errorf("%w: compatible migration names are duplicated", ErrInvalidCompatibilityPolicy)
 		}
 		seen[migration.Name] = struct{}{}
-		if !IsCanonicalName(migration.Name) || migration.Name != ReleaseCompatibilityMigrationName {
+		if !IsCanonicalName(migration.Name) || migration.Name != reviewed[index].Name {
 			return fmt.Errorf("%w: compatible migration name is not reviewed", ErrInvalidCompatibilityPolicy)
 		}
 		if len(migration.SHA256) != sha256.Size*2 || migration.SHA256 != strings.ToLower(migration.SHA256) {
@@ -170,7 +176,7 @@ func validateReleaseCompatibilityPolicy(policy CompatibilityPolicy) error {
 				return fmt.Errorf("%w: compatible migration SHA-256 has an invalid format", ErrInvalidCompatibilityPolicy)
 			}
 		}
-		if migration.SHA256 != ReleaseCompatibilityMigrationSHA256 {
+		if migration.SHA256 != reviewed[index].SHA256 {
 			return fmt.Errorf("%w: compatible migration SHA-256 is not reviewed", ErrInvalidCompatibilityPolicy)
 		}
 	}
@@ -216,6 +222,21 @@ func isCanonicalReleaseCompatibilityBaseline(required []string) bool {
 		}
 	}
 	return required[len(required)-1] == ReleaseCompatibilityBaseMigration
+}
+
+// Each exception applies only to its exact preceding canonical history. Keeping
+// the historical policy readable does not make a schema-33 binary support 035.
+func (policy CompatibilityPolicy) allowsAfter(required []string, name string) bool {
+	if !policy.allows(name) {
+		return false
+	}
+	if isCanonicalReleaseCompatibilityBaseline(required) {
+		return name == ReleaseCompatibilityMigrationName
+	}
+	return len(required) == len(canonicalReleaseCompatibilityBaseline)+1 &&
+		required[len(required)-1] == ReleaseCompatibilityMigrationName &&
+		isCanonicalReleaseCompatibilityBaseline(required[:len(required)-1]) &&
+		name == ReleaseCompatibilityMobileMigrationName
 }
 
 func rejectDuplicateJSONMembers(data []byte) error {

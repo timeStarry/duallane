@@ -34,6 +34,8 @@ export const CONTAINER_PIDS_LIMIT = 32;
 export const REVIEWED_BASE_MIGRATION = "033_workspace_command_result_finalization.sql";
 export const REVIEWED_COMPATIBLE_MIGRATION = "034_workspace_chat_auto_hide.sql";
 export const REVIEWED_COMPATIBLE_MIGRATION_SHA256 = "b5c6ed855f9ca76a06f14ac590a8dd96fdec9cd2ec88c75dc5814990669658cb";
+export const REVIEWED_MOBILE_MIGRATION = "035_mobile_sessions.sql";
+export const REVIEWED_MOBILE_MIGRATION_SHA256 = "479d042a0a5f4d07886d3557901b5d8152b8714fe9dfeeceddfba94121e58061";
 
 const INSPECTION_REPORT_HEADER = "DLSCHEMA\t1";
 const INSPECTION_REPORT_END = "P_END";
@@ -898,9 +900,15 @@ function validatePolicy(input, migrations, scope) {
   const baseNumber = migrationNumber(policy.baseMigration, `${scope}_policy_base_invalid`);
   const migrationByName = new Map(migrations.map((migration) => [migration.name, migration]));
   if (!migrationByName.has(policy.baseMigration)) reject(`${scope}_policy_base_missing`);
-  if (!Array.isArray(policy.compatibleMigrations) || policy.compatibleMigrations.length !== 1) {
+  // Accept the immutable historical policy and this bridge's exact extension.
+  // New SQL is still authorized only by the previous image's own declaration.
+  if (!Array.isArray(policy.compatibleMigrations) || ![1, 2].includes(policy.compatibleMigrations.length)) {
     reject(`${scope}_policy_compatible_invalid`);
   }
+  const reviewed = [
+    { name: REVIEWED_COMPATIBLE_MIGRATION, sha256: REVIEWED_COMPATIBLE_MIGRATION_SHA256 },
+    { name: REVIEWED_MOBILE_MIGRATION, sha256: REVIEWED_MOBILE_MIGRATION_SHA256 },
+  ];
 
   const compatible = [];
   const compatibleByName = new Map();
@@ -914,8 +922,8 @@ function validatePolicy(input, migrations, scope) {
     const number = migrationNumber(item.name, `${scope}_policy_compatible_name_invalid`);
     assertSHA256(item.sha256, `${scope}_policy_compatible_hash_invalid`);
     if (
-      item.name !== REVIEWED_COMPATIBLE_MIGRATION ||
-      item.sha256 !== REVIEWED_COMPATIBLE_MIGRATION_SHA256 ||
+      item.name !== reviewed[index].name ||
+      item.sha256 !== reviewed[index].sha256 ||
       number !== baseNumber + index + 1
     ) {
       reject(`${scope}_policy_sequence_invalid`);
@@ -939,6 +947,11 @@ function validatePolicy(input, migrations, scope) {
     if (!authorized || authorized.sha256 !== migration.sha256) {
       reject(`${scope}_policy_inventory_mismatch`);
     }
+  }
+  // The Go bridge binds 035 compatibility to the exact 001-034 required set.
+  // A schema-33 image cannot claim 035 merely by carrying the extended JSON.
+  if (compatible.length === 2 && !migrationByName.has(REVIEWED_COMPATIBLE_MIGRATION)) {
+    reject(`${scope}_policy_mobile_baseline_missing`);
   }
 
   return Object.freeze({

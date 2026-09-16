@@ -1,6 +1,7 @@
 package migrations
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 )
@@ -15,8 +16,70 @@ func TestEmbeddedReleaseCompatibilityPolicyIsReviewedAndBounded(t *testing.T) {
 	if policy.Version != ReleaseCompatibilityPolicyVersion || policy.BaseMigration != ReleaseCompatibilityBaseMigration {
 		t.Fatalf("unexpected embedded policy: %#v", policy)
 	}
-	if len(policy.CompatibleMigrations) != 1 || policy.CompatibleMigrations[0].Name != ReleaseCompatibilityMigrationName || policy.CompatibleMigrations[0].SHA256 != ReleaseCompatibilityMigrationSHA256 {
+	if len(policy.CompatibleMigrations) != 2 || policy.CompatibleMigrations[0].Name != ReleaseCompatibilityMigrationName || policy.CompatibleMigrations[0].SHA256 != ReleaseCompatibilityMigrationSHA256 || policy.CompatibleMigrations[1].Name != ReleaseCompatibilityMobileMigrationName || policy.CompatibleMigrations[1].SHA256 != ReleaseCompatibilityMobileMigrationSHA256 {
 		t.Fatalf("unexpected compatible migration policy: %#v", policy.CompatibleMigrations)
+	}
+}
+
+func TestReleaseCompatibilityPreservesHistoricalPolicyAuthority(t *testing.T) {
+	t.Parallel()
+	policy, err := EmbeddedReleaseCompatibilityPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline33 := append([]string(nil), canonicalReleaseCompatibilityBaseline[:]...)
+	baseline34 := append(append([]string(nil), baseline33...), ReleaseCompatibilityMigrationName)
+	if !policy.allowsAfter(baseline33, ReleaseCompatibilityMigrationName) || policy.allowsAfter(baseline33, ReleaseCompatibilityMobileMigrationName) || !policy.allowsAfter(baseline34, ReleaseCompatibilityMobileMigrationName) {
+		t.Fatal("bridge exceptions must bind to their exact preceding history")
+	}
+	baseline34[0] = "001_renamed.sql"
+	if policy.allowsAfter(baseline34, ReleaseCompatibilityMobileMigrationName) {
+		t.Fatal("renamed baseline accepted")
+	}
+	policy.CompatibleMigrations = policy.CompatibleMigrations[:1]
+	document, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	historical, err := ParseReleaseCompatibilityPolicy(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if historical.allows(ReleaseCompatibilityMobileMigrationName) || !historical.allows(ReleaseCompatibilityMigrationName) {
+		t.Fatal("reading historical policy widened its authority")
+	}
+}
+
+func TestMobileCompatibilityPolicyRejectsUnreviewedExtensions(t *testing.T) {
+	t.Parallel()
+	for _, change := range []struct {
+		name  string
+		apply func(*CompatibilityPolicy)
+	}{
+		{"changed mobile hash", func(p *CompatibilityPolicy) { p.CompatibleMigrations[1].SHA256 = ReleaseCompatibilityMigrationSHA256 }},
+		{"renamed mobile migration", func(p *CompatibilityPolicy) { p.CompatibleMigrations[1].Name = "035_renamed.sql" }},
+		{"future migration", func(p *CompatibilityPolicy) {
+			p.CompatibleMigrations = append(p.CompatibleMigrations, CompatibleMigration{Name: "036_future.sql", SHA256: ReleaseCompatibilityMobileMigrationSHA256})
+		}},
+		{"missing historical declaration", func(p *CompatibilityPolicy) { p.CompatibleMigrations = p.CompatibleMigrations[1:] }},
+		{"reordered declarations", func(p *CompatibilityPolicy) {
+			p.CompatibleMigrations[0], p.CompatibleMigrations[1] = p.CompatibleMigrations[1], p.CompatibleMigrations[0]
+		}},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			policy, err := EmbeddedReleaseCompatibilityPolicy()
+			if err != nil {
+				t.Fatal(err)
+			}
+			change.apply(&policy)
+			document, err := json.Marshal(policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ParseReleaseCompatibilityPolicy(document); !errors.Is(err, ErrInvalidCompatibilityPolicy) {
+				t.Fatalf("error=%v, want invalid policy", err)
+			}
+		})
 	}
 }
 
