@@ -203,7 +203,7 @@ function WorkspaceTopicCard({
   );
 }
 
-function WorkspaceEchoCard({ card, onRefresh }: { card: WorkspaceCardProjection; onRefresh: () => void }) {
+export function WorkspaceEchoCard({ card, onRefresh }: { card: WorkspaceCardProjection; onRefresh: () => void }) {
   const [payload, setPayload] = useState(card.payload);
   const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>(stringArray(card.payload.selectedOptionIds));
   const [action, setAction] = useState("");
@@ -264,7 +264,7 @@ function WorkspaceEchoCard({ card, onRefresh }: { card: WorkspaceCardProjection;
         <small>{kind}{publicId ? ` · ${publicId}` : ""}</small>
         <strong>{title}</strong>
         {summary && <span>{summary}</span>}
-        <em>{itemCount === null ? echoStateLabel(state) : `${itemCount} 条记录`}</em>
+        <em>{itemCount === null ? echoStateLabel(state, isRequirement ? stringValue(payload.archiveOutcome) : "") : `${itemCount} 条记录`}</em>
       </span>
       {isSolicitation && status === "open" && card.actions.includes("vote") && (
         <div className="workspace-card-choice-list" aria-label={stringValue(payload.question) || "选择投票选项"}>
@@ -346,13 +346,22 @@ function topicStatusLabel(status: string) {
   return status === "open" ? "进行中" : status === "closed" ? "已关闭" : status === "archived" ? "已归档" : status;
 }
 
-function echoStateLabel(state: string) {
+function echoStateLabel(state: string, archiveOutcome: string) {
+  if (state === "archived") {
+    const archivedLabels = new Map([
+      ["implemented", "已实现"],
+      ["rejected", "已驳回"],
+      ["duplicate", "重复提案"],
+      ["withdrawn", "已撤回"],
+      ["cancelled", "已取消"]
+    ]);
+    return archivedLabels.get(archiveOutcome) ?? "已归档";
+  }
   const labels: Record<string, string> = {
     pending_review: "待处理",
     planned: "已计划",
     in_progress: "进行中",
     delivered: "已交付",
-    archived: "已归档",
     draft: "草稿",
     open: "征集中",
     closed: "已结束",
