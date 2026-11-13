@@ -6,10 +6,15 @@
   "private": true,
   "exports": {
     ".": "./src/index.js",
+    "./v2": {
+      "types": "./src/index.d.ts",
+      "default": "./src/v2.js"
+    },
     "./openclaw": "./src/openclaw.js"
   },
+  "types": "./src/index.d.ts",
   "scripts": {
-    "lint": "node --check src/index.js && node --check src/openclaw.js",
+    "lint": "node --check src/index.js && node --check src/v2.js && node --check src/openclaw.js",
     "test": "node --test"
   },
   "engines": {
