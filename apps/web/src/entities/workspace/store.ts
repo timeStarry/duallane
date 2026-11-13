@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { DualLaneCardKitDocument } from "@duallane/protocol";
 import { apiV1, type ThreadReplyItem, type ThreadViewResponse } from "@/shared/lib/api-v1";
+import { buildDevPreviewFixture } from "./demo-fixture";
 import {
   getWorkspaceSyncCursor,
   loadWorkspaceDrafts,
@@ -72,6 +73,7 @@ export interface DraftEntry {
 }
 
 interface WorkspaceState {
+  isPreviewMode: boolean;
   authStatus: "checking" | "unauthenticated" | "authenticated";
   connectionStatus: "connected" | "reconnecting" | "offline";
   currentUser: V1User | null;
@@ -244,6 +246,7 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
+  isPreviewMode: false,
   authStatus: "checking",
   connectionStatus: "connected",
   currentUser: null,
@@ -266,6 +269,30 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   p2pDraft: "",
 
   bootstrapWorkspace: async () => {
+    if (
+      import.meta.env.DEV &&
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("preview") === "1"
+    ) {
+      const fixture = buildDevPreviewFixture();
+      set({
+        isPreviewMode: true,
+        authStatus: "authenticated",
+        connectionStatus: "connected",
+        currentUser: fixture.currentUser,
+        quotaUsedBytes: fixture.quotaUsedBytes,
+        quotaLimitBytes: fixture.quotaLimitBytes,
+        members: fixture.members,
+        conversations: fixture.conversations,
+        conversationOrder: fixture.conversationOrder,
+        messagesByConv: fixture.messagesByConv,
+        activeConversationId: fixture.activeConversationId,
+        threadsByRootId: fixture.threadsByRootId,
+        drafts: fixture.drafts,
+      });
+      return;
+    }
+
     try {
       const [drafts, scrollTops, raw] = await Promise.all([
         loadWorkspaceDrafts(),
@@ -349,6 +376,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   loadConversationMessages: async (conversationId) => {
+    if (get().isPreviewMode) return;
     try {
       const res = await apiV1.listMessages(conversationId);
       if (!Array.isArray(res.messages)) return;
@@ -380,8 +408,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           }
         : s.conversations,
     }));
-    void get().loadConversationMessages(conversationId);
-    void apiV1.markConversationRead(conversationId).catch(() => {});
+    if (!get().isPreviewMode) {
+      void get().loadConversationMessages(conversationId);
+      void apiV1.markConversationRead(conversationId).catch(() => {});
+    }
   },
 
   jumpToMessage: (conversationId, messageId) => {
@@ -439,6 +469,28 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }));
     get().setDraft(conversationId, "");
 
+    if (get().isPreviewMode) {
+      set((s) => ({
+        messagesByConv: {
+          ...s.messagesByConv,
+          [conversationId]: (s.messagesByConv[conversationId] || []).map((m) =>
+            m.id === tempId ? { ...m, status: "read" } : m
+          ),
+        },
+        conversations: s.conversations[conversationId]
+          ? {
+              ...s.conversations,
+              [conversationId]: {
+                ...s.conversations[conversationId],
+                lastMessageText: text,
+                lastMessageAt: optimistic.createdAt,
+              },
+            }
+          : s.conversations,
+      }));
+      return;
+    }
+
     try {
       const res = await apiV1.sendMessage(conversationId, text, { replyToMessageId: replyToId });
       const msgObj = (res.message || {}) as Record<string, unknown>;
@@ -486,7 +538,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         ),
       },
     }));
-    await apiV1.editMessage(messageId, trimmed);
+    if (!get().isPreviewMode) {
+      await apiV1.editMessage(messageId, trimmed);
+    }
   },
 
   toggleReaction: async (conversationId, messageId, emoji) => {
@@ -508,7 +562,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         }),
       },
     }));
-    await apiV1.reactToMessage(messageId, emoji).catch(() => {});
+    if (!get().isPreviewMode) {
+      await apiV1.reactToMessage(messageId, emoji).catch(() => {});
+    }
   },
 
   togglePinMessage: async (conversationId, messageId) => {
@@ -525,6 +581,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         [conversationId]: { ...conv, pinnedMessageIds: nextPins },
       },
     }));
+    if (get().isPreviewMode) return;
     if (isPinned) {
       await apiV1.unpinMessage(conversationId, messageId);
     } else {
@@ -533,10 +590,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   forwardMessage: async (messageIds, targetConversationId) => {
+    if (get().isPreviewMode) return;
     await apiV1.forwardMessages(messageIds, targetConversationId);
   },
 
   loadThread: async (rootMessageId) => {
+    if (get().isPreviewMode) return;
     const res = await apiV1.getThread(rootMessageId);
     set((s) => ({
       threadsByRootId: {
@@ -547,6 +606,38 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   sendThreadReply: async (rootMessageId, text, alsoSendToChannel) => {
+    if (get().isPreviewMode) {
+      const user = get().currentUser;
+      const convId = get().activeConversationId || "conv_arch";
+      const reply: ThreadReplyItem = {
+        id: `tr_${crypto.randomUUID().slice(0, 8)}`,
+        conversationId: convId,
+        threadRootId: rootMessageId,
+        alsoSendToChannel,
+        authorId: user?.id || "usr_owner_1",
+        authorName: user?.displayName || "我",
+        plainText: text,
+        createdAt: new Date().toISOString(),
+      };
+      set((s) => {
+        const existing = s.threadsByRootId[rootMessageId] || {
+          rootMessageId,
+          replyCount: 0,
+          replies: [],
+        };
+        return {
+          threadsByRootId: {
+            ...s.threadsByRootId,
+            [rootMessageId]: {
+              ...existing,
+              replyCount: existing.replyCount + 1,
+              replies: [...existing.replies, reply],
+            },
+          },
+        };
+      });
+      return;
+    }
     const reply: ThreadReplyItem = await apiV1.replyThread(
       rootMessageId,
       text,
@@ -572,6 +663,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   triggerCardAction: async (cardId, actionId, payload) => {
+    if (get().isPreviewMode) return;
     await apiV1.invokeCardAction(cardId, actionId, payload);
   },
 

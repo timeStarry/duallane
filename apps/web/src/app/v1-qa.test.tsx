@@ -1,8 +1,10 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { DESIGN_TOKENS } from "@duallane/design-tokens";
 import type { DualLaneCardKitDocument } from "@duallane/protocol";
-import { parseBootstrapPayload } from "@/entities/workspace/store";
+import { parseBootstrapPayload, useWorkspaceStore } from "@/entities/workspace/store";
+import { buildDevPreviewFixture } from "@/entities/workspace/demo-fixture";
 import { apiV1 } from "@/shared/lib/api-v1";
 import {
   decryptP2PPayload,
@@ -12,6 +14,27 @@ import {
 } from "@/shared/lib/p2p-lane";
 import { applyVibrancyTokensToRoot } from "@/shared/theme/vibrancy";
 import { DualLaneCardKit } from "@/widgets/DualLaneCardKit";
+import { PrimaryRail } from "@/widgets/PrimaryRail";
+import { ConversationSidebar } from "@/widgets/ConversationSidebar";
+import { TimelinePane } from "@/widgets/TimelinePane";
+import { TooltipProvider } from "@/shared/ui";
+
+function hexLuminance(hex: string): number {
+  const clean = hex.replace("#", "");
+  const r = parseInt(clean.slice(0, 2), 16) / 255;
+  const g = parseInt(clean.slice(2, 4), 16) / 255;
+  const b = parseInt(clean.slice(4, 6), 16) / 255;
+  const toLinear = (c: number) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
+}
+
+function contrastRatio(fgHex: string, bgHex: string): number {
+  const l1 = hexLuminance(fgHex);
+  const l2 = hexLuminance(bgHex);
+  const lighter = Math.max(l1, l2);
+  const darker = Math.min(l1, l2);
+  return (lighter + 0.05) / (darker + 0.05);
+}
 
 describe("DualLane v1.0 QA Acceptance Suite", () => {
   it("encrypts and decrypts P2P AES-256-GCM messages in memory without mutating plaintext", async () => {
@@ -167,6 +190,82 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
       expect(document.documentElement.style.getPropertyValue("--dl-bg")).toBeTruthy();
     } else {
       expect(() => applyVibrancyTokensToRoot("dark", "indigo", "glass", false)).not.toThrow();
+    }
+  });
+
+  it("enforces WCAG AA contrast ratios (>= 4.5:1) across Light and Dark dual-lane tokens", () => {
+    const light = DESIGN_TOKENS.modes.light;
+    const dark = DESIGN_TOKENS.modes.dark;
+
+    // Body text & muted secondary text on surface
+    expect(contrastRatio(light.text, light.surface)).toBeGreaterThanOrEqual(12);
+    expect(contrastRatio(light.muted, light.surface)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(dark.text, dark.surface)).toBeGreaterThanOrEqual(12);
+    expect(contrastRatio(dark.muted, dark.surface)).toBeGreaterThanOrEqual(4.5);
+
+    // Dual-lane bubble text (onShared / onDirect) in both Light & Dark modes (>= 4.5:1 WCAG AA)
+    expect(contrastRatio(light.onShared, light.shared)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(light.onDirect, light.direct)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(dark.onShared, dark.shared)).toBeGreaterThanOrEqual(7.0);
+    expect(contrastRatio(dark.onDirect, dark.direct)).toBeGreaterThanOrEqual(6.5);
+  });
+
+  it("renders PrimaryRail, ConversationSidebar, and TimelinePane with vector icons, consecutive message grouping, and floating hover bar", () => {
+    const fixture = buildDevPreviewFixture();
+    const prevInitial = { ...useWorkspaceStore.getInitialState() };
+    const snapshot = {
+      isPreviewMode: true,
+      authStatus: "authenticated" as const,
+      currentUser: fixture.currentUser,
+      quotaUsedBytes: fixture.quotaUsedBytes,
+      quotaLimitBytes: fixture.quotaLimitBytes,
+      members: fixture.members,
+      conversations: fixture.conversations,
+      conversationOrder: fixture.conversationOrder,
+      messagesByConv: fixture.messagesByConv,
+      activeConversationId: fixture.activeConversationId,
+      threadsByRootId: fixture.threadsByRootId,
+      drafts: fixture.drafts,
+    };
+    Object.assign(useWorkspaceStore.getInitialState(), snapshot);
+    useWorkspaceStore.setState(snapshot);
+
+    try {
+      const railHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <PrimaryRail />
+        </TooltipProvider>
+      );
+      const sidebarHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <ConversationSidebar />
+        </TooltipProvider>
+      );
+      const timelineHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <TimelinePane />
+        </TooltipProvider>
+      );
+
+      // Crisp SVG icons rendered instead of raw OS chrome emojis
+      expect(railHtml).toContain("<svg");
+      expect(railHtml).not.toContain("🏢");
+      expect(railHtml).not.toContain("⚙️");
+
+      // Conversation hierarchy: Saved Messages pinned first, [草稿] preview, @ mention & adaptive unread badge
+      expect(sidebarHtml).toContain("我的收藏");
+      expect(sidebarHtml).toContain("[草稿]");
+      expect(sidebarHtml).toContain("text-dl-on-shared");
+
+      // Timeline UX: adaptive bubble text contrast, floating action pill (-top-3.5), multi-line textarea, grouped messages
+      expect(timelineHtml).toContain("text-dl-on-shared");
+      expect(timelineHtml).not.toContain("bg-dl-lane-shared text-white");
+      expect(timelineHtml).toContain("-top-3.5");
+      expect(timelineHtml).toContain("<textarea");
+      expect(timelineHtml).toContain("3 条线程回复");
+    } finally {
+      Object.assign(useWorkspaceStore.getInitialState(), prevInitial);
+      useWorkspaceStore.setState(prevInitial);
     }
   });
 });

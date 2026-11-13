@@ -18,6 +18,7 @@ export interface LightboxItem {
 
 interface LaneUIState {
   activeLane: LaneId;
+  mobileView: "list" | "chat";
   themeMode: ThemeMode;
   inspectorOpen: boolean;
   inspectorTab: InspectorTab;
@@ -31,6 +32,7 @@ interface LaneUIState {
   lightboxIndex: number;
 
   setActiveLane: (lane: LaneId) => void;
+  setMobileView: (view: "list" | "chat") => void;
   setThemeMode: (mode: ThemeMode) => void;
   openThreadInspector: (rootMessageId: string) => void;
   openDetailsInspector: () => void;
@@ -58,6 +60,7 @@ function applyThemeToDocument(mode: ThemeMode) {
 
 export const useLaneStore = create<LaneUIState>((set) => ({
   activeLane: "workspace",
+  mobileView: "chat",
   themeMode: "system",
   inspectorOpen: false,
   inspectorTab: "details",
@@ -71,6 +74,7 @@ export const useLaneStore = create<LaneUIState>((set) => ({
   lightboxIndex: 0,
 
   setActiveLane: (activeLane) => set({ activeLane }),
+  setMobileView: (mobileView) => set({ mobileView }),
   setThemeMode: (themeMode) => {
     applyThemeToDocument(themeMode);
     set({ themeMode });

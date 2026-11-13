@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { Bot, Palette, QrCode, Smartphone, User } from "lucide-react";
 import type { AccentId, ThemePreference } from "@duallane/design-tokens";
 import type { UserDeviceSummary } from "@duallane/protocol";
 import { useLaneStore, type SettingsTab } from "@/entities/lane/store";
@@ -17,12 +18,12 @@ import {
 import { BotSettingsPanel } from "@/widgets/BotSettingsPanel";
 import { cn } from "@/shared/lib/cn";
 
-const TABS: Array<{ id: SettingsTab; label: string }> = [
-  { id: "appearance", label: "外观" },
-  { id: "profile", label: "个人" },
-  { id: "devices", label: "设备" },
-  { id: "qr", label: "扫码" },
-  { id: "bots", label: "机器人" },
+const TABS: Array<{ id: SettingsTab; label: string; icon: React.ComponentType<{ className?: string; strokeWidth?: number }> }> = [
+  { id: "appearance", label: "外观", icon: Palette },
+  { id: "profile", label: "个人", icon: User },
+  { id: "devices", label: "设备", icon: Smartphone },
+  { id: "qr", label: "扫码", icon: QrCode },
+  { id: "bots", label: "机器人", icon: Bot },
 ];
 
 const ACCENTS: Array<{ id: AccentId; label: string }> = [
@@ -45,14 +46,35 @@ export function SettingsModal() {
     setTransparency,
     setReducedMotion,
   } = useThemeStore();
-  const { currentUser, logout } = useWorkspaceStore();
+  const { isPreviewMode, currentUser, logout } = useWorkspaceStore();
 
-  const [devices, setDevices] = useState<UserDeviceSummary[]>([]);
+  const [devices, setDevices] = useState<UserDeviceSummary[]>(() =>
+    isPreviewMode
+      ? [
+          {
+            id: "dev_mac_1",
+            platform: "web",
+            deviceName: "MacBook Pro · Safari / Chrome",
+            appVersion: "1.0.0",
+            lastActiveAt: new Date().toISOString(),
+            current: true,
+          },
+          {
+            id: "dev_ios_1",
+            platform: "ios",
+            deviceName: "iPhone 16 Pro · DualLane Mobile",
+            appVersion: "1.0.0",
+            lastActiveAt: new Date(Date.now() - 180_000).toISOString(),
+            current: false,
+          },
+        ]
+      : []
+  );
   const [qrSession, setQrSession] = useState<QRSessionResponse | null>(null);
   const [qrApproved, setQrApproved] = useState(false);
 
   useEffect(() => {
-    if (!settingsOpen || settingsTab !== "devices") return;
+    if (!settingsOpen || settingsTab !== "devices" || isPreviewMode) return;
     let active = true;
     void apiV1
       .listDevices()
@@ -63,17 +85,28 @@ export function SettingsModal() {
     return () => {
       active = false;
     };
-  }, [settingsOpen, settingsTab]);
+  }, [isPreviewMode, settingsOpen, settingsTab]);
 
   const handleGenerateQR = async () => {
     setQrApproved(false);
+    if (isPreviewMode) {
+      setQrSession({
+        id: `qrs_${crypto.randomUUID().slice(0, 10)}`,
+        challenge: crypto.randomUUID().replace(/-/g, ""),
+        status: "pending",
+        expiresAt: new Date(Date.now() + 180_000).toISOString(),
+      });
+      return;
+    }
     const res = await apiV1.startQRLogin("ios", "DualLane Mobile");
     setQrSession(res);
   };
 
   const handleApproveQR = async () => {
     if (!qrSession) return;
-    await apiV1.approveQRLogin(qrSession.id);
+    if (!isPreviewMode) {
+      await apiV1.approveQRLogin(qrSession.id);
+    }
     setQrApproved(true);
   };
 
@@ -92,22 +125,26 @@ export function SettingsModal() {
         <DialogHeader>
           <DialogTitle>DualLane 设置中心</DialogTitle>
         </DialogHeader>
-        <div className="flex gap-4 min-h-[380px] p-6 pt-4">
-          <nav className="w-32 shrink-0 space-y-1 border-r border-dl-border-hairline pr-3">
-            {TABS.map((tab) => (
-              <Button
-                key={tab.id}
-                variant={settingsTab === tab.id ? "primary" : "ghost"}
-                size="sm"
-                className="w-full justify-start"
-                onClick={() => setSettingsTab(tab.id)}
-              >
-                {tab.label}
-              </Button>
-            ))}
+        <div className="flex max-compact:flex-col gap-4 min-h-[380px] max-h-[72vh] p-6 pt-4">
+          <nav className="w-36 max-compact:w-full shrink-0 max-compact:flex max-compact:overflow-x-auto space-y-1 max-compact:space-y-0 max-compact:gap-1 border-r max-compact:border-r-0 max-compact:border-b border-dl-border-hairline pr-3 max-compact:pr-0 max-compact:pb-2.5">
+            {TABS.map((tab) => {
+              const Icon = tab.icon;
+              return (
+                <Button
+                  key={tab.id}
+                  variant={settingsTab === tab.id ? "primary" : "ghost"}
+                  size="sm"
+                  className="w-full max-compact:w-auto justify-start gap-2"
+                  onClick={() => setSettingsTab(tab.id)}
+                >
+                  <Icon className="size-4 shrink-0" strokeWidth={1.85} />
+                  {tab.label}
+                </Button>
+              );
+            })}
           </nav>
 
-          <div className="flex-1 min-w-0 overflow-y-auto pr-1">
+          <div className="dl-scroll flex-1 min-w-0 overflow-y-auto pr-1">
             {settingsTab === "appearance" && (
               <div className="space-y-5">
                 <div className="space-y-2">

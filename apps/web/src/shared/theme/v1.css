@@ -37,15 +37,18 @@
   --color-danger: var(--dl-danger);
   --color-danger-soft: var(--dl-danger-soft);
 
-  /* Clean-Room v1 Widget Semantic Aliases */
+  /* Clean-Room v1 Widget Semantic Aliases (3-tier typography & adaptive contrast) */
   --color-dl-surface-canvas: var(--dl-bg);
   --color-dl-surface-subtle: var(--dl-soft);
   --color-dl-border-hairline: var(--dl-line);
+  --color-dl-border-strong: var(--dl-line-strong);
   --color-dl-text-primary: var(--dl-text);
   --color-dl-text-secondary: var(--dl-muted);
-  --color-dl-text-tertiary: var(--dl-muted);
+  --color-dl-text-tertiary: color-mix(in oklab, var(--dl-muted) 74%, transparent);
   --color-dl-lane-shared: var(--dl-shared);
+  --color-dl-on-shared: var(--dl-on-shared);
   --color-dl-lane-direct: var(--dl-direct);
+  --color-dl-on-direct: var(--dl-on-direct);
   --color-dl-success: var(--dl-success);
   --color-dl-warning: var(--dl-warning);
   --color-dl-danger: var(--dl-danger);
@@ -195,4 +198,47 @@ html[data-transparency="solid"] :is(.dl-glass-chrome, .dl-glass-elevated, .dl-gl
 
 html[data-motion="reduced"] :is(.dl-anim-popover, .dl-anim-scrim, .dl-anim-dialog) {
   animation-duration: 0.01ms !important;
+}
+
+/* Base Typography & macOS Thin Scrollbars */
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Inter", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--dl-text);
+  background-color: var(--dl-bg);
+}
+
+.dl-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--dl-line-strong) transparent;
+}
+.dl-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.dl-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.dl-scroll::-webkit-scrollbar-thumb {
+  background-color: var(--dl-line-strong);
+  border-radius: 9999px;
+}
+
+.dl-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 500;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  line-height: 1;
+  color: var(--dl-muted);
+  background-color: var(--dl-soft);
+  border: 1px solid var(--dl-line-strong);
+  border-radius: 5px;
 }

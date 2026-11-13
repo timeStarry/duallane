@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from "react";
+import { ArrowRight, Building2, ShieldCheck } from "lucide-react";
+import { motion } from "motion/react";
 import { useLaneStore } from "@/entities/lane/store";
 import { useWorkspaceStore } from "@/entities/workspace/store";
 import { apiV1 } from "@/shared/lib/api-v1";
 import { extractP2PRoomFromUrl } from "@/shared/lib/p2p-lane";
-import { Button, Input } from "@/shared/ui";
+import { Button, Input, TooltipProvider } from "@/shared/ui";
 import { CommandSearchModal } from "@/widgets/CommandSearchModal";
 import { ConversationSidebar } from "@/widgets/ConversationSidebar";
 import { InspectorPane } from "@/widgets/InspectorPane";
@@ -83,24 +85,52 @@ export function AppV1() {
   if (authStatus === "unauthenticated" && activeLane !== "p2p") {
     return (
       <main className="dl-canvas-ambient flex min-h-screen w-screen items-center justify-center p-6">
-        <div className="dl-glass-dialog w-full max-w-md rounded-dialog border border-dl-border-hairline p-6 space-y-5">
+        <motion.div
+          initial={{ opacity: 0, y: 12, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ type: "spring", stiffness: 380, damping: 32 }}
+          className="dl-glass-dialog w-full max-w-[440px] rounded-dialog border border-dl-border-hairline p-7 space-y-6"
+        >
           <div className="flex items-start justify-between gap-3">
-            <div>
-              <h1 className="text-lg font-bold text-dl-text-primary">DualLane v1.0</h1>
-              <p className="text-xs text-dl-text-tertiary mt-0.5">
-                共享空间自洽协作 · 私密直连端到端加密
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-dl-lane-shared to-dl-lane-direct text-dl-on-shared font-bold text-sm shadow-sm">
+                DL
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-lg font-bold tracking-tight text-dl-text-primary">
+                    DualLane
+                  </h1>
+                  <span className="rounded-full bg-dl-lane-shared/14 px-2 py-0.5 text-[10px] font-semibold text-dl-lane-shared">
+                    v1.0
+                  </span>
+                </div>
+                <p className="text-xs text-dl-text-secondary mt-0.5">
+                  共享空间自洽协作 · 私密直连端到端加密
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2.5 text-xs">
+            <div className="rounded-2xl border border-dl-lane-shared/25 bg-dl-lane-shared/8 p-3 space-y-1">
+              <div className="flex items-center gap-1.5 font-semibold text-dl-lane-shared">
+                <Building2 className="size-3.5" strokeWidth={2} />
+                共享空间
+              </div>
+              <p className="text-[11px] leading-relaxed text-dl-text-secondary">
+                群组置顶、右侧线程、我的收藏与 Card Kit 智能体
               </p>
             </div>
-            <Button
-              size="sm"
-              variant="glass"
-              onClick={() => {
-                setActiveLane("p2p");
-                void createP2PRoom();
-              }}
-            >
-              🔐 免登录直连
-            </Button>
+            <div className="rounded-2xl border border-dl-lane-direct/25 bg-dl-lane-direct/8 p-3 space-y-1">
+              <div className="flex items-center gap-1.5 font-semibold text-dl-lane-direct">
+                <ShieldCheck className="size-3.5" strokeWidth={2} />
+                私密直连
+              </div>
+              <p className="text-[11px] leading-relaxed text-dl-text-secondary">
+                免登录一键建房，AES-256-GCM 密钥仅驻留内存
+              </p>
+            </div>
           </div>
 
           {authError && (
@@ -118,15 +148,31 @@ export function AppV1() {
             <Button
               type="button"
               variant="primary"
-              className="w-full"
+              className="w-full justify-center gap-2"
               onClick={handleGitHubSignIn}
             >
-              使用 GitHub 登录共享空间
+              <span>使用 GitHub 登录共享空间</span>
+              <ArrowRight className="size-4" strokeWidth={2} />
+            </Button>
+            <Button
+              type="button"
+              variant="glass"
+              className="w-full justify-center gap-2 border-dl-lane-direct/30 text-dl-lane-direct hover:bg-dl-lane-direct/12"
+              onClick={() => {
+                setActiveLane("p2p");
+                void createP2PRoom();
+              }}
+            >
+              <ShieldCheck className="size-4" strokeWidth={1.9} />
+              <span>免登录进入私密直连通道</span>
             </Button>
           </div>
 
           {inviteCode.trim() && (
-            <form onSubmit={handleInviteQuickAccept} className="pt-2 border-t border-dl-border-hairline">
+            <form
+              onSubmit={handleInviteQuickAccept}
+              className="pt-2 border-t border-dl-border-hairline"
+            >
               <Button
                 type="submit"
                 variant="secondary"
@@ -138,20 +184,22 @@ export function AppV1() {
               </Button>
             </form>
           )}
-        </div>
+        </motion.div>
       </main>
     );
   }
 
   return (
-    <main className="dl-canvas-ambient flex h-screen w-screen overflow-hidden text-dl-text-primary">
-      <PrimaryRail />
-      <ConversationSidebar />
-      <TimelinePane />
-      <InspectorPane />
-      <SettingsModal />
-      <CommandSearchModal />
-      <MediaLightbox />
-    </main>
+    <TooltipProvider delayDuration={240}>
+      <main className="dl-canvas-ambient relative flex h-screen w-screen overflow-hidden text-dl-text-primary">
+        <PrimaryRail />
+        <ConversationSidebar />
+        <TimelinePane />
+        <InspectorPane />
+        <SettingsModal />
+        <CommandSearchModal />
+        <MediaLightbox />
+      </main>
+    </TooltipProvider>
   );
 }

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { ArrowUpRight, FileText, Search } from "lucide-react";
 import { useLaneStore } from "@/entities/lane/store";
 import { useWorkspaceStore } from "@/entities/workspace/store";
 import { apiV1, type SearchResponse } from "@/shared/lib/api-v1";
@@ -14,7 +15,7 @@ import {
 
 export function CommandSearchModal() {
   const { searchOpen, setSearchOpen } = useLaneStore();
-  const { conversations, jumpToMessage } = useWorkspaceStore();
+  const { isPreviewMode, conversations, messagesByConv, jumpToMessage } = useWorkspaceStore();
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<SearchResponse>({ messages: [], files: [] });
@@ -34,24 +35,69 @@ export function CommandSearchModal() {
     if (!searchOpen) return;
     const trimmed = query.trim();
     if (!trimmed) return;
+
+    const searchLocally = (): SearchResponse => {
+      const q = trimmed.toLowerCase();
+      const msgHits: SearchResponse["messages"] = [];
+      const fileHits: SearchResponse["files"] = [];
+      for (const [convId, list] of Object.entries(messagesByConv)) {
+        for (const m of list) {
+          if (m.plainText.toLowerCase().includes(q)) {
+            msgHits.push({
+              id: m.id,
+              conversationId: convId,
+              authorId: m.senderId,
+              authorName: m.senderName,
+              plainText: m.plainText,
+              createdAt: m.createdAt,
+            });
+          }
+          for (const att of m.attachments || []) {
+            if (att.fileName.toLowerCase().includes(q)) {
+              fileHits.push({
+                id: att.id,
+                fileName: att.fileName,
+                mimeType: att.mimeType,
+                byteSize: att.byteSize,
+                conversationId: convId,
+                sourceMessageId: m.id,
+                createdAt: m.createdAt,
+              });
+            }
+          }
+        }
+      }
+      return { messages: msgHits, files: fileHits };
+    };
+
     const timer = setTimeout(() => {
+      if (isPreviewMode) {
+        setResults(searchLocally());
+        return;
+      }
       setLoading(true);
       void apiV1
         .search(trimmed)
         .then(setResults)
-        .catch(() => {})
+        .catch(() => setResults(searchLocally()))
         .finally(() => setLoading(false));
-    }, 180);
+    }, 150);
     return () => clearTimeout(timer);
-  }, [query, searchOpen]);
+  }, [isPreviewMode, messagesByConv, query, searchOpen]);
 
   return (
     <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
       <DialogContent size="lg">
         <DialogHeader>
-          <DialogTitle>全局搜索</DialogTitle>
+          <div className="flex items-center justify-between pr-8">
+            <DialogTitle className="flex items-center gap-2">
+              <Search className="size-4 text-dl-lane-shared" strokeWidth={2} />
+              全局搜索
+            </DialogTitle>
+            <kbd className="dl-kbd">ESC</kbd>
+          </div>
           <DialogDescription>
-            搜索共享空间消息正文与附件文件，点击结果直接跳转定位。
+            搜索共享空间消息正文与附件文件，点击结果直接跳转定位原上下文。
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 p-6 pt-4">
@@ -68,7 +114,7 @@ export function CommandSearchModal() {
 
           {loading && <div className="text-xs text-dl-text-tertiary">正在搜索…</div>}
 
-          <div className="max-h-80 overflow-y-auto space-y-4">
+          <div className="dl-scroll max-h-80 overflow-y-auto space-y-4">
             {results.messages.length > 0 && (
               <div className="space-y-1.5">
                 <div className="text-[11px] font-semibold text-dl-text-tertiary">
@@ -78,7 +124,7 @@ export function CommandSearchModal() {
                   <Button
                     key={hit.id}
                     variant="ghost"
-                    className="w-full h-auto justify-between rounded-xl px-3 py-2 text-left"
+                    className="w-full h-auto justify-between rounded-xl px-3 py-2.5 text-left"
                     onClick={() => {
                       jumpToMessage(hit.conversationId, hit.id);
                       setSearchOpen(false);
@@ -91,7 +137,10 @@ export function CommandSearchModal() {
                       </div>
                       <div className="truncate text-sm text-dl-text-primary">{hit.plainText}</div>
                     </div>
-                    <span className="text-[11px] text-dl-text-tertiary shrink-0 ml-2">跳转</span>
+                    <span className="inline-flex items-center gap-0.5 text-[11px] text-dl-text-tertiary shrink-0 ml-2">
+                      跳转
+                      <ArrowUpRight className="size-3" strokeWidth={2} />
+                    </span>
                   </Button>
                 ))}
               </div>
@@ -106,7 +155,7 @@ export function CommandSearchModal() {
                   <Button
                     key={att.id}
                     variant="ghost"
-                    className="w-full h-auto justify-between rounded-xl px-3 py-2 text-left"
+                    className="w-full h-auto justify-between rounded-xl px-3 py-2.5 text-left"
                     disabled={!att.conversationId || !att.sourceMessageId}
                     onClick={() => {
                       if (att.conversationId && att.sourceMessageId) {
@@ -115,14 +164,18 @@ export function CommandSearchModal() {
                       }
                     }}
                   >
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-dl-text-primary">
-                        📎 {att.fileName}
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                      <FileText className="size-4 shrink-0 text-dl-lane-shared" strokeWidth={1.8} />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-dl-text-primary">
+                          {att.fileName}
+                        </div>
+                        <div className="text-[11px] text-dl-text-tertiary">{att.mimeType}</div>
                       </div>
-                      <div className="text-[11px] text-dl-text-tertiary">{att.mimeType}</div>
                     </div>
-                    <span className="text-[11px] text-dl-text-tertiary shrink-0 ml-2">
+                    <span className="inline-flex items-center gap-0.5 text-[11px] text-dl-text-tertiary shrink-0 ml-2">
                       {att.sourceMessageId ? "定位原消息" : "无来源"}
+                      {att.sourceMessageId && <ArrowUpRight className="size-3" strokeWidth={2} />}
                     </span>
                   </Button>
                 ))}

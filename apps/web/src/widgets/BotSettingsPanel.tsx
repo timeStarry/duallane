@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { Bot } from "lucide-react";
 import { useWorkspaceStore } from "@/entities/workspace/store";
 import { apiV1, type BotCommandSpec } from "@/shared/lib/api-v1";
 import { Button, Input, Select, Switch } from "@/shared/ui";
@@ -31,12 +32,33 @@ const VALID_SCOPES = [
 ];
 
 export function BotSettingsPanel() {
-  const { members } = useWorkspaceStore();
-  const [bots, setBots] = useState<BotItem[]>([]);
-  const [selectedBotId, setSelectedBotId] = useState<string>("");
+  const { isPreviewMode, members } = useWorkspaceStore();
+  const [bots, setBots] = useState<BotItem[]>(() =>
+    isPreviewMode
+      ? [
+          {
+            id: "bot_echo_1",
+            name: "Echo 智能体",
+            status: "active",
+            visibilityPolicy: "space_members",
+            triggerPolicy: "mention-or-command",
+          },
+          {
+            id: "bot_release_2",
+            name: "Release 审批官",
+            status: "active",
+            visibilityPolicy: "groups",
+            triggerPolicy: "mention-or-command",
+          },
+        ]
+      : []
+  );
+  const [selectedBotId, setSelectedBotId] = useState<string>(() =>
+    isPreviewMode ? "bot_echo_1" : ""
+  );
   const [settings, setSettings] = useState<BotSettingsData>({
-    visibilityPolicy: "private",
-    proactiveEnabled: false,
+    visibilityPolicy: isPreviewMode ? "space_members" : "private",
+    proactiveEnabled: isPreviewMode,
     triggerPolicy: "mention-or-command",
     allowedMemberIds: [],
   });
@@ -51,13 +73,21 @@ export function BotSettingsPanel() {
   const [webhookUrl, setWebhookUrl] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
   const [webhookEnabled, setWebhookEnabled] = useState(false);
-  const [commands, setCommands] = useState<BotCommandSpec[]>([]);
+  const [commands, setCommands] = useState<BotCommandSpec[]>(() =>
+    isPreviewMode
+      ? [
+          { command: "summarize", description: "总结当前对话与线程结论", scope: "all" },
+          { command: "poll", description: "生成 Card Kit v1 投票卡片", scope: "all" },
+        ]
+      : []
+  );
   const [cmdName, setCmdName] = useState("");
   const [cmdDesc, setCmdDesc] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
 
   const loadBots = useCallback(async () => {
+    if (isPreviewMode) return;
     try {
       const res = await apiV1.listBots();
       const list = Array.isArray(res.bots) ? (res.bots as BotItem[]) : [];
@@ -66,9 +96,10 @@ export function BotSettingsPanel() {
     } catch {
       // Non-fatal
     }
-  }, []);
+  }, [isPreviewMode]);
 
   useEffect(() => {
+    if (isPreviewMode) return;
     let active = true;
     void apiV1
       .listBots()
@@ -82,10 +113,10 @@ export function BotSettingsPanel() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [isPreviewMode]);
 
   useEffect(() => {
-    if (!selectedBotId) return;
+    if (!selectedBotId || isPreviewMode) return;
     let active = true;
     void Promise.all([
       apiV1.getBotSettings(selectedBotId).catch(() => null),
@@ -108,7 +139,7 @@ export function BotSettingsPanel() {
     return () => {
       active = false;
     };
-  }, [selectedBotId]);
+  }, [isPreviewMode, selectedBotId]);
 
   const activeBot = bots.find((b) => b.id === selectedBotId);
 
@@ -221,9 +252,11 @@ export function BotSettingsPanel() {
               key={bot.id}
               size="sm"
               variant={bot.id === selectedBotId ? "primary" : "secondary"}
+              className="gap-1.5"
               onClick={() => setSelectedBotId(bot.id)}
             >
-              🤖 {bot.name}
+              <Bot className="size-3.5" strokeWidth={1.9} />
+              {bot.name}
             </Button>
           ))}
         </div>
