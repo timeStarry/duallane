@@ -1,6 +1,9 @@
 import React, { lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
+import { initializeV1Theme } from "./shared/theme/vibrancy";
 import "./shared/theme/v1.css";
+
+initializeV1Theme();
 
 const showWorkbench = import.meta.env.DEV && window.location.pathname === "/__design";
 

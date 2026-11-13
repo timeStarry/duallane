@@ -1,28 +1,52 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { useWorkspaceStore } from "@/entities/workspace/store";
 import { apiV1, type BotCommandSpec } from "@/shared/lib/api-v1";
-import { Button, Input, Switch } from "@/shared/ui";
+import { Button, Input, Select, Switch } from "@/shared/ui";
+import { cn } from "@/shared/lib/cn";
 
 interface BotItem {
   id: string;
-  displayName: string;
-  handle: string;
-  proactiveEnabled?: boolean;
-  privacyMode?: boolean;
+  name: string;
+  status: string;
+  visibilityPolicy?: string;
+  triggerPolicy?: string;
 }
 
-const ALL_SCOPES = [
-  { id: "messages:send", label: "发送消息" },
-  { id: "cards:send", label: "发送交互卡片" },
-  { id: "cards:update", label: "更新卡片状态" },
-  { id: "context:read", label: "读取触发上下文" },
+interface BotSettingsData {
+  visibilityPolicy: string;
+  proactiveEnabled: boolean;
+  triggerPolicy: string;
+  allowedMemberIds: string[];
+}
+
+const VALID_SCOPES = [
+  { id: "messages:read_trigger", label: "读取触发消息" },
+  { id: "messages:read_context", label: "读取对话上下文" },
+  { id: "messages:send", label: "发送回复消息" },
+  { id: "cards:write", label: "发送与更新卡片" },
+  { id: "cards:act", label: "接收卡片交互" },
+  { id: "commands:receive", label: "接收 Slash 指令" },
+  { id: "files:read_metadata", label: "读取附件元数据" },
+  { id: "files:write", label: "上传生成文件" },
 ];
 
 export function BotSettingsPanel() {
+  const { members } = useWorkspaceStore();
   const [bots, setBots] = useState<BotItem[]>([]);
   const [selectedBotId, setSelectedBotId] = useState<string>("");
+  const [settings, setSettings] = useState<BotSettingsData>({
+    visibilityPolicy: "private",
+    proactiveEnabled: false,
+    triggerPolicy: "mention-or-command",
+    allowedMemberIds: [],
+  });
   const [newName, setNewName] = useState("");
-  const [newHandle, setNewHandle] = useState("");
-  const [selectedScopes, setSelectedScopes] = useState<string[]>(["messages:send", "cards:send"]);
+  const [selectedScopes, setSelectedScopes] = useState<string[]>([
+    "messages:read_trigger",
+    "messages:send",
+    "cards:write",
+    "commands:receive",
+  ]);
   const [issuedToken, setIssuedToken] = useState<string>("");
   const [webhookUrl, setWebhookUrl] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
@@ -31,6 +55,7 @@ export function BotSettingsPanel() {
   const [cmdName, setCmdName] = useState("");
   const [cmdDesc, setCmdDesc] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
 
   const loadBots = useCallback(async () => {
     try {
@@ -39,7 +64,7 @@ export function BotSettingsPanel() {
       setBots(list);
       setSelectedBotId((prev) => prev || list[0]?.id || "");
     } catch {
-      // Ignore if not owner/admin
+      // Non-fatal
     }
   }, []);
 
@@ -61,76 +86,134 @@ export function BotSettingsPanel() {
 
   useEffect(() => {
     if (!selectedBotId) return;
-    void apiV1
-      .getBotCommands(selectedBotId)
-      .then((res) => setCommands(res.commands || []))
-      .catch(() => {});
+    let active = true;
+    void Promise.all([
+      apiV1.getBotSettings(selectedBotId).catch(() => null),
+      apiV1.getBotCommands(selectedBotId).catch(() => ({ commands: [] })),
+    ]).then(([settingsRes, cmdRes]) => {
+      if (!active) return;
+      if (settingsRes?.settings) {
+        const s = settingsRes.settings;
+        setSettings({
+          visibilityPolicy: String(s.visibilityPolicy || "private"),
+          proactiveEnabled: Boolean(s.proactiveEnabled),
+          triggerPolicy: String(s.triggerPolicy || "mention-or-command"),
+          allowedMemberIds: Array.isArray(s.allowedMemberIds)
+            ? s.allowedMemberIds.map(String)
+            : [],
+        });
+      }
+      setCommands(cmdRes.commands || []);
+    });
+    return () => {
+      active = false;
+    };
   }, [selectedBotId]);
 
   const activeBot = bots.find((b) => b.id === selectedBotId);
 
   const handleCreateBot = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newName.trim() || !newHandle.trim()) return;
-    await apiV1.createBot(newName.trim(), newHandle.trim());
-    setNewName("");
-    setNewHandle("");
-    await loadBots();
-    setStatusMessage("机器人已创建");
+    if (!newName.trim()) return;
+    setErrorMessage("");
+    try {
+      const res = await apiV1.createBot(newName.trim());
+      setNewName("");
+      await loadBots();
+      if (res.botId) setSelectedBotId(String(res.botId));
+      setStatusMessage("新机器人已创建");
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "创建失败");
+    }
   };
 
-  const handleIssueToken = async () => {
+  const patchSettings = async (patch: Record<string, unknown>) => {
     if (!selectedBotId) return;
-    const res = await apiV1.issueBotToken(selectedBotId, selectedScopes);
-    const token = String(res.token || (res.raw as string) || "");
-    setIssuedToken(token);
-    setStatusMessage("新 Token 已签发，旧 Token 保留 24 小时宽限期。");
+    setErrorMessage("");
+    try {
+      await apiV1.updateBotSettings(selectedBotId, patch);
+      setSettings((prev) => ({ ...prev, ...patch }));
+      setStatusMessage("机器人策略已更新");
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "更新策略失败");
+    }
+  };
+
+  const handleIssueOrRotateToken = async (rotate: boolean) => {
+    if (!selectedBotId || selectedScopes.length === 0) return;
+    setErrorMessage("");
+    try {
+      const res = rotate
+        ? await apiV1.rotateBotToken(selectedBotId, selectedScopes)
+        : await apiV1.issueBotToken(selectedBotId, selectedScopes);
+      setIssuedToken(String(res.token || ""));
+      setStatusMessage(
+        rotate
+          ? "Token 已安全轮换（仅展示一次明文，请立即复制保存）"
+          : "新 Token 已签发（仅展示一次明文）"
+      );
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Token 操作失败");
+    }
   };
 
   const handleSaveWebhook = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedBotId) return;
-    await apiV1.putBotWebhook(selectedBotId, webhookUrl, webhookSecret, webhookEnabled);
-    setStatusMessage("Webhook 配置已保存（HMAC-SHA256 签名投递）");
+    setErrorMessage("");
+    try {
+      await apiV1.putBotWebhook(selectedBotId, webhookUrl, webhookSecret, webhookEnabled);
+      setStatusMessage("Outbound Webhook 已保存（HMAC-SHA256 签名投递）");
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Webhook 配置无效（密钥至少 16 位）");
+    }
   };
 
   const handleAddCommand = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedBotId || !cmdName.trim()) return;
-    const next = [...commands, { command: cmdName.trim(), description: cmdDesc.trim() || "自定义指令" }];
-    const res = await apiV1.putBotCommands(selectedBotId, next);
-    setCommands(res.commands || next);
-    setCmdName("");
-    setCmdDesc("");
-    setStatusMessage("指令菜单已更新");
+    setErrorMessage("");
+    const cleaned = cmdName.trim().replace(/^\//, "").toLowerCase();
+    const next: BotCommandSpec[] = [
+      ...commands.filter((c) => c.command !== cleaned),
+      { command: cleaned, description: cmdDesc.trim() || "自定义指令", scope: "all" },
+    ];
+    try {
+      await apiV1.putBotCommands(selectedBotId, next);
+      setCommands(next);
+      setCmdName("");
+      setCmdDesc("");
+      setStatusMessage("Slash 指令已注册");
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "指令注册失败");
+    }
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       {statusMessage && (
         <div className="rounded-xl bg-dl-lane-shared/10 px-3 py-2 text-xs text-dl-lane-shared border border-dl-lane-shared/25">
           {statusMessage}
         </div>
       )}
+      {errorMessage && (
+        <div className="rounded-xl bg-dl-danger/10 px-3 py-2 text-xs text-dl-danger border border-dl-danger/25">
+          {errorMessage}
+        </div>
+      )}
 
-      {/* Create Bot */}
-      <form onSubmit={handleCreateBot} className="grid grid-cols-3 gap-2">
+      {/* Multi-Bot Create */}
+      <form onSubmit={handleCreateBot} className="flex items-center gap-2">
         <Input
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
-          placeholder="机器人名称"
+          placeholder="输入新机器人名称（支持一人创建多个 Bot）"
         />
-        <Input
-          value={newHandle}
-          onChange={(e) => setNewHandle(e.target.value)}
-          placeholder="@handle"
-        />
-        <Button type="submit" variant="primary" size="sm">
+        <Button type="submit" variant="primary" size="sm" disabled={!newName.trim()}>
           创建机器人
         </Button>
       </form>
 
-      {/* Bot List */}
       {bots.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {bots.map((bot) => (
@@ -140,51 +223,93 @@ export function BotSettingsPanel() {
               variant={bot.id === selectedBotId ? "primary" : "secondary"}
               onClick={() => setSelectedBotId(bot.id)}
             >
-              🤖 {bot.displayName} (@{bot.handle})
+              🤖 {bot.name}
             </Button>
           ))}
         </div>
       )}
 
       {activeBot && (
-        <div className="space-y-4 rounded-2xl border border-dl-border-hairline p-3.5">
+        <div className="space-y-4 rounded-2xl border border-dl-border-hairline p-4">
+          {/* Privacy Mode & Proactive Push */}
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-xs font-semibold text-dl-text-primary">Telegram 隐私模式</div>
+              <div className="text-xs font-semibold text-dl-text-primary">Telegram 群组隐私模式</div>
               <div className="text-[11px] text-dl-text-tertiary">
-                开启后在群组仅接收 @提及 与 `/` 指令消息
+                开启时仅接收 `@提及` 与 `/指令`；关闭后接收所在群组全部消息
               </div>
             </div>
             <Switch
-              checked={activeBot.privacyMode !== false}
-              onCheckedChange={(checked) =>
-                void apiV1.updateBotSettings(activeBot.id, { privacyMode: checked }).then(loadBots)
+              checked={settings.triggerPolicy !== "all-messages"}
+              onCheckedChange={(privacyOn) =>
+                void patchSettings({
+                  triggerPolicy: privacyOn ? "mention-or-command" : "all-messages",
+                })
               }
             />
           </div>
 
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-xs font-semibold text-dl-text-primary">主动推送权限</div>
+              <div className="text-xs font-semibold text-dl-text-primary">允许主动推送消息/卡片</div>
               <div className="text-[11px] text-dl-text-tertiary">
-                允许机器人不依赖回复上下文主动发送通知卡片
+                允许不依赖回复触发上下文主动投递通知与 Card Kit 卡片
               </div>
             </div>
             <Switch
-              checked={Boolean(activeBot.proactiveEnabled)}
-              onCheckedChange={(checked) =>
-                void apiV1
-                  .updateBotSettings(activeBot.id, { proactiveEnabled: checked })
-                  .then(loadBots)
-              }
+              checked={settings.proactiveEnabled}
+              onCheckedChange={(checked) => void patchSettings({ proactiveEnabled: checked })}
             />
           </div>
 
-          {/* Scopes & Token */}
+          {/* Visibility Policy + Visual Member Selector (no raw IDs!) */}
           <div className="space-y-2 border-t border-dl-border-hairline pt-3">
-            <div className="text-xs font-semibold text-dl-text-primary">Token 权限范围与签发</div>
-            <div className="flex flex-wrap gap-2">
-              {ALL_SCOPES.map((s) => {
+            <div className="text-xs font-semibold text-dl-text-primary">可见性与成员授权</div>
+            <Select
+              value={settings.visibilityPolicy}
+              onValueChange={(val) => void patchSettings({ visibilityPolicy: val })}
+              options={[
+                { value: "private", label: "仅自己可见" },
+                { value: "specified_members", label: "指定空间成员可用" },
+                { value: "space_members", label: "全空间成员可用" },
+                { value: "groups", label: "允许加入群组" },
+              ]}
+            />
+            {settings.visibilityPolicy === "specified_members" && (
+              <div className="max-h-36 overflow-y-auto rounded-xl border border-dl-border-hairline p-2 space-y-1">
+                {Object.values(members).map((m) => {
+                  const selected = settings.allowedMemberIds.includes(m.id);
+                  return (
+                    <Button
+                      key={m.id}
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className={cn(
+                        "w-full justify-between px-2.5",
+                        selected && "bg-dl-lane-shared/10 text-dl-lane-shared"
+                      )}
+                      onClick={() => {
+                        const next = selected
+                          ? settings.allowedMemberIds.filter((id) => id !== m.id)
+                          : [...settings.allowedMemberIds, m.id];
+                        void patchSettings({ allowedMemberIds: next });
+                      }}
+                    >
+                      <span>{m.displayName}</span>
+                      <span>{selected ? "✓ 已授权" : "点击授权"}</span>
+                    </Button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Scopes & Token Issuance */}
+          <div className="space-y-2 border-t border-dl-border-hairline pt-3">
+            <div className="text-xs font-semibold text-dl-text-primary">Token 细粒度权限范围</div>
+            <div className="flex flex-wrap gap-1.5">
+              {VALID_SCOPES.map((s) => {
                 const active = selectedScopes.includes(s.id);
                 return (
                   <Button
@@ -204,20 +329,40 @@ export function BotSettingsPanel() {
                 );
               })}
             </div>
-            <Button type="button" size="sm" variant="secondary" onClick={() => void handleIssueToken()}>
-              签发 / 轮换 Bot Token
-            </Button>
+            <div className="flex items-center gap-2 pt-1">
+              <Button
+                type="button"
+                size="sm"
+                variant="primary"
+                onClick={() => void handleIssueOrRotateToken(false)}
+              >
+                签发新 Token
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => void handleIssueOrRotateToken(true)}
+              >
+                轮换 Token
+              </Button>
+            </div>
             {issuedToken && (
-              <div className="rounded-xl bg-dl-surface-subtle p-2 text-xs font-mono break-all select-all">
+              <div className="rounded-xl bg-dl-surface-subtle p-2.5 text-xs font-mono break-all select-all border border-dl-border-hairline">
                 {issuedToken}
               </div>
             )}
           </div>
 
           {/* Outbound Webhook */}
-          <form onSubmit={handleSaveWebhook} className="space-y-2 border-t border-dl-border-hairline pt-3">
+          <form
+            onSubmit={handleSaveWebhook}
+            className="space-y-2 border-t border-dl-border-hairline pt-3"
+          >
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-dl-text-primary">Outbound Webhook (HMAC)</span>
+              <span className="text-xs font-semibold text-dl-text-primary">
+                Outbound Webhook（HMAC-SHA256）
+              </span>
               <Switch checked={webhookEnabled} onCheckedChange={setWebhookEnabled} />
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -229,7 +374,7 @@ export function BotSettingsPanel() {
               <Input
                 value={webhookSecret}
                 onChange={(e) => setWebhookSecret(e.target.value)}
-                placeholder="Signing Secret"
+                placeholder="签名密钥（至少 16 位）"
               />
             </div>
             <Button type="submit" size="sm" variant="secondary">
@@ -238,18 +383,26 @@ export function BotSettingsPanel() {
           </form>
 
           {/* Slash Commands */}
-          <form onSubmit={handleAddCommand} className="space-y-2 border-t border-dl-border-hairline pt-3">
+          <form
+            onSubmit={handleAddCommand}
+            className="space-y-2 border-t border-dl-border-hairline pt-3"
+          >
             <div className="text-xs font-semibold text-dl-text-primary">
-              Slash 指令注册 ({commands.length})
+              Slash 指令菜单 ({commands.length})
             </div>
-            <div className="space-y-1">
-              {commands.map((cmd, i) => (
-                <div key={i} className="flex items-center justify-between text-xs px-2 py-1 rounded-lg bg-dl-surface-subtle/60">
-                  <span className="font-mono text-dl-lane-shared">{cmd.command}</span>
-                  <span className="text-dl-text-secondary">{cmd.description}</span>
-                </div>
-              ))}
-            </div>
+            {commands.length > 0 && (
+              <div className="space-y-1">
+                {commands.map((cmd) => (
+                  <div
+                    key={cmd.command}
+                    className="flex items-center justify-between rounded-lg bg-dl-surface-subtle/60 px-2.5 py-1 text-xs"
+                  >
+                    <span className="font-mono text-dl-lane-shared">/{cmd.command}</span>
+                    <span className="text-dl-text-secondary">{cmd.description}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="grid grid-cols-3 gap-2">
               <Input
                 value={cmdName}
@@ -259,10 +412,10 @@ export function BotSettingsPanel() {
               <Input
                 value={cmdDesc}
                 onChange={(e) => setCmdDesc(e.target.value)}
-                placeholder="指令说明"
+                placeholder="总结当前线程"
               />
               <Button type="submit" size="sm" variant="secondary">
-                添加指令
+                注册指令
               </Button>
             </div>
           </form>

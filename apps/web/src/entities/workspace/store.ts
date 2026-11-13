@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { DualLaneCardKitDocument } from "@duallane/protocol";
-import { apiV1, type ThreadMessageItem } from "@/shared/lib/api-v1";
+import { apiV1, type ThreadReplyItem, type ThreadViewResponse } from "@/shared/lib/api-v1";
 import {
   getWorkspaceSyncCursor,
   loadWorkspaceDrafts,
@@ -72,23 +72,20 @@ export interface DraftEntry {
 }
 
 interface WorkspaceState {
-  // Auth & Connection
   authStatus: "checking" | "unauthenticated" | "authenticated";
   connectionStatus: "connected" | "reconnecting" | "offline";
   currentUser: V1User | null;
   quotaUsedBytes: number;
   quotaLimitBytes: number;
 
-  // Workspace Data
   conversations: Record<string, V1Conversation>;
   conversationOrder: string[];
   messagesByConv: Record<string, V1Message[]>;
   members: Record<string, V1User>;
   activeConversationId: string | null;
   highlightedMessageId: string | null;
-  threadsByRootId: Record<string, { root: ThreadMessageItem; replies: ThreadMessageItem[] }>;
+  threadsByRootId: Record<string, ThreadViewResponse>;
 
-  // Drafts & Scroll Memory (Workspace persisted to IndexedDB, P2P RAM-only)
   drafts: Record<string, DraftEntry>;
   scrollTops: Record<string, number>;
   editingMessageId: string | null;
@@ -99,12 +96,11 @@ interface WorkspaceState {
   p2pMessages: P2PChatMessage[];
   p2pDraft: string;
 
-  // Actions
   bootstrapWorkspace: () => Promise<void>;
-  login: (email: string, password: string) => Promise<void>;
-  register: (inviteCode: string, displayName: string, email: string, password: string) => Promise<void>;
+  acceptInviteAndBootstrap: (inviteCode: string) => Promise<void>;
   logout: () => Promise<void>;
   selectConversation: (conversationId: string) => void;
+  loadConversationMessages: (conversationId: string) => Promise<void>;
   jumpToMessage: (conversationId: string, messageId: string) => void;
   setDraft: (conversationId: string, text: string, replyToMessageId?: string) => void;
   setScrollTop: (conversationId: string, scrollTop: number) => void;
@@ -119,7 +115,6 @@ interface WorkspaceState {
   sendThreadReply: (rootMessageId: string, text: string, alsoSendToChannel: boolean) => Promise<void>;
   triggerCardAction: (cardId: string, actionId: string, payload?: Record<string, unknown>) => Promise<void>;
 
-  // P2P Actions (RAM-only)
   createP2PRoom: () => Promise<string>;
   joinP2PRoom: (roomId: string, keyStr: string) => Promise<void>;
   leaveP2PRoom: () => void;
@@ -127,17 +122,58 @@ interface WorkspaceState {
   sendP2PMessage: (text: string, replyToId?: string) => Promise<void>;
 }
 
-function parseBootstrapPayload(raw: Record<string, unknown>) {
-  const userObj = (raw.user || raw.currentUser || {}) as Record<string, unknown>;
+function mapRawMessage(
+  conversationId: string,
+  m: Record<string, unknown>,
+  members: Record<string, V1User>
+): V1Message {
+  const senderId = String(m.authorId || m.senderId || "");
+  return {
+    id: String(m.id || ""),
+    conversationId,
+    senderId,
+    senderName:
+      members[senderId]?.displayName ||
+      String(m.authorDisplayName || m.senderName || "成员"),
+    plainText: String(m.plainText || m.text || ""),
+    replyToId: m.replyToMessageId
+      ? String(m.replyToMessageId)
+      : m.replyToId
+      ? String(m.replyToId)
+      : undefined,
+    threadRootId: m.threadRootId ? String(m.threadRootId) : undefined,
+    threadReplyCount: Number(m.threadReplyCount || m.replyCount || 0),
+    editedAt: m.editedAt ? String(m.editedAt) : undefined,
+    createdAt: String(m.createdAt || new Date().toISOString()),
+    status: "read",
+    reactions: {},
+    card: m.card as DualLaneCardKitDocument | undefined,
+  };
+}
+
+export function parseBootstrapPayload(raw: Record<string, unknown>) {
+  const authObj = (raw.auth || {}) as Record<string, unknown>;
+  const userObj = (authObj.currentUser || raw.currentUser || raw.user || {}) as Record<
+    string,
+    unknown
+  >;
   const currentUser: V1User | null = userObj.id
     ? {
         id: String(userObj.id),
-        displayName: String(userObj.displayName || userObj.name || "我"),
-        handle: userObj.handle ? String(userObj.handle) : undefined,
+        displayName: String(userObj.nickname || userObj.displayName || userObj.name || "我"),
+        handle: userObj.githubLogin
+          ? String(userObj.githubLogin)
+          : userObj.handle
+          ? String(userObj.handle)
+          : undefined,
         role: (userObj.role as V1User["role"]) || "member",
         avatarUrl: userObj.avatarUrl ? String(userObj.avatarUrl) : undefined,
       }
     : null;
+
+  const policyObj = (raw.policy || {}) as Record<string, unknown>;
+  const quotaUsedBytes = Number(policyObj.usedTodayBytes || 0);
+  const quotaLimitBytes = Number(policyObj.dailyQuotaBytes || 512 * 1024 * 1024);
 
   const members: Record<string, V1User> = {};
   const rawMembers = Array.isArray(raw.members) ? raw.members : [];
@@ -146,11 +182,14 @@ function parseBootstrapPayload(raw: Record<string, unknown>) {
     if (!id) continue;
     members[id] = {
       id,
-      displayName: String(m.displayName || m.name || id),
-      handle: m.handle ? String(m.handle) : undefined,
+      displayName: String(m.remark || m.nickname || m.displayName || m.name || id),
+      handle: m.githubLogin ? String(m.githubLogin) : m.handle ? String(m.handle) : undefined,
       role: (m.role as V1User["role"]) || "member",
       avatarUrl: m.avatarUrl ? String(m.avatarUrl) : undefined,
     };
+  }
+  if (currentUser && !members[currentUser.id]) {
+    members[currentUser.id] = currentUser;
   }
 
   const conversations: Record<string, V1Conversation> = {};
@@ -161,7 +200,10 @@ function parseBootstrapPayload(raw: Record<string, unknown>) {
     const id = String(c.id || "");
     if (!id) continue;
     conversationOrder.push(id);
-    const kind = (c.kind as V1Conversation["kind"]) || (c.type === "direct" ? "direct" : "group");
+    const rawType = String(c.kind || c.type || "group");
+    const kind: V1Conversation["kind"] =
+      rawType === "saved" ? "saved" : rawType === "direct" ? "direct" : "group";
+    const lastMsg = (c.lastMessage || {}) as Record<string, unknown>;
     conversations[id] = {
       id,
       kind,
@@ -170,32 +212,35 @@ function parseBootstrapPayload(raw: Record<string, unknown>) {
       mentionCount: Number(c.mentionCount || 0),
       pinnedMessageIds: Array.isArray(c.pinnedMessageIds) ? c.pinnedMessageIds.map(String) : [],
       memberIds: Array.isArray(c.memberIds) ? c.memberIds.map(String) : [],
-      lastMessageText: c.lastMessageText ? String(c.lastMessageText) : undefined,
-      lastMessageAt: c.lastMessageAt ? String(c.lastMessageAt) : undefined,
+      lastMessageText: c.lastMessageText
+        ? String(c.lastMessageText)
+        : lastMsg.plainText
+        ? String(lastMsg.plainText)
+        : undefined,
+      lastMessageAt: c.lastMessageAt
+        ? String(c.lastMessageAt)
+        : lastMsg.createdAt
+        ? String(lastMsg.createdAt)
+        : undefined,
     };
     const rawMsgs = Array.isArray(c.messages) ? c.messages : [];
-    messagesByConv[id] = rawMsgs.map((msg) => {
-      const m = msg as Record<string, unknown>;
-      const senderId = String(m.senderId || m.authorId || "");
-      return {
-        id: String(m.id || ""),
-        conversationId: id,
-        senderId,
-        senderName: members[senderId]?.displayName || String(m.senderName || "成员"),
-        plainText: String(m.plainText || m.text || ""),
-        replyToId: m.replyToId ? String(m.replyToId) : undefined,
-        threadRootId: m.threadRootId ? String(m.threadRootId) : undefined,
-        threadReplyCount: Number(m.threadReplyCount || 0),
-        editedAt: m.editedAt ? String(m.editedAt) : undefined,
-        createdAt: String(m.createdAt || new Date().toISOString()),
-        status: "read",
-        reactions: {},
-        card: m.card as DualLaneCardKitDocument | undefined,
-      };
-    });
+    messagesByConv[id] = rawMsgs.map((msg) =>
+      mapRawMessage(id, msg as Record<string, unknown>, members)
+    );
   }
 
-  return { currentUser, members, conversations, conversationOrder, messagesByConv };
+  const eventCursor = Number(raw.eventCursor || 0);
+
+  return {
+    currentUser,
+    quotaUsedBytes,
+    quotaLimitBytes,
+    members,
+    conversations,
+    conversationOrder,
+    messagesByConv,
+    eventCursor,
+  };
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
@@ -232,7 +277,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         set({ authStatus: "unauthenticated", drafts, scrollTops });
         return;
       }
-      // Ensure Saved Messages conversation exists
+
       try {
         const savedRes = await apiV1.ensureSavedConversation();
         if (savedRes.conversationId && !parsed.conversations[savedRes.conversationId]) {
@@ -254,7 +299,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
       const lastSeq = await getWorkspaceSyncCursor();
       try {
-        const syncRes = await apiV1.sync(lastSeq);
+        const syncRes = await apiV1.sync(lastSeq || parsed.eventCursor);
         if (syncRes.currentSeq > lastSeq) {
           await setWorkspaceSyncCursor(syncRes.currentSeq);
         }
@@ -262,30 +307,32 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         // Non-fatal
       }
 
+      const firstConvId = parsed.conversationOrder[0] || null;
       set({
         authStatus: "authenticated",
         connectionStatus: "connected",
         currentUser: parsed.currentUser,
+        quotaUsedBytes: parsed.quotaUsedBytes,
+        quotaLimitBytes: parsed.quotaLimitBytes,
         members: parsed.members,
         conversations: parsed.conversations,
         conversationOrder: parsed.conversationOrder,
         messagesByConv: parsed.messagesByConv,
-        activeConversationId: parsed.conversationOrder[0] || null,
+        activeConversationId: firstConvId,
         drafts,
         scrollTops,
       });
+
+      if (firstConvId) {
+        void get().loadConversationMessages(firstConvId);
+      }
     } catch {
       set({ authStatus: "unauthenticated" });
     }
   },
 
-  login: async (email, password) => {
-    await apiV1.loginWithPassword(email, password);
-    await get().bootstrapWorkspace();
-  },
-
-  register: async (inviteCode, displayName, email, password) => {
-    await apiV1.registerWithInvite(inviteCode, displayName, email, password);
+  acceptInviteAndBootstrap: async (inviteCode) => {
+    await apiV1.acceptInvite(inviteCode);
     await get().bootstrapWorkspace();
   },
 
@@ -301,17 +348,41 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     });
   },
 
-  selectConversation: (conversationId) =>
+  loadConversationMessages: async (conversationId) => {
+    try {
+      const res = await apiV1.listMessages(conversationId);
+      if (!Array.isArray(res.messages)) return;
+      const members = get().members;
+      const mapped = res.messages.map((m) => mapRawMessage(conversationId, m, members));
+      set((s) => ({
+        messagesByConv: {
+          ...s.messagesByConv,
+          [conversationId]: mapped,
+        },
+      }));
+    } catch {
+      // Keep existing cached messages
+    }
+  },
+
+  selectConversation: (conversationId) => {
     set((s) => ({
       activeConversationId: conversationId,
       highlightedMessageId: null,
       conversations: s.conversations[conversationId]
         ? {
             ...s.conversations,
-            [conversationId]: { ...s.conversations[conversationId], unreadCount: 0, mentionCount: 0 },
+            [conversationId]: {
+              ...s.conversations[conversationId],
+              unreadCount: 0,
+              mentionCount: 0,
+            },
           }
         : s.conversations,
-    })),
+    }));
+    void get().loadConversationMessages(conversationId);
+    void apiV1.markConversationRead(conversationId).catch(() => {});
+  },
 
   jumpToMessage: (conversationId, messageId) => {
     get().selectConversation(conversationId);
@@ -476,16 +547,24 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   sendThreadReply: async (rootMessageId, text, alsoSendToChannel) => {
-    const res = await apiV1.replyThread(rootMessageId, text, alsoSendToChannel);
+    const reply: ThreadReplyItem = await apiV1.replyThread(
+      rootMessageId,
+      text,
+      alsoSendToChannel
+    );
     set((s) => {
-      const existing = s.threadsByRootId[rootMessageId];
-      if (!existing) return s;
+      const existing = s.threadsByRootId[rootMessageId] || {
+        rootMessageId,
+        replyCount: 0,
+        replies: [],
+      };
       return {
         threadsByRootId: {
           ...s.threadsByRootId,
           [rootMessageId]: {
             ...existing,
-            replies: [...existing.replies, res.message],
+            replyCount: existing.replyCount + 1,
+            replies: [...existing.replies, reply],
           },
         },
       };
@@ -496,7 +575,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     await apiV1.invokeCardAction(cardId, actionId, payload);
   },
 
-  // P2P Direct Lane (RAM-only)
   createP2PRoom: async () => {
     const roomId = crypto.randomUUID().slice(0, 12);
     const keyStr = await generateRoomKeyString();
@@ -545,7 +623,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   sendP2PMessage: async (text, replyToId) => {
     const key = get().p2pAesKey;
     if (!key || !text.trim()) return;
-    // Verify real WebCrypto encryption round-trip even for local loopback echo
     await encryptP2PPayload(key, text);
     const msg: P2PChatMessage = {
       id: `p2p_${crypto.randomUUID()}`,

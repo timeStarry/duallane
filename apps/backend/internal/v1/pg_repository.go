@@ -369,7 +369,7 @@ func (r *PGRepository) PinMessage(ctx context.Context, actorID, conversationID, 
 	}
 
 	_, err = r.pool.Exec(ctx, `
-		INSERT INTO conversation_message_pins (conversation_id, message_id, pinned_by_user_id, pinned_at)
+		INSERT INTO conversation_pinned_messages (conversation_id, message_id, pinned_by_user_id, created_at)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (conversation_id, message_id) DO NOTHING
 	`, conversationID, messageID, actorID, now)
@@ -386,7 +386,7 @@ func (r *PGRepository) UnpinMessage(ctx context.Context, actorID, conversationID
 	if err != nil || !isMember {
 		return ErrForbidden
 	}
-	_, err = r.pool.Exec(ctx, `DELETE FROM conversation_message_pins WHERE conversation_id = $1 AND message_id = $2`, conversationID, messageID)
+	_, err = r.pool.Exec(ctx, `DELETE FROM conversation_pinned_messages WHERE conversation_id = $1 AND message_id = $2`, conversationID, messageID)
 	return err
 }
 
@@ -570,6 +570,79 @@ func (r *PGRepository) ListBotCommands(ctx context.Context, conversationID strin
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func (r *PGRepository) ListBotCommandsByBot(ctx context.Context, actorID, botID string) ([]BotCommand, error) {
+	var ownerID string
+	err := r.pool.QueryRow(ctx, `SELECT owner_user_id FROM workspace_agent_bots WHERE id = $1 AND status <> 'deleted'`, botID).Scan(&ownerID)
+	if err != nil || ownerID != actorID {
+		return nil, ErrForbidden
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT command, description, scope
+		FROM bot_commands
+		WHERE bot_id = $1
+		ORDER BY command ASC
+	`, botID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]BotCommand, 0)
+	for rows.Next() {
+		var item BotCommand
+		if err := rows.Scan(&item.Command, &item.Description, &item.Scope); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (r *PGRepository) CreateMultiBot(ctx context.Context, actorID, name string, now time.Time) (string, error) {
+	var count int
+	if err := r.pool.QueryRow(ctx, `SELECT count(*) FROM workspace_agent_bots WHERE space_id = $1 AND owner_user_id = $2 AND status <> 'deleted'`, r.spaceID, actorID).Scan(&count); err != nil {
+		return "", err
+	}
+	if count >= 20 {
+		return "", ErrRateLimited
+	}
+	botID := randomID("bot")
+	botUserID := randomID("usr_bot")
+	norm := strings.ToLower(strings.TrimSpace(name))
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO users (id, github_id, github_login, display_name, created_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`, botUserID, -now.UnixNano(), "__duallane_"+botID, strings.TrimSpace(name), now); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO workspace_agent_bots (id, space_id, owner_user_id, bot_user_id, mode, name, name_normalized, visibility_policy, conversation_policy, trigger_policy, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'external_agent', $5, $6, 'private', 'group-capable', 'mention-or-command', 'active', $7, $7)
+	`, botID, r.spaceID, actorID, botUserID, strings.TrimSpace(name), norm, now); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO workspace_agent_bot_settings (bot_id, space_id, visibility_policy, allow_direct, allow_group, group_inviter_policy, require_owner_approval, proactive_enabled, trigger_policy, created_at, updated_at)
+		VALUES ($1, $2, 'private', 1, 1, 'owner', 1, 0, 'mention-or-command', $3, $3)
+	`, botID, r.spaceID, now); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO workspace_agent_bot_limits (bot_id, space_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $3)
+	`, botID, r.spaceID, now); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return botID, nil
 }
 
 func (r *PGRepository) UpsertBotWebhook(ctx context.Context, actorID, botID, url, secret string, enabled bool, now time.Time) (BotWebhookConfig, error) {

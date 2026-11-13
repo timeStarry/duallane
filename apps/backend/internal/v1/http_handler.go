@@ -45,6 +45,8 @@ func (h *HTTPHandler) Mount(r chi.Router) {
 			r.Post("/auth/qr/{sessionId}/approve", h.handleQRApprove)
 			r.Get("/preferences", h.handleGetPreferences)
 			r.Put("/preferences", h.handleSavePreferences)
+			r.Post("/bots", h.handleCreateBot)
+			r.Get("/bots/{botId}/commands", h.handleListBotCommandsByBot)
 			r.Put("/bots/{botId}/commands", h.handleRegisterBotCommands)
 			r.Get("/conversations/{conversationId}/bot-commands", h.handleListBotCommands)
 			r.Put("/bots/{botId}/webhook", h.handleUpsertBotWebhook)
@@ -76,7 +78,11 @@ func actorFromContext(ctx context.Context) *auth.Actor {
 }
 
 func (h *HTTPHandler) handleSync(w http.ResponseWriter, r *http.Request) {
-	sinceSeq, _ := strconv.ParseInt(r.URL.Query().Get("sinceSeq"), 10, 64)
+	rawSeq := r.URL.Query().Get("sinceSeq")
+	if rawSeq == "" {
+		rawSeq = r.URL.Query().Get("afterSeq")
+	}
+	sinceSeq, _ := strconv.ParseInt(rawSeq, 10, 64)
 	res, err := h.service.SyncDelta(r.Context(), actorFromContext(r.Context()).ID, sinceSeq)
 	if err != nil {
 		writeServiceError(w, err)
@@ -276,6 +282,31 @@ func (h *HTTPHandler) handleRegisterBotCommands(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"updated": true})
+}
+
+func (h *HTTPHandler) handleCreateBot(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.bad_json", "请求格式无效")
+		return
+	}
+	botID, err := h.service.CreateMultiBot(r.Context(), actorFromContext(r.Context()).ID, body.Name)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"botId": botID, "name": body.Name})
+}
+
+func (h *HTTPHandler) handleListBotCommandsByBot(w http.ResponseWriter, r *http.Request) {
+	cmds, err := h.service.ListBotCommandsByBot(r.Context(), actorFromContext(r.Context()).ID, chi.URLParam(r, "botId"))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"commands": cmds})
 }
 
 func (h *HTTPHandler) handleListBotCommands(w http.ResponseWriter, r *http.Request) {

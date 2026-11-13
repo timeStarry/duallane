@@ -94,8 +94,24 @@ CREATE TABLE IF NOT EXISTS user_preferences (
   updated_at TIMESTAMPTZ NOT NULL
 );
 
--- 8. Bot Platform v2: lift 1-bot-per-user limit, add custom slash commands & signed outbound webhooks
+-- 8. Bot Platform v2: lift 1-bot-per-user limit, support Telegram privacy mode toggle, custom slash commands & signed outbound webhooks
+DROP INDEX IF EXISTS workspace_agent_bots_active_owner_idx;
 DROP INDEX IF EXISTS workspace_agent_bots_one_active_per_owner;
+
+ALTER TABLE workspace_agent_bots
+  DROP CONSTRAINT IF EXISTS workspace_agent_bots_trigger_policy_check;
+ALTER TABLE workspace_agent_bots
+  ADD CONSTRAINT workspace_agent_bots_trigger_policy_check CHECK (trigger_policy IN ('mention-or-command', 'all-messages'));
+
+ALTER TABLE workspace_agent_bot_settings
+  DROP CONSTRAINT IF EXISTS workspace_agent_bot_settings_trigger_policy_check;
+ALTER TABLE workspace_agent_bot_settings
+  ADD CONSTRAINT workspace_agent_bot_settings_trigger_policy_check CHECK (trigger_policy IN ('mention-or-command', 'all-messages'));
+
+ALTER TABLE conversation_pin_counters
+  DROP CONSTRAINT IF EXISTS conversation_pin_counters_pin_count_check;
+ALTER TABLE conversation_pin_counters
+  ADD CONSTRAINT conversation_pin_counters_pin_count_check CHECK (pin_count >= 0);
 
 CREATE TABLE IF NOT EXISTS bot_commands (
   id TEXT PRIMARY KEY,

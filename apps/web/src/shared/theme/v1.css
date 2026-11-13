@@ -37,6 +37,19 @@
   --color-danger: var(--dl-danger);
   --color-danger-soft: var(--dl-danger-soft);
 
+  /* Clean-Room v1 Widget Semantic Aliases */
+  --color-dl-surface-canvas: var(--dl-bg);
+  --color-dl-surface-subtle: var(--dl-soft);
+  --color-dl-border-hairline: var(--dl-line);
+  --color-dl-text-primary: var(--dl-text);
+  --color-dl-text-secondary: var(--dl-muted);
+  --color-dl-text-tertiary: var(--dl-muted);
+  --color-dl-lane-shared: var(--dl-shared);
+  --color-dl-lane-direct: var(--dl-direct);
+  --color-dl-success: var(--dl-success);
+  --color-dl-warning: var(--dl-warning);
+  --color-dl-danger: var(--dl-danger);
+
   /* Strict Radii Scale (5 levels + pill) */
   --radius-tag: 6px;
   --radius-control: 10px;
@@ -96,7 +109,8 @@ html[data-transparency="solid"] :is(.dl-glass-chrome, .dl-glass-elevated, .dl-gl
   -webkit-backdrop-filter: none;
 }
 
-.dl-canvas-ambient {
+.dl-canvas-ambient,
+.dl-ambient-canvas {
   background:
     radial-gradient(900px 520px at 15% -10%, var(--dl-shared-soft), transparent 65%),
     radial-gradient(760px 460px at 90% 105%, var(--dl-direct-soft), transparent 65%),

@@ -74,7 +74,7 @@ export function InspectorPane() {
             {(() => {
               const thread = threadsByRootId[inspectorThreadRootId];
               const localRoot = messages.find((m) => m.id === inspectorThreadRootId);
-              const rootText = thread?.root?.plainText || localRoot?.plainText || "正在加载线程…";
+              const rootText = localRoot?.plainText || thread?.threadTitle || `消息 #${inspectorThreadRootId.slice(-6)}`;
               const replies = thread?.replies || [];
               return (
                 <>
@@ -91,7 +91,7 @@ export function InspectorPane() {
                       className="rounded-2xl border border-dl-border-hairline bg-dl-surface-subtle/50 p-3 space-y-1"
                     >
                       <div className="text-[11px] font-medium text-dl-text-secondary">
-                        {members[reply.senderId]?.displayName || reply.senderId}
+                        {reply.authorName || members[reply.authorId]?.displayName || reply.authorId}
                       </div>
                       <div className="text-sm text-dl-text-primary whitespace-pre-wrap">
                         {reply.plainText}
@@ -118,7 +118,13 @@ export function InspectorPane() {
                 placeholder="在线程中回复…"
                 className="flex-1 rounded-xl border border-dl-border-hairline bg-dl-surface-subtle/60 px-3 py-1.5 text-sm text-dl-text-primary focus:outline-none"
               />
-              <Button type="submit" size="sm" variant="primary" busy={sending} disabled={!replyText.trim()}>
+              <Button
+                type="submit"
+                size="sm"
+                variant="primary"
+                busy={sending}
+                disabled={!replyText.trim()}
+              >
                 回复
               </Button>
             </div>

@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { useLaneStore } from "@/entities/lane/store";
 import { useWorkspaceStore } from "@/entities/workspace/store";
+import { apiV1 } from "@/shared/lib/api-v1";
 import { extractP2PRoomFromUrl } from "@/shared/lib/p2p-lane";
-import { Button, Input, SegmentedControl } from "@/shared/ui";
+import { Button, Input } from "@/shared/ui";
 import { CommandSearchModal } from "@/widgets/CommandSearchModal";
 import { ConversationSidebar } from "@/widgets/ConversationSidebar";
 import { InspectorPane } from "@/widgets/InspectorPane";
@@ -12,33 +13,30 @@ import { SettingsModal } from "@/widgets/SettingsModal";
 import { TimelinePane } from "@/widgets/TimelinePane";
 
 export function AppV1() {
-  const { activeLane, setActiveLane, setThemeMode } = useLaneStore();
+  const { activeLane, setActiveLane } = useLaneStore();
   const {
     authStatus,
     bootstrapWorkspace,
-    login,
-    register,
+    acceptInviteAndBootstrap,
     joinP2PRoom,
     createP2PRoom,
   } = useWorkspaceStore();
 
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [displayName, setDisplayName] = useState("");
-  const [inviteCode, setInviteCode] = useState("");
+  const [inviteCode, setInviteCode] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("invite") || "";
+  });
   const [authError, setAuthError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    setThemeMode("system");
     const p2p = extractP2PRoomFromUrl();
     if (p2p) {
       setActiveLane("p2p");
       void joinP2PRoom(p2p.roomId, p2p.keyStr);
     }
     void bootstrapWorkspace();
-  }, [bootstrapWorkspace, joinP2PRoom, setActiveLane, setThemeMode]);
+  }, [bootstrapWorkspace, joinP2PRoom, setActiveLane]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -54,18 +52,19 @@ export function AppV1() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [setActiveLane]);
 
-  const handleAuthSubmit = async (e: React.FormEvent) => {
+  const handleGitHubSignIn = () => {
+    window.location.assign(apiV1.getGitHubStartUrl(inviteCode));
+  };
+
+  const handleInviteQuickAccept = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!inviteCode.trim()) return;
     setAuthError("");
     setSubmitting(true);
     try {
-      if (authMode === "login") {
-        await login(email, password);
-      } else {
-        await register(inviteCode, displayName, email, password);
-      }
+      await acceptInviteAndBootstrap(inviteCode);
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : "登录失败，请检查输入");
+      setAuthError(err instanceof Error ? err.message : "邀请码验证失败");
     } finally {
       setSubmitting(false);
     }
@@ -73,94 +72,79 @@ export function AppV1() {
 
   if (authStatus === "checking") {
     return (
-      <main className="dl-ambient-canvas flex h-screen w-screen items-center justify-center">
-        <div className="dl-glass-elevated rounded-3xl px-6 py-4 text-sm text-dl-text-secondary">
+      <main className="dl-canvas-ambient flex h-screen w-screen items-center justify-center">
+        <div className="dl-glass-elevated rounded-dialog px-6 py-4 text-sm text-dl-text-secondary">
           正在连接 DualLane v1.0…
         </div>
       </main>
     );
   }
 
-  // Unauthenticated Dual-Lane Entry (allows instant P2P or Workspace Sign-In)
   if (authStatus === "unauthenticated" && activeLane !== "p2p") {
     return (
-      <main className="dl-ambient-canvas flex min-h-screen w-screen items-center justify-center p-6">
-        <div className="dl-glass-dialog w-full max-w-md rounded-3xl border border-dl-border-hairline p-6 shadow-xl space-y-5">
-          <div className="flex items-center justify-between">
+      <main className="dl-canvas-ambient flex min-h-screen w-screen items-center justify-center p-6">
+        <div className="dl-glass-dialog w-full max-w-md rounded-dialog border border-dl-border-hairline p-6 space-y-5">
+          <div className="flex items-start justify-between gap-3">
             <div>
               <h1 className="text-lg font-bold text-dl-text-primary">DualLane v1.0</h1>
-              <p className="text-xs text-dl-text-tertiary">共享空间协作 · 私密直连加密</p>
+              <p className="text-xs text-dl-text-tertiary mt-0.5">
+                共享空间自洽协作 · 私密直连端到端加密
+              </p>
             </div>
             <Button
               size="sm"
-              variant="secondary"
+              variant="glass"
               onClick={() => {
                 setActiveLane("p2p");
                 void createP2PRoom();
               }}
             >
-              🔐 免登录发起 P2P 直连
+              🔐 免登录直连
             </Button>
           </div>
 
-          <SegmentedControl
-            label="登录或注册"
-            value={authMode}
-            onValueChange={(v) => setAuthMode(v as "login" | "register")}
-            options={[
-              { value: "login", label: "账号登录" },
-              { value: "register", label: "邀请码注册" },
-            ]}
-          />
-
           {authError && (
-            <div className="rounded-xl bg-dl-danger/10 px-3 py-2 text-xs text-dl-danger border border-dl-danger/25">
+            <div className="rounded-control bg-dl-danger/10 px-3 py-2 text-xs text-dl-danger border border-dl-danger/25">
               {authError}
             </div>
           )}
 
-          <form onSubmit={handleAuthSubmit} className="space-y-3">
-            {authMode === "register" && (
-              <>
-                <Input
-                  value={inviteCode}
-                  onChange={(e) => setInviteCode(e.target.value)}
-                  placeholder="邀请码"
-                  required
-                />
-                <Input
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder="显示名称"
-                  required
-                />
-              </>
-            )}
+          <div className="space-y-3">
             <Input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="邮箱地址"
-              required
+              value={inviteCode}
+              onChange={(e) => setInviteCode(e.target.value)}
+              placeholder="可选：输入空间邀请码"
             />
-            <Input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="密码"
-              required
-            />
-            <Button type="submit" variant="primary" className="w-full" busy={submitting}>
-              {authMode === "login" ? "进入共享空间" : "注册并加入空间"}
+            <Button
+              type="button"
+              variant="primary"
+              className="w-full"
+              onClick={handleGitHubSignIn}
+            >
+              使用 GitHub 登录共享空间
             </Button>
-          </form>
+          </div>
+
+          {inviteCode.trim() && (
+            <form onSubmit={handleInviteQuickAccept} className="pt-2 border-t border-dl-border-hairline">
+              <Button
+                type="submit"
+                variant="secondary"
+                size="sm"
+                className="w-full"
+                busy={submitting}
+              >
+                通过邀请码直接加入（开发环境快捷入口）
+              </Button>
+            </form>
+          )}
         </div>
       </main>
     );
   }
 
   return (
-    <main className="dl-ambient-canvas flex h-screen w-screen overflow-hidden text-dl-text-primary">
+    <main className="dl-canvas-ambient flex h-screen w-screen overflow-hidden text-dl-text-primary">
       <PrimaryRail />
       <ConversationSidebar />
       <TimelinePane />

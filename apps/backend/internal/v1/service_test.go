@@ -61,6 +61,12 @@ func (s *stubRepo) RegisterBotCommands(_ context.Context, _, _ string, commands 
 func (s *stubRepo) ListBotCommands(_ context.Context, _ string) ([]BotCommand, error) {
 	return s.commands, nil
 }
+func (s *stubRepo) ListBotCommandsByBot(_ context.Context, _, _ string) ([]BotCommand, error) {
+	return s.commands, nil
+}
+func (s *stubRepo) CreateMultiBot(_ context.Context, _, _ string, _ time.Time) (string, error) {
+	return "bot_multi_1", nil
+}
 func (s *stubRepo) UpsertBotWebhook(_ context.Context, _, botID, url, _ string, enabled bool, _ time.Time) (BotWebhookConfig, error) {
 	return BotWebhookConfig{BotID: botID, URL: url, Enabled: enabled}, nil
 }

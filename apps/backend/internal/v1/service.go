@@ -28,6 +28,8 @@ type Repository interface {
 	SavePreferences(ctx context.Context, actorID string, prefs map[string]any, now time.Time) error
 	RegisterBotCommands(ctx context.Context, actorID, botID string, commands []BotCommand, now time.Time) error
 	ListBotCommands(ctx context.Context, conversationID string) ([]BotCommand, error)
+	ListBotCommandsByBot(ctx context.Context, actorID, botID string) ([]BotCommand, error)
+	CreateMultiBot(ctx context.Context, actorID, name string, now time.Time) (string, error)
 	UpsertBotWebhook(ctx context.Context, actorID, botID, url, secretHash string, enabled bool, now time.Time) (BotWebhookConfig, error)
 }
 
@@ -183,6 +185,21 @@ func (s *Service) RegisterBotCommands(ctx context.Context, actorID, botID string
 
 func (s *Service) ListBotCommands(ctx context.Context, conversationID string) ([]BotCommand, error) {
 	return s.repo.ListBotCommands(ctx, conversationID)
+}
+
+func (s *Service) ListBotCommandsByBot(ctx context.Context, actorID, botID string) ([]BotCommand, error) {
+	if strings.TrimSpace(actorID) == "" || strings.TrimSpace(botID) == "" {
+		return nil, ErrInvalidInput
+	}
+	return s.repo.ListBotCommandsByBot(ctx, actorID, botID)
+}
+
+func (s *Service) CreateMultiBot(ctx context.Context, actorID, name string) (string, error) {
+	trimmed := strings.TrimSpace(name)
+	if strings.TrimSpace(actorID) == "" || len(trimmed) < 2 || len(trimmed) > 64 {
+		return "", ErrInvalidInput
+	}
+	return s.repo.CreateMultiBot(ctx, actorID, trimmed, s.now())
 }
 
 func (s *Service) UpsertBotWebhook(ctx context.Context, actorID, botID, url, secret string, enabled bool) (BotWebhookConfig, error) {
