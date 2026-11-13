@@ -744,6 +744,23 @@ func TestAcknowledgeAndRateLimit(t *testing.T) {
 	}
 }
 
+func TestSafeDeliveryPayloadDeliversMessageAndCommandContext(t *testing.T) {
+	msgBytes := safeDeliveryPayload(EventRecord{
+		EventType:      "message.created",
+		ActorUserID:    "usr_owner_1",
+		ConversationID: "conv_1",
+		TargetID:       "msg_1",
+		PayloadJSON:    []byte(`{"plainText":"hello @echo","threadRootId":"msg_root_1","command":"/summarize","args":"last 10"}`),
+	})
+	var msgPayload map[string]any
+	if err := json.Unmarshal(msgBytes, &msgPayload); err != nil {
+		t.Fatal(err)
+	}
+	if msgPayload["text"] != "hello @echo" || msgPayload["messageId"] != "msg_1" || msgPayload["threadRootId"] != "msg_root_1" || msgPayload["args"] != "last 10" {
+		t.Fatalf("unexpected message delivery payload: %#v", msgPayload)
+	}
+}
+
 func isCode(err error, code string) bool {
 	var value *Error
 	return errors.As(err, &value) && value.Code == code

@@ -1599,24 +1599,61 @@ func eventStringFields(payload map[string]any, keys ...string) map[string]any {
 }
 
 func safeDeliveryPayload(event EventRecord) []byte {
-	if event.EventType != "card.action" {
-		return []byte(`{}`)
-	}
 	payload := parseObject(event.PayloadJSON)
-	result := eventStringFields(payload, "botId", "botUserId", "cardId", "actionId", "clientActionId")
-	if identifierPattern.MatchString(event.ActorUserID) {
-		result["actorUserId"] = event.ActorUserID
-	}
-	data, err := workspacecards.NormalizeCardPayload(payload["data"], workspacecards.Limits{MaxPayloadBytes: MaxDeliveryDataBytes, MaxDepth: MaxDeliveryDataDepth, MaxNodes: MaxDeliveryDataNodes, MaxTextBytes: MaxDeliveryTextBytes}, false)
-	if err != nil {
-		data = map[string]any{}
-	}
-	result["data"] = data
-	encoded, err := json.Marshal(result)
-	if err != nil {
+	switch event.EventType {
+	case "card.action":
+		result := eventStringFields(payload, "botId", "botUserId", "cardId", "actionId", "clientActionId")
+		if identifierPattern.MatchString(event.ActorUserID) {
+			result["actorUserId"] = event.ActorUserID
+		}
+		data, err := workspacecards.NormalizeCardPayload(payload["data"], workspacecards.Limits{MaxPayloadBytes: MaxDeliveryDataBytes, MaxDepth: MaxDeliveryDataDepth, MaxNodes: MaxDeliveryDataNodes, MaxTextBytes: MaxDeliveryTextBytes}, false)
+		if err != nil {
+			data = map[string]any{}
+		}
+		result["data"] = data
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return []byte(`{}`)
+		}
+		return encoded
+	case "message.created", "message.updated", "command.invoked", "thread.reply":
+		result := eventStringFields(payload, "botId", "botUserId", "messageId", "conversationId", "threadRootId", "replyToMessageId", "senderId", "command")
+		if identifierPattern.MatchString(event.ActorUserID) {
+			result["actorUserId"] = event.ActorUserID
+		}
+		if _, ok := result["messageId"]; !ok && identifierPattern.MatchString(event.TargetID) {
+			result["messageId"] = event.TargetID
+		}
+		if _, ok := result["conversationId"]; !ok && identifierPattern.MatchString(event.ConversationID) {
+			result["conversationId"] = event.ConversationID
+		}
+		if text := stringField(payload, "plainText"); text != "" {
+			result["text"] = truncateUTF8Bytes(text, MaxDeliveryTextBytes)
+		} else if text := stringField(payload, "text"); text != "" {
+			result["text"] = truncateUTF8Bytes(text, MaxDeliveryTextBytes)
+		}
+		if args := stringField(payload, "args"); args != "" {
+			result["args"] = truncateUTF8Bytes(args, MaxDeliveryTextBytes)
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return []byte(`{}`)
+		}
+		return encoded
+	default:
 		return []byte(`{}`)
 	}
-	return encoded
+}
+
+func truncateUTF8Bytes(value string, maxBytes int) string {
+	if maxBytes <= 0 || len(value) <= maxBytes {
+		return value
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut]
 }
 
 func (s *Service) passesDeliveryRateLimits(ctx context.Context, value *Auth, event EventRecord) (bool, error) {

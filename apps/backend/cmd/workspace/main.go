@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	v1 "github.com/timestarry/duallane/apps/backend/internal/v1"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/config"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/httpserver"
 	"github.com/timestarry/duallane/apps/backend/internal/platform/logging"
@@ -500,6 +501,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			BotGatewaySetup:     botService,
 			BotGatewayWebSocket: botGatewayWebSocket,
 			Realtime:            realtimeHandler,
+			V1:                  v1.NewHTTPHandler(v1.NewService(v1.NewPGRepository(pool, auth.DefaultSpaceID)), authHandler),
 			FrontendURL:         runtimeConfig.FrontendURL, PublicBaseURL: runtimeConfig.PublicBaseURL,
 			TrustProxy: runtimeConfig.TrustProxy,
 		}), metricSet, pool),

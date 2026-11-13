@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	v1 "github.com/timestarry/duallane/apps/backend/internal/v1"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bootstrap"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/botgateway"
@@ -133,6 +134,7 @@ type RouterOptions struct {
 	BotGatewaySetup     BotGatewaySetupService
 	BotGatewayWebSocket http.Handler
 	Realtime            http.Handler
+	V1                  *v1.HTTPHandler
 	FrontendURL         string
 	PublicBaseURL       string
 	InteractionSpaceID  string
@@ -205,6 +207,11 @@ func NewRouter(options RouterOptions) http.Handler {
 			ActorResolver: options.ActorResolver, TrustProxy: options.TrustProxy,
 		})
 	})
+	if options.V1 != nil {
+		router.With(options.Gate.Middleware).Group(func(v1Router chi.Router) {
+			options.V1.Mount(v1Router)
+		})
+	}
 	return router
 }
 
