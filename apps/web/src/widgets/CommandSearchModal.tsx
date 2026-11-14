@@ -116,7 +116,11 @@ export function CommandSearchModal() {
   const p2pHits = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q || !Array.isArray(p2pMessages)) return [];
-    return p2pMessages.filter((m) => (m.text || "").toLowerCase().includes(q));
+    return p2pMessages.filter(
+      (m) =>
+        (m.text || "").toLowerCase().includes(q) ||
+        (m.attachment?.fileName || "").toLowerCase().includes(q)
+    );
   }, [p2pMessages, query]);
 
   const messageHits = Array.isArray(results?.messages) ? results.messages : [];
@@ -126,23 +130,23 @@ export function CommandSearchModal() {
     <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
       <DialogContent size="lg">
         <DialogHeader>
-          <div className="flex items-center justify-between pr-8">
-            <DialogTitle className="flex items-center gap-2">
-              <Search className="size-4 text-dl-lane-shared" strokeWidth={2} />
-              全局搜索
+          <div className="flex items-center justify-between gap-2 pr-8 max-narrow:pr-4">
+            <DialogTitle className="flex flex-wrap items-center gap-2">
+              <Search className="size-4 shrink-0 text-dl-lane-shared" strokeWidth={2} />
+              <span>全局搜索</span>
               <span className="rounded-full bg-dl-surface-subtle px-2 py-0.5 text-[10px] font-medium text-dl-text-secondary">
                 {searchSource === "remote" && authStatus === "authenticated"
                   ? "服务端全文检索"
                   : "本机内存检索"}
               </span>
             </DialogTitle>
-            <kbd className="dl-kbd">ESC</kbd>
+            <kbd className="dl-kbd max-narrow:hidden">ESC</kbd>
           </div>
           <DialogDescription>
             搜索共享空间消息正文、附件文件与当前私密直连内存记录，点击结果直接定位原上下文。
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 p-6 pt-4">
+        <div className="space-y-4 p-6 max-narrow:p-3.5 pt-4">
           <Input
             autoFocus
             value={query}
@@ -152,6 +156,7 @@ export function CommandSearchModal() {
               if (!val.trim()) setResults({ messages: [], files: [] });
             }}
             placeholder="输入关键词、文件名或指令…"
+            aria-label="全局搜索关键词"
           />
 
           {loading && <div className="text-xs text-dl-text-tertiary">正在搜索…</div>}

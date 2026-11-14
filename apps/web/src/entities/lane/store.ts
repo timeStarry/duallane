@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { scrubP2PRoomFromUrl } from "@/shared/lib/p2p-lane";
 
 export type LaneId = "workspace" | "p2p";
 export type ThemeMode = "system" | "light" | "dark";
@@ -8,8 +9,10 @@ export type InspectorTab = "thread" | "details" | "file";
 export interface LightboxItem {
   id: string;
   url: string;
+  downloadUrl?: string;
   fileName: string;
   mimeType: string;
+  byteSize?: number;
   width?: number;
   height?: number;
   sourceMessageId?: string;
@@ -73,8 +76,18 @@ export const useLaneStore = create<LaneUIState>((set) => ({
   lightboxItems: [],
   lightboxIndex: 0,
 
-  setActiveLane: (activeLane) => set({ activeLane }),
-  setMobileView: (mobileView) => set({ mobileView }),
+  setActiveLane: (activeLane) => {
+    if (activeLane === "workspace") {
+      scrubP2PRoomFromUrl("/");
+    }
+    set({ activeLane });
+  },
+  setMobileView: (mobileView) => {
+    if (mobileView === "list") {
+      scrubP2PRoomFromUrl("/");
+    }
+    set({ mobileView });
+  },
   setThemeMode: (themeMode) => {
     applyThemeToDocument(themeMode);
     set({ themeMode });

@@ -7,11 +7,14 @@ import { parseBootstrapPayload, useWorkspaceStore } from "@/entities/workspace/s
 import { buildDevPreviewFixture } from "@/entities/workspace/demo-fixture";
 import { apiV1 } from "@/shared/lib/api-v1";
 import {
+  createSafeP2PBlobUrl,
   decryptP2PPayload,
   deriveAesKey,
   encryptP2PPayload,
   extractP2PRoomFromUrl,
   generateRoomKeyString,
+  hasP2PRoomInUrl,
+  safeInlineImageMime,
 } from "@/shared/lib/p2p-lane";
 import { useLaneStore } from "@/entities/lane/store";
 import { applyVibrancyTokensToRoot } from "@/shared/theme/vibrancy";
@@ -210,6 +213,118 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
     expect(contrastRatio(light.onDirect, light.direct)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(dark.onShared, dark.shared)).toBeGreaterThanOrEqual(7.0);
     expect(contrastRatio(dark.onDirect, dark.direct)).toBeGreaterThanOrEqual(6.5);
+
+    // Semantic status colors (success, warning, danger) against surface (>= 4.5:1 WCAG AA)
+    expect(contrastRatio(light.warning, light.surface)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(light.danger, light.surface)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(dark.warning, dark.surface)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(dark.danger, dark.surface)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("enforces strict Base64URL #k= validation, URL detection, and XSS-safe P2P Blob MIME handling", async () => {
+    await expect(deriveAesKey("invalid+base64/chars==")).rejects.toThrow();
+    await expect(deriveAesKey("short")).rejects.toThrow();
+
+    expect(hasP2PRoomInUrl({ pathname: "/direct/Rm123", hash: "#k=abc" })).toBe(true);
+    expect(hasP2PRoomInUrl({ pathname: "/", hash: "#k=abc" })).toBe(true);
+    expect(hasP2PRoomInUrl({ pathname: "/workspace", hash: "" })).toBe(false);
+
+    expect(safeInlineImageMime("image/png")).toBe(true);
+    expect(safeInlineImageMime("image/jpeg")).toBe(true);
+    expect(safeInlineImageMime("image/webp")).toBe(true);
+    expect(safeInlineImageMime("image/svg+xml")).toBe(false);
+    expect(safeInlineImageMime("text/html")).toBe(false);
+
+    const svgBytes = new TextEncoder().encode("<svg onload='alert(1)'></svg>");
+    const blobUrl = createSafeP2PBlobUrl(svgBytes, "image/svg+xml");
+    expect(blobUrl.startsWith("blob:")).toBe(true);
+    URL.revokeObjectURL(blobUrl);
+  });
+
+  it("uploads Workspace files (single & chunked) and omits empty text blocks on attachment-only messages", async () => {
+    const calls: Array<{ url: string; method: string; headers?: HeadersInit; body?: unknown }> = [];
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, method: init?.method || "GET", headers: init?.headers, body: init?.body });
+      if (url === "/api/workspace/files/uploads/reserve") {
+        const req = JSON.parse(String(init?.body));
+        if (req.byteSize > 10) {
+          return new Response(
+            JSON.stringify({
+              status: "reserved",
+              attachment: { id: "att_chunked", fileName: req.fileName, mimeType: req.mimeType, byteSize: req.byteSize },
+              upload: { id: "up_chunked", mode: "chunked", partSize: 8, partCount: 2 },
+            }),
+            { status: 201 }
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            status: "reserved",
+            attachment: { id: "att_single", fileName: req.fileName, mimeType: req.mimeType, byteSize: req.byteSize },
+            upload: { id: "up_single", mode: "single", partSize: 4096, partCount: 1 },
+          }),
+          { status: 201 }
+        );
+      }
+      if (url.startsWith("/api/workspace/files/uploads/up_single/content")) {
+        return new Response(
+          JSON.stringify({
+            usedToday: 5,
+            attachment: { id: "att_single", fileName: "note.txt", mimeType: "text/plain", byteSize: 5 },
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes("/parts/")) {
+        return new Response(JSON.stringify({ part: { partNumber: 1 } }), { status: 200 });
+      }
+      if (url.endsWith("/complete")) {
+        return new Response(
+          JSON.stringify({
+            usedToday: 17,
+            attachment: { id: "att_chunked", fileName: "diagram.png", mimeType: "image/png", byteSize: 12 },
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response(JSON.stringify({ message: { id: "msg_att_1" } }), { status: 201 });
+    }) as typeof fetch;
+
+    try {
+      const smallFile = new File(["hello"], "note.txt", { type: "text/plain" });
+      const singleAtt = await apiV1.uploadWorkspaceFile("conv_1", smallFile);
+      expect(singleAtt.id).toBe("att_single");
+      expect(singleAtt.downloadUrl).toBe("/api/workspace/files/att_single/download");
+      expect(singleAtt.url).toBe("/api/workspace/files/att_single/download");
+
+      const largeFile = new File(["0123456789AB"], "diagram.png", { type: "image/png" });
+      const chunkedAtt = await apiV1.uploadWorkspaceFile("conv_1", largeFile);
+      expect(chunkedAtt.id).toBe("att_chunked");
+      expect(chunkedAtt.url).toBe("/api/workspace/files/att_chunked/preview");
+      expect(calls.some((c) => c.url === "/api/workspace/files/uploads/up_chunked/parts/1")).toBe(true);
+      expect(calls.some((c) => c.url === "/api/workspace/files/uploads/up_chunked/parts/2")).toBe(true);
+      expect(calls.some((c) => c.url === "/api/workspace/files/uploads/up_chunked/complete")).toBe(true);
+
+      await apiV1.sendMessage("conv_1", "", {
+        clientMessageId: "cli_att_only",
+        attachmentIds: ["att_chunked"],
+      });
+      const msgCall = calls.find((c) => c.url === "/api/workspace/messages");
+      expect(JSON.parse(String(msgCall?.body))).toEqual({
+        conversationId: "conv_1",
+        clientMessageId: "cli_att_only",
+        replyToMessageId: "",
+        content: {
+          format: "duallane.message+json;v=1",
+          plainText: "[文件]",
+          blocks: [{ type: "attachment", attachmentId: "att_chunked" }],
+        },
+      });
+    } finally {
+      globalThis.fetch = origFetch;
+    }
   });
 
   it("renders PrimaryRail, ConversationSidebar, and TimelinePane with vector icons, consecutive message grouping, and floating hover bar", () => {

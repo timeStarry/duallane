@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { AtSign, Bookmark, Check, Plus, ShieldCheck } from "lucide-react";
+import { AtSign, Bookmark, Check, LogOut, Plus, ShieldCheck } from "lucide-react";
 import { useLaneStore } from "@/entities/lane/store";
 import { useWorkspaceStore } from "@/entities/workspace/store";
 import { apiV1 } from "@/shared/lib/api-v1";
@@ -40,6 +40,7 @@ export function ConversationSidebar() {
     bootstrapWorkspace,
     p2pRoom,
     createP2PRoom,
+    leaveP2PRoom,
     p2pDraft,
   } = useWorkspaceStore();
 
@@ -86,26 +87,27 @@ export function ConversationSidebar() {
   if (activeLane === "p2p") {
     return (
       <aside
+        aria-label="私密直连会话列表"
         className={cn(
           "dl-glass-chrome flex h-full w-[288px] shrink-0 flex-col border-r border-dl-border-hairline",
-          "max-compact:flex-1 max-compact:w-auto max-compact:border-r-0",
+          "max-compact:flex-1 max-compact:min-h-0 max-compact:w-full max-compact:border-r-0",
           mobileView === "chat" && "max-compact:hidden"
         )}
       >
-        <div className="flex items-center justify-between border-b border-dl-border-hairline px-4 py-3.5">
-          <div>
-            <h2 className="text-sm font-semibold text-dl-text-primary">私密直连</h2>
-            <p className="text-[11px] font-medium text-dl-lane-direct">
+        <div className="flex items-center justify-between gap-2 border-b border-dl-border-hairline px-4 max-narrow:px-3 py-3.5">
+          <div className="min-w-0">
+            <h2 className="truncate text-sm font-semibold text-dl-text-primary">私密直连</h2>
+            <p className="truncate text-[11px] font-medium text-dl-lane-direct">
               端到端加密 · 零服务端落盘
             </p>
           </div>
           <Button
             size="sm"
             variant="secondary"
-            className="border-dl-lane-direct/35 bg-dl-lane-direct/15 text-dl-lane-direct hover:bg-dl-lane-direct/25"
+            className="shrink-0 border-dl-lane-direct/35 bg-dl-lane-direct/15 text-dl-lane-direct hover:bg-dl-lane-direct/25"
             onClick={() => {
-              void createP2PRoom();
               setMobileView("chat");
+              void createP2PRoom();
             }}
           >
             <Plus className="size-3.5" strokeWidth={2} />
@@ -113,61 +115,78 @@ export function ConversationSidebar() {
           </Button>
         </div>
 
-        <div className="p-3 space-y-2">
+        <div className="dl-scroll flex-1 overflow-y-auto p-3 space-y-2.5">
           {p2pRoom ? (
-            <Button
-              variant="ghost"
-              onClick={() => setMobileView("chat")}
-              className="dl-glass-elevated h-auto w-full flex-col items-stretch rounded-2xl border border-dl-lane-direct/35 p-3 text-left"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="flex items-center gap-1.5 text-xs font-semibold text-dl-text-primary truncate">
-                  <ShieldCheck className="size-3.5 shrink-0 text-dl-lane-direct" strokeWidth={2} />
-                  <span className="truncate">房间 #{p2pRoom.roomId}</span>
-                </span>
-                <span
-                  className={cn(
-                    "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold",
-                    p2pRoom.status === "peer_connected"
-                      ? "bg-dl-success/16 text-dl-success"
-                      : p2pRoom.status === "waiting_peer" || p2pRoom.status === "connecting"
-                        ? "bg-dl-warning/16 text-dl-warning"
-                        : "bg-dl-danger/14 text-dl-danger"
-                  )}
-                >
+            <div className="dl-glass-elevated rounded-2xl border border-dl-lane-direct/35 p-3 space-y-2.5">
+              <Button
+                variant="ghost"
+                onClick={() => setMobileView("chat")}
+                className="h-auto w-full flex-col items-stretch rounded-xl p-1 text-left"
+              >
+                <div className="flex items-center justify-between gap-2 min-w-0">
+                  <span className="flex items-center gap-1.5 text-xs font-semibold text-dl-text-primary min-w-0">
+                    <ShieldCheck className="size-3.5 shrink-0 text-dl-lane-direct" strokeWidth={2} />
+                    <span className="truncate">房间 #{p2pRoom.roomId}</span>
+                  </span>
                   <span
                     className={cn(
-                      "h-1.5 w-1.5 rounded-full",
+                      "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold",
                       p2pRoom.status === "peer_connected"
-                        ? "bg-dl-success"
+                        ? "bg-dl-success/16 text-dl-success"
                         : p2pRoom.status === "waiting_peer" || p2pRoom.status === "connecting"
-                          ? "bg-dl-warning"
-                          : "bg-dl-danger"
+                          ? "bg-dl-warning/16 text-dl-warning"
+                          : "bg-dl-danger/14 text-dl-danger"
                     )}
-                  />
-                  {p2pRoom.status === "peer_connected"
-                    ? "对端已连接 2/2"
-                    : p2pRoom.status === "waiting_peer"
-                      ? "等待对端 1/2"
-                      : p2pRoom.status === "connecting"
-                        ? "连接信令中"
-                        : p2pRoom.status === "room_full"
-                          ? "房间已满"
-                          : p2pRoom.status === "room_not_found"
-                            ? "房间已过期"
-                            : "信令未连接"}
-                </span>
-              </div>
-              <div className="mt-1 text-[11px] font-mono text-dl-text-tertiary">
-                指纹 {p2pRoom.keyFingerprint}
-              </div>
-              {p2pDraft.trim() ? (
-                <div className="mt-1.5 truncate text-xs">
-                  <span className="font-medium text-dl-warning">[草稿] </span>
-                  <span className="text-dl-text-secondary">{p2pDraft}</span>
+                  >
+                    <span
+                      className={cn(
+                        "h-1.5 w-1.5 rounded-full",
+                        p2pRoom.status === "peer_connected"
+                          ? "bg-dl-success"
+                          : p2pRoom.status === "waiting_peer" || p2pRoom.status === "connecting"
+                            ? "bg-dl-warning"
+                            : "bg-dl-danger"
+                      )}
+                    />
+                    {p2pRoom.status === "peer_connected"
+                      ? "对端已连接 2/2"
+                      : p2pRoom.status === "waiting_peer"
+                        ? "等待对端 1/2"
+                        : p2pRoom.status === "connecting"
+                          ? "连接信令中"
+                          : p2pRoom.status === "room_full"
+                            ? "房间已满"
+                            : p2pRoom.status === "room_not_found"
+                              ? "房间已过期"
+                              : "信令未连接"}
+                  </span>
                 </div>
-              ) : null}
-            </Button>
+                <div className="mt-1 truncate text-[11px] font-mono text-dl-text-tertiary">
+                  指纹 {p2pRoom.keyFingerprint}
+                </div>
+                {p2pDraft.trim() ? (
+                  <div className="mt-1.5 truncate text-xs">
+                    <span className="font-medium text-dl-warning">[草稿] </span>
+                    <span className="text-dl-text-secondary">{p2pDraft}</span>
+                  </div>
+                ) : null}
+              </Button>
+
+              <div className="flex items-center justify-end border-t border-dl-border-hairline pt-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 gap-1.5 px-2.5 text-xs text-dl-danger hover:bg-dl-danger/10"
+                  onClick={() => {
+                    leaveP2PRoom();
+                    setMobileView("list");
+                  }}
+                >
+                  <LogOut className="size-3.5" strokeWidth={1.9} />
+                  退出并销毁房间
+                </Button>
+              </div>
+            </div>
           ) : (
             <div className="rounded-2xl border border-dashed border-dl-border-strong p-5 text-center text-xs leading-relaxed text-dl-text-secondary">
               点击右上角「新建房间」生成端到端加密直连链接，密钥仅保存在 URL <code className="font-mono text-dl-lane-direct">#k=</code> 与浏览器内存中。
@@ -182,9 +201,10 @@ export function ConversationSidebar() {
 
   return (
     <aside
+      aria-label="共享空间对话列表"
       className={cn(
         "dl-glass-chrome flex h-full w-[288px] shrink-0 flex-col border-r border-dl-border-hairline",
-        "max-compact:flex-1 max-compact:w-auto max-compact:border-r-0",
+        "max-compact:flex-1 max-compact:min-h-0 max-compact:w-full max-compact:border-r-0",
         mobileView === "chat" && "max-compact:hidden"
       )}
     >
@@ -308,11 +328,12 @@ export function ConversationSidebar() {
               选择要加入的成员，创建后所有成员均可置顶消息与发起线程讨论。
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleCreateGroup} className="space-y-3 p-6 pt-4">
+          <form onSubmit={handleCreateGroup} className="space-y-3 p-6 max-narrow:p-3.5 pt-4">
             <Input
               value={groupTitle}
               onChange={(e) => setGroupTitle(e.target.value)}
               placeholder="群组名称，例如：产品设计与架构"
+              aria-label="群组名称"
               required
             />
             <div className="dl-scroll max-h-48 overflow-y-auto space-y-1 rounded-xl border border-dl-border-hairline p-2">

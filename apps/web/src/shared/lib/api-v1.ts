@@ -232,8 +232,140 @@ export const apiV1 = {
     requestJSON<{ messages?: Array<Record<string, unknown>> }>(
       `/api/workspace/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}`
     ),
-  sendMessage: (conversationId: string, text: string, options?: { replyToMessageId?: string; clientMessageId?: string }) =>
-    requestJSON<Record<string, unknown>>("/api/workspace/messages", {
+  uploadWorkspaceFile: async (
+    conversationId: string,
+    file: File
+  ): Promise<{
+    id: string;
+    fileName: string;
+    mimeType: string;
+    byteSize: number;
+    url: string;
+    downloadUrl: string;
+    previewUrl: string;
+    usedToday?: number;
+  }> => {
+    const mimeType = file.type || "application/octet-stream";
+    const reserved = await requestJSON<{
+      status?: string;
+      id?: string;
+      usedToday?: number;
+      attachment?: {
+        id: string;
+        fileName: string;
+        mimeType: string;
+        byteSize: number;
+      };
+      upload?: {
+        id: string;
+        mode: "single" | "chunked" | string;
+        partSize: number;
+        partCount: number;
+      };
+    }>("/api/workspace/files/uploads/reserve", {
+      method: "POST",
+      body: JSON.stringify({
+        fileName: file.name,
+        mimeType,
+        byteSize: file.size,
+        visibility: "conversation",
+        conversationId,
+      }),
+    });
+
+    if (reserved.status === "rejected" || !reserved.upload?.id) {
+      throw new ApiClientError("quota.insufficient", "今日空间文件上传配额不足", 429);
+    }
+
+    const uploadId = reserved.upload.id;
+    const rawBuffer = await file.arrayBuffer();
+    let finalAttachment = reserved.attachment;
+    let finalUsedToday = reserved.usedToday;
+
+    if (reserved.upload.mode === "chunked" && reserved.upload.partCount > 1) {
+      const partSize = reserved.upload.partSize || 4 * 1024 * 1024;
+      for (let partNumber = 1; partNumber <= reserved.upload.partCount; partNumber++) {
+        const start = (partNumber - 1) * partSize;
+        const end = Math.min(rawBuffer.byteLength, start + partSize);
+        const chunk = rawBuffer.slice(start, end);
+        const digestBuf = await crypto.subtle.digest("SHA-256", chunk);
+        const sha256Hex = Array.from(new Uint8Array(digestBuf))
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+        await requestJSON<Record<string, unknown>>(
+          `/api/workspace/files/uploads/${encodeURIComponent(uploadId)}/parts/${partNumber}`,
+          {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/octet-stream",
+              "X-Content-SHA256": sha256Hex,
+            },
+            body: chunk,
+          }
+        );
+      }
+      const completed = await requestJSON<{
+        usedToday?: number;
+        attachment?: { id: string; fileName: string; mimeType: string; byteSize: number };
+      }>(`/api/workspace/files/uploads/${encodeURIComponent(uploadId)}/complete`, {
+        method: "POST",
+      });
+      if (completed.attachment) finalAttachment = completed.attachment;
+      if (typeof completed.usedToday === "number") finalUsedToday = completed.usedToday;
+    } else {
+      const completed = await requestJSON<{
+        usedToday?: number;
+        attachment?: { id: string; fileName: string; mimeType: string; byteSize: number };
+      }>(`/api/workspace/files/uploads/${encodeURIComponent(uploadId)}/content`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/octet-stream",
+        },
+        body: rawBuffer,
+      });
+      if (completed.attachment) finalAttachment = completed.attachment;
+      if (typeof completed.usedToday === "number") finalUsedToday = completed.usedToday;
+    }
+
+    const attId = finalAttachment?.id || reserved.attachment?.id || "";
+    if (!attId) {
+      throw new ApiClientError("upload.incomplete", "文件上传未返回有效附件标识", 500);
+    }
+    const downloadUrl = `/api/workspace/files/${encodeURIComponent(attId)}/download`;
+    const previewUrl = mimeType.startsWith("image/")
+      ? `/api/workspace/files/${encodeURIComponent(attId)}/preview`
+      : downloadUrl;
+
+    return {
+      id: attId,
+      fileName: finalAttachment?.fileName || file.name,
+      mimeType: finalAttachment?.mimeType || mimeType,
+      byteSize: finalAttachment?.byteSize ?? file.size,
+      url: previewUrl,
+      downloadUrl,
+      previewUrl,
+      usedToday: finalUsedToday,
+    };
+  },
+  sendMessage: (
+    conversationId: string,
+    text: string,
+    options?: {
+      replyToMessageId?: string;
+      clientMessageId?: string;
+      attachmentIds?: string[];
+    }
+  ) => {
+    const trimmedText = text.trim();
+    const attachmentIds = (options?.attachmentIds || []).filter(Boolean);
+    const blocks: Array<Record<string, unknown>> = [];
+    if (trimmedText) {
+      blocks.push({ type: "text", text: trimmedText });
+    }
+    for (const attachmentId of attachmentIds) {
+      blocks.push({ type: "attachment", attachmentId });
+    }
+    return requestJSON<Record<string, unknown>>("/api/workspace/messages", {
       method: "POST",
       body: JSON.stringify({
         conversationId,
@@ -241,11 +373,12 @@ export const apiV1 = {
         replyToMessageId: options?.replyToMessageId || "",
         content: {
           format: "duallane.message+json;v=1",
-          plainText: text,
-          blocks: [{ type: "text", text }],
+          plainText: trimmedText || (attachmentIds.length > 0 ? "[文件]" : ""),
+          blocks,
         },
       }),
-    }),
+    });
+  },
   createDirectConversation: (targetUserId: string) =>
     requestJSON<Record<string, unknown>>("/api/workspace/conversations", {
       method: "POST",

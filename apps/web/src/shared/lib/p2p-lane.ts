@@ -32,6 +32,13 @@ export interface P2PRoomSession {
   keyMismatchWarning?: boolean;
 }
 
+export interface P2PFileAttachment {
+  fileName: string;
+  mimeType: string;
+  byteSize: number;
+  blobUrl: string;
+}
+
 export interface P2PChatMessage {
   id: string;
   senderName: string;
@@ -42,7 +49,11 @@ export interface P2PChatMessage {
   createdAt: string;
   deliveryStatus: P2PDeliveryStatus;
   reactions: Record<string, number>;
+  attachment?: P2PFileAttachment;
 }
+
+export const P2P_FILE_CHUNK_BYTES = 6144;
+export const P2P_MAX_FILE_BYTES = 8 * 1024 * 1024;
 
 export type P2PDataEnvelope =
   | {
@@ -52,6 +63,27 @@ export type P2PDataEnvelope =
       body: string;
       at: string;
       replyToId?: string;
+    }
+  | {
+      kind: "file-start";
+      id: string;
+      author: string;
+      fileName: string;
+      mimeType: string;
+      byteSize: number;
+      totalChunks: number;
+      caption?: string;
+      at: string;
+    }
+  | {
+      kind: "file-chunk";
+      id: string;
+      index: number;
+      data: string;
+    }
+  | {
+      kind: "file-end";
+      id: string;
     }
   | {
       kind: "chat-ack";
@@ -74,6 +106,9 @@ function toBase64Url(bytes: Uint8Array): string {
 }
 
 function fromBase64Url(str: string): Uint8Array {
+  if (!str || !/^[A-Za-z0-9_-]+$/.test(str) || str.length % 4 === 1) {
+    throw new Error("无效的 Base64URL 端到端加密密钥编码");
+  }
   const padded = str.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((str.length + 3) % 4);
   const bin = atob(padded);
   const out = new Uint8Array(bin.length);
@@ -81,6 +116,22 @@ function fromBase64Url(str: string): Uint8Array {
     out[i] = bin.charCodeAt(i);
   }
   return out;
+}
+
+export function safeInlineImageMime(mimeType: string): boolean {
+  return (
+    mimeType === "image/png" ||
+    mimeType === "image/jpeg" ||
+    mimeType === "image/webp" ||
+    mimeType === "image/gif"
+  );
+}
+
+export function createSafeP2PBlobUrl(bytes: Uint8Array, mimeType: string): string {
+  const safeType = safeInlineImageMime(mimeType) ? mimeType : "application/octet-stream";
+  const copy = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(copy).set(bytes);
+  return URL.createObjectURL(new Blob([copy], { type: safeType }));
 }
 
 export async function generateRoomKeyString(): Promise<string> {
@@ -157,6 +208,23 @@ export function extractP2PRoomFromUrl(
   return { roomId: match[1], keyStr };
 }
 
+export function hasP2PRoomInUrl(
+  loc: Pick<Location, "pathname" | "hash"> = window.location
+): boolean {
+  if (/^\/(?:direct|r)(?:\/|$)/.test(loc.pathname)) return true;
+  const hash = loc.hash.replace(/^#/, "");
+  if (!hash) return false;
+  const params = new URLSearchParams(hash);
+  return params.has("k");
+}
+
+export function scrubP2PRoomFromUrl(targetPath = "/"): void {
+  if (typeof window === "undefined") return;
+  if (hasP2PRoomInUrl(window.location)) {
+    window.history.replaceState(null, "", targetPath);
+  }
+}
+
 export function buildP2PShareUrl(roomId: string, keyStr: string, origin = window.location.origin): string {
   return `${origin}/direct/${encodeURIComponent(roomId)}#k=${keyStr}`;
 }
@@ -202,6 +270,13 @@ export interface P2PRoomTransportCallbacks {
     at: string;
     replyToId?: string;
   }) => void;
+  onIncomingFile: (fileMsg: {
+    id: string;
+    author: string;
+    caption: string;
+    at: string;
+    attachment: P2PFileAttachment;
+  }) => void;
   onDeliveryAck: (messageId: string) => void;
   onKeyMismatch: () => void;
 }
@@ -214,6 +289,15 @@ export interface P2PRoomTransport {
     body: string;
     at: string;
     replyToId?: string;
+  }) => Promise<boolean>;
+  sendFile: (payload: {
+    id: string;
+    author: string;
+    fileName: string;
+    mimeType: string;
+    bytes: Uint8Array;
+    caption?: string;
+    at: string;
   }) => Promise<boolean>;
   close: () => void;
 }
@@ -241,6 +325,52 @@ function parseEnvelope(rawPlaintext: string): P2PDataEnvelope | null {
         replyToId: typeof obj.replyToId === "string" ? obj.replyToId : undefined,
       };
     }
+    if (
+      obj.kind === "file-start" &&
+      typeof obj.id === "string" &&
+      obj.id.length > 0 &&
+      typeof obj.author === "string" &&
+      typeof obj.fileName === "string" &&
+      obj.fileName.length > 0 &&
+      typeof obj.mimeType === "string" &&
+      typeof obj.byteSize === "number" &&
+      obj.byteSize >= 0 &&
+      obj.byteSize <= P2P_MAX_FILE_BYTES &&
+      typeof obj.totalChunks === "number" &&
+      obj.totalChunks >= 0 &&
+      obj.totalChunks <= Math.ceil(P2P_MAX_FILE_BYTES / P2P_FILE_CHUNK_BYTES) + 1 &&
+      typeof obj.at === "string"
+    ) {
+      return {
+        kind: "file-start",
+        id: obj.id,
+        author: obj.author,
+        fileName: obj.fileName,
+        mimeType: obj.mimeType,
+        byteSize: obj.byteSize,
+        totalChunks: obj.totalChunks,
+        caption: typeof obj.caption === "string" ? obj.caption : undefined,
+        at: obj.at,
+      };
+    }
+    if (
+      obj.kind === "file-chunk" &&
+      typeof obj.id === "string" &&
+      obj.id.length > 0 &&
+      typeof obj.index === "number" &&
+      obj.index >= 0 &&
+      typeof obj.data === "string"
+    ) {
+      return {
+        kind: "file-chunk",
+        id: obj.id,
+        index: obj.index,
+        data: obj.data,
+      };
+    }
+    if (obj.kind === "file-end" && typeof obj.id === "string" && obj.id.length > 0) {
+      return { kind: "file-end", id: obj.id };
+    }
     if (obj.kind === "chat-ack" && typeof obj.messageId === "string" && obj.messageId.length > 0) {
       return { kind: "chat-ack", messageId: obj.messageId };
     }
@@ -264,6 +394,54 @@ export function connectP2PRoomTransport(
   let terminalRoomError = false;
   let latestTotalPeers = 1;
   let latestRemotePeers = 0;
+  let incomingChain = Promise.resolve();
+
+  const incomingFiles = new Map<
+    string,
+    {
+      author: string;
+      fileName: string;
+      mimeType: string;
+      byteSize: number;
+      totalChunks: number;
+      caption: string;
+      at: string;
+      chunks: Array<Uint8Array | undefined>;
+      receivedChunks: number;
+      ended: boolean;
+    }
+  >();
+
+  const tryFinalizeIncomingFile = (transferId: string) => {
+    const entry = incomingFiles.get(transferId);
+    if (!entry || !entry.ended || entry.receivedChunks !== entry.totalChunks) {
+      return;
+    }
+    incomingFiles.delete(transferId);
+    const merged = new Uint8Array(entry.byteSize);
+    let offset = 0;
+    for (let i = 0; i < entry.totalChunks; i++) {
+      const part = entry.chunks[i];
+      if (!part || offset + part.byteLength > entry.byteSize) return;
+      merged.set(part, offset);
+      offset += part.byteLength;
+    }
+    if (offset !== entry.byteSize) return;
+    const blobUrl = createSafeP2PBlobUrl(merged, entry.mimeType);
+    callbacks.onIncomingFile({
+      id: transferId,
+      author: entry.author,
+      caption: entry.caption,
+      at: entry.at,
+      attachment: {
+        fileName: entry.fileName,
+        mimeType: entry.mimeType,
+        byteSize: entry.byteSize,
+        blobUrl,
+      },
+    });
+    void sendEncryptedEnvelope({ kind: "chat-ack", messageId: transferId });
+  };
 
   const sendEncryptedEnvelope = async (envelope: P2PDataEnvelope): Promise<boolean> => {
     if (socket.readyState !== WebSocket.OPEN) return false;
@@ -362,29 +540,67 @@ export function connectP2PRoomTransport(
       typeof frame.nonce === "string" &&
       typeof frame.ciphertext === "string"
     ) {
-      void (async () => {
-        let decrypted: string;
-        try {
-          decrypted = await decryptP2PBytes(aesKey, frame.nonce as string, frame.ciphertext as string);
-        } catch {
-          callbacks.onKeyMismatch();
-          return;
-        }
-        const parsed = parseEnvelope(decrypted);
-        if (!parsed) return;
-        if (parsed.kind === "chat") {
-          callbacks.onIncomingChat({
-            id: parsed.id,
-            author: parsed.author,
-            body: parsed.body,
-            at: parsed.at,
-            replyToId: parsed.replyToId,
-          });
-          void sendEncryptedEnvelope({ kind: "chat-ack", messageId: parsed.id });
-        } else if (parsed.kind === "chat-ack") {
-          callbacks.onDeliveryAck(parsed.messageId);
-        }
-      })();
+      const nonce = frame.nonce;
+      const ciphertext = frame.ciphertext;
+      incomingChain = incomingChain
+        .then(async () => {
+          let decrypted: string;
+          try {
+            decrypted = await decryptP2PBytes(aesKey, nonce, ciphertext);
+          } catch {
+            callbacks.onKeyMismatch();
+            return;
+          }
+          const parsed = parseEnvelope(decrypted);
+          if (!parsed) return;
+          if (parsed.kind === "chat") {
+            callbacks.onIncomingChat({
+              id: parsed.id,
+              author: parsed.author,
+              body: parsed.body,
+              at: parsed.at,
+              replyToId: parsed.replyToId,
+            });
+            void sendEncryptedEnvelope({ kind: "chat-ack", messageId: parsed.id });
+          } else if (parsed.kind === "file-start") {
+            incomingFiles.set(parsed.id, {
+              author: parsed.author,
+              fileName: parsed.fileName,
+              mimeType: parsed.mimeType,
+              byteSize: parsed.byteSize,
+              totalChunks: parsed.totalChunks,
+              caption: parsed.caption || "",
+              at: parsed.at,
+              chunks: new Array<Uint8Array | undefined>(parsed.totalChunks),
+              receivedChunks: 0,
+              ended: parsed.totalChunks === 0,
+            });
+            if (parsed.totalChunks === 0) {
+              tryFinalizeIncomingFile(parsed.id);
+            }
+          } else if (parsed.kind === "file-chunk") {
+            const entry = incomingFiles.get(parsed.id);
+            if (!entry || parsed.index >= entry.totalChunks) return;
+            try {
+              const rawPart = fromBase64Url(parsed.data);
+              if (!entry.chunks[parsed.index]) {
+                entry.chunks[parsed.index] = rawPart;
+                entry.receivedChunks += 1;
+              }
+              tryFinalizeIncomingFile(parsed.id);
+            } catch {
+              incomingFiles.delete(parsed.id);
+            }
+          } else if (parsed.kind === "file-end") {
+            const entry = incomingFiles.get(parsed.id);
+            if (!entry) return;
+            entry.ended = true;
+            tryFinalizeIncomingFile(parsed.id);
+          } else if (parsed.kind === "chat-ack") {
+            callbacks.onDeliveryAck(parsed.messageId);
+          }
+        })
+        .catch(() => {});
     }
   });
 
@@ -419,8 +635,46 @@ export function connectP2PRoomTransport(
         at: msg.at,
         replyToId: msg.replyToId,
       }),
+    sendFile: async (payload) => {
+      if (payload.bytes.byteLength > P2P_MAX_FILE_BYTES) {
+        return false;
+      }
+      const totalChunks =
+        payload.bytes.byteLength === 0
+          ? 0
+          : Math.ceil(payload.bytes.byteLength / P2P_FILE_CHUNK_BYTES);
+      const started = await sendEncryptedEnvelope({
+        kind: "file-start",
+        id: payload.id,
+        author: payload.author,
+        fileName: payload.fileName,
+        mimeType: payload.mimeType || "application/octet-stream",
+        byteSize: payload.bytes.byteLength,
+        totalChunks,
+        caption: payload.caption,
+        at: payload.at,
+      });
+      if (!started) return false;
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * P2P_FILE_CHUNK_BYTES;
+        const end = Math.min(payload.bytes.byteLength, start + P2P_FILE_CHUNK_BYTES);
+        const slice = payload.bytes.subarray(start, end);
+        const sentChunk = await sendEncryptedEnvelope({
+          kind: "file-chunk",
+          id: payload.id,
+          index: i,
+          data: toBase64Url(slice),
+        });
+        if (!sentChunk) return false;
+      }
+      return sendEncryptedEnvelope({
+        kind: "file-end",
+        id: payload.id,
+      });
+    },
     close: () => {
       closedIntentionally = true;
+      incomingFiles.clear();
       try {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: "leave" }));

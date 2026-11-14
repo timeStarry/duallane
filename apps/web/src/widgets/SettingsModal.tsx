@@ -152,8 +152,11 @@ export function SettingsModal() {
         <DialogHeader>
           <DialogTitle>DualLane 设置中心</DialogTitle>
         </DialogHeader>
-        <div className="flex max-compact:flex-col gap-4 min-h-[380px] max-h-[72vh] p-6 pt-4">
-          <nav className="w-36 max-compact:w-full shrink-0 max-compact:flex max-compact:overflow-x-auto space-y-1 max-compact:space-y-0 max-compact:gap-1 border-r max-compact:border-r-0 max-compact:border-b border-dl-border-hairline pr-3 max-compact:pr-0 max-compact:pb-2.5">
+        <div className="flex max-compact:flex-col gap-4 min-h-[320px] max-h-[72vh] p-6 max-narrow:p-3.5 pt-4">
+          <nav
+            aria-label="设置分类"
+            className="w-36 max-compact:w-full shrink-0 max-compact:flex max-compact:flex-wrap max-compact:overflow-x-auto space-y-1 max-compact:space-y-0 max-compact:gap-1 border-r max-compact:border-r-0 max-compact:border-b border-dl-border-hairline pr-3 max-compact:pr-0 max-compact:pb-2.5"
+          >
             {TABS.map((tab) => {
               const Icon = tab.icon;
               return (
@@ -211,12 +214,16 @@ export function SettingsModal() {
                   />
                 </div>
 
-                <div className="flex items-center justify-between pt-1">
-                  <div>
+                <div className="flex items-center justify-between gap-2 pt-1">
+                  <div className="min-w-0">
                     <div className="text-sm font-semibold text-dl-text-primary">减弱动态效果</div>
                     <div className="text-xs text-dl-text-tertiary">关闭弹性过渡动画以降低视觉干扰</div>
                   </div>
-                  <Switch checked={reducedMotion} onCheckedChange={setReducedMotion} />
+                  <Switch
+                    label="减弱动态效果"
+                    checked={reducedMotion}
+                    onCheckedChange={setReducedMotion}
+                  />
                 </div>
               </div>
             )}
@@ -234,8 +241,8 @@ export function SettingsModal() {
 
                 {canManageInvites && (
                   <div className="rounded-2xl border border-dl-border-hairline p-4 space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <div>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-0">
                         <div className="text-sm font-semibold text-dl-text-primary">
                           空间成员邀请码
                         </div>
@@ -260,7 +267,7 @@ export function SettingsModal() {
                     )}
 
                     {generatedInviteCode && (
-                      <div className="flex items-center justify-between gap-2 rounded-xl bg-dl-surface-subtle p-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-dl-surface-subtle p-2.5">
                         <code
                           data-testid="generated-invite-code"
                           className="text-xs font-mono font-semibold text-dl-text-primary select-all break-all"

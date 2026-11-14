@@ -25,7 +25,7 @@ import {
 import { cn } from "@/shared/lib/cn";
 
 export function PrimaryRail() {
-  const { activeLane, setActiveLane, setSearchOpen, openSettings } = useLaneStore();
+  const { activeLane, mobileView, setActiveLane, setSearchOpen, openSettings } = useLaneStore();
   const {
     currentUser,
     connectionStatus,
@@ -41,24 +41,31 @@ export function PrimaryRail() {
   );
 
   return (
-    <aside className="dl-glass-chrome z-sticky flex h-full w-[68px] max-compact:w-[60px] shrink-0 flex-col items-center justify-between border-r border-dl-border-hairline py-3.5 select-none">
+    <nav
+      aria-label="主通道导航"
+      className={cn(
+        "dl-glass-chrome z-sticky flex h-full w-[68px] shrink-0 flex-col items-center justify-between border-r border-dl-border-hairline py-3.5 select-none",
+        "max-compact:order-last max-compact:h-14 max-compact:w-full max-compact:flex-row max-compact:justify-around max-compact:border-r-0 max-compact:border-t max-compact:px-2 max-compact:py-1",
+        mobileView === "chat" && "max-compact:hidden"
+      )}
+    >
       {/* Top: Brand & Dual-Lane Live Switcher */}
-      <div className="flex w-full flex-col items-center gap-2.5 px-2">
+      <div className="flex w-full flex-col items-center gap-2.5 px-2 max-compact:w-auto max-compact:flex-1 max-compact:flex-row max-compact:justify-around max-compact:gap-1 max-compact:px-0">
         <div
-          className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-dl-lane-shared to-dl-lane-direct text-dl-on-shared font-bold text-[13px] tracking-tight shadow-sm"
+          className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-dl-lane-shared to-dl-lane-direct text-dl-on-shared font-bold text-[13px] tracking-tight shadow-sm max-compact:hidden"
           title="DualLane v1.0"
         >
           DL
         </div>
 
-        <div className="my-0.5 h-px w-8 bg-dl-border-hairline" />
+        <div className="my-0.5 h-px w-8 bg-dl-border-hairline max-compact:hidden" />
 
-        <div className="relative flex w-full justify-center">
+        <div className="relative flex w-full justify-center max-compact:w-auto">
           {activeLane === "workspace" && (
             <motion.span
               layoutId="rail-active-lane"
               transition={{ type: "spring", stiffness: 460, damping: 34 }}
-              className="absolute left-0 top-2.5 bottom-2.5 w-1 rounded-r-full bg-dl-lane-shared"
+              className="absolute left-0 top-2.5 bottom-2.5 w-1 rounded-r-full bg-dl-lane-shared max-compact:hidden"
             />
           )}
           <Tooltip content="共享空间 · 团队协作、线程与机器人 (⌘1)" side="right">
@@ -67,7 +74,7 @@ export function PrimaryRail() {
               size="md"
               onClick={() => setActiveLane("workspace")}
               className={cn(
-                "relative h-11 w-11 rounded-2xl p-0 flex-col gap-1 transition-colors",
+                "relative h-11 w-11 max-compact:h-10 max-compact:w-12 rounded-2xl p-0 flex-col gap-1 transition-colors",
                 activeLane === "workspace"
                   ? "bg-dl-lane-shared text-dl-on-shared hover:bg-dl-lane-shared shadow-sm"
                   : "text-dl-text-secondary hover:bg-dl-surface-subtle/80 hover:text-dl-text-primary"
@@ -80,12 +87,12 @@ export function PrimaryRail() {
           </Tooltip>
         </div>
 
-        <div className="relative flex w-full justify-center">
+        <div className="relative flex w-full justify-center max-compact:w-auto">
           {activeLane === "p2p" && (
             <motion.span
               layoutId="rail-active-lane"
               transition={{ type: "spring", stiffness: 460, damping: 34 }}
-              className="absolute left-0 top-2.5 bottom-2.5 w-1 rounded-r-full bg-dl-lane-direct"
+              className="absolute left-0 top-2.5 bottom-2.5 w-1 rounded-r-full bg-dl-lane-direct max-compact:hidden"
             />
           )}
           <Tooltip
@@ -97,7 +104,7 @@ export function PrimaryRail() {
               size="md"
               onClick={() => setActiveLane("p2p")}
               className={cn(
-                "relative h-11 w-11 rounded-2xl p-0 flex-col gap-1 transition-colors",
+                "relative h-11 w-11 max-compact:h-10 max-compact:w-12 rounded-2xl p-0 flex-col gap-1 transition-colors",
                 activeLane === "p2p"
                   ? "bg-dl-lane-direct text-dl-on-direct hover:bg-dl-lane-direct shadow-sm"
                   : "text-dl-text-secondary hover:bg-dl-surface-subtle/80 hover:text-dl-text-primary"
@@ -118,7 +125,7 @@ export function PrimaryRail() {
           </Tooltip>
         </div>
 
-        <div className="my-0.5 h-px w-8 bg-dl-border-hairline" />
+        <div className="my-0.5 h-px w-8 bg-dl-border-hairline max-compact:hidden" />
 
         <Tooltip content="全局搜索 (⌘K)" side="right">
           <IconButton
@@ -135,7 +142,7 @@ export function PrimaryRail() {
           <IconButton
             variant="ghost"
             onClick={() => openSettings("bots")}
-            className="h-9 w-9 rounded-xl"
+            className="h-9 w-9 rounded-xl max-compact:hidden"
             label="机器人与集成"
           >
             <Bot className="size-[18px]" strokeWidth={1.75} />
@@ -144,7 +151,7 @@ export function PrimaryRail() {
       </div>
 
       {/* Bottom: Connection Status, Quota, Settings & User Menu */}
-      <div className="flex w-full flex-col items-center gap-2.5 px-2">
+      <div className="flex w-full flex-col items-center gap-2.5 px-2 max-compact:w-auto max-compact:flex-row max-compact:gap-2 max-compact:px-1">
         <Tooltip
           content={
             connectionStatus === "connected"
@@ -155,7 +162,7 @@ export function PrimaryRail() {
           }
           side="right"
         >
-          <div className="flex items-center gap-1 rounded-full border border-dl-border-hairline bg-dl-surface-subtle/80 px-2 py-0.5">
+          <div className="flex items-center gap-1 rounded-full border border-dl-border-hairline bg-dl-surface-subtle/80 px-2 py-0.5 max-compact:hidden">
             <span
               className={cn(
                 "h-1.5 w-1.5 rounded-full",
@@ -187,7 +194,7 @@ export function PrimaryRail() {
           <PopoverTrigger asChild>
             <IconButton
               variant="ghost"
-              className="h-10 w-10 rounded-full p-0"
+              className="h-10 w-10 max-compact:h-9 max-compact:w-9 rounded-full p-0"
               label="个人菜单"
             >
               <Avatar
@@ -198,7 +205,7 @@ export function PrimaryRail() {
               />
             </IconButton>
           </PopoverTrigger>
-          <PopoverContent align="end" side="right">
+          <PopoverContent align="end" side="top">
             <div className="w-52 space-y-1.5 p-1">
               <div className="px-2.5 py-1.5">
                 <div className="truncate text-sm font-semibold text-dl-text-primary">
@@ -250,6 +257,6 @@ export function PrimaryRail() {
           </PopoverContent>
         </Popover>
       </div>
-    </aside>
+    </nav>
   );
 }

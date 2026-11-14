@@ -29,7 +29,7 @@ export function Select({
   return (
     <RadixSelect.Root value={value} onValueChange={onValueChange} disabled={disabled}>
       <RadixSelect.Trigger
-        aria-label={label}
+        aria-label={label || placeholder}
         className={cn(
           "inline-flex h-10 w-full items-center justify-between gap-2 rounded-control border border-line-strong",
           "bg-surface/80 px-3 text-[14px] text-text transition-colors duration-120",

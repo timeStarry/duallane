@@ -20,9 +20,12 @@ import {
   buildP2PShareUrl,
   connectP2PRoomTransport,
   createRemoteP2PRoom,
+  createSafeP2PBlobUrl,
   deriveAesKey,
   encryptP2PPayload,
   generateRoomKeyString,
+  P2P_MAX_FILE_BYTES,
+  scrubP2PRoomFromUrl,
   type P2PChatMessage,
   type P2PRoomSession,
   type P2PRoomTransport,
@@ -42,6 +45,7 @@ export interface V1MessageAttachment {
   mimeType: string;
   byteSize: number;
   url: string;
+  downloadUrl?: string;
   width?: number;
   height?: number;
   thumbHash?: string;
@@ -123,7 +127,12 @@ interface WorkspaceState {
   setScrollTop: (conversationId: string, scrollTop: number) => void;
   setEditingMessageId: (messageId: string | null) => void;
 
-  sendWorkspaceMessage: (conversationId: string, text: string, replyToId?: string) => Promise<void>;
+  sendWorkspaceMessage: (
+    conversationId: string,
+    text: string,
+    replyToId?: string,
+    attachments?: V1MessageAttachment[]
+  ) => Promise<void>;
   editWorkspaceMessage: (conversationId: string, messageId: string, newText: string) => Promise<void>;
   toggleReaction: (conversationId: string, messageId: string, emoji: string) => Promise<void>;
   togglePinMessage: (conversationId: string, messageId: string) => Promise<void>;
@@ -137,11 +146,16 @@ interface WorkspaceState {
   leaveP2PRoom: () => void;
   setP2PDraft: (text: string) => void;
   sendP2PMessage: (text: string, replyToId?: string) => Promise<void>;
+  sendP2PFile: (file: File, caption?: string) => Promise<void>;
 }
 
 let activeP2PTransport: P2PRoomTransport | null = null;
 let activeP2PRoomToken = "";
 let activeP2PJoinPromise: Promise<void> | null = null;
+const queuedP2PFileBytes = new Map<
+  string,
+  { fileName: string; mimeType: string; bytes: Uint8Array; caption?: string }
+>();
 let activeWorkspaceSocket: WebSocket | null = null;
 let workspaceReconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -191,17 +205,31 @@ function mapRawAttachments(
   fallbackMessageId?: string
 ): V1MessageAttachment[] | undefined {
   if (!Array.isArray(raw) || raw.length === 0) return undefined;
-  return (raw as Array<Record<string, unknown>>).map((a) => ({
-    id: String(a.id || ""),
-    fileName: String(a.fileName || a.name || "附件"),
-    mimeType: String(a.mimeType || "application/octet-stream"),
-    byteSize: Number(a.byteSize || a.size || 0),
-    url: String(a.downloadUrl || a.url || ""),
-    width: typeof a.width === "number" ? a.width : undefined,
-    height: typeof a.height === "number" ? a.height : undefined,
-    thumbHash: typeof a.thumbHash === "string" ? a.thumbHash : undefined,
-    sourceMessageId: a.sourceMessageId ? String(a.sourceMessageId) : fallbackMessageId,
-  }));
+  return (raw as Array<Record<string, unknown>>).map((a) => {
+    const id = String(a.id || "");
+    const mimeType = String(a.mimeType || "application/octet-stream");
+    const defaultDownloadUrl = id
+      ? `/api/workspace/files/${encodeURIComponent(id)}/download`
+      : "";
+    const defaultPreviewUrl =
+      id && mimeType.startsWith("image/")
+        ? `/api/workspace/files/${encodeURIComponent(id)}/preview`
+        : defaultDownloadUrl;
+    const downloadUrl = String(a.downloadUrl || a.url || defaultDownloadUrl);
+    const url = String(a.previewUrl || a.url || a.downloadUrl || defaultPreviewUrl);
+    return {
+      id,
+      fileName: String(a.fileName || a.name || "附件"),
+      mimeType,
+      byteSize: Number(a.byteSize || a.size || 0),
+      url,
+      downloadUrl,
+      width: typeof a.width === "number" ? a.width : undefined,
+      height: typeof a.height === "number" ? a.height : undefined,
+      thumbHash: typeof a.thumbHash === "string" ? a.thumbHash : undefined,
+      sourceMessageId: a.sourceMessageId ? String(a.sourceMessageId) : fallbackMessageId,
+    };
+  });
 }
 
 function mapRawMessage(
@@ -369,16 +397,42 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             m.id === item.id ? { ...m, deliveryStatus: "sending" } : m
           ),
         }));
-        const ok = await transport.sendChat({
-          id: item.id,
-          author: item.senderName,
-          body: item.text,
-          at: item.createdAt,
-          replyToId: item.replyToId,
-        });
+        const queuedFile = queuedP2PFileBytes.get(item.id);
+        let ok = false;
+        if (queuedFile) {
+          ok = await transport.sendFile({
+            id: item.id,
+            author: item.senderName,
+            fileName: queuedFile.fileName,
+            mimeType: queuedFile.mimeType,
+            bytes: queuedFile.bytes,
+            caption: queuedFile.caption,
+            at: item.createdAt,
+          });
+          if (ok) {
+            queuedP2PFileBytes.delete(item.id);
+          }
+        } else {
+          ok = await transport.sendChat({
+            id: item.id,
+            author: item.senderName,
+            body: item.text,
+            at: item.createdAt,
+            replyToId: item.replyToId,
+          });
+        }
         set((s) => ({
           p2pMessages: s.p2pMessages.map((m) =>
-            m.id === item.id ? { ...m, deliveryStatus: ok ? "sent" : "queued" } : m
+            m.id === item.id
+              ? {
+                  ...m,
+                  deliveryStatus: ok
+                    ? m.deliveryStatus === "delivered"
+                      ? "delivered"
+                      : "sent"
+                    : "queued",
+                }
+              : m
           ),
         }));
       }
@@ -415,6 +469,27 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             createdAt: incoming.at,
             deliveryStatus: "delivered",
             reactions: {},
+          };
+          return {
+            p2pMessages: [...s.p2pMessages, nextMsg],
+            p2pRoom: s.p2pRoom
+              ? { ...s.p2pRoom, keyMismatchWarning: false }
+              : s.p2pRoom,
+          };
+        });
+      },
+      onIncomingFile: (incoming) => {
+        set((s) => {
+          if (s.p2pMessages.some((m) => m.id === incoming.id)) return s;
+          const nextMsg: P2PChatMessage = {
+            id: incoming.id,
+            senderName: incoming.author,
+            isOwn: false,
+            text: incoming.caption || "",
+            createdAt: incoming.at,
+            deliveryStatus: "delivered",
+            reactions: {},
+            attachment: incoming.attachment,
           };
           return {
             p2pMessages: [...s.p2pMessages, nextMsg],
@@ -720,11 +795,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       }
 
       try {
-        const [drafts, scrollTops, raw] = await Promise.all([
-          loadWorkspaceDrafts(),
-          loadWorkspaceScrolls(),
-          apiV1.getBootstrap(),
-        ]);
+        const raw = await apiV1.getBootstrap();
         const parsed = parseBootstrapPayload(raw);
         if (!parsed.workspaceEnabled) {
           teardownWorkspaceSocket();
@@ -733,8 +804,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             workspaceAvailability: "disabled",
             workspaceStatusMessage:
               "当前环境未开启共享空间（WORKSPACE_ENABLED=false）。如需测试共享空间，请配置开发数据库并启用 WORKSPACE_ENABLED=true；你也可以直接免登录使用私密直连通道。",
-            drafts,
-            scrollTops,
           });
           return;
         }
@@ -744,11 +813,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             authStatus: "unauthenticated",
             workspaceAvailability: "ready",
             workspaceStatusMessage: null,
-            drafts,
-            scrollTops,
           });
           return;
         }
+
+        const [drafts, scrollTops] = await Promise.all([
+          loadWorkspaceDrafts(),
+          loadWorkspaceScrolls(),
+        ]);
 
         try {
           const savedRes = await apiV1.ensureSavedConversation();
@@ -946,22 +1018,26 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
     setEditingMessageId: (editingMessageId) => set({ editingMessageId }),
 
-    sendWorkspaceMessage: async (conversationId, text, replyToId) => {
+    sendWorkspaceMessage: async (conversationId, text, replyToId, attachments) => {
       const user = get().currentUser;
-      if (!user || !text.trim()) return;
+      const trimmed = text.trim();
+      const attList = attachments && attachments.length > 0 ? attachments : undefined;
+      if (!user || (!trimmed && !attList)) return;
       const clientMessageId = `cli_${crypto.randomUUID()}`;
       const tempId = `opt_${clientMessageId}`;
+      const displayPlain = trimmed || (attList ? "[文件]" : "");
       const optimistic: V1Message = {
         id: tempId,
         clientMessageId,
         conversationId,
         senderId: user.id,
         senderName: user.displayName,
-        plainText: text,
+        plainText: displayPlain,
         replyToId,
         createdAt: new Date().toISOString(),
         status: "sending",
         reactions: {},
+        attachments: attList,
       };
       set((s) => ({
         messagesByConv: {
@@ -984,7 +1060,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                 ...s.conversations,
                 [conversationId]: {
                   ...s.conversations[conversationId],
-                  lastMessageText: text,
+                  lastMessageText: displayPlain,
                   lastMessageAt: optimistic.createdAt,
                 },
               }
@@ -994,18 +1070,28 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       }
 
       try {
-        const res = await apiV1.sendMessage(conversationId, text, {
+        const res = await apiV1.sendMessage(conversationId, trimmed, {
           replyToMessageId: replyToId,
           clientMessageId,
+          attachmentIds: attList?.map((a) => a.id),
         });
         const msgObj = (res.message || {}) as Record<string, unknown>;
         const realId = msgObj.id ? String(msgObj.id) : tempId;
+        const serverMapped = msgObj.id
+          ? mapRawMessage(conversationId, msgObj, get().members)
+          : null;
         set((s) => {
           const list = s.messagesByConv[conversationId] || [];
           const alreadyDeliveredByWs = list.some((m) => m.id === realId && m.id !== tempId);
           const nextList = alreadyDeliveredByWs
             ? list.filter((m) => m.id !== tempId)
-            : list.map((m) => (m.id === tempId ? { ...m, id: realId, status: "sent" as const } : m));
+            : list.map((m) =>
+                m.id === tempId
+                  ? serverMapped
+                    ? { ...serverMapped, status: "sent" as const }
+                    : { ...m, id: realId, status: "sent" as const }
+                  : m
+              );
           return {
             messagesByConv: {
               ...s.messagesByConv,
@@ -1016,7 +1102,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                   ...s.conversations,
                   [conversationId]: {
                     ...s.conversations[conversationId],
-                    lastMessageText: text,
+                    lastMessageText: serverMapped?.plainText || displayPlain,
                     lastMessageAt: optimistic.createdAt,
                   },
                 }
@@ -1300,6 +1386,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         } catch (err) {
           if (activeP2PRoomToken !== targetToken) return;
           activeP2PRoomToken = "";
+          scrubP2PRoomFromUrl("/");
           set({
             p2pAesKey: null,
             p2pRoom: {
@@ -1327,10 +1414,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     leaveP2PRoom: () => {
       activeP2PRoomToken = "";
       activeP2PJoinPromise = null;
-      teardownP2PTransport();
-      if (typeof window !== "undefined" && /^\/(?:direct|r)\//.test(window.location.pathname)) {
-        window.history.replaceState(null, "", "/");
+      queuedP2PFileBytes.clear();
+      for (const msg of get().p2pMessages) {
+        if (msg.attachment?.blobUrl) {
+          try {
+            URL.revokeObjectURL(msg.attachment.blobUrl);
+          } catch {
+            // Ignore revoke errors
+          }
+        }
       }
+      teardownP2PTransport();
+      scrubP2PRoomFromUrl("/");
       set({
         p2pRoom: null,
         p2pAesKey: null,
@@ -1384,6 +1479,88 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         at: createdAt,
         replyToId,
       });
+      set((s) => ({
+        p2pMessages: s.p2pMessages.map((m) =>
+          m.id === id
+            ? {
+                ...m,
+                deliveryStatus: ok
+                  ? m.deliveryStatus === "delivered"
+                    ? "delivered"
+                    : "sent"
+                  : "failed",
+              }
+            : m
+        ),
+      }));
+    },
+
+    sendP2PFile: async (file, caption) => {
+      const key = get().p2pAesKey;
+      const room = get().p2pRoom;
+      if (!key || !room) return;
+      if (file.size > P2P_MAX_FILE_BYTES) {
+        throw new Error("直连内存模式单文件上限为 8 MB，大文件请使用共享空间传输");
+      }
+
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const mimeType = file.type || "application/octet-stream";
+      const blobUrl = createSafeP2PBlobUrl(bytes, mimeType);
+      const id = `p2pf_${crypto.randomUUID()}`;
+      const senderName = get().currentUser?.displayName || "直连节点";
+      const createdAt = new Date().toISOString();
+      const trimmedCaption = (caption || "").trim();
+
+      const canSendImmediately =
+        room.status === "peer_connected" &&
+        room.remotePeerCount > 0 &&
+        Boolean(activeP2PTransport?.isOpen());
+
+      const msg: P2PChatMessage = {
+        id,
+        senderName,
+        isOwn: true,
+        text: trimmedCaption,
+        createdAt,
+        deliveryStatus: canSendImmediately ? "sending" : "queued",
+        reactions: {},
+        attachment: {
+          fileName: file.name,
+          mimeType,
+          byteSize: file.size,
+          blobUrl,
+        },
+      };
+
+      if (!canSendImmediately || !activeP2PTransport) {
+        queuedP2PFileBytes.set(id, {
+          fileName: file.name,
+          mimeType,
+          bytes,
+          caption: trimmedCaption || undefined,
+        });
+        set((s) => ({
+          p2pMessages: [...s.p2pMessages, msg],
+          p2pDraft: "",
+        }));
+        return;
+      }
+
+      set((s) => ({
+        p2pMessages: [...s.p2pMessages, msg],
+        p2pDraft: "",
+      }));
+
+      const ok = await activeP2PTransport.sendFile({
+        id,
+        author: senderName,
+        fileName: file.name,
+        mimeType,
+        bytes,
+        caption: trimmedCaption || undefined,
+        at: createdAt,
+      });
+
       set((s) => ({
         p2pMessages: s.p2pMessages.map((m) =>
           m.id === id

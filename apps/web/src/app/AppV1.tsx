@@ -31,16 +31,36 @@ export function AppV1() {
     return params.get("invite") || "";
   });
   const [devDisplayName, setDevDisplayName] = useState("");
-  const [authError, setAuthError] = useState("");
+  const [authError, setAuthError] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    const errParam = params.get("authError") || params.get("error") || "";
+    if (!errParam) return "";
+    const desc = params.get("error_description") || "";
+    if (errParam === "access_denied") {
+      return "GitHub 授权已取消，如需进入共享空间请重新发起登录。";
+    }
+    return desc ? `登录验证未完成：${desc}` : `登录验证未完成 (${errParam})`;
+  });
   const [submitting, setSubmitting] = useState(false);
   const [probingBackend, setProbingBackend] = useState(false);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("error") || params.has("error_description") || params.has("authError")) {
+      params.delete("error");
+      params.delete("error_description");
+      params.delete("authError");
+      const rest = params.toString();
+      const nextUrl = `${window.location.pathname}${rest ? `?${rest}` : ""}${window.location.hash}`;
+      window.history.replaceState(null, "", nextUrl);
+    }
+
     const syncRoomFromLocation = () => {
       const p2p = extractP2PRoomFromUrl();
       if (!p2p) return;
       const currentRoom = useWorkspaceStore.getState().p2pRoom;
       setActiveLane("p2p");
+      useLaneStore.getState().setMobileView("chat");
       if (currentRoom?.roomId === p2p.roomId && currentRoom.shareUrl === window.location.href) {
         return;
       }
@@ -146,20 +166,23 @@ export function AppV1() {
       workspaceAvailability === "disabled" || workspaceAvailability === "unreachable";
 
     return (
-      <main className="dl-canvas-ambient flex min-h-screen w-screen items-center justify-center p-6">
+      <main
+        aria-label="DualLane 登录与通道入口"
+        className="dl-canvas-ambient flex min-h-dvh w-screen items-center justify-center p-6 max-narrow:p-3"
+      >
         <motion.div
           initial={{ opacity: 0, y: 12, scale: 0.98 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           transition={{ type: "spring", stiffness: 380, damping: 32 }}
-          className="dl-glass-dialog w-full max-w-[440px] rounded-dialog border border-dl-border-hairline p-7 space-y-6"
+          className="dl-glass-dialog w-full max-w-[440px] rounded-dialog border border-dl-border-hairline p-7 max-narrow:p-4 space-y-6 max-narrow:space-y-4"
         >
           <div className="flex items-start justify-between gap-3">
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 min-w-0">
               <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-dl-lane-shared to-dl-lane-direct text-dl-on-shared font-bold text-sm shadow-sm">
                 DL
               </div>
-              <div>
-                <div className="flex items-center gap-2">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
                   <h1 className="text-lg font-bold tracking-tight text-dl-text-primary">
                     DualLane
                   </h1>
@@ -174,7 +197,7 @@ export function AppV1() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2.5 text-xs">
+          <div className="grid grid-cols-2 max-narrow:grid-cols-1 gap-2.5 text-xs">
             <div className="rounded-2xl border border-dl-lane-shared/25 bg-dl-lane-shared/8 p-3 space-y-1">
               <div className="flex items-center gap-1.5 font-semibold text-dl-lane-shared">
                 <Building2 className="size-3.5" strokeWidth={2} />
@@ -238,6 +261,7 @@ export function AppV1() {
               value={inviteCode}
               onChange={(e) => setInviteCode(e.target.value)}
               placeholder="可选：输入空间邀请码"
+              aria-label="空间邀请码"
             />
             <Button
               type="button"
@@ -247,7 +271,7 @@ export function AppV1() {
               onClick={() => void handleGitHubSignIn()}
             >
               <span>使用 GitHub 登录共享空间</span>
-              <ArrowRight className="size-4" strokeWidth={2} />
+              <ArrowRight className="size-4 shrink-0" strokeWidth={2} />
             </Button>
             <Button
               type="button"
@@ -255,10 +279,11 @@ export function AppV1() {
               className="w-full justify-center gap-2 border-dl-lane-direct/30 text-dl-lane-direct hover:bg-dl-lane-direct/12"
               onClick={() => {
                 setActiveLane("p2p");
+                useLaneStore.getState().setMobileView("chat");
                 void createP2PRoom();
               }}
             >
-              <ShieldCheck className="size-4" strokeWidth={1.9} />
+              <ShieldCheck className="size-4 shrink-0" strokeWidth={1.9} />
               <span>免登录进入私密直连通道</span>
             </Button>
           </div>
@@ -272,6 +297,7 @@ export function AppV1() {
                 value={devDisplayName}
                 onChange={(e) => setDevDisplayName(e.target.value)}
                 placeholder="可选：测试成员昵称（双窗口联调推荐使用）"
+                aria-label="测试成员昵称"
               />
               <Button
                 type="submit"
@@ -291,7 +317,10 @@ export function AppV1() {
 
   return (
     <TooltipProvider delayDuration={240}>
-      <main className="dl-canvas-ambient relative flex h-screen w-screen overflow-hidden text-dl-text-primary">
+      <main
+        aria-label="DualLane 工作台"
+        className="dl-canvas-ambient relative flex max-compact:flex-col h-dvh w-screen overflow-hidden text-dl-text-primary"
+      >
         <PrimaryRail />
         <ConversationSidebar />
         <TimelinePane />

@@ -44,7 +44,7 @@
   --color-dl-border-strong: var(--dl-line-strong);
   --color-dl-text-primary: var(--dl-text);
   --color-dl-text-secondary: var(--dl-muted);
-  --color-dl-text-tertiary: color-mix(in oklab, var(--dl-muted) 74%, transparent);
+  --color-dl-text-tertiary: var(--dl-muted);
   --color-dl-lane-shared: var(--dl-shared);
   --color-dl-on-shared: var(--dl-on-shared);
   --color-dl-lane-direct: var(--dl-direct);
@@ -73,6 +73,7 @@
 
   /* DualLane Breakpoints */
   --breakpoint-*: initial;
+  --breakpoint-narrow: 420px;
   --breakpoint-compact: 760px;
   --breakpoint-wide: 1100px;
 }

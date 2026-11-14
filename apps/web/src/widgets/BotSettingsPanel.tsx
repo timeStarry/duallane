@@ -234,11 +234,13 @@ export function BotSettingsPanel() {
       )}
 
       {/* Multi-Bot Create */}
-      <form onSubmit={handleCreateBot} className="flex items-center gap-2">
+      <form onSubmit={handleCreateBot} className="flex flex-wrap items-center gap-2">
         <Input
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
           placeholder="输入新机器人名称（支持一人创建多个 Bot）"
+          aria-label="新机器人名称"
+          className="min-w-0 flex-1"
         />
         <Button type="submit" variant="primary" size="sm" disabled={!newName.trim()}>
           创建机器人
@@ -273,6 +275,7 @@ export function BotSettingsPanel() {
               </div>
             </div>
             <Switch
+              label="Telegram 群组隐私模式"
               checked={settings.triggerPolicy !== "all-messages"}
               onCheckedChange={(privacyOn) =>
                 void patchSettings({
@@ -290,6 +293,7 @@ export function BotSettingsPanel() {
               </div>
             </div>
             <Switch
+              label="允许主动推送消息或卡片"
               checked={settings.proactiveEnabled}
               onCheckedChange={(checked) => void patchSettings({ proactiveEnabled: checked })}
             />
@@ -396,18 +400,24 @@ export function BotSettingsPanel() {
               <span className="text-xs font-semibold text-dl-text-primary">
                 Outbound Webhook（HMAC-SHA256）
               </span>
-              <Switch checked={webhookEnabled} onCheckedChange={setWebhookEnabled} />
+              <Switch
+                label="启用 Outbound Webhook"
+                checked={webhookEnabled}
+                onCheckedChange={setWebhookEnabled}
+              />
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 max-narrow:grid-cols-1 gap-2">
               <Input
                 value={webhookUrl}
                 onChange={(e) => setWebhookUrl(e.target.value)}
                 placeholder="https://agent.example.com/webhook"
+                aria-label="Webhook 地址"
               />
               <Input
                 value={webhookSecret}
                 onChange={(e) => setWebhookSecret(e.target.value)}
                 placeholder="签名密钥（至少 16 位）"
+                aria-label="Webhook 签名密钥"
               />
             </div>
             <Button type="submit" size="sm" variant="secondary">
@@ -436,16 +446,18 @@ export function BotSettingsPanel() {
                 ))}
               </div>
             )}
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-3 max-narrow:grid-cols-1 gap-2">
               <Input
                 value={cmdName}
                 onChange={(e) => setCmdName(e.target.value)}
                 placeholder="/summarize"
+                aria-label="Slash 指令名"
               />
               <Input
                 value={cmdDesc}
                 onChange={(e) => setCmdDesc(e.target.value)}
                 placeholder="总结当前线程"
+                aria-label="Slash 指令描述"
               />
               <Button type="submit" size="sm" variant="secondary">
                 注册指令

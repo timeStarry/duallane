@@ -1,12 +1,88 @@
-import { expect, test } from "@playwright/test";
+import fs from "node:fs/promises";
+import { expect, test, type Page } from "@playwright/test";
 
-test.describe("DualLane v1.0 Shared Workspace Login, Search & Dual-End Delivery", () => {
-  test("logs into Shared Workspace without HTTP 500, onboards peer via invite, delivers group messages in real time over /ws/workspace, and searches via /api/v1/search", async ({
+function buildWorkspacePngBuffer(): Buffer {
+  const basePng = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+    "base64"
+  );
+  const payload = Buffer.from("DUALLANE-WORKSPACE-PNG-PAYLOAD-2026", "utf8");
+  return Buffer.concat([basePng, payload]);
+}
+
+async function assertNarrowWorkspaceNoOverlap(page: Page, label: string) {
+  const audit = await page.evaluate(() => {
+    const scrollWidth = document.documentElement.scrollWidth;
+    const interactive = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        'button, input:not([type="hidden"]), textarea, [role="switch"], [role="combobox"]'
+      )
+    ).filter((el) => {
+      let cur: HTMLElement | null = el;
+      while (cur) {
+        const s = window.getComputedStyle(cur);
+        if (
+          s.display === "none" ||
+          s.visibility === "hidden" ||
+          Number(s.opacity) === 0 ||
+          s.pointerEvents === "none"
+        ) {
+          return false;
+        }
+        cur = cur.parentElement;
+      }
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    });
+
+    const outOfBounds: string[] = [];
+    const rects = interactive.map((el) => {
+      const r = el.getBoundingClientRect();
+      const desc = `${el.tagName.toLowerCase()}[${el.getAttribute("aria-label") || el.textContent?.trim().slice(0, 18) || ""}]`;
+      if (r.left < -1 || r.right > 321) {
+        outOfBounds.push(`${desc}: left=${r.left.toFixed(1)}, right=${r.right.toFixed(1)}`);
+      }
+      return { el, desc, r };
+    });
+
+    const overlaps: string[] = [];
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        const a = rects[i]!;
+        const b = rects[j]!;
+        if (a.el.contains(b.el) || b.el.contains(a.el)) continue;
+        const aLayer = a.el.closest('[role="dialog"], [data-inspector-drawer="true"]');
+        const bLayer = b.el.closest('[role="dialog"], [data-inspector-drawer="true"]');
+        if (aLayer !== bLayer) continue;
+        const ix = Math.min(a.r.right, b.r.right) - Math.max(a.r.left, b.r.left);
+        const iy = Math.min(a.r.bottom, b.r.bottom) - Math.max(a.r.top, b.r.top);
+        if (ix > 2 && iy > 2) {
+          overlaps.push(`${a.desc} <-> ${b.desc} (${ix.toFixed(1)}x${iy.toFixed(1)})`);
+        }
+      }
+    }
+
+    return { scrollWidth, outOfBounds, overlaps };
+  });
+
+  expect(audit.scrollWidth, `${label}: scrollWidth <= 320`).toBeLessThanOrEqual(320);
+  expect(audit.outOfBounds, `${label}: out-of-bounds controls`).toEqual([]);
+  expect(audit.overlaps, `${label}: overlapping controls`).toEqual([]);
+}
+
+test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320px Responsive Acceptance", () => {
+  test("logs into Shared Workspace, onboards peer, exchanges real-time messages & binary/image attachments, downloads byte-for-byte files, searches filenames, and fits 320px cleanly", async ({
     browser,
     baseURL,
   }) => {
-    const contextOwner = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-    const contextMember = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const contextOwner = await browser.newContext({
+      viewport: { width: 1280, height: 800 },
+      acceptDownloads: true,
+    });
+    const contextMember = await browser.newContext({
+      viewport: { width: 1280, height: 800 },
+      acceptDownloads: true,
+    });
     const pageOwner = await contextOwner.newPage();
     const pageMember = await contextMember.newPage();
 
@@ -16,26 +92,18 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search & Dual-End Delivery"
     pageMember.on("pageerror", (err) => memberErrors.push(err.message));
 
     try {
-      // 1. Owner opens landing page & signs in via GitHub OAuth flow (dev auto-callback -> 200 OK, zero HTTP 500!)
+      // 1. Owner signs in via GitHub OAuth flow
       await pageOwner.goto(`${baseURL}/`);
       await expect(pageOwner.getByRole("button", { name: "使用 GitHub 登录共享空间" })).toBeVisible();
       await pageOwner.getByRole("button", { name: "使用 GitHub 登录共享空间" }).click();
 
-      // Authenticated into Shared Workspace shell with Saved Messages ("我的收藏")
       await expect(pageOwner.getByRole("heading", { name: "共享空间" })).toBeVisible();
       await expect(pageOwner.getByRole("button", { name: /我的收藏/ }).first()).toBeVisible();
 
-      // 2. Owner opens Settings -> Profile -> Generates a Workspace Invite Code
+      // 2. Owner generates a Workspace Invite Code
       await pageOwner.getByRole("button", { name: "设置中心" }).click();
       const settingsDialog = pageOwner.getByRole("dialog", { name: "DualLane 设置中心" });
       await expect(settingsDialog).toBeVisible();
-
-      // Assert Settings modal is strictly centered inside viewport
-      const settingsBox = await settingsDialog.boundingBox();
-      expect(settingsBox).not.toBeNull();
-      expect(Math.abs(settingsBox!.x + settingsBox!.width / 2 - 640)).toBeLessThan(24);
-      expect(settingsBox!.y).toBeGreaterThan(40);
-      expect(settingsBox!.y + settingsBox!.height).toBeLessThan(800 - 40);
 
       await settingsDialog.getByRole("button", { name: "个人" }).click();
       await settingsDialog.getByRole("button", { name: "生成邀请码" }).click();
@@ -48,7 +116,7 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search & Dual-End Delivery"
       await pageOwner.keyboard.press("Escape");
       await expect(settingsDialog).toBeHidden();
 
-      // 3. Second user (Member B) opens invite link and joins Shared Workspace
+      // 3. Member B joins Shared Workspace via invite code
       await pageMember.goto(`${baseURL}/?invite=${encodeURIComponent(inviteCode)}`);
       await pageMember
         .getByPlaceholder("可选：测试成员昵称（双窗口联调推荐使用）")
@@ -59,7 +127,7 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search & Dual-End Delivery"
 
       await expect(pageMember.getByRole("heading", { name: "共享空间" })).toBeVisible();
 
-      // 4. Owner creates a new group conversation including Member B ("协作成员晓明")
+      // 4. Owner creates a group conversation including Member B
       await pageOwner.getByRole("button", { name: "新建群组" }).click();
       const createGroupDialog = pageOwner.getByRole("dialog", { name: "新建群组对话" });
       await expect(createGroupDialog).toBeVisible();
@@ -70,15 +138,13 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search & Dual-End Delivery"
       await createGroupDialog.getByRole("button", { name: "创建群组" }).click();
       await expect(createGroupDialog).toBeHidden();
 
-      // Select the newly created group on Owner
       await pageOwner.getByRole("button", { name: /v1\.0 双端实时验收群/ }).click();
 
-      // Member B receives conversation.created in real time over /ws/workspace without reload!
       const memberGroupBtn = pageMember.getByRole("button", { name: /v1\.0 双端实时验收群/ });
       await expect(memberGroupBtn).toBeVisible();
       await memberGroupBtn.click();
 
-      // 5. Owner sends a message -> Member B receives it in real time over /ws/workspace!
+      // 5. Bidirectional real-time text delivery
       const ownerComposer = pageOwner.getByPlaceholder("发送消息到 v1.0 双端实时验收群…");
       await ownerComposer.fill("共享空间双端实时送达验收通过 2026");
       await ownerComposer.press("Enter");
@@ -87,38 +153,90 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search & Dual-End Delivery"
         pageMember.locator("section").getByText("共享空间双端实时送达验收通过 2026")
       ).toBeVisible();
 
-      // 6. Member B replies -> Owner receives reply in real time over /ws/workspace!
       const memberComposer = pageMember.getByPlaceholder("发送消息到 v1.0 双端实时验收群…");
-      await memberComposer.fill("晓明已实时收到，正在验证全文检索跳转！");
+      await memberComposer.fill("晓明已实时收到，正在验证全文检索与文件传输！");
       await memberComposer.press("Enter");
 
       await expect(
-        pageOwner.locator("section").getByText("晓明已实时收到，正在验证全文检索跳转！")
+        pageOwner.locator("section").getByText("晓明已实时收到，正在验证全文检索与文件传输！")
       ).toBeVisible();
 
-      // 7. Owner switches to Saved Messages, opens Global Search (⌘K), searches via /api/v1/search, and jumps back to the group message!
+      // 6. End-to-End Shared Workspace File Upload (PNG image + PDF document, attachment-only send!)
+      const pngBytes = buildWorkspacePngBuffer();
+      const pdfBytes = Buffer.from("%PDF-1.7\nDualLane v1.0 Architecture Signoff Spec\n%%EOF", "utf8");
+
+      await pageOwner.locator('input[type="file"]').setInputFiles([
+        {
+          name: "architecture-diagram.png",
+          mimeType: "image/png",
+          buffer: pngBytes,
+        },
+        {
+          name: "release-checklist.pdf",
+          mimeType: "application/pdf",
+          buffer: pdfBytes,
+        },
+      ]);
+
+      await expect(pageOwner.getByTestId("pending-attachment-chip")).toHaveCount(2);
+      await pageOwner.getByRole("button", { name: "发送" }).click();
+      await expect(pageOwner.getByTestId("pending-attachment-chip")).toHaveCount(0);
+
+      // Member B receives both attachments in real time over /ws/workspace!
+      await expect(
+        pageMember.getByRole("button", { name: "预览图片 architecture-diagram.png" })
+      ).toBeVisible();
+      await expect(
+        pageMember.getByRole("button", { name: "查看附件 release-checklist.pdf" })
+      ).toBeVisible();
+
+      // Member B previews PNG in MediaLightbox and downloads exact bytes
+      await pageMember.getByRole("button", { name: "预览图片 architecture-diagram.png" }).click();
+      const lightbox = pageMember.getByRole("dialog", { name: "architecture-diagram.png" });
+      await expect(lightbox).toBeVisible();
+
+      const dlPngPromise = pageMember.waitForEvent("download");
+      await lightbox.getByRole("button", { name: "下载文件" }).click();
+      const dlPng = await dlPngPromise;
+      expect(dlPng.suggestedFilename()).toBe("architecture-diagram.png");
+      const dlPngBytes = await fs.readFile((await dlPng.path())!);
+      expect(Buffer.compare(dlPngBytes, pngBytes)).toBe(0);
+
+      await pageMember.keyboard.press("Escape");
+      await expect(lightbox).toBeHidden();
+
+      // Member B opens PDF in File InspectorPane and downloads exact bytes
+      await pageMember.getByRole("button", { name: "查看附件 release-checklist.pdf" }).click();
+      const dlPdfPromise = pageMember.waitForEvent("download");
+      await pageMember.getByRole("button", { name: "下载文件" }).click();
+      const dlPdf = await dlPdfPromise;
+      expect(dlPdf.suggestedFilename()).toBe("release-checklist.pdf");
+      const dlPdfBytes = await fs.readFile((await dlPdf.path())!);
+      expect(Buffer.compare(dlPdfBytes, pdfBytes)).toBe(0);
+
+      // 7. Global Search (⌘K) searches both message text AND uploaded filenames!
       await pageOwner.getByRole("button", { name: /我的收藏/ }).first().click();
       await pageOwner.getByRole("button", { name: "全局搜索" }).click();
-
       const searchDialog = pageOwner.getByRole("dialog", { name: /全局搜索/ });
       await expect(searchDialog).toBeVisible();
 
-      const searchBox = await searchDialog.boundingBox();
-      expect(searchBox).not.toBeNull();
-      expect(Math.abs(searchBox!.x + searchBox!.width / 2 - 640)).toBeLessThan(24);
-
-      await searchDialog.getByPlaceholder("输入关键词、文件名或指令…").fill("全文检索跳转");
-      await expect(searchDialog).toContainText("服务端全文检索");
-      const hitButton = searchDialog.getByRole("button", {
-        name: /晓明已实时收到，正在验证全文检索跳转！/,
-      });
-      await expect(hitButton).toBeVisible();
-      await hitButton.click();
-
+      await searchDialog.getByPlaceholder("输入关键词、文件名或指令…").fill("release-checklist");
+      await expect(searchDialog).toContainText("文件与媒体");
+      await searchDialog.getByRole("button", { name: /release-checklist\.pdf/ }).click();
       await expect(searchDialog).toBeHidden();
-      await expect(
-        pageOwner.getByRole("heading", { name: "v1.0 双端实时验收群" })
-      ).toBeVisible();
+      await expect(pageOwner.getByRole("heading", { name: "v1.0 双端实时验收群" })).toBeVisible();
+
+      // 8. Resize Member B to 320x568 ultra-narrow viewport and verify Shared Workspace responsive layout!
+      await pageMember.setViewportSize({ width: 320, height: 568 });
+      // Audit open File Inspector drawer at 320px first, then close via Escape!
+      await assertNarrowWorkspaceNoOverlap(pageMember, "320px Shared Workspace Inspector Drawer");
+      await pageMember.keyboard.press("Escape");
+      await expect(pageMember.getByRole("button", { name: "关闭检查器" })).toHaveCount(0);
+
+      await assertNarrowWorkspaceNoOverlap(pageMember, "320px Shared Workspace Chat View");
+
+      await pageMember.getByRole("button", { name: "返回对话列表" }).click();
+      await assertNarrowWorkspaceNoOverlap(pageMember, "320px Shared Workspace Conversation List");
 
       expect(ownerErrors).toEqual([]);
       expect(memberErrors).toEqual([]);

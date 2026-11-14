@@ -1,8 +1,18 @@
 import React, { useEffect, useState } from "react";
-import { FileText, LocateFixed, MessageSquareText, PinOff, SendHorizontal, Users, X } from "lucide-react";
+import {
+  Download,
+  FileText,
+  LocateFixed,
+  MessageSquareText,
+  PinOff,
+  SendHorizontal,
+  Users,
+  X,
+} from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useLaneStore } from "@/entities/lane/store";
 import { useWorkspaceStore } from "@/entities/workspace/store";
+import { triggerBrowserDownload } from "@/shared/lib/download";
 import { Avatar, Button, IconButton, Switch } from "@/shared/ui";
 
 export function InspectorPane() {
@@ -35,6 +45,17 @@ export function InspectorPane() {
       void loadThread(inspectorThreadRootId).catch(() => {});
     }
   }, [inspectorOpen, inspectorTab, inspectorThreadRootId, loadThread]);
+
+  useEffect(() => {
+    if (!inspectorOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        closeInspector();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [inspectorOpen, closeInspector]);
 
   const showPane = inspectorOpen && activeLane === "workspace";
   const activeConv = activeConversationId ? conversations[activeConversationId] : undefined;
@@ -69,11 +90,13 @@ export function InspectorPane() {
 
           <motion.aside
             key="inspector-pane"
+            aria-label="对话右侧检查器"
+            data-inspector-drawer="true"
             initial={{ opacity: 0, x: 24 }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: 24 }}
             transition={{ type: "spring", stiffness: 420, damping: 36, mass: 0.85 }}
-            className="dl-glass-chrome flex h-full w-[340px] max-compact:w-[min(340px,88vw)] shrink-0 flex-col border-l border-dl-border-hairline max-wide:fixed max-wide:right-0 max-wide:inset-y-0 max-wide:z-drawer max-wide:shadow-dialog"
+            className="dl-glass-chrome flex h-full w-[340px] max-compact:w-[min(340px,88vw)] max-narrow:w-full shrink-0 flex-col border-l border-dl-border-hairline max-wide:fixed max-wide:right-0 max-wide:inset-y-0 max-wide:z-drawer max-wide:shadow-dialog"
           >
             <div className="flex items-center justify-between border-b border-dl-border-hairline px-4 py-3">
               <div className="flex items-center gap-2">
@@ -168,14 +191,19 @@ export function InspectorPane() {
                 >
                   <div className="flex items-center justify-between px-0.5 text-xs text-dl-text-secondary">
                     <span>同时发送到主对话</span>
-                    <Switch checked={alsoSendToChannel} onCheckedChange={setAlsoSendToChannel} />
+                    <Switch
+                      label="同时发送到主对话"
+                      checked={alsoSendToChannel}
+                      onCheckedChange={setAlsoSendToChannel}
+                    />
                   </div>
                   <div className="dl-glass-pill flex items-center gap-2 rounded-xl border border-dl-border-hairline px-2.5 py-1.5">
                     <input
                       value={replyText}
                       onChange={(e) => setReplyText(e.target.value)}
                       placeholder="在线程中回复…"
-                      className="flex-1 bg-transparent text-[13px] text-dl-text-primary placeholder:text-dl-text-tertiary focus:outline-none"
+                      aria-label="在线程中回复"
+                      className="min-w-0 flex-1 bg-transparent text-[13px] text-dl-text-primary placeholder:text-dl-text-tertiary focus:outline-none"
                     />
                     <IconButton
                       type="submit"
@@ -287,9 +315,26 @@ export function InspectorPane() {
                   <div className="text-xs text-dl-text-tertiary">{inspectorFile.mimeType}</div>
                 </div>
 
-                {inspectorFile.sourceMessageId && inspectorFile.conversationId && (
+                {(inspectorFile.downloadUrl || inspectorFile.url) && (
                   <Button
                     variant="primary"
+                    size="sm"
+                    className="w-full gap-1.5"
+                    onClick={() =>
+                      triggerBrowserDownload(
+                        inspectorFile.downloadUrl || inspectorFile.url,
+                        inspectorFile.fileName
+                      )
+                    }
+                  >
+                    <Download className="size-3.5" strokeWidth={1.9} />
+                    下载文件
+                  </Button>
+                )}
+
+                {inspectorFile.sourceMessageId && inspectorFile.conversationId && (
+                  <Button
+                    variant="secondary"
                     size="sm"
                     className="w-full gap-1.5"
                     onClick={() =>

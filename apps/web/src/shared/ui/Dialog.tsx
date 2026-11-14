@@ -15,10 +15,10 @@ interface DialogContentProps extends ComponentPropsWithoutRef<typeof RadixDialog
 }
 
 const SIZE_CLASSES = {
-  sm: "w-[min(420px,calc(100vw-24px))]",
-  md: "w-[min(560px,calc(100vw-24px))]",
-  lg: "w-[min(780px,calc(100vw-24px))]",
-  xl: "w-[min(960px,calc(100vw-24px))] h-[min(720px,calc(100dvh-32px))]"
+  sm: "w-[min(420px,calc(100vw-24px))] max-narrow:w-[calc(100vw-16px)]",
+  md: "w-[min(560px,calc(100vw-24px))] max-narrow:w-[calc(100vw-16px)]",
+  lg: "w-[min(780px,calc(100vw-24px))] max-narrow:w-[calc(100vw-16px)]",
+  xl: "w-[min(960px,calc(100vw-24px))] max-narrow:w-[calc(100vw-16px)] h-[min(720px,calc(100dvh-32px))]"
 };
 
 export function DialogContent({
@@ -35,11 +35,11 @@ export function DialogContent({
           "dl-anim-scrim fixed inset-0 z-dialog bg-backdrop backdrop-blur-[6px]"
         )}
       />
-      <div className="fixed inset-0 z-dialog flex items-center justify-center p-4 pointer-events-none">
+      <div className="fixed inset-0 z-dialog flex items-center justify-center p-4 max-narrow:p-2 pointer-events-none">
         <RadixDialog.Content
           className={cn(
             "dl-anim-dialog dl-glass-dialog relative pointer-events-auto",
-            "max-h-[calc(100dvh-32px)] overflow-hidden rounded-dialog border border-line text-text",
+            "max-h-[calc(100dvh-32px)] max-narrow:max-h-[calc(100dvh-16px)] overflow-hidden rounded-dialog border border-line text-text",
             "flex flex-col focus:outline-none",
             SIZE_CLASSES[size],
             className
@@ -53,7 +53,7 @@ export function DialogContent({
                 label="关闭弹窗"
                 size="sm"
                 variant="ghost"
-                className="absolute right-3.5 top-3.5 z-10 rounded-full"
+                className="absolute right-3.5 top-3.5 max-narrow:right-2.5 max-narrow:top-2.5 z-10 rounded-full"
               >
                 <X className="size-4" />
               </IconButton>
@@ -67,7 +67,7 @@ export function DialogContent({
 
 export function DialogHeader({ className, children }: { className?: string; children: ReactNode }) {
   return (
-    <div className={cn("flex flex-col gap-1 border-b border-line px-6 py-4 pr-14", className)}>
+    <div className={cn("flex flex-col gap-1 border-b border-line px-6 max-narrow:px-4 py-4 pr-14 max-narrow:pr-11", className)}>
       {children}
     </div>
   );
