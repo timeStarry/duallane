@@ -17,6 +17,7 @@ import {
   safeInlineImageMime,
 } from "@/shared/lib/p2p-lane";
 import {
+  inferEntryViewFromLocation,
   inferLaneFromLocation,
   inferMobileViewFromLocation,
   useLaneStore,
@@ -1012,7 +1013,7 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
     }
   });
 
-  it("restores activeLane and mobileView from /direct vs /workspace URLs and renders Grand Two-Direction Home Portal", () => {
+  it("restores activeLane and entryView from URLs and keeps Home Entry Portal pure & uncluttered", () => {
     expect(inferLaneFromLocation({ pathname: "/direct", search: "" })).toBe("p2p");
     expect(inferMobileViewFromLocation({ pathname: "/direct" })).toBe("list");
     expect(inferLaneFromLocation({ pathname: "/direct/Rm123", search: "" })).toBe("p2p");
@@ -1020,11 +1021,21 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
     expect(inferLaneFromLocation({ pathname: "/r/Rm123", search: "" })).toBe("p2p");
     expect(inferLaneFromLocation({ pathname: "/workspace", search: "" })).toBe("workspace");
     expect(inferLaneFromLocation({ pathname: "/", search: "?lane=p2p" })).toBe("p2p");
+    expect(inferEntryViewFromLocation({ pathname: "/", search: "" })).toBe("entry");
+    expect(inferEntryViewFromLocation({ pathname: "/workspace", search: "" })).toBe("workspace");
+    expect(inferEntryViewFromLocation({ pathname: "/", search: "?invite=INV-1" })).toBe("workspace");
+    expect(inferEntryViewFromLocation({ pathname: "/", search: "?error=access_denied" })).toBe(
+      "workspace"
+    );
 
     const prevWsInitial = { ...useWorkspaceStore.getInitialState() };
     const prevLaneInitial = { ...useLaneStore.getInitialState() };
     try {
-      const homeLane = { ...prevLaneInitial, activeLane: "workspace" as const };
+      const homeLane = {
+        ...prevLaneInitial,
+        activeLane: "workspace" as const,
+        entryView: "entry" as const,
+      };
       Object.assign(useLaneStore.getInitialState(), homeLane);
       useLaneStore.setState(homeLane);
 
@@ -1032,18 +1043,32 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
         ...prevWsInitial,
         isPreviewMode: false,
         authStatus: "unauthenticated" as const,
+        workspaceAvailability: "disabled" as const,
         currentUser: null,
         p2pRoom: null,
       };
       Object.assign(useWorkspaceStore.getInitialState(), homeWs);
       useWorkspaceStore.setState(homeWs);
 
+      // 1. "/" Entry Portal stays serene & pure: two choice cards + theme switcher, ZERO login inputs or service warnings
       const homeHtml = renderToStaticMarkup(<AppV1 />);
-      expect(homeHtml).toContain('data-testid="home-card-workspace"');
       expect(homeHtml).toContain('data-testid="home-card-direct"');
-      expect(homeHtml).toContain("选择沟通方式，两条通道各司其职");
-      expect(homeHtml).toContain("使用 GitHub 登录共享空间");
-      expect(homeHtml).toContain("免登录进入私密直连通道");
+      expect(homeHtml).toContain('data-testid="home-card-workspace"');
+      expect(homeHtml).toContain("选择沟通方式");
+      expect(homeHtml).toContain("开始临时会话");
+      expect(homeHtml).toContain("进入共享空间");
+      expect(homeHtml).not.toContain("空间邀请码");
+      expect(homeHtml).not.toContain("共享空间服务当前未启用");
+
+      // 2. "/workspace" Sign-In View renders focused login card with back button
+      const wsLoginLane = { ...homeLane, entryView: "workspace" as const };
+      Object.assign(useLaneStore.getInitialState(), wsLoginLane);
+      useLaneStore.setState(wsLoginLane);
+
+      const wsLoginHtml = renderToStaticMarkup(<AppV1 />);
+      expect(wsLoginHtml).toContain("登录后进入共享空间");
+      expect(wsLoginHtml).toContain("使用 GitHub 登录共享空间");
+      expect(wsLoginHtml).toContain("返回选择");
     } finally {
       Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);
       useWorkspaceStore.setState(prevWsInitial);

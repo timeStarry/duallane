@@ -135,11 +135,13 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320
     pageMember.on("pageerror", (err) => memberErrors.push(err.message));
 
     try {
-      // 1. Home Portal shows Two Grand Directional Hero Cards; Owner signs in via GitHub OAuth flow
+      // 1. Home Entry Portal ("/") shows serene two-card choices; clicking Shared Workspace opens "/workspace" login view
       await pageOwner.goto(`${baseURL}/`);
-      await expect(pageOwner.getByTestId("home-card-workspace")).toBeVisible();
       await expect(pageOwner.getByTestId("home-card-direct")).toBeVisible();
-      await assertWorkspaceNoOverlapAtWidth(pageOwner, 1280, "1280px Grand Two-Direction Home Portal");
+      await expect(pageOwner.getByTestId("home-card-workspace")).toBeVisible();
+      await assertWorkspaceNoOverlapAtWidth(pageOwner, 1280, "1280px Minimalist Two-Card Home Portal");
+      await pageOwner.getByTestId("home-card-workspace").click();
+      await expect(pageOwner).toHaveURL(/\/workspace$/);
       await expect(pageOwner.getByRole("button", { name: "使用 GitHub 登录共享空间" })).toBeVisible();
       await pageOwner.getByRole("button", { name: "使用 GitHub 登录共享空间" }).click();
 

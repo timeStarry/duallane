@@ -215,16 +215,23 @@ test.describe("DualLane v1.0 P2P Direct Lane, File Transfer, 320px Responsive, A
     pageB.on("pageerror", (err) => pageErrorsB.push(err.message));
 
     try {
-      // 1. Open landing screen on Browser A (only Go P2P backend is running; Workspace backend is absent)
+      // 1. Open serene Home Entry Portal on Browser A (only Go P2P backend is running; Workspace backend is absent)
       await pageA.goto(`${baseURL}/`);
-      await expect(pageA.getByRole("button", { name: "使用 GitHub 登录共享空间" })).toBeVisible();
+      await expect(pageA.getByTestId("home-card-direct")).toBeVisible();
+      await expect(pageA.getByTestId("home-card-workspace")).toBeVisible();
+      // Home Entry Portal MUST remain uncluttered with zero warning banners or login inputs
+      await expect(pageA.getByText("共享空间服务当前未启用")).toHaveCount(0);
 
-      // Clicking GitHub sign-in when Workspace backend is unavailable MUST NOT navigate to a raw HTTP 500 screen
+      // Entering "/workspace" and clicking GitHub sign-in when Workspace backend is unavailable MUST NOT navigate to a raw HTTP 500 screen
+      await pageA.getByTestId("home-card-workspace").click();
+      await expect(pageA).toHaveURL(/\/workspace$/);
       await pageA.getByRole("button", { name: "使用 GitHub 登录共享空间" }).click();
-      await expect(pageA.getByRole("button", { name: "免登录进入私密直连通道" })).toBeVisible();
+      await expect(pageA.getByRole("button", { name: "返回选择" })).toBeVisible();
 
-      // 2. Enter P2P Direct Lane & create remote E2EE room on Go P2P backend
-      await pageA.getByRole("button", { name: "免登录进入私密直连通道" }).click();
+      // Return to Home Entry Portal and click left card ("一对一直连 · 开始临时会话") to create E2EE room
+      await pageA.getByRole("button", { name: "返回选择" }).click();
+      await expect(pageA).toHaveURL(`${baseURL}/`);
+      await pageA.getByTestId("home-card-direct").click();
       await expect(pageA).toHaveURL(/\/direct\/[A-Za-z0-9_-]+#k=[A-Za-z0-9_-]+/);
 
       const shareUrl = pageA.url();
@@ -390,12 +397,19 @@ test.describe("DualLane v1.0 P2P Direct Lane, File Transfer, 320px Responsive, A
     });
 
     try {
-      // 1. OAuth error callback (?error=access_denied) shows friendly banner, scrubs query param, fits 320px cleanly
+      // 1a. Audit 320px Home Entry Portal ("/") + WCAG AA contrast
+      await page.goto(`${baseURL}/`);
+      await expect(page.getByTestId("home-card-direct")).toBeVisible();
+      await expect(page.getByTestId("home-card-workspace")).toBeVisible();
+      await assertNoOverflowOrControlOverlap(page, 320, "320px Home Entry Portal");
+      await assertAccessibleNamesAndContrast(page, "Home Entry Light Mode");
+
+      // 1b. OAuth error callback (?error=access_denied) opens "/workspace" login card with friendly banner, scrubs query param, fits 320px cleanly
       await page.goto(`${baseURL}/?error=access_denied`);
       await expect(page.getByText(/GitHub 授权已取消/)).toBeVisible();
       expect(new URL(page.url()).search).toBe("");
-      await assertNoOverflowOrControlOverlap(page, 320, "320px Landing Screen");
-      await assertAccessibleNamesAndContrast(page, "Landing Light Mode");
+      await assertNoOverflowOrControlOverlap(page, 320, "320px Workspace Sign-In Screen");
+      await assertAccessibleNamesAndContrast(page, "Workspace Sign-In Light Mode");
 
       // 2. Invalid #k= fragment (/direct/BadRoom99#k=invalid!bad!) MUST NOT open any WS connection AND MUST scrub URL!
       openedWsUrls.length = 0;

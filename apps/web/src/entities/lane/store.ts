@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { extractP2PRoomFromUrl, scrubP2PRoomFromUrl } from "@/shared/lib/p2p-lane";
 
 export type LaneId = "workspace" | "p2p";
+export type EntryView = "entry" | "workspace";
 export type ThemeMode = "system" | "light" | "dark";
 export type SettingsTab = "appearance" | "profile" | "devices" | "qr" | "space" | "bots";
 export type SpaceAdminTab = "overview" | "members" | "invites" | "storage";
@@ -22,6 +23,7 @@ export interface LightboxItem {
 
 interface LaneUIState {
   activeLane: LaneId;
+  entryView: EntryView;
   mobileView: "list" | "chat";
   themeMode: ThemeMode;
   inspectorOpen: boolean;
@@ -38,6 +40,7 @@ interface LaneUIState {
   lightboxIndex: number;
 
   setActiveLane: (lane: LaneId) => void;
+  setEntryView: (view: EntryView, pushHistory?: boolean) => void;
   setMobileView: (view: "list" | "chat") => void;
   setThemeMode: (mode: ThemeMode) => void;
   openThreadInspector: (rootMessageId: string) => void;
@@ -101,8 +104,32 @@ export function inferMobileViewFromLocation(
   return "chat";
 }
 
+export function inferEntryViewFromLocation(
+  loc: Partial<Pick<Location, "pathname" | "search">> | undefined =
+    typeof window !== "undefined" ? window.location : undefined
+): EntryView {
+  if (!loc) return "entry";
+  const pathname = loc.pathname || "/";
+  if (pathname === "/workspace" || pathname.startsWith("/workspace/")) {
+    return "workspace";
+  }
+  if (loc.search) {
+    const params = new URLSearchParams(loc.search);
+    if (
+      params.get("lane") === "workspace" ||
+      params.has("invite") ||
+      params.has("error") ||
+      params.has("authError")
+    ) {
+      return "workspace";
+    }
+  }
+  return "entry";
+}
+
 export const useLaneStore = create<LaneUIState>((set, get) => ({
   activeLane: inferLaneFromLocation(),
+  entryView: inferEntryViewFromLocation(),
   mobileView: inferMobileViewFromLocation(),
   themeMode: "system",
   inspectorOpen: false,
@@ -137,7 +164,22 @@ export const useLaneStore = create<LaneUIState>((set, get) => ({
         }
       }
     }
-    set({ activeLane });
+    set(activeLane === "workspace" ? { activeLane, entryView: "workspace" } : { activeLane });
+  },
+  setEntryView: (entryView, pushHistory = false) => {
+    if (typeof window !== "undefined" && window.location) {
+      const search = entryView === "workspace" ? window.location.search || "" : "";
+      const targetUrl = entryView === "workspace" ? `/workspace${search}` : "/";
+      const currentUrl = `${window.location.pathname || "/"}${window.location.search || ""}${window.location.hash || ""}`;
+      if (currentUrl !== targetUrl) {
+        if (pushHistory && window.history?.pushState) {
+          window.history.pushState(null, "", targetUrl);
+        } else {
+          window.history?.replaceState?.(null, "", targetUrl);
+        }
+      }
+    }
+    set({ activeLane: "workspace", entryView });
   },
   setMobileView: (mobileView) => {
     if (mobileView === "list") {
