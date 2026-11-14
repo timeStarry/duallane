@@ -6,7 +6,6 @@ import {
   QrCode,
   Search,
   Settings,
-  ShieldCheck,
   Smartphone,
   User,
 } from "lucide-react";
@@ -15,7 +14,6 @@ import { useLaneStore } from "@/entities/lane/store";
 import { useWorkspaceStore } from "@/entities/workspace/store";
 import {
   Avatar,
-  BrandLogo,
   Button,
   IconButton,
   Popover,
@@ -24,6 +22,7 @@ import {
   Tooltip,
 } from "@/shared/ui";
 import { cn } from "@/shared/lib/cn";
+import { DualLaneDeckSwitch } from "@/widgets/DualLaneDeckSwitch";
 
 export function PrimaryRail() {
   const { activeLane, mobileView, setActiveLane, setSearchOpen, openSettings } = useLaneStore();
@@ -34,6 +33,7 @@ export function PrimaryRail() {
     connectionStatus,
     quotaUsedBytes,
     quotaLimitBytes,
+    conversations,
     p2pRoom,
     logout,
   } = useWorkspaceStore();
@@ -41,6 +41,15 @@ export function PrimaryRail() {
   const isAuthenticated =
     isPreviewMode || (authStatus === "authenticated" && Boolean(currentUser));
   const [userMenuOpen, setUserMenuOpen] = React.useState(false);
+
+  const workspaceUnreadCount = React.useMemo(
+    () =>
+      Object.values(conversations).reduce(
+        (sum, conv) => sum + Math.max(0, conv.unreadCount || 0),
+        0
+      ),
+    [conversations]
+  );
 
   const quotaPct = Math.min(
     100,
@@ -52,83 +61,27 @@ export function PrimaryRail() {
       aria-label="主通道导航"
       className={cn(
         "dl-glass-chrome z-sticky flex h-full w-[68px] shrink-0 flex-col items-center justify-between border-r border-dl-border-hairline py-3.5 select-none",
-        "max-compact:order-last max-compact:h-14 max-compact:w-full max-compact:flex-row max-compact:justify-around max-compact:border-r-0 max-compact:border-t max-compact:px-2 max-compact:py-1",
+        "max-compact:order-last max-compact:h-14 max-compact:w-full max-compact:flex-row max-compact:justify-between max-compact:border-r-0 max-compact:border-t max-compact:px-2.5 max-compact:py-1",
         mobileView === "chat" && "max-compact:hidden"
       )}
     >
-      {/* Top: Brand & Dual-Lane Live Switcher */}
-      <div className="flex w-full flex-col items-center gap-2.5 px-2 max-compact:w-auto max-compact:flex-1 max-compact:flex-row max-compact:justify-around max-compact:gap-1 max-compact:px-0">
-        <Tooltip content="DualLane v1.0 · Two Trust Lanes. Crystal Clear." side="right">
-          <div className="max-compact:hidden">
-            <BrandLogo size={38} withTile label="DualLane" />
-          </div>
-        </Tooltip>
-
-        <div className="my-0.5 h-px w-8 bg-dl-border-hairline max-compact:hidden" />
-
+      {/* Top: Interactive Brand Emblem · Card-Shuffling Dual-Lane Switcher */}
+      <div className="flex w-full flex-col items-center gap-2.5 px-1.5 max-compact:w-auto max-compact:flex-1 max-compact:flex-row max-compact:justify-start max-compact:gap-2 max-compact:px-0">
         <div className="relative flex w-full justify-center max-compact:w-auto">
-          {activeLane === "workspace" && (
-            <motion.span
-              layoutId="rail-active-lane"
-              transition={{ type: "spring", stiffness: 460, damping: 34 }}
-              className="absolute left-0 top-2.5 bottom-2.5 w-1 rounded-r-full bg-dl-lane-shared max-compact:hidden"
-            />
-          )}
-          <Tooltip content="共享空间 · 团队协作、线程与机器人 (⌘1)" side="right">
-            <Button
-              variant="ghost"
-              size="md"
-              onClick={() => setActiveLane("workspace")}
-              className={cn(
-                "relative h-11 w-11 max-compact:h-10 max-compact:w-12 rounded-2xl p-0 flex-col gap-1 transition-colors",
-                activeLane === "workspace"
-                  ? "bg-dl-lane-shared text-dl-on-shared hover:bg-dl-lane-shared shadow-sm"
-                  : "text-dl-text-secondary hover:bg-dl-surface-subtle/80 hover:text-dl-text-primary"
-              )}
-              aria-label="共享空间"
-            >
-              <Building2 className="size-[18px]" strokeWidth={1.75} />
-              <span className="text-[10px] font-semibold leading-none">空间</span>
-            </Button>
-          </Tooltip>
-        </div>
-
-        <div className="relative flex w-full justify-center max-compact:w-auto">
-          {activeLane === "p2p" && (
-            <motion.span
-              layoutId="rail-active-lane"
-              transition={{ type: "spring", stiffness: 460, damping: 34 }}
-              className="absolute left-0 top-2.5 bottom-2.5 w-1 rounded-r-full bg-dl-lane-direct max-compact:hidden"
-            />
-          )}
-          <Tooltip
-            content={`私密直连 · 端到端加密点对点${p2pRoom ? " (房间活跃)" : ""} (⌘2)`}
-            side="right"
-          >
-            <Button
-              variant="ghost"
-              size="md"
-              onClick={() => setActiveLane("p2p")}
-              className={cn(
-                "relative h-11 w-11 max-compact:h-10 max-compact:w-12 rounded-2xl p-0 flex-col gap-1 transition-colors",
-                activeLane === "p2p"
-                  ? "bg-dl-lane-direct text-dl-on-direct hover:bg-dl-lane-direct shadow-sm"
-                  : "text-dl-text-secondary hover:bg-dl-surface-subtle/80 hover:text-dl-text-primary"
-              )}
-              aria-label="私密直连"
-            >
-              <ShieldCheck className="size-[18px]" strokeWidth={1.75} />
-              <span className="text-[10px] font-semibold leading-none">直连</span>
-              {p2pRoom && (
-                <span
-                  className={cn(
-                    "absolute top-1.5 right-1.5 h-2 w-2 rounded-full animate-pulse",
-                    activeLane === "p2p" ? "bg-dl-on-direct" : "bg-dl-lane-direct"
-                  )}
-                />
-              )}
-            </Button>
-          </Tooltip>
+          <motion.span
+            layoutId="rail-active-lane"
+            transition={{ type: "spring", stiffness: 440, damping: 32 }}
+            className={cn(
+              "absolute -left-1.5 top-2 bottom-5 w-1 rounded-r-full transition-colors max-compact:hidden",
+              activeLane === "workspace" ? "bg-dl-lane-shared" : "bg-dl-lane-direct"
+            )}
+          />
+          <DualLaneDeckSwitch
+            activeLane={activeLane}
+            onToggleLane={setActiveLane}
+            hasActiveP2PRoom={Boolean(p2pRoom)}
+            workspaceUnreadCount={isAuthenticated ? workspaceUnreadCount : 0}
+          />
         </div>
 
         <div className="my-0.5 h-px w-8 bg-dl-border-hairline max-compact:hidden" />

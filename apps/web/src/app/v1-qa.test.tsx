@@ -784,6 +784,81 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
       expect(railHtml).not.toContain('aria-label="机器人与集成"');
       expect(railHtml).not.toContain(">0%<");
       expect(railHtml).toContain(">访<");
+      expect(railHtml).toContain('data-testid="dual-lane-deck-switch"');
+      expect(railHtml).toContain('data-active-lane="p2p"');
+      expect(railHtml).toContain('data-front-card="p2p"');
+      expect(railHtml).toContain(">直连<");
+    } finally {
+      Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);
+      useWorkspaceStore.setState(prevWsInitial);
+      Object.assign(useLaneStore.getInitialState(), prevLaneInitial);
+      useLaneStore.setState(prevLaneInitial);
+    }
+  });
+
+  it("consolidates lane switching onto top-left DualLaneDeckSwitch with front/back crystal card layering and cross-lane status badges", () => {
+    const fixture = buildDevPreviewFixture();
+    const prevWsInitial = { ...useWorkspaceStore.getInitialState() };
+    const prevLaneInitial = { ...useLaneStore.getInitialState() };
+
+    try {
+      const wsSnapshot = {
+        ...prevWsInitial,
+        isPreviewMode: true,
+        authStatus: "authenticated" as const,
+        currentUser: fixture.currentUser,
+        conversations: fixture.conversations,
+        conversationOrder: fixture.conversationOrder,
+        p2pRoom: {
+          roomId: "RoomDeck01",
+          keyFingerprint: "A1B2-C3D4",
+          connectedPeers: 2,
+          remotePeerCount: 1,
+          status: "peer_connected" as const,
+          shareUrl: "http://localhost:5173/direct/RoomDeck01#k=k_test",
+        },
+      };
+      Object.assign(useWorkspaceStore.getInitialState(), wsSnapshot);
+      useWorkspaceStore.setState(wsSnapshot);
+
+      // 1. Workspace active: blue workspace card on top (rendered after amber back card), P2P live dot shown
+      const wsLane = { ...prevLaneInitial, activeLane: "workspace" as const };
+      Object.assign(useLaneStore.getInitialState(), wsLane);
+      useLaneStore.setState(wsLane);
+
+      const wsRailHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <PrimaryRail />
+        </TooltipProvider>
+      );
+      expect(wsRailHtml).toContain('data-testid="dual-lane-deck-switch"');
+      expect(wsRailHtml).toContain('data-front-card="workspace"');
+      expect(wsRailHtml).toContain('data-card-lane="workspace" data-card-depth="front"');
+      expect(wsRailHtml).toContain('data-card-lane="p2p" data-card-depth="back"');
+      expect(wsRailHtml.indexOf('data-card-lane="p2p"')).toBeLessThan(
+        wsRailHtml.indexOf('data-card-lane="workspace"')
+      );
+      expect(wsRailHtml).toContain('data-testid="deck-p2p-active-dot"');
+      expect(wsRailHtml).toContain(">空间<");
+
+      // 2. P2P active: amber direct card on top (rendered after blue back card), Workspace unread badge shown
+      const p2pLane = { ...prevLaneInitial, activeLane: "p2p" as const };
+      Object.assign(useLaneStore.getInitialState(), p2pLane);
+      useLaneStore.setState(p2pLane);
+
+      const p2pRailHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <PrimaryRail />
+        </TooltipProvider>
+      );
+      expect(p2pRailHtml).toContain('data-front-card="p2p"');
+      expect(p2pRailHtml).toContain('data-card-lane="p2p" data-card-depth="front"');
+      expect(p2pRailHtml).toContain('data-card-lane="workspace" data-card-depth="back"');
+      expect(p2pRailHtml.indexOf('data-card-lane="workspace"')).toBeLessThan(
+        p2pRailHtml.indexOf('data-card-lane="p2p"')
+      );
+      expect(p2pRailHtml).toContain('data-testid="deck-workspace-unread-dot"');
+      expect(p2pRailHtml).toContain(">直连<");
     } finally {
       Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);
       useWorkspaceStore.setState(prevWsInitial);

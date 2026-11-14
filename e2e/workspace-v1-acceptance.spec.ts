@@ -283,6 +283,32 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320
       await pageMember.getByRole("button", { name: "返回对话列表" }).click();
       await assertNarrowWorkspaceNoOverlap(pageMember, "320px Shared Workspace Conversation List");
 
+      // 9. Verify Top-Left Dual-Lane Card-Deck Switcher (`卡片叠换动效`) on both Desktop (1280px) & 320px Mobile!
+      const ownerDeckSwitch = pageOwner.getByTestId("dual-lane-deck-switch");
+      await expect(ownerDeckSwitch).toHaveAttribute("data-active-lane", "workspace");
+      await expect(ownerDeckSwitch).toHaveAttribute("data-front-card", "workspace");
+
+      await ownerDeckSwitch.click();
+      await expect(ownerDeckSwitch).toHaveAttribute("data-active-lane", "p2p");
+      await expect(ownerDeckSwitch).toHaveAttribute("data-front-card", "p2p");
+      await expect(pageOwner.getByRole("heading", { name: "私密直连", exact: true })).toBeVisible();
+
+      await ownerDeckSwitch.click();
+      await expect(ownerDeckSwitch).toHaveAttribute("data-active-lane", "workspace");
+      await expect(ownerDeckSwitch).toHaveAttribute("data-front-card", "workspace");
+      await expect(pageOwner.getByRole("heading", { name: "v1.0 双端实时验收群" })).toBeVisible();
+
+      const memberDeckSwitch = pageMember.getByTestId("dual-lane-deck-switch");
+      await memberDeckSwitch.click();
+      await expect(memberDeckSwitch).toHaveAttribute("data-active-lane", "p2p");
+      await expect(memberDeckSwitch).toHaveAttribute("data-front-card", "p2p");
+      await assertNarrowWorkspaceNoOverlap(pageMember, "320px Deck Switch -> P2P List");
+
+      await memberDeckSwitch.click();
+      await expect(memberDeckSwitch).toHaveAttribute("data-active-lane", "workspace");
+      await expect(memberDeckSwitch).toHaveAttribute("data-front-card", "workspace");
+      await assertNarrowWorkspaceNoOverlap(pageMember, "320px Deck Switch -> Workspace List");
+
       expect(ownerErrors).toEqual([]);
       expect(memberErrors).toEqual([]);
     } finally {

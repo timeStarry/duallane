@@ -86,6 +86,10 @@ export function AppV1() {
       } else if ((e.metaKey || e.ctrlKey) && e.key === "2") {
         e.preventDefault();
         setActiveLane("p2p");
+      } else if ((e.metaKey || e.ctrlKey) && e.key === "\\") {
+        e.preventDefault();
+        const current = useLaneStore.getState().activeLane;
+        setActiveLane(current === "workspace" ? "p2p" : "workspace");
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -282,7 +286,17 @@ export function AppV1() {
               onClick={() => {
                 setActiveLane("p2p");
                 useLaneStore.getState().setMobileView("chat");
-                void createP2PRoom();
+                const existingRoom = useWorkspaceStore.getState().p2pRoom;
+                if (!existingRoom) {
+                  void createP2PRoom();
+                } else if (existingRoom.shareUrl) {
+                  try {
+                    const parsed = new URL(existingRoom.shareUrl);
+                    window.history.replaceState(null, "", `${parsed.pathname}${parsed.hash}`);
+                  } catch {
+                    // Keep in-memory room active even if shareUrl is relative.
+                  }
+                }
               }}
             >
               <ShieldCheck className="size-4 shrink-0" strokeWidth={1.9} />
