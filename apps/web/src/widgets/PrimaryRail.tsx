@@ -52,7 +52,7 @@ export function PrimaryRail() {
     >
       {/* Top: Brand & Dual-Lane Live Switcher */}
       <div className="flex w-full flex-col items-center gap-2.5 px-2 max-compact:w-auto max-compact:flex-1 max-compact:flex-row max-compact:justify-around max-compact:gap-1 max-compact:px-0">
-        <Tooltip content="DualLane v1.0 · One Prism. Two Trust Wavelengths." side="right">
+        <Tooltip content="DualLane v1.0 · Two Trust Lanes. Crystal Clear." side="right">
           <div className="max-compact:hidden">
             <BrandLogo size={38} withTile label="DualLane" />
           </div>

@@ -190,10 +190,10 @@ export function AppV1() {
                   </span>
                 </div>
                 <p className="text-xs text-dl-text-secondary mt-0.5 leading-snug">
-                  分流式安全会话 · 会话起点前的信任分光镜
+                  分流式安全会话 · 共享空间与私密直连
                 </p>
                 <div className="text-[11px] font-mono text-dl-text-secondary mt-0.5 truncate">
-                  One Prism. Two Trust Wavelengths.
+                  Two Trust Lanes. Crystal Clear.
                 </div>
               </div>
             </div>

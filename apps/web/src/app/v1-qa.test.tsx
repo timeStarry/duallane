@@ -364,9 +364,9 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
         </TooltipProvider>
       );
 
-      // Crisp SVG icons & Dichroic Prism brand mark rendered instead of raw OS chrome emojis or "DL" text placeholder
+      // Crisp SVG icons & Liquid Vibrancy Panes brand mark rendered instead of raw OS chrome emojis or "DL" text placeholder
       expect(railHtml).toContain("<svg");
-      expect(railHtml).toContain('data-brand-mark="dichroic-prism"');
+      expect(railHtml).toContain('data-brand-mark="vibrancy-panes"');
       expect(railHtml).not.toContain(">DL<");
       expect(railHtml).not.toContain("🏢");
       expect(railHtml).not.toContain("⚙️");
@@ -550,20 +550,20 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
     }
   });
 
-  it("renders BrandLogo Dichroic Prism optical geometry across detail, 16px compact, tile, and monochrome modes", () => {
+  it("renders BrandLogo Liquid Vibrancy Panes optical geometry across detail, 16px compact, tile, and monochrome modes", () => {
     expect(DESIGN_TOKENS.modes.dark.direct).toBe("#fb923c");
 
     const detailHtml = renderToStaticMarkup(<BrandLogo size={36} withTile label="DualLane" />);
-    expect(detailHtml).toContain('data-brand-mark="dichroic-prism"');
+    expect(detailHtml).toContain('data-brand-mark="vibrancy-panes"');
     expect(detailHtml).toContain('data-optical-mode="detail"');
     expect(detailHtml).toContain('aria-label="DualLane"');
-    expect(detailHtml).toContain("<line ");
+    expect(detailHtml).toContain('stroke-width="2"');
     expect(detailHtml).toContain("#F97316");
     expect(detailHtml).toContain("#0EA5E9");
 
     const compactHtml = renderToStaticMarkup(<BrandLogo size={16} />);
     expect(compactHtml).toContain('data-optical-mode="compact"');
-    expect(compactHtml).not.toContain("<line ");
+    expect(compactHtml).toContain('stroke-width="0"');
 
     const monoHtml = renderToStaticMarkup(<BrandLogo size={24} monochrome />);
     expect(monoHtml).toContain('fill="currentColor"');

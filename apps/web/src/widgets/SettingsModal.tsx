@@ -157,7 +157,7 @@ export function SettingsModal() {
             <span className="tracking-[-0.025em]">DualLane 设置中心</span>
           </DialogTitle>
           <DialogDescription className="text-xs font-mono">
-            One Prism. Two Trust Wavelengths.
+            Two Trust Lanes. Crystal Clear.
           </DialogDescription>
         </DialogHeader>
         <div className="flex max-compact:flex-col gap-4 min-h-[320px] max-h-[72vh] p-6 max-narrow:p-3.5 pt-4">

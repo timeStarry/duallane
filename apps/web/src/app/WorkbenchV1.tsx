@@ -77,7 +77,7 @@ export function WorkbenchV1() {
               <div>
                 <h1 className="text-[16px] font-bold tracking-[-0.032em]">DualLane · v1.0 组件工作台</h1>
                 <p className="text-[12px] text-muted">
-                  One Prism. Two Trust Wavelengths. · 当前解析模式：{resolvedMode === "dark" ? "深色 Vibrancy" : "浅色 Vibrancy"}
+                  Two Trust Lanes. Crystal Clear. · 当前解析模式：{resolvedMode === "dark" ? "深色 Vibrancy" : "浅色 Vibrancy"}
                 </p>
               </div>
             </div>

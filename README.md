@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="apps/web/public/assets/duallane-mark.svg" width="84" height="84" alt="DualLane Dichroic Prism Mark" />
+  <img src="apps/web/public/assets/duallane-mark.svg" width="84" height="84" alt="DualLane Liquid Vibrancy Mark" />
 </p>
 
 <h1 align="center">DualLane</h1>
 
 <p align="center">
-  <strong>One Prism. Two Trust Wavelengths.</strong><br />
-  <sub>分流式安全会话 · 会话起点前的信任分光镜</sub>
+  <strong>Two Trust Lanes. Crystal Clear.</strong><br />
+  <sub>分流式安全会话 · 共享空间与私密直连</sub>
 </p>
 
 DualLane is a self-hosted split-lane communication tool. The private direct lane
