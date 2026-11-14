@@ -37,7 +37,7 @@ COPY --from=certificates /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-ce
 RUN case "${DEBIAN_MIRROR}" in http://deb.debian.org|https://deb.debian.org|https://mirrors.ustc.edu.cn) ;; *) exit 2 ;; esac \
     && sed -i "s|http://deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates=20250419~deb12u1 libvips42=8.14.1-3+deb12u3 tzdata=2026b-0+deb12u1 \
+    && apt-get install -y --no-install-recommends ca-certificates=20250419~deb12u2 libvips42=8.14.1-3+deb12u3 tzdata=2026f-0+deb12u1 \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /app/data/workspace-files \
     && chown 65532:65532 /app/data /app/data/workspace-files

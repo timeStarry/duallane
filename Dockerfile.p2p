@@ -21,7 +21,7 @@ COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certifica
 RUN case "${DEBIAN_MIRROR}" in http://deb.debian.org|https://deb.debian.org|https://mirrors.ustc.edu.cn) ;; *) exit 2 ;; esac \
     && sed -i "s|http://deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates=20250419~deb12u1 tzdata=2026b-0+deb12u1 \
+    && apt-get install -y --no-install-recommends ca-certificates=20250419~deb12u2 tzdata=2026f-0+deb12u1 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/p2p /usr/local/bin/duallane-p2p
 COPY --from=build /out/healthcheck /usr/local/bin/duallane-healthcheck

@@ -3,6 +3,8 @@ ARG NGINX_IMAGE=docker.m.daocloud.io/library/nginx:1.27-alpine@sha256:65645c7bb6
 
 FROM ${NODE_IMAGE} AS build
 ARG NPM_REGISTRY=https://registry.npmjs.org
+ENV COREPACK_NPM_REGISTRY=${NPM_REGISTRY} \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 WORKDIR /app
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
