@@ -281,6 +281,63 @@ function mapRawMessage(
   };
 }
 
+function upsertRawMemberRecord(
+  target: Record<string, V1User>,
+  m: Record<string, unknown> | null | undefined
+): string {
+  if (!m || typeof m !== "object") return "";
+  const id = String(m.id || m.userId || "");
+  if (!id) return "";
+  const prev = target[id];
+  const rawKind = String(m.kind || "");
+  const rawRole = String(m.role || prev?.role || "member");
+  const role: V1User["role"] =
+    rawKind === "bot" || rawRole === "bot"
+      ? "bot"
+      : rawRole === "owner" || rawRole === "admin"
+      ? rawRole
+      : "member";
+  const candidateName =
+    m.remark || m.nickname || m.displayName || m.name || m.githubLogin || m.handle;
+  const resolvedName = candidateName
+    ? String(candidateName)
+    : prev?.displayName && !prev.displayName.startsWith("usr_")
+    ? prev.displayName
+    : id;
+  target[id] = {
+    id,
+    displayName: resolvedName,
+    handle: m.githubLogin
+      ? String(m.githubLogin)
+      : m.handle
+      ? String(m.handle)
+      : prev?.handle,
+    role,
+    avatarUrl: m.avatarUrl ? String(m.avatarUrl) : prev?.avatarUrl,
+  };
+  return id;
+}
+
+function backfillMemberFromMessage(
+  target: Record<string, V1User>,
+  msg: V1Message
+): void {
+  if (!msg.senderId || msg.kind === "system") return;
+  const existing = target[msg.senderId];
+  if (existing && existing.displayName && !existing.displayName.startsWith("usr_")) {
+    return;
+  }
+  if (msg.senderName && msg.senderName !== "成员" && !msg.senderName.startsWith("usr_")) {
+    target[msg.senderId] = {
+      id: msg.senderId,
+      displayName: msg.senderName,
+      handle: existing?.handle,
+      role: msg.kind === "bot" ? "bot" : existing?.role || "member",
+      avatarUrl: existing?.avatarUrl,
+    };
+  }
+}
+
 export function parseBootstrapPayload(raw: Record<string, unknown>) {
   const authObj = (raw.auth || {}) as Record<string, unknown>;
   const workspaceEnabled = authObj.enabled !== false;
@@ -309,15 +366,7 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
   const members: Record<string, V1User> = {};
   const rawMembers = Array.isArray(raw.members) ? raw.members : [];
   for (const m of rawMembers as Array<Record<string, unknown>>) {
-    const id = String(m.id || m.userId || "");
-    if (!id) continue;
-    members[id] = {
-      id,
-      displayName: String(m.remark || m.nickname || m.displayName || m.name || id),
-      handle: m.githubLogin ? String(m.githubLogin) : m.handle ? String(m.handle) : undefined,
-      role: (m.role as V1User["role"]) || "member",
-      avatarUrl: m.avatarUrl ? String(m.avatarUrl) : undefined,
-    };
+    upsertRawMemberRecord(members, m);
   }
   if (currentUser && !members[currentUser.id]) {
     members[currentUser.id] = currentUser;
@@ -335,8 +384,13 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
     const kind: V1Conversation["kind"] =
       rawType === "saved" ? "saved" : rawType === "direct" ? "direct" : "group";
     const lastMsg = (c.lastMessage || {}) as Record<string, unknown>;
+    if (c.otherMember && typeof c.otherMember === "object") {
+      upsertRawMemberRecord(members, c.otherMember as Record<string, unknown>);
+    }
     const rawMemberList = Array.isArray(c.members)
-      ? (c.members as Array<Record<string, unknown>>).map((item) => String(item.id || ""))
+      ? (c.members as Array<Record<string, unknown>>).map((item) =>
+          upsertRawMemberRecord(members, item)
+        )
       : Array.isArray(c.memberIds)
       ? c.memberIds.map(String)
       : [];
@@ -369,9 +423,11 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
       : Array.isArray(c.messages)
       ? c.messages
       : [];
-    messagesByConv[id] = rawMsgs.map((msg) =>
-      mapRawMessage(id, msg as Record<string, unknown>, members)
-    );
+    messagesByConv[id] = rawMsgs.map((msg) => {
+      const mapped = mapRawMessage(id, msg as Record<string, unknown>, members);
+      backfillMemberFromMessage(members, mapped);
+      return mapped;
+    });
   }
 
   const eventCursor = Number(raw.eventCursor || 0);
@@ -616,6 +672,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             set((s) => {
               const exists = Boolean(s.conversations[convId]);
               const prev = s.conversations[convId];
+              const nextMembers = { ...s.members };
+              if (c.otherMember && typeof c.otherMember === "object") {
+                upsertRawMemberRecord(nextMembers, c.otherMember as Record<string, unknown>);
+              }
+              const parsedMemberIds = Array.isArray(c.members)
+                ? (c.members as Array<Record<string, unknown>>)
+                    .map((m) => upsertRawMemberRecord(nextMembers, m))
+                    .filter(Boolean)
+                : prev?.memberIds || [];
               const nextConv: V1Conversation = {
                 id: convId,
                 kind,
@@ -629,11 +694,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                     : Number(c.unreadCount ?? prev?.unreadCount ?? 0),
                 mentionCount: prev?.mentionCount || 0,
                 pinnedMessageIds: prev?.pinnedMessageIds || [],
-                memberIds: Array.isArray(c.members)
-                  ? (c.members as Array<Record<string, unknown>>)
-                      .map((m) => String(m.id || ""))
-                      .filter(Boolean)
-                  : prev?.memberIds || [],
+                memberIds: parsedMemberIds,
                 lastMessageText: c.lastMessagePlainText
                   ? String(c.lastMessagePlainText)
                   : prev?.lastMessageText,
@@ -646,7 +707,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
               if (Array.isArray(c.latestMessages) && c.latestMessages.length > 0) {
                 const incoming = (c.latestMessages as Array<Record<string, unknown>>)
                   .filter((m) => Boolean(m && m.id))
-                  .map((m) => mapRawMessage(convId, m, s.members));
+                  .map((m) => {
+                    const mappedMsg = mapRawMessage(convId, m, nextMembers);
+                    backfillMemberFromMessage(nextMembers, mappedMsg);
+                    return mappedMsg;
+                  });
                 const existing = s.messagesByConv[convId] || [];
                 if (existing.length === 0) {
                   nextMessagesByConv = { ...s.messagesByConv, [convId]: incoming };
@@ -669,6 +734,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
               }
 
               return {
+                members: nextMembers,
                 messagesByConv: nextMessagesByConv,
                 conversations: { ...s.conversations, [convId]: nextConv },
                 conversationOrder: exists
@@ -744,7 +810,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                     lastMessageAt: mapped.createdAt,
                   };
 
+              const nextMembers = { ...s.members };
+              if (Array.isArray(convPayload?.members)) {
+                for (const m of convPayload.members as Array<Record<string, unknown>>) {
+                  upsertRawMemberRecord(nextMembers, m);
+                }
+              }
+              backfillMemberFromMessage(nextMembers, mapped);
+
               return {
+                members: nextMembers,
                 messagesByConv: {
                   ...s.messagesByConv,
                   [convId]: nextList,
@@ -986,6 +1061,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     logout: async () => {
       teardownWorkspaceSocket();
       await apiV1.logout().catch(() => {});
+      if (typeof window !== "undefined" && window.location?.pathname?.startsWith("/workspace")) {
+        window.history?.replaceState?.(null, "", "/");
+      }
       set({
         authStatus: "unauthenticated",
         currentUser: null,
@@ -1001,9 +1079,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       try {
         const res = await apiV1.listMessages(conversationId);
         if (!Array.isArray(res.messages)) return;
-        const members = get().members;
-        const mapped = res.messages.map((m) => mapRawMessage(conversationId, m, members));
+        const nextMembers = { ...get().members };
+        const mapped = res.messages.map((m) => {
+          const msg = mapRawMessage(conversationId, m, nextMembers);
+          backfillMemberFromMessage(nextMembers, msg);
+          return msg;
+        });
         set((s) => ({
+          members: { ...s.members, ...nextMembers },
           messagesByConv: {
             ...s.messagesByConv,
             [conversationId]: mapped,
@@ -1435,7 +1518,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         } catch (err) {
           if (activeP2PRoomToken !== targetToken) return;
           activeP2PRoomToken = "";
-          scrubP2PRoomFromUrl("/");
+          scrubP2PRoomFromUrl("/direct");
           set({
             p2pAesKey: null,
             p2pRoom: {
@@ -1474,7 +1557,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         }
       }
       teardownP2PTransport();
-      scrubP2PRoomFromUrl("/");
+      scrubP2PRoomFromUrl("/direct");
       set({
         p2pRoom: null,
         p2pAesKey: null,

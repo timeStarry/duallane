@@ -1,7 +1,19 @@
 import React, { useEffect, useState } from "react";
-import { AlertTriangle, ArrowRight, Building2, RefreshCw, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowRight,
+  Building2,
+  CheckCircle2,
+  LockKeyhole,
+  RefreshCw,
+  ShieldCheck,
+} from "lucide-react";
 import { motion } from "motion/react";
-import { useLaneStore } from "@/entities/lane/store";
+import {
+  inferLaneFromLocation,
+  inferMobileViewFromLocation,
+  useLaneStore,
+} from "@/entities/lane/store";
 import { useWorkspaceStore } from "@/entities/workspace/store";
 import { apiV1 } from "@/shared/lib/api-v1";
 import { extractP2PRoomFromUrl } from "@/shared/lib/p2p-lane";
@@ -19,11 +31,12 @@ const SpaceAdminConsole = React.lazy(() =>
 );
 
 export function AppV1() {
-  const { activeLane, setActiveLane, adminConsoleOpen } = useLaneStore();
+  const { activeLane, mobileView, setActiveLane, adminConsoleOpen } = useLaneStore();
   const {
     isPreviewMode,
     authStatus,
     currentUser,
+    p2pRoom,
     workspaceAvailability,
     workspaceStatusMessage,
     bootstrapWorkspace,
@@ -38,11 +51,13 @@ export function AppV1() {
       (currentUser?.role === "owner" || currentUser?.role === "admin"));
 
   const [inviteCode, setInviteCode] = useState(() => {
+    if (typeof window === "undefined") return "";
     const params = new URLSearchParams(window.location.search);
     return params.get("invite") || "";
   });
   const [devDisplayName, setDevDisplayName] = useState("");
   const [authError, setAuthError] = useState(() => {
+    if (typeof window === "undefined") return "";
     const params = new URLSearchParams(window.location.search);
     const errParam = params.get("authError") || params.get("error") || "";
     if (!errParam) return "";
@@ -66,28 +81,70 @@ export function AppV1() {
       window.history.replaceState(null, "", nextUrl);
     }
 
-    const syncRoomFromLocation = () => {
+    const syncRouteFromLocation = () => {
       const p2p = extractP2PRoomFromUrl();
-      if (!p2p) return;
-      const currentRoom = useWorkspaceStore.getState().p2pRoom;
-      setActiveLane("p2p");
-      useLaneStore.getState().setMobileView("chat");
-      if (currentRoom?.roomId === p2p.roomId && currentRoom.shareUrl === window.location.href) {
+      if (p2p) {
+        const currentRoom = useWorkspaceStore.getState().p2pRoom;
+        useLaneStore.setState({ activeLane: "p2p", mobileView: "chat" });
+        if (currentRoom?.roomId === p2p.roomId && currentRoom.shareUrl === window.location.href) {
+          return;
+        }
+        void joinP2PRoom(p2p.roomId, p2p.keyStr);
         return;
       }
-      void joinP2PRoom(p2p.roomId, p2p.keyStr);
+      const nextLane = inferLaneFromLocation(window.location);
+      const nextMobileView = inferMobileViewFromLocation(window.location);
+      useLaneStore.setState({ activeLane: nextLane, mobileView: nextMobileView });
     };
 
-    syncRoomFromLocation();
+    syncRouteFromLocation();
     void bootstrapWorkspace();
 
-    window.addEventListener("popstate", syncRoomFromLocation);
-    window.addEventListener("hashchange", syncRoomFromLocation);
+    window.addEventListener("popstate", syncRouteFromLocation);
+    window.addEventListener("hashchange", syncRouteFromLocation);
     return () => {
-      window.removeEventListener("popstate", syncRoomFromLocation);
-      window.removeEventListener("hashchange", syncRoomFromLocation);
+      window.removeEventListener("popstate", syncRouteFromLocation);
+      window.removeEventListener("hashchange", syncRouteFromLocation);
     };
-  }, [bootstrapWorkspace, joinP2PRoom, setActiveLane]);
+  }, [bootstrapWorkspace, joinP2PRoom]);
+
+  // Keep browser address bar canonically aligned with activeLane so page refresh restores the exact lane
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.history?.replaceState) return;
+    const pathname = window.location.pathname || "/";
+    const search = window.location.search || "";
+
+    if (activeLane === "p2p") {
+      if (p2pRoom?.shareUrl && mobileView === "chat") {
+        try {
+          const parsed = new URL(p2pRoom.shareUrl);
+          const target = `${parsed.pathname}${parsed.hash}`;
+          if (`${pathname}${window.location.hash}` !== target) {
+            window.history.replaceState(null, "", target);
+          }
+          return;
+        } catch {
+          // Fall through if shareUrl is non-standard
+        }
+      }
+      const urlHasValidRoom = Boolean(extractP2PRoomFromUrl(window.location));
+      if (!urlHasValidRoom && (pathname !== "/direct" || window.location.hash !== "")) {
+        window.history.replaceState(null, "", "/direct");
+      }
+      return;
+    }
+
+    // activeLane === "workspace"
+    if (authStatus === "authenticated") {
+      const params = new URLSearchParams(search);
+      params.delete("invite");
+      const rest = params.toString();
+      const target = `/workspace${rest ? `?${rest}` : ""}`;
+      if (`${pathname}${search}${window.location.hash}` !== target) {
+        window.history.replaceState(null, "", target);
+      }
+    }
+  }, [activeLane, authStatus, mobileView, p2pRoom]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -184,159 +241,281 @@ export function AppV1() {
     return (
       <main
         aria-label="DualLane 登录与通道入口"
-        className="dl-canvas-ambient flex min-h-dvh w-screen items-center justify-center p-6 max-narrow:p-3"
+        className="dl-canvas-ambient flex min-h-dvh w-screen items-center justify-center px-6 py-8 max-compact:px-4 max-compact:py-6 max-narrow:px-3 max-narrow:py-4"
       >
         <motion.div
-          initial={{ opacity: 0, y: 12, scale: 0.98 }}
+          initial={{ opacity: 0, y: 14, scale: 0.985 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ type: "spring", stiffness: 380, damping: 32 }}
-          className="dl-glass-dialog w-full max-w-[440px] rounded-dialog border border-dl-border-hairline p-7 max-narrow:p-4 space-y-6 max-narrow:space-y-4"
+          transition={{ type: "spring", stiffness: 360, damping: 32 }}
+          className="w-full max-w-[940px] space-y-7 max-compact:space-y-5 max-narrow:space-y-4"
         >
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex items-center gap-3.5 min-w-0">
-              <BrandLogo size={46} withTile animated />
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h1 className="text-lg font-bold tracking-[-0.032em] text-dl-text-primary">
+          {/* Architectural Brand Stage Header */}
+          <header className="flex flex-col items-center text-center space-y-2.5 max-narrow:space-y-2">
+            <div className="flex items-center gap-3">
+              <BrandLogo size={48} withTile animated />
+              <div className="text-left">
+                <div className="flex items-center gap-2">
+                  <span className="text-lg font-bold tracking-[-0.03em] text-dl-text-primary">
                     DualLane
-                  </h1>
-                  <span className="rounded-full bg-dl-lane-shared/14 px-2 py-0.5 text-[10px] font-semibold text-dl-lane-shared">
+                  </span>
+                  <span className="rounded-full bg-dl-lane-shared/14 px-2 py-0.5 text-[11px] font-semibold text-dl-lane-shared">
                     v1.0
                   </span>
                 </div>
-                <p className="text-xs text-dl-text-secondary mt-0.5 leading-snug">
-                  分流式安全会话 · 共享空间与私密直连
-                </p>
-                <div className="text-[11px] font-mono text-dl-text-secondary mt-0.5 truncate">
+                <div className="text-[11px] font-mono text-dl-text-secondary">
                   Two Trust Lanes. Crystal Clear.
                 </div>
               </div>
             </div>
-          </div>
+            <h1 className="text-2xl max-compact:text-xl max-narrow:text-lg font-bold tracking-[-0.03em] text-dl-text-primary pt-1">
+              选择沟通方式，两条通道各司其职
+            </h1>
+            <p className="max-w-[540px] text-sm max-narrow:text-xs text-dl-text-secondary leading-relaxed">
+              临时敏感交谈走免登录一对一直连，熟人与团队持续协作进入受邀共享空间。
+            </p>
+          </header>
 
-          <div className="grid grid-cols-2 max-narrow:grid-cols-1 gap-2.5 text-xs">
-            <div className="rounded-2xl border border-dl-lane-shared/25 bg-dl-lane-shared/8 p-3 space-y-1">
-              <div className="flex items-center gap-1.5 font-semibold text-dl-lane-shared">
-                <Building2 className="size-3.5" strokeWidth={2} />
-                共享空间
-              </div>
-              <p className="text-[11px] leading-relaxed text-dl-text-secondary">
-                群组置顶、右侧线程、我的收藏与 Card Kit 智能体
-              </p>
-            </div>
-            <div className="rounded-2xl border border-dl-lane-direct/25 bg-dl-lane-direct/8 p-3 space-y-1">
-              <div className="flex items-center gap-1.5 font-semibold text-dl-lane-direct">
-                <ShieldCheck className="size-3.5" strokeWidth={2} />
-                私密直连
-              </div>
-              <p className="text-[11px] leading-relaxed text-dl-text-secondary">
-                免登录一键建房，AES-256-GCM 密钥仅驻留内存
-              </p>
-            </div>
-          </div>
+          {/* Grand Two-Direction Hero Cards */}
+          <div
+            data-testid="home-dual-direction-cards"
+            className="grid grid-cols-2 max-compact:grid-cols-1 gap-5 max-narrow:gap-3.5 items-stretch"
+          >
+            {/* Direction 1: Shared Workspace Hero Card */}
+            <section
+              aria-labelledby="home-card-workspace-title"
+              data-testid="home-card-workspace"
+              className="dl-glass-dialog relative flex flex-col justify-between overflow-hidden rounded-dialog border border-dl-lane-shared/30 p-7 max-compact:p-6 max-narrow:p-4 space-y-6 max-narrow:space-y-4"
+            >
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 top-0 h-1.5 bg-dl-lane-shared/85"
+              />
 
-          {showServiceBanner && (
-            <div className="rounded-2xl border border-dl-warning/35 bg-dl-warning/10 p-3.5 space-y-2.5 text-xs">
-              <div className="flex items-start gap-2 text-dl-text-primary">
-                <AlertTriangle className="size-4 shrink-0 text-dl-warning mt-0.5" strokeWidth={2} />
-                <div className="space-y-1">
-                  <div className="font-semibold">
-                    {workspaceAvailability === "disabled"
-                      ? "共享空间服务当前未启用"
-                      : "共享空间后端暂未就绪"}
+              <div className="space-y-4 max-narrow:space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex h-12 w-12 max-narrow:h-10 max-narrow:w-10 shrink-0 items-center justify-center rounded-2xl bg-dl-lane-shared/14 text-dl-lane-shared border border-dl-lane-shared/25">
+                    <Building2 className="size-6 max-narrow:size-5" strokeWidth={1.85} />
                   </div>
-                  <p className="text-[11px] leading-relaxed text-dl-text-secondary">
-                    {workspaceStatusMessage ||
-                      "请确认本地 Go Workspace 服务与 PostgreSQL 已启动；你也可以直接免登录使用私密直连通道。"}
+                  <span className="rounded-full border border-dl-lane-shared/25 bg-dl-lane-shared/10 px-2.5 py-1 text-[11px] font-semibold text-dl-lane-shared">
+                    共享通道 · 邀请制
+                  </span>
+                </div>
+
+                <div className="space-y-1.5">
+                  <h2
+                    id="home-card-workspace-title"
+                    className="text-xl max-narrow:text-lg font-bold tracking-[-0.025em] text-dl-text-primary"
+                  >
+                    共享空间
+                  </h2>
+                  <p className="text-xs leading-relaxed text-dl-text-secondary">
+                    与熟悉的人或团队持续会话、共享文件与协作沉淀，需要登录与空间邀请，数据按空间规则安全保留。
                   </p>
                 </div>
+
+                <ul className="space-y-2 text-xs text-dl-text-primary">
+                  <li className="flex items-start gap-2">
+                    <CheckCircle2
+                      className="size-4 shrink-0 text-dl-lane-shared mt-0.5"
+                      strokeWidth={1.9}
+                    />
+                    <span>群聊置顶、右侧独立线程讨论、全文检索与个人云端收藏</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <CheckCircle2
+                      className="size-4 shrink-0 text-dl-lane-shared mt-0.5"
+                      strokeWidth={1.9}
+                    />
+                    <span>支持高清原图灯箱预览、大文件分片上传与 Card Kit 智能体交互</span>
+                  </li>
+                </ul>
+
+                {showServiceBanner && (
+                  <div className="rounded-2xl border border-dl-warning/35 bg-dl-warning/10 p-3.5 space-y-2.5 text-xs">
+                    <div className="flex items-start gap-2 text-dl-text-primary">
+                      <AlertTriangle
+                        className="size-4 shrink-0 text-dl-warning mt-0.5"
+                        strokeWidth={2}
+                      />
+                      <div className="space-y-1">
+                        <div className="font-semibold">
+                          {workspaceAvailability === "disabled"
+                            ? "共享空间服务当前未启用"
+                            : "共享空间后端暂未就绪"}
+                        </div>
+                        <p className="text-[11px] leading-relaxed text-dl-text-secondary">
+                          {workspaceStatusMessage ||
+                            "请确认本地 Go Workspace 服务与 PostgreSQL 已启动；你也可以直接进入右侧私密直连通道。"}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex justify-end">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        busy={probingBackend}
+                        className="h-7 gap-1.5 text-xs"
+                        onClick={() => void handleRetryBackend()}
+                      >
+                        <RefreshCw className="size-3" strokeWidth={2} />
+                        重新检测服务
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {authError && (
+                  <div className="rounded-control bg-dl-danger/10 px-3 py-2 text-xs text-dl-danger border border-dl-danger/25">
+                    {authError}
+                  </div>
+                )}
               </div>
-              <div className="flex justify-end">
+
+              <div className="space-y-3 pt-2 border-t border-dl-border-hairline">
+                <Input
+                  value={inviteCode}
+                  onChange={(e) => setInviteCode(e.target.value)}
+                  placeholder="可选：输入空间邀请码"
+                  aria-label="空间邀请码"
+                />
                 <Button
                   type="button"
-                  size="sm"
-                  variant="secondary"
+                  variant="primary"
+                  size="lg"
                   busy={probingBackend}
-                  className="h-7 gap-1.5 text-xs"
-                  onClick={() => void handleRetryBackend()}
+                  className="w-full justify-center gap-2 font-semibold"
+                  onClick={() => void handleGitHubSignIn()}
                 >
-                  <RefreshCw className="size-3" strokeWidth={2} />
-                  重新检测服务
+                  <span>使用 GitHub 登录共享空间</span>
+                  <ArrowRight className="size-4 shrink-0" strokeWidth={2} />
+                </Button>
+
+                {inviteCode.trim() && (
+                  <form
+                    onSubmit={handleInviteQuickAccept}
+                    className="pt-2.5 border-t border-dl-border-hairline space-y-2"
+                  >
+                    <Input
+                      value={devDisplayName}
+                      onChange={(e) => setDevDisplayName(e.target.value)}
+                      placeholder="可选：测试成员昵称（双窗口联调推荐使用）"
+                      aria-label="测试成员昵称"
+                    />
+                    <Button
+                      type="submit"
+                      variant="secondary"
+                      size="sm"
+                      className="w-full"
+                      busy={submitting}
+                    >
+                      通过邀请码直接加入（开发环境快捷入口）
+                    </Button>
+                  </form>
+                )}
+              </div>
+            </section>
+
+            {/* Direction 2: Private Direct Hero Card */}
+            <section
+              aria-labelledby="home-card-direct-title"
+              data-testid="home-card-direct"
+              className="dl-glass-dialog relative flex flex-col justify-between overflow-hidden rounded-dialog border border-dl-lane-direct/35 p-7 max-compact:p-6 max-narrow:p-4 space-y-6 max-narrow:space-y-4"
+            >
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 top-0 h-1.5 bg-dl-lane-direct/85"
+              />
+
+              <div className="space-y-4 max-narrow:space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex h-12 w-12 max-narrow:h-10 max-narrow:w-10 shrink-0 items-center justify-center rounded-2xl bg-dl-lane-direct/14 text-dl-lane-direct border border-dl-lane-direct/25">
+                    <LockKeyhole className="size-6 max-narrow:size-5" strokeWidth={1.85} />
+                  </div>
+                  <span className="rounded-full border border-dl-lane-direct/30 bg-dl-lane-direct/10 px-2.5 py-1 text-[11px] font-semibold text-dl-lane-direct">
+                    私密通道 · 无需账号
+                  </span>
+                </div>
+
+                <div className="space-y-1.5">
+                  <h2
+                    id="home-card-direct-title"
+                    className="text-xl max-narrow:text-lg font-bold tracking-[-0.025em] text-dl-text-primary"
+                  >
+                    一对一直连
+                  </h2>
+                  <p className="text-xs leading-relaxed text-dl-text-secondary">
+                    无需注册登录，一键创建专属加密房间并分享链接开始交谈，消息与文件不在服务器保存。
+                  </p>
+                </div>
+
+                <ul className="space-y-2 text-xs text-dl-text-primary">
+                  <li className="flex items-start gap-2">
+                    <ShieldCheck
+                      className="size-4 shrink-0 text-dl-lane-direct mt-0.5"
+                      strokeWidth={1.9}
+                    />
+                    <span>AES-256-GCM 端到端加密，#k= 密钥仅驻留本地内存与链接片段</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <ShieldCheck
+                      className="size-4 shrink-0 text-dl-lane-direct mt-0.5"
+                      strokeWidth={1.9}
+                    />
+                    <span>支持对端离线暂存待发、送达回执与最大 8 MB 内存分片文件直传</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <ShieldCheck
+                      className="size-4 shrink-0 text-dl-lane-direct mt-0.5"
+                      strokeWidth={1.9}
+                    />
+                    <span>服务端零历史落盘，销毁房间或关闭标签页后会话痕迹立即清空</span>
+                  </li>
+                </ul>
+              </div>
+
+              <div className="space-y-2.5 pt-2 border-t border-dl-border-hairline">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="lg"
+                  className="w-full justify-center gap-2 border-transparent bg-dl-lane-direct text-dl-on-direct hover:opacity-92 font-semibold"
+                  onClick={() => {
+                    setActiveLane("p2p");
+                    useLaneStore.getState().setMobileView("chat");
+                    const existingRoom = useWorkspaceStore.getState().p2pRoom;
+                    if (!existingRoom) {
+                      void createP2PRoom();
+                    } else if (existingRoom.shareUrl) {
+                      try {
+                        const parsed = new URL(existingRoom.shareUrl);
+                        window.history.replaceState(null, "", `${parsed.pathname}${parsed.hash}`);
+                      } catch {
+                        // Keep in-memory room active even if shareUrl is relative.
+                      }
+                    }
+                  }}
+                >
+                  <ShieldCheck className="size-4 shrink-0" strokeWidth={2} />
+                  <span>免登录进入私密直连通道</span>
+                  <ArrowRight className="size-4 shrink-0" strokeWidth={2} />
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-center text-xs text-dl-text-secondary hover:text-dl-text-primary"
+                  onClick={() => {
+                    setActiveLane("p2p");
+                    useLaneStore.getState().setMobileView("list");
+                  }}
+                >
+                  仅进入直连通道列表
                 </Button>
               </div>
-            </div>
-          )}
-
-          {authError && (
-            <div className="rounded-control bg-dl-danger/10 px-3 py-2 text-xs text-dl-danger border border-dl-danger/25">
-              {authError}
-            </div>
-          )}
-
-          <div className="space-y-3">
-            <Input
-              value={inviteCode}
-              onChange={(e) => setInviteCode(e.target.value)}
-              placeholder="可选：输入空间邀请码"
-              aria-label="空间邀请码"
-            />
-            <Button
-              type="button"
-              variant="primary"
-              busy={probingBackend}
-              className="w-full justify-center gap-2"
-              onClick={() => void handleGitHubSignIn()}
-            >
-              <span>使用 GitHub 登录共享空间</span>
-              <ArrowRight className="size-4 shrink-0" strokeWidth={2} />
-            </Button>
-            <Button
-              type="button"
-              variant="glass"
-              className="w-full justify-center gap-2 border-dl-lane-direct/30 text-dl-lane-direct hover:bg-dl-lane-direct/12"
-              onClick={() => {
-                setActiveLane("p2p");
-                useLaneStore.getState().setMobileView("chat");
-                const existingRoom = useWorkspaceStore.getState().p2pRoom;
-                if (!existingRoom) {
-                  void createP2PRoom();
-                } else if (existingRoom.shareUrl) {
-                  try {
-                    const parsed = new URL(existingRoom.shareUrl);
-                    window.history.replaceState(null, "", `${parsed.pathname}${parsed.hash}`);
-                  } catch {
-                    // Keep in-memory room active even if shareUrl is relative.
-                  }
-                }
-              }}
-            >
-              <ShieldCheck className="size-4 shrink-0" strokeWidth={1.9} />
-              <span>免登录进入私密直连通道</span>
-            </Button>
+            </section>
           </div>
-
-          {inviteCode.trim() && (
-            <form
-              onSubmit={handleInviteQuickAccept}
-              className="pt-3 border-t border-dl-border-hairline space-y-2.5"
-            >
-              <Input
-                value={devDisplayName}
-                onChange={(e) => setDevDisplayName(e.target.value)}
-                placeholder="可选：测试成员昵称（双窗口联调推荐使用）"
-                aria-label="测试成员昵称"
-              />
-              <Button
-                type="submit"
-                variant="secondary"
-                size="sm"
-                className="w-full"
-                busy={submitting}
-              >
-                通过邀请码直接加入（开发环境快捷入口）
-              </Button>
-            </form>
-          )}
         </motion.div>
       </main>
     );

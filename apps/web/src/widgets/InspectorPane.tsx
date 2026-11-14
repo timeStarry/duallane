@@ -275,15 +275,19 @@ export function InspectorPane() {
                   <div className="space-y-1">
                     {activeConv.memberIds.map((id) => {
                       const m = members[id];
+                      const displayLabel =
+                        m?.displayName && !m.displayName.startsWith("usr_")
+                          ? m.displayName
+                          : m?.handle || "空间成员";
                       return (
                         <div
                           key={id}
                           className="flex items-center gap-2.5 rounded-xl px-2 py-1.5 hover:bg-dl-surface-subtle/50 transition-colors"
                         >
-                          <Avatar name={m?.displayName || id} size="sm" />
+                          <Avatar name={displayLabel} src={m?.avatarUrl} size="sm" />
                           <div className="min-w-0 flex-1">
                             <div className="truncate text-xs font-medium text-dl-text-primary">
-                              {m?.displayName || id}
+                              {displayLabel}
                             </div>
                             <div className="text-[11px] text-dl-text-tertiary">
                               {m?.role === "bot" ? "智能体机器人" : "空间成员"}

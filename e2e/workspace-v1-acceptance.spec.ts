@@ -10,8 +10,12 @@ function buildWorkspacePngBuffer(): Buffer {
   return Buffer.concat([basePng, payload]);
 }
 
-async function assertNarrowWorkspaceNoOverlap(page: Page, label: string) {
-  const audit = await page.evaluate(() => {
+async function assertWorkspaceNoOverlapAtWidth(
+  page: Page,
+  viewportWidth: number,
+  label: string
+) {
+  const audit = await page.evaluate((vw) => {
     const scrollWidth = document.documentElement.scrollWidth;
     function getClippedRect(el: HTMLElement) {
       const raw = el.getBoundingClientRect();
@@ -72,7 +76,7 @@ async function assertNarrowWorkspaceNoOverlap(page: Page, label: string) {
     const rects = interactive.map((el) => {
       const r = getClippedRect(el);
       const desc = `${el.tagName.toLowerCase()}[${el.getAttribute("aria-label") || el.textContent?.trim().slice(0, 18) || ""}]`;
-      if (r.left < -1 || r.right > 321) {
+      if (r.left < -1 || r.right > vw + 1) {
         outOfBounds.push(`${desc}: left=${r.left.toFixed(1)}, right=${r.right.toFixed(1)}`);
       }
       return { el, desc, r };
@@ -96,11 +100,17 @@ async function assertNarrowWorkspaceNoOverlap(page: Page, label: string) {
     }
 
     return { scrollWidth, outOfBounds, overlaps };
-  });
+  }, viewportWidth);
 
-  expect(audit.scrollWidth, `${label}: scrollWidth <= 320`).toBeLessThanOrEqual(320);
+  expect(audit.scrollWidth, `${label}: scrollWidth <= ${viewportWidth}`).toBeLessThanOrEqual(
+    viewportWidth
+  );
   expect(audit.outOfBounds, `${label}: out-of-bounds controls`).toEqual([]);
   expect(audit.overlaps, `${label}: overlapping controls`).toEqual([]);
+}
+
+async function assertNarrowWorkspaceNoOverlap(page: Page, label: string) {
+  return assertWorkspaceNoOverlapAtWidth(page, 320, label);
 }
 
 test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320px Responsive Acceptance", () => {
@@ -125,8 +135,11 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320
     pageMember.on("pageerror", (err) => memberErrors.push(err.message));
 
     try {
-      // 1. Owner signs in via GitHub OAuth flow
+      // 1. Home Portal shows Two Grand Directional Hero Cards; Owner signs in via GitHub OAuth flow
       await pageOwner.goto(`${baseURL}/`);
+      await expect(pageOwner.getByTestId("home-card-workspace")).toBeVisible();
+      await expect(pageOwner.getByTestId("home-card-direct")).toBeVisible();
+      await assertWorkspaceNoOverlapAtWidth(pageOwner, 1280, "1280px Grand Two-Direction Home Portal");
       await expect(pageOwner.getByRole("button", { name: "使用 GitHub 登录共享空间" })).toBeVisible();
       await pageOwner.getByRole("button", { name: "使用 GitHub 登录共享空间" }).click();
 
@@ -292,10 +305,18 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320
       await expect(ownerDeckSwitch).toHaveAttribute("data-active-lane", "p2p");
       await expect(ownerDeckSwitch).toHaveAttribute("data-front-card", "p2p");
       await expect(pageOwner.getByRole("heading", { name: "私密直连", exact: true })).toBeVisible();
+      // P2 Regression Gate: Switching from /workspace to Direct List MUST update URL to /direct AND survive reload!
+      expect(new URL(pageOwner.url()).pathname).toBe("/direct");
+      await pageOwner.reload();
+      expect(new URL(pageOwner.url()).pathname).toBe("/direct");
+      await expect(ownerDeckSwitch).toHaveAttribute("data-active-lane", "p2p");
+      await expect(pageOwner.getByRole("heading", { name: "私密直连", exact: true })).toBeVisible();
 
       await ownerDeckSwitch.click();
       await expect(ownerDeckSwitch).toHaveAttribute("data-active-lane", "workspace");
       await expect(ownerDeckSwitch).toHaveAttribute("data-front-card", "workspace");
+      expect(new URL(pageOwner.url()).pathname).toBe("/workspace");
+      await pageOwner.getByRole("button", { name: /v1\.0 双端实时验收群/ }).click();
       await expect(pageOwner.getByRole("heading", { name: "v1.0 双端实时验收群" })).toBeVisible();
 
       const memberDeckSwitch = pageMember.getByTestId("dual-lane-deck-switch");
@@ -322,11 +343,15 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320
       });
       expect(memberAdminStatus).toBe(403);
 
+      // Reload pageMember on /workspace so bootstrap runs with directory-visibility isolation, then verify group details shows creator nickname ("timeStarry"), NEVER internal ID ("usr_owner")!
       await pageMember.setViewportSize({ width: 1280, height: 800 });
+      await pageMember.reload();
       await pageMember.getByRole("button", { name: /v1\.0 双端实时验收群/ }).click();
       await pageMember.getByRole("button", { name: "详情与置顶" }).click();
       const memberInspector = pageMember.getByRole("complementary", { name: "对话右侧检查器" });
       await expect(memberInspector).toBeVisible();
+      await expect(memberInspector).toContainText("timeStarry");
+      await expect(memberInspector).not.toContainText("usr_owner");
       await expect(memberInspector).toContainText("空间成员");
       await expect(memberInspector).not.toContainText("空间所有者");
       await expect(memberInspector).not.toContainText("空间管理员");
@@ -337,9 +362,14 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320
       const adminDialog = pageOwner.getByRole("dialog", { name: "空间治理台" });
       await expect(adminDialog).toBeVisible();
 
-      // Tab 1: Overview & Security Audit Logs
+      // Tab 1: Overview & Security Audit Logs + Desktop Close vs Refresh Zero-Overlap Gate!
       await expect(adminDialog).toContainText("安全与治理审计日志");
       await expect(adminDialog).toContainText("invite.accept");
+      await assertWorkspaceNoOverlapAtWidth(
+        pageOwner,
+        1280,
+        "1280px SpaceAdminConsole Overview (Close vs Refresh)"
+      );
 
       // Tab 2: Members & Directory Visibility Isolation Matrix
       await adminDialog.getByRole("button", { name: "成员与可见性" }).click();
@@ -364,9 +394,13 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320
       await expect(adminDialog).toContainText("已更新空间全局配额与保留策略");
       await adminDialog.getByRole("button", { name: "清理超时挂起上传" }).click();
 
-      // Verify SpaceAdminConsole at 320x568 ultra-narrow viewport has zero horizontal overflow!
+      // Verify SpaceAdminConsole at 320x568 ultra-narrow viewport has zero overlap AND clicking "邀请码治理" switches tabs without hitting the Close button!
       await pageOwner.setViewportSize({ width: 320, height: 568 });
-      await assertNarrowWorkspaceNoOverlap(pageOwner, "320px SpaceAdminConsole Modal");
+      await assertNarrowWorkspaceNoOverlap(pageOwner, "320px SpaceAdminConsole Storage Tab");
+      await adminDialog.getByRole("button", { name: "邀请码治理" }).click();
+      await expect(adminDialog).toBeVisible();
+      await expect(adminDialog).toContainText("签发新邀请码");
+      await assertNarrowWorkspaceNoOverlap(pageOwner, "320px SpaceAdminConsole Invites Tab");
       await pageOwner.keyboard.press("Escape");
       await expect(adminDialog).toBeHidden();
 

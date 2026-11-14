@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { scrubP2PRoomFromUrl } from "@/shared/lib/p2p-lane";
+import { extractP2PRoomFromUrl, scrubP2PRoomFromUrl } from "@/shared/lib/p2p-lane";
 
 export type LaneId = "workspace" | "p2p";
 export type ThemeMode = "system" | "light" | "dark";
@@ -67,9 +67,43 @@ function applyThemeToDocument(mode: ThemeMode) {
   }
 }
 
-export const useLaneStore = create<LaneUIState>((set) => ({
-  activeLane: "workspace",
-  mobileView: "chat",
+export function inferLaneFromLocation(
+  loc: Partial<Pick<Location, "pathname" | "search" | "hash">> | undefined =
+    typeof window !== "undefined" ? window.location : undefined
+): LaneId {
+  if (!loc) return "workspace";
+  const pathname = loc.pathname || "/";
+  if (
+    pathname === "/direct" ||
+    pathname.startsWith("/direct/") ||
+    pathname.startsWith("/r/")
+  ) {
+    return "p2p";
+  }
+  if (loc.search) {
+    const laneParam = new URLSearchParams(loc.search).get("lane");
+    if (laneParam === "p2p" || laneParam === "direct") {
+      return "p2p";
+    }
+  }
+  return "workspace";
+}
+
+export function inferMobileViewFromLocation(
+  loc: Partial<Pick<Location, "pathname">> | undefined =
+    typeof window !== "undefined" ? window.location : undefined
+): "list" | "chat" {
+  if (!loc) return "chat";
+  const pathname = loc.pathname || "/";
+  if (pathname === "/direct") {
+    return "list";
+  }
+  return "chat";
+}
+
+export const useLaneStore = create<LaneUIState>((set, get) => ({
+  activeLane: inferLaneFromLocation(),
+  mobileView: inferMobileViewFromLocation(),
   themeMode: "system",
   inspectorOpen: false,
   inspectorTab: "details",
@@ -85,14 +119,30 @@ export const useLaneStore = create<LaneUIState>((set) => ({
   lightboxIndex: 0,
 
   setActiveLane: (activeLane) => {
-    if (activeLane === "workspace") {
-      scrubP2PRoomFromUrl("/");
+    if (typeof window !== "undefined" && window.location && window.history?.replaceState) {
+      if (activeLane === "workspace") {
+        const pathname = window.location.pathname || "/";
+        const search = window.location.search || "";
+        if (pathname === "/direct" || pathname.startsWith("/direct/") || pathname.startsWith("/r/")) {
+          window.history.replaceState(null, "", `/workspace${search}`);
+        } else {
+          scrubP2PRoomFromUrl(`/workspace${search}`);
+        }
+      } else {
+        const existingRoomInUrl = window.location.pathname
+          ? extractP2PRoomFromUrl(window.location)
+          : null;
+        if (!existingRoomInUrl && window.location.pathname !== "/direct") {
+          window.history.replaceState(null, "", "/direct");
+        }
+      }
     }
     set({ activeLane });
   },
   setMobileView: (mobileView) => {
     if (mobileView === "list") {
-      scrubP2PRoomFromUrl("/");
+      const targetPath = get().activeLane === "p2p" ? "/direct" : "/workspace";
+      scrubP2PRoomFromUrl(targetPath);
     }
     set({ mobileView });
   },

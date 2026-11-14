@@ -16,7 +16,12 @@ import {
   hasP2PRoomInUrl,
   safeInlineImageMime,
 } from "@/shared/lib/p2p-lane";
-import { useLaneStore } from "@/entities/lane/store";
+import {
+  inferLaneFromLocation,
+  inferMobileViewFromLocation,
+  useLaneStore,
+} from "@/entities/lane/store";
+import { AppV1 } from "@/app/AppV1";
 import { applyVibrancyTokensToRoot } from "@/shared/theme/vibrancy";
 import { DualLaneCardKit } from "@/widgets/DualLaneCardKit";
 import { PrimaryRail } from "@/widgets/PrimaryRail";
@@ -936,6 +941,109 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
       expect(ownerInspectorHtml).toContain(">空间成员<");
       expect(ownerInspectorHtml).not.toContain("空间所有者");
       expect(ownerInspectorHtml).not.toContain(">管理员<");
+    } finally {
+      Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);
+      useWorkspaceStore.setState(prevWsInitial);
+      Object.assign(useLaneStore.getInitialState(), prevLaneInitial);
+      useLaneStore.setState(prevLaneInitial);
+    }
+  });
+
+  it("hydrates group creator nickname from conversation.members under directory isolation and never displays raw usr_* IDs", () => {
+    const prevWsInitial = { ...useWorkspaceStore.getInitialState() };
+    const prevLaneInitial = { ...useLaneStore.getInitialState() };
+
+    try {
+      // Simulate Go directory visibility isolation: top-level bootstrap.members only has usr_member_b,
+      // while shared group conversation.members includes usr_owner's masked Member record.
+      const parsed = parseBootstrapPayload({
+        auth: {
+          enabled: true,
+          currentUser: { id: "usr_member_b", nickname: "测试成员B", role: "member" },
+        },
+        members: [{ id: "usr_member_b", nickname: "测试成员B", role: "member" }],
+        conversations: [
+          {
+            id: "conv_isolated_grp",
+            type: "group",
+            title: "隔离目录昵称测试群",
+            memberIds: ["usr_owner", "usr_member_b", "usr_unknown_ghost"],
+            members: [
+              { id: "usr_owner", nickname: "timeStarry", role: "member" },
+              { id: "usr_member_b", nickname: "测试成员B", role: "member" },
+            ],
+          },
+        ],
+      });
+
+      expect(parsed.members["usr_owner"]?.displayName).toBe("timeStarry");
+
+      const laneSnapshot = {
+        ...prevLaneInitial,
+        activeLane: "workspace" as const,
+        inspectorOpen: true,
+        inspectorTab: "details" as const,
+      };
+      Object.assign(useLaneStore.getInitialState(), laneSnapshot);
+      useLaneStore.setState(laneSnapshot);
+
+      const wsSnapshot = {
+        ...prevWsInitial,
+        authStatus: "authenticated" as const,
+        currentUser: parsed.currentUser,
+        members: parsed.members,
+        conversations: parsed.conversations,
+        conversationOrder: parsed.conversationOrder,
+        activeConversationId: "conv_isolated_grp",
+      };
+      Object.assign(useWorkspaceStore.getInitialState(), wsSnapshot);
+      useWorkspaceStore.setState(wsSnapshot);
+
+      const inspectorHtml = renderToStaticMarkup(<InspectorPane />);
+      expect(inspectorHtml).toContain("timeStarry");
+      expect(inspectorHtml).toContain("测试成员B");
+      expect(inspectorHtml).not.toContain("usr_owner");
+      expect(inspectorHtml).not.toContain("usr_unknown_ghost");
+    } finally {
+      Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);
+      useWorkspaceStore.setState(prevWsInitial);
+      Object.assign(useLaneStore.getInitialState(), prevLaneInitial);
+      useLaneStore.setState(prevLaneInitial);
+    }
+  });
+
+  it("restores activeLane and mobileView from /direct vs /workspace URLs and renders Grand Two-Direction Home Portal", () => {
+    expect(inferLaneFromLocation({ pathname: "/direct", search: "" })).toBe("p2p");
+    expect(inferMobileViewFromLocation({ pathname: "/direct" })).toBe("list");
+    expect(inferLaneFromLocation({ pathname: "/direct/Rm123", search: "" })).toBe("p2p");
+    expect(inferMobileViewFromLocation({ pathname: "/direct/Rm123" })).toBe("chat");
+    expect(inferLaneFromLocation({ pathname: "/r/Rm123", search: "" })).toBe("p2p");
+    expect(inferLaneFromLocation({ pathname: "/workspace", search: "" })).toBe("workspace");
+    expect(inferLaneFromLocation({ pathname: "/", search: "?lane=p2p" })).toBe("p2p");
+
+    const prevWsInitial = { ...useWorkspaceStore.getInitialState() };
+    const prevLaneInitial = { ...useLaneStore.getInitialState() };
+    try {
+      const homeLane = { ...prevLaneInitial, activeLane: "workspace" as const };
+      Object.assign(useLaneStore.getInitialState(), homeLane);
+      useLaneStore.setState(homeLane);
+
+      const homeWs = {
+        ...prevWsInitial,
+        isPreviewMode: false,
+        authStatus: "unauthenticated" as const,
+        currentUser: null,
+        p2pRoom: null,
+      };
+      Object.assign(useWorkspaceStore.getInitialState(), homeWs);
+      useWorkspaceStore.setState(homeWs);
+
+      const homeHtml = renderToStaticMarkup(<AppV1 />);
+      expect(homeHtml).toContain('data-testid="home-card-workspace"');
+      expect(homeHtml).toContain('data-testid="home-card-direct"');
+      expect(homeHtml).toContain("选择沟通方式，两条通道各司其职");
+      expect(homeHtml).toContain("使用 GitHub 登录共享空间");
+      expect(homeHtml).toContain("免登录进入私密直连通道");
     } finally {
       Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);
       useWorkspaceStore.setState(prevWsInitial);

@@ -402,7 +402,8 @@ test.describe("DualLane v1.0 P2P Direct Lane, File Transfer, 320px Responsive, A
       await page.goto(`${baseURL}/direct/BadRoom99#k=invalid!bad!`);
       await expect(page.getByText(/无效的 Base64URL 端到端加密密钥编码/).first()).toBeVisible();
       expect(openedWsUrls).toEqual([]);
-      expect(new URL(page.url()).pathname).toBe("/");
+      expect(page.url()).not.toContain("/direct/");
+      expect(new URL(page.url()).pathname).toBe("/direct");
       expect(new URL(page.url()).hash).toBe("");
       await assertNoOverflowOrControlOverlap(page, 320, "320px Invalid Key Error State");
 
@@ -431,12 +432,12 @@ test.describe("DualLane v1.0 P2P Direct Lane, File Transfer, 320px Responsive, A
       await assertNoOverflowOrControlOverlap(page, 320, "320px P2P Chat With Bubbles & File Card");
       await assertAccessibleNamesAndContrast(page, "320px P2P Chat Light Mode");
 
-      // 4. Defect #2 Regression Gate: Click "返回列表" -> URL MUST scrub both /direct/<roomId> AND #k=<key>!
+      // 4. Defect #2 Regression Gate: Click "返回列表" -> URL MUST scrub both /direct/<roomId> AND #k=<key> while keeping /direct!
       await page.getByRole("button", { name: "返回列表" }).click();
-      await expect(page.getByRole("heading", { name: "私密直连" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "私密直连", exact: true })).toBeVisible();
       expect(page.url()).not.toContain("/direct/");
       expect(page.url()).not.toContain("#k=");
-      expect(new URL(page.url()).pathname).toBe("/");
+      expect(new URL(page.url()).pathname).toBe("/direct");
       expect(new URL(page.url()).hash).toBe("");
 
       // Audit 320px P2P List view (with bottom PrimaryRail + active room session card)

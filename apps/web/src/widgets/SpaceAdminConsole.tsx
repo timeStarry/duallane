@@ -497,30 +497,24 @@ export function SpaceAdminConsole() {
   return (
     <Dialog open={adminConsoleOpen} onOpenChange={(open) => !open && closeAdminConsole()}>
       <DialogContent
-        className="w-[min(920px,calc(100vw-20px))] max-w-[920px] p-0 overflow-hidden"
+        className="w-[min(920px,calc(100vw-20px))] max-narrow:w-[calc(100vw-16px)] max-w-[920px] p-0 overflow-hidden"
       >
-        <DialogHeader className="sr-only">
-          <DialogTitle>空间治理台</DialogTitle>
-          <DialogDescription>
-            管理共享空间成员角色、通讯录可见性、邀请码生命周期、审计日志与存储配额
+        <DialogHeader className="bg-dl-surface-subtle/35">
+          <DialogTitle className="flex items-center gap-2.5">
+            <BrandLogo size={26} withTile />
+            <span className="tracking-[-0.025em]">空间治理台</span>
+          </DialogTitle>
+          <DialogDescription className="text-xs">
+            仅管理权限可见 · 同源管理成员、通讯录可见性、邀请码与存储策略
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex max-compact:flex-col h-[min(700px,88dvh)]">
-          {/* Left Navigation Rail */}
-          <div className="w-52 max-compact:w-full shrink-0 border-r max-compact:border-r-0 max-compact:border-b border-dl-border-hairline bg-dl-surface-subtle/45 p-3.5 max-compact:p-2.5 max-compact:pr-12 flex flex-col max-compact:flex-row max-compact:items-center gap-1.5 overflow-x-auto">
-            <div className="mb-2.5 flex items-center gap-2.5 px-2 max-compact:hidden">
-              <BrandLogo size={26} withTile />
-              <div className="min-w-0">
-                <div className="text-sm font-semibold text-dl-text-primary truncate">
-                  空间治理台
-                </div>
-                <div className="text-[10px] font-medium text-dl-lane-shared">
-                  仅管理权限可见
-                </div>
-              </div>
-            </div>
-
+        <div className="flex max-compact:flex-col h-[min(620px,calc(88dvh-84px))] min-h-0">
+          {/* Navigation Rail (Vertical on Desktop, Clean 2x2 Grid Below Header on Mobile) */}
+          <nav
+            aria-label="空间治理模块"
+            className="w-48 max-compact:w-full shrink-0 border-r max-compact:border-r-0 max-compact:border-b border-dl-border-hairline bg-dl-surface-subtle/45 p-3.5 max-compact:p-2.5 flex flex-col max-compact:grid max-compact:grid-cols-2 gap-1.5"
+          >
             {ADMIN_TABS.map((tab) => {
               const Icon = tab.icon;
               const active = adminConsoleTab === tab.id;
@@ -536,16 +530,16 @@ export function SpaceAdminConsole() {
                     setAdminConsoleTab(tab.id);
                   }}
                   className={cn(
-                    "justify-start gap-2.5 rounded-xl px-3 py-2 max-compact:px-2.5 max-compact:py-1.5 text-xs font-medium shrink-0",
+                    "justify-start gap-2 rounded-xl px-3 py-2 max-compact:px-2 max-compact:py-1.5 text-xs font-medium shrink-0 min-w-0",
                     !active && "text-dl-text-secondary hover:text-dl-text-primary"
                   )}
                 >
-                  <Icon className="size-4 shrink-0" strokeWidth={1.85} />
-                  <span>{tab.label}</span>
+                  <Icon className="size-3.5 shrink-0" strokeWidth={1.85} />
+                  <span className="truncate">{tab.label}</span>
                 </Button>
               );
             })}
-          </div>
+          </nav>
 
           {/* Right Workspace Panel */}
           <div className="dl-scroll flex-1 overflow-y-auto p-5 max-compact:p-3.5 space-y-4">
