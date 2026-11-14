@@ -188,3 +188,105 @@ func SignWebhookDelivery(secret string, timestamp time.Time, body []byte) string
 	mac.Write(body)
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
+
+type AdminCounts struct {
+	Members       int64 `json:"members"`
+	Conversations int64 `json:"conversations"`
+	Messages      int64 `json:"messages"`
+	Files         int64 `json:"files"`
+	UploadedBytes int64 `json:"uploadedBytes"`
+}
+
+type AdminSpaceSummary struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Slug      string `json:"slug"`
+	CreatedAt string `json:"createdAt"`
+}
+
+type AdminSpacePolicy struct {
+	DailyQuotaBytes       int64  `json:"dailyQuotaBytes"`
+	MessageRetentionCount int    `json:"messageRetentionCount"`
+	UpdatedAt             string `json:"updatedAt,omitempty"`
+}
+
+type StorageOperatorRunSummary struct {
+	ID             string `json:"id"`
+	Operation      string `json:"operation"`
+	State          string `json:"state"`
+	Phase          string `json:"phase"`
+	TotalItems     int    `json:"totalItems"`
+	ProcessedItems int    `json:"processedItems"`
+	LastErrorCode  string `json:"lastErrorCode,omitempty"`
+	StartedAt      string `json:"startedAt"`
+	CompletedAt    string `json:"completedAt,omitempty"`
+}
+
+type AdminStorageSummary struct {
+	ActiveAttachments      int64                       `json:"activeAttachments"`
+	ActiveBytes            int64                       `json:"activeBytes"`
+	PendingUploads         int64                       `json:"pendingUploads"`
+	PendingBytes           int64                       `json:"pendingBytes"`
+	ReclaimableAttachments int64                       `json:"reclaimableAttachments"`
+	ReclaimableBytes       int64                       `json:"reclaimableBytes"`
+	CASObjects             int64                       `json:"casObjects"`
+	CASBytes               int64                       `json:"casBytes"`
+	RecentOperatorRuns     []StorageOperatorRunSummary `json:"recentOperatorRuns"`
+}
+
+type AdminOverviewResponse struct {
+	Space      AdminSpaceSummary   `json:"space"`
+	Totals     AdminCounts         `json:"totals"`
+	Today      AdminCounts         `json:"today"`
+	Policy     AdminSpacePolicy    `json:"policy"`
+	Storage    AdminStorageSummary `json:"storage"`
+	ViewerRole string              `json:"viewerRole"`
+}
+
+type AdminInviteItem struct {
+	ID            string  `json:"id"`
+	CodePreview   string  `json:"codePreview"`
+	DefaultRole   string  `json:"defaultRole"`
+	MaxUses       int     `json:"maxUses"`
+	Uses          int     `json:"uses"`
+	Status        string  `json:"status"`
+	CreatedByName string  `json:"createdByName"`
+	ExpiresAt     *string `json:"expiresAt,omitempty"`
+	RevokedAt     *string `json:"revokedAt,omitempty"`
+	CreatedAt     string  `json:"createdAt"`
+}
+
+type AdminInviteListResponse struct {
+	Total         int               `json:"total"`
+	Active        int               `json:"active"`
+	AcceptedUses  int               `json:"acceptedUses"`
+	AvailableUses int               `json:"availableUses"`
+	Invites       []AdminInviteItem `json:"invites"`
+}
+
+type AdminAuditLogItem struct {
+	ID               string `json:"id"`
+	ActorUserID      string `json:"actorUserId,omitempty"`
+	ActorDisplayName string `json:"actorDisplayName"`
+	ActorGitHubLogin string `json:"actorGitHubLogin,omitempty"`
+	Action           string `json:"action"`
+	TargetType       string `json:"targetType"`
+	TargetID         string `json:"targetId,omitempty"`
+	Result           string `json:"result"`
+	Reason           string `json:"reason,omitempty"`
+	IPAddress        string `json:"ipAddress,omitempty"`
+	RequestID        string `json:"requestId,omitempty"`
+	CreatedAt        string `json:"createdAt"`
+}
+
+type AdminPolicyUpdateInput struct {
+	SpaceName             string `json:"spaceName"`
+	DailyQuotaBytes       int64  `json:"dailyQuotaBytes"`
+	MessageRetentionCount int    `json:"messageRetentionCount"`
+}
+
+type AdminStorageCleanupResult struct {
+	ReleasedTransfers  int64 `json:"releasedTransfers"`
+	CleanedAttachments int64 `json:"cleanedAttachments"`
+	ReclaimedBytes     int64 `json:"reclaimedBytes"`
+}

@@ -4,6 +4,7 @@ import { scrubP2PRoomFromUrl } from "@/shared/lib/p2p-lane";
 export type LaneId = "workspace" | "p2p";
 export type ThemeMode = "system" | "light" | "dark";
 export type SettingsTab = "appearance" | "profile" | "devices" | "qr" | "space" | "bots";
+export type SpaceAdminTab = "overview" | "members" | "invites" | "storage";
 export type InspectorTab = "thread" | "details" | "file";
 
 export interface LightboxItem {
@@ -29,6 +30,8 @@ interface LaneUIState {
   inspectorFile: LightboxItem | null;
   settingsOpen: boolean;
   settingsTab: SettingsTab;
+  adminConsoleOpen: boolean;
+  adminConsoleTab: SpaceAdminTab;
   searchOpen: boolean;
   lightboxOpen: boolean;
   lightboxItems: LightboxItem[];
@@ -44,6 +47,9 @@ interface LaneUIState {
   openSettings: (tab?: SettingsTab) => void;
   closeSettings: () => void;
   setSettingsTab: (tab: SettingsTab) => void;
+  openAdminConsole: (tab?: SpaceAdminTab) => void;
+  closeAdminConsole: () => void;
+  setAdminConsoleTab: (tab: SpaceAdminTab) => void;
   setSearchOpen: (open: boolean) => void;
   openLightbox: (items: LightboxItem[], index: number) => void;
   closeLightbox: () => void;
@@ -71,6 +77,8 @@ export const useLaneStore = create<LaneUIState>((set) => ({
   inspectorFile: null,
   settingsOpen: false,
   settingsTab: "appearance",
+  adminConsoleOpen: false,
+  adminConsoleTab: "overview",
   searchOpen: false,
   lightboxOpen: false,
   lightboxItems: [],
@@ -117,6 +125,14 @@ export const useLaneStore = create<LaneUIState>((set) => ({
     })),
   closeSettings: () => set({ settingsOpen: false }),
   setSettingsTab: (settingsTab) => set({ settingsTab }),
+  openAdminConsole: (tab) =>
+    set((s) => ({
+      adminConsoleOpen: true,
+      adminConsoleTab: tab || s.adminConsoleTab,
+      settingsOpen: false,
+    })),
+  closeAdminConsole: () => set({ adminConsoleOpen: false }),
+  setAdminConsoleTab: (adminConsoleTab) => set({ adminConsoleTab }),
   setSearchOpen: (searchOpen) => set({ searchOpen }),
   openLightbox: (lightboxItems, lightboxIndex) =>
     set({ lightboxOpen: true, lightboxItems, lightboxIndex }),

@@ -745,3 +745,352 @@ func (r *PGRepository) UpsertBotWebhook(ctx context.Context, actorID, botID, url
 	}
 	return BotWebhookConfig{BotID: botID, URL: url, Enabled: enabled}, nil
 }
+
+func (r *PGRepository) resolveSpaceManager(ctx context.Context, actorID string) (string, string, error) {
+	var role, githubLogin string
+	err := r.pool.QueryRow(ctx, `
+		SELECT sm.role, coalesce(u.github_login, '')
+		FROM space_members sm
+		JOIN users u ON u.id = sm.user_id
+		WHERE sm.space_id = $1 AND sm.user_id = $2 AND sm.removed_at IS NULL AND u.kind = 'human'
+	`, r.spaceID, actorID).Scan(&role, &githubLogin)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", "", ErrForbidden
+		}
+		return "", "", err
+	}
+	if role != "owner" && role != "admin" {
+		return "", "", ErrForbidden
+	}
+	return role, githubLogin, nil
+}
+
+func (r *PGRepository) GetAdminOverview(ctx context.Context, actorID string, now time.Time) (AdminOverviewResponse, error) {
+	role, _, err := r.resolveSpaceManager(ctx, actorID)
+	if err != nil {
+		return AdminOverviewResponse{}, err
+	}
+
+	var resp AdminOverviewResponse
+	resp.ViewerRole = role
+	resp.Storage.RecentOperatorRuns = []StorageOperatorRunSummary{}
+
+	var spaceCreatedAt time.Time
+	if err := r.pool.QueryRow(ctx, `
+		SELECT id, name, slug, created_at FROM spaces WHERE id = $1
+	`, r.spaceID).Scan(&resp.Space.ID, &resp.Space.Name, &resp.Space.Slug, &spaceCreatedAt); err != nil {
+		return AdminOverviewResponse{}, err
+	}
+	resp.Space.CreatedAt = spaceCreatedAt.UTC().Format(time.RFC3339Nano)
+
+	dayStart := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC)
+	if err := r.pool.QueryRow(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM space_members WHERE space_id = $1 AND removed_at IS NULL),
+			(SELECT COUNT(*) FROM conversations WHERE space_id = $1),
+			(SELECT COUNT(*) FROM messages WHERE space_id = $1 AND deleted_at IS NULL),
+			(SELECT COUNT(*) FROM attachments WHERE space_id = $1 AND status = 'available'),
+			(SELECT COALESCE(SUM(byte_size), 0) FROM attachments WHERE space_id = $1 AND status = 'available'),
+			(SELECT COUNT(*) FROM space_members WHERE space_id = $1 AND removed_at IS NULL AND joined_at >= $2),
+			(SELECT COUNT(*) FROM conversations WHERE space_id = $1 AND created_at >= $2),
+			(SELECT COUNT(*) FROM messages WHERE space_id = $1 AND deleted_at IS NULL AND created_at >= $2),
+			(SELECT COUNT(*) FROM attachments WHERE space_id = $1 AND status = 'available' AND COALESCE(completed_at, created_at) >= $2),
+			(SELECT COALESCE(SUM(byte_size), 0) FROM attachments WHERE space_id = $1 AND status = 'available' AND COALESCE(completed_at, created_at) >= $2)
+	`, r.spaceID, dayStart).Scan(
+		&resp.Totals.Members, &resp.Totals.Conversations, &resp.Totals.Messages, &resp.Totals.Files, &resp.Totals.UploadedBytes,
+		&resp.Today.Members, &resp.Today.Conversations, &resp.Today.Messages, &resp.Today.Files, &resp.Today.UploadedBytes,
+	); err != nil {
+		return AdminOverviewResponse{}, err
+	}
+
+	resp.Policy = AdminSpacePolicy{
+		DailyQuotaBytes:       2 * 1024 * 1024 * 1024,
+		MessageRetentionCount: 10000,
+	}
+	var policyUpdatedAt time.Time
+	if err := r.pool.QueryRow(ctx, `
+		SELECT daily_quota_bytes, message_retention_count, updated_at
+		FROM space_policies
+		WHERE space_id = $1
+	`, r.spaceID).Scan(&resp.Policy.DailyQuotaBytes, &resp.Policy.MessageRetentionCount, &policyUpdatedAt); err == nil {
+		resp.Policy.UpdatedAt = policyUpdatedAt.UTC().Format(time.RFC3339Nano)
+	}
+
+	_ = r.pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE status = 'available'),
+			COALESCE(SUM(byte_size) FILTER (WHERE status = 'available'), 0),
+			COUNT(*) FILTER (WHERE status = 'pending'),
+			COALESCE(SUM(byte_size) FILTER (WHERE status = 'pending'), 0),
+			COUNT(*) FILTER (WHERE status IN ('failed', 'removed')),
+			COALESCE(SUM(byte_size) FILTER (WHERE status IN ('failed', 'removed')), 0)
+		FROM attachments
+		WHERE space_id = $1
+	`, r.spaceID).Scan(
+		&resp.Storage.ActiveAttachments,
+		&resp.Storage.ActiveBytes,
+		&resp.Storage.PendingUploads,
+		&resp.Storage.PendingBytes,
+		&resp.Storage.ReclaimableAttachments,
+		&resp.Storage.ReclaimableBytes,
+	)
+
+	_ = r.pool.QueryRow(ctx, `
+		SELECT COUNT(*), COALESCE(SUM(byte_size), 0)
+		FROM workspace_storage_objects
+		WHERE deleted_at IS NULL
+	`).Scan(&resp.Storage.CASObjects, &resp.Storage.CASBytes)
+
+	runRows, runErr := r.pool.Query(ctx, `
+		SELECT id, operation, state, phase, total_items, processed_items, COALESCE(last_error_code, ''), started_at, COALESCE(completed_at, '')
+		FROM workspace_storage_operator_runs
+		ORDER BY started_at DESC
+		LIMIT 5
+	`)
+	if runErr == nil {
+		defer runRows.Close()
+		for runRows.Next() {
+			var run StorageOperatorRunSummary
+			if err := runRows.Scan(&run.ID, &run.Operation, &run.State, &run.Phase, &run.TotalItems, &run.ProcessedItems, &run.LastErrorCode, &run.StartedAt, &run.CompletedAt); err == nil {
+				resp.Storage.RecentOperatorRuns = append(resp.Storage.RecentOperatorRuns, run)
+			}
+		}
+	}
+
+	return resp, nil
+}
+
+func (r *PGRepository) ListAdminInvites(ctx context.Context, actorID string, now time.Time) (AdminInviteListResponse, error) {
+	role, _, err := r.resolveSpaceManager(ctx, actorID)
+	if err != nil {
+		return AdminInviteListResponse{}, err
+	}
+
+	viewAllRoles := role == "owner"
+	resp := AdminInviteListResponse{
+		Invites: []AdminInviteItem{},
+	}
+
+	rows, err := r.pool.Query(ctx, `
+		SELECT i.id, i.code_preview, i.default_role, i.max_uses, i.uses, i.expires_at, i.revoked_at, i.created_at, COALESCE(u.display_name, u.github_login, '')
+		FROM invites i
+		LEFT JOIN users u ON u.id = i.created_by
+		WHERE i.space_id = $1 AND ($2 OR i.default_role = 'member')
+		ORDER BY i.created_at DESC
+		LIMIT 100
+	`, r.spaceID, viewAllRoles)
+	if err != nil {
+		return AdminInviteListResponse{}, err
+	}
+	defer rows.Close()
+
+	nowUTC := now.UTC()
+	for rows.Next() {
+		var item AdminInviteItem
+		var expiresAt, revokedAt *time.Time
+		var createdAt time.Time
+		if err := rows.Scan(&item.ID, &item.CodePreview, &item.DefaultRole, &item.MaxUses, &item.Uses, &expiresAt, &revokedAt, &createdAt, &item.CreatedByName); err != nil {
+			return AdminInviteListResponse{}, err
+		}
+		item.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
+		if expiresAt != nil {
+			s := expiresAt.UTC().Format(time.RFC3339Nano)
+			item.ExpiresAt = &s
+		}
+		if revokedAt != nil {
+			s := revokedAt.UTC().Format(time.RFC3339Nano)
+			item.RevokedAt = &s
+		}
+
+		switch {
+		case revokedAt != nil:
+			item.Status = "revoked"
+		case expiresAt != nil && !expiresAt.UTC().After(nowUTC):
+			item.Status = "expired"
+		case item.Uses >= item.MaxUses:
+			item.Status = "exhausted"
+		default:
+			item.Status = "active"
+			resp.Active++
+			resp.AvailableUses += item.MaxUses - item.Uses
+		}
+		resp.Total++
+		resp.AcceptedUses += item.Uses
+		resp.Invites = append(resp.Invites, item)
+	}
+	return resp, rows.Err()
+}
+
+func (r *PGRepository) ListAdminAuditLogs(ctx context.Context, actorID, resultFilter, query string, limit int) ([]AdminAuditLogItem, error) {
+	if _, _, err := r.resolveSpaceManager(ctx, actorID); err != nil {
+		return nil, err
+	}
+
+	like := "%" + query + "%"
+	rows, err := r.pool.Query(ctx, `
+		SELECT
+			a.id,
+			COALESCE(a.actor_user_id, ''),
+			COALESCE(u.display_name, a.actor_github_login, '系统'),
+			COALESCE(a.actor_github_login, ''),
+			a.action,
+			a.target_type,
+			COALESCE(a.target_id, ''),
+			a.result,
+			COALESCE(a.reason, ''),
+			COALESCE(a.ip_address, ''),
+			COALESCE(a.request_id, ''),
+			a.created_at
+		FROM audit_logs a
+		LEFT JOIN users u ON u.id = a.actor_user_id
+		WHERE (a.space_id = $1 OR a.space_id IS NULL)
+		  AND ($2 = '' OR a.result = $2)
+		  AND (
+			$3 = ''
+			OR a.action ILIKE $4
+			OR a.target_type ILIKE $4
+			OR COALESCE(a.target_id, '') ILIKE $4
+			OR COALESCE(a.actor_github_login, '') ILIKE $4
+			OR COALESCE(u.display_name, '') ILIKE $4
+			OR COALESCE(a.reason, '') ILIKE $4
+			OR COALESCE(a.ip_address, '') ILIKE $4
+		  )
+		ORDER BY a.created_at DESC
+		LIMIT $5
+	`, r.spaceID, resultFilter, query, like, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]AdminAuditLogItem, 0)
+	for rows.Next() {
+		var item AdminAuditLogItem
+		var createdAt time.Time
+		if err := rows.Scan(
+			&item.ID,
+			&item.ActorUserID,
+			&item.ActorDisplayName,
+			&item.ActorGitHubLogin,
+			&item.Action,
+			&item.TargetType,
+			&item.TargetID,
+			&item.Result,
+			&item.Reason,
+			&item.IPAddress,
+			&item.RequestID,
+			&createdAt,
+		); err != nil {
+			return nil, err
+		}
+		item.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r *PGRepository) UpdateSpacePolicy(ctx context.Context, actorID string, input AdminPolicyUpdateInput, now time.Time) (AdminSpacePolicy, error) {
+	role, githubLogin, err := r.resolveSpaceManager(ctx, actorID)
+	if err != nil {
+		return AdminSpacePolicy{}, err
+	}
+	if role != "owner" {
+		_, _ = r.pool.Exec(ctx, `
+			INSERT INTO audit_logs (id, space_id, actor_user_id, actor_github_login, action, target_type, target_id, result, reason, created_at)
+			VALUES ($1, $2, $3, NULLIF($4, ''), 'space.policy_update', 'space', $2, 'rejected', 'owner required', $5)
+		`, randomID("aud"), r.spaceID, actorID, githubLogin, now.UTC())
+		return AdminSpacePolicy{}, ErrForbidden
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return AdminSpacePolicy{}, err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	if input.SpaceName != "" {
+		if _, err := tx.Exec(ctx, `UPDATE spaces SET name = $2 WHERE id = $1`, r.spaceID, input.SpaceName); err != nil {
+			return AdminSpacePolicy{}, err
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO space_policies (space_id, daily_quota_bytes, message_retention_count, updated_by, updated_at)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (space_id) DO UPDATE
+		SET daily_quota_bytes = EXCLUDED.daily_quota_bytes,
+		    message_retention_count = EXCLUDED.message_retention_count,
+		    updated_by = EXCLUDED.updated_by,
+		    updated_at = EXCLUDED.updated_at
+	`, r.spaceID, input.DailyQuotaBytes, input.MessageRetentionCount, actorID, now.UTC()); err != nil {
+		return AdminSpacePolicy{}, err
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_logs (id, space_id, actor_user_id, actor_github_login, action, target_type, target_id, result, reason, created_at)
+		VALUES ($1, $2, $3, NULLIF($4, ''), 'space.policy_update', 'space', $2, 'success', $5, $6)
+	`, randomID("aud"), r.spaceID, actorID, githubLogin, fmt.Sprintf("quota=%d retention=%d", input.DailyQuotaBytes, input.MessageRetentionCount), now.UTC()); err != nil {
+		return AdminSpacePolicy{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return AdminSpacePolicy{}, err
+	}
+
+	return AdminSpacePolicy{
+		DailyQuotaBytes:       input.DailyQuotaBytes,
+		MessageRetentionCount: input.MessageRetentionCount,
+		UpdatedAt:             now.UTC().Format(time.RFC3339Nano),
+	}, nil
+}
+
+func (r *PGRepository) CleanupStaleStorage(ctx context.Context, actorID string, now time.Time) (AdminStorageCleanupResult, error) {
+	_, githubLogin, err := r.resolveSpaceManager(ctx, actorID)
+	if err != nil {
+		return AdminStorageCleanupResult{}, err
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return AdminStorageCleanupResult{}, err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	cutoff := now.UTC().Add(-15 * time.Minute)
+	var result AdminStorageCleanupResult
+
+	if err := tx.QueryRow(ctx, `
+		WITH rel AS (
+			UPDATE transfer_ledger
+			SET status = 'released', released_at = $3
+			WHERE space_id = $1 AND status = 'reserved' AND created_at < $2
+			RETURNING byte_size
+		)
+		SELECT COUNT(*), COALESCE(SUM(byte_size), 0) FROM rel
+	`, r.spaceID, cutoff, now.UTC()).Scan(&result.ReleasedTransfers, &result.ReclaimedBytes); err != nil {
+		return AdminStorageCleanupResult{}, err
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE attachments
+		SET status = 'failed'
+		WHERE space_id = $1 AND status = 'pending' AND created_at < $2
+	`, r.spaceID, cutoff)
+	if err != nil {
+		return AdminStorageCleanupResult{}, err
+	}
+	result.CleanedAttachments = tag.RowsAffected()
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_logs (id, space_id, actor_user_id, actor_github_login, action, target_type, target_id, result, reason, created_at)
+		VALUES ($1, $2, $3, NULLIF($4, ''), 'storage.cleanup', 'workspace', $2, 'success', $5, $6)
+	`, randomID("aud"), r.spaceID, actorID, githubLogin, fmt.Sprintf("transfers=%d attachments=%d", result.ReleasedTransfers, result.CleanedAttachments), now.UTC()); err != nil {
+		return AdminStorageCleanupResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return AdminStorageCleanupResult{}, err
+	}
+	return result, nil
+}

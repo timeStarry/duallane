@@ -141,3 +141,12 @@ WHERE c.type = 'direct'
     SELECT 1 FROM conversation_members cm
     WHERE cm.conversation_id = c.id AND cm.user_id = 'usr_system_beacon'
   );
+
+-- 10. Space-Level Governance Policies (dynamic upload quota & retention overrides)
+CREATE TABLE IF NOT EXISTS space_policies (
+  space_id TEXT PRIMARY KEY REFERENCES spaces(id) ON DELETE CASCADE,
+  daily_quota_bytes BIGINT NOT NULL DEFAULT 2147483648 CHECK (daily_quota_bytes > 0),
+  message_retention_count INTEGER NOT NULL DEFAULT 10000 CHECK (message_retention_count >= 100),
+  updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);

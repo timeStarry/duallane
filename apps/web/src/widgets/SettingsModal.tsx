@@ -8,6 +8,7 @@ import {
   Plus,
   QrCode,
   ShieldCheck,
+  SlidersHorizontal,
   Smartphone,
   User,
 } from "lucide-react";
@@ -48,8 +49,14 @@ const ACCENTS: Array<{ id: AccentId; label: string }> = [
 ];
 
 export function SettingsModal() {
-  const { settingsOpen, closeSettings, settingsTab, setSettingsTab, setActiveLane } =
-    useLaneStore();
+  const {
+    settingsOpen,
+    closeSettings,
+    settingsTab,
+    setSettingsTab,
+    setActiveLane,
+    openAdminConsole,
+  } = useLaneStore();
   const {
     preference,
     accent,
@@ -288,16 +295,30 @@ export function SettingsModal() {
                             生成一次性或多用途邀请链接，供新成员加入共享空间
                           </div>
                         </div>
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          busy={creatingInvite}
-                          className="gap-1.5 shrink-0"
-                          onClick={() => void handleCreateInvite()}
-                        >
-                          <Plus className="size-3.5" strokeWidth={2} />
-                          生成邀请码
-                        </Button>
+                        <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="gap-1.5 shrink-0"
+                            onClick={() => {
+                              closeSettings();
+                              openAdminConsole("invites");
+                            }}
+                          >
+                            <SlidersHorizontal className="size-3.5" strokeWidth={1.9} />
+                            打开空间治理台
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            busy={creatingInvite}
+                            className="gap-1.5 shrink-0"
+                            onClick={() => void handleCreateInvite()}
+                          >
+                            <Plus className="size-3.5" strokeWidth={2} />
+                            生成邀请码
+                          </Button>
+                        </div>
                       </div>
 
                       {inviteError && (

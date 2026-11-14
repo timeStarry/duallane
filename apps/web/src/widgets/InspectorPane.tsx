@@ -286,13 +286,7 @@ export function InspectorPane() {
                               {m?.displayName || id}
                             </div>
                             <div className="text-[11px] text-dl-text-tertiary">
-                              {m?.role === "bot"
-                                ? "智能体机器人"
-                                : m?.role === "owner"
-                                ? "空间所有者"
-                                : m?.role === "admin"
-                                ? "管理员"
-                                : "成员"}
+                              {m?.role === "bot" ? "智能体机器人" : "空间成员"}
                             </div>
                           </div>
                         </div>

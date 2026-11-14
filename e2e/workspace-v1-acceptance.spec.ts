@@ -309,6 +309,67 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320
       await expect(memberDeckSwitch).toHaveAttribute("data-front-card", "workspace");
       await assertNarrowWorkspaceNoOverlap(pageMember, "320px Deck Switch -> Workspace List");
 
+      // 10. Stealth Governance & Cohesive Same-Origin SpaceAdminConsole Verification!
+      // 10a. Ordinary member sees ZERO admin entry points (rail OR personal menu), ZERO privileged peer labels, and receives HTTP 403 on /api/v1/admin/*
+      await expect(pageMember.getByRole("button", { name: "空间治理台" })).toHaveCount(0);
+      await pageMember.getByRole("button", { name: "个人菜单" }).click();
+      await expect(pageMember.getByRole("button", { name: "空间治理台" })).toHaveCount(0);
+      await pageMember.keyboard.press("Escape");
+
+      const memberAdminStatus = await pageMember.evaluate(async () => {
+        const res = await fetch("/api/v1/admin/overview", { credentials: "same-origin" });
+        return res.status;
+      });
+      expect(memberAdminStatus).toBe(403);
+
+      await pageMember.setViewportSize({ width: 1280, height: 800 });
+      await pageMember.getByRole("button", { name: /v1\.0 双端实时验收群/ }).click();
+      await pageMember.getByRole("button", { name: "详情与置顶" }).click();
+      const memberInspector = pageMember.getByRole("complementary", { name: "对话右侧检查器" });
+      await expect(memberInspector).toBeVisible();
+      await expect(memberInspector).toContainText("空间成员");
+      await expect(memberInspector).not.toContainText("空间所有者");
+      await expect(memberInspector).not.toContainText("空间管理员");
+
+      // 10b. Owner opens lazy-loaded SpaceAdminConsole and exercises all 4 governance modules!
+      await expect(pageOwner.getByRole("button", { name: "空间治理台" })).toBeVisible();
+      await pageOwner.getByRole("button", { name: "空间治理台" }).click();
+      const adminDialog = pageOwner.getByRole("dialog", { name: "空间治理台" });
+      await expect(adminDialog).toBeVisible();
+
+      // Tab 1: Overview & Security Audit Logs
+      await expect(adminDialog).toContainText("安全与治理审计日志");
+      await expect(adminDialog).toContainText("invite.accept");
+
+      // Tab 2: Members & Directory Visibility Isolation Matrix
+      await adminDialog.getByRole("button", { name: "成员与可见性" }).click();
+      await expect(adminDialog).toContainText("协作成员晓明");
+      await expect(adminDialog).toContainText("Owner（空间主理人）");
+      await adminDialog.getByRole("button", { name: "可见性" }).last().click();
+      await expect(adminDialog).toContainText("通讯录可见性隔离矩阵");
+      await adminDialog.getByRole("button", { name: "保存可见性白名单" }).click();
+      await expect(adminDialog).toContainText("已保存成员通讯录可见性白名单");
+
+      // Tab 3: Invite Code Lifecycle Management
+      await adminDialog.getByRole("button", { name: "邀请码治理" }).click();
+      await adminDialog.getByRole("button", { name: "签发邀请码" }).click();
+      await expect(adminDialog.getByTestId("admin-created-invite-code")).toBeVisible();
+      await adminDialog.getByRole("button", { name: "吊销" }).first().click();
+      await expect(adminDialog).toContainText("已吊销");
+
+      // Tab 4: Storage, Quota Policy & Stale Upload Cleanup
+      await adminDialog.getByRole("button", { name: "存储与配额" }).click();
+      await adminDialog.getByRole("button", { name: "2 GB" }).click();
+      await adminDialog.getByRole("button", { name: "保存空间策略" }).click();
+      await expect(adminDialog).toContainText("已更新空间全局配额与保留策略");
+      await adminDialog.getByRole("button", { name: "清理超时挂起上传" }).click();
+
+      // Verify SpaceAdminConsole at 320x568 ultra-narrow viewport has zero horizontal overflow!
+      await pageOwner.setViewportSize({ width: 320, height: 568 });
+      await assertNarrowWorkspaceNoOverlap(pageOwner, "320px SpaceAdminConsole Modal");
+      await pageOwner.keyboard.press("Escape");
+      await expect(adminDialog).toBeHidden();
+
       expect(ownerErrors).toEqual([]);
       expect(memberErrors).toEqual([]);
     } finally {

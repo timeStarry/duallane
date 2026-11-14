@@ -169,8 +169,13 @@ export const apiV1 = {
       }
     );
   },
-  createInvite: (options?: { defaultRole?: "member" | "admin"; maxUses?: number; expiresInHours?: number }) =>
-    requestJSON<{ invite?: { id: string; code?: string; codePreview?: string }; inviteUrl?: string; code?: string }>(
+  createInvite: (options?: {
+    defaultRole?: "member" | "admin" | "owner";
+    maxUses?: number;
+    expiresInHours?: number;
+    code?: string;
+  }) =>
+    requestJSON<{ invite?: { id: string; code?: string; codePreview?: string; inviteUrl?: string }; inviteUrl?: string; code?: string }>(
       "/api/workspace/invites",
       {
         method: "POST",
@@ -178,6 +183,7 @@ export const apiV1 = {
           defaultRole: options?.defaultRole || "member",
           maxUses: options?.maxUses || 10,
           expiresInHours: options?.expiresInHours || 72,
+          ...(options?.code ? { code: options.code } : {}),
         }),
       }
     ),
@@ -466,4 +472,169 @@ export const apiV1 = {
       method: "PUT",
       body: JSON.stringify({ url, secret, enabled }),
     }),
+
+  // Space Governance Console (Owner / Admin only)
+  getAdminOverview: () =>
+    requestJSON<AdminOverviewResponse>("/api/v1/admin/overview"),
+  listAdminInvites: () =>
+    requestJSON<AdminInviteListResponse>("/api/v1/admin/invites"),
+  revokeInvite: (inviteId: string) =>
+    requestJSON<Record<string, unknown>>(
+      `/api/workspace/invites/${encodeURIComponent(inviteId)}/revoke`,
+      { method: "POST" }
+    ),
+  listAdminAuditLogs: async (params?: {
+    result?: "all" | "success" | "rejected" | "failure";
+    q?: string;
+    limit?: number;
+  }): Promise<AdminAuditLogItem[]> => {
+    const query = new URLSearchParams();
+    if (params?.result && params.result !== "all") query.set("result", params.result);
+    if (params?.q?.trim()) query.set("q", params.q.trim());
+    if (params?.limit) query.set("limit", String(params.limit));
+    const qs = query.toString();
+    const res = await requestJSON<{ items?: AdminAuditLogItem[] }>(
+      `/api/v1/admin/audit-logs${qs ? `?${qs}` : ""}`
+    );
+    return Array.isArray(res.items) ? res.items : [];
+  },
+  updateAdminPolicy: (input: {
+    spaceName?: string;
+    dailyQuotaBytes: number;
+    messageRetentionCount: number;
+  }) =>
+    requestJSON<{ policy: AdminSpacePolicy }>("/api/v1/admin/policy", {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+  cleanupAdminStorage: () =>
+    requestJSON<AdminStorageCleanupResult>("/api/v1/admin/storage/cleanup", {
+      method: "POST",
+    }),
+  listWorkspaceMembers: () =>
+    requestJSON<{ members?: Array<Record<string, unknown>> }>("/api/workspace/members"),
+  updateMemberRole: (userId: string, role: "owner" | "admin" | "member") =>
+    requestJSON<{ member?: Record<string, unknown> }>(
+      `/api/workspace/members/${encodeURIComponent(userId)}/role`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ role }),
+      }
+    ),
+  removeSpaceMember: (userId: string) =>
+    requestJSON<{ ok: boolean }>(`/api/workspace/members/${encodeURIComponent(userId)}`, {
+      method: "DELETE",
+    }),
+  getMemberVisibility: (userId: string) =>
+    requestJSON<{ visibility: MemberVisibilityRule }>(
+      `/api/workspace/member-visibility/${encodeURIComponent(userId)}`
+    ),
+  updateMemberVisibility: (userId: string, visibleUserIds: string[]) =>
+    requestJSON<{ visibility: MemberVisibilityRule }>(
+      `/api/workspace/member-visibility/${encodeURIComponent(userId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ visibleUserIds }),
+      }
+    ),
 };
+
+export interface AdminCounts {
+  members: number;
+  conversations: number;
+  messages: number;
+  files: number;
+  uploadedBytes: number;
+}
+
+export interface AdminSpacePolicy {
+  dailyQuotaBytes: number;
+  messageRetentionCount: number;
+  updatedAt?: string;
+}
+
+export interface StorageOperatorRunSummary {
+  id: string;
+  operation: string;
+  state: string;
+  phase: string;
+  totalItems: number;
+  processedItems: number;
+  lastErrorCode?: string;
+  startedAt: string;
+  completedAt?: string;
+}
+
+export interface AdminOverviewResponse {
+  space: {
+    id: string;
+    name: string;
+    slug: string;
+    createdAt: string;
+  };
+  totals: AdminCounts;
+  today: AdminCounts;
+  policy: AdminSpacePolicy;
+  storage: {
+    activeAttachments: number;
+    activeBytes: number;
+    pendingUploads: number;
+    pendingBytes: number;
+    reclaimableAttachments: number;
+    reclaimableBytes: number;
+    casObjects: number;
+    casBytes: number;
+    recentOperatorRuns: StorageOperatorRunSummary[];
+  };
+  viewerRole: "owner" | "admin" | string;
+}
+
+export interface AdminInviteItem {
+  id: string;
+  codePreview: string;
+  defaultRole: string;
+  maxUses: number;
+  uses: number;
+  status: "active" | "exhausted" | "expired" | "revoked" | string;
+  createdByName: string;
+  expiresAt?: string;
+  revokedAt?: string;
+  createdAt: string;
+}
+
+export interface AdminInviteListResponse {
+  total: number;
+  active: number;
+  acceptedUses: number;
+  availableUses: number;
+  invites: AdminInviteItem[];
+}
+
+export interface AdminAuditLogItem {
+  id: string;
+  actorUserId?: string;
+  actorDisplayName: string;
+  actorGitHubLogin?: string;
+  action: string;
+  targetType: string;
+  targetId?: string;
+  result: "success" | "rejected" | "failure" | string;
+  reason?: string;
+  ipAddress?: string;
+  requestId?: string;
+  createdAt: string;
+}
+
+export interface AdminStorageCleanupResult {
+  releasedTransfers: number;
+  cleanedAttachments: number;
+  reclaimedBytes: number;
+}
+
+export interface MemberVisibilityRule {
+  basis: string;
+  viewerUserId: string;
+  automaticUserIds: string[];
+  grantedUserIds: string[];
+  visibleUserIds: string[];
+}

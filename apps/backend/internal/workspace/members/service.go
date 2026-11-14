@@ -263,7 +263,7 @@ func (s *Service) List(ctx context.Context, input ListInput) ([]Member, error) {
 	discoveryEnabled := utf8.RuneCountInString(query) >= 2
 	items := make([]Member, 0, len(records))
 	for _, record := range records {
-		normallyVisible := record.NormallyVisible || record.ID == actor.ID || actor.Role == RoleOwner
+		normallyVisible := record.NormallyVisible || record.ID == actor.ID || actor.Role == RoleOwner || actor.Role == RoleAdmin
 		if !normallyVisible && !(discoveryEnabled && record.Kind == "human" && record.SearchDiscoverable &&
 			(strings.Contains(strings.ToLower(pointerValue(record.Nickname)), query) || strings.Contains(strings.ToLower(record.GitHubLogin), query))) {
 			continue
@@ -834,13 +834,19 @@ func sanitizeAvatarURL(value string) string {
 
 func projectedRole(record MemberRecord, actor *auth.Actor) string {
 	role := record.Role
-	if role == RoleOwner && (actor == nil || actor.Role != RoleOwner) {
-		return RoleAdmin
-	}
-	if role == RoleAuditor && (actor == nil || (actor.ID != record.ID && actor.Role != RoleOwner)) {
+	if role == "" {
 		return RoleMember
 	}
-	if role == "" {
+	if actor == nil || (actor.Role != RoleOwner && actor.Role != RoleAdmin) {
+		if actor != nil && actor.ID == record.ID && role == RoleAuditor {
+			return RoleAuditor
+		}
+		return RoleMember
+	}
+	if role == RoleOwner && actor.Role != RoleOwner {
+		return RoleAdmin
+	}
+	if role == RoleAuditor && actor.ID != record.ID && actor.Role != RoleOwner {
 		return RoleMember
 	}
 	return role

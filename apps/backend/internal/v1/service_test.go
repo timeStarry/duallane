@@ -2,8 +2,13 @@ package v1
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 )
 
 type stubRepo struct {
@@ -70,6 +75,29 @@ func (s *stubRepo) CreateMultiBot(_ context.Context, _, _ string, _ time.Time) (
 func (s *stubRepo) UpsertBotWebhook(_ context.Context, _, botID, url, _ string, enabled bool, _ time.Time) (BotWebhookConfig, error) {
 	return BotWebhookConfig{BotID: botID, URL: url, Enabled: enabled}, nil
 }
+func (s *stubRepo) GetAdminOverview(_ context.Context, _ string, _ time.Time) (AdminOverviewResponse, error) {
+	return AdminOverviewResponse{
+		Space:      AdminSpaceSummary{ID: "spc_default", Name: "DualLane"},
+		Policy:     AdminSpacePolicy{DailyQuotaBytes: 2147483648, MessageRetentionCount: 10000},
+		ViewerRole: "owner",
+	}, nil
+}
+func (s *stubRepo) ListAdminInvites(_ context.Context, _ string, _ time.Time) (AdminInviteListResponse, error) {
+	return AdminInviteListResponse{Total: 1, Active: 1, Invites: []AdminInviteItem{{ID: "inv_1", Status: "active"}}}, nil
+}
+func (s *stubRepo) ListAdminAuditLogs(_ context.Context, _, _, _ string, _ int) ([]AdminAuditLogItem, error) {
+	return []AdminAuditLogItem{{ID: "aud_1", Action: "invite.create", Result: "success"}}, nil
+}
+func (s *stubRepo) UpdateSpacePolicy(_ context.Context, _ string, input AdminPolicyUpdateInput, now time.Time) (AdminSpacePolicy, error) {
+	return AdminSpacePolicy{
+		DailyQuotaBytes:       input.DailyQuotaBytes,
+		MessageRetentionCount: input.MessageRetentionCount,
+		UpdatedAt:             now.Format(time.RFC3339),
+	}, nil
+}
+func (s *stubRepo) CleanupStaleStorage(_ context.Context, _ string, _ time.Time) (AdminStorageCleanupResult, error) {
+	return AdminStorageCleanupResult{ReleasedTransfers: 1, CleanedAttachments: 1}, nil
+}
 
 func TestValidateCardKitDocumentAllowsArbitraryActionIDs(t *testing.T) {
 	doc := CardKitDocument{
@@ -119,5 +147,70 @@ func TestServiceBotCommandsNormalizationAndWebhookValidation(t *testing.T) {
 	cfg, err := svc.UpsertBotWebhook(context.Background(), "usr_1", "bot_1", "https://bot.example.com/hook", "very-strong-secret-012345", true)
 	if err != nil || !cfg.Enabled {
 		t.Fatalf("expected valid webhook config, got %+v err=%v", cfg, err)
+	}
+}
+
+func TestAdminPolicyValidationAndAuditFilter(t *testing.T) {
+	repo := &stubRepo{}
+	svc := NewService(repo)
+
+	if _, err := svc.UpdateSpacePolicy(context.Background(), "usr_owner", AdminPolicyUpdateInput{
+		DailyQuotaBytes:       1024,
+		MessageRetentionCount: 10000,
+	}); err == nil {
+		t.Fatal("expected error for tiny dailyQuotaBytes")
+	}
+
+	if _, err := svc.ListAdminAuditLogs(context.Background(), "usr_owner", "invalid_status", "", 20); err == nil {
+		t.Fatal("expected error for invalid audit result filter")
+	}
+
+	policy, err := svc.UpdateSpacePolicy(context.Background(), "usr_owner", AdminPolicyUpdateInput{
+		SpaceName:             "DualLane Studio",
+		DailyQuotaBytes:       5 * 1024 * 1024 * 1024,
+		MessageRetentionCount: 20000,
+	})
+	if err != nil || policy.MessageRetentionCount != 20000 {
+		t.Fatalf("expected valid policy update, got %+v err=%v", policy, err)
+	}
+}
+
+type stubActorResolver struct {
+	actor *auth.Actor
+}
+
+func (s stubActorResolver) ResolveActor(context.Context, *http.Request) (*auth.Actor, error) {
+	return s.actor, nil
+}
+
+func TestAdminHTTPHandlerRejectsOrdinaryMember(t *testing.T) {
+	svc := NewService(&stubRepo{})
+
+	for _, tc := range []struct {
+		name       string
+		role       string
+		wantStatus int
+	}{
+		{name: "member forbidden", role: "member", wantStatus: http.StatusForbidden},
+		{name: "auditor forbidden", role: "auditor", wantStatus: http.StatusForbidden},
+		{name: "admin allowed", role: "admin", wantStatus: http.StatusOK},
+		{name: "owner allowed", role: "owner", wantStatus: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := chi.NewRouter()
+			h := NewHTTPHandler(svc, stubActorResolver{
+				actor: &auth.Actor{ID: "usr_" + tc.role, Role: tc.role, DisplayName: tc.role},
+			})
+			h.Mount(r)
+
+			for _, path := range []string{"/api/v1/admin/overview", "/api/v1/admin/invites", "/api/v1/admin/audit-logs"} {
+				req := httptest.NewRequest(http.MethodGet, path, nil)
+				rec := httptest.NewRecorder()
+				r.ServeHTTP(rec, req)
+				if rec.Code != tc.wantStatus {
+					t.Fatalf("%s for role %q: got status %d, want %d (body=%s)", path, tc.role, rec.Code, tc.wantStatus, rec.Body.String())
+				}
+			}
+		})
 	}
 }

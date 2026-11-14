@@ -328,13 +328,19 @@ func roleLabel(role string) string {
 
 func projectedRole(member MemberRecord, actor *auth.Actor) string {
 	role := member.Role
-	if role == "owner" && (actor == nil || actor.Role != "owner") {
-		return "admin"
-	}
-	if role == "auditor" && (actor == nil || (actor.ID != member.ID && actor.Role != "owner")) {
+	if role == "" {
 		return "member"
 	}
-	if role == "" {
+	if actor == nil || (actor.Role != "owner" && actor.Role != "admin") {
+		if actor != nil && actor.ID == member.ID && role == "auditor" {
+			return "auditor"
+		}
+		return "member"
+	}
+	if role == "owner" && actor.Role != "owner" {
+		return "admin"
+	}
+	if role == "auditor" && actor.ID != member.ID && actor.Role != "owner" {
 		return "member"
 	}
 	return role

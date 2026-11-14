@@ -141,13 +141,15 @@ func (r *PGRepository) publicMemberPayload(ctx context.Context, spaceID string, 
 		displayName, kind, avatarURL = "回声", "bot", stringPointer("/assets/echo-avatar.svg")
 	}
 	projectedRole := role
-	if projectedRole == "owner" && actor.Role != "owner" {
-		projectedRole = "admin"
-	}
-	if projectedRole == "auditor" && actor.Role != "owner" && actor.ID != id {
-		projectedRole = "member"
-	}
 	if projectedRole == "" {
+		projectedRole = "member"
+	} else if actor == nil || (actor.Role != "owner" && actor.Role != "admin") {
+		if !(actor != nil && actor.ID == id && projectedRole == "auditor") {
+			projectedRole = "member"
+		}
+	} else if projectedRole == "owner" && actor.Role != "owner" {
+		projectedRole = "admin"
+	} else if projectedRole == "auditor" && actor.Role != "owner" && actor.ID != id {
 		projectedRole = "member"
 	}
 	if kind == "human" {

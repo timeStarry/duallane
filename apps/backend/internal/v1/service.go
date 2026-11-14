@@ -31,6 +31,11 @@ type Repository interface {
 	ListBotCommandsByBot(ctx context.Context, actorID, botID string) ([]BotCommand, error)
 	CreateMultiBot(ctx context.Context, actorID, name string, now time.Time) (string, error)
 	UpsertBotWebhook(ctx context.Context, actorID, botID, url, secretHash string, enabled bool, now time.Time) (BotWebhookConfig, error)
+	GetAdminOverview(ctx context.Context, actorID string, now time.Time) (AdminOverviewResponse, error)
+	ListAdminInvites(ctx context.Context, actorID string, now time.Time) (AdminInviteListResponse, error)
+	ListAdminAuditLogs(ctx context.Context, actorID, resultFilter, query string, limit int) ([]AdminAuditLogItem, error)
+	UpdateSpacePolicy(ctx context.Context, actorID string, input AdminPolicyUpdateInput, now time.Time) (AdminSpacePolicy, error)
+	CleanupStaleStorage(ctx context.Context, actorID string, now time.Time) (AdminStorageCleanupResult, error)
 }
 
 type Service struct {
@@ -210,6 +215,61 @@ func (s *Service) UpsertBotWebhook(ctx context.Context, actorID, botID, url, sec
 		return BotWebhookConfig{}, fmt.Errorf("%w: webhook secret must be at least 16 chars", ErrInvalidInput)
 	}
 	return s.repo.UpsertBotWebhook(ctx, actorID, botID, strings.TrimSpace(url), secret, enabled, s.now())
+}
+
+func (s *Service) GetAdminOverview(ctx context.Context, actorID string) (AdminOverviewResponse, error) {
+	if strings.TrimSpace(actorID) == "" {
+		return AdminOverviewResponse{}, ErrForbidden
+	}
+	return s.repo.GetAdminOverview(ctx, actorID, s.now())
+}
+
+func (s *Service) ListAdminInvites(ctx context.Context, actorID string) (AdminInviteListResponse, error) {
+	if strings.TrimSpace(actorID) == "" {
+		return AdminInviteListResponse{}, ErrForbidden
+	}
+	return s.repo.ListAdminInvites(ctx, actorID, s.now())
+}
+
+func (s *Service) ListAdminAuditLogs(ctx context.Context, actorID, resultFilter, query string, limit int) ([]AdminAuditLogItem, error) {
+	if strings.TrimSpace(actorID) == "" {
+		return nil, ErrForbidden
+	}
+	rf := strings.ToLower(strings.TrimSpace(resultFilter))
+	if rf == "all" {
+		rf = ""
+	}
+	if rf != "" && rf != "success" && rf != "rejected" && rf != "failure" {
+		return nil, ErrInvalidInput
+	}
+	if limit <= 0 {
+		limit = 60
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	return s.repo.ListAdminAuditLogs(ctx, actorID, rf, strings.TrimSpace(query), limit)
+}
+
+func (s *Service) UpdateSpacePolicy(ctx context.Context, actorID string, input AdminPolicyUpdateInput) (AdminSpacePolicy, error) {
+	if strings.TrimSpace(actorID) == "" {
+		return AdminSpacePolicy{}, ErrForbidden
+	}
+	if input.DailyQuotaBytes < 10*1024*1024 || input.DailyQuotaBytes > 100*1024*1024*1024 {
+		return AdminSpacePolicy{}, fmt.Errorf("%w: dailyQuotaBytes must be between 10 MiB and 100 GiB", ErrInvalidInput)
+	}
+	if input.MessageRetentionCount < 100 || input.MessageRetentionCount > 500000 {
+		return AdminSpacePolicy{}, fmt.Errorf("%w: messageRetentionCount must be between 100 and 500000", ErrInvalidInput)
+	}
+	input.SpaceName = strings.TrimSpace(input.SpaceName)
+	return s.repo.UpdateSpacePolicy(ctx, actorID, input, s.now())
+}
+
+func (s *Service) CleanupStaleStorage(ctx context.Context, actorID string) (AdminStorageCleanupResult, error) {
+	if strings.TrimSpace(actorID) == "" {
+		return AdminStorageCleanupResult{}, ErrForbidden
+	}
+	return s.repo.CleanupStaleStorage(ctx, actorID, s.now())
 }
 
 func randomID(prefix string) string {

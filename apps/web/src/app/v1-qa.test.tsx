@@ -21,6 +21,8 @@ import { applyVibrancyTokensToRoot } from "@/shared/theme/vibrancy";
 import { DualLaneCardKit } from "@/widgets/DualLaneCardKit";
 import { PrimaryRail } from "@/widgets/PrimaryRail";
 import { ConversationSidebar } from "@/widgets/ConversationSidebar";
+import { InspectorPane } from "@/widgets/InspectorPane";
+import { SpaceAdminConsole } from "@/widgets/SpaceAdminConsole";
 import { TimelinePane } from "@/widgets/TimelinePane";
 import { BrandLogo, TooltipProvider } from "@/shared/ui";
 
@@ -859,6 +861,81 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
       );
       expect(p2pRailHtml).toContain('data-testid="deck-workspace-unread-dot"');
       expect(p2pRailHtml).toContain(">直连<");
+    } finally {
+      Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);
+      useWorkspaceStore.setState(prevWsInitial);
+      Object.assign(useLaneStore.getInitialState(), prevLaneInitial);
+      useLaneStore.setState(prevLaneInitial);
+    }
+  });
+
+  it("enforces stealth governance: ordinary members see zero admin entry points or privileged peer labels, while owner/admin see SpaceAdminConsole entry", () => {
+    const fixture = buildDevPreviewFixture();
+    const prevWsInitial = { ...useWorkspaceStore.getInitialState() };
+    const prevLaneInitial = { ...useLaneStore.getInitialState() };
+
+    try {
+      // 1. Ordinary member: NO "空间治理台" button on PrimaryRail, NO "空间所有者"/"管理员" peer labels in InspectorPane, and <SpaceAdminConsole /> renders empty
+      const memberLane = {
+        ...prevLaneInitial,
+        activeLane: "workspace" as const,
+        inspectorOpen: true,
+        inspectorTab: "details" as const,
+        adminConsoleOpen: true,
+      };
+      Object.assign(useLaneStore.getInitialState(), memberLane);
+      useLaneStore.setState(memberLane);
+
+      const memberWs = {
+        ...prevWsInitial,
+        isPreviewMode: false,
+        authStatus: "authenticated" as const,
+        currentUser: { id: "usr_member_1", displayName: "普通成员晓明", role: "member" as const },
+        members: {
+          ...fixture.members,
+          usr_member_1: { id: "usr_member_1", displayName: "普通成员晓明", role: "member" as const },
+        },
+        conversations: fixture.conversations,
+        conversationOrder: fixture.conversationOrder,
+        activeConversationId: "conv_arch",
+      };
+      Object.assign(useWorkspaceStore.getInitialState(), memberWs);
+      useWorkspaceStore.setState(memberWs);
+
+      const memberRailHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <PrimaryRail />
+        </TooltipProvider>
+      );
+      expect(memberRailHtml).not.toContain('aria-label="空间治理台"');
+
+      const memberInspectorHtml = renderToStaticMarkup(<InspectorPane />);
+      expect(memberInspectorHtml).toContain(">空间成员<");
+      expect(memberInspectorHtml).not.toContain("空间所有者");
+      expect(memberInspectorHtml).not.toContain(">管理员<");
+
+      const leakedConsoleHtml = renderToStaticMarkup(<SpaceAdminConsole />);
+      expect(leakedConsoleHtml).toBe("");
+
+      // 2. Owner/Admin: sees "空间治理台" entry on PrimaryRail, while everyday InspectorPane STILL avoids flaunting peer hierarchy
+      const ownerWs = {
+        ...memberWs,
+        currentUser: fixture.currentUser, // role: "owner"
+      };
+      Object.assign(useWorkspaceStore.getInitialState(), ownerWs);
+      useWorkspaceStore.setState(ownerWs);
+
+      const ownerRailHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <PrimaryRail />
+        </TooltipProvider>
+      );
+      expect(ownerRailHtml).toContain('aria-label="空间治理台"');
+
+      const ownerInspectorHtml = renderToStaticMarkup(<InspectorPane />);
+      expect(ownerInspectorHtml).toContain(">空间成员<");
+      expect(ownerInspectorHtml).not.toContain("空间所有者");
+      expect(ownerInspectorHtml).not.toContain(">管理员<");
     } finally {
       Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);
       useWorkspaceStore.setState(prevWsInitial);

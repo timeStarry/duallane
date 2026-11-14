@@ -14,10 +14,16 @@ import { PrimaryRail } from "@/widgets/PrimaryRail";
 import { SettingsModal } from "@/widgets/SettingsModal";
 import { TimelinePane } from "@/widgets/TimelinePane";
 
+const SpaceAdminConsole = React.lazy(() =>
+  import("@/widgets/SpaceAdminConsole").then((m) => ({ default: m.SpaceAdminConsole }))
+);
+
 export function AppV1() {
-  const { activeLane, setActiveLane } = useLaneStore();
+  const { activeLane, setActiveLane, adminConsoleOpen } = useLaneStore();
   const {
+    isPreviewMode,
     authStatus,
+    currentUser,
     workspaceAvailability,
     workspaceStatusMessage,
     bootstrapWorkspace,
@@ -25,6 +31,11 @@ export function AppV1() {
     joinP2PRoom,
     createP2PRoom,
   } = useWorkspaceStore();
+
+  const isSpaceManager =
+    isPreviewMode ||
+    (authStatus === "authenticated" &&
+      (currentUser?.role === "owner" || currentUser?.role === "admin"));
 
   const [inviteCode, setInviteCode] = useState(() => {
     const params = new URLSearchParams(window.location.search);
@@ -344,6 +355,11 @@ export function AppV1() {
         <SettingsModal />
         <CommandSearchModal />
         <MediaLightbox />
+        {isSpaceManager && adminConsoleOpen && (
+          <React.Suspense fallback={null}>
+            <SpaceAdminConsole />
+          </React.Suspense>
+        )}
       </main>
     </TooltipProvider>
   );

@@ -668,8 +668,13 @@ func TestMemberJSONPreservesHumanNullAndRoleProjection(t *testing.T) {
 	if value, exists := payload["nickname"]; !exists || value != "Owner Nickname" {
 		t.Fatalf("expected human nickname, got %#v", payload["nickname"])
 	}
-	if payload["role"] != "admin" {
-		t.Fatalf("expected owner role projection as admin, got %#v", payload["role"])
+	if payload["role"] != "member" || payload["roleLabel"] != "成员" {
+		t.Fatalf("expected owner role masked as member for ordinary viewer, got %#v (%#v)", payload["role"], payload["roleLabel"])
+	}
+	adminActor := &auth.Actor{ID: "admin_viewer", Role: "admin"}
+	ownerForAdmin := projectMember(MemberRecord{ID: "owner", GitHubLogin: "owner-login", DisplayName: "Owner", Kind: "human", Role: "owner"}, adminActor)
+	if ownerForAdmin.Role != "admin" {
+		t.Fatalf("expected owner role projection as admin for admin viewer, got %#v", ownerForAdmin.Role)
 	}
 	if payload["displayName"] != "Owner Alias" || payload["githubLogin"] != "owner-login" || payload["remark"] != "Owner Alias" {
 		t.Fatalf("unexpected human other projection: %#v", payload)

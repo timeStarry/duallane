@@ -6,6 +6,7 @@ import {
   QrCode,
   Search,
   Settings,
+  SlidersHorizontal,
   Smartphone,
   User,
 } from "lucide-react";
@@ -25,7 +26,8 @@ import { cn } from "@/shared/lib/cn";
 import { DualLaneDeckSwitch } from "@/widgets/DualLaneDeckSwitch";
 
 export function PrimaryRail() {
-  const { activeLane, mobileView, setActiveLane, setSearchOpen, openSettings } = useLaneStore();
+  const { activeLane, mobileView, setActiveLane, setSearchOpen, openSettings, openAdminConsole } =
+    useLaneStore();
   const {
     isPreviewMode,
     authStatus,
@@ -40,6 +42,9 @@ export function PrimaryRail() {
 
   const isAuthenticated =
     isPreviewMode || (authStatus === "authenticated" && Boolean(currentUser));
+  const isSpaceManager =
+    isAuthenticated &&
+    (isPreviewMode || currentUser?.role === "owner" || currentUser?.role === "admin");
   const [userMenuOpen, setUserMenuOpen] = React.useState(false);
 
   const workspaceUnreadCount = React.useMemo(
@@ -106,6 +111,19 @@ export function PrimaryRail() {
               label="机器人与集成"
             >
               <Bot className="size-[18px]" strokeWidth={1.75} />
+            </IconButton>
+          </Tooltip>
+        )}
+
+        {isSpaceManager && (
+          <Tooltip content="空间治理台" side="right">
+            <IconButton
+              variant="ghost"
+              onClick={() => openAdminConsole("overview")}
+              className="h-9 w-9 rounded-xl max-compact:hidden text-dl-lane-shared hover:bg-dl-lane-shared/12"
+              label="空间治理台"
+            >
+              <SlidersHorizontal className="size-[18px]" strokeWidth={1.75} />
             </IconButton>
           </Tooltip>
         )}
@@ -185,6 +203,20 @@ export function PrimaryRail() {
                     </div>
                   </div>
                   <div className="h-px bg-dl-border-hairline" />
+                  {isSpaceManager && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="w-full justify-start gap-2 text-dl-lane-shared hover:bg-dl-lane-shared/10"
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        openAdminConsole("overview");
+                      }}
+                    >
+                      <SlidersHorizontal className="size-4 shrink-0" strokeWidth={1.8} />
+                      空间治理台
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="sm"

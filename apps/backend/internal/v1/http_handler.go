@@ -50,6 +50,15 @@ func (h *HTTPHandler) Mount(r chi.Router) {
 			r.Put("/bots/{botId}/commands", h.handleRegisterBotCommands)
 			r.Get("/conversations/{conversationId}/bot-commands", h.handleListBotCommands)
 			r.Put("/bots/{botId}/webhook", h.handleUpsertBotWebhook)
+
+			r.Route("/admin", func(r chi.Router) {
+				r.Use(h.requireSpaceManager)
+				r.Get("/overview", h.handleAdminOverview)
+				r.Get("/invites", h.handleAdminListInvites)
+				r.Get("/audit-logs", h.handleAdminListAuditLogs)
+				r.Patch("/policy", h.handleAdminUpdatePolicy)
+				r.Post("/storage/cleanup", h.handleAdminStorageCleanup)
+			})
 		})
 	})
 }
@@ -334,6 +343,74 @@ func (h *HTTPHandler) handleUpsertBotWebhook(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, cfg)
+}
+
+func (h *HTTPHandler) requireSpaceManager(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		actor := actorFromContext(r.Context())
+		if actor == nil || (actor.Role != "owner" && actor.Role != "admin") {
+			writeJSONError(w, http.StatusForbidden, "v1.forbidden", "无权限访问空间治理接口")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (h *HTTPHandler) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
+	overview, err := h.service.GetAdminOverview(r.Context(), actorFromContext(r.Context()).ID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, overview)
+}
+
+func (h *HTTPHandler) handleAdminListInvites(w http.ResponseWriter, r *http.Request) {
+	invites, err := h.service.ListAdminInvites(r.Context(), actorFromContext(r.Context()).ID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, invites)
+}
+
+func (h *HTTPHandler) handleAdminListAuditLogs(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	items, err := h.service.ListAdminAuditLogs(
+		r.Context(),
+		actorFromContext(r.Context()).ID,
+		r.URL.Query().Get("result"),
+		r.URL.Query().Get("q"),
+		limit,
+	)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *HTTPHandler) handleAdminUpdatePolicy(w http.ResponseWriter, r *http.Request) {
+	var body AdminPolicyUpdateInput
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.bad_json", "请求格式无效")
+		return
+	}
+	policy, err := h.service.UpdateSpacePolicy(r.Context(), actorFromContext(r.Context()).ID, body)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"policy": policy})
+}
+
+func (h *HTTPHandler) handleAdminStorageCleanup(w http.ResponseWriter, r *http.Request) {
+	result, err := h.service.CleanupStaleStorage(r.Context(), actorFromContext(r.Context()).ID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func writeServiceError(w http.ResponseWriter, err error) {
