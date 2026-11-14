@@ -253,6 +253,28 @@ test.describe("DualLane v1.0 P2P Direct Lane, File Transfer, 320px Responsive, A
       await pageA.keyboard.press("Escape");
       await expect(searchDialog).toBeHidden();
 
+      // Verify Guest Personal Settings & User Menu do NOT expose empty ID/Role or Logout buttons
+      await pageA.getByRole("button", { name: "设置中心" }).click();
+      const guestSettingsDialog = pageA.getByRole("dialog", { name: "DualLane 设置中心" });
+      await expect(guestSettingsDialog).toBeVisible();
+      await expect(guestSettingsDialog.getByRole("button", { name: "设备" })).toHaveCount(0);
+      await expect(guestSettingsDialog.getByRole("button", { name: "扫码" })).toHaveCount(0);
+      await expect(guestSettingsDialog.getByRole("button", { name: "机器人" })).toHaveCount(0);
+
+      await guestSettingsDialog.getByRole("button", { name: "个人" }).click();
+      await expect(guestSettingsDialog).toContainText("免登录访客");
+      await expect(guestSettingsDialog.getByRole("button", { name: "前往登录共享空间" })).toBeVisible();
+      await expect(guestSettingsDialog).not.toContainText("ID:");
+      await expect(guestSettingsDialog).not.toContainText("角色:");
+      await expect(guestSettingsDialog.getByRole("button", { name: "退出登录" })).toHaveCount(0);
+      await pageA.keyboard.press("Escape");
+      await expect(guestSettingsDialog).toBeHidden();
+
+      await pageA.getByRole("button", { name: "个人菜单" }).click();
+      await expect(pageA.getByText("私密直连模式")).toBeVisible();
+      await expect(pageA.getByRole("button", { name: "退出当前账号" })).toHaveCount(0);
+      await pageA.keyboard.press("Escape");
+
       // 5. Browser B joins via encrypted #k= share link
       await pageB.goto(shareUrl);
       const peerStatusB = pageB.getByTestId("p2p-peer-status");

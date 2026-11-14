@@ -56,6 +56,7 @@ export interface V1Message {
   id: string;
   clientMessageId?: string;
   conversationId: string;
+  kind?: "user" | "bot" | "system";
   senderId: string;
   senderName: string;
   plainText: string;
@@ -241,12 +242,16 @@ function mapRawMessage(
     string,
     unknown
   >;
+  const rawKind = typeof m.kind === "string" ? m.kind : undefined;
+  const kind: V1Message["kind"] =
+    rawKind === "system" ? "system" : rawKind === "bot" ? "bot" : "user";
   const senderId = String(m.authorId || m.senderId || authorObj.id || "");
   const id = String(m.id || "");
   return {
     id,
     clientMessageId: m.clientMessageId ? String(m.clientMessageId) : undefined,
     conversationId,
+    kind,
     senderId,
     senderName:
       members[senderId]?.displayName ||
@@ -257,7 +262,7 @@ function mapRawMessage(
           m.authorDisplayName ||
           authorObj.displayName ||
           m.senderName ||
-          "成员"
+          (kind === "system" ? "系统通知" : "成员")
       ),
     plainText: String(m.plainText || m.text || ""),
     replyToId: m.replyToMessageId
@@ -636,7 +641,35 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                   ? String(c.lastMessageAt)
                   : prev?.lastMessageAt,
               };
+
+              let nextMessagesByConv = s.messagesByConv;
+              if (Array.isArray(c.latestMessages) && c.latestMessages.length > 0) {
+                const incoming = (c.latestMessages as Array<Record<string, unknown>>)
+                  .filter((m) => Boolean(m && m.id))
+                  .map((m) => mapRawMessage(convId, m, s.members));
+                const existing = s.messagesByConv[convId] || [];
+                if (existing.length === 0) {
+                  nextMessagesByConv = { ...s.messagesByConv, [convId]: incoming };
+                } else {
+                  const merged = [...existing];
+                  for (const msg of incoming) {
+                    const idx = merged.findIndex(
+                      (item) =>
+                        item.id === msg.id ||
+                        (msg.clientMessageId && item.clientMessageId === msg.clientMessageId)
+                    );
+                    if (idx >= 0) {
+                      merged[idx] = { ...msg, status: "read" as const };
+                    } else {
+                      merged.push(msg);
+                    }
+                  }
+                  nextMessagesByConv = { ...s.messagesByConv, [convId]: merged };
+                }
+              }
+
               return {
+                messagesByConv: nextMessagesByConv,
                 conversations: { ...s.conversations, [convId]: nextConv },
                 conversationOrder: exists
                   ? s.conversationOrder
@@ -653,6 +686,17 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             );
             if (!convId || !rawMsg.id) return;
             const mapped = mapRawMessage(convId, rawMsg, get().members);
+            const convPayload =
+              payload.conversation && typeof payload.conversation === "object"
+                ? (payload.conversation as Record<string, unknown>)
+                : undefined;
+            const serverUnread =
+              typeof convPayload?.unreadCount === "number"
+                ? convPayload.unreadCount
+                : undefined;
+            const isSystemMessage =
+              mapped.kind === "system" || String(rawMsg.kind || "") === "system";
+
             set((s) => {
               const existing = s.messagesByConv[convId] || [];
               const matchIndex = existing.findIndex(
@@ -660,34 +704,39 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                   item.id === mapped.id ||
                   (mapped.clientMessageId && item.clientMessageId === mapped.clientMessageId)
               );
-              const nextList =
-                matchIndex >= 0
-                  ? existing.map((item, idx) =>
-                      idx === matchIndex ? { ...mapped, status: "read" as const } : item
-                    )
-                  : [...existing, mapped];
+              const alreadyExisted = matchIndex >= 0;
+              const nextList = alreadyExisted
+                ? existing.map((item, idx) =>
+                    idx === matchIndex ? { ...mapped, status: "read" as const } : item
+                  )
+                : [...existing, mapped];
 
               const prevConv = s.conversations[convId];
-              const isOwn = mapped.senderId === s.currentUser?.id;
+              const isOwn = Boolean(s.currentUser?.id && mapped.senderId === s.currentUser.id);
               const isActive = convId === s.activeConversationId;
+              const baseUnread = prevConv?.unreadCount || 0;
+              const nextUnreadCount = isActive
+                ? 0
+                : typeof serverUnread === "number"
+                ? serverUnread
+                : evType === "message.created" && !alreadyExisted && !isOwn && !isSystemMessage
+                ? baseUnread + 1
+                : baseUnread;
+
               const nextConv: V1Conversation = prevConv
                 ? {
                     ...prevConv,
                     lastMessageText: mapped.plainText,
                     lastMessageAt: mapped.createdAt,
-                    unreadCount:
-                      isActive || isOwn ? prevConv.unreadCount : prevConv.unreadCount + 1,
+                    unreadCount: nextUnreadCount,
                   }
                 : {
                     id: convId,
                     kind: "group",
                     title: String(
-                      (payload.conversation as Record<string, unknown> | undefined)
-                        ?.displayTitle ||
-                        (payload.conversation as Record<string, unknown> | undefined)?.title ||
-                        "新对话"
+                      convPayload?.displayTitle || convPayload?.title || "新对话"
                     ),
-                    unreadCount: isActive || isOwn ? 0 : 1,
+                    unreadCount: nextUnreadCount,
                     mentionCount: 0,
                     pinnedMessageIds: [],
                     memberIds: [],

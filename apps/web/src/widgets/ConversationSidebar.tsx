@@ -307,7 +307,10 @@ export function ConversationSidebar() {
                         </span>
                       )}
                       {conv.unreadCount > 0 && (
-                        <span className="inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-dl-lane-shared px-1.5 text-[10px] font-semibold text-dl-on-shared tabular-nums">
+                        <span
+                          data-testid="unread-badge"
+                          className="inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-dl-lane-shared px-1.5 text-[10px] font-semibold text-dl-on-shared tabular-nums"
+                        >
                           {conv.unreadCount}
                         </span>
                       )}

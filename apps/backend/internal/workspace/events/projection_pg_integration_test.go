@@ -80,11 +80,11 @@ func TestPGConversationProjectionCarriesViewerReadState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertConversationReadState(t, initial, int64(2), nil, nil, nil)
+	assertConversationReadState(t, initial, int64(1), nil, nil, nil)
 
 	service := NewService(ServiceOptions{Repository: repository, BatchSize: 100, ReplayLimit: 100})
 	initialEvent := replayConversationProjection(t, ctx, service, conversationID)
-	assertConversationReadState(t, initialEvent, int64(2), nil, nil, nil)
+	assertConversationReadState(t, initialEvent, int64(1), nil, nil, nil)
 	assertConversationReadParity(t, initial, initialEvent)
 
 	readAt := now.Add(time.Second).UTC().Truncate(time.Millisecond)

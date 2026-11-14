@@ -124,14 +124,57 @@ func (r *PGRepository) Search(ctx context.Context, actorID, query, scope string,
 
 	if scope == "all" || scope == "files" {
 		rows, err := r.pool.Query(ctx, `
-			SELECT a.id, a.file_name, a.mime_type, a.byte_size, coalesce(a.conversation_id, ''), coalesce(a.source_message_id, ''), a.width, a.height, coalesce(a.thumb_hash, ''), a.created_at
+			SELECT
+				a.id,
+				a.file_name,
+				a.mime_type,
+				a.byte_size,
+				coalesce(direct_src.conversation_id, linked_msg.conversation_id, a.conversation_id, ''),
+				coalesce(direct_src.id, linked_msg.message_id, ''),
+				a.width,
+				a.height,
+				coalesce(a.thumb_hash, ''),
+				a.created_at
 			FROM attachments a
+			LEFT JOIN messages direct_src
+				ON a.source_message_id IS NOT NULL
+				AND direct_src.id = a.source_message_id
+				AND direct_src.space_id = a.space_id
+				AND direct_src.topic_id IS NULL
+				AND direct_src.deleted_at IS NULL
+				AND direct_src.recalled_at IS NULL
+				AND EXISTS (
+					SELECT 1 FROM conversation_members dcm
+					WHERE dcm.conversation_id = direct_src.conversation_id
+					  AND dcm.user_id = $3
+					  AND dcm.removed_at IS NULL
+				)
+			LEFT JOIN LATERAL (
+				SELECT m.id AS message_id, m.conversation_id AS conversation_id
+				FROM message_attachments ma
+				INNER JOIN messages m ON m.id = ma.message_id
+				INNER JOIN conversation_members mcm
+					ON mcm.conversation_id = m.conversation_id
+					AND mcm.user_id = $3
+					AND mcm.removed_at IS NULL
+				WHERE ma.attachment_id = a.id
+				  AND m.space_id = a.space_id
+				  AND m.topic_id IS NULL
+				  AND m.deleted_at IS NULL
+				  AND m.recalled_at IS NULL
+				ORDER BY
+					CASE WHEN a.conversation_id IS NOT NULL AND m.conversation_id = a.conversation_id THEN 0 ELSE 1 END,
+					m.created_at DESC,
+					m.id DESC
+				LIMIT 1
+			) linked_msg ON TRUE
 			WHERE a.space_id = $1
 			  AND a.status = 'available'
 			  AND a.file_name ILIKE $2
 			  AND (
 				a.visibility = 'space'
 				OR a.uploader_id = $3
+				OR linked_msg.message_id IS NOT NULL
 				OR (a.conversation_id IS NOT NULL AND EXISTS (
 					SELECT 1 FROM conversation_members cm
 					WHERE cm.conversation_id = a.conversation_id AND cm.user_id = $3 AND cm.removed_at IS NULL

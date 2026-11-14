@@ -1,5 +1,16 @@
 import React, { useEffect, useState } from "react";
-import { Bot, Check, Copy, Palette, Plus, QrCode, Smartphone, User } from "lucide-react";
+import {
+  Bot,
+  Building2,
+  Check,
+  Copy,
+  Palette,
+  Plus,
+  QrCode,
+  ShieldCheck,
+  Smartphone,
+  User,
+} from "lucide-react";
 import type { AccentId, ThemePreference } from "@duallane/design-tokens";
 import type { UserDeviceSummary } from "@duallane/protocol";
 import { useLaneStore, type SettingsTab } from "@/entities/lane/store";
@@ -37,7 +48,8 @@ const ACCENTS: Array<{ id: AccentId; label: string }> = [
 ];
 
 export function SettingsModal() {
-  const { settingsOpen, closeSettings, settingsTab, setSettingsTab } = useLaneStore();
+  const { settingsOpen, closeSettings, settingsTab, setSettingsTab, setActiveLane } =
+    useLaneStore();
   const {
     preference,
     accent,
@@ -48,7 +60,13 @@ export function SettingsModal() {
     setTransparency,
     setReducedMotion,
   } = useThemeStore();
-  const { isPreviewMode, currentUser, logout } = useWorkspaceStore();
+  const { isPreviewMode, authStatus, currentUser, logout } = useWorkspaceStore();
+
+  const isAuthenticated =
+    isPreviewMode || (authStatus === "authenticated" && Boolean(currentUser));
+  const visibleTabs = isAuthenticated
+    ? TABS
+    : TABS.filter((tab) => tab.id === "appearance" || tab.id === "profile");
 
   const [devices, setDevices] = useState<UserDeviceSummary[]>(() =>
     isPreviewMode
@@ -103,7 +121,13 @@ export function SettingsModal() {
   };
 
   useEffect(() => {
-    if (!settingsOpen || settingsTab !== "devices" || isPreviewMode) return;
+    if (!isAuthenticated && settingsTab !== "appearance" && settingsTab !== "profile") {
+      setSettingsTab("profile");
+    }
+  }, [isAuthenticated, settingsTab, setSettingsTab]);
+
+  useEffect(() => {
+    if (!settingsOpen || settingsTab !== "devices" || isPreviewMode || !isAuthenticated) return;
     let active = true;
     void apiV1
       .listDevices()
@@ -114,7 +138,7 @@ export function SettingsModal() {
     return () => {
       active = false;
     };
-  }, [isPreviewMode, settingsOpen, settingsTab]);
+  }, [isAuthenticated, isPreviewMode, settingsOpen, settingsTab]);
 
   const handleGenerateQR = async () => {
     setQrApproved(false);
@@ -165,7 +189,7 @@ export function SettingsModal() {
             aria-label="设置分类"
             className="w-36 max-compact:w-full shrink-0 max-compact:flex max-compact:flex-wrap max-compact:overflow-x-auto space-y-1 max-compact:space-y-0 max-compact:gap-1 border-r max-compact:border-r-0 max-compact:border-b border-dl-border-hairline pr-3 max-compact:pr-0 max-compact:pb-2.5"
           >
-            {TABS.map((tab) => {
+            {visibleTabs.map((tab) => {
               const Icon = tab.icon;
               return (
                 <Button
@@ -236,87 +260,128 @@ export function SettingsModal() {
               </div>
             )}
 
-            {settingsTab === "profile" && (
-              <div className="space-y-4">
-                <div className="rounded-2xl border border-dl-border-hairline p-4 space-y-1">
-                  <div className="text-sm font-semibold text-dl-text-primary">
-                    {currentUser?.displayName || "当前成员"}
-                  </div>
-                  <div className="text-xs text-dl-text-tertiary">
-                    ID: {currentUser?.id} · 角色: {currentUser?.role}
-                  </div>
-                </div>
-
-                {canManageInvites && (
-                  <div className="rounded-2xl border border-dl-border-hairline p-4 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-dl-text-primary">
-                          空间成员邀请码
-                        </div>
-                        <div className="text-xs text-dl-text-tertiary mt-0.5">
-                          生成一次性或多用途邀请链接，供新成员加入共享空间
-                        </div>
-                      </div>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        busy={creatingInvite}
-                        className="gap-1.5 shrink-0"
-                        onClick={() => void handleCreateInvite()}
-                      >
-                        <Plus className="size-3.5" strokeWidth={2} />
-                        生成邀请码
-                      </Button>
+            {settingsTab === "profile" &&
+              (isAuthenticated && currentUser ? (
+                <div className="space-y-4">
+                  <div className="rounded-2xl border border-dl-border-hairline p-4 space-y-1">
+                    <div className="text-sm font-semibold text-dl-text-primary">
+                      {currentUser.displayName || "当前成员"}
                     </div>
+                    <div className="text-xs text-dl-text-tertiary">
+                      ID: {currentUser.id} · 角色:{" "}
+                      {currentUser.role === "owner"
+                        ? "空间所有者"
+                        : currentUser.role === "admin"
+                        ? "空间管理员"
+                        : "空间成员"}
+                    </div>
+                  </div>
 
-                    {inviteError && (
-                      <div className="text-xs text-dl-danger">{inviteError}</div>
-                    )}
-
-                    {generatedInviteCode && (
-                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-dl-surface-subtle p-2.5">
-                        <code
-                          data-testid="generated-invite-code"
-                          className="text-xs font-mono font-semibold text-dl-text-primary select-all break-all"
-                        >
-                          {generatedInviteCode}
-                        </code>
+                  {canManageInvites && (
+                    <div className="rounded-2xl border border-dl-border-hairline p-4 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-dl-text-primary">
+                            空间成员邀请码
+                          </div>
+                          <div className="text-xs text-dl-text-tertiary mt-0.5">
+                            生成一次性或多用途邀请链接，供新成员加入共享空间
+                          </div>
+                        </div>
                         <Button
                           size="sm"
-                          variant="ghost"
-                          className="h-7 gap-1 shrink-0 text-xs"
-                          onClick={() => {
-                            const url = `${window.location.origin}/?invite=${encodeURIComponent(generatedInviteCode)}`;
-                            void navigator.clipboard?.writeText(url);
-                            setCopiedInvite(true);
-                            setTimeout(() => setCopiedInvite(false), 1800);
-                          }}
+                          variant="secondary"
+                          busy={creatingInvite}
+                          className="gap-1.5 shrink-0"
+                          onClick={() => void handleCreateInvite()}
                         >
-                          {copiedInvite ? (
-                            <>
-                              <Check className="size-3.5 text-dl-success" strokeWidth={2} />
-                              已复制邀请链接
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="size-3.5" strokeWidth={1.8} />
-                              复制邀请链接
-                            </>
-                          )}
+                          <Plus className="size-3.5" strokeWidth={2} />
+                          生成邀请码
                         </Button>
                       </div>
-                    )}
+
+                      {inviteError && (
+                        <div className="text-xs text-dl-danger">{inviteError}</div>
+                      )}
+
+                      {generatedInviteCode && (
+                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-dl-surface-subtle p-2.5">
+                          <code
+                            data-testid="generated-invite-code"
+                            className="text-xs font-mono font-semibold text-dl-text-primary select-all break-all"
+                          >
+                            {generatedInviteCode}
+                          </code>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 gap-1 shrink-0 text-xs"
+                            onClick={() => {
+                              const url = `${window.location.origin}/?invite=${encodeURIComponent(generatedInviteCode)}`;
+                              void navigator.clipboard?.writeText(url);
+                              setCopiedInvite(true);
+                              setTimeout(() => setCopiedInvite(false), 1800);
+                            }}
+                          >
+                            {copiedInvite ? (
+                              <>
+                                <Check className="size-3.5 text-dl-success" strokeWidth={2} />
+                                已复制邀请链接
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="size-3.5" strokeWidth={1.8} />
+                                复制邀请链接
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <Button variant="danger" size="sm" onClick={() => void logout()}>
+                    退出登录
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="rounded-2xl border border-dl-border-hairline p-4 space-y-2.5">
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-dl-lane-direct/15 text-dl-lane-direct">
+                        <ShieldCheck className="size-4" strokeWidth={1.9} />
+                      </span>
+                      <div>
+                        <div className="text-sm font-semibold text-dl-text-primary">
+                          免登录访客
+                        </div>
+                        <div className="text-xs text-dl-text-tertiary">
+                          当前处于私密直连访客模式，未绑定共享空间账号
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-xs leading-relaxed text-dl-text-secondary">
+                      私密直连支持免登录端到端加密通信，不持久保存个人身份或会话历史。如需查看成员身份、管理多端设备或使用空间机器人，请登录共享空间。
+                    </p>
+                    <div>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        className="gap-1.5"
+                        onClick={() => {
+                          closeSettings();
+                          setActiveLane("workspace");
+                        }}
+                      >
+                        <Building2 className="size-3.5" strokeWidth={1.85} />
+                        前往登录共享空间
+                      </Button>
+                    </div>
                   </div>
-                )}
+                </div>
+              ))}
 
-                <Button variant="danger" size="sm" onClick={() => void logout()}>
-                  退出登录
-                </Button>
-              </div>
-            )}
-
-            {settingsTab === "devices" && (
+            {isAuthenticated && settingsTab === "devices" && (
               <div className="space-y-3">
                 <div className="text-sm font-semibold text-dl-text-primary">活跃设备与会话</div>
                 {devices.length === 0 ? (
@@ -357,7 +422,7 @@ export function SettingsModal() {
               </div>
             )}
 
-            {settingsTab === "qr" && (
+            {isAuthenticated && settingsTab === "qr" && (
               <div className="space-y-4">
                 <div>
                   <div className="text-sm font-semibold text-dl-text-primary">移动端扫码登录</div>
@@ -391,7 +456,7 @@ export function SettingsModal() {
               </div>
             )}
 
-            {settingsTab === "bots" && <BotSettingsPanel />}
+            {isAuthenticated && settingsTab === "bots" && <BotSettingsPanel />}
           </div>
         </div>
       </DialogContent>

@@ -569,4 +569,226 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
     expect(monoHtml).toContain('fill="currentColor"');
     expect(monoHtml).not.toContain("<linearGradient");
   });
+
+  it("excludes system messages and duplicate projections from unread badges during group creation and recall", async () => {
+    const prevWsInitial = { ...useWorkspaceStore.getInitialState() };
+    const origWindow = globalThis.window;
+    const origWebSocket = globalThis.WebSocket;
+
+    class FakeWorkspaceSocket {
+      static instances: FakeWorkspaceSocket[] = [];
+      private listeners: Record<string, Array<(ev: { data: string }) => void>> = {};
+      url: string;
+      constructor(url: string) {
+        this.url = url;
+        FakeWorkspaceSocket.instances.push(this);
+      }
+      addEventListener(type: string, cb: (ev: { data: string }) => void) {
+        this.listeners[type] = this.listeners[type] || [];
+        this.listeners[type]!.push(cb);
+      }
+      send() {}
+      close() {}
+      emitFrame(frame: unknown) {
+        const data = JSON.stringify(frame);
+        for (const cb of this.listeners.message || []) {
+          cb({ data });
+        }
+      }
+    }
+
+    vi.spyOn(apiV1, "getBootstrap").mockResolvedValue({
+      auth: {
+        enabled: true,
+        currentUser: { id: "usr_member_b", nickname: "晓明", role: "member" },
+      },
+      members: [
+        { id: "usr_owner_a", nickname: "群主", role: "owner" },
+        { id: "usr_member_b", nickname: "晓明", role: "member" },
+      ],
+      conversations: [
+        { id: "conv_saved_b", type: "saved", title: "个人空间", unreadCount: 0 },
+      ],
+      eventCursor: 10,
+    });
+
+    try {
+      (globalThis as unknown as { window: unknown }).window = {
+        location: { protocol: "http:", host: "127.0.0.1:5173", search: "" },
+      };
+      (globalThis as unknown as { WebSocket: unknown }).WebSocket = FakeWorkspaceSocket;
+
+      await useWorkspaceStore.getState().bootstrapWorkspace();
+      const ws = FakeWorkspaceSocket.instances.at(-1)!;
+      expect(ws).toBeTruthy();
+
+      // 1. Owner creates group: conversation.created + message.created(system) arrive in same batch
+      ws.emitFrame({
+        type: "event",
+        event: {
+          seq: 11,
+          type: "conversation.created",
+          conversationId: "conv_new_grp",
+          payload: {
+            conversation: {
+              id: "conv_new_grp",
+              type: "group",
+              title: "新群未读测试",
+              unreadCount: 0,
+              latestMessages: [
+                {
+                  id: "msg_sys_1",
+                  conversationId: "conv_new_grp",
+                  kind: "system",
+                  plainText: "群主 创建了群聊「新群未读测试」",
+                  createdAt: "2026-11-14T05:00:00Z",
+                },
+              ],
+            },
+          },
+        },
+      });
+      ws.emitFrame({
+        type: "event",
+        event: {
+          seq: 12,
+          type: "message.created",
+          conversationId: "conv_new_grp",
+          payload: {
+            conversationId: "conv_new_grp",
+            message: {
+              id: "msg_sys_1",
+              conversationId: "conv_new_grp",
+              kind: "system",
+              plainText: "群主 创建了群聊「新群未读测试」",
+              createdAt: "2026-11-14T05:00:00Z",
+            },
+            conversation: {
+              id: "conv_new_grp",
+              type: "group",
+              title: "新群未读测试",
+              unreadCount: 0,
+            },
+          },
+        },
+      });
+
+      expect(useWorkspaceStore.getState().conversations["conv_new_grp"]?.unreadCount).toBe(0);
+      expect(useWorkspaceStore.getState().messagesByConv["conv_new_grp"]).toHaveLength(1);
+
+      // 2. Owner sends 1 human message -> 2 visible rows (1 system + 1 user), unreadCount MUST be 1 (not 3!)
+      ws.emitFrame({
+        type: "event",
+        event: {
+          seq: 13,
+          type: "message.created",
+          conversationId: "conv_new_grp",
+          payload: {
+            conversationId: "conv_new_grp",
+            message: {
+              id: "msg_user_1",
+              conversationId: "conv_new_grp",
+              kind: "user",
+              authorId: "usr_owner_a",
+              authorName: "群主",
+              plainText: "第一条真实群消息",
+              createdAt: "2026-11-14T05:00:05Z",
+            },
+            conversation: {
+              id: "conv_new_grp",
+              type: "group",
+              title: "新群未读测试",
+              unreadCount: 1,
+            },
+          },
+        },
+      });
+
+      expect(useWorkspaceStore.getState().messagesByConv["conv_new_grp"]).toHaveLength(2);
+      expect(useWorkspaceStore.getState().conversations["conv_new_grp"]?.unreadCount).toBe(1);
+
+      // 3. Even without server conversation payload, system messages and recalls never inflate unreadCount
+      ws.emitFrame({
+        type: "event",
+        event: {
+          seq: 14,
+          type: "message.created",
+          conversationId: "conv_new_grp",
+          payload: {
+            conversationId: "conv_new_grp",
+            message: {
+              id: "msg_sys_2",
+              conversationId: "conv_new_grp",
+              kind: "system",
+              plainText: "群主 修改了群名称",
+              createdAt: "2026-11-14T05:00:08Z",
+            },
+          },
+        },
+      });
+      expect(useWorkspaceStore.getState().conversations["conv_new_grp"]?.unreadCount).toBe(1);
+
+      ws.emitFrame({
+        type: "event",
+        event: {
+          seq: 15,
+          type: "message.recalled",
+          conversationId: "conv_new_grp",
+          payload: {
+            conversationId: "conv_new_grp",
+            message: {
+              id: "msg_user_1",
+              conversationId: "conv_new_grp",
+              kind: "user",
+              authorId: "usr_owner_a",
+              plainText: "消息已撤回",
+              createdAt: "2026-11-14T05:00:05Z",
+            },
+          },
+        },
+      });
+      expect(useWorkspaceStore.getState().conversations["conv_new_grp"]?.unreadCount).toBe(1);
+    } finally {
+      vi.restoreAllMocks();
+      (globalThis as unknown as { window: unknown }).window = origWindow;
+      (globalThis as unknown as { WebSocket: unknown }).WebSocket = origWebSocket;
+      Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);
+      useWorkspaceStore.setState(prevWsInitial);
+    }
+  });
+
+  it("hides Workspace-only rail controls and quota pill when browsing as an unauthenticated P2P guest", () => {
+    const prevWsInitial = { ...useWorkspaceStore.getInitialState() };
+    const prevLaneInitial = { ...useLaneStore.getInitialState() };
+
+    try {
+      const guestLane = { ...prevLaneInitial, activeLane: "p2p" as const };
+      Object.assign(useLaneStore.getInitialState(), guestLane);
+      useLaneStore.setState(guestLane);
+
+      const guestWs = {
+        ...prevWsInitial,
+        isPreviewMode: false,
+        authStatus: "unauthenticated" as const,
+        currentUser: null,
+        connectionStatus: "offline" as const,
+      };
+      Object.assign(useWorkspaceStore.getInitialState(), guestWs);
+      useWorkspaceStore.setState(guestWs);
+
+      const railHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <PrimaryRail />
+        </TooltipProvider>
+      );
+      expect(railHtml).not.toContain('aria-label="机器人与集成"');
+      expect(railHtml).not.toContain(">0%<");
+      expect(railHtml).toContain(">访<");
+    } finally {
+      Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);
+      useWorkspaceStore.setState(prevWsInitial);
+      Object.assign(useLaneStore.getInitialState(), prevLaneInitial);
+      useLaneStore.setState(prevLaneInitial);
+    }
+  });
 });

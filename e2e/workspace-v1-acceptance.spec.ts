@@ -13,6 +13,39 @@ function buildWorkspacePngBuffer(): Buffer {
 async function assertNarrowWorkspaceNoOverlap(page: Page, label: string) {
   const audit = await page.evaluate(() => {
     const scrollWidth = document.documentElement.scrollWidth;
+    function getClippedRect(el: HTMLElement) {
+      const raw = el.getBoundingClientRect();
+      let left = raw.left;
+      let top = raw.top;
+      let right = raw.right;
+      let bottom = raw.bottom;
+      let parent = el.parentElement;
+      while (parent && parent !== document.documentElement) {
+        const ps = window.getComputedStyle(parent);
+        if (ps.overflowX !== "visible" || ps.overflowY !== "visible") {
+          const pr = parent.getBoundingClientRect();
+          if (ps.overflowX !== "visible") {
+            left = Math.max(left, pr.left);
+            right = Math.min(right, pr.right);
+          }
+          if (ps.overflowY !== "visible") {
+            top = Math.max(top, pr.top);
+            bottom = Math.min(bottom, pr.bottom);
+          }
+        }
+        parent = parent.parentElement;
+      }
+      return {
+        raw,
+        left,
+        top,
+        right,
+        bottom,
+        width: Math.max(0, right - left),
+        height: Math.max(0, bottom - top),
+      };
+    }
+
     const interactive = Array.from(
       document.querySelectorAll<HTMLElement>(
         'button, input:not([type="hidden"]), textarea, [role="switch"], [role="combobox"]'
@@ -31,13 +64,13 @@ async function assertNarrowWorkspaceNoOverlap(page: Page, label: string) {
         }
         cur = cur.parentElement;
       }
-      const r = el.getBoundingClientRect();
+      const r = getClippedRect(el);
       return r.width > 0 && r.height > 0;
     });
 
     const outOfBounds: string[] = [];
     const rects = interactive.map((el) => {
-      const r = el.getBoundingClientRect();
+      const r = getClippedRect(el);
       const desc = `${el.tagName.toLowerCase()}[${el.getAttribute("aria-label") || el.textContent?.trim().slice(0, 18) || ""}]`;
       if (r.left < -1 || r.right > 321) {
         outOfBounds.push(`${desc}: left=${r.left.toFixed(1)}, right=${r.right.toFixed(1)}`);
@@ -140,14 +173,19 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320
 
       await pageOwner.getByRole("button", { name: /v1\.0 双端实时验收群/ }).click();
 
+      // Member B sees the newly created group immediately; creation system notice MUST NOT inflate unread badge!
       const memberGroupBtn = pageMember.getByRole("button", { name: /v1\.0 双端实时验收群/ });
       await expect(memberGroupBtn).toBeVisible();
-      await memberGroupBtn.click();
+      await expect(memberGroupBtn.getByTestId("unread-badge")).toHaveCount(0);
 
-      // 5. Bidirectional real-time text delivery
+      // 5. Bidirectional real-time text delivery + accurate unread badge count (1 chat msg + 1 system msg => badge 1, NOT 3!)
       const ownerComposer = pageOwner.getByPlaceholder("发送消息到 v1.0 双端实时验收群…");
       await ownerComposer.fill("共享空间双端实时送达验收通过 2026");
       await ownerComposer.press("Enter");
+
+      await expect(memberGroupBtn.getByTestId("unread-badge")).toHaveText("1");
+      await memberGroupBtn.click();
+      await expect(memberGroupBtn.getByTestId("unread-badge")).toHaveCount(0);
 
       await expect(
         pageMember.locator("section").getByText("共享空间双端实时送达验收通过 2026")
@@ -222,9 +260,16 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320
 
       await searchDialog.getByPlaceholder("输入关键词、文件名或指令…").fill("release-checklist");
       await expect(searchDialog).toContainText("文件与媒体");
-      await searchDialog.getByRole("button", { name: /release-checklist\.pdf/ }).click();
+      const fileHitBtn = searchDialog.getByRole("button", { name: /release-checklist\.pdf/ });
+      await expect(fileHitBtn).toBeEnabled();
+      await expect(fileHitBtn).toContainText("定位原消息");
+      await expect(fileHitBtn).not.toContainText("无来源");
+      await fileHitBtn.click();
       await expect(searchDialog).toBeHidden();
       await expect(pageOwner.getByRole("heading", { name: "v1.0 双端实时验收群" })).toBeVisible();
+      await expect(
+        pageOwner.getByRole("button", { name: "查看附件 release-checklist.pdf" })
+      ).toBeVisible();
 
       // 8. Resize Member B to 320x568 ultra-narrow viewport and verify Shared Workspace responsive layout!
       await pageMember.setViewportSize({ width: 320, height: 568 });

@@ -819,7 +819,7 @@ const conversationSelect = `SELECT
 	c.created_at, COALESCE(MAX(m.created_at), c.created_at) AS last_activity_at,
 	COUNT(m.id) FILTER (WHERE m.deleted_at IS NULL AND m.topic_id IS NULL) AS message_count,
 	cm.last_read_message_id, cm.last_read_at, cm.last_read_seq, cm.notification_level,
-	COUNT(m.id) FILTER (WHERE m.deleted_at IS NULL AND m.topic_id IS NULL AND (m.author_id IS NULL OR m.author_id <> cm.user_id)
+	COUNT(m.id) FILTER (WHERE m.deleted_at IS NULL AND m.topic_id IS NULL AND m.kind <> 'system' AND (m.author_id IS NULL OR m.author_id <> cm.user_id)
 		AND ((cm.last_read_seq IS NOT NULL AND EXISTS (SELECT 1 FROM workspace_events we WHERE we.space_id = c.space_id AND we.type = 'message.created' AND we.target_id = m.id AND we.seq > cm.last_read_seq))
 			OR (cm.last_read_seq IS NULL AND (cm.last_read_at IS NULL OR m.created_at > cm.last_read_at)))) AS unread_count
 FROM conversations c

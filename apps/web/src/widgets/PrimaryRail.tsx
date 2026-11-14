@@ -28,6 +28,8 @@ import { cn } from "@/shared/lib/cn";
 export function PrimaryRail() {
   const { activeLane, mobileView, setActiveLane, setSearchOpen, openSettings } = useLaneStore();
   const {
+    isPreviewMode,
+    authStatus,
     currentUser,
     connectionStatus,
     quotaUsedBytes,
@@ -35,6 +37,10 @@ export function PrimaryRail() {
     p2pRoom,
     logout,
   } = useWorkspaceStore();
+
+  const isAuthenticated =
+    isPreviewMode || (authStatus === "authenticated" && Boolean(currentUser));
+  const [userMenuOpen, setUserMenuOpen] = React.useState(false);
 
   const quotaPct = Math.min(
     100,
@@ -138,46 +144,50 @@ export function PrimaryRail() {
           </IconButton>
         </Tooltip>
 
-        <Tooltip content="机器人与集成" side="right">
-          <IconButton
-            variant="ghost"
-            onClick={() => openSettings("bots")}
-            className="h-9 w-9 rounded-xl max-compact:hidden"
-            label="机器人与集成"
-          >
-            <Bot className="size-[18px]" strokeWidth={1.75} />
-          </IconButton>
-        </Tooltip>
+        {isAuthenticated && (
+          <Tooltip content="机器人与集成" side="right">
+            <IconButton
+              variant="ghost"
+              onClick={() => openSettings("bots")}
+              className="h-9 w-9 rounded-xl max-compact:hidden"
+              label="机器人与集成"
+            >
+              <Bot className="size-[18px]" strokeWidth={1.75} />
+            </IconButton>
+          </Tooltip>
+        )}
       </div>
 
       {/* Bottom: Connection Status, Quota, Settings & User Menu */}
       <div className="flex w-full flex-col items-center gap-2.5 px-2 max-compact:w-auto max-compact:flex-row max-compact:gap-2 max-compact:px-1">
-        <Tooltip
-          content={
-            connectionStatus === "connected"
-              ? `实时连接正常 · 今日配额已用 ${quotaPct}%`
-              : connectionStatus === "reconnecting"
-              ? "正在重连…"
-              : "离线"
-          }
-          side="right"
-        >
-          <div className="flex items-center gap-1 rounded-full border border-dl-border-hairline bg-dl-surface-subtle/80 px-2 py-0.5 max-compact:hidden">
-            <span
-              className={cn(
-                "h-1.5 w-1.5 rounded-full",
-                connectionStatus === "connected"
-                  ? "bg-dl-success"
-                  : connectionStatus === "reconnecting"
-                  ? "bg-dl-warning animate-pulse"
-                  : "bg-dl-danger"
-              )}
-            />
-            <span className="text-[10px] font-medium text-dl-text-secondary tabular-nums">
-              {quotaPct}%
-            </span>
-          </div>
-        </Tooltip>
+        {isAuthenticated && (
+          <Tooltip
+            content={
+              connectionStatus === "connected"
+                ? `实时连接正常 · 今日配额已用 ${quotaPct}%`
+                : connectionStatus === "reconnecting"
+                ? "正在重连…"
+                : "离线"
+            }
+            side="right"
+          >
+            <div className="flex items-center gap-1 rounded-full border border-dl-border-hairline bg-dl-surface-subtle/80 px-2 py-0.5 max-compact:hidden">
+              <span
+                className={cn(
+                  "h-1.5 w-1.5 rounded-full",
+                  connectionStatus === "connected"
+                    ? "bg-dl-success"
+                    : connectionStatus === "reconnecting"
+                    ? "bg-dl-warning animate-pulse"
+                    : "bg-dl-danger"
+                )}
+              />
+              <span className="text-[10px] font-medium text-dl-text-secondary tabular-nums">
+                {quotaPct}%
+              </span>
+            </div>
+          </Tooltip>
+        )}
 
         <Tooltip content="设置中心" side="right">
           <IconButton
@@ -190,7 +200,7 @@ export function PrimaryRail() {
           </IconButton>
         </Tooltip>
 
-        <Popover>
+        <Popover open={userMenuOpen} onOpenChange={setUserMenuOpen}>
           <PopoverTrigger asChild>
             <IconButton
               variant="ghost"
@@ -198,61 +208,128 @@ export function PrimaryRail() {
               label="个人菜单"
             >
               <Avatar
-                name={currentUser?.displayName || "访客"}
-                src={currentUser?.avatarUrl}
+                name={isAuthenticated ? currentUser?.displayName || "当前成员" : "访客"}
+                src={isAuthenticated ? currentUser?.avatarUrl : undefined}
                 size="md"
-                online={connectionStatus === "connected"}
+                online={isAuthenticated ? connectionStatus === "connected" : Boolean(p2pRoom)}
               />
             </IconButton>
           </PopoverTrigger>
           <PopoverContent align="end" side="top">
             <div className="w-52 space-y-1.5 p-1">
-              <div className="px-2.5 py-1.5">
-                <div className="truncate text-sm font-semibold text-dl-text-primary">
-                  {currentUser?.displayName || "未登录"}
-                </div>
-                <div className="text-xs text-dl-text-tertiary">
-                  {currentUser?.role === "owner" ? "空间所有者" : "空间成员"}
-                </div>
-              </div>
-              <div className="h-px bg-dl-border-hairline" />
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start gap-2"
-                onClick={() => openSettings("profile")}
-              >
-                <User className="size-4 text-dl-text-secondary" strokeWidth={1.75} />
-                个人资料与状态
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start gap-2"
-                onClick={() => openSettings("devices")}
-              >
-                <Smartphone className="size-4 text-dl-text-secondary" strokeWidth={1.75} />
-                活跃设备与安全
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start gap-2"
-                onClick={() => openSettings("qr")}
-              >
-                <QrCode className="size-4 text-dl-text-secondary" strokeWidth={1.75} />
-                手机扫码登录
-              </Button>
-              <div className="h-px bg-dl-border-hairline" />
-              <Button
-                variant="danger"
-                size="sm"
-                className="w-full justify-start gap-2"
-                onClick={() => void logout()}
-              >
-                <LogOut className="size-4" strokeWidth={1.75} />
-                退出当前账号
-              </Button>
+              {isAuthenticated ? (
+                <>
+                  <div className="px-2.5 py-1.5">
+                    <div className="truncate text-sm font-semibold text-dl-text-primary">
+                      {currentUser?.displayName || "当前成员"}
+                    </div>
+                    <div className="text-xs text-dl-text-tertiary">
+                      {currentUser?.role === "owner"
+                        ? "空间所有者"
+                        : currentUser?.role === "admin"
+                        ? "空间管理员"
+                        : "空间成员"}
+                    </div>
+                  </div>
+                  <div className="h-px bg-dl-border-hairline" />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start gap-2"
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      openSettings("profile");
+                    }}
+                  >
+                    <User className="size-4 text-dl-text-secondary" strokeWidth={1.75} />
+                    个人资料与状态
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start gap-2"
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      openSettings("devices");
+                    }}
+                  >
+                    <Smartphone className="size-4 text-dl-text-secondary" strokeWidth={1.75} />
+                    活跃设备与安全
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start gap-2"
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      openSettings("qr");
+                    }}
+                  >
+                    <QrCode className="size-4 text-dl-text-secondary" strokeWidth={1.75} />
+                    手机扫码登录
+                  </Button>
+                  <div className="h-px bg-dl-border-hairline" />
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    className="w-full justify-start gap-2"
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      void logout();
+                    }}
+                  >
+                    <LogOut className="size-4" strokeWidth={1.75} />
+                    退出当前账号
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <div className="px-2.5 py-1.5">
+                    <div className="truncate text-sm font-semibold text-dl-text-primary">
+                      免登录访客
+                    </div>
+                    <div className="text-xs text-dl-text-tertiary">私密直连模式</div>
+                  </div>
+                  <div className="h-px bg-dl-border-hairline" />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start gap-2"
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      openSettings("appearance");
+                    }}
+                  >
+                    <Settings className="size-4 text-dl-text-secondary" strokeWidth={1.75} />
+                    外观与界面偏好
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start gap-2"
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      openSettings("profile");
+                    }}
+                  >
+                    <User className="size-4 text-dl-text-secondary" strokeWidth={1.75} />
+                    访客状态说明
+                  </Button>
+                  <div className="h-px bg-dl-border-hairline" />
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="w-full justify-start gap-2"
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      setActiveLane("workspace");
+                    }}
+                  >
+                    <Building2 className="size-4" strokeWidth={1.75} />
+                    前往登录共享空间
+                  </Button>
+                </>
+              )}
             </div>
           </PopoverContent>
         </Popover>

@@ -179,11 +179,15 @@ export function TimelinePane() {
   // Auto-scroll to highlighted message when jumping from Search / Pin / File backlink
   useEffect(() => {
     if (!highlightedMessageId || !scrollRef.current) return;
-    const el = scrollRef.current.querySelector(`[data-message-id="${highlightedMessageId}"]`);
+    const escapedId =
+      typeof CSS !== "undefined" && typeof CSS.escape === "function"
+        ? CSS.escape(highlightedMessageId)
+        : highlightedMessageId.replace(/["\\]/g, "\\$&");
+    const el = scrollRef.current.querySelector(`[data-message-id="${escapedId}"]`);
     if (el) {
       el.scrollIntoView({ behavior: "smooth", block: "center" });
     }
-  }, [highlightedMessageId]);
+  }, [highlightedMessageId, messages]);
 
   if (activeLane === "p2p") {
     const peerStatusLabel = p2pRoom
