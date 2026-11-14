@@ -475,8 +475,9 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		shutdownBotGateway = botGatewayWebSocket.Shutdown
 	}
 	var v1Handler *v1.HTTPHandler
-	// Schema 036 v1 routes activate after this compatibility bridge records a
-	// verified production rollback snapshot.
+	if pool != nil {
+		v1Handler = v1.NewHTTPHandler(v1.NewService(v1.NewPGRepository(pool, auth.DefaultSpaceID)), authHandler)
+	}
 	return &application{
 		pool: pool, cancel: cancel, backgroundDone: backgroundDone,
 		shutdownBotGateway: shutdownBotGateway, logger: logger,
