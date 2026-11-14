@@ -1,4 +1,5 @@
 export * from "./Avatar";
+export * from "./BrandLogo";
 export * from "./Button";
 export * from "./ContextMenu";
 export * from "./Dialog";

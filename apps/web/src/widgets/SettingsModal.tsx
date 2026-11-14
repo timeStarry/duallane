@@ -7,9 +7,11 @@ import { useWorkspaceStore } from "@/entities/workspace/store";
 import { apiV1, type QRSessionResponse } from "@/shared/lib/api-v1";
 import { useThemeStore, type TransparencyMode } from "@/shared/theme/vibrancy";
 import {
+  BrandLogo,
   Button,
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   SegmentedControl,
@@ -150,7 +152,13 @@ export function SettingsModal() {
     >
       <DialogContent size="lg">
         <DialogHeader>
-          <DialogTitle>DualLane 设置中心</DialogTitle>
+          <DialogTitle className="flex items-center gap-2.5">
+            <BrandLogo size={26} withTile />
+            <span className="tracking-[-0.025em]">DualLane 设置中心</span>
+          </DialogTitle>
+          <DialogDescription className="text-xs font-mono">
+            One Prism. Two Trust Wavelengths.
+          </DialogDescription>
         </DialogHeader>
         <div className="flex max-compact:flex-col gap-4 min-h-[320px] max-h-[72vh] p-6 max-narrow:p-3.5 pt-4">
           <nav

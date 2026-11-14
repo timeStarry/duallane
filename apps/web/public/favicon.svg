@@ -1,0 +1,47 @@
+<svg viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="dl-tile-bg" cx="22%" cy="15%" r="115%">
+      <stop offset="0%" stop-color="#1D2B42" />
+      <stop offset="60%" stop-color="#0B111B" />
+      <stop offset="100%" stop-color="#060A11" />
+    </radialGradient>
+    <linearGradient id="dl-tile-border" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.28" />
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.08" />
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.03" />
+    </linearGradient>
+    <linearGradient id="dl-amber" x1="12%" y1="15%" x2="90%" y2="85%">
+      <stop offset="0%" stop-color="#FCD34D" />
+      <stop offset="46%" stop-color="#F97316" />
+      <stop offset="100%" stop-color="#C2410C" />
+    </linearGradient>
+    <linearGradient id="dl-blue" x1="12%" y1="15%" x2="90%" y2="88%">
+      <stop offset="0%" stop-color="#7DD3FC" />
+      <stop offset="46%" stop-color="#0EA5E9" />
+      <stop offset="100%" stop-color="#0369A1" />
+    </linearGradient>
+    <linearGradient id="dl-crystal" x1="15%" y1="10%" x2="85%" y2="90%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.98" />
+      <stop offset="55%" stop-color="#CBD5E1" stop-opacity="0.88" />
+      <stop offset="100%" stop-color="#64748B" stop-opacity="0.76" />
+    </linearGradient>
+  </defs>
+
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#dl-tile-bg)" />
+  <rect x="9.5" y="9.5" width="237" height="237" rx="54.5" stroke="url(#dl-tile-border)" stroke-width="3" />
+
+  <g transform="translate(128 128) scale(0.92) translate(-128 -128)">
+    <path
+      d="M 70 90 Q 76 84 82 90 L 114 122 Q 120 128 114 134 L 82 166 Q 76 172 70 166 L 38 134 Q 32 128 38 122 Z"
+      fill="url(#dl-crystal)"
+    />
+    <path
+      d="M 99 69 Q 93 71 97 76 L 131 110 Q 135 114 141 112 L 212 86 Q 218 84 218 77 L 218 51 Q 218 44 211 46 Z"
+      fill="url(#dl-amber)"
+    />
+    <path
+      d="M 99 187 Q 93 185 97 180 L 131 146 Q 135 142 141 144 L 212 170 Q 218 172 218 179 L 218 205 Q 218 212 211 210 Z"
+      fill="url(#dl-blue)"
+    />
+  </g>
+</svg>

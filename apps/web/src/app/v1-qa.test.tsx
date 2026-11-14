@@ -22,7 +22,7 @@ import { DualLaneCardKit } from "@/widgets/DualLaneCardKit";
 import { PrimaryRail } from "@/widgets/PrimaryRail";
 import { ConversationSidebar } from "@/widgets/ConversationSidebar";
 import { TimelinePane } from "@/widgets/TimelinePane";
-import { TooltipProvider } from "@/shared/ui";
+import { BrandLogo, TooltipProvider } from "@/shared/ui";
 
 function hexLuminance(hex: string): number {
   const clean = hex.replace("#", "");
@@ -364,8 +364,10 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
         </TooltipProvider>
       );
 
-      // Crisp SVG icons rendered instead of raw OS chrome emojis
+      // Crisp SVG icons & Dichroic Prism brand mark rendered instead of raw OS chrome emojis or "DL" text placeholder
       expect(railHtml).toContain("<svg");
+      expect(railHtml).toContain('data-brand-mark="dichroic-prism"');
+      expect(railHtml).not.toContain(">DL<");
       expect(railHtml).not.toContain("🏢");
       expect(railHtml).not.toContain("⚙️");
 
@@ -546,5 +548,25 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
       Object.assign(useLaneStore.getInitialState(), prevLaneInitial);
       useLaneStore.setState(prevLaneInitial);
     }
+  });
+
+  it("renders BrandLogo Dichroic Prism optical geometry across detail, 16px compact, tile, and monochrome modes", () => {
+    expect(DESIGN_TOKENS.modes.dark.direct).toBe("#fb923c");
+
+    const detailHtml = renderToStaticMarkup(<BrandLogo size={36} withTile label="DualLane" />);
+    expect(detailHtml).toContain('data-brand-mark="dichroic-prism"');
+    expect(detailHtml).toContain('data-optical-mode="detail"');
+    expect(detailHtml).toContain('aria-label="DualLane"');
+    expect(detailHtml).toContain("<line ");
+    expect(detailHtml).toContain("#F97316");
+    expect(detailHtml).toContain("#0EA5E9");
+
+    const compactHtml = renderToStaticMarkup(<BrandLogo size={16} />);
+    expect(compactHtml).toContain('data-optical-mode="compact"');
+    expect(compactHtml).not.toContain("<line ");
+
+    const monoHtml = renderToStaticMarkup(<BrandLogo size={24} monochrome />);
+    expect(monoHtml).toContain('fill="currentColor"');
+    expect(monoHtml).not.toContain("<linearGradient");
   });
 });

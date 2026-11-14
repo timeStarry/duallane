@@ -15,6 +15,7 @@ import { useLaneStore } from "@/entities/lane/store";
 import { useWorkspaceStore } from "@/entities/workspace/store";
 import {
   Avatar,
+  BrandLogo,
   Button,
   IconButton,
   Popover,
@@ -51,12 +52,11 @@ export function PrimaryRail() {
     >
       {/* Top: Brand & Dual-Lane Live Switcher */}
       <div className="flex w-full flex-col items-center gap-2.5 px-2 max-compact:w-auto max-compact:flex-1 max-compact:flex-row max-compact:justify-around max-compact:gap-1 max-compact:px-0">
-        <div
-          className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-dl-lane-shared to-dl-lane-direct text-dl-on-shared font-bold text-[13px] tracking-tight shadow-sm max-compact:hidden"
-          title="DualLane v1.0"
-        >
-          DL
-        </div>
+        <Tooltip content="DualLane v1.0 · One Prism. Two Trust Wavelengths." side="right">
+          <div className="max-compact:hidden">
+            <BrandLogo size={38} withTile label="DualLane" />
+          </div>
+        </Tooltip>
 
         <div className="my-0.5 h-px w-8 bg-dl-border-hairline max-compact:hidden" />
 

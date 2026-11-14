@@ -19,6 +19,7 @@ import { useState } from "react";
 import { initializeV1Theme, useThemeStore } from "@/shared/theme/vibrancy";
 import {
   Avatar,
+  BrandLogo,
   Button,
   ContextMenu,
   ContextMenuContent,
@@ -72,14 +73,11 @@ export function WorkbenchV1() {
           {/* Header */}
           <header className="dl-glass-chrome sticky top-4 z-sticky flex flex-wrap items-center justify-between gap-4 rounded-panel border border-line px-5 py-3.5">
             <div className="flex items-center gap-3">
-              <div className="flex items-center gap-1">
-                <span className="h-5 w-1.5 rounded-full bg-direct" />
-                <span className="h-5 w-1.5 rounded-full bg-shared" />
-              </div>
+              <BrandLogo size={38} withTile animated />
               <div>
-                <h1 className="text-[16px] font-semibold tracking-tight">DualLane v1.0 毛玻璃组件工作台</h1>
+                <h1 className="text-[16px] font-bold tracking-[-0.032em]">DualLane · v1.0 组件工作台</h1>
                 <p className="text-[12px] text-muted">
-                  Tailwind CSS v4 + Radix UI + Motion · 当前解析模式：{resolvedMode === "dark" ? "深色 Vibrancy" : "浅色 Vibrancy"}
+                  One Prism. Two Trust Wavelengths. · 当前解析模式：{resolvedMode === "dark" ? "深色 Vibrancy" : "浅色 Vibrancy"}
                 </p>
               </div>
             </div>

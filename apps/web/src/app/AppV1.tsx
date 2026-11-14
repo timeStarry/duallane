@@ -5,7 +5,7 @@ import { useLaneStore } from "@/entities/lane/store";
 import { useWorkspaceStore } from "@/entities/workspace/store";
 import { apiV1 } from "@/shared/lib/api-v1";
 import { extractP2PRoomFromUrl } from "@/shared/lib/p2p-lane";
-import { Button, Input, TooltipProvider } from "@/shared/ui";
+import { BrandLogo, Button, Input, TooltipProvider } from "@/shared/ui";
 import { CommandSearchModal } from "@/widgets/CommandSearchModal";
 import { ConversationSidebar } from "@/widgets/ConversationSidebar";
 import { InspectorPane } from "@/widgets/InspectorPane";
@@ -154,8 +154,9 @@ export function AppV1() {
   if (authStatus === "checking" && activeLane !== "p2p") {
     return (
       <main className="dl-canvas-ambient flex h-screen w-screen items-center justify-center">
-        <div className="dl-glass-elevated rounded-dialog px-6 py-4 text-sm text-dl-text-secondary">
-          正在连接 DualLane v1.0…
+        <div className="dl-glass-elevated flex items-center gap-3 rounded-dialog px-5 py-3.5 text-sm text-dl-text-secondary">
+          <BrandLogo size={32} withTile animated />
+          <span>正在连接 DualLane v1.0…</span>
         </div>
       </main>
     );
@@ -177,22 +178,23 @@ export function AppV1() {
           className="dl-glass-dialog w-full max-w-[440px] rounded-dialog border border-dl-border-hairline p-7 max-narrow:p-4 space-y-6 max-narrow:space-y-4"
         >
           <div className="flex items-start justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-dl-lane-shared to-dl-lane-direct text-dl-on-shared font-bold text-sm shadow-sm">
-                DL
-              </div>
+            <div className="flex items-center gap-3.5 min-w-0">
+              <BrandLogo size={46} withTile animated />
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h1 className="text-lg font-bold tracking-tight text-dl-text-primary">
+                  <h1 className="text-lg font-bold tracking-[-0.032em] text-dl-text-primary">
                     DualLane
                   </h1>
                   <span className="rounded-full bg-dl-lane-shared/14 px-2 py-0.5 text-[10px] font-semibold text-dl-lane-shared">
                     v1.0
                   </span>
                 </div>
-                <p className="text-xs text-dl-text-secondary mt-0.5">
-                  共享空间自洽协作 · 私密直连端到端加密
+                <p className="text-xs text-dl-text-secondary mt-0.5 leading-snug">
+                  分流式安全会话 · 会话起点前的信任分光镜
                 </p>
+                <div className="text-[11px] font-mono text-dl-text-secondary mt-0.5 truncate">
+                  One Prism. Two Trust Wavelengths.
+                </div>
               </div>
             </div>
           </div>
