@@ -12,7 +12,10 @@ import {
 } from "lucide-react";
 import type { ThemePreference } from "@duallane/design-tokens";
 import { motion } from "motion/react";
+import { useEmoteStore } from "@/entities/emote/store";
 import {
+  extractBotSetupIdFromLocation,
+  extractSharedEmotePackIdFromLocation,
   inferEntryViewFromLocation,
   inferLaneFromLocation,
   inferMobileViewFromLocation,
@@ -25,6 +28,7 @@ import { useThemeStore } from "@/shared/theme/vibrancy";
 import { BrandLogo, Button, Input, SegmentedControl, TooltipProvider } from "@/shared/ui";
 import { CommandSearchModal } from "@/widgets/CommandSearchModal";
 import { ConversationSidebar } from "@/widgets/ConversationSidebar";
+import { EmoteGlobalModals } from "@/widgets/EmoteSystem";
 import { InspectorPane } from "@/widgets/InspectorPane";
 import { PrimaryRail } from "@/widgets/PrimaryRail";
 import { TimelinePane } from "@/widgets/TimelinePane";
@@ -48,6 +52,10 @@ export function AppV1() {
     setEntryView,
     adminConsoleOpen,
     settingsOpen,
+    pendingBotSetupId,
+    pendingSharedEmotePackId,
+    setPendingSharedEmotePackId,
+    openSettings,
     lightboxOpen,
   } = useLaneStore();
   const { preference, setPreference } = useThemeStore();
@@ -117,13 +125,18 @@ export function AppV1() {
       }
       const nextLane = inferLaneFromLocation(window.location);
       const nextMobileView = inferMobileViewFromLocation(window.location);
-      const nextEntryView = forceWorkspaceEntry
-        ? "workspace"
-        : inferEntryViewFromLocation(window.location);
+      const nextSetupId = extractBotSetupIdFromLocation(window.location);
+      const nextSharedPackId = extractSharedEmotePackIdFromLocation(window.location);
+      const nextEntryView =
+        forceWorkspaceEntry || Boolean(nextSetupId) || Boolean(nextSharedPackId)
+          ? "workspace"
+          : inferEntryViewFromLocation(window.location);
       useLaneStore.setState({
         activeLane: nextLane,
         entryView: nextEntryView,
         mobileView: nextMobileView,
+        ...(nextSetupId ? { pendingBotSetupId: nextSetupId } : {}),
+        ...(nextSharedPackId ? { pendingSharedEmotePackId: nextSharedPackId } : {}),
       });
     };
 
@@ -188,6 +201,20 @@ export function AppV1() {
       useLaneStore.setState({ entryView: "entry" });
     }
   }, [activeLane, authError, authStatus, mobileView, p2pRoom]);
+
+  useEffect(() => {
+    if ((authStatus === "authenticated" || isPreviewMode) && pendingBotSetupId) {
+      openSettings("bots");
+    }
+  }, [authStatus, isPreviewMode, openSettings, pendingBotSetupId]);
+
+  useEffect(() => {
+    if ((authStatus === "authenticated" || isPreviewMode) && pendingSharedEmotePackId) {
+      const shareId = pendingSharedEmotePackId;
+      setPendingSharedEmotePackId("");
+      void useEmoteStore.getState().openSharedPack(shareId, isPreviewMode);
+    }
+  }, [authStatus, isPreviewMode, pendingSharedEmotePackId, setPendingSharedEmotePackId]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -565,6 +592,7 @@ export function AppV1() {
         <TimelinePane />
         <InspectorPane />
         <CommandSearchModal />
+        <EmoteGlobalModals />
         {settingsOpen && (
           <React.Suspense fallback={null}>
             <SettingsModal />

@@ -476,7 +476,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	}
 	var v1Handler *v1.HTTPHandler
 	if pool != nil {
-		v1Handler = v1.NewHTTPHandler(v1.NewService(v1.NewPGRepository(pool, auth.DefaultSpaceID)), authHandler)
+		v1Handler = v1.NewHTTPHandler(v1.NewService(v1.NewPGRepository(pool, auth.DefaultSpaceID)), authHandler).WithBotAuthenticator(botGatewayService)
 	}
 	return &application{
 		pool: pool, cancel: cancel, backgroundDone: backgroundDone,

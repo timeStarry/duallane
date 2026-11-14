@@ -11,12 +11,16 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/botgateway"
 )
 
 type stubRepo struct {
-	commands []BotCommand
-	savedID  string
-	group    GroupConversationSummary
+	commands      []BotCommand
+	savedID       string
+	group         GroupConversationSummary
+	editedActorID string
+	editedMsgID   string
+	editedText    string
 }
 
 func (s *stubRepo) GetBootstrap(_ context.Context, actorID string, _ time.Time) (V1BootstrapResponse, error) {
@@ -85,7 +89,12 @@ func (s *stubRepo) AddGroupMembers(_ context.Context, _, convID string, userIDs 
 func (s *stubRepo) LeaveGroupConversation(_ context.Context, _, _ string, _ time.Time) error {
 	return nil
 }
-func (s *stubRepo) EditMessage(_ context.Context, _, _, _ string, _ time.Time) error { return nil }
+func (s *stubRepo) EditMessage(_ context.Context, actorID, msgID, text string, _ time.Time) error {
+	s.editedActorID = actorID
+	s.editedMsgID = msgID
+	s.editedText = text
+	return nil
+}
 func (s *stubRepo) ForwardMessages(_ context.Context, _, _ string, ids []string, _ time.Time) ([]string, error) {
 	return ids, nil
 }
@@ -131,6 +140,18 @@ func (s *stubRepo) CreateMultiBot(_ context.Context, _, _ string, _ time.Time) (
 }
 func (s *stubRepo) UpsertBotWebhook(_ context.Context, _, botID, url, _ string, enabled bool, _ time.Time) (BotWebhookConfig, error) {
 	return BotWebhookConfig{BotID: botID, URL: url, Enabled: enabled}, nil
+}
+func (s *stubRepo) ListBotConversations(_ context.Context, _, _ string) ([]BotConversationSummary, error) {
+	return []BotConversationSummary{{
+		ID:           "conv_dm_bot_1",
+		Type:         "direct",
+		Title:        "测试成员",
+		AllowSend:    true,
+		AllowTrigger: true,
+		AllowContext: true,
+		MaxMessages:  50,
+		UpdatedAt:    "2026-11-14T15:00:00Z",
+	}}, nil
 }
 func (s *stubRepo) GetAdminOverview(_ context.Context, _ string, _ time.Time) (AdminOverviewResponse, error) {
 	return AdminOverviewResponse{
@@ -373,5 +394,89 @@ func TestHTTPHandlerBootstrapEndpoint(t *testing.T) {
 	}
 	if !resp.Auth.Enabled || resp.Auth.CurrentUser.ID != "usr_fast_1" || len(resp.Conversations) != 1 || resp.EventCursor != 42 {
 		t.Fatalf("unexpected bootstrap payload: %+v", resp)
+	}
+}
+
+type stubBotAuthenticator struct {
+	auth *botgateway.Auth
+	err  error
+}
+
+func (s stubBotAuthenticator) Authenticate(context.Context, string, botgateway.TokenAuthOptions) (*botgateway.Auth, error) {
+	return s.auth, s.err
+}
+
+func TestBotGatewayV2ConversationsAndMessageEdit(t *testing.T) {
+	repo := &stubRepo{}
+	svc := NewService(repo)
+	validToken := "dl_bot_0123456789abcdef0123456789abcdef"
+	botAuth := &botgateway.Auth{
+		TokenID: "btk_1",
+		BotID:   "bot_agent_1",
+		UserID:  "usr_bot_agent_1",
+		SpaceID: auth.DefaultSpaceID,
+		Scopes:  []string{botgateway.ScopeMessagesReadTrigger, botgateway.ScopeMessagesSend},
+	}
+
+	handler := NewHTTPHandler(svc, stubActorResolver{}).WithBotAuthenticator(stubBotAuthenticator{auth: botAuth})
+	r := chi.NewRouter()
+	handler.Mount(r)
+
+	// 1. Reject unauthenticated request
+	unauthReq := httptest.NewRequest(http.MethodGet, "/api/bot/v2/conversations", nil)
+	unauthRec := httptest.NewRecorder()
+	r.ServeHTTP(unauthRec, unauthReq)
+	if unauthRec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without bearer token, got %d", unauthRec.Code)
+	}
+
+	// 2. List bot conversations
+	listReq := httptest.NewRequest(http.MethodGet, "/api/bot/v2/conversations", nil)
+	listReq.Header.Set("Authorization", "Bearer "+validToken)
+	listRec := httptest.NewRecorder()
+	r.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on /api/bot/v2/conversations, got %d: %s", listRec.Code, listRec.Body.String())
+	}
+	var listResp struct {
+		Conversations []BotConversationSummary `json:"conversations"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("unmarshal bot conversations: %v", err)
+	}
+	if len(listResp.Conversations) != 1 || listResp.Conversations[0].ID != "conv_dm_bot_1" || !listResp.Conversations[0].AllowContext {
+		t.Fatalf("unexpected bot conversations: %+v", listResp.Conversations)
+	}
+
+	// 3. Edit bot message with messages:send scope
+	editReq := httptest.NewRequest(http.MethodPatch, "/api/bot/v2/messages/msg_stream_1", bytes.NewBufferString(`{"plainText":"已完成分析，结论如下"}`))
+	editReq.Header.Set("Authorization", "Bearer "+validToken)
+	editRec := httptest.NewRecorder()
+	r.ServeHTTP(editRec, editReq)
+	if editRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on bot message edit, got %d: %s", editRec.Code, editRec.Body.String())
+	}
+	if repo.editedActorID != "usr_bot_agent_1" || repo.editedMsgID != "msg_stream_1" || repo.editedText != "已完成分析，结论如下" {
+		t.Fatalf("unexpected edited message state: %+v", repo)
+	}
+
+	// 4. Reject edit when messages:send scope is missing
+	readOnlyHandler := NewHTTPHandler(svc, stubActorResolver{}).WithBotAuthenticator(stubBotAuthenticator{
+		auth: &botgateway.Auth{
+			TokenID: "btk_ro",
+			BotID:   "bot_agent_1",
+			UserID:  "usr_bot_agent_1",
+			SpaceID: auth.DefaultSpaceID,
+			Scopes:  []string{botgateway.ScopeMessagesReadTrigger},
+		},
+	})
+	roRouter := chi.NewRouter()
+	readOnlyHandler.Mount(roRouter)
+	roReq := httptest.NewRequest(http.MethodPatch, "/api/bot/v2/messages/msg_stream_1", bytes.NewBufferString(`{"plainText":"denied"}`))
+	roReq.Header.Set("Authorization", "Bearer "+validToken)
+	roRec := httptest.NewRecorder()
+	roRouter.ServeHTTP(roRec, roReq)
+	if roRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 without messages:send scope, got %d: %s", roRec.Code, roRec.Body.String())
 	}
 }

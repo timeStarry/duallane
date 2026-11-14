@@ -17,6 +17,8 @@ import {
   safeInlineImageMime,
 } from "@/shared/lib/p2p-lane";
 import {
+  extractBotSetupIdFromLocation,
+  extractSharedEmotePackIdFromLocation,
   inferEntryViewFromLocation,
   inferLaneFromLocation,
   inferMobileViewFromLocation,
@@ -25,7 +27,9 @@ import {
 import { AppV1 } from "@/app/AppV1";
 import { WorkbenchV1 } from "@/app/WorkbenchV1";
 import { applyVibrancyTokensToRoot } from "@/shared/theme/vibrancy";
+import { BotSettingsPanel } from "@/widgets/BotSettingsPanel";
 import { DualLaneCardKit } from "@/widgets/DualLaneCardKit";
+import { EmoteStudioPanel } from "@/widgets/EmoteSystem";
 import { PrimaryRail } from "@/widgets/PrimaryRail";
 import { ConversationSidebar } from "@/widgets/ConversationSidebar";
 import { InspectorPane } from "@/widgets/InspectorPane";
@@ -1582,6 +1586,171 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
     } finally {
       (globalThis as unknown as { window: unknown }).window = origWindow;
       vi.restoreAllMocks();
+    }
+  });
+
+  it("supports universal AI Agent setup deep-links (?setup=setup_...) and BotSettingsPanel pairing UI", async () => {
+    const setupId = "setup_0123456789abcdef0123456789abcdef";
+    expect(extractBotSetupIdFromLocation({ search: `?setup=${setupId}` })).toBe(setupId);
+    expect(extractBotSetupIdFromLocation({ search: "?setup=invalid" })).toBe("");
+    expect(inferEntryViewFromLocation({ pathname: "/", search: `?setup=${setupId}` })).toBe(
+      "workspace"
+    );
+
+    const prevWsInitial = { ...useWorkspaceStore.getInitialState() };
+    const prevLaneInitial = { ...useLaneStore.getInitialState() };
+    try {
+      const wsPatch = { isPreviewMode: true, authStatus: "authenticated" as const };
+      const lanePatch = { pendingBotSetupId: setupId };
+      Object.assign(useWorkspaceStore.getInitialState(), wsPatch);
+      useWorkspaceStore.setState(wsPatch);
+      Object.assign(useLaneStore.getInitialState(), lanePatch);
+      useLaneStore.setState(lanePatch);
+
+      const html = renderToStaticMarkup(<BotSettingsPanel />);
+      expect(html).toContain("收到 Agent 配对请求，请确认授权");
+      expect(html).toContain("一键连接 AI Agent");
+      expect(html).toContain("生成并复制 Agent 配对指令");
+      expect(html).toContain("复制标准 MCP 配置");
+      expect(html).toContain("开发者选项（Slash 指令 / 手动 Token / Webhook）");
+    } finally {
+      Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);
+      useWorkspaceStore.setState(prevWsInitial);
+      Object.assign(useLaneStore.getInitialState(), prevLaneInitial);
+      useLaneStore.setState(prevLaneInitial);
+    }
+  });
+
+  it("renders Telegram-style custom stickers, built-in emotes, sticker pack share cards, deep-links, and EmoteStudioPanel", () => {
+    const shareId = "share_abcdef0123456789";
+    expect(
+      extractSharedEmotePackIdFromLocation({
+        pathname: `/workspace/emotes/shared/${shareId}`,
+      })
+    ).toBe(shareId);
+    expect(
+      inferEntryViewFromLocation({
+        pathname: `/workspace/emotes/shared/${shareId}`,
+        search: "",
+      })
+    ).toBe("workspace");
+
+    const parsed = parseBootstrapPayload({
+      auth: {
+        enabled: true,
+        currentUser: { id: "usr_sticker_me", displayName: "星辰", role: "owner" },
+      },
+      members: [{ id: "usr_sticker_me", displayName: "星辰", role: "owner" }],
+      conversations: [
+        {
+          id: "conv_sticker_test",
+          type: "saved",
+          title: "个人空间",
+          displayTitle: "我的收藏",
+          memberIds: ["usr_sticker_me"],
+          latestMessages: [
+            {
+              id: "msg_custom_sticker",
+              senderId: "usr_sticker_me",
+              plainText: "[表情]",
+              content: {
+                plainText: "[表情]",
+                blocks: [
+                  {
+                    type: "emoji",
+                    shortcode: "custom:11111111-2222-3333-4444-555555555555",
+                  },
+                ],
+              },
+              createdAt: "2026-11-14T15:00:00Z",
+              reactions: [{ emoji: "bili:doge", count: 2, reactedByMe: true }],
+            },
+            {
+              id: "msg_builtin_sticker",
+              senderId: "usr_sticker_me",
+              plainText: "[bili:doge]",
+              content: {
+                plainText: "[bili:doge]",
+                blocks: [{ type: "text", text: "[bili:doge]" }],
+              },
+              createdAt: "2026-11-14T15:01:00Z",
+            },
+            {
+              id: "msg_pack_share",
+              senderId: "usr_sticker_me",
+              plainText: "[表情包]",
+              content: {
+                plainText: "[表情包]",
+                blocks: [
+                  {
+                    type: "emote_collection",
+                    shareId,
+                    share: {
+                      id: shareId,
+                      name: "猫猫打工日常",
+                      itemCount: 12,
+                      covers: [],
+                      sharedBy: { id: "usr_sticker_me", displayName: "星辰" },
+                      originalCreator: { id: "usr_sticker_me", displayName: "星辰" },
+                      sharePath: `/workspace/emotes/shared/${shareId}`,
+                      createdAt: "2026-11-14T15:02:00Z",
+                      revokedAt: null,
+                    },
+                  },
+                ],
+              },
+              createdAt: "2026-11-14T15:02:00Z",
+            },
+          ],
+        },
+      ],
+    });
+
+    const prevWsInitial = { ...useWorkspaceStore.getInitialState() };
+    const prevLaneInitial = { ...useLaneStore.getInitialState() };
+    try {
+      const wsPatch = {
+        isPreviewMode: true,
+        authStatus: "authenticated" as const,
+        currentUser: parsed.currentUser,
+        conversations: parsed.conversations,
+        conversationOrder: parsed.conversationOrder,
+        activeConversationId: "conv_sticker_test",
+        messagesByConv: parsed.messagesByConv,
+      };
+      const lanePatch = { activeLane: "workspace" as const };
+      Object.assign(useWorkspaceStore.getInitialState(), wsPatch);
+      useWorkspaceStore.setState(wsPatch);
+      Object.assign(useLaneStore.getInitialState(), lanePatch);
+      useLaneStore.setState(lanePatch);
+
+      const timelineHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <TimelinePane />
+        </TooltipProvider>
+      );
+      expect(timelineHtml).toContain('data-testid="jumbo-custom-sticker"');
+      expect(timelineHtml).toContain(
+        "/api/workspace/emotes/11111111-2222-3333-4444-555555555555/content"
+      );
+      expect(timelineHtml).not.toContain(">[表情]<");
+      expect(timelineHtml).toContain('data-testid="jumbo-builtin-sticker"');
+      expect(timelineHtml).toContain('data-testid="emote-pack-share-card"');
+      expect(timelineHtml).toContain("猫猫打工日常");
+      expect(timelineHtml).toContain("查看并添加表情包");
+      expect(timelineHtml).toContain('aria-label="表情与贴纸"');
+      expect(timelineHtml).toContain('aria-label="收藏贴纸"');
+
+      const studioHtml = renderToStaticMarkup(<EmoteStudioPanel />);
+      expect(studioHtml).toContain("新建表情包");
+      expect(studioHtml).toContain("立即创建第一个表情包");
+      expect(studioHtml).toContain("收藏贴纸");
+      expect(studioHtml).toContain("内置与偏好");
+    } finally {
+      Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);
+      useWorkspaceStore.setState(prevWsInitial);
+      Object.assign(useLaneStore.getInitialState(), prevLaneInitial);
+      useLaneStore.setState(prevLaneInitial);
     }
   });
 });

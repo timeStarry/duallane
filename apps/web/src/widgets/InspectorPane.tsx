@@ -16,11 +16,13 @@ import {
   X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import { renderMessageParts } from "@/emotes";
 import { useLaneStore } from "@/entities/lane/store";
 import { useWorkspaceStore } from "@/entities/workspace/store";
 import { cn } from "@/shared/lib/cn";
 import { triggerBrowserDownload } from "@/shared/lib/download";
 import { Avatar, Button, IconButton, Input, Switch } from "@/shared/ui";
+import { MessageRichContent } from "@/widgets/EmoteSystem";
 
 const GROUP_EMOJI_PRESETS = ["🚀", "💡", "🎨", "🛠️", "📌", "⚡", "🌿", "🎯"];
 
@@ -264,7 +266,11 @@ export function InspectorPane() {
                             </span>
                           </div>
                           <div className="text-[13px] leading-relaxed text-dl-text-primary whitespace-pre-wrap">
-                            {rootText}
+                            {localRoot ? (
+                              <MessageRichContent msg={localRoot} />
+                            ) : (
+                              renderMessageParts(rootText)
+                            )}
                           </div>
                         </div>
 
@@ -298,7 +304,7 @@ export function InspectorPane() {
                                   )}
                                 </div>
                                 <div className="text-[13px] leading-relaxed text-dl-text-primary whitespace-pre-wrap break-words">
-                                  {reply.plainText}
+                                  {renderMessageParts(reply.plainText)}
                                 </div>
                               </div>
                             </div>

@@ -725,23 +725,125 @@ func (r *PGRepository) GetOrCreateSavedConversation(ctx context.Context, actorID
 }
 
 func (r *PGRepository) EditMessage(ctx context.Context, actorID, messageID, plainText string, now time.Time) error {
-	contentJSON, _ := json.Marshal(map[string]any{
-		"format":    "duallane.message+json;v=1",
-		"plainText": plainText,
-		"blocks":    []map[string]any{{"type": "text", "text": plainText}},
-	})
-	tag, err := r.pool.Exec(ctx, `
-		UPDATE messages
-		SET plain_text = $1, content_json = $2, edited_at = $3
-		WHERE id = $4 AND author_id = $5 AND deleted_at IS NULL
-	`, plainText, string(contentJSON), now, messageID, actorID)
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrForbidden
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	contentObj := map[string]any{
+		"format":    "duallane.message+json;v=1",
+		"plainText": plainText,
+		"blocks":    []map[string]any{{"type": "text", "text": plainText}},
 	}
-	return nil
+	contentJSON, _ := json.Marshal(contentObj)
+
+	var convID string
+	var createdAt time.Time
+	err = tx.QueryRow(ctx, `
+		UPDATE messages
+		SET plain_text = $1, content_json = $2, edited_at = $3
+		WHERE space_id = $4 AND id = $5 AND author_id = $6 AND deleted_at IS NULL AND recalled_at IS NULL
+		RETURNING conversation_id, created_at
+	`, plainText, string(contentJSON), now.UTC(), r.spaceID, messageID, actorID).Scan(&convID, &createdAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrForbidden
+		}
+		return err
+	}
+
+	if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, convID, "message.edited", "message", messageID, map[string]any{
+		"conversationId": convID,
+		"messageId":      messageID,
+		"message": map[string]any{
+			"id":             messageID,
+			"conversationId": convID,
+			"authorId":       actorID,
+			"plainText":      plainText,
+			"content":        contentObj,
+			"createdAt":      createdAt.UTC().Format(time.RFC3339Nano),
+			"editedAt":       now.UTC().Format(time.RFC3339Nano),
+		},
+	}, now); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+func (r *PGRepository) ListBotConversations(ctx context.Context, botID, botUserID string) ([]BotConversationSummary, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT
+			c.id,
+			c.type,
+			CASE
+				WHEN c.type = 'direct' THEN COALESCE(NULLIF(c.title, ''), peer.peer_name, '私聊会话')
+				ELSE COALESCE(NULLIF(c.title, ''), '群聊会话')
+			END AS display_title,
+			CASE
+				WHEN c.type = 'direct' THEN COALESCE(bs.allow_direct = 1, TRUE)
+				WHEN c.type = 'group' THEN (COALESCE(bs.allow_group = 1, FALSE) AND b.conversation_policy = 'group-capable' AND gp.status = 'active')
+				ELSE FALSE
+			END AS allow_send,
+			COALESCE(cg.allow_trigger = 1, FALSE) AS allow_trigger,
+			COALESCE(cg.allow_context = 1, FALSE) AS allow_context,
+			LEAST(
+				COALESCE(NULLIF(cg.max_messages, 0), NULLIF(bs.max_context_messages, 0), 50),
+				COALESCE(NULLIF(bs.max_context_messages, 0), 50)
+			) AS max_messages,
+			COALESCE(gp.status, '') AS group_policy_status,
+			COALESCE(latest.created_at, c.created_at) AS activity_at
+		FROM conversation_members cm
+		JOIN conversations c ON c.id = cm.conversation_id AND c.space_id = $1
+		JOIN workspace_agent_bots b ON b.id = $2 AND b.space_id = $1
+		LEFT JOIN workspace_agent_bot_settings bs ON bs.bot_id = b.id AND bs.space_id = $1
+		LEFT JOIN workspace_agent_bot_context_grants cg ON cg.bot_id = b.id AND cg.space_id = $1 AND cg.conversation_id = c.id
+		LEFT JOIN workspace_agent_bot_group_policies gp ON gp.bot_id = b.id AND gp.space_id = $1 AND gp.conversation_id = c.id
+		LEFT JOIN LATERAL (
+			SELECT COALESCE(NULLIF(u.nickname, ''), NULLIF(u.display_name, ''), NULLIF(u.github_login, ''), '成员') AS peer_name
+			FROM conversation_members pcm
+			JOIN users u ON u.id = pcm.user_id
+			WHERE pcm.conversation_id = c.id AND pcm.user_id <> $3 AND pcm.removed_at IS NULL
+			ORDER BY pcm.joined_at ASC, u.id ASC
+			LIMIT 1
+		) peer ON c.type = 'direct'
+		LEFT JOIN LATERAL (
+			SELECT m.created_at
+			FROM messages m
+			WHERE m.conversation_id = c.id AND m.space_id = $1 AND m.deleted_at IS NULL
+			ORDER BY m.created_at DESC, m.id DESC
+			LIMIT 1
+		) latest ON TRUE
+		WHERE cm.user_id = $3 AND cm.removed_at IS NULL AND c.type IN ('direct', 'group')
+		ORDER BY activity_at DESC, c.id ASC
+	`, r.spaceID, botID, botUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]BotConversationSummary, 0, 8)
+	for rows.Next() {
+		var item BotConversationSummary
+		var activityAt time.Time
+		if err := rows.Scan(
+			&item.ID,
+			&item.Type,
+			&item.Title,
+			&item.AllowSend,
+			&item.AllowTrigger,
+			&item.AllowContext,
+			&item.MaxMessages,
+			&item.GroupPolicyStatus,
+			&activityAt,
+		); err != nil {
+			return nil, err
+		}
+		item.UpdatedAt = activityAt.UTC().Format(time.RFC3339Nano)
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 func (r *PGRepository) ForwardMessages(ctx context.Context, actorID, targetConversationID string, messageIDs []string, now time.Time) ([]string, error) {
@@ -781,6 +883,27 @@ func (r *PGRepository) ForwardMessages(ctx context.Context, actorID, targetConve
 			VALUES ($1, $2, $3, $4, 'human', 'user', 'duallane.message+json;v=1', $5, $6, $7, $8)
 		`, newID, r.spaceID, targetConversationID, actorID, contentJSON, plainText, string(metaJSON), now)
 		if err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO message_attachments (message_id, attachment_id)
+			SELECT $1, attachment_id FROM message_attachments WHERE message_id = $2
+			ON CONFLICT DO NOTHING
+		`, newID, srcID); err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO message_custom_emotes (message_id, custom_emote_id)
+			SELECT $1, custom_emote_id FROM message_custom_emotes WHERE message_id = $2
+			ON CONFLICT DO NOTHING
+		`, newID, srcID); err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO message_emote_collection_shares (message_id, share_id)
+			SELECT $1, share_id FROM message_emote_collection_shares WHERE message_id = $2
+			ON CONFLICT DO NOTHING
+		`, newID, srcID); err != nil {
 			return nil, err
 		}
 		if err := emitMessageCreatedEvent(ctx, tx, r.spaceID, actorID, targetConversationID, newID, now); err != nil {

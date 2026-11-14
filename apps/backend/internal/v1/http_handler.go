@@ -6,25 +6,40 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/botgateway"
 )
 
 type ActorResolver interface {
 	ResolveActor(context.Context, *http.Request) (*auth.Actor, error)
 }
 
+type BotAuthenticator interface {
+	Authenticate(context.Context, string, botgateway.TokenAuthOptions) (*botgateway.Auth, error)
+}
+
 type HTTPHandler struct {
 	service  *Service
 	resolver ActorResolver
+	botAuth  BotAuthenticator
 }
 
 func NewHTTPHandler(service *Service, resolver ActorResolver) *HTTPHandler {
 	return &HTTPHandler{service: service, resolver: resolver}
 }
 
+func (h *HTTPHandler) WithBotAuthenticator(botAuth BotAuthenticator) *HTTPHandler {
+	h.botAuth = botAuth
+	return h
+}
+
 func (h *HTTPHandler) Mount(r chi.Router) {
+	r.Get("/api/bot/v2/conversations", h.handleBotListConversations)
+	r.Patch("/api/bot/v2/messages/{messageId}", h.handleBotEditMessage)
+
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Post("/auth/qr/start", h.handleQRStart)
 		r.Post("/auth/qr/{sessionId}/exchange", h.handleQRExchange)
@@ -520,6 +535,85 @@ func (h *HTTPHandler) handleAdminStorageCleanup(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *HTTPHandler) authenticateBotRequest(w http.ResponseWriter, r *http.Request) (*botgateway.Auth, bool) {
+	w.Header().Set("Cache-Control", "no-store")
+	if h.botAuth == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "v1.unavailable", "Bot 网关尚未就绪")
+		return nil, false
+	}
+	authorization := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authorization, "Bearer") {
+		writeJSONError(w, http.StatusUnauthorized, botgateway.CodeInvalidToken, botgateway.MessageInvalidToken)
+		return nil, false
+	}
+	if _, err := botgateway.ExtractBearerToken(authorization); err != nil {
+		writeBotGatewayError(w, err)
+		return nil, false
+	}
+	botAuth, err := h.botAuth.Authenticate(r.Context(), authorization, botgateway.TokenAuthOptions{
+		SpaceID: auth.DefaultSpaceID,
+	})
+	if err != nil {
+		writeBotGatewayError(w, err)
+		return nil, false
+	}
+	if botAuth == nil {
+		writeJSONError(w, http.StatusUnauthorized, botgateway.CodeInvalidToken, botgateway.MessageInvalidToken)
+		return nil, false
+	}
+	return botAuth, true
+}
+
+func writeBotGatewayError(w http.ResponseWriter, err error) {
+	var gwErr *botgateway.Error
+	if errors.As(err, &gwErr) && gwErr != nil {
+		status := gwErr.StatusCode
+		if status < 400 || status >= 600 {
+			status = http.StatusUnauthorized
+		}
+		writeJSONError(w, status, gwErr.Code, gwErr.Message)
+		return
+	}
+	writeJSONError(w, http.StatusUnauthorized, botgateway.CodeInvalidToken, botgateway.MessageInvalidToken)
+}
+
+func (h *HTTPHandler) handleBotListConversations(w http.ResponseWriter, r *http.Request) {
+	botAuth, ok := h.authenticateBotRequest(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.service.ListBotConversations(r.Context(), botAuth.BotID, botAuth.UserID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"conversations": items})
+}
+
+func (h *HTTPHandler) handleBotEditMessage(w http.ResponseWriter, r *http.Request) {
+	botAuth, ok := h.authenticateBotRequest(w, r)
+	if !ok {
+		return
+	}
+	if err := botgateway.RequireScope(botAuth, botgateway.ScopeMessagesSend); err != nil {
+		writeBotGatewayError(w, err)
+		return
+	}
+	var body struct {
+		PlainText string `json:"plainText"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, botgateway.CodeInvalidRequest, "请求参数无效")
+		return
+	}
+	messageID := chi.URLParam(r, "messageId")
+	if err := h.service.EditMessage(r.Context(), botAuth.UserID, messageID, body.PlainText); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messageId": messageID})
 }
 
 func writeServiceError(w http.ResponseWriter, err error) {

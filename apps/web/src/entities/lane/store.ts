@@ -4,7 +4,7 @@ import { extractP2PRoomFromUrl, scrubP2PRoomFromUrl } from "@/shared/lib/p2p-lan
 export type LaneId = "workspace" | "p2p";
 export type EntryView = "entry" | "workspace";
 export type ThemeMode = "system" | "light" | "dark";
-export type SettingsTab = "appearance" | "profile" | "devices" | "qr" | "space" | "bots";
+export type SettingsTab = "appearance" | "profile" | "emotes" | "devices" | "qr" | "space" | "bots";
 export type SpaceAdminTab = "overview" | "members" | "invites" | "storage";
 export type InspectorTab = "thread" | "details" | "file";
 
@@ -32,6 +32,8 @@ interface LaneUIState {
   inspectorFile: LightboxItem | null;
   settingsOpen: boolean;
   settingsTab: SettingsTab;
+  pendingBotSetupId: string;
+  pendingSharedEmotePackId: string;
   adminConsoleOpen: boolean;
   adminConsoleTab: SpaceAdminTab;
   searchOpen: boolean;
@@ -50,6 +52,8 @@ interface LaneUIState {
   openSettings: (tab?: SettingsTab) => void;
   closeSettings: () => void;
   setSettingsTab: (tab: SettingsTab) => void;
+  setPendingBotSetupId: (setupId: string) => void;
+  setPendingSharedEmotePackId: (shareId: string) => void;
   openAdminConsole: (tab?: SpaceAdminTab) => void;
   closeAdminConsole: () => void;
   setAdminConsoleTab: (tab: SpaceAdminTab) => void;
@@ -118,6 +122,7 @@ export function inferEntryViewFromLocation(
     if (
       params.get("lane") === "workspace" ||
       params.has("invite") ||
+      params.has("setup") ||
       params.has("error") ||
       params.has("authError")
     ) {
@@ -125,6 +130,24 @@ export function inferEntryViewFromLocation(
     }
   }
   return "entry";
+}
+
+export function extractBotSetupIdFromLocation(
+  loc: Partial<Pick<Location, "search">> | undefined =
+    typeof window !== "undefined" ? window.location : undefined
+): string {
+  if (!loc?.search) return "";
+  const raw = (new URLSearchParams(loc.search).get("setup") || "").trim();
+  return /^setup_[A-Za-z0-9_-]{8,}$/u.test(raw) ? raw : "";
+}
+
+export function extractSharedEmotePackIdFromLocation(
+  loc: Partial<Pick<Location, "pathname">> | undefined =
+    typeof window !== "undefined" ? window.location : undefined
+): string {
+  const pathname = loc?.pathname || "";
+  const match = /^\/workspace\/emotes\/shared\/([A-Za-z0-9_-]{8,128})\/?$/u.exec(pathname);
+  return match ? match[1] : "";
 }
 
 export const useLaneStore = create<LaneUIState>((set, get) => ({
@@ -138,6 +161,8 @@ export const useLaneStore = create<LaneUIState>((set, get) => ({
   inspectorFile: null,
   settingsOpen: false,
   settingsTab: "appearance",
+  pendingBotSetupId: extractBotSetupIdFromLocation(),
+  pendingSharedEmotePackId: extractSharedEmotePackIdFromLocation(),
   adminConsoleOpen: false,
   adminConsoleTab: "overview",
   searchOpen: false,
@@ -217,6 +242,24 @@ export const useLaneStore = create<LaneUIState>((set, get) => ({
     })),
   closeSettings: () => set({ settingsOpen: false }),
   setSettingsTab: (settingsTab) => set({ settingsTab }),
+  setPendingBotSetupId: (pendingBotSetupId) => {
+    if (
+      !pendingBotSetupId &&
+      typeof window !== "undefined" &&
+      window.location?.search &&
+      window.history?.replaceState
+    ) {
+      const params = new URLSearchParams(window.location.search);
+      if (params.has("setup")) {
+        params.delete("setup");
+        const rest = params.toString();
+        const nextUrl = `${window.location.pathname || "/workspace"}${rest ? `?${rest}` : ""}${window.location.hash || ""}`;
+        window.history.replaceState(null, "", nextUrl);
+      }
+    }
+    set({ pendingBotSetupId });
+  },
+  setPendingSharedEmotePackId: (pendingSharedEmotePackId) => set({ pendingSharedEmotePackId }),
   openAdminConsole: (tab) =>
     set((s) => ({
       adminConsoleOpen: true,

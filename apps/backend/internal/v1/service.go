@@ -37,6 +37,7 @@ type Repository interface {
 	ListBotCommandsByBot(ctx context.Context, actorID, botID string) ([]BotCommand, error)
 	CreateMultiBot(ctx context.Context, actorID, name string, now time.Time) (string, error)
 	UpsertBotWebhook(ctx context.Context, actorID, botID, url, secretHash string, enabled bool, now time.Time) (BotWebhookConfig, error)
+	ListBotConversations(ctx context.Context, botID, botUserID string) ([]BotConversationSummary, error)
 	GetAdminOverview(ctx context.Context, actorID string, now time.Time) (AdminOverviewResponse, error)
 	ListAdminInvites(ctx context.Context, actorID string, now time.Time) (AdminInviteListResponse, error)
 	ListAdminAuditLogs(ctx context.Context, actorID, resultFilter, query string, limit int) ([]AdminAuditLogItem, error)
@@ -353,6 +354,20 @@ func (s *Service) UpsertBotWebhook(ctx context.Context, actorID, botID, url, sec
 		return BotWebhookConfig{}, fmt.Errorf("%w: webhook secret must be at least 16 chars", ErrInvalidInput)
 	}
 	return s.repo.UpsertBotWebhook(ctx, actorID, botID, strings.TrimSpace(url), secret, enabled, s.now())
+}
+
+func (s *Service) ListBotConversations(ctx context.Context, botID, botUserID string) ([]BotConversationSummary, error) {
+	if strings.TrimSpace(botID) == "" || strings.TrimSpace(botUserID) == "" {
+		return nil, ErrForbidden
+	}
+	items, err := s.repo.ListBotConversations(ctx, strings.TrimSpace(botID), strings.TrimSpace(botUserID))
+	if err != nil {
+		return nil, err
+	}
+	if items == nil {
+		return []BotConversationSummary{}, nil
+	}
+	return items, nil
 }
 
 func (s *Service) GetAdminOverview(ctx context.Context, actorID string) (AdminOverviewResponse, error) {

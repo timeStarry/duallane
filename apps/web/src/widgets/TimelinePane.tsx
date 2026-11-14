@@ -10,6 +10,7 @@ import {
   Download,
   FileText,
   Forward,
+  Heart,
   LogOut,
   MessageSquareText,
   PanelRightOpen,
@@ -26,7 +27,9 @@ import {
   Smile,
   X,
 } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
+import { isSingleImageEmoteText, renderMessageParts } from "@/emotes";
+import { useEmoteStore } from "@/entities/emote/store";
 import { useLaneStore } from "@/entities/lane/store";
 import {
   useWorkspaceStore,
@@ -55,9 +58,17 @@ import {
   Tooltip,
 } from "@/shared/ui";
 import { DualLaneCardKit } from "@/widgets/DualLaneCardKit";
+import {
+  EmoteStickerPopover,
+  extractFavoritableSource,
+  isEmotePackShareOnlyMessage,
+  isJumboStickerMessage,
+  MessageRichContent,
+  ReactionKeyDisplay,
+  ReactionPickerPopoverContent,
+} from "@/widgets/EmoteSystem";
 import { cn } from "@/shared/lib/cn";
 
-const QUICK_REACTIONS = ["👍", "❤️", "🎉", "🔥", "👀"];
 const GROUP_WINDOW_MS = 5 * 60 * 1000;
 
 function isGroupedPair(a?: V1Message, b?: V1Message): boolean {
@@ -432,6 +443,7 @@ export function TimelinePane() {
                 msg.attachment && safeInlineImageMime(msg.attachment.mimeType)
               );
               const isImageOnlyP2P = !msg.text && isInlineP2PImg;
+              const isJumboP2PSticker = !msg.attachment && isSingleImageEmoteText(msg.text || "");
               return (
                 <motion.div
                   key={msg.id}
@@ -449,14 +461,28 @@ export function TimelinePane() {
                     data-p2p-message-id={msg.id}
                     data-delivery-status={msg.deliveryStatus}
                     className={cn(
-                      "max-w-[72%] max-compact:max-w-[88%] rounded-[18px] text-[14px] leading-relaxed shadow-2xs",
-                      isImageOnlyP2P ? "px-2 py-1.5" : "px-3.5 py-2",
-                      msg.isOwn
-                        ? "rounded-br-[6px] bg-dl-lane-direct text-dl-on-direct"
-                        : "rounded-bl-[6px] dl-glass-elevated border border-dl-border-hairline text-dl-text-primary"
+                      "max-w-[72%] max-compact:max-w-[88%] text-[14px] leading-relaxed",
+                      isJumboP2PSticker
+                        ? "p-0.5 text-dl-text-primary"
+                        : cn(
+                            "rounded-[18px] shadow-2xs",
+                            isImageOnlyP2P ? "px-2 py-1.5" : "px-3.5 py-2",
+                            msg.isOwn
+                              ? "rounded-br-[6px] bg-dl-lane-direct text-dl-on-direct"
+                              : "rounded-bl-[6px] dl-glass-elevated border border-dl-border-hairline text-dl-text-primary"
+                          )
                     )}
                   >
-                    {msg.text && <div className="whitespace-pre-wrap break-words">{msg.text}</div>}
+                    {msg.text && (
+                      <div
+                        className={cn(
+                          "whitespace-pre-wrap break-words",
+                          isJumboP2PSticker && "dl-jumbo-sticker p-1"
+                        )}
+                      >
+                        {renderMessageParts(msg.text)}
+                      </div>
+                    )}
 
                     {msg.attachment && (
                       <div className={cn("space-y-1.5", msg.text && "mt-2")}>
@@ -534,7 +560,7 @@ export function TimelinePane() {
                     <div
                       className={cn(
                         "mt-1 flex items-center justify-end gap-1.5 text-[10px] tabular-nums",
-                        msg.isOwn ? "opacity-90" : "text-dl-text-tertiary"
+                        msg.isOwn && !isJumboP2PSticker ? "opacity-90" : "text-dl-text-tertiary"
                       )}
                     >
                       <span>
@@ -613,6 +639,11 @@ export function TimelinePane() {
               >
                 <Paperclip className="size-4" strokeWidth={1.85} />
               </IconButton>
+              <EmoteStickerPopover
+                lane="p2p"
+                disabled={Boolean(hasRoomError)}
+                onInsertText={(t) => setP2PDraft(`${p2pDraft}${t}`)}
+              />
               <input
                 value={p2pDraft}
                 onChange={(e) => setP2PDraft(e.target.value)}
@@ -881,6 +912,13 @@ export function TimelinePane() {
             const isPinned = activeConv.pinnedMessageIds.includes(msg.id);
             const hasReactionsOrThread =
               Object.keys(msg.reactions).length > 0 || (msg.threadReplyCount || 0) > 0;
+            const favoritableSource = extractFavoritableSource(msg);
+            const isEditableTextMsg =
+              isOwn &&
+              !msg.card &&
+              !msg.blocks?.some(
+                (b) => b.type === "emoji" || b.type === "emote_collection"
+              );
 
             return (
               <div
@@ -910,22 +948,32 @@ export function TimelinePane() {
                         <Smile className="size-3.5" strokeWidth={1.85} />
                       </IconButton>
                     </PopoverTrigger>
-                    <PopoverContent side="top" align={isOwn ? "end" : "start"} className="p-1">
-                      <div className="flex items-center gap-0.5">
-                        {QUICK_REACTIONS.map((emoji) => (
-                          <Button
-                            key={emoji}
-                            size="sm"
-                            variant="ghost"
-                            className="h-7 w-7 rounded-full p-0 text-sm"
-                            onClick={() => void toggleReaction(activeConv.id, msg.id, emoji)}
-                          >
-                            {emoji}
-                          </Button>
-                        ))}
-                      </div>
+                    <PopoverContent side="top" align={isOwn ? "end" : "start"} className="p-1.5">
+                      <ReactionPickerPopoverContent
+                        onSelectReaction={(key) => void toggleReaction(activeConv.id, msg.id, key)}
+                      />
                     </PopoverContent>
                   </Popover>
+
+                  {favoritableSource && (
+                    <IconButton
+                      size="sm"
+                      variant="ghost"
+                      className="size-6 rounded-full hover:text-dl-danger"
+                      label="收藏贴纸"
+                      onClick={() =>
+                        void useEmoteStore
+                          .getState()
+                          .favoriteFromMessage(
+                            { messageId: msg.id, ...favoritableSource },
+                            undefined,
+                            isPreviewMode
+                          )
+                      }
+                    >
+                      <Heart className="size-3.5" strokeWidth={1.85} />
+                    </IconButton>
+                  )}
 
                   <IconButton
                     size="sm"
@@ -977,7 +1025,7 @@ export function TimelinePane() {
                     )}
                   </IconButton>
 
-                  {isOwn && !msg.card && (
+                  {isEditableTextMsg && (
                     <IconButton
                       size="sm"
                       variant="ghost"
@@ -1020,9 +1068,57 @@ export function TimelinePane() {
                       <DualLaneCardKit card={msg.card} onAction={triggerCardAction} />
                     ) : (
                       (() => {
+                        const isJumboSticker = isJumboStickerMessage(msg);
+                        const isPackShareOnly = isEmotePackShareOnlyMessage(msg);
+
+                        if (isJumboSticker || isPackShareOnly) {
+                          return (
+                            <div
+                              className={cn(
+                                "flex flex-col",
+                                isOwn ? "items-end" : "items-start"
+                              )}
+                            >
+                              <MessageRichContent msg={msg} jumbo={isJumboSticker} />
+                              <div className="mt-0.5 flex items-center gap-1 px-1 text-[10px] tabular-nums text-dl-text-tertiary select-none">
+                                {msg.editedAt && <span>(已编辑)</span>}
+                                <span>
+                                  {new Date(msg.createdAt).toLocaleTimeString([], {
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  })}
+                                </span>
+                                {isOwn && (
+                                  <span className="inline-flex items-center">
+                                    {msg.status === "sending" ? (
+                                      <Clock className="size-3" strokeWidth={2} />
+                                    ) : msg.status === "failed" ? (
+                                      <AlertCircle className="size-3 text-dl-danger" strokeWidth={2} />
+                                    ) : msg.status === "read" ? (
+                                      <CheckCheck className="size-3.5 text-dl-lane-shared" strokeWidth={2} />
+                                    ) : (
+                                      <Check className="size-3" strokeWidth={2} />
+                                    )}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        const hasCustomOrShareBlock = Boolean(
+                          msg.blocks?.some(
+                            (b) =>
+                              b.type === "emoji" ||
+                              b.type === "emote_collection" ||
+                              b.type === "mention" ||
+                              b.type === "link"
+                          )
+                        );
                         const hasVisibleText =
-                          (!msg.attachments?.length || msg.plainText !== "[文件]") &&
-                          Boolean(msg.plainText);
+                          hasCustomOrShareBlock ||
+                          ((!msg.attachments?.length || msg.plainText !== "[文件]") &&
+                            Boolean(msg.plainText));
                         const allInlineImages =
                           Boolean(msg.attachments?.length) &&
                           msg.attachments!.every(
@@ -1073,9 +1169,7 @@ export function TimelinePane() {
                               </Button>
                             )}
 
-                            {hasVisibleText && (
-                              <div className="whitespace-pre-wrap break-words">{msg.plainText}</div>
-                            )}
+                            {hasVisibleText && <MessageRichContent msg={msg} />}
 
                             {msg.attachments && msg.attachments.length > 0 && (
                               <div
@@ -1222,7 +1316,7 @@ export function TimelinePane() {
                                 : "border-dl-border-hairline bg-dl-surface-subtle/75 text-dl-text-secondary"
                             )}
                           >
-                            <span>{emoji}</span>
+                            <ReactionKeyDisplay emoteKey={emoji} />
                             <span>{info.count}</span>
                           </Button>
                         ))}
@@ -1411,6 +1505,17 @@ export function TimelinePane() {
           >
             <Paperclip className="size-4" strokeWidth={1.85} />
           </IconButton>
+
+          <EmoteStickerPopover
+            lane="workspace"
+            conversationId={activeConv.id}
+            replyToId={replyToId}
+            disabled={Boolean(editingMsg)}
+            onInsertText={(t) => {
+              setDraft(activeConv.id, `${draft}${t}`, replyToId);
+              composerRef.current?.focus();
+            }}
+          />
 
           <textarea
             ref={composerRef}

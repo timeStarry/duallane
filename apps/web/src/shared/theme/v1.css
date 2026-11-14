@@ -244,3 +244,35 @@ body {
   border: 1px solid var(--dl-line-strong);
   border-radius: 5px;
 }
+
+/* Inline Emotes, Reaction Glyphs & Telegram-Style Jumbo Stickers */
+.message-emote-image {
+  display: inline-block;
+  width: 24px;
+  height: 24px;
+  margin: 0 2px;
+  vertical-align: -5px;
+  object-fit: contain;
+  user-select: none;
+}
+
+.dl-jumbo-sticker .message-emote-image {
+  display: block;
+  width: 96px;
+  height: 96px;
+  margin: 0;
+  vertical-align: middle;
+}
+
+.dl-reaction-glyph .message-emote-image {
+  display: block;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  vertical-align: middle;
+}
+
+.dl-reaction-glyph .unicode-emote {
+  font-size: 13px;
+  line-height: 1;
+}

@@ -10,6 +10,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Smartphone,
+  Smile,
   User,
 } from "lucide-react";
 import {
@@ -35,11 +36,13 @@ import {
   Switch,
 } from "@/shared/ui";
 import { BotSettingsPanel } from "@/widgets/BotSettingsPanel";
+import { EmoteStudioPanel } from "@/widgets/EmoteSystem";
 import { cn } from "@/shared/lib/cn";
 
 const TABS: Array<{ id: SettingsTab; label: string; icon: React.ComponentType<{ className?: string; strokeWidth?: number }> }> = [
   { id: "appearance", label: "外观", icon: Palette },
   { id: "profile", label: "个人", icon: User },
+  { id: "emotes", label: "表情", icon: Smile },
   { id: "devices", label: "设备", icon: Smartphone },
   { id: "qr", label: "扫码", icon: QrCode },
   { id: "bots", label: "机器人", icon: Bot },
@@ -466,6 +469,8 @@ export function SettingsModal() {
                 )}
               </div>
             )}
+
+            {isAuthenticated && settingsTab === "emotes" && <EmoteStudioPanel />}
 
             {isAuthenticated && settingsTab === "bots" && <BotSettingsPanel />}
           </div>

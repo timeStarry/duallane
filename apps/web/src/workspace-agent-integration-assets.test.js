@@ -15,7 +15,8 @@ describe("versioned Agent integration assets", () => {
       "hermes/duallane-channel.md",
       "v1/duallane-channel.md",
       "v1/openclaw/duallane-channel.md",
-      "v1/hermes/duallane-channel.md"
+      "v1/hermes/duallane-channel.md",
+      "v2/duallane-channel.md"
     ];
     for (const relativePath of paths) {
       const content = await readFile(path.join(publicRoot, relativePath), "utf8");

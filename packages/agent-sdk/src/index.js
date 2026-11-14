@@ -1,6 +1,7 @@
-import WebSocket from "ws";
+import crypto from "node:crypto";
+import { LiteWebSocket } from "./ws-lite.js";
 
-export const DUALLANE_AGENT_SDK_VERSION = "0.15.1";
+export const DUALLANE_AGENT_SDK_VERSION = "1.0.0";
 export const DUALLANE_GATEWAY_VERSION = 1;
 
 const OPEN = 1;
@@ -230,6 +231,23 @@ export class DualLaneAgentClient {
     return this.#request("POST", "/api/bot-gateway/v1/typing", { conversationId: normalizeId(conversationId, "conversationId") });
   }
 
+  async listConversations() {
+    return this.#request("GET", "/api/bot/v2/conversations");
+  }
+
+  async editMessage(messageId, plainText) {
+    const id = normalizeId(messageId, "messageId");
+    const text = typeof plainText === "string" ? plainText.trim() : "";
+    if (!text) throw new TypeError("plainText is required");
+    return this.#request("PATCH", `/api/bot/v2/messages/${encodeURIComponent(id)}`, { plainText: text });
+  }
+
+  async getUpdates(options = {}) {
+    const afterSequence = options.afterSequence === undefined ? 0 : normalizeSequence(options.afterSequence, true);
+    const limit = options.limit === undefined ? 50 : normalizeLimit(options.limit);
+    return this.#request("GET", `/api/bot/v2/updates?afterSequence=${afterSequence}&limit=${limit}`);
+  }
+
   async #request(method, path, body) {
     let response;
     try {
@@ -437,7 +455,7 @@ export class DualLaneAgentClient {
 }
 
 function defaultWebSocketFactory(url, options) {
-  return new WebSocket(url, { headers: options.headers });
+  return new LiteWebSocket(url, { headers: options?.headers });
 }
 
 function bindSocket(socket, event, listener) {

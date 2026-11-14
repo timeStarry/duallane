@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
-import { Download } from "lucide-react";
+import { Download, Heart } from "lucide-react";
+import { useEmoteStore } from "@/entities/emote/store";
 import { useLaneStore } from "@/entities/lane/store";
 import { useWorkspaceStore } from "@/entities/workspace/store";
 import { triggerBrowserDownload } from "@/shared/lib/download";
@@ -13,7 +14,7 @@ export function MediaLightbox() {
     closeLightbox,
     setLightboxIndex,
   } = useLaneStore();
-  const { jumpToMessage } = useWorkspaceStore();
+  const { jumpToMessage, isPreviewMode } = useWorkspaceStore();
 
   useEffect(() => {
     if (!lightboxOpen) return;
@@ -73,6 +74,25 @@ export function MediaLightbox() {
                 </Button>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                {current.sourceMessageId && current.id && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="gap-1.5"
+                    onClick={() =>
+                      void useEmoteStore
+                        .getState()
+                        .favoriteFromMessage(
+                          { messageId: current.sourceMessageId!, attachmentId: current.id },
+                          undefined,
+                          isPreviewMode
+                        )
+                    }
+                  >
+                    <Heart className="size-3.5" strokeWidth={1.9} />
+                    收藏为贴纸
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="secondary"

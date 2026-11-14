@@ -53,13 +53,28 @@ export function createCardKitBuilder(cardId?: string, cardType?: string): CardKi
 
 export class DualLaneBotV2 {
   constructor(options: { baseUrl: string; token: string; fetchImpl?: typeof fetch });
+  getMe(): Promise<unknown>;
+  listConversations(): Promise<{
+    conversations: Array<{
+      id: string;
+      type: "direct" | "group";
+      title: string;
+      allowSend: boolean;
+      allowTrigger: boolean;
+      allowContext: boolean;
+      maxMessages: number;
+      groupPolicyStatus?: string;
+      updatedAt: string;
+    }>;
+  }>;
+  getContext(conversationId: string, limit?: number): Promise<{ conversation: unknown; messages: unknown[] }>;
   getUpdates(afterSequence?: number, limit?: number): Promise<{ events: unknown[]; nextSequence: number }>;
   sendMessage(
     conversationId: string,
     text: string,
     options?: { replyToMessageId?: string; clientMessageId?: string; idempotencyKey?: string }
   ): Promise<{ message?: { id: string } }>;
-  editMessage(messageId: string, plainText: string): Promise<{ message: unknown }>;
+  editMessage(messageId: string, plainText: string): Promise<{ ok: boolean; messageId: string }>;
   sendCard(
     conversationId: string,
     cardDoc: DualLaneCardKitDocument,

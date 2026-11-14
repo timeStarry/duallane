@@ -110,6 +110,20 @@ export class DualLaneBotV2 {
     return body;
   }
 
+  getMe() {
+    return this.#request("/api/bot-gateway/v1/me", { method: "GET" });
+  }
+
+  listConversations() {
+    return this.#request("/api/bot/v2/conversations", { method: "GET" });
+  }
+
+  getContext(conversationId, limit = 50) {
+    return this.#request(`/api/bot-gateway/v1/conversations/${encodeURIComponent(conversationId)}/context?limit=${limit}`, {
+      method: "GET",
+    });
+  }
+
   getUpdates(afterSequence = 0, limit = 50) {
     return this.#request(`/api/bot/v2/updates?afterSequence=${afterSequence}&limit=${limit}`, {
       method: "GET",
@@ -130,7 +144,7 @@ export class DualLaneBotV2 {
   }
 
   editMessage(messageId, plainText) {
-    return this.#request(`/api/v1/messages/${encodeURIComponent(messageId)}`, {
+    return this.#request(`/api/bot/v2/messages/${encodeURIComponent(messageId)}`, {
       method: "PATCH",
       body: JSON.stringify({ plainText }),
     });

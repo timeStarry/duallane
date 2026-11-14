@@ -157,6 +157,18 @@ type BotWebhookConfig struct {
 	LastError  string `json:"lastError,omitempty"`
 }
 
+type BotConversationSummary struct {
+	ID                string `json:"id"`
+	Type              string `json:"type"`
+	Title             string `json:"title"`
+	AllowSend         bool   `json:"allowSend"`
+	AllowTrigger      bool   `json:"allowTrigger"`
+	AllowContext      bool   `json:"allowContext"`
+	MaxMessages       int    `json:"maxMessages"`
+	GroupPolicyStatus string `json:"groupPolicyStatus,omitempty"`
+	UpdatedAt         string `json:"updatedAt"`
+}
+
 type CardKitBlock struct {
 	Type     string         `json:"type"`
 	Title    string         `json:"title,omitempty"`

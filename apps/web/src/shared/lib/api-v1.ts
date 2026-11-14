@@ -368,16 +368,21 @@ export const apiV1 = {
       replyToMessageId?: string;
       clientMessageId?: string;
       attachmentIds?: string[];
+      blocks?: Array<Record<string, unknown>>;
     }
   ) => {
     const trimmedText = text.trim();
     const attachmentIds = (options?.attachmentIds || []).filter(Boolean);
-    const blocks: Array<Record<string, unknown>> = [];
-    if (trimmedText) {
-      blocks.push({ type: "text", text: trimmedText });
-    }
-    for (const attachmentId of attachmentIds) {
-      blocks.push({ type: "attachment", attachmentId });
+    const blocks: Array<Record<string, unknown>> = options?.blocks
+      ? [...options.blocks]
+      : [];
+    if (!options?.blocks) {
+      if (trimmedText) {
+        blocks.push({ type: "text", text: trimmedText });
+      }
+      for (const attachmentId of attachmentIds) {
+        blocks.push({ type: "attachment", attachmentId });
+      }
     }
     return requestJSON<Record<string, unknown>>("/api/workspace/messages", {
       method: "POST",
@@ -387,7 +392,7 @@ export const apiV1 = {
         replyToMessageId: options?.replyToMessageId || "",
         content: {
           format: "duallane.message+json;v=1",
-          plainText: trimmedText || (attachmentIds.length > 0 ? "[文件]" : ""),
+          plainText: trimmedText || (attachmentIds.length > 0 ? "[文件]" : "[表情]"),
           blocks,
         },
       }),
@@ -515,6 +520,90 @@ export const apiV1 = {
       method: "PUT",
       body: JSON.stringify({ url, secret, enabled }),
     }),
+  createBotSetupSession: (
+    botId: string,
+    requestedScopes: string[],
+    conversationIds?: string[]
+  ) =>
+    requestJSON<{ session: BotSetupSession; setupUrl: string }>(
+      `/api/workspace/bots/${encodeURIComponent(botId)}/setup-sessions`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          requestedScopes,
+          ...(conversationIds ? { conversationIds } : {}),
+        }),
+      }
+    ),
+  getBotSetupSession: (sessionId: string) =>
+    requestJSON<{ session: BotSetupSession }>(
+      `/api/workspace/bot-setup/${encodeURIComponent(sessionId)}`
+    ),
+  approveBotSetupSession: (
+    sessionId: string,
+    scopes: string[],
+    conversationIds?: string[]
+  ) =>
+    requestJSON<{ session: BotSetupSession }>(
+      `/api/workspace/bot-setup/${encodeURIComponent(sessionId)}/approve`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          scopes,
+          ...(conversationIds ? { conversationIds } : {}),
+        }),
+      }
+    ),
+  denyBotSetupSession: (sessionId: string) =>
+    requestJSON<{ session: BotSetupSession }>(
+      `/api/workspace/bot-setup/${encodeURIComponent(sessionId)}/deny`,
+      { method: "POST" }
+    ),
+  getBotConnection: (botId: string) =>
+    requestJSON<{ connection: BotConnectionInfo | null }>(
+      `/api/workspace/bots/${encodeURIComponent(botId)}/connection`
+    ),
+  testBotConnection: (botId: string) =>
+    requestJSON<{ connection: BotConnectionInfo | null }>(
+      `/api/workspace/bots/${encodeURIComponent(botId)}/connection/test`,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      }
+    ),
+  updateBotContextGrant: (
+    botId: string,
+    conversationId: string,
+    patch: { allowTrigger?: boolean; allowContext?: boolean; maxMessages?: number }
+  ) =>
+    requestJSON<{ grant: BotContextGrant }>(
+      `/api/workspace/bots/${encodeURIComponent(botId)}/context-grants/${encodeURIComponent(conversationId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      }
+    ),
+  listBotGroupPolicies: (botId: string) =>
+    requestJSON<{ policies: BotGroupPolicy[] }>(
+      `/api/workspace/bots/${encodeURIComponent(botId)}/group-policies`
+    ),
+  updateBotGroupPolicy: (
+    botId: string,
+    conversationId: string,
+    patch: {
+      status?: string;
+      allowTrigger?: boolean;
+      allowContext?: boolean;
+      maxMessages?: number;
+    }
+  ) =>
+    requestJSON<{ policy: BotGroupPolicy }>(
+      `/api/workspace/bots/${encodeURIComponent(botId)}/group-policies/${encodeURIComponent(conversationId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      }
+    ),
 
   // Space Governance Console (Owner / Admin only)
   getAdminOverview: () =>
@@ -579,6 +668,139 @@ export const apiV1 = {
         method: "PUT",
         body: JSON.stringify({ visibleUserIds }),
       }
+    ),
+
+  // Emotes, Stickers & Collections (Telegram-style Pack & Subscription System)
+  getEmoteSettings: () =>
+    requestJSON<{ settings: EmoteSettingsDTO }>("/api/workspace/me/emote-settings"),
+  updateEmoteSettings: (patch: {
+    enabledPackIds?: string[];
+    clickImageEmoteToSend?: boolean;
+    replyAutoMention?: boolean;
+  }) =>
+    requestJSON<{ settings: EmoteSettingsDTO }>("/api/workspace/me/emote-settings", {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
+  getEmoteLibrary: () =>
+    requestJSON<EmoteLibraryDTO>("/api/workspace/me/emote-library"),
+  uploadCustomEmote: async (
+    file: File,
+    options?: { collectionId?: string; addToLibrary?: boolean }
+  ): Promise<{ emote: CustomEmoteDTO }> => {
+    const params = new URLSearchParams();
+    if (options?.collectionId) {
+      params.set("collectionId", options.collectionId);
+      if (options.addToLibrary === false) {
+        params.set("addToLibrary", "false");
+      }
+    }
+    const qs = params.toString();
+    const rawBuffer = await file.arrayBuffer();
+    return requestJSON<{ emote: CustomEmoteDTO }>(
+      `/api/workspace/me/emotes${qs ? `?${qs}` : ""}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": file.type || "application/octet-stream",
+          "X-DualLane-File-Name": encodeURIComponent(file.name),
+        },
+        body: rawBuffer,
+      }
+    );
+  },
+  favoriteMessageEmote: (input: {
+    messageId: string;
+    customEmoteId?: string;
+    attachmentId?: string;
+    emoteKey?: string;
+  }) =>
+    requestJSON<{ emote: CustomEmoteDTO }>("/api/workspace/me/emotes/favorite", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  renameCustomEmote: (emoteId: string, label: string) =>
+    requestJSON<{ emote: CustomEmoteDTO }>(
+      `/api/workspace/me/emotes/${encodeURIComponent(emoteId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ label }),
+      }
+    ),
+  deleteCustomEmote: (emoteId: string) =>
+    requestJSON<Record<string, unknown>>(
+      `/api/workspace/me/emotes/${encodeURIComponent(emoteId)}`,
+      { method: "DELETE" }
+    ),
+  createEmoteCollection: (name: string, emoteIds?: string[]) =>
+    requestJSON<{ collection: EmoteCollectionDTO }>("/api/workspace/me/emote-collections", {
+      method: "POST",
+      body: JSON.stringify({ name, ...(emoteIds?.length ? { emoteIds } : {}) }),
+    }),
+  renameEmoteCollection: (collectionId: string, name: string) =>
+    requestJSON<{ collection: EmoteCollectionDTO }>(
+      `/api/workspace/me/emote-collections/${encodeURIComponent(collectionId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ name }),
+      }
+    ),
+  deleteEmoteCollection: (collectionId: string, disposition: "keep" | "remove" = "keep") =>
+    requestJSON<Record<string, unknown>>(
+      `/api/workspace/me/emote-collections/${encodeURIComponent(collectionId)}?itemDisposition=${disposition}`,
+      { method: "DELETE" }
+    ),
+  addEmotesToCollection: (collectionId: string, emoteIds: string[]) =>
+    requestJSON<{ collection: EmoteCollectionDTO }>(
+      `/api/workspace/me/emote-collections/${encodeURIComponent(collectionId)}/items`,
+      {
+        method: "POST",
+        body: JSON.stringify({ emoteIds }),
+      }
+    ),
+  removeEmoteFromCollection: (collectionId: string, emoteId: string) =>
+    requestJSON<{ collection: EmoteCollectionDTO }>(
+      `/api/workspace/me/emote-collections/${encodeURIComponent(collectionId)}/items/${encodeURIComponent(emoteId)}`,
+      { method: "DELETE" }
+    ),
+  updateEmoteCollectionSubscription: (collectionId: string, enabled: boolean) =>
+    requestJSON<{ collection?: EmoteCollectionDTO; library?: EmoteLibraryDTO }>(
+      `/api/workspace/me/emote-collections/${encodeURIComponent(collectionId)}/source-subscription`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ enabled }),
+      }
+    ),
+  createEmoteCollectionShare: (collectionId: string) =>
+    requestJSON<{ share: EmoteCollectionShareDetailDTO }>(
+      `/api/workspace/me/emote-collections/${encodeURIComponent(collectionId)}/shares`,
+      { method: "POST" }
+    ),
+  getEmoteCollectionShare: (shareId: string) =>
+    requestJSON<{ share: EmoteCollectionShareDetailDTO }>(
+      `/api/workspace/emote-collection-shares/${encodeURIComponent(shareId)}`
+    ),
+  importEmoteCollectionShare: (
+    shareId: string,
+    payload: {
+      emoteIds?: string[];
+      asCollection?: boolean;
+      collectionName?: string;
+      subscribeToSourceChanges?: boolean;
+    }
+  ) =>
+    requestJSON<{
+      importedCount?: number;
+      collection?: EmoteCollectionDTO;
+      library?: EmoteLibraryDTO;
+    }>(`/api/workspace/emote-collection-shares/${encodeURIComponent(shareId)}/import`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  revokeEmoteCollectionShare: (shareId: string) =>
+    requestJSON<{ share: EmoteCollectionShareDetailDTO }>(
+      `/api/workspace/me/emote-collection-shares/${encodeURIComponent(shareId)}`,
+      { method: "DELETE" }
     ),
 };
 
@@ -680,4 +902,177 @@ export interface MemberVisibilityRule {
   automaticUserIds: string[];
   grantedUserIds: string[];
   visibleUserIds: string[];
+}
+
+export interface BotSetupSession {
+  id: string;
+  bot?: {
+    id: string;
+    botUserId?: string;
+    name: string;
+    status?: string;
+  } | null;
+  status:
+    | "created"
+    | "awaiting_user"
+    | "approved"
+    | "exchanged"
+    | "denied"
+    | "expired"
+    | "revoked"
+    | string;
+  requestedScopes: string[];
+  approvedScopes: string[];
+  requestedConversations: string[];
+  approvedConversations: string[];
+  clientName?: string | null;
+  clientVersion?: string | null;
+  protocolVersion?: string;
+  capabilities?: string[];
+  expiresAt: string;
+  approvedAt?: string | null;
+  exchangedAt?: string | null;
+  deniedAt?: string | null;
+  createdAt: string;
+}
+
+export interface BotConnectionInfo {
+  id?: string;
+  botId: string;
+  status: "connected" | "disconnected" | "paused" | "revoked" | string;
+  adapterVersion?: string | null;
+  connectedAt?: string | null;
+  disconnectedAt?: string | null;
+  lastHeartbeatAt?: string | null;
+  lastProcessedAt?: string | null;
+  lastErrorCode?: string | null;
+  lastErrorAt?: string | null;
+  updatedAt?: string;
+  testedAt?: string;
+}
+
+export interface BotContextGrant {
+  grantId: string;
+  botId: string;
+  conversationId: string;
+  allowTrigger: boolean;
+  allowContext: boolean;
+  maxMessages?: number | null;
+  updatedAt?: string;
+}
+
+export interface BotGroupPolicy {
+  botId?: string;
+  conversationId: string;
+  status: "active" | "pending" | "revoked" | string;
+  allowTrigger: boolean;
+  allowContext: boolean;
+  contextMaxMessages?: number | null;
+  updatedAt?: string;
+}
+
+export interface CustomEmoteDTO {
+  id: string;
+  kind: "image" | string;
+  label: string;
+  token: string;
+  src?: string;
+  emoteKey?: string;
+  animated: boolean;
+  byteSize?: number;
+  width?: number;
+  height?: number;
+  sourceType?: string;
+  originalFileName?: string;
+  createdAt: string;
+}
+
+export interface EmoteCollectionSubscriptionDTO {
+  eligible: boolean;
+  enabled: boolean;
+  status: "off" | "synced" | "paused" | "detached" | string;
+  sourceCollectionId?: string | null;
+  sourceRevision?: number | null;
+  lastSyncedAt?: string | null;
+  readOnly: boolean;
+}
+
+export interface EmoteCollectionDTO {
+  id: string;
+  name: string;
+  sourceCollectionId?: string | null;
+  originalCreatorUserId: string;
+  originalCreator: { id: string; displayName: string };
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+  sourceSubscription: EmoteCollectionSubscriptionDTO;
+  items: CustomEmoteDTO[];
+  itemCount: number;
+}
+
+export interface EmoteLibraryDTO {
+  entries: Array<{
+    id: string;
+    type: "emote" | "collection" | string;
+    emote?: CustomEmoteDTO;
+    collection?: EmoteCollectionDTO;
+  }>;
+  emotes: CustomEmoteDTO[];
+  collections: EmoteCollectionDTO[];
+  usage: {
+    itemCount: number;
+    totalBytes: number;
+    subscribedItemCount?: number;
+    subscribedTotalBytes?: number;
+    totalItemCount?: number;
+    allTotalBytes?: number;
+    collectionCount?: number;
+    subscribedCollectionCount?: number;
+    overLimit?: boolean;
+  };
+  limits: {
+    maxItems?: number | null;
+    maxTotalBytes: number;
+    maxInputBytes: number;
+    maxCollections?: number | null;
+    maxCollectionItems: number;
+    maxBatchItems: number;
+  };
+}
+
+export interface EmoteSettingsDTO {
+  availablePacks: Array<{ id: string; label: string; defaultEnabled: boolean }>;
+  enabledPackIds: string[];
+  clickImageEmoteToSend: boolean;
+  replyAutoMention: boolean;
+  autoHideMessages?: boolean;
+  autoHideMessageTypes?: string[];
+  minimumEnabled?: number;
+}
+
+export interface EmoteCollectionShareCoverDTO {
+  id: string;
+  label: string;
+  src: string;
+  animated?: boolean;
+}
+
+export interface EmoteCollectionShareSummaryDTO {
+  id: string;
+  name: string;
+  itemCount: number;
+  createdAt: string;
+  revokedAt?: string | null;
+  sharedBy: { id: string; displayName: string };
+  originalCreator: { id: string; displayName: string };
+  canRevoke: boolean;
+  covers?: EmoteCollectionShareCoverDTO[];
+  sharePath: string;
+}
+
+export interface EmoteCollectionShareDetailDTO extends EmoteCollectionShareSummaryDTO {
+  sourceCollectionId: string;
+  canSubscribeToSourceChanges: boolean;
+  items: CustomEmoteDTO[];
 }

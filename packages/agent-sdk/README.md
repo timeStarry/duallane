@@ -1,8 +1,45 @@
-# DualLane Agent SDK
+# DualLane Agent SDK (`@duallane/agent-sdk`)
 
-`@duallane/agent-sdk` is the versioned JavaScript client for Bot Gateway
-protocol v1. It is intended for server-side Agent runtimes. Bot tokens are sent
-only in the `Authorization` header and are never accepted in the DualLane URL.
+Zero-dependency universal JavaScript SDK, CLI (`duallane-agent`), and Standard Stdio MCP Server for the DualLane Agent Bot Gateway (Node.js 20+, zero external npm packages required).
+
+Works out-of-the-box with **Claude Code, Codex CLI, Cursor, Windsurf, Gemini CLI, Antigravity, OpenClaw**, and custom Node.js runtimes.
+
+## 1. One-Command Interactive Pairing (CLI)
+
+Generate a pairing link in **DualLane → 设置 → 机器人 → 一键配对 AI Agent**, then run:
+
+```bash
+node packages/agent-sdk/bin/duallane-agent.mjs setup "https://duallane.example.com/workspace?setup=setup_..." --name "My Agent"
+```
+
+After you click **确认授权** in DualLane, credentials are saved with `0600` permissions to `~/.config/duallane/agents/default.json` (never printed to stdout).
+
+## 2. Standard Stdio MCP Server
+
+Configure in any MCP-compatible coding agent (`.mcp.json`, `~/.cursor/mcp.json`, `mcp_config.json`, etc.):
+
+```json
+{
+  "mcpServers": {
+    "duallane": {
+      "command": "node",
+      "args": ["/absolute/path/to/duallane/packages/agent-sdk/bin/duallane-agent.mjs", "mcp", "--profile", "default"]
+    }
+  }
+}
+```
+
+Tools provided: `duallane_setup_start`, `duallane_setup_finish`, `duallane_status`, `duallane_list_conversations`, `duallane_get_context`, `duallane_send_message`, `duallane_edit_message`, `duallane_send_card`, and `duallane_wait_for_event`.
+
+## 3. Local Incoming Channel Bridge (`listen`)
+
+Bridge incoming `@Bot` mentions, DMs, `/commands`, and interactive card clicks over outbound WebSocket (`wss://.../ws/bot-gateway`, zero public IP needed) to any local CLI command:
+
+```bash
+node packages/agent-sdk/bin/duallane-agent.mjs listen --cmd "my-local-agent-handler"
+```
+
+## 4. Programmatic SDK (`DualLaneAgentClient` & `DualLaneBotV2`)
 
 ```js
 import { DualLaneAgentClient } from "@duallane/agent-sdk";
@@ -13,8 +50,10 @@ const client = new DualLaneAgentClient({
   adapterVersion: "my-agent/1.0.0"
 });
 
+const { conversations } = await client.listConversations();
+
 await client.connect({
-  lastSequence: Number(loadCursor() ?? 0),
+  lastSequence: 0,
   async onEvent(event) {
     const context = await client.getContext(event.conversationId);
     await client.sendMessage({
@@ -23,47 +62,8 @@ await client.connect({
       idempotencyKey: `${event.eventId}:reply`,
       clientMessageId: `${event.eventId}:message`
     });
-  },
-  async onSyncRequired(state) {
-    await rebuildAuthorizedState(state.currentSequence);
   }
 });
 ```
 
-For the user-approved bootstrap flow, use `DualLaneAgentSetupClient` before
-constructing the authenticated client:
-
-```js
-import { DualLaneAgentSetupClient } from "@duallane/agent-sdk";
-
-const setup = new DualLaneAgentSetupClient({ url: process.env.DUALLANE_URL });
-await setup.request(process.env.DUALLANE_SETUP_SESSION, {
-  requestedScopes: ["messages:read_trigger", "messages:send", "commands:receive"],
-  clientName: "my-agent/1.0.0",
-  protocolVersion: "v1",
-  capabilities: ["poll_setup", "write_config"]
-});
-await waitUntilApproved(() => setup.status(process.env.DUALLANE_SETUP_SESSION));
-const { token } = await setup.exchange(process.env.DUALLANE_SETUP_SESSION, {
-  clientName: "my-agent/1.0.0"
-});
-```
-
-The setup session is short-lived and one-time. Store the returned token only
-in the Agent runtime's secret store; never include it in a URL or model prompt.
-
-The SDK handles Gateway `hello`, heartbeat, ordered event consumption,
-acknowledgement, bounded reconnect backoff, and replay from the last
-acknowledged sequence. An event is acknowledged only after `onEvent` resolves.
-Persist `client.lastSequence` after processing if the runtime needs durable
-resume across process restarts.
-
-Available REST helpers include `getMe`, `getContext`, `acknowledge`,
-`sendMessage`, `sendCard`, `sendFeishuCard`, `updateCard`,
-`updateFeishuCard`, and `setTyping`. Every operation is still limited by the
-Bot token scopes and DualLane conversation policy.
-
-The `@duallane/agent-sdk/openclaw` export provides the minimal official
-DualLane transport bridge. OpenClaw channel-plugin registration remains in the
-OpenClaw process; pass its inbound dispatcher as `dispatchInbound` and map its
-outbound adapter to `sendText`, `sendCard`, and `setTyping`.
+Bot tokens are sent exclusively in `Authorization: Bearer ...` headers and are redacted from all SDK error messages.

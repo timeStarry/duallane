@@ -50,5 +50,6 @@ test("DualLaneBotV2.streamReply sends initial message and flushes PATCH edits", 
   assert.equal(res.text, "Hello DualLane!");
   assert.equal(calls[0].method, "POST");
   assert.equal(calls[calls.length - 1].method, "PATCH");
+  assert.equal(calls[calls.length - 1].url, "https://duallane.local/api/bot/v2/messages/msg_stream_1");
   assert.equal(calls[calls.length - 1].body.plainText, "Hello DualLane!");
 });

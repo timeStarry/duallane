@@ -4,9 +4,12 @@ import {
   ApiClientError,
   apiV1,
   type DevInviteProfileInput,
+  type EmoteCollectionShareSummaryDTO,
   type ThreadReplyItem,
   type ThreadViewResponse,
 } from "@/shared/lib/api-v1";
+import { emotePacks } from "@/emotes";
+import { useEmoteStore } from "@/entities/emote/store";
 import { buildDevPreviewFixture } from "./demo-fixture";
 import {
   loadWorkspaceDrafts,
@@ -51,6 +54,17 @@ export interface V1MessageAttachment {
   sourceMessageId?: string;
 }
 
+export type V1MessageBlock =
+  | { type: "text"; text: string }
+  | { type: "mention"; userId: string; label: string }
+  | { type: "link"; url: string; label?: string }
+  | { type: "emoji"; shortcode: string }
+  | {
+      type: "emote_collection";
+      shareId: string;
+      share?: EmoteCollectionShareSummaryDTO;
+    };
+
 export interface V1Message {
   id: string;
   clientMessageId?: string;
@@ -59,6 +73,7 @@ export interface V1Message {
   senderId: string;
   senderName: string;
   plainText: string;
+  blocks?: V1MessageBlock[];
   replyToId?: string;
   threadRootId?: string;
   threadReplyCount?: number;
@@ -137,6 +152,15 @@ interface WorkspaceState {
     replyToId?: string,
     attachments?: V1MessageAttachment[]
   ) => Promise<void>;
+  sendCustomSticker: (
+    conversationId: string,
+    customEmoteId: string,
+    replyToId?: string
+  ) => Promise<void>;
+  sendStickerPackShare: (
+    conversationId: string,
+    share: EmoteCollectionShareSummaryDTO
+  ) => Promise<void>;
   editWorkspaceMessage: (conversationId: string, messageId: string, newText: string) => Promise<void>;
   toggleReaction: (conversationId: string, messageId: string, emoji: string) => Promise<void>;
   togglePinMessage: (conversationId: string, messageId: string) => Promise<void>;
@@ -194,6 +218,60 @@ function teardownP2PTransport() {
     activeP2PTransport = null;
     t.close();
   }
+}
+
+const unicodeToEmoteKey = new Map<string, string>();
+for (const pack of emotePacks) {
+  if (pack.id !== "emoji") continue;
+  for (const item of pack.items) {
+    if (item.kind === "unicode" && item.value) {
+      unicodeToEmoteKey.set(item.value, `emoji:${item.id}`);
+    }
+  }
+}
+
+export function normalizeReactionEmoteKey(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return "";
+  if (trimmed.includes(":")) return trimmed;
+  return unicodeToEmoteKey.get(trimmed) || trimmed;
+}
+
+function mapRawBlocks(rawContent: unknown): V1MessageBlock[] | undefined {
+  if (!rawContent || typeof rawContent !== "object") return undefined;
+  const blocksRaw = (rawContent as Record<string, unknown>).blocks;
+  if (!Array.isArray(blocksRaw) || blocksRaw.length === 0) return undefined;
+  const out: V1MessageBlock[] = [];
+  for (const b of blocksRaw as Array<Record<string, unknown>>) {
+    const t = String(b.type || "");
+    if (t === "text" && typeof b.text === "string") {
+      out.push({ type: "text", text: b.text });
+    } else if (t === "mention" && b.userId) {
+      out.push({
+        type: "mention",
+        userId: String(b.userId),
+        label: String(b.label || b.userId),
+      });
+    } else if (t === "link" && b.url) {
+      out.push({
+        type: "link",
+        url: String(b.url),
+        label: b.label ? String(b.label) : undefined,
+      });
+    } else if (t === "emoji" && b.shortcode) {
+      out.push({ type: "emoji", shortcode: String(b.shortcode) });
+    } else if (t === "emote_collection" && b.shareId) {
+      out.push({
+        type: "emote_collection",
+        shareId: String(b.shareId),
+        share:
+          b.share && typeof b.share === "object"
+            ? (b.share as EmoteCollectionShareSummaryDTO)
+            : undefined,
+      });
+    }
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 function mapRawReactions(raw: unknown): Record<string, { count: number; reactedByMe: boolean }> {
@@ -277,6 +355,7 @@ function mapRawMessage(
           (kind === "system" ? "系统通知" : "成员")
       ),
     plainText: String(m.plainText || m.text || ""),
+    blocks: mapRawBlocks(m.content),
     replyToId: m.replyToMessageId
       ? String(m.replyToMessageId)
       : m.replyToId
@@ -859,6 +938,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             return;
           }
 
+          if (evType === "emote.library.updated") {
+            void useEmoteStore.getState().refreshLibrary(false);
+            return;
+          }
+
           if (evType === "conversation.created" || evType === "conversation.updated") {
             const c = (payload.conversation || {}) as Record<string, unknown>;
             const convId = String(c.id || eventObj.conversationId || "");
@@ -964,7 +1048,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             return;
           }
 
-          if (evType === "message.created" || evType === "message.recalled") {
+          if (
+            evType === "message.created" ||
+            evType === "message.recalled" ||
+            evType === "message.edited"
+          ) {
             const rawMsg = (payload.message || {}) as Record<string, unknown>;
             const convId = String(
               rawMsg.conversationId || payload.conversationId || eventObj.conversationId || ""
@@ -1357,6 +1445,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         saveBootstrapShellCache(get());
         connectWorkspaceRealtime(parsed.eventCursor);
         void setWorkspaceSyncCursor(parsed.eventCursor);
+        void useEmoteStore.getState().loadEmoteState(false);
 
         if (firstConvId) {
           void get().loadConversationMessages(firstConvId);
@@ -1618,6 +1707,185 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       }
     },
 
+    sendCustomSticker: async (conversationId, customEmoteId, replyToId) => {
+      const user = get().currentUser;
+      const cleanedId = customEmoteId.trim();
+      if (!user || !cleanedId) return;
+      const shortcode = cleanedId.startsWith("custom:") ? cleanedId : `custom:${cleanedId}`;
+      const clientMessageId = `cli_${crypto.randomUUID()}`;
+      const tempId = `opt_${clientMessageId}`;
+      const stickerBlock: V1MessageBlock = { type: "emoji", shortcode };
+      const optimistic: V1Message = {
+        id: tempId,
+        clientMessageId,
+        conversationId,
+        senderId: user.id,
+        senderName: user.displayName,
+        plainText: "[表情]",
+        blocks: [stickerBlock],
+        replyToId,
+        createdAt: new Date().toISOString(),
+        status: "sending",
+        reactions: {},
+      };
+      set((s) => ({
+        messagesByConv: {
+          ...s.messagesByConv,
+          [conversationId]: [...(s.messagesByConv[conversationId] || []), optimistic],
+        },
+      }));
+
+      if (get().isPreviewMode) {
+        set((s) => ({
+          messagesByConv: {
+            ...s.messagesByConv,
+            [conversationId]: (s.messagesByConv[conversationId] || []).map((m) =>
+              m.id === tempId ? { ...m, status: "read" } : m
+            ),
+          },
+        }));
+        return;
+      }
+
+      try {
+        const res = await apiV1.sendMessage(conversationId, "[表情]", {
+          replyToMessageId: replyToId,
+          clientMessageId,
+          blocks: [{ type: "emoji", shortcode }],
+        });
+        const msgObj = (res.message || {}) as Record<string, unknown>;
+        const realId = msgObj.id ? String(msgObj.id) : tempId;
+        const serverMapped = msgObj.id
+          ? mapRawMessage(conversationId, msgObj, get().members)
+          : null;
+        set((s) => {
+          const list = s.messagesByConv[conversationId] || [];
+          const alreadyDeliveredByWs = list.some((m) => m.id === realId && m.id !== tempId);
+          const nextList = alreadyDeliveredByWs
+            ? list.filter((m) => m.id !== tempId)
+            : list.map((m) =>
+                m.id === tempId
+                  ? serverMapped
+                    ? { ...serverMapped, status: "sent" as const }
+                    : { ...m, id: realId, status: "sent" as const }
+                  : m
+              );
+          return {
+            messagesByConv: { ...s.messagesByConv, [conversationId]: nextList },
+            conversations: s.conversations[conversationId]
+              ? {
+                  ...s.conversations,
+                  [conversationId]: {
+                    ...s.conversations[conversationId],
+                    lastMessageText: "[表情]",
+                    lastMessageAt: optimistic.createdAt,
+                  },
+                }
+              : s.conversations,
+          };
+        });
+      } catch {
+        set((s) => ({
+          messagesByConv: {
+            ...s.messagesByConv,
+            [conversationId]: (s.messagesByConv[conversationId] || []).map((m) =>
+              m.id === tempId ? { ...m, status: "failed" } : m
+            ),
+          },
+        }));
+      }
+    },
+
+    sendStickerPackShare: async (conversationId, share) => {
+      const user = get().currentUser;
+      if (!user || !share?.id) return;
+      const clientMessageId = `cli_${crypto.randomUUID()}`;
+      const tempId = `opt_${clientMessageId}`;
+      const displayPlain = `[表情包] ${share.name}`;
+      const shareBlock: V1MessageBlock = {
+        type: "emote_collection",
+        shareId: share.id,
+        share,
+      };
+      const optimistic: V1Message = {
+        id: tempId,
+        clientMessageId,
+        conversationId,
+        senderId: user.id,
+        senderName: user.displayName,
+        plainText: displayPlain,
+        blocks: [shareBlock],
+        createdAt: new Date().toISOString(),
+        status: "sending",
+        reactions: {},
+      };
+      set((s) => ({
+        messagesByConv: {
+          ...s.messagesByConv,
+          [conversationId]: [...(s.messagesByConv[conversationId] || []), optimistic],
+        },
+      }));
+
+      if (get().isPreviewMode) {
+        set((s) => ({
+          messagesByConv: {
+            ...s.messagesByConv,
+            [conversationId]: (s.messagesByConv[conversationId] || []).map((m) =>
+              m.id === tempId ? { ...m, status: "read" } : m
+            ),
+          },
+        }));
+        return;
+      }
+
+      try {
+        const res = await apiV1.sendMessage(conversationId, displayPlain, {
+          clientMessageId,
+          blocks: [{ type: "emote_collection", shareId: share.id }],
+        });
+        const msgObj = (res.message || {}) as Record<string, unknown>;
+        const realId = msgObj.id ? String(msgObj.id) : tempId;
+        const serverMapped = msgObj.id
+          ? mapRawMessage(conversationId, msgObj, get().members)
+          : null;
+        set((s) => {
+          const list = s.messagesByConv[conversationId] || [];
+          const alreadyDeliveredByWs = list.some((m) => m.id === realId && m.id !== tempId);
+          const nextList = alreadyDeliveredByWs
+            ? list.filter((m) => m.id !== tempId)
+            : list.map((m) =>
+                m.id === tempId
+                  ? serverMapped
+                    ? { ...serverMapped, status: "sent" as const }
+                    : { ...m, id: realId, status: "sent" as const }
+                  : m
+              );
+          return {
+            messagesByConv: { ...s.messagesByConv, [conversationId]: nextList },
+            conversations: s.conversations[conversationId]
+              ? {
+                  ...s.conversations,
+                  [conversationId]: {
+                    ...s.conversations[conversationId],
+                    lastMessageText: displayPlain,
+                    lastMessageAt: optimistic.createdAt,
+                  },
+                }
+              : s.conversations,
+          };
+        });
+      } catch {
+        set((s) => ({
+          messagesByConv: {
+            ...s.messagesByConv,
+            [conversationId]: (s.messagesByConv[conversationId] || []).map((m) =>
+              m.id === tempId ? { ...m, status: "failed" } : m
+            ),
+          },
+        }));
+      }
+    },
+
     editWorkspaceMessage: async (conversationId, messageId, newText) => {
       const trimmed = newText.trim();
       if (!trimmed) return;
@@ -1637,26 +1905,28 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     },
 
     toggleReaction: async (conversationId, messageId, emoji) => {
+      const normalizedKey = normalizeReactionEmoteKey(emoji);
+      if (!normalizedKey) return;
       set((s) => ({
         messagesByConv: {
           ...s.messagesByConv,
           [conversationId]: (s.messagesByConv[conversationId] || []).map((m) => {
             if (m.id !== messageId) return m;
-            const prev = m.reactions[emoji] || { count: 0, reactedByMe: false };
+            const prev = m.reactions[normalizedKey] || { count: 0, reactedByMe: false };
             const nextReacted = !prev.reactedByMe;
             const nextCount = Math.max(0, prev.count + (nextReacted ? 1 : -1));
             const nextReactions = { ...m.reactions };
             if (nextCount === 0) {
-              delete nextReactions[emoji];
+              delete nextReactions[normalizedKey];
             } else {
-              nextReactions[emoji] = { count: nextCount, reactedByMe: nextReacted };
+              nextReactions[normalizedKey] = { count: nextCount, reactedByMe: nextReacted };
             }
             return { ...m, reactions: nextReactions };
           }),
         },
       }));
       if (!get().isPreviewMode) {
-        await apiV1.reactToMessage(messageId, emoji).catch(() => {});
+        await apiV1.reactToMessage(messageId, normalizedKey).catch(() => {});
       }
     },
 
