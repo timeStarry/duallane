@@ -31,6 +31,7 @@ test("Node online code and image are retired while canonical SQL and browser too
   const canonicalMobileMigration = await readFile(path.join(root, "apps/web/server/migrations/035_mobile_sessions.sql"));
   const reviewedMobileFixture = await readFile(path.join(root, "apps/backend/internal/platform/migrations/testdata/035_mobile_sessions.sql"));
   assert.deepEqual(canonicalMobileMigration, reviewedMobileFixture, "activated mobile migration must preserve the reviewed bridge fixture bytes");
+  await access(path.join(root, "apps/backend/internal/platform/migrations/testdata/036_v1_clean_architecture.sql"));
   await access(path.join(root, "packages/agent-sdk/package.json"));
 });
 

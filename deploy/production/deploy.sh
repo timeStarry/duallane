@@ -19,6 +19,7 @@ source "${SCRIPT_DIR}/release-helper.sh"
 
 bootstrap=false
 expected_commit=""
+allow_branch=""
 release_profile="go-full"
 go_upgrade=false
 previous_release_snapshot=""
@@ -61,6 +62,14 @@ while (($# > 0)); do
         exit 2
       fi
       expected_commit="$2"
+      shift 2
+      ;;
+    --allow-branch)
+      if (($# < 2)); then
+        echo "Missing value for --allow-branch" >&2
+        exit 2
+      fi
+      allow_branch="$2"
       shift 2
       ;;
     --release-profile)
@@ -544,9 +553,20 @@ if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
 fi
 
 readonly current_branch="$(git symbolic-ref --quiet --short HEAD || true)"
-if [[ "${current_branch}" != "main" ]]; then
-  echo "Production deployment requires the main branch, found ${current_branch:-detached HEAD}" >&2
-  exit 1
+if [[ -z "${allow_branch}" ]]; then
+  if [[ "${current_branch}" != "main" ]]; then
+    echo "Production deployment requires the main branch, found ${current_branch:-detached HEAD}" >&2
+    exit 1
+  fi
+else
+  if [[ ! "${allow_branch}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+    echo "Invalid --allow-branch value: ${allow_branch}" >&2
+    exit 2
+  fi
+  if [[ "${current_branch}" != "${allow_branch}" ]]; then
+    echo "Production deployment requires branch ${allow_branch}, found ${current_branch:-detached HEAD}" >&2
+    exit 1
+  fi
 fi
 readonly current_commit="$(git rev-parse HEAD)"
 requested_commit="${expected_commit}"
@@ -562,14 +582,27 @@ if [[ "${current_commit}" != "${expected_commit}" ]]; then
   echo "Expected commit ${expected_commit}, found ${current_commit}" >&2
   exit 1
 fi
-if ! git show-ref --verify --quiet refs/remotes/origin/main; then
-  echo "Production deployment requires a fetched origin/main reference" >&2
-  exit 1
-fi
-readonly origin_main_commit="$(git rev-parse refs/remotes/origin/main)"
-if [[ "${current_commit}" != "${origin_main_commit}" ]]; then
-  echo "Production HEAD ${current_commit} does not match origin/main ${origin_main_commit}" >&2
-  exit 1
+readonly target_remote_ref="refs/remotes/origin/${allow_branch:-main}"
+if [[ -z "${allow_branch}" ]]; then
+  if ! git show-ref --verify --quiet refs/remotes/origin/main; then
+    echo "Production deployment requires a fetched origin/main reference" >&2
+    exit 1
+  fi
+  readonly origin_main_commit="$(git rev-parse refs/remotes/origin/main)"
+  if [[ "${current_commit}" != "${origin_main_commit}" ]]; then
+    echo "Production HEAD ${current_commit} does not match origin/main ${origin_main_commit}" >&2
+    exit 1
+  fi
+else
+  if ! git show-ref --verify --quiet "${target_remote_ref}"; then
+    echo "Production deployment requires a fetched origin/${allow_branch} reference" >&2
+    exit 1
+  fi
+  readonly origin_branch_commit="$(git rev-parse "${target_remote_ref}")"
+  if [[ "${current_commit}" != "${origin_branch_commit}" ]]; then
+    echo "Production HEAD ${current_commit} does not match origin/${allow_branch} ${origin_branch_commit}" >&2
+    exit 1
+  fi
 fi
 
 root_app_version="$(node -p "require('./package.json').version")"

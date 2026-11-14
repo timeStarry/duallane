@@ -158,6 +158,8 @@ func inspectCompatibleMigrationSchema(ctx context.Context, queryer Queryer, appl
 			err = inspectReviewed034Schema(ctx, queryer)
 		case ReleaseCompatibilityMobileMigrationName:
 			err = inspectReviewed035Schema(ctx, queryer)
+		case ReleaseCompatibilityV1MigrationName:
+			err = inspectReviewed036Schema(ctx, queryer)
 		default:
 			return errors.Join(ErrSchemaCompatibility, ErrCompatibleMigrationSchema)
 		}

@@ -205,7 +205,23 @@ func (r *PGRepository) Search(ctx context.Context, actorID, query, scope string,
 func (r *PGRepository) GetOrCreateSavedConversation(ctx context.Context, actorID string, now time.Time) (string, error) {
 	directKey := "saved:" + actorID
 	var id string
-	err := r.pool.QueryRow(ctx, `SELECT id FROM conversations WHERE space_id = $1 AND direct_key = $2`, r.spaceID, directKey).Scan(&id)
+	err := r.pool.QueryRow(ctx, `
+		SELECT c.id
+		FROM conversations c
+		WHERE c.space_id = $1
+		  AND (
+			c.direct_key = $2
+			OR (
+				c.type = 'saved'
+				AND EXISTS (
+					SELECT 1 FROM conversation_members cm
+					WHERE cm.conversation_id = c.id AND cm.user_id = $3 AND cm.removed_at IS NULL
+				)
+			)
+		  )
+		ORDER BY CASE WHEN c.direct_key = $2 THEN 0 ELSE 1 END, c.created_at ASC
+		LIMIT 1
+	`, r.spaceID, directKey, actorID).Scan(&id)
 	if err == nil {
 		return id, nil
 	}

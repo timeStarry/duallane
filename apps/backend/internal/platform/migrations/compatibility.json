@@ -9,6 +9,10 @@
     {
       "name": "035_mobile_sessions.sql",
       "sha256": "479d042a0a5f4d07886d3557901b5d8152b8714fe9dfeeceddfba94121e58061"
+    },
+    {
+      "name": "036_v1_clean_architecture.sql",
+      "sha256": "2649cdb3baf4130cee7040a492869db161dd89cae52c3afd27bc8bad922f28f4"
     }
   ]
 }

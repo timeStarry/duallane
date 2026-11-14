@@ -56,8 +56,23 @@ func TestPGSearchResolvesAttachmentSourceMessageFromJoinTable(t *testing.T) {
 	}).Run(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Stat(filepath.Join(migrationDirectory, "036_v1_clean_architecture.sql")); os.IsNotExist(err) {
+		deferredSQL, readErr := os.ReadFile(filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "../platform/migrations/testdata/036_v1_clean_architecture.sql")))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if _, execErr := conn.Exec(ctx, string(deferredSQL)); execErr != nil {
+			t.Fatal(execErr)
+		}
+	}
 
 	now := time.Date(2026, 11, 14, 5, 0, 0, 0, time.UTC)
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO spaces (id, slug, name, created_at)
+		VALUES ('default', 'default', 'Default', $1)
+	`, now); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := conn.Exec(ctx, `
 		INSERT INTO users (id, github_login, display_name, kind, created_at)
 		VALUES

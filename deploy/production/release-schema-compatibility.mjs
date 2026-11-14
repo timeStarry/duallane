@@ -36,6 +36,8 @@ export const REVIEWED_COMPATIBLE_MIGRATION = "034_workspace_chat_auto_hide.sql";
 export const REVIEWED_COMPATIBLE_MIGRATION_SHA256 = "b5c6ed855f9ca76a06f14ac590a8dd96fdec9cd2ec88c75dc5814990669658cb";
 export const REVIEWED_MOBILE_MIGRATION = "035_mobile_sessions.sql";
 export const REVIEWED_MOBILE_MIGRATION_SHA256 = "479d042a0a5f4d07886d3557901b5d8152b8714fe9dfeeceddfba94121e58061";
+export const REVIEWED_V1_MIGRATION = "036_v1_clean_architecture.sql";
+export const REVIEWED_V1_MIGRATION_SHA256 = "2649cdb3baf4130cee7040a492869db161dd89cae52c3afd27bc8bad922f28f4";
 
 const INSPECTION_REPORT_HEADER = "DLSCHEMA\t1";
 const INSPECTION_REPORT_END = "P_END";
@@ -902,12 +904,13 @@ function validatePolicy(input, migrations, scope) {
   if (!migrationByName.has(policy.baseMigration)) reject(`${scope}_policy_base_missing`);
   // Accept the immutable historical policy and this bridge's exact extension.
   // New SQL is still authorized only by the previous image's own declaration.
-  if (!Array.isArray(policy.compatibleMigrations) || ![1, 2].includes(policy.compatibleMigrations.length)) {
+  if (!Array.isArray(policy.compatibleMigrations) || ![1, 2, 3].includes(policy.compatibleMigrations.length)) {
     reject(`${scope}_policy_compatible_invalid`);
   }
   const reviewed = [
     { name: REVIEWED_COMPATIBLE_MIGRATION, sha256: REVIEWED_COMPATIBLE_MIGRATION_SHA256 },
     { name: REVIEWED_MOBILE_MIGRATION, sha256: REVIEWED_MOBILE_MIGRATION_SHA256 },
+    { name: REVIEWED_V1_MIGRATION, sha256: REVIEWED_V1_MIGRATION_SHA256 },
   ];
 
   const compatible = [];
@@ -950,8 +953,11 @@ function validatePolicy(input, migrations, scope) {
   }
   // The Go bridge binds 035 compatibility to the exact 001-034 required set.
   // A schema-33 image cannot claim 035 merely by carrying the extended JSON.
-  if (compatible.length === 2 && !migrationByName.has(REVIEWED_COMPATIBLE_MIGRATION)) {
+  if (compatible.length >= 2 && !migrationByName.has(REVIEWED_COMPATIBLE_MIGRATION)) {
     reject(`${scope}_policy_mobile_baseline_missing`);
+  }
+  if (compatible.length === 3 && !migrationByName.has(REVIEWED_MOBILE_MIGRATION)) {
+    reject(`${scope}_policy_v1_baseline_missing`);
   }
 
   return Object.freeze({

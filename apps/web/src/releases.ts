@@ -13,6 +13,15 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "0.20.1",
+    releasedAt: "2026-11-14",
+    title: "兼容性维护与界面整理",
+    summary: "精简首页沟通入口卡片，已有聊天、文件和个人设置继续可用。",
+    categories: [
+      { title: "首页与导航", items: ["首页提供清晰的一对一直连与共享空间双卡片入口，保留明暗外观切换", "已有消息、文件和邀请链接按原有方式继续使用"] }
+    ]
+  },
+  {
     version: "0.20.0",
     releasedAt: "2026-09-16",
     title: "Android 内部测试版接入",

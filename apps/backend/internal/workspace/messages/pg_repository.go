@@ -409,16 +409,11 @@ func (t *pgTx) InsertMessage(ctx context.Context, record MessageInsert) (bool, *
 
 func (t *pgTx) LinkMessageAttachment(ctx context.Context, spaceID, messageID, attachmentID string) error {
 	_, err := t.tx.Exec(ctx, `
-		WITH linked AS (
-			INSERT INTO message_attachments (message_id, attachment_id)
-			SELECT $1, a.id
-			FROM attachments a
-			WHERE a.id = $2 AND a.space_id = $3
-			ON CONFLICT DO NOTHING
-		)
-		UPDATE attachments
-		SET source_message_id = COALESCE(source_message_id, $1)
-		WHERE id = $2 AND space_id = $3 AND source_message_id IS NULL
+		INSERT INTO message_attachments (message_id, attachment_id)
+		SELECT $1, a.id
+		FROM attachments a
+		WHERE a.id = $2 AND a.space_id = $3
+		ON CONFLICT DO NOTHING
 	`, messageID, attachmentID, spaceID)
 	return err
 }
