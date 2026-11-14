@@ -1,6 +1,12 @@
 import { create } from "zustand";
 import type { DualLaneCardKitDocument } from "@duallane/protocol";
-import { apiV1, type ThreadReplyItem, type ThreadViewResponse } from "@/shared/lib/api-v1";
+import {
+  ApiClientError,
+  apiV1,
+  type DevInviteProfileInput,
+  type ThreadReplyItem,
+  type ThreadViewResponse,
+} from "@/shared/lib/api-v1";
 import { buildDevPreviewFixture } from "./demo-fixture";
 import {
   getWorkspaceSyncCursor,
@@ -11,11 +17,15 @@ import {
   setWorkspaceSyncCursor,
 } from "@/shared/lib/draft-db";
 import {
+  buildP2PShareUrl,
+  connectP2PRoomTransport,
+  createRemoteP2PRoom,
   deriveAesKey,
   encryptP2PPayload,
   generateRoomKeyString,
   type P2PChatMessage,
   type P2PRoomSession,
+  type P2PRoomTransport,
 } from "@/shared/lib/p2p-lane";
 
 export interface V1User {
@@ -40,6 +50,7 @@ export interface V1MessageAttachment {
 
 export interface V1Message {
   id: string;
+  clientMessageId?: string;
   conversationId: string;
   senderId: string;
   senderName: string;
@@ -72,9 +83,13 @@ export interface DraftEntry {
   replyToMessageId?: string;
 }
 
+export type WorkspaceAvailability = "checking" | "ready" | "disabled" | "unreachable";
+
 interface WorkspaceState {
   isPreviewMode: boolean;
   authStatus: "checking" | "unauthenticated" | "authenticated";
+  workspaceAvailability: WorkspaceAvailability;
+  workspaceStatusMessage: string | null;
   connectionStatus: "connected" | "reconnecting" | "offline";
   currentUser: V1User | null;
   quotaUsedBytes: number;
@@ -99,7 +114,7 @@ interface WorkspaceState {
   p2pDraft: string;
 
   bootstrapWorkspace: () => Promise<void>;
-  acceptInviteAndBootstrap: (inviteCode: string) => Promise<void>;
+  acceptInviteAndBootstrap: (inviteCode: string, profile?: DevInviteProfileInput) => Promise<void>;
   logout: () => Promise<void>;
   selectConversation: (conversationId: string) => void;
   loadConversationMessages: (conversationId: string) => Promise<void>;
@@ -124,19 +139,98 @@ interface WorkspaceState {
   sendP2PMessage: (text: string, replyToId?: string) => Promise<void>;
 }
 
+let activeP2PTransport: P2PRoomTransport | null = null;
+let activeP2PRoomToken = "";
+let activeP2PJoinPromise: Promise<void> | null = null;
+let activeWorkspaceSocket: WebSocket | null = null;
+let workspaceReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+function teardownWorkspaceSocket() {
+  if (workspaceReconnectTimer) {
+    clearTimeout(workspaceReconnectTimer);
+    workspaceReconnectTimer = null;
+  }
+  if (activeWorkspaceSocket) {
+    const ws = activeWorkspaceSocket;
+    activeWorkspaceSocket = null;
+    try {
+      ws.close(1000, "teardown");
+    } catch {
+      // Ignore close errors
+    }
+  }
+}
+
+function teardownP2PTransport() {
+  if (activeP2PTransport) {
+    const t = activeP2PTransport;
+    activeP2PTransport = null;
+    t.close();
+  }
+}
+
+function mapRawReactions(raw: unknown): Record<string, { count: number; reactedByMe: boolean }> {
+  const out: Record<string, { count: number; reactedByMe: boolean }> = {};
+  if (!Array.isArray(raw)) return out;
+  for (const item of raw as Array<Record<string, unknown>>) {
+    const key = String(item.emoteKey || item.emoji || item.key || "");
+    if (!key) continue;
+    const count = Number(item.count || 0);
+    if (count > 0) {
+      out[key] = {
+        count,
+        reactedByMe: Boolean(item.reactedByCurrentUser ?? item.reactedByMe),
+      };
+    }
+  }
+  return out;
+}
+
+function mapRawAttachments(
+  raw: unknown,
+  fallbackMessageId?: string
+): V1MessageAttachment[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  return (raw as Array<Record<string, unknown>>).map((a) => ({
+    id: String(a.id || ""),
+    fileName: String(a.fileName || a.name || "附件"),
+    mimeType: String(a.mimeType || "application/octet-stream"),
+    byteSize: Number(a.byteSize || a.size || 0),
+    url: String(a.downloadUrl || a.url || ""),
+    width: typeof a.width === "number" ? a.width : undefined,
+    height: typeof a.height === "number" ? a.height : undefined,
+    thumbHash: typeof a.thumbHash === "string" ? a.thumbHash : undefined,
+    sourceMessageId: a.sourceMessageId ? String(a.sourceMessageId) : fallbackMessageId,
+  }));
+}
+
 function mapRawMessage(
   conversationId: string,
   m: Record<string, unknown>,
   members: Record<string, V1User>
 ): V1Message {
-  const senderId = String(m.authorId || m.senderId || "");
+  const authorObj = (m.author && typeof m.author === "object" ? m.author : {}) as Record<
+    string,
+    unknown
+  >;
+  const senderId = String(m.authorId || m.senderId || authorObj.id || "");
+  const id = String(m.id || "");
   return {
-    id: String(m.id || ""),
+    id,
+    clientMessageId: m.clientMessageId ? String(m.clientMessageId) : undefined,
     conversationId,
     senderId,
     senderName:
       members[senderId]?.displayName ||
-      String(m.authorDisplayName || m.senderName || "成员"),
+      String(
+        m.authorRemark ||
+          m.authorNickname ||
+          m.authorName ||
+          m.authorDisplayName ||
+          authorObj.displayName ||
+          m.senderName ||
+          "成员"
+      ),
     plainText: String(m.plainText || m.text || ""),
     replyToId: m.replyToMessageId
       ? String(m.replyToMessageId)
@@ -148,13 +242,15 @@ function mapRawMessage(
     editedAt: m.editedAt ? String(m.editedAt) : undefined,
     createdAt: String(m.createdAt || new Date().toISOString()),
     status: "read",
-    reactions: {},
+    reactions: mapRawReactions(m.reactions),
+    attachments: mapRawAttachments(m.attachments, id),
     card: m.card as DualLaneCardKitDocument | undefined,
   };
 }
 
 export function parseBootstrapPayload(raw: Record<string, unknown>) {
   const authObj = (raw.auth || {}) as Record<string, unknown>;
+  const workspaceEnabled = authObj.enabled !== false;
   const userObj = (authObj.currentUser || raw.currentUser || raw.user || {}) as Record<
     string,
     unknown
@@ -206,15 +302,25 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
     const kind: V1Conversation["kind"] =
       rawType === "saved" ? "saved" : rawType === "direct" ? "direct" : "group";
     const lastMsg = (c.lastMessage || {}) as Record<string, unknown>;
+    const rawMemberList = Array.isArray(c.members)
+      ? (c.members as Array<Record<string, unknown>>).map((item) => String(item.id || ""))
+      : Array.isArray(c.memberIds)
+      ? c.memberIds.map(String)
+      : [];
     conversations[id] = {
       id,
       kind,
-      title: kind === "saved" ? "我的收藏" : String(c.title || c.name || "未命名对话"),
+      title:
+        kind === "saved"
+          ? "我的收藏"
+          : String(c.displayTitle || c.title || c.name || "未命名对话"),
       unreadCount: Number(c.unreadCount || 0),
       mentionCount: Number(c.mentionCount || 0),
       pinnedMessageIds: Array.isArray(c.pinnedMessageIds) ? c.pinnedMessageIds.map(String) : [],
-      memberIds: Array.isArray(c.memberIds) ? c.memberIds.map(String) : [],
-      lastMessageText: c.lastMessageText
+      memberIds: rawMemberList.filter(Boolean),
+      lastMessageText: c.lastMessagePlainText
+        ? String(c.lastMessagePlainText)
+        : c.lastMessageText
         ? String(c.lastMessageText)
         : lastMsg.plainText
         ? String(lastMsg.plainText)
@@ -225,7 +331,11 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
         ? String(lastMsg.createdAt)
         : undefined,
     };
-    const rawMsgs = Array.isArray(c.messages) ? c.messages : [];
+    const rawMsgs = Array.isArray(c.latestMessages)
+      ? c.latestMessages
+      : Array.isArray(c.messages)
+      ? c.messages
+      : [];
     messagesByConv[id] = rawMsgs.map((msg) =>
       mapRawMessage(id, msg as Record<string, unknown>, members)
     );
@@ -234,6 +344,7 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
   const eventCursor = Number(raw.eventCursor || 0);
 
   return {
+    workspaceEnabled,
     currentUser,
     quotaUsedBytes,
     quotaLimitBytes,
@@ -245,380 +356,803 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
   };
 }
 
-export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
-  isPreviewMode: false,
-  authStatus: "checking",
-  connectionStatus: "connected",
-  currentUser: null,
-  quotaUsedBytes: 0,
-  quotaLimitBytes: 512 * 1024 * 1024,
-  conversations: {},
-  conversationOrder: [],
-  messagesByConv: {},
-  members: {},
-  activeConversationId: null,
-  highlightedMessageId: null,
-  threadsByRootId: {},
-  drafts: {},
-  scrollTops: {},
-  editingMessageId: null,
+export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
+  const wireP2PSession = (roomId: string, key: CryptoKey) => {
+    teardownP2PTransport();
+    if (typeof window === "undefined" || typeof WebSocket === "undefined") return;
 
-  p2pRoom: null,
-  p2pAesKey: null,
-  p2pMessages: [],
-  p2pDraft: "",
+    const flushQueuedMessages = async (transport: P2PRoomTransport) => {
+      const queued = get().p2pMessages.filter((m) => m.isOwn && m.deliveryStatus === "queued");
+      for (const item of queued) {
+        set((s) => ({
+          p2pMessages: s.p2pMessages.map((m) =>
+            m.id === item.id ? { ...m, deliveryStatus: "sending" } : m
+          ),
+        }));
+        const ok = await transport.sendChat({
+          id: item.id,
+          author: item.senderName,
+          body: item.text,
+          at: item.createdAt,
+          replyToId: item.replyToId,
+        });
+        set((s) => ({
+          p2pMessages: s.p2pMessages.map((m) =>
+            m.id === item.id ? { ...m, deliveryStatus: ok ? "sent" : "queued" } : m
+          ),
+        }));
+      }
+    };
 
-  bootstrapWorkspace: async () => {
+    const transport = connectP2PRoomTransport(roomId, key, {
+      onPresenceChange: (update) => {
+        set((s) =>
+          s.p2pRoom && s.p2pRoom.roomId === roomId
+            ? {
+                p2pRoom: {
+                  ...s.p2pRoom,
+                  status: update.status,
+                  connectedPeers: update.connectedPeers,
+                  remotePeerCount: update.remotePeerCount,
+                  errorMessage: update.errorMessage,
+                },
+              }
+            : s
+        );
+        if (update.remotePeerCount > 0 && activeP2PTransport) {
+          void flushQueuedMessages(activeP2PTransport);
+        }
+      },
+      onIncomingChat: (incoming) => {
+        set((s) => {
+          if (s.p2pMessages.some((m) => m.id === incoming.id)) return s;
+          const nextMsg: P2PChatMessage = {
+            id: incoming.id,
+            senderName: incoming.author,
+            isOwn: false,
+            text: incoming.body,
+            replyToId: incoming.replyToId,
+            createdAt: incoming.at,
+            deliveryStatus: "delivered",
+            reactions: {},
+          };
+          return {
+            p2pMessages: [...s.p2pMessages, nextMsg],
+            p2pRoom: s.p2pRoom
+              ? { ...s.p2pRoom, keyMismatchWarning: false }
+              : s.p2pRoom,
+          };
+        });
+      },
+      onDeliveryAck: (messageId) => {
+        set((s) => ({
+          p2pMessages: s.p2pMessages.map((m) =>
+            m.id === messageId ? { ...m, deliveryStatus: "delivered" } : m
+          ),
+        }));
+      },
+      onKeyMismatch: () => {
+        set((s) => ({
+          p2pRoom: s.p2pRoom
+            ? {
+                ...s.p2pRoom,
+                keyMismatchWarning: true,
+              }
+            : s.p2pRoom,
+        }));
+      },
+    });
+    activeP2PTransport = transport;
+  };
+
+  const connectWorkspaceRealtime = (initialCursor: number) => {
+    teardownWorkspaceSocket();
     if (
-      import.meta.env.DEV &&
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("preview") === "1"
+      typeof window === "undefined" ||
+      typeof WebSocket === "undefined" ||
+      get().isPreviewMode
     ) {
-      const fixture = buildDevPreviewFixture();
-      set({
-        isPreviewMode: true,
-        authStatus: "authenticated",
-        connectionStatus: "connected",
-        currentUser: fixture.currentUser,
-        quotaUsedBytes: fixture.quotaUsedBytes,
-        quotaLimitBytes: fixture.quotaLimitBytes,
-        members: fixture.members,
-        conversations: fixture.conversations,
-        conversationOrder: fixture.conversationOrder,
-        messagesByConv: fixture.messagesByConv,
-        activeConversationId: fixture.activeConversationId,
-        threadsByRootId: fixture.threadsByRootId,
-        drafts: fixture.drafts,
-      });
       return;
     }
 
-    try {
-      const [drafts, scrollTops, raw] = await Promise.all([
-        loadWorkspaceDrafts(),
-        loadWorkspaceScrolls(),
-        apiV1.getBootstrap(),
-      ]);
-      const parsed = parseBootstrapPayload(raw);
-      if (!parsed.currentUser) {
-        set({ authStatus: "unauthenticated", drafts, scrollTops });
+    let cursor = Math.max(0, Math.trunc(initialCursor || 0));
+    const openSocket = () => {
+      if (get().authStatus !== "authenticated" || get().isPreviewMode) return;
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const ws = new WebSocket(`${protocol}//${window.location.host}/ws/workspace`);
+      activeWorkspaceSocket = ws;
+
+      ws.addEventListener("open", () => {
+        if (activeWorkspaceSocket !== ws) return;
+        ws.send(JSON.stringify({ type: "hello", version: 1, lastSeq: cursor }));
+      });
+
+      ws.addEventListener("message", (ev) => {
+        if (activeWorkspaceSocket !== ws || typeof ev.data !== "string") return;
+        let frame: Record<string, unknown>;
+        try {
+          frame = JSON.parse(ev.data) as Record<string, unknown>;
+        } catch {
+          return;
+        }
+
+        if (frame.type === "ready") {
+          if (typeof frame.currentSeq === "number" && frame.currentSeq > cursor) {
+            cursor = frame.currentSeq;
+            void setWorkspaceSyncCursor(cursor);
+          }
+          set({ connectionStatus: "connected" });
+          return;
+        }
+
+        if (frame.type === "sync.required") {
+          if (typeof frame.currentSeq === "number") {
+            cursor = frame.currentSeq;
+            void setWorkspaceSyncCursor(cursor);
+          }
+          void get().bootstrapWorkspace();
+          return;
+        }
+
+        if (frame.type === "event" && frame.event && typeof frame.event === "object") {
+          const eventObj = frame.event as Record<string, unknown>;
+          const seq = Number(eventObj.seq || 0);
+          if (seq > cursor) {
+            cursor = seq;
+            void setWorkspaceSyncCursor(cursor);
+          }
+          const evType = String(eventObj.type || "");
+          const payload = (eventObj.payload && typeof eventObj.payload === "object"
+            ? eventObj.payload
+            : {}) as Record<string, unknown>;
+
+          if (evType === "workspace.member_joined" || evType === "workspace.member_updated") {
+            const m = (payload.member || {}) as Record<string, unknown>;
+            const id = String(m.id || payload.userId || "");
+            if (id) {
+              set((s) => ({
+                members: {
+                  ...s.members,
+                  [id]: {
+                    id,
+                    displayName: String(m.remark || m.nickname || m.displayName || id),
+                    handle: m.githubLogin ? String(m.githubLogin) : undefined,
+                    role: (m.role as V1User["role"]) || "member",
+                    avatarUrl: m.avatarUrl ? String(m.avatarUrl) : undefined,
+                  },
+                },
+              }));
+            }
+            return;
+          }
+
+          if (evType === "conversation.created" || evType === "conversation.updated") {
+            const c = (payload.conversation || {}) as Record<string, unknown>;
+            const convId = String(c.id || eventObj.conversationId || "");
+            if (!convId) return;
+            const rawType = String(c.kind || c.type || "group");
+            const kind: V1Conversation["kind"] =
+              rawType === "saved" ? "saved" : rawType === "direct" ? "direct" : "group";
+            set((s) => {
+              const exists = Boolean(s.conversations[convId]);
+              const prev = s.conversations[convId];
+              const nextConv: V1Conversation = {
+                id: convId,
+                kind,
+                title:
+                  kind === "saved"
+                    ? "我的收藏"
+                    : String(c.displayTitle || c.title || prev?.title || "未命名对话"),
+                unreadCount:
+                  convId === s.activeConversationId
+                    ? 0
+                    : Number(c.unreadCount ?? prev?.unreadCount ?? 0),
+                mentionCount: prev?.mentionCount || 0,
+                pinnedMessageIds: prev?.pinnedMessageIds || [],
+                memberIds: Array.isArray(c.members)
+                  ? (c.members as Array<Record<string, unknown>>)
+                      .map((m) => String(m.id || ""))
+                      .filter(Boolean)
+                  : prev?.memberIds || [],
+                lastMessageText: c.lastMessagePlainText
+                  ? String(c.lastMessagePlainText)
+                  : prev?.lastMessageText,
+                lastMessageAt: c.lastMessageAt
+                  ? String(c.lastMessageAt)
+                  : prev?.lastMessageAt,
+              };
+              return {
+                conversations: { ...s.conversations, [convId]: nextConv },
+                conversationOrder: exists
+                  ? s.conversationOrder
+                  : [...s.conversationOrder, convId],
+              };
+            });
+            return;
+          }
+
+          if (evType === "message.created" || evType === "message.recalled") {
+            const rawMsg = (payload.message || {}) as Record<string, unknown>;
+            const convId = String(
+              rawMsg.conversationId || payload.conversationId || eventObj.conversationId || ""
+            );
+            if (!convId || !rawMsg.id) return;
+            const mapped = mapRawMessage(convId, rawMsg, get().members);
+            set((s) => {
+              const existing = s.messagesByConv[convId] || [];
+              const matchIndex = existing.findIndex(
+                (item) =>
+                  item.id === mapped.id ||
+                  (mapped.clientMessageId && item.clientMessageId === mapped.clientMessageId)
+              );
+              const nextList =
+                matchIndex >= 0
+                  ? existing.map((item, idx) =>
+                      idx === matchIndex ? { ...mapped, status: "read" as const } : item
+                    )
+                  : [...existing, mapped];
+
+              const prevConv = s.conversations[convId];
+              const isOwn = mapped.senderId === s.currentUser?.id;
+              const isActive = convId === s.activeConversationId;
+              const nextConv: V1Conversation = prevConv
+                ? {
+                    ...prevConv,
+                    lastMessageText: mapped.plainText,
+                    lastMessageAt: mapped.createdAt,
+                    unreadCount:
+                      isActive || isOwn ? prevConv.unreadCount : prevConv.unreadCount + 1,
+                  }
+                : {
+                    id: convId,
+                    kind: "group",
+                    title: String(
+                      (payload.conversation as Record<string, unknown> | undefined)
+                        ?.displayTitle ||
+                        (payload.conversation as Record<string, unknown> | undefined)?.title ||
+                        "新对话"
+                    ),
+                    unreadCount: isActive || isOwn ? 0 : 1,
+                    mentionCount: 0,
+                    pinnedMessageIds: [],
+                    memberIds: [],
+                    lastMessageText: mapped.plainText,
+                    lastMessageAt: mapped.createdAt,
+                  };
+
+              return {
+                messagesByConv: {
+                  ...s.messagesByConv,
+                  [convId]: nextList,
+                },
+                conversations: {
+                  ...s.conversations,
+                  [convId]: nextConv,
+                },
+                conversationOrder: prevConv
+                  ? s.conversationOrder
+                  : [...s.conversationOrder, convId],
+              };
+            });
+            return;
+          }
+
+          if (evType === "reaction.added" || evType === "reaction.removed") {
+            const msgId = String(payload.messageId || eventObj.targetId || "");
+            const convId = String(payload.conversationId || eventObj.conversationId || "");
+            if (!msgId || !convId) return;
+            const nextReactions = mapRawReactions(payload.reactions);
+            set((s) => ({
+              messagesByConv: {
+                ...s.messagesByConv,
+                [convId]: (s.messagesByConv[convId] || []).map((m) =>
+                  m.id === msgId ? { ...m, reactions: nextReactions } : m
+                ),
+              },
+            }));
+          }
+        }
+      });
+
+      ws.addEventListener("close", () => {
+        if (activeWorkspaceSocket !== ws) return;
+        activeWorkspaceSocket = null;
+        if (get().authStatus === "authenticated" && !get().isPreviewMode) {
+          set({ connectionStatus: "reconnecting" });
+          workspaceReconnectTimer = setTimeout(openSocket, 1800);
+        }
+      });
+    };
+
+    openSocket();
+  };
+
+  return {
+    isPreviewMode: false,
+    authStatus: "checking",
+    workspaceAvailability: "checking",
+    workspaceStatusMessage: null,
+    connectionStatus: "connected",
+    currentUser: null,
+    quotaUsedBytes: 0,
+    quotaLimitBytes: 512 * 1024 * 1024,
+    conversations: {},
+    conversationOrder: [],
+    messagesByConv: {},
+    members: {},
+    activeConversationId: null,
+    highlightedMessageId: null,
+    threadsByRootId: {},
+    drafts: {},
+    scrollTops: {},
+    editingMessageId: null,
+
+    p2pRoom: null,
+    p2pAesKey: null,
+    p2pMessages: [],
+    p2pDraft: "",
+
+    bootstrapWorkspace: async () => {
+      if (
+        import.meta.env.DEV &&
+        typeof window !== "undefined" &&
+        new URLSearchParams(window.location.search).get("preview") === "1"
+      ) {
+        const fixture = buildDevPreviewFixture();
+        set({
+          isPreviewMode: true,
+          authStatus: "authenticated",
+          workspaceAvailability: "ready",
+          workspaceStatusMessage: null,
+          connectionStatus: "connected",
+          currentUser: fixture.currentUser,
+          quotaUsedBytes: fixture.quotaUsedBytes,
+          quotaLimitBytes: fixture.quotaLimitBytes,
+          members: fixture.members,
+          conversations: fixture.conversations,
+          conversationOrder: fixture.conversationOrder,
+          messagesByConv: fixture.messagesByConv,
+          activeConversationId: fixture.activeConversationId,
+          threadsByRootId: fixture.threadsByRootId,
+          drafts: fixture.drafts,
+        });
         return;
       }
 
       try {
-        const savedRes = await apiV1.ensureSavedConversation();
-        if (savedRes.conversationId && !parsed.conversations[savedRes.conversationId]) {
-          parsed.conversations[savedRes.conversationId] = {
-            id: savedRes.conversationId,
-            kind: "saved",
-            title: "我的收藏",
-            unreadCount: 0,
-            mentionCount: 0,
-            pinnedMessageIds: [],
-            memberIds: [parsed.currentUser.id],
-          };
-          parsed.conversationOrder.unshift(savedRes.conversationId);
-          parsed.messagesByConv[savedRes.conversationId] = [];
+        const [drafts, scrollTops, raw] = await Promise.all([
+          loadWorkspaceDrafts(),
+          loadWorkspaceScrolls(),
+          apiV1.getBootstrap(),
+        ]);
+        const parsed = parseBootstrapPayload(raw);
+        if (!parsed.workspaceEnabled) {
+          teardownWorkspaceSocket();
+          set({
+            authStatus: "unauthenticated",
+            workspaceAvailability: "disabled",
+            workspaceStatusMessage:
+              "当前环境未开启共享空间（WORKSPACE_ENABLED=false）。如需测试共享空间，请配置开发数据库并启用 WORKSPACE_ENABLED=true；你也可以直接免登录使用私密直连通道。",
+            drafts,
+            scrollTops,
+          });
+          return;
         }
-      } catch {
-        // Non-fatal if migration pending
-      }
-
-      const lastSeq = await getWorkspaceSyncCursor();
-      try {
-        const syncRes = await apiV1.sync(lastSeq || parsed.eventCursor);
-        if (syncRes.currentSeq > lastSeq) {
-          await setWorkspaceSyncCursor(syncRes.currentSeq);
+        if (!parsed.currentUser) {
+          teardownWorkspaceSocket();
+          set({
+            authStatus: "unauthenticated",
+            workspaceAvailability: "ready",
+            workspaceStatusMessage: null,
+            drafts,
+            scrollTops,
+          });
+          return;
         }
-      } catch {
-        // Non-fatal
-      }
 
-      const firstConvId = parsed.conversationOrder[0] || null;
-      set({
-        authStatus: "authenticated",
-        connectionStatus: "connected",
-        currentUser: parsed.currentUser,
-        quotaUsedBytes: parsed.quotaUsedBytes,
-        quotaLimitBytes: parsed.quotaLimitBytes,
-        members: parsed.members,
-        conversations: parsed.conversations,
-        conversationOrder: parsed.conversationOrder,
-        messagesByConv: parsed.messagesByConv,
-        activeConversationId: firstConvId,
-        drafts,
-        scrollTops,
-      });
-
-      if (firstConvId) {
-        void get().loadConversationMessages(firstConvId);
-      }
-    } catch {
-      set({ authStatus: "unauthenticated" });
-    }
-  },
-
-  acceptInviteAndBootstrap: async (inviteCode) => {
-    await apiV1.acceptInvite(inviteCode);
-    await get().bootstrapWorkspace();
-  },
-
-  logout: async () => {
-    await apiV1.logout().catch(() => {});
-    set({
-      authStatus: "unauthenticated",
-      currentUser: null,
-      conversations: {},
-      conversationOrder: [],
-      messagesByConv: {},
-      activeConversationId: null,
-    });
-  },
-
-  loadConversationMessages: async (conversationId) => {
-    if (get().isPreviewMode) return;
-    try {
-      const res = await apiV1.listMessages(conversationId);
-      if (!Array.isArray(res.messages)) return;
-      const members = get().members;
-      const mapped = res.messages.map((m) => mapRawMessage(conversationId, m, members));
-      set((s) => ({
-        messagesByConv: {
-          ...s.messagesByConv,
-          [conversationId]: mapped,
-        },
-      }));
-    } catch {
-      // Keep existing cached messages
-    }
-  },
-
-  selectConversation: (conversationId) => {
-    set((s) => ({
-      activeConversationId: conversationId,
-      highlightedMessageId: null,
-      conversations: s.conversations[conversationId]
-        ? {
-            ...s.conversations,
-            [conversationId]: {
-              ...s.conversations[conversationId],
+        try {
+          const savedRes = await apiV1.ensureSavedConversation();
+          if (savedRes.conversationId && !parsed.conversations[savedRes.conversationId]) {
+            parsed.conversations[savedRes.conversationId] = {
+              id: savedRes.conversationId,
+              kind: "saved",
+              title: "我的收藏",
               unreadCount: 0,
               mentionCount: 0,
-            },
+              pinnedMessageIds: [],
+              memberIds: [parsed.currentUser.id],
+            };
+            parsed.conversationOrder.unshift(savedRes.conversationId);
+            parsed.messagesByConv[savedRes.conversationId] = [];
           }
-        : s.conversations,
-    }));
-    if (!get().isPreviewMode) {
-      void get().loadConversationMessages(conversationId);
-      void apiV1.markConversationRead(conversationId).catch(() => {});
-    }
-  },
+        } catch {
+          // Non-fatal if migration pending
+        }
 
-  jumpToMessage: (conversationId, messageId) => {
-    get().selectConversation(conversationId);
-    set({ highlightedMessageId: messageId });
-    setTimeout(() => {
-      if (get().highlightedMessageId === messageId) {
-        set({ highlightedMessageId: null });
+        const lastSeq = await getWorkspaceSyncCursor();
+        let activeCursor = lastSeq || parsed.eventCursor;
+        try {
+          const syncRes = await apiV1.sync(activeCursor);
+          if (syncRes.currentSeq > activeCursor) {
+            activeCursor = syncRes.currentSeq;
+            await setWorkspaceSyncCursor(activeCursor);
+          }
+        } catch {
+          // Non-fatal
+        }
+
+        const currentActive = get().activeConversationId;
+        const firstConvId =
+          currentActive && parsed.conversations[currentActive]
+            ? currentActive
+            : parsed.conversationOrder[0] || null;
+        set({
+          authStatus: "authenticated",
+          workspaceAvailability: "ready",
+          workspaceStatusMessage: null,
+          connectionStatus: "connected",
+          currentUser: parsed.currentUser,
+          quotaUsedBytes: parsed.quotaUsedBytes,
+          quotaLimitBytes: parsed.quotaLimitBytes,
+          members: parsed.members,
+          conversations: parsed.conversations,
+          conversationOrder: parsed.conversationOrder,
+          messagesByConv: parsed.messagesByConv,
+          activeConversationId: firstConvId,
+          drafts,
+          scrollTops,
+        });
+
+        connectWorkspaceRealtime(activeCursor);
+
+        if (firstConvId) {
+          void get().loadConversationMessages(firstConvId);
+        }
+      } catch (err) {
+        teardownWorkspaceSocket();
+        if (err instanceof ApiClientError) {
+          if (err.code === "workspace.disabled") {
+            set({
+              authStatus: "unauthenticated",
+              workspaceAvailability: "disabled",
+              workspaceStatusMessage:
+                "当前环境未开启共享空间（WORKSPACE_ENABLED=false）。如需验证共享空间，请配置本地开发数据库并设置 WORKSPACE_ENABLED=true，或直接进入私密直连通道。",
+            });
+            return;
+          }
+          if (err.code === "auth.required" || err.status === 401) {
+            set({
+              authStatus: "unauthenticated",
+              workspaceAvailability: "ready",
+              workspaceStatusMessage: null,
+            });
+            return;
+          }
+        }
+        try {
+          const health = await apiV1.getHealth();
+          if (health.workspace?.enabled !== true) {
+            set({
+              authStatus: "unauthenticated",
+              workspaceAvailability: "disabled",
+              workspaceStatusMessage:
+                "当前环境未开启共享空间（仅直连信令服务在线或 WORKSPACE_ENABLED=false）。启用开发库后即可登录，或直接使用私密直连通道。",
+            });
+            return;
+          }
+          set({
+            authStatus: "unauthenticated",
+            workspaceAvailability: "unreachable",
+            workspaceStatusMessage:
+              "共享空间初始化接口返回异常，请检查 PostgreSQL 连接与 036 数据库迁移状态，或直接使用私密直连通道。",
+          });
+        } catch {
+          set({
+            authStatus: "unauthenticated",
+            workspaceAvailability: "unreachable",
+            workspaceStatusMessage:
+              "共享空间后端服务 (127.0.0.1:8898) 未连接或尚未执行 036 数据库迁移。请运行 pnpm dev 启动完整双通道后端。",
+          });
+        }
       }
-    }, 2400);
-  },
+    },
 
-  setDraft: (conversationId, text, replyToMessageId) => {
-    set((s) => {
-      const next = { ...s.drafts };
-      if (!text.trim()) {
-        delete next[conversationId];
-      } else {
-        next[conversationId] = { text, replyToMessageId };
+    acceptInviteAndBootstrap: async (inviteCode, profile) => {
+      await apiV1.acceptInvite(inviteCode, profile);
+      await get().bootstrapWorkspace();
+    },
+
+    logout: async () => {
+      teardownWorkspaceSocket();
+      await apiV1.logout().catch(() => {});
+      set({
+        authStatus: "unauthenticated",
+        currentUser: null,
+        conversations: {},
+        conversationOrder: [],
+        messagesByConv: {},
+        activeConversationId: null,
+      });
+    },
+
+    loadConversationMessages: async (conversationId) => {
+      if (get().isPreviewMode) return;
+      try {
+        const res = await apiV1.listMessages(conversationId);
+        if (!Array.isArray(res.messages)) return;
+        const members = get().members;
+        const mapped = res.messages.map((m) => mapRawMessage(conversationId, m, members));
+        set((s) => ({
+          messagesByConv: {
+            ...s.messagesByConv,
+            [conversationId]: mapped,
+          },
+        }));
+      } catch {
+        // Keep existing cached messages
       }
-      return { drafts: next };
-    });
-    void saveWorkspaceDraft(conversationId, text, replyToMessageId);
-  },
+    },
 
-  setScrollTop: (conversationId, scrollTop) => {
-    set((s) => ({
-      scrollTops: { ...s.scrollTops, [conversationId]: scrollTop },
-    }));
-    void saveWorkspaceScroll(conversationId, scrollTop);
-  },
-
-  setEditingMessageId: (editingMessageId) => set({ editingMessageId }),
-
-  sendWorkspaceMessage: async (conversationId, text, replyToId) => {
-    const user = get().currentUser;
-    if (!user || !text.trim()) return;
-    const tempId = `opt_${crypto.randomUUID()}`;
-    const optimistic: V1Message = {
-      id: tempId,
-      conversationId,
-      senderId: user.id,
-      senderName: user.displayName,
-      plainText: text,
-      replyToId,
-      createdAt: new Date().toISOString(),
-      status: "sending",
-      reactions: {},
-    };
-    set((s) => ({
-      messagesByConv: {
-        ...s.messagesByConv,
-        [conversationId]: [...(s.messagesByConv[conversationId] || []), optimistic],
-      },
-    }));
-    get().setDraft(conversationId, "");
-
-    if (get().isPreviewMode) {
+    selectConversation: (conversationId) => {
       set((s) => ({
-        messagesByConv: {
-          ...s.messagesByConv,
-          [conversationId]: (s.messagesByConv[conversationId] || []).map((m) =>
-            m.id === tempId ? { ...m, status: "read" } : m
-          ),
-        },
+        activeConversationId: conversationId,
+        highlightedMessageId: null,
         conversations: s.conversations[conversationId]
           ? {
               ...s.conversations,
               [conversationId]: {
                 ...s.conversations[conversationId],
-                lastMessageText: text,
-                lastMessageAt: optimistic.createdAt,
+                unreadCount: 0,
+                mentionCount: 0,
               },
             }
           : s.conversations,
       }));
-      return;
-    }
+      if (!get().isPreviewMode) {
+        void get().loadConversationMessages(conversationId);
+        void apiV1.markConversationRead(conversationId).catch(() => {});
+      }
+    },
 
-    try {
-      const res = await apiV1.sendMessage(conversationId, text, { replyToMessageId: replyToId });
-      const msgObj = (res.message || {}) as Record<string, unknown>;
-      const realId = msgObj.id ? String(msgObj.id) : tempId;
+    jumpToMessage: (conversationId, messageId) => {
+      get().selectConversation(conversationId);
+      set({ highlightedMessageId: messageId });
+      setTimeout(() => {
+        if (get().highlightedMessageId === messageId) {
+          set({ highlightedMessageId: null });
+        }
+      }, 2400);
+    },
+
+    setDraft: (conversationId, text, replyToMessageId) => {
+      set((s) => {
+        const next = { ...s.drafts };
+        if (!text.trim()) {
+          delete next[conversationId];
+        } else {
+          next[conversationId] = { text, replyToMessageId };
+        }
+        return { drafts: next };
+      });
+      void saveWorkspaceDraft(conversationId, text, replyToMessageId);
+    },
+
+    setScrollTop: (conversationId, scrollTop) => {
       set((s) => ({
-        messagesByConv: {
-          ...s.messagesByConv,
-          [conversationId]: (s.messagesByConv[conversationId] || []).map((m) =>
-            m.id === tempId ? { ...m, id: realId, status: "sent" } : m
-          ),
-        },
-        conversations: s.conversations[conversationId]
-          ? {
-              ...s.conversations,
-              [conversationId]: {
-                ...s.conversations[conversationId],
-                lastMessageText: text,
-                lastMessageAt: optimistic.createdAt,
-              },
-            }
-          : s.conversations,
+        scrollTops: { ...s.scrollTops, [conversationId]: scrollTop },
       }));
-    } catch {
-      set((s) => ({
-        messagesByConv: {
-          ...s.messagesByConv,
-          [conversationId]: (s.messagesByConv[conversationId] || []).map((m) =>
-            m.id === tempId ? { ...m, status: "failed" } : m
-          ),
-        },
-      }));
-    }
-  },
+      void saveWorkspaceScroll(conversationId, scrollTop);
+    },
 
-  editWorkspaceMessage: async (conversationId, messageId, newText) => {
-    const trimmed = newText.trim();
-    if (!trimmed) return;
-    const editedAt = new Date().toISOString();
-    set((s) => ({
-      editingMessageId: null,
-      messagesByConv: {
-        ...s.messagesByConv,
-        [conversationId]: (s.messagesByConv[conversationId] || []).map((m) =>
-          m.id === messageId ? { ...m, plainText: trimmed, editedAt } : m
-        ),
-      },
-    }));
-    if (!get().isPreviewMode) {
-      await apiV1.editMessage(messageId, trimmed);
-    }
-  },
+    setEditingMessageId: (editingMessageId) => set({ editingMessageId }),
 
-  toggleReaction: async (conversationId, messageId, emoji) => {
-    set((s) => ({
-      messagesByConv: {
-        ...s.messagesByConv,
-        [conversationId]: (s.messagesByConv[conversationId] || []).map((m) => {
-          if (m.id !== messageId) return m;
-          const prev = m.reactions[emoji] || { count: 0, reactedByMe: false };
-          const nextReacted = !prev.reactedByMe;
-          const nextCount = Math.max(0, prev.count + (nextReacted ? 1 : -1));
-          const nextReactions = { ...m.reactions };
-          if (nextCount === 0) {
-            delete nextReactions[emoji];
-          } else {
-            nextReactions[emoji] = { count: nextCount, reactedByMe: nextReacted };
-          }
-          return { ...m, reactions: nextReactions };
-        }),
-      },
-    }));
-    if (!get().isPreviewMode) {
-      await apiV1.reactToMessage(messageId, emoji).catch(() => {});
-    }
-  },
-
-  togglePinMessage: async (conversationId, messageId) => {
-    const conv = get().conversations[conversationId];
-    if (!conv) return;
-    const isPinned = conv.pinnedMessageIds.includes(messageId);
-    const nextPins = isPinned
-      ? conv.pinnedMessageIds.filter((id) => id !== messageId)
-      : [messageId, ...conv.pinnedMessageIds];
-
-    set((s) => ({
-      conversations: {
-        ...s.conversations,
-        [conversationId]: { ...conv, pinnedMessageIds: nextPins },
-      },
-    }));
-    if (get().isPreviewMode) return;
-    if (isPinned) {
-      await apiV1.unpinMessage(conversationId, messageId);
-    } else {
-      await apiV1.pinMessage(conversationId, messageId);
-    }
-  },
-
-  forwardMessage: async (messageIds, targetConversationId) => {
-    if (get().isPreviewMode) return;
-    await apiV1.forwardMessages(messageIds, targetConversationId);
-  },
-
-  loadThread: async (rootMessageId) => {
-    if (get().isPreviewMode) return;
-    const res = await apiV1.getThread(rootMessageId);
-    set((s) => ({
-      threadsByRootId: {
-        ...s.threadsByRootId,
-        [rootMessageId]: res,
-      },
-    }));
-  },
-
-  sendThreadReply: async (rootMessageId, text, alsoSendToChannel) => {
-    if (get().isPreviewMode) {
+    sendWorkspaceMessage: async (conversationId, text, replyToId) => {
       const user = get().currentUser;
-      const convId = get().activeConversationId || "conv_arch";
-      const reply: ThreadReplyItem = {
-        id: `tr_${crypto.randomUUID().slice(0, 8)}`,
-        conversationId: convId,
-        threadRootId: rootMessageId,
-        alsoSendToChannel,
-        authorId: user?.id || "usr_owner_1",
-        authorName: user?.displayName || "我",
+      if (!user || !text.trim()) return;
+      const clientMessageId = `cli_${crypto.randomUUID()}`;
+      const tempId = `opt_${clientMessageId}`;
+      const optimistic: V1Message = {
+        id: tempId,
+        clientMessageId,
+        conversationId,
+        senderId: user.id,
+        senderName: user.displayName,
         plainText: text,
+        replyToId,
         createdAt: new Date().toISOString(),
+        status: "sending",
+        reactions: {},
       };
+      set((s) => ({
+        messagesByConv: {
+          ...s.messagesByConv,
+          [conversationId]: [...(s.messagesByConv[conversationId] || []), optimistic],
+        },
+      }));
+      get().setDraft(conversationId, "");
+
+      if (get().isPreviewMode) {
+        set((s) => ({
+          messagesByConv: {
+            ...s.messagesByConv,
+            [conversationId]: (s.messagesByConv[conversationId] || []).map((m) =>
+              m.id === tempId ? { ...m, status: "read" } : m
+            ),
+          },
+          conversations: s.conversations[conversationId]
+            ? {
+                ...s.conversations,
+                [conversationId]: {
+                  ...s.conversations[conversationId],
+                  lastMessageText: text,
+                  lastMessageAt: optimistic.createdAt,
+                },
+              }
+            : s.conversations,
+        }));
+        return;
+      }
+
+      try {
+        const res = await apiV1.sendMessage(conversationId, text, {
+          replyToMessageId: replyToId,
+          clientMessageId,
+        });
+        const msgObj = (res.message || {}) as Record<string, unknown>;
+        const realId = msgObj.id ? String(msgObj.id) : tempId;
+        set((s) => {
+          const list = s.messagesByConv[conversationId] || [];
+          const alreadyDeliveredByWs = list.some((m) => m.id === realId && m.id !== tempId);
+          const nextList = alreadyDeliveredByWs
+            ? list.filter((m) => m.id !== tempId)
+            : list.map((m) => (m.id === tempId ? { ...m, id: realId, status: "sent" as const } : m));
+          return {
+            messagesByConv: {
+              ...s.messagesByConv,
+              [conversationId]: nextList,
+            },
+            conversations: s.conversations[conversationId]
+              ? {
+                  ...s.conversations,
+                  [conversationId]: {
+                    ...s.conversations[conversationId],
+                    lastMessageText: text,
+                    lastMessageAt: optimistic.createdAt,
+                  },
+                }
+              : s.conversations,
+          };
+        });
+      } catch {
+        set((s) => ({
+          messagesByConv: {
+            ...s.messagesByConv,
+            [conversationId]: (s.messagesByConv[conversationId] || []).map((m) =>
+              m.id === tempId ? { ...m, status: "failed" } : m
+            ),
+          },
+        }));
+      }
+    },
+
+    editWorkspaceMessage: async (conversationId, messageId, newText) => {
+      const trimmed = newText.trim();
+      if (!trimmed) return;
+      const editedAt = new Date().toISOString();
+      set((s) => ({
+        editingMessageId: null,
+        messagesByConv: {
+          ...s.messagesByConv,
+          [conversationId]: (s.messagesByConv[conversationId] || []).map((m) =>
+            m.id === messageId ? { ...m, plainText: trimmed, editedAt } : m
+          ),
+        },
+      }));
+      if (!get().isPreviewMode) {
+        await apiV1.editMessage(messageId, trimmed);
+      }
+    },
+
+    toggleReaction: async (conversationId, messageId, emoji) => {
+      set((s) => ({
+        messagesByConv: {
+          ...s.messagesByConv,
+          [conversationId]: (s.messagesByConv[conversationId] || []).map((m) => {
+            if (m.id !== messageId) return m;
+            const prev = m.reactions[emoji] || { count: 0, reactedByMe: false };
+            const nextReacted = !prev.reactedByMe;
+            const nextCount = Math.max(0, prev.count + (nextReacted ? 1 : -1));
+            const nextReactions = { ...m.reactions };
+            if (nextCount === 0) {
+              delete nextReactions[emoji];
+            } else {
+              nextReactions[emoji] = { count: nextCount, reactedByMe: nextReacted };
+            }
+            return { ...m, reactions: nextReactions };
+          }),
+        },
+      }));
+      if (!get().isPreviewMode) {
+        await apiV1.reactToMessage(messageId, emoji).catch(() => {});
+      }
+    },
+
+    togglePinMessage: async (conversationId, messageId) => {
+      const conv = get().conversations[conversationId];
+      if (!conv) return;
+      const isPinned = conv.pinnedMessageIds.includes(messageId);
+      const nextPins = isPinned
+        ? conv.pinnedMessageIds.filter((id) => id !== messageId)
+        : [messageId, ...conv.pinnedMessageIds];
+
+      set((s) => ({
+        conversations: {
+          ...s.conversations,
+          [conversationId]: { ...conv, pinnedMessageIds: nextPins },
+        },
+      }));
+      if (get().isPreviewMode) return;
+      if (isPinned) {
+        await apiV1.unpinMessage(conversationId, messageId);
+      } else {
+        await apiV1.pinMessage(conversationId, messageId);
+      }
+    },
+
+    forwardMessage: async (messageIds, targetConversationId) => {
+      if (get().isPreviewMode) return;
+      await apiV1.forwardMessages(messageIds, targetConversationId);
+    },
+
+    loadThread: async (rootMessageId) => {
+      if (get().isPreviewMode) return;
+      const res = await apiV1.getThread(rootMessageId);
+      set((s) => ({
+        threadsByRootId: {
+          ...s.threadsByRootId,
+          [rootMessageId]: res,
+        },
+      }));
+    },
+
+    sendThreadReply: async (rootMessageId, text, alsoSendToChannel) => {
+      if (get().isPreviewMode) {
+        const user = get().currentUser;
+        const convId = get().activeConversationId || "conv_arch";
+        const reply: ThreadReplyItem = {
+          id: `tr_${crypto.randomUUID().slice(0, 8)}`,
+          conversationId: convId,
+          threadRootId: rootMessageId,
+          alsoSendToChannel,
+          authorId: user?.id || "usr_owner_1",
+          authorName: user?.displayName || "我",
+          plainText: text,
+          createdAt: new Date().toISOString(),
+        };
+        set((s) => {
+          const existing = s.threadsByRootId[rootMessageId] || {
+            rootMessageId,
+            replyCount: 0,
+            replies: [],
+          };
+          return {
+            threadsByRootId: {
+              ...s.threadsByRootId,
+              [rootMessageId]: {
+                ...existing,
+                replyCount: existing.replyCount + 1,
+                replies: [...existing.replies, reply],
+              },
+            },
+          };
+        });
+        return;
+      }
+      const reply: ThreadReplyItem = await apiV1.replyThread(
+        rootMessageId,
+        text,
+        alsoSendToChannel
+      );
       set((s) => {
         const existing = s.threadsByRootId[rootMessageId] || {
           rootMessageId,
@@ -636,98 +1170,234 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           },
         };
       });
-      return;
-    }
-    const reply: ThreadReplyItem = await apiV1.replyThread(
-      rootMessageId,
-      text,
-      alsoSendToChannel
-    );
-    set((s) => {
-      const existing = s.threadsByRootId[rootMessageId] || {
-        rootMessageId,
-        replyCount: 0,
-        replies: [],
-      };
-      return {
-        threadsByRootId: {
-          ...s.threadsByRootId,
-          [rootMessageId]: {
-            ...existing,
-            replyCount: existing.replyCount + 1,
-            replies: [...existing.replies, reply],
+    },
+
+    triggerCardAction: async (cardId, actionId, payload) => {
+      if (get().isPreviewMode) return;
+      await apiV1.invokeCardAction(cardId, actionId, payload);
+    },
+
+    createP2PRoom: async () => {
+      teardownP2PTransport();
+      const keyStr = await generateRoomKeyString();
+      const { key, fingerprint } = await deriveAesKey(keyStr);
+
+      if (get().isPreviewMode) {
+        const previewId = crypto.randomUUID().slice(0, 12);
+        const shareUrl = buildP2PShareUrl(previewId, keyStr);
+        window.history.replaceState(null, "", `/direct/${previewId}#k=${keyStr}`);
+        set({
+          p2pAesKey: key,
+          p2pRoom: {
+            roomId: previewId,
+            keyFingerprint: fingerprint,
+            connectedPeers: 1,
+            remotePeerCount: 0,
+            status: "waiting_peer",
+            shareUrl,
           },
-        },
+          p2pMessages: [],
+        });
+        return shareUrl;
+      }
+
+      try {
+        const created = await createRemoteP2PRoom();
+        const shareUrl = buildP2PShareUrl(created.roomId, keyStr);
+        activeP2PRoomToken = `${created.roomId}#${keyStr}`;
+        activeP2PJoinPromise = null;
+        window.history.replaceState(
+          null,
+          "",
+          `/direct/${encodeURIComponent(created.roomId)}#k=${keyStr}`
+        );
+        set({
+          p2pAesKey: key,
+          p2pRoom: {
+            roomId: created.roomId,
+            keyFingerprint: fingerprint,
+            connectedPeers: 1,
+            remotePeerCount: 0,
+            status: "connecting",
+            shareUrl,
+            expiresAt: created.expiresAt,
+          },
+          p2pMessages: [],
+        });
+        wireP2PSession(created.roomId, key);
+        return shareUrl;
+      } catch (err) {
+        activeP2PRoomToken = "";
+        activeP2PJoinPromise = null;
+        const errorMessage =
+          err instanceof Error
+            ? err.message
+            : "无法连接 Go P2P 信令服务，请运行 pnpm dev 启动完整服务";
+        set({
+          p2pAesKey: null,
+          p2pRoom: {
+            roomId: "未连接",
+            keyFingerprint: fingerprint,
+            connectedPeers: 0,
+            remotePeerCount: 0,
+            status: "error",
+            shareUrl: "",
+            errorMessage,
+          },
+          p2pMessages: [],
+        });
+        return "";
+      }
+    },
+
+    joinP2PRoom: async (roomId, keyStr) => {
+      const targetToken = `${roomId}#${keyStr}`;
+      if (activeP2PRoomToken === targetToken) {
+        if (activeP2PJoinPromise) {
+          return activeP2PJoinPromise;
+        }
+        const existingStatus = get().p2pRoom?.status;
+        if (
+          get().isPreviewMode ||
+          (activeP2PTransport &&
+            existingStatus &&
+            existingStatus !== "disconnected" &&
+            existingStatus !== "error")
+        ) {
+          return;
+        }
+      }
+
+      teardownP2PTransport();
+      activeP2PRoomToken = targetToken;
+
+      let task: Promise<void> | null = null;
+      task = (async () => {
+        try {
+          const { key, fingerprint } = await deriveAesKey(keyStr);
+          if (activeP2PRoomToken !== targetToken) return;
+          const shareUrl = buildP2PShareUrl(roomId, keyStr);
+          window.history.replaceState(
+            null,
+            "",
+            `/direct/${encodeURIComponent(roomId)}#k=${keyStr}`
+          );
+          set({
+            p2pAesKey: key,
+            p2pRoom: {
+              roomId,
+              keyFingerprint: fingerprint,
+              connectedPeers: 1,
+              remotePeerCount: 0,
+              status: get().isPreviewMode ? "waiting_peer" : "connecting",
+              shareUrl,
+            },
+            p2pMessages: [],
+          });
+          if (!get().isPreviewMode) {
+            wireP2PSession(roomId, key);
+          }
+        } catch (err) {
+          if (activeP2PRoomToken !== targetToken) return;
+          activeP2PRoomToken = "";
+          set({
+            p2pAesKey: null,
+            p2pRoom: {
+              roomId,
+              keyFingerprint: "--",
+              connectedPeers: 0,
+              remotePeerCount: 0,
+              status: "error",
+              shareUrl: "",
+              errorMessage:
+                err instanceof Error ? err.message : "房间加密密钥无效，请核对完整 #k= 邀请链接",
+            },
+          });
+        } finally {
+          if (activeP2PJoinPromise === task) {
+            activeP2PJoinPromise = null;
+          }
+        }
+      })();
+
+      activeP2PJoinPromise = task;
+      return task;
+    },
+
+    leaveP2PRoom: () => {
+      activeP2PRoomToken = "";
+      activeP2PJoinPromise = null;
+      teardownP2PTransport();
+      if (typeof window !== "undefined" && /^\/(?:direct|r)\//.test(window.location.pathname)) {
+        window.history.replaceState(null, "", "/");
+      }
+      set({
+        p2pRoom: null,
+        p2pAesKey: null,
+        p2pMessages: [],
+        p2pDraft: "",
+      });
+    },
+
+    setP2PDraft: (p2pDraft) => set({ p2pDraft }),
+
+    sendP2PMessage: async (text, replyToId) => {
+      const key = get().p2pAesKey;
+      const room = get().p2pRoom;
+      const trimmed = text.trim();
+      if (!key || !room || !trimmed) return;
+
+      // Validate local WebCrypto encryption immediately in RAM
+      await encryptP2PPayload(key, trimmed);
+
+      const id = `p2p_${crypto.randomUUID()}`;
+      const senderName = get().currentUser?.displayName || "直连节点";
+      const createdAt = new Date().toISOString();
+      const canSendImmediately =
+        room.status === "peer_connected" &&
+        room.remotePeerCount > 0 &&
+        Boolean(activeP2PTransport?.isOpen());
+
+      const msg: P2PChatMessage = {
+        id,
+        senderName,
+        isOwn: true,
+        text: trimmed,
+        replyToId,
+        createdAt,
+        deliveryStatus: canSendImmediately ? "sending" : "queued",
+        reactions: {},
       };
-    });
-  },
+      set((s) => ({
+        p2pMessages: [...s.p2pMessages, msg],
+        p2pDraft: "",
+      }));
 
-  triggerCardAction: async (cardId, actionId, payload) => {
-    if (get().isPreviewMode) return;
-    await apiV1.invokeCardAction(cardId, actionId, payload);
-  },
+      if (!canSendImmediately || !activeP2PTransport) {
+        return;
+      }
 
-  createP2PRoom: async () => {
-    const roomId = crypto.randomUUID().slice(0, 12);
-    const keyStr = await generateRoomKeyString();
-    const { key, fingerprint } = await deriveAesKey(keyStr);
-    const shareUrl = `${window.location.origin}/r/${roomId}#k=${keyStr}`;
-    window.history.replaceState(null, "", `/r/${roomId}#k=${keyStr}`);
-    set({
-      p2pAesKey: key,
-      p2pRoom: {
-        roomId,
-        keyFingerprint: fingerprint,
-        connectedPeers: 1,
-        status: "connected",
-        shareUrl,
-      },
-      p2pMessages: [],
-    });
-    return shareUrl;
-  },
-
-  joinP2PRoom: async (roomId, keyStr) => {
-    const { key, fingerprint } = await deriveAesKey(keyStr);
-    const shareUrl = `${window.location.origin}/r/${roomId}#k=${keyStr}`;
-    set({
-      p2pAesKey: key,
-      p2pRoom: {
-        roomId,
-        keyFingerprint: fingerprint,
-        connectedPeers: 1,
-        status: "connected",
-        shareUrl,
-      },
-    });
-  },
-
-  leaveP2PRoom: () =>
-    set({
-      p2pRoom: null,
-      p2pAesKey: null,
-      p2pMessages: [],
-      p2pDraft: "",
-    }),
-
-  setP2PDraft: (p2pDraft) => set({ p2pDraft }),
-
-  sendP2PMessage: async (text, replyToId) => {
-    const key = get().p2pAesKey;
-    if (!key || !text.trim()) return;
-    await encryptP2PPayload(key, text);
-    const msg: P2PChatMessage = {
-      id: `p2p_${crypto.randomUUID()}`,
-      senderName: get().currentUser?.displayName || "本机节点",
-      isOwn: true,
-      text: text.trim(),
-      replyToId,
-      createdAt: new Date().toISOString(),
-      reactions: {},
-    };
-    set((s) => ({
-      p2pMessages: [...s.p2pMessages, msg],
-      p2pDraft: "",
-    }));
-  },
-}));
+      const ok = await activeP2PTransport.sendChat({
+        id,
+        author: senderName,
+        body: trimmed,
+        at: createdAt,
+        replyToId,
+      });
+      set((s) => ({
+        p2pMessages: s.p2pMessages.map((m) =>
+          m.id === id
+            ? {
+                ...m,
+                deliveryStatus: ok
+                  ? m.deliveryStatus === "delivered"
+                    ? "delivered"
+                    : "sent"
+                  : "failed",
+              }
+            : m
+        ),
+      }));
+    },
+  };
+});

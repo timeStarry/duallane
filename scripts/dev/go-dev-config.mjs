@@ -54,6 +54,8 @@ export function createDevProxy(environment = process.env) {
     "^/api/auth(?:/|\\?|$)": workspaceOrigin,
     "^/api/mobile/release-policy(?:\\?.*)?$": workspaceOrigin,
     "^/api/workspace(?:/|\\?|$)": workspaceOrigin,
+    "^/api/v1(?:/|\\?|$)": workspaceOrigin,
+    "^/api/bot/v2(?:/|\\?|$)": workspaceOrigin,
     "^/api/bot-gateway(?:/|\\?|$)": workspaceOrigin,
     "^/api/health(?:\\?.*)?$": workspaceOrigin,
     "^/ws/p2p(?:/|\\?|$)": websocketProxy(p2pOrigin),

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Bot, Palette, QrCode, Smartphone, User } from "lucide-react";
+import { Bot, Check, Copy, Palette, Plus, QrCode, Smartphone, User } from "lucide-react";
 import type { AccentId, ThemePreference } from "@duallane/design-tokens";
 import type { UserDeviceSummary } from "@duallane/protocol";
 import { useLaneStore, type SettingsTab } from "@/entities/lane/store";
@@ -72,6 +72,33 @@ export function SettingsModal() {
   );
   const [qrSession, setQrSession] = useState<QRSessionResponse | null>(null);
   const [qrApproved, setQrApproved] = useState(false);
+  const [generatedInviteCode, setGeneratedInviteCode] = useState<string>("");
+  const [creatingInvite, setCreatingInvite] = useState(false);
+  const [copiedInvite, setCopiedInvite] = useState(false);
+  const [inviteError, setInviteError] = useState<string>("");
+
+  const canManageInvites =
+    isPreviewMode || currentUser?.role === "owner" || currentUser?.role === "admin";
+
+  const handleCreateInvite = async () => {
+    setInviteError("");
+    setCreatingInvite(true);
+    try {
+      if (isPreviewMode) {
+        setGeneratedInviteCode(`DL-${crypto.randomUUID().slice(0, 8).toUpperCase()}`);
+        return;
+      }
+      const res = await apiV1.createInvite({ defaultRole: "member", maxUses: 10, expiresInHours: 72 });
+      const code = res.invite?.code || res.code || "";
+      if (code) {
+        setGeneratedInviteCode(code);
+      }
+    } catch (err) {
+      setInviteError(err instanceof Error ? err.message : "生成邀请码失败");
+    } finally {
+      setCreatingInvite(false);
+    }
+  };
 
   useEffect(() => {
     if (!settingsOpen || settingsTab !== "devices" || isPreviewMode) return;
@@ -204,6 +231,70 @@ export function SettingsModal() {
                     ID: {currentUser?.id} · 角色: {currentUser?.role}
                   </div>
                 </div>
+
+                {canManageInvites && (
+                  <div className="rounded-2xl border border-dl-border-hairline p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-sm font-semibold text-dl-text-primary">
+                          空间成员邀请码
+                        </div>
+                        <div className="text-xs text-dl-text-tertiary mt-0.5">
+                          生成一次性或多用途邀请链接，供新成员加入共享空间
+                        </div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        busy={creatingInvite}
+                        className="gap-1.5 shrink-0"
+                        onClick={() => void handleCreateInvite()}
+                      >
+                        <Plus className="size-3.5" strokeWidth={2} />
+                        生成邀请码
+                      </Button>
+                    </div>
+
+                    {inviteError && (
+                      <div className="text-xs text-dl-danger">{inviteError}</div>
+                    )}
+
+                    {generatedInviteCode && (
+                      <div className="flex items-center justify-between gap-2 rounded-xl bg-dl-surface-subtle p-2.5">
+                        <code
+                          data-testid="generated-invite-code"
+                          className="text-xs font-mono font-semibold text-dl-text-primary select-all break-all"
+                        >
+                          {generatedInviteCode}
+                        </code>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 gap-1 shrink-0 text-xs"
+                          onClick={() => {
+                            const url = `${window.location.origin}/?invite=${encodeURIComponent(generatedInviteCode)}`;
+                            void navigator.clipboard?.writeText(url);
+                            setCopiedInvite(true);
+                            setTimeout(() => setCopiedInvite(false), 1800);
+                          }}
+                        >
+                          {copiedInvite ? (
+                            <>
+                              <Check className="size-3.5 text-dl-success" strokeWidth={2} />
+                              已复制邀请链接
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="size-3.5" strokeWidth={1.8} />
+                              复制邀请链接
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <Button variant="danger" size="sm" onClick={() => void logout()}>
                   退出登录
                 </Button>

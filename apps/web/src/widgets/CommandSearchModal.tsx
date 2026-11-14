@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { ArrowUpRight, FileText, Search } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { ArrowUpRight, FileText, Search, ShieldCheck } from "lucide-react";
 import { useLaneStore } from "@/entities/lane/store";
 import { useWorkspaceStore } from "@/entities/workspace/store";
 import { apiV1, type SearchResponse } from "@/shared/lib/api-v1";
@@ -14,10 +14,19 @@ import {
 } from "@/shared/ui";
 
 export function CommandSearchModal() {
-  const { searchOpen, setSearchOpen } = useLaneStore();
-  const { isPreviewMode, conversations, messagesByConv, jumpToMessage } = useWorkspaceStore();
+  const { searchOpen, setSearchOpen, setActiveLane, setMobileView } = useLaneStore();
+  const {
+    isPreviewMode,
+    authStatus,
+    conversations,
+    messagesByConv,
+    jumpToMessage,
+    p2pRoom,
+    p2pMessages,
+  } = useWorkspaceStore();
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
+  const [searchSource, setSearchSource] = useState<"remote" | "local">("local");
   const [results, setResults] = useState<SearchResponse>({ messages: [], files: [] });
 
   useEffect(() => {
@@ -40,9 +49,10 @@ export function CommandSearchModal() {
       const q = trimmed.toLowerCase();
       const msgHits: SearchResponse["messages"] = [];
       const fileHits: SearchResponse["files"] = [];
-      for (const [convId, list] of Object.entries(messagesByConv)) {
+      for (const [convId, list] of Object.entries(messagesByConv || {})) {
+        if (!Array.isArray(list)) continue;
         for (const m of list) {
-          if (m.plainText.toLowerCase().includes(q)) {
+          if ((m.plainText || "").toLowerCase().includes(q)) {
             msgHits.push({
               id: m.id,
               conversationId: convId,
@@ -53,7 +63,7 @@ export function CommandSearchModal() {
             });
           }
           for (const att of m.attachments || []) {
-            if (att.fileName.toLowerCase().includes(q)) {
+            if ((att.fileName || "").toLowerCase().includes(q)) {
               fileHits.push({
                 id: att.id,
                 fileName: att.fileName,
@@ -70,20 +80,47 @@ export function CommandSearchModal() {
       return { messages: msgHits, files: fileHits };
     };
 
+    let cancelled = false;
     const timer = setTimeout(() => {
-      if (isPreviewMode) {
+      if (isPreviewMode || authStatus !== "authenticated") {
+        setSearchSource("local");
         setResults(searchLocally());
         return;
       }
       setLoading(true);
       void apiV1
         .search(trimmed)
-        .then(setResults)
-        .catch(() => setResults(searchLocally()))
-        .finally(() => setLoading(false));
+        .then((res) => {
+          if (cancelled) return;
+          setSearchSource("remote");
+          setResults({
+            messages: Array.isArray(res?.messages) ? res.messages : [],
+            files: Array.isArray(res?.files) ? res.files : [],
+          });
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setSearchSource("local");
+          setResults(searchLocally());
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
     }, 150);
-    return () => clearTimeout(timer);
-  }, [isPreviewMode, messagesByConv, query, searchOpen]);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [authStatus, isPreviewMode, messagesByConv, query, searchOpen]);
+
+  const p2pHits = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q || !Array.isArray(p2pMessages)) return [];
+    return p2pMessages.filter((m) => (m.text || "").toLowerCase().includes(q));
+  }, [p2pMessages, query]);
+
+  const messageHits = Array.isArray(results?.messages) ? results.messages : [];
+  const fileHits = Array.isArray(results?.files) ? results.files : [];
 
   return (
     <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
@@ -93,11 +130,16 @@ export function CommandSearchModal() {
             <DialogTitle className="flex items-center gap-2">
               <Search className="size-4 text-dl-lane-shared" strokeWidth={2} />
               全局搜索
+              <span className="rounded-full bg-dl-surface-subtle px-2 py-0.5 text-[10px] font-medium text-dl-text-secondary">
+                {searchSource === "remote" && authStatus === "authenticated"
+                  ? "服务端全文检索"
+                  : "本机内存检索"}
+              </span>
             </DialogTitle>
             <kbd className="dl-kbd">ESC</kbd>
           </div>
           <DialogDescription>
-            搜索共享空间消息正文与附件文件，点击结果直接跳转定位原上下文。
+            搜索共享空间消息正文、附件文件与当前私密直连内存记录，点击结果直接定位原上下文。
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 p-6 pt-4">
@@ -115,17 +157,51 @@ export function CommandSearchModal() {
           {loading && <div className="text-xs text-dl-text-tertiary">正在搜索…</div>}
 
           <div className="dl-scroll max-h-80 overflow-y-auto space-y-4">
-            {results.messages.length > 0 && (
+            {p2pHits.length > 0 && (
               <div className="space-y-1.5">
-                <div className="text-[11px] font-semibold text-dl-text-tertiary">
-                  消息 ({results.messages.length})
+                <div className="text-[11px] font-semibold text-dl-lane-direct">
+                  私密直连内存消息 ({p2pHits.length})
                 </div>
-                {results.messages.map((hit) => (
+                {p2pHits.map((hit) => (
                   <Button
                     key={hit.id}
                     variant="ghost"
                     className="w-full h-auto justify-between rounded-xl px-3 py-2.5 text-left"
                     onClick={() => {
+                      setActiveLane("p2p");
+                      setMobileView("chat");
+                      setSearchOpen(false);
+                    }}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1 text-xs font-semibold text-dl-lane-direct">
+                        <ShieldCheck className="size-3" strokeWidth={2} />
+                        {p2pRoom ? `房间 #${p2pRoom.roomId}` : "私密直连"} · {hit.senderName}
+                      </div>
+                      <div className="truncate text-sm text-dl-text-primary">{hit.text}</div>
+                    </div>
+                    <span className="inline-flex items-center gap-0.5 text-[11px] text-dl-text-tertiary shrink-0 ml-2">
+                      查看
+                      <ArrowUpRight className="size-3" strokeWidth={2} />
+                    </span>
+                  </Button>
+                ))}
+              </div>
+            )}
+
+            {messageHits.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="text-[11px] font-semibold text-dl-text-tertiary">
+                  消息 ({messageHits.length})
+                </div>
+                {messageHits.map((hit) => (
+                  <Button
+                    key={hit.id}
+                    variant="ghost"
+                    className="w-full h-auto justify-between rounded-xl px-3 py-2.5 text-left"
+                    onClick={() => {
+                      setActiveLane("workspace");
+                      setMobileView("chat");
                       jumpToMessage(hit.conversationId, hit.id);
                       setSearchOpen(false);
                     }}
@@ -146,12 +222,12 @@ export function CommandSearchModal() {
               </div>
             )}
 
-            {results.files.length > 0 && (
+            {fileHits.length > 0 && (
               <div className="space-y-1.5">
                 <div className="text-[11px] font-semibold text-dl-text-tertiary">
-                  文件与媒体 ({results.files.length})
+                  文件与媒体 ({fileHits.length})
                 </div>
-                {results.files.map((att) => (
+                {fileHits.map((att) => (
                   <Button
                     key={att.id}
                     variant="ghost"
@@ -159,6 +235,8 @@ export function CommandSearchModal() {
                     disabled={!att.conversationId || !att.sourceMessageId}
                     onClick={() => {
                       if (att.conversationId && att.sourceMessageId) {
+                        setActiveLane("workspace");
+                        setMobileView("chat");
                         jumpToMessage(att.conversationId, att.sourceMessageId);
                         setSearchOpen(false);
                       }
@@ -184,8 +262,9 @@ export function CommandSearchModal() {
 
             {!loading &&
               query.trim() &&
-              results.messages.length === 0 &&
-              results.files.length === 0 && (
+              p2pHits.length === 0 &&
+              messageHits.length === 0 &&
+              fileHits.length === 0 && (
                 <div className="py-8 text-center text-xs text-dl-text-tertiary">
                   没有找到匹配的消息或文件
                 </div>

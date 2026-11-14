@@ -25,26 +25,47 @@ async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
   if (init?.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const response = await fetch(url, {
-    credentials: "include",
-    ...init,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      credentials: "include",
+      ...init,
+      headers,
+    });
+  } catch {
+    throw new ApiClientError("network.unreachable", "无法连接后端服务，请检查本地服务是否已启动", 0);
+  }
   const text = await response.text();
   let parsed: Record<string, unknown> = {};
-  if (text) {
+  let jsonValid = true;
+  if (text.trim()) {
     try {
-      parsed = JSON.parse(text) as Record<string, unknown>;
+      const candidate = JSON.parse(text) as unknown;
+      if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+        parsed = candidate as Record<string, unknown>;
+      } else {
+        jsonValid = false;
+      }
     } catch {
-      parsed = {};
+      jsonValid = false;
     }
   }
   if (!response.ok) {
     const errObj = parsed.error as ApiErrorPayload | undefined;
     throw new ApiClientError(
-      errObj?.code || "request.failed",
-      errObj?.message || `请求失败 (${response.status})`,
+      errObj?.code || (response.status >= 500 ? "server.unavailable" : "request.failed"),
+      errObj?.message ||
+        (response.status >= 500
+          ? `后端服务暂时不可用 (HTTP ${response.status})`
+          : `请求失败 (${response.status})`),
       response.status
+    );
+  }
+  if (text.trim() && !jsonValid) {
+    throw new ApiClientError(
+      "response.invalid_json",
+      "接口返回了非 JSON 响应，请检查开发代理与后端路由配置",
+      502
     );
   }
   return parsed as T;
@@ -113,8 +134,17 @@ export interface QRSessionResponse {
   expiresAt: string;
 }
 
+export interface DevInviteProfileInput {
+  githubId?: string;
+  githubLogin: string;
+  email: string;
+  displayName: string;
+}
+
 export const apiV1 = {
-  // Auth & Bootstrap
+  // Health, Auth & Bootstrap
+  getHealth: () =>
+    requestJSON<{ ok?: boolean; workspace?: { enabled?: boolean } }>("/api/health"),
   getBootstrap: () =>
     requestJSON<Record<string, unknown>>("/api/workspace/bootstrap"),
   getGitHubStartUrl: (inviteCode?: string) => {
@@ -123,10 +153,33 @@ export const apiV1 = {
       ? `/api/auth/github/start?invite=${encodeURIComponent(code)}`
       : "/api/auth/github/start";
   },
-  acceptInvite: (inviteCode: string) =>
-    requestJSON<Record<string, unknown>>(
+  acceptInvite: (inviteCode: string, profile?: DevInviteProfileInput) => {
+    const suffix = crypto.randomUUID().slice(0, 6);
+    const body: DevInviteProfileInput = profile || {
+      githubId: `dev_${suffix}`,
+      githubLogin: `member_${suffix}`,
+      email: `member_${suffix}@duallane.local`,
+      displayName: `协作成员 ${suffix.toUpperCase()}`,
+    };
+    return requestJSON<Record<string, unknown>>(
       `/api/workspace/invites/${encodeURIComponent(inviteCode.trim())}/accept`,
-      { method: "POST" }
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      }
+    );
+  },
+  createInvite: (options?: { defaultRole?: "member" | "admin"; maxUses?: number; expiresInHours?: number }) =>
+    requestJSON<{ invite?: { id: string; code?: string; codePreview?: string }; inviteUrl?: string; code?: string }>(
+      "/api/workspace/invites",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          defaultRole: options?.defaultRole || "member",
+          maxUses: options?.maxUses || 10,
+          expiresInHours: options?.expiresInHours || 72,
+        }),
+      }
     ),
   logout: () =>
     requestJSON<Record<string, unknown>>("/api/auth/logout", { method: "POST" }),
@@ -134,9 +187,13 @@ export const apiV1 = {
   // v1.0 Incremental Sync & Search
   sync: (sinceSeq: number) =>
     requestJSON<SyncDeltaResponse>(`/api/v1/sync?sinceSeq=${sinceSeq}`),
-  search: (q: string, scope: "all" | "messages" | "files" = "all") => {
+  search: async (q: string, scope: "all" | "messages" | "files" = "all"): Promise<SearchResponse> => {
     const params = new URLSearchParams({ q, scope });
-    return requestJSON<SearchResponse>(`/api/v1/search?${params.toString()}`);
+    const raw = await requestJSON<Partial<SearchResponse>>(`/api/v1/search?${params.toString()}`);
+    return {
+      messages: Array.isArray(raw.messages) ? raw.messages : [],
+      files: Array.isArray(raw.files) ? raw.files : [],
+    };
   },
 
   // Saved Messages, Pins, Edit, Forward, Threads

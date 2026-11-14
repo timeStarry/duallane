@@ -1,6 +1,7 @@
 import React, { lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { initializeV1Theme } from "./shared/theme/vibrancy";
+import { ErrorBoundary } from "./shared/ui";
 import "./shared/theme/v1.css";
 
 initializeV1Theme();
@@ -13,9 +14,11 @@ if (showWorkbench) {
   );
   createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
-      <Suspense fallback={<p>正在加载 v1.0 组件工作台…</p>}>
-        <WorkbenchV1 />
-      </Suspense>
+      <ErrorBoundary>
+        <Suspense fallback={<p>正在加载 v1.0 组件工作台…</p>}>
+          <WorkbenchV1 />
+        </Suspense>
+      </ErrorBoundary>
     </React.StrictMode>
   );
 } else {
@@ -24,9 +27,11 @@ if (showWorkbench) {
   );
   createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
-      <Suspense fallback={<p>正在加载 DualLane v1.0…</p>}>
-        <AppV1 />
-      </Suspense>
+      <ErrorBoundary>
+        <Suspense fallback={<p>正在加载 DualLane v1.0…</p>}>
+          <AppV1 />
+        </Suspense>
+      </ErrorBoundary>
     </React.StrictMode>
   );
 }

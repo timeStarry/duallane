@@ -10,8 +10,10 @@ import {
   decryptP2PPayload,
   deriveAesKey,
   encryptP2PPayload,
+  extractP2PRoomFromUrl,
   generateRoomKeyString,
 } from "@/shared/lib/p2p-lane";
+import { useLaneStore } from "@/entities/lane/store";
 import { applyVibrancyTokensToRoot } from "@/shared/theme/vibrancy";
 import { DualLaneCardKit } from "@/widgets/DualLaneCardKit";
 import { PrimaryRail } from "@/widgets/PrimaryRail";
@@ -266,6 +268,168 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
     } finally {
       Object.assign(useWorkspaceStore.getInitialState(), prevInitial);
       useWorkspaceStore.setState(prevInitial);
+    }
+  });
+
+  it("rejects HTML SPA fallback responses instead of silently returning {} and normalizes search arrays", async () => {
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => {
+      return new Response("<!doctype html><html><body>SPA fallback</body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      });
+    }) as typeof fetch;
+
+    try {
+      await expect(apiV1.search("测试")).rejects.toMatchObject({
+        code: "response.invalid_json",
+      });
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const normalized = await apiV1.search("测试");
+      expect(normalized).toEqual({ messages: [], files: [] });
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  it("extracts P2P roomId and #k= fragment key from both /direct/:roomId and /r/:roomId", () => {
+    expect(
+      extractP2PRoomFromUrl({
+        pathname: "/direct/AbCdEf123456",
+        hash: "#k=test_secret_key_material",
+      })
+    ).toEqual({
+      roomId: "AbCdEf123456",
+      keyStr: "test_secret_key_material",
+    });
+
+    expect(
+      extractP2PRoomFromUrl({
+        pathname: "/r/room_xyz",
+        hash: "#k=another_key",
+      })
+    ).toEqual({
+      roomId: "room_xyz",
+      keyStr: "another_key",
+    });
+  });
+
+  it("maps Go Workspace projection DTO fields (displayTitle, latestMessages, authorName, reaction arrays)", () => {
+    const parsed = parseBootstrapPayload({
+      auth: {
+        currentUser: { id: "usr_owner", nickname: "Owner", role: "owner" },
+      },
+      conversations: [
+        {
+          id: "conv_go_1",
+          type: "group",
+          displayTitle: "Go 后端契约联调群",
+          lastMessagePlainText: "来自 Go 投影的最新摘要",
+          lastMessageAt: "2026-11-14T02:00:00Z",
+          memberIds: ["usr_owner", "usr_peer"],
+          latestMessages: [
+            {
+              id: "msg_go_1",
+              conversationId: "conv_go_1",
+              authorId: "usr_peer",
+              authorName: "对端成员",
+              plainText: "实时投影消息",
+              createdAt: "2026-11-14T02:00:00Z",
+              reactions: [{ emoteKey: "🔥", count: 2, reactedByCurrentUser: true }],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(parsed.conversations["conv_go_1"]?.title).toBe("Go 后端契约联调群");
+    expect(parsed.conversations["conv_go_1"]?.lastMessageText).toBe("来自 Go 投影的最新摘要");
+    const msg = parsed.messagesByConv["conv_go_1"]?.[0];
+    expect(msg?.senderName).toBe("对端成员");
+    expect(msg?.reactions["🔥"]).toEqual({ count: 2, reactedByMe: true });
+  });
+
+  it("renders explicit P2P peer status and honest per-message delivery feedback (waiting vs delivered)", () => {
+    const prevWsInitial = { ...useWorkspaceStore.getInitialState() };
+    const prevLaneInitial = { ...useLaneStore.getInitialState() };
+
+    try {
+      const laneWaiting = { ...prevLaneInitial, activeLane: "p2p" as const };
+      Object.assign(useLaneStore.getInitialState(), laneWaiting);
+      useLaneStore.setState(laneWaiting);
+
+      const wsWaiting = {
+        ...prevWsInitial,
+        p2pRoom: {
+          roomId: "RmWait01",
+          keyFingerprint: "AA:BB:CC:DD",
+          connectedPeers: 1,
+          remotePeerCount: 0,
+          status: "waiting_peer" as const,
+          shareUrl: "http://127.0.0.1:5173/direct/RmWait01#k=secret",
+        },
+        p2pMessages: [
+          {
+            id: "p2p_q1",
+            senderName: "我",
+            isOwn: true,
+            text: "这条消息还在等待对端上线",
+            createdAt: "2026-11-14T03:00:00Z",
+            deliveryStatus: "queued" as const,
+            reactions: {},
+          },
+        ],
+      };
+      Object.assign(useWorkspaceStore.getInitialState(), wsWaiting);
+      useWorkspaceStore.setState(wsWaiting);
+
+      const waitingHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <TimelinePane />
+        </TooltipProvider>
+      );
+      expect(waitingHtml).toContain("等待对端加入 · 仅本机在线 1/2");
+      expect(waitingHtml).toContain("等待对端加入");
+      expect(waitingHtml).not.toContain("对端已收");
+
+      const wsConnected = {
+        ...wsWaiting,
+        p2pRoom: {
+          ...wsWaiting.p2pRoom,
+          connectedPeers: 2,
+          remotePeerCount: 1,
+          status: "peer_connected" as const,
+        },
+        p2pMessages: [
+          {
+            ...wsWaiting.p2pMessages[0]!,
+            deliveryStatus: "delivered" as const,
+          },
+        ],
+      };
+      Object.assign(useWorkspaceStore.getInitialState(), wsConnected);
+      useWorkspaceStore.setState(wsConnected);
+
+      const connectedHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <TimelinePane />
+        </TooltipProvider>
+      );
+      expect(connectedHtml).toContain("对端已连接 · 2/2 在线");
+      expect(connectedHtml).toContain("对端已收");
+    } finally {
+      Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);
+      useWorkspaceStore.setState(prevWsInitial);
+      Object.assign(useLaneStore.getInitialState(), prevLaneInitial);
+      useLaneStore.setState(prevLaneInitial);
     }
   });
 });

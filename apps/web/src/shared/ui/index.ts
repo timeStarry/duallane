@@ -2,6 +2,7 @@ export * from "./Avatar";
 export * from "./Button";
 export * from "./ContextMenu";
 export * from "./Dialog";
+export * from "./ErrorBoundary";
 export * from "./Input";
 export * from "./Popover";
 export * from "./SegmentedControl";

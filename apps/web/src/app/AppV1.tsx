@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { ArrowRight, Building2, ShieldCheck } from "lucide-react";
+import { AlertTriangle, ArrowRight, Building2, RefreshCw, ShieldCheck } from "lucide-react";
 import { motion } from "motion/react";
 import { useLaneStore } from "@/entities/lane/store";
 import { useWorkspaceStore } from "@/entities/workspace/store";
@@ -18,6 +18,8 @@ export function AppV1() {
   const { activeLane, setActiveLane } = useLaneStore();
   const {
     authStatus,
+    workspaceAvailability,
+    workspaceStatusMessage,
     bootstrapWorkspace,
     acceptInviteAndBootstrap,
     joinP2PRoom,
@@ -28,16 +30,32 @@ export function AppV1() {
     const params = new URLSearchParams(window.location.search);
     return params.get("invite") || "";
   });
+  const [devDisplayName, setDevDisplayName] = useState("");
   const [authError, setAuthError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [probingBackend, setProbingBackend] = useState(false);
 
   useEffect(() => {
-    const p2p = extractP2PRoomFromUrl();
-    if (p2p) {
+    const syncRoomFromLocation = () => {
+      const p2p = extractP2PRoomFromUrl();
+      if (!p2p) return;
+      const currentRoom = useWorkspaceStore.getState().p2pRoom;
       setActiveLane("p2p");
+      if (currentRoom?.roomId === p2p.roomId && currentRoom.shareUrl === window.location.href) {
+        return;
+      }
       void joinP2PRoom(p2p.roomId, p2p.keyStr);
-    }
+    };
+
+    syncRoomFromLocation();
     void bootstrapWorkspace();
+
+    window.addEventListener("popstate", syncRoomFromLocation);
+    window.addEventListener("hashchange", syncRoomFromLocation);
+    return () => {
+      window.removeEventListener("popstate", syncRoomFromLocation);
+      window.removeEventListener("hashchange", syncRoomFromLocation);
+    };
   }, [bootstrapWorkspace, joinP2PRoom, setActiveLane]);
 
   useEffect(() => {
@@ -54,7 +72,37 @@ export function AppV1() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [setActiveLane]);
 
-  const handleGitHubSignIn = () => {
+  const handleRetryBackend = async () => {
+    setAuthError("");
+    setProbingBackend(true);
+    try {
+      await bootstrapWorkspace();
+    } finally {
+      setProbingBackend(false);
+    }
+  };
+
+  const handleGitHubSignIn = async () => {
+    setAuthError("");
+    if (workspaceAvailability !== "ready") {
+      setProbingBackend(true);
+      try {
+        await bootstrapWorkspace();
+      } finally {
+        setProbingBackend(false);
+      }
+      const nextState = useWorkspaceStore.getState();
+      if (nextState.authStatus === "authenticated") {
+        return;
+      }
+      if (nextState.workspaceAvailability !== "ready") {
+        setAuthError(
+          nextState.workspaceStatusMessage ||
+            "共享空间后端当前不可用，已拦截页面跳转以避免 HTTP 500 错误页。"
+        );
+        return;
+      }
+    }
     window.location.assign(apiV1.getGitHubStartUrl(inviteCode));
   };
 
@@ -64,7 +112,18 @@ export function AppV1() {
     setAuthError("");
     setSubmitting(true);
     try {
-      await acceptInviteAndBootstrap(inviteCode);
+      const trimmedName = devDisplayName.trim();
+      if (trimmedName) {
+        const suffix = crypto.randomUUID().slice(0, 6);
+        await acceptInviteAndBootstrap(inviteCode, {
+          githubId: `dev_${suffix}`,
+          githubLogin: `member_${suffix}`,
+          email: `member_${suffix}@duallane.local`,
+          displayName: trimmedName,
+        });
+      } else {
+        await acceptInviteAndBootstrap(inviteCode);
+      }
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : "邀请码验证失败");
     } finally {
@@ -72,7 +131,7 @@ export function AppV1() {
     }
   };
 
-  if (authStatus === "checking") {
+  if (authStatus === "checking" && activeLane !== "p2p") {
     return (
       <main className="dl-canvas-ambient flex h-screen w-screen items-center justify-center">
         <div className="dl-glass-elevated rounded-dialog px-6 py-4 text-sm text-dl-text-secondary">
@@ -82,7 +141,10 @@ export function AppV1() {
     );
   }
 
-  if (authStatus === "unauthenticated" && activeLane !== "p2p") {
+  if (authStatus !== "authenticated" && activeLane !== "p2p") {
+    const showServiceBanner =
+      workspaceAvailability === "disabled" || workspaceAvailability === "unreachable";
+
     return (
       <main className="dl-canvas-ambient flex min-h-screen w-screen items-center justify-center p-6">
         <motion.div
@@ -133,6 +195,38 @@ export function AppV1() {
             </div>
           </div>
 
+          {showServiceBanner && (
+            <div className="rounded-2xl border border-dl-warning/35 bg-dl-warning/10 p-3.5 space-y-2.5 text-xs">
+              <div className="flex items-start gap-2 text-dl-text-primary">
+                <AlertTriangle className="size-4 shrink-0 text-dl-warning mt-0.5" strokeWidth={2} />
+                <div className="space-y-1">
+                  <div className="font-semibold">
+                    {workspaceAvailability === "disabled"
+                      ? "共享空间服务当前未启用"
+                      : "共享空间后端暂未就绪"}
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-dl-text-secondary">
+                    {workspaceStatusMessage ||
+                      "请确认本地 Go Workspace 服务与 PostgreSQL 已启动；你也可以直接免登录使用私密直连通道。"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex justify-end">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  busy={probingBackend}
+                  className="h-7 gap-1.5 text-xs"
+                  onClick={() => void handleRetryBackend()}
+                >
+                  <RefreshCw className="size-3" strokeWidth={2} />
+                  重新检测服务
+                </Button>
+              </div>
+            </div>
+          )}
+
           {authError && (
             <div className="rounded-control bg-dl-danger/10 px-3 py-2 text-xs text-dl-danger border border-dl-danger/25">
               {authError}
@@ -148,8 +242,9 @@ export function AppV1() {
             <Button
               type="button"
               variant="primary"
+              busy={probingBackend}
               className="w-full justify-center gap-2"
-              onClick={handleGitHubSignIn}
+              onClick={() => void handleGitHubSignIn()}
             >
               <span>使用 GitHub 登录共享空间</span>
               <ArrowRight className="size-4" strokeWidth={2} />
@@ -171,8 +266,13 @@ export function AppV1() {
           {inviteCode.trim() && (
             <form
               onSubmit={handleInviteQuickAccept}
-              className="pt-2 border-t border-dl-border-hairline"
+              className="pt-3 border-t border-dl-border-hairline space-y-2.5"
             >
+              <Input
+                value={devDisplayName}
+                onChange={(e) => setDevDisplayName(e.target.value)}
+                placeholder="可选：测试成员昵称（双窗口联调推荐使用）"
+              />
               <Button
                 type="submit"
                 variant="secondary"

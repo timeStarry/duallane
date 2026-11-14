@@ -35,30 +35,32 @@ export function DialogContent({
           "dl-anim-scrim fixed inset-0 z-dialog bg-backdrop backdrop-blur-[6px]"
         )}
       />
-      <RadixDialog.Content
-        className={cn(
-          "dl-anim-dialog dl-glass-dialog fixed left-1/2 top-1/2 z-dialog -translate-x-1/2 -translate-y-1/2",
-          "max-h-[calc(100dvh-32px)] overflow-hidden rounded-dialog border border-line text-text",
-          "flex flex-col focus:outline-none",
-          SIZE_CLASSES[size],
-          className
-        )}
-        {...props}
-      >
-        {children}
-        {showCloseButton && (
-          <RadixDialog.Close asChild>
-            <IconButton
-              label="关闭弹窗"
-              size="sm"
-              variant="ghost"
-              className="absolute right-3.5 top-3.5 z-10 rounded-full"
-            >
-              <X className="size-4" />
-            </IconButton>
-          </RadixDialog.Close>
-        )}
-      </RadixDialog.Content>
+      <div className="fixed inset-0 z-dialog flex items-center justify-center p-4 pointer-events-none">
+        <RadixDialog.Content
+          className={cn(
+            "dl-anim-dialog dl-glass-dialog relative pointer-events-auto",
+            "max-h-[calc(100dvh-32px)] overflow-hidden rounded-dialog border border-line text-text",
+            "flex flex-col focus:outline-none",
+            SIZE_CLASSES[size],
+            className
+          )}
+          {...props}
+        >
+          {children}
+          {showCloseButton && (
+            <RadixDialog.Close asChild>
+              <IconButton
+                label="关闭弹窗"
+                size="sm"
+                variant="ghost"
+                className="absolute right-3.5 top-3.5 z-10 rounded-full"
+              >
+                <X className="size-4" />
+              </IconButton>
+            </RadixDialog.Close>
+          )}
+        </RadixDialog.Content>
+      </div>
     </RadixDialog.Portal>
   );
 }

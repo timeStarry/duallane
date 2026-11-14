@@ -120,12 +120,43 @@ export function ConversationSidebar() {
               onClick={() => setMobileView("chat")}
               className="dl-glass-elevated h-auto w-full flex-col items-stretch rounded-2xl border border-dl-lane-direct/35 p-3 text-left"
             >
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1.5 text-xs font-semibold text-dl-text-primary">
-                  <ShieldCheck className="size-3.5 text-dl-lane-direct" strokeWidth={2} />
-                  房间 #{p2pRoom.roomId}
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5 text-xs font-semibold text-dl-text-primary truncate">
+                  <ShieldCheck className="size-3.5 shrink-0 text-dl-lane-direct" strokeWidth={2} />
+                  <span className="truncate">房间 #{p2pRoom.roomId}</span>
                 </span>
-                <span className="h-2 w-2 rounded-full bg-dl-lane-direct" />
+                <span
+                  className={cn(
+                    "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold",
+                    p2pRoom.status === "peer_connected"
+                      ? "bg-dl-success/16 text-dl-success"
+                      : p2pRoom.status === "waiting_peer" || p2pRoom.status === "connecting"
+                        ? "bg-dl-warning/16 text-dl-warning"
+                        : "bg-dl-danger/14 text-dl-danger"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "h-1.5 w-1.5 rounded-full",
+                      p2pRoom.status === "peer_connected"
+                        ? "bg-dl-success"
+                        : p2pRoom.status === "waiting_peer" || p2pRoom.status === "connecting"
+                          ? "bg-dl-warning"
+                          : "bg-dl-danger"
+                    )}
+                  />
+                  {p2pRoom.status === "peer_connected"
+                    ? "对端已连接 2/2"
+                    : p2pRoom.status === "waiting_peer"
+                      ? "等待对端 1/2"
+                      : p2pRoom.status === "connecting"
+                        ? "连接信令中"
+                        : p2pRoom.status === "room_full"
+                          ? "房间已满"
+                          : p2pRoom.status === "room_not_found"
+                            ? "房间已过期"
+                            : "信令未连接"}
+                </span>
               </div>
               <div className="mt-1 text-[11px] font-mono text-dl-text-tertiary">
                 指纹 {p2pRoom.keyFingerprint}

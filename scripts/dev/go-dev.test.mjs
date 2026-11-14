@@ -170,6 +170,8 @@ test("Vite proxy follows candidate gateway ownership", () => {
   assert.equal(proxy["^/api/p2p(?:/|\\?|$)"], "http://127.0.0.1:8897");
   assert.equal(proxy["^/api/auth(?:/|\\?|$)"], "http://127.0.0.1:8898");
   assert.equal(proxy["^/api/workspace(?:/|\\?|$)"], "http://127.0.0.1:8898");
+  assert.equal(proxy["^/api/v1(?:/|\\?|$)"], "http://127.0.0.1:8898");
+  assert.equal(proxy["^/api/bot/v2(?:/|\\?|$)"], "http://127.0.0.1:8898");
   assert.equal(proxy["^/api/bot-gateway(?:/|\\?|$)"], "http://127.0.0.1:8898");
   assert.equal(proxy["^/api/health(?:\\?.*)?$"], "http://127.0.0.1:8898");
   assert.deepEqual(proxy["^/ws/p2p(?:/|\\?|$)"], { target: "ws://127.0.0.1:8897", ws: true });

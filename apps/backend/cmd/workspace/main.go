@@ -470,9 +470,17 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			gate.HealthHandler(healthInput), readinessHandler(healthInput, databaseProbe, storageProbe),
 		), metricSet, pool)}, nil
 	}
+	var shutdownBotGateway func(context.Context) error
+	if botGatewayWebSocket != nil {
+		shutdownBotGateway = botGatewayWebSocket.Shutdown
+	}
+	var v1Handler *v1.HTTPHandler
+	if pool != nil {
+		v1Handler = v1.NewHTTPHandler(v1.NewService(v1.NewPGRepository(pool, auth.DefaultSpaceID)), authHandler)
+	}
 	return &application{
 		pool: pool, cancel: cancel, backgroundDone: backgroundDone,
-		shutdownBotGateway: botGatewayWebSocket.Shutdown, logger: logger,
+		shutdownBotGateway: shutdownBotGateway, logger: logger,
 		handler: withPrivateWorkspaceMetrics(httpapi.NewRouter(httpapi.RouterOptions{
 			ObserveHTTP: workspaceHTTPObserver(metricSet),
 			Gate:        workspaceGate, Health: gate.HealthHandler(healthInput), Readiness: readinessHandler(healthInput, databaseProbe, storageProbe),
@@ -501,7 +509,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 			BotGatewaySetup:     botService,
 			BotGatewayWebSocket: botGatewayWebSocket,
 			Realtime:            realtimeHandler,
-			V1:                  v1.NewHTTPHandler(v1.NewService(v1.NewPGRepository(pool, auth.DefaultSpaceID)), authHandler),
+			V1:                  v1Handler,
 			FrontendURL:         runtimeConfig.FrontendURL, PublicBaseURL: runtimeConfig.PublicBaseURL,
 			TrustProxy: runtimeConfig.TrustProxy,
 		}), metricSet, pool),

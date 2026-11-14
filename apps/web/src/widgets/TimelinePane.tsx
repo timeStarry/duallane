@@ -152,6 +152,27 @@ export function TimelinePane() {
   }, [highlightedMessageId]);
 
   if (activeLane === "p2p") {
+    const peerStatusLabel = p2pRoom
+      ? p2pRoom.status === "peer_connected"
+        ? "对端已连接 · 2/2 在线"
+        : p2pRoom.status === "waiting_peer"
+          ? "等待对端加入 · 仅本机在线 1/2"
+          : p2pRoom.status === "connecting"
+            ? "正在连接信令服务…"
+            : p2pRoom.status === "room_not_found"
+              ? "房间不存在或已过期"
+              : p2pRoom.status === "room_full"
+                ? "房间已满 (2/2)"
+                : "信令未连接"
+      : "";
+
+    const hasRoomError =
+      p2pRoom &&
+      (p2pRoom.status === "room_not_found" ||
+        p2pRoom.status === "room_full" ||
+        p2pRoom.status === "disconnected" ||
+        p2pRoom.status === "error");
+
     return (
       <section
         className={cn(
@@ -159,7 +180,7 @@ export function TimelinePane() {
           mobileView === "list" && "max-compact:hidden"
         )}
       >
-        <header className="dl-glass-chrome flex items-center justify-between border-b border-dl-border-hairline px-5 max-compact:px-3.5 py-3">
+        <header className="dl-glass-chrome flex items-center justify-between gap-3 border-b border-dl-border-hairline px-5 max-compact:px-3.5 py-3">
           <div className="flex items-center gap-2.5 min-w-0">
             <IconButton
               variant="ghost"
@@ -174,10 +195,37 @@ export function TimelinePane() {
               <ShieldCheck className="size-[18px]" strokeWidth={1.9} />
             </div>
             <div className="min-w-0">
-              <h1 className="truncate text-sm font-semibold text-dl-text-primary">
-                {p2pRoom ? `私密直连 · #${p2pRoom.roomId}` : "私密直连通道"}
-              </h1>
-              <p className="truncate text-xs text-dl-lane-direct">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="truncate text-sm font-semibold text-dl-text-primary">
+                  {p2pRoom ? `私密直连 · #${p2pRoom.roomId}` : "私密直连通道"}
+                </h1>
+                {p2pRoom && (
+                  <span
+                    data-testid="p2p-peer-status"
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
+                      p2pRoom.status === "peer_connected"
+                        ? "bg-dl-success/16 text-dl-success"
+                        : p2pRoom.status === "waiting_peer" || p2pRoom.status === "connecting"
+                          ? "bg-dl-warning/16 text-dl-warning"
+                          : "bg-dl-danger/14 text-dl-danger"
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "h-1.5 w-1.5 rounded-full",
+                        p2pRoom.status === "peer_connected"
+                          ? "bg-dl-success"
+                          : p2pRoom.status === "waiting_peer" || p2pRoom.status === "connecting"
+                            ? "bg-dl-warning"
+                            : "bg-dl-danger"
+                      )}
+                    />
+                    {peerStatusLabel}
+                  </span>
+                )}
+              </div>
+              <p className="truncate text-xs text-dl-lane-direct mt-0.5">
                 {p2pRoom
                   ? `AES-256-GCM · 密钥指纹 ${p2pRoom.keyFingerprint}`
                   : "端到端加密 · 刷新页面即清空内存"}
@@ -188,7 +236,7 @@ export function TimelinePane() {
             <Button
               size="sm"
               variant="secondary"
-              className="gap-1.5"
+              className="gap-1.5 shrink-0"
               onClick={() => {
                 void navigator.clipboard?.writeText(p2pRoom.shareUrl);
                 setCopiedLink(true);
@@ -209,6 +257,34 @@ export function TimelinePane() {
             </Button>
           )}
         </header>
+
+        {hasRoomError && p2pRoom && (
+          <div className="flex items-center justify-between gap-3 border-b border-dl-danger/25 bg-dl-danger/10 px-5 py-2 text-xs text-dl-danger">
+            <div className="flex items-center gap-2 min-w-0">
+              <AlertCircle className="size-4 shrink-0" strokeWidth={2} />
+              <span className="truncate">
+                {p2pRoom.errorMessage || "直连房间连接异常，请重新创建加密房间。"}
+              </span>
+            </div>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="h-7 shrink-0 text-xs"
+              onClick={() => void createP2PRoom()}
+            >
+              重新创建加密房间
+            </Button>
+          </div>
+        )}
+
+        {p2pRoom?.keyMismatchWarning && (
+          <div className="flex items-center gap-2 border-b border-dl-warning/30 bg-dl-warning/12 px-5 py-2 text-xs text-dl-warning">
+            <AlertCircle className="size-4 shrink-0" strokeWidth={2} />
+            <span>
+              检测到无法解密的对端密文：双方链接中的 #k= 密钥不一致，请重新复制完整加密链接发送给对方。
+            </span>
+          </div>
+        )}
 
         <div className="dl-scroll flex-1 overflow-y-auto px-5 py-4 space-y-2.5">
           {!p2pRoom ? (
@@ -235,8 +311,36 @@ export function TimelinePane() {
               </Button>
             </div>
           ) : p2pMessages.length === 0 ? (
-            <div className="flex h-full items-center justify-center text-xs text-dl-text-secondary">
-              直连通道已就绪，消息采用 AES-256-GCM 在内存中实时加解密。
+            <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+              <div className="dl-glass-elevated max-w-md rounded-2xl border border-dl-border-hairline p-5 space-y-3">
+                <div className="text-sm font-semibold text-dl-text-primary">
+                  {p2pRoom.status === "peer_connected"
+                    ? "对端已连接（2/2 在线）· 端到端加密已就绪"
+                    : "等待对端加入房间（当前仅本机在线 · 1/2）"}
+                </div>
+                <p className="text-xs leading-relaxed text-dl-text-secondary">
+                  {p2pRoom.status === "peer_connected"
+                    ? "双方已建立 AES-256-GCM 内存加密通道，发送的消息将实时直达对端设备内存并回执确认。"
+                    : "请复制下方完整加密链接（含 #k= 密钥片段）发送给对方；在对端加入前发送的消息将暂存本机内存，对端上线后自动加密送达。"}
+                </p>
+                {p2pRoom.status !== "peer_connected" && (
+                  <div className="pt-1">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="gap-1.5 border-dl-lane-direct/35 bg-dl-lane-direct/15 text-dl-lane-direct hover:bg-dl-lane-direct/25"
+                      onClick={() => {
+                        void navigator.clipboard?.writeText(p2pRoom.shareUrl);
+                        setCopiedLink(true);
+                        setTimeout(() => setCopiedLink(false), 1800);
+                      }}
+                    >
+                      <Copy className="size-3.5" strokeWidth={1.8} />
+                      {copiedLink ? "已复制完整加密邀请链接" : "复制完整加密邀请链接"}
+                    </Button>
+                  </div>
+                )}
+              </div>
             </div>
           ) : (
             p2pMessages.map((msg) => (
@@ -247,7 +351,14 @@ export function TimelinePane() {
                 transition={{ duration: 0.16 }}
                 className={cn("flex flex-col", msg.isOwn ? "items-end" : "items-start")}
               >
+                {!msg.isOwn && (
+                  <span className="mb-1 px-1 text-[11px] font-semibold text-dl-text-secondary">
+                    {msg.senderName}
+                  </span>
+                )}
                 <div
+                  data-p2p-message-id={msg.id}
+                  data-delivery-status={msg.deliveryStatus}
                   className={cn(
                     "max-w-[72%] max-compact:max-w-[86%] rounded-[18px] px-3.5 py-2 text-[14px] leading-relaxed shadow-2xs",
                     msg.isOwn
@@ -258,8 +369,8 @@ export function TimelinePane() {
                   <div className="whitespace-pre-wrap break-words">{msg.text}</div>
                   <div
                     className={cn(
-                      "mt-1 flex items-center justify-end gap-1 text-[10px] tabular-nums",
-                      msg.isOwn ? "opacity-75" : "text-dl-text-tertiary"
+                      "mt-1 flex items-center justify-end gap-1.5 text-[10px] tabular-nums",
+                      msg.isOwn ? "opacity-90" : "text-dl-text-tertiary"
                     )}
                   >
                     <span>
@@ -268,7 +379,36 @@ export function TimelinePane() {
                         minute: "2-digit",
                       })}
                     </span>
-                    {msg.isOwn && <CheckCheck className="size-3" strokeWidth={2} />}
+                    {msg.isOwn && (
+                      <span className="inline-flex items-center gap-0.5 font-medium">
+                        {msg.deliveryStatus === "delivered" ? (
+                          <>
+                            <CheckCheck className="size-3.5" strokeWidth={2.1} />
+                            <span>对端已收</span>
+                          </>
+                        ) : msg.deliveryStatus === "sent" ? (
+                          <>
+                            <Check className="size-3" strokeWidth={2} />
+                            <span>已发出</span>
+                          </>
+                        ) : msg.deliveryStatus === "sending" ? (
+                          <>
+                            <Clock className="size-3" strokeWidth={2} />
+                            <span>加密发送中</span>
+                          </>
+                        ) : msg.deliveryStatus === "failed" ? (
+                          <>
+                            <AlertCircle className="size-3" strokeWidth={2} />
+                            <span>未送达</span>
+                          </>
+                        ) : (
+                          <>
+                            <Clock className="size-3" strokeWidth={2} />
+                            <span>等待对端加入</span>
+                          </>
+                        )}
+                      </span>
+                    )}
                   </div>
                 </div>
               </motion.div>
@@ -277,7 +417,15 @@ export function TimelinePane() {
         </div>
 
         {p2pRoom && (
-          <div className="px-5 max-compact:px-3 pb-4 pt-1.5">
+          <div className="px-5 max-compact:px-3 pb-4 pt-1.5 space-y-1.5">
+            {p2pRoom.status !== "peer_connected" && !hasRoomError && (
+              <div className="flex items-center justify-between gap-2 rounded-xl border border-dl-warning/25 bg-dl-warning/8 px-3 py-1.5 text-[11px] text-dl-text-secondary">
+                <span>
+                  对端尚未加入房间 · 当前发送的消息将暂存本机内存，待对端连接后自动加密送达
+                </span>
+                <span className="shrink-0 font-semibold text-dl-warning">仅本机在线 (1/2)</span>
+              </div>
+            )}
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -288,18 +436,23 @@ export function TimelinePane() {
               <input
                 value={p2pDraft}
                 onChange={(e) => setP2PDraft(e.target.value)}
-                placeholder="发送端到端加密消息…"
+                placeholder={
+                  p2pRoom.status === "peer_connected"
+                    ? "发送端到端加密消息（对端实时在线）…"
+                    : "输入消息（对端加入后自动加密送达）…"
+                }
+                aria-label="发送端到端加密消息"
                 className="flex-1 bg-transparent text-sm text-dl-text-primary placeholder:text-dl-text-tertiary focus:outline-none"
               />
               <Button
                 type="submit"
                 size="sm"
                 variant="secondary"
-                disabled={!p2pDraft.trim()}
+                disabled={!p2pDraft.trim() || Boolean(hasRoomError)}
                 className="gap-1.5 border-transparent bg-dl-lane-direct text-dl-on-direct hover:brightness-105 disabled:opacity-40"
               >
                 <SendHorizontal className="size-3.5" strokeWidth={2} />
-                发送
+                {p2pRoom.status === "peer_connected" ? "加密发送" : "暂存待发"}
               </Button>
             </form>
           </div>

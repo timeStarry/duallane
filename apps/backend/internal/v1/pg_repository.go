@@ -262,12 +262,43 @@ func (r *PGRepository) ForwardMessages(ctx context.Context, actorID, targetConve
 		if err != nil {
 			return nil, err
 		}
+		if err := emitMessageCreatedEvent(ctx, tx, r.spaceID, actorID, targetConversationID, newID, now); err != nil {
+			return nil, err
+		}
 		created = append(created, newID)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return created, nil
+}
+
+func emitMessageCreatedEvent(ctx context.Context, tx pgx.Tx, spaceID, actorID, conversationID, messageID string, now time.Time) error {
+	var nextSeq int64
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO workspace_event_cursors (space_id, next_seq)
+		VALUES ($1, 2)
+		ON CONFLICT (space_id) DO UPDATE
+		SET next_seq = workspace_event_cursors.next_seq + 1
+		RETURNING next_seq - 1
+	`, spaceID).Scan(&nextSeq); err != nil {
+		return err
+	}
+	payloadBytes, _ := json.Marshal(map[string]any{
+		"conversationId": conversationID,
+		"messageId":      messageID,
+	})
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO workspace_events (
+			id, space_id, seq, type, actor_user_id, conversation_id,
+			target_type, target_id, payload_json, created_at
+		)
+		VALUES ($1, $2, $3, 'message.created', $4, $5, 'message', $6, $7, $8)
+	`, randomID("evt"), spaceID, nextSeq, actorID, conversationID, messageID, string(payloadBytes), now.UTC()); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `SELECT pg_notify('duallane_workspace_events', '')`)
+	return err
 }
 
 func (r *PGRepository) GetThread(ctx context.Context, actorID, rootMessageID string) (ThreadView, error) {
@@ -616,9 +647,16 @@ func (r *PGRepository) CreateMultiBot(ctx context.Context, actorID, name string,
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO users (id, github_id, github_login, display_name, created_at)
-		VALUES ($1, $2, $3, $4, $5)
-	`, botUserID, -now.UnixNano(), "__duallane_"+botID, strings.TrimSpace(name), now); err != nil {
+		INSERT INTO users (id, github_id, github_login, display_name, kind, created_at)
+		VALUES ($1, NULL, $2, $3, 'bot', $4)
+	`, botUserID, "__duallane_"+botID, strings.TrimSpace(name), now); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO space_members (space_id, user_id, role, joined_at)
+		VALUES ($1, $2, 'member', $3)
+		ON CONFLICT (space_id, user_id) DO NOTHING
+	`, r.spaceID, botUserID, now); err != nil {
 		return "", err
 	}
 	if _, err := tx.Exec(ctx, `
