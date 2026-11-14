@@ -238,7 +238,7 @@ export function BotSettingsPanel() {
         <Input
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
-          placeholder="输入新机器人名称（支持一人创建多个 Bot）"
+          placeholder="输入新机器人名称"
           aria-label="新机器人名称"
           className="min-w-0 flex-1"
         />
@@ -267,12 +267,10 @@ export function BotSettingsPanel() {
       {activeBot && (
         <div className="space-y-4 rounded-2xl border border-dl-border-hairline p-4">
           {/* Privacy Mode & Proactive Push */}
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-xs font-semibold text-dl-text-primary">Telegram 群组隐私模式</div>
-              <div className="text-[11px] text-dl-text-tertiary">
-                开启时仅接收 `@提及` 与 `/指令`；关闭后接收所在群组全部消息
-              </div>
+              <div className="text-xs font-semibold text-dl-text-primary">群组隐私模式</div>
+              <div className="text-[11px] text-dl-text-tertiary">仅接收 `@提及` 与 `/指令`</div>
             </div>
             <Switch
               label="Telegram 群组隐私模式"
@@ -285,13 +283,8 @@ export function BotSettingsPanel() {
             />
           </div>
 
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-xs font-semibold text-dl-text-primary">允许主动推送消息/卡片</div>
-              <div className="text-[11px] text-dl-text-tertiary">
-                允许不依赖回复触发上下文主动投递通知与 Card Kit 卡片
-              </div>
-            </div>
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs font-semibold text-dl-text-primary">允许主动推送消息与卡片</div>
             <Switch
               label="允许主动推送消息或卡片"
               checked={settings.proactiveEnabled}

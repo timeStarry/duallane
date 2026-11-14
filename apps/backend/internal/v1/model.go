@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 var (
@@ -17,6 +19,49 @@ var (
 	ErrRateLimited   = errors.New("v1.rate_limited")
 	ErrProactiveDeny = errors.New("v1.proactive_disabled")
 )
+
+type V1BootstrapMember struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+	Nickname    string `json:"nickname,omitempty"`
+	Remark      string `json:"remark,omitempty"`
+	GitHubLogin string `json:"githubLogin,omitempty"`
+	Kind        string `json:"kind"`
+	Role        string `json:"role"`
+	AvatarURL   string `json:"avatarUrl,omitempty"`
+}
+
+type V1BootstrapAuth struct {
+	Enabled     bool              `json:"enabled"`
+	CurrentUser V1BootstrapMember `json:"currentUser"`
+}
+
+type V1BootstrapPolicy struct {
+	DailyQuotaBytes int64 `json:"dailyQuotaBytes"`
+	UsedTodayBytes  int64 `json:"usedTodayBytes"`
+}
+
+type V1BootstrapConversation struct {
+	ID                   string   `json:"id"`
+	Type                 string   `json:"type"`
+	Title                string   `json:"title"`
+	DisplayTitle         string   `json:"displayTitle"`
+	AvatarEmoji          *string  `json:"avatarEmoji,omitempty"`
+	UnreadCount          int      `json:"unreadCount"`
+	PinnedMessageIDs     []string `json:"pinnedMessageIds"`
+	MemberIDs            []string `json:"memberIds"`
+	LastMessagePlainText string   `json:"lastMessagePlainText,omitempty"`
+	LastMessageAt        *string  `json:"lastMessageAt,omitempty"`
+}
+
+type V1BootstrapResponse struct {
+	Auth          V1BootstrapAuth           `json:"auth"`
+	Policy        V1BootstrapPolicy         `json:"policy"`
+	Preferences   map[string]any            `json:"preferences"`
+	Members       []V1BootstrapMember       `json:"members"`
+	Conversations []V1BootstrapConversation `json:"conversations"`
+	EventCursor   int64                     `json:"eventCursor"`
+}
 
 type SyncEvent struct {
 	Seq            int64          `json:"seq"`
@@ -289,4 +334,85 @@ type AdminStorageCleanupResult struct {
 	ReleasedTransfers  int64 `json:"releasedTransfers"`
 	CleanedAttachments int64 `json:"cleanedAttachments"`
 	ReclaimedBytes     int64 `json:"reclaimedBytes"`
+}
+
+type GroupMemberSummary struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+	GitHubLogin string `json:"githubLogin,omitempty"`
+	Kind        string `json:"kind"`
+	Role        string `json:"role"`
+	AvatarURL   string `json:"avatarUrl,omitempty"`
+}
+
+type GroupConversationSummary struct {
+	ID          string               `json:"id"`
+	Type        string               `json:"type"`
+	Title       string               `json:"title"`
+	AvatarEmoji *string              `json:"avatarEmoji"`
+	MemberIDs   []string             `json:"memberIds"`
+	Members     []GroupMemberSummary `json:"members"`
+	CreatedAt   string               `json:"createdAt"`
+}
+
+type CreateGroupInput struct {
+	Title     string   `json:"title"`
+	MemberIDs []string `json:"memberIds"`
+	Avatar    *string  `json:"avatar,omitempty"`
+}
+
+type UpdateGroupInput struct {
+	Title     *string `json:"title,omitempty"`
+	TitleSet  bool    `json:"-"`
+	Avatar    *string `json:"avatar,omitempty"`
+	AvatarSet bool    `json:"-"`
+}
+
+const (
+	workspaceFilePreviewPrefix = "/api/workspace/files/"
+	workspaceFilePreviewSuffix = "/preview"
+)
+
+// NormalizeGroupAvatarValue validates either an empty reset, a workspace file preview URL,
+// or a short emoji string. External URLs or HTML/path traversal payloads are rejected.
+func NormalizeGroupAvatarValue(raw string) (kind string, normalized string, attachmentID string, err error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "empty", "", "", nil
+	}
+	if strings.HasPrefix(trimmed, "/") || strings.Contains(trimmed, "://") {
+		if !strings.HasPrefix(trimmed, workspaceFilePreviewPrefix) || !strings.HasSuffix(trimmed, workspaceFilePreviewSuffix) {
+			return "", "", "", fmt.Errorf("%w: group avatar image must use workspace file preview", ErrInvalidInput)
+		}
+		id := strings.TrimSuffix(strings.TrimPrefix(trimmed, workspaceFilePreviewPrefix), workspaceFilePreviewSuffix)
+		if id == "" || len(id) > 128 {
+			return "", "", "", fmt.Errorf("%w: invalid group avatar attachment id", ErrInvalidInput)
+		}
+		for _, r := range id {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-') {
+				return "", "", "", fmt.Errorf("%w: invalid group avatar attachment id", ErrInvalidInput)
+			}
+		}
+		return "file", workspaceFilePreviewPrefix + id + workspaceFilePreviewSuffix, id, nil
+	}
+	if !utf8.ValidString(trimmed) {
+		return "", "", "", fmt.Errorf("%w: invalid group avatar encoding", ErrInvalidInput)
+	}
+	runeCount := utf8.RuneCountInString(trimmed)
+	if runeCount < 1 || runeCount > 12 {
+		return "", "", "", fmt.Errorf("%w: group emoji avatar length out of range", ErrInvalidInput)
+	}
+	hasSymbol := false
+	for _, r := range trimmed {
+		if unicode.IsSpace(r) || unicode.IsControl(r) || strings.ContainsRune(`/\<>:"'`, r) {
+			return "", "", "", fmt.Errorf("%w: invalid characters in group avatar", ErrInvalidInput)
+		}
+		if r > 0x7f {
+			hasSymbol = true
+		}
+	}
+	if !hasSymbol {
+		return "", "", "", fmt.Errorf("%w: group avatar must be an emoji or uploaded image", ErrInvalidInput)
+	}
+	return "emoji", trimmed, "", nil
 }

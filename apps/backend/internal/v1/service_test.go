@@ -1,7 +1,9 @@
 package v1
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,8 +16,29 @@ import (
 type stubRepo struct {
 	commands []BotCommand
 	savedID  string
+	group    GroupConversationSummary
 }
 
+func (s *stubRepo) GetBootstrap(_ context.Context, actorID string, _ time.Time) (V1BootstrapResponse, error) {
+	return V1BootstrapResponse{
+		Auth: V1BootstrapAuth{
+			Enabled:     true,
+			CurrentUser: V1BootstrapMember{ID: actorID, DisplayName: "测试成员", Kind: "human", Role: "member"},
+		},
+		Policy:      V1BootstrapPolicy{DailyQuotaBytes: 2147483648, UsedTodayBytes: 1024},
+		Preferences: map[string]any{"pinnedConversationIds": []string{"conv_saved_1"}},
+		Members:     []V1BootstrapMember{{ID: actorID, DisplayName: "测试成员", Kind: "human", Role: "member"}},
+		Conversations: []V1BootstrapConversation{{
+			ID:               "conv_saved_1",
+			Type:             "saved",
+			Title:            "个人空间",
+			DisplayTitle:     "我的收藏",
+			PinnedMessageIDs: []string{},
+			MemberIDs:        []string{actorID},
+		}},
+		EventCursor: 42,
+	}, nil
+}
 func (s *stubRepo) SyncDelta(_ context.Context, _ string, sinceSeq int64, _ int) (SyncDeltaResponse, error) {
 	return SyncDeltaResponse{CurrentSeq: sinceSeq + 2, HasMore: false, Events: []SyncEvent{{Seq: sinceSeq + 1, Type: "message.created"}}}, nil
 }
@@ -27,6 +50,40 @@ func (s *stubRepo) GetOrCreateSavedConversation(_ context.Context, _ string, _ t
 		s.savedID = "conv_saved_1"
 	}
 	return s.savedID, nil
+}
+func (s *stubRepo) CreateGroupConversation(_ context.Context, actorID string, input CreateGroupInput, now time.Time) (GroupConversationSummary, error) {
+	members := append([]string{actorID}, input.MemberIDs...)
+	s.group = GroupConversationSummary{
+		ID:          "conv_grp_1",
+		Type:        "group",
+		Title:       input.Title,
+		AvatarEmoji: input.Avatar,
+		MemberIDs:   members,
+		CreatedAt:   now.Format(time.RFC3339),
+	}
+	return s.group, nil
+}
+func (s *stubRepo) UpdateGroupConversation(_ context.Context, _, convID string, input UpdateGroupInput, _ time.Time) (GroupConversationSummary, error) {
+	if s.group.ID == "" {
+		s.group = GroupConversationSummary{ID: convID, Type: "group", Title: "默认群聊"}
+	}
+	if input.TitleSet && input.Title != nil {
+		s.group.Title = *input.Title
+	}
+	if input.AvatarSet {
+		s.group.AvatarEmoji = input.Avatar
+	}
+	return s.group, nil
+}
+func (s *stubRepo) AddGroupMembers(_ context.Context, _, convID string, userIDs []string, _ time.Time) (GroupConversationSummary, error) {
+	if s.group.ID == "" {
+		s.group = GroupConversationSummary{ID: convID, Type: "group", Title: "默认群聊"}
+	}
+	s.group.MemberIDs = append(s.group.MemberIDs, userIDs...)
+	return s.group, nil
+}
+func (s *stubRepo) LeaveGroupConversation(_ context.Context, _, _ string, _ time.Time) error {
+	return nil
 }
 func (s *stubRepo) EditMessage(_ context.Context, _, _, _ string, _ time.Time) error { return nil }
 func (s *stubRepo) ForwardMessages(_ context.Context, _, _ string, ids []string, _ time.Time) ([]string, error) {
@@ -212,5 +269,109 @@ func TestAdminHTTPHandlerRejectsOrdinaryMember(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPeerEqualGroupManagementRoutesAndAvatarValidation(t *testing.T) {
+	repo := &stubRepo{}
+	svc := NewService(repo)
+	r := chi.NewRouter()
+	// Ordinary member (not owner/admin) has full peer-equal group controls
+	h := NewHTTPHandler(svc, stubActorResolver{
+		actor: &auth.Actor{ID: "usr_member_1", Role: "member", DisplayName: "Alice"},
+	})
+	h.Mount(r)
+
+	// 1. Create group with emoji avatar
+	createReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/conversations/groups",
+		bytes.NewBufferString(`{"title":"产品共创组","memberIds":["usr_member_2","usr_member_1"],"avatar":"🚀"}`),
+	)
+	createRec := httptest.NewRecorder()
+	r.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 on group create by ordinary member, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+
+	// 2. Patch group name and custom workspace file preview avatar
+	patchReq := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/v1/conversations/conv_grp_1",
+		bytes.NewBufferString(`{"title":"DualLane 共创群","avatar":"/api/workspace/files/att_img_99/preview"}`),
+	)
+	patchRec := httptest.NewRecorder()
+	r.ServeHTTP(patchRec, patchReq)
+	if patchRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on group patch, got %d: %s", patchRec.Code, patchRec.Body.String())
+	}
+	var patchResp struct {
+		Conversation GroupConversationSummary `json:"conversation"`
+	}
+	if err := json.Unmarshal(patchRec.Body.Bytes(), &patchResp); err != nil {
+		t.Fatalf("unmarshal patch response: %v", err)
+	}
+	if patchResp.Conversation.Title != "DualLane 共创群" || patchResp.Conversation.AvatarEmoji == nil || *patchResp.Conversation.AvatarEmoji != "/api/workspace/files/att_img_99/preview" {
+		t.Fatalf("unexpected patched conversation: %+v", patchResp.Conversation)
+	}
+
+	// 3. Reject SSRF / external URL, path traversal, and plain ASCII avatar
+	for _, badAvatar := range []string{
+		`https://evil.example.com/avatar.png`,
+		`/api/workspace/files/../secret/preview`,
+		`plain_ascii_text`,
+	} {
+		badBody, _ := json.Marshal(map[string]string{"avatar": badAvatar})
+		badReq := httptest.NewRequest(http.MethodPatch, "/api/v1/conversations/conv_grp_1", bytes.NewReader(badBody))
+		badRec := httptest.NewRecorder()
+		r.ServeHTTP(badRec, badReq)
+		if badRec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for invalid avatar %q, got %d", badAvatar, badRec.Code)
+		}
+	}
+
+	// 4. Reset group avatar via null
+	resetReq := httptest.NewRequest(http.MethodPatch, "/api/v1/conversations/conv_grp_1", bytes.NewBufferString(`{"avatar":null}`))
+	resetRec := httptest.NewRecorder()
+	r.ServeHTTP(resetRec, resetReq)
+	if resetRec.Code != http.StatusOK || repo.group.AvatarEmoji != nil {
+		t.Fatalf("expected avatar reset to nil, got code=%d avatar=%v", resetRec.Code, repo.group.AvatarEmoji)
+	}
+
+	// 5. Invite members & leave group
+	invReq := httptest.NewRequest(http.MethodPost, "/api/v1/conversations/conv_grp_1/members", bytes.NewBufferString(`{"userIds":["usr_member_3"]}`))
+	invRec := httptest.NewRecorder()
+	r.ServeHTTP(invRec, invReq)
+	if invRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on member invite, got %d: %s", invRec.Code, invRec.Body.String())
+	}
+
+	leaveReq := httptest.NewRequest(http.MethodPost, "/api/v1/conversations/conv_grp_1/leave", nil)
+	leaveRec := httptest.NewRecorder()
+	r.ServeHTTP(leaveRec, leaveReq)
+	if leaveRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on group leave, got %d: %s", leaveRec.Code, leaveRec.Body.String())
+	}
+}
+
+func TestHTTPHandlerBootstrapEndpoint(t *testing.T) {
+	repo := &stubRepo{}
+	svc := NewService(repo)
+	handler := NewHTTPHandler(svc, stubActorResolver{actor: &auth.Actor{ID: "usr_fast_1", Kind: "human", Role: "member"}})
+	r := chi.NewRouter()
+	handler.Mount(r)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/bootstrap", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on /api/v1/bootstrap, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp V1BootstrapResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal /api/v1/bootstrap: %v", err)
+	}
+	if !resp.Auth.Enabled || resp.Auth.CurrentUser.ID != "usr_fast_1" || len(resp.Conversations) != 1 || resp.EventCursor != 42 {
+		t.Fatalf("unexpected bootstrap payload: %+v", resp)
 	}
 }

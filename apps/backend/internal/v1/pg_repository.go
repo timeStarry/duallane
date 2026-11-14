@@ -26,6 +26,468 @@ func NewPGRepository(pool *pgxpool.Pool, spaceID string) *PGRepository {
 	return &PGRepository{pool: pool, spaceID: spaceID}
 }
 
+func sanitizeBootstrapAvatarURL(raw string) string {
+	candidate := strings.TrimSpace(raw)
+	if candidate == "" {
+		return ""
+	}
+	if strings.HasPrefix(candidate, "/assets/") && !strings.Contains(candidate, "..") {
+		return candidate
+	}
+	if strings.HasPrefix(candidate, "/api/workspace/avatars/") && !strings.Contains(candidate, "..") {
+		return candidate
+	}
+	if strings.HasPrefix(candidate, "https://avatars.githubusercontent.com/") {
+		return candidate
+	}
+	return ""
+}
+
+func projectBootstrapRole(memberID, memberKind, rawRole, actorID, actorRole string) string {
+	if memberKind == "bot" {
+		return "member"
+	}
+	if actorRole != "owner" && actorRole != "admin" {
+		if memberID == actorID && rawRole == "auditor" {
+			return "auditor"
+		}
+		return "member"
+	}
+	if rawRole == "owner" && actorRole != "owner" {
+		return "admin"
+	}
+	if rawRole == "auditor" && memberID != actorID && actorRole != "owner" {
+		return "member"
+	}
+	if rawRole == "" {
+		return "member"
+	}
+	return rawRole
+}
+
+func projectBootstrapMember(
+	id, githubLogin, displayName, nickname, remark, avatarURL, kind, rawRole, actorID, actorRole string,
+) V1BootstrapMember {
+	switch id {
+	case "usr_system_beacon":
+		return V1BootstrapMember{
+			ID:          id,
+			DisplayName: "信标",
+			Kind:        "bot",
+			Role:        "member",
+			AvatarURL:   "/assets/beacon-avatar.png",
+		}
+	case "usr_system_echo":
+		return V1BootstrapMember{
+			ID:          id,
+			DisplayName: "回声",
+			Kind:        "bot",
+			Role:        "member",
+			AvatarURL:   "/assets/echo-avatar.svg",
+		}
+	}
+
+	resolved := ""
+	if id != actorID {
+		resolved = strings.TrimSpace(remark)
+	}
+	if resolved == "" {
+		resolved = strings.TrimSpace(nickname)
+	}
+	if kind != "human" && strings.TrimSpace(displayName) != "" {
+		resolved = strings.TrimSpace(displayName)
+	}
+	if resolved == "" {
+		resolved = strings.TrimSpace(githubLogin)
+	}
+	if resolved == "" {
+		resolved = strings.TrimSpace(displayName)
+	}
+	if resolved == "" {
+		if kind == "bot" {
+			resolved = "Bot"
+		} else {
+			resolved = "成员"
+		}
+	}
+
+	out := V1BootstrapMember{
+		ID:          id,
+		DisplayName: resolved,
+		Kind:        kind,
+		Role:        projectBootstrapRole(id, kind, rawRole, actorID, actorRole),
+		AvatarURL:   sanitizeBootstrapAvatarURL(avatarURL),
+	}
+	if kind == "human" {
+		out.GitHubLogin = strings.TrimSpace(githubLogin)
+		out.Nickname = strings.TrimSpace(nickname)
+		if id != actorID {
+			out.Remark = strings.TrimSpace(remark)
+		}
+	}
+	return out
+}
+
+func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now time.Time) (V1BootstrapResponse, error) {
+	nowUTC := now.UTC()
+	quotaSince := nowUTC.Add(-24 * time.Hour)
+
+	var (
+		uID, uGitHub, uDisplay, uNick, uAvatar, actorRole string
+		dailyQuotaBytes, usedTodayBytes, eventCursor      int64
+		prefsRaw                                          string
+	)
+	err := r.pool.QueryRow(ctx, `
+		SELECT
+			u.id,
+			coalesce(u.github_login, ''),
+			coalesce(u.display_name, ''),
+			coalesce(u.nickname, ''),
+			coalesce(u.avatar_url, ''),
+			sm.role,
+			coalesce((SELECT daily_quota_bytes FROM space_policies WHERE space_id = $1), 2147483648),
+			coalesce((
+				SELECT SUM(byte_size)::bigint
+				FROM transfer_ledger
+				WHERE space_id = $1 AND user_id = $2 AND created_at >= $3 AND status IN ('reserved', 'completed')
+			), 0),
+			coalesce((SELECT prefs_json FROM user_preferences WHERE user_id = $2), '{}'),
+			coalesce((SELECT MAX(seq) FROM workspace_events WHERE space_id = $1), 0)
+		FROM space_members sm
+		JOIN users u ON u.id = sm.user_id
+		WHERE sm.space_id = $1 AND sm.user_id = $2 AND sm.removed_at IS NULL AND u.kind = 'human'
+	`, r.spaceID, actorID, quotaSince).Scan(
+		&uID, &uGitHub, &uDisplay, &uNick, &uAvatar, &actorRole,
+		&dailyQuotaBytes, &usedTodayBytes, &prefsRaw, &eventCursor,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return V1BootstrapResponse{}, ErrForbidden
+		}
+		return V1BootstrapResponse{}, err
+	}
+
+	canReadConversations := actorRole == "owner" || actorRole == "admin" || actorRole == "member"
+	if canReadConversations {
+		_, _ = r.GetOrCreateSavedConversation(ctx, actorID, nowUTC)
+	}
+
+	prefs := map[string]any{}
+	_ = json.Unmarshal([]byte(prefsRaw), &prefs)
+	if prefs == nil {
+		prefs = map[string]any{}
+	}
+
+	currentUser := projectBootstrapMember(
+		uID, uGitHub, uDisplay, uNick, "", uAvatar, "human", actorRole, actorID, actorRole,
+	)
+	currentUser.Role = actorRole
+
+	memberRows, err := r.pool.Query(ctx, `
+		SELECT
+			u.id,
+			coalesce(u.github_login, ''),
+			coalesce(u.display_name, ''),
+			coalesce(u.nickname, ''),
+			coalesce(ur.remark, ''),
+			coalesce(u.avatar_url, ''),
+			u.kind,
+			sm.role
+		FROM space_members sm
+		JOIN users u ON u.id = sm.user_id
+		LEFT JOIN user_remarks ur ON ur.owner_user_id = $2 AND ur.target_user_id = u.id
+		WHERE sm.space_id = $1
+			AND sm.removed_at IS NULL
+			AND (
+				$3 IN ('owner', 'admin')
+				OR u.id = $2
+				OR u.id IN ('usr_system_beacon', 'usr_system_echo')
+				OR (
+					u.kind = 'bot'
+					AND EXISTS (
+						SELECT 1 FROM workspace_agent_bots b
+						WHERE b.space_id = $1
+							AND b.bot_user_id = u.id
+							AND b.status = 'active'
+							AND (b.owner_user_id = $2 OR b.visibility_policy = 'space')
+					)
+				)
+				OR (u.kind = 'human' AND sm.role <> 'auditor' AND u.search_discoverable = TRUE)
+				OR EXISTS (
+					SELECT 1 FROM member_visibility_grants g
+					WHERE g.space_id = $1 AND g.viewer_user_id = $2 AND g.visible_user_id = u.id
+				)
+				OR EXISTS (
+					SELECT 1
+					FROM conversation_members cm_self
+					JOIN conversations c_shared ON c_shared.id = cm_self.conversation_id AND c_shared.space_id = $1
+					JOIN conversation_members cm_peer
+						ON cm_peer.conversation_id = cm_self.conversation_id
+						AND cm_peer.user_id = u.id
+						AND cm_peer.removed_at IS NULL
+					WHERE cm_self.user_id = $2 AND cm_self.removed_at IS NULL
+				)
+			)
+		ORDER BY sm.joined_at ASC, u.id ASC
+	`, r.spaceID, actorID, actorRole)
+	if err != nil {
+		return V1BootstrapResponse{}, err
+	}
+	members := make([]V1BootstrapMember, 0, 16)
+	memberByID := make(map[string]V1BootstrapMember, 16)
+	for memberRows.Next() {
+		var mID, mGitHub, mDisplay, mNick, mRemark, mAvatar, mKind, mRole string
+		if scanErr := memberRows.Scan(&mID, &mGitHub, &mDisplay, &mNick, &mRemark, &mAvatar, &mKind, &mRole); scanErr != nil {
+			memberRows.Close()
+			return V1BootstrapResponse{}, scanErr
+		}
+		projected := projectBootstrapMember(
+			mID, mGitHub, mDisplay, mNick, mRemark, mAvatar, mKind, mRole, actorID, actorRole,
+		)
+		if mID == actorID {
+			projected.Role = actorRole
+		}
+		members = append(members, projected)
+		memberByID[mID] = projected
+	}
+	if err := memberRows.Err(); err != nil {
+		memberRows.Close()
+		return V1BootstrapResponse{}, err
+	}
+	memberRows.Close()
+
+	conversations := make([]V1BootstrapConversation, 0, 16)
+	if canReadConversations {
+		convRows, err := r.pool.Query(ctx, `
+			WITH user_convs AS (
+				SELECT
+					c.id,
+					c.type,
+					c.title,
+					c.avatar_emoji,
+					c.created_at,
+					cm.last_read_seq,
+					cm.last_read_at
+				FROM conversation_members cm
+				JOIN conversations c ON c.id = cm.conversation_id AND c.space_id = $1
+				WHERE cm.user_id = $2 AND cm.removed_at IS NULL
+			),
+			seq_bounds AS (
+				SELECT MIN(last_read_seq) AS min_seq
+				FROM user_convs
+				WHERE last_read_seq IS NOT NULL
+			),
+			seq_unread AS (
+				SELECT m.conversation_id, COUNT(DISTINCT m.id)::int AS cnt
+				FROM seq_bounds sb
+				JOIN workspace_events we
+					ON sb.min_seq IS NOT NULL
+					AND we.space_id = $1
+					AND we.seq > sb.min_seq
+					AND we.type = 'message.created'
+				JOIN messages m ON m.id = we.target_id
+				JOIN user_convs uc ON uc.id = m.conversation_id
+				WHERE uc.last_read_seq IS NOT NULL
+					AND we.seq > uc.last_read_seq
+					AND m.space_id = $1
+					AND m.deleted_at IS NULL
+					AND m.topic_id IS NULL
+					AND m.kind <> 'system'
+					AND (m.author_id IS NULL OR m.author_id <> $2)
+				GROUP BY m.conversation_id
+			),
+			time_unread AS (
+				SELECT uc.id AS conversation_id, COUNT(m.id)::int AS cnt
+				FROM user_convs uc
+				JOIN messages m ON m.conversation_id = uc.id AND m.space_id = $1
+				WHERE uc.last_read_seq IS NULL
+					AND m.deleted_at IS NULL
+					AND m.topic_id IS NULL
+					AND m.kind <> 'system'
+					AND (m.author_id IS NULL OR m.author_id <> $2)
+					AND (uc.last_read_at IS NULL OR m.created_at > uc.last_read_at)
+				GROUP BY uc.id
+			)
+			SELECT
+				uc.id,
+				uc.type,
+				uc.title,
+				uc.avatar_emoji,
+				CASE
+					WHEN latest.id IS NULL THEN ''
+					WHEN latest.recalled_at IS NOT NULL THEN '消息已撤回'
+					ELSE coalesce(latest.plain_text, '')
+				END AS last_plain_text,
+				latest.created_at AS last_msg_at,
+				coalesce(all_latest.created_at, uc.created_at) AS last_activity_at,
+				CASE
+					WHEN uc.last_read_seq IS NOT NULL THEN coalesce(su.cnt, 0)
+					ELSE coalesce(tu.cnt, 0)
+				END AS unread_count
+			FROM user_convs uc
+			LEFT JOIN seq_unread su ON su.conversation_id = uc.id
+			LEFT JOIN time_unread tu ON tu.conversation_id = uc.id
+			LEFT JOIN LATERAL (
+				SELECT m.created_at
+				FROM messages m
+				WHERE m.conversation_id = uc.id
+					AND m.space_id = $1
+					AND m.topic_id IS NULL
+					AND m.deleted_at IS NULL
+				ORDER BY m.created_at DESC, m.id DESC
+				LIMIT 1
+			) all_latest ON TRUE
+			LEFT JOIN LATERAL (
+				SELECT m.id, m.plain_text, m.recalled_at, m.created_at
+				FROM messages m
+				WHERE m.conversation_id = uc.id
+					AND m.space_id = $1
+					AND m.topic_id IS NULL
+					AND m.deleted_at IS NULL
+					AND NOT EXISTS (
+						SELECT 1 FROM message_hidden_states h
+						WHERE h.message_id = m.id AND h.user_id = $2
+					)
+				ORDER BY m.created_at DESC, m.id DESC
+				LIMIT 1
+			) latest ON TRUE
+			ORDER BY last_activity_at DESC, uc.id ASC
+		`, r.spaceID, actorID)
+		if err != nil {
+			return V1BootstrapResponse{}, err
+		}
+
+		convIDs := make([]string, 0, 16)
+		convIndexByID := make(map[string]int, 16)
+		for convRows.Next() {
+			var (
+				c         V1BootstrapConversation
+				lastMsgAt *time.Time
+				activity  time.Time
+			)
+			if scanErr := convRows.Scan(
+				&c.ID,
+				&c.Type,
+				&c.Title,
+				&c.AvatarEmoji,
+				&c.LastMessagePlainText,
+				&lastMsgAt,
+				&activity,
+				&c.UnreadCount,
+			); scanErr != nil {
+				convRows.Close()
+				return V1BootstrapResponse{}, scanErr
+			}
+			if c.Type != "group" {
+				c.AvatarEmoji = nil
+			}
+			c.DisplayTitle = c.Title
+			if c.Type == "saved" {
+				c.DisplayTitle = "我的收藏"
+			}
+			c.MemberIDs = []string{}
+			c.PinnedMessageIDs = []string{}
+			if lastMsgAt != nil && !lastMsgAt.IsZero() {
+				formatted := lastMsgAt.UTC().Format(time.RFC3339Nano)
+				c.LastMessageAt = &formatted
+			}
+			convIndexByID[c.ID] = len(conversations)
+			convIDs = append(convIDs, c.ID)
+			conversations = append(conversations, c)
+		}
+		if err := convRows.Err(); err != nil {
+			convRows.Close()
+			return V1BootstrapResponse{}, err
+		}
+		convRows.Close()
+
+		if len(convIDs) > 0 {
+			cmRows, err := r.pool.Query(ctx, `
+				SELECT cm.conversation_id, cm.user_id
+				FROM conversation_members cm
+				JOIN space_members sm ON sm.space_id = $1 AND sm.user_id = cm.user_id AND sm.removed_at IS NULL
+				WHERE cm.conversation_id = ANY($2) AND cm.removed_at IS NULL
+				ORDER BY cm.joined_at ASC, cm.user_id ASC
+			`, r.spaceID, convIDs)
+			if err != nil {
+				return V1BootstrapResponse{}, err
+			}
+			for cmRows.Next() {
+				var cID, mID string
+				if scanErr := cmRows.Scan(&cID, &mID); scanErr != nil {
+					cmRows.Close()
+					return V1BootstrapResponse{}, scanErr
+				}
+				if idx, ok := convIndexByID[cID]; ok {
+					conversations[idx].MemberIDs = append(conversations[idx].MemberIDs, mID)
+				}
+			}
+			if err := cmRows.Err(); err != nil {
+				cmRows.Close()
+				return V1BootstrapResponse{}, err
+			}
+			cmRows.Close()
+
+			for i := range conversations {
+				if conversations[i].Type == "direct" {
+					for _, mID := range conversations[i].MemberIDs {
+						if mID != actorID {
+							if peer, ok := memberByID[mID]; ok && peer.DisplayName != "" {
+								conversations[i].DisplayTitle = peer.DisplayName
+							}
+							break
+						}
+					}
+				}
+			}
+
+			pinRows, err := r.pool.Query(ctx, `
+				SELECT p.conversation_id, p.message_id
+				FROM conversation_pinned_messages p
+				JOIN messages m ON m.id = p.message_id
+				WHERE p.conversation_id = ANY($1)
+					AND m.space_id = $2
+					AND m.deleted_at IS NULL
+					AND m.recalled_at IS NULL
+				ORDER BY p.created_at DESC
+			`, convIDs, r.spaceID)
+			if err != nil {
+				return V1BootstrapResponse{}, err
+			}
+			for pinRows.Next() {
+				var cID, msgID string
+				if scanErr := pinRows.Scan(&cID, &msgID); scanErr != nil {
+					pinRows.Close()
+					return V1BootstrapResponse{}, scanErr
+				}
+				if idx, ok := convIndexByID[cID]; ok {
+					conversations[idx].PinnedMessageIDs = append(conversations[idx].PinnedMessageIDs, msgID)
+				}
+			}
+			if err := pinRows.Err(); err != nil {
+				pinRows.Close()
+				return V1BootstrapResponse{}, err
+			}
+			pinRows.Close()
+		}
+	}
+
+	return V1BootstrapResponse{
+		Auth: V1BootstrapAuth{
+			Enabled:     true,
+			CurrentUser: currentUser,
+		},
+		Policy: V1BootstrapPolicy{
+			DailyQuotaBytes: dailyQuotaBytes,
+			UsedTodayBytes:  usedTodayBytes,
+		},
+		Preferences:   prefs,
+		Members:       members,
+		Conversations: conversations,
+		EventCursor:   eventCursor,
+	}, nil
+}
+
 func (r *PGRepository) SyncDelta(ctx context.Context, actorID string, sinceSeq int64, limit int) (SyncDeltaResponse, error) {
 	var currentSeq int64
 	err := r.pool.QueryRow(ctx, `SELECT coalesce(max(seq), 0) FROM workspace_events WHERE space_id = $1`, r.spaceID).Scan(&currentSeq)
@@ -332,7 +794,13 @@ func (r *PGRepository) ForwardMessages(ctx context.Context, actorID, targetConve
 	return created, nil
 }
 
-func emitMessageCreatedEvent(ctx context.Context, tx pgx.Tx, spaceID, actorID, conversationID, messageID string, now time.Time) error {
+func emitWorkspaceEventTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	spaceID, actorID, conversationID, eventType, targetType, targetID string,
+	payload map[string]any,
+	now time.Time,
+) error {
 	var nextSeq int64
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO workspace_event_cursors (space_id, next_seq)
@@ -343,21 +811,535 @@ func emitMessageCreatedEvent(ctx context.Context, tx pgx.Tx, spaceID, actorID, c
 	`, spaceID).Scan(&nextSeq); err != nil {
 		return err
 	}
-	payloadBytes, _ := json.Marshal(map[string]any{
-		"conversationId": conversationID,
-		"messageId":      messageID,
-	})
+	payloadBytes, _ := json.Marshal(payload)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO workspace_events (
 			id, space_id, seq, type, actor_user_id, conversation_id,
 			target_type, target_id, payload_json, created_at
 		)
-		VALUES ($1, $2, $3, 'message.created', $4, $5, 'message', $6, $7, $8)
-	`, randomID("evt"), spaceID, nextSeq, actorID, conversationID, messageID, string(payloadBytes), now.UTC()); err != nil {
+		VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), $9, $10)
+	`, randomID("evt"), spaceID, nextSeq, eventType, actorID, conversationID, targetType, targetID, string(payloadBytes), now.UTC()); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx, `SELECT pg_notify('duallane_workspace_events', '')`)
 	return err
+}
+
+func emitMessageCreatedEvent(ctx context.Context, tx pgx.Tx, spaceID, actorID, conversationID, messageID string, now time.Time) error {
+	return emitWorkspaceEventTx(ctx, tx, spaceID, actorID, conversationID, "message.created", "message", messageID, map[string]any{
+		"conversationId": conversationID,
+		"messageId":      messageID,
+	}, now)
+}
+
+func insertGroupSystemMessageTx(ctx context.Context, tx pgx.Tx, spaceID, actorID, conversationID, plainText string, now time.Time) error {
+	text := strings.TrimSpace(plainText)
+	if text == "" {
+		return nil
+	}
+	msgID := randomID("msg")
+	contentJSON, _ := json.Marshal(map[string]any{
+		"format":    "duallane.message+json;v=1",
+		"plainText": text,
+		"blocks":    []map[string]any{{"type": "text", "text": text}},
+	})
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO messages (
+			id, space_id, conversation_id, author_id, author_kind, kind,
+			content_format, content_json, plain_text, created_at
+		)
+		VALUES ($1, $2, $3, NULL, 'system', 'system', 'duallane.message+json;v=1', $4, $5, $6)
+	`, msgID, spaceID, conversationID, string(contentJSON), text, now.UTC()); err != nil {
+		return err
+	}
+	return emitWorkspaceEventTx(ctx, tx, spaceID, actorID, conversationID, "message.created", "message", msgID, map[string]any{
+		"conversationId": conversationID,
+		"messageId":      msgID,
+		"message": map[string]any{
+			"id":             msgID,
+			"conversationId": conversationID,
+			"kind":           "system",
+			"plainText":      text,
+			"createdAt":      now.UTC().Format(time.RFC3339Nano),
+		},
+	}, now)
+}
+
+func resolveHumanSpaceParticipantTx(ctx context.Context, tx pgx.Tx, spaceID, userID string) (role string, displayName string, err error) {
+	var kind string
+	err = tx.QueryRow(ctx, `
+		SELECT sm.role, u.kind, coalesce(nullif(u.nickname, ''), nullif(u.display_name, ''), nullif(u.github_login, ''), '成员')
+		FROM space_members sm
+		JOIN users u ON u.id = sm.user_id
+		WHERE sm.space_id = $1 AND sm.user_id = $2 AND sm.removed_at IS NULL
+	`, spaceID, userID).Scan(&role, &kind, &displayName)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", "", ErrForbidden
+		}
+		return "", "", err
+	}
+	if kind != "human" || (role != "owner" && role != "admin" && role != "member") {
+		return "", "", ErrForbidden
+	}
+	return role, displayName, nil
+}
+
+func canInviteSpaceMemberTx(ctx context.Context, tx pgx.Tx, spaceID, actorID, actorRole, targetID string) (GroupMemberSummary, error) {
+	var summary GroupMemberSummary
+	var discoverable bool
+	err := tx.QueryRow(ctx, `
+		SELECT
+			u.id,
+			coalesce(nullif(u.nickname, ''), nullif(u.display_name, ''), nullif(u.github_login, ''), '成员'),
+			coalesce(u.github_login, ''),
+			u.kind,
+			sm.role,
+			coalesce(u.avatar_url, ''),
+			u.search_discoverable
+		FROM space_members sm
+		JOIN users u ON u.id = sm.user_id
+		WHERE sm.space_id = $1 AND sm.user_id = $2 AND sm.removed_at IS NULL
+	`, spaceID, targetID).Scan(
+		&summary.ID,
+		&summary.DisplayName,
+		&summary.GitHubLogin,
+		&summary.Kind,
+		&summary.Role,
+		&summary.AvatarURL,
+		&discoverable,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return GroupMemberSummary{}, fmt.Errorf("%w: 目标成员不存在", ErrInvalidInput)
+		}
+		return GroupMemberSummary{}, err
+	}
+	if summary.Kind != "human" || summary.Role == "auditor" {
+		return GroupMemberSummary{}, fmt.Errorf("%w: 该账号不可加入群聊", ErrInvalidInput)
+	}
+	if actorRole == "owner" || actorRole == "admin" || discoverable {
+		return summary, nil
+	}
+	var visible bool
+	err = tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM member_visibility_grants g
+			WHERE g.space_id = $1 AND g.viewer_user_id = $2 AND g.visible_user_id = $3
+		) OR EXISTS (
+			SELECT 1
+			FROM conversations c
+			JOIN conversation_members cm1 ON cm1.conversation_id = c.id AND cm1.user_id = $2 AND cm1.removed_at IS NULL
+			JOIN conversation_members cm2 ON cm2.conversation_id = c.id AND cm2.user_id = $3 AND cm2.removed_at IS NULL
+			WHERE c.space_id = $1
+		)
+	`, spaceID, actorID, targetID).Scan(&visible)
+	if err != nil {
+		return GroupMemberSummary{}, err
+	}
+	if !visible {
+		return GroupMemberSummary{}, ErrForbidden
+	}
+	return summary, nil
+}
+
+func loadGroupSummaryTx(ctx context.Context, tx pgx.Tx, spaceID, conversationID string) (GroupConversationSummary, error) {
+	var out GroupConversationSummary
+	var createdAt time.Time
+	err := tx.QueryRow(ctx, `
+		SELECT id, type, title, avatar_emoji, created_at
+		FROM conversations
+		WHERE space_id = $1 AND id = $2
+	`, spaceID, conversationID).Scan(&out.ID, &out.Type, &out.Title, &out.AvatarEmoji, &createdAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return GroupConversationSummary{}, ErrNotFound
+		}
+		return GroupConversationSummary{}, err
+	}
+	out.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
+	out.MemberIDs = []string{}
+	out.Members = []GroupMemberSummary{}
+
+	rows, err := tx.Query(ctx, `
+		SELECT
+			u.id,
+			coalesce(nullif(u.nickname, ''), nullif(u.display_name, ''), nullif(u.github_login, ''), '成员'),
+			coalesce(u.github_login, ''),
+			u.kind,
+			coalesce(sm.role, 'member'),
+			coalesce(u.avatar_url, '')
+		FROM conversation_members cm
+		JOIN users u ON u.id = cm.user_id
+		LEFT JOIN space_members sm ON sm.space_id = $1 AND sm.user_id = cm.user_id AND sm.removed_at IS NULL
+		WHERE cm.conversation_id = $2 AND cm.removed_at IS NULL
+		ORDER BY cm.joined_at ASC, u.id ASC
+	`, spaceID, conversationID)
+	if err != nil {
+		return GroupConversationSummary{}, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var m GroupMemberSummary
+		if err := rows.Scan(&m.ID, &m.DisplayName, &m.GitHubLogin, &m.Kind, &m.Role, &m.AvatarURL); err != nil {
+			return GroupConversationSummary{}, err
+		}
+		out.MemberIDs = append(out.MemberIDs, m.ID)
+		out.Members = append(out.Members, m)
+	}
+	return out, rows.Err()
+}
+
+func (r *PGRepository) CreateGroupConversation(ctx context.Context, actorID string, input CreateGroupInput, now time.Time) (GroupConversationSummary, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return GroupConversationSummary{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	actorRole, actorName, err := resolveHumanSpaceParticipantTx(ctx, tx, r.spaceID, actorID)
+	if err != nil {
+		return GroupConversationSummary{}, err
+	}
+
+	invitees := make([]GroupMemberSummary, 0, len(input.MemberIDs))
+	for _, peerID := range input.MemberIDs {
+		member, err := canInviteSpaceMemberTx(ctx, tx, r.spaceID, actorID, actorRole, peerID)
+		if err != nil {
+			return GroupConversationSummary{}, err
+		}
+		invitees = append(invitees, member)
+	}
+
+	convID := randomID("conv")
+	var avatarArg any
+	if input.Avatar != nil && strings.TrimSpace(*input.Avatar) != "" {
+		avatarArg = strings.TrimSpace(*input.Avatar)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO conversations (id, space_id, type, title, avatar_emoji, direct_key, retention_count, created_by, created_at)
+		VALUES ($1, $2, 'group', $3, $4, NULL, 10000, $5, $6)
+	`, convID, r.spaceID, input.Title, avatarArg, actorID, now.UTC()); err != nil {
+		return GroupConversationSummary{}, err
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO conversation_members (conversation_id, user_id, role, joined_at, removed_at)
+		VALUES ($1, $2, 'owner', $3, NULL)
+	`, convID, actorID, now.UTC()); err != nil {
+		return GroupConversationSummary{}, err
+	}
+	for _, inv := range invitees {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO conversation_members (conversation_id, user_id, role, joined_at, removed_at)
+			VALUES ($1, $2, 'member', $3, NULL)
+			ON CONFLICT (conversation_id, user_id) DO UPDATE SET removed_at = NULL, joined_at = EXCLUDED.joined_at
+		`, convID, inv.ID, now.UTC()); err != nil {
+			return GroupConversationSummary{}, err
+		}
+	}
+
+	summary, err := loadGroupSummaryTx(ctx, tx, r.spaceID, convID)
+	if err != nil {
+		return GroupConversationSummary{}, err
+	}
+
+	if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, convID, "conversation.created", "conversation", convID, map[string]any{
+		"conversationId": convID,
+		"type":           "group",
+		"title":          summary.Title,
+		"avatarEmoji":    summary.AvatarEmoji,
+		"conversation":   summary,
+	}, now); err != nil {
+		return GroupConversationSummary{}, err
+	}
+	for _, inv := range invitees {
+		if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, convID, "conversation.member_added", "user", inv.ID, map[string]any{
+			"conversationId": convID,
+			"userId":         inv.ID,
+			"member":         inv,
+		}, now); err != nil {
+			return GroupConversationSummary{}, err
+		}
+	}
+	if err := insertGroupSystemMessageTx(ctx, tx, r.spaceID, actorID, convID, fmt.Sprintf("%s 创建了群聊「%s」", actorName, summary.Title), now); err != nil {
+		return GroupConversationSummary{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return GroupConversationSummary{}, err
+	}
+	return summary, nil
+}
+
+func (r *PGRepository) UpdateGroupConversation(ctx context.Context, actorID, conversationID string, input UpdateGroupInput, now time.Time) (GroupConversationSummary, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return GroupConversationSummary{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	_, actorName, err := resolveHumanSpaceParticipantTx(ctx, tx, r.spaceID, actorID)
+	if err != nil {
+		return GroupConversationSummary{}, err
+	}
+
+	var convType, currentTitle string
+	var currentAvatar *string
+	err = tx.QueryRow(ctx, `
+		SELECT c.type, c.title, c.avatar_emoji
+		FROM conversations c
+		JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $3 AND cm.removed_at IS NULL
+		WHERE c.space_id = $1 AND c.id = $2
+		FOR UPDATE OF c
+	`, r.spaceID, conversationID, actorID).Scan(&convType, &currentTitle, &currentAvatar)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return GroupConversationSummary{}, ErrForbidden
+		}
+		return GroupConversationSummary{}, err
+	}
+	if convType != "group" {
+		return GroupConversationSummary{}, fmt.Errorf("%w: 仅群聊支持编辑资料", ErrInvalidInput)
+	}
+
+	nextTitle := currentTitle
+	if input.TitleSet && input.Title != nil {
+		nextTitle = *input.Title
+	}
+
+	nextAvatar := currentAvatar
+	avatarKind := ""
+	if input.AvatarSet {
+		if input.Avatar == nil || strings.TrimSpace(*input.Avatar) == "" {
+			nextAvatar = nil
+			avatarKind = "empty"
+		} else {
+			kind, norm, attID, err := NormalizeGroupAvatarValue(*input.Avatar)
+			if err != nil {
+				return GroupConversationSummary{}, err
+			}
+			avatarKind = kind
+			if kind == "file" {
+				var validImage bool
+				if err := tx.QueryRow(ctx, `
+					SELECT EXISTS (
+						SELECT 1 FROM attachments
+						WHERE id = $1 AND space_id = $2 AND conversation_id = $3
+						  AND status = 'available' AND mime_type LIKE 'image/%'
+					)
+				`, attID, r.spaceID, conversationID).Scan(&validImage); err != nil {
+					return GroupConversationSummary{}, err
+				}
+				if !validImage {
+					return GroupConversationSummary{}, fmt.Errorf("%w: 群头像图片不存在或不属于当前群聊", ErrInvalidInput)
+				}
+			}
+			nextAvatar = &norm
+		}
+	}
+
+	var avatarArg any
+	if nextAvatar != nil {
+		avatarArg = *nextAvatar
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE conversations SET title = $1, avatar_emoji = $2
+		WHERE space_id = $3 AND id = $4 AND type = 'group'
+	`, nextTitle, avatarArg, r.spaceID, conversationID); err != nil {
+		return GroupConversationSummary{}, err
+	}
+
+	summary, err := loadGroupSummaryTx(ctx, tx, r.spaceID, conversationID)
+	if err != nil {
+		return GroupConversationSummary{}, err
+	}
+
+	if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, conversationID, "conversation.updated", "conversation", conversationID, map[string]any{
+		"conversationId": conversationID,
+		"title":          summary.Title,
+		"avatarEmoji":    summary.AvatarEmoji,
+		"conversation":   summary,
+	}, now); err != nil {
+		return GroupConversationSummary{}, err
+	}
+
+	if input.TitleSet && nextTitle != currentTitle {
+		if err := insertGroupSystemMessageTx(ctx, tx, r.spaceID, actorID, conversationID, fmt.Sprintf("%s 将群聊名称改为「%s」", actorName, nextTitle), now); err != nil {
+			return GroupConversationSummary{}, err
+		}
+	}
+	oldAvatarStr := ""
+	if currentAvatar != nil {
+		oldAvatarStr = *currentAvatar
+	}
+	newAvatarStr := ""
+	if nextAvatar != nil {
+		newAvatarStr = *nextAvatar
+	}
+	if input.AvatarSet && oldAvatarStr != newAvatarStr {
+		sysMsg := fmt.Sprintf("%s 恢复了默认群头像", actorName)
+		if avatarKind == "file" {
+			sysMsg = fmt.Sprintf("%s 更新了群头像", actorName)
+		} else if avatarKind == "emoji" && nextAvatar != nil {
+			sysMsg = fmt.Sprintf("%s 将群头像改为 %s", actorName, *nextAvatar)
+		}
+		if err := insertGroupSystemMessageTx(ctx, tx, r.spaceID, actorID, conversationID, sysMsg, now); err != nil {
+			return GroupConversationSummary{}, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return GroupConversationSummary{}, err
+	}
+	return summary, nil
+}
+
+func (r *PGRepository) AddGroupMembers(ctx context.Context, actorID, conversationID string, userIDs []string, now time.Time) (GroupConversationSummary, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return GroupConversationSummary{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	actorRole, actorName, err := resolveHumanSpaceParticipantTx(ctx, tx, r.spaceID, actorID)
+	if err != nil {
+		return GroupConversationSummary{}, err
+	}
+
+	var convType string
+	err = tx.QueryRow(ctx, `
+		SELECT c.type
+		FROM conversations c
+		JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $3 AND cm.removed_at IS NULL
+		WHERE c.space_id = $1 AND c.id = $2
+		FOR UPDATE OF c
+	`, r.spaceID, conversationID, actorID).Scan(&convType)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return GroupConversationSummary{}, ErrForbidden
+		}
+		return GroupConversationSummary{}, err
+	}
+	if convType != "group" {
+		return GroupConversationSummary{}, fmt.Errorf("%w: 仅群聊支持邀请成员", ErrInvalidInput)
+	}
+
+	addedNames := make([]string, 0, len(userIDs))
+	for _, uid := range userIDs {
+		member, err := canInviteSpaceMemberTx(ctx, tx, r.spaceID, actorID, actorRole, uid)
+		if err != nil {
+			return GroupConversationSummary{}, err
+		}
+		var alreadyActive bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM conversation_members
+				WHERE conversation_id = $1 AND user_id = $2 AND removed_at IS NULL
+			)
+		`, conversationID, member.ID).Scan(&alreadyActive); err != nil {
+			return GroupConversationSummary{}, err
+		}
+		if alreadyActive {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO conversation_members (conversation_id, user_id, role, joined_at, removed_at)
+			VALUES ($1, $2, 'member', $3, NULL)
+			ON CONFLICT (conversation_id, user_id) DO UPDATE SET removed_at = NULL, joined_at = EXCLUDED.joined_at
+		`, conversationID, member.ID, now.UTC()); err != nil {
+			return GroupConversationSummary{}, err
+		}
+		addedNames = append(addedNames, member.DisplayName)
+		if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, conversationID, "conversation.member_added", "user", member.ID, map[string]any{
+			"conversationId": conversationID,
+			"userId":         member.ID,
+			"member":         member,
+		}, now); err != nil {
+			return GroupConversationSummary{}, err
+		}
+	}
+
+	summary, err := loadGroupSummaryTx(ctx, tx, r.spaceID, conversationID)
+	if err != nil {
+		return GroupConversationSummary{}, err
+	}
+
+	if len(addedNames) > 0 {
+		if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, conversationID, "conversation.updated", "conversation", conversationID, map[string]any{
+			"conversationId": conversationID,
+			"title":          summary.Title,
+			"avatarEmoji":    summary.AvatarEmoji,
+			"conversation":   summary,
+		}, now); err != nil {
+			return GroupConversationSummary{}, err
+		}
+		if err := insertGroupSystemMessageTx(ctx, tx, r.spaceID, actorID, conversationID, fmt.Sprintf("%s 邀请 %s 加入群聊", actorName, strings.Join(addedNames, "、")), now); err != nil {
+			return GroupConversationSummary{}, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return GroupConversationSummary{}, err
+	}
+	return summary, nil
+}
+
+func (r *PGRepository) LeaveGroupConversation(ctx context.Context, actorID, conversationID string, now time.Time) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	_, actorName, err := resolveHumanSpaceParticipantTx(ctx, tx, r.spaceID, actorID)
+	if err != nil {
+		return err
+	}
+
+	var convType string
+	err = tx.QueryRow(ctx, `
+		SELECT c.type
+		FROM conversations c
+		JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $3 AND cm.removed_at IS NULL
+		WHERE c.space_id = $1 AND c.id = $2
+		FOR UPDATE OF c
+	`, r.spaceID, conversationID, actorID).Scan(&convType)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if convType != "group" {
+		return fmt.Errorf("%w: 仅群聊支持退出操作", ErrInvalidInput)
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE conversation_members
+		SET removed_at = $1
+		WHERE conversation_id = $2 AND user_id = $3 AND removed_at IS NULL
+	`, now.UTC(), conversationID, actorID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, conversationID, "conversation.member_removed", "user", actorID, map[string]any{
+		"conversationId": conversationID,
+		"userId":         actorID,
+		"self":           true,
+	}, now); err != nil {
+		return err
+	}
+	if err := insertGroupSystemMessageTx(ctx, tx, r.spaceID, actorID, conversationID, fmt.Sprintf("%s 离开了群聊", actorName), now); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }
 
 func (r *PGRepository) GetThread(ctx context.Context, actorID, rootMessageID string) (ThreadView, error) {
@@ -448,8 +1430,14 @@ func (r *PGRepository) ReplyThread(ctx context.Context, actorID, rootMessageID, 
 }
 
 func (r *PGRepository) PinMessage(ctx context.Context, actorID, conversationID, messageID string, now time.Time) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	var isMember bool
-	err := r.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM conversation_members WHERE conversation_id = $1 AND user_id = $2 AND removed_at IS NULL
 		)
@@ -458,17 +1446,48 @@ func (r *PGRepository) PinMessage(ctx context.Context, actorID, conversationID, 
 		return ErrForbidden
 	}
 
-	_, err = r.pool.Exec(ctx, `
+	var msgExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM messages
+			WHERE id = $1 AND conversation_id = $2 AND space_id = $3 AND deleted_at IS NULL
+		)
+	`, messageID, conversationID, r.spaceID).Scan(&msgExists); err != nil {
+		return err
+	}
+	if !msgExists {
+		return ErrNotFound
+	}
+
+	tag, err := tx.Exec(ctx, `
 		INSERT INTO conversation_pinned_messages (conversation_id, message_id, pinned_by_user_id, created_at)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (conversation_id, message_id) DO NOTHING
-	`, conversationID, messageID, actorID, now)
-	return err
+	`, conversationID, messageID, actorID, now.UTC())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() > 0 {
+		if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, conversationID, "message.pinned", "message", messageID, map[string]any{
+			"conversationId": conversationID,
+			"messageId":      messageID,
+			"pinnedByUserId": actorID,
+		}, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *PGRepository) UnpinMessage(ctx context.Context, actorID, conversationID, messageID string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	var isMember bool
-	err := r.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM conversation_members WHERE conversation_id = $1 AND user_id = $2 AND removed_at IS NULL
 		)
@@ -476,8 +1495,19 @@ func (r *PGRepository) UnpinMessage(ctx context.Context, actorID, conversationID
 	if err != nil || !isMember {
 		return ErrForbidden
 	}
-	_, err = r.pool.Exec(ctx, `DELETE FROM conversation_pinned_messages WHERE conversation_id = $1 AND message_id = $2`, conversationID, messageID)
-	return err
+	tag, err := tx.Exec(ctx, `DELETE FROM conversation_pinned_messages WHERE conversation_id = $1 AND message_id = $2`, conversationID, messageID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() > 0 {
+		if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, conversationID, "message.unpinned", "message", messageID, map[string]any{
+			"conversationId": conversationID,
+			"messageId":      messageID,
+		}, time.Now().UTC()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *PGRepository) ListDevices(ctx context.Context, actorID, currentDeviceID string) ([]UserDevice, error) {

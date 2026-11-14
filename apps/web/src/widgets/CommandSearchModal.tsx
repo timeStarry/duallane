@@ -26,7 +26,6 @@ export function CommandSearchModal() {
   } = useWorkspaceStore();
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
-  const [searchSource, setSearchSource] = useState<"remote" | "local">("local");
   const [results, setResults] = useState<SearchResponse>({ messages: [], files: [] });
 
   useEffect(() => {
@@ -83,7 +82,6 @@ export function CommandSearchModal() {
     let cancelled = false;
     const timer = setTimeout(() => {
       if (isPreviewMode || authStatus !== "authenticated") {
-        setSearchSource("local");
         setResults(searchLocally());
         return;
       }
@@ -92,7 +90,6 @@ export function CommandSearchModal() {
         .search(trimmed)
         .then((res) => {
           if (cancelled) return;
-          setSearchSource("remote");
           setResults({
             messages: Array.isArray(res?.messages) ? res.messages : [],
             files: Array.isArray(res?.files) ? res.files : [],
@@ -100,7 +97,6 @@ export function CommandSearchModal() {
         })
         .catch(() => {
           if (cancelled) return;
-          setSearchSource("local");
           setResults(searchLocally());
         })
         .finally(() => {
@@ -131,20 +127,13 @@ export function CommandSearchModal() {
       <DialogContent size="lg">
         <DialogHeader>
           <div className="flex items-center justify-between gap-2 pr-8 max-narrow:pr-4">
-            <DialogTitle className="flex flex-wrap items-center gap-2">
+            <DialogTitle className="flex items-center gap-2">
               <Search className="size-4 shrink-0 text-dl-lane-shared" strokeWidth={2} />
               <span>全局搜索</span>
-              <span className="rounded-full bg-dl-surface-subtle px-2 py-0.5 text-[10px] font-medium text-dl-text-secondary">
-                {searchSource === "remote" && authStatus === "authenticated"
-                  ? "服务端全文检索"
-                  : "本机内存检索"}
-              </span>
             </DialogTitle>
             <kbd className="dl-kbd max-narrow:hidden">ESC</kbd>
           </div>
-          <DialogDescription>
-            搜索共享空间消息正文、附件文件与当前私密直连内存记录，点击结果直接定位原上下文。
-          </DialogDescription>
+          <DialogDescription className="sr-only">搜索消息与附件</DialogDescription>
         </DialogHeader>
         <div className="space-y-4 p-6 max-narrow:p-3.5 pt-4">
           <Input

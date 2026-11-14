@@ -40,8 +40,8 @@ export function Switch({
               damping: DESIGN_TOKENS.motion.spring.damping
             }}
             className={cn(
-              "block size-[20px] rounded-full bg-white shadow-sm",
-              checked ? "translate-x-[18px]" : "translate-x-0"
+              "block size-[20px] rounded-full shadow-sm",
+              checked ? "translate-x-[18px] bg-on-accent" : "translate-x-0 bg-white"
             )}
           />
         </RadixSwitch.Thumb>

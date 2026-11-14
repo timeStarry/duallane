@@ -12,7 +12,12 @@ import {
   Smartphone,
   User,
 } from "lucide-react";
-import type { AccentId, ThemePreference } from "@duallane/design-tokens";
+import {
+  ACCENT_IDS,
+  DESIGN_TOKENS,
+  type AccentId,
+  type ThemePreference,
+} from "@duallane/design-tokens";
 import type { UserDeviceSummary } from "@duallane/protocol";
 import { useLaneStore, type SettingsTab } from "@/entities/lane/store";
 import { useWorkspaceStore } from "@/entities/workspace/store";
@@ -38,14 +43,6 @@ const TABS: Array<{ id: SettingsTab; label: string; icon: React.ComponentType<{ 
   { id: "devices", label: "设备", icon: Smartphone },
   { id: "qr", label: "扫码", icon: QrCode },
   { id: "bots", label: "机器人", icon: Bot },
-];
-
-const ACCENTS: Array<{ id: AccentId; label: string }> = [
-  { id: "azure", label: "湛蓝" },
-  { id: "indigo", label: "靛青" },
-  { id: "emerald", label: "翡翠" },
-  { id: "copper", label: "赤铜" },
-  { id: "graphite", label: "石墨" },
 ];
 
 export function SettingsModal() {
@@ -184,14 +181,14 @@ export function SettingsModal() {
       <DialogContent size="lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2.5">
-            <BrandLogo size={26} withTile />
-            <span className="tracking-[-0.025em]">DualLane 设置中心</span>
+            <BrandLogo size={24} withTile />
+            <span className="tracking-[-0.025em]">设置</span>
           </DialogTitle>
-          <DialogDescription className="text-xs font-mono">
-            Two Trust Lanes. Crystal Clear.
+          <DialogDescription className="sr-only">
+            外观、个人身份、设备与机器人设置
           </DialogDescription>
         </DialogHeader>
-        <div className="flex max-compact:flex-col gap-4 min-h-[320px] max-h-[72vh] p-6 max-narrow:p-3.5 pt-4">
+        <div className="flex max-compact:flex-col gap-4 min-h-[300px] max-h-[72vh] p-6 max-narrow:p-3.5 pt-4">
           <nav
             aria-label="设置分类"
             className="w-36 max-compact:w-full shrink-0 max-compact:flex max-compact:flex-wrap max-compact:overflow-x-auto space-y-1 max-compact:space-y-0 max-compact:gap-1 border-r max-compact:border-r-0 max-compact:border-b border-dl-border-hairline pr-3 max-compact:pr-0 max-compact:pb-2.5"
@@ -224,19 +221,30 @@ export function SettingsModal() {
                     onValueChange={(v) => setPreference(v as ThemePreference)}
                     options={[
                       { value: "system", label: "跟随系统" },
-                      { value: "light", label: "浅色玻璃" },
-                      { value: "dark", label: "深色玻璃" },
+                      { value: "light", label: "浅色" },
+                      { value: "dark", label: "深色" },
                     ]}
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <div className="text-sm font-semibold text-dl-text-primary">主题强调色</div>
+                  <div className="text-sm font-semibold text-dl-text-primary">主题色</div>
                   <SegmentedControl
-                    label="主题强调色"
+                    label="主题色"
                     value={accent}
                     onValueChange={(v) => setAccent(v as AccentId)}
-                    options={ACCENTS.map((a) => ({ value: a.id, label: a.label }))}
+                    options={ACCENT_IDS.map((id) => ({
+                      value: id,
+                      label: DESIGN_TOKENS.accents[id].label,
+                      icon: (
+                        <span
+                          data-testid={`theme-swatch-${id}`}
+                          aria-hidden="true"
+                          className="size-2.5 shrink-0 rounded-full ring-1 ring-black/15"
+                          style={{ backgroundColor: DESIGN_TOKENS.accents[id].swatch }}
+                        />
+                      ),
+                    }))}
                   />
                 </div>
 
@@ -247,17 +255,14 @@ export function SettingsModal() {
                     value={transparency}
                     onValueChange={(v) => setTransparency(v as TransparencyMode)}
                     options={[
-                      { value: "glass", label: "Vibrancy 毛玻璃" },
-                      { value: "solid", label: "纯色高对比" },
+                      { value: "glass", label: "毛玻璃" },
+                      { value: "solid", label: "纯色" },
                     ]}
                   />
                 </div>
 
                 <div className="flex items-center justify-between gap-2 pt-1">
-                  <div className="min-w-0">
-                    <div className="text-sm font-semibold text-dl-text-primary">减弱动态效果</div>
-                    <div className="text-xs text-dl-text-tertiary">关闭弹性过渡动画以降低视觉干扰</div>
-                  </div>
+                  <div className="text-sm font-semibold text-dl-text-primary">减弱动态效果</div>
                   <Switch
                     label="减弱动态效果"
                     checked={reducedMotion}
@@ -275,7 +280,7 @@ export function SettingsModal() {
                       {currentUser.displayName || "当前成员"}
                     </div>
                     <div className="text-xs text-dl-text-tertiary">
-                      ID: {currentUser.id} · 角色:{" "}
+                      {currentUser.handle ? `@${currentUser.handle} · ` : ""}
                       {currentUser.role === "owner"
                         ? "空间所有者"
                         : currentUser.role === "admin"
@@ -287,13 +292,8 @@ export function SettingsModal() {
                   {canManageInvites && (
                     <div className="rounded-2xl border border-dl-border-hairline p-4 space-y-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="text-sm font-semibold text-dl-text-primary">
-                            空间成员邀请码
-                          </div>
-                          <div className="text-xs text-dl-text-tertiary mt-0.5">
-                            生成一次性或多用途邀请链接，供新成员加入共享空间
-                          </div>
+                        <div className="text-sm font-semibold text-dl-text-primary">
+                          空间成员邀请码
                         </div>
                         <div className="flex flex-wrap items-center gap-1.5 shrink-0">
                           <Button
@@ -367,9 +367,9 @@ export function SettingsModal() {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  <div className="rounded-2xl border border-dl-border-hairline p-4 space-y-2.5">
-                    <div className="flex items-center gap-2">
-                      <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-dl-lane-direct/15 text-dl-lane-direct">
+                  <div className="rounded-2xl border border-dl-border-hairline p-4 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-dl-lane-direct/15 text-dl-lane-direct">
                         <ShieldCheck className="size-4" strokeWidth={1.9} />
                       </span>
                       <div>
@@ -377,27 +377,22 @@ export function SettingsModal() {
                           免登录访客
                         </div>
                         <div className="text-xs text-dl-text-tertiary">
-                          当前处于私密直连访客模式，未绑定共享空间账号
+                          未绑定共享空间账号
                         </div>
                       </div>
                     </div>
-                    <p className="text-xs leading-relaxed text-dl-text-secondary">
-                      私密直连支持免登录端到端加密通信，不持久保存个人身份或会话历史。如需查看成员身份、管理多端设备或使用空间机器人，请登录共享空间。
-                    </p>
-                    <div>
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        className="gap-1.5"
-                        onClick={() => {
-                          closeSettings();
-                          setActiveLane("workspace");
-                        }}
-                      >
-                        <Building2 className="size-3.5" strokeWidth={1.85} />
-                        前往登录共享空间
-                      </Button>
-                    </div>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      className="gap-1.5"
+                      onClick={() => {
+                        closeSettings();
+                        setActiveLane("workspace");
+                      }}
+                    >
+                      <Building2 className="size-3.5" strokeWidth={1.85} />
+                      前往登录共享空间
+                    </Button>
                   </div>
                 </div>
               ))}
@@ -445,12 +440,7 @@ export function SettingsModal() {
 
             {isAuthenticated && settingsTab === "qr" && (
               <div className="space-y-4">
-                <div>
-                  <div className="text-sm font-semibold text-dl-text-primary">移动端扫码登录</div>
-                  <div className="text-xs text-dl-text-tertiary mt-0.5">
-                    为新版 DualLane Mobile 生成一次性会话载荷并在当前 Web 会话确认授权
-                  </div>
-                </div>
+                <div className="text-sm font-semibold text-dl-text-primary">移动端扫码登录</div>
                 <Button size="sm" variant="primary" onClick={() => void handleGenerateQR()}>
                   生成新扫码会话
                 </Button>

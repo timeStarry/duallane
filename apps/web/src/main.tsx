@@ -1,5 +1,6 @@
 import React, { lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
+import { AppV1 } from "./app/AppV1";
 import { initializeV1Theme } from "./shared/theme/vibrancy";
 import { ErrorBoundary } from "./shared/ui";
 import "./shared/theme/v1.css";
@@ -22,15 +23,10 @@ if (showWorkbench) {
     </React.StrictMode>
   );
 } else {
-  const AppV1 = lazy(() =>
-    import("./app/AppV1").then((m) => ({ default: m.AppV1 }))
-  );
   createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
       <ErrorBoundary>
-        <Suspense fallback={<p>正在加载 DualLane v1.0…</p>}>
-          <AppV1 />
-        </Suspense>
+        <AppV1 />
       </ErrorBoundary>
     </React.StrictMode>
   );

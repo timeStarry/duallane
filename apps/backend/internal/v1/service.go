@@ -7,12 +7,18 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type Repository interface {
+	GetBootstrap(ctx context.Context, actorID string, now time.Time) (V1BootstrapResponse, error)
 	SyncDelta(ctx context.Context, actorID string, sinceSeq int64, limit int) (SyncDeltaResponse, error)
 	Search(ctx context.Context, actorID, query, scope string, limit int) (SearchResponse, error)
 	GetOrCreateSavedConversation(ctx context.Context, actorID string, now time.Time) (string, error)
+	CreateGroupConversation(ctx context.Context, actorID string, input CreateGroupInput, now time.Time) (GroupConversationSummary, error)
+	UpdateGroupConversation(ctx context.Context, actorID, conversationID string, input UpdateGroupInput, now time.Time) (GroupConversationSummary, error)
+	AddGroupMembers(ctx context.Context, actorID, conversationID string, userIDs []string, now time.Time) (GroupConversationSummary, error)
+	LeaveGroupConversation(ctx context.Context, actorID, conversationID string, now time.Time) error
 	EditMessage(ctx context.Context, actorID, messageID, plainText string, now time.Time) error
 	ForwardMessages(ctx context.Context, actorID, targetConversationID string, messageIDs []string, now time.Time) ([]string, error)
 	GetThread(ctx context.Context, actorID, rootMessageID string) (ThreadView, error)
@@ -50,6 +56,14 @@ func NewService(repo Repository) *Service {
 	}
 }
 
+func (s *Service) GetBootstrap(ctx context.Context, actorID string) (V1BootstrapResponse, error) {
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" {
+		return V1BootstrapResponse{}, ErrForbidden
+	}
+	return s.repo.GetBootstrap(ctx, actorID, s.now())
+}
+
 func (s *Service) SyncDelta(ctx context.Context, actorID string, sinceSeq int64) (SyncDeltaResponse, error) {
 	if strings.TrimSpace(actorID) == "" {
 		return SyncDeltaResponse{}, ErrForbidden
@@ -79,6 +93,130 @@ func (s *Service) GetOrCreateSavedConversation(ctx context.Context, actorID stri
 		return "", ErrForbidden
 	}
 	return s.repo.GetOrCreateSavedConversation(ctx, actorID, s.now())
+}
+
+func (s *Service) CreateGroupConversation(ctx context.Context, actorID string, input CreateGroupInput) (GroupConversationSummary, error) {
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" {
+		return GroupConversationSummary{}, ErrForbidden
+	}
+	title := strings.TrimSpace(input.Title)
+	if title == "" || utf8.RuneCountInString(title) > 80 {
+		return GroupConversationSummary{}, fmt.Errorf("%w: 群聊名称需为 1-80 个字符", ErrInvalidInput)
+	}
+	var normalizedAvatar *string
+	if input.Avatar != nil && strings.TrimSpace(*input.Avatar) != "" {
+		kind, norm, _, err := NormalizeGroupAvatarValue(*input.Avatar)
+		if err != nil {
+			return GroupConversationSummary{}, err
+		}
+		if kind != "emoji" {
+			return GroupConversationSummary{}, fmt.Errorf("%w: 创建群聊时仅支持 Emoji 头像，创建后可上传图片头像", ErrInvalidInput)
+		}
+		normalizedAvatar = &norm
+	}
+	peers := make([]string, 0, len(input.MemberIDs))
+	for _, id := range dedupeNonEmptyIDs(input.MemberIDs) {
+		if id != actorID {
+			peers = append(peers, id)
+		}
+	}
+	if len(peers) == 0 || len(peers) > 100 {
+		return GroupConversationSummary{}, fmt.Errorf("%w: 请至少选择 1 位空间成员", ErrInvalidInput)
+	}
+	return s.repo.CreateGroupConversation(ctx, actorID, CreateGroupInput{
+		Title:     title,
+		MemberIDs: peers,
+		Avatar:    normalizedAvatar,
+	}, s.now())
+}
+
+func (s *Service) UpdateGroupConversation(ctx context.Context, actorID, conversationID string, input UpdateGroupInput) (GroupConversationSummary, error) {
+	actorID = strings.TrimSpace(actorID)
+	conversationID = strings.TrimSpace(conversationID)
+	if actorID == "" {
+		return GroupConversationSummary{}, ErrForbidden
+	}
+	if conversationID == "" || (!input.TitleSet && !input.AvatarSet) {
+		return GroupConversationSummary{}, ErrInvalidInput
+	}
+	clean := UpdateGroupInput{
+		TitleSet:  input.TitleSet,
+		AvatarSet: input.AvatarSet,
+	}
+	if input.TitleSet {
+		title := ""
+		if input.Title != nil {
+			title = strings.TrimSpace(*input.Title)
+		}
+		if title == "" || utf8.RuneCountInString(title) > 80 {
+			return GroupConversationSummary{}, fmt.Errorf("%w: 群聊名称需为 1-80 个字符", ErrInvalidInput)
+		}
+		clean.Title = &title
+	}
+	if input.AvatarSet {
+		raw := ""
+		if input.Avatar != nil {
+			raw = *input.Avatar
+		}
+		kind, norm, _, err := NormalizeGroupAvatarValue(raw)
+		if err != nil {
+			return GroupConversationSummary{}, err
+		}
+		if kind == "empty" {
+			clean.Avatar = nil
+		} else {
+			clean.Avatar = &norm
+		}
+	}
+	return s.repo.UpdateGroupConversation(ctx, actorID, conversationID, clean, s.now())
+}
+
+func (s *Service) AddGroupMembers(ctx context.Context, actorID, conversationID string, userIDs []string) (GroupConversationSummary, error) {
+	actorID = strings.TrimSpace(actorID)
+	conversationID = strings.TrimSpace(conversationID)
+	if actorID == "" {
+		return GroupConversationSummary{}, ErrForbidden
+	}
+	cleaned := make([]string, 0, len(userIDs))
+	for _, id := range dedupeNonEmptyIDs(userIDs) {
+		if id != actorID {
+			cleaned = append(cleaned, id)
+		}
+	}
+	if conversationID == "" || len(cleaned) == 0 || len(cleaned) > 50 {
+		return GroupConversationSummary{}, ErrInvalidInput
+	}
+	return s.repo.AddGroupMembers(ctx, actorID, conversationID, cleaned, s.now())
+}
+
+func (s *Service) LeaveGroupConversation(ctx context.Context, actorID, conversationID string) error {
+	actorID = strings.TrimSpace(actorID)
+	conversationID = strings.TrimSpace(conversationID)
+	if actorID == "" {
+		return ErrForbidden
+	}
+	if conversationID == "" {
+		return ErrInvalidInput
+	}
+	return s.repo.LeaveGroupConversation(ctx, actorID, conversationID, s.now())
+}
+
+func dedupeNonEmptyIDs(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	out := make([]string, 0, len(items))
+	for _, raw := range items {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 func (s *Service) EditMessage(ctx context.Context, actorID, messageID, plainText string) error {

@@ -23,6 +23,7 @@ import {
   useLaneStore,
 } from "@/entities/lane/store";
 import { AppV1 } from "@/app/AppV1";
+import { WorkbenchV1 } from "@/app/WorkbenchV1";
 import { applyVibrancyTokensToRoot } from "@/shared/theme/vibrancy";
 import { DualLaneCardKit } from "@/widgets/DualLaneCardKit";
 import { PrimaryRail } from "@/widgets/PrimaryRail";
@@ -1074,6 +1075,513 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
       useWorkspaceStore.setState(prevWsInitial);
       Object.assign(useLaneStore.getInitialState(), prevLaneInitial);
       useLaneStore.setState(prevLaneInitial);
+    }
+  });
+
+  it("supports peer-equal group settings (rename, avatar, pin conversation, invite, leave) for ordinary members", async () => {
+    const prevWsInitial = { ...useWorkspaceStore.getInitialState() };
+    const prevLaneInitial = { ...useLaneStore.getInitialState() };
+    const origFetch = globalThis.fetch;
+
+    const calls: Array<{ url: string; method: string; body?: string }> = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method || "GET";
+      const body = init?.body ? String(init.body) : undefined;
+      calls.push({ url, method, body });
+
+      if (url === "/api/v1/conversations/conv_grp_peer" && method === "PATCH") {
+        const parsed = JSON.parse(body || "{}");
+        return new Response(
+          JSON.stringify({
+            conversation: {
+              id: "conv_grp_peer",
+              kind: "group",
+              title: parsed.title ?? "产品共创群",
+              avatarUrl: parsed.avatar ?? parsed.avatarUrl ?? "🚀",
+              memberIds: ["usr_owner", "usr_member_peer"],
+              members: [
+                { id: "usr_owner", displayName: "Owner", role: "member" },
+                { id: "usr_member_peer", displayName: "普通群友", role: "member" },
+              ],
+            },
+          }),
+          { status: 200 }
+        );
+      }
+      if (url === "/api/v1/conversations/conv_grp_peer/members" && method === "POST") {
+        return new Response(
+          JSON.stringify({
+            conversation: {
+              id: "conv_grp_peer",
+              kind: "group",
+              title: "新群名",
+              avatarUrl: "🚀",
+              memberIds: ["usr_owner", "usr_member_peer", "usr_friend_c"],
+              members: [
+                { id: "usr_owner", displayName: "Owner", role: "member" },
+                { id: "usr_member_peer", displayName: "普通群友", role: "member" },
+                { id: "usr_friend_c", displayName: "新成员C", role: "member" },
+              ],
+            },
+          }),
+          { status: 200 }
+        );
+      }
+      if (url === "/api/v1/preferences" && method === "PUT") {
+        return new Response(body || "{}", { status: 200 });
+      }
+      if (url === "/api/v1/conversations/conv_grp_peer/leave" && method === "POST") {
+        return new Response(JSON.stringify({ ok: true, conversationId: "conv_grp_peer" }), {
+          status: 200,
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const laneSnapshot = {
+        ...prevLaneInitial,
+        activeLane: "workspace" as const,
+        inspectorOpen: true,
+        inspectorTab: "details" as const,
+      };
+      Object.assign(useLaneStore.getInitialState(), laneSnapshot);
+      useLaneStore.setState(laneSnapshot);
+
+      const wsSnapshot = {
+        ...prevWsInitial,
+        isPreviewMode: false,
+        authStatus: "authenticated" as const,
+        currentUser: { id: "usr_member_peer", displayName: "普通群友", role: "member" as const },
+        members: {
+          usr_owner: { id: "usr_owner", displayName: "Owner", role: "member" as const },
+          usr_member_peer: {
+            id: "usr_member_peer",
+            displayName: "普通群友",
+            role: "member" as const,
+          },
+          usr_friend_c: { id: "usr_friend_c", displayName: "新成员C", role: "member" as const },
+        },
+        conversations: {
+          conv_saved: {
+            id: "conv_saved",
+            kind: "saved" as const,
+            title: "我的收藏",
+            unreadCount: 0,
+            mentionCount: 0,
+            pinnedMessageIds: [],
+            memberIds: ["usr_member_peer"],
+          },
+          conv_other: {
+            id: "conv_other",
+            kind: "group" as const,
+            title: "日常群",
+            unreadCount: 0,
+            mentionCount: 0,
+            pinnedMessageIds: [],
+            memberIds: ["usr_owner", "usr_member_peer"],
+          },
+          conv_grp_peer: {
+            id: "conv_grp_peer",
+            kind: "group" as const,
+            title: "产品共创群",
+            unreadCount: 0,
+            mentionCount: 0,
+            pinnedMessageIds: [],
+            memberIds: ["usr_owner", "usr_member_peer"],
+          },
+        },
+        conversationOrder: ["conv_saved", "conv_other", "conv_grp_peer"],
+        pinnedConversationIds: [],
+        userPreferences: {},
+        activeConversationId: "conv_grp_peer",
+      };
+      Object.assign(useWorkspaceStore.getInitialState(), wsSnapshot);
+      useWorkspaceStore.setState(wsSnapshot);
+
+      // Header exposes clear "群聊设置" entry and Inspector exposes full peer-equal group controls
+      const timelineHeaderHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <TimelinePane />
+        </TooltipProvider>
+      );
+      expect(timelineHeaderHtml).toContain('aria-label="群聊设置"');
+      expect(timelineHeaderHtml).not.toContain("支持置顶与线程讨论");
+
+      const inspectorHtml = renderToStaticMarkup(<InspectorPane />);
+      expect(inspectorHtml).toContain("群聊设置");
+      expect(inspectorHtml).toContain('aria-label="群聊名称"');
+      expect(inspectorHtml).toContain("上传群头像图片");
+      expect(inspectorHtml).toContain('aria-label="置顶会话"');
+      expect(inspectorHtml).toContain("邀请成员");
+      expect(inspectorHtml).toContain("退出群聊");
+
+      // Execute peer-equal mutations as ordinary member
+      await useWorkspaceStore
+        .getState()
+        .updateGroupProfile("conv_grp_peer", { title: "新群名", avatar: "🚀" });
+      expect(useWorkspaceStore.getState().conversations["conv_grp_peer"]?.title).toBe("新群名");
+      expect(useWorkspaceStore.getState().conversations["conv_grp_peer"]?.avatarEmoji).toBe("🚀");
+
+      await useWorkspaceStore.getState().togglePinConversation("conv_grp_peer");
+      expect(useWorkspaceStore.getState().pinnedConversationIds).toContain("conv_grp_peer");
+      Object.assign(useWorkspaceStore.getInitialState(), useWorkspaceStore.getState());
+
+      // Pinned conversation sorts right after "我的收藏" and ahead of unpinned conversations
+      const sidebarHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <ConversationSidebar />
+        </TooltipProvider>
+      );
+      expect(sidebarHtml.indexOf("我的收藏")).toBeLessThan(sidebarHtml.indexOf("新群名"));
+      expect(sidebarHtml.indexOf("新群名")).toBeLessThan(sidebarHtml.indexOf("日常群"));
+      expect(sidebarHtml).toContain('aria-label="已置顶会话"');
+      expect(sidebarHtml).toContain("🚀");
+
+      await useWorkspaceStore.getState().inviteGroupMembers("conv_grp_peer", ["usr_friend_c"]);
+      expect(useWorkspaceStore.getState().conversations["conv_grp_peer"]?.memberIds).toContain(
+        "usr_friend_c"
+      );
+
+      await useWorkspaceStore.getState().leaveGroup("conv_grp_peer");
+      expect(useWorkspaceStore.getState().conversations["conv_grp_peer"]).toBeUndefined();
+      const writeRoutes = calls
+        .filter((c) => c.method !== "GET")
+        .map((c) => `${c.method} ${c.url}`);
+      expect(writeRoutes).toEqual([
+        "PATCH /api/v1/conversations/conv_grp_peer",
+        "PUT /api/v1/preferences",
+        "POST /api/v1/conversations/conv_grp_peer/members",
+        "POST /api/v1/conversations/conv_grp_peer/leave",
+      ]);
+    } finally {
+      globalThis.fetch = origFetch;
+      Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);
+      useWorkspaceStore.setState(prevWsInitial);
+      Object.assign(useLaneStore.getInitialState(), prevLaneInitial);
+      useLaneStore.setState(prevLaneInitial);
+    }
+  });
+
+  it("renders inline image messages cleanly without redundant download strips while keeping file download buttons for non-image attachments", () => {
+    const prevWsInitial = { ...useWorkspaceStore.getInitialState() };
+    const prevLaneInitial = { ...useLaneStore.getInitialState() };
+
+    try {
+      // 1. Workspace timeline: image/png vs application/pdf
+      const wsLane = { ...prevLaneInitial, activeLane: "workspace" as const };
+      Object.assign(useLaneStore.getInitialState(), wsLane);
+      useLaneStore.setState(wsLane);
+
+      const wsState = {
+        ...prevWsInitial,
+        authStatus: "authenticated" as const,
+        currentUser: { id: "usr_me", displayName: "我", role: "member" as const },
+        conversations: {
+          conv_media: {
+            id: "conv_media",
+            kind: "group" as const,
+            title: "媒体测试群",
+            unreadCount: 0,
+            mentionCount: 0,
+            pinnedMessageIds: [],
+            memberIds: ["usr_me"],
+          },
+        },
+        conversationOrder: ["conv_media"],
+        activeConversationId: "conv_media",
+        messagesByConv: {
+          conv_media: [
+            {
+              id: "msg_img_1",
+              conversationId: "conv_media",
+              senderId: "usr_me",
+              senderName: "我",
+              plainText: "[文件]",
+              createdAt: "2026-11-14T10:00:00Z",
+              status: "sent" as const,
+              reactions: {},
+              attachments: [
+                {
+                  id: "att_img_1",
+                  fileName: "photo.png",
+                  mimeType: "image/png",
+                  byteSize: 20480,
+                  url: "/api/workspace/files/att_img_1/preview",
+                  downloadUrl: "/api/workspace/files/att_img_1/download",
+                },
+              ],
+            },
+            {
+              id: "msg_pdf_1",
+              conversationId: "conv_media",
+              senderId: "usr_me",
+              senderName: "我",
+              plainText: "[文件]",
+              createdAt: "2026-11-14T10:01:00Z",
+              status: "sent" as const,
+              reactions: {},
+              attachments: [
+                {
+                  id: "att_pdf_1",
+                  fileName: "spec.pdf",
+                  mimeType: "application/pdf",
+                  byteSize: 102400,
+                  url: "/api/workspace/files/att_pdf_1/download",
+                  downloadUrl: "/api/workspace/files/att_pdf_1/download",
+                },
+              ],
+            },
+          ],
+        },
+      };
+      Object.assign(useWorkspaceStore.getInitialState(), wsState);
+      useWorkspaceStore.setState(wsState);
+
+      const wsHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <TimelinePane />
+        </TooltipProvider>
+      );
+      expect(wsHtml).toContain('aria-label="预览图片 photo.png"');
+      expect(wsHtml).not.toContain('aria-label="下载 photo.png"');
+      expect(wsHtml).not.toContain('aria-label="查看附件 photo.png"');
+      expect(wsHtml).toContain('aria-label="查看附件 spec.pdf"');
+      expect(wsHtml).toContain('aria-label="下载 spec.pdf"');
+
+      // 2. P2P timeline: image/webp vs application/zip
+      const p2pLane = { ...prevLaneInitial, activeLane: "p2p" as const };
+      Object.assign(useLaneStore.getInitialState(), p2pLane);
+      useLaneStore.setState(p2pLane);
+
+      const p2pState = {
+        ...wsState,
+        p2pRoom: {
+          roomId: "RmImg01",
+          keyFingerprint: "11:22:33:44",
+          connectedPeers: 2,
+          remotePeerCount: 1,
+          status: "peer_connected" as const,
+          shareUrl: "http://127.0.0.1:5173/direct/RmImg01#k=secret",
+        },
+        p2pMessages: [
+          {
+            id: "p2p_img_1",
+            senderName: "我",
+            isOwn: true,
+            text: "",
+            createdAt: "2026-11-14T10:02:00Z",
+            deliveryStatus: "delivered" as const,
+            reactions: {},
+            attachment: {
+              fileName: "shot.webp",
+              mimeType: "image/webp",
+              byteSize: 8192,
+              blobUrl: "blob:http://127.0.0.1:5173/fake-webp",
+            },
+          },
+          {
+            id: "p2p_zip_1",
+            senderName: "我",
+            isOwn: true,
+            text: "",
+            createdAt: "2026-11-14T10:03:00Z",
+            deliveryStatus: "delivered" as const,
+            reactions: {},
+            attachment: {
+              fileName: "archive.zip",
+              mimeType: "application/zip",
+              byteSize: 65536,
+              blobUrl: "blob:http://127.0.0.1:5173/fake-zip",
+            },
+          },
+        ],
+      };
+      Object.assign(useWorkspaceStore.getInitialState(), p2pState);
+      useWorkspaceStore.setState(p2pState);
+
+      const p2pHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <TimelinePane />
+        </TooltipProvider>
+      );
+      expect(p2pHtml).toContain('aria-label="预览图片 shot.webp"');
+      expect(p2pHtml).not.toContain('aria-label="下载 shot.webp"');
+      expect(p2pHtml).toContain('aria-label="下载 archive.zip"');
+    } finally {
+      Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);
+      useWorkspaceStore.setState(prevWsInitial);
+      Object.assign(useLaneStore.getInitialState(), prevLaneInitial);
+      useLaneStore.setState(prevLaneInitial);
+    }
+  });
+
+  it("upgrades 主题色 with color swatches and drives --dl-shared, --dl-accent, and --dl-focus with WCAG AA contrast", () => {
+    // 1. Every theme accent has swatch + WCAG AA (>= 4.5:1) foreground contrast in both Light and Dark modes
+    for (const [id, spec] of Object.entries(DESIGN_TOKENS.accents)) {
+      expect(spec.swatch, `${id} swatch`).toMatch(/^#[0-9a-fA-F]{6}$/);
+      expect(contrastRatio(spec.onLight, spec.light), `${id} light contrast`).toBeGreaterThanOrEqual(
+        4.5
+      );
+      expect(contrastRatio(spec.onDark, spec.dark), `${id} dark contrast`).toBeGreaterThanOrEqual(
+        4.5
+      );
+    }
+
+    // 2. CSS custom properties propagate the selected theme color across shared lane, primary accent, and focus ring
+    const origDocument = globalThis.document;
+    const vars = new Map<string, string>();
+    const fakeRoot = {
+      dataset: {} as Record<string, string>,
+      style: {
+        setProperty: (k: string, v: string) => {
+          vars.set(k, v);
+        },
+        getPropertyValue: (k: string) => vars.get(k) || "",
+      },
+    };
+    try {
+      (globalThis as unknown as { document: unknown }).document = { documentElement: fakeRoot };
+      applyVibrancyTokensToRoot("light", "emerald", "glass", false);
+      expect(vars.get("--dl-shared")).toBe(DESIGN_TOKENS.accents.emerald.light);
+      expect(vars.get("--dl-accent")).toBe(DESIGN_TOKENS.accents.emerald.light);
+      expect(vars.get("--dl-focus")).toBe(DESIGN_TOKENS.accents.emerald.light);
+      expect(vars.get("--dl-on-shared")).toBe(DESIGN_TOKENS.accents.emerald.onLight);
+      expect(vars.get("--dl-on-accent")).toBe(DESIGN_TOKENS.accents.emerald.onLight);
+
+      applyVibrancyTokensToRoot("dark", "indigo", "solid", false);
+      expect(vars.get("--dl-shared")).toBe(DESIGN_TOKENS.accents.indigo.dark);
+      expect(vars.get("--dl-accent")).toBe(DESIGN_TOKENS.accents.indigo.dark);
+      expect(vars.get("--dl-on-shared")).toBe(DESIGN_TOKENS.accents.indigo.onDark);
+    } finally {
+      (globalThis as unknown as { document: unknown }).document = origDocument;
+    }
+
+    // 3. Theme selector renders circular color swatches on options
+    const workbenchHtml = renderToStaticMarkup(<WorkbenchV1 />);
+    expect(workbenchHtml).toContain('aria-label="主题色"');
+    expect(workbenchHtml).toContain('data-testid="theme-swatch-azure"');
+    expect(workbenchHtml).toContain('data-testid="theme-swatch-indigo"');
+    expect(workbenchHtml).toContain('data-testid="theme-swatch-emerald"');
+    expect(workbenchHtml).toContain('data-testid="theme-swatch-copper"');
+    expect(workbenchHtml).toContain('data-testid="theme-swatch-graphite"');
+  });
+
+  it("single-shot v1 bootstrap skips waterfall round-trips and hydrates cached shell instantly", async () => {
+    const prevWsInitial = { ...useWorkspaceStore.getInitialState() };
+    useWorkspaceStore.setState(prevWsInitial);
+    const origWindow = (globalThis as unknown as { window?: unknown }).window;
+    const memStorage = new Map<string, string>();
+    const fakeLocalStorage = {
+      getItem: (k: string) => memStorage.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        memStorage.set(k, v);
+      },
+      removeItem: (k: string) => {
+        memStorage.delete(k);
+      },
+    };
+
+    const ensureSavedSpy = vi.spyOn(apiV1, "ensureSavedConversation");
+    const getPrefsSpy = vi.spyOn(apiV1, "getPreferences");
+    const syncSpy = vi.spyOn(apiV1, "sync");
+    vi.spyOn(apiV1, "listMessages").mockResolvedValue({
+      messages: [
+        {
+          id: "msg_fast_1",
+          authorId: "usr_fast_1",
+          authorNickname: "星辰",
+          plainText: "秒开首屏",
+          createdAt: "2026-11-14T10:00:00Z",
+        },
+      ],
+    });
+    vi.spyOn(apiV1, "getBootstrap").mockResolvedValue({
+      auth: {
+        enabled: true,
+        currentUser: { id: "usr_fast_1", displayName: "星辰", role: "owner" },
+      },
+      policy: { dailyQuotaBytes: 2147483648, usedTodayBytes: 4096 },
+      preferences: { pinnedConversationIds: ["conv_grp_fast"] },
+      members: [{ id: "usr_fast_1", displayName: "星辰", role: "owner" }],
+      conversations: [
+        {
+          id: "conv_saved_fast",
+          type: "saved",
+          title: "个人空间",
+          displayTitle: "我的收藏",
+          unreadCount: 0,
+          memberIds: ["usr_fast_1"],
+          pinnedMessageIds: [],
+        },
+        {
+          id: "conv_grp_fast",
+          type: "group",
+          title: "极速协作群",
+          displayTitle: "极速协作群",
+          unreadCount: 2,
+          memberIds: ["usr_fast_1"],
+          pinnedMessageIds: [],
+          lastMessagePlainText: "秒开首屏",
+        },
+      ],
+      eventCursor: 88,
+    });
+
+    try {
+      (globalThis as unknown as { window: unknown }).window = {
+        location: { protocol: "https:", host: "duallane.tsio.top", pathname: "/workspace", search: "" },
+        localStorage: fakeLocalStorage,
+      };
+
+      // 1. Cold load: single /api/v1/bootstrap resolves everything with zero waterfall round-trips
+      await useWorkspaceStore.getState().bootstrapWorkspace();
+      expect(useWorkspaceStore.getState().authStatus).toBe("authenticated");
+      expect(useWorkspaceStore.getState().pinnedConversationIds).toEqual(["conv_grp_fast"]);
+      expect(ensureSavedSpy).not.toHaveBeenCalled();
+      expect(getPrefsSpy).not.toHaveBeenCalled();
+      expect(syncSpy).not.toHaveBeenCalled();
+      expect(memStorage.has("duallane:v1:shell-snapshot:v1")).toBe(true);
+
+      // 2. Warm reload on /workspace: hydrates cached shell synchronously BEFORE network resolves
+      useWorkspaceStore.setState(prevWsInitial);
+      let resolveSlowBootstrap!: (val: Record<string, unknown>) => void;
+      vi.spyOn(apiV1, "getBootstrap").mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveSlowBootstrap = resolve;
+          })
+      );
+
+      const pendingBootstrap = useWorkspaceStore.getState().bootstrapWorkspace();
+      expect(useWorkspaceStore.getState().authStatus).toBe("authenticated");
+      expect(useWorkspaceStore.getState().connectionStatus).toBe("reconnecting");
+      expect(useWorkspaceStore.getState().conversations.conv_grp_fast?.title).toBe("极速协作群");
+
+      resolveSlowBootstrap({
+        auth: {
+          enabled: true,
+          currentUser: { id: "usr_fast_1", displayName: "星辰", role: "owner" },
+        },
+        preferences: { pinnedConversationIds: ["conv_grp_fast"] },
+        members: [{ id: "usr_fast_1", displayName: "星辰", role: "owner" }],
+        conversations: [
+          { id: "conv_saved_fast", type: "saved", title: "个人空间", memberIds: ["usr_fast_1"] },
+          { id: "conv_grp_fast", type: "group", title: "极速协作群", memberIds: ["usr_fast_1"] },
+        ],
+        eventCursor: 89,
+      });
+      await pendingBootstrap;
+      expect(useWorkspaceStore.getState().connectionStatus).toBe("connected");
+
+      // 3. Logout wipes cached shell snapshot immediately
+      vi.spyOn(apiV1, "logout").mockResolvedValue({ ok: true });
+      await useWorkspaceStore.getState().logout();
+      expect(memStorage.has("duallane:v1:shell-snapshot:v1")).toBe(false);
+    } finally {
+      (globalThis as unknown as { window: unknown }).window = origWindow;
+      vi.restoreAllMocks();
     }
   });
 });

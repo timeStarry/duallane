@@ -145,8 +145,16 @@ export const apiV1 = {
   // Health, Auth & Bootstrap
   getHealth: () =>
     requestJSON<{ ok?: boolean; workspace?: { enabled?: boolean } }>("/api/health"),
-  getBootstrap: () =>
-    requestJSON<Record<string, unknown>>("/api/workspace/bootstrap"),
+  getBootstrap: async () => {
+    try {
+      return await requestJSON<Record<string, unknown>>("/api/v1/bootstrap");
+    } catch (err) {
+      if (err instanceof ApiClientError && err.status === 404) {
+        return requestJSON<Record<string, unknown>>("/api/workspace/bootstrap");
+      }
+      throw err;
+    }
+  },
   getGitHubStartUrl: (inviteCode?: string) => {
     const code = inviteCode?.trim();
     return code
@@ -390,10 +398,45 @@ export const apiV1 = {
       method: "POST",
       body: JSON.stringify({ type: "direct", targetUserId }),
     }),
-  createGroupConversation: (title: string, memberIds: string[]) =>
-    requestJSON<Record<string, unknown>>("/api/workspace/conversations", {
+  createGroupConversation: (title: string, memberIds: string[], avatar?: string) =>
+    requestJSON<Record<string, unknown>>("/api/v1/conversations/groups", {
       method: "POST",
-      body: JSON.stringify({ type: "group", title, memberIds }),
+      body: JSON.stringify({
+        title,
+        memberIds,
+        ...(avatar ? { avatar } : {}),
+      }),
+    }),
+  updateGroupConversation: (
+    conversationId: string,
+    patch: { title?: string; avatar?: string | null }
+  ) =>
+    requestJSON<{ conversation?: Record<string, unknown> }>(
+      `/api/v1/conversations/${encodeURIComponent(conversationId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      }
+    ),
+  addGroupMembers: (conversationId: string, userIds: string[]) =>
+    requestJSON<{ conversation?: Record<string, unknown> }>(
+      `/api/v1/conversations/${encodeURIComponent(conversationId)}/members`,
+      {
+        method: "POST",
+        body: JSON.stringify({ userIds }),
+      }
+    ),
+  leaveGroupConversation: (conversationId: string) =>
+    requestJSON<{ ok: boolean; conversationId: string }>(
+      `/api/v1/conversations/${encodeURIComponent(conversationId)}/leave`,
+      { method: "POST" }
+    ),
+  getPreferences: () =>
+    requestJSON<{ preferences?: Record<string, unknown> }>("/api/v1/preferences"),
+  savePreferences: (preferences: Record<string, unknown>) =>
+    requestJSON<{ saved: boolean }>("/api/v1/preferences", {
+      method: "PUT",
+      body: JSON.stringify({ preferences }),
     }),
   reactToMessage: (messageId: string, emoteKey: string) =>
     requestJSON<Record<string, unknown>>(

@@ -1,11 +1,25 @@
 import React, { useMemo, useState } from "react";
-import { AtSign, Bookmark, Check, LogOut, Plus, ShieldCheck } from "lucide-react";
+import {
+  AtSign,
+  Bookmark,
+  Check,
+  LogOut,
+  Pin,
+  PinOff,
+  Plus,
+  Settings2,
+  ShieldCheck,
+} from "lucide-react";
 import { useLaneStore } from "@/entities/lane/store";
 import { useWorkspaceStore } from "@/entities/workspace/store";
-import { apiV1 } from "@/shared/lib/api-v1";
 import {
   Avatar,
   Button,
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -17,6 +31,7 @@ import {
 import { cn } from "@/shared/lib/cn";
 
 type FilterTab = "all" | "unread" | "mentions";
+const GROUP_EMOJI_PRESETS = ["🚀", "💡", "🎨", "🛠️", "📌", "⚡", "🌿", "🎯"];
 
 function formatShortTime(iso?: string): string {
   if (!iso) return "";
@@ -28,16 +43,19 @@ function formatShortTime(iso?: string): string {
 }
 
 export function ConversationSidebar() {
-  const { activeLane, mobileView, setMobileView } = useLaneStore();
+  const { activeLane, mobileView, setMobileView, openDetailsInspector } = useLaneStore();
   const {
     conversations,
     conversationOrder,
+    pinnedConversationIds,
     activeConversationId,
     selectConversation,
+    togglePinConversation,
+    createGroup,
+    leaveGroup,
     drafts,
     members,
     currentUser,
-    bootstrapWorkspace,
     p2pRoom,
     createP2PRoom,
     leaveP2PRoom,
@@ -48,8 +66,10 @@ export function ConversationSidebar() {
   const [query, setQuery] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [groupTitle, setGroupTitle] = useState("");
+  const [groupEmoji, setGroupEmoji] = useState("");
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState("");
 
   const visibleConversations = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -65,20 +85,35 @@ export function ConversationSidebar() {
       .sort((a, b) => {
         if (a.kind === "saved" && b.kind !== "saved") return -1;
         if (b.kind === "saved" && a.kind !== "saved") return 1;
+        const aPinIdx = pinnedConversationIds.indexOf(a.id);
+        const bPinIdx = pinnedConversationIds.indexOf(b.id);
+        const aPinned = aPinIdx !== -1;
+        const bPinned = bPinIdx !== -1;
+        if (aPinned && !bPinned) return -1;
+        if (!aPinned && bPinned) return 1;
+        if (aPinned && bPinned) return aPinIdx - bPinIdx;
         return 0;
       });
-  }, [conversationOrder, conversations, filter, query]);
+  }, [conversationOrder, conversations, filter, pinnedConversationIds, query]);
 
   const handleCreateGroup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!groupTitle.trim()) return;
+    if (selectedMemberIds.length === 0) {
+      setCreateError("请至少选择 1 位空间成员");
+      return;
+    }
+    setCreateError("");
     setCreating(true);
     try {
-      await apiV1.createGroupConversation(groupTitle.trim(), selectedMemberIds);
+      await createGroup(groupTitle.trim(), selectedMemberIds, groupEmoji || undefined);
       setGroupTitle("");
+      setGroupEmoji("");
       setSelectedMemberIds([]);
       setCreateOpen(false);
-      await bootstrapWorkspace();
+      setMobileView("chat");
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : "创建群聊失败");
     } finally {
       setCreating(false);
     }
@@ -95,12 +130,7 @@ export function ConversationSidebar() {
         )}
       >
         <div className="flex items-center justify-between gap-2 border-b border-dl-border-hairline px-4 max-narrow:px-3 py-3.5">
-          <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold text-dl-text-primary">私密直连</h2>
-            <p className="truncate text-[11px] font-medium text-dl-lane-direct">
-              端到端加密 · 零服务端落盘
-            </p>
-          </div>
+          <h2 className="truncate text-sm font-semibold text-dl-text-primary">私密直连</h2>
           <Button
             size="sm"
             variant="secondary"
@@ -189,7 +219,7 @@ export function ConversationSidebar() {
             </div>
           ) : (
             <div className="rounded-2xl border border-dashed border-dl-border-strong p-5 text-center text-xs leading-relaxed text-dl-text-secondary">
-              点击右上角「新建房间」生成端到端加密直连链接，密钥仅保存在 URL <code className="font-mono text-dl-lane-direct">#k=</code> 与浏览器内存中。
+              点击「新建房间」生成邀请链接
             </div>
           )}
         </div>
@@ -197,7 +227,9 @@ export function ConversationSidebar() {
     );
   }
 
-  const selectableMembers = Object.values(members).filter((m) => m.id !== currentUser?.id);
+  const selectableMembers = Object.values(members).filter(
+    (m) => m.id !== currentUser?.id && m.role !== "bot"
+  );
 
   return (
     <aside
@@ -251,9 +283,10 @@ export function ConversationSidebar() {
         ) : (
           visibleConversations.map((conv) => {
             const active = conv.id === activeConversationId;
+            const isPinned = pinnedConversationIds.includes(conv.id);
             const draft = drafts[conv.id];
             const timeLabel = formatShortTime(conv.lastMessageAt);
-            return (
+            const rowButton = (
               <Button
                 key={conv.id}
                 variant="ghost"
@@ -273,12 +306,25 @@ export function ConversationSidebar() {
                     <Bookmark className="size-4" strokeWidth={1.9} />
                   </div>
                 ) : (
-                  <Avatar name={conv.title} size="md" />
+                  <Avatar
+                    name={conv.title}
+                    src={conv.avatarUrl}
+                    emoji={conv.avatarEmoji}
+                    kind={conv.kind === "group" ? "group" : "human"}
+                    size="md"
+                  />
                 )}
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-1.5">
-                    <span className="truncate text-[13px] font-semibold text-dl-text-primary">
-                      {conv.title}
+                    <span className="flex min-w-0 items-center gap-1 text-[13px] font-semibold text-dl-text-primary">
+                      <span className="truncate">{conv.title}</span>
+                      {isPinned && (
+                        <Pin
+                          aria-label="已置顶会话"
+                          className="size-3 shrink-0 text-dl-lane-shared"
+                          strokeWidth={2}
+                        />
+                      )}
                     </span>
                     {timeLabel && (
                       <span className="shrink-0 text-[10px] tabular-nums text-dl-text-tertiary">
@@ -319,6 +365,46 @@ export function ConversationSidebar() {
                 </div>
               </Button>
             );
+
+            if (conv.kind === "saved") {
+              return rowButton;
+            }
+
+            return (
+              <ContextMenu key={conv.id}>
+                <ContextMenuTrigger asChild>{rowButton}</ContextMenuTrigger>
+                <ContextMenuContent>
+                  <ContextMenuItem
+                    icon={isPinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
+                    onSelect={() => void togglePinConversation(conv.id)}
+                  >
+                    {isPinned ? "取消置顶会话" : "置顶会话"}
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    icon={<Settings2 className="size-4" />}
+                    onSelect={() => {
+                      selectConversation(conv.id);
+                      setMobileView("chat");
+                      openDetailsInspector();
+                    }}
+                  >
+                    {conv.kind === "group" ? "群聊设置" : "会话详情"}
+                  </ContextMenuItem>
+                  {conv.kind === "group" && (
+                    <>
+                      <ContextMenuSeparator />
+                      <ContextMenuItem
+                        tone="danger"
+                        icon={<LogOut className="size-4" />}
+                        onSelect={() => void leaveGroup(conv.id)}
+                      >
+                        退出群聊
+                      </ContextMenuItem>
+                    </>
+                  )}
+                </ContextMenuContent>
+              </ContextMenu>
+            );
           })
         )}
       </div>
@@ -326,19 +412,40 @@ export function ConversationSidebar() {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>新建群组对话</DialogTitle>
-            <DialogDescription>
-              选择要加入的成员，创建后所有成员均可置顶消息与发起线程讨论。
+            <DialogTitle>新建群聊</DialogTitle>
+            <DialogDescription className="sr-only">
+              设置群聊名称、可选图标与成员
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleCreateGroup} className="space-y-3 p-6 max-narrow:p-3.5 pt-4">
             <Input
               value={groupTitle}
               onChange={(e) => setGroupTitle(e.target.value)}
-              placeholder="群组名称，例如：产品设计与架构"
+              placeholder="群聊名称"
               aria-label="群组名称"
               required
             />
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs text-dl-text-secondary mr-1">群图标</span>
+              {GROUP_EMOJI_PRESETS.map((emoji) => (
+                <Button
+                  key={emoji}
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`选择群图标 ${emoji}`}
+                  onClick={() => setGroupEmoji((prev) => (prev === emoji ? "" : emoji))}
+                  className={cn(
+                    "size-8 rounded-lg border p-0 text-base",
+                    groupEmoji === emoji
+                      ? "border-dl-lane-shared bg-dl-lane-shared/14"
+                      : "border-dl-border-hairline bg-dl-surface-subtle/50 hover:bg-dl-surface-subtle"
+                  )}
+                >
+                  {emoji}
+                </Button>
+              ))}
+            </div>
             <div className="dl-scroll max-h-48 overflow-y-auto space-y-1 rounded-xl border border-dl-border-hairline p-2">
               {selectableMembers.length === 0 ? (
                 <div className="p-2 text-xs text-dl-text-tertiary">暂无其他空间成员</div>
@@ -377,6 +484,9 @@ export function ConversationSidebar() {
                 })
               )}
             </div>
+            {createError && (
+              <div className="text-xs text-dl-danger">{createError}</div>
+            )}
             <div className="flex justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setCreateOpen(false)}>
                 取消

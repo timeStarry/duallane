@@ -28,6 +28,7 @@
   --color-on-shared: var(--dl-on-shared);
   --color-accent: var(--dl-accent);
   --color-accent-soft: var(--dl-accent-soft);
+  --color-on-accent: var(--dl-on-accent);
 
   /* Status Semantics */
   --color-success: var(--dl-success);
@@ -116,8 +117,8 @@ html[data-transparency="solid"] :is(.dl-glass-chrome, .dl-glass-elevated, .dl-gl
 .dl-canvas-ambient,
 .dl-ambient-canvas {
   background:
-    radial-gradient(900px 520px at 15% -10%, var(--dl-shared-soft), transparent 65%),
-    radial-gradient(760px 460px at 90% 105%, var(--dl-direct-soft), transparent 65%),
+    radial-gradient(960px 540px at 14% -8%, var(--dl-accent-soft), transparent 66%),
+    radial-gradient(780px 480px at 88% 106%, var(--dl-accent-soft), transparent 70%),
     linear-gradient(180deg, var(--dl-canvas-from) 0%, var(--dl-canvas-to) 100%);
 }
 

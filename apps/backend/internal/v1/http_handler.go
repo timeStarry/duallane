@@ -31,9 +31,14 @@ func (h *HTTPHandler) Mount(r chi.Router) {
 
 		r.Group(func(r chi.Router) {
 			r.Use(h.requireActor)
+			r.Get("/bootstrap", h.handleBootstrap)
 			r.Get("/sync", h.handleSync)
 			r.Get("/search", h.handleSearch)
 			r.Post("/conversations/saved", h.handleSavedConversation)
+			r.Post("/conversations/groups", h.handleCreateGroup)
+			r.Patch("/conversations/{conversationId}", h.handleUpdateGroup)
+			r.Post("/conversations/{conversationId}/members", h.handleAddGroupMembers)
+			r.Post("/conversations/{conversationId}/leave", h.handleLeaveGroup)
 			r.Post("/conversations/{conversationId}/pins/{messageId}", h.handlePin)
 			r.Delete("/conversations/{conversationId}/pins/{messageId}", h.handleUnpin)
 			r.Patch("/messages/{messageId}", h.handleEditMessage)
@@ -86,6 +91,15 @@ func actorFromContext(ctx context.Context) *auth.Actor {
 	return actor
 }
 
+func (h *HTTPHandler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
+	res, err := h.service.GetBootstrap(r.Context(), actorFromContext(r.Context()).ID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 func (h *HTTPHandler) handleSync(w http.ResponseWriter, r *http.Request) {
 	rawSeq := r.URL.Query().Get("sinceSeq")
 	if rawSeq == "" {
@@ -118,6 +132,101 @@ func (h *HTTPHandler) handleSavedConversation(w http.ResponseWriter, r *http.Req
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"conversationId": id})
+}
+
+func (h *HTTPHandler) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
+	var body CreateGroupInput
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.bad_json", "请求格式无效")
+		return
+	}
+	conv, err := h.service.CreateGroupConversation(r.Context(), actorFromContext(r.Context()).ID, body)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"conversation": conv})
+}
+
+func (h *HTTPHandler) handleUpdateGroup(w http.ResponseWriter, r *http.Request) {
+	var fields map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&fields); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.bad_json", "请求格式无效")
+		return
+	}
+	var input UpdateGroupInput
+	if rawTitle, ok := fields["title"]; ok {
+		input.TitleSet = true
+		var title *string
+		if err := json.Unmarshal(rawTitle, &title); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "v1.bad_json", "群聊名称格式无效")
+			return
+		}
+		input.Title = title
+	}
+	if rawAvatar, ok := fields["avatar"]; ok {
+		input.AvatarSet = true
+		var avatar *string
+		if err := json.Unmarshal(rawAvatar, &avatar); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "v1.bad_json", "群头像格式无效")
+			return
+		}
+		input.Avatar = avatar
+	} else if rawAvatarEmoji, ok := fields["avatarEmoji"]; ok {
+		input.AvatarSet = true
+		var avatar *string
+		if err := json.Unmarshal(rawAvatarEmoji, &avatar); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "v1.bad_json", "群头像格式无效")
+			return
+		}
+		input.Avatar = avatar
+	}
+	conv, err := h.service.UpdateGroupConversation(
+		r.Context(),
+		actorFromContext(r.Context()).ID,
+		chi.URLParam(r, "conversationId"),
+		input,
+	)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"conversation": conv})
+}
+
+func (h *HTTPHandler) handleAddGroupMembers(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		UserIDs []string `json:"userIds"`
+		UserID  string   `json:"userId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.bad_json", "请求格式无效")
+		return
+	}
+	ids := body.UserIDs
+	if body.UserID != "" {
+		ids = append(ids, body.UserID)
+	}
+	conv, err := h.service.AddGroupMembers(
+		r.Context(),
+		actorFromContext(r.Context()).ID,
+		chi.URLParam(r, "conversationId"),
+		ids,
+	)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"conversation": conv})
+}
+
+func (h *HTTPHandler) handleLeaveGroup(w http.ResponseWriter, r *http.Request) {
+	convID := chi.URLParam(r, "conversationId")
+	if err := h.service.LeaveGroupConversation(r.Context(), actorFromContext(r.Context()).ID, convID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "conversationId": convID})
 }
 
 func (h *HTTPHandler) handleEditMessage(w http.ResponseWriter, r *http.Request) {

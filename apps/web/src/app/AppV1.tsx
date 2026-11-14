@@ -26,18 +26,30 @@ import { BrandLogo, Button, Input, SegmentedControl, TooltipProvider } from "@/s
 import { CommandSearchModal } from "@/widgets/CommandSearchModal";
 import { ConversationSidebar } from "@/widgets/ConversationSidebar";
 import { InspectorPane } from "@/widgets/InspectorPane";
-import { MediaLightbox } from "@/widgets/MediaLightbox";
 import { PrimaryRail } from "@/widgets/PrimaryRail";
-import { SettingsModal } from "@/widgets/SettingsModal";
 import { TimelinePane } from "@/widgets/TimelinePane";
 
+const SettingsModal = React.lazy(() =>
+  import("@/widgets/SettingsModal").then((m) => ({ default: m.SettingsModal }))
+);
+const MediaLightbox = React.lazy(() =>
+  import("@/widgets/MediaLightbox").then((m) => ({ default: m.MediaLightbox }))
+);
 const SpaceAdminConsole = React.lazy(() =>
   import("@/widgets/SpaceAdminConsole").then((m) => ({ default: m.SpaceAdminConsole }))
 );
 
 export function AppV1() {
-  const { activeLane, entryView, mobileView, setActiveLane, setEntryView, adminConsoleOpen } =
-    useLaneStore();
+  const {
+    activeLane,
+    entryView,
+    mobileView,
+    setActiveLane,
+    setEntryView,
+    adminConsoleOpen,
+    settingsOpen,
+    lightboxOpen,
+  } = useLaneStore();
   const { preference, setPreference } = useThemeStore();
   const {
     isPreviewMode,
@@ -329,22 +341,19 @@ export function AppV1() {
               aria-labelledby="workspace-signin-title"
               className="rounded-[20px] border border-dl-border-hairline bg-surface p-8 max-narrow:p-5 shadow-xs space-y-5"
             >
-              <div className="space-y-2.5">
+              <div className="space-y-2">
                 <div className="mb-3 flex size-[52px] items-center justify-center rounded-2xl bg-dl-lane-shared/12 text-dl-lane-shared">
                   <ShieldCheck className="size-6" strokeWidth={1.9} />
                 </div>
-                <p className="text-xs font-semibold text-dl-text-secondary">
-                  {workspaceAvailability === "disabled" ? "暂未开放" : "共享通道"}
-                </p>
+                {workspaceAvailability === "disabled" && (
+                  <p className="text-xs font-semibold text-dl-text-secondary">暂未开放</p>
+                )}
                 <h1
                   id="workspace-signin-title"
                   className="text-2xl max-narrow:text-xl font-bold tracking-[-0.02em] text-dl-text-primary"
                 >
                   登录后进入共享空间
                 </h1>
-                <p className="text-sm leading-relaxed text-dl-text-secondary">
-                  共享空间会保存聊天和文件，方便成员稍后查看。进入权限由服务端校验。
-                </p>
               </div>
 
               {showServiceBanner && (
@@ -464,24 +473,18 @@ export function AppV1() {
           className="mx-auto flex w-full max-w-[880px] flex-1 flex-col justify-center pb-10 pt-4 max-compact:py-6"
         >
           <div className="mb-9 max-w-[660px] max-compact:mb-6">
-            <div className="mb-8 flex items-center gap-2.5 max-compact:mb-5">
+            <div className="mb-7 flex items-center gap-2.5 max-compact:mb-5">
               <BrandLogo size={26} />
               <span className="text-[20px] font-semibold tracking-[-0.02em] text-dl-text-primary">
                 DualLane
               </span>
             </div>
-            <p className="mb-2 text-xs font-semibold text-dl-text-secondary">
-              两种连接，一处交流
-            </p>
             <h1
               id="entry-title"
               className="text-[32px] max-narrow:text-[26px] font-bold leading-[1.2] tracking-[-0.02em] text-dl-text-primary"
             >
               选择沟通方式
             </h1>
-            <p className="mt-3.5 text-[16px] max-narrow:text-[14px] leading-[1.6] text-dl-text-secondary">
-              临时私密交谈，或与熟悉的人持续协作。
-            </p>
           </div>
 
           <div
@@ -495,7 +498,7 @@ export function AppV1() {
               variant="ghost"
               data-testid="home-card-direct"
               onClick={enterDirectSession}
-              className="group h-auto min-h-[296px] max-compact:min-h-[236px] w-full flex-col items-start justify-start gap-3 rounded-[20px] border border-dl-border-hairline bg-surface p-7 max-narrow:p-5 text-left whitespace-normal shadow-xs hover:border-dl-border-strong hover:bg-surface active:scale-[0.995]"
+              className="group h-auto min-h-[268px] max-compact:min-h-[216px] w-full flex-col items-start justify-start gap-2.5 rounded-[20px] border border-dl-border-hairline bg-surface p-7 max-narrow:p-5 text-left whitespace-normal shadow-xs hover:border-dl-border-strong hover:bg-surface active:scale-[0.995]"
             >
               <span
                 aria-hidden="true"
@@ -503,16 +506,11 @@ export function AppV1() {
               >
                 <LockKeyhole className="size-6" strokeWidth={1.9} />
               </span>
-              <span className="text-xs font-medium text-dl-text-secondary">
-                私密通道
-              </span>
               <strong className="text-[24px] max-narrow:text-[20px] font-bold leading-[1.3] tracking-[-0.02em] text-dl-text-primary">
                 一对一直连
               </strong>
               <span className="max-w-[380px] text-[15px] max-narrow:text-[14px] font-normal leading-[1.55] text-dl-text-secondary">
-                无需登录，用邀请链接开始。
-                <br />
-                对话内容不在服务器保存。
+                无需登录，用邀请链接开始，消息不在服务器保存。
               </span>
               <span className="mt-auto pt-4 inline-flex items-center gap-2 text-[14px] font-semibold text-dl-lane-direct">
                 <span>开始临时会话</span>
@@ -528,7 +526,7 @@ export function AppV1() {
               variant="ghost"
               data-testid="home-card-workspace"
               onClick={() => setEntryView("workspace", true)}
-              className="group h-auto min-h-[296px] max-compact:min-h-[236px] w-full flex-col items-start justify-start gap-3 rounded-[20px] border border-dl-border-hairline bg-surface p-7 max-narrow:p-5 text-left whitespace-normal shadow-xs hover:border-dl-border-strong hover:bg-surface active:scale-[0.995]"
+              className="group h-auto min-h-[268px] max-compact:min-h-[216px] w-full flex-col items-start justify-start gap-2.5 rounded-[20px] border border-dl-border-hairline bg-surface p-7 max-narrow:p-5 text-left whitespace-normal shadow-xs hover:border-dl-border-strong hover:bg-surface active:scale-[0.995]"
             >
               <span
                 aria-hidden="true"
@@ -536,16 +534,11 @@ export function AppV1() {
               >
                 <ShieldCheck className="size-6" strokeWidth={1.9} />
               </span>
-              <span className="text-xs font-medium text-dl-text-secondary">
-                共享通道
-              </span>
               <strong className="text-[24px] max-narrow:text-[20px] font-bold leading-[1.3] tracking-[-0.02em] text-dl-text-primary">
                 共享空间
               </strong>
               <span className="max-w-[380px] text-[15px] max-narrow:text-[14px] font-normal leading-[1.55] text-dl-text-secondary">
-                和熟人或小组持续聊天、共享文件。
-                <br />
-                需要登录和邀请，内容按空间规则保留。
+                受邀登录加入，与熟人持续会话与共享文件。
               </span>
               <span className="mt-auto pt-4 inline-flex items-center gap-2 text-[14px] font-semibold text-dl-lane-shared">
                 <span>进入共享空间</span>
@@ -571,9 +564,17 @@ export function AppV1() {
         <ConversationSidebar />
         <TimelinePane />
         <InspectorPane />
-        <SettingsModal />
         <CommandSearchModal />
-        <MediaLightbox />
+        {settingsOpen && (
+          <React.Suspense fallback={null}>
+            <SettingsModal />
+          </React.Suspense>
+        )}
+        {lightboxOpen && (
+          <React.Suspense fallback={null}>
+            <MediaLightbox />
+          </React.Suspense>
+        )}
         {isSpaceManager && adminConsoleOpen && (
           <React.Suspense fallback={null}>
             <SpaceAdminConsole />

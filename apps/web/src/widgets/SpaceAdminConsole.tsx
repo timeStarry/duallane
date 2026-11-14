@@ -504,9 +504,7 @@ export function SpaceAdminConsole() {
             <BrandLogo size={26} withTile />
             <span className="tracking-[-0.025em]">空间治理台</span>
           </DialogTitle>
-          <DialogDescription className="text-xs">
-            仅管理权限可见 · 同源管理成员、通讯录可见性、邀请码与存储策略
-          </DialogDescription>
+          <DialogDescription className="sr-only">空间治理与策略设置</DialogDescription>
         </DialogHeader>
 
         <div className="flex max-compact:flex-col h-[min(620px,calc(88dvh-84px))] min-h-0">
@@ -558,14 +556,9 @@ export function SpaceAdminConsole() {
             {adminConsoleTab === "overview" && (
               <div className="space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h3 className="text-sm font-semibold text-dl-text-primary">
-                      {overview?.space.name || "共享空间运行概览"}
-                    </h3>
-                    <p className="text-xs text-dl-text-secondary">
-                      同源实时治理 · 普通成员界面与协议层均已隐藏管理角色标识
-                    </p>
-                  </div>
+                  <h3 className="text-sm font-semibold text-dl-text-primary">
+                    {overview?.space.name || "共享空间运行概览"}
+                  </h3>
                   <Button
                     size="sm"
                     variant="secondary"
@@ -710,16 +703,9 @@ export function SpaceAdminConsole() {
             {/* TAB 2: Members, Roles & Visibility Matrix */}
             {adminConsoleTab === "members" && (
               <div className="space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h3 className="text-sm font-semibold text-dl-text-primary">
-                      空间成员、隐式权限与通讯录可见性
-                    </h3>
-                    <p className="text-xs text-dl-text-secondary">
-                      角色标签仅在此管理台显示；普通成员在群聊和通讯录中看到所有人均为对等「空间成员」
-                    </p>
-                  </div>
-                </div>
+                <h3 className="text-sm font-semibold text-dl-text-primary">
+                  成员与通讯录可见性
+                </h3>
 
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 size-4 text-dl-text-secondary" />
@@ -914,14 +900,7 @@ export function SpaceAdminConsole() {
             {/* TAB 3: Invite Lifecycle Management */}
             {adminConsoleTab === "invites" && (
               <div className="space-y-4">
-                <div>
-                  <h3 className="text-sm font-semibold text-dl-text-primary">
-                    邀请码生命周期治理
-                  </h3>
-                  <p className="text-xs text-dl-text-secondary">
-                    签发限定次数与有效期的空间准入凭证，随时一键吊销泄露或闲置的邀请码
-                  </p>
-                </div>
+                <h3 className="text-sm font-semibold text-dl-text-primary">邀请码管理</h3>
 
                 <div className="grid grid-cols-3 gap-2.5">
                   <div className="rounded-2xl border border-dl-border-hairline bg-dl-surface-subtle/50 p-3">
@@ -1120,14 +1099,7 @@ export function SpaceAdminConsole() {
             {/* TAB 4: Storage, Quota Policy & CAS Snapshots */}
             {adminConsoleTab === "storage" && (
               <div className="space-y-4">
-                <div>
-                  <h3 className="text-sm font-semibold text-dl-text-primary">
-                    实例存储、传输配额与内容寻址池（CAS）治理
-                  </h3>
-                  <p className="text-xs text-dl-text-secondary">
-                    统一管控成员每日上传/下载额度、消息保留策略与分片存储回收
-                  </p>
-                </div>
+                <h3 className="text-sm font-semibold text-dl-text-primary">存储与配额策略</h3>
 
                 {/* Storage Breakdown */}
                 <div className="grid grid-cols-2 wide:grid-cols-4 gap-2.5">

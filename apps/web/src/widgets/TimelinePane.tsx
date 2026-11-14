@@ -20,6 +20,7 @@ import {
   Plus,
   Reply,
   SendHorizontal,
+  Settings2,
   ShieldCheck,
   Slash,
   Smile,
@@ -256,13 +257,8 @@ export function TimelinePane() {
               </div>
               <div className="min-w-0 flex-1">
                 <h1 className="truncate text-sm font-semibold text-dl-text-primary">
-                  {p2pRoom ? `私密直连 · #${p2pRoom.roomId}` : "私密直连通道"}
+                  {p2pRoom ? `私密直连 · #${p2pRoom.roomId}` : "私密直连"}
                 </h1>
-                {!p2pRoom && (
-                  <p className="truncate text-xs text-dl-lane-direct mt-0.5">
-                    端到端加密 · 刷新页面即清空内存
-                  </p>
-                )}
               </div>
             </div>
 
@@ -339,7 +335,7 @@ export function TimelinePane() {
                 <span className="truncate">{peerStatusLabel}</span>
               </span>
               <span className="truncate text-[11px] text-dl-lane-direct">
-                AES-256-GCM · 指纹 {p2pRoom.keyFingerprint}
+                指纹 {p2pRoom.keyFingerprint}
               </span>
             </div>
           )}
@@ -379,13 +375,8 @@ export function TimelinePane() {
               <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-dl-lane-direct/14 text-dl-lane-direct">
                 <ShieldCheck className="size-6" strokeWidth={1.75} />
               </div>
-              <div className="space-y-1 max-w-xs">
-                <div className="text-sm font-semibold text-dl-text-primary">
-                  开启零落盘端到端加密会话
-                </div>
-                <p className="text-xs leading-relaxed text-dl-text-secondary">
-                  直连密钥仅驻留在 URL <code className="font-mono text-dl-lane-direct">#k=</code> 片段与双方设备内存中，从不发往服务端。
-                </p>
+              <div className="text-sm font-semibold text-dl-text-primary">
+                创建端到端加密临时会话
               </div>
               <Button
                 size="sm"
@@ -399,21 +390,21 @@ export function TimelinePane() {
             </div>
           ) : p2pMessages.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-              <div className="dl-glass-elevated w-full max-w-md rounded-2xl border border-dl-border-hairline p-5 max-narrow:p-3.5 space-y-3">
+              <div className="dl-glass-elevated w-full max-w-md rounded-2xl border border-dl-border-hairline p-5 max-narrow:p-3.5 space-y-2.5">
                 <div className="text-sm font-semibold text-dl-text-primary">
                   {hasRoomError
                     ? "加密房间不可用"
                     : p2pRoom.status === "peer_connected"
-                      ? "对端已连接（2/2 在线）· 端到端加密已就绪"
-                      : "等待对端加入房间（当前仅本机在线 · 1/2）"}
+                      ? "对端已连接 · 2/2 在线"
+                      : "等待对端加入（1/2）"}
                 </div>
-                <p className="text-xs leading-relaxed text-dl-text-secondary">
-                  {hasRoomError
-                    ? p2pRoom.errorMessage || "链接中的房间或密钥已失效，请重新创建加密房间。"
-                    : p2pRoom.status === "peer_connected"
-                      ? "双方已建立 AES-256-GCM 内存加密通道，发送的消息与文件将实时直达对端设备内存并回执确认。"
-                      : "请复制下方完整加密链接（含 #k= 密钥片段）发送给对方；在对端加入前发送的消息与文件将暂存本机内存，对端上线后自动加密送达。"}
-                </p>
+                {(hasRoomError || p2pRoom.status !== "peer_connected") && (
+                  <p className="text-xs leading-relaxed text-dl-text-secondary">
+                    {hasRoomError
+                      ? p2pRoom.errorMessage || "链接中的房间或密钥已失效，请重新创建加密房间。"
+                      : "复制下方邀请链接发送给对方，即可开始加密对话。"}
+                  </p>
+                )}
                 {p2pRoom.status !== "peer_connected" && !hasRoomError && p2pRoom.shareUrl && (
                   <div className="pt-1">
                     <Button
@@ -428,7 +419,7 @@ export function TimelinePane() {
                     >
                       <Copy className="size-3.5 shrink-0" strokeWidth={1.8} />
                       <span className="truncate">
-                        {copiedLink ? "已复制完整加密邀请链接" : "复制完整加密邀请链接"}
+                        {copiedLink ? "已复制邀请链接" : "复制邀请链接"}
                       </span>
                     </Button>
                   </div>
@@ -436,149 +427,157 @@ export function TimelinePane() {
               </div>
             </div>
           ) : (
-            p2pMessages.map((msg) => (
-              <motion.div
-                key={msg.id}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.16 }}
-                className={cn("flex flex-col", msg.isOwn ? "items-end" : "items-start")}
-              >
-                {!msg.isOwn && (
-                  <span className="mb-1 px-1 text-[11px] font-semibold text-dl-text-secondary">
-                    {msg.senderName}
-                  </span>
-                )}
-                <div
-                  data-p2p-message-id={msg.id}
-                  data-delivery-status={msg.deliveryStatus}
-                  className={cn(
-                    "max-w-[72%] max-compact:max-w-[88%] rounded-[18px] px-3.5 py-2 text-[14px] leading-relaxed shadow-2xs",
-                    msg.isOwn
-                      ? "rounded-br-[6px] bg-dl-lane-direct text-dl-on-direct"
-                      : "rounded-bl-[6px] dl-glass-elevated border border-dl-border-hairline text-dl-text-primary"
-                  )}
+            p2pMessages.map((msg) => {
+              const isInlineP2PImg = Boolean(
+                msg.attachment && safeInlineImageMime(msg.attachment.mimeType)
+              );
+              const isImageOnlyP2P = !msg.text && isInlineP2PImg;
+              return (
+                <motion.div
+                  key={msg.id}
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.16 }}
+                  className={cn("flex flex-col", msg.isOwn ? "items-end" : "items-start")}
                 >
-                  {msg.text && <div className="whitespace-pre-wrap break-words">{msg.text}</div>}
-
-                  {msg.attachment && (
-                    <div className={cn("space-y-1.5", msg.text && "mt-2")}>
-                      {safeInlineImageMime(msg.attachment.mimeType) && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="h-auto w-full overflow-hidden rounded-xl p-0"
-                          aria-label={`预览图片 ${msg.attachment.fileName}`}
-                          onClick={() =>
-                            openLightbox(
-                              [
-                                {
-                                  id: msg.id,
-                                  url: msg.attachment!.blobUrl,
-                                  downloadUrl: msg.attachment!.blobUrl,
-                                  fileName: msg.attachment!.fileName,
-                                  mimeType: msg.attachment!.mimeType,
-                                  byteSize: msg.attachment!.byteSize,
-                                },
-                              ],
-                              0
-                            )
-                          }
-                        >
-                          <img
-                            src={msg.attachment.blobUrl}
-                            alt={msg.attachment.fileName}
-                            className="max-h-44 max-w-full rounded-xl object-contain"
-                          />
-                        </Button>
-                      )}
-                      <div
-                        className={cn(
-                          "flex items-center justify-between gap-2 rounded-xl border px-2.5 py-1.5 text-xs",
-                          msg.isOwn
-                            ? "border-current/25 bg-black/10 text-dl-on-direct"
-                            : "border-dl-border-hairline bg-dl-surface-subtle/65 text-dl-text-primary"
-                        )}
-                      >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <FileText className="size-4 shrink-0 opacity-85" strokeWidth={1.8} />
-                          <div className="min-w-0">
-                            <div className="truncate font-medium max-w-[160px]">
-                              {msg.attachment.fileName}
-                            </div>
-                            <div className="text-[10px] opacity-80">
-                              {formatBytes(msg.attachment.byteSize)}
-                            </div>
-                          </div>
-                        </div>
-                        <IconButton
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          className={cn(
-                            "size-7 shrink-0 rounded-lg",
-                            msg.isOwn && "text-dl-on-direct hover:bg-black/15"
-                          )}
-                          label={`下载 ${msg.attachment.fileName}`}
-                          onClick={() =>
-                            triggerBrowserDownload(
-                              msg.attachment!.blobUrl,
-                              msg.attachment!.fileName
-                            )
-                          }
-                        >
-                          <Download className="size-3.5" strokeWidth={2} />
-                        </IconButton>
-                      </div>
-                    </div>
+                  {!msg.isOwn && (
+                    <span className="mb-1 px-1 text-[11px] font-semibold text-dl-text-secondary">
+                      {msg.senderName}
+                    </span>
                   )}
-
                   <div
+                    data-p2p-message-id={msg.id}
+                    data-delivery-status={msg.deliveryStatus}
                     className={cn(
-                      "mt-1 flex items-center justify-end gap-1.5 text-[10px] tabular-nums",
-                      msg.isOwn ? "opacity-90" : "text-dl-text-tertiary"
+                      "max-w-[72%] max-compact:max-w-[88%] rounded-[18px] text-[14px] leading-relaxed shadow-2xs",
+                      isImageOnlyP2P ? "px-2 py-1.5" : "px-3.5 py-2",
+                      msg.isOwn
+                        ? "rounded-br-[6px] bg-dl-lane-direct text-dl-on-direct"
+                        : "rounded-bl-[6px] dl-glass-elevated border border-dl-border-hairline text-dl-text-primary"
                     )}
                   >
-                    <span>
-                      {new Date(msg.createdAt).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </span>
-                    {msg.isOwn && (
-                      <span className="inline-flex items-center gap-0.5 font-medium">
-                        {msg.deliveryStatus === "delivered" ? (
-                          <>
-                            <CheckCheck className="size-3.5" strokeWidth={2.1} />
-                            <span>对端已收</span>
-                          </>
-                        ) : msg.deliveryStatus === "sent" ? (
-                          <>
-                            <Check className="size-3" strokeWidth={2} />
-                            <span>已发出</span>
-                          </>
-                        ) : msg.deliveryStatus === "sending" ? (
-                          <>
-                            <Clock className="size-3" strokeWidth={2} />
-                            <span>加密发送中</span>
-                          </>
-                        ) : msg.deliveryStatus === "failed" ? (
-                          <>
-                            <AlertCircle className="size-3" strokeWidth={2} />
-                            <span>未送达</span>
-                          </>
+                    {msg.text && <div className="whitespace-pre-wrap break-words">{msg.text}</div>}
+
+                    {msg.attachment && (
+                      <div className={cn("space-y-1.5", msg.text && "mt-2")}>
+                        {isInlineP2PImg ? (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="h-auto w-full overflow-hidden rounded-xl p-0"
+                            aria-label={`预览图片 ${msg.attachment.fileName}`}
+                            onClick={() =>
+                              openLightbox(
+                                [
+                                  {
+                                    id: msg.id,
+                                    url: msg.attachment!.blobUrl,
+                                    downloadUrl: msg.attachment!.blobUrl,
+                                    fileName: msg.attachment!.fileName,
+                                    mimeType: msg.attachment!.mimeType,
+                                    byteSize: msg.attachment!.byteSize,
+                                  },
+                                ],
+                                0
+                              )
+                            }
+                          >
+                            <img
+                              src={msg.attachment.blobUrl}
+                              alt={msg.attachment.fileName}
+                              className="max-h-60 max-w-full rounded-xl object-contain"
+                            />
+                          </Button>
                         ) : (
-                          <>
-                            <Clock className="size-3" strokeWidth={2} />
-                            <span>等待对端加入</span>
-                          </>
+                          <div
+                            className={cn(
+                              "flex items-center justify-between gap-2 rounded-xl border px-2.5 py-1.5 text-xs",
+                              msg.isOwn
+                                ? "border-current/25 bg-black/10 text-dl-on-direct"
+                                : "border-dl-border-hairline bg-dl-surface-subtle/65 text-dl-text-primary"
+                            )}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <FileText className="size-4 shrink-0 opacity-85" strokeWidth={1.8} />
+                              <div className="min-w-0">
+                                <div className="truncate font-medium max-w-[160px]">
+                                  {msg.attachment.fileName}
+                                </div>
+                                <div className="text-[10px] opacity-80">
+                                  {formatBytes(msg.attachment.byteSize)}
+                                </div>
+                              </div>
+                            </div>
+                            <IconButton
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className={cn(
+                                "size-7 shrink-0 rounded-lg",
+                                msg.isOwn && "text-dl-on-direct hover:bg-black/15"
+                              )}
+                              label={`下载 ${msg.attachment.fileName}`}
+                              onClick={() =>
+                                triggerBrowserDownload(
+                                  msg.attachment!.blobUrl,
+                                  msg.attachment!.fileName
+                                )
+                              }
+                            >
+                              <Download className="size-3.5" strokeWidth={2} />
+                            </IconButton>
+                          </div>
                         )}
-                      </span>
+                      </div>
                     )}
+
+                    <div
+                      className={cn(
+                        "mt-1 flex items-center justify-end gap-1.5 text-[10px] tabular-nums",
+                        msg.isOwn ? "opacity-90" : "text-dl-text-tertiary"
+                      )}
+                    >
+                      <span>
+                        {new Date(msg.createdAt).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                      {msg.isOwn && (
+                        <span className="inline-flex items-center gap-0.5 font-medium">
+                          {msg.deliveryStatus === "delivered" ? (
+                            <>
+                              <CheckCheck className="size-3.5" strokeWidth={2.1} />
+                              <span>对端已收</span>
+                            </>
+                          ) : msg.deliveryStatus === "sent" ? (
+                            <>
+                              <Check className="size-3" strokeWidth={2} />
+                              <span>已发出</span>
+                            </>
+                          ) : msg.deliveryStatus === "sending" ? (
+                            <>
+                              <Clock className="size-3" strokeWidth={2} />
+                              <span>加密发送中</span>
+                            </>
+                          ) : msg.deliveryStatus === "failed" ? (
+                            <>
+                              <AlertCircle className="size-3" strokeWidth={2} />
+                              <span>未送达</span>
+                            </>
+                          ) : (
+                            <>
+                              <Clock className="size-3" strokeWidth={2} />
+                              <span>等待对端加入</span>
+                            </>
+                          )}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </motion.div>
-            ))
+                </motion.div>
+              );
+            })
           )}
         </div>
 
@@ -587,14 +586,6 @@ export function TimelinePane() {
             {p2pFileError && (
               <div className="rounded-xl border border-dl-danger/30 bg-dl-danger/10 px-3 py-1.5 text-xs text-dl-danger">
                 {p2pFileError}
-              </div>
-            )}
-            {p2pRoom.status !== "peer_connected" && !hasRoomError && (
-              <div className="flex flex-wrap items-center justify-between gap-1.5 rounded-xl border border-dl-warning/25 bg-dl-warning/8 px-3 py-1.5 text-[11px] text-dl-text-secondary">
-                <span>
-                  对端尚未加入房间 · 当前发送的消息与文件将暂存本机内存，待对端连接后自动加密送达
-                </span>
-                <span className="shrink-0 font-semibold text-dl-warning">仅本机在线 (1/2)</span>
               </div>
             )}
             <form
@@ -768,39 +759,58 @@ export function TimelinePane() {
             <ChevronLeft className="size-4" strokeWidth={2} />
           </IconButton>
 
-          {activeConv.kind === "saved" ? (
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-dl-lane-shared/16 text-dl-lane-shared max-narrow:hidden">
-              <Bookmark className="size-[18px]" strokeWidth={1.9} />
-            </div>
-          ) : (
-            <div className="shrink-0 max-narrow:hidden">
-              <Avatar name={activeConv.title} size="md" />
-            </div>
-          )}
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={openDetailsInspector}
+            className="h-auto min-w-0 flex-1 justify-start gap-2.5 max-narrow:gap-2 rounded-xl px-1.5 py-0.5 -mx-1.5 text-left font-normal hover:bg-dl-surface-subtle/50"
+          >
+            {activeConv.kind === "saved" ? (
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-dl-lane-shared/16 text-dl-lane-shared max-narrow:hidden">
+                <Bookmark className="size-[18px]" strokeWidth={1.9} />
+              </div>
+            ) : (
+              <div className="shrink-0 max-narrow:hidden">
+                <Avatar
+                  name={activeConv.title}
+                  src={activeConv.avatarUrl}
+                  emoji={activeConv.avatarEmoji}
+                  kind={activeConv.kind === "group" ? "group" : "human"}
+                  size="md"
+                />
+              </div>
+            )}
 
-          <div className="min-w-0 flex-1">
-            <h1 className="truncate text-sm font-semibold tracking-tight text-dl-text-primary">
-              {activeConv.title}
-            </h1>
-            <p className="truncate text-xs text-dl-text-secondary">
-              {activeConv.kind === "saved"
-                ? "个人专属云端备忘与跨设备收藏"
-                : `${activeConv.memberIds.length || 1} 位空间成员 · 支持置顶与线程讨论`}
-            </p>
-          </div>
+            <div className="min-w-0 flex-1">
+              <h1 className="truncate text-sm font-semibold tracking-tight text-dl-text-primary">
+                {activeConv.title}
+              </h1>
+              {activeConv.kind === "group" && (
+                <p className="truncate text-xs text-dl-text-secondary">
+                  {activeConv.memberIds.length || 1} 人
+                </p>
+              )}
+            </div>
+          </Button>
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
-          <Tooltip content="对话详情、成员与置顶管理" side="bottom">
+          <Tooltip content={activeConv.kind === "group" ? "群聊设置" : "会话详情"} side="bottom">
             <Button
               size="sm"
               variant="ghost"
-              aria-label="详情与置顶"
+              aria-label={activeConv.kind === "group" ? "群聊设置" : "会话详情"}
               className="gap-1.5 text-xs text-dl-text-secondary hover:text-dl-text-primary max-narrow:px-2"
               onClick={openDetailsInspector}
             >
-              <PanelRightOpen className="size-4 shrink-0" strokeWidth={1.75} />
-              <span className="max-compact:hidden">详情与置顶</span>
+              {activeConv.kind === "group" ? (
+                <Settings2 className="size-4 shrink-0" strokeWidth={1.8} />
+              ) : (
+                <PanelRightOpen className="size-4 shrink-0" strokeWidth={1.75} />
+              )}
+              <span className="max-compact:hidden">
+                {activeConv.kind === "group" ? "群聊设置" : "会话详情"}
+              </span>
             </Button>
           </Tooltip>
         </div>
@@ -1009,183 +1019,191 @@ export function TimelinePane() {
                     {msg.card ? (
                       <DualLaneCardKit card={msg.card} onAction={triggerCardAction} />
                     ) : (
-                      <div
-                        className={cn(
-                          "rounded-[18px] px-3.5 py-2 text-[14px] leading-[1.52] shadow-2xs transition-colors",
-                          isOwn
-                            ? cn(
-                                "bg-dl-lane-shared text-dl-on-shared",
-                                groupedWithPrev && "rounded-tr-[6px]",
-                                !groupedWithNext && "rounded-br-[6px]"
-                              )
-                            : cn(
-                                "dl-glass-elevated border border-dl-border-hairline text-dl-text-primary",
-                                groupedWithPrev && "rounded-tl-[6px]",
-                                !groupedWithNext && "rounded-bl-[6px]"
-                              )
-                        )}
-                      >
-                        {msg.replyToId && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => jumpToMessage(activeConv.id, msg.replyToId!)}
-                            className={cn(
-                              "mb-1.5 flex h-auto w-full flex-col items-start gap-0.5 rounded-lg border-l-2 px-2 py-1 text-left text-[11px]",
-                              isOwn
-                                ? "border-current/50 bg-black/10 text-dl-on-shared hover:bg-black/15"
-                                : "border-dl-lane-shared bg-dl-lane-shared/8 text-dl-text-secondary hover:bg-dl-lane-shared/14"
-                            )}
-                          >
-                            <span className="font-semibold">
-                              {repliedMsg ? repliedMsg.senderName : "引用消息"}
-                            </span>
-                            <span className="w-full truncate opacity-85">
-                              {repliedMsg ? repliedMsg.plainText : `#${msg.replyToId.slice(-6)}`}
-                            </span>
-                          </Button>
-                        )}
+                      (() => {
+                        const hasVisibleText =
+                          (!msg.attachments?.length || msg.plainText !== "[文件]") &&
+                          Boolean(msg.plainText);
+                        const allInlineImages =
+                          Boolean(msg.attachments?.length) &&
+                          msg.attachments!.every(
+                            (att) => safeInlineImageMime(att.mimeType) && Boolean(att.url)
+                          );
+                        const isImageOnlyMsg =
+                          !hasVisibleText && !msg.replyToId && allInlineImages;
 
-                        {(!msg.attachments?.length || msg.plainText !== "[文件]") &&
-                          msg.plainText && (
-                            <div className="whitespace-pre-wrap break-words">{msg.plainText}</div>
-                          )}
-
-                        {msg.attachments && msg.attachments.length > 0 && (
+                        return (
                           <div
                             className={cn(
-                              "flex flex-col gap-1.5",
-                              (!msg.attachments.length || msg.plainText !== "[文件]") &&
-                                msg.plainText &&
-                                "mt-2"
+                              "rounded-[18px] text-[14px] leading-[1.52] shadow-2xs transition-colors",
+                              isImageOnlyMsg ? "px-2 py-1.5" : "px-3.5 py-2",
+                              isOwn
+                                ? cn(
+                                    "bg-dl-lane-shared text-dl-on-shared",
+                                    groupedWithPrev && "rounded-tr-[6px]",
+                                    !groupedWithNext && "rounded-br-[6px]"
+                                  )
+                                : cn(
+                                    "dl-glass-elevated border border-dl-border-hairline text-dl-text-primary",
+                                    groupedWithPrev && "rounded-tl-[6px]",
+                                    !groupedWithNext && "rounded-bl-[6px]"
+                                  )
                             )}
                           >
-                            {msg.attachments.map((att, attIdx) => {
-                              const dlHref = att.downloadUrl || att.url;
-                              const isSafeImg = safeInlineImageMime(att.mimeType) && Boolean(att.url);
-                              return (
-                                <div key={att.id} className="space-y-1.5">
-                                  {isSafeImg && (
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      className="h-auto w-full overflow-hidden rounded-xl p-0"
-                                      aria-label={`预览图片 ${att.fileName}`}
-                                      onClick={() =>
-                                        openLightbox(
-                                          msg.attachments!.map((a) => ({
-                                            ...a,
-                                            conversationId: activeConv.id,
-                                            sourceMessageId: msg.id,
-                                          })),
-                                          attIdx
-                                        )
-                                      }
-                                    >
-                                      <img
-                                        src={att.url}
-                                        alt={att.fileName}
-                                        className="max-h-44 max-w-full rounded-xl object-contain"
-                                      />
-                                    </Button>
-                                  )}
-                                  <div
-                                    className={cn(
-                                      "flex items-center justify-between gap-1.5 rounded-xl border px-2 py-1 text-xs",
-                                      isOwn
-                                        ? "border-current/25 bg-black/10 text-dl-on-shared"
-                                        : "border-dl-border-hairline bg-dl-surface-subtle/60 text-dl-text-primary"
-                                    )}
-                                  >
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="sm"
-                                      aria-label={`查看附件 ${att.fileName}`}
-                                      className={cn(
-                                        "h-auto min-w-0 flex-1 justify-start gap-2 px-1 py-0.5 text-left text-xs",
-                                        isOwn && "text-dl-on-shared hover:bg-black/10"
-                                      )}
-                                      onClick={() => {
-                                        if (isSafeImg) {
-                                          openLightbox(
-                                            msg.attachments!.map((a) => ({
-                                              ...a,
-                                              conversationId: activeConv.id,
-                                              sourceMessageId: msg.id,
-                                            })),
-                                            attIdx
-                                          );
-                                        } else {
-                                          openFileInspector({
-                                            ...att,
-                                            conversationId: activeConv.id,
-                                            sourceMessageId: msg.id,
-                                          });
-                                        }
-                                      }}
-                                    >
-                                      <FileText className="size-4 shrink-0 opacity-85" strokeWidth={1.8} />
-                                      <div className="min-w-0">
-                                        <div className="truncate font-medium max-w-[160px]">
-                                          {att.fileName}
-                                        </div>
-                                        <div className="text-[10px] opacity-75">
-                                          {formatBytes(att.byteSize)}
-                                        </div>
-                                      </div>
-                                    </Button>
-                                    {dlHref && (
-                                      <IconButton
-                                        type="button"
-                                        size="sm"
-                                        variant="ghost"
-                                        className={cn(
-                                          "size-7 shrink-0 rounded-lg",
-                                          isOwn && "text-dl-on-shared hover:bg-black/15"
-                                        )}
-                                        label={`下载 ${att.fileName}`}
-                                        onClick={() => triggerBrowserDownload(dlHref, att.fileName)}
-                                      >
-                                        <Download className="size-3.5" strokeWidth={2} />
-                                      </IconButton>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
+                            {msg.replyToId && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => jumpToMessage(activeConv.id, msg.replyToId!)}
+                                className={cn(
+                                  "mb-1.5 flex h-auto w-full flex-col items-start gap-0.5 rounded-lg border-l-2 px-2 py-1 text-left text-[11px]",
+                                  isOwn
+                                    ? "border-current/50 bg-black/10 text-dl-on-shared hover:bg-black/15"
+                                    : "border-dl-lane-shared bg-dl-lane-shared/8 text-dl-text-secondary hover:bg-dl-lane-shared/14"
+                                )}
+                              >
+                                <span className="font-semibold">
+                                  {repliedMsg ? repliedMsg.senderName : "引用消息"}
+                                </span>
+                                <span className="w-full truncate opacity-85">
+                                  {repliedMsg
+                                    ? repliedMsg.plainText
+                                    : `#${msg.replyToId.slice(-6)}`}
+                                </span>
+                              </Button>
+                            )}
 
-                        <div
-                          className={cn(
-                            "mt-1 flex items-center justify-end gap-1 text-[10px] tabular-nums select-none",
-                            isOwn ? "opacity-75" : "text-dl-text-tertiary"
-                          )}
-                        >
-                          {msg.editedAt && <span>(已编辑)</span>}
-                          <span>
-                            {new Date(msg.createdAt).toLocaleTimeString([], {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </span>
-                          {isOwn && (
-                            <span className="inline-flex items-center">
-                              {msg.status === "sending" ? (
-                                <Clock className="size-3" strokeWidth={2} />
-                              ) : msg.status === "failed" ? (
-                                <AlertCircle className="size-3 text-dl-danger" strokeWidth={2} />
-                              ) : msg.status === "read" ? (
-                                <CheckCheck className="size-3.5" strokeWidth={2} />
-                              ) : (
-                                <Check className="size-3" strokeWidth={2} />
+                            {hasVisibleText && (
+                              <div className="whitespace-pre-wrap break-words">{msg.plainText}</div>
+                            )}
+
+                            {msg.attachments && msg.attachments.length > 0 && (
+                              <div
+                                className={cn("flex flex-col gap-1.5", hasVisibleText && "mt-2")}
+                              >
+                                {msg.attachments.map((att, attIdx) => {
+                                  const dlHref = att.downloadUrl || att.url;
+                                  const isSafeImg =
+                                    safeInlineImageMime(att.mimeType) && Boolean(att.url);
+                                  return (
+                                    <div key={att.id}>
+                                      {isSafeImg ? (
+                                        <Button
+                                          type="button"
+                                          variant="ghost"
+                                          className="h-auto w-full overflow-hidden rounded-xl p-0"
+                                          aria-label={`预览图片 ${att.fileName}`}
+                                          onClick={() =>
+                                            openLightbox(
+                                              msg.attachments!.map((a) => ({
+                                                ...a,
+                                                conversationId: activeConv.id,
+                                                sourceMessageId: msg.id,
+                                              })),
+                                              attIdx
+                                            )
+                                          }
+                                        >
+                                          <img
+                                            src={att.url}
+                                            alt={att.fileName}
+                                            className="max-h-60 max-w-full rounded-xl object-contain"
+                                          />
+                                        </Button>
+                                      ) : (
+                                        <div
+                                          className={cn(
+                                            "flex items-center justify-between gap-1.5 rounded-xl border px-2 py-1 text-xs",
+                                            isOwn
+                                              ? "border-current/25 bg-black/10 text-dl-on-shared"
+                                              : "border-dl-border-hairline bg-dl-surface-subtle/60 text-dl-text-primary"
+                                          )}
+                                        >
+                                          <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="sm"
+                                            aria-label={`查看附件 ${att.fileName}`}
+                                            className={cn(
+                                              "h-auto min-w-0 flex-1 justify-start gap-2 px-1 py-0.5 text-left text-xs",
+                                              isOwn && "text-dl-on-shared hover:bg-black/10"
+                                            )}
+                                            onClick={() =>
+                                              openFileInspector({
+                                                ...att,
+                                                conversationId: activeConv.id,
+                                                sourceMessageId: msg.id,
+                                              })
+                                            }
+                                          >
+                                            <FileText
+                                              className="size-4 shrink-0 opacity-85"
+                                              strokeWidth={1.8}
+                                            />
+                                            <div className="min-w-0">
+                                              <div className="truncate font-medium max-w-[160px]">
+                                                {att.fileName}
+                                              </div>
+                                              <div className="text-[10px] opacity-75">
+                                                {formatBytes(att.byteSize)}
+                                              </div>
+                                            </div>
+                                          </Button>
+                                          {dlHref && (
+                                            <IconButton
+                                              type="button"
+                                              size="sm"
+                                              variant="ghost"
+                                              className={cn(
+                                                "size-7 shrink-0 rounded-lg",
+                                                isOwn && "text-dl-on-shared hover:bg-black/15"
+                                              )}
+                                              label={`下载 ${att.fileName}`}
+                                              onClick={() =>
+                                                triggerBrowserDownload(dlHref, att.fileName)
+                                              }
+                                            >
+                                              <Download className="size-3.5" strokeWidth={2} />
+                                            </IconButton>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+
+                            <div
+                              className={cn(
+                                "mt-1 flex items-center justify-end gap-1 text-[10px] tabular-nums select-none",
+                                isOwn ? "opacity-75" : "text-dl-text-tertiary"
                               )}
-                            </span>
-                          )}
-                        </div>
-                      </div>
+                            >
+                              {msg.editedAt && <span>(已编辑)</span>}
+                              <span>
+                                {new Date(msg.createdAt).toLocaleTimeString([], {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })}
+                              </span>
+                              {isOwn && (
+                                <span className="inline-flex items-center">
+                                  {msg.status === "sending" ? (
+                                    <Clock className="size-3" strokeWidth={2} />
+                                  ) : msg.status === "failed" ? (
+                                    <AlertCircle className="size-3 text-dl-danger" strokeWidth={2} />
+                                  ) : msg.status === "read" ? (
+                                    <CheckCheck className="size-3.5" strokeWidth={2} />
+                                  ) : (
+                                    <Check className="size-3" strokeWidth={2} />
+                                  )}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()
                     )}
 
                     {/* Reactions & Thread Entry Pill */}

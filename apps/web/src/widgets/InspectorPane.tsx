@@ -1,19 +1,28 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
+  Camera,
+  Check,
   Download,
   FileText,
   LocateFixed,
+  LogOut,
   MessageSquareText,
   PinOff,
+  RotateCcw,
   SendHorizontal,
+  Settings2,
+  UserPlus,
   Users,
   X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useLaneStore } from "@/entities/lane/store";
 import { useWorkspaceStore } from "@/entities/workspace/store";
+import { cn } from "@/shared/lib/cn";
 import { triggerBrowserDownload } from "@/shared/lib/download";
-import { Avatar, Button, IconButton, Switch } from "@/shared/ui";
+import { Avatar, Button, IconButton, Input, Switch } from "@/shared/ui";
+
+const GROUP_EMOJI_PRESETS = ["🚀", "💡", "🎨", "🛠️", "📌", "⚡", "🌿", "🎯"];
 
 export function InspectorPane() {
   const {
@@ -27,6 +36,7 @@ export function InspectorPane() {
   const {
     activeConversationId,
     conversations,
+    pinnedConversationIds,
     messagesByConv,
     members,
     threadsByRootId,
@@ -34,11 +44,28 @@ export function InspectorPane() {
     sendThreadReply,
     jumpToMessage,
     togglePinMessage,
+    togglePinConversation,
+    updateGroupProfile,
+    uploadGroupAvatar,
+    inviteGroupMembers,
+    leaveGroup,
   } = useWorkspaceStore();
 
   const [replyText, setReplyText] = useState("");
   const [alsoSendToChannel, setAlsoSendToChannel] = useState(false);
   const [sending, setSending] = useState(false);
+
+  const [titleDraftByConv, setTitleDraftByConv] = useState<Record<string, string>>({});
+  const [savingGroup, setSavingGroup] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [invitingOpenConvId, setInvitingOpenConvId] = useState<string | null>(null);
+  const [selectedInviteIdsByConv, setSelectedInviteIdsByConv] = useState<Record<string, string[]>>(
+    {}
+  );
+  const [invitingBusy, setInvitingBusy] = useState(false);
+  const [confirmLeaveConvId, setConfirmLeaveConvId] = useState<string | null>(null);
+  const [groupErrorByConv, setGroupErrorByConv] = useState<Record<string, string>>({});
+  const avatarFileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (inspectorOpen && inspectorTab === "thread" && inspectorThreadRootId) {
@@ -60,6 +87,99 @@ export function InspectorPane() {
   const showPane = inspectorOpen && activeLane === "workspace";
   const activeConv = activeConversationId ? conversations[activeConversationId] : undefined;
   const messages = activeConversationId ? messagesByConv[activeConversationId] || [] : [];
+
+  const convKey = activeConv?.id || "";
+  const titleDraft = activeConv ? (titleDraftByConv[convKey] ?? activeConv.title) : "";
+  const invitingOpen = Boolean(convKey && invitingOpenConvId === convKey);
+  const selectedInviteIds = convKey ? selectedInviteIdsByConv[convKey] || [] : [];
+  const confirmLeave = Boolean(convKey && confirmLeaveConvId === convKey);
+  const groupActionError = convKey ? groupErrorByConv[convKey] || "" : "";
+  const setGroupError = (convId: string, msg: string) =>
+    setGroupErrorByConv((prev) => ({ ...prev, [convId]: msg }));
+
+  const handleSaveGroupTitle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeConv || activeConv.kind !== "group") return;
+    const convId = activeConv.id;
+    const trimmed = titleDraft.trim();
+    if (!trimmed || trimmed === activeConv.title) return;
+    setGroupError(convId, "");
+    setSavingGroup(true);
+    try {
+      await updateGroupProfile(convId, { title: trimmed });
+      setTitleDraftByConv((prev) => {
+        const next = { ...prev };
+        delete next[convId];
+        return next;
+      });
+    } catch (err) {
+      setGroupError(convId, err instanceof Error ? err.message : "更新群聊名称失败");
+    } finally {
+      setSavingGroup(false);
+    }
+  };
+
+  const handleAvatarFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !activeConv || activeConv.kind !== "group") return;
+    const convId = activeConv.id;
+    setGroupError(convId, "");
+    setUploadingAvatar(true);
+    try {
+      await uploadGroupAvatar(convId, file);
+    } catch (err) {
+      setGroupError(convId, err instanceof Error ? err.message : "上传群头像失败");
+    } finally {
+      setUploadingAvatar(false);
+    }
+  };
+
+  const handleEmojiAvatarSelect = async (emoji: string | null) => {
+    if (!activeConv || activeConv.kind !== "group") return;
+    const convId = activeConv.id;
+    setGroupError(convId, "");
+    setSavingGroup(true);
+    try {
+      await updateGroupProfile(convId, { avatar: emoji });
+    } catch (err) {
+      setGroupError(convId, err instanceof Error ? err.message : "更新群头像失败");
+    } finally {
+      setSavingGroup(false);
+    }
+  };
+
+  const handleConfirmInvite = async () => {
+    if (!activeConv || selectedInviteIds.length === 0) return;
+    const convId = activeConv.id;
+    setGroupError(convId, "");
+    setInvitingBusy(true);
+    try {
+      await inviteGroupMembers(convId, selectedInviteIds);
+      setSelectedInviteIdsByConv((prev) => ({ ...prev, [convId]: [] }));
+      setInvitingOpenConvId(null);
+    } catch (err) {
+      setGroupError(convId, err instanceof Error ? err.message : "邀请成员失败");
+    } finally {
+      setInvitingBusy(false);
+    }
+  };
+
+  const handleConfirmLeaveGroup = async () => {
+    if (!activeConv || activeConv.kind !== "group") return;
+    const convId = activeConv.id;
+    setGroupError(convId, "");
+    setSavingGroup(true);
+    try {
+      await leaveGroup(convId);
+      setConfirmLeaveConvId(null);
+      closeInspector();
+    } catch (err) {
+      setGroupError(convId, err instanceof Error ? err.message : "退出群聊失败");
+    } finally {
+      setSavingGroup(false);
+    }
+  };
 
   const handleThreadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -104,6 +224,8 @@ export function InspectorPane() {
                   <MessageSquareText className="size-4 text-dl-lane-shared" strokeWidth={1.85} />
                 ) : inspectorTab === "file" ? (
                   <FileText className="size-4 text-dl-lane-shared" strokeWidth={1.85} />
+                ) : activeConv?.kind === "group" ? (
+                  <Settings2 className="size-4 text-dl-lane-shared" strokeWidth={1.85} />
                 ) : (
                   <Users className="size-4 text-dl-lane-shared" strokeWidth={1.85} />
                 )}
@@ -112,6 +234,8 @@ export function InspectorPane() {
                     ? "话题线程"
                     : inspectorTab === "file"
                     ? "文件预览与溯源"
+                    : activeConv?.kind === "group"
+                    ? "群聊设置"
                     : "对话详情"}
                 </h2>
               </div>
@@ -221,6 +345,131 @@ export function InspectorPane() {
 
             {inspectorTab === "details" && activeConv && (
               <div className="dl-scroll flex-1 overflow-y-auto p-4 space-y-5">
+                {activeConv.kind === "group" && (
+                  <div className="rounded-2xl border border-dl-border-hairline bg-dl-surface-subtle/45 p-3.5 space-y-3.5">
+                    <div className="flex items-center gap-3">
+                      <div className="relative shrink-0">
+                        <input
+                          ref={avatarFileInputRef}
+                          type="file"
+                          accept="image/*"
+                          aria-label="上传群头像图片"
+                          className="sr-only"
+                          onChange={(e) => void handleAvatarFileChange(e)}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          onClick={() => avatarFileInputRef.current?.click()}
+                          disabled={uploadingAvatar}
+                          aria-label="更换群头像图片"
+                          className="group relative h-auto w-auto rounded-entity p-0 hover:bg-transparent"
+                        >
+                          <Avatar
+                            name={activeConv.title}
+                            src={activeConv.avatarUrl}
+                            emoji={activeConv.avatarEmoji}
+                            kind="group"
+                            size="lg"
+                          />
+                          <span className="absolute -bottom-1 -right-1 flex size-5 items-center justify-center rounded-full border border-dl-border-hairline bg-surface text-dl-text-primary shadow-2xs group-hover:text-dl-lane-shared">
+                            <Camera className="size-3" strokeWidth={2} />
+                          </span>
+                        </Button>
+                      </div>
+                      <div className="min-w-0 flex-1 space-y-1.5">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-xs font-semibold text-dl-text-secondary">
+                            群头像
+                          </span>
+                          {(activeConv.avatarUrl || activeConv.avatarEmoji) && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => void handleEmojiAvatarSelect(null)}
+                              disabled={savingGroup}
+                              className="h-5 gap-1 px-1.5 text-[11px] text-dl-text-tertiary hover:text-dl-text-primary"
+                            >
+                              <RotateCcw className="size-2.5" strokeWidth={2} />
+                              恢复默认
+                            </Button>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1">
+                          {GROUP_EMOJI_PRESETS.map((emoji) => {
+                            const selected = activeConv.avatarEmoji === emoji && !activeConv.avatarUrl;
+                            return (
+                              <Button
+                                key={emoji}
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                aria-label={`群头像 ${emoji}`}
+                                onClick={() => void handleEmojiAvatarSelect(emoji)}
+                                disabled={savingGroup}
+                                className={cn(
+                                  "size-7 rounded-lg border p-0 text-sm",
+                                  selected
+                                    ? "border-dl-lane-shared bg-dl-lane-shared/15"
+                                    : "border-dl-border-hairline bg-surface/70 hover:bg-dl-surface-subtle"
+                                )}
+                              >
+                                {emoji}
+                              </Button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
+                    <form onSubmit={(e) => void handleSaveGroupTitle(e)} className="space-y-1.5">
+                      <label className="block text-xs font-semibold text-dl-text-secondary">
+                        群聊名称
+                      </label>
+                      <div className="flex items-center gap-1.5">
+                        <Input
+                          value={titleDraft}
+                          onChange={(e) =>
+                            setTitleDraftByConv((prev) => ({
+                              ...prev,
+                              [activeConv.id]: e.target.value,
+                            }))
+                          }
+                          aria-label="群聊名称"
+                          placeholder="输入群聊名称"
+                          className="h-8 text-xs"
+                        />
+                        <Button
+                          type="submit"
+                          size="sm"
+                          variant="primary"
+                          busy={savingGroup}
+                          disabled={!titleDraft.trim() || titleDraft.trim() === activeConv.title}
+                          className="h-8 shrink-0 px-3 text-xs"
+                        >
+                          保存
+                        </Button>
+                      </div>
+                    </form>
+
+                    {groupActionError && (
+                      <div className="text-xs text-dl-danger">{groupActionError}</div>
+                    )}
+                  </div>
+                )}
+
+                {activeConv.kind !== "saved" && (
+                  <div className="flex items-center justify-between rounded-2xl border border-dl-border-hairline bg-dl-surface-subtle/40 px-3.5 py-2">
+                    <span className="text-xs font-semibold text-dl-text-primary">置顶会话</span>
+                    <Switch
+                      label="置顶会话"
+                      checked={pinnedConversationIds.includes(activeConv.id)}
+                      onCheckedChange={() => void togglePinConversation(activeConv.id)}
+                    />
+                  </div>
+                )}
+
                 <div>
                   <div className="mb-2 text-xs font-semibold text-dl-text-secondary">
                     置顶消息 ({activeConv.pinnedMessageIds.length})
@@ -269,9 +518,104 @@ export function InspectorPane() {
                 </div>
 
                 <div>
-                  <div className="mb-2 text-xs font-semibold text-dl-text-secondary">
-                    成员列表 ({activeConv.memberIds.length})
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-dl-text-secondary">
+                      成员 ({activeConv.memberIds.length})
+                    </span>
+                    {activeConv.kind === "group" && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 gap-1 px-2 text-xs text-dl-lane-shared"
+                        onClick={() =>
+                          setInvitingOpenConvId((prev) =>
+                            prev === activeConv.id ? null : activeConv.id
+                          )
+                        }
+                      >
+                        <UserPlus className="size-3.5" strokeWidth={1.9} />
+                        邀请成员
+                      </Button>
+                    )}
                   </div>
+
+                  {activeConv.kind === "group" && invitingOpen && (() => {
+                    const invitable = Object.values(members).filter(
+                      (m) => m.role !== "bot" && !activeConv.memberIds.includes(m.id)
+                    );
+                    return (
+                      <div className="mb-2.5 rounded-xl border border-dl-border-hairline bg-dl-surface-subtle/55 p-2.5 space-y-2">
+                        {invitable.length === 0 ? (
+                          <div className="text-xs text-dl-text-tertiary py-1 text-center">
+                            所有可见成员均已在群内
+                          </div>
+                        ) : (
+                          <>
+                            <div className="dl-scroll max-h-36 overflow-y-auto space-y-1">
+                              {invitable.map((m) => {
+                                const checked = selectedInviteIds.includes(m.id);
+                                return (
+                                  <Button
+                                    key={m.id}
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() =>
+                                      setSelectedInviteIdsByConv((prev) => {
+                                        const cur = prev[activeConv.id] || [];
+                                        return {
+                                          ...prev,
+                                          [activeConv.id]: checked
+                                            ? cur.filter((id) => id !== m.id)
+                                            : [...cur, m.id],
+                                        };
+                                      })
+                                    }
+                                    className={cn(
+                                      "h-auto w-full justify-between rounded-lg px-2 py-1.5 text-xs",
+                                      checked
+                                        ? "bg-dl-lane-shared/14 text-dl-lane-shared font-medium"
+                                        : "text-dl-text-primary hover:bg-surface/70"
+                                    )}
+                                  >
+                                    <span className="truncate">{m.displayName}</span>
+                                    {checked && <Check className="size-3.5 shrink-0" strokeWidth={2} />}
+                                  </Button>
+                                );
+                              })}
+                            </div>
+                            <div className="flex justify-end gap-1.5 pt-1">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 px-2.5 text-xs"
+                                onClick={() => {
+                                  setInvitingOpenConvId(null);
+                                  setSelectedInviteIdsByConv((prev) => ({
+                                    ...prev,
+                                    [activeConv.id]: [],
+                                  }));
+                                }}
+                              >
+                                取消
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="primary"
+                                busy={invitingBusy}
+                                disabled={selectedInviteIds.length === 0}
+                                className="h-7 px-2.5 text-xs"
+                                onClick={() => void handleConfirmInvite()}
+                              >
+                                确认邀请
+                              </Button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })()}
+
                   <div className="space-y-1">
                     {activeConv.memberIds.map((id) => {
                       const m = members[id];
@@ -298,6 +642,45 @@ export function InspectorPane() {
                     })}
                   </div>
                 </div>
+
+                {activeConv.kind === "group" && (
+                  <div className="border-t border-dl-border-hairline pt-3">
+                    {confirmLeave ? (
+                      <div className="flex items-center justify-between gap-2 rounded-xl bg-dl-danger/8 p-2.5">
+                        <span className="text-xs font-medium text-dl-danger">确认退出当前群聊？</span>
+                        <div className="flex items-center gap-1.5">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2.5 text-xs"
+                            onClick={() => setConfirmLeaveConvId(null)}
+                          >
+                            取消
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            busy={savingGroup}
+                            className="h-7 px-2.5 text-xs"
+                            onClick={() => void handleConfirmLeaveGroup()}
+                          >
+                            确认退出
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        className="w-full gap-1.5"
+                        onClick={() => setConfirmLeaveConvId(activeConv.id)}
+                      >
+                        <LogOut className="size-3.5" strokeWidth={1.9} />
+                        退出群聊
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 

@@ -62,6 +62,10 @@ export function applyVibrancyTokensToRoot(mode: ThemeMode, accent: AccentId, tra
   root.dataset.motion = reducedMotion ? "reduced" : "normal";
   root.style.colorScheme = mode;
 
+  const activeAccent = mode === "dark" ? accentPalette.dark : accentPalette.light;
+  const activeAccentSoft = mode === "dark" ? accentPalette.darkSoft : accentPalette.lightSoft;
+  const activeOnAccent = mode === "dark" ? accentPalette.onDark : accentPalette.onLight;
+
   const vars: Record<string, string> = {
     "--dl-bg": palette.bg,
     "--dl-canvas-from": palette.canvasFrom,
@@ -77,18 +81,19 @@ export function applyVibrancyTokensToRoot(mode: ThemeMode, accent: AccentId, tra
     "--dl-text": palette.text,
     "--dl-muted": palette.muted,
     "--dl-control": palette.control,
-    "--dl-focus": palette.focus,
+    "--dl-focus": activeAccent,
     "--dl-backdrop": palette.backdrop,
     "--dl-shadow-menu": palette.shadowMenu,
     "--dl-shadow-dialog": palette.shadowDialog,
     "--dl-direct": palette.direct,
     "--dl-direct-soft": palette.directSoft,
     "--dl-on-direct": palette.onDirect,
-    "--dl-shared": palette.shared,
-    "--dl-shared-soft": palette.sharedSoft,
-    "--dl-on-shared": palette.onShared,
-    "--dl-accent": mode === "dark" ? accentPalette.dark : accentPalette.light,
-    "--dl-accent-soft": mode === "dark" ? accentPalette.darkSoft : accentPalette.lightSoft,
+    "--dl-shared": activeAccent,
+    "--dl-shared-soft": activeAccentSoft,
+    "--dl-on-shared": activeOnAccent,
+    "--dl-accent": activeAccent,
+    "--dl-accent-soft": activeAccentSoft,
+    "--dl-on-accent": activeOnAccent,
     "--dl-success": palette.success,
     "--dl-success-soft": palette.successSoft,
     "--dl-warning": palette.warning,

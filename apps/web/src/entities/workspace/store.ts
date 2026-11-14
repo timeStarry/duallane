@@ -9,7 +9,6 @@ import {
 } from "@/shared/lib/api-v1";
 import { buildDevPreviewFixture } from "./demo-fixture";
 import {
-  getWorkspaceSyncCursor,
   loadWorkspaceDrafts,
   loadWorkspaceScrolls,
   saveWorkspaceDraft,
@@ -75,6 +74,8 @@ export interface V1Conversation {
   id: string;
   kind: "saved" | "direct" | "group";
   title: string;
+  avatarUrl?: string;
+  avatarEmoji?: string;
   unreadCount: number;
   mentionCount: number;
   pinnedMessageIds: string[];
@@ -102,6 +103,8 @@ interface WorkspaceState {
 
   conversations: Record<string, V1Conversation>;
   conversationOrder: string[];
+  pinnedConversationIds: string[];
+  userPreferences: Record<string, unknown>;
   messagesByConv: Record<string, V1Message[]>;
   members: Record<string, V1User>;
   activeConversationId: string | null;
@@ -137,6 +140,15 @@ interface WorkspaceState {
   editWorkspaceMessage: (conversationId: string, messageId: string, newText: string) => Promise<void>;
   toggleReaction: (conversationId: string, messageId: string, emoji: string) => Promise<void>;
   togglePinMessage: (conversationId: string, messageId: string) => Promise<void>;
+  togglePinConversation: (conversationId: string) => Promise<void>;
+  createGroup: (title: string, memberIds: string[], avatar?: string) => Promise<string | null>;
+  updateGroupProfile: (
+    conversationId: string,
+    patch: { title?: string; avatar?: string | null }
+  ) => Promise<void>;
+  uploadGroupAvatar: (conversationId: string, file: File) => Promise<void>;
+  inviteGroupMembers: (conversationId: string, userIds: string[]) => Promise<void>;
+  leaveGroup: (conversationId: string) => Promise<void>;
   forwardMessage: (messageIds: string[], targetConversationId: string) => Promise<void>;
   loadThread: (rootMessageId: string) => Promise<void>;
   sendThreadReply: (rootMessageId: string, text: string, alsoSendToChannel: boolean) => Promise<void>;
@@ -338,6 +350,43 @@ function backfillMemberFromMessage(
   }
 }
 
+function splitConversationAvatar(
+  kind: V1Conversation["kind"],
+  rawConv: Record<string, unknown>,
+  members: Record<string, V1User>,
+  memberIds: string[],
+  currentUserId?: string
+): { avatarUrl?: string; avatarEmoji?: string } {
+  const rawVal = rawConv.avatarUrl ?? rawConv.avatarEmoji ?? rawConv.avatar;
+  if (typeof rawVal === "string" && rawVal.trim()) {
+    const val = rawVal.trim();
+    if (
+      val.startsWith("/") ||
+      val.startsWith("blob:") ||
+      val.startsWith("data:") ||
+      val.startsWith("http://") ||
+      val.startsWith("https://")
+    ) {
+      return { avatarUrl: val, avatarEmoji: undefined };
+    }
+    return { avatarUrl: undefined, avatarEmoji: val };
+  }
+  if (kind === "direct") {
+    const otherObj =
+      rawConv.otherMember && typeof rawConv.otherMember === "object"
+        ? (rawConv.otherMember as Record<string, unknown>)
+        : undefined;
+    if (otherObj?.avatarUrl && typeof otherObj.avatarUrl === "string") {
+      return { avatarUrl: otherObj.avatarUrl };
+    }
+    const peerId = memberIds.find((uid) => uid && uid !== currentUserId);
+    if (peerId && members[peerId]?.avatarUrl) {
+      return { avatarUrl: members[peerId].avatarUrl };
+    }
+  }
+  return {};
+}
+
 export function parseBootstrapPayload(raw: Record<string, unknown>) {
   const authObj = (raw.auth || {}) as Record<string, unknown>;
   const workspaceEnabled = authObj.enabled !== false;
@@ -394,6 +443,14 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
       : Array.isArray(c.memberIds)
       ? c.memberIds.map(String)
       : [];
+    const cleanedMemberIds = rawMemberList.filter(Boolean);
+    const resolvedAvatar = splitConversationAvatar(
+      kind,
+      c,
+      members,
+      cleanedMemberIds,
+      currentUser?.id
+    );
     conversations[id] = {
       id,
       kind,
@@ -401,10 +458,12 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
         kind === "saved"
           ? "我的收藏"
           : String(c.displayTitle || c.title || c.name || "未命名对话"),
+      avatarUrl: resolvedAvatar.avatarUrl,
+      avatarEmoji: resolvedAvatar.avatarEmoji,
       unreadCount: Number(c.unreadCount || 0),
       mentionCount: Number(c.mentionCount || 0),
       pinnedMessageIds: Array.isArray(c.pinnedMessageIds) ? c.pinnedMessageIds.map(String) : [],
-      memberIds: rawMemberList.filter(Boolean),
+      memberIds: cleanedMemberIds,
       lastMessageText: c.lastMessagePlainText
         ? String(c.lastMessagePlainText)
         : c.lastMessageText
@@ -431,6 +490,15 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
   }
 
   const eventCursor = Number(raw.eventCursor || 0);
+  const hasEmbeddedPreferences = Boolean(
+    raw.preferences && typeof raw.preferences === "object" && !Array.isArray(raw.preferences)
+  );
+  const userPreferences: Record<string, unknown> = hasEmbeddedPreferences
+    ? { ...(raw.preferences as Record<string, unknown>) }
+    : {};
+  const pinnedConversationIds: string[] = Array.isArray(userPreferences.pinnedConversationIds)
+    ? userPreferences.pinnedConversationIds.map(String).filter(Boolean)
+    : [];
 
   return {
     workspaceEnabled,
@@ -442,7 +510,136 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
     conversationOrder,
     messagesByConv,
     eventCursor,
+    hasEmbeddedPreferences,
+    userPreferences,
+    pinnedConversationIds,
   };
+}
+
+const BOOTSTRAP_SHELL_CACHE_KEY = "duallane:v1:shell-snapshot:v1";
+
+interface BootstrapShellSnapshot {
+  version: 1;
+  savedAt: number;
+  currentUser: V1User;
+  quotaUsedBytes: number;
+  quotaLimitBytes: number;
+  members: Record<string, V1User>;
+  conversations: Record<string, V1Conversation>;
+  conversationOrder: string[];
+  pinnedConversationIds: string[];
+  userPreferences: Record<string, unknown>;
+  activeConversationId: string | null;
+  activeMessages: V1Message[];
+}
+
+function getSafeBrowserStorage(): Storage | null {
+  try {
+    if (typeof window === "undefined") return null;
+    const storage = window.localStorage;
+    if (!storage || typeof storage.getItem !== "function") return null;
+    return storage;
+  } catch {
+    return null;
+  }
+}
+
+function loadBootstrapShellCache(): BootstrapShellSnapshot | null {
+  const storage = getSafeBrowserStorage();
+  if (!storage) return null;
+  try {
+    const raw = storage.getItem(BOOTSTRAP_SHELL_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<BootstrapShellSnapshot>;
+    if (
+      parsed.version !== 1 ||
+      !parsed.currentUser?.id ||
+      !parsed.conversations ||
+      typeof parsed.conversations !== "object" ||
+      !Array.isArray(parsed.conversationOrder)
+    ) {
+      return null;
+    }
+    return {
+      version: 1,
+      savedAt: Number(parsed.savedAt || 0),
+      currentUser: parsed.currentUser,
+      quotaUsedBytes: Number(parsed.quotaUsedBytes || 0),
+      quotaLimitBytes: Number(parsed.quotaLimitBytes || 512 * 1024 * 1024),
+      members: parsed.members && typeof parsed.members === "object" ? parsed.members : {},
+      conversations: parsed.conversations,
+      conversationOrder: parsed.conversationOrder,
+      pinnedConversationIds: Array.isArray(parsed.pinnedConversationIds)
+        ? parsed.pinnedConversationIds
+        : [],
+      userPreferences:
+        parsed.userPreferences && typeof parsed.userPreferences === "object"
+          ? parsed.userPreferences
+          : {},
+      activeConversationId: parsed.activeConversationId ?? null,
+      activeMessages: Array.isArray(parsed.activeMessages) ? parsed.activeMessages : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveBootstrapShellCache(state: {
+  currentUser: V1User | null;
+  quotaUsedBytes: number;
+  quotaLimitBytes: number;
+  members: Record<string, V1User>;
+  conversations: Record<string, V1Conversation>;
+  conversationOrder: string[];
+  pinnedConversationIds: string[];
+  userPreferences: Record<string, unknown>;
+  activeConversationId: string | null;
+  messagesByConv: Record<string, V1Message[]>;
+}): void {
+  if (!state.currentUser) return;
+  const storage = getSafeBrowserStorage();
+  if (!storage) return;
+  try {
+    const cappedOrder = state.conversationOrder.slice(0, 100);
+    const cappedConversations: Record<string, V1Conversation> = {};
+    for (const id of cappedOrder) {
+      if (state.conversations[id]) {
+        cappedConversations[id] = state.conversations[id];
+      }
+    }
+    const activeId =
+      state.activeConversationId && cappedConversations[state.activeConversationId]
+        ? state.activeConversationId
+        : cappedOrder[0] || null;
+    const activeMessages = activeId ? (state.messagesByConv[activeId] || []).slice(-30) : [];
+    const payload: BootstrapShellSnapshot = {
+      version: 1,
+      savedAt: Date.now(),
+      currentUser: state.currentUser,
+      quotaUsedBytes: state.quotaUsedBytes,
+      quotaLimitBytes: state.quotaLimitBytes,
+      members: state.members,
+      conversations: cappedConversations,
+      conversationOrder: cappedOrder,
+      pinnedConversationIds: state.pinnedConversationIds,
+      userPreferences: state.userPreferences,
+      activeConversationId: activeId,
+      activeMessages,
+    };
+    storage.setItem(BOOTSTRAP_SHELL_CACHE_KEY, JSON.stringify(payload));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+function clearBootstrapShellCache(): void {
+  const storage = getSafeBrowserStorage();
+  if (!storage) return;
+  try {
+    storage.removeItem(BOOTSTRAP_SHELL_CACHE_KEY);
+  } catch {
+    // Ignore
+  }
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
@@ -680,14 +877,36 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                 ? (c.members as Array<Record<string, unknown>>)
                     .map((m) => upsertRawMemberRecord(nextMembers, m))
                     .filter(Boolean)
+                : Array.isArray(c.memberIds)
+                ? c.memberIds.map(String).filter(Boolean)
                 : prev?.memberIds || [];
+              const hasExplicitAvatarKey =
+                "avatarEmoji" in c || "avatarEmoji" in payload || "avatarUrl" in c;
+              const parsedAvatar = splitConversationAvatar(
+                kind,
+                {
+                  ...c,
+                  ...(payload.avatarEmoji !== undefined ? { avatarEmoji: payload.avatarEmoji } : {}),
+                },
+                nextMembers,
+                parsedMemberIds,
+                s.currentUser?.id
+              );
               const nextConv: V1Conversation = {
                 id: convId,
                 kind,
                 title:
                   kind === "saved"
                     ? "我的收藏"
-                    : String(c.displayTitle || c.title || prev?.title || "未命名对话"),
+                    : String(
+                        c.displayTitle ||
+                          c.title ||
+                          payload.title ||
+                          prev?.title ||
+                          "未命名对话"
+                      ),
+                avatarUrl: hasExplicitAvatarKey ? parsedAvatar.avatarUrl : prev?.avatarUrl,
+                avatarEmoji: hasExplicitAvatarKey ? parsedAvatar.avatarEmoji : prev?.avatarEmoji,
                 unreadCount:
                   convId === s.activeConversationId
                     ? 0
@@ -849,6 +1068,88 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                 ),
               },
             }));
+            return;
+          }
+
+          if (evType === "conversation.member_added") {
+            const convId = String(payload.conversationId || eventObj.conversationId || "");
+            const userId = String(payload.userId || eventObj.targetId || "");
+            if (!convId || !userId) return;
+            set((s) => {
+              const prevConv = s.conversations[convId];
+              const nextMembers = { ...s.members };
+              if (payload.member && typeof payload.member === "object") {
+                upsertRawMemberRecord(nextMembers, payload.member as Record<string, unknown>);
+              }
+              if (!prevConv) {
+                return { members: nextMembers };
+              }
+              const nextMemberIds = prevConv.memberIds.includes(userId)
+                ? prevConv.memberIds
+                : [...prevConv.memberIds, userId];
+              return {
+                members: nextMembers,
+                conversations: {
+                  ...s.conversations,
+                  [convId]: { ...prevConv, memberIds: nextMemberIds },
+                },
+              };
+            });
+            return;
+          }
+
+          if (evType === "conversation.member_removed") {
+            const convId = String(payload.conversationId || eventObj.conversationId || "");
+            const userId = String(payload.userId || eventObj.targetId || "");
+            if (!convId || !userId) return;
+            set((s) => {
+              const prevConv = s.conversations[convId];
+              if (!prevConv) return s;
+              if (s.currentUser?.id && userId === s.currentUser.id) {
+                const nextConversations = { ...s.conversations };
+                delete nextConversations[convId];
+                const nextOrder = s.conversationOrder.filter((id) => id !== convId);
+                return {
+                  conversations: nextConversations,
+                  conversationOrder: nextOrder,
+                  pinnedConversationIds: s.pinnedConversationIds.filter((id) => id !== convId),
+                  activeConversationId:
+                    s.activeConversationId === convId ? nextOrder[0] || null : s.activeConversationId,
+                };
+              }
+              return {
+                conversations: {
+                  ...s.conversations,
+                  [convId]: {
+                    ...prevConv,
+                    memberIds: prevConv.memberIds.filter((id) => id !== userId),
+                  },
+                },
+              };
+            });
+            return;
+          }
+
+          if (evType === "message.pinned" || evType === "message.unpinned") {
+            const convId = String(payload.conversationId || eventObj.conversationId || "");
+            const msgId = String(payload.messageId || eventObj.targetId || "");
+            if (!convId || !msgId) return;
+            set((s) => {
+              const prevConv = s.conversations[convId];
+              if (!prevConv) return s;
+              const nextPins =
+                evType === "message.pinned"
+                  ? prevConv.pinnedMessageIds.includes(msgId)
+                    ? prevConv.pinnedMessageIds
+                    : [msgId, ...prevConv.pinnedMessageIds]
+                  : prevConv.pinnedMessageIds.filter((id) => id !== msgId);
+              return {
+                conversations: {
+                  ...s.conversations,
+                  [convId]: { ...prevConv, pinnedMessageIds: nextPins },
+                },
+              };
+            });
           }
         }
       });
@@ -877,6 +1178,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     quotaLimitBytes: 512 * 1024 * 1024,
     conversations: {},
     conversationOrder: [],
+    pinnedConversationIds: [],
+    userPreferences: {},
     messagesByConv: {},
     members: {},
     activeConversationId: null,
@@ -918,10 +1221,43 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         return;
       }
 
+      if (
+        get().authStatus !== "authenticated" &&
+        typeof window !== "undefined" &&
+        window.location?.pathname?.startsWith("/workspace")
+      ) {
+        const cached = loadBootstrapShellCache();
+        if (cached) {
+          set({
+            authStatus: "authenticated",
+            workspaceAvailability: "ready",
+            workspaceStatusMessage: null,
+            connectionStatus: "reconnecting",
+            currentUser: cached.currentUser,
+            quotaUsedBytes: cached.quotaUsedBytes,
+            quotaLimitBytes: cached.quotaLimitBytes,
+            members: cached.members,
+            conversations: cached.conversations,
+            conversationOrder: cached.conversationOrder,
+            pinnedConversationIds: cached.pinnedConversationIds,
+            userPreferences: cached.userPreferences,
+            activeConversationId: cached.activeConversationId,
+            messagesByConv: cached.activeConversationId
+              ? { [cached.activeConversationId]: cached.activeMessages }
+              : {},
+          });
+        }
+      }
+
       try {
-        const raw = await apiV1.getBootstrap();
+        const [raw, drafts, scrollTops] = await Promise.all([
+          apiV1.getBootstrap(),
+          loadWorkspaceDrafts(),
+          loadWorkspaceScrolls(),
+        ]);
         const parsed = parseBootstrapPayload(raw);
         if (!parsed.workspaceEnabled) {
+          clearBootstrapShellCache();
           teardownWorkspaceSocket();
           set({
             authStatus: "unauthenticated",
@@ -932,6 +1268,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           return;
         }
         if (!parsed.currentUser) {
+          clearBootstrapShellCache();
           teardownWorkspaceSocket();
           set({
             authStatus: "unauthenticated",
@@ -941,47 +1278,63 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           return;
         }
 
-        const [drafts, scrollTops] = await Promise.all([
-          loadWorkspaceDrafts(),
-          loadWorkspaceScrolls(),
-        ]);
-
-        try {
-          const savedRes = await apiV1.ensureSavedConversation();
-          if (savedRes.conversationId && !parsed.conversations[savedRes.conversationId]) {
-            parsed.conversations[savedRes.conversationId] = {
-              id: savedRes.conversationId,
-              kind: "saved",
-              title: "我的收藏",
-              unreadCount: 0,
-              mentionCount: 0,
-              pinnedMessageIds: [],
-              memberIds: [parsed.currentUser.id],
-            };
-            parsed.conversationOrder.unshift(savedRes.conversationId);
-            parsed.messagesByConv[savedRes.conversationId] = [];
+        const hasSavedConv = Object.values(parsed.conversations).some((c) => c.kind === "saved");
+        if (!hasSavedConv) {
+          try {
+            const savedRes = await apiV1.ensureSavedConversation();
+            if (savedRes.conversationId && !parsed.conversations[savedRes.conversationId]) {
+              parsed.conversations[savedRes.conversationId] = {
+                id: savedRes.conversationId,
+                kind: "saved",
+                title: "我的收藏",
+                unreadCount: 0,
+                mentionCount: 0,
+                pinnedMessageIds: [],
+                memberIds: [parsed.currentUser.id],
+              };
+              parsed.conversationOrder.unshift(savedRes.conversationId);
+              parsed.messagesByConv[savedRes.conversationId] = [];
+            }
+          } catch {
+            // Non-fatal if migration pending
           }
-        } catch {
-          // Non-fatal if migration pending
         }
 
-        const lastSeq = await getWorkspaceSyncCursor();
-        let activeCursor = lastSeq || parsed.eventCursor;
-        try {
-          const syncRes = await apiV1.sync(activeCursor);
-          if (syncRes.currentSeq > activeCursor) {
-            activeCursor = syncRes.currentSeq;
-            await setWorkspaceSyncCursor(activeCursor);
+        let userPreferences = parsed.userPreferences;
+        let pinnedConversationIds = parsed.pinnedConversationIds;
+        if (!parsed.hasEmbeddedPreferences) {
+          try {
+            const prefRes = await apiV1.getPreferences();
+            if (prefRes.preferences && typeof prefRes.preferences === "object") {
+              userPreferences = prefRes.preferences;
+              if (Array.isArray(prefRes.preferences.pinnedConversationIds)) {
+                pinnedConversationIds = prefRes.preferences.pinnedConversationIds
+                  .map(String)
+                  .filter(Boolean);
+              }
+            }
+          } catch {
+            // Non-fatal
           }
-        } catch {
-          // Non-fatal
         }
 
-        const currentActive = get().activeConversationId;
+        const prevState = get();
+        const currentActive = prevState.activeConversationId;
         const firstConvId =
           currentActive && parsed.conversations[currentActive]
             ? currentActive
             : parsed.conversationOrder[0] || null;
+
+        const mergedMessagesByConv: Record<string, V1Message[]> = {};
+        for (const convId of Object.keys(parsed.conversations)) {
+          const incoming = parsed.messagesByConv[convId] || [];
+          const existing =
+            prevState.currentUser?.id === parsed.currentUser.id
+              ? prevState.messagesByConv[convId] || []
+              : [];
+          mergedMessagesByConv[convId] = incoming.length > 0 ? incoming : existing;
+        }
+
         set({
           authStatus: "authenticated",
           workspaceAvailability: "ready",
@@ -993,13 +1346,17 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           members: parsed.members,
           conversations: parsed.conversations,
           conversationOrder: parsed.conversationOrder,
-          messagesByConv: parsed.messagesByConv,
+          pinnedConversationIds,
+          userPreferences,
+          messagesByConv: mergedMessagesByConv,
           activeConversationId: firstConvId,
           drafts,
           scrollTops,
         });
 
-        connectWorkspaceRealtime(activeCursor);
+        saveBootstrapShellCache(get());
+        connectWorkspaceRealtime(parsed.eventCursor);
+        void setWorkspaceSyncCursor(parsed.eventCursor);
 
         if (firstConvId) {
           void get().loadConversationMessages(firstConvId);
@@ -1008,6 +1365,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         teardownWorkspaceSocket();
         if (err instanceof ApiClientError) {
           if (err.code === "workspace.disabled") {
+            clearBootstrapShellCache();
             set({
               authStatus: "unauthenticated",
               workspaceAvailability: "disabled",
@@ -1017,6 +1375,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             return;
           }
           if (err.code === "auth.required" || err.status === 401) {
+            clearBootstrapShellCache();
             set({
               authStatus: "unauthenticated",
               workspaceAvailability: "ready",
@@ -1059,6 +1418,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     },
 
     logout: async () => {
+      clearBootstrapShellCache();
       teardownWorkspaceSocket();
       await apiV1.logout().catch(() => {});
       if (typeof window !== "undefined" && window.location?.pathname?.startsWith("/workspace")) {
@@ -1069,6 +1429,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         currentUser: null,
         conversations: {},
         conversationOrder: [],
+        pinnedConversationIds: [],
+        userPreferences: {},
         messagesByConv: {},
         activeConversationId: null,
       });
@@ -1092,6 +1454,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             [conversationId]: mapped,
           },
         }));
+        if (get().activeConversationId === conversationId) {
+          saveBootstrapShellCache(get());
+        }
       } catch {
         // Keep existing cached messages
       }
@@ -1315,6 +1680,265 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       } else {
         await apiV1.pinMessage(conversationId, messageId);
       }
+    },
+
+    togglePinConversation: async (conversationId) => {
+      const state = get();
+      const conv = state.conversations[conversationId];
+      if (!conv || conv.kind === "saved") return;
+      const isPinned = state.pinnedConversationIds.includes(conversationId);
+      const nextPinned = isPinned
+        ? state.pinnedConversationIds.filter((id) => id !== conversationId)
+        : [conversationId, ...state.pinnedConversationIds];
+      const nextPrefs = {
+        ...state.userPreferences,
+        pinnedConversationIds: nextPinned,
+      };
+      set({
+        pinnedConversationIds: nextPinned,
+        userPreferences: nextPrefs,
+      });
+      if (!state.isPreviewMode) {
+        await apiV1.savePreferences(nextPrefs).catch(() => {});
+      }
+    },
+
+    createGroup: async (title, memberIds, avatar) => {
+      const trimmedTitle = title.trim();
+      const peers = Array.from(new Set(memberIds.filter(Boolean)));
+      if (!trimmedTitle || peers.length === 0) return null;
+
+      if (get().isPreviewMode) {
+        const newId = `conv_grp_${crypto.randomUUID().slice(0, 8)}`;
+        const meId = get().currentUser?.id || "usr_owner_1";
+        const allMembers = Array.from(new Set([meId, ...peers]));
+        const avatarSplit = avatar
+          ? splitConversationAvatar("group", { avatarEmoji: avatar }, get().members, allMembers, meId)
+          : {};
+        set((s) => ({
+          conversations: {
+            ...s.conversations,
+            [newId]: {
+              id: newId,
+              kind: "group",
+              title: trimmedTitle,
+              avatarUrl: avatarSplit.avatarUrl,
+              avatarEmoji: avatarSplit.avatarEmoji,
+              unreadCount: 0,
+              mentionCount: 0,
+              pinnedMessageIds: [],
+              memberIds: allMembers,
+              lastMessageText: `${s.currentUser?.displayName || "我"} 创建了群聊「${trimmedTitle}」`,
+              lastMessageAt: new Date().toISOString(),
+            },
+          },
+          conversationOrder: [newId, ...s.conversationOrder],
+          messagesByConv: {
+            ...s.messagesByConv,
+            [newId]: [],
+          },
+          activeConversationId: newId,
+        }));
+        return newId;
+      }
+
+      const res = await apiV1.createGroupConversation(trimmedTitle, peers, avatar);
+      const convObj = (res.conversation || res) as Record<string, unknown>;
+      const newId = String(convObj.id || "");
+      if (!newId) {
+        await get().bootstrapWorkspace();
+        return null;
+      }
+      set((s) => {
+        const nextMembers = { ...s.members };
+        const parsedMemberIds = Array.isArray(convObj.members)
+          ? (convObj.members as Array<Record<string, unknown>>)
+              .map((m) => upsertRawMemberRecord(nextMembers, m))
+              .filter(Boolean)
+          : Array.isArray(convObj.memberIds)
+          ? convObj.memberIds.map(String).filter(Boolean)
+          : Array.from(new Set([s.currentUser?.id || "", ...peers])).filter(Boolean);
+        const avatarSplit = splitConversationAvatar(
+          "group",
+          convObj,
+          nextMembers,
+          parsedMemberIds,
+          s.currentUser?.id
+        );
+        const nextConv: V1Conversation = {
+          id: newId,
+          kind: "group",
+          title: String(convObj.title || trimmedTitle),
+          avatarUrl: avatarSplit.avatarUrl,
+          avatarEmoji: avatarSplit.avatarEmoji,
+          unreadCount: 0,
+          mentionCount: 0,
+          pinnedMessageIds: [],
+          memberIds: parsedMemberIds,
+          lastMessageAt: String(convObj.createdAt || new Date().toISOString()),
+        };
+        const exists = s.conversationOrder.includes(newId);
+        return {
+          members: nextMembers,
+          conversations: { ...s.conversations, [newId]: nextConv },
+          conversationOrder: exists ? s.conversationOrder : [newId, ...s.conversationOrder],
+          activeConversationId: newId,
+        };
+      });
+      void get().loadConversationMessages(newId);
+      return newId;
+    },
+
+    updateGroupProfile: async (conversationId, patch) => {
+      const state = get();
+      const prevConv = state.conversations[conversationId];
+      if (!prevConv || prevConv.kind !== "group") return;
+
+      const optimisticTitle =
+        patch.title !== undefined ? patch.title.trim() || prevConv.title : prevConv.title;
+      const optimisticAvatar =
+        patch.avatar !== undefined
+          ? patch.avatar
+            ? splitConversationAvatar(
+                "group",
+                { avatarEmoji: patch.avatar },
+                state.members,
+                prevConv.memberIds,
+                state.currentUser?.id
+              )
+            : { avatarUrl: undefined, avatarEmoji: undefined }
+          : { avatarUrl: prevConv.avatarUrl, avatarEmoji: prevConv.avatarEmoji };
+
+      set((s) => ({
+        conversations: {
+          ...s.conversations,
+          [conversationId]: {
+            ...prevConv,
+            title: optimisticTitle,
+            avatarUrl: optimisticAvatar.avatarUrl,
+            avatarEmoji: optimisticAvatar.avatarEmoji,
+          },
+        },
+      }));
+
+      if (state.isPreviewMode) return;
+
+      const res = await apiV1.updateGroupConversation(conversationId, patch);
+      const convObj = res.conversation;
+      if (convObj && typeof convObj === "object") {
+        set((s) => {
+          const current = s.conversations[conversationId] || prevConv;
+          const nextMembers = { ...s.members };
+          const parsedMemberIds = Array.isArray(convObj.members)
+            ? (convObj.members as Array<Record<string, unknown>>)
+                .map((m) => upsertRawMemberRecord(nextMembers, m))
+                .filter(Boolean)
+            : current.memberIds;
+          const serverAvatar = splitConversationAvatar(
+            "group",
+            convObj,
+            nextMembers,
+            parsedMemberIds,
+            s.currentUser?.id
+          );
+          return {
+            members: nextMembers,
+            conversations: {
+              ...s.conversations,
+              [conversationId]: {
+                ...current,
+                title: String(convObj.title || optimisticTitle),
+                avatarUrl: serverAvatar.avatarUrl,
+                avatarEmoji: serverAvatar.avatarEmoji,
+                memberIds: parsedMemberIds,
+              },
+            },
+          };
+        });
+      }
+      void get().loadConversationMessages(conversationId);
+    },
+
+    uploadGroupAvatar: async (conversationId, file) => {
+      if (get().isPreviewMode) {
+        const blobUrl = URL.createObjectURL(file);
+        await get().updateGroupProfile(conversationId, { avatar: blobUrl });
+        return;
+      }
+      const uploaded = await apiV1.uploadWorkspaceFile(conversationId, file);
+      if (typeof uploaded.usedToday === "number") {
+        set({ quotaUsedBytes: uploaded.usedToday });
+      }
+      await get().updateGroupProfile(conversationId, { avatar: uploaded.previewUrl });
+    },
+
+    inviteGroupMembers: async (conversationId, userIds) => {
+      const cleaned = Array.from(new Set(userIds.filter(Boolean)));
+      if (cleaned.length === 0) return;
+      const state = get();
+      const prevConv = state.conversations[conversationId];
+      if (!prevConv || prevConv.kind !== "group") return;
+
+      const mergedIds = Array.from(new Set([...prevConv.memberIds, ...cleaned]));
+      set((s) => ({
+        conversations: {
+          ...s.conversations,
+          [conversationId]: {
+            ...prevConv,
+            memberIds: mergedIds,
+          },
+        },
+      }));
+
+      if (state.isPreviewMode) return;
+
+      const res = await apiV1.addGroupMembers(conversationId, cleaned);
+      const convObj = res.conversation;
+      if (convObj && typeof convObj === "object") {
+        set((s) => {
+          const current = s.conversations[conversationId] || prevConv;
+          const nextMembers = { ...s.members };
+          const parsedMemberIds = Array.isArray(convObj.members)
+            ? (convObj.members as Array<Record<string, unknown>>)
+                .map((m) => upsertRawMemberRecord(nextMembers, m))
+                .filter(Boolean)
+            : mergedIds;
+          return {
+            members: nextMembers,
+            conversations: {
+              ...s.conversations,
+              [conversationId]: {
+                ...current,
+                memberIds: parsedMemberIds,
+              },
+            },
+          };
+        });
+      }
+      void get().loadConversationMessages(conversationId);
+    },
+
+    leaveGroup: async (conversationId) => {
+      const state = get();
+      const prevConv = state.conversations[conversationId];
+      if (!prevConv || prevConv.kind !== "group") return;
+
+      if (!state.isPreviewMode) {
+        await apiV1.leaveGroupConversation(conversationId);
+      }
+
+      set((s) => {
+        const nextConversations = { ...s.conversations };
+        delete nextConversations[conversationId];
+        const nextOrder = s.conversationOrder.filter((id) => id !== conversationId);
+        return {
+          conversations: nextConversations,
+          conversationOrder: nextOrder,
+          pinnedConversationIds: s.pinnedConversationIds.filter((id) => id !== conversationId),
+          activeConversationId:
+            s.activeConversationId === conversationId ? nextOrder[0] || null : s.activeConversationId,
+        };
+      });
     },
 
     forwardMessage: async (messageIds, targetConversationId) => {

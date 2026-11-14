@@ -6,6 +6,7 @@ export type AvatarKind = "human" | "group" | "bot" | "saved";
 export function Avatar({
   name,
   src,
+  emoji,
   kind = "human",
   size = "md",
   online,
@@ -13,14 +14,17 @@ export function Avatar({
 }: {
   name: string;
   src?: string | null;
+  emoji?: string | null;
   kind?: AvatarKind;
   size?: "sm" | "md" | "lg";
   online?: boolean;
   className?: string;
 }) {
   const sizeClass = size === "sm" ? "size-8 text-[12px]" : size === "lg" ? "size-12 text-[16px]" : "size-10 text-[14px]";
+  const emojiSizeClass = size === "sm" ? "text-[16px]" : size === "lg" ? "text-[24px]" : "text-[19px]";
   const shapeClass = kind === "human" || kind === "saved" ? "rounded-full" : "rounded-entity";
   const initial = (name.trim().slice(0, 1) || "?").toUpperCase();
+  const cleanEmoji = emoji?.trim();
 
   return (
     <span className={cn("relative inline-flex shrink-0 items-center justify-center select-none", sizeClass, className)}>
@@ -34,6 +38,16 @@ export function Avatar({
           alt={name}
           className={cn("size-full object-cover border border-line", shapeClass)}
         />
+      ) : cleanEmoji ? (
+        <span
+          className={cn(
+            "flex size-full items-center justify-center border border-line bg-soft leading-none",
+            emojiSizeClass,
+            shapeClass
+          )}
+        >
+          {cleanEmoji}
+        </span>
       ) : (
         <span
           className={cn(

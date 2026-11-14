@@ -93,14 +93,21 @@ export function WorkbenchV1() {
                   { value: "dark", label: "深色" }
                 ]}
               />
-              <Select
-                label="主题强调色"
+              <SegmentedControl<AccentId>
+                label="主题色"
                 value={accent}
-                onValueChange={(v) => setAccent(v as AccentId)}
-                className="w-32"
+                onValueChange={setAccent}
                 options={ACCENT_IDS.map((id) => ({
                   value: id,
-                  label: DESIGN_TOKENS.accents[id].label
+                  label: DESIGN_TOKENS.accents[id].label,
+                  icon: (
+                    <span
+                      data-testid={`theme-swatch-${id}`}
+                      aria-hidden="true"
+                      className="size-2.5 shrink-0 rounded-full ring-1 ring-black/15 dark:ring-white/20"
+                      style={{ backgroundColor: DESIGN_TOKENS.accents[id].swatch }}
+                    />
+                  )
                 }))}
               />
             </div>
