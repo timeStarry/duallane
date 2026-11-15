@@ -27,9 +27,15 @@ Or via the standard **Stdio MCP Server** (`duallane-agent mcp`):
 
 ### Path B — Direct HTTP Handshake (Universal Fallback — Works Anywhere with `curl` / `fetch` / Python)
 
-If `@duallane/agent-sdk` is not installed locally, run the 3-step Setup Session handshake directly against `<origin>`:
+If `@duallane/agent-sdk` is not installed locally, run the Setup Session handshake directly against `<origin>`:
 
-1. **Register your pairing request** (unauthenticated, strict field allowlist):
+1. **Check status first (supports pre-approved sessions)**:
+   ```http
+   GET <origin>/api/bot-gateway/v1/setup/status?setupSessionId=setup_<id>
+   ```
+   If `setup.status === "approved"`, skip directly to Step 3 (`exchange`).
+
+2. **Otherwise register your pairing request** (unauthenticated, strict field allowlist):
    ```http
    POST <origin>/api/bot-gateway/v1/setup/request
    Content-Type: application/json
@@ -52,14 +58,7 @@ If `@duallane/agent-sdk` is not installed locally, run the 3-step Setup Session 
    ```
    *(Do not add unlisted JSON keys; the gateway enforces a strict field allowlist.)*
 
-2. **Ask the user to approve in Browser**:
-   Direct the user to `<origin>/workspace?setup=setup_<id>` (or the Bots tab in DualLane Settings) and poll:
-   ```http
-   GET <origin>/api/bot-gateway/v1/setup/status?setupSessionId=setup_<id>
-   ```
-   until `setup.status === "approved"` (stop if `"denied"` or `"expired"`).
-
-3. **Exchange once & store outside LLM context**:
+3. **Ask the user to approve in Browser (if not yet approved)**, then **exchange once & store outside LLM context**:
    Execute a local script/command that posts to `/api/bot-gateway/v1/setup/exchange` and writes the response directly to `~/.config/duallane/agents/default.json` with `0600` permissions **without printing `.token` to stdout**:
    ```http
    POST <origin>/api/bot-gateway/v1/setup/exchange

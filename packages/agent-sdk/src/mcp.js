@@ -243,13 +243,20 @@ export function createDualLaneMcpServer(options = {}) {
             : [...DEFAULT_SETUP_SCOPES];
 
         const setupClient = new DualLaneAgentSetupClient({ url: target.origin, fetch: fetchImpl });
-        const response = await setupClient.request(target.setupSessionId, {
-          requestedScopes,
-          clientName,
-          clientVersion: DUALLANE_AGENT_SDK_VERSION,
-          protocolVersion: "v1",
-          capabilities: ["mcp", "websocket", "cards", "stream_edit"],
-        });
+        const initialCheck = await setupClient.status(target.setupSessionId).catch(() => null);
+        const initialSession = initialCheck?.setup || initialCheck?.session || null;
+        const initialStatus = initialSession ? String(initialSession.status || "") : "";
+
+        let response = initialCheck;
+        if (initialStatus !== "approved") {
+          response = await setupClient.request(target.setupSessionId, {
+            requestedScopes,
+            clientName,
+            clientVersion: DUALLANE_AGENT_SDK_VERSION,
+            protocolVersion: "v1",
+            capabilities: ["mcp", "websocket", "cards", "stream_edit"],
+          });
+        }
 
         savePendingSetup(
           profileName,
@@ -263,14 +270,18 @@ export function createDualLaneMcpServer(options = {}) {
           { configDir }
         );
 
+        const resolvedStatus = response?.session?.status || response?.setup?.status || "pending_approval";
         return {
-          status: response?.session?.status || response?.setup?.status || "pending_approval",
+          status: resolvedStatus,
           profile: profileName,
           origin: target.origin,
           setupSessionId: target.setupSessionId,
           approvalUrl: target.approvalUrl,
           requestedScopes,
-          nextStep: `Ask the user to open ${target.approvalUrl} (or approve directly in DualLane Settings -> Bots), then call duallane_setup_finish.`,
+          nextStep:
+            resolvedStatus === "approved"
+              ? "Session is already approved! Call duallane_setup_finish immediately to complete credential exchange."
+              : `Ask the user to open ${target.approvalUrl} (or approve directly in DualLane Settings -> Bots), then call duallane_setup_finish.`,
         };
       }
 

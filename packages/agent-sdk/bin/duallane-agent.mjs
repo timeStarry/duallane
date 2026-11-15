@@ -74,20 +74,28 @@ async function runSetup(positionals, flags) {
     : [...DEFAULT_SETUP_SCOPES];
 
   const setupClient = new DualLaneAgentSetupClient({ url: target.origin });
-  await setupClient.request(target.setupSessionId, {
-    requestedScopes: scopes,
-    clientName,
-    clientVersion: DUALLANE_AGENT_SDK_VERSION,
-    protocolVersion: "v1",
-    capabilities: ["cli", "mcp", "websocket", "cards", "stream_edit"],
-  });
+  const initialCheck = await setupClient.status(target.setupSessionId).catch(() => null);
+  const initialSession = initialCheck?.setup || initialCheck?.session || null;
+  const initialStatus = initialSession ? String(initialSession.status || "") : "";
 
-  process.stderr.write(`\n[DualLane] Pairing request submitted as "${clientName}".\n`);
-  process.stderr.write(`[DualLane] Approve in DualLane Settings -> Bots or open:\n  ${target.approvalUrl}\n\n`);
+  if (initialStatus !== "approved") {
+    await setupClient.request(target.setupSessionId, {
+      requestedScopes: scopes,
+      clientName,
+      clientVersion: DUALLANE_AGENT_SDK_VERSION,
+      protocolVersion: "v1",
+      capabilities: ["cli", "mcp", "websocket", "cards", "stream_edit"],
+    });
 
-  if (flags["no-wait"]) {
-    process.stdout.write(JSON.stringify({ status: "pending_approval", profile, approvalUrl: target.approvalUrl }, null, 2) + "\n");
-    return;
+    process.stderr.write(`\n[DualLane] Pairing request submitted as "${clientName}".\n`);
+    process.stderr.write(`[DualLane] Approve in DualLane Settings -> Bots or open:\n  ${target.approvalUrl}\n\n`);
+
+    if (flags["no-wait"]) {
+      process.stdout.write(JSON.stringify({ status: "pending_approval", profile, approvalUrl: target.approvalUrl }, null, 2) + "\n");
+      return;
+    }
+  } else {
+    process.stderr.write(`\n[DualLane] Setup session is already pre-approved — exchanging credentials now...\n`);
   }
 
   const waitSeconds = Math.min(300, Math.max(5, Number(flags.wait || 180)));
