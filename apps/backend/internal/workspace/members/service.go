@@ -826,7 +826,7 @@ func sanitizeAvatarURL(value string) string {
 	if candidate == "" || strings.Contains(candidate, "..") {
 		return ""
 	}
-	if strings.HasPrefix(candidate, "/assets/") || strings.HasPrefix(candidate, "/api/workspace/avatars/") || strings.HasPrefix(candidate, "https://avatars.githubusercontent.com/") {
+	if strings.HasPrefix(candidate, "/assets/") || strings.HasPrefix(candidate, "/api/workspace/avatars/") || strings.HasPrefix(candidate, "/api/v1/bots/") || strings.HasPrefix(candidate, "https://avatars.githubusercontent.com/") {
 		return candidate
 	}
 	return ""

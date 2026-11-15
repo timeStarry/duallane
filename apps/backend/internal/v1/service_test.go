@@ -15,12 +15,19 @@ import (
 )
 
 type stubRepo struct {
-	commands      []BotCommand
-	savedID       string
-	group         GroupConversationSummary
-	editedActorID string
-	editedMsgID   string
-	editedText    string
+	commands       []BotCommand
+	savedID        string
+	group          GroupConversationSummary
+	editedActorID  string
+	editedMsgID    string
+	editedText     string
+	lastReadConvID string
+	typingConvID   string
+	typingKind     string
+	typingState    string
+	botProfile     BotProfileResult
+	botAvatar      BotAvatarPayload
+	unboundTokenID string
 }
 
 func (s *stubRepo) GetBootstrap(_ context.Context, actorID string, _ time.Time) (V1BootstrapResponse, error) {
@@ -89,6 +96,29 @@ func (s *stubRepo) AddGroupMembers(_ context.Context, _, convID string, userIDs 
 func (s *stubRepo) LeaveGroupConversation(_ context.Context, _, _ string, _ time.Time) error {
 	return nil
 }
+func (s *stubRepo) RemoveGroupMember(_ context.Context, _, convID, targetUserID string, _ time.Time) (GroupConversationSummary, error) {
+	if s.group.ID == "" {
+		s.group = GroupConversationSummary{ID: convID, Type: "group", Title: "默认群聊"}
+	}
+	next := make([]string, 0, len(s.group.MemberIDs))
+	for _, id := range s.group.MemberIDs {
+		if id != targetUserID {
+			next = append(next, id)
+		}
+	}
+	s.group.MemberIDs = next
+	return s.group, nil
+}
+func (s *stubRepo) MarkConversationRead(_ context.Context, _, convID string, now time.Time) (string, error) {
+	s.lastReadConvID = convID
+	return now.UTC().Format(time.RFC3339Nano), nil
+}
+func (s *stubRepo) SendConversationTyping(_ context.Context, _, convID, kind, state string, now time.Time) (string, error) {
+	s.typingConvID = convID
+	s.typingKind = kind
+	s.typingState = state
+	return now.UTC().Add(5 * time.Second).Format(time.RFC3339Nano), nil
+}
 func (s *stubRepo) EditMessage(_ context.Context, actorID, msgID, text string, _ time.Time) error {
 	s.editedActorID = actorID
 	s.editedMsgID = msgID
@@ -129,7 +159,7 @@ func (s *stubRepo) RegisterBotCommands(_ context.Context, _, _ string, commands 
 	s.commands = commands
 	return nil
 }
-func (s *stubRepo) ListBotCommands(_ context.Context, _ string) ([]BotCommand, error) {
+func (s *stubRepo) ListBotCommands(_ context.Context, _, _ string) ([]BotCommand, error) {
 	return s.commands, nil
 }
 func (s *stubRepo) ListBotCommandsByBot(_ context.Context, _, _ string) ([]BotCommand, error) {
@@ -137,6 +167,40 @@ func (s *stubRepo) ListBotCommandsByBot(_ context.Context, _, _ string) ([]BotCo
 }
 func (s *stubRepo) CreateMultiBot(_ context.Context, _, _ string, _ time.Time) (string, error) {
 	return "bot_multi_1", nil
+}
+func (s *stubRepo) UpdateBotProfile(_ context.Context, _, botID string, input BotProfileUpdateInput, _ time.Time) (BotProfileResult, error) {
+	s.botProfile.BotID = botID
+	s.botProfile.BotUserID = "usr_" + botID
+	if input.NameSet && input.Name != nil {
+		s.botProfile.Name = *input.Name
+	}
+	if input.DescriptionSet && input.Description != nil {
+		s.botProfile.Description = *input.Description
+	}
+	return s.botProfile, nil
+}
+func (s *stubRepo) UploadBotAvatar(_ context.Context, _, botID, mimeType string, data []byte, _ time.Time) (BotProfileResult, error) {
+	s.botAvatar = BotAvatarPayload{MIMEType: mimeType, Data: append([]byte(nil), data...)}
+	s.botProfile.BotID = botID
+	s.botProfile.BotUserID = "usr_" + botID
+	s.botProfile.AvatarURL = "/api/v1/bots/" + botID + "/avatar?v=1"
+	return s.botProfile, nil
+}
+func (s *stubRepo) DeleteBotAvatar(_ context.Context, _, botID string, _ time.Time) (BotProfileResult, error) {
+	s.botAvatar = BotAvatarPayload{}
+	s.botProfile.BotID = botID
+	s.botProfile.AvatarURL = ""
+	return s.botProfile, nil
+}
+func (s *stubRepo) GetBotAvatar(_ context.Context, _, _ string) (BotAvatarPayload, error) {
+	if len(s.botAvatar.Data) == 0 {
+		return BotAvatarPayload{}, ErrNotFound
+	}
+	return s.botAvatar, nil
+}
+func (s *stubRepo) UnbindBotToken(_ context.Context, _, tokenID string, _ time.Time) error {
+	s.unboundTokenID = tokenID
+	return nil
 }
 func (s *stubRepo) UpsertBotWebhook(_ context.Context, _, botID, url, _ string, enabled bool, _ time.Time) (BotWebhookConfig, error) {
 	return BotWebhookConfig{BotID: botID, URL: url, Enabled: enabled}, nil
@@ -478,5 +542,87 @@ func TestBotGatewayV2ConversationsAndMessageEdit(t *testing.T) {
 	roRouter.ServeHTTP(roRec, roReq)
 	if roRec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 without messages:send scope, got %d: %s", roRec.Code, roRec.Body.String())
+	}
+
+	// 5. Bot typing & self-unbind endpoints
+	typingReq := httptest.NewRequest(http.MethodPost, "/api/bot/v2/typing", bytes.NewBufferString(`{"conversationId":"conv_dm_bot_1","state":"thinking"}`))
+	typingReq.Header.Set("Authorization", "Bearer "+validToken)
+	typingRec := httptest.NewRecorder()
+	r.ServeHTTP(typingRec, typingReq)
+	if typingRec.Code != http.StatusOK || repo.typingConvID != "conv_dm_bot_1" || repo.typingKind != "bot" || repo.typingState != "thinking" {
+		t.Fatalf("expected 200 on /api/bot/v2/typing, got %d state=%+v", typingRec.Code, repo)
+	}
+
+	unbindReq := httptest.NewRequest(http.MethodPost, "/api/bot/v2/unbind", nil)
+	unbindReq.Header.Set("Authorization", "Bearer "+validToken)
+	unbindRec := httptest.NewRecorder()
+	r.ServeHTTP(unbindRec, unbindReq)
+	if unbindRec.Code != http.StatusOK || repo.unboundTokenID != "btk_1" {
+		t.Fatalf("expected 200 on /api/bot/v2/unbind, got %d token=%q", unbindRec.Code, repo.unboundTokenID)
+	}
+}
+
+func TestReadReceiptTypingBotProfileAndGroupRemoveRoutes(t *testing.T) {
+	repo := &stubRepo{}
+	svc := NewService(repo)
+	r := chi.NewRouter()
+	h := NewHTTPHandler(svc, stubActorResolver{
+		actor: &auth.Actor{ID: "usr_owner_1", Role: "owner", DisplayName: "Owner"},
+	})
+	h.Mount(r)
+
+	// 1. Mark read + human typing
+	readReq := httptest.NewRequest(http.MethodPost, "/api/v1/conversations/conv_dm_1/read", nil)
+	readRec := httptest.NewRecorder()
+	r.ServeHTTP(readRec, readReq)
+	if readRec.Code != http.StatusOK || repo.lastReadConvID != "conv_dm_1" {
+		t.Fatalf("expected 200 on mark read, got %d (%s)", readRec.Code, readRec.Body.String())
+	}
+
+	typReq := httptest.NewRequest(http.MethodPost, "/api/v1/conversations/conv_dm_1/typing", bytes.NewBufferString(`{"state":"typing"}`))
+	typRec := httptest.NewRecorder()
+	r.ServeHTTP(typRec, typReq)
+	if typRec.Code != http.StatusOK || repo.typingConvID != "conv_dm_1" || repo.typingKind != "human" {
+		t.Fatalf("expected 200 on human typing, got %d (%s)", typRec.Code, typRec.Body.String())
+	}
+
+	// 2. Update bot profile, upload/get/delete bot avatar
+	profReq := httptest.NewRequest(http.MethodPatch, "/api/v1/bots/bot_astra/profile", bytes.NewBufferString(`{"name":"Astra Pro","description":"全栈协作智能体"}`))
+	profRec := httptest.NewRecorder()
+	r.ServeHTTP(profRec, profReq)
+	if profRec.Code != http.StatusOK || repo.botProfile.Name != "Astra Pro" || repo.botProfile.Description != "全栈协作智能体" {
+		t.Fatalf("expected 200 on bot profile patch, got %d (%s)", profRec.Code, profRec.Body.String())
+	}
+
+	pngHeader := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0x00, 0x01}
+	avaPut := httptest.NewRequest(http.MethodPut, "/api/v1/bots/bot_astra/avatar", bytes.NewReader(pngHeader))
+	avaPut.Header.Set("Content-Type", "image/png")
+	avaPutRec := httptest.NewRecorder()
+	r.ServeHTTP(avaPutRec, avaPut)
+	if avaPutRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on bot avatar upload, got %d (%s)", avaPutRec.Code, avaPutRec.Body.String())
+	}
+
+	avaGet := httptest.NewRequest(http.MethodGet, "/api/v1/bots/bot_astra/avatar", nil)
+	avaGetRec := httptest.NewRecorder()
+	r.ServeHTTP(avaGetRec, avaGet)
+	if avaGetRec.Code != http.StatusOK || avaGetRec.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("expected 200 image/png on bot avatar get, got %d", avaGetRec.Code)
+	}
+
+	avaDel := httptest.NewRequest(http.MethodDelete, "/api/v1/bots/bot_astra/avatar", nil)
+	avaDelRec := httptest.NewRecorder()
+	r.ServeHTTP(avaDelRec, avaDel)
+	if avaDelRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on bot avatar delete, got %d", avaDelRec.Code)
+	}
+
+	// 3. Remove bot member from group
+	repo.group = GroupConversationSummary{ID: "conv_grp_bot", Type: "group", Title: "研发群", MemberIDs: []string{"usr_owner_1", "usr_bot_astra"}}
+	remReq := httptest.NewRequest(http.MethodDelete, "/api/v1/conversations/conv_grp_bot/members/usr_bot_astra", nil)
+	remRec := httptest.NewRecorder()
+	r.ServeHTTP(remRec, remReq)
+	if remRec.Code != http.StatusOK || len(repo.group.MemberIDs) != 1 {
+		t.Fatalf("expected 200 on group member remove, got %d (%s)", remRec.Code, remRec.Body.String())
 	}
 }

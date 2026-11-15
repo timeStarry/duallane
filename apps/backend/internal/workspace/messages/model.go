@@ -581,6 +581,9 @@ func sanitizeMessageAvatar(value string) string {
 	if strings.HasPrefix(value, "/api/workspace/avatars/") && !strings.Contains(value, "..") {
 		return value
 	}
+	if strings.HasPrefix(value, "/api/v1/bots/") && !strings.Contains(value, "..") {
+		return value
+	}
 	if strings.HasPrefix(value, "https://avatars.githubusercontent.com/") {
 		return value
 	}

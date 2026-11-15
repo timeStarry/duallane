@@ -355,6 +355,125 @@ function EmotePackShareCard({
   );
 }
 
+function CopyCodeSnippetButton({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      aria-label={copied ? "已复制代码" : "复制代码"}
+      className="h-5 gap-1 px-1.5 text-[10px] text-white/80 hover:bg-white/15 hover:text-white"
+      onClick={() => {
+        void navigator?.clipboard?.writeText?.(code).catch(() => {});
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1600);
+      }}
+    >
+      {copied ? <Check className="size-2.5" /> : <Copy className="size-2.5" />}
+      <span>{copied ? "已复制" : "复制"}</span>
+    </Button>
+  );
+}
+
+const FENCED_CODE_RE = /```([a-zA-Z0-9_+-]*)\n?([\s\S]*?)```/gu;
+const INLINE_TOKEN_RE = /(`[^`\n]+`|@所有人)/gu;
+
+function renderInlineRichTokens(segment: string): React.ReactNode {
+  if (!segment.includes("`") && !segment.includes("@所有人")) {
+    return renderMessageParts(segment);
+  }
+  const nodes: React.ReactNode[] = [];
+  let lastIdx = 0;
+  INLINE_TOKEN_RE.lastIndex = 0;
+  let match = INLINE_TOKEN_RE.exec(segment);
+  while (match) {
+    if (match.index > lastIdx) {
+      nodes.push(
+        <React.Fragment key={`t_${lastIdx}`}>
+          {renderMessageParts(segment.slice(lastIdx, match.index))}
+        </React.Fragment>
+      );
+    }
+    const token = match[0];
+    if (token === "@所有人") {
+      nodes.push(
+        <span
+          key={`all_${match.index}`}
+          className="mx-0.5 inline-flex items-center rounded-md bg-black/14 px-1.5 py-0.5 text-[13px] font-semibold"
+        >
+          @所有人
+        </span>
+      );
+    } else {
+      nodes.push(
+        <code
+          key={`ic_${match.index}`}
+          className="mx-0.5 rounded-md bg-black/14 px-1.5 py-0.5 font-mono text-[12px]"
+        >
+          {token.slice(1, -1)}
+        </code>
+      );
+    }
+    lastIdx = match.index + token.length;
+    match = INLINE_TOKEN_RE.exec(segment);
+  }
+  if (lastIdx < segment.length) {
+    nodes.push(
+      <React.Fragment key={`tail_${lastIdx}`}>
+        {renderMessageParts(segment.slice(lastIdx))}
+      </React.Fragment>
+    );
+  }
+  return nodes;
+}
+
+function renderFormattedTextSegment(text: string): React.ReactNode {
+  if (!text) return null;
+  if (!text.includes("```")) {
+    return renderInlineRichTokens(text);
+  }
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  FENCED_CODE_RE.lastIndex = 0;
+  let match = FENCED_CODE_RE.exec(text);
+  while (match) {
+    if (match.index > lastIndex) {
+      parts.push(
+        <React.Fragment key={`pre_${lastIndex}`}>
+          {renderInlineRichTokens(text.slice(lastIndex, match.index))}
+        </React.Fragment>
+      );
+    }
+    const lang = (match[1] || "code").trim();
+    const codeBody = (match[2] || "").replace(/\n$/, "");
+    parts.push(
+      <div
+        key={`cb_${match.index}`}
+        className="my-1.5 overflow-hidden rounded-xl border border-white/10 bg-[#0f172a] text-slate-100 shadow-xs"
+      >
+        <div className="flex items-center justify-between border-b border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-mono text-slate-300">
+          <span>{lang}</span>
+          <CopyCodeSnippetButton code={codeBody} />
+        </div>
+        <pre className="dl-scroll overflow-x-auto p-2.5 font-mono text-[12px] leading-relaxed whitespace-pre">
+          <code>{codeBody}</code>
+        </pre>
+      </div>
+    );
+    lastIndex = match.index + match[0].length;
+    match = FENCED_CODE_RE.exec(text);
+  }
+  if (lastIndex < text.length) {
+    parts.push(
+      <React.Fragment key={`post_${lastIndex}`}>
+        {renderInlineRichTokens(text.slice(lastIndex))}
+      </React.Fragment>
+    );
+  }
+  return parts;
+}
+
 export function MessageRichContent({
   msg,
   jumbo = false,
@@ -461,15 +580,21 @@ export function MessageRichContent({
       <div className="whitespace-pre-wrap break-words">
         {msg.blocks.map((block, i) => {
           if (block.type === "text") {
-            return <React.Fragment key={i}>{renderMessageParts(block.text)}</React.Fragment>;
+            return (
+              <React.Fragment key={i}>
+                {renderFormattedTextSegment(block.text)}
+              </React.Fragment>
+            );
           }
           if (block.type === "mention") {
+            const cleanLabel = block.label.replace(/^@/, "");
             return (
               <span
                 key={i}
-                className="mx-0.5 inline-flex items-center rounded-md bg-black/10 px-1.5 py-0.5 text-[13px] font-semibold"
+                data-mention-user-id={block.userId}
+                className="mx-0.5 inline-flex items-center rounded-md bg-black/14 px-1.5 py-0.5 text-[13px] font-semibold"
               >
-                @{block.label}
+                @{cleanLabel}
               </span>
             );
           }
@@ -518,7 +643,11 @@ export function MessageRichContent({
     );
   }
 
-  return <div className="whitespace-pre-wrap break-words">{renderMessageParts(msg.plainText)}</div>;
+  return (
+    <div className="whitespace-pre-wrap break-words">
+      {renderFormattedTextSegment(msg.plainText)}
+    </div>
+  );
 }
 
 type PickerTabKey =

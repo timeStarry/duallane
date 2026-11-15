@@ -3,6 +3,7 @@ package v1
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -35,6 +36,9 @@ func sanitizeBootstrapAvatarURL(raw string) string {
 		return candidate
 	}
 	if strings.HasPrefix(candidate, "/api/workspace/avatars/") && !strings.Contains(candidate, "..") {
+		return candidate
+	}
+	if strings.HasPrefix(candidate, "/api/v1/bots/") && !strings.Contains(candidate, "..") {
 		return candidate
 	}
 	if strings.HasPrefix(candidate, "https://avatars.githubusercontent.com/") {
@@ -190,12 +194,15 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 			coalesce(u.display_name, ''),
 			coalesce(u.nickname, ''),
 			coalesce(ur.remark, ''),
-			coalesce(u.avatar_url, ''),
+			coalesce(bs_meta.description, ''),
+			coalesce(u.avatar_url, bs_meta.avatar_url, ''),
 			u.kind,
 			sm.role
 		FROM space_members sm
 		JOIN users u ON u.id = sm.user_id
 		LEFT JOIN user_remarks ur ON ur.owner_user_id = $2 AND ur.target_user_id = u.id
+		LEFT JOIN workspace_agent_bots b_meta ON b_meta.space_id = $1 AND b_meta.bot_user_id = u.id AND b_meta.status <> 'deleted'
+		LEFT JOIN workspace_agent_bot_settings bs_meta ON bs_meta.bot_id = b_meta.id AND bs_meta.space_id = $1
 		WHERE sm.space_id = $1
 			AND sm.removed_at IS NULL
 			AND (
@@ -208,8 +215,19 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 						SELECT 1 FROM workspace_agent_bots b
 						WHERE b.space_id = $1
 							AND b.bot_user_id = u.id
-							AND b.status = 'active'
-							AND (b.owner_user_id = $2 OR b.visibility_policy = 'space')
+							AND (
+								(b.owner_user_id = $2 AND b.status IN ('active', 'paused'))
+								OR (
+									b.status = 'active'
+									AND (
+										b.visibility_policy IN ('space', 'space_members', 'groups')
+										OR EXISTS (
+											SELECT 1 FROM workspace_agent_bot_visibility_members bvm
+											WHERE bvm.bot_id = b.id AND bvm.space_id = $1 AND bvm.user_id = $2
+										)
+									)
+								)
+							)
 					)
 				)
 				OR (u.kind = 'human' AND sm.role <> 'auditor' AND u.search_discoverable = TRUE)
@@ -236,14 +254,17 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 	members := make([]V1BootstrapMember, 0, 16)
 	memberByID := make(map[string]V1BootstrapMember, 16)
 	for memberRows.Next() {
-		var mID, mGitHub, mDisplay, mNick, mRemark, mAvatar, mKind, mRole string
-		if scanErr := memberRows.Scan(&mID, &mGitHub, &mDisplay, &mNick, &mRemark, &mAvatar, &mKind, &mRole); scanErr != nil {
+		var mID, mGitHub, mDisplay, mNick, mRemark, mDesc, mAvatar, mKind, mRole string
+		if scanErr := memberRows.Scan(&mID, &mGitHub, &mDisplay, &mNick, &mRemark, &mDesc, &mAvatar, &mKind, &mRole); scanErr != nil {
 			memberRows.Close()
 			return V1BootstrapResponse{}, scanErr
 		}
 		projected := projectBootstrapMember(
 			mID, mGitHub, mDisplay, mNick, mRemark, mAvatar, mKind, mRole, actorID, actorRole,
 		)
+		if mKind == "bot" && strings.TrimSpace(mDesc) != "" {
+			projected.Description = strings.TrimSpace(mDesc)
+		}
 		if mID == actorID {
 			projected.Role = actorRole
 		}
@@ -323,7 +344,22 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				CASE
 					WHEN uc.last_read_seq IS NOT NULL THEN coalesce(su.cnt, 0)
 					ELSE coalesce(tu.cnt, 0)
-				END AS unread_count
+				END AS unread_count,
+				GREATEST(
+					(SELECT MAX(cm_peer.last_read_at)
+					 FROM conversation_members cm_peer
+					 WHERE cm_peer.conversation_id = uc.id
+					   AND cm_peer.user_id <> $2
+					   AND cm_peer.removed_at IS NULL),
+					(SELECT MAX(m_peer.created_at)
+					 FROM messages m_peer
+					 WHERE m_peer.conversation_id = uc.id
+					   AND m_peer.space_id = $1
+					   AND m_peer.deleted_at IS NULL
+					   AND m_peer.kind <> 'system'
+					   AND m_peer.author_id IS NOT NULL
+					   AND m_peer.author_id <> $2)
+				) AS peer_last_read_at
 			FROM user_convs uc
 			LEFT JOIN seq_unread su ON su.conversation_id = uc.id
 			LEFT JOIN time_unread tu ON tu.conversation_id = uc.id
@@ -361,9 +397,10 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 		convIndexByID := make(map[string]int, 16)
 		for convRows.Next() {
 			var (
-				c         V1BootstrapConversation
-				lastMsgAt *time.Time
-				activity  time.Time
+				c              V1BootstrapConversation
+				lastMsgAt      *time.Time
+				activity       time.Time
+				peerLastReadAt *time.Time
 			)
 			if scanErr := convRows.Scan(
 				&c.ID,
@@ -374,6 +411,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				&lastMsgAt,
 				&activity,
 				&c.UnreadCount,
+				&peerLastReadAt,
 			); scanErr != nil {
 				convRows.Close()
 				return V1BootstrapResponse{}, scanErr
@@ -390,6 +428,10 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 			if lastMsgAt != nil && !lastMsgAt.IsZero() {
 				formatted := lastMsgAt.UTC().Format(time.RFC3339Nano)
 				c.LastMessageAt = &formatted
+			}
+			if peerLastReadAt != nil && !peerLastReadAt.IsZero() {
+				formatted := peerLastReadAt.UTC().Format(time.RFC3339Nano)
+				c.PeerLastReadAt = &formatted
 			}
 			convIndexByID[c.ID] = len(conversations)
 			convIDs = append(convIDs, c.ID)
@@ -1064,7 +1106,47 @@ func canInviteSpaceMemberTx(ctx context.Context, tx pgx.Tx, spaceID, actorID, ac
 		}
 		return GroupMemberSummary{}, err
 	}
-	if summary.Kind != "human" || summary.Role == "auditor" {
+	if summary.Role == "auditor" {
+		return GroupMemberSummary{}, fmt.Errorf("%w: 该账号不可加入群聊", ErrInvalidInput)
+	}
+	summary.AvatarURL = sanitizeBootstrapAvatarURL(summary.AvatarURL)
+	if summary.Kind == "bot" {
+		summary.Role = "member"
+		summary.GitHubLogin = ""
+		var botAllowed bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM workspace_agent_bots b
+				LEFT JOIN workspace_agent_bot_settings bs ON bs.bot_id = b.id AND bs.space_id = b.space_id
+				WHERE b.space_id = $1
+				  AND b.bot_user_id = $2
+				  AND b.status = 'active'
+				  AND (
+					b.owner_user_id = $3
+					OR (
+						b.conversation_policy = 'group-capable'
+						AND COALESCE(bs.allow_group, 1) = 1
+						AND (
+							$4 IN ('owner', 'admin')
+							OR b.visibility_policy IN ('space', 'space_members', 'groups')
+							OR EXISTS (
+								SELECT 1 FROM workspace_agent_bot_visibility_members bvm
+								WHERE bvm.bot_id = b.id AND bvm.space_id = $1 AND bvm.user_id = $3
+							)
+						)
+					)
+				  )
+			)
+		`, spaceID, targetID, actorID, actorRole).Scan(&botAllowed); err != nil {
+			return GroupMemberSummary{}, err
+		}
+		if !botAllowed {
+			return GroupMemberSummary{}, fmt.Errorf("%w: 该机器人当前不可加入群聊或尚未启用", ErrInvalidInput)
+		}
+		return summary, nil
+	}
+	if summary.Kind != "human" {
 		return GroupMemberSummary{}, fmt.Errorf("%w: 该账号不可加入群聊", ErrInvalidInput)
 	}
 	if actorRole == "owner" || actorRole == "admin" || discoverable {
@@ -1186,6 +1268,11 @@ func (r *PGRepository) CreateGroupConversation(ctx context.Context, actorID stri
 			ON CONFLICT (conversation_id, user_id) DO UPDATE SET removed_at = NULL, joined_at = EXCLUDED.joined_at
 		`, convID, inv.ID, now.UTC()); err != nil {
 			return GroupConversationSummary{}, err
+		}
+		if inv.Kind == "bot" {
+			if err := ensureBotGroupAccessTx(ctx, tx, r.spaceID, actorID, convID, inv.ID, now); err != nil {
+				return GroupConversationSummary{}, err
+			}
 		}
 	}
 
@@ -1400,6 +1487,11 @@ func (r *PGRepository) AddGroupMembers(ctx context.Context, actorID, conversatio
 		`, conversationID, member.ID, now.UTC()); err != nil {
 			return GroupConversationSummary{}, err
 		}
+		if member.Kind == "bot" {
+			if err := ensureBotGroupAccessTx(ctx, tx, r.spaceID, actorID, conversationID, member.ID, now); err != nil {
+				return GroupConversationSummary{}, err
+			}
+		}
 		addedNames = append(addedNames, member.DisplayName)
 		if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, conversationID, "conversation.member_added", "user", member.ID, map[string]any{
 			"conversationId": conversationID,
@@ -1489,6 +1581,320 @@ func (r *PGRepository) LeaveGroupConversation(ctx context.Context, actorID, conv
 	}
 
 	return tx.Commit(ctx)
+}
+
+func ensureBotGroupAccessTx(ctx context.Context, tx pgx.Tx, spaceID, actorID, conversationID, botUserID string, now time.Time) error {
+	var botID, ownerID string
+	err := tx.QueryRow(ctx, `
+		SELECT id, owner_user_id
+		FROM workspace_agent_bots
+		WHERE space_id = $1 AND bot_user_id = $2 AND status <> 'deleted'
+	`, spaceID, botUserID).Scan(&botID, &ownerID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	if ownerID == actorID {
+		if _, err := tx.Exec(ctx, `
+			UPDATE workspace_agent_bots
+			SET conversation_policy = 'group-capable', updated_at = $1
+			WHERE id = $2 AND space_id = $3
+		`, now.UTC(), botID, spaceID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE workspace_agent_bot_settings
+			SET allow_group = 1, updated_at = $1
+			WHERE bot_id = $2 AND space_id = $3
+		`, now.UTC(), botID, spaceID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO workspace_agent_bot_group_policies (
+			bot_id, space_id, conversation_id, status, invited_by, approved_by, max_context_messages, created_at, updated_at
+		)
+		VALUES ($1, $2, $3, 'active', $4, $4, 50, $5, $5)
+		ON CONFLICT (bot_id, conversation_id) DO UPDATE
+		SET status = 'active',
+		    invited_by = EXCLUDED.invited_by,
+		    approved_by = EXCLUDED.approved_by,
+		    updated_at = EXCLUDED.updated_at
+	`, botID, spaceID, conversationID, actorID, now.UTC()); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO workspace_agent_bot_context_grants (
+			grant_id, bot_id, space_id, conversation_id, allow_trigger, allow_context, max_messages, granted_by, created_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, 1, 1, 50, $5, $6, $6)
+		ON CONFLICT (bot_id, conversation_id) DO UPDATE
+		SET allow_trigger = 1,
+		    allow_context = 1,
+		    max_messages = GREATEST(COALESCE(workspace_agent_bot_context_grants.max_messages, 0), 50),
+		    granted_by = EXCLUDED.granted_by,
+		    updated_at = EXCLUDED.updated_at
+	`, randomID("bgr"), botID, spaceID, conversationID, actorID, now.UTC()); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *PGRepository) RemoveGroupMember(ctx context.Context, actorID, conversationID, targetUserID string, now time.Time) (GroupConversationSummary, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return GroupConversationSummary{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	actorRole, actorName, err := resolveHumanSpaceParticipantTx(ctx, tx, r.spaceID, actorID)
+	if err != nil {
+		return GroupConversationSummary{}, err
+	}
+
+	var convType, createdBy string
+	err = tx.QueryRow(ctx, `
+		SELECT c.type, coalesce(c.created_by, '')
+		FROM conversations c
+		JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $3 AND cm.removed_at IS NULL
+		WHERE c.space_id = $1 AND c.id = $2
+		FOR UPDATE OF c
+	`, r.spaceID, conversationID, actorID).Scan(&convType, &createdBy)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return GroupConversationSummary{}, ErrForbidden
+		}
+		return GroupConversationSummary{}, err
+	}
+	if convType != "group" {
+		return GroupConversationSummary{}, fmt.Errorf("%w: 仅群聊支持移除成员", ErrInvalidInput)
+	}
+
+	var targetKind, targetName string
+	err = tx.QueryRow(ctx, `
+		SELECT u.kind, coalesce(nullif(u.nickname, ''), nullif(u.display_name, ''), nullif(u.github_login, ''), '成员')
+		FROM conversation_members cm
+		JOIN users u ON u.id = cm.user_id
+		WHERE cm.conversation_id = $1 AND cm.user_id = $2 AND cm.removed_at IS NULL
+	`, conversationID, targetUserID).Scan(&targetKind, &targetName)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return GroupConversationSummary{}, ErrNotFound
+		}
+		return GroupConversationSummary{}, err
+	}
+
+	if targetKind != "bot" && actorRole != "owner" && actorRole != "admin" && createdBy != actorID {
+		return GroupConversationSummary{}, ErrForbidden
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE conversation_members
+		SET removed_at = $1
+		WHERE conversation_id = $2 AND user_id = $3 AND removed_at IS NULL
+	`, now.UTC(), conversationID, targetUserID); err != nil {
+		return GroupConversationSummary{}, err
+	}
+	if targetKind == "bot" {
+		_, _ = tx.Exec(ctx, `
+			UPDATE workspace_agent_bot_group_policies
+			SET status = 'revoked', updated_at = $1
+			WHERE space_id = $2 AND conversation_id = $3
+			  AND bot_id IN (SELECT id FROM workspace_agent_bots WHERE space_id = $2 AND bot_user_id = $4)
+		`, now.UTC(), r.spaceID, conversationID, targetUserID)
+	}
+
+	summary, err := loadGroupSummaryTx(ctx, tx, r.spaceID, conversationID)
+	if err != nil {
+		return GroupConversationSummary{}, err
+	}
+
+	if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, conversationID, "conversation.member_removed", "user", targetUserID, map[string]any{
+		"conversationId": conversationID,
+		"userId":         targetUserID,
+		"self":           false,
+	}, now); err != nil {
+		return GroupConversationSummary{}, err
+	}
+	if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, conversationID, "conversation.updated", "conversation", conversationID, map[string]any{
+		"conversationId": conversationID,
+		"title":          summary.Title,
+		"avatarEmoji":    summary.AvatarEmoji,
+		"conversation":   summary,
+	}, now); err != nil {
+		return GroupConversationSummary{}, err
+	}
+	if err := insertGroupSystemMessageTx(ctx, tx, r.spaceID, actorID, conversationID, fmt.Sprintf("%s 将 %s 移出了群聊", actorName, targetName), now); err != nil {
+		return GroupConversationSummary{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return GroupConversationSummary{}, err
+	}
+	return summary, nil
+}
+
+func (r *PGRepository) MarkConversationRead(ctx context.Context, actorID, conversationID string, now time.Time) (string, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var isMember bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM conversation_members cm
+			JOIN conversations c ON c.id = cm.conversation_id AND c.space_id = $1
+			WHERE cm.conversation_id = $2 AND cm.user_id = $3 AND cm.removed_at IS NULL
+		)
+	`, r.spaceID, conversationID, actorID).Scan(&isMember); err != nil {
+		return "", err
+	}
+	if !isMember {
+		return "", ErrForbidden
+	}
+
+	var messageID *string
+	var messageAt *time.Time
+	var sequence int64
+	if err := tx.QueryRow(ctx, `
+		SELECT
+			latest.id,
+			latest.created_at,
+			COALESCE(latest.event_seq, (SELECT COALESCE(MAX(seq), 0) FROM workspace_events WHERE space_id = $1))
+		FROM (VALUES (1)) anchor(one)
+		LEFT JOIN LATERAL (
+			SELECT m.id, m.created_at, we.seq AS event_seq
+			FROM messages m
+			LEFT JOIN workspace_events we
+				ON we.space_id = m.space_id
+				AND we.conversation_id = m.conversation_id
+				AND we.type = 'message.created'
+				AND we.target_id = m.id
+			WHERE m.space_id = $1 AND m.conversation_id = $2 AND m.topic_id IS NULL AND m.deleted_at IS NULL
+			ORDER BY m.created_at DESC, we.seq DESC NULLS LAST, m.id DESC
+			LIMIT 1
+		) latest ON TRUE
+	`, r.spaceID, conversationID).Scan(&messageID, &messageAt, &sequence); err != nil {
+		return "", err
+	}
+
+	readAt := now.UTC()
+	if messageAt != nil && messageAt.UTC().After(readAt) {
+		readAt = messageAt.UTC()
+	}
+
+	var msgIDArg any
+	if messageID != nil && strings.TrimSpace(*messageID) != "" {
+		msgIDArg = strings.TrimSpace(*messageID)
+	}
+	var compareTime time.Time
+	if messageAt != nil {
+		compareTime = messageAt.UTC()
+	} else {
+		compareTime = readAt
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE conversation_members
+		SET last_read_message_id = COALESCE($1, last_read_message_id),
+		    last_read_at = GREATEST(COALESCE(last_read_at, $2), $2),
+		    last_read_seq = GREATEST(COALESCE(last_read_seq, $3), $3)
+		WHERE conversation_id = $4
+		  AND user_id = $5
+		  AND removed_at IS NULL
+		  AND (
+			last_read_seq IS NULL
+			OR last_read_seq < $3
+			OR last_read_at IS NULL
+			OR last_read_at < $6
+		  )
+	`, msgIDArg, readAt, sequence, conversationID, actorID, compareTime)
+	if err != nil {
+		return "", err
+	}
+
+	readAtStr := readAt.Format(time.RFC3339Nano)
+	if tag.RowsAffected() > 0 {
+		if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, conversationID, "conversation.read", "conversation", conversationID, map[string]any{
+			"conversationId": conversationID,
+			"userId":         actorID,
+			"readAt":         readAtStr,
+		}, readAt); err != nil {
+			return "", err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return readAtStr, nil
+}
+
+func (r *PGRepository) SendConversationTyping(ctx context.Context, actorID, conversationID, kind, state string, now time.Time) (string, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var displayName, userKind string
+	err = tx.QueryRow(ctx, `
+		SELECT
+			coalesce(nullif(u.nickname, ''), nullif(u.display_name, ''), nullif(u.github_login, ''), '成员'),
+			u.kind
+		FROM conversation_members cm
+		JOIN conversations c ON c.id = cm.conversation_id AND c.space_id = $1
+		JOIN users u ON u.id = cm.user_id
+		WHERE cm.conversation_id = $2 AND cm.user_id = $3 AND cm.removed_at IS NULL
+	`, r.spaceID, conversationID, actorID).Scan(&displayName, &userKind)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrForbidden
+		}
+		return "", err
+	}
+
+	resolvedKind := "human"
+	ttl := 4500 * time.Millisecond
+	if userKind == "bot" || kind == "bot" {
+		resolvedKind = "bot"
+		ttl = 6500 * time.Millisecond
+		readAt := now.UTC()
+		readTag, readErr := tx.Exec(ctx, `
+			UPDATE conversation_members
+			SET last_read_at = GREATEST(COALESCE(last_read_at, $1), $1)
+			WHERE conversation_id = $2 AND user_id = $3 AND removed_at IS NULL
+			  AND (last_read_at IS NULL OR last_read_at < $1)
+		`, readAt, conversationID, actorID)
+		if readErr == nil && readTag.RowsAffected() > 0 {
+			_ = emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, conversationID, "conversation.read", "conversation", conversationID, map[string]any{
+				"conversationId": conversationID,
+				"userId":         actorID,
+				"readAt":         readAt.Format(time.RFC3339Nano),
+			}, readAt)
+		}
+	}
+
+	expiresAt := now.UTC().Add(ttl).Format(time.RFC3339Nano)
+	if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, conversationID, "conversation.typing", "conversation", conversationID, map[string]any{
+		"conversationId": conversationID,
+		"userId":         actorID,
+		"displayName":    displayName,
+		"kind":           resolvedKind,
+		"state":          state,
+		"expiresAt":      expiresAt,
+	}, now); err != nil {
+		return "", err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return expiresAt, nil
 }
 
 func (r *PGRepository) GetThread(ctx context.Context, actorID, rootMessageID string) (ThreadView, error) {
@@ -1817,14 +2223,28 @@ func (r *PGRepository) RegisterBotCommands(ctx context.Context, actorID, botID s
 	return tx.Commit(ctx)
 }
 
-func (r *PGRepository) ListBotCommands(ctx context.Context, conversationID string) ([]BotCommand, error) {
+func (r *PGRepository) ListBotCommands(ctx context.Context, actorID, conversationID string) ([]BotCommand, error) {
+	var isMember bool
+	if err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM conversation_members cm
+			JOIN conversations c ON c.id = cm.conversation_id AND c.space_id = $1
+			WHERE cm.conversation_id = $2 AND cm.user_id = $3 AND cm.removed_at IS NULL
+		)
+	`, r.spaceID, conversationID, actorID).Scan(&isMember); err != nil {
+		return nil, err
+	}
+	if !isMember {
+		return nil, ErrForbidden
+	}
+
 	rows, err := r.pool.Query(ctx, `
-		SELECT bc.command, bc.description, bc.scope
+		SELECT bc.command, bc.description, bc.scope, b.id, b.name
 		FROM bot_commands bc
-		JOIN workspace_agent_bots b ON b.id = bc.bot_id AND b.status = 'active'
-		JOIN conversation_members cm ON cm.user_id = b.bot_user_id AND cm.conversation_id = $1 AND cm.removed_at IS NULL
-		ORDER BY bc.command ASC
-	`, conversationID)
+		JOIN workspace_agent_bots b ON b.id = bc.bot_id AND b.space_id = $1 AND b.status = 'active'
+		JOIN conversation_members cm ON cm.user_id = b.bot_user_id AND cm.conversation_id = $2 AND cm.removed_at IS NULL
+		ORDER BY b.name ASC, bc.command ASC
+	`, r.spaceID, conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -1833,7 +2253,7 @@ func (r *PGRepository) ListBotCommands(ctx context.Context, conversationID strin
 	out := make([]BotCommand, 0)
 	for rows.Next() {
 		var item BotCommand
-		if err := rows.Scan(&item.Command, &item.Description, &item.Scope); err != nil {
+		if err := rows.Scan(&item.Command, &item.Description, &item.Scope, &item.BotID, &item.BotName); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -1915,10 +2335,357 @@ func (r *PGRepository) CreateMultiBot(ctx context.Context, actorID, name string,
 	`, botID, r.spaceID, now); err != nil {
 		return "", err
 	}
+	_ = emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, "", "workspace.member_joined", "user", botUserID, map[string]any{
+		"userId": botUserID,
+		"member": map[string]any{
+			"id":          botUserID,
+			"displayName": strings.TrimSpace(name),
+			"kind":        "bot",
+			"role":        "member",
+		},
+	}, now)
 	if err := tx.Commit(ctx); err != nil {
 		return "", err
 	}
 	return botID, nil
+}
+
+func (r *PGRepository) UpdateBotProfile(ctx context.Context, actorID, botID string, input BotProfileUpdateInput, now time.Time) (BotProfileResult, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return BotProfileResult{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var ownerID, botUserID, curName, curDesc, curAvatar string
+	err = tx.QueryRow(ctx, `
+		SELECT
+			b.owner_user_id,
+			b.bot_user_id,
+			b.name,
+			coalesce(bs.description, ''),
+			coalesce(u.avatar_url, bs.avatar_url, '')
+		FROM workspace_agent_bots b
+		JOIN users u ON u.id = b.bot_user_id
+		LEFT JOIN workspace_agent_bot_settings bs ON bs.bot_id = b.id AND bs.space_id = b.space_id
+		WHERE b.space_id = $1 AND b.id = $2 AND b.status <> 'deleted'
+		FOR UPDATE OF b
+	`, r.spaceID, botID).Scan(&ownerID, &botUserID, &curName, &curDesc, &curAvatar)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return BotProfileResult{}, ErrNotFound
+		}
+		return BotProfileResult{}, err
+	}
+	if ownerID != actorID {
+		return BotProfileResult{}, ErrForbidden
+	}
+
+	nextName := curName
+	if input.NameSet && input.Name != nil {
+		nextName = strings.TrimSpace(*input.Name)
+	}
+	nextDesc := curDesc
+	if input.DescriptionSet && input.Description != nil {
+		nextDesc = strings.TrimSpace(*input.Description)
+	}
+
+	if nextName != curName {
+		norm := strings.ToLower(nextName)
+		if _, err := tx.Exec(ctx, `
+			UPDATE workspace_agent_bots
+			SET name = $1, name_normalized = $2, updated_at = $3
+			WHERE space_id = $4 AND id = $5
+		`, nextName, norm, now.UTC(), r.spaceID, botID); err != nil {
+			return BotProfileResult{}, fmt.Errorf("%w: 机器人名称已被使用", ErrInvalidInput)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE users SET display_name = $1 WHERE id = $2
+		`, nextName, botUserID); err != nil {
+			return BotProfileResult{}, err
+		}
+	}
+
+	var descArg any
+	if nextDesc != "" {
+		descArg = nextDesc
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE workspace_agent_bot_settings
+		SET description = $1, updated_at = $2
+		WHERE space_id = $3 AND bot_id = $4
+	`, descArg, now.UTC(), r.spaceID, botID); err != nil {
+		return BotProfileResult{}, err
+	}
+
+	cleanAvatar := sanitizeBootstrapAvatarURL(curAvatar)
+	if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, "", "workspace.member_updated", "user", botUserID, map[string]any{
+		"userId": botUserID,
+		"member": map[string]any{
+			"id":          botUserID,
+			"displayName": nextName,
+			"description": nextDesc,
+			"avatarUrl":   cleanAvatar,
+			"kind":        "bot",
+			"role":        "member",
+		},
+	}, now); err != nil {
+		return BotProfileResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return BotProfileResult{}, err
+	}
+	return BotProfileResult{
+		BotID:       botID,
+		BotUserID:   botUserID,
+		Name:        nextName,
+		Description: nextDesc,
+		AvatarURL:   cleanAvatar,
+	}, nil
+}
+
+func (r *PGRepository) UploadBotAvatar(ctx context.Context, actorID, botID, mimeType string, data []byte, now time.Time) (BotProfileResult, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return BotProfileResult{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var ownerID, botUserID, botName, botDesc, rawPrefs string
+	err = tx.QueryRow(ctx, `
+		SELECT
+			b.owner_user_id,
+			b.bot_user_id,
+			b.name,
+			coalesce(bs.description, ''),
+			coalesce((SELECT prefs_json FROM user_preferences WHERE user_id = b.bot_user_id), '{}')
+		FROM workspace_agent_bots b
+		LEFT JOIN workspace_agent_bot_settings bs ON bs.bot_id = b.id AND bs.space_id = b.space_id
+		WHERE b.space_id = $1 AND b.id = $2 AND b.status <> 'deleted'
+		FOR UPDATE OF b
+	`, r.spaceID, botID).Scan(&ownerID, &botUserID, &botName, &botDesc, &rawPrefs)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return BotProfileResult{}, ErrNotFound
+		}
+		return BotProfileResult{}, err
+	}
+	if ownerID != actorID {
+		return BotProfileResult{}, ErrForbidden
+	}
+
+	prefs := map[string]any{}
+	_ = json.Unmarshal([]byte(rawPrefs), &prefs)
+	if prefs == nil {
+		prefs = map[string]any{}
+	}
+	prefs["botAvatarMime"] = mimeType
+	prefs["botAvatarBase64"] = base64.StdEncoding.EncodeToString(data)
+	encodedPrefs, _ := json.Marshal(prefs)
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO user_preferences (user_id, prefs_json, updated_at)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (user_id) DO UPDATE SET prefs_json = EXCLUDED.prefs_json, updated_at = EXCLUDED.updated_at
+	`, botUserID, string(encodedPrefs), now.UTC()); err != nil {
+		return BotProfileResult{}, err
+	}
+
+	avatarURL := fmt.Sprintf("/api/v1/bots/%s/avatar?v=%d", botID, now.UTC().UnixMilli())
+	if _, err := tx.Exec(ctx, `UPDATE users SET avatar_url = $1 WHERE id = $2`, avatarURL, botUserID); err != nil {
+		return BotProfileResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE workspace_agent_bot_settings SET avatar_url = $1, updated_at = $2
+		WHERE space_id = $3 AND bot_id = $4
+	`, avatarURL, now.UTC(), r.spaceID, botID); err != nil {
+		return BotProfileResult{}, err
+	}
+
+	if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, "", "workspace.member_updated", "user", botUserID, map[string]any{
+		"userId": botUserID,
+		"member": map[string]any{
+			"id":          botUserID,
+			"displayName": botName,
+			"description": botDesc,
+			"avatarUrl":   avatarURL,
+			"kind":        "bot",
+			"role":        "member",
+		},
+	}, now); err != nil {
+		return BotProfileResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return BotProfileResult{}, err
+	}
+	return BotProfileResult{
+		BotID:       botID,
+		BotUserID:   botUserID,
+		Name:        botName,
+		Description: botDesc,
+		AvatarURL:   avatarURL,
+	}, nil
+}
+
+func (r *PGRepository) DeleteBotAvatar(ctx context.Context, actorID, botID string, now time.Time) (BotProfileResult, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return BotProfileResult{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var ownerID, botUserID, botName, botDesc, rawPrefs string
+	err = tx.QueryRow(ctx, `
+		SELECT
+			b.owner_user_id,
+			b.bot_user_id,
+			b.name,
+			coalesce(bs.description, ''),
+			coalesce((SELECT prefs_json FROM user_preferences WHERE user_id = b.bot_user_id), '{}')
+		FROM workspace_agent_bots b
+		LEFT JOIN workspace_agent_bot_settings bs ON bs.bot_id = b.id AND bs.space_id = b.space_id
+		WHERE b.space_id = $1 AND b.id = $2 AND b.status <> 'deleted'
+		FOR UPDATE OF b
+	`, r.spaceID, botID).Scan(&ownerID, &botUserID, &botName, &botDesc, &rawPrefs)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return BotProfileResult{}, ErrNotFound
+		}
+		return BotProfileResult{}, err
+	}
+	if ownerID != actorID {
+		return BotProfileResult{}, ErrForbidden
+	}
+
+	prefs := map[string]any{}
+	_ = json.Unmarshal([]byte(rawPrefs), &prefs)
+	delete(prefs, "botAvatarMime")
+	delete(prefs, "botAvatarBase64")
+	encodedPrefs, _ := json.Marshal(prefs)
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO user_preferences (user_id, prefs_json, updated_at)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (user_id) DO UPDATE SET prefs_json = EXCLUDED.prefs_json, updated_at = EXCLUDED.updated_at
+	`, botUserID, string(encodedPrefs), now.UTC()); err != nil {
+		return BotProfileResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE users SET avatar_url = NULL WHERE id = $1`, botUserID); err != nil {
+		return BotProfileResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE workspace_agent_bot_settings SET avatar_url = NULL, updated_at = $1
+		WHERE space_id = $2 AND bot_id = $3
+	`, now.UTC(), r.spaceID, botID); err != nil {
+		return BotProfileResult{}, err
+	}
+
+	if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, "", "workspace.member_updated", "user", botUserID, map[string]any{
+		"userId": botUserID,
+		"member": map[string]any{
+			"id":          botUserID,
+			"displayName": botName,
+			"description": botDesc,
+			"avatarUrl":   "",
+			"kind":        "bot",
+			"role":        "member",
+		},
+	}, now); err != nil {
+		return BotProfileResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return BotProfileResult{}, err
+	}
+	return BotProfileResult{
+		BotID:       botID,
+		BotUserID:   botUserID,
+		Name:        botName,
+		Description: botDesc,
+		AvatarURL:   "",
+	}, nil
+}
+
+func (r *PGRepository) GetBotAvatar(ctx context.Context, actorID, botID string) (BotAvatarPayload, error) {
+	var isSpaceMember bool
+	if err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM space_members
+			WHERE space_id = $1 AND user_id = $2 AND removed_at IS NULL
+		)
+	`, r.spaceID, actorID).Scan(&isSpaceMember); err != nil {
+		return BotAvatarPayload{}, err
+	}
+	if !isSpaceMember {
+		return BotAvatarPayload{}, ErrForbidden
+	}
+
+	var rawPrefs string
+	err := r.pool.QueryRow(ctx, `
+		SELECT coalesce(up.prefs_json, '{}')
+		FROM workspace_agent_bots b
+		LEFT JOIN user_preferences up ON up.user_id = b.bot_user_id
+		WHERE b.space_id = $1 AND b.id = $2 AND b.status <> 'deleted'
+	`, r.spaceID, botID).Scan(&rawPrefs)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return BotAvatarPayload{}, ErrNotFound
+		}
+		return BotAvatarPayload{}, err
+	}
+
+	prefs := map[string]any{}
+	_ = json.Unmarshal([]byte(rawPrefs), &prefs)
+	mimeType, _ := prefs["botAvatarMime"].(string)
+	b64, _ := prefs["botAvatarBase64"].(string)
+	if mimeType == "" || b64 == "" {
+		return BotAvatarPayload{}, ErrNotFound
+	}
+	decoded, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil || len(decoded) == 0 {
+		return BotAvatarPayload{}, ErrNotFound
+	}
+	return BotAvatarPayload{
+		MIMEType: mimeType,
+		Data:     decoded,
+	}, nil
+}
+
+func (r *PGRepository) UnbindBotToken(ctx context.Context, botID, tokenID string, now time.Time) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE workspace_agent_bot_tokens
+		SET revoked_at = COALESCE(revoked_at, $1)
+		WHERE id = $2 AND bot_id = $3 AND space_id = $4
+	`, now.UTC(), tokenID, botID, r.spaceID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	var activeCount int
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*) FROM workspace_agent_bot_tokens
+		WHERE bot_id = $1 AND space_id = $2 AND revoked_at IS NULL
+		  AND (expires_at IS NULL OR expires_at > $3)
+	`, botID, r.spaceID, now.UTC()).Scan(&activeCount); err == nil && activeCount == 0 {
+		_, _ = tx.Exec(ctx, `
+			UPDATE workspace_agent_bot_connections
+			SET status = 'disconnected', disconnected_at = $1, updated_at = $1
+			WHERE bot_id = $2 AND space_id = $3
+		`, now.UTC(), botID, r.spaceID)
+	}
+
+	return tx.Commit(ctx)
 }
 
 func (r *PGRepository) UpsertBotWebhook(ctx context.Context, actorID, botID, url, secret string, enabled bool, now time.Time) (BotWebhookConfig, error) {

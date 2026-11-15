@@ -1246,13 +1246,21 @@ func (s *Service) CreateAttachment(ctx context.Context, value *Auth, input Creat
 	return map[string]any{"upload": result}, nil
 }
 
+type BotPresenceRecorder interface {
+	RecordBotTyping(ctx context.Context, spaceID, conversationID, botUserID, botName string, now time.Time) error
+	RecordBotAckRead(ctx context.Context, botID, spaceID, botUserID, eventID string, sequence int64, now time.Time) error
+}
+
 func (s *Service) Typing(ctx context.Context, value *Auth, conversationID string) (map[string]any, error) {
-	current, _, err := s.requireConversationCurrent(ctx, value, conversationID)
+	current, conv, err := s.requireConversationCurrent(ctx, value, conversationID)
 	if err != nil {
 		return nil, err
 	}
 	if err := RequireScope(current, ScopeMessagesSend); err != nil {
 		return nil, err
+	}
+	if recorder, ok := s.repo.(BotPresenceRecorder); ok && conv != nil {
+		_ = recorder.RecordBotTyping(ctx, current.SpaceID, conv.ID, current.UserID, current.Bot.Name, s.nowUTC())
 	}
 	return map[string]any{"accepted": true, "expiresInMs": 5000}, nil
 }
@@ -1281,6 +1289,11 @@ func (s *Service) Acknowledge(ctx context.Context, value *Auth, input Acknowledg
 	})
 	if err != nil {
 		return AcknowledgeResult{}, normalizeError(err)
+	}
+	if acknowledged {
+		if recorder, ok := s.repo.(BotPresenceRecorder); ok {
+			_ = recorder.RecordBotAckRead(ctx, current.BotID, current.SpaceID, current.UserID, eventID, sequence, now)
+		}
 	}
 	return AcknowledgeResult{Acknowledged: acknowledged, EventID: eventID, Sequence: sequence}, nil
 }

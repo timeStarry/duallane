@@ -39,6 +39,20 @@ export interface V1User {
   handle?: string;
   role: "owner" | "admin" | "member" | "bot";
   avatarUrl?: string;
+  description?: string;
+}
+
+export interface TypingIndicatorEntry {
+  userId: string;
+  displayName: string;
+  kind: "human" | "bot";
+  state: "typing" | "thinking";
+  expiresAt: number;
+}
+
+export interface RecalledDraftEntry {
+  text: string;
+  replyToId?: string;
 }
 
 export interface V1MessageAttachment {
@@ -79,6 +93,7 @@ export interface V1Message {
   threadRootId?: string;
   threadReplyCount?: number;
   editedAt?: string;
+  recalledAt?: string;
   createdAt: string;
   status?: "sending" | "sent" | "read" | "failed";
   reactions: Record<string, { count: number; reactedByMe: boolean }>;
@@ -98,6 +113,7 @@ export interface V1Conversation {
   memberIds: string[];
   lastMessageText?: string;
   lastMessageAt?: string;
+  peerLastReadAt?: string;
 }
 
 export interface DraftEntry {
@@ -130,6 +146,8 @@ interface WorkspaceState {
   drafts: Record<string, DraftEntry>;
   scrollTops: Record<string, number>;
   editingMessageId: string | null;
+  typingByConv: Record<string, TypingIndicatorEntry[]>;
+  recalledDrafts: Record<string, RecalledDraftEntry>;
 
   // P2P Direct Lane (Strict RAM-only!)
   p2pRoom: P2PRoomSession | null;
@@ -163,6 +181,7 @@ interface WorkspaceState {
     share: EmoteCollectionShareSummaryDTO
   ) => Promise<void>;
   editWorkspaceMessage: (conversationId: string, messageId: string, newText: string) => Promise<void>;
+  recallWorkspaceMessage: (conversationId: string, messageId: string) => Promise<void>;
   toggleReaction: (conversationId: string, messageId: string, emoji: string) => Promise<void>;
   togglePinMessage: (conversationId: string, messageId: string) => Promise<void>;
   togglePinConversation: (conversationId: string) => Promise<void>;
@@ -174,7 +193,9 @@ interface WorkspaceState {
   ) => Promise<void>;
   uploadGroupAvatar: (conversationId: string, file: File) => Promise<void>;
   inviteGroupMembers: (conversationId: string, userIds: string[]) => Promise<void>;
+  removeGroupMember: (conversationId: string, userId: string) => Promise<void>;
   leaveGroup: (conversationId: string) => Promise<void>;
+  applyRealtimeEvent: (eventObj: Record<string, unknown>) => void;
   forwardMessage: (messageIds: string[], targetConversationId: string) => Promise<void>;
   loadThread: (rootMessageId: string) => Promise<void>;
   sendThreadReply: (rootMessageId: string, text: string, alsoSendToChannel: boolean) => Promise<void>;
@@ -325,10 +346,102 @@ function mapRawAttachments(
   });
 }
 
+export function computeOwnMessageStatus(
+  convKind: V1Conversation["kind"] | undefined,
+  peerLastReadAt: string | undefined,
+  createdAt: string
+): "sent" | "read" {
+  if (convKind === "saved") return "read";
+  if (peerLastReadAt) {
+    const msgMs = Date.parse(createdAt);
+    const peerMs = Date.parse(peerLastReadAt);
+    if (Number.isFinite(msgMs) && Number.isFinite(peerMs) && msgMs <= peerMs) {
+      return "read";
+    }
+  }
+  return "sent";
+}
+
+function isMentionBoundaryChar(ch: string | undefined): boolean {
+  if (!ch) return true;
+  return /[\s,.;:!?，。；：！？、)）\]】]/u.test(ch);
+}
+
+export function buildTextAndMentionBlocks(
+  text: string,
+  conv: V1Conversation | undefined,
+  members: Record<string, V1User>,
+  currentUserId?: string
+): Array<Record<string, unknown>> {
+  if (!text) return [];
+  const candidateIds = conv?.memberIds || [];
+  const candidates = candidateIds
+    .filter((uid) => Boolean(uid && uid !== currentUserId && members[uid]?.displayName))
+    .map((uid) => ({ id: uid, displayName: members[uid].displayName.trim() }))
+    .filter((item) => item.displayName.length > 0)
+    .sort((a, b) => b.displayName.length - a.displayName.length);
+
+  if (candidates.length === 0 || !text.includes("@")) {
+    return [{ type: "text", text }];
+  }
+
+  const blocks: Array<Record<string, unknown>> = [];
+  let textStart = 0;
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const atIdx = text.indexOf("@", cursor);
+    if (atIdx === -1) break;
+
+    let matched: { id: string; displayName: string } | null = null;
+    for (const c of candidates) {
+      if (text.startsWith(c.displayName, atIdx + 1)) {
+        const nextChar = text[atIdx + 1 + c.displayName.length];
+        if (isMentionBoundaryChar(nextChar)) {
+          matched = c;
+          break;
+        }
+      }
+    }
+
+    if (matched) {
+      if (atIdx > textStart) {
+        const plainSlice = text.slice(textStart, atIdx);
+        if (plainSlice) {
+          blocks.push({ type: "text", text: plainSlice });
+        }
+      }
+      blocks.push({
+        type: "mention",
+        userId: matched.id,
+        label: matched.displayName,
+      });
+      cursor = atIdx + 1 + matched.displayName.length;
+      textStart = cursor;
+    } else {
+      cursor = atIdx + 1;
+    }
+  }
+
+  if (textStart < text.length) {
+    const tail = text.slice(textStart);
+    if (tail) {
+      blocks.push({ type: "text", text: tail });
+    }
+  }
+
+  return blocks.length > 0 ? blocks : [{ type: "text", text }];
+}
+
 function mapRawMessage(
   conversationId: string,
   m: Record<string, unknown>,
-  members: Record<string, V1User>
+  members: Record<string, V1User>,
+  statusContext?: {
+    currentUserId?: string;
+    convKind?: V1Conversation["kind"];
+    peerLastReadAt?: string;
+  }
 ): V1Message {
   const authorObj = (m.author && typeof m.author === "object" ? m.author : {}) as Record<
     string,
@@ -339,6 +452,13 @@ function mapRawMessage(
     rawKind === "system" ? "system" : rawKind === "bot" ? "bot" : "user";
   const senderId = String(m.authorId || m.senderId || authorObj.id || "");
   const id = String(m.id || "");
+  const createdAt = String(m.createdAt || new Date().toISOString());
+  const recalledAt =
+    typeof m.recalledAt === "string" && m.recalledAt.trim() ? m.recalledAt.trim() : undefined;
+  const isOwn = Boolean(statusContext?.currentUserId && senderId === statusContext.currentUserId);
+  const resolvedStatus: V1Message["status"] = isOwn
+    ? computeOwnMessageStatus(statusContext?.convKind, statusContext?.peerLastReadAt, createdAt)
+    : "read";
   const rawAvatar =
     typeof m.authorAvatarUrl === "string" && m.authorAvatarUrl.trim()
       ? m.authorAvatarUrl.trim()
@@ -366,8 +486,10 @@ function mapRawMessage(
       ),
     senderAvatarUrl: members[senderId]?.avatarUrl || rawAvatar,
     plainText: String(m.plainText || m.text || ""),
-    blocks: mapRawBlocks(m.content),
-    replyToId: m.replyToMessageId
+    blocks: recalledAt ? [] : mapRawBlocks(m.content),
+    replyToId: recalledAt
+      ? undefined
+      : m.replyToMessageId
       ? String(m.replyToMessageId)
       : m.replyToId
       ? String(m.replyToId)
@@ -375,11 +497,12 @@ function mapRawMessage(
     threadRootId: m.threadRootId ? String(m.threadRootId) : undefined,
     threadReplyCount: Number(m.threadReplyCount || m.replyCount || 0),
     editedAt: m.editedAt ? String(m.editedAt) : undefined,
-    createdAt: String(m.createdAt || new Date().toISOString()),
-    status: "read",
-    reactions: mapRawReactions(m.reactions),
-    attachments: mapRawAttachments(m.attachments, id),
-    card: m.card as DualLaneCardKitDocument | undefined,
+    recalledAt,
+    createdAt,
+    status: resolvedStatus,
+    reactions: recalledAt ? {} : mapRawReactions(m.reactions),
+    attachments: recalledAt ? undefined : mapRawAttachments(m.attachments, id),
+    card: recalledAt ? undefined : (m.card as DualLaneCardKitDocument | undefined),
   };
 }
 
@@ -406,6 +529,16 @@ function upsertRawMemberRecord(
     : prev?.displayName && !prev.displayName.startsWith("usr_")
     ? prev.displayName
     : id;
+  const hasExplicitAvatar = "avatarUrl" in m;
+  const nextAvatarUrl = hasExplicitAvatar
+    ? typeof m.avatarUrl === "string" && m.avatarUrl.trim()
+      ? m.avatarUrl.trim()
+      : undefined
+    : prev?.avatarUrl;
+  const nextDescription =
+    typeof m.description === "string"
+      ? m.description.trim() || undefined
+      : prev?.description;
   target[id] = {
     id,
     displayName: resolvedName,
@@ -415,7 +548,8 @@ function upsertRawMemberRecord(
       ? String(m.handle)
       : prev?.handle,
     role,
-    avatarUrl: m.avatarUrl ? String(m.avatarUrl) : prev?.avatarUrl,
+    avatarUrl: nextAvatarUrl,
+    description: nextDescription,
   };
   return id;
 }
@@ -544,6 +678,10 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
       cleanedMemberIds,
       currentUser?.id
     );
+    const peerLastReadAt =
+      typeof c.peerLastReadAt === "string" && c.peerLastReadAt.trim()
+        ? c.peerLastReadAt.trim()
+        : undefined;
     conversations[id] = {
       id,
       kind,
@@ -569,6 +707,7 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
         : lastMsg.createdAt
         ? String(lastMsg.createdAt)
         : undefined,
+      peerLastReadAt,
     };
     const rawMsgs = Array.isArray(c.latestMessages)
       ? c.latestMessages
@@ -576,7 +715,11 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
       ? c.messages
       : [];
     messagesByConv[id] = rawMsgs.map((msg) => {
-      const mapped = mapRawMessage(id, msg as Record<string, unknown>, members);
+      const mapped = mapRawMessage(id, msg as Record<string, unknown>, members, {
+        currentUserId: currentUser?.id,
+        convKind: kind,
+        peerLastReadAt,
+      });
       backfillMemberFromMessage(members, mapped);
       return mapped;
     });
@@ -927,360 +1070,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             cursor = seq;
             void setWorkspaceSyncCursor(cursor);
           }
-          const evType = String(eventObj.type || "");
-          const payload = (eventObj.payload && typeof eventObj.payload === "object"
-            ? eventObj.payload
-            : {}) as Record<string, unknown>;
-
-          if (evType === "workspace.member_joined" || evType === "workspace.member_updated") {
-            const m = (payload.member || {}) as Record<string, unknown>;
-            const id = String(m.id || payload.userId || "");
-            if (id) {
-              set((s) => ({
-                members: {
-                  ...s.members,
-                  [id]: {
-                    id,
-                    displayName: String(m.remark || m.nickname || m.displayName || id),
-                    handle: m.githubLogin ? String(m.githubLogin) : undefined,
-                    role: (m.role as V1User["role"]) || "member",
-                    avatarUrl: m.avatarUrl ? String(m.avatarUrl) : undefined,
-                  },
-                },
-              }));
-            }
-            return;
-          }
-
-          if (evType === "emote.library.updated") {
-            void useEmoteStore.getState().refreshLibrary(false);
-            return;
-          }
-
-          if (evType === "conversation.created" || evType === "conversation.updated") {
-            const c = (payload.conversation || {}) as Record<string, unknown>;
-            const convId = String(c.id || eventObj.conversationId || "");
-            if (!convId) return;
-            const rawType = String(c.kind || c.type || "group");
-            const kind: V1Conversation["kind"] =
-              rawType === "saved" ? "saved" : rawType === "direct" ? "direct" : "group";
-            set((s) => {
-              const exists = Boolean(s.conversations[convId]);
-              const prev = s.conversations[convId];
-              const nextMembers = { ...s.members };
-              if (c.otherMember && typeof c.otherMember === "object") {
-                upsertRawMemberRecord(nextMembers, c.otherMember as Record<string, unknown>);
-              }
-              const parsedMemberIds = Array.isArray(c.members)
-                ? (c.members as Array<Record<string, unknown>>)
-                    .map((m) => upsertRawMemberRecord(nextMembers, m))
-                    .filter(Boolean)
-                : Array.isArray(c.memberIds)
-                ? c.memberIds.map(String).filter(Boolean)
-                : prev?.memberIds || [];
-              const hasExplicitAvatarKey =
-                "avatarEmoji" in c || "avatarEmoji" in payload || "avatarUrl" in c;
-              const parsedAvatar = splitConversationAvatar(
-                kind,
-                {
-                  ...c,
-                  ...(payload.avatarEmoji !== undefined ? { avatarEmoji: payload.avatarEmoji } : {}),
-                },
-                nextMembers,
-                parsedMemberIds,
-                s.currentUser?.id
-              );
-              const nextConv: V1Conversation = {
-                id: convId,
-                kind,
-                title:
-                  kind === "saved"
-                    ? "我的收藏"
-                    : String(
-                        c.displayTitle ||
-                          c.title ||
-                          payload.title ||
-                          prev?.title ||
-                          "未命名对话"
-                      ),
-                avatarUrl: hasExplicitAvatarKey ? parsedAvatar.avatarUrl : prev?.avatarUrl,
-                avatarEmoji: hasExplicitAvatarKey ? parsedAvatar.avatarEmoji : prev?.avatarEmoji,
-                unreadCount:
-                  convId === s.activeConversationId
-                    ? 0
-                    : Number(c.unreadCount ?? prev?.unreadCount ?? 0),
-                mentionCount: prev?.mentionCount || 0,
-                pinnedMessageIds: prev?.pinnedMessageIds || [],
-                memberIds: parsedMemberIds,
-                lastMessageText: c.lastMessagePlainText
-                  ? String(c.lastMessagePlainText)
-                  : prev?.lastMessageText,
-                lastMessageAt: c.lastMessageAt
-                  ? String(c.lastMessageAt)
-                  : prev?.lastMessageAt,
-              };
-
-              let nextMessagesByConv = s.messagesByConv;
-              if (Array.isArray(c.latestMessages) && c.latestMessages.length > 0) {
-                const incoming = (c.latestMessages as Array<Record<string, unknown>>)
-                  .filter((m) => Boolean(m && m.id))
-                  .map((m) => {
-                    const mappedMsg = mapRawMessage(convId, m, nextMembers);
-                    backfillMemberFromMessage(nextMembers, mappedMsg);
-                    return mappedMsg;
-                  });
-                const existing = s.messagesByConv[convId] || [];
-                if (existing.length === 0) {
-                  nextMessagesByConv = { ...s.messagesByConv, [convId]: incoming };
-                } else {
-                  const merged = [...existing];
-                  for (const msg of incoming) {
-                    const idx = merged.findIndex(
-                      (item) =>
-                        item.id === msg.id ||
-                        (msg.clientMessageId && item.clientMessageId === msg.clientMessageId)
-                    );
-                    if (idx >= 0) {
-                      merged[idx] = { ...msg, status: "read" as const };
-                    } else {
-                      merged.push(msg);
-                    }
-                  }
-                  nextMessagesByConv = { ...s.messagesByConv, [convId]: merged };
-                }
-              }
-
-              return {
-                members: nextMembers,
-                messagesByConv: nextMessagesByConv,
-                conversations: { ...s.conversations, [convId]: nextConv },
-                conversationOrder: exists
-                  ? s.conversationOrder
-                  : [...s.conversationOrder, convId],
-              };
-            });
-            return;
-          }
-
-          if (
-            evType === "message.created" ||
-            evType === "message.recalled" ||
-            evType === "message.edited"
-          ) {
-            const rawMsg = (payload.message || {}) as Record<string, unknown>;
-            const convId = String(
-              rawMsg.conversationId || payload.conversationId || eventObj.conversationId || ""
-            );
-            if (!convId || !rawMsg.id) return;
-            const mapped = mapRawMessage(convId, rawMsg, get().members);
-            const convPayload =
-              payload.conversation && typeof payload.conversation === "object"
-                ? (payload.conversation as Record<string, unknown>)
-                : undefined;
-            const serverUnread =
-              typeof convPayload?.unreadCount === "number"
-                ? convPayload.unreadCount
-                : undefined;
-            const isSystemMessage =
-              mapped.kind === "system" || String(rawMsg.kind || "") === "system";
-
-            set((s) => {
-              const existing = s.messagesByConv[convId] || [];
-              const matchIndex = existing.findIndex(
-                (item) =>
-                  item.id === mapped.id ||
-                  (mapped.clientMessageId && item.clientMessageId === mapped.clientMessageId)
-              );
-              const alreadyExisted = matchIndex >= 0;
-              const nextList = alreadyExisted
-                ? existing.map((item, idx) =>
-                    idx === matchIndex
-                      ? {
-                          ...item,
-                          ...mapped,
-                          blocks:
-                            mapped.blocks && mapped.blocks.length > 0
-                              ? mapped.blocks
-                              : [{ type: "text" as const, text: mapped.plainText }],
-                          reactions:
-                            rawMsg.reactions !== undefined ? mapped.reactions : item.reactions,
-                          attachments: mapped.attachments || item.attachments,
-                          threadReplyCount:
-                            rawMsg.threadReplyCount !== undefined || rawMsg.replyCount !== undefined
-                              ? mapped.threadReplyCount
-                              : item.threadReplyCount,
-                          replyToId: mapped.replyToId || item.replyToId,
-                          senderAvatarUrl: mapped.senderAvatarUrl || item.senderAvatarUrl,
-                          status: "read" as const,
-                        }
-                      : item
-                  )
-                : [...existing, mapped];
-
-              const prevConv = s.conversations[convId];
-              const isOwn = Boolean(s.currentUser?.id && mapped.senderId === s.currentUser.id);
-              const isActive = convId === s.activeConversationId;
-              const baseUnread = prevConv?.unreadCount || 0;
-              const nextUnreadCount = isActive
-                ? 0
-                : typeof serverUnread === "number"
-                ? serverUnread
-                : evType === "message.created" && !alreadyExisted && !isOwn && !isSystemMessage
-                ? baseUnread + 1
-                : baseUnread;
-
-              const isLatestInConv =
-                evType !== "message.edited" ||
-                nextList[nextList.length - 1]?.id === mapped.id;
-
-              const nextConv: V1Conversation = prevConv
-                ? {
-                    ...prevConv,
-                    lastMessageText: isLatestInConv
-                      ? mapped.plainText
-                      : prevConv.lastMessageText,
-                    lastMessageAt:
-                      evType === "message.edited"
-                        ? prevConv.lastMessageAt || mapped.createdAt
-                        : mapped.createdAt,
-                    unreadCount: nextUnreadCount,
-                  }
-                : {
-                    id: convId,
-                    kind: "group",
-                    title: String(
-                      convPayload?.displayTitle || convPayload?.title || "新对话"
-                    ),
-                    unreadCount: nextUnreadCount,
-                    mentionCount: 0,
-                    pinnedMessageIds: [],
-                    memberIds: [],
-                    lastMessageText: mapped.plainText,
-                    lastMessageAt: mapped.createdAt,
-                  };
-
-              const nextMembers = { ...s.members };
-              if (Array.isArray(convPayload?.members)) {
-                for (const m of convPayload.members as Array<Record<string, unknown>>) {
-                  upsertRawMemberRecord(nextMembers, m);
-                }
-              }
-              backfillMemberFromMessage(nextMembers, mapped);
-
-              return {
-                members: nextMembers,
-                messagesByConv: {
-                  ...s.messagesByConv,
-                  [convId]: nextList,
-                },
-                conversations: {
-                  ...s.conversations,
-                  [convId]: nextConv,
-                },
-                conversationOrder: prevConv
-                  ? s.conversationOrder
-                  : [...s.conversationOrder, convId],
-              };
-            });
-            return;
-          }
-
-          if (evType === "reaction.added" || evType === "reaction.removed") {
-            const msgId = String(payload.messageId || eventObj.targetId || "");
-            const convId = String(payload.conversationId || eventObj.conversationId || "");
-            if (!msgId || !convId) return;
-            const nextReactions = mapRawReactions(payload.reactions);
-            set((s) => ({
-              messagesByConv: {
-                ...s.messagesByConv,
-                [convId]: (s.messagesByConv[convId] || []).map((m) =>
-                  m.id === msgId ? { ...m, reactions: nextReactions } : m
-                ),
-              },
-            }));
-            return;
-          }
-
-          if (evType === "conversation.member_added") {
-            const convId = String(payload.conversationId || eventObj.conversationId || "");
-            const userId = String(payload.userId || eventObj.targetId || "");
-            if (!convId || !userId) return;
-            set((s) => {
-              const prevConv = s.conversations[convId];
-              const nextMembers = { ...s.members };
-              if (payload.member && typeof payload.member === "object") {
-                upsertRawMemberRecord(nextMembers, payload.member as Record<string, unknown>);
-              }
-              if (!prevConv) {
-                return { members: nextMembers };
-              }
-              const nextMemberIds = prevConv.memberIds.includes(userId)
-                ? prevConv.memberIds
-                : [...prevConv.memberIds, userId];
-              return {
-                members: nextMembers,
-                conversations: {
-                  ...s.conversations,
-                  [convId]: { ...prevConv, memberIds: nextMemberIds },
-                },
-              };
-            });
-            return;
-          }
-
-          if (evType === "conversation.member_removed") {
-            const convId = String(payload.conversationId || eventObj.conversationId || "");
-            const userId = String(payload.userId || eventObj.targetId || "");
-            if (!convId || !userId) return;
-            set((s) => {
-              const prevConv = s.conversations[convId];
-              if (!prevConv) return s;
-              if (s.currentUser?.id && userId === s.currentUser.id) {
-                const nextConversations = { ...s.conversations };
-                delete nextConversations[convId];
-                const nextOrder = s.conversationOrder.filter((id) => id !== convId);
-                return {
-                  conversations: nextConversations,
-                  conversationOrder: nextOrder,
-                  pinnedConversationIds: s.pinnedConversationIds.filter((id) => id !== convId),
-                  activeConversationId:
-                    s.activeConversationId === convId ? nextOrder[0] || null : s.activeConversationId,
-                };
-              }
-              return {
-                conversations: {
-                  ...s.conversations,
-                  [convId]: {
-                    ...prevConv,
-                    memberIds: prevConv.memberIds.filter((id) => id !== userId),
-                  },
-                },
-              };
-            });
-            return;
-          }
-
-          if (evType === "message.pinned" || evType === "message.unpinned") {
-            const convId = String(payload.conversationId || eventObj.conversationId || "");
-            const msgId = String(payload.messageId || eventObj.targetId || "");
-            if (!convId || !msgId) return;
-            set((s) => {
-              const prevConv = s.conversations[convId];
-              if (!prevConv) return s;
-              const nextPins =
-                evType === "message.pinned"
-                  ? prevConv.pinnedMessageIds.includes(msgId)
-                    ? prevConv.pinnedMessageIds
-                    : [msgId, ...prevConv.pinnedMessageIds]
-                  : prevConv.pinnedMessageIds.filter((id) => id !== msgId);
-              return {
-                conversations: {
-                  ...s.conversations,
-                  [convId]: { ...prevConv, pinnedMessageIds: nextPins },
-                },
-              };
-            });
-          }
+          get().applyRealtimeEvent(eventObj);
         }
       });
 
@@ -1295,6 +1085,620 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     };
 
     openSocket();
+  };
+
+  const applyRealtimeEvent = (eventObj: Record<string, unknown>) => {
+    const evType = String(eventObj.type || "");
+    const payload = (eventObj.payload && typeof eventObj.payload === "object"
+      ? eventObj.payload
+      : {}) as Record<string, unknown>;
+
+    if (evType === "workspace.member_joined" || evType === "workspace.member_updated") {
+      const m = (payload.member || payload) as Record<string, unknown>;
+      const id = String(m.id || payload.userId || eventObj.targetId || "");
+      if (id) {
+        set((s) => {
+          const nextMembers = { ...s.members };
+          upsertRawMemberRecord(nextMembers, { ...m, id });
+          const updatedMember = nextMembers[id];
+          let nextConversations = s.conversations;
+          if (updatedMember) {
+            let changed = false;
+            const patchedConvs: Record<string, V1Conversation> = { ...s.conversations };
+            for (const [cid, conv] of Object.entries(s.conversations)) {
+              if (
+                conv.kind === "direct" &&
+                conv.memberIds.includes(id) &&
+                id !== s.currentUser?.id
+              ) {
+                patchedConvs[cid] = {
+                  ...conv,
+                  title: updatedMember.displayName || conv.title,
+                  avatarUrl: updatedMember.avatarUrl,
+                };
+                changed = true;
+              }
+            }
+            if (changed) nextConversations = patchedConvs;
+          }
+          return {
+            members: nextMembers,
+            conversations: nextConversations,
+            currentUser:
+              s.currentUser?.id === id && updatedMember
+                ? { ...s.currentUser, ...updatedMember }
+                : s.currentUser,
+          };
+        });
+      }
+      return;
+    }
+
+    if (evType === "emote.library.updated") {
+      void useEmoteStore.getState().refreshLibrary(false);
+      return;
+    }
+
+    if (evType === "conversation.read") {
+      const convId = String(payload.conversationId || eventObj.conversationId || "");
+      const readerId = String(payload.userId || eventObj.actorId || "");
+      const readAt = String(payload.readAt || payload.lastReadAt || eventObj.createdAt || "");
+      if (!convId || !readerId || !readAt) return;
+      const readMs = Date.parse(readAt);
+      if (!Number.isFinite(readMs)) return;
+
+      set((s) => {
+        if (s.currentUser?.id && readerId === s.currentUser.id) {
+          const prevConv = s.conversations[convId];
+          if (!prevConv) return s;
+          return {
+            conversations: {
+              ...s.conversations,
+              [convId]: { ...prevConv, unreadCount: 0, mentionCount: 0 },
+            },
+          };
+        }
+        const prevConv = s.conversations[convId];
+        const prevPeerMs = prevConv?.peerLastReadAt ? Date.parse(prevConv.peerLastReadAt) : 0;
+        const nextPeerLastReadAt =
+          !Number.isFinite(prevPeerMs) || readMs > prevPeerMs
+            ? readAt
+            : prevConv?.peerLastReadAt;
+
+        const existingMsgs = s.messagesByConv[convId] || [];
+        let msgChanged = false;
+        const nextMsgs = existingMsgs.map((msg) => {
+          if (
+            s.currentUser?.id &&
+            msg.senderId === s.currentUser.id &&
+            msg.status === "sent"
+          ) {
+            const mMs = Date.parse(msg.createdAt);
+            if (Number.isFinite(mMs) && mMs <= readMs) {
+              msgChanged = true;
+              return { ...msg, status: "read" as const };
+            }
+          }
+          return msg;
+        });
+
+        if (!prevConv && !msgChanged) return s;
+        return {
+          ...(msgChanged
+            ? {
+                messagesByConv: {
+                  ...s.messagesByConv,
+                  [convId]: nextMsgs,
+                },
+              }
+            : {}),
+          ...(prevConv
+            ? {
+                conversations: {
+                  ...s.conversations,
+                  [convId]: {
+                    ...prevConv,
+                    peerLastReadAt: nextPeerLastReadAt,
+                  },
+                },
+              }
+            : {}),
+        };
+      });
+      return;
+    }
+
+    if (evType === "conversation.typing") {
+      const convId = String(payload.conversationId || eventObj.conversationId || "");
+      const typerId = String(payload.userId || eventObj.actorId || "");
+      if (!convId || !typerId) return;
+      if (get().currentUser?.id && typerId === get().currentUser?.id) return;
+
+      const parsedExpires = Date.parse(String(payload.expiresAt || ""));
+      const expiresAt = Number.isFinite(parsedExpires) ? parsedExpires : Date.now() + 5000;
+      const now = Date.now();
+      if (expiresAt <= now) return;
+
+      const kind: "human" | "bot" =
+        payload.kind === "bot" || get().members[typerId]?.role === "bot" ? "bot" : "human";
+      const state: "typing" | "thinking" =
+        payload.state === "thinking" ? "thinking" : "typing";
+      const displayName = String(
+        payload.displayName ||
+          get().members[typerId]?.displayName ||
+          (kind === "bot" ? "机器人" : "对方")
+      );
+
+      set((s) => {
+        const currentList = (s.typingByConv[convId] || []).filter(
+          (entry) => entry.expiresAt > now && entry.userId !== typerId
+        );
+        return {
+          typingByConv: {
+            ...s.typingByConv,
+            [convId]: [
+              ...currentList,
+              { userId: typerId, displayName, kind, state, expiresAt },
+            ],
+          },
+        };
+      });
+
+      const cleanupDelay = Math.min(12000, Math.max(250, expiresAt - now + 80));
+      setTimeout(() => {
+        const ts = Date.now();
+        set((s) => {
+          const list = s.typingByConv[convId];
+          if (!list || list.length === 0) return s;
+          const filtered = list.filter((entry) => entry.expiresAt > ts);
+          if (filtered.length === list.length) return s;
+          const nextTyping = { ...s.typingByConv };
+          if (filtered.length === 0) {
+            delete nextTyping[convId];
+          } else {
+            nextTyping[convId] = filtered;
+          }
+          return { typingByConv: nextTyping };
+        });
+      }, cleanupDelay);
+      return;
+    }
+
+    if (evType === "conversation.created" || evType === "conversation.updated") {
+      const c = (payload.conversation || {}) as Record<string, unknown>;
+      const convId = String(c.id || eventObj.conversationId || "");
+      if (!convId) return;
+      const rawType = String(c.kind || c.type || "group");
+      const kind: V1Conversation["kind"] =
+        rawType === "saved" ? "saved" : rawType === "direct" ? "direct" : "group";
+      set((s) => {
+        const exists = Boolean(s.conversations[convId]);
+        const prev = s.conversations[convId];
+        const nextMembers = { ...s.members };
+        if (c.otherMember && typeof c.otherMember === "object") {
+          upsertRawMemberRecord(nextMembers, c.otherMember as Record<string, unknown>);
+        }
+        const parsedMemberIds = Array.isArray(c.members)
+          ? (c.members as Array<Record<string, unknown>>)
+              .map((m) => upsertRawMemberRecord(nextMembers, m))
+              .filter(Boolean)
+          : Array.isArray(c.memberIds)
+          ? c.memberIds.map(String).filter(Boolean)
+          : prev?.memberIds || [];
+        const hasExplicitAvatarKey =
+          "avatarEmoji" in c || "avatarEmoji" in payload || "avatarUrl" in c;
+        const parsedAvatar = splitConversationAvatar(
+          kind,
+          {
+            ...c,
+            ...(payload.avatarEmoji !== undefined ? { avatarEmoji: payload.avatarEmoji } : {}),
+          },
+          nextMembers,
+          parsedMemberIds,
+          s.currentUser?.id
+        );
+        const peerLastReadAt =
+          typeof c.peerLastReadAt === "string" && c.peerLastReadAt.trim()
+            ? c.peerLastReadAt.trim()
+            : prev?.peerLastReadAt;
+        const nextConv: V1Conversation = {
+          id: convId,
+          kind,
+          title:
+            kind === "saved"
+              ? "我的收藏"
+              : String(
+                  c.displayTitle ||
+                    c.title ||
+                    payload.title ||
+                    prev?.title ||
+                    "未命名对话"
+                ),
+          avatarUrl: hasExplicitAvatarKey ? parsedAvatar.avatarUrl : prev?.avatarUrl,
+          avatarEmoji: hasExplicitAvatarKey ? parsedAvatar.avatarEmoji : prev?.avatarEmoji,
+          unreadCount:
+            convId === s.activeConversationId
+              ? 0
+              : Number(c.unreadCount ?? prev?.unreadCount ?? 0),
+          mentionCount: prev?.mentionCount || 0,
+          pinnedMessageIds: prev?.pinnedMessageIds || [],
+          memberIds: parsedMemberIds,
+          lastMessageText: c.lastMessagePlainText
+            ? String(c.lastMessagePlainText)
+            : prev?.lastMessageText,
+          lastMessageAt: c.lastMessageAt
+            ? String(c.lastMessageAt)
+            : prev?.lastMessageAt,
+          peerLastReadAt,
+        };
+
+        let nextMessagesByConv = s.messagesByConv;
+        if (Array.isArray(c.latestMessages) && c.latestMessages.length > 0) {
+          const incoming = (c.latestMessages as Array<Record<string, unknown>>)
+            .filter((m) => Boolean(m && m.id))
+            .map((m) => {
+              const mappedMsg = mapRawMessage(convId, m, nextMembers, {
+                currentUserId: s.currentUser?.id,
+                convKind: kind,
+                peerLastReadAt,
+              });
+              backfillMemberFromMessage(nextMembers, mappedMsg);
+              return mappedMsg;
+            });
+          const existing = s.messagesByConv[convId] || [];
+          if (existing.length === 0) {
+            nextMessagesByConv = { ...s.messagesByConv, [convId]: incoming };
+          } else {
+            const merged = [...existing];
+            for (const msg of incoming) {
+              const idx = merged.findIndex(
+                (item) =>
+                  item.id === msg.id ||
+                  (msg.clientMessageId && item.clientMessageId === msg.clientMessageId)
+              );
+              if (idx >= 0) {
+                const resolvedStatus =
+                  s.currentUser?.id && msg.senderId === s.currentUser.id
+                    ? computeOwnMessageStatus(kind, peerLastReadAt, msg.createdAt)
+                    : ("read" as const);
+                merged[idx] = { ...msg, status: resolvedStatus };
+              } else {
+                merged.push(msg);
+              }
+            }
+            nextMessagesByConv = { ...s.messagesByConv, [convId]: merged };
+          }
+        }
+
+        return {
+          members: nextMembers,
+          messagesByConv: nextMessagesByConv,
+          conversations: { ...s.conversations, [convId]: nextConv },
+          conversationOrder: exists
+            ? s.conversationOrder
+            : [...s.conversationOrder, convId],
+        };
+      });
+      return;
+    }
+
+    if (
+      evType === "message.created" ||
+      evType === "message.recalled" ||
+      evType === "message.edited"
+    ) {
+      const rawMsg = (payload.message || {}) as Record<string, unknown>;
+      const convId = String(
+        rawMsg.conversationId || payload.conversationId || eventObj.conversationId || ""
+      );
+      if (!convId || !rawMsg.id) return;
+      const stateSnap = get();
+      const snapConv = stateSnap.conversations[convId];
+      const mapped = mapRawMessage(convId, rawMsg, stateSnap.members, {
+        currentUserId: stateSnap.currentUser?.id,
+        convKind: snapConv?.kind,
+        peerLastReadAt: snapConv?.peerLastReadAt,
+      });
+      const convPayload =
+        payload.conversation && typeof payload.conversation === "object"
+          ? (payload.conversation as Record<string, unknown>)
+          : undefined;
+      const serverUnread =
+        typeof convPayload?.unreadCount === "number"
+          ? convPayload.unreadCount
+          : undefined;
+      const isSystemMessage =
+        mapped.kind === "system" || String(rawMsg.kind || "") === "system";
+      const isOwnSnap = Boolean(
+        stateSnap.currentUser?.id && mapped.senderId === stateSnap.currentUser.id
+      );
+
+      if (
+        evType === "message.created" &&
+        !isOwnSnap &&
+        !isSystemMessage &&
+        convId === stateSnap.activeConversationId &&
+        !stateSnap.isPreviewMode
+      ) {
+        void apiV1.markConversationRead(convId).catch(() => {});
+      }
+
+      set((s) => {
+        const prevConv = s.conversations[convId];
+        const isOwn = Boolean(s.currentUser?.id && mapped.senderId === s.currentUser.id);
+        let nextPeerLastReadAt = prevConv?.peerLastReadAt;
+        if (evType === "message.created" && !isOwn && !isSystemMessage) {
+          const msgMs = Date.parse(mapped.createdAt);
+          const prevMs = nextPeerLastReadAt ? Date.parse(nextPeerLastReadAt) : 0;
+          if (Number.isFinite(msgMs) && (!Number.isFinite(prevMs) || msgMs > prevMs)) {
+            nextPeerLastReadAt = mapped.createdAt;
+          }
+        }
+
+        const resolvedMappedStatus: V1Message["status"] = isOwn
+          ? computeOwnMessageStatus(prevConv?.kind, nextPeerLastReadAt, mapped.createdAt)
+          : "read";
+
+        const existing = s.messagesByConv[convId] || [];
+        const matchIndex = existing.findIndex(
+          (item) =>
+            item.id === mapped.id ||
+            (mapped.clientMessageId && item.clientMessageId === mapped.clientMessageId)
+        );
+        const alreadyExisted = matchIndex >= 0;
+        const recalledTimestamp =
+          evType === "message.recalled"
+            ? mapped.recalledAt || String(eventObj.createdAt || new Date().toISOString())
+            : mapped.recalledAt;
+
+        let nextList = alreadyExisted
+          ? existing.map((item, idx) =>
+              idx === matchIndex
+                ? evType === "message.recalled"
+                  ? {
+                      ...item,
+                      ...mapped,
+                      recalledAt: recalledTimestamp,
+                      blocks: [],
+                      reactions: {},
+                      attachments: undefined,
+                      card: undefined,
+                      replyToId: undefined,
+                      status: item.status === "read" ? "read" : resolvedMappedStatus,
+                    }
+                  : {
+                      ...item,
+                      ...mapped,
+                      blocks:
+                        mapped.blocks && mapped.blocks.length > 0
+                          ? mapped.blocks
+                          : [{ type: "text" as const, text: mapped.plainText }],
+                      reactions:
+                        rawMsg.reactions !== undefined ? mapped.reactions : item.reactions,
+                      attachments: mapped.attachments || item.attachments,
+                      threadReplyCount:
+                        rawMsg.threadReplyCount !== undefined || rawMsg.replyCount !== undefined
+                          ? mapped.threadReplyCount
+                          : item.threadReplyCount,
+                      replyToId: mapped.replyToId || item.replyToId,
+                      senderAvatarUrl: mapped.senderAvatarUrl || item.senderAvatarUrl,
+                      status: item.status === "read" ? "read" : resolvedMappedStatus,
+                    }
+                : item
+            )
+          : [
+              ...existing,
+              {
+                ...mapped,
+                recalledAt: recalledTimestamp,
+                status: resolvedMappedStatus,
+              },
+            ];
+
+        if (evType === "message.created" && !isOwn && !isSystemMessage && nextPeerLastReadAt) {
+          const peerMs = Date.parse(nextPeerLastReadAt);
+          if (Number.isFinite(peerMs)) {
+            nextList = nextList.map((item) => {
+              if (
+                s.currentUser?.id &&
+                item.senderId === s.currentUser.id &&
+                item.status === "sent" &&
+                Date.parse(item.createdAt) <= peerMs
+              ) {
+                return { ...item, status: "read" as const };
+              }
+              return item;
+            });
+          }
+        }
+
+        const isActive = convId === s.activeConversationId;
+        const baseUnread = prevConv?.unreadCount || 0;
+        const nextUnreadCount = isActive
+          ? 0
+          : typeof serverUnread === "number"
+          ? serverUnread
+          : evType === "message.created" && !alreadyExisted && !isOwn && !isSystemMessage
+          ? baseUnread + 1
+          : baseUnread;
+
+        const isLatestInConv =
+          evType === "message.created" ||
+          nextList[nextList.length - 1]?.id === mapped.id;
+
+        const summaryText =
+          evType === "message.recalled"
+            ? isOwn
+              ? "你撤回了一条消息"
+              : `${mapped.senderName} 撤回了一条消息`
+            : mapped.plainText;
+
+        const nextConv: V1Conversation = prevConv
+          ? {
+              ...prevConv,
+              lastMessageText: isLatestInConv
+                ? summaryText
+                : prevConv.lastMessageText,
+              lastMessageAt:
+                evType === "message.edited" || evType === "message.recalled"
+                  ? prevConv.lastMessageAt || mapped.createdAt
+                  : mapped.createdAt,
+              unreadCount: nextUnreadCount,
+              peerLastReadAt: nextPeerLastReadAt,
+            }
+          : {
+              id: convId,
+              kind: "group",
+              title: String(
+                convPayload?.displayTitle || convPayload?.title || "新对话"
+              ),
+              unreadCount: nextUnreadCount,
+              mentionCount: 0,
+              pinnedMessageIds: [],
+              memberIds: [],
+              lastMessageText: summaryText,
+              lastMessageAt: mapped.createdAt,
+              peerLastReadAt: nextPeerLastReadAt,
+            };
+
+        const nextMembers = { ...s.members };
+        if (Array.isArray(convPayload?.members)) {
+          for (const m of convPayload.members as Array<Record<string, unknown>>) {
+            upsertRawMemberRecord(nextMembers, m);
+          }
+        }
+        backfillMemberFromMessage(nextMembers, mapped);
+
+        let nextTypingByConv = s.typingByConv;
+        if (evType === "message.created" && s.typingByConv[convId]?.length) {
+          const remaining = s.typingByConv[convId].filter(
+            (t) => t.userId !== mapped.senderId
+          );
+          if (remaining.length !== s.typingByConv[convId].length) {
+            nextTypingByConv = { ...s.typingByConv };
+            if (remaining.length === 0) {
+              delete nextTypingByConv[convId];
+            } else {
+              nextTypingByConv[convId] = remaining;
+            }
+          }
+        }
+
+        return {
+          members: nextMembers,
+          typingByConv: nextTypingByConv,
+          messagesByConv: {
+            ...s.messagesByConv,
+            [convId]: nextList,
+          },
+          conversations: {
+            ...s.conversations,
+            [convId]: nextConv,
+          },
+          conversationOrder: prevConv
+            ? s.conversationOrder
+            : [...s.conversationOrder, convId],
+        };
+      });
+      return;
+    }
+
+    if (evType === "reaction.added" || evType === "reaction.removed") {
+      const msgId = String(payload.messageId || eventObj.targetId || "");
+      const convId = String(payload.conversationId || eventObj.conversationId || "");
+      if (!msgId || !convId) return;
+      const nextReactions = mapRawReactions(payload.reactions);
+      set((s) => ({
+        messagesByConv: {
+          ...s.messagesByConv,
+          [convId]: (s.messagesByConv[convId] || []).map((m) =>
+            m.id === msgId ? { ...m, reactions: nextReactions } : m
+          ),
+        },
+      }));
+      return;
+    }
+
+    if (evType === "conversation.member_added") {
+      const convId = String(payload.conversationId || eventObj.conversationId || "");
+      const userId = String(payload.userId || eventObj.targetId || "");
+      if (!convId || !userId) return;
+      set((s) => {
+        const prevConv = s.conversations[convId];
+        const nextMembers = { ...s.members };
+        if (payload.member && typeof payload.member === "object") {
+          upsertRawMemberRecord(nextMembers, payload.member as Record<string, unknown>);
+        }
+        if (!prevConv) {
+          return { members: nextMembers };
+        }
+        const nextMemberIds = prevConv.memberIds.includes(userId)
+          ? prevConv.memberIds
+          : [...prevConv.memberIds, userId];
+        return {
+          members: nextMembers,
+          conversations: {
+            ...s.conversations,
+            [convId]: { ...prevConv, memberIds: nextMemberIds },
+          },
+        };
+      });
+      return;
+    }
+
+    if (evType === "conversation.member_removed") {
+      const convId = String(payload.conversationId || eventObj.conversationId || "");
+      const userId = String(payload.userId || eventObj.targetId || "");
+      if (!convId || !userId) return;
+      set((s) => {
+        const prevConv = s.conversations[convId];
+        if (!prevConv) return s;
+        if (s.currentUser?.id && userId === s.currentUser.id) {
+          const nextConversations = { ...s.conversations };
+          delete nextConversations[convId];
+          const nextOrder = s.conversationOrder.filter((id) => id !== convId);
+          return {
+            conversations: nextConversations,
+            conversationOrder: nextOrder,
+            pinnedConversationIds: s.pinnedConversationIds.filter((id) => id !== convId),
+            activeConversationId:
+              s.activeConversationId === convId ? nextOrder[0] || null : s.activeConversationId,
+          };
+        }
+        return {
+          conversations: {
+            ...s.conversations,
+            [convId]: {
+              ...prevConv,
+              memberIds: prevConv.memberIds.filter((id) => id !== userId),
+            },
+          },
+        };
+      });
+      return;
+    }
+
+    if (evType === "message.pinned" || evType === "message.unpinned") {
+      const convId = String(payload.conversationId || eventObj.conversationId || "");
+      const msgId = String(payload.messageId || eventObj.targetId || "");
+      if (!convId || !msgId) return;
+      set((s) => {
+        const prevConv = s.conversations[convId];
+        if (!prevConv) return s;
+        const nextPins =
+          evType === "message.pinned"
+            ? prevConv.pinnedMessageIds.includes(msgId)
+              ? prevConv.pinnedMessageIds
+              : [msgId, ...prevConv.pinnedMessageIds]
+            : prevConv.pinnedMessageIds.filter((id) => id !== msgId);
+        return {
+          conversations: {
+            ...s.conversations,
+            [convId]: { ...prevConv, pinnedMessageIds: nextPins },
+          },
+        };
+      });
+    }
   };
 
   return {
@@ -1318,6 +1722,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     drafts: {},
     scrollTops: {},
     editingMessageId: null,
+    typingByConv: {},
+    recalledDrafts: {},
+
+    applyRealtimeEvent,
 
     p2pRoom: null,
     p2pAesKey: null,
@@ -1576,9 +1984,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       try {
         const res = await apiV1.listMessages(conversationId);
         if (!Array.isArray(res.messages)) return;
-        const nextMembers = { ...get().members };
+        const snap = get();
+        const conv = snap.conversations[conversationId];
+        const nextMembers = { ...snap.members };
         const mapped = res.messages.map((m) => {
-          const msg = mapRawMessage(conversationId, m, nextMembers);
+          const msg = mapRawMessage(conversationId, m, nextMembers, {
+            currentUserId: snap.currentUser?.id,
+            convKind: conv?.kind,
+            peerLastReadAt: conv?.peerLastReadAt,
+          });
           backfillMemberFromMessage(nextMembers, msg);
           return msg;
         });
@@ -1651,13 +2065,34 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     setEditingMessageId: (editingMessageId) => set({ editingMessageId }),
 
     sendWorkspaceMessage: async (conversationId, text, replyToId, attachments) => {
-      const user = get().currentUser;
+      const stateSnap = get();
+      const user = stateSnap.currentUser;
       const trimmed = text.trim();
       const attList = attachments && attachments.length > 0 ? attachments : undefined;
       if (!user || (!trimmed && !attList)) return;
+      const convSnap = stateSnap.conversations[conversationId];
       const clientMessageId = `cli_${crypto.randomUUID()}`;
       const tempId = `opt_${clientMessageId}`;
       const displayPlain = trimmed || (attList ? "[文件]" : "");
+      const parsedBlocks = buildTextAndMentionBlocks(
+        trimmed,
+        convSnap,
+        stateSnap.members,
+        user.id
+      );
+      const optimisticBlocks: V1MessageBlock[] | undefined =
+        parsedBlocks.length > 0
+          ? (parsedBlocks.map((b) =>
+              b.type === "mention"
+                ? {
+                    type: "mention" as const,
+                    userId: String(b.userId),
+                    label: String(b.label),
+                  }
+                : { type: "text" as const, text: String(b.text) }
+            ) as V1MessageBlock[])
+          : undefined;
+
       const optimistic: V1Message = {
         id: tempId,
         clientMessageId,
@@ -1665,6 +2100,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         senderId: user.id,
         senderName: user.displayName,
         plainText: displayPlain,
+        blocks: optimisticBlocks,
         replyToId,
         createdAt: new Date().toISOString(),
         status: "sending",
@@ -1680,11 +2116,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       get().setDraft(conversationId, "");
 
       if (get().isPreviewMode) {
+        const previewStatus = convSnap?.kind === "saved" ? "read" : "sent";
         set((s) => ({
           messagesByConv: {
             ...s.messagesByConv,
             [conversationId]: (s.messagesByConv[conversationId] || []).map((m) =>
-              m.id === tempId ? { ...m, status: "read" } : m
+              m.id === tempId ? { ...m, status: previewStatus } : m
             ),
           },
           conversations: s.conversations[conversationId]
@@ -1702,16 +2139,34 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       }
 
       try {
+        const requestBlocks: Array<Record<string, unknown>> = [...parsedBlocks];
+        for (const a of attList || []) {
+          if (a.id) {
+            requestBlocks.push({ type: "attachment", attachmentId: a.id });
+          }
+        }
         const res = await apiV1.sendMessage(conversationId, trimmed, {
           replyToMessageId: replyToId,
           clientMessageId,
           attachmentIds: attList?.map((a) => a.id),
+          blocks: requestBlocks.length > 0 ? requestBlocks : undefined,
         });
         const msgObj = (res.message || {}) as Record<string, unknown>;
         const realId = msgObj.id ? String(msgObj.id) : tempId;
+        const latestState = get();
+        const latestConv = latestState.conversations[conversationId];
         const serverMapped = msgObj.id
-          ? mapRawMessage(conversationId, msgObj, get().members)
+          ? mapRawMessage(conversationId, msgObj, latestState.members, {
+              currentUserId: user.id,
+              convKind: latestConv?.kind,
+              peerLastReadAt: latestConv?.peerLastReadAt,
+            })
           : null;
+        const finalStatus = computeOwnMessageStatus(
+          latestConv?.kind,
+          latestConv?.peerLastReadAt,
+          serverMapped?.createdAt || optimistic.createdAt
+        );
         set((s) => {
           const list = s.messagesByConv[conversationId] || [];
           const alreadyDeliveredByWs = list.some((m) => m.id === realId && m.id !== tempId);
@@ -1720,8 +2175,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             : list.map((m) =>
                 m.id === tempId
                   ? serverMapped
-                    ? { ...serverMapped, status: "sent" as const }
-                    : { ...m, id: realId, status: "sent" as const }
+                    ? { ...serverMapped, status: finalStatus }
+                    : { ...m, id: realId, status: finalStatus }
                   : m
               );
           return {
@@ -1782,11 +2237,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       }));
 
       if (get().isPreviewMode) {
+        const previewStatus =
+          get().conversations[conversationId]?.kind === "saved" ? "read" : "sent";
         set((s) => ({
           messagesByConv: {
             ...s.messagesByConv,
             [conversationId]: (s.messagesByConv[conversationId] || []).map((m) =>
-              m.id === tempId ? { ...m, status: "read" } : m
+              m.id === tempId ? { ...m, status: previewStatus } : m
             ),
           },
         }));
@@ -1801,9 +2258,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         });
         const msgObj = (res.message || {}) as Record<string, unknown>;
         const realId = msgObj.id ? String(msgObj.id) : tempId;
+        const latestState = get();
+        const latestConv = latestState.conversations[conversationId];
         const serverMapped = msgObj.id
-          ? mapRawMessage(conversationId, msgObj, get().members)
+          ? mapRawMessage(conversationId, msgObj, latestState.members, {
+              currentUserId: user.id,
+              convKind: latestConv?.kind,
+              peerLastReadAt: latestConv?.peerLastReadAt,
+            })
           : null;
+        const finalStatus = computeOwnMessageStatus(
+          latestConv?.kind,
+          latestConv?.peerLastReadAt,
+          serverMapped?.createdAt || optimistic.createdAt
+        );
         set((s) => {
           const list = s.messagesByConv[conversationId] || [];
           const alreadyDeliveredByWs = list.some((m) => m.id === realId && m.id !== tempId);
@@ -1812,8 +2280,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             : list.map((m) =>
                 m.id === tempId
                   ? serverMapped
-                    ? { ...serverMapped, status: "sent" as const }
-                    : { ...m, id: realId, status: "sent" as const }
+                    ? { ...serverMapped, status: finalStatus }
+                    : { ...m, id: realId, status: finalStatus }
                   : m
               );
           return {
@@ -1873,11 +2341,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       }));
 
       if (get().isPreviewMode) {
+        const previewStatus =
+          get().conversations[conversationId]?.kind === "saved" ? "read" : "sent";
         set((s) => ({
           messagesByConv: {
             ...s.messagesByConv,
             [conversationId]: (s.messagesByConv[conversationId] || []).map((m) =>
-              m.id === tempId ? { ...m, status: "read" } : m
+              m.id === tempId ? { ...m, status: previewStatus } : m
             ),
           },
         }));
@@ -1891,9 +2361,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         });
         const msgObj = (res.message || {}) as Record<string, unknown>;
         const realId = msgObj.id ? String(msgObj.id) : tempId;
+        const latestState = get();
+        const latestConv = latestState.conversations[conversationId];
         const serverMapped = msgObj.id
-          ? mapRawMessage(conversationId, msgObj, get().members)
+          ? mapRawMessage(conversationId, msgObj, latestState.members, {
+              currentUserId: user.id,
+              convKind: latestConv?.kind,
+              peerLastReadAt: latestConv?.peerLastReadAt,
+            })
           : null;
+        const finalStatus = computeOwnMessageStatus(
+          latestConv?.kind,
+          latestConv?.peerLastReadAt,
+          serverMapped?.createdAt || optimistic.createdAt
+        );
         set((s) => {
           const list = s.messagesByConv[conversationId] || [];
           const alreadyDeliveredByWs = list.some((m) => m.id === realId && m.id !== tempId);
@@ -1902,8 +2383,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             : list.map((m) =>
                 m.id === tempId
                   ? serverMapped
-                    ? { ...serverMapped, status: "sent" as const }
-                    : { ...m, id: realId, status: "sent" as const }
+                    ? { ...serverMapped, status: finalStatus }
+                    : { ...m, id: realId, status: finalStatus }
                   : m
               );
           return {
@@ -1987,6 +2468,83 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           useEmoteStore
             .getState()
             .showToast(err instanceof Error ? err.message : "编辑消息失败，请稍后重试");
+        }
+      }
+    },
+
+    recallWorkspaceMessage: async (conversationId, messageId) => {
+      const prevMessages = get().messagesByConv[conversationId] || [];
+      const prevTarget = prevMessages.find((m) => m.id === messageId);
+      if (!prevTarget) return;
+      const isOwn = Boolean(
+        get().currentUser?.id && prevTarget.senderId === get().currentUser?.id
+      );
+      const savedText = prevTarget.plainText?.trim() || "";
+      const savedDraft: RecalledDraftEntry | undefined =
+        isOwn &&
+        savedText &&
+        savedText !== "[文件]" &&
+        savedText !== "[表情]" &&
+        !savedText.startsWith("[表情包]")
+          ? { text: savedText, replyToId: prevTarget.replyToId }
+          : undefined;
+      const recalledAt = new Date().toISOString();
+
+      set((s) => {
+        const list = (s.messagesByConv[conversationId] || []).map((m) =>
+          m.id === messageId
+            ? {
+                ...m,
+                recalledAt,
+                blocks: [],
+                reactions: {},
+                attachments: undefined,
+                card: undefined,
+                replyToId: undefined,
+              }
+            : m
+        );
+        const isLast = list[list.length - 1]?.id === messageId;
+        const prevConv = s.conversations[conversationId];
+        return {
+          editingMessageId: s.editingMessageId === messageId ? null : s.editingMessageId,
+          recalledDrafts: savedDraft
+            ? { ...s.recalledDrafts, [messageId]: savedDraft }
+            : s.recalledDrafts,
+          messagesByConv: {
+            ...s.messagesByConv,
+            [conversationId]: list,
+          },
+          conversations:
+            prevConv && isLast
+              ? {
+                  ...s.conversations,
+                  [conversationId]: {
+                    ...prevConv,
+                    lastMessageText: isOwn
+                      ? "你撤回了一条消息"
+                      : `${prevTarget.senderName} 撤回了一条消息`,
+                  },
+                }
+              : s.conversations,
+        };
+      });
+
+      if (!get().isPreviewMode) {
+        try {
+          await apiV1.recallMessage(messageId);
+        } catch (err) {
+          set((s) => ({
+            messagesByConv: {
+              ...s.messagesByConv,
+              [conversationId]: (s.messagesByConv[conversationId] || []).map((m) =>
+                m.id === messageId ? prevTarget : m
+              ),
+            },
+          }));
+          useEmoteStore
+            .getState()
+            .showToast(err instanceof Error ? err.message : "撤回消息失败，请稍后重试");
         }
       }
     },
@@ -2286,6 +2844,38 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         });
       }
       void get().loadConversationMessages(conversationId);
+    },
+
+    removeGroupMember: async (conversationId, userId) => {
+      if (!userId) return;
+      const state = get();
+      const prevConv = state.conversations[conversationId];
+      if (!prevConv || prevConv.kind !== "group") return;
+
+      set((s) => ({
+        conversations: {
+          ...s.conversations,
+          [conversationId]: {
+            ...prevConv,
+            memberIds: prevConv.memberIds.filter((id) => id !== userId),
+          },
+        },
+      }));
+
+      if (state.isPreviewMode) return;
+
+      try {
+        await apiV1.removeGroupMember(conversationId, userId);
+        void get().loadConversationMessages(conversationId);
+      } catch (err) {
+        set((s) => ({
+          conversations: {
+            ...s.conversations,
+            [conversationId]: prevConv,
+          },
+        }));
+        throw err;
+      }
     },
 
     leaveGroup: async (conversationId) => {

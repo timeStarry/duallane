@@ -123,6 +123,18 @@ export interface BotCommandSpec {
   command: string;
   description: string;
   scope?: "all" | "direct" | "group";
+  botId?: string;
+  botName?: string;
+}
+
+export interface BotTokenRecord {
+  id: string;
+  botId?: string;
+  scopes: string[];
+  expiresAt?: string | null;
+  revokedAt?: string | null;
+  lastUsedAt?: string | null;
+  createdAt: string;
 }
 
 export interface QRSessionResponse {
@@ -228,6 +240,14 @@ export const apiV1 = {
       method: "PATCH",
       body: JSON.stringify({ plainText }),
     }),
+  recallMessage: (messageId: string, reason?: string) =>
+    requestJSON<{ message?: Record<string, unknown> }>(
+      `/api/workspace/messages/${encodeURIComponent(messageId)}/recall`,
+      {
+        method: "POST",
+        body: JSON.stringify(reason ? { reason } : {}),
+      }
+    ),
   forwardMessages: (messageIds: string[], targetConversationId: string) =>
     requestJSON<{ createdIds: string[] }>("/api/v1/messages/forward", {
       method: "POST",
@@ -431,10 +451,19 @@ export const apiV1 = {
         body: JSON.stringify({ userIds }),
       }
     ),
+  removeGroupMember: (conversationId: string, userId: string) =>
+    requestJSON<{ ok: boolean; conversationId: string; userId: string }>(
+      `/api/v1/conversations/${encodeURIComponent(conversationId)}/members/${encodeURIComponent(userId)}`,
+      { method: "DELETE" }
+    ),
   leaveGroupConversation: (conversationId: string) =>
     requestJSON<{ ok: boolean; conversationId: string }>(
       `/api/v1/conversations/${encodeURIComponent(conversationId)}/leave`,
       { method: "POST" }
+    ),
+  listConversationBotCommands: (conversationId: string) =>
+    requestJSON<{ commands: BotCommandSpec[] }>(
+      `/api/v1/conversations/${encodeURIComponent(conversationId)}/bot-commands`
     ),
   getPreferences: () =>
     requestJSON<{ preferences?: Record<string, unknown> }>("/api/v1/preferences"),
@@ -450,8 +479,16 @@ export const apiV1 = {
     ),
   markConversationRead: (conversationId: string) =>
     requestJSON<Record<string, unknown>>(
-      `/api/workspace/conversations/${encodeURIComponent(conversationId)}/read`,
+      `/api/v1/conversations/${encodeURIComponent(conversationId)}/read`,
       { method: "POST" }
+    ),
+  sendConversationTyping: (conversationId: string, state: "typing" | "thinking" = "typing") =>
+    requestJSON<{ ok: boolean }>(
+      `/api/v1/conversations/${encodeURIComponent(conversationId)}/typing`,
+      {
+        method: "POST",
+        body: JSON.stringify({ state }),
+      }
     ),
   invokeCardAction: (cardId: string, actionId: string, input?: Record<string, unknown>, expectedRevision = 1) =>
     requestJSON<Record<string, unknown>>(
@@ -493,6 +530,15 @@ export const apiV1 = {
     }),
   getBotSettings: (botId: string) =>
     requestJSON<{ settings: Record<string, unknown> }>(`/api/workspace/bots/${encodeURIComponent(botId)}/settings`),
+  listBotTokens: (botId: string) =>
+    requestJSON<{ tokens: BotTokenRecord[] }>(
+      `/api/workspace/bots/${encodeURIComponent(botId)}/tokens`
+    ),
+  revokeBotToken: (botId: string, tokenId: string) =>
+    requestJSON<{ token?: BotTokenRecord }>(
+      `/api/workspace/bots/${encodeURIComponent(botId)}/tokens/${encodeURIComponent(tokenId)}/revoke`,
+      { method: "POST" }
+    ),
   issueBotToken: (botId: string, scopes: string[]) =>
     requestJSON<Record<string, unknown>>(`/api/workspace/bots/${encodeURIComponent(botId)}/tokens`, {
       method: "POST",
@@ -502,6 +548,51 @@ export const apiV1 = {
     requestJSON<Record<string, unknown>>(`/api/workspace/bots/${encodeURIComponent(botId)}/tokens/rotate`, {
       method: "POST",
       body: JSON.stringify({ scopes }),
+    }),
+  pauseBot: (botId: string) =>
+    requestJSON<{ bot?: Record<string, unknown> }>(
+      `/api/workspace/bots/${encodeURIComponent(botId)}/pause`,
+      { method: "POST" }
+    ),
+  resumeBot: (botId: string) =>
+    requestJSON<{ bot?: Record<string, unknown> }>(
+      `/api/workspace/bots/${encodeURIComponent(botId)}/resume`,
+      { method: "POST" }
+    ),
+  beginDeleteBot: (botId: string) =>
+    requestJSON<{ bot?: Record<string, unknown>; confirmationToken?: string }>(
+      `/api/workspace/bots/${encodeURIComponent(botId)}`,
+      { method: "DELETE" }
+    ),
+  confirmDeleteBot: (botId: string) =>
+    requestJSON<{ bot?: Record<string, unknown> }>(
+      `/api/workspace/bots/${encodeURIComponent(botId)}/delete/confirm`,
+      { method: "POST", body: JSON.stringify({}) }
+    ),
+  updateBotProfile: (botId: string, patch: { name?: string; description?: string }) =>
+    requestJSON<{ ok: boolean; name?: string; description?: string; avatarUrl?: string }>(
+      `/api/v1/bots/${encodeURIComponent(botId)}/profile`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      }
+    ),
+  uploadBotAvatar: async (botId: string, file: File) => {
+    const rawBuffer = await file.arrayBuffer();
+    return requestJSON<{ avatarUrl: string }>(
+      `/api/v1/bots/${encodeURIComponent(botId)}/avatar`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": file.type || "image/png",
+        },
+        body: rawBuffer,
+      }
+    );
+  },
+  deleteBotAvatar: (botId: string) =>
+    requestJSON<{ ok: boolean }>(`/api/v1/bots/${encodeURIComponent(botId)}/avatar`, {
+      method: "DELETE",
     }),
   updateBotSettings: (botId: string, settings: Record<string, unknown>) =>
     requestJSON<Record<string, unknown>>(`/api/workspace/bots/${encodeURIComponent(botId)}/settings`, {

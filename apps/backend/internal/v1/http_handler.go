@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -39,6 +40,8 @@ func (h *HTTPHandler) WithBotAuthenticator(botAuth BotAuthenticator) *HTTPHandle
 func (h *HTTPHandler) Mount(r chi.Router) {
 	r.Get("/api/bot/v2/conversations", h.handleBotListConversations)
 	r.Patch("/api/bot/v2/messages/{messageId}", h.handleBotEditMessage)
+	r.Post("/api/bot/v2/typing", h.handleBotTyping)
+	r.Post("/api/bot/v2/unbind", h.handleBotUnbind)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Post("/auth/qr/start", h.handleQRStart)
@@ -53,7 +56,10 @@ func (h *HTTPHandler) Mount(r chi.Router) {
 			r.Post("/conversations/groups", h.handleCreateGroup)
 			r.Patch("/conversations/{conversationId}", h.handleUpdateGroup)
 			r.Post("/conversations/{conversationId}/members", h.handleAddGroupMembers)
+			r.Delete("/conversations/{conversationId}/members/{userId}", h.handleRemoveGroupMember)
 			r.Post("/conversations/{conversationId}/leave", h.handleLeaveGroup)
+			r.Post("/conversations/{conversationId}/read", h.handleMarkConversationRead)
+			r.Post("/conversations/{conversationId}/typing", h.handleConversationTyping)
 			r.Post("/conversations/{conversationId}/pins/{messageId}", h.handlePin)
 			r.Delete("/conversations/{conversationId}/pins/{messageId}", h.handleUnpin)
 			r.Patch("/messages/{messageId}", h.handleEditMessage)
@@ -66,6 +72,10 @@ func (h *HTTPHandler) Mount(r chi.Router) {
 			r.Get("/preferences", h.handleGetPreferences)
 			r.Put("/preferences", h.handleSavePreferences)
 			r.Post("/bots", h.handleCreateBot)
+			r.Patch("/bots/{botId}/profile", h.handleUpdateBotProfile)
+			r.Put("/bots/{botId}/avatar", h.handleUploadBotAvatar)
+			r.Delete("/bots/{botId}/avatar", h.handleDeleteBotAvatar)
+			r.Get("/bots/{botId}/avatar", h.handleGetBotAvatar)
 			r.Get("/bots/{botId}/commands", h.handleListBotCommandsByBot)
 			r.Put("/bots/{botId}/commands", h.handleRegisterBotCommands)
 			r.Get("/conversations/{conversationId}/bot-commands", h.handleListBotCommands)
@@ -242,6 +252,46 @@ func (h *HTTPHandler) handleLeaveGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "conversationId": convID})
+}
+
+func (h *HTTPHandler) handleRemoveGroupMember(w http.ResponseWriter, r *http.Request) {
+	conv, err := h.service.RemoveGroupMember(
+		r.Context(),
+		actorFromContext(r.Context()).ID,
+		chi.URLParam(r, "conversationId"),
+		chi.URLParam(r, "userId"),
+	)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"conversation": conv})
+}
+
+func (h *HTTPHandler) handleMarkConversationRead(w http.ResponseWriter, r *http.Request) {
+	convID := chi.URLParam(r, "conversationId")
+	readAt, err := h.service.MarkConversationRead(r.Context(), actorFromContext(r.Context()).ID, convID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "conversationId": convID, "readAt": readAt})
+}
+
+func (h *HTTPHandler) handleConversationTyping(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		State string `json:"state"`
+	}
+	if r.ContentLength != 0 {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	convID := chi.URLParam(r, "conversationId")
+	expiresAt, err := h.service.SendConversationTyping(r.Context(), actorFromContext(r.Context()).ID, convID, "human", body.State)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"accepted": true, "conversationId": convID, "expiresAt": expiresAt})
 }
 
 func (h *HTTPHandler) handleEditMessage(w http.ResponseWriter, r *http.Request) {
@@ -443,12 +493,86 @@ func (h *HTTPHandler) handleListBotCommandsByBot(w http.ResponseWriter, r *http.
 }
 
 func (h *HTTPHandler) handleListBotCommands(w http.ResponseWriter, r *http.Request) {
-	cmds, err := h.service.ListBotCommands(r.Context(), chi.URLParam(r, "conversationId"))
+	cmds, err := h.service.ListBotCommands(r.Context(), actorFromContext(r.Context()).ID, chi.URLParam(r, "conversationId"))
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"commands": cmds})
+}
+
+func (h *HTTPHandler) handleUpdateBotProfile(w http.ResponseWriter, r *http.Request) {
+	var fields map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&fields); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.bad_json", "请求格式无效")
+		return
+	}
+	var input BotProfileUpdateInput
+	if rawName, ok := fields["name"]; ok {
+		input.NameSet = true
+		var name *string
+		if err := json.Unmarshal(rawName, &name); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "v1.bad_json", "机器人名称格式无效")
+			return
+		}
+		input.Name = name
+	}
+	if rawDesc, ok := fields["description"]; ok {
+		input.DescriptionSet = true
+		var desc *string
+		if err := json.Unmarshal(rawDesc, &desc); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "v1.bad_json", "机器人简介格式无效")
+			return
+		}
+		input.Description = desc
+	}
+	res, err := h.service.UpdateBotProfile(r.Context(), actorFromContext(r.Context()).ID, chi.URLParam(r, "botId"), input)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"profile": res})
+}
+
+func (h *HTTPHandler) handleUploadBotAvatar(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 520*1024)
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.avatar_too_large", "机器人头像大小需在 512KB 以内")
+		return
+	}
+	mimeType := strings.TrimSpace(r.Header.Get("Content-Type"))
+	if mimeType == "" || mimeType == "application/octet-stream" {
+		mimeType = http.DetectContentType(data)
+	}
+	res, err := h.service.UploadBotAvatar(r.Context(), actorFromContext(r.Context()).ID, chi.URLParam(r, "botId"), mimeType, data)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"profile": res})
+}
+
+func (h *HTTPHandler) handleDeleteBotAvatar(w http.ResponseWriter, r *http.Request) {
+	res, err := h.service.DeleteBotAvatar(r.Context(), actorFromContext(r.Context()).ID, chi.URLParam(r, "botId"))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"profile": res})
+}
+
+func (h *HTTPHandler) handleGetBotAvatar(w http.ResponseWriter, r *http.Request) {
+	payload, err := h.service.GetBotAvatar(r.Context(), actorFromContext(r.Context()).ID, chi.URLParam(r, "botId"))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", payload.MIMEType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(payload.Data)
 }
 
 func (h *HTTPHandler) handleUpsertBotWebhook(w http.ResponseWriter, r *http.Request) {
@@ -614,6 +738,43 @@ func (h *HTTPHandler) handleBotEditMessage(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messageId": messageID})
+}
+
+func (h *HTTPHandler) handleBotTyping(w http.ResponseWriter, r *http.Request) {
+	botAuth, ok := h.authenticateBotRequest(w, r)
+	if !ok {
+		return
+	}
+	if err := botgateway.RequireScope(botAuth, botgateway.ScopeMessagesSend); err != nil {
+		writeBotGatewayError(w, err)
+		return
+	}
+	var body struct {
+		ConversationID string `json:"conversationId"`
+		State          string `json:"state"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.ConversationID) == "" {
+		writeJSONError(w, http.StatusBadRequest, botgateway.CodeInvalidRequest, "请求参数无效")
+		return
+	}
+	expiresAt, err := h.service.SendConversationTyping(r.Context(), botAuth.UserID, body.ConversationID, "bot", body.State)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"accepted": true, "expiresAt": expiresAt, "expiresInMs": 6000})
+}
+
+func (h *HTTPHandler) handleBotUnbind(w http.ResponseWriter, r *http.Request) {
+	botAuth, ok := h.authenticateBotRequest(w, r)
+	if !ok {
+		return
+	}
+	if err := h.service.UnbindBotSelf(r.Context(), botAuth.BotID, botAuth.TokenID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "revokedTokenId": botAuth.TokenID})
 }
 
 func writeServiceError(w http.ResponseWriter, err error) {

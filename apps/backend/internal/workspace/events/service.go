@@ -376,6 +376,10 @@ func projectPayload(eventType string, payload map[string]any, actor *auth.Actor)
 			result["conversation"] = conversation
 		}
 		return result
+	case "conversation.read":
+		return stringFields(payload, "conversationId", "userId", "readAt")
+	case "conversation.typing":
+		return stringFields(payload, "conversationId", "userId", "displayName", "kind", "state", "expiresAt")
 	case "emote.settings.updated":
 		return stringFields(payload, "userId")
 	case "emote.library.updated":

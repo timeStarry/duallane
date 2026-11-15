@@ -1,14 +1,21 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Bot,
+  Camera,
   Check,
   ChevronDown,
   ChevronRight,
   Copy,
+  KeyRound,
   Link2,
   MessageSquare,
+  PauseCircle,
+  PlayCircle,
   RefreshCw,
+  RotateCcw,
   ShieldCheck,
+  Trash2,
+  Unlink,
   X,
 } from "lucide-react";
 import { useLaneStore } from "@/entities/lane/store";
@@ -19,8 +26,9 @@ import {
   type BotConnectionInfo,
   type BotGroupPolicy,
   type BotSetupSession,
+  type BotTokenRecord,
 } from "@/shared/lib/api-v1";
-import { Button, IconButton, Input, Select, Switch } from "@/shared/ui";
+import { Avatar, Button, IconButton, Input, Select, Switch } from "@/shared/ui";
 import { cn } from "@/shared/lib/cn";
 
 interface BotItem {
@@ -30,6 +38,8 @@ interface BotItem {
   status: string;
   visibilityPolicy?: string;
   triggerPolicy?: string;
+  description?: string;
+  avatarUrl?: string;
 }
 
 interface BotSettingsData {
@@ -39,6 +49,8 @@ interface BotSettingsData {
   proactiveEnabled: boolean;
   triggerPolicy: string;
   allowedMemberIds: string[];
+  description: string;
+  avatarUrl: string;
 }
 
 const VALID_SCOPES = [
@@ -185,7 +197,27 @@ export function BotSettingsPanel() {
     proactiveEnabled: isPreviewMode,
     triggerPolicy: "mention-or-command",
     allowedMemberIds: [],
+    description: isPreviewMode ? "负责架构评审、会议纪要总结与发布卡片流转" : "",
+    avatarUrl: "",
   });
+  const [tokens, setTokens] = useState<BotTokenRecord[]>(() =>
+    isPreviewMode
+      ? [
+          {
+            id: "btk_preview_active_01",
+            botId: "bot_echo_1",
+            scopes: DEFAULT_PAIRING_SCOPES,
+            createdAt: "2026-11-15T00:00:00.000Z",
+            lastUsedAt: "2026-11-15T00:50:00.000Z",
+          },
+        ]
+      : []
+  );
+  const [profileDraftsByBot, setProfileDraftsByBot] = useState<
+    Record<string, { name?: string; bio?: string }>
+  >({});
+  const [confirmDeleteBotId, setConfirmDeleteBotId] = useState<string>("");
+  const botAvatarInputRef = useRef<HTMLInputElement | null>(null);
   const [connection, setConnection] = useState<BotConnectionInfo | null>(() =>
     isPreviewMode
       ? {
@@ -272,14 +304,17 @@ export function BotSettingsPanel() {
   const refreshBotRuntimeState = useCallback(
     async (botId: string) => {
       if (!botId || isPreviewMode) return;
-      const [settingsRes, cmdRes, connRes, gpRes] = await Promise.all([
+      const [settingsRes, cmdRes, connRes, gpRes, tokensRes] = await Promise.all([
         apiV1.getBotSettings(botId).catch(() => null),
         apiV1.getBotCommands(botId).catch(() => ({ commands: [] })),
         apiV1.getBotConnection(botId).catch(() => ({ connection: null })),
         apiV1.listBotGroupPolicies(botId).catch(() => ({ policies: [] })),
+        apiV1.listBotTokens(botId).catch(() => ({ tokens: [] })),
       ]);
       if (settingsRes?.settings) {
         const s = settingsRes.settings;
+        const desc = typeof s.description === "string" ? s.description : "";
+        const avatar = typeof s.avatarUrl === "string" ? s.avatarUrl : "";
         setSettings({
           visibilityPolicy: String(s.visibilityPolicy || "private"),
           allowDirect: s.allowDirect !== false,
@@ -289,11 +324,14 @@ export function BotSettingsPanel() {
           allowedMemberIds: Array.isArray(s.allowedMemberIds)
             ? s.allowedMemberIds.map(String)
             : [],
+          description: desc,
+          avatarUrl: avatar,
         });
       }
       setCommands(cmdRes.commands || []);
       setConnection(connRes.connection || null);
       setGroupPolicies(Array.isArray(gpRes.policies) ? gpRes.policies : []);
+      setTokens(Array.isArray(tokensRes.tokens) ? tokensRes.tokens : []);
     },
     [isPreviewMode]
   );
@@ -306,10 +344,13 @@ export function BotSettingsPanel() {
       apiV1.getBotCommands(selectedBotId).catch(() => ({ commands: [] })),
       apiV1.getBotConnection(selectedBotId).catch(() => ({ connection: null })),
       apiV1.listBotGroupPolicies(selectedBotId).catch(() => ({ policies: [] })),
-    ]).then(([settingsRes, cmdRes, connRes, gpRes]) => {
+      apiV1.listBotTokens(selectedBotId).catch(() => ({ tokens: [] })),
+    ]).then(([settingsRes, cmdRes, connRes, gpRes, tokensRes]) => {
       if (!active) return;
       if (settingsRes?.settings) {
         const s = settingsRes.settings;
+        const desc = typeof s.description === "string" ? s.description : "";
+        const avatar = typeof s.avatarUrl === "string" ? s.avatarUrl : "";
         setSettings({
           visibilityPolicy: String(s.visibilityPolicy || "private"),
           allowDirect: s.allowDirect !== false,
@@ -319,11 +360,14 @@ export function BotSettingsPanel() {
           allowedMemberIds: Array.isArray(s.allowedMemberIds)
             ? s.allowedMemberIds.map(String)
             : [],
+          description: desc,
+          avatarUrl: avatar,
         });
       }
       setCommands(cmdRes.commands || []);
       setConnection(connRes.connection || null);
       setGroupPolicies(Array.isArray(gpRes.policies) ? gpRes.policies : []);
+      setTokens(Array.isArray(tokensRes.tokens) ? tokensRes.tokens : []);
     });
     return () => {
       active = false;
@@ -389,6 +433,29 @@ export function BotSettingsPanel() {
   }, [isPreviewMode, refreshBotRuntimeState, setupSession?.id, setupSession?.status]);
 
   const activeBot = bots.find((b) => b.id === selectedBotId);
+  const profileNameDraft = activeBot
+    ? (profileDraftsByBot[activeBot.id]?.name ?? activeBot.name)
+    : "";
+  const profileBioDraft = activeBot
+    ? (profileDraftsByBot[activeBot.id]?.bio ??
+      activeBot.description ??
+      settings.description ??
+      "")
+    : "";
+  const setProfileNameDraft = (name: string) => {
+    if (!selectedBotId) return;
+    setProfileDraftsByBot((prev) => ({
+      ...prev,
+      [selectedBotId]: { ...prev[selectedBotId], name },
+    }));
+  };
+  const setProfileBioDraft = (bio: string) => {
+    if (!selectedBotId) return;
+    setProfileDraftsByBot((prev) => ({
+      ...prev,
+      [selectedBotId]: { ...prev[selectedBotId], bio },
+    }));
+  };
 
   const botConversations = activeBot?.botUserId
     ? Object.values(conversations).filter(
@@ -669,11 +736,221 @@ export function BotSettingsPanel() {
       setIssuedToken(String(res.token || ""));
       setStatusMessage(
         rotate
-          ? "Token 已轮换（仅展示一次明文，请立即复制保存）"
-          : "新 Token 已签发（仅展示一次明文）"
+          ? "凭证已轮换（仅展示一次明文，请立即复制保存）"
+          : "新凭证已签发（仅展示一次明文）"
       );
+      if (!isPreviewMode) {
+        await refreshBotRuntimeState(selectedBotId);
+      }
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Token 操作失败");
+      setErrorMessage(err instanceof Error ? err.message : "凭证操作失败");
+    }
+  };
+
+  const handleSaveBotProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeBot || !profileNameDraft.trim()) return;
+    setErrorMessage("");
+    setBusyAction("profile");
+    try {
+      const nextName = profileNameDraft.trim();
+      const nextBio = profileBioDraft.trim();
+      if (!isPreviewMode) {
+        await apiV1.updateBotProfile(activeBot.id, {
+          name: nextName,
+          description: nextBio,
+        });
+        await loadBots();
+        await bootstrapWorkspace().catch(() => {});
+      } else {
+        setBots((prev) =>
+          prev.map((b) =>
+            b.id === activeBot.id
+              ? { ...b, name: nextName, description: nextBio }
+              : b
+          )
+        );
+      }
+      setSettings((prev) => ({ ...prev, description: nextBio }));
+      setStatusMessage("机器人资料已更新");
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "保存资料失败");
+    } finally {
+      setBusyAction("");
+    }
+  };
+
+  const handleBotAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !activeBot) return;
+    setErrorMessage("");
+    setBusyAction("avatar");
+    try {
+      if (isPreviewMode) {
+        const previewUrl = URL.createObjectURL(file);
+        setSettings((prev) => ({ ...prev, avatarUrl: previewUrl }));
+        setBots((prev) =>
+          prev.map((b) => (b.id === activeBot.id ? { ...b, avatarUrl: previewUrl } : b))
+        );
+        setStatusMessage("机器人头像已更新");
+        return;
+      }
+      const res = await apiV1.uploadBotAvatar(activeBot.id, file);
+      setSettings((prev) => ({ ...prev, avatarUrl: res.avatarUrl }));
+      setBots((prev) =>
+        prev.map((b) => (b.id === activeBot.id ? { ...b, avatarUrl: res.avatarUrl } : b))
+      );
+      await bootstrapWorkspace().catch(() => {});
+      setStatusMessage("机器人头像已更新");
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "上传机器人头像失败（上限 512 KB）");
+    } finally {
+      setBusyAction("");
+    }
+  };
+
+  const handleResetBotAvatar = async () => {
+    if (!activeBot) return;
+    setErrorMessage("");
+    setBusyAction("avatar");
+    try {
+      if (!isPreviewMode) {
+        await apiV1.deleteBotAvatar(activeBot.id);
+        await bootstrapWorkspace().catch(() => {});
+      }
+      setSettings((prev) => ({ ...prev, avatarUrl: "" }));
+      setBots((prev) =>
+        prev.map((b) => (b.id === activeBot.id ? { ...b, avatarUrl: "" } : b))
+      );
+      setStatusMessage("已恢复默认机器人头像");
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "重置头像失败");
+    } finally {
+      setBusyAction("");
+    }
+  };
+
+  const handleRevokeToken = async (tokenId: string) => {
+    if (!activeBot) return;
+    setErrorMessage("");
+    setBusyAction(`revoke:${tokenId}`);
+    try {
+      if (!isPreviewMode) {
+        await apiV1.revokeBotToken(activeBot.id, tokenId);
+        await refreshBotRuntimeState(activeBot.id);
+      } else {
+        setTokens((prev) =>
+          prev.map((t) =>
+            t.id === tokenId ? { ...t, revokedAt: new Date().toISOString() } : t
+          )
+        );
+        setConnection((prev) => (prev ? { ...prev, status: "disconnected" } : prev));
+      }
+      setStatusMessage("已解绑该 Agent 授权凭证，对应客户端连接已立即失效");
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "解绑凭证失败");
+    } finally {
+      setBusyAction("");
+    }
+  };
+
+  const handleRevokeAllTokens = async () => {
+    if (!activeBot) return;
+    const activeList = tokens.filter((t) => !t.revokedAt);
+    if (activeList.length === 0) return;
+    setErrorMessage("");
+    setBusyAction("revoke-all");
+    try {
+      if (!isPreviewMode) {
+        for (const t of activeList) {
+          await apiV1.revokeBotToken(activeBot.id, t.id);
+        }
+        await refreshBotRuntimeState(activeBot.id);
+      } else {
+        const nowIso = new Date().toISOString();
+        setTokens((prev) => prev.map((t) => ({ ...t, revokedAt: t.revokedAt || nowIso })));
+        setConnection((prev) => (prev ? { ...prev, status: "disconnected" } : prev));
+      }
+      setStatusMessage("已解绑全部 Agent 授权凭证");
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "批量解绑失败");
+    } finally {
+      setBusyAction("");
+    }
+  };
+
+  const handleTogglePauseBot = async () => {
+    if (!activeBot) return;
+    const isPaused = activeBot.status === "paused";
+    setErrorMessage("");
+    setBusyAction("pause");
+    try {
+      if (!isPreviewMode) {
+        if (isPaused) {
+          await apiV1.resumeBot(activeBot.id);
+        } else {
+          await apiV1.pauseBot(activeBot.id);
+        }
+        await loadBots();
+        await refreshBotRuntimeState(activeBot.id);
+      } else {
+        setBots((prev) =>
+          prev.map((b) =>
+            b.id === activeBot.id
+              ? { ...b, status: isPaused ? "active" : "paused" }
+              : b
+          )
+        );
+      }
+      setStatusMessage(isPaused ? "机器人已恢复运行" : "机器人已暂停响应");
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "切换运行状态失败");
+    } finally {
+      setBusyAction("");
+    }
+  };
+
+  const handleConfirmDeleteBot = async () => {
+    if (!activeBot) return;
+    setErrorMessage("");
+    setBusyAction("delete");
+    try {
+      const deletingId = activeBot.id;
+      if (!isPreviewMode) {
+        await apiV1.beginDeleteBot(deletingId);
+        await apiV1.confirmDeleteBot(deletingId);
+        const res = await apiV1.listBots();
+        const nextList = Array.isArray(res.bots) ? (res.bots as BotItem[]) : [];
+        setBots(nextList);
+        setSelectedBotId(nextList[0]?.id || "");
+        await bootstrapWorkspace().catch(() => {});
+      } else {
+        const nextList = bots.filter((b) => b.id !== deletingId);
+        setBots(nextList);
+        setSelectedBotId(nextList[0]?.id || "");
+      }
+      setConfirmDeleteBotId("");
+      setStatusMessage("机器人已永久删除，所有绑定凭证均已吊销");
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "删除机器人失败");
+    } finally {
+      setBusyAction("");
+    }
+  };
+
+  const handleRemoveCommand = async (commandName: string) => {
+    if (!selectedBotId) return;
+    setErrorMessage("");
+    const next = commands.filter((c) => c.command !== commandName);
+    try {
+      if (!isPreviewMode) {
+        await apiV1.putBotCommands(selectedBotId, next);
+      }
+      setCommands(next);
+      setStatusMessage(`已移除指令 /${commandName}`);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "移除指令失败");
     }
   };
 
@@ -712,6 +989,12 @@ export function BotSettingsPanel() {
   };
 
   const isConnected = connection?.status === "connected";
+  const isPaused = activeBot?.status === "paused";
+  const activeTokens = tokens.filter((t) => !t.revokedAt);
+  const activeBotAvatarUrl =
+    settings.avatarUrl ||
+    activeBot?.avatarUrl ||
+    (activeBot?.botUserId ? members[activeBot.botUserId]?.avatarUrl : undefined);
 
   return (
     <div className="space-y-4">
@@ -872,7 +1155,10 @@ export function BotSettingsPanel() {
               size="sm"
               variant={bot.id === selectedBotId ? "primary" : "secondary"}
               className="gap-1.5"
-              onClick={() => setSelectedBotId(bot.id)}
+              onClick={() => {
+                setSelectedBotId(bot.id);
+                setConfirmDeleteBotId("");
+              }}
             >
               <Bot className="size-3.5" strokeWidth={1.9} />
               {bot.name}
@@ -883,8 +1169,173 @@ export function BotSettingsPanel() {
 
       {activeBot && (
         <div className="space-y-4 rounded-2xl border border-dl-border-hairline p-4">
+          {/* 0. Bot Profile, Avatar & Lifecycle Bar (Feishu / BotFather Style) */}
+          <form onSubmit={(e) => void handleSaveBotProfile(e)} className="space-y-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="relative shrink-0">
+                  <input
+                    ref={botAvatarInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    aria-label="上传机器人头像"
+                    className="sr-only"
+                    onChange={(e) => void handleBotAvatarChange(e)}
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    aria-label="更换机器人头像"
+                    disabled={busyAction === "avatar"}
+                    onClick={() => botAvatarInputRef.current?.click()}
+                    className="group relative h-auto w-auto rounded-entity p-0 hover:bg-transparent"
+                  >
+                    <Avatar
+                      name={profileNameDraft || activeBot.name}
+                      src={activeBotAvatarUrl}
+                      kind="bot"
+                      size="lg"
+                    />
+                    <span className="absolute -bottom-1 -right-1 flex size-5 items-center justify-center rounded-full border border-dl-border-hairline bg-surface text-dl-text-primary shadow-2xs group-hover:text-dl-lane-shared">
+                      <Camera className="size-3" strokeWidth={2} />
+                    </span>
+                  </Button>
+                </div>
+
+                <div className="min-w-0 space-y-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-sm font-semibold text-dl-text-primary truncate">
+                      {activeBot.name}
+                    </span>
+                    <span
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold",
+                        isPaused
+                          ? "bg-dl-warning/15 text-dl-warning"
+                          : "bg-dl-success/14 text-dl-success"
+                      )}
+                    >
+                      {isPaused ? "已暂停" : "运行中"}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      disabled={busyAction === "avatar"}
+                      onClick={() => botAvatarInputRef.current?.click()}
+                      className="h-6 px-2 text-[11px] text-dl-lane-shared"
+                    >
+                      更换头像
+                    </Button>
+                    {activeBotAvatarUrl && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={busyAction === "avatar"}
+                        onClick={() => void handleResetBotAvatar()}
+                        className="h-6 gap-1 px-2 text-[11px] text-dl-text-tertiary hover:text-dl-text-primary"
+                      >
+                        <RotateCcw className="size-2.5" strokeWidth={2} />
+                        恢复默认
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={busyAction === "pause"}
+                  onClick={() => void handleTogglePauseBot()}
+                  className="gap-1"
+                >
+                  {isPaused ? (
+                    <>
+                      <PlayCircle className="size-3.5" strokeWidth={1.9} />
+                      恢复运行
+                    </>
+                  ) : (
+                    <>
+                      <PauseCircle className="size-3.5" strokeWidth={1.9} />
+                      暂停响应
+                    </>
+                  )}
+                </Button>
+
+                {confirmDeleteBotId === activeBot.id ? (
+                  <div className="inline-flex items-center gap-1 rounded-xl bg-dl-danger/10 px-2 py-0.5">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="danger"
+                      disabled={busyAction === "delete"}
+                      onClick={() => void handleConfirmDeleteBot()}
+                      className="h-6 px-2 text-[11px]"
+                    >
+                      确认删除
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setConfirmDeleteBotId("")}
+                      className="h-6 px-1.5 text-[11px]"
+                    >
+                      取消
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setConfirmDeleteBotId(activeBot.id)}
+                    className="gap-1 text-dl-text-secondary hover:text-dl-danger"
+                  >
+                    <Trash2 className="size-3.5" strokeWidth={1.85} />
+                    删除
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 wide:grid-cols-2 gap-2">
+              <Input
+                value={profileNameDraft}
+                onChange={(e) => setProfileNameDraft(e.target.value)}
+                placeholder="机器人显示名称"
+                aria-label="机器人显示名称"
+                className="h-8 text-xs"
+              />
+              <div className="flex items-center gap-2">
+                <Input
+                  value={profileBioDraft}
+                  onChange={(e) => setProfileBioDraft(e.target.value)}
+                  placeholder="机器人职责简介（如：负责会议纪要与工单分发）"
+                  aria-label="机器人职责简介"
+                  className="h-8 flex-1 text-xs"
+                />
+                <Button
+                  type="submit"
+                  size="sm"
+                  variant="secondary"
+                  disabled={!profileNameDraft.trim() || busyAction === "profile"}
+                  className="h-8 shrink-0 px-3 text-xs"
+                >
+                  保存资料
+                </Button>
+              </div>
+            </div>
+          </form>
+
           {/* 1. Universal One-Click Agent Pairing */}
-          <div className="space-y-2.5">
+          <div className="space-y-2.5 border-t border-dl-border-hairline pt-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <span className="text-xs font-semibold text-dl-text-primary">
@@ -976,6 +1427,79 @@ export function BotSettingsPanel() {
                 {copiedKey === "mcp" ? "已复制 MCP 配置" : "复制标准 MCP 配置"}
               </Button>
             </div>
+          </div>
+
+          {/* 1.5 Bound Agent Credentials & One-Click Unbind */}
+          <div className="space-y-2 border-t border-dl-border-hairline pt-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-dl-text-primary">
+                <KeyRound className="size-3.5 text-dl-lane-shared" strokeWidth={1.9} />
+                <span>已绑定凭证与解绑 ({activeTokens.length})</span>
+              </div>
+              {activeTokens.length > 0 && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={busyAction === "revoke-all"}
+                  onClick={() => void handleRevokeAllTokens()}
+                  className="h-6 gap-1 px-2 text-[11px] text-dl-danger hover:bg-dl-danger/10"
+                >
+                  <Unlink className="size-3" strokeWidth={2} />
+                  解绑全部凭证
+                </Button>
+              )}
+            </div>
+
+            {activeTokens.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-dl-border-hairline px-3 py-2 text-[11px] text-dl-text-tertiary">
+                当前未绑定任何 Agent 客户端凭证。点击上方「生成并复制 Agent 配对指令」即可完成无密钥配对。
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {activeTokens.map((tok) => (
+                  <div
+                    key={tok.id}
+                    data-testid="bound-agent-token-row"
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-dl-surface-subtle/60 px-3 py-2 text-xs"
+                  >
+                    <div className="min-w-0 space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-[11px] font-semibold text-dl-text-primary">
+                          凭证 #{tok.id.slice(-8)}
+                        </span>
+                        <span className="rounded-full bg-dl-lane-shared/12 px-1.5 py-0.5 text-[10px] font-medium text-dl-lane-shared">
+                          {tok.scopes?.length || 0} 项权限
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-dl-text-tertiary">
+                        绑定于 {new Date(tok.createdAt).toLocaleDateString()}
+                        {tok.lastUsedAt
+                          ? ` · 最近活跃 ${new Date(tok.lastUsedAt).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}`
+                          : ""}
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      disabled={busyAction === `revoke:${tok.id}`}
+                      onClick={() => void handleRevokeToken(tok.id)}
+                      className="h-7 gap-1 px-2.5 text-xs hover:text-dl-danger"
+                    >
+                      <Unlink className="size-3.5" strokeWidth={1.9} />
+                      解绑凭证
+                    </Button>
+                  </div>
+                ))}
+                <div className="text-[11px] text-dl-text-tertiary">
+                  提示：也可在 Agent 终端运行 <code className="font-mono text-dl-text-secondary">duallane-agent unbind</code> 主动解绑并清除本地凭证。
+                </div>
+              </div>
+            )}
           </div>
 
           {/* 2. Conversation Context Grants */}
@@ -1114,10 +1638,26 @@ export function BotSettingsPanel() {
                       {commands.map((cmd) => (
                         <div
                           key={cmd.command}
-                          className="flex items-center justify-between rounded-lg bg-dl-surface-subtle/60 px-2.5 py-1 text-xs"
+                          className="flex items-center justify-between gap-2 rounded-lg bg-dl-surface-subtle/60 px-2.5 py-1 text-xs"
                         >
-                          <span className="font-mono text-dl-lane-shared">/{cmd.command}</span>
-                          <span className="text-dl-text-secondary">{cmd.description}</span>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="font-mono font-medium text-dl-lane-shared shrink-0">
+                              /{cmd.command}
+                            </span>
+                            <span className="truncate text-dl-text-secondary">
+                              {cmd.description}
+                            </span>
+                          </div>
+                          <IconButton
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            label={`移除指令 /${cmd.command}`}
+                            className="size-6 shrink-0 text-dl-text-tertiary hover:text-dl-danger"
+                            onClick={() => void handleRemoveCommand(cmd.command)}
+                          >
+                            <X className="size-3" strokeWidth={2} />
+                          </IconButton>
                         </div>
                       ))}
                     </div>

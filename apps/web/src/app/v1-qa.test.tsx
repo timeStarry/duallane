@@ -3,7 +3,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { DESIGN_TOKENS } from "@duallane/design-tokens";
 import type { DualLaneCardKitDocument } from "@duallane/protocol";
-import { parseBootstrapPayload, useWorkspaceStore } from "@/entities/workspace/store";
+import {
+  buildTextAndMentionBlocks,
+  parseBootstrapPayload,
+  useWorkspaceStore,
+} from "@/entities/workspace/store";
 import { buildDevPreviewFixture } from "@/entities/workspace/demo-fixture";
 import { apiV1 } from "@/shared/lib/api-v1";
 import {
@@ -1911,6 +1915,242 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
       useLaneStore.setState(prevLaneInitial);
       Object.assign(useEmoteStore.getInitialState(), prevEmoteState);
       useEmoteStore.setState(prevEmoteState);
+    }
+  });
+
+  it("verifies v1.0.4 accurate read receipts, bot unbind & live thinking status, @mentions, recall re-edit, and frameless standalone images", async () => {
+    const parsed = parseBootstrapPayload({
+      user: {
+        id: "usr_me",
+        nickname: "星辰",
+        role: "owner",
+      },
+      members: [
+        {
+          id: "usr_peer_xu",
+          nickname: "徐总",
+          role: "member",
+          avatarUrl: "/api/workspace/avatars/usr_peer_xu/v2",
+        },
+        {
+          id: "usr_bot_astra",
+          nickname: "Astra",
+          role: "bot",
+          description: "AI 研发协作助手",
+          avatarUrl: "/api/v1/bots/bot_astra/avatar?v=1",
+        },
+      ],
+      conversations: [
+        {
+          id: "conv_v104_group",
+          type: "group",
+          title: "研发核心群",
+          memberIds: ["usr_me", "usr_peer_xu", "usr_bot_astra"],
+          peerLastReadAt: "2026-11-15T08:50:00.000Z",
+          latestMessages: [
+            {
+              id: "msg_peer_hi",
+              authorId: "usr_peer_xu",
+              authorName: "徐总",
+              kind: "user",
+              plainText: "早安，今天排期对齐一下",
+              createdAt: "2026-11-15T08:50:00.000Z",
+            },
+            {
+              id: "msg_own_unread",
+              authorId: "usr_me",
+              authorName: "星辰",
+              kind: "user",
+              plainText: "好的，马上同步",
+              createdAt: "2026-11-15T08:54:00.000Z",
+            },
+            {
+              id: "msg_own_img_only",
+              authorId: "usr_me",
+              authorName: "星辰",
+              kind: "user",
+              plainText: "[文件]",
+              createdAt: "2026-11-15T08:55:00.000Z",
+              attachments: [
+                {
+                  id: "att_shot_1",
+                  fileName: "architecture.png",
+                  mimeType: "image/png",
+                  byteSize: 24576,
+                  status: "available",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    const prevWsInitial = { ...useWorkspaceStore.getInitialState() };
+    const prevLaneInitial = { ...useLaneStore.getInitialState() };
+
+    try {
+      // 1. Newly sent message after peerLastReadAt MUST start as single-checkmark "sent", not "read"
+      const initialMsgs = parsed.messagesByConv["conv_v104_group"]!;
+      expect(initialMsgs.find((m) => m.id === "msg_own_unread")?.status).toBe("sent");
+      expect(initialMsgs.find((m) => m.id === "msg_own_img_only")?.status).toBe("sent");
+
+      const wsPatch = {
+        ...prevWsInitial,
+        isPreviewMode: true,
+        authStatus: "authenticated" as const,
+        currentUser: parsed.currentUser,
+        members: parsed.members,
+        conversations: parsed.conversations,
+        conversationOrder: parsed.conversationOrder,
+        activeConversationId: "conv_v104_group",
+        messagesByConv: parsed.messagesByConv,
+        drafts: { conv_v104_group: { text: "@" } },
+      };
+      const lanePatch = { ...prevLaneInitial, activeLane: "workspace" as const };
+      Object.assign(useWorkspaceStore.getInitialState(), wsPatch);
+      useWorkspaceStore.setState(wsPatch);
+      Object.assign(useLaneStore.getInitialState(), lanePatch);
+      useLaneStore.setState(lanePatch);
+
+      const initialHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <TimelinePane />
+        </TooltipProvider>
+      );
+
+      // Single checkmark receipt status rendered
+      expect(initialHtml).toContain('data-receipt-status="sent"');
+      expect(initialHtml).not.toContain('data-receipt-status="read"');
+      // Frameless standalone image rendered without colored chat bubble outer frame
+      expect(initialHtml).toContain('data-frameless-image="true"');
+      // Feishu-style hover/click @mention trigger on incoming sender name
+      expect(initialHtml).toContain('data-testid="sender-mention-trigger"');
+      expect(initialHtml).toContain('aria-label="提及 徐总"');
+      // @mention autocomplete popover opened with @所有人 + group members
+      expect(initialHtml).toContain('data-testid="mention-autocomplete-popover"');
+      expect(initialHtml).toContain("所有人");
+      expect(initialHtml).toContain("Astra");
+      // Timeline date divider rendered
+      expect(initialHtml).toContain('data-testid="timeline-date-divider"');
+
+      // 2. Structured @mention block parsing keeps @所有人 in text while emitting mention blocks for members
+      const mentionBlocks = buildTextAndMentionBlocks(
+        "@Astra 请同步一下 @所有人",
+        parsed.conversations["conv_v104_group"],
+        parsed.members,
+        "usr_me"
+      );
+      expect(mentionBlocks).toEqual([
+        { type: "mention", userId: "usr_bot_astra", label: "Astra" },
+        { type: "text", text: " 请同步一下 @所有人" },
+      ]);
+
+      // 3. Real-time bot typing ("thinking") + read receipt upgrade ("sent" -> "read")
+      useWorkspaceStore.getState().applyRealtimeEvent({
+        type: "conversation.read",
+        conversationId: "conv_v104_group",
+        payload: {
+          conversationId: "conv_v104_group",
+          userId: "usr_bot_astra",
+          readAt: "2026-11-15T08:56:00.000Z",
+        },
+      });
+      useWorkspaceStore.getState().applyRealtimeEvent({
+        type: "conversation.typing",
+        conversationId: "conv_v104_group",
+        payload: {
+          conversationId: "conv_v104_group",
+          userId: "usr_bot_astra",
+          displayName: "Astra",
+          kind: "bot",
+          state: "thinking",
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      });
+      Object.assign(useWorkspaceStore.getInitialState(), useWorkspaceStore.getState());
+      const afterReadAndTypingHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <TimelinePane />
+        </TooltipProvider>
+      );
+      expect(afterReadAndTypingHtml).toContain('data-receipt-status="read"');
+      expect(afterReadAndTypingHtml).not.toContain('data-receipt-status="sent"');
+      expect(afterReadAndTypingHtml).toContain('data-testid="header-typing-status"');
+      expect(afterReadAndTypingHtml).toContain('data-testid="timeline-typing-bar"');
+      expect(afterReadAndTypingHtml).toContain("Astra 正在思考…");
+
+      // 4. Recall own message + Feishu-style "重新编辑"
+      await useWorkspaceStore
+        .getState()
+        .recallWorkspaceMessage("conv_v104_group", "msg_own_unread");
+      Object.assign(useWorkspaceStore.getInitialState(), useWorkspaceStore.getState());
+      const afterRecallHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <TimelinePane />
+        </TooltipProvider>
+      );
+      expect(afterRecallHtml).toContain('data-testid="recalled-message-pill"');
+      expect(afterRecallHtml).toContain("你撤回了一条消息");
+      expect(afterRecallHtml).toContain("重新编辑");
+
+      // 5. Frameless standalone image in P2P lane too
+      const p2pWsPatch = {
+        ...useWorkspaceStore.getState(),
+        p2pRoom: {
+          roomId: "RoomImg01",
+          keyFingerprint: "1122-3344",
+          connectedPeers: 2,
+          remotePeerCount: 1,
+          status: "peer_connected" as const,
+          shareUrl: "http://localhost:5173/direct/RoomImg01#k=k_test",
+        },
+        p2pMessages: [
+          {
+            id: "p2p_img_1",
+            senderName: "我",
+            isOwn: true,
+            text: "",
+            createdAt: "2026-11-15T09:00:00.000Z",
+            deliveryStatus: "delivered" as const,
+            reactions: {},
+            attachment: {
+              fileName: "e2ee-photo.png",
+              mimeType: "image/png",
+              byteSize: 8192,
+              blobUrl: "blob:http://localhost:5173/test-p2p-img",
+            },
+          },
+        ],
+      };
+      const p2pLanePatch = { ...prevLaneInitial, activeLane: "p2p" as const };
+      Object.assign(useWorkspaceStore.getInitialState(), p2pWsPatch);
+      useWorkspaceStore.setState(p2pWsPatch);
+      Object.assign(useLaneStore.getInitialState(), p2pLanePatch);
+      useLaneStore.setState(p2pLanePatch);
+      const p2pHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <TimelinePane />
+        </TooltipProvider>
+      );
+      expect(p2pHtml).toContain('data-frameless-image="true"');
+
+      // 6. BotSettingsPanel renders credential unbind, pause/resume, custom avatar & profile controls
+      const botPanelHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <BotSettingsPanel />
+        </TooltipProvider>
+      );
+      expect(botPanelHtml).toContain("已绑定凭证与解绑");
+      expect(botPanelHtml).toContain("解绑凭证");
+      expect(botPanelHtml).toContain("暂停响应");
+      expect(botPanelHtml).toContain("更换机器人头像");
+      expect(botPanelHtml).toContain("保存资料");
+    } finally {
+      Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);
+      useWorkspaceStore.setState(prevWsInitial);
+      Object.assign(useLaneStore.getInitialState(), prevLaneInitial);
+      useLaneStore.setState(prevLaneInitial);
     }
   });
 });

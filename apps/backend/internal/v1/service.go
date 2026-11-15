@@ -18,7 +18,10 @@ type Repository interface {
 	CreateGroupConversation(ctx context.Context, actorID string, input CreateGroupInput, now time.Time) (GroupConversationSummary, error)
 	UpdateGroupConversation(ctx context.Context, actorID, conversationID string, input UpdateGroupInput, now time.Time) (GroupConversationSummary, error)
 	AddGroupMembers(ctx context.Context, actorID, conversationID string, userIDs []string, now time.Time) (GroupConversationSummary, error)
+	RemoveGroupMember(ctx context.Context, actorID, conversationID, targetUserID string, now time.Time) (GroupConversationSummary, error)
 	LeaveGroupConversation(ctx context.Context, actorID, conversationID string, now time.Time) error
+	MarkConversationRead(ctx context.Context, actorID, conversationID string, now time.Time) (string, error)
+	SendConversationTyping(ctx context.Context, actorID, conversationID, kind, state string, now time.Time) (string, error)
 	EditMessage(ctx context.Context, actorID, messageID, plainText string, now time.Time) error
 	ForwardMessages(ctx context.Context, actorID, targetConversationID string, messageIDs []string, now time.Time) ([]string, error)
 	GetThread(ctx context.Context, actorID, rootMessageID string) (ThreadView, error)
@@ -33,9 +36,14 @@ type Repository interface {
 	GetPreferences(ctx context.Context, actorID string) (map[string]any, error)
 	SavePreferences(ctx context.Context, actorID string, prefs map[string]any, now time.Time) error
 	RegisterBotCommands(ctx context.Context, actorID, botID string, commands []BotCommand, now time.Time) error
-	ListBotCommands(ctx context.Context, conversationID string) ([]BotCommand, error)
+	ListBotCommands(ctx context.Context, actorID, conversationID string) ([]BotCommand, error)
 	ListBotCommandsByBot(ctx context.Context, actorID, botID string) ([]BotCommand, error)
 	CreateMultiBot(ctx context.Context, actorID, name string, now time.Time) (string, error)
+	UpdateBotProfile(ctx context.Context, actorID, botID string, input BotProfileUpdateInput, now time.Time) (BotProfileResult, error)
+	UploadBotAvatar(ctx context.Context, actorID, botID, mimeType string, data []byte, now time.Time) (BotProfileResult, error)
+	DeleteBotAvatar(ctx context.Context, actorID, botID string, now time.Time) (BotProfileResult, error)
+	GetBotAvatar(ctx context.Context, actorID, botID string) (BotAvatarPayload, error)
+	UnbindBotToken(ctx context.Context, botID, tokenID string, now time.Time) error
 	UpsertBotWebhook(ctx context.Context, actorID, botID, url, secretHash string, enabled bool, now time.Time) (BotWebhookConfig, error)
 	ListBotConversations(ctx context.Context, botID, botUserID string) ([]BotConversationSummary, error)
 	GetAdminOverview(ctx context.Context, actorID string, now time.Time) (AdminOverviewResponse, error)
@@ -203,6 +211,55 @@ func (s *Service) LeaveGroupConversation(ctx context.Context, actorID, conversat
 	return s.repo.LeaveGroupConversation(ctx, actorID, conversationID, s.now())
 }
 
+func (s *Service) RemoveGroupMember(ctx context.Context, actorID, conversationID, targetUserID string) (GroupConversationSummary, error) {
+	actorID = strings.TrimSpace(actorID)
+	conversationID = strings.TrimSpace(conversationID)
+	targetUserID = strings.TrimSpace(targetUserID)
+	if actorID == "" {
+		return GroupConversationSummary{}, ErrForbidden
+	}
+	if conversationID == "" || targetUserID == "" || targetUserID == actorID {
+		return GroupConversationSummary{}, ErrInvalidInput
+	}
+	return s.repo.RemoveGroupMember(ctx, actorID, conversationID, targetUserID, s.now())
+}
+
+func (s *Service) MarkConversationRead(ctx context.Context, actorID, conversationID string) (string, error) {
+	actorID = strings.TrimSpace(actorID)
+	conversationID = strings.TrimSpace(conversationID)
+	if actorID == "" {
+		return "", ErrForbidden
+	}
+	if conversationID == "" {
+		return "", ErrInvalidInput
+	}
+	return s.repo.MarkConversationRead(ctx, actorID, conversationID, s.now())
+}
+
+func (s *Service) SendConversationTyping(ctx context.Context, actorID, conversationID, kind, state string) (string, error) {
+	actorID = strings.TrimSpace(actorID)
+	conversationID = strings.TrimSpace(conversationID)
+	if actorID == "" {
+		return "", ErrForbidden
+	}
+	if conversationID == "" {
+		return "", ErrInvalidInput
+	}
+	normKind := strings.ToLower(strings.TrimSpace(kind))
+	if normKind != "bot" {
+		normKind = "human"
+	}
+	normState := strings.ToLower(strings.TrimSpace(state))
+	if normState != "thinking" && normState != "typing" {
+		if normKind == "bot" {
+			normState = "thinking"
+		} else {
+			normState = "typing"
+		}
+	}
+	return s.repo.SendConversationTyping(ctx, actorID, conversationID, normKind, normState, s.now())
+}
+
 func dedupeNonEmptyIDs(items []string) []string {
 	seen := make(map[string]struct{}, len(items))
 	out := make([]string, 0, len(items))
@@ -327,8 +384,23 @@ func (s *Service) RegisterBotCommands(ctx context.Context, actorID, botID string
 	return s.repo.RegisterBotCommands(ctx, actorID, botID, commands, s.now())
 }
 
-func (s *Service) ListBotCommands(ctx context.Context, conversationID string) ([]BotCommand, error) {
-	return s.repo.ListBotCommands(ctx, conversationID)
+func (s *Service) ListBotCommands(ctx context.Context, actorID, conversationID string) ([]BotCommand, error) {
+	actorID = strings.TrimSpace(actorID)
+	conversationID = strings.TrimSpace(conversationID)
+	if actorID == "" {
+		return nil, ErrForbidden
+	}
+	if conversationID == "" {
+		return nil, ErrInvalidInput
+	}
+	cmds, err := s.repo.ListBotCommands(ctx, actorID, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	if cmds == nil {
+		return []BotCommand{}, nil
+	}
+	return cmds, nil
 }
 
 func (s *Service) ListBotCommandsByBot(ctx context.Context, actorID, botID string) ([]BotCommand, error) {
@@ -340,10 +412,104 @@ func (s *Service) ListBotCommandsByBot(ctx context.Context, actorID, botID strin
 
 func (s *Service) CreateMultiBot(ctx context.Context, actorID, name string) (string, error) {
 	trimmed := strings.TrimSpace(name)
-	if strings.TrimSpace(actorID) == "" || len(trimmed) < 2 || len(trimmed) > 64 {
+	if strings.TrimSpace(actorID) == "" || utf8.RuneCountInString(trimmed) < 2 || utf8.RuneCountInString(trimmed) > 64 {
 		return "", ErrInvalidInput
 	}
 	return s.repo.CreateMultiBot(ctx, actorID, trimmed, s.now())
+}
+
+func (s *Service) UpdateBotProfile(ctx context.Context, actorID, botID string, input BotProfileUpdateInput) (BotProfileResult, error) {
+	actorID = strings.TrimSpace(actorID)
+	botID = strings.TrimSpace(botID)
+	if actorID == "" {
+		return BotProfileResult{}, ErrForbidden
+	}
+	if botID == "" || (!input.NameSet && !input.DescriptionSet) {
+		return BotProfileResult{}, ErrInvalidInput
+	}
+	clean := BotProfileUpdateInput{
+		NameSet:        input.NameSet,
+		DescriptionSet: input.DescriptionSet,
+	}
+	if input.NameSet {
+		name := ""
+		if input.Name != nil {
+			name = strings.TrimSpace(*input.Name)
+		}
+		rc := utf8.RuneCountInString(name)
+		if rc < 2 || rc > 64 {
+			return BotProfileResult{}, fmt.Errorf("%w: 机器人名称需为 2-64 个字符", ErrInvalidInput)
+		}
+		lower := strings.ToLower(name)
+		for _, reserved := range []string{"信标", "回声", "beacon", "echo", "duallane"} {
+			if lower == reserved {
+				return BotProfileResult{}, fmt.Errorf("%w: 该名称为系统保留名称", ErrInvalidInput)
+			}
+		}
+		clean.Name = &name
+	}
+	if input.DescriptionSet {
+		desc := ""
+		if input.Description != nil {
+			desc = strings.TrimSpace(*input.Description)
+		}
+		if utf8.RuneCountInString(desc) > 240 {
+			return BotProfileResult{}, fmt.Errorf("%w: 机器人简介不可超过 240 个字符", ErrInvalidInput)
+		}
+		clean.Description = &desc
+	}
+	return s.repo.UpdateBotProfile(ctx, actorID, botID, clean, s.now())
+}
+
+func (s *Service) UploadBotAvatar(ctx context.Context, actorID, botID, mimeType string, data []byte) (BotProfileResult, error) {
+	actorID = strings.TrimSpace(actorID)
+	botID = strings.TrimSpace(botID)
+	if actorID == "" {
+		return BotProfileResult{}, ErrForbidden
+	}
+	if botID == "" || len(data) == 0 || len(data) > 512*1024 {
+		return BotProfileResult{}, fmt.Errorf("%w: 机器人头像大小需在 512KB 以内", ErrInvalidInput)
+	}
+	cleanMime := strings.ToLower(strings.TrimSpace(strings.Split(mimeType, ";")[0]))
+	switch cleanMime {
+	case "image/png", "image/jpeg", "image/webp", "image/gif":
+	default:
+		return BotProfileResult{}, fmt.Errorf("%w: 仅支持 PNG、JPG、WebP 或 GIF 图片", ErrInvalidInput)
+	}
+	return s.repo.UploadBotAvatar(ctx, actorID, botID, cleanMime, data, s.now())
+}
+
+func (s *Service) DeleteBotAvatar(ctx context.Context, actorID, botID string) (BotProfileResult, error) {
+	actorID = strings.TrimSpace(actorID)
+	botID = strings.TrimSpace(botID)
+	if actorID == "" {
+		return BotProfileResult{}, ErrForbidden
+	}
+	if botID == "" {
+		return BotProfileResult{}, ErrInvalidInput
+	}
+	return s.repo.DeleteBotAvatar(ctx, actorID, botID, s.now())
+}
+
+func (s *Service) GetBotAvatar(ctx context.Context, actorID, botID string) (BotAvatarPayload, error) {
+	actorID = strings.TrimSpace(actorID)
+	botID = strings.TrimSpace(botID)
+	if actorID == "" {
+		return BotAvatarPayload{}, ErrForbidden
+	}
+	if botID == "" {
+		return BotAvatarPayload{}, ErrInvalidInput
+	}
+	return s.repo.GetBotAvatar(ctx, actorID, botID)
+}
+
+func (s *Service) UnbindBotSelf(ctx context.Context, botID, tokenID string) error {
+	botID = strings.TrimSpace(botID)
+	tokenID = strings.TrimSpace(tokenID)
+	if botID == "" || tokenID == "" {
+		return ErrForbidden
+	}
+	return s.repo.UnbindBotToken(ctx, botID, tokenID, s.now())
 }
 
 func (s *Service) UpsertBotWebhook(ctx context.Context, actorID, botID, url, secret string, enabled bool) (BotWebhookConfig, error) {

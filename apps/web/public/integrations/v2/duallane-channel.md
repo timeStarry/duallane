@@ -101,7 +101,9 @@ Add `duallane` to your Agent's standard `mcpServers` config (supported by Claude
 | `duallane_send_message` | Send Markdown text or reply to a specific message |
 | `duallane_edit_message` | Stream / update a Bot-authored message in real time |
 | `duallane_send_card` | Send interactive approval/action cards (`confirm`, `cancel`, `submit`, `refresh`) |
+| `duallane_set_typing` | Broadcast live Bot status (`thinking` / `typing`) and advance read receipt |
 | `duallane_wait_for_event` | Wait via outbound WebSocket for user replies, `@mentions`, `/commands`, or card clicks |
+| `duallane_unbind` | Revoke current Bot token on DualLane and delete local credential profile |
 
 ---
 
@@ -134,6 +136,8 @@ All authenticated calls require `Authorization: Bearer <bot-token>` (never query
 - `POST /api/bot-gateway/v1/messages` — `{ conversationId, text, replyToMessageId?, clientMessageId, idempotencyKey }`
 - `PATCH /api/bot/v2/messages/{messageId}` — `{ plainText }` (real-time streaming message edit for messages authored by this Bot)
 - `POST /api/bot-gateway/v1/cards` — Interactive cards (`format: "feishu-card"`, registered button action IDs: `confirm`, `cancel`, `submit`, `refresh`)
+- `POST /api/bot/v2/typing` — `{ conversationId, state?: "thinking" | "typing" }` (live processing indicator + read receipt advance)
+- `POST /api/bot/v2/unbind` — Self-revoke current Bot credential token (or run `duallane-agent unbind`)
 - `GET /api/bot/v2/updates?afterSequence=0&limit=50` & `POST /api/bot-gateway/v1/events/ack` — HTTP long-poll / replay alternative to WebSocket
 
 ### Error Handling Rules

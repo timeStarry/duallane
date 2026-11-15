@@ -204,3 +204,19 @@ export function clearPendingSetup(profile = "default", options = {}) {
     /* ignore */
   }
 }
+
+export function deleteAgentProfile(profile = "default", options = {}) {
+  const normalized = normalizeProfileName(profile);
+  const filePath = resolveProfilePath(normalized, options.configDir);
+  clearPendingSetup(normalized, options);
+  let removed = false;
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      removed = true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return { profile: normalized, filePath, removed };
+}

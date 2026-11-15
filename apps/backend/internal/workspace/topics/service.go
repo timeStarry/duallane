@@ -1089,7 +1089,7 @@ func sanitizeAvatarPointer(value *string) *string {
 	if normalized == "" || strings.Contains(normalized, "..") || strings.ContainsAny(normalized, "\r\n") {
 		return nil
 	}
-	if strings.HasPrefix(normalized, "/assets/") || strings.HasPrefix(normalized, "/api/workspace/avatars/") || strings.HasPrefix(normalized, "https://avatars.githubusercontent.com/") {
+	if strings.HasPrefix(normalized, "/assets/") || strings.HasPrefix(normalized, "/api/workspace/avatars/") || strings.HasPrefix(normalized, "/api/v1/bots/") || strings.HasPrefix(normalized, "https://avatars.githubusercontent.com/") {
 		return &normalized
 	}
 	return nil

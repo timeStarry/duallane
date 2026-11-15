@@ -691,7 +691,7 @@ func safeWorkspaceAvatarURL(value string) string {
 	if value == "" || strings.Contains(value, "..") {
 		return ""
 	}
-	if strings.HasPrefix(value, "/assets/") || strings.HasPrefix(value, "/api/workspace/avatars/") {
+	if strings.HasPrefix(value, "/assets/") || strings.HasPrefix(value, "/api/workspace/avatars/") || strings.HasPrefix(value, "/api/v1/bots/") {
 		return value
 	}
 	parsed, err := url.Parse(value)

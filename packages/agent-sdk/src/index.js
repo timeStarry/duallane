@@ -227,8 +227,17 @@ export class DualLaneAgentClient {
     }));
   }
 
-  async setTyping(conversationId) {
-    return this.#request("POST", "/api/bot-gateway/v1/typing", { conversationId: normalizeId(conversationId, "conversationId") });
+  async setTyping(conversationId, options = {}) {
+    const id = normalizeId(conversationId, "conversationId");
+    const state = typeof options.state === "string" ? options.state.trim() : "";
+    if (state === "typing" || state === "thinking") {
+      return this.#request("POST", "/api/bot/v2/typing", { conversationId: id, state });
+    }
+    return this.#request("POST", "/api/bot-gateway/v1/typing", { conversationId: id });
+  }
+
+  async unbind() {
+    return this.#request("POST", "/api/bot/v2/unbind", {});
   }
 
   async listConversations() {

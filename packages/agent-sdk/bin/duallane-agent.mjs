@@ -9,6 +9,7 @@ import {
 import { startDualLaneMcpStdioServer } from "../src/mcp.js";
 import {
   DEFAULT_SETUP_SCOPES,
+  deleteAgentProfile,
   loadAgentProfile,
   normalizeProfileName,
   parseSetupTarget,
@@ -55,6 +56,8 @@ Usage:
   duallane-agent wait [--timeout 3600] [--profile default]
   duallane-agent send <conversationId> <text> [--reply-to <messageId>] [--profile default]
   duallane-agent edit <messageId> <text> [--profile default]
+  duallane-agent typing <conversationId> [--state thinking|typing] [--profile default]
+  duallane-agent unbind [--profile default]
   duallane-agent listen --cmd "<shell-command>" [--profile default]
 
 Works with Claude Code, Codex CLI, Cursor, Windsurf, Gemini CLI, Antigravity, and OpenClaw.
@@ -444,6 +447,37 @@ async function main() {
     const { client } = requireClient(flags.profile);
     const res = await client.editMessage(messageId, text);
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    return;
+  }
+
+  if (subcommand === "typing") {
+    const [conversationId] = positionals.slice(1);
+    if (!conversationId) {
+      throw new Error("Usage: duallane-agent typing <conversationId> [--state thinking|typing] [--profile default]");
+    }
+    const { client } = requireClient(flags.profile);
+    const state = flags.state === "typing" ? "typing" : "thinking";
+    const res = await client.setTyping(conversationId, { state });
+    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    return;
+  }
+
+  if (subcommand === "unbind") {
+    const { client, profileName } = requireClient(flags.profile);
+    const revoked = await client.unbind().catch(() => ({ ok: false }));
+    const deleted = deleteAgentProfile(profileName);
+    process.stdout.write(
+      JSON.stringify(
+        {
+          ok: true,
+          profile: profileName,
+          serverRevoked: Boolean(revoked?.ok),
+          localDeleted: deleted,
+        },
+        null,
+        2
+      ) + "\n"
+    );
     return;
   }
 

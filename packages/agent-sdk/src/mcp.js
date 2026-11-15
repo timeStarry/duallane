@@ -2,6 +2,7 @@ import { DualLaneAgentClient, DualLaneAgentError, DualLaneAgentSetupClient, DUAL
 import {
   clearPendingSetup,
   DEFAULT_SETUP_SCOPES,
+  deleteAgentProfile,
   loadAgentProfile,
   loadPendingSetup,
   normalizeProfileName,
@@ -199,6 +200,35 @@ export const DUALLANE_MCP_TOOLS = [
           minimum: 0,
           description: "Optional sequence cursor override (defaults to profile's saved lastSequence).",
         },
+        profile: { type: "string", description: "Local credential profile name (default: 'default')." },
+      },
+    },
+  },
+  {
+    name: "duallane_set_typing",
+    description:
+      "Emit a real-time 'thinking' or 'typing' indicator in a DualLane conversation (and advance read confirmation) while processing a complex task.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        conversationId: { type: "string", description: "Target DualLane conversation ID (conv_...)." },
+        state: {
+          type: "string",
+          enum: ["thinking", "typing"],
+          description: "Processing state shown to users (default: 'thinking').",
+        },
+        profile: { type: "string", description: "Local credential profile name (default: 'default')." },
+      },
+      required: ["conversationId"],
+    },
+  },
+  {
+    name: "duallane_unbind",
+    description:
+      "Revoke this Agent's bound DualLane Bot token on the server and remove the local ~/.config/duallane/agents/<profile>.json credential file.",
+    inputSchema: {
+      type: "object",
+      properties: {
         profile: { type: "string", description: "Local credential profile name (default: 'default')." },
       },
     },
@@ -541,6 +571,35 @@ export function createDualLaneMcpServer(options = {}) {
               reject(err);
             });
         });
+      }
+
+      case "duallane_set_typing": {
+        const { client } = makeClient(args.profile);
+        return await client.setTyping(args.conversationId, { state: args.state || "thinking" });
+      }
+
+      case "duallane_unbind": {
+        const profileName = normalizeProfileName(args.profile || defaultProfile);
+        const existing = loadAgentProfile(profileName, { configDir });
+        let serverRevoked = false;
+        if (existing) {
+          const client = new DualLaneAgentClient({
+            url: existing.url,
+            token: existing.token,
+            fetch: fetchImpl,
+            webSocketFactory,
+          });
+          await client.unbind().then(() => {
+            serverRevoked = true;
+          }).catch(() => {});
+        }
+        const cleaned = deleteAgentProfile(profileName, { configDir });
+        return {
+          status: "unbound",
+          profile: cleaned.profile,
+          serverRevoked,
+          removedLocalFile: cleaned.removed,
+        };
       }
 
       default:

@@ -36,6 +36,7 @@ export function InspectorPane() {
     closeInspector,
   } = useLaneStore();
   const {
+    currentUser,
     activeConversationId,
     conversations,
     pinnedConversationIds,
@@ -50,6 +51,7 @@ export function InspectorPane() {
     updateGroupProfile,
     uploadGroupAvatar,
     inviteGroupMembers,
+    removeGroupMember,
     leaveGroup,
   } = useWorkspaceStore();
 
@@ -550,26 +552,30 @@ export function InspectorPane() {
                         }
                       >
                         <UserPlus className="size-3.5" strokeWidth={1.9} />
-                        邀请成员
+                        邀请成员 / 机器人
                       </Button>
                     )}
                   </div>
 
                   {activeConv.kind === "group" && invitingOpen && (() => {
                     const invitable = Object.values(members).filter(
-                      (m) => m.role !== "bot" && !activeConv.memberIds.includes(m.id)
+                      (m) =>
+                        !m.id.startsWith("usr_system_") &&
+                        !activeConv.memberIds.includes(m.id)
                     );
                     return (
                       <div className="mb-2.5 rounded-xl border border-dl-border-hairline bg-dl-surface-subtle/55 p-2.5 space-y-2">
                         {invitable.length === 0 ? (
                           <div className="text-xs text-dl-text-tertiary py-1 text-center">
-                            所有可见成员均已在群内
+                            所有可见成员与机器人均已在群内
                           </div>
                         ) : (
                           <>
-                            <div className="dl-scroll max-h-36 overflow-y-auto space-y-1">
+                            <div className="dl-scroll max-h-40 overflow-y-auto space-y-1">
                               {invitable.map((m) => {
                                 const checked = selectedInviteIds.includes(m.id);
+                                const isBotCandidate =
+                                  m.role === "bot" || m.id.startsWith("usr_bot_");
                                 return (
                                   <Button
                                     key={m.id}
@@ -594,7 +600,14 @@ export function InspectorPane() {
                                         : "text-dl-text-primary hover:bg-surface/70"
                                     )}
                                   >
-                                    <span className="truncate">{m.displayName}</span>
+                                    <span className="flex items-center gap-1.5 min-w-0">
+                                      <span className="truncate">{m.displayName}</span>
+                                      {isBotCandidate && (
+                                        <span className="shrink-0 rounded-full bg-dl-lane-shared/14 px-1.5 py-0.5 text-[9px] font-semibold text-dl-lane-shared">
+                                          BOT
+                                        </span>
+                                      )}
+                                    </span>
                                     {checked && <Check className="size-3.5 shrink-0" strokeWidth={2} />}
                                   </Button>
                                 );
@@ -639,6 +652,15 @@ export function InspectorPane() {
                         m?.displayName && !m.displayName.startsWith("usr_")
                           ? m.displayName
                           : m?.handle || "空间成员";
+                      const isBotMember =
+                        m?.role === "bot" || id.startsWith("usr_bot_") || id.startsWith("usr_system_");
+                      const canRemoveFromGroup =
+                        activeConv.kind === "group" &&
+                        !id.startsWith("usr_system_") &&
+                        id !== currentUser?.id &&
+                        (isBotMember ||
+                          currentUser?.role === "owner" ||
+                          currentUser?.role === "admin");
                       return (
                         <div
                           key={id}
@@ -647,17 +669,46 @@ export function InspectorPane() {
                           <Avatar
                             name={displayLabel}
                             src={m?.avatarUrl}
-                            kind={m?.role === "bot" || id.startsWith("usr_bot_") ? "bot" : "human"}
+                            kind={isBotMember ? "bot" : "human"}
                             size="sm"
                           />
                           <div className="min-w-0 flex-1">
-                            <div className="truncate text-xs font-medium text-dl-text-primary">
-                              {displayLabel}
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="truncate text-xs font-medium text-dl-text-primary">
+                                {displayLabel}
+                              </span>
+                              {isBotMember && (
+                                <span className="shrink-0 rounded-full bg-dl-lane-shared/14 px-1.5 py-0.5 text-[9px] font-semibold text-dl-lane-shared">
+                                  BOT
+                                </span>
+                              )}
                             </div>
-                            <div className="text-[11px] text-dl-text-tertiary">
-                              {m?.role === "bot" ? "智能体机器人" : "空间成员"}
+                            <div className="truncate text-[11px] text-dl-text-tertiary">
+                              {isBotMember
+                                ? m?.description || "智能体机器人"
+                                : "空间成员"}
                             </div>
                           </div>
+                          {canRemoveFromGroup && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              aria-label={`将 ${displayLabel} 移出群聊`}
+                              className="h-6 shrink-0 px-2 text-[11px] text-dl-text-tertiary hover:text-dl-danger"
+                              onClick={() => {
+                                setGroupError(activeConv.id, "");
+                                void removeGroupMember(activeConv.id, id).catch((err) => {
+                                  setGroupError(
+                                    activeConv.id,
+                                    err instanceof Error ? err.message : "移出成员失败"
+                                  );
+                                });
+                              }}
+                            >
+                              移出
+                            </Button>
+                          )}
                         </div>
                       );
                     })}

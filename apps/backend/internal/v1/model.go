@@ -25,6 +25,7 @@ type V1BootstrapMember struct {
 	DisplayName string `json:"displayName"`
 	Nickname    string `json:"nickname,omitempty"`
 	Remark      string `json:"remark,omitempty"`
+	Description string `json:"description,omitempty"`
 	GitHubLogin string `json:"githubLogin,omitempty"`
 	Kind        string `json:"kind"`
 	Role        string `json:"role"`
@@ -52,6 +53,7 @@ type V1BootstrapConversation struct {
 	MemberIDs            []string `json:"memberIds"`
 	LastMessagePlainText string   `json:"lastMessagePlainText,omitempty"`
 	LastMessageAt        *string  `json:"lastMessageAt,omitempty"`
+	PeerLastReadAt       *string  `json:"peerLastReadAt,omitempty"`
 }
 
 type V1BootstrapResponse struct {
@@ -147,6 +149,28 @@ type BotCommand struct {
 	Command     string `json:"command"`
 	Description string `json:"description"`
 	Scope       string `json:"scope"`
+	BotID       string `json:"botId,omitempty"`
+	BotName     string `json:"botName,omitempty"`
+}
+
+type BotProfileUpdateInput struct {
+	Name           *string `json:"name,omitempty"`
+	NameSet        bool    `json:"-"`
+	Description    *string `json:"description,omitempty"`
+	DescriptionSet bool    `json:"-"`
+}
+
+type BotProfileResult struct {
+	BotID       string `json:"botId"`
+	BotUserID   string `json:"botUserId"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	AvatarURL   string `json:"avatarUrl,omitempty"`
+}
+
+type BotAvatarPayload struct {
+	MIMEType string
+	Data     []byte
 }
 
 type BotWebhookConfig struct {
