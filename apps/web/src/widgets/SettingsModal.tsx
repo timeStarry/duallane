@@ -4,6 +4,7 @@ import {
   Building2,
   Check,
   Copy,
+  Mail,
   Palette,
   Plus,
   QrCode,
@@ -32,6 +33,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  Input,
   SegmentedControl,
   Switch,
 } from "@/shared/ui";
@@ -67,7 +69,14 @@ export function SettingsModal() {
     setTransparency,
     setReducedMotion,
   } = useThemeStore();
-  const { isPreviewMode, authStatus, currentUser, logout } = useWorkspaceStore();
+  const {
+    isPreviewMode,
+    authStatus,
+    currentUser,
+    boundEmail,
+    setBoundEmailLocal,
+    logout,
+  } = useWorkspaceStore();
 
   const isAuthenticated =
     isPreviewMode || (authStatus === "authenticated" && Boolean(currentUser));
@@ -103,6 +112,110 @@ export function SettingsModal() {
   const [creatingInvite, setCreatingInvite] = useState(false);
   const [copiedInvite, setCopiedInvite] = useState(false);
   const [inviteError, setInviteError] = useState<string>("");
+
+  // Bound Login Email state
+  const [editingBoundEmail, setEditingBoundEmail] = useState(false);
+  const [emailInput, setEmailInput] = useState("");
+  const [emailCodeInput, setEmailCodeInput] = useState("");
+  const [bindChallengeId, setBindChallengeId] = useState("");
+  const [emailMaskedTarget, setEmailMaskedTarget] = useState("");
+  const [emailCooldown, setEmailCooldown] = useState(0);
+  const [emailBusy, setEmailBusy] = useState<"" | "send" | "verify" | "unbind">("");
+  const [emailError, setEmailError] = useState("");
+  const [emailFeedback, setEmailFeedback] = useState("");
+
+  useEffect(() => {
+    if (emailCooldown <= 0) return;
+    const timer = setTimeout(() => {
+      setEmailCooldown((prev) => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [emailCooldown]);
+
+  const handleSendBindCode = async () => {
+    const trimmed = emailInput.trim();
+    if (!trimmed) {
+      setEmailError("请输入邮箱地址");
+      return;
+    }
+    setEmailError("");
+    setEmailFeedback("");
+    setEmailBusy("send");
+    try {
+      if (isPreviewMode) {
+        setBindChallengeId("ech_preview_1");
+        setEmailMaskedTarget(trimmed);
+        setEmailCooldown(60);
+        setEmailFeedback(`验证码已发送至 ${trimmed}`);
+        return;
+      }
+      const res = await apiV1.sendBindEmailCode(trimmed);
+      setBindChallengeId(res.challengeId);
+      setEmailMaskedTarget(res.maskedEmail);
+      setEmailCooldown(60);
+      setEmailFeedback(`验证码已发送至 ${res.maskedEmail}`);
+    } catch (err) {
+      setEmailError(err instanceof Error ? err.message : "发送验证码失败");
+    } finally {
+      setEmailBusy("");
+    }
+  };
+
+  const handleVerifyBindCode = async () => {
+    const code = emailCodeInput.trim();
+    if (!bindChallengeId) {
+      setEmailError("请先获取验证码");
+      return;
+    }
+    if (code.length !== 6) {
+      setEmailError("请输入 6 位数字验证码");
+      return;
+    }
+    setEmailError("");
+    setEmailFeedback("");
+    setEmailBusy("verify");
+    try {
+      if (isPreviewMode) {
+        setBoundEmailLocal(emailInput.trim());
+        setEditingBoundEmail(false);
+        setBindChallengeId("");
+        setEmailCodeInput("");
+        setEmailFeedback("登录邮箱已绑定");
+        return;
+      }
+      const res = await apiV1.verifyBindEmail(bindChallengeId, code);
+      setBoundEmailLocal(res.email || emailInput.trim());
+      setEditingBoundEmail(false);
+      setBindChallengeId("");
+      setEmailCodeInput("");
+      setEmailInput("");
+      setEmailFeedback("登录邮箱已绑定");
+    } catch (err) {
+      setEmailError(err instanceof Error ? err.message : "验证码校验失败");
+    } finally {
+      setEmailBusy("");
+    }
+  };
+
+  const handleUnbindEmail = async () => {
+    setEmailError("");
+    setEmailFeedback("");
+    setEmailBusy("unbind");
+    try {
+      if (!isPreviewMode) {
+        await apiV1.unbindAccountEmail();
+      }
+      setBoundEmailLocal("");
+      setEditingBoundEmail(false);
+      setBindChallengeId("");
+      setEmailCodeInput("");
+      setEmailFeedback("已解除登录邮箱绑定");
+    } catch (err) {
+      setEmailError(err instanceof Error ? err.message : "解除绑定失败");
+    } finally {
+      setEmailBusy("");
+    }
+  };
 
   const canManageInvites =
     isPreviewMode || currentUser?.role === "owner" || currentUser?.role === "admin";
@@ -290,6 +403,132 @@ export function SettingsModal() {
                         ? "空间管理员"
                         : "空间成员"}
                     </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-dl-border-hairline p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-1.5 text-sm font-semibold text-dl-text-primary">
+                          <Mail className="size-3.5 text-dl-lane-shared" strokeWidth={1.9} />
+                          <span>登录邮箱</span>
+                        </div>
+                        <div className="text-xs text-dl-text-tertiary">
+                          绑定后可使用邮箱验证码快捷登录双端（GitHub 仍为主账号凭证）
+                        </div>
+                      </div>
+                      {boundEmail && !editingBoundEmail && (
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => {
+                              setEditingBoundEmail(true);
+                              setEmailInput("");
+                              setEmailCodeInput("");
+                              setBindChallengeId("");
+                              setEmailError("");
+                              setEmailFeedback("");
+                            }}
+                          >
+                            更换
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            busy={emailBusy === "unbind"}
+                            disabled={Boolean(emailBusy)}
+                            onClick={() => void handleUnbindEmail()}
+                          >
+                            解绑
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+
+                    {boundEmail && !editingBoundEmail ? (
+                      <div className="flex items-center justify-between gap-2 rounded-xl bg-dl-surface-subtle px-3 py-2">
+                        <span className="text-xs font-mono font-medium text-dl-text-primary break-all">
+                          {boundEmail}
+                        </span>
+                        <span className="shrink-0 rounded-full bg-dl-success/12 px-2 py-0.5 text-[11px] font-medium text-dl-success">
+                          已绑定
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="space-y-2.5">
+                        <div className="flex max-narrow:flex-col gap-2">
+                          <Input
+                            type="email"
+                            value={emailInput}
+                            onChange={(e) => setEmailInput(e.target.value)}
+                            placeholder="name@example.com"
+                            aria-label="绑定登录邮箱"
+                            className="flex-1"
+                          />
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            busy={emailBusy === "send"}
+                            disabled={Boolean(emailBusy) || emailCooldown > 0}
+                            className="shrink-0"
+                            onClick={() => void handleSendBindCode()}
+                          >
+                            {emailCooldown > 0 ? `${emailCooldown}s 后重发` : "获取验证码"}
+                          </Button>
+                        </div>
+
+                        {bindChallengeId && (
+                          <div className="flex max-narrow:flex-col gap-2">
+                            <Input
+                              value={emailCodeInput}
+                              onChange={(e) =>
+                                setEmailCodeInput(e.target.value.replace(/\D/g, "").slice(0, 6))
+                              }
+                              inputMode="numeric"
+                              maxLength={6}
+                              placeholder="6 位数字验证码"
+                              aria-label="邮箱绑定验证码"
+                              className="flex-1 font-mono tracking-[0.2em]"
+                            />
+                            <Button
+                              size="sm"
+                              variant="primary"
+                              busy={emailBusy === "verify"}
+                              disabled={Boolean(emailBusy) || emailCodeInput.trim().length !== 6}
+                              className="shrink-0"
+                              onClick={() => void handleVerifyBindCode()}
+                            >
+                              确认绑定
+                            </Button>
+                          </div>
+                        )}
+
+                        {editingBoundEmail && (
+                          <div className="flex justify-end">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                setEditingBoundEmail(false);
+                                setBindChallengeId("");
+                                setEmailCodeInput("");
+                                setEmailError("");
+                              }}
+                            >
+                              取消更换
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {emailError && <div className="text-xs text-dl-danger">{emailError}</div>}
+                    {emailFeedback && !emailError && (
+                      <div className="text-xs text-dl-text-secondary">
+                        {emailFeedback}
+                        {emailMaskedTarget && bindChallengeId ? " · 10 分钟内有效" : ""}
+                      </div>
+                    )}
                   </div>
 
                   {canManageInvites && (

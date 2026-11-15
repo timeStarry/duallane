@@ -31,6 +31,7 @@ import { ConversationSidebar } from "@/widgets/ConversationSidebar";
 import { EmoteGlobalModals } from "@/widgets/EmoteSystem";
 import { InspectorPane } from "@/widgets/InspectorPane";
 import { PrimaryRail } from "@/widgets/PrimaryRail";
+import { SystemAnnouncementModal } from "@/widgets/SystemAnnouncementModal";
 import { TimelinePane } from "@/widgets/TimelinePane";
 
 const SettingsModal = React.lazy(() =>
@@ -96,6 +97,21 @@ export function AppV1() {
   });
   const [submitting, setSubmitting] = useState(false);
   const [probingBackend, setProbingBackend] = useState(false);
+  const [signInMethod, setSignInMethod] = useState<"github" | "email">("github");
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginChallengeId, setLoginChallengeId] = useState("");
+  const [loginMaskedEmail, setLoginMaskedEmail] = useState("");
+  const [loginCode, setLoginCode] = useState("");
+  const [loginEmailCooldown, setLoginEmailCooldown] = useState(0);
+  const [loginEmailBusy, setLoginEmailBusy] = useState<"" | "send" | "verify">("");
+
+  useEffect(() => {
+    if (loginEmailCooldown <= 0) return;
+    const timer = setTimeout(() => {
+      setLoginEmailCooldown((prev) => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [loginEmailCooldown]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -268,6 +284,52 @@ export function AppV1() {
     window.location.assign(apiV1.getGitHubStartUrl(inviteCode));
   };
 
+  const handleSendLoginEmailCode = async () => {
+    const trimmed = loginEmail.trim();
+    if (!trimmed) {
+      setAuthError("请输入已绑定的邮箱地址");
+      return;
+    }
+    setAuthError("");
+    setLoginEmailBusy("send");
+    try {
+      const res = await apiV1.sendLoginEmailCode(trimmed);
+      setLoginChallengeId(res.challengeId);
+      setLoginMaskedEmail(res.maskedEmail);
+      setLoginEmailCooldown(60);
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : "发送验证码失败");
+    } finally {
+      setLoginEmailBusy("");
+    }
+  };
+
+  const handleEmailCodeLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmedEmail = loginEmail.trim();
+    const code = loginCode.trim();
+    if (!trimmedEmail || !loginChallengeId) {
+      setAuthError("请先输入邮箱并获取验证码");
+      return;
+    }
+    if (code.length !== 6) {
+      setAuthError("请输入 6 位数字验证码");
+      return;
+    }
+    setAuthError("");
+    setLoginEmailBusy("verify");
+    try {
+      await apiV1.verifyLoginEmail(trimmedEmail, loginChallengeId, code);
+      setLoginCode("");
+      setLoginChallengeId("");
+      await bootstrapWorkspace();
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : "验证码登录失败");
+    } finally {
+      setLoginEmailBusy("");
+    }
+  };
+
   const handleInviteQuickAccept = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inviteCode.trim()) return;
@@ -424,44 +486,113 @@ export function AppV1() {
               )}
 
               <div className="space-y-3 pt-1">
-                <Input
-                  value={inviteCode}
-                  onChange={(e) => setInviteCode(e.target.value)}
-                  placeholder="可选：输入空间邀请码"
-                  aria-label="空间邀请码"
+                <SegmentedControl
+                  label="登录方式"
+                  value={signInMethod}
+                  onValueChange={(v) => {
+                    setAuthError("");
+                    setSignInMethod(v as "github" | "email");
+                  }}
+                  options={[
+                    { value: "github", label: "GitHub 登录" },
+                    { value: "email", label: "已绑定邮箱" },
+                  ]}
                 />
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="lg"
-                  busy={probingBackend}
-                  className="w-full justify-center gap-2 font-semibold"
-                  onClick={() => void handleGitHubSignIn()}
-                >
-                  <span>使用 GitHub 登录共享空间</span>
-                  <ArrowRight className="size-4 shrink-0" strokeWidth={2} />
-                </Button>
 
-                {inviteCode.trim() && (
-                  <form
-                    onSubmit={handleInviteQuickAccept}
-                    className="pt-2.5 border-t border-dl-border-hairline space-y-2"
-                  >
+                {signInMethod === "github" ? (
+                  <>
                     <Input
-                      value={devDisplayName}
-                      onChange={(e) => setDevDisplayName(e.target.value)}
-                      placeholder="可选：测试成员昵称（双窗口联调推荐使用）"
-                      aria-label="测试成员昵称"
+                      value={inviteCode}
+                      onChange={(e) => setInviteCode(e.target.value)}
+                      placeholder="可选：输入空间邀请码"
+                      aria-label="空间邀请码"
                     />
                     <Button
-                      type="submit"
-                      variant="secondary"
-                      size="sm"
-                      className="w-full"
-                      busy={submitting}
+                      type="button"
+                      variant="primary"
+                      size="lg"
+                      busy={probingBackend}
+                      className="w-full justify-center gap-2 font-semibold"
+                      onClick={() => void handleGitHubSignIn()}
                     >
-                      通过邀请码直接加入（开发环境快捷入口）
+                      <span>使用 GitHub 登录共享空间</span>
+                      <ArrowRight className="size-4 shrink-0" strokeWidth={2} />
                     </Button>
+
+                    {inviteCode.trim() && (
+                      <form
+                        onSubmit={handleInviteQuickAccept}
+                        className="pt-2.5 border-t border-dl-border-hairline space-y-2"
+                      >
+                        <Input
+                          value={devDisplayName}
+                          onChange={(e) => setDevDisplayName(e.target.value)}
+                          placeholder="可选：测试成员昵称（双窗口联调推荐使用）"
+                          aria-label="测试成员昵称"
+                        />
+                        <Button
+                          type="submit"
+                          variant="secondary"
+                          size="sm"
+                          className="w-full"
+                          busy={submitting}
+                        >
+                          通过邀请码直接加入（开发环境快捷入口）
+                        </Button>
+                      </form>
+                    )}
+                  </>
+                ) : (
+                  <form onSubmit={handleEmailCodeLogin} className="space-y-2.5">
+                    <div className="flex gap-2">
+                      <Input
+                        type="email"
+                        value={loginEmail}
+                        onChange={(e) => setLoginEmail(e.target.value)}
+                        placeholder="输入已绑定的邮箱"
+                        aria-label="已绑定邮箱"
+                        className="flex-1"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        busy={loginEmailBusy === "send"}
+                        disabled={Boolean(loginEmailBusy) || loginEmailCooldown > 0}
+                        className="shrink-0"
+                        onClick={() => void handleSendLoginEmailCode()}
+                      >
+                        {loginEmailCooldown > 0 ? `${loginEmailCooldown}s` : "获取验证码"}
+                      </Button>
+                    </div>
+                    <Input
+                      value={loginCode}
+                      onChange={(e) => setLoginCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                      inputMode="numeric"
+                      maxLength={6}
+                      placeholder="6 位数字验证码"
+                      aria-label="登录验证码"
+                      className="font-mono tracking-[0.2em]"
+                    />
+                    {loginMaskedEmail && loginChallengeId && (
+                      <p className="text-[11px] text-dl-text-tertiary">
+                        验证码已发送至 {loginMaskedEmail}，10 分钟内有效。
+                      </p>
+                    )}
+                    <Button
+                      type="submit"
+                      variant="primary"
+                      size="lg"
+                      busy={loginEmailBusy === "verify"}
+                      disabled={!loginChallengeId || loginCode.trim().length !== 6}
+                      className="w-full justify-center gap-2 font-semibold"
+                    >
+                      <span>验证并进入共享空间</span>
+                      <ArrowRight className="size-4 shrink-0" strokeWidth={2} />
+                    </Button>
+                    <p className="text-center text-[11px] text-dl-text-tertiary">
+                      仅限已在个人设置绑定邮箱的成员登录
+                    </p>
                   </form>
                 )}
               </div>
@@ -593,6 +724,7 @@ export function AppV1() {
         <InspectorPane />
         <CommandSearchModal />
         <EmoteGlobalModals />
+        <SystemAnnouncementModal />
         {settingsOpen && (
           <React.Suspense fallback={null}>
             <SettingsModal />

@@ -518,6 +518,30 @@ export function createDualLaneMcpServer(options = {}) {
             ? Number(args.afterSequence)
             : profile.lastSequence || 0;
         const filterConv = args.conversationId ? String(args.conversationId).trim() : "";
+        const startedAtMs = Date.now();
+
+        const fallbackToPoll = async (cursor) => {
+          const remainingMs = Math.max(1000, timeoutSeconds * 1000 - (Date.now() - startedAtMs));
+          const polled = await client.pollNextEvent({
+            afterSequence: cursor,
+            timeoutMs: remainingMs,
+            conversationId: filterConv,
+            onCursorAdvance: (seq) => updateProfileCursor(profileName, seq, { configDir }),
+            onSyncRequired: ({ currentSequence }) => updateProfileCursor(profileName, currentSequence, { configDir }),
+          });
+          if (polled.timeout) {
+            return {
+              timeout: true,
+              waitedSeconds: timeoutSeconds,
+              lastSequence: polled.lastSequence,
+            };
+          }
+          return {
+            timeout: false,
+            event: polled.event,
+            lastSequence: polled.lastSequence,
+          };
+        };
 
         return await new Promise((resolve, reject) => {
           let settled = false;
@@ -568,6 +592,10 @@ export function createDualLaneMcpServer(options = {}) {
               settled = true;
               clearTimeout(timer);
               client.stop();
+              if (err?.retryable) {
+                fallbackToPoll(client.lastSequence || startSeq).then(resolve, reject);
+                return;
+              }
               reject(err);
             });
         });

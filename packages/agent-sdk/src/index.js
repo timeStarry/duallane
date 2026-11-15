@@ -1,10 +1,9 @@
 import crypto from "node:crypto";
-import { LiteWebSocket } from "./ws-lite.js";
+import { LiteWebSocket, OPEN } from "./ws-lite.js";
 
-export const DUALLANE_AGENT_SDK_VERSION = "1.0.0";
+export const DUALLANE_AGENT_SDK_VERSION = "1.0.6";
 export const DUALLANE_GATEWAY_VERSION = 1;
 
-const OPEN = 1;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 
 export class DualLaneAgentError extends Error {
@@ -254,7 +253,48 @@ export class DualLaneAgentClient {
   async getUpdates(options = {}) {
     const afterSequence = options.afterSequence === undefined ? 0 : normalizeSequence(options.afterSequence, true);
     const limit = options.limit === undefined ? 50 : normalizeLimit(options.limit);
-    return this.#request("GET", `/api/bot/v2/updates?afterSequence=${afterSequence}&limit=${limit}`);
+    const timeoutRaw = options.timeout === undefined ? 0 : Number(options.timeout);
+    const timeout = Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? Math.min(25, Math.floor(timeoutRaw)) : 0;
+    const timeoutParam = timeout > 0 ? `&timeout=${timeout}` : "";
+    return this.#request("GET", `/api/bot/v2/updates?afterSequence=${afterSequence}&limit=${limit}${timeoutParam}`);
+  }
+
+  async pollNextEvent(options = {}) {
+    const deadlineMs = Date.now() + Math.max(1000, Number(options.timeoutMs || 60_000));
+    const filterConv = typeof options.conversationId === "string" ? options.conversationId.trim() : "";
+    let cursor = normalizeSequence(options.afterSequence ?? 0, true);
+    const signal = options.signal;
+
+    while (Date.now() < deadlineMs && !signal?.aborted) {
+      const remainingSec = Math.max(1, Math.ceil((deadlineMs - Date.now()) / 1000));
+      const longPollSec = Math.min(20, remainingSec);
+      let res = await this.getUpdates({ afterSequence: cursor, limit: 50, timeout: longPollSec });
+      if (res?.syncRequired && Number.isSafeInteger(res?.currentSequence)) {
+        cursor = Math.max(0, Number(res.currentSequence));
+        await options.onSyncRequired?.({ currentSequence: cursor, reason: "sync_required" });
+        continue;
+      }
+      const events = Array.isArray(res?.events) ? res.events : [];
+      for (const ev of events) {
+        const seq = Number(ev?.sequence || 0);
+        if (seq > cursor) {
+          cursor = seq;
+          this.#lastSequence = Math.max(this.#lastSequence, seq);
+        }
+        if (ev?.eventId && seq > 0) {
+          await this.acknowledge({ eventId: ev.eventId, sequence: seq }).catch(() => {});
+        }
+        await options.onCursorAdvance?.(cursor);
+        if (filterConv && ev?.conversationId !== filterConv) {
+          continue;
+        }
+        return { timeout: false, event: ev, lastSequence: cursor, transport: "poll" };
+      }
+      if (events.length === 0 && Date.now() < deadlineMs && !signal?.aborted) {
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    }
+    return { timeout: true, lastSequence: cursor, transport: "poll" };
   }
 
   async #request(method, path, body) {

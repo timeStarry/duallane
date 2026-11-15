@@ -1,6 +1,6 @@
 {
   "name": "@duallane/agent-sdk",
-  "version": "1.0.0",
+  "version": "1.0.6",
   "description": "Zero-dependency universal JavaScript SDK, CLI, and Stdio MCP server for the DualLane Agent Bot Gateway.",
   "type": "module",
   "private": true,
@@ -19,6 +19,7 @@
   },
   "types": "./src/index.d.ts",
   "scripts": {
+    "bundle": "node scripts/bundle-standalone.mjs",
     "lint": "node --check src/index.js && node --check src/ws-lite.js && node --check src/v2.js && node --check src/openclaw.js && node --check src/profile-store.js && node --check src/mcp.js && node --check bin/duallane-agent.mjs",
     "test": "node --test"
   },

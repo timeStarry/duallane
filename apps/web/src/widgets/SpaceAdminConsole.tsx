@@ -7,23 +7,33 @@ import {
   Eye,
   HardDrive,
   KeyRound,
+  Mail,
+  Megaphone,
   RefreshCw,
   Search,
   ShieldCheck,
   SlidersHorizontal,
+  Smartphone,
   Trash2,
   UserMinus,
   Users,
 } from "lucide-react";
 import { useLaneStore, type SpaceAdminTab } from "@/entities/lane/store";
-import { useWorkspaceStore, type V1User } from "@/entities/workspace/store";
+import {
+  parseRawSystemAnnouncement,
+  useWorkspaceStore,
+  type V1User,
+} from "@/entities/workspace/store";
 import {
   apiV1,
   type AdminAuditLogItem,
+  type AdminEmailSettingsDTO,
+  type AdminEmailSettingsInput,
   type AdminInviteItem,
   type AdminInviteListResponse,
   type AdminOverviewResponse,
   type MemberVisibilityRule,
+  type SystemAnnouncementDTO,
 } from "@/shared/lib/api-v1";
 import {
   Avatar,
@@ -37,6 +47,7 @@ import {
   Input,
   SegmentedControl,
   Select,
+  Switch,
 } from "@/shared/ui";
 import { cn } from "@/shared/lib/cn";
 
@@ -46,9 +57,11 @@ const ADMIN_TABS: Array<{
   icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
 }> = [
   { id: "overview", label: "概览与审计", icon: Activity },
+  { id: "announcement", label: "系统通告", icon: Megaphone },
   { id: "members", label: "成员与可见性", icon: Users },
   { id: "invites", label: "邀请码治理", icon: KeyRound },
   { id: "storage", label: "存储与配额", icon: HardDrive },
+  { id: "mail", label: "邮件发信", icon: Mail },
 ];
 
 const QUOTA_PRESETS: Array<{ label: string; bytes: number }> = [
@@ -161,6 +174,33 @@ export function SpaceAdminConsole() {
   const [savingPolicy, setSavingPolicy] = useState(false);
   const [cleaningStorage, setCleaningStorage] = useState(false);
 
+  // System Announcement state
+  const [annMeta, setAnnMeta] = useState<SystemAnnouncementDTO | null>(null);
+  const [annEnabled, setAnnEnabled] = useState(false);
+  const [annDisplayMode, setAnnDisplayMode] = useState<"once" | "always">("once");
+  const [annBadge, setAnnBadge] = useState("");
+  const [annTitle, setAnnTitle] = useState("");
+  const [annContent, setAnnContent] = useState("");
+  const [annCtaLabel, setAnnCtaLabel] = useState("");
+  const [annCtaUrl, setAnnCtaUrl] = useState("");
+  const [savingAnnMode, setSavingAnnMode] = useState<"" | "save" | "repush">("");
+
+  // Space Email SMTP state
+  const [emailSettings, setEmailSettings] = useState<AdminEmailSettingsDTO | null>(null);
+  const [emailDraft, setEmailDraft] = useState<AdminEmailSettingsInput>({
+    enabled: false,
+    smtpHost: "",
+    smtpPort: 587,
+    encryption: "starttls",
+    username: "",
+    password: "",
+    fromAddress: "",
+    fromName: "DualLane",
+  });
+  const [emailTestProof, setEmailTestProof] = useState("");
+  const [emailTestedRecipient, setEmailTestedRecipient] = useState("");
+  const [busyEmailAction, setBusyEmailAction] = useState<"" | "test" | "save">("");
+
   const loadOverviewAndAudits = useCallback(async () => {
     if (isPreviewMode) {
       const memberCount = Object.keys(members).length;
@@ -248,6 +288,45 @@ export function SpaceAdminConsole() {
     setInviteData(res);
   }, [isPreviewMode]);
 
+  const loadAnnouncement = useCallback(async () => {
+    if (isPreviewMode) {
+      return;
+    }
+    const res = await apiV1.getAdminAnnouncement();
+    const ann = res.announcement;
+    setAnnMeta(ann || null);
+    if (ann) {
+      setAnnEnabled(Boolean(ann.enabled));
+      setAnnDisplayMode(ann.displayMode === "always" ? "always" : "once");
+      setAnnBadge(ann.badge || "");
+      setAnnTitle(ann.title || "");
+      setAnnContent(ann.content || "");
+      setAnnCtaLabel(ann.ctaLabel || "");
+      setAnnCtaUrl(ann.ctaUrl || "");
+    }
+  }, [isPreviewMode]);
+
+  const loadEmailSettings = useCallback(async () => {
+    if (isPreviewMode) {
+      return;
+    }
+    const res = await apiV1.getWorkspaceEmailSettings();
+    const s = res.settings;
+    setEmailSettings(s);
+    if (s) {
+      setEmailDraft({
+        enabled: s.enabled,
+        smtpHost: s.smtpHost || "",
+        smtpPort: s.smtpPort || 587,
+        encryption: s.encryption || "starttls",
+        username: s.username || "",
+        password: "",
+        fromAddress: s.fromAddress || "",
+        fromName: s.fromName || "DualLane",
+      });
+    }
+  }, [isPreviewMode]);
+
   useEffect(() => {
     if (!adminConsoleOpen || !isSpaceManager) return;
     let cancelled = false;
@@ -260,6 +339,10 @@ export function SpaceAdminConsole() {
           await loadOverviewAndAudits();
         } else if (adminConsoleTab === "members") {
           await loadMembersDirectory();
+        } else if (adminConsoleTab === "announcement") {
+          await loadAnnouncement();
+        } else if (adminConsoleTab === "mail") {
+          await loadEmailSettings();
         } else {
           await loadInvites();
         }
@@ -280,6 +363,8 @@ export function SpaceAdminConsole() {
     adminConsoleOpen,
     adminConsoleTab,
     isSpaceManager,
+    loadAnnouncement,
+    loadEmailSettings,
     loadInvites,
     loadMembersDirectory,
     loadOverviewAndAudits,
@@ -491,6 +576,152 @@ export function SpaceAdminConsole() {
       setBannerError(err instanceof Error ? err.message : "执行存储清理失败");
     } finally {
       setCleaningStorage(false);
+    }
+  };
+
+  const handleFillMobilePromoTemplate = () => {
+    setAnnEnabled(true);
+    setAnnBadge("移动端发布");
+    setAnnTitle("DualLane Android 客户端现已可用");
+    setAnnContent(
+      "轻量原生的 DualLane Android 客户端已上线，支持共享空间实时会话、系统通告与已绑定邮箱快捷登录。"
+    );
+    setAnnCtaLabel("下载 Android 安装包");
+    setAnnCtaUrl(
+      "https://github.com/timeStarry/duallane-mobile/releases/latest/download/app-release.apk"
+    );
+  };
+
+  const handleSaveAnnouncement = async (resetAck: boolean) => {
+    setBannerError("");
+    setBannerSuccess("");
+    if (annEnabled && (!annTitle.trim() || !annContent.trim())) {
+      setBannerError("启用通告时请填写标题与正文");
+      return;
+    }
+    setSavingAnnMode(resetAck ? "repush" : "save");
+    try {
+      if (isPreviewMode) {
+        const previewAnn: SystemAnnouncementDTO = {
+          id: resetAck || !annMeta?.id ? `ann_${Date.now()}` : annMeta.id,
+          enabled: annEnabled,
+          displayMode: annDisplayMode,
+          badge: annBadge.trim() || undefined,
+          title: annTitle.trim() || "系统通告",
+          content: annContent.trim() || "通告预览正文",
+          ctaLabel: annCtaLabel.trim() || undefined,
+          ctaUrl: annCtaUrl.trim() || undefined,
+          updatedAt: new Date().toISOString(),
+          shouldShow: annEnabled,
+        };
+        setAnnMeta(previewAnn);
+        useWorkspaceStore.setState({
+          systemAnnouncement: annEnabled ? previewAnn : null,
+          ...(resetAck ? { dismissedAnnouncementKey: null } : {}),
+        });
+        setBannerSuccess(resetAck ? "已生成新通告并全员重推" : "系统通告已保存");
+        return;
+      }
+
+      const res = await apiV1.updateAdminAnnouncement({
+        enabled: annEnabled,
+        displayMode: annDisplayMode,
+        badge: annBadge.trim(),
+        title: annTitle.trim(),
+        content: annContent.trim(),
+        ctaLabel: annCtaLabel.trim(),
+        ctaUrl: annCtaUrl.trim(),
+        resetAck,
+      });
+      const nextAnn = parseRawSystemAnnouncement(res.announcement);
+      setAnnMeta(res.announcement || null);
+      if (resetAck) {
+        useWorkspaceStore.setState({
+          systemAnnouncement: nextAnn && nextAnn.enabled ? { ...nextAnn, shouldShow: true } : null,
+          dismissedAnnouncementKey: null,
+        });
+      }
+      setBannerSuccess(
+        !annEnabled
+          ? "系统通告已关闭"
+          : resetAck
+          ? "已作为新通告全员重推（双端登录时强提示）"
+          : "系统通告已保存并同步至双端"
+      );
+    } catch (err) {
+      setBannerError(err instanceof Error ? err.message : "保存系统通告失败");
+    } finally {
+      setSavingAnnMode("");
+    }
+  };
+
+  const updateEmailDraftField = <K extends keyof AdminEmailSettingsInput>(
+    key: K,
+    value: AdminEmailSettingsInput[K]
+  ) => {
+    setEmailDraft((prev) => ({ ...prev, [key]: value }));
+    setEmailTestProof("");
+    setEmailTestedRecipient("");
+  };
+
+  const handleTestEmailSettings = async () => {
+    setBannerError("");
+    setBannerSuccess("");
+    setBusyEmailAction("test");
+    try {
+      if (isPreviewMode) {
+        setEmailTestProof("proof_preview");
+        setEmailTestedRecipient("owner@duallane.local");
+        setBannerSuccess("测试邮件发送成功，可保存并启用");
+        return;
+      }
+      const res = await apiV1.testWorkspaceEmailSettings(emailDraft);
+      setEmailTestProof(res.testProof);
+      setEmailTestedRecipient(res.recipient);
+      setEmailSettings((prev) =>
+        prev
+          ? {
+              ...prev,
+              lastTestedAt: res.testedAt,
+              lastTestStatus: "success",
+              lastTestErrorCode: null,
+            }
+          : prev
+      );
+      setBannerSuccess(`测试邮件已发送至 ${res.recipient}，请保存以生效`);
+    } catch (err) {
+      setEmailTestProof("");
+      setBannerError(err instanceof Error ? err.message : "测试邮件发送失败");
+    } finally {
+      setBusyEmailAction("");
+    }
+  };
+
+  const handleSaveEmailSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBannerError("");
+    setBannerSuccess("");
+    setBusyEmailAction("save");
+    try {
+      if (isPreviewMode) {
+        setBannerSuccess("邮件发信设置已保存");
+        return;
+      }
+      const res = await apiV1.saveWorkspaceEmailSettings({
+        ...emailDraft,
+        ...(emailTestProof ? { testProof: emailTestProof } : {}),
+      });
+      setEmailSettings(res.settings);
+      setEmailDraft((prev) => ({ ...prev, password: "" }));
+      setEmailTestProof("");
+      setEmailTestedRecipient("");
+      setBannerSuccess(
+        res.settings.enabled ? "空间发信邮箱已启用（同时用于通知与邮箱验证码发放）" : "发信设置已保存并停用"
+      );
+    } catch (err) {
+      setBannerError(err instanceof Error ? err.message : "保存邮件发信设置失败");
+    } finally {
+      setBusyEmailAction("");
     }
   };
 
@@ -1262,6 +1493,300 @@ export function SpaceAdminConsole() {
                     )}
                 </div>
               </div>
+            )}
+
+            {/* TAB 5: System-Wide Modal Announcement */}
+            {adminConsoleTab === "announcement" && (
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-semibold text-dl-text-primary">
+                      系统级强提示通告
+                    </h3>
+                    <p className="text-xs text-dl-text-secondary">
+                      成员登录 PC 或移动端后弹出模态框强提示，适用于移动端推广、版本变更与重要通知。
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className="gap-1.5"
+                    onClick={handleFillMobilePromoTemplate}
+                  >
+                    <Smartphone className="size-3.5" strokeWidth={1.9} />
+                    填入移动端推广模板
+                  </Button>
+                </div>
+
+                <div className="rounded-2xl border border-dl-border-hairline bg-dl-surface-subtle/40 p-4 space-y-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs font-semibold text-dl-text-primary">启用全员弹窗通告</div>
+                      <div className="text-[11px] text-dl-text-tertiary">
+                        {annMeta?.updatedAt
+                          ? `最近更新：${formatShortTime(annMeta.updatedAt)}`
+                          : "尚未发布过系统通告"}
+                      </div>
+                    </div>
+                    <Switch
+                      label="启用全员弹窗通告"
+                      checked={annEnabled}
+                      onCheckedChange={setAnnEnabled}
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-semibold text-dl-text-primary">展示策略</div>
+                    <SegmentedControl
+                      label="通告展示策略"
+                      value={annDisplayMode}
+                      onValueChange={(v) => setAnnDisplayMode(v as "once" | "always")}
+                      options={[
+                        { value: "once", label: "任一端见过一次即可" },
+                        { value: "always", label: "每次登录一直显示" },
+                      ]}
+                    />
+                    <p className="text-[11px] text-dl-text-tertiary">
+                      {annDisplayMode === "once"
+                        ? "成员在 PC 或移动端任意一端点击确认后，服务端记录已读，双端均不再重复弹出。"
+                        : "每次成员登录或重新进入会话均会弹出提醒，直至关闭通告或切换为见过一次即可。"}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-3 max-compact:grid-cols-1 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-xs text-dl-text-secondary">角标标签（可选）</label>
+                      <Input
+                        value={annBadge}
+                        onChange={(e) => setAnnBadge(e.target.value)}
+                        placeholder="如：移动端发布"
+                        maxLength={24}
+                      />
+                    </div>
+                    <div className="col-span-2 max-compact:col-span-1 space-y-1">
+                      <label className="text-xs text-dl-text-secondary">通告标题</label>
+                      <Input
+                        value={annTitle}
+                        onChange={(e) => setAnnTitle(e.target.value)}
+                        placeholder="简洁明确的弹窗主标题"
+                        maxLength={80}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs text-dl-text-secondary">通告正文</label>
+                    <textarea
+                      rows={4}
+                      value={annContent}
+                      onChange={(e) => setAnnContent(e.target.value)}
+                      placeholder="输入通告正文，支持换行展示…"
+                      className="w-full rounded-xl border border-dl-border-hairline bg-control/60 px-3.5 py-2.5 text-sm text-dl-text-primary placeholder:text-dl-text-tertiary focus:outline-none focus:ring-2 focus:ring-dl-lane-shared/40"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 max-compact:grid-cols-1 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-xs text-dl-text-secondary">主按钮文案（可选）</label>
+                      <Input
+                        value={annCtaLabel}
+                        onChange={(e) => setAnnCtaLabel(e.target.value)}
+                        placeholder="如：下载 Android 安装包"
+                        maxLength={32}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-dl-text-secondary">跳转或下载链接（可选）</label>
+                      <Input
+                        value={annCtaUrl}
+                        onChange={(e) => setAnnCtaUrl(e.target.value)}
+                        placeholder="https://..."
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      busy={savingAnnMode === "repush"}
+                      disabled={Boolean(savingAnnMode)}
+                      onClick={() => void handleSaveAnnouncement(true)}
+                    >
+                      作为新通告全员重推
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="primary"
+                      busy={savingAnnMode === "save"}
+                      disabled={Boolean(savingAnnMode)}
+                      onClick={() => void handleSaveAnnouncement(false)}
+                    >
+                      保存通告
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 6: Space SMTP Email Sender */}
+            {adminConsoleTab === "mail" && (
+              <form onSubmit={handleSaveEmailSettings} className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-semibold text-dl-text-primary">
+                      空间通知与验证码发信邮箱
+                    </h3>
+                    <p className="text-xs text-dl-text-secondary">
+                      离线通知邮件与成员邮箱绑定、登录验证码统一使用此 SMTP 发信通道。
+                    </p>
+                  </div>
+                  <Switch
+                    label="启用空间邮件服务"
+                    checked={emailDraft.enabled}
+                    disabled={!isOwner || Boolean(busyEmailAction)}
+                    onCheckedChange={(v) => updateEmailDraftField("enabled", v)}
+                  />
+                </div>
+
+                <div className="grid grid-cols-3 max-compact:grid-cols-1 gap-2.5">
+                  <div className="rounded-xl border border-dl-border-hairline bg-dl-surface-subtle/40 px-3.5 py-2.5">
+                    <div className="text-[11px] text-dl-text-tertiary">当前发信状态</div>
+                    <div className="mt-0.5 text-xs font-semibold text-dl-text-primary">
+                      {emailSettings?.enabled ? "已启用" : "未启用"}
+                      {emailSettings?.activeFrom ? ` · ${emailSettings.activeFrom}` : ""}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-dl-border-hairline bg-dl-surface-subtle/40 px-3.5 py-2.5">
+                    <div className="text-[11px] text-dl-text-tertiary">最近连通测试</div>
+                    <div className="mt-0.5 text-xs font-semibold text-dl-text-primary">
+                      {emailSettings?.lastTestedAt ? formatShortTime(emailSettings.lastTestedAt) : "暂无"}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-dl-border-hairline bg-dl-surface-subtle/40 px-3.5 py-2.5">
+                    <div className="text-[11px] text-dl-text-tertiary">最近发信投递</div>
+                    <div className="mt-0.5 text-xs font-semibold text-dl-text-primary">
+                      {emailSettings?.lastDeliveryAt ? formatShortTime(emailSettings.lastDeliveryAt) : "暂无"}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-dl-border-hairline bg-dl-surface-subtle/40 p-4 space-y-3.5">
+                  <div className="grid grid-cols-3 max-compact:grid-cols-1 gap-3">
+                    <div className="col-span-2 max-compact:col-span-1 space-y-1">
+                      <label className="text-xs text-dl-text-secondary">SMTP 服务器</label>
+                      <Input
+                        value={emailDraft.smtpHost}
+                        disabled={!isOwner || Boolean(busyEmailAction)}
+                        onChange={(e) => updateEmailDraftField("smtpHost", e.target.value)}
+                        placeholder="smtp.example.com"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-dl-text-secondary">端口</label>
+                      <Input
+                        type="number"
+                        value={String(emailDraft.smtpPort)}
+                        disabled={!isOwner || Boolean(busyEmailAction)}
+                        onChange={(e) => updateEmailDraftField("smtpPort", Number(e.target.value) || 587)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs text-dl-text-secondary">加密传输</label>
+                    <SegmentedControl
+                      label="SMTP 加密方式"
+                      value={emailDraft.encryption}
+                      onValueChange={(v) =>
+                        updateEmailDraftField("encryption", v as "starttls" | "tls" | "none")
+                      }
+                      options={[
+                        { value: "starttls", label: "STARTTLS" },
+                        { value: "tls", label: "SSL / TLS" },
+                        { value: "none", label: "无加密" },
+                      ]}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 max-compact:grid-cols-1 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-xs text-dl-text-secondary">SMTP 用户名</label>
+                      <Input
+                        value={emailDraft.username}
+                        disabled={!isOwner || Boolean(busyEmailAction)}
+                        onChange={(e) => updateEmailDraftField("username", e.target.value)}
+                        placeholder="user@example.com"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-dl-text-secondary">SMTP 密码 / 授权码</label>
+                      <Input
+                        type="password"
+                        value={emailDraft.password || ""}
+                        disabled={!isOwner || Boolean(busyEmailAction)}
+                        onChange={(e) => updateEmailDraftField("password", e.target.value)}
+                        placeholder={emailSettings?.passwordConfigured ? "留空则保留已加密保存的密码" : "输入密码或客户端授权码"}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 max-compact:grid-cols-1 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-xs text-dl-text-secondary">发信地址</label>
+                      <Input
+                        type="email"
+                        value={emailDraft.fromAddress}
+                        disabled={!isOwner || Boolean(busyEmailAction)}
+                        onChange={(e) => updateEmailDraftField("fromAddress", e.target.value)}
+                        placeholder="留空默认使用邮箱格式用户名"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-dl-text-secondary">发件人名称</label>
+                      <Input
+                        value={emailDraft.fromName}
+                        disabled={!isOwner || Boolean(busyEmailAction)}
+                        onChange={(e) => updateEmailDraftField("fromName", e.target.value)}
+                        placeholder="DualLane"
+                      />
+                    </div>
+                  </div>
+
+                  {emailTestProof && emailTestedRecipient && (
+                    <div className="text-xs text-dl-success">
+                      已通过发信验证（收件地址：{emailTestedRecipient}），10 分钟内可直接保存启用。
+                    </div>
+                  )}
+
+                  {isOwner && (
+                    <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        busy={busyEmailAction === "test"}
+                        disabled={Boolean(busyEmailAction)}
+                        onClick={() => void handleTestEmailSettings()}
+                      >
+                        发送测试邮件
+                      </Button>
+                      <Button
+                        type="submit"
+                        size="sm"
+                        variant="primary"
+                        busy={busyEmailAction === "save"}
+                        disabled={Boolean(busyEmailAction) || (emailDraft.enabled && !emailTestProof && !emailSettings?.enabled)}
+                      >
+                        保存发信设置
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </form>
             )}
           </div>
         </div>

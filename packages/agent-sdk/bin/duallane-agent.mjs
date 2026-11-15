@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import os from "node:os";
+import { fileURLToPath } from "node:url";
 import {
   DualLaneAgentClient,
+  DualLaneAgentError,
   DualLaneAgentSetupClient,
   DUALLANE_AGENT_SDK_VERSION,
+  DUALLANE_GATEWAY_VERSION,
 } from "../src/index.js";
-import { startDualLaneMcpStdioServer } from "../src/mcp.js";
+import { createDualLaneMcpServer, DUALLANE_MCP_TOOLS, startDualLaneMcpStdioServer } from "../src/mcp.js";
 import {
   DEFAULT_SETUP_SCOPES,
   deleteAgentProfile,
@@ -17,6 +21,20 @@ import {
   saveAgentProfile,
   updateProfileCursor,
 } from "../src/profile-store.js";
+
+export {
+  DualLaneAgentClient,
+  DualLaneAgentError,
+  DualLaneAgentSetupClient,
+  DUALLANE_AGENT_SDK_VERSION,
+  DUALLANE_GATEWAY_VERSION,
+  DUALLANE_MCP_TOOLS,
+  createDualLaneMcpServer,
+  startDualLaneMcpStdioServer,
+  loadAgentProfile,
+  saveAgentProfile,
+  deleteAgentProfile,
+};
 
 function parseArgs(argv) {
   const positionals = [];
@@ -52,13 +70,13 @@ Usage:
   duallane-agent mcp [--profile default]
   duallane-agent status [--profile default]
   duallane-agent conversations [--profile default]
-  duallane-agent updates [--ack] [--profile default]
-  duallane-agent wait [--timeout 3600] [--profile default]
+  duallane-agent updates [--ack] [--timeout 20] [--profile default]
+  duallane-agent wait [--timeout 3600] [--transport auto|ws|poll] [--profile default]
   duallane-agent send <conversationId> <text> [--reply-to <messageId>] [--profile default]
   duallane-agent edit <messageId> <text> [--profile default]
   duallane-agent typing <conversationId> [--state thinking|typing] [--profile default]
   duallane-agent unbind [--profile default]
-  duallane-agent listen --cmd "<shell-command>" [--profile default]
+  duallane-agent listen --cmd "<shell-command>" [--transport auto|ws|poll] [--profile default]
 
 Works with Claude Code, Codex CLI, Cursor, Windsurf, Gemini CLI, Antigravity, and OpenClaw.
 `);
@@ -211,57 +229,106 @@ async function runListen(flags) {
   if (!cmd) {
     throw new Error("Missing --cmd \"<shell-command>\" for incoming event bridge.");
   }
+  const transportMode = String(flags.transport || "auto").trim().toLowerCase();
   const { client, profile, profileName } = requireClient(flags.profile);
   const me = await client.getMe();
   process.stderr.write(
     `[DualLane] Listening as "${me?.bot?.name || profile.botName || "Bot"}" (${profile.url}) -> forwarding events to: ${cmd}\n`
   );
 
-  await client.connect({
-    lastSequence: profile.lastSequence || 0,
-    onStatus(state) {
-      if (state.status === "connected") {
-        process.stderr.write(`[DualLane] WebSocket connected (seq=${state.currentSequence ?? state.lastSequence})\n`);
-      } else if (state.status === "disconnected") {
-        process.stderr.write(`[DualLane] Disconnected, retrying in ${state.retryInMs}ms...\n`);
-      }
-    },
-    async onEvent(event) {
-      updateProfileCursor(profileName, event.sequence);
-      if (!event.conversationId) return;
+  let stopped = false;
+  const handleIncomingEvent = async (event) => {
+    updateProfileCursor(profileName, event.sequence);
+    if (!event.conversationId) return;
 
-      await client.setTyping(event.conversationId).catch(() => {});
-      let context = null;
-      if (profile.scopes.includes("messages:read_context")) {
-        context = await client.getContext(event.conversationId, { limit: 20 }).catch(() => null);
-      }
+    await client.setTyping(event.conversationId).catch(() => {});
+    let context = null;
+    if (profile.scopes.includes("messages:read_context")) {
+      context = await client.getContext(event.conversationId, { limit: 20 }).catch(() => null);
+    }
 
-      const replyText = await runBridgeCommand(cmd, { event, context });
-      if (replyText) {
-        await client.sendMessage({
-          conversationId: event.conversationId,
-          text: replyText,
-          replyToMessageId: event.payload?.message?.id || event.payload?.messageId,
-          clientMessageId: `${event.eventId}:reply`,
-          idempotencyKey: `${event.eventId}:reply`,
+    const replyText = await runBridgeCommand(cmd, { event, context });
+    if (replyText) {
+      await client.sendMessage({
+        conversationId: event.conversationId,
+        text: replyText,
+        replyToMessageId: event.payload?.message?.id || event.payload?.messageId,
+        clientMessageId: `${event.eventId}:reply`,
+        idempotencyKey: `${event.eventId}:reply`,
+      });
+    }
+  };
+
+  const runPollLoop = async (initialSeq) => {
+    let cursor = initialSeq;
+    process.stderr.write(`[DualLane] HTTP long-polling active (seq=${cursor})\n`);
+    while (!stopped) {
+      try {
+        const polled = await client.pollNextEvent({
+          afterSequence: cursor,
+          timeoutMs: 25_000,
+          onCursorAdvance: (seq) => {
+            cursor = seq;
+            updateProfileCursor(profileName, seq);
+          },
+          onSyncRequired: ({ currentSequence }) => {
+            cursor = currentSequence;
+            updateProfileCursor(profileName, currentSequence);
+          },
         });
+        cursor = polled.lastSequence;
+        if (!polled.timeout && polled.event) {
+          await handleIncomingEvent(polled.event);
+        }
+      } catch (err) {
+        if (stopped) break;
+        process.stderr.write(`[DualLane] Poll error (${err?.code || "poll_failed"}): ${err?.message || err}\n`);
+        await new Promise((r) => setTimeout(r, 2000));
       }
-    },
-    async onSyncRequired({ currentSequence }) {
-      updateProfileCursor(profileName, currentSequence);
-    },
-    onError(err) {
-      process.stderr.write(`[DualLane] Gateway error (${err.code}): ${err.message}\n`);
-    },
-  });
+    }
+  };
 
   const shutdown = () => {
+    stopped = true;
     process.stderr.write("\n[DualLane] Stopping listener...\n");
     client.stop();
     process.exit(0);
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+
+  if (transportMode === "poll") {
+    await runPollLoop(profile.lastSequence || 0);
+    return;
+  }
+
+  try {
+    await client.connect({
+      lastSequence: profile.lastSequence || 0,
+      onStatus(state) {
+        if (state.status === "connected") {
+          process.stderr.write(`[DualLane] WebSocket connected (seq=${state.currentSequence ?? state.lastSequence})\n`);
+        } else if (state.status === "disconnected") {
+          process.stderr.write(`[DualLane] Disconnected, retrying in ${state.retryInMs}ms...\n`);
+        }
+      },
+      onEvent: handleIncomingEvent,
+      async onSyncRequired({ currentSequence }) {
+        updateProfileCursor(profileName, currentSequence);
+      },
+      onError(err) {
+        process.stderr.write(`[DualLane] Gateway error (${err.code}): ${err.message}\n`);
+      },
+    });
+  } catch (err) {
+    if (transportMode === "auto" && err?.retryable) {
+      client.stop();
+      process.stderr.write(`[DualLane] WebSocket unavailable (${err.code}), falling back to HTTP long-polling...\n`);
+      await runPollLoop(client.lastSequence || profile.lastSequence || 0);
+      return;
+    }
+    throw err;
+  }
 }
 
 async function main() {
@@ -319,11 +386,12 @@ async function main() {
       flags["after-sequence"] !== undefined
         ? Number(flags["after-sequence"])
         : profile.lastSequence || 0;
-    let res = await client.getUpdates({ afterSequence, limit: Number(flags.limit || 50) });
+    const timeout = flags.timeout !== undefined ? Number(flags.timeout) : 0;
+    let res = await client.getUpdates({ afterSequence, limit: Number(flags.limit || 50), timeout });
     if (res?.syncRequired && Number(res.currentSequence) > 0 && afterSequence === 0) {
       const fallbackSeq = Math.max(0, Number(res.currentSequence) - 100);
       const retry = await client
-        .getUpdates({ afterSequence: fallbackSeq, limit: Number(flags.limit || 50) })
+        .getUpdates({ afterSequence: fallbackSeq, limit: Number(flags.limit || 50), timeout })
         .catch(() => null);
       if (retry && !retry.syncRequired) {
         res = retry;
@@ -352,71 +420,118 @@ async function main() {
         ? Number(flags["after-sequence"])
         : profile.lastSequence || 0;
     const filterConv = typeof flags.conversation === "string" ? flags.conversation.trim() : "";
+    const transportMode = String(flags.transport || "auto").trim().toLowerCase();
+    const startedAtMs = Date.now();
 
-    const result = await new Promise((resolve, reject) => {
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        client.stop();
-        resolve({
+    const waitViaPoll = async (cursor) => {
+      const remainingMs = Math.max(1000, timeoutSeconds * 1000 - (Date.now() - startedAtMs));
+      const polled = await client.pollNextEvent({
+        afterSequence: cursor,
+        timeoutMs: remainingMs,
+        conversationId: filterConv,
+        onCursorAdvance: (seq) => updateProfileCursor(profileName, seq),
+        onSyncRequired: ({ currentSequence }) => updateProfileCursor(profileName, currentSequence),
+      });
+      if (polled.timeout || !polled.event) {
+        return {
           status: "timeout",
           profile: profileName,
           waitedSeconds: timeoutSeconds,
-          lastSequence: client.lastSequence || startSeq,
-        });
-      }, timeoutSeconds * 1000);
+          lastSequence: polled.lastSequence,
+          transport: "poll",
+        };
+      }
+      const ev = polled.event;
+      if (ev.conversationId) {
+        await client.setTyping(ev.conversationId).catch(() => {});
+      }
+      let context = null;
+      if (ev.conversationId && profile.scopes?.includes("messages:read_context")) {
+        context = await client.getContext(ev.conversationId, { limit: 15 }).catch(() => null);
+      }
+      return {
+        status: "event",
+        profile: profileName,
+        lastSequence: polled.lastSequence,
+        transport: "poll",
+        event: ev,
+        context,
+      };
+    };
 
-      client
-        .connect({
-          lastSequence: startSeq,
-          async onEvent(event) {
-            updateProfileCursor(profileName, event.sequence);
-            await client
-              .acknowledge({ eventId: event.eventId, sequence: event.sequence })
-              .catch(() => {});
-            if (filterConv && event.conversationId !== filterConv) {
-              return;
-            }
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            if (event.conversationId) {
-              await client.setTyping(event.conversationId).catch(() => {});
-            }
-            let context = null;
-            if (event.conversationId && profile.scopes?.includes("messages:read_context")) {
-              context = await client.getContext(event.conversationId, { limit: 15 }).catch(() => null);
-            }
-            setImmediate(() => client.stop());
-            resolve({
-              status: "event",
-              profile: profileName,
-              lastSequence: event.sequence,
-              event,
-              context,
-            });
-          },
-          async onSyncRequired({ currentSequence }) {
-            updateProfileCursor(profileName, currentSequence);
-          },
-          onError(err) {
-            if (!settled && !err?.retryable) {
+    const result =
+      transportMode === "poll"
+        ? await waitViaPoll(startSeq)
+        : await new Promise((resolve, reject) => {
+            let settled = false;
+            const timer = setTimeout(() => {
+              if (settled) return;
               settled = true;
-              clearTimeout(timer);
               client.stop();
-              reject(err);
-            }
-          },
-        })
-        .catch((err) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          client.stop();
-          reject(err);
-        });
-    });
+              resolve({
+                status: "timeout",
+                profile: profileName,
+                waitedSeconds: timeoutSeconds,
+                lastSequence: client.lastSequence || startSeq,
+                transport: "ws",
+              });
+            }, timeoutSeconds * 1000);
+
+            client
+              .connect({
+                lastSequence: startSeq,
+                async onEvent(event) {
+                  updateProfileCursor(profileName, event.sequence);
+                  await client
+                    .acknowledge({ eventId: event.eventId, sequence: event.sequence })
+                    .catch(() => {});
+                  if (filterConv && event.conversationId !== filterConv) {
+                    return;
+                  }
+                  if (settled) return;
+                  settled = true;
+                  clearTimeout(timer);
+                  if (event.conversationId) {
+                    await client.setTyping(event.conversationId).catch(() => {});
+                  }
+                  let context = null;
+                  if (event.conversationId && profile.scopes?.includes("messages:read_context")) {
+                    context = await client.getContext(event.conversationId, { limit: 15 }).catch(() => null);
+                  }
+                  setImmediate(() => client.stop());
+                  resolve({
+                    status: "event",
+                    profile: profileName,
+                    lastSequence: event.sequence,
+                    transport: "ws",
+                    event,
+                    context,
+                  });
+                },
+                async onSyncRequired({ currentSequence }) {
+                  updateProfileCursor(profileName, currentSequence);
+                },
+                onError(err) {
+                  if (!settled && !err?.retryable) {
+                    settled = true;
+                    clearTimeout(timer);
+                    client.stop();
+                    reject(err);
+                  }
+                },
+              })
+              .catch((err) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                client.stop();
+                if (transportMode === "auto" && err?.retryable) {
+                  waitViaPoll(client.lastSequence || startSeq).then(resolve, reject);
+                  return;
+                }
+                reject(err);
+              });
+          });
 
     process.stdout.write(JSON.stringify(result, null, 2) + "\n");
     return;
@@ -489,8 +604,19 @@ async function main() {
   throw new Error(`Unknown subcommand "${subcommand}". Run "duallane-agent --help".`);
 }
 
-main().catch((err) => {
-  const safeMsg = String(err?.message || err).replace(/dl_bot_[A-Za-z0-9_-]{12,}/gu, "[REDACTED]");
-  process.stderr.write(`[DualLane Error] ${safeMsg}\n`);
-  process.exit(1);
-});
+const isDirectCli = (() => {
+  try {
+    if (!process.argv[1]) return false;
+    return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return true;
+  }
+})();
+
+if (isDirectCli) {
+  main().catch((err) => {
+    const safeMsg = String(err?.message || err).replace(/dl_bot_[A-Za-z0-9_-]{12,}/gu, "[REDACTED]");
+    process.stderr.write(`[DualLane Error] ${safeMsg}\n`);
+    process.exit(1);
+  });
+}

@@ -73,6 +73,29 @@ func (s *MobilePGStore) Exchange(ctx context.Context, hash, verifier, redirect s
 	}
 	return tx.Commit(ctx)
 }
+
+func (s *MobilePGStore) IssueDirect(ctx context.Context, userID string, tokens MobileTokens, _ time.Time) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	family, err := newUUID()
+	if err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `INSERT INTO mobile_session_families(id,user_id,expires_at) SELECT $1,u.id,$2 FROM users u JOIN space_members sm ON sm.user_id=u.id AND sm.space_id=$3 AND sm.removed_at IS NULL WHERE u.id=$4 AND u.kind='human'`, family, tokens.RefreshTokenExpiresAt, DefaultSpaceID, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return errMobileInvalid
+	}
+	if err = insertMobileTokens(ctx, tx, family, tokens); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
 func insertMobileTokens(ctx context.Context, tx pgx.Tx, family string, tokens MobileTokens) error {
 	if _, err := tx.Exec(ctx, `INSERT INTO mobile_refresh_tokens(token_hash,family_id) VALUES($1,$2)`, HashSecret(tokens.RefreshToken), family); err != nil {
 		return err

@@ -88,13 +88,16 @@ const SCOPE_LABEL_MAP: Record<string, string> = Object.fromEntries(
 );
 
 function buildPairingPrompt(botName: string, origin: string, sessionId: string): string {
-  const skillUrl = `${origin}/integrations/v2/duallane-channel.md`;
+  const skillUrl = `${origin}/integrations/duallane-channel.md`;
+  const runtimeUrl = `${origin}/integrations/duallane-agent.mjs`;
   const setupUrl = `${origin}/workspace?setup=${encodeURIComponent(sessionId)}`;
   return [
     `请接入我的 DualLane 机器人「${botName}」：`,
     `1. 先阅读接入规范：${skillUrl}`,
-    `2. 使用一次性配对地址发起绑定（无需手动粘贴 Token）：${setupUrl}`,
-    `发起请求后提醒我在网页点击「确认授权」，完成后即可换取凭证并收发消息或卡片。`,
+    `2. 无需 npm，直接从当前实例下载零依赖单文件运行时（含 CLI / MCP / 实时监听）：`,
+    `   mkdir -p ~/.duallane/bin && curl -fsSL "${runtimeUrl}" -o ~/.duallane/bin/duallane-agent.mjs && chmod +x ~/.duallane/bin/duallane-agent.mjs`,
+    `3. 使用一次性配对地址发起绑定（无需手动粘贴 Token）：${setupUrl}`,
+    `发起请求后提醒我在网页点击「确认授权」，完成后运行 node ~/.duallane/bin/duallane-agent.mjs wait 即可持续接收并回复实时消息。`,
   ].join("\n");
 }
 
@@ -105,7 +108,7 @@ function buildStandardMcpConfig(): string {
         duallane: {
           command: "node",
           args: [
-            "/path/to/duallane/packages/agent-sdk/bin/duallane-agent.mjs",
+            "~/.duallane/bin/duallane-agent.mjs",
             "mcp",
             "--profile",
             "default",

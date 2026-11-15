@@ -13,11 +13,14 @@ import (
 )
 
 var (
-	ErrForbidden     = errors.New("v1.forbidden")
-	ErrNotFound      = errors.New("v1.not_found")
-	ErrInvalidInput  = errors.New("v1.invalid_input")
-	ErrRateLimited   = errors.New("v1.rate_limited")
-	ErrProactiveDeny = errors.New("v1.proactive_disabled")
+	ErrForbidden         = errors.New("v1.forbidden")
+	ErrNotFound          = errors.New("v1.not_found")
+	ErrInvalidInput      = errors.New("v1.invalid_input")
+	ErrRateLimited       = errors.New("v1.rate_limited")
+	ErrProactiveDeny     = errors.New("v1.proactive_disabled")
+	ErrEmailAlreadyBound = errors.New("v1.email_already_bound")
+	ErrEmailNotBound     = errors.New("v1.email_not_bound")
+	ErrChallengeInvalid  = errors.New("v1.challenge_invalid")
 )
 
 type V1BootstrapMember struct {
@@ -36,6 +39,7 @@ type V1BootstrapMember struct {
 type V1BootstrapAuth struct {
 	Enabled     bool              `json:"enabled"`
 	CurrentUser V1BootstrapMember `json:"currentUser"`
+	BoundEmail  string            `json:"boundEmail,omitempty"`
 }
 
 type V1BootstrapPolicy struct {
@@ -57,10 +61,58 @@ type V1BootstrapConversation struct {
 	PeerLastReadAt       *string  `json:"peerLastReadAt,omitempty"`
 }
 
+type SystemAnnouncement struct {
+	ID          string `json:"id"`
+	Enabled     bool   `json:"enabled"`
+	DisplayMode string `json:"displayMode"`
+	Badge       string `json:"badge,omitempty"`
+	Title       string `json:"title"`
+	Content     string `json:"content"`
+	CTALabel    string `json:"ctaLabel,omitempty"`
+	CTAURL      string `json:"ctaUrl,omitempty"`
+	UpdatedAt   string `json:"updatedAt,omitempty"`
+	ShouldShow  bool   `json:"shouldShow"`
+}
+
+type SystemAnnouncementUpdateInput struct {
+	Enabled     bool   `json:"enabled"`
+	DisplayMode string `json:"displayMode"`
+	Badge       string `json:"badge"`
+	Title       string `json:"title"`
+	Content     string `json:"content"`
+	CTALabel    string `json:"ctaLabel"`
+	CTAURL      string `json:"ctaUrl"`
+	ResetAck    bool   `json:"resetAck"`
+}
+
+type EmailChallengeSummary struct {
+	ChallengeID        string `json:"challengeId"`
+	MaskedEmail        string `json:"maskedEmail"`
+	ExpiresAt          string `json:"expiresAt"`
+	ResendAfterSeconds int    `json:"resendAfterSeconds"`
+}
+
+type BoundEmailStatus struct {
+	BoundEmail  string `json:"boundEmail"`
+	MaskedEmail string `json:"maskedEmail"`
+}
+
+type EmailChallengeStoreRecord struct {
+	ID           string
+	UserID       string
+	PendingEmail string
+	CodeHash     string
+	Attempts     int
+	CreatedAt    time.Time
+	ExpiresAt    time.Time
+	ConsumedAt   *time.Time
+}
+
 type V1BootstrapResponse struct {
 	Auth          V1BootstrapAuth           `json:"auth"`
 	Policy        V1BootstrapPolicy         `json:"policy"`
 	Preferences   map[string]any            `json:"preferences"`
+	Announcement  *SystemAnnouncement       `json:"announcement,omitempty"`
 	Members       []V1BootstrapMember       `json:"members"`
 	Conversations []V1BootstrapConversation `json:"conversations"`
 	EventCursor   int64                     `json:"eventCursor"`

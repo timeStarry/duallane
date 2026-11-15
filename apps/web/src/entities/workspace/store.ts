@@ -5,6 +5,7 @@ import {
   apiV1,
   type DevInviteProfileInput,
   type EmoteCollectionShareSummaryDTO,
+  type SystemAnnouncementDTO,
   type ThreadReplyItem,
   type ThreadViewResponse,
 } from "@/shared/lib/api-v1";
@@ -131,6 +132,9 @@ interface WorkspaceState {
   workspaceStatusMessage: string | null;
   connectionStatus: "connected" | "reconnecting" | "offline";
   currentUser: V1User | null;
+  boundEmail: string;
+  systemAnnouncement: SystemAnnouncementDTO | null;
+  dismissedAnnouncementKey: string | null;
   quotaUsedBytes: number;
   quotaLimitBytes: number;
 
@@ -202,6 +206,8 @@ interface WorkspaceState {
   sendThreadReply: (rootMessageId: string, text: string, alsoSendToChannel: boolean) => Promise<void>;
   triggerCardAction: (cardId: string, actionId: string, payload?: Record<string, unknown>) => Promise<void>;
   patchMemberLocal: (userId: string, patch: Partial<V1User>) => void;
+  dismissSystemAnnouncement: () => Promise<void>;
+  setBoundEmailLocal: (email: string) => void;
 
   createP2PRoom: () => Promise<string>;
   joinP2PRoom: (roomId: string, keyStr: string) => Promise<void>;
@@ -623,9 +629,35 @@ function splitConversationAvatar(
   return {};
 }
 
+export function parseRawSystemAnnouncement(rawAnn: unknown): SystemAnnouncementDTO | null {
+  if (!rawAnn || typeof rawAnn !== "object" || Array.isArray(rawAnn)) return null;
+  const a = rawAnn as Record<string, unknown>;
+  const id = String(a.id || "").trim();
+  const title = String(a.title || "").trim();
+  const content = String(a.content || "").trim();
+  if (!id || (!title && !content)) return null;
+  const displayMode: "once" | "always" = a.displayMode === "always" ? "always" : "once";
+  return {
+    id,
+    enabled: Boolean(a.enabled),
+    displayMode,
+    badge: typeof a.badge === "string" && a.badge.trim() ? a.badge.trim() : undefined,
+    title,
+    content,
+    ctaLabel: typeof a.ctaLabel === "string" && a.ctaLabel.trim() ? a.ctaLabel.trim() : undefined,
+    ctaUrl: typeof a.ctaUrl === "string" && a.ctaUrl.trim() ? a.ctaUrl.trim() : undefined,
+    updatedAt: typeof a.updatedAt === "string" ? a.updatedAt : undefined,
+    updatedBy: typeof a.updatedBy === "string" ? a.updatedBy : undefined,
+    shouldShow: typeof a.shouldShow === "boolean" ? a.shouldShow : Boolean(a.enabled),
+  };
+}
+
 export function parseBootstrapPayload(raw: Record<string, unknown>) {
   const authObj = (raw.auth || {}) as Record<string, unknown>;
   const workspaceEnabled = authObj.enabled !== false;
+  const boundEmail =
+    typeof authObj.boundEmail === "string" ? authObj.boundEmail.trim() : "";
+  const systemAnnouncement = parseRawSystemAnnouncement(raw.announcement);
   const userObj = (authObj.currentUser || raw.currentUser || raw.user || {}) as Record<
     string,
     unknown
@@ -748,6 +780,8 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
   return {
     workspaceEnabled,
     currentUser,
+    boundEmail,
+    systemAnnouncement,
     quotaUsedBytes,
     quotaLimitBytes,
     members,
@@ -831,6 +865,9 @@ function loadBootstrapShellCache(): BootstrapShellSnapshot | null {
 
 function saveBootstrapShellCache(state: {
   currentUser: V1User | null;
+  boundEmail: string;
+  systemAnnouncement: SystemAnnouncementDTO | null;
+  dismissedAnnouncementKey: string | null;
   quotaUsedBytes: number;
   quotaLimitBytes: number;
   members: Record<string, V1User>;
@@ -1145,6 +1182,22 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
     if (evType === "emote.library.updated") {
       void useEmoteStore.getState().refreshLibrary(false);
+      return;
+    }
+
+    if (evType === "workspace.announcement_updated") {
+      const nextAnn = parseRawSystemAnnouncement(payload.announcement ?? payload);
+      set((s) => {
+        if (!nextAnn || !nextAnn.enabled) {
+          return { systemAnnouncement: null };
+        }
+        const prevAckedId = String(s.userPreferences?.ackAnnouncementId || "");
+        const shouldShow =
+          nextAnn.displayMode === "always" || !prevAckedId || prevAckedId !== nextAnn.id;
+        return {
+          systemAnnouncement: { ...nextAnn, shouldShow },
+        };
+      });
       return;
     }
 
@@ -1717,6 +1770,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     workspaceStatusMessage: null,
     connectionStatus: "connected",
     currentUser: null,
+    boundEmail: "",
+    systemAnnouncement: null,
+    dismissedAnnouncementKey: null,
     quotaUsedBytes: 0,
     quotaLimitBytes: 512 * 1024 * 1024,
     conversations: {},
@@ -1891,6 +1947,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           workspaceStatusMessage: null,
           connectionStatus: "connected",
           currentUser: parsed.currentUser,
+          boundEmail: parsed.boundEmail,
+          systemAnnouncement: parsed.systemAnnouncement,
+          dismissedAnnouncementKey:
+            prevState.authStatus === "authenticated" &&
+            prevState.currentUser?.id === parsed.currentUser.id
+              ? prevState.dismissedAnnouncementKey
+              : null,
           quotaUsedBytes: parsed.quotaUsedBytes,
           quotaLimitBytes: parsed.quotaLimitBytes,
           members: parsed.members,
@@ -1979,6 +2042,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       set({
         authStatus: "unauthenticated",
         currentUser: null,
+        boundEmail: "",
+        systemAnnouncement: null,
+        dismissedAnnouncementKey: null,
         conversations: {},
         conversationOrder: [],
         pinnedConversationIds: [],
@@ -3321,6 +3387,29 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           },
         };
       });
+    },
+
+    dismissSystemAnnouncement: async () => {
+      const ann = get().systemAnnouncement;
+      if (!ann) return;
+      const key = `${ann.id}:${ann.updatedAt || ""}`;
+      set((s) => ({
+        dismissedAnnouncementKey: key,
+        systemAnnouncement: s.systemAnnouncement
+          ? { ...s.systemAnnouncement, shouldShow: false }
+          : null,
+        userPreferences: {
+          ...s.userPreferences,
+          ackAnnouncementId: ann.id,
+        },
+      }));
+      if (!get().isPreviewMode && ann.id) {
+        await apiV1.ackAnnouncement(ann.id).catch(() => {});
+      }
+    },
+
+    setBoundEmailLocal: (email) => {
+      set({ boundEmail: email.trim() });
     },
   };
 });

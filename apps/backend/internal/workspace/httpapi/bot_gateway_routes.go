@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -184,10 +185,42 @@ func registerBotGatewayRoutes(router chi.Router, options BotGatewayRouteOptions)
 		}
 		lastSeq, _ := strconv.ParseInt(strings.TrimSpace(request.URL.Query().Get("afterSequence")), 10, 64)
 		limit, _ := strconv.Atoi(strings.TrimSpace(request.URL.Query().Get("limit")))
+		timeoutSec, _ := strconv.Atoi(strings.TrimSpace(request.URL.Query().Get("timeout")))
+		if timeoutSec > 25 {
+			timeoutSec = 25
+		}
 		result, err := replaySvc.Replay(request.Context(), value, botgateway.ReplayInput{
 			LastSequence: lastSeq,
 			Limit:        limit,
 		})
+		if err == nil && timeoutSec > 0 && len(result.Events) == 0 && !result.SyncRequired {
+			deadline := time.NewTimer(time.Duration(timeoutSec) * time.Second)
+			defer deadline.Stop()
+			ticker := time.NewTicker(750 * time.Millisecond)
+			defer ticker.Stop()
+		longPoll:
+			for {
+				select {
+				case <-request.Context().Done():
+					return
+				case <-deadline.C:
+					break longPoll
+				case <-ticker.C:
+					next, pollErr := replaySvc.Replay(request.Context(), value, botgateway.ReplayInput{
+						LastSequence: lastSeq,
+						Limit:        limit,
+					})
+					if pollErr != nil {
+						err = pollErr
+						break longPoll
+					}
+					result = next
+					if len(result.Events) > 0 || result.SyncRequired {
+						break longPoll
+					}
+				}
+			}
+		}
 		writeResult(response, http.StatusOK, result, err)
 	}))
 }

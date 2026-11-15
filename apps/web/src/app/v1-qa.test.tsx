@@ -2189,4 +2189,100 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
       useLaneStore.setState(prevLaneInitial);
     }
   });
+
+  it("parses boundEmail and systemAnnouncement (once vs always) and persists announcement ack", async () => {
+    const prevWsInitial = { ...useWorkspaceStore.getInitialState() };
+    const origFetch = globalThis.fetch;
+    const ackedIds: string[] = [];
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/announcement/ack" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body || "{}")) as { id?: string };
+        if (body.id) ackedIds.push(body.id);
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const parsed = parseBootstrapPayload({
+        auth: {
+          enabled: true,
+          currentUser: { id: "usr_me", displayName: "Starry", role: "owner" },
+          boundEmail: "starry@example.com",
+        },
+        announcement: {
+          id: "ann_mobile_v106",
+          enabled: true,
+          displayMode: "once",
+          badge: "移动端发布",
+          title: "DualLane Android 客户端现已可用",
+          content: "支持实时消息与绑定邮箱验证码快捷登录。",
+          ctaLabel: "下载安装包",
+          ctaUrl: "https://example.com/app-release.apk",
+          updatedAt: "2026-11-15T15:00:00Z",
+          shouldShow: true,
+        },
+        conversations: [],
+        members: [],
+        preferences: {},
+      });
+
+      expect(parsed.boundEmail).toBe("starry@example.com");
+      expect(parsed.systemAnnouncement?.id).toBe("ann_mobile_v106");
+      expect(parsed.systemAnnouncement?.shouldShow).toBe(true);
+
+      useWorkspaceStore.setState({
+        isPreviewMode: false,
+        authStatus: "authenticated",
+        currentUser: parsed.currentUser,
+        boundEmail: parsed.boundEmail,
+        systemAnnouncement: parsed.systemAnnouncement,
+        dismissedAnnouncementKey: null,
+        userPreferences: {},
+      });
+
+      await useWorkspaceStore.getState().dismissSystemAnnouncement();
+      expect(ackedIds).toEqual(["ann_mobile_v106"]);
+      expect(useWorkspaceStore.getState().systemAnnouncement?.shouldShow).toBe(false);
+      expect(useWorkspaceStore.getState().userPreferences.ackAnnouncementId).toBe("ann_mobile_v106");
+
+      // Updating the same announcement ID in "once" mode keeps shouldShow=false for an already-acked user
+      useWorkspaceStore.getState().applyRealtimeEvent({
+        type: "workspace.announcement_updated",
+        payload: {
+          announcement: {
+            id: "ann_mobile_v106",
+            enabled: true,
+            displayMode: "once",
+            title: "文案微调",
+            content: "已确认过的用户不会再次弹窗",
+            updatedAt: "2026-11-15T15:05:00Z",
+          },
+        },
+      });
+      expect(useWorkspaceStore.getState().systemAnnouncement?.shouldShow).toBe(false);
+
+      // Switching to "always" or pushing a new ID sets shouldShow=true
+      useWorkspaceStore.getState().applyRealtimeEvent({
+        type: "workspace.announcement_updated",
+        payload: {
+          announcement: {
+            id: "ann_mobile_v106_repush",
+            enabled: true,
+            displayMode: "once",
+            title: "全员重推",
+            content: "新通告 ID 将再次弹出",
+            updatedAt: "2026-11-15T15:10:00Z",
+          },
+        },
+      });
+      expect(useWorkspaceStore.getState().systemAnnouncement?.shouldShow).toBe(true);
+    } finally {
+      globalThis.fetch = origFetch;
+      Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);
+      useWorkspaceStore.setState(prevWsInitial);
+    }
+  });
 });

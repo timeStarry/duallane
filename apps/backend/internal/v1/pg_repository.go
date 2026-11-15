@@ -139,7 +139,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 	var (
 		uID, uGitHub, uDisplay, uNick, uAvatar, actorRole string
 		dailyQuotaBytes, usedTodayBytes, eventCursor      int64
-		prefsRaw                                          string
+		prefsRaw, beaconPrefsRaw                          string
 	)
 	err := r.pool.QueryRow(ctx, `
 		SELECT
@@ -156,13 +156,14 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				WHERE space_id = $1 AND user_id = $2 AND created_at >= $3 AND status IN ('reserved', 'completed')
 			), 0),
 			coalesce((SELECT prefs_json FROM user_preferences WHERE user_id = $2), '{}'),
+			coalesce((SELECT prefs_json FROM user_preferences WHERE user_id = 'usr_system_beacon'), '{}'),
 			coalesce((SELECT MAX(seq) FROM workspace_events WHERE space_id = $1), 0)
 		FROM space_members sm
 		JOIN users u ON u.id = sm.user_id
 		WHERE sm.space_id = $1 AND sm.user_id = $2 AND sm.removed_at IS NULL AND u.kind = 'human'
 	`, r.spaceID, actorID, quotaSince).Scan(
 		&uID, &uGitHub, &uDisplay, &uNick, &uAvatar, &actorRole,
-		&dailyQuotaBytes, &usedTodayBytes, &prefsRaw, &eventCursor,
+		&dailyQuotaBytes, &usedTodayBytes, &prefsRaw, &beaconPrefsRaw, &eventCursor,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -526,16 +527,30 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 		}
 	}
 
+	boundEmail, _ := prefs["boundEmail"].(string)
+	boundEmail = strings.TrimSpace(boundEmail)
+	ackAnnID, _ := prefs["ackAnnouncementId"].(string)
+	ackAnnID = strings.TrimSpace(ackAnnID)
+	stripReservedPreferenceKeys(prefs)
+
+	var activeAnnouncement *SystemAnnouncement
+	if parsedAnn, ok := parseSystemAnnouncementFromPrefsRaw(beaconPrefsRaw); ok && parsedAnn.Enabled && parsedAnn.ID != "" && parsedAnn.Title != "" {
+		parsedAnn.ShouldShow = parsedAnn.DisplayMode == "always" || ackAnnID != parsedAnn.ID
+		activeAnnouncement = &parsedAnn
+	}
+
 	return V1BootstrapResponse{
 		Auth: V1BootstrapAuth{
 			Enabled:     true,
 			CurrentUser: currentUser,
+			BoundEmail:  boundEmail,
 		},
 		Policy: V1BootstrapPolicy{
 			DailyQuotaBytes: dailyQuotaBytes,
 			UsedTodayBytes:  usedTodayBytes,
 		},
 		Preferences:   prefs,
+		Announcement:  activeAnnouncement,
 		Members:       members,
 		Conversations: conversations,
 		EventCursor:   eventCursor,
@@ -2179,6 +2194,22 @@ func (r *PGRepository) ExchangeQRSession(ctx context.Context, sessionID, challen
 	return rawToken, nil
 }
 
+var reservedServerPrefKeys = []string{
+	"boundEmail",
+	"boundEmailAt",
+	"ackAnnouncementId",
+	"systemAnnouncement",
+}
+
+func stripReservedPreferenceKeys(prefs map[string]any) {
+	if prefs == nil {
+		return
+	}
+	delete(prefs, "boundEmail")
+	delete(prefs, "boundEmailAt")
+	delete(prefs, "systemAnnouncement")
+}
+
 func (r *PGRepository) GetPreferences(ctx context.Context, actorID string) (map[string]any, error) {
 	var raw string
 	err := r.pool.QueryRow(ctx, `SELECT prefs_json FROM user_preferences WHERE user_id = $1`, actorID).Scan(&raw)
@@ -2190,20 +2221,48 @@ func (r *PGRepository) GetPreferences(ctx context.Context, actorID string) (map[
 	}
 	out := map[string]any{}
 	_ = json.Unmarshal([]byte(raw), &out)
+	stripReservedPreferenceKeys(out)
 	return out, nil
 }
 
 func (r *PGRepository) SavePreferences(ctx context.Context, actorID string, prefs map[string]any, now time.Time) error {
-	encoded, err := json.Marshal(prefs)
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	_, err = r.pool.Exec(ctx, `
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	var existingRaw string
+	err = tx.QueryRow(ctx, `SELECT prefs_json FROM user_preferences WHERE user_id = $1 FOR UPDATE`, actorID).Scan(&existingRaw)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	existing := map[string]any{}
+	if existingRaw != "" {
+		_ = json.Unmarshal([]byte(existingRaw), &existing)
+	}
+	merged := map[string]any{}
+	for k, v := range prefs {
+		merged[k] = v
+	}
+	for _, key := range reservedServerPrefKeys {
+		delete(merged, key)
+		if val, ok := existing[key]; ok {
+			merged[key] = val
+		}
+	}
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO user_preferences (user_id, prefs_json, updated_at)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (user_id) DO UPDATE SET prefs_json = EXCLUDED.prefs_json, updated_at = EXCLUDED.updated_at
-	`, actorID, string(encoded), now)
-	return err
+	`, actorID, string(encoded), now.UTC()); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *PGRepository) RegisterBotCommands(ctx context.Context, actorID, botID string, commands []BotCommand, now time.Time) error {
@@ -3106,4 +3165,477 @@ func (r *PGRepository) CleanupStaleStorage(ctx context.Context, actorID string, 
 		return AdminStorageCleanupResult{}, err
 	}
 	return result, nil
+}
+
+func parseSystemAnnouncementFromPrefsRaw(raw string) (SystemAnnouncement, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return SystemAnnouncement{}, false
+	}
+	var outer map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &outer); err != nil {
+		return SystemAnnouncement{}, false
+	}
+	annBytes, ok := outer["systemAnnouncement"]
+	if !ok || len(annBytes) == 0 {
+		return SystemAnnouncement{}, false
+	}
+	var ann SystemAnnouncement
+	if err := json.Unmarshal(annBytes, &ann); err != nil {
+		return SystemAnnouncement{}, false
+	}
+	if ann.DisplayMode != "always" {
+		ann.DisplayMode = "once"
+	}
+	return ann, true
+}
+
+func (r *PGRepository) GetAdminAnnouncement(ctx context.Context, actorID string) (SystemAnnouncement, error) {
+	if _, _, err := r.resolveSpaceManager(ctx, actorID); err != nil {
+		return SystemAnnouncement{}, err
+	}
+	var raw string
+	err := r.pool.QueryRow(ctx, `SELECT prefs_json FROM user_preferences WHERE user_id = 'usr_system_beacon'`).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SystemAnnouncement{DisplayMode: "once"}, nil
+	}
+	if err != nil {
+		return SystemAnnouncement{}, err
+	}
+	if ann, ok := parseSystemAnnouncementFromPrefsRaw(raw); ok {
+		return ann, nil
+	}
+	return SystemAnnouncement{DisplayMode: "once"}, nil
+}
+
+func (r *PGRepository) UpsertAdminAnnouncement(ctx context.Context, actorID string, ann SystemAnnouncement, now time.Time) (SystemAnnouncement, error) {
+	_, githubLogin, err := r.resolveSpaceManager(ctx, actorID)
+	if err != nil {
+		return SystemAnnouncement{}, err
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return SystemAnnouncement{}, err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	var existingRaw string
+	err = tx.QueryRow(ctx, `SELECT prefs_json FROM user_preferences WHERE user_id = 'usr_system_beacon' FOR UPDATE`).Scan(&existingRaw)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return SystemAnnouncement{}, err
+	}
+	prefs := map[string]any{}
+	if existingRaw != "" {
+		_ = json.Unmarshal([]byte(existingRaw), &prefs)
+	}
+	stored := ann
+	stored.ShouldShow = false
+	prefs["systemAnnouncement"] = stored
+	encoded, err := json.Marshal(prefs)
+	if err != nil {
+		return SystemAnnouncement{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO user_preferences (user_id, prefs_json, updated_at)
+		VALUES ('usr_system_beacon', $1, $2)
+		ON CONFLICT (user_id) DO UPDATE SET prefs_json = EXCLUDED.prefs_json, updated_at = EXCLUDED.updated_at
+	`, string(encoded), now.UTC()); err != nil {
+		return SystemAnnouncement{}, err
+	}
+
+	reason := fmt.Sprintf("enabled=%t mode=%s id=%s", ann.Enabled, ann.DisplayMode, ann.ID)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_logs (id, space_id, actor_user_id, actor_github_login, action, target_type, target_id, result, reason, created_at)
+		VALUES ($1, $2, $3, NULLIF($4, ''), 'space.announcement_update', 'space', $2, 'success', $5, $6)
+	`, randomID("aud"), r.spaceID, actorID, githubLogin, reason, now.UTC()); err != nil {
+		return SystemAnnouncement{}, err
+	}
+
+	if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, "", "workspace.announcement_updated", "space", r.spaceID, map[string]any{
+		"announcement": stored,
+	}, now.UTC()); err != nil {
+		return SystemAnnouncement{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return SystemAnnouncement{}, err
+	}
+	return stored, nil
+}
+
+func (r *PGRepository) AckAnnouncement(ctx context.Context, actorID, announcementID string, now time.Time) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	var exists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM space_members sm
+			JOIN users u ON u.id = sm.user_id
+			WHERE sm.space_id = $1 AND sm.user_id = $2 AND sm.removed_at IS NULL AND u.kind = 'human'
+		)
+	`, r.spaceID, actorID).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return ErrForbidden
+	}
+
+	var existingRaw string
+	err = tx.QueryRow(ctx, `SELECT prefs_json FROM user_preferences WHERE user_id = $1 FOR UPDATE`, actorID).Scan(&existingRaw)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	prefs := map[string]any{}
+	if existingRaw != "" {
+		_ = json.Unmarshal([]byte(existingRaw), &prefs)
+	}
+	prefs["ackAnnouncementId"] = announcementID
+	encoded, err := json.Marshal(prefs)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO user_preferences (user_id, prefs_json, updated_at)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (user_id) DO UPDATE SET prefs_json = EXCLUDED.prefs_json, updated_at = EXCLUDED.updated_at
+	`, actorID, string(encoded), now.UTC()); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (r *PGRepository) FindBoundEmailOwner(ctx context.Context, normalizedEmail string) (string, error) {
+	var userID string
+	err := r.pool.QueryRow(ctx, `
+		SELECT u.id
+		FROM space_members sm
+		JOIN users u ON u.id = sm.user_id
+		JOIN user_preferences up ON up.user_id = u.id
+		WHERE sm.space_id = $1
+		  AND sm.removed_at IS NULL
+		  AND u.kind = 'human'
+		  AND lower(coalesce((up.prefs_json::jsonb ->> 'boundEmail'), '')) = $2
+		LIMIT 1
+	`, r.spaceID, strings.ToLower(strings.TrimSpace(normalizedEmail))).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return userID, nil
+}
+
+func (r *PGRepository) CheckEmailChallengeCooldown(ctx context.Context, userID string, now time.Time) error {
+	nowUTC := now.UTC()
+	var count int
+	var latest *time.Time
+	err := r.pool.QueryRow(ctx, `
+		SELECT COUNT(*), MAX(created_at)
+		FROM notification_email_challenges
+		WHERE user_id = $1 AND created_at >= $2
+	`, userID, nowUTC.Add(-time.Hour)).Scan(&count, &latest)
+	if err != nil {
+		return err
+	}
+	if count >= 5 {
+		return fmt.Errorf("%w: 验证码发送次数已达每小时上限，请稍后再试", ErrRateLimited)
+	}
+	if latest != nil && nowUTC.Sub(latest.UTC()) < 60*time.Second {
+		return fmt.Errorf("%w: 请等待 60 秒后再重新获取验证码", ErrRateLimited)
+	}
+	return nil
+}
+
+func (r *PGRepository) SaveEmailChallenge(ctx context.Context, challengeID, userID, normalizedEmail, codeHash string, now, expiresAt time.Time) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	prefix := "echl_%"
+	if strings.HasPrefix(challengeID, "echl_bind_") {
+		prefix = "echl_bind_%"
+	} else if strings.HasPrefix(challengeID, "echl_login_") {
+		prefix = "echl_login_%"
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE notification_email_challenges
+		SET consumed_at = $3
+		WHERE user_id = $1 AND id LIKE $2 AND consumed_at IS NULL
+	`, userID, prefix, now.UTC()); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO notification_email_challenges (id, user_id, pending_email, code_hash, attempts, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, 0, $5, $6)
+	`, challengeID, userID, normalizedEmail, codeHash, now.UTC(), expiresAt.UTC()); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (r *PGRepository) VerifyAndConsumeEmailChallenge(
+	ctx context.Context,
+	challengeID string,
+	verifyFn func(rec EmailChallengeStoreRecord) (bool, error),
+	now time.Time,
+) (EmailChallengeStoreRecord, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return EmailChallengeStoreRecord{}, err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	var rec EmailChallengeStoreRecord
+	err = tx.QueryRow(ctx, `
+		SELECT id, user_id, pending_email, code_hash, attempts, created_at, expires_at, consumed_at
+		FROM notification_email_challenges
+		WHERE id = $1
+		FOR UPDATE
+	`, challengeID).Scan(
+		&rec.ID, &rec.UserID, &rec.PendingEmail, &rec.CodeHash,
+		&rec.Attempts, &rec.CreatedAt, &rec.ExpiresAt, &rec.ConsumedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return EmailChallengeStoreRecord{}, ErrChallengeInvalid
+	}
+	if err != nil {
+		return EmailChallengeStoreRecord{}, err
+	}
+	nowUTC := now.UTC()
+	if rec.ConsumedAt != nil || !rec.ExpiresAt.After(nowUTC) || rec.Attempts >= 5 {
+		return EmailChallengeStoreRecord{}, ErrChallengeInvalid
+	}
+	matched, verifyErr := verifyFn(rec)
+	if verifyErr != nil {
+		return EmailChallengeStoreRecord{}, verifyErr
+	}
+	if !matched {
+		if _, err := tx.Exec(ctx, `
+			UPDATE notification_email_challenges SET attempts = attempts + 1 WHERE id = $1
+		`, challengeID); err != nil {
+			return EmailChallengeStoreRecord{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return EmailChallengeStoreRecord{}, err
+		}
+		return EmailChallengeStoreRecord{}, ErrChallengeInvalid
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE notification_email_challenges SET consumed_at = $2 WHERE id = $1
+	`, challengeID, nowUTC); err != nil {
+		return EmailChallengeStoreRecord{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return EmailChallengeStoreRecord{}, err
+	}
+	return rec, nil
+}
+
+func (r *PGRepository) BindAccountEmail(ctx context.Context, actorID, normalizedEmail string, now time.Time) error {
+	normalized := strings.ToLower(strings.TrimSpace(normalizedEmail))
+	nowUTC := now.UTC()
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "duallane:bound-email:"+normalized); err != nil {
+		return err
+	}
+
+	var githubLogin string
+	err = tx.QueryRow(ctx, `
+		SELECT coalesce(u.github_login, '')
+		FROM space_members sm
+		JOIN users u ON u.id = sm.user_id
+		WHERE sm.space_id = $1 AND sm.user_id = $2 AND sm.removed_at IS NULL AND u.kind = 'human'
+	`, r.spaceID, actorID).Scan(&githubLogin)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrForbidden
+	}
+	if err != nil {
+		return err
+	}
+
+	var conflictID string
+	err = tx.QueryRow(ctx, `
+		SELECT u.id
+		FROM space_members sm
+		JOIN users u ON u.id = sm.user_id
+		JOIN user_preferences up ON up.user_id = u.id
+		WHERE sm.space_id = $1
+		  AND sm.removed_at IS NULL
+		  AND u.kind = 'human'
+		  AND u.id <> $2
+		  AND lower(coalesce((up.prefs_json::jsonb ->> 'boundEmail'), '')) = $3
+		LIMIT 1
+	`, r.spaceID, actorID, normalized).Scan(&conflictID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	if conflictID != "" {
+		return ErrEmailAlreadyBound
+	}
+
+	var existingRaw string
+	err = tx.QueryRow(ctx, `SELECT prefs_json FROM user_preferences WHERE user_id = $1 FOR UPDATE`, actorID).Scan(&existingRaw)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	prefs := map[string]any{}
+	if existingRaw != "" {
+		_ = json.Unmarshal([]byte(existingRaw), &prefs)
+	}
+	prefs["boundEmail"] = normalized
+	prefs["boundEmailAt"] = nowUTC.Format(time.RFC3339)
+	encoded, err := json.Marshal(prefs)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO user_preferences (user_id, prefs_json, updated_at)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (user_id) DO UPDATE SET prefs_json = EXCLUDED.prefs_json, updated_at = EXCLUDED.updated_at
+	`, actorID, string(encoded), nowUTC); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO user_notification_preferences (
+			user_id, email, email_source, email_verified_at, enabled, immediate_enabled, digest_enabled, updated_at
+		)
+		VALUES ($1, $2, 'custom', $3, 1, 0, 1, $3)
+		ON CONFLICT (user_id) DO UPDATE
+		SET email = EXCLUDED.email,
+		    email_source = 'custom',
+		    email_verified_at = EXCLUDED.email_verified_at,
+		    updated_at = EXCLUDED.updated_at
+	`, actorID, normalized, nowUTC); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_logs (id, space_id, actor_user_id, actor_github_login, action, target_type, target_id, result, created_at)
+		VALUES ($1, $2, $3, NULLIF($4, ''), 'account.email_bind', 'user', $3, 'success', $5)
+	`, randomID("aud"), r.spaceID, actorID, githubLogin, nowUTC); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+func (r *PGRepository) UnbindAccountEmail(ctx context.Context, actorID string, now time.Time) error {
+	nowUTC := now.UTC()
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	var githubLogin string
+	err = tx.QueryRow(ctx, `
+		SELECT coalesce(u.github_login, '')
+		FROM space_members sm
+		JOIN users u ON u.id = sm.user_id
+		WHERE sm.space_id = $1 AND sm.user_id = $2 AND sm.removed_at IS NULL AND u.kind = 'human'
+	`, r.spaceID, actorID).Scan(&githubLogin)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrForbidden
+	}
+	if err != nil {
+		return err
+	}
+
+	var existingRaw string
+	err = tx.QueryRow(ctx, `SELECT prefs_json FROM user_preferences WHERE user_id = $1 FOR UPDATE`, actorID).Scan(&existingRaw)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	if existingRaw != "" {
+		prefs := map[string]any{}
+		_ = json.Unmarshal([]byte(existingRaw), &prefs)
+		delete(prefs, "boundEmail")
+		delete(prefs, "boundEmailAt")
+		encoded, err := json.Marshal(prefs)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE user_preferences SET prefs_json = $2, updated_at = $3 WHERE user_id = $1
+		`, actorID, string(encoded), nowUTC); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_logs (id, space_id, actor_user_id, actor_github_login, action, target_type, target_id, result, created_at)
+		VALUES ($1, $2, $3, NULLIF($4, ''), 'account.email_unbind', 'user', $3, 'success', $5)
+	`, randomID("aud"), r.spaceID, actorID, githubLogin, nowUTC); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+func (r *PGRepository) ResolveEmailLoginMember(ctx context.Context, userID, normalizedEmail string, now time.Time) (V1BootstrapMember, error) {
+	normalized := strings.ToLower(strings.TrimSpace(normalizedEmail))
+	nowUTC := now.UTC()
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return V1BootstrapMember{}, err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	var uID, uGitHub, uDisplay, uNick, uAvatar, role string
+	err = tx.QueryRow(ctx, `
+		SELECT
+			u.id,
+			coalesce(u.github_login, ''),
+			coalesce(u.display_name, ''),
+			coalesce(u.nickname, ''),
+			coalesce(u.avatar_url, ''),
+			sm.role
+		FROM space_members sm
+		JOIN users u ON u.id = sm.user_id
+		JOIN user_preferences up ON up.user_id = u.id
+		WHERE sm.space_id = $1
+		  AND sm.user_id = $2
+		  AND sm.removed_at IS NULL
+		  AND u.kind = 'human'
+		  AND lower(coalesce((up.prefs_json::jsonb ->> 'boundEmail'), '')) = $3
+	`, r.spaceID, userID, normalized).Scan(&uID, &uGitHub, &uDisplay, &uNick, &uAvatar, &role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return V1BootstrapMember{}, ErrChallengeInvalid
+	}
+	if err != nil {
+		return V1BootstrapMember{}, err
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE users SET last_login_at = $2 WHERE id = $1`, uID, nowUTC); err != nil {
+		return V1BootstrapMember{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_logs (id, space_id, actor_user_id, actor_github_login, action, target_type, target_id, result, created_at)
+		VALUES ($1, $2, $3, NULLIF($4, ''), 'auth.email.login', 'user', $3, 'success', $5)
+	`, randomID("aud"), r.spaceID, uID, uGitHub, nowUTC); err != nil {
+		return V1BootstrapMember{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return V1BootstrapMember{}, err
+	}
+
+	member := projectBootstrapMember(uID, uGitHub, uDisplay, uNick, "", uAvatar, "human", role, uID, role)
+	member.Role = role
+	return member, nil
 }

@@ -12,10 +12,17 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/botgateway"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
 )
 
 type ActorResolver interface {
 	ResolveActor(context.Context, *http.Request) (*auth.Actor, error)
+}
+
+type SessionIssuer interface {
+	CheckPublicAuthRateLimit(context.Context, *http.Request) (bool, error)
+	IssueWebLoginSession(http.ResponseWriter, *http.Request, string) (string, error)
+	IssueMobileLoginSession(context.Context, string) (auth.MobileTokens, error)
 }
 
 type BotAuthenticator interface {
@@ -25,11 +32,21 @@ type BotAuthenticator interface {
 type HTTPHandler struct {
 	service  *Service
 	resolver ActorResolver
+	sessions SessionIssuer
 	botAuth  BotAuthenticator
 }
 
 func NewHTTPHandler(service *Service, resolver ActorResolver) *HTTPHandler {
-	return &HTTPHandler{service: service, resolver: resolver}
+	h := &HTTPHandler{service: service, resolver: resolver}
+	if issuer, ok := resolver.(SessionIssuer); ok {
+		h.sessions = issuer
+	}
+	return h
+}
+
+func (h *HTTPHandler) WithSessionIssuer(issuer SessionIssuer) *HTTPHandler {
+	h.sessions = issuer
+	return h
 }
 
 func (h *HTTPHandler) WithBotAuthenticator(botAuth BotAuthenticator) *HTTPHandler {
@@ -46,10 +63,16 @@ func (h *HTTPHandler) Mount(r chi.Router) {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Post("/auth/qr/start", h.handleQRStart)
 		r.Post("/auth/qr/{sessionId}/exchange", h.handleQRExchange)
+		r.Post("/auth/email/send-code", h.handleSendLoginEmailCode)
+		r.Post("/auth/email/verify", h.handleVerifyLoginEmail)
 
 		r.Group(func(r chi.Router) {
 			r.Use(h.requireActor)
 			r.Get("/bootstrap", h.handleBootstrap)
+			r.Post("/announcement/ack", h.handleAckAnnouncement)
+			r.Post("/account/email/send-code", h.handleSendBindEmailCode)
+			r.Post("/account/email/verify", h.handleVerifyBindEmail)
+			r.Delete("/account/email", h.handleUnbindEmail)
 			r.Get("/sync", h.handleSync)
 			r.Get("/search", h.handleSearch)
 			r.Post("/conversations/saved", h.handleSavedConversation)
@@ -88,6 +111,8 @@ func (h *HTTPHandler) Mount(r chi.Router) {
 				r.Get("/audit-logs", h.handleAdminListAuditLogs)
 				r.Patch("/policy", h.handleAdminUpdatePolicy)
 				r.Post("/storage/cleanup", h.handleAdminStorageCleanup)
+				r.Get("/announcement", h.handleAdminGetAnnouncement)
+				r.Put("/announcement", h.handleAdminUpdateAnnouncement)
 			})
 		})
 	})
@@ -786,14 +811,224 @@ func (h *HTTPHandler) handleBotUnbind(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "revokedTokenId": botAuth.TokenID})
 }
 
+func (h *HTTPHandler) handleAckAnnouncement(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16*1024)).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.invalid_json", "请求体格式错误")
+		return
+	}
+	if err := h.service.AckAnnouncement(r.Context(), actorFromContext(r.Context()).ID, body.ID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (h *HTTPHandler) handleAdminGetAnnouncement(w http.ResponseWriter, r *http.Request) {
+	ann, err := h.service.GetAdminAnnouncement(r.Context(), actorFromContext(r.Context()).ID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"announcement": ann})
+}
+
+func (h *HTTPHandler) handleAdminUpdateAnnouncement(w http.ResponseWriter, r *http.Request) {
+	var input SystemAnnouncementUpdateInput
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&input); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.invalid_json", "请求体格式错误")
+		return
+	}
+	ann, err := h.service.UpdateAdminAnnouncement(r.Context(), actorFromContext(r.Context()).ID, input)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"announcement": ann})
+}
+
+func (h *HTTPHandler) handleSendBindEmailCode(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	var body struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16*1024)).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.invalid_json", "请求体格式错误")
+		return
+	}
+	res, err := h.service.SendBindEmailCode(r.Context(), actorFromContext(r.Context()).ID, body.Email)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (h *HTTPHandler) handleVerifyBindEmail(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	var body struct {
+		ChallengeID string `json:"challengeId"`
+		Code        string `json:"code"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16*1024)).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.invalid_json", "请求体格式错误")
+		return
+	}
+	res, err := h.service.VerifyBindEmail(r.Context(), actorFromContext(r.Context()).ID, body.ChallengeID, body.Code)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (h *HTTPHandler) handleUnbindEmail(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if err := h.service.UnbindAccountEmail(r.Context(), actorFromContext(r.Context()).ID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (h *HTTPHandler) checkEmailAuthRateLimit(w http.ResponseWriter, r *http.Request) bool {
+	w.Header().Set("Cache-Control", "no-store")
+	if h.sessions == nil {
+		return true
+	}
+	allowed, err := h.sessions.CheckPublicAuthRateLimit(r.Context(), r)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "v1.internal", "服务器内部错误")
+		return false
+	}
+	if !allowed {
+		writeJSONError(w, http.StatusTooManyRequests, "v1.rate_limited", "请求过于频繁，请稍后再试")
+		return false
+	}
+	return true
+}
+
+func (h *HTTPHandler) handleSendLoginEmailCode(w http.ResponseWriter, r *http.Request) {
+	if !h.checkEmailAuthRateLimit(w, r) {
+		return
+	}
+	var body struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16*1024)).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.invalid_json", "请求体格式错误")
+		return
+	}
+	res, err := h.service.SendLoginEmailCode(r.Context(), body.Email)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (h *HTTPHandler) handleVerifyLoginEmail(w http.ResponseWriter, r *http.Request) {
+	if !h.checkEmailAuthRateLimit(w, r) {
+		return
+	}
+	if h.sessions == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "auth.unavailable", "认证服务未就绪")
+		return
+	}
+	var body struct {
+		Email       string `json:"email"`
+		ChallengeID string `json:"challengeId"`
+		Code        string `json:"code"`
+		Client      string `json:"client"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16*1024)).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.invalid_json", "请求体格式错误")
+		return
+	}
+	member, err := h.service.VerifyLoginEmail(r.Context(), body.Email, body.ChallengeID, body.Code)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(body.Client), "mobile") {
+		tokens, err := h.sessions.IssueMobileLoginSession(r.Context(), member.ID)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"user":                  member,
+			"accessToken":           tokens.AccessToken,
+			"refreshToken":          tokens.RefreshToken,
+			"accessTokenExpiresAt":  tokens.AccessTokenExpiresAt,
+			"refreshTokenExpiresAt": tokens.RefreshTokenExpiresAt,
+		})
+		return
+	}
+	expiresAt, err := h.sessions.IssueWebLoginSession(w, r, member.ID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user": member,
+		"session": map[string]any{
+			"expiresAt": expiresAt,
+		},
+	})
+}
+
+func cleanServiceErrMessage(err error, prefix string) string {
+	msg := strings.TrimSpace(err.Error())
+	msg = strings.TrimPrefix(msg, prefix+": ")
+	msg = strings.TrimPrefix(msg, prefix)
+	return strings.TrimSpace(msg)
+}
+
 func writeServiceError(w http.ResponseWriter, err error) {
+	var emailErr *email.Error
+	if errors.As(err, &emailErr) && emailErr != nil {
+		status := emailErr.StatusCode
+		if status <= 0 {
+			status = http.StatusBadRequest
+		}
+		writeJSONError(w, status, emailErr.Code, emailErr.Message)
+		return
+	}
+	var authErr *auth.Error
+	if errors.As(err, &authErr) && authErr != nil {
+		status := authErr.StatusCode
+		if status <= 0 {
+			status = http.StatusUnauthorized
+		}
+		writeJSONError(w, status, authErr.Code, authErr.Message)
+		return
+	}
 	switch {
 	case errors.Is(err, ErrForbidden):
 		writeJSONError(w, http.StatusForbidden, "v1.forbidden", "无权限执行该操作")
 	case errors.Is(err, ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, "v1.not_found", "目标不存在")
+	case errors.Is(err, ErrRateLimited):
+		msg := cleanServiceErrMessage(err, ErrRateLimited.Error())
+		if msg == "" {
+			msg = "请求过于频繁，请稍后再试"
+		}
+		writeJSONError(w, http.StatusTooManyRequests, "v1.rate_limited", msg)
+	case errors.Is(err, ErrEmailAlreadyBound):
+		writeJSONError(w, http.StatusConflict, "v1.email_already_bound", "该邮箱已被其他空间成员绑定")
+	case errors.Is(err, ErrEmailNotBound):
+		writeJSONError(w, http.StatusBadRequest, "v1.email_not_bound", "该邮箱尚未绑定已有账号，请先使用 GitHub 登录后在个人设置中绑定")
+	case errors.Is(err, ErrChallengeInvalid):
+		writeJSONError(w, http.StatusBadRequest, "v1.challenge_invalid", "验证码错误或已失效，请重新获取")
 	case errors.Is(err, ErrInvalidInput):
-		writeJSONError(w, http.StatusBadRequest, "v1.invalid_input", err.Error())
+		msg := cleanServiceErrMessage(err, ErrInvalidInput.Error())
+		if msg == "" {
+			msg = "请求参数无效"
+		}
+		writeJSONError(w, http.StatusBadRequest, "v1.invalid_input", msg)
 	default:
 		writeJSONError(w, http.StatusInternalServerError, "v1.internal", "服务器内部错误")
 	}

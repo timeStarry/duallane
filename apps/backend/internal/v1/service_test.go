@@ -28,6 +28,10 @@ type stubRepo struct {
 	botProfile     BotProfileResult
 	botAvatar      BotAvatarPayload
 	unboundTokenID string
+	announcement   SystemAnnouncement
+	ackedByUser    map[string]string
+	boundByUser    map[string]string
+	challenges     map[string]EmailChallengeStoreRecord
 }
 
 func (s *stubRepo) GetBootstrap(_ context.Context, actorID string, _ time.Time) (V1BootstrapResponse, error) {
@@ -242,6 +246,89 @@ func (s *stubRepo) UpdateSpacePolicy(_ context.Context, _ string, input AdminPol
 }
 func (s *stubRepo) CleanupStaleStorage(_ context.Context, _ string, _ time.Time) (AdminStorageCleanupResult, error) {
 	return AdminStorageCleanupResult{ReleasedTransfers: 1, CleanedAttachments: 1}, nil
+}
+func (s *stubRepo) GetAdminAnnouncement(_ context.Context, _ string) (SystemAnnouncement, error) {
+	if s.announcement.DisplayMode == "" {
+		s.announcement.DisplayMode = "once"
+	}
+	return s.announcement, nil
+}
+func (s *stubRepo) UpsertAdminAnnouncement(_ context.Context, _ string, ann SystemAnnouncement, _ time.Time) (SystemAnnouncement, error) {
+	s.announcement = ann
+	return ann, nil
+}
+func (s *stubRepo) AckAnnouncement(_ context.Context, actorID, announcementID string, _ time.Time) error {
+	if s.ackedByUser == nil {
+		s.ackedByUser = make(map[string]string)
+	}
+	s.ackedByUser[actorID] = announcementID
+	return nil
+}
+func (s *stubRepo) FindBoundEmailOwner(_ context.Context, normalizedEmail string) (string, error) {
+	for uid, em := range s.boundByUser {
+		if em == normalizedEmail {
+			return uid, nil
+		}
+	}
+	return "", nil
+}
+func (s *stubRepo) CheckEmailChallengeCooldown(_ context.Context, _ string, _ time.Time) error {
+	return nil
+}
+func (s *stubRepo) SaveEmailChallenge(_ context.Context, challengeID, userID, normalizedEmail, codeHash string, now, expiresAt time.Time) error {
+	if s.challenges == nil {
+		s.challenges = make(map[string]EmailChallengeStoreRecord)
+	}
+	s.challenges[challengeID] = EmailChallengeStoreRecord{
+		ID:           challengeID,
+		UserID:       userID,
+		PendingEmail: normalizedEmail,
+		CodeHash:     codeHash,
+		CreatedAt:    now,
+		ExpiresAt:    expiresAt,
+	}
+	return nil
+}
+func (s *stubRepo) VerifyAndConsumeEmailChallenge(_ context.Context, challengeID string, verifyFn func(rec EmailChallengeStoreRecord) (bool, error), now time.Time) (EmailChallengeStoreRecord, error) {
+	rec, ok := s.challenges[challengeID]
+	if !ok || rec.ConsumedAt != nil || !rec.ExpiresAt.After(now) || rec.Attempts >= 5 {
+		return EmailChallengeStoreRecord{}, ErrChallengeInvalid
+	}
+	matched, err := verifyFn(rec)
+	if err != nil {
+		return EmailChallengeStoreRecord{}, err
+	}
+	if !matched {
+		rec.Attempts++
+		s.challenges[challengeID] = rec
+		return EmailChallengeStoreRecord{}, ErrChallengeInvalid
+	}
+	t := now
+	rec.ConsumedAt = &t
+	s.challenges[challengeID] = rec
+	return rec, nil
+}
+func (s *stubRepo) BindAccountEmail(_ context.Context, actorID, normalizedEmail string, _ time.Time) error {
+	if s.boundByUser == nil {
+		s.boundByUser = make(map[string]string)
+	}
+	for uid, em := range s.boundByUser {
+		if uid != actorID && em == normalizedEmail {
+			return ErrEmailAlreadyBound
+		}
+	}
+	s.boundByUser[actorID] = normalizedEmail
+	return nil
+}
+func (s *stubRepo) UnbindAccountEmail(_ context.Context, actorID string, _ time.Time) error {
+	delete(s.boundByUser, actorID)
+	return nil
+}
+func (s *stubRepo) ResolveEmailLoginMember(_ context.Context, userID, normalizedEmail string, _ time.Time) (V1BootstrapMember, error) {
+	if s.boundByUser[userID] != normalizedEmail {
+		return V1BootstrapMember{}, ErrChallengeInvalid
+	}
+	return V1BootstrapMember{ID: userID, DisplayName: "已绑定成员", Kind: "human", Role: "member"}, nil
 }
 
 func TestValidateCardKitDocumentAllowsArbitraryActionIDs(t *testing.T) {
@@ -641,5 +728,180 @@ func TestReadReceiptTypingBotProfileAndGroupRemoveRoutes(t *testing.T) {
 	r.ServeHTTP(remRec, remReq)
 	if remRec.Code != http.StatusOK || len(repo.group.MemberIDs) != 1 {
 		t.Fatalf("expected 200 on group member remove, got %d (%s)", remRec.Code, remRec.Body.String())
+	}
+}
+
+type stubEmailSender struct {
+	lastRecipient string
+	lastCode      string
+	lastPurpose   string
+}
+
+func (s *stubEmailSender) SendVerificationCode(_ context.Context, recipient, code, purpose string) error {
+	s.lastRecipient = recipient
+	s.lastCode = code
+	s.lastPurpose = purpose
+	return nil
+}
+func (s *stubEmailSender) HashChallengeCode(id, code string) (string, error) {
+	return id + ":" + code, nil
+}
+func (s *stubEmailSender) VerifyChallengeCode(expectedHash, id, code string) (bool, error) {
+	return expectedHash == id+":"+code, nil
+}
+
+type stubSessionIssuer struct {
+	webIssuedUser    string
+	mobileIssuedUser string
+}
+
+type actorResolverFunc func(context.Context, *http.Request) (*auth.Actor, error)
+
+func (fn actorResolverFunc) ResolveActor(ctx context.Context, r *http.Request) (*auth.Actor, error) {
+	return fn(ctx, r)
+}
+
+func (s *stubSessionIssuer) CheckPublicAuthRateLimit(_ context.Context, _ *http.Request) (bool, error) {
+	return true, nil
+}
+func (s *stubSessionIssuer) IssueWebLoginSession(w http.ResponseWriter, _ *http.Request, userID string) (string, error) {
+	s.webIssuedUser = userID
+	http.SetCookie(w, &http.Cookie{Name: auth.SessionCookieName, Value: "session_for_" + userID, Path: "/"})
+	return "2026-12-01T00:00:00.000Z", nil
+}
+func (s *stubSessionIssuer) IssueMobileLoginSession(_ context.Context, userID string) (auth.MobileTokens, error) {
+	s.mobileIssuedUser = userID
+	return auth.MobileTokens{
+		AccessToken:           "mob_acc_" + userID,
+		RefreshToken:          "mob_ref_" + userID,
+		AccessTokenExpiresAt:  "2026-11-16T00:15:00.000Z",
+		RefreshTokenExpiresAt: "2026-12-15T00:00:00.000Z",
+	}, nil
+}
+
+func TestAnnouncementAndEmailBindLoginLifecycle(t *testing.T) {
+	repo := &stubRepo{}
+	mailer := &stubEmailSender{}
+	sessions := &stubSessionIssuer{}
+	svc := NewService(repo).WithEmailSender(mailer)
+	svc.codeGen = func() (string, error) { return "654321", nil }
+
+	resolver := actorResolverFunc(func(_ context.Context, r *http.Request) (*auth.Actor, error) {
+		if r.Header.Get("X-Test-Auth") == "none" {
+			return nil, nil
+		}
+		return &auth.Actor{ID: "usr_owner_1", Kind: "human", Role: "owner"}, nil
+	})
+	handler := NewHTTPHandler(svc, resolver).WithSessionIssuer(sessions)
+	r := chi.NewRouter()
+	handler.Mount(r)
+
+	// 1. Admin creates announcement (once mode) & rejects unsafe javascript: CTA URL
+	badAnnReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/announcement", bytes.NewBufferString(`{"enabled":true,"displayMode":"once","title":"测试","content":"正文","ctaUrl":"javascript:alert(1)"}`))
+	badAnnRec := httptest.NewRecorder()
+	r.ServeHTTP(badAnnRec, badAnnReq)
+	if badAnnRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on javascript ctaUrl, got %d", badAnnRec.Code)
+	}
+
+	putAnnReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/announcement", bytes.NewBufferString(`{"enabled":true,"displayMode":"once","badge":"新版发布","title":"DualLane 移动端上线","content":"欢迎下载 Android 客户端","ctaLabel":"立即下载","ctaUrl":"https://github.com/timeStarry/duallane-mobile/releases/latest"}`))
+	putAnnRec := httptest.NewRecorder()
+	r.ServeHTTP(putAnnRec, putAnnReq)
+	if putAnnRec.Code != http.StatusOK || !repo.announcement.Enabled || repo.announcement.ID == "" {
+		t.Fatalf("expected 200 on put announcement, got %d (%s)", putAnnRec.Code, putAnnRec.Body.String())
+	}
+	firstAnnID := repo.announcement.ID
+
+	ackReq := httptest.NewRequest(http.MethodPost, "/api/v1/announcement/ack", bytes.NewBufferString(`{"id":"`+firstAnnID+`"}`))
+	ackRec := httptest.NewRecorder()
+	r.ServeHTTP(ackRec, ackReq)
+	if ackRec.Code != http.StatusOK || repo.ackedByUser["usr_owner_1"] != firstAnnID {
+		t.Fatalf("expected 200 on ack announcement, got %d", ackRec.Code)
+	}
+
+	// Re-pushing with resetAck generates a fresh announcement ID
+	repushReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/announcement", bytes.NewBufferString(`{"enabled":true,"displayMode":"always","title":"DualLane 移动端上线","content":"欢迎下载","resetAck":true}`))
+	repushRec := httptest.NewRecorder()
+	r.ServeHTTP(repushRec, repushReq)
+	if repushRec.Code != http.StatusOK || repo.announcement.ID == firstAnnID || repo.announcement.DisplayMode != "always" {
+		t.Fatalf("expected new announcement ID and always mode, got %+v", repo.announcement)
+	}
+
+	// 2. Unbound email login is strictly rejected (no registration via email)
+	unboundLoginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/email/send-code", bytes.NewBufferString(`{"email":"stranger@example.com"}`))
+	unboundLoginReq.Header.Set("X-Test-Auth", "none")
+	unboundLoginRec := httptest.NewRecorder()
+	r.ServeHTTP(unboundLoginRec, unboundLoginReq)
+	if unboundLoginRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 when attempting login with unbound email, got %d (%s)", unboundLoginRec.Code, unboundLoginRec.Body.String())
+	}
+
+	// 3. Authenticated GitHub user binds email
+	bindSendReq := httptest.NewRequest(http.MethodPost, "/api/v1/account/email/send-code", bytes.NewBufferString(`{"email":"Member@Example.com"}`))
+	bindSendRec := httptest.NewRecorder()
+	r.ServeHTTP(bindSendRec, bindSendReq)
+	if bindSendRec.Code != http.StatusOK || mailer.lastPurpose != "bind" || mailer.lastCode != "654321" {
+		t.Fatalf("expected 200 on bind send-code, got %d (%s)", bindSendRec.Code, bindSendRec.Body.String())
+	}
+	var bindChallenge EmailChallengeSummary
+	_ = json.Unmarshal(bindSendRec.Body.Bytes(), &bindChallenge)
+
+	// Cross-replay guard: bind challenge cannot be used on /auth/email/verify
+	crossReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/email/verify", bytes.NewBufferString(`{"email":"member@example.com","challengeId":"`+bindChallenge.ChallengeID+`","code":"654321"}`))
+	crossReq.Header.Set("X-Test-Auth", "none")
+	crossRec := httptest.NewRecorder()
+	r.ServeHTTP(crossRec, crossReq)
+	if crossRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on cross-replaying bind challenge as login, got %d", crossRec.Code)
+	}
+
+	bindVerifyReq := httptest.NewRequest(http.MethodPost, "/api/v1/account/email/verify", bytes.NewBufferString(`{"challengeId":"`+bindChallenge.ChallengeID+`","code":"654321"}`))
+	bindVerifyRec := httptest.NewRecorder()
+	r.ServeHTTP(bindVerifyRec, bindVerifyReq)
+	if bindVerifyRec.Code != http.StatusOK || repo.boundByUser["usr_owner_1"] != "member@example.com" {
+		t.Fatalf("expected 200 on bind verify, got %d (%s)", bindVerifyRec.Code, bindVerifyRec.Body.String())
+	}
+
+	// 4. Web & Mobile Email Login with bound email
+	loginSendReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/email/send-code", bytes.NewBufferString(`{"email":"member@example.com"}`))
+	loginSendReq.Header.Set("X-Test-Auth", "none")
+	loginSendRec := httptest.NewRecorder()
+	r.ServeHTTP(loginSendRec, loginSendReq)
+	if loginSendRec.Code != http.StatusOK || mailer.lastPurpose != "login" {
+		t.Fatalf("expected 200 on login send-code, got %d (%s)", loginSendRec.Code, loginSendRec.Body.String())
+	}
+	var loginChallenge EmailChallengeSummary
+	_ = json.Unmarshal(loginSendRec.Body.Bytes(), &loginChallenge)
+
+	webVerifyReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/email/verify", bytes.NewBufferString(`{"email":"member@example.com","challengeId":"`+loginChallenge.ChallengeID+`","code":"654321","client":"web"}`))
+	webVerifyReq.Header.Set("X-Test-Auth", "none")
+	webVerifyRec := httptest.NewRecorder()
+	r.ServeHTTP(webVerifyRec, webVerifyReq)
+	if webVerifyRec.Code != http.StatusOK || sessions.webIssuedUser != "usr_owner_1" {
+		t.Fatalf("expected 200 web session on email login, got %d (%s)", webVerifyRec.Code, webVerifyRec.Body.String())
+	}
+
+	// Mobile client login issues Keystore-ready accessToken + refreshToken
+	loginSendMobReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/email/send-code", bytes.NewBufferString(`{"email":"member@example.com"}`))
+	loginSendMobReq.Header.Set("X-Test-Auth", "none")
+	loginSendMobRec := httptest.NewRecorder()
+	r.ServeHTTP(loginSendMobRec, loginSendMobReq)
+	var mobChallenge EmailChallengeSummary
+	_ = json.Unmarshal(loginSendMobRec.Body.Bytes(), &mobChallenge)
+
+	mobVerifyReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/email/verify", bytes.NewBufferString(`{"email":"member@example.com","challengeId":"`+mobChallenge.ChallengeID+`","code":"654321","client":"mobile"}`))
+	mobVerifyReq.Header.Set("X-Test-Auth", "none")
+	mobVerifyRec := httptest.NewRecorder()
+	r.ServeHTTP(mobVerifyRec, mobVerifyReq)
+	if mobVerifyRec.Code != http.StatusOK || sessions.mobileIssuedUser != "usr_owner_1" {
+		t.Fatalf("expected 200 mobile session on email login, got %d (%s)", mobVerifyRec.Code, mobVerifyRec.Body.String())
+	}
+
+	// 5. Unbind email removes bound email while keeping GitHub account intact
+	unbindReq := httptest.NewRequest(http.MethodDelete, "/api/v1/account/email", nil)
+	unbindRec := httptest.NewRecorder()
+	r.ServeHTTP(unbindRec, unbindReq)
+	if unbindRec.Code != http.StatusOK || repo.boundByUser["usr_owner_1"] != "" {
+		t.Fatalf("expected 200 on email unbind, got %d", unbindRec.Code)
 	}
 }

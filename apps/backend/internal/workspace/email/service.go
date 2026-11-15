@@ -496,6 +496,47 @@ func (s *Service) UpdatePreferences(ctx context.Context, input UpdatePreferences
 	return projectPreferences(record, actor.Email, available), nil
 }
 
+func (s *Service) SendVerificationCode(ctx context.Context, recipient, code, purpose string) error {
+	if err := s.checkReady("send verification code"); err != nil {
+		return err
+	}
+	normalized, err := normalizeEmail(recipient)
+	if err != nil {
+		return err
+	}
+	smtp, err := s.activeSMTP(ctx)
+	if err != nil {
+		return err
+	}
+	if s.mailer == nil {
+		return internalError("send verification code", errors.New("mailer is required"))
+	}
+	if err := s.mailer.Send(ctx, smtp, BuildVerificationCodeMessage(purpose, code), normalized); err != nil {
+		errorCode := normalizeErrorCode(normalizeMailerError(err))
+		return newError(errorCode, smtpErrorMessage(errorCode), 502)
+	}
+	return nil
+}
+
+func (s *Service) HashChallengeCode(id, code string) (string, error) {
+	if s == nil {
+		return "", newError(CodeEncryptionUnconfigured, MessageEncryptionMissing, 503)
+	}
+	key, err := s.key()
+	if err != nil {
+		return "", err
+	}
+	return challengeHash(key, strings.TrimSpace(id), strings.TrimSpace(code)), nil
+}
+
+func (s *Service) VerifyChallengeCode(expectedHash, id, code string) (bool, error) {
+	computed, err := s.HashChallengeCode(id, code)
+	if err != nil {
+		return false, err
+	}
+	return secureEqual(expectedHash, computed), nil
+}
+
 func (s *Service) CreateEmailChallenge(ctx context.Context, input CreateChallengeInput) (ChallengeResult, error) {
 	if err := s.checkReady("create notification email challenge"); err != nil {
 		return ChallengeResult{}, err
@@ -540,7 +581,7 @@ func (s *Service) CreateEmailChallenge(ctx context.Context, input CreateChalleng
 	if s.mailer == nil {
 		return ChallengeResult{}, internalError("send email challenge", errors.New("mailer is required"))
 	}
-	if err := s.mailer.Send(ctx, smtp, bodyWithNoContent("验证通知邮箱", "您的验证码是 "+code+"，10 分钟内有效。", s.frontend()), email); err != nil {
+	if err := s.mailer.Send(ctx, smtp, BuildVerificationCodeMessage("notify", code), email); err != nil {
 		errorCode := normalizeErrorCode(normalizeMailerError(err))
 		if auditErr := s.writeAudit(ctx, actor, input.Meta, "email.verification_send", "failure", errorCode, now); auditErr != nil {
 			return ChallengeResult{}, auditErr

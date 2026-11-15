@@ -299,6 +299,38 @@ func messageMentions(raw []byte, userID string) bool {
 	return false
 }
 
+func NormalizeEmailAddress(value string) (string, error) {
+	return normalizeEmail(value)
+}
+
+func MaskEmailAddress(value string) string {
+	return maskEmail(value)
+}
+
+func GenerateVerificationCode() (string, error) {
+	return randomCode()
+}
+
+func BuildVerificationCodeMessage(purpose, code string) Message {
+	code = strings.TrimSpace(code)
+	label := "邮箱验证"
+	switch strings.TrimSpace(purpose) {
+	case "login":
+		label = "登录验证码"
+	case "bind":
+		label = "绑定邮箱验证"
+	}
+	return Message{
+		Subject: "DualLane 验证码：" + code,
+		Text:    "DualLane " + label + "：" + code + "\n\n10 分钟内有效，如非本人操作请忽略。",
+		HTML:    buildVerificationCodeHTML(label, code),
+	}
+}
+
+func buildVerificationCodeHTML(label, code string) string {
+	return "<!doctype html><html lang=\"zh-CN\"><body style=\"margin:0;padding:0;background:#eef2f6;color:#0f172a;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','PingFang SC','Segoe UI',sans-serif;-webkit-font-smoothing:antialiased\"><div style=\"max-width:440px;margin:0 auto;padding:40px 20px\"><div style=\"background:#ffffff;border:1px solid #e2e8f0;border-radius:20px;padding:30px 28px;box-shadow:0 12px 32px rgba(15,23,42,0.05)\"><div style=\"display:flex;align-items:center\"><span style=\"display:inline-block;width:8px;height:8px;border-radius:999px;background:#0071e3;margin-right:8px;vertical-align:middle\"></span><span style=\"font-size:13px;font-weight:600;letter-spacing:0.02em;color:#0f172a;vertical-align:middle\">DualLane</span></div><div style=\"margin:20px 0 14px;font-size:16px;font-weight:600;line-height:1.4;color:#0f172a\">" + escapeHTML(label) + "</div><div style=\"background:#f4f7fa;border:1px solid #e2e8f0;border-radius:14px;padding:18px 16px;text-align:center;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:30px;font-weight:700;letter-spacing:0.28em;text-indent:0.28em;color:#0071e3\">" + escapeHTML(code) + "</div><p style=\"margin:16px 0 0;font-size:12px;line-height:1.5;color:#64748b\">10 分钟内有效 · 如非本人操作请忽略</p></div></div></body></html>"
+}
+
 func bodyWithNoContent(title, body, baseURL string) Message {
 	baseURL = normalizeBaseURL(baseURL)
 	return Message{
@@ -309,7 +341,7 @@ func bodyWithNoContent(title, body, baseURL string) Message {
 }
 
 func buildHTML(title, body, baseURL string) string {
-	return "<!doctype html><html lang=\"zh-CN\"><body style=\"margin:0;background:#f5f4ef;color:#1f2928;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif\"><div style=\"max-width:560px;margin:0 auto;padding:32px 20px\"><div style=\"border:1px solid #d9dedb;background:#ffffff;padding:28px\"><div style=\"font-size:14px;font-weight:600;color:#168579\">DualLane</div><h1 style=\"margin:18px 0 12px;font-size:22px;line-height:1.35\">" + escapeHTML(title) + "</h1><p style=\"margin:0 0 24px;font-size:15px;line-height:1.7;color:#45504e\">" + escapeHTML(body) + "</p><a href=\"" + escapeHTML(baseURL) + "\" style=\"display:inline-block;background:#168579;color:#ffffff;text-decoration:none;padding:10px 16px;border-radius:6px;font-weight:600\">打开共享空间</a><p style=\"margin:28px 0 0;font-size:12px;line-height:1.6;color:#77817f\">此邮件不会展示消息正文、会话名称或附件内容。通知偏好可在个人设置中修改。</p></div></div></body></html>"
+	return "<!doctype html><html lang=\"zh-CN\"><body style=\"margin:0;padding:0;background:#eef2f6;color:#0f172a;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','PingFang SC','Segoe UI',sans-serif;-webkit-font-smoothing:antialiased\"><div style=\"max-width:480px;margin:0 auto;padding:40px 20px\"><div style=\"border:1px solid #e2e8f0;border-radius:20px;background:#ffffff;padding:30px 28px;box-shadow:0 12px 32px rgba(15,23,42,0.05)\"><div style=\"margin-bottom:18px\"><span style=\"display:inline-block;width:8px;height:8px;border-radius:999px;background:#0071e3;margin-right:8px;vertical-align:middle\"></span><span style=\"font-size:13px;font-weight:600;letter-spacing:0.02em;color:#0f172a;vertical-align:middle\">DualLane</span></div><h1 style=\"margin:0 0 10px;font-size:19px;font-weight:600;line-height:1.4;color:#0f172a\">" + escapeHTML(title) + "</h1><p style=\"margin:0 0 22px;font-size:14px;line-height:1.65;color:#475569\">" + escapeHTML(body) + "</p><a href=\"" + escapeHTML(baseURL) + "\" style=\"display:inline-block;background:#0071e3;color:#ffffff;text-decoration:none;padding:10px 18px;border-radius:10px;font-size:14px;font-weight:600\">打开 DualLane</a><p style=\"margin:22px 0 0;font-size:12px;line-height:1.5;color:#94a3b8\">为保护隐私，邮件不包含会话标题与消息内容。</p></div></div></body></html>"
 }
 
 func escapeHTML(value string) string {

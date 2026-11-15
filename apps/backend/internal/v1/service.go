@@ -8,7 +8,15 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
 )
+
+type EmailCodeSender interface {
+	SendVerificationCode(ctx context.Context, recipient, code, purpose string) error
+	HashChallengeCode(id, code string) (string, error)
+	VerifyChallengeCode(expectedHash, id, code string) (bool, error)
+}
 
 type Repository interface {
 	GetBootstrap(ctx context.Context, actorID string, now time.Time) (V1BootstrapResponse, error)
@@ -51,18 +59,36 @@ type Repository interface {
 	ListAdminAuditLogs(ctx context.Context, actorID, resultFilter, query string, limit int) ([]AdminAuditLogItem, error)
 	UpdateSpacePolicy(ctx context.Context, actorID string, input AdminPolicyUpdateInput, now time.Time) (AdminSpacePolicy, error)
 	CleanupStaleStorage(ctx context.Context, actorID string, now time.Time) (AdminStorageCleanupResult, error)
+	GetAdminAnnouncement(ctx context.Context, actorID string) (SystemAnnouncement, error)
+	UpsertAdminAnnouncement(ctx context.Context, actorID string, ann SystemAnnouncement, now time.Time) (SystemAnnouncement, error)
+	AckAnnouncement(ctx context.Context, actorID, announcementID string, now time.Time) error
+	FindBoundEmailOwner(ctx context.Context, normalizedEmail string) (string, error)
+	CheckEmailChallengeCooldown(ctx context.Context, userID string, now time.Time) error
+	SaveEmailChallenge(ctx context.Context, challengeID, userID, normalizedEmail, codeHash string, now, expiresAt time.Time) error
+	VerifyAndConsumeEmailChallenge(ctx context.Context, challengeID string, verifyFn func(rec EmailChallengeStoreRecord) (bool, error), now time.Time) (EmailChallengeStoreRecord, error)
+	BindAccountEmail(ctx context.Context, actorID, normalizedEmail string, now time.Time) error
+	UnbindAccountEmail(ctx context.Context, actorID string, now time.Time) error
+	ResolveEmailLoginMember(ctx context.Context, userID, normalizedEmail string, now time.Time) (V1BootstrapMember, error)
 }
 
 type Service struct {
-	repo Repository
-	now  func() time.Time
+	repo        Repository
+	emailSender EmailCodeSender
+	codeGen     func() (string, error)
+	now         func() time.Time
 }
 
 func NewService(repo Repository) *Service {
 	return &Service{
-		repo: repo,
-		now:  func() time.Time { return time.Now().UTC() },
+		repo:    repo,
+		codeGen: email.GenerateVerificationCode,
+		now:     func() time.Time { return time.Now().UTC() },
 	}
+}
+
+func (s *Service) WithEmailSender(sender EmailCodeSender) *Service {
+	s.emailSender = sender
+	return s
 }
 
 func (s *Service) GetBootstrap(ctx context.Context, actorID string) (V1BootstrapResponse, error) {
@@ -600,6 +626,252 @@ func (s *Service) CleanupStaleStorage(ctx context.Context, actorID string) (Admi
 		return AdminStorageCleanupResult{}, ErrForbidden
 	}
 	return s.repo.CleanupStaleStorage(ctx, actorID, s.now())
+}
+
+func sanitizeAnnouncementCTAURL(raw string) (string, error) {
+	u := strings.TrimSpace(raw)
+	if u == "" {
+		return "", nil
+	}
+	if len(u) > 512 {
+		return "", fmt.Errorf("%w: 链接长度不能超过 512 个字符", ErrInvalidInput)
+	}
+	if strings.HasPrefix(u, "/") && !strings.HasPrefix(u, "//") {
+		return u, nil
+	}
+	lower := strings.ToLower(u)
+	if strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "http://") {
+		return u, nil
+	}
+	return "", fmt.Errorf("%w: 跳转链接需以 https://、http:// 或 / 开头", ErrInvalidInput)
+}
+
+func (s *Service) GetAdminAnnouncement(ctx context.Context, actorID string) (SystemAnnouncement, error) {
+	if strings.TrimSpace(actorID) == "" {
+		return SystemAnnouncement{}, ErrForbidden
+	}
+	return s.repo.GetAdminAnnouncement(ctx, strings.TrimSpace(actorID))
+}
+
+func (s *Service) UpdateAdminAnnouncement(ctx context.Context, actorID string, input SystemAnnouncementUpdateInput) (SystemAnnouncement, error) {
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" {
+		return SystemAnnouncement{}, ErrForbidden
+	}
+	mode := strings.ToLower(strings.TrimSpace(input.DisplayMode))
+	if mode == "" {
+		mode = "once"
+	}
+	if mode != "once" && mode != "always" {
+		return SystemAnnouncement{}, fmt.Errorf("%w: 展示模式仅支持 once 或 always", ErrInvalidInput)
+	}
+	title := strings.TrimSpace(input.Title)
+	content := strings.TrimSpace(input.Content)
+	badge := strings.TrimSpace(input.Badge)
+	ctaLabel := strings.TrimSpace(input.CTALabel)
+	ctaURL, err := sanitizeAnnouncementCTAURL(input.CTAURL)
+	if err != nil {
+		return SystemAnnouncement{}, err
+	}
+	if input.Enabled {
+		if title == "" || utf8.RuneCountInString(title) > 80 {
+			return SystemAnnouncement{}, fmt.Errorf("%w: 通告标题需为 1-80 个字符", ErrInvalidInput)
+		}
+		if content == "" || utf8.RuneCountInString(content) > 2000 {
+			return SystemAnnouncement{}, fmt.Errorf("%w: 通告正文需为 1-2000 个字符", ErrInvalidInput)
+		}
+	} else {
+		if utf8.RuneCountInString(title) > 80 || utf8.RuneCountInString(content) > 2000 {
+			return SystemAnnouncement{}, fmt.Errorf("%w: 通告内容超出长度限制", ErrInvalidInput)
+		}
+	}
+	if utf8.RuneCountInString(badge) > 24 || utf8.RuneCountInString(ctaLabel) > 32 {
+		return SystemAnnouncement{}, fmt.Errorf("%w: 角标或按钮文案过长", ErrInvalidInput)
+	}
+
+	existing, err := s.repo.GetAdminAnnouncement(ctx, actorID)
+	if err != nil {
+		return SystemAnnouncement{}, err
+	}
+	now := s.now()
+	annID := strings.TrimSpace(existing.ID)
+	if annID == "" || input.ResetAck {
+		annID = randomID("ann")
+	}
+	next := SystemAnnouncement{
+		ID:          annID,
+		Enabled:     input.Enabled,
+		DisplayMode: mode,
+		Badge:       badge,
+		Title:       title,
+		Content:     content,
+		CTALabel:    ctaLabel,
+		CTAURL:      ctaURL,
+		UpdatedAt:   now.UTC().Format(time.RFC3339),
+	}
+	return s.repo.UpsertAdminAnnouncement(ctx, actorID, next, now)
+}
+
+func (s *Service) AckAnnouncement(ctx context.Context, actorID, announcementID string) error {
+	actorID = strings.TrimSpace(actorID)
+	announcementID = strings.TrimSpace(announcementID)
+	if actorID == "" {
+		return ErrForbidden
+	}
+	if announcementID == "" || len(announcementID) > 128 {
+		return ErrInvalidInput
+	}
+	return s.repo.AckAnnouncement(ctx, actorID, announcementID, s.now())
+}
+
+func (s *Service) SendBindEmailCode(ctx context.Context, actorID, rawEmail string) (EmailChallengeSummary, error) {
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" {
+		return EmailChallengeSummary{}, ErrForbidden
+	}
+	if s.emailSender == nil {
+		return EmailChallengeSummary{}, fmt.Errorf("%w: 空间尚未开启通知发信邮箱", ErrInvalidInput)
+	}
+	normalized, err := email.NormalizeEmailAddress(rawEmail)
+	if err != nil {
+		return EmailChallengeSummary{}, fmt.Errorf("%w: 请输入有效的邮箱地址", ErrInvalidInput)
+	}
+	existingOwner, err := s.repo.FindBoundEmailOwner(ctx, normalized)
+	if err != nil {
+		return EmailChallengeSummary{}, err
+	}
+	if existingOwner != "" && existingOwner != actorID {
+		return EmailChallengeSummary{}, ErrEmailAlreadyBound
+	}
+	now := s.now()
+	if err := s.repo.CheckEmailChallengeCooldown(ctx, actorID, now); err != nil {
+		return EmailChallengeSummary{}, err
+	}
+	challengeID := randomID("echl_bind")
+	code, err := s.codeGen()
+	if err != nil {
+		return EmailChallengeSummary{}, err
+	}
+	codeHash, err := s.emailSender.HashChallengeCode(challengeID, code)
+	if err != nil {
+		return EmailChallengeSummary{}, err
+	}
+	if err := s.emailSender.SendVerificationCode(ctx, normalized, code, "bind"); err != nil {
+		return EmailChallengeSummary{}, err
+	}
+	expiresAt := now.Add(email.EmailChallengeTTL)
+	if err := s.repo.SaveEmailChallenge(ctx, challengeID, actorID, normalized, codeHash, now, expiresAt); err != nil {
+		return EmailChallengeSummary{}, err
+	}
+	return EmailChallengeSummary{
+		ChallengeID:        challengeID,
+		MaskedEmail:        email.MaskEmailAddress(normalized),
+		ExpiresAt:          expiresAt.UTC().Format(time.RFC3339),
+		ResendAfterSeconds: int(email.EmailChallengeResend / time.Second),
+	}, nil
+}
+
+func (s *Service) VerifyBindEmail(ctx context.Context, actorID, challengeID, code string) (BoundEmailStatus, error) {
+	actorID = strings.TrimSpace(actorID)
+	challengeID = strings.TrimSpace(challengeID)
+	code = strings.TrimSpace(code)
+	if actorID == "" {
+		return BoundEmailStatus{}, ErrForbidden
+	}
+	if s.emailSender == nil || !strings.HasPrefix(challengeID, "echl_bind_") || len(code) != 6 {
+		return BoundEmailStatus{}, ErrChallengeInvalid
+	}
+	now := s.now()
+	rec, err := s.repo.VerifyAndConsumeEmailChallenge(ctx, challengeID, func(rec EmailChallengeStoreRecord) (bool, error) {
+		if rec.UserID != actorID {
+			return false, nil
+		}
+		return s.emailSender.VerifyChallengeCode(rec.CodeHash, rec.ID, code)
+	}, now)
+	if err != nil {
+		return BoundEmailStatus{}, err
+	}
+	if err := s.repo.BindAccountEmail(ctx, actorID, rec.PendingEmail, now); err != nil {
+		return BoundEmailStatus{}, err
+	}
+	return BoundEmailStatus{
+		BoundEmail:  rec.PendingEmail,
+		MaskedEmail: email.MaskEmailAddress(rec.PendingEmail),
+	}, nil
+}
+
+func (s *Service) UnbindAccountEmail(ctx context.Context, actorID string) error {
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" {
+		return ErrForbidden
+	}
+	return s.repo.UnbindAccountEmail(ctx, actorID, s.now())
+}
+
+func (s *Service) SendLoginEmailCode(ctx context.Context, rawEmail string) (EmailChallengeSummary, error) {
+	if s.emailSender == nil {
+		return EmailChallengeSummary{}, fmt.Errorf("%w: 空间尚未开启通知发信邮箱", ErrInvalidInput)
+	}
+	normalized, err := email.NormalizeEmailAddress(rawEmail)
+	if err != nil {
+		return EmailChallengeSummary{}, fmt.Errorf("%w: 请输入有效的邮箱地址", ErrInvalidInput)
+	}
+	userID, err := s.repo.FindBoundEmailOwner(ctx, normalized)
+	if err != nil {
+		return EmailChallengeSummary{}, err
+	}
+	if userID == "" {
+		return EmailChallengeSummary{}, ErrEmailNotBound
+	}
+	now := s.now()
+	if err := s.repo.CheckEmailChallengeCooldown(ctx, userID, now); err != nil {
+		return EmailChallengeSummary{}, err
+	}
+	challengeID := randomID("echl_login")
+	code, err := s.codeGen()
+	if err != nil {
+		return EmailChallengeSummary{}, err
+	}
+	codeHash, err := s.emailSender.HashChallengeCode(challengeID, code)
+	if err != nil {
+		return EmailChallengeSummary{}, err
+	}
+	if err := s.emailSender.SendVerificationCode(ctx, normalized, code, "login"); err != nil {
+		return EmailChallengeSummary{}, err
+	}
+	expiresAt := now.Add(email.EmailChallengeTTL)
+	if err := s.repo.SaveEmailChallenge(ctx, challengeID, userID, normalized, codeHash, now, expiresAt); err != nil {
+		return EmailChallengeSummary{}, err
+	}
+	return EmailChallengeSummary{
+		ChallengeID:        challengeID,
+		MaskedEmail:        email.MaskEmailAddress(normalized),
+		ExpiresAt:          expiresAt.UTC().Format(time.RFC3339),
+		ResendAfterSeconds: int(email.EmailChallengeResend / time.Second),
+	}, nil
+}
+
+func (s *Service) VerifyLoginEmail(ctx context.Context, rawEmail, challengeID, code string) (V1BootstrapMember, error) {
+	challengeID = strings.TrimSpace(challengeID)
+	code = strings.TrimSpace(code)
+	if s.emailSender == nil || !strings.HasPrefix(challengeID, "echl_login_") || len(code) != 6 {
+		return V1BootstrapMember{}, ErrChallengeInvalid
+	}
+	normalized, err := email.NormalizeEmailAddress(rawEmail)
+	if err != nil {
+		return V1BootstrapMember{}, ErrChallengeInvalid
+	}
+	now := s.now()
+	rec, err := s.repo.VerifyAndConsumeEmailChallenge(ctx, challengeID, func(rec EmailChallengeStoreRecord) (bool, error) {
+		if !strings.EqualFold(rec.PendingEmail, normalized) {
+			return false, nil
+		}
+		return s.emailSender.VerifyChallengeCode(rec.CodeHash, rec.ID, code)
+	}, now)
+	if err != nil {
+		return V1BootstrapMember{}, err
+	}
+	return s.repo.ResolveEmailLoginMember(ctx, rec.UserID, normalized, now)
 }
 
 func randomID(prefix string) string {

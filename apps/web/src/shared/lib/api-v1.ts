@@ -740,6 +740,57 @@ export const apiV1 = {
     requestJSON<AdminStorageCleanupResult>("/api/v1/admin/storage/cleanup", {
       method: "POST",
     }),
+  getAdminAnnouncement: () =>
+    requestJSON<{ announcement: SystemAnnouncementDTO }>("/api/v1/admin/announcement"),
+  updateAdminAnnouncement: (input: SystemAnnouncementUpdateInput) =>
+    requestJSON<{ announcement: SystemAnnouncementDTO }>("/api/v1/admin/announcement", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  ackAnnouncement: (id: string) =>
+    requestJSON<{ ok: boolean }>("/api/v1/announcement/ack", {
+      method: "POST",
+      body: JSON.stringify({ id }),
+    }),
+  sendBindEmailCode: (email: string) =>
+    requestJSON<EmailChallengeSummaryDTO>("/api/v1/account/email/send-code", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+  verifyBindEmail: (challengeId: string, code: string) =>
+    requestJSON<BoundEmailStatusDTO>("/api/v1/account/email/verify", {
+      method: "POST",
+      body: JSON.stringify({ challengeId, code }),
+    }),
+  unbindAccountEmail: () =>
+    requestJSON<{ ok: boolean }>("/api/v1/account/email", {
+      method: "DELETE",
+    }),
+  sendLoginEmailCode: (email: string) =>
+    requestJSON<EmailChallengeSummaryDTO>("/api/v1/auth/email/send-code", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+  verifyLoginEmail: (email: string, challengeId: string, code: string) =>
+    requestJSON<EmailVerifyLoginResponseDTO>("/api/v1/auth/email/verify", {
+      method: "POST",
+      body: JSON.stringify({ email, challengeId, code, client: "web" }),
+    }),
+  getWorkspaceEmailSettings: () =>
+    requestJSON<{ settings: AdminEmailSettingsDTO }>("/api/workspace/settings/email"),
+  testWorkspaceEmailSettings: (input: AdminEmailSettingsInput) =>
+    requestJSON<{ testProof: string; recipient: string; testedAt: string }>(
+      "/api/workspace/settings/email/test",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      }
+    ),
+  saveWorkspaceEmailSettings: (input: AdminEmailSettingsInput & { testProof?: string }) =>
+    requestJSON<{ settings: AdminEmailSettingsDTO }>("/api/workspace/settings/email", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
   listWorkspaceMembers: () =>
     requestJSON<{ members?: Array<Record<string, unknown>> }>("/api/workspace/members"),
   updateMemberRole: (userId: string, role: "owner" | "admin" | "member") =>
@@ -991,6 +1042,77 @@ export interface AdminStorageCleanupResult {
   releasedTransfers: number;
   cleanedAttachments: number;
   reclaimedBytes: number;
+}
+
+export interface SystemAnnouncementDTO {
+  id: string;
+  enabled: boolean;
+  displayMode: "once" | "always";
+  badge?: string;
+  title: string;
+  content: string;
+  ctaLabel?: string;
+  ctaUrl?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+  shouldShow?: boolean;
+}
+
+export interface SystemAnnouncementUpdateInput {
+  enabled: boolean;
+  displayMode: "once" | "always";
+  badge?: string;
+  title: string;
+  content: string;
+  ctaLabel?: string;
+  ctaUrl?: string;
+  resetAck?: boolean;
+}
+
+export interface EmailChallengeSummaryDTO {
+  challengeId: string;
+  maskedEmail: string;
+  expiresAt: string;
+}
+
+export interface BoundEmailStatusDTO {
+  bound: boolean;
+  email?: string;
+  maskedEmail?: string;
+}
+
+export interface EmailVerifyLoginResponseDTO {
+  ok: boolean;
+  client: "web" | "mobile" | string;
+  user?: Record<string, unknown>;
+}
+
+export interface AdminEmailSettingsDTO {
+  enabled: boolean;
+  smtpHost: string;
+  smtpPort: number;
+  encryption: "starttls" | "tls" | "none";
+  username: string;
+  fromAddress: string;
+  fromName: string;
+  passwordConfigured: boolean;
+  activeFrom?: string | null;
+  lastTestedAt: string | null;
+  lastTestStatus: "success" | "failure" | null;
+  lastTestErrorCode: string | null;
+  lastDeliveryAt?: string | null;
+  failedJobCount: number;
+}
+
+export interface AdminEmailSettingsInput {
+  enabled: boolean;
+  smtpHost: string;
+  smtpPort: number;
+  encryption: "starttls" | "tls" | "none";
+  username: string;
+  password?: string;
+  fromAddress: string;
+  fromName: string;
 }
 
 export interface MemberVisibilityRule {
