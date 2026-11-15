@@ -196,6 +196,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 			coalesce(ur.remark, ''),
 			coalesce(bs_meta.description, ''),
 			coalesce(u.avatar_url, bs_meta.avatar_url, ''),
+			coalesce(up_bot.prefs_json, '{}'),
 			u.kind,
 			sm.role
 		FROM space_members sm
@@ -203,6 +204,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 		LEFT JOIN user_remarks ur ON ur.owner_user_id = $2 AND ur.target_user_id = u.id
 		LEFT JOIN workspace_agent_bots b_meta ON b_meta.space_id = $1 AND b_meta.bot_user_id = u.id AND b_meta.status <> 'deleted'
 		LEFT JOIN workspace_agent_bot_settings bs_meta ON bs_meta.bot_id = b_meta.id AND bs_meta.space_id = $1
+		LEFT JOIN user_preferences up_bot ON up_bot.user_id = u.id AND u.kind = 'bot'
 		WHERE sm.space_id = $1
 			AND sm.removed_at IS NULL
 			AND (
@@ -254,16 +256,26 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 	members := make([]V1BootstrapMember, 0, 16)
 	memberByID := make(map[string]V1BootstrapMember, 16)
 	for memberRows.Next() {
-		var mID, mGitHub, mDisplay, mNick, mRemark, mDesc, mAvatar, mKind, mRole string
-		if scanErr := memberRows.Scan(&mID, &mGitHub, &mDisplay, &mNick, &mRemark, &mDesc, &mAvatar, &mKind, &mRole); scanErr != nil {
+		var mID, mGitHub, mDisplay, mNick, mRemark, mDesc, mAvatar, mBotPrefsRaw, mKind, mRole string
+		if scanErr := memberRows.Scan(&mID, &mGitHub, &mDisplay, &mNick, &mRemark, &mDesc, &mAvatar, &mBotPrefsRaw, &mKind, &mRole); scanErr != nil {
 			memberRows.Close()
 			return V1BootstrapResponse{}, scanErr
 		}
 		projected := projectBootstrapMember(
 			mID, mGitHub, mDisplay, mNick, mRemark, mAvatar, mKind, mRole, actorID, actorRole,
 		)
-		if mKind == "bot" && strings.TrimSpace(mDesc) != "" {
-			projected.Description = strings.TrimSpace(mDesc)
+		if mKind == "bot" {
+			if strings.TrimSpace(mDesc) != "" {
+				projected.Description = strings.TrimSpace(mDesc)
+			}
+			if mBotPrefsRaw != "" && mBotPrefsRaw != "{}" {
+				var botPrefs map[string]any
+				if json.Unmarshal([]byte(mBotPrefsRaw), &botPrefs) == nil {
+					if rawCol, ok := botPrefs["botColor"].(string); ok && IsValidBotColor(rawCol) && rawCol != "" {
+						projected.AvatarColor = rawCol
+					}
+				}
+			}
 		}
 		if mID == actorID {
 			projected.Role = actorRole
@@ -2357,20 +2369,21 @@ func (r *PGRepository) UpdateBotProfile(ctx context.Context, actorID, botID stri
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var ownerID, botUserID, curName, curDesc, curAvatar string
+	var ownerID, botUserID, curName, curDesc, curAvatar, rawPrefs string
 	err = tx.QueryRow(ctx, `
 		SELECT
 			b.owner_user_id,
 			b.bot_user_id,
 			b.name,
 			coalesce(bs.description, ''),
-			coalesce(u.avatar_url, bs.avatar_url, '')
+			coalesce(u.avatar_url, bs.avatar_url, ''),
+			coalesce((SELECT prefs_json FROM user_preferences WHERE user_id = b.bot_user_id), '{}')
 		FROM workspace_agent_bots b
 		JOIN users u ON u.id = b.bot_user_id
 		LEFT JOIN workspace_agent_bot_settings bs ON bs.bot_id = b.id AND bs.space_id = b.space_id
 		WHERE b.space_id = $1 AND b.id = $2 AND b.status <> 'deleted'
 		FOR UPDATE OF b
-	`, r.spaceID, botID).Scan(&ownerID, &botUserID, &curName, &curDesc, &curAvatar)
+	`, r.spaceID, botID).Scan(&ownerID, &botUserID, &curName, &curDesc, &curAvatar, &rawPrefs)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return BotProfileResult{}, ErrNotFound
@@ -2379,6 +2392,30 @@ func (r *PGRepository) UpdateBotProfile(ctx context.Context, actorID, botID stri
 	}
 	if ownerID != actorID {
 		return BotProfileResult{}, ErrForbidden
+	}
+
+	prefs := map[string]any{}
+	_ = json.Unmarshal([]byte(rawPrefs), &prefs)
+	if prefs == nil {
+		prefs = map[string]any{}
+	}
+	curColor, _ := prefs["botColor"].(string)
+	nextColor := curColor
+	if input.ColorSet && input.Color != nil {
+		nextColor = strings.ToLower(strings.TrimSpace(*input.Color))
+		if nextColor == "" {
+			delete(prefs, "botColor")
+		} else {
+			prefs["botColor"] = nextColor
+		}
+		encodedPrefs, _ := json.Marshal(prefs)
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO user_preferences (user_id, prefs_json, updated_at)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (user_id) DO UPDATE SET prefs_json = EXCLUDED.prefs_json, updated_at = EXCLUDED.updated_at
+		`, botUserID, string(encodedPrefs), now.UTC()); err != nil {
+			return BotProfileResult{}, err
+		}
 	}
 
 	nextName := curName
@@ -2426,6 +2463,7 @@ func (r *PGRepository) UpdateBotProfile(ctx context.Context, actorID, botID stri
 			"displayName": nextName,
 			"description": nextDesc,
 			"avatarUrl":   cleanAvatar,
+			"avatarColor": nextColor,
 			"kind":        "bot",
 			"role":        "member",
 		},
@@ -2442,6 +2480,7 @@ func (r *PGRepository) UpdateBotProfile(ctx context.Context, actorID, botID stri
 		Name:        nextName,
 		Description: nextDesc,
 		AvatarURL:   cleanAvatar,
+		AvatarColor: nextColor,
 	}, nil
 }
 
@@ -2482,6 +2521,10 @@ func (r *PGRepository) UploadBotAvatar(ctx context.Context, actorID, botID, mime
 	}
 	prefs["botAvatarMime"] = mimeType
 	prefs["botAvatarBase64"] = base64.StdEncoding.EncodeToString(data)
+	botColor, _ := prefs["botColor"].(string)
+	if !IsValidBotColor(botColor) {
+		botColor = ""
+	}
 	encodedPrefs, _ := json.Marshal(prefs)
 
 	if _, err := tx.Exec(ctx, `
@@ -2510,6 +2553,7 @@ func (r *PGRepository) UploadBotAvatar(ctx context.Context, actorID, botID, mime
 			"displayName": botName,
 			"description": botDesc,
 			"avatarUrl":   avatarURL,
+			"avatarColor": botColor,
 			"kind":        "bot",
 			"role":        "member",
 		},
@@ -2526,6 +2570,7 @@ func (r *PGRepository) UploadBotAvatar(ctx context.Context, actorID, botID, mime
 		Name:        botName,
 		Description: botDesc,
 		AvatarURL:   avatarURL,
+		AvatarColor: botColor,
 	}, nil
 }
 
@@ -2563,6 +2608,10 @@ func (r *PGRepository) DeleteBotAvatar(ctx context.Context, actorID, botID strin
 	_ = json.Unmarshal([]byte(rawPrefs), &prefs)
 	delete(prefs, "botAvatarMime")
 	delete(prefs, "botAvatarBase64")
+	botColor, _ := prefs["botColor"].(string)
+	if !IsValidBotColor(botColor) {
+		botColor = ""
+	}
 	encodedPrefs, _ := json.Marshal(prefs)
 
 	if _, err := tx.Exec(ctx, `
@@ -2589,6 +2638,7 @@ func (r *PGRepository) DeleteBotAvatar(ctx context.Context, actorID, botID strin
 			"displayName": botName,
 			"description": botDesc,
 			"avatarUrl":   "",
+			"avatarColor": botColor,
 			"kind":        "bot",
 			"role":        "member",
 		},
@@ -2605,6 +2655,7 @@ func (r *PGRepository) DeleteBotAvatar(ctx context.Context, actorID, botID strin
 		Name:        botName,
 		Description: botDesc,
 		AvatarURL:   "",
+		AvatarColor: botColor,
 	}, nil
 }
 

@@ -39,6 +39,7 @@ export interface V1User {
   handle?: string;
   role: "owner" | "admin" | "member" | "bot";
   avatarUrl?: string;
+  avatarColor?: string;
   description?: string;
 }
 
@@ -200,6 +201,7 @@ interface WorkspaceState {
   loadThread: (rootMessageId: string) => Promise<void>;
   sendThreadReply: (rootMessageId: string, text: string, alsoSendToChannel: boolean) => Promise<void>;
   triggerCardAction: (cardId: string, actionId: string, payload?: Record<string, unknown>) => Promise<void>;
+  patchMemberLocal: (userId: string, patch: Partial<V1User>) => void;
 
   createP2PRoom: () => Promise<string>;
   joinP2PRoom: (roomId: string, keyStr: string) => Promise<void>;
@@ -535,6 +537,12 @@ function upsertRawMemberRecord(
       ? m.avatarUrl.trim()
       : undefined
     : prev?.avatarUrl;
+  const hasExplicitColor = "avatarColor" in m;
+  const nextAvatarColor = hasExplicitColor
+    ? typeof m.avatarColor === "string" && m.avatarColor.trim()
+      ? m.avatarColor.trim().toLowerCase()
+      : undefined
+    : prev?.avatarColor;
   const nextDescription =
     typeof m.description === "string"
       ? m.description.trim() || undefined
@@ -549,6 +557,7 @@ function upsertRawMemberRecord(
       : prev?.handle,
     role,
     avatarUrl: nextAvatarUrl,
+    avatarColor: nextAvatarColor,
     description: nextDescription,
   };
   return id;
@@ -3291,6 +3300,27 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             : m
         ),
       }));
+    },
+
+    patchMemberLocal: (userId, patch) => {
+      if (!userId) return;
+      set((s) => {
+        const existing = s.members[userId];
+        const updated: V1User = existing
+          ? { ...existing, ...patch }
+          : {
+              id: userId,
+              displayName: patch.displayName || userId,
+              role: patch.role || "bot",
+              ...patch,
+            };
+        return {
+          members: {
+            ...s.members,
+            [userId]: updated,
+          },
+        };
+      });
     },
   };
 });

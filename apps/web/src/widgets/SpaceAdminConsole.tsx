@@ -729,7 +729,13 @@ export function SpaceAdminConsole() {
                         className="flex flex-wrap items-center justify-between gap-2.5 rounded-2xl border border-dl-border-hairline bg-dl-surface-subtle/45 p-3"
                       >
                         <div className="flex items-center gap-2.5 min-w-0">
-                          <Avatar name={m.displayName} src={m.avatarUrl} size="sm" />
+                          <Avatar
+                            name={m.displayName}
+                            src={m.avatarUrl}
+                            kind={isBot ? "bot" : "human"}
+                            color={m.avatarColor}
+                            size="sm"
+                          />
                           <div className="min-w-0">
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <span className="truncate text-xs font-semibold text-dl-text-primary">

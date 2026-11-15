@@ -177,6 +177,9 @@ func (s *stubRepo) UpdateBotProfile(_ context.Context, _, botID string, input Bo
 	if input.DescriptionSet && input.Description != nil {
 		s.botProfile.Description = *input.Description
 	}
+	if input.ColorSet && input.Color != nil {
+		s.botProfile.AvatarColor = *input.Color
+	}
 	return s.botProfile, nil
 }
 func (s *stubRepo) UploadBotAvatar(_ context.Context, _, botID, mimeType string, data []byte, _ time.Time) (BotProfileResult, error) {
@@ -586,12 +589,26 @@ func TestReadReceiptTypingBotProfileAndGroupRemoveRoutes(t *testing.T) {
 		t.Fatalf("expected 200 on human typing, got %d (%s)", typRec.Code, typRec.Body.String())
 	}
 
-	// 2. Update bot profile, upload/get/delete bot avatar
+	// 2. Update bot profile, color, upload/get/delete bot avatar
 	profReq := httptest.NewRequest(http.MethodPatch, "/api/v1/bots/bot_astra/profile", bytes.NewBufferString(`{"name":"Astra Pro","description":"全栈协作智能体"}`))
 	profRec := httptest.NewRecorder()
 	r.ServeHTTP(profRec, profReq)
 	if profRec.Code != http.StatusOK || repo.botProfile.Name != "Astra Pro" || repo.botProfile.Description != "全栈协作智能体" {
 		t.Fatalf("expected 200 on bot profile patch, got %d (%s)", profRec.Code, profRec.Body.String())
+	}
+
+	colReq := httptest.NewRequest(http.MethodPatch, "/api/v1/bots/bot_astra/profile", bytes.NewBufferString(`{"color":"violet"}`))
+	colRec := httptest.NewRecorder()
+	r.ServeHTTP(colRec, colReq)
+	if colRec.Code != http.StatusOK || repo.botProfile.AvatarColor != "violet" {
+		t.Fatalf("expected 200 on bot color patch, got %d (%s)", colRec.Code, colRec.Body.String())
+	}
+
+	badColReq := httptest.NewRequest(http.MethodPatch, "/api/v1/bots/bot_astra/profile", bytes.NewBufferString(`{"color":"neon-pink"}`))
+	badColRec := httptest.NewRecorder()
+	r.ServeHTTP(badColRec, badColReq)
+	if badColRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on invalid bot color patch, got %d (%s)", badColRec.Code, badColRec.Body.String())
 	}
 
 	pngHeader := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0x00, 0x01}

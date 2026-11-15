@@ -333,6 +333,7 @@ export function TimelinePane() {
       displayName: string;
       subtitle?: string;
       avatarUrl?: string;
+      avatarColor?: string;
       isBot: boolean;
       isAll: boolean;
     }> = [];
@@ -364,6 +365,7 @@ export function TimelinePane() {
             member.description ||
             (member.role === "bot" ? "机器人 / Agent" : member.handle ? `@${member.handle}` : undefined),
           avatarUrl: member.avatarUrl,
+          avatarColor: member.avatarColor,
           isBot:
             member.role === "bot" ||
             member.id.startsWith("usr_bot_") ||
@@ -1248,6 +1250,11 @@ export function TimelinePane() {
                       ? "bot"
                       : "human"
                   }
+                  color={
+                    activeConv.kind !== "group" && hasBotInConversation
+                      ? directPeer?.avatarColor
+                      : undefined
+                  }
                   size="md"
                 />
               </div>
@@ -1531,6 +1538,7 @@ export function TimelinePane() {
                           name={msg.senderName}
                           src={senderAvatarSrc}
                           kind={senderAvatarKind}
+                          color={senderMember?.avatarColor}
                           size="sm"
                         />
                       ))}
@@ -2224,6 +2232,7 @@ export function TimelinePane() {
                         name={item.displayName}
                         src={item.avatarUrl}
                         kind={item.isBot ? "bot" : "human"}
+                        color={item.avatarColor}
                         size="sm"
                       />
                     )}

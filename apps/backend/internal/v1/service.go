@@ -424,12 +424,13 @@ func (s *Service) UpdateBotProfile(ctx context.Context, actorID, botID string, i
 	if actorID == "" {
 		return BotProfileResult{}, ErrForbidden
 	}
-	if botID == "" || (!input.NameSet && !input.DescriptionSet) {
+	if botID == "" || (!input.NameSet && !input.DescriptionSet && !input.ColorSet) {
 		return BotProfileResult{}, ErrInvalidInput
 	}
 	clean := BotProfileUpdateInput{
 		NameSet:        input.NameSet,
 		DescriptionSet: input.DescriptionSet,
+		ColorSet:       input.ColorSet,
 	}
 	if input.NameSet {
 		name := ""
@@ -457,6 +458,16 @@ func (s *Service) UpdateBotProfile(ctx context.Context, actorID, botID string, i
 			return BotProfileResult{}, fmt.Errorf("%w: 机器人简介不可超过 240 个字符", ErrInvalidInput)
 		}
 		clean.Description = &desc
+	}
+	if input.ColorSet {
+		color := ""
+		if input.Color != nil {
+			color = strings.ToLower(strings.TrimSpace(*input.Color))
+		}
+		if !IsValidBotColor(color) {
+			return BotProfileResult{}, fmt.Errorf("%w: 机器人主题色无效", ErrInvalidInput)
+		}
+		clean.Color = &color
 	}
 	return s.repo.UpdateBotProfile(ctx, actorID, botID, clean, s.now())
 }

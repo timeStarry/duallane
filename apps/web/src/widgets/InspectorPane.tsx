@@ -302,6 +302,7 @@ export function InspectorPane() {
                                 name={authorName}
                                 src={replyMember?.avatarUrl}
                                 kind={authorKind}
+                                color={replyMember?.avatarColor}
                                 size="sm"
                               />
                               <div className="min-w-0 flex-1 space-y-1">
@@ -670,6 +671,7 @@ export function InspectorPane() {
                             name={displayLabel}
                             src={m?.avatarUrl}
                             kind={isBotMember ? "bot" : "human"}
+                            color={m?.avatarColor}
                             size="sm"
                           />
                           <div className="min-w-0 flex-1">

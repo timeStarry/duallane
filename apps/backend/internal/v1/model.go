@@ -30,6 +30,7 @@ type V1BootstrapMember struct {
 	Kind        string `json:"kind"`
 	Role        string `json:"role"`
 	AvatarURL   string `json:"avatarUrl,omitempty"`
+	AvatarColor string `json:"avatarColor,omitempty"`
 }
 
 type V1BootstrapAuth struct {
@@ -158,6 +159,8 @@ type BotProfileUpdateInput struct {
 	NameSet        bool    `json:"-"`
 	Description    *string `json:"description,omitempty"`
 	DescriptionSet bool    `json:"-"`
+	Color          *string `json:"color,omitempty"`
+	ColorSet       bool    `json:"-"`
 }
 
 type BotProfileResult struct {
@@ -166,6 +169,16 @@ type BotProfileResult struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	AvatarURL   string `json:"avatarUrl,omitempty"`
+	AvatarColor string `json:"avatarColor,omitempty"`
+}
+
+func IsValidBotColor(color string) bool {
+	switch color {
+	case "", "azure", "indigo", "violet", "emerald", "cyan", "amber", "rose", "slate":
+		return true
+	default:
+		return false
+	}
 }
 
 type BotAvatarPayload struct {

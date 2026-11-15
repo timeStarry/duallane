@@ -28,7 +28,16 @@ import {
   type BotSetupSession,
   type BotTokenRecord,
 } from "@/shared/lib/api-v1";
-import { Avatar, Button, IconButton, Input, Select, Switch } from "@/shared/ui";
+import {
+  Avatar,
+  BOT_AVATAR_COLORS,
+  Button,
+  IconButton,
+  Input,
+  Select,
+  Switch,
+  type BotAvatarColor,
+} from "@/shared/ui";
 import { cn } from "@/shared/lib/cn";
 
 interface BotItem {
@@ -40,6 +49,7 @@ interface BotItem {
   triggerPolicy?: string;
   description?: string;
   avatarUrl?: string;
+  avatarColor?: string;
 }
 
 interface BotSettingsData {
@@ -162,6 +172,7 @@ export function BotSettingsPanel() {
     conversations,
     bootstrapWorkspace,
     selectConversation,
+    patchMemberLocal,
   } = useWorkspaceStore();
   const { pendingBotSetupId, setPendingBotSetupId, closeSettings } = useLaneStore();
 
@@ -780,6 +791,43 @@ export function BotSettingsPanel() {
     }
   };
 
+  const handleSelectBotColor = async (nextColor: BotAvatarColor | "") => {
+    if (!activeBot) return;
+    setErrorMessage("");
+    const prevColor =
+      activeBot.avatarColor ??
+      (activeBot.botUserId ? members[activeBot.botUserId]?.avatarColor : undefined) ??
+      "";
+    setBots((prev) =>
+      prev.map((b) => (b.id === activeBot.id ? { ...b, avatarColor: nextColor } : b))
+    );
+    if (activeBot.botUserId) {
+      patchMemberLocal(activeBot.botUserId, {
+        displayName: activeBot.name,
+        role: "bot",
+        avatarColor: nextColor || undefined,
+      });
+    }
+    try {
+      if (!isPreviewMode) {
+        await apiV1.updateBotProfile(activeBot.id, { color: nextColor });
+        void bootstrapWorkspace().catch(() => {});
+      }
+      const label = BOT_AVATAR_COLORS.find((c) => c.id === nextColor)?.label;
+      setStatusMessage(label ? `机器人主题色已设为「${label}」` : "已恢复默认自动配色");
+    } catch (err) {
+      setBots((prev) =>
+        prev.map((b) => (b.id === activeBot.id ? { ...b, avatarColor: prevColor } : b))
+      );
+      if (activeBot.botUserId) {
+        patchMemberLocal(activeBot.botUserId, {
+          avatarColor: prevColor || undefined,
+        });
+      }
+      setErrorMessage(err instanceof Error ? err.message : "更新机器人主题色失败");
+    }
+  };
+
   const handleBotAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -995,6 +1043,10 @@ export function BotSettingsPanel() {
     settings.avatarUrl ||
     activeBot?.avatarUrl ||
     (activeBot?.botUserId ? members[activeBot.botUserId]?.avatarUrl : undefined);
+  const activeBotColor =
+    activeBot?.avatarColor ??
+    (activeBot?.botUserId ? members[activeBot.botUserId]?.avatarColor : undefined) ??
+    "";
 
   return (
     <div className="space-y-4">
@@ -1194,6 +1246,7 @@ export function BotSettingsPanel() {
                       name={profileNameDraft || activeBot.name}
                       src={activeBotAvatarUrl}
                       kind="bot"
+                      color={activeBotColor}
                       size="lg"
                     />
                     <span className="absolute -bottom-1 -right-1 flex size-5 items-center justify-center rounded-full border border-dl-border-hairline bg-surface text-dl-text-primary shadow-2xs group-hover:text-dl-lane-shared">
@@ -1330,6 +1383,57 @@ export function BotSettingsPanel() {
                 >
                   保存资料
                 </Button>
+              </div>
+            </div>
+
+            <div
+              data-testid="bot-color-picker"
+              className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-dl-surface-subtle/55 px-3 py-2"
+            >
+              <span className="text-[11px] font-medium text-dl-text-secondary">
+                机器人主题色
+              </span>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => void handleSelectBotColor("")}
+                  aria-label="自动配色"
+                  aria-pressed={!activeBotColor}
+                  className={cn(
+                    "h-6 rounded-full px-2 text-[11px] font-medium",
+                    !activeBotColor
+                      ? "bg-dl-lane-shared/15 text-dl-lane-shared ring-1 ring-dl-lane-shared/40"
+                      : "bg-surface/80 text-dl-text-secondary hover:text-dl-text-primary border border-dl-border-hairline"
+                  )}
+                >
+                  自动
+                </Button>
+                {BOT_AVATAR_COLORS.map((preset) => {
+                  const selected = activeBotColor === preset.id;
+                  return (
+                    <Button
+                      key={preset.id}
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      title={preset.label}
+                      aria-label={`配色：${preset.label}`}
+                      aria-pressed={selected}
+                      onClick={() => void handleSelectBotColor(preset.id)}
+                      style={{ backgroundImage: preset.gradient }}
+                      className={cn(
+                        "relative size-6 min-w-0 rounded-full p-0 text-white shadow-2xs transition-transform hover:scale-105 hover:bg-transparent",
+                        selected
+                          ? "ring-2 ring-offset-2 ring-offset-surface ring-dl-text-primary scale-105"
+                          : "ring-1 ring-black/10 dark:ring-white/15"
+                      )}
+                    >
+                      {selected && <Check className="size-3 stroke-[2.6]" />}
+                    </Button>
+                  );
+                })}
               </div>
             </div>
           </form>

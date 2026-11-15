@@ -526,6 +526,15 @@ func (h *HTTPHandler) handleUpdateBotProfile(w http.ResponseWriter, r *http.Requ
 		}
 		input.Description = desc
 	}
+	if rawColor, ok := fields["color"]; ok {
+		input.ColorSet = true
+		var color *string
+		if err := json.Unmarshal(rawColor, &color); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "v1.bad_json", "机器人颜色格式无效")
+			return
+		}
+		input.Color = color
+	}
 	res, err := h.service.UpdateBotProfile(r.Context(), actorFromContext(r.Context()).ID, chi.URLParam(r, "botId"), input)
 	if err != nil {
 		writeServiceError(w, err)

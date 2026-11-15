@@ -286,6 +286,23 @@ export function ConversationSidebar() {
             const isPinned = pinnedConversationIds.includes(conv.id);
             const draft = drafts[conv.id];
             const timeLabel = formatShortTime(conv.lastMessageAt);
+            const directPeer =
+              conv.kind === "direct"
+                ? conv.memberIds
+                    .map((uid) => members[uid])
+                    .find((m) => m && m.id !== currentUser?.id) ||
+                  conv.memberIds.map((uid) => members[uid]).find(Boolean)
+                : undefined;
+            const isBotDirect =
+              conv.kind === "direct" &&
+              Boolean(
+                directPeer?.role === "bot" ||
+                  conv.memberIds.some(
+                    (uid) =>
+                      uid !== currentUser?.id &&
+                      (uid.startsWith("usr_bot_") || uid.startsWith("usr_system_"))
+                  )
+              );
             const rowButton = (
               <Button
                 key={conv.id}
@@ -308,9 +325,10 @@ export function ConversationSidebar() {
                 ) : (
                   <Avatar
                     name={conv.title}
-                    src={conv.avatarUrl}
+                    src={conv.avatarUrl || directPeer?.avatarUrl}
                     emoji={conv.avatarEmoji}
-                    kind={conv.kind === "group" ? "group" : "human"}
+                    kind={conv.kind === "group" ? "group" : isBotDirect ? "bot" : "human"}
+                    color={isBotDirect ? directPeer?.avatarColor : undefined}
                     size="md"
                   />
                 )}

@@ -2146,6 +2146,42 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
       expect(botPanelHtml).toContain("暂停响应");
       expect(botPanelHtml).toContain("更换机器人头像");
       expect(botPanelHtml).toContain("保存资料");
+      expect(botPanelHtml).toContain('data-testid="bot-color-picker"');
+      expect(botPanelHtml).toContain('aria-label="配色：极光紫"');
+
+      // 7. Bot DM in ConversationSidebar renders squircle bot avatar with configured avatarColor instead of human initial
+      useWorkspaceStore.getState().patchMemberLocal("usr_bot_astra", {
+        displayName: "Astra",
+        role: "bot",
+        avatarColor: "violet",
+      });
+      useWorkspaceStore.setState({
+        conversations: {
+          ...useWorkspaceStore.getState().conversations,
+          conv_dm_astra: {
+            id: "conv_dm_astra",
+            kind: "direct",
+            title: "Astra",
+            unreadCount: 0,
+            mentionCount: 0,
+            pinnedMessageIds: [],
+            memberIds: ["usr_me", "usr_bot_astra"],
+            lastMessageText: "你好",
+            lastMessageAt: "2026-11-15T09:05:00.000Z",
+          },
+        },
+        conversationOrder: ["conv_dm_astra"],
+      });
+      Object.assign(useLaneStore.getInitialState(), { activeLane: "workspace" });
+      useLaneStore.setState({ activeLane: "workspace" });
+      Object.assign(useWorkspaceStore.getInitialState(), useWorkspaceStore.getState());
+      const sidebarHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <ConversationSidebar />
+        </TooltipProvider>
+      );
+      expect(sidebarHtml).toContain('data-avatar-kind="bot"');
+      expect(sidebarHtml).toContain('data-bot-color="violet"');
     } finally {
       Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);
       useWorkspaceStore.setState(prevWsInitial);
