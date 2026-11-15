@@ -1,6 +1,11 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowDown,
+  ArrowLeftRight,
+  ArrowUp,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   FolderPlus,
   Heart,
@@ -8,6 +13,7 @@ import {
   Layers,
   Link2,
   Pencil,
+  Pin,
   Plus,
   RefreshCw,
   Search,
@@ -35,6 +41,7 @@ import { CachedEmoteImage } from "@/emote-image-cache";
 import { getRecentEmojiIds, recordRecentEmojiUse } from "@/recent-emojis";
 import {
   resolveCustomEmoteSrc,
+  resolveOrderedPickerTabKeys,
   useEmoteStore,
   type StudioTab,
 } from "@/entities/emote/store";
@@ -519,6 +526,15 @@ type PickerTabKey =
   | `pack:${string}`
   | EmotePack["id"];
 
+interface OrderedPickerTabDescriptor {
+  key: PickerTabKey;
+  label: string;
+  kind: "favorites" | "custom_pack" | "builtin_pack";
+  coverSrc?: string;
+  unicodeSample?: string;
+  builtinSampleSrc?: string;
+}
+
 export function EmoteStickerPopover({
   lane,
   conversationId,
@@ -534,9 +550,10 @@ export function EmoteStickerPopover({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [activeTab, setActiveTab] = useState<PickerTabKey>(() =>
-    lane === "workspace" ? "favorites" : "emoji"
-  );
+  const [selectedTab, setSelectedTab] = useState<PickerTabKey | null>(null);
+  const [reorderingTabs, setReorderingTabs] = useState(false);
+  const [draggingTabKey, setDraggingTabKey] = useState<PickerTabKey | null>(null);
+  const [dragOverTabKey, setDragOverTabKey] = useState<PickerTabKey | null>(null);
   const [recentIds, setRecentIds] = useState<string[]>(() =>
     getRecentEmojiIds(UNICODE_EMOJI_IDS, 8)
   );
@@ -549,17 +566,22 @@ export function EmoteStickerPopover({
     sendWorkspaceMessage,
     sendCustomSticker,
     sendStickerPackShare,
+    updateUserPreferences,
   } = useWorkspaceStore();
   const {
     hydrated,
     library,
     settings,
+    tabOrder,
     loadEmoteState,
     uploadStickers,
     updateSettingsPatch,
     createPackShare,
     openStudio,
     showToast,
+    setTabOrder,
+    moveTabOrder,
+    reorderTabBefore,
   } = useEmoteStore();
 
   useEffect(() => {
@@ -568,12 +590,73 @@ export function EmoteStickerPopover({
     }
   }, [hydrated, isPreviewMode, lane, loadEmoteState, open]);
 
-  const enabledBuiltinPacks =
-    lane === "p2p"
-      ? visibleEmotePacks
-      : visibleEmotePacks.filter(
-          (p) => settings.enabledPackIds.includes(p.id) || p.id === "emoji"
-        );
+  const enabledBuiltinPacks = useMemo(
+    () =>
+      lane === "p2p"
+        ? visibleEmotePacks
+        : visibleEmotePacks.filter(
+            (p) => settings.enabledPackIds.includes(p.id) || p.id === "emoji"
+          ),
+    [lane, settings.enabledPackIds]
+  );
+
+  const orderedTabs = useMemo<OrderedPickerTabDescriptor[]>(() => {
+    const map = new Map<PickerTabKey, OrderedPickerTabDescriptor>();
+    const defaultKeys: PickerTabKey[] = [];
+
+    if (lane === "workspace") {
+      defaultKeys.push("favorites");
+      map.set("favorites", {
+        key: "favorites",
+        label: "收藏",
+        kind: "favorites",
+      });
+      for (const col of library.collections) {
+        const key: PickerTabKey = `pack:${col.id}`;
+        defaultKeys.push(key);
+        map.set(key, {
+          key,
+          label: col.name,
+          kind: "custom_pack",
+          coverSrc: col.items[0] ? resolveCustomEmoteSrc(col.items[0]) : undefined,
+        });
+      }
+    }
+
+    for (const pack of enabledBuiltinPacks) {
+      defaultKeys.push(pack.id);
+      const sample = pack.items[0];
+      map.set(pack.id, {
+        key: pack.id,
+        label: pack.label,
+        kind: "builtin_pack",
+        unicodeSample: sample?.kind === "unicode" ? sample.value : undefined,
+        builtinSampleSrc: sample?.kind === "image" ? sample.src : undefined,
+      });
+    }
+
+    const sortedKeys =
+      lane === "workspace"
+        ? (resolveOrderedPickerTabKeys(defaultKeys, tabOrder) as PickerTabKey[])
+        : defaultKeys;
+
+    return sortedKeys
+      .map((k) => map.get(k))
+      .filter((item): item is OrderedPickerTabDescriptor => Boolean(item));
+  }, [enabledBuiltinPacks, lane, library.collections, tabOrder]);
+
+  const availableTabKeys = useMemo(() => orderedTabs.map((t) => t.key), [orderedTabs]);
+  const defaultTabKey: PickerTabKey =
+    orderedTabs[0]?.key || (lane === "workspace" ? "favorites" : "emoji");
+  const activeTab: PickerTabKey =
+    selectedTab && orderedTabs.some((t) => t.key === selectedTab)
+      ? selectedTab
+      : defaultTabKey;
+  const setActiveTab = (tab: PickerTabKey) => setSelectedTab(tab);
+
+  const persistTabOrderToServer = (order: string[]) => {
+    void updateUserPreferences({ emoteTabOrder: order });
+  };
 
   const selectedCollection =
     lane === "workspace" && activeTab.startsWith("pack:")
@@ -720,6 +803,15 @@ export function EmoteStickerPopover({
                 建包
               </Button>
               <IconButton
+                label="调整表情栏标签顺序"
+                size="sm"
+                variant={reorderingTabs ? "primary" : "ghost"}
+                className="size-8 shrink-0"
+                onClick={() => setReorderingTabs((v) => !v)}
+              >
+                <ArrowLeftRight className="size-3.5" />
+              </IconButton>
+              <IconButton
                 label="管理表情与贴纸包"
                 size="sm"
                 variant="ghost"
@@ -735,62 +827,145 @@ export function EmoteStickerPopover({
           )}
         </div>
 
-        {/* Telegram-Style Pack Strip */}
+        {/* Telegram-Style Pack Strip (Supports Drag & Drop + Inline Reordering) */}
         {!trimmedQuery && (
-          <div className="dl-scroll flex items-center gap-1 overflow-x-auto border-b border-dl-border-hairline bg-dl-surface-subtle/45 px-2 py-1.5">
-            {lane === "workspace" && (
-              <Button
-                type="button"
-                size="sm"
-                variant={activeTab === "favorites" ? "primary" : "ghost"}
-                className="h-7 shrink-0 gap-1 rounded-lg px-2 text-xs"
-                onClick={() => setActiveTab("favorites")}
-              >
-                <Heart className="size-3.5" />
-                收藏
-              </Button>
-            )}
-
-            {lane === "workspace" &&
-              library.collections.map((col) => {
-                const tabKey: PickerTabKey = `pack:${col.id}`;
-                const cover = col.items[0];
+          <>
+            <div
+              data-testid="emote-picker-tab-strip"
+              className="dl-scroll flex items-center gap-1 overflow-x-auto border-b border-dl-border-hairline bg-dl-surface-subtle/45 px-2 py-1.5"
+            >
+              {orderedTabs.map((tab) => {
+                const isActive = activeTab === tab.key;
+                const isDragTarget =
+                  Boolean(draggingTabKey) &&
+                  draggingTabKey !== tab.key &&
+                  dragOverTabKey === tab.key;
                 return (
                   <Button
-                    key={col.id}
+                    key={tab.key}
                     type="button"
                     size="sm"
-                    variant={activeTab === tabKey ? "primary" : "ghost"}
-                    className="h-7 shrink-0 gap-1.5 rounded-lg px-2 text-xs max-w-[128px]"
-                    onClick={() => setActiveTab(tabKey)}
-                  >
-                    {cover ? (
-                      <img
-                        src={resolveCustomEmoteSrc(cover)}
-                        alt=""
-                        className="size-4 shrink-0 object-contain"
-                      />
-                    ) : (
-                      <Layers className="size-3.5 shrink-0" />
+                    draggable={lane === "workspace"}
+                    onDragStart={(e) => {
+                      if (lane !== "workspace") return;
+                      setDraggingTabKey(tab.key);
+                      e.dataTransfer?.setData("text/plain", tab.key);
+                    }}
+                    onDragOver={(e) => {
+                      if (lane !== "workspace" || !draggingTabKey || draggingTabKey === tab.key) {
+                        return;
+                      }
+                      e.preventDefault();
+                      setDragOverTabKey(tab.key);
+                    }}
+                    onDrop={(e) => {
+                      if (lane !== "workspace") return;
+                      e.preventDefault();
+                      const dragged =
+                        draggingTabKey ||
+                        (e.dataTransfer?.getData("text/plain") as PickerTabKey);
+                      setDraggingTabKey(null);
+                      setDragOverTabKey(null);
+                      if (dragged && dragged !== tab.key) {
+                        reorderTabBefore(
+                          dragged,
+                          tab.key,
+                          availableTabKeys,
+                          persistTabOrderToServer
+                        );
+                      }
+                    }}
+                    onDragEnd={() => {
+                      setDraggingTabKey(null);
+                      setDragOverTabKey(null);
+                    }}
+                    variant={isActive ? "primary" : "ghost"}
+                    className={cn(
+                      "h-7 shrink-0 gap-1.5 rounded-lg px-2 text-xs max-w-[132px]",
+                      lane === "workspace" && "cursor-grab active:cursor-grabbing",
+                      isDragTarget && "ring-2 ring-dl-lane-shared"
                     )}
-                    <span className="truncate">{col.name}</span>
+                    onClick={() => setActiveTab(tab.key)}
+                  >
+                    {tab.kind === "favorites" ? (
+                      <Heart className="size-3.5 shrink-0" />
+                    ) : tab.kind === "custom_pack" ? (
+                      tab.coverSrc ? (
+                        <img
+                          src={tab.coverSrc}
+                          alt=""
+                          className="size-4 shrink-0 object-contain"
+                        />
+                      ) : (
+                        <Layers className="size-3.5 shrink-0" />
+                      )
+                    ) : null}
+                    <span className="truncate">{tab.label}</span>
                   </Button>
                 );
               })}
+            </div>
 
-            {enabledBuiltinPacks.map((pack) => (
-              <Button
-                key={pack.id}
-                type="button"
-                size="sm"
-                variant={activeTab === pack.id ? "primary" : "ghost"}
-                className="h-7 shrink-0 rounded-lg px-2 text-xs"
-                onClick={() => setActiveTab(pack.id)}
-              >
-                {pack.label}
-              </Button>
-            ))}
-          </div>
+            {lane === "workspace" && reorderingTabs && (
+              <div className="flex items-center justify-between gap-1 border-b border-dl-border-hairline bg-dl-lane-shared/8 px-2.5 py-1 text-[11px]">
+                <span className="truncate font-medium text-dl-text-secondary">
+                  排序「{orderedTabs.find((t) => t.key === activeTab)?.label || "当前栏"}」· 亦可直接拖拽标签
+                </span>
+                <div className="flex items-center gap-0.5 shrink-0">
+                  <IconButton
+                    size="sm"
+                    variant="ghost"
+                    className="size-6 rounded-md"
+                    label="移至首位（默认打开）"
+                    disabled={availableTabKeys.indexOf(activeTab) <= 0}
+                    onClick={() =>
+                      moveTabOrder(activeTab, "top", availableTabKeys, persistTabOrderToServer)
+                    }
+                  >
+                    <Pin className="size-3" />
+                  </IconButton>
+                  <IconButton
+                    size="sm"
+                    variant="ghost"
+                    className="size-6 rounded-md"
+                    label="向前移动标签"
+                    disabled={availableTabKeys.indexOf(activeTab) <= 0}
+                    onClick={() =>
+                      moveTabOrder(activeTab, "left", availableTabKeys, persistTabOrderToServer)
+                    }
+                  >
+                    <ChevronLeft className="size-3.5" />
+                  </IconButton>
+                  <IconButton
+                    size="sm"
+                    variant="ghost"
+                    className="size-6 rounded-md"
+                    label="向后移动标签"
+                    disabled={
+                      availableTabKeys.indexOf(activeTab) < 0 ||
+                      availableTabKeys.indexOf(activeTab) >= availableTabKeys.length - 1
+                    }
+                    onClick={() =>
+                      moveTabOrder(activeTab, "right", availableTabKeys, persistTabOrderToServer)
+                    }
+                  >
+                    <ChevronRight className="size-3.5" />
+                  </IconButton>
+                  {tabOrder.length > 0 && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 rounded-md px-1.5 text-[11px] text-dl-text-tertiary"
+                      onClick={() => setTabOrder([], persistTabOrderToServer)}
+                    >
+                      重置
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         {/* Active Content Area */}
@@ -1122,11 +1297,13 @@ export function EmoteStudioPanel() {
     activeConversationId,
     conversations,
     sendStickerPackShare,
+    updateUserPreferences,
   } = useWorkspaceStore();
   const {
     hydrated,
     library,
     settings,
+    tabOrder,
     studioTab,
     studioSelectedPackId,
     setStudioTab,
@@ -1143,6 +1320,8 @@ export function EmoteStudioPanel() {
     togglePackSubscription,
     createPackShare,
     updateSettingsPatch,
+    setTabOrder,
+    moveTabOrder,
     showToast,
     closeStudio,
   } = useEmoteStore();
@@ -1813,6 +1992,127 @@ export function EmoteStudioPanel() {
                 void updateSettingsPatch({ clickImageEmoteToSend: checked }, isPreviewMode)
               }
             />
+          </div>
+
+          <div className="space-y-2 border-t border-dl-border-hairline pt-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-xs font-semibold text-dl-text-primary">
+                  弹出菜单标签栏顺序
+                </div>
+                <div className="text-[11px] text-dl-text-secondary">
+                  首位标签将作为打开表情面板时的默认栏目（也可在弹出面板直接拖拽标签）
+                </div>
+              </div>
+              {tabOrder.length > 0 && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2 text-xs text-dl-text-secondary"
+                  onClick={() =>
+                    setTabOrder([], (order) => void updateUserPreferences({ emoteTabOrder: order }))
+                  }
+                >
+                  恢复默认顺序
+                </Button>
+              )}
+            </div>
+
+            {(() => {
+              const enabledPacks = visibleEmotePacks.filter(
+                (p) => settings.enabledPackIds.includes(p.id) || p.id === "emoji"
+              );
+              const metaMap = new Map<
+                string,
+                { key: string; label: string; badge: string }
+              >();
+              const defaultKeys: string[] = ["favorites"];
+              metaMap.set("favorites", {
+                key: "favorites",
+                label: "收藏",
+                badge: "个人贴纸库",
+              });
+              for (const col of library.collections) {
+                const k = `pack:${col.id}`;
+                defaultKeys.push(k);
+                metaMap.set(k, {
+                  key: k,
+                  label: col.name,
+                  badge: `表情包 · ${col.itemCount} 张`,
+                });
+              }
+              for (const pack of enabledPacks) {
+                defaultKeys.push(pack.id);
+                metaMap.set(pack.id, {
+                  key: pack.id,
+                  label: pack.label,
+                  badge: `内置 · ${pack.items.length} 个`,
+                });
+              }
+              const orderedKeys = resolveOrderedPickerTabKeys(defaultKeys, tabOrder);
+              const persistOrder = (order: string[]) =>
+                void updateUserPreferences({ emoteTabOrder: order });
+
+              return (
+                <div className="space-y-1.5">
+                  {orderedKeys.map((k, idx) => {
+                    const info = metaMap.get(k);
+                    if (!info) return null;
+                    return (
+                      <div
+                        key={k}
+                        className="flex items-center justify-between gap-2 rounded-xl border border-dl-border-hairline bg-dl-surface-subtle/45 px-3 py-1.5"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="inline-flex size-5 shrink-0 items-center justify-center rounded-md bg-dl-lane-shared/12 text-[10px] font-bold tabular-nums text-dl-lane-shared">
+                            {idx + 1}
+                          </span>
+                          <span className="truncate text-xs font-semibold text-dl-text-primary">
+                            {info.label}
+                          </span>
+                          <span className="shrink-0 text-[10px] text-dl-text-tertiary">
+                            {idx === 0 ? "默认打开" : info.badge}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-0.5 shrink-0">
+                          <IconButton
+                            size="sm"
+                            variant="ghost"
+                            className="size-6 rounded-md"
+                            label={`置顶 ${info.label}`}
+                            disabled={idx === 0}
+                            onClick={() => moveTabOrder(k, "top", orderedKeys, persistOrder)}
+                          >
+                            <Pin className="size-3" />
+                          </IconButton>
+                          <IconButton
+                            size="sm"
+                            variant="ghost"
+                            className="size-6 rounded-md"
+                            label={`上移 ${info.label}`}
+                            disabled={idx === 0}
+                            onClick={() => moveTabOrder(k, "left", orderedKeys, persistOrder)}
+                          >
+                            <ArrowUp className="size-3" />
+                          </IconButton>
+                          <IconButton
+                            size="sm"
+                            variant="ghost"
+                            className="size-6 rounded-md"
+                            label={`下移 ${info.label}`}
+                            disabled={idx === orderedKeys.length - 1}
+                            onClick={() => moveTabOrder(k, "right", orderedKeys, persistOrder)}
+                          >
+                            <ArrowDown className="size-3" />
+                          </IconButton>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
 
           <div className="space-y-2 border-t border-dl-border-hairline pt-3">

@@ -64,7 +64,7 @@ func (r *PGRepository) ProjectEventPayload(ctx context.Context, actor *auth.Acto
 			}
 			projected["reactions"] = reactions
 		}
-	case "message.created", "message.recalled":
+	case "message.created", "message.recalled", "message.edited":
 		messageID := stringField(projected, "messageId")
 		if messageID == "" {
 			messageID = pointerString(event.TargetID)

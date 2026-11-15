@@ -13,6 +13,7 @@ import {
   Heart,
   LogOut,
   MessageSquareText,
+  MoreHorizontal,
   PanelRightOpen,
   Paperclip,
   Pencil,
@@ -46,10 +47,20 @@ import {
 import {
   Avatar,
   Button,
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
   IconButton,
   Popover,
   PopoverContent,
@@ -98,6 +109,7 @@ export function TimelinePane() {
   const {
     isPreviewMode,
     currentUser,
+    members,
     conversations,
     conversationOrder,
     activeConversationId,
@@ -168,6 +180,54 @@ export function TimelinePane() {
 
   const currentPin =
     pinnedMessages.length > 0 ? pinnedMessages[pinIndex % pinnedMessages.length] : null;
+
+  const hasBotInConversation = useMemo(() => {
+    if (!activeConv || activeConv.kind === "saved") return false;
+    const memberHasBot = activeConv.memberIds.some((id) => {
+      const m = members[id];
+      return m?.role === "bot" || id.startsWith("usr_bot_") || id.startsWith("usr_system_");
+    });
+    if (memberHasBot) return true;
+    return messages.some(
+      (m) =>
+        m.kind === "bot" ||
+        m.senderId.startsWith("usr_bot_") ||
+        m.senderId.startsWith("usr_system_")
+    );
+  }, [activeConv, members, messages]);
+
+  const directPeer = useMemo(() => {
+    if (!activeConv || activeConv.kind !== "direct") return undefined;
+    const peerId = activeConv.memberIds.find((id) => id && id !== currentUser?.id);
+    return peerId ? members[peerId] : undefined;
+  }, [activeConv, currentUser?.id, members]);
+
+  const copyMessagePlainText = async (plainText: string) => {
+    const text = plainText || "";
+    if (!text) return;
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        useEmoteStore.getState().showToast("已复制消息内容");
+        return;
+      }
+    } catch {
+      // Fallback below
+    }
+    try {
+      const el = document.createElement("textarea");
+      el.value = text;
+      el.style.position = "fixed";
+      el.style.opacity = "0";
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand("copy");
+      document.body.removeChild(el);
+      useEmoteStore.getState().showToast("已复制消息内容");
+    } catch {
+      // Ignore
+    }
+  };
 
   // Auto-resize composer textarea height cleanly
   useEffect(() => {
@@ -804,9 +864,15 @@ export function TimelinePane() {
               <div className="shrink-0 max-narrow:hidden">
                 <Avatar
                   name={activeConv.title}
-                  src={activeConv.avatarUrl}
+                  src={activeConv.avatarUrl || directPeer?.avatarUrl}
                   emoji={activeConv.avatarEmoji}
-                  kind={activeConv.kind === "group" ? "group" : "human"}
+                  kind={
+                    activeConv.kind === "group"
+                      ? "group"
+                      : hasBotInConversation
+                      ? "bot"
+                      : "human"
+                  }
                   size="md"
                 />
               </div>
@@ -919,12 +985,48 @@ export function TimelinePane() {
               !msg.blocks?.some(
                 (b) => b.type === "emoji" || b.type === "emote_collection"
               );
+            const senderMember = members[msg.senderId];
+            const senderAvatarSrc = senderMember?.avatarUrl || msg.senderAvatarUrl;
+            const senderAvatarKind =
+              msg.kind === "bot" ||
+              senderMember?.role === "bot" ||
+              msg.senderId.startsWith("usr_bot_") ||
+              msg.senderId.startsWith("usr_system_")
+                ? "bot"
+                : "human";
+
+            const triggerFavoriteSticker = () => {
+              if (!favoritableSource) return;
+              void useEmoteStore
+                .getState()
+                .favoriteFromMessage(
+                  { messageId: msg.id, ...favoritableSource },
+                  undefined,
+                  isPreviewMode
+                );
+            };
+
+            const triggerStartReply = () => {
+              setReplyToId(msg.id);
+              composerRef.current?.focus();
+            };
+
+            const triggerStartEdit = () => {
+              setEditingMessageId(msg.id);
+              setDraft(activeConv.id, msg.plainText);
+              composerRef.current?.focus();
+            };
+
+            const triggerOpenForward = () => {
+              setForwardMsgId(msg.id);
+              setForwardTargetConvId(conversationOrder[0] || "");
+            };
 
             return (
               <div
                 key={msg.id}
                 data-message-id={msg.id}
-                onDoubleClick={() => setReplyToId(msg.id)}
+                onDoubleClick={triggerStartReply}
                 className={cn(
                   "group relative flex flex-col rounded-2xl px-1.5 py-0.5 transition-colors",
                   idx === 0 ? "mt-0" : groupedWithPrev ? "mt-1" : "mt-4",
@@ -932,119 +1034,9 @@ export function TimelinePane() {
                   isHighlighted && "bg-dl-lane-shared/14 ring-1 ring-dl-lane-shared/40 py-1.5"
                 )}
               >
-                {/* Floating Hover Quick Action Pill (Zero vertical layout shift!) */}
                 <div
                   className={cn(
-                    "dl-glass-pill absolute -top-3.5 z-sticky flex items-center gap-0.5 rounded-full border border-dl-border-hairline px-1 py-0.5",
-                    "opacity-0 pointer-events-none translate-y-1 transition-all duration-150",
-                    "group-hover:opacity-100 group-hover:pointer-events-auto group-hover:translate-y-0",
-                    "focus-within:opacity-100 focus-within:pointer-events-auto focus-within:translate-y-0",
-                    isOwn ? "right-2" : "left-11"
-                  )}
-                >
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <IconButton size="sm" variant="ghost" className="size-6 rounded-full" label="添加表情回应">
-                        <Smile className="size-3.5" strokeWidth={1.85} />
-                      </IconButton>
-                    </PopoverTrigger>
-                    <PopoverContent side="top" align={isOwn ? "end" : "start"} className="p-1.5">
-                      <ReactionPickerPopoverContent
-                        onSelectReaction={(key) => void toggleReaction(activeConv.id, msg.id, key)}
-                      />
-                    </PopoverContent>
-                  </Popover>
-
-                  {favoritableSource && (
-                    <IconButton
-                      size="sm"
-                      variant="ghost"
-                      className="size-6 rounded-full hover:text-dl-danger"
-                      label="收藏贴纸"
-                      onClick={() =>
-                        void useEmoteStore
-                          .getState()
-                          .favoriteFromMessage(
-                            { messageId: msg.id, ...favoritableSource },
-                            undefined,
-                            isPreviewMode
-                          )
-                      }
-                    >
-                      <Heart className="size-3.5" strokeWidth={1.85} />
-                    </IconButton>
-                  )}
-
-                  <IconButton
-                    size="sm"
-                    variant="ghost"
-                    className="size-6 rounded-full"
-                    label="引用回复"
-                    onClick={() => {
-                      setReplyToId(msg.id);
-                      composerRef.current?.focus();
-                    }}
-                  >
-                    <Reply className="size-3.5" strokeWidth={1.85} />
-                  </IconButton>
-
-                  <IconButton
-                    size="sm"
-                    variant="ghost"
-                    className="size-6 rounded-full"
-                    label="在右侧展开线程讨论"
-                    onClick={() => openThreadInspector(msg.id)}
-                  >
-                    <MessageSquareText className="size-3.5" strokeWidth={1.85} />
-                  </IconButton>
-
-                  <IconButton
-                    size="sm"
-                    variant="ghost"
-                    className="size-6 rounded-full"
-                    label="转发消息"
-                    onClick={() => {
-                      setForwardMsgId(msg.id);
-                      setForwardTargetConvId(conversationOrder[0] || "");
-                    }}
-                  >
-                    <Forward className="size-3.5" strokeWidth={1.85} />
-                  </IconButton>
-
-                  <IconButton
-                    size="sm"
-                    variant="ghost"
-                    className={cn("size-6 rounded-full", isPinned && "text-dl-lane-shared")}
-                    label={isPinned ? "取消置顶" : "置顶到对话顶部"}
-                    onClick={() => void togglePinMessage(activeConv.id, msg.id)}
-                  >
-                    {isPinned ? (
-                      <PinOff className="size-3.5" strokeWidth={1.85} />
-                    ) : (
-                      <Pin className="size-3.5" strokeWidth={1.85} />
-                    )}
-                  </IconButton>
-
-                  {isEditableTextMsg && (
-                    <IconButton
-                      size="sm"
-                      variant="ghost"
-                      className="size-6 rounded-full"
-                      label="编辑消息"
-                      onClick={() => {
-                        setEditingMessageId(msg.id);
-                        setDraft(activeConv.id, msg.plainText);
-                        composerRef.current?.focus();
-                      }}
-                    >
-                      <Pencil className="size-3.5" strokeWidth={1.85} />
-                    </IconButton>
-                  )}
-                </div>
-
-                <div
-                  className={cn(
-                    "flex items-end gap-2.5 max-w-[76%] max-compact:max-w-[88%]",
+                    "flex items-end gap-2 max-w-[85%] max-compact:max-w-[95%]",
                     isOwn && "flex-row-reverse"
                   )}
                 >
@@ -1052,10 +1044,17 @@ export function TimelinePane() {
                     (groupedWithNext ? (
                       <div className="w-7 shrink-0" aria-hidden="true" />
                     ) : (
-                      <Avatar name={msg.senderName} size="sm" />
+                      <Avatar
+                        name={msg.senderName}
+                        src={senderAvatarSrc}
+                        kind={senderAvatarKind}
+                        size="sm"
+                      />
                     ))}
 
-                  <div className={cn("flex flex-col min-w-0", isOwn ? "items-end" : "items-start")}>
+                  <ContextMenu>
+                    <ContextMenuTrigger asChild>
+                      <div className={cn("flex flex-col min-w-0", isOwn ? "items-end" : "items-start")}>
                     {!isOwn && !groupedWithPrev && (
                       <div className="mb-1 flex items-center gap-1.5 px-1">
                         <span className="text-[11px] font-semibold text-dl-text-secondary">
@@ -1334,6 +1333,191 @@ export function TimelinePane() {
                         )}
                       </div>
                     )}
+                      </div>
+                    </ContextMenuTrigger>
+
+                    <ContextMenuContent
+                      onQuickReaction={(emoji) => void toggleReaction(activeConv.id, msg.id, emoji)}
+                    >
+                      <ContextMenuItem
+                        icon={<Reply className="size-4" strokeWidth={1.85} />}
+                        onSelect={triggerStartReply}
+                      >
+                        引用回复
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        icon={<MessageSquareText className="size-4" strokeWidth={1.85} />}
+                        onSelect={() => openThreadInspector(msg.id)}
+                      >
+                        展开话题讨论
+                      </ContextMenuItem>
+                      {msg.plainText && (
+                        <ContextMenuItem
+                          icon={<Copy className="size-4" strokeWidth={1.85} />}
+                          onSelect={() => void copyMessagePlainText(msg.plainText)}
+                        >
+                          复制消息内容
+                        </ContextMenuItem>
+                      )}
+                      {favoritableSource && (
+                        <ContextMenuItem
+                          icon={<Heart className="size-4" strokeWidth={1.85} />}
+                          onSelect={triggerFavoriteSticker}
+                        >
+                          收藏贴纸
+                        </ContextMenuItem>
+                      )}
+                      {isEditableTextMsg && (
+                        <ContextMenuItem
+                          icon={<Pencil className="size-4" strokeWidth={1.85} />}
+                          onSelect={triggerStartEdit}
+                        >
+                          编辑消息
+                        </ContextMenuItem>
+                      )}
+                      <ContextMenuSeparator />
+                      <ContextMenuItem
+                        icon={<Forward className="size-4" strokeWidth={1.85} />}
+                        onSelect={triggerOpenForward}
+                      >
+                        转发消息
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        icon={
+                          isPinned ? (
+                            <PinOff className="size-4" strokeWidth={1.85} />
+                          ) : (
+                            <Pin className="size-4" strokeWidth={1.85} />
+                          )
+                        }
+                        onSelect={() => void togglePinMessage(activeConv.id, msg.id)}
+                      >
+                        {isPinned ? "取消置顶" : "置顶到对话顶部"}
+                      </ContextMenuItem>
+                    </ContextMenuContent>
+                  </ContextMenu>
+
+                  {/* Non-overlapping Inline Side Action Pill */}
+                  <div
+                    className={cn(
+                      "dl-glass-pill mb-0.5 flex shrink-0 items-center gap-0.5 self-center rounded-full border border-dl-border-hairline px-1 py-0.5",
+                      "opacity-0 pointer-events-none transition-opacity duration-150",
+                      "group-hover:opacity-100 group-hover:pointer-events-auto",
+                      "focus-within:opacity-100 focus-within:pointer-events-auto"
+                    )}
+                  >
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <IconButton
+                          size="sm"
+                          variant="ghost"
+                          className="size-6 rounded-full"
+                          label="添加表情回应"
+                        >
+                          <Smile className="size-3.5" strokeWidth={1.85} />
+                        </IconButton>
+                      </PopoverTrigger>
+                      <PopoverContent side="top" align={isOwn ? "end" : "start"} className="p-1.5">
+                        <ReactionPickerPopoverContent
+                          onSelectReaction={(key) => void toggleReaction(activeConv.id, msg.id, key)}
+                        />
+                      </PopoverContent>
+                    </Popover>
+
+                    <IconButton
+                      size="sm"
+                      variant="ghost"
+                      className="size-6 rounded-full"
+                      label="引用回复"
+                      onClick={triggerStartReply}
+                    >
+                      <Reply className="size-3.5" strokeWidth={1.85} />
+                    </IconButton>
+
+                    {favoritableSource && (
+                      <IconButton
+                        size="sm"
+                        variant="ghost"
+                        className="size-6 rounded-full hover:text-dl-danger"
+                        label="收藏贴纸"
+                        onClick={triggerFavoriteSticker}
+                      >
+                        <Heart className="size-3.5" strokeWidth={1.85} />
+                      </IconButton>
+                    )}
+
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <IconButton
+                          size="sm"
+                          variant="ghost"
+                          className="size-6 rounded-full"
+                          label="更多消息操作"
+                        >
+                          <MoreHorizontal className="size-3.5" strokeWidth={1.9} />
+                        </IconButton>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent
+                        align={isOwn ? "end" : "start"}
+                        onQuickReaction={(emoji) => void toggleReaction(activeConv.id, msg.id, emoji)}
+                      >
+                        <DropdownMenuItem
+                          icon={<Reply className="size-4" strokeWidth={1.85} />}
+                          onSelect={triggerStartReply}
+                        >
+                          引用回复
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          icon={<MessageSquareText className="size-4" strokeWidth={1.85} />}
+                          onSelect={() => openThreadInspector(msg.id)}
+                        >
+                          展开话题讨论
+                        </DropdownMenuItem>
+                        {msg.plainText && (
+                          <DropdownMenuItem
+                            icon={<Copy className="size-4" strokeWidth={1.85} />}
+                            onSelect={() => void copyMessagePlainText(msg.plainText)}
+                          >
+                            复制消息内容
+                          </DropdownMenuItem>
+                        )}
+                        {favoritableSource && (
+                          <DropdownMenuItem
+                            icon={<Heart className="size-4" strokeWidth={1.85} />}
+                            onSelect={triggerFavoriteSticker}
+                          >
+                            收藏贴纸
+                          </DropdownMenuItem>
+                        )}
+                        {isEditableTextMsg && (
+                          <DropdownMenuItem
+                            icon={<Pencil className="size-4" strokeWidth={1.85} />}
+                            onSelect={triggerStartEdit}
+                          >
+                            编辑消息
+                          </DropdownMenuItem>
+                        )}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          icon={<Forward className="size-4" strokeWidth={1.85} />}
+                          onSelect={triggerOpenForward}
+                        >
+                          转发消息
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          icon={
+                            isPinned ? (
+                              <PinOff className="size-4" strokeWidth={1.85} />
+                            ) : (
+                              <Pin className="size-4" strokeWidth={1.85} />
+                            )
+                          }
+                          onSelect={() => void togglePinMessage(activeConv.id, msg.id)}
+                        >
+                          {isPinned ? "取消置顶" : "置顶到对话顶部"}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 </div>
               </div>
@@ -1447,52 +1631,54 @@ export function TimelinePane() {
             onChange={(e) => void handleWorkspaceFileSelect(e)}
           />
 
-          <Popover>
-            <PopoverTrigger asChild>
-              <IconButton
-                type="button"
-                size="sm"
-                variant="ghost"
-                className="rounded-xl shrink-0"
-                label="Slash 快捷指令与动作"
-              >
-                <Slash className="size-4" strokeWidth={1.85} />
-              </IconButton>
-            </PopoverTrigger>
-            <PopoverContent side="top" align="start">
-              <div className="w-52 space-y-1 p-0.5">
-                <div className="px-2 py-1 text-[11px] font-semibold text-dl-text-tertiary">
-                  机器人 Slash 指令
+          {hasBotInConversation && (
+            <Popover>
+              <PopoverTrigger asChild>
+                <IconButton
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="rounded-xl shrink-0"
+                  label="Slash 快捷指令与动作"
+                >
+                  <Slash className="size-4" strokeWidth={1.85} />
+                </IconButton>
+              </PopoverTrigger>
+              <PopoverContent side="top" align="start">
+                <div className="w-52 space-y-1 p-0.5">
+                  <div className="px-2 py-1 text-[11px] font-semibold text-dl-text-tertiary">
+                    机器人 Slash 指令
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-between text-xs"
+                    onClick={() => {
+                      setDraft(activeConv.id, `${draft}/summarize `);
+                      composerRef.current?.focus();
+                    }}
+                  >
+                    <span className="font-mono text-dl-lane-shared">/summarize</span>
+                    <span className="text-dl-text-tertiary">总结对话</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-between text-xs"
+                    onClick={() => {
+                      setDraft(activeConv.id, `${draft}/poll `);
+                      composerRef.current?.focus();
+                    }}
+                  >
+                    <span className="font-mono text-dl-lane-shared">/poll</span>
+                    <span className="text-dl-text-tertiary">发起投票卡片</span>
+                  </Button>
                 </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="w-full justify-between text-xs"
-                  onClick={() => {
-                    setDraft(activeConv.id, `${draft}/summarize `);
-                    composerRef.current?.focus();
-                  }}
-                >
-                  <span className="font-mono text-dl-lane-shared">/summarize</span>
-                  <span className="text-dl-text-tertiary">总结对话</span>
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="w-full justify-between text-xs"
-                  onClick={() => {
-                    setDraft(activeConv.id, `${draft}/poll `);
-                    composerRef.current?.focus();
-                  }}
-                >
-                  <span className="font-mono text-dl-lane-shared">/poll</span>
-                  <span className="text-dl-text-tertiary">发起投票卡片</span>
-                </Button>
-              </div>
-            </PopoverContent>
-          </Popover>
+              </PopoverContent>
+            </Popover>
+          )}
 
           <IconButton
             type="button"

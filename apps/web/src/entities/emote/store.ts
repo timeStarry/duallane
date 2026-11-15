@@ -96,6 +96,61 @@ const PREVIEW_COLLECTIONS: EmoteCollectionDTO[] = [
 
 let inflightLoad: Promise<void> | null = null;
 
+const EMOTE_TAB_ORDER_STORAGE_KEY = "duallane:v1:emote-tab-order";
+
+function loadStoredTabOrder(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(EMOTE_TAB_ORDER_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.map(String).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistStoredTabOrder(order: string[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (order.length === 0) {
+      window.localStorage.removeItem(EMOTE_TAB_ORDER_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(EMOTE_TAB_ORDER_STORAGE_KEY, JSON.stringify(order));
+    }
+  } catch {
+    // Ignore quota / privacy errors
+  }
+}
+
+export function resolveOrderedPickerTabKeys(
+  availableKeys: string[],
+  tabOrder: string[]
+): string[] {
+  if (availableKeys.length <= 1) return [...availableKeys];
+  const availableSet = new Set(availableKeys);
+  const explicit = tabOrder.filter((key, idx) => availableSet.has(key) && tabOrder.indexOf(key) === idx);
+  if (explicit.length === 0) return [...availableKeys];
+
+  const explicitSet = new Set(explicit);
+  const unseen = availableKeys.filter((k) => !explicitSet.has(k));
+  if (unseen.length === 0) return explicit;
+
+  const unseenCustomPacks = unseen.filter((k) => k.startsWith("pack:"));
+  const unseenOthers = unseen.filter((k) => !k.startsWith("pack:"));
+  const result = [...explicit];
+
+  if (unseenCustomPacks.length > 0) {
+    const favIndex = result.indexOf("favorites");
+    const insertAt = favIndex >= 0 ? favIndex + 1 : 0;
+    result.splice(insertAt, 0, ...unseenCustomPacks);
+  }
+  result.push(...unseenOthers);
+  return result;
+}
+
 export type StudioTab = "packs" | "create" | "favorites" | "builtin";
 
 export interface EmoteStoreState {
@@ -103,6 +158,7 @@ export interface EmoteStoreState {
   loading: boolean;
   library: EmoteLibraryDTO;
   settings: EmoteSettingsDTO;
+  tabOrder: string[];
 
   // Telegram-style Shared Pack Preview Modal state
   activeSharedPackId: string | null;
@@ -192,6 +248,23 @@ export interface EmoteStoreState {
   closeStudio: () => void;
   setStudioTab: (tab: StudioTab) => void;
   setStudioSelectedPackId: (packId: string) => void;
+  hydrateTabOrderFromPreferences: (rawOrder: unknown) => void;
+  setTabOrder: (
+    nextOrder: string[],
+    onPersistPreferences?: (order: string[]) => void
+  ) => void;
+  moveTabOrder: (
+    tabKey: string,
+    direction: "left" | "right" | "top",
+    availableKeys: string[],
+    onPersistPreferences?: (order: string[]) => void
+  ) => void;
+  reorderTabBefore: (
+    draggedKey: string,
+    targetKey: string,
+    availableKeys: string[],
+    onPersistPreferences?: (order: string[]) => void
+  ) => void;
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -205,6 +278,7 @@ export const useEmoteStore = create<EmoteStoreState>((set, get) => ({
   loading: false,
   library: EMPTY_LIBRARY,
   settings: DEFAULT_SETTINGS,
+  tabOrder: loadStoredTabOrder(),
 
   activeSharedPackId: null,
   sharedPackDetail: null,
@@ -705,4 +779,51 @@ export const useEmoteStore = create<EmoteStoreState>((set, get) => ({
   closeStudio: () => set({ studioOpen: false }),
   setStudioTab: (tab) => set({ studioTab: tab }),
   setStudioSelectedPackId: (packId) => set({ studioSelectedPackId: packId }),
+
+  hydrateTabOrderFromPreferences: (rawOrder) => {
+    if (!Array.isArray(rawOrder)) return;
+    const cleaned = rawOrder.map(String).filter(Boolean);
+    if (cleaned.length > 0) {
+      persistStoredTabOrder(cleaned);
+      set({ tabOrder: cleaned });
+    }
+  },
+
+  setTabOrder: (nextOrder, onPersistPreferences) => {
+    const deduped = nextOrder.filter((key, idx) => Boolean(key) && nextOrder.indexOf(key) === idx);
+    persistStoredTabOrder(deduped);
+    set({ tabOrder: deduped });
+    onPersistPreferences?.(deduped);
+  },
+
+  moveTabOrder: (tabKey, direction, availableKeys, onPersistPreferences) => {
+    const ordered = resolveOrderedPickerTabKeys(availableKeys, get().tabOrder);
+    const idx = ordered.indexOf(tabKey);
+    if (idx < 0) return;
+    const next = [...ordered];
+    if (direction === "top") {
+      if (idx === 0) return;
+      next.splice(idx, 1);
+      next.unshift(tabKey);
+    } else if (direction === "left") {
+      if (idx === 0) return;
+      [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+    } else if (direction === "right") {
+      if (idx >= next.length - 1) return;
+      [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+    }
+    get().setTabOrder(next, onPersistPreferences);
+  },
+
+  reorderTabBefore: (draggedKey, targetKey, availableKeys, onPersistPreferences) => {
+    if (!draggedKey || !targetKey || draggedKey === targetKey) return;
+    const ordered = resolveOrderedPickerTabKeys(availableKeys, get().tabOrder);
+    const fromIdx = ordered.indexOf(draggedKey);
+    const toIdx = ordered.indexOf(targetKey);
+    if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
+    const next = [...ordered];
+    next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, draggedKey);
+    get().setTabOrder(next, onPersistPreferences);
+  },
 }));

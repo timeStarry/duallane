@@ -30,6 +30,7 @@ import { applyVibrancyTokensToRoot } from "@/shared/theme/vibrancy";
 import { BotSettingsPanel } from "@/widgets/BotSettingsPanel";
 import { DualLaneCardKit } from "@/widgets/DualLaneCardKit";
 import { EmoteStudioPanel } from "@/widgets/EmoteSystem";
+import { resolveOrderedPickerTabKeys, useEmoteStore } from "@/entities/emote/store";
 import { PrimaryRail } from "@/widgets/PrimaryRail";
 import { ConversationSidebar } from "@/widgets/ConversationSidebar";
 import { InspectorPane } from "@/widgets/InspectorPane";
@@ -389,10 +390,10 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
       expect(sidebarHtml).toContain("[草稿]");
       expect(sidebarHtml).toContain("text-dl-on-shared");
 
-      // Timeline UX: adaptive bubble text contrast, floating action pill (-top-3.5), multi-line textarea, grouped messages
+      // Timeline UX: adaptive bubble text contrast, non-overlapping side action pill, multi-line textarea, grouped messages
       expect(timelineHtml).toContain("text-dl-on-shared");
       expect(timelineHtml).not.toContain("bg-dl-lane-shared text-white");
-      expect(timelineHtml).toContain("-top-3.5");
+      expect(timelineHtml).toContain('aria-label="更多消息操作"');
       expect(timelineHtml).toContain("<textarea");
       expect(timelineHtml).toContain("3 条线程回复");
     } finally {
@@ -1751,6 +1752,165 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
       useWorkspaceStore.setState(prevWsInitial);
       Object.assign(useLaneStore.getInitialState(), prevLaneInitial);
       useLaneStore.setState(prevLaneInitial);
+    }
+  });
+
+  it("renders chat user avatars, hides slash button in non-bot chats, updates blocks on edit, and supports emote tab ordering", async () => {
+    const parsed = parseBootstrapPayload({
+      auth: {
+        enabled: true,
+        currentUser: { id: "usr_me", displayName: "星辰", role: "owner" },
+      },
+      members: [
+        { id: "usr_me", displayName: "星辰", kind: "human", role: "owner" },
+        {
+          id: "usr_peer_xu",
+          displayName: "徐总",
+          kind: "human",
+          role: "member",
+          avatarUrl: "/api/workspace/avatars/usr_peer_xu/v2",
+        },
+        {
+          id: "usr_bot_astra",
+          displayName: "Astra",
+          kind: "bot",
+          role: "member",
+          avatarUrl: "/assets/echo-avatar.svg",
+        },
+      ],
+      conversations: [
+        {
+          id: "conv_human_dm",
+          type: "direct",
+          title: "徐总",
+          memberIds: ["usr_me", "usr_peer_xu"],
+          latestMessages: [
+            {
+              id: "msg_peer_1",
+              authorId: "usr_peer_xu",
+              kind: "user",
+              plainText: "学费回来了",
+              content: {
+                format: "duallane.message+json;v=1",
+                plainText: "学费回来了",
+                blocks: [{ type: "text", text: "学费回来了" }],
+              },
+              createdAt: "2026-11-15T09:02:00.000Z",
+            },
+            {
+              id: "msg_own_edit",
+              authorId: "usr_me",
+              kind: "user",
+              plainText: "修改前的原始文案",
+              content: {
+                format: "duallane.message+json;v=1",
+                plainText: "修改前的原始文案",
+                blocks: [{ type: "text", text: "修改前的原始文案" }],
+              },
+              createdAt: "2026-11-15T09:03:00.000Z",
+            },
+          ],
+        },
+        {
+          id: "conv_bot_dm",
+          type: "direct",
+          title: "Astra",
+          memberIds: ["usr_me", "usr_bot_astra"],
+          latestMessages: [],
+        },
+      ],
+    });
+
+    const prevWsInitial = { ...useWorkspaceStore.getInitialState() };
+    const prevLaneInitial = { ...useLaneStore.getInitialState() };
+    const prevEmoteState = { ...useEmoteStore.getState() };
+
+    try {
+      const wsPatch = {
+        isPreviewMode: true,
+        authStatus: "authenticated" as const,
+        currentUser: parsed.currentUser,
+        members: parsed.members,
+        conversations: parsed.conversations,
+        conversationOrder: parsed.conversationOrder,
+        activeConversationId: "conv_human_dm",
+        messagesByConv: parsed.messagesByConv,
+      };
+      const lanePatch = { activeLane: "workspace" as const };
+      Object.assign(useWorkspaceStore.getInitialState(), wsPatch);
+      useWorkspaceStore.setState(wsPatch);
+      Object.assign(useLaneStore.getInitialState(), lanePatch);
+      useLaneStore.setState(lanePatch);
+
+      const humanChatHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <TimelinePane />
+        </TooltipProvider>
+      );
+
+      // 1. User avatar src rendered properly in timeline
+      expect(humanChatHtml).toContain("/api/workspace/avatars/usr_peer_xu/v2");
+      // 2. Non-bot chat hides Slash button
+      expect(humanChatHtml).not.toContain('aria-label="Slash 快捷指令与动作"');
+      // 3. Non-overlapping inline side action menu trigger present (no -top-3.5 overlap)
+      expect(humanChatHtml).toContain('aria-label="更多消息操作"');
+      expect(humanChatHtml).not.toContain("-top-3.5");
+
+      // 4. Editing message updates both plainText and blocks so rendered bubble text updates
+      await useWorkspaceStore
+        .getState()
+        .editWorkspaceMessage("conv_human_dm", "msg_own_edit", "编辑成功后的新内容");
+      const editedPatch = { ...useWorkspaceStore.getState() };
+      Object.assign(useWorkspaceStore.getInitialState(), editedPatch);
+      const afterEditHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <TimelinePane />
+        </TooltipProvider>
+      );
+      expect(afterEditHtml).toContain("编辑成功后的新内容");
+      expect(afterEditHtml).toContain("(已编辑)");
+      expect(afterEditHtml).not.toContain("修改前的原始文案");
+
+      // 5. Bot conversation DOES show Slash button
+      const botPatch = { ...useWorkspaceStore.getState(), activeConversationId: "conv_bot_dm" };
+      Object.assign(useWorkspaceStore.getInitialState(), botPatch);
+      useWorkspaceStore.setState(botPatch);
+      const botChatHtml = renderToStaticMarkup(
+        <TooltipProvider>
+          <TimelinePane />
+        </TooltipProvider>
+      );
+      expect(botChatHtml).toContain('aria-label="Slash 快捷指令与动作"');
+
+      // 6. Emote tab ordering + studio tab order UI
+      const ordered = resolveOrderedPickerTabKeys(
+        ["favorites", "pack:new_pack", "emoji", "bili", "wechat"],
+        ["bili", "favorites", "emoji"]
+      );
+      // "bili" stays #1, newly added custom pack appears right after "favorites", unseen builtin at end
+      expect(ordered).toEqual(["bili", "favorites", "pack:new_pack", "emoji", "wechat"]);
+
+      useEmoteStore.getState().hydrateForPreview();
+      useEmoteStore.getState().setStudioTab("builtin");
+      useEmoteStore
+        .getState()
+        .moveTabOrder(
+          "bili",
+          "top",
+          ["favorites", "pack:11111111-1111-4111-8111-111111111111", "emoji", "bili"]
+        );
+      expect(useEmoteStore.getState().tabOrder[0]).toBe("bili");
+      Object.assign(useEmoteStore.getInitialState(), useEmoteStore.getState());
+      const builtinStudioHtml = renderToStaticMarkup(<EmoteStudioPanel />);
+      expect(builtinStudioHtml).toContain("弹出菜单标签栏顺序");
+      expect(builtinStudioHtml).toContain("恢复默认顺序");
+    } finally {
+      Object.assign(useWorkspaceStore.getInitialState(), prevWsInitial);
+      useWorkspaceStore.setState(prevWsInitial);
+      Object.assign(useLaneStore.getInitialState(), prevLaneInitial);
+      useLaneStore.setState(prevLaneInitial);
+      Object.assign(useEmoteStore.getInitialState(), prevEmoteState);
+      useEmoteStore.setState(prevEmoteState);
     }
   });
 });

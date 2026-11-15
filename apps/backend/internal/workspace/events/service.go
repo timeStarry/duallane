@@ -390,7 +390,7 @@ func projectPayload(eventType string, payload map[string]any, actor *auth.Actor)
 			result["revision"] = value
 		}
 		return result
-	case "message.created", "message.recalled":
+	case "message.created", "message.recalled", "message.edited":
 		result := stringFields(payload, "messageId", "conversationId")
 		if message, ok := safeMessage(payload["message"], actorID(actor)); ok {
 			result["message"] = message

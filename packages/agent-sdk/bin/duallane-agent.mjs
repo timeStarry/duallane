@@ -51,7 +51,10 @@ Usage:
   duallane-agent mcp [--profile default]
   duallane-agent status [--profile default]
   duallane-agent conversations [--profile default]
+  duallane-agent updates [--ack] [--profile default]
+  duallane-agent wait [--timeout 3600] [--profile default]
   duallane-agent send <conversationId> <text> [--reply-to <messageId>] [--profile default]
+  duallane-agent edit <messageId> <text> [--profile default]
   duallane-agent listen --cmd "<shell-command>" [--profile default]
 
 Works with Claude Code, Codex CLI, Cursor, Windsurf, Gemini CLI, Antigravity, and OpenClaw.
@@ -122,6 +125,7 @@ async function runSetup(positionals, flags) {
         botUserId: me?.bot?.botUserId || null,
         botName: me?.bot?.name || null,
         scopes: me?.scopes || exchanged?.tokenRecord?.scopes || [],
+        lastSequence: Number(me?.connection?.currentSequence || 0),
         clientName,
       });
 
@@ -306,6 +310,115 @@ async function main() {
     return;
   }
 
+  if (subcommand === "updates") {
+    const { client, profile, profileName } = requireClient(flags.profile);
+    const afterSequence =
+      flags["after-sequence"] !== undefined
+        ? Number(flags["after-sequence"])
+        : profile.lastSequence || 0;
+    let res = await client.getUpdates({ afterSequence, limit: Number(flags.limit || 50) });
+    if (res?.syncRequired && Number(res.currentSequence) > 0 && afterSequence === 0) {
+      const fallbackSeq = Math.max(0, Number(res.currentSequence) - 100);
+      const retry = await client
+        .getUpdates({ afterSequence: fallbackSeq, limit: Number(flags.limit || 50) })
+        .catch(() => null);
+      if (retry && !retry.syncRequired) {
+        res = retry;
+      }
+    }
+    const events = Array.isArray(res?.events) ? res.events : [];
+    if (flags.ack) {
+      const maxSeq =
+        events.length > 0
+          ? Math.max(...events.map((e) => Number(e.sequence || 0)))
+          : Number(res?.currentSequence || 0);
+      if (maxSeq > 0) {
+        await client.acknowledge({ sequence: maxSeq }).catch(() => {});
+        updateProfileCursor(profileName, maxSeq);
+      }
+    }
+    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    return;
+  }
+
+  if (subcommand === "wait") {
+    const { client, profile, profileName } = requireClient(flags.profile);
+    const timeoutSeconds = Math.min(86400, Math.max(5, Number(flags.timeout || 3600)));
+    const startSeq =
+      flags["after-sequence"] !== undefined
+        ? Number(flags["after-sequence"])
+        : profile.lastSequence || 0;
+    const filterConv = typeof flags.conversation === "string" ? flags.conversation.trim() : "";
+
+    const result = await new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        client.stop();
+        resolve({
+          status: "timeout",
+          profile: profileName,
+          waitedSeconds: timeoutSeconds,
+          lastSequence: client.lastSequence || startSeq,
+        });
+      }, timeoutSeconds * 1000);
+
+      client
+        .connect({
+          lastSequence: startSeq,
+          async onEvent(event) {
+            updateProfileCursor(profileName, event.sequence);
+            await client
+              .acknowledge({ eventId: event.eventId, sequence: event.sequence })
+              .catch(() => {});
+            if (filterConv && event.conversationId !== filterConv) {
+              return;
+            }
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            if (event.conversationId) {
+              await client.setTyping(event.conversationId).catch(() => {});
+            }
+            let context = null;
+            if (event.conversationId && profile.scopes?.includes("messages:read_context")) {
+              context = await client.getContext(event.conversationId, { limit: 15 }).catch(() => null);
+            }
+            setImmediate(() => client.stop());
+            resolve({
+              status: "event",
+              profile: profileName,
+              lastSequence: event.sequence,
+              event,
+              context,
+            });
+          },
+          async onSyncRequired({ currentSequence }) {
+            updateProfileCursor(profileName, currentSequence);
+          },
+          onError(err) {
+            if (!settled && !err?.retryable) {
+              settled = true;
+              clearTimeout(timer);
+              client.stop();
+              reject(err);
+            }
+          },
+        })
+        .catch((err) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          client.stop();
+          reject(err);
+        });
+    });
+
+    process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+    return;
+  }
+
   if (subcommand === "send") {
     const [conversationId, ...rest] = positionals.slice(1);
     const text = rest.join(" ").trim();
@@ -318,6 +431,18 @@ async function main() {
       text,
       replyToMessageId: typeof flags["reply-to"] === "string" ? flags["reply-to"] : undefined,
     });
+    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    return;
+  }
+
+  if (subcommand === "edit") {
+    const [messageId, ...rest] = positionals.slice(1);
+    const text = rest.join(" ").trim();
+    if (!messageId || !text) {
+      throw new Error("Usage: duallane-agent edit <messageId> <text> [--profile default]");
+    }
+    const { client } = requireClient(flags.profile);
+    const res = await client.editMessage(messageId, text);
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
     return;
   }

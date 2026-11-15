@@ -105,15 +105,22 @@ Add `duallane` to your Agent's standard `mcpServers` config (supported by Claude
 
 ---
 
-## 3. Outbound WebSocket & Local Channel Daemon (Feishu / Telegram Style)
+## 3. Outbound WebSocket & Live Event Wakeup (Feishu / Telegram Style)
 
 DualLane Bots connect **outbound** to `wss://<host>/ws/bot-gateway` with `Authorization: Bearer <bot-token>`, so local laptops, NAT workstations, and private containers receive `@Bot` mentions, DMs, `/commands`, and card button clicks in real time without exposing any inbound port or webhook:
 
-```bash
-node packages/agent-sdk/bin/duallane-agent.mjs listen --cmd "<local-agent-cli-command>"
-```
+- **Reactive Session Wakeup (for interactive coding agents with background task notifications, such as Antigravity or Claude Code)**:
+  Launch a one-shot background listener before ending your turn:
+  ```bash
+  node packages/agent-sdk/bin/duallane-agent.mjs wait --profile default --timeout 3600
+  ```
+  When a DualLane message arrives, `wait` automatically marks typing, acks the sequence cursor, prints `{ status: "event", event, context }`, and exits `0` — waking your agent turn to reply via `duallane-agent send` and re-arm `wait`!
 
-Each authorized incoming event is piped as JSON (`{ event, context }`) to `<local-agent-cli-command>` stdin (with `DUALLANE_CONVERSATION_ID`, `DUALLANE_EVENT_TYPE`, `DUALLANE_MESSAGE_TEXT` env vars, never leaking the Bot token to child processes), and non-empty stdout is sent back as an idempotent reply.
+- **Standalone 24/7 Local Channel Daemon**:
+  ```bash
+  node packages/agent-sdk/bin/duallane-agent.mjs listen --cmd "<local-agent-cli-command>" --profile default
+  ```
+  Each authorized incoming event is piped as JSON (`{ event, context }`) to `<local-agent-cli-command>` stdin (with `DUALLANE_CONVERSATION_ID`, `DUALLANE_EVENT_TYPE`, `DUALLANE_MESSAGE_TEXT` env vars, never leaking the Bot token to child processes), and non-empty stdout is sent back as an idempotent reply.
 
 ---
 

@@ -731,10 +731,36 @@ func (r *PGRepository) EditMessage(ctx context.Context, actorID, messageID, plai
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	blocks := []map[string]any{{"type": "text", "text": plainText}}
+	attRows, err := tx.Query(ctx, `
+		SELECT attachment_id
+		FROM message_attachments
+		WHERE message_id = $1
+		ORDER BY attachment_id ASC
+	`, messageID)
+	if err != nil {
+		return err
+	}
+	for attRows.Next() {
+		var attID string
+		if scanErr := attRows.Scan(&attID); scanErr != nil {
+			attRows.Close()
+			return scanErr
+		}
+		if strings.TrimSpace(attID) != "" {
+			blocks = append(blocks, map[string]any{"type": "attachment", "attachmentId": attID})
+		}
+	}
+	if err := attRows.Err(); err != nil {
+		attRows.Close()
+		return err
+	}
+	attRows.Close()
+
 	contentObj := map[string]any{
 		"format":    "duallane.message+json;v=1",
 		"plainText": plainText,
-		"blocks":    []map[string]any{{"type": "text", "text": plainText}},
+		"blocks":    blocks,
 	}
 	contentJSON, _ := json.Marshal(contentObj)
 

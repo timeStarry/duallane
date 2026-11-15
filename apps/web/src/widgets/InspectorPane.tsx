@@ -282,16 +282,26 @@ export function InspectorPane() {
                         </div>
 
                         {replies.map((reply) => {
+                          const replyMember = members[reply.authorId];
                           const authorName =
+                            replyMember?.displayName ||
                             reply.authorName ||
-                            members[reply.authorId]?.displayName ||
                             reply.authorId;
+                          const authorKind =
+                            replyMember?.role === "bot" || reply.authorId.startsWith("usr_bot_")
+                              ? "bot"
+                              : "human";
                           return (
                             <div
                               key={reply.id}
                               className="flex items-start gap-2.5 rounded-2xl border border-dl-border-hairline bg-dl-surface-subtle/55 p-3"
                             >
-                              <Avatar name={authorName} size="sm" />
+                              <Avatar
+                                name={authorName}
+                                src={replyMember?.avatarUrl}
+                                kind={authorKind}
+                                size="sm"
+                              />
                               <div className="min-w-0 flex-1 space-y-1">
                                 <div className="flex items-center justify-between gap-2">
                                   <span className="truncate text-xs font-semibold text-dl-text-primary">
@@ -634,7 +644,12 @@ export function InspectorPane() {
                           key={id}
                           className="flex items-center gap-2.5 rounded-xl px-2 py-1.5 hover:bg-dl-surface-subtle/50 transition-colors"
                         >
-                          <Avatar name={displayLabel} src={m?.avatarUrl} size="sm" />
+                          <Avatar
+                            name={displayLabel}
+                            src={m?.avatarUrl}
+                            kind={m?.role === "bot" || id.startsWith("usr_bot_") ? "bot" : "human"}
+                            size="sm"
+                          />
                           <div className="min-w-0 flex-1">
                             <div className="truncate text-xs font-medium text-dl-text-primary">
                               {displayLabel}

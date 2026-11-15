@@ -72,6 +72,7 @@ export interface V1Message {
   kind?: "user" | "bot" | "system";
   senderId: string;
   senderName: string;
+  senderAvatarUrl?: string;
   plainText: string;
   blocks?: V1MessageBlock[];
   replyToId?: string;
@@ -165,6 +166,7 @@ interface WorkspaceState {
   toggleReaction: (conversationId: string, messageId: string, emoji: string) => Promise<void>;
   togglePinMessage: (conversationId: string, messageId: string) => Promise<void>;
   togglePinConversation: (conversationId: string) => Promise<void>;
+  updateUserPreferences: (patch: Record<string, unknown>) => Promise<void>;
   createGroup: (title: string, memberIds: string[], avatar?: string) => Promise<string | null>;
   updateGroupProfile: (
     conversationId: string,
@@ -337,6 +339,14 @@ function mapRawMessage(
     rawKind === "system" ? "system" : rawKind === "bot" ? "bot" : "user";
   const senderId = String(m.authorId || m.senderId || authorObj.id || "");
   const id = String(m.id || "");
+  const rawAvatar =
+    typeof m.authorAvatarUrl === "string" && m.authorAvatarUrl.trim()
+      ? m.authorAvatarUrl.trim()
+      : typeof authorObj.avatarUrl === "string" && authorObj.avatarUrl.trim()
+      ? authorObj.avatarUrl.trim()
+      : typeof m.senderAvatarUrl === "string" && m.senderAvatarUrl.trim()
+      ? m.senderAvatarUrl.trim()
+      : undefined;
   return {
     id,
     clientMessageId: m.clientMessageId ? String(m.clientMessageId) : undefined,
@@ -354,6 +364,7 @@ function mapRawMessage(
           m.senderName ||
           (kind === "system" ? "系统通知" : "成员")
       ),
+    senderAvatarUrl: members[senderId]?.avatarUrl || rawAvatar,
     plainText: String(m.plainText || m.text || ""),
     blocks: mapRawBlocks(m.content),
     replyToId: m.replyToMessageId
@@ -416,6 +427,9 @@ function backfillMemberFromMessage(
   if (!msg.senderId || msg.kind === "system") return;
   const existing = target[msg.senderId];
   if (existing && existing.displayName && !existing.displayName.startsWith("usr_")) {
+    if (!existing.avatarUrl && msg.senderAvatarUrl) {
+      target[msg.senderId] = { ...existing, avatarUrl: msg.senderAvatarUrl };
+    }
     return;
   }
   if (msg.senderName && msg.senderName !== "成员" && !msg.senderName.startsWith("usr_")) {
@@ -424,7 +438,7 @@ function backfillMemberFromMessage(
       displayName: msg.senderName,
       handle: existing?.handle,
       role: msg.kind === "bot" ? "bot" : existing?.role || "member",
-      avatarUrl: existing?.avatarUrl,
+      avatarUrl: existing?.avatarUrl || msg.senderAvatarUrl,
     };
   }
 }
@@ -1080,7 +1094,26 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
               const alreadyExisted = matchIndex >= 0;
               const nextList = alreadyExisted
                 ? existing.map((item, idx) =>
-                    idx === matchIndex ? { ...mapped, status: "read" as const } : item
+                    idx === matchIndex
+                      ? {
+                          ...item,
+                          ...mapped,
+                          blocks:
+                            mapped.blocks && mapped.blocks.length > 0
+                              ? mapped.blocks
+                              : [{ type: "text" as const, text: mapped.plainText }],
+                          reactions:
+                            rawMsg.reactions !== undefined ? mapped.reactions : item.reactions,
+                          attachments: mapped.attachments || item.attachments,
+                          threadReplyCount:
+                            rawMsg.threadReplyCount !== undefined || rawMsg.replyCount !== undefined
+                              ? mapped.threadReplyCount
+                              : item.threadReplyCount,
+                          replyToId: mapped.replyToId || item.replyToId,
+                          senderAvatarUrl: mapped.senderAvatarUrl || item.senderAvatarUrl,
+                          status: "read" as const,
+                        }
+                      : item
                   )
                 : [...existing, mapped];
 
@@ -1096,11 +1129,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                 ? baseUnread + 1
                 : baseUnread;
 
+              const isLatestInConv =
+                evType !== "message.edited" ||
+                nextList[nextList.length - 1]?.id === mapped.id;
+
               const nextConv: V1Conversation = prevConv
                 ? {
                     ...prevConv,
-                    lastMessageText: mapped.plainText,
-                    lastMessageAt: mapped.createdAt,
+                    lastMessageText: isLatestInConv
+                      ? mapped.plainText
+                      : prevConv.lastMessageText,
+                    lastMessageAt:
+                      evType === "message.edited"
+                        ? prevConv.lastMessageAt || mapped.createdAt
+                        : mapped.createdAt,
                     unreadCount: nextUnreadCount,
                   }
                 : {
@@ -1316,6 +1358,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       ) {
         const cached = loadBootstrapShellCache();
         if (cached) {
+          useEmoteStore
+            .getState()
+            .hydrateTabOrderFromPreferences(cached.userPreferences?.emoteTabOrder);
           set({
             authStatus: "authenticated",
             workspaceAvailability: "ready",
@@ -1443,6 +1488,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         });
 
         saveBootstrapShellCache(get());
+        useEmoteStore.getState().hydrateTabOrderFromPreferences(userPreferences.emoteTabOrder);
         connectWorkspaceRealtime(parsed.eventCursor);
         void setWorkspaceSyncCursor(parsed.eventCursor);
         void useEmoteStore.getState().loadEmoteState(false);
@@ -1889,18 +1935,59 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     editWorkspaceMessage: async (conversationId, messageId, newText) => {
       const trimmed = newText.trim();
       if (!trimmed) return;
+      const prevMessages = get().messagesByConv[conversationId] || [];
+      const prevTarget = prevMessages.find((m) => m.id === messageId);
       const editedAt = new Date().toISOString();
-      set((s) => ({
-        editingMessageId: null,
-        messagesByConv: {
-          ...s.messagesByConv,
-          [conversationId]: (s.messagesByConv[conversationId] || []).map((m) =>
-            m.id === messageId ? { ...m, plainText: trimmed, editedAt } : m
-          ),
-        },
-      }));
+      const updatedBlocks: V1MessageBlock[] = [{ type: "text", text: trimmed }];
+      set((s) => {
+        const list = (s.messagesByConv[conversationId] || []).map((m) =>
+          m.id === messageId
+            ? {
+                ...m,
+                plainText: trimmed,
+                blocks: updatedBlocks,
+                editedAt,
+              }
+            : m
+        );
+        const isLast = list[list.length - 1]?.id === messageId;
+        const prevConv = s.conversations[conversationId];
+        return {
+          editingMessageId: null,
+          messagesByConv: {
+            ...s.messagesByConv,
+            [conversationId]: list,
+          },
+          conversations:
+            prevConv && isLast
+              ? {
+                  ...s.conversations,
+                  [conversationId]: {
+                    ...prevConv,
+                    lastMessageText: trimmed,
+                  },
+                }
+              : s.conversations,
+        };
+      });
       if (!get().isPreviewMode) {
-        await apiV1.editMessage(messageId, trimmed);
+        try {
+          await apiV1.editMessage(messageId, trimmed);
+        } catch (err) {
+          if (prevTarget) {
+            set((s) => ({
+              messagesByConv: {
+                ...s.messagesByConv,
+                [conversationId]: (s.messagesByConv[conversationId] || []).map((m) =>
+                  m.id === messageId ? prevTarget : m
+                ),
+              },
+            }));
+          }
+          useEmoteStore
+            .getState()
+            .showToast(err instanceof Error ? err.message : "编辑消息失败，请稍后重试");
+        }
       }
     },
 
@@ -1968,6 +2055,19 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         pinnedConversationIds: nextPinned,
         userPreferences: nextPrefs,
       });
+      if (!state.isPreviewMode) {
+        await apiV1.savePreferences(nextPrefs).catch(() => {});
+      }
+    },
+
+    updateUserPreferences: async (patch) => {
+      const state = get();
+      const nextPrefs = {
+        ...state.userPreferences,
+        ...patch,
+      };
+      set({ userPreferences: nextPrefs });
+      saveBootstrapShellCache(get());
       if (!state.isPreviewMode) {
         await apiV1.savePreferences(nextPrefs).catch(() => {});
       }

@@ -92,13 +92,18 @@ export function DropdownMenuContent({
   className,
   sideOffset = 6,
   align = "end",
+  quickReactions,
+  onQuickReaction,
   children
 }: {
   className?: string;
   sideOffset?: number;
   align?: "start" | "center" | "end";
+  quickReactions?: string[];
+  onQuickReaction?: (emoji: string) => void;
   children: ReactNode;
 }) {
+  const emojis = quickReactions ?? QUICK_REACTIONS;
   return (
     <RadixDropdownMenu.Portal>
       <RadixDropdownMenu.Content
@@ -106,10 +111,26 @@ export function DropdownMenuContent({
         align={align}
         collisionPadding={12}
         className={cn(
-          "dl-anim-popover dl-glass-elevated z-popover min-w-[200px] rounded-panel border border-line p-1.5 text-text focus:outline-none",
+          "dl-anim-popover dl-glass-elevated z-popover min-w-[208px] rounded-panel border border-line p-1.5 text-text focus:outline-none",
           className
         )}
       >
+        {onQuickReaction && (
+          <>
+            <div className="mb-1 flex items-center justify-between gap-1 px-1 py-0.5">
+              {emojis.map((emoji) => (
+                <RadixDropdownMenu.Item
+                  key={emoji}
+                  onSelect={() => onQuickReaction(emoji)}
+                  className="flex size-8 cursor-pointer items-center justify-center rounded-control text-[17px] transition-transform duration-120 hover:scale-125 hover:bg-soft/90 focus:bg-soft/90 focus:outline-none"
+                >
+                  {emoji}
+                </RadixDropdownMenu.Item>
+              ))}
+            </div>
+            <RadixDropdownMenu.Separator className="my-1 h-px bg-line" />
+          </>
+        )}
         {children}
       </RadixDropdownMenu.Content>
     </RadixDropdownMenu.Portal>
