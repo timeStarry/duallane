@@ -370,7 +370,7 @@ async function main() {
   const { positionals, flags } = parseArgs(process.argv.slice(2));
   const subcommand = positionals[0];
 
-  if (flags.version || subcommand === "-v" || subcommand === "version") {
+  if ((!subcommand && flags.version) || subcommand === "-v" || subcommand === "version") {
     const profile = loadAgentProfile(normalizeProfileName(flags.profile || "default"));
     const origin = String(flags.url || profile?.url || "").trim();
     if (flags.check && origin) {
