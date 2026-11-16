@@ -408,6 +408,10 @@ func (s *Service) requireConversationCurrent(ctx context.Context, value *Auth, c
 	if err != nil {
 		return nil, nil, err
 	}
+	return s.requireConversationPrevalidated(ctx, current, conversationID)
+}
+
+func (s *Service) requireConversationPrevalidated(ctx context.Context, current *Auth, conversationID string) (*Auth, *Conversation, error) {
 	id, err := normalizeIdentifier(conversationID, CodeConversationInvalid)
 	if err != nil {
 		return nil, nil, err
@@ -1363,15 +1367,26 @@ func (s *Service) Replay(ctx context.Context, value *Auth, input ReplayInput) (R
 		}
 		allowed = append(allowed, candidate)
 	}
-	earliest, err := s.repo.EarliestDeliverySequence(ctx, current.BotID, current.SpaceID, s.nowUTC())
+	earliestWorkspace, err := s.repo.EarliestSequence(ctx, current.SpaceID)
 	if err != nil {
 		return ReplayResult{}, normalizeError(err)
+	}
+	scanFloor := earliestWorkspace
+	if windowFloor := workspaceSequence - int64(s.replayLimit*4) + 1; windowFloor > scanFloor {
+		scanFloor = windowFloor
+	}
+	earliestDelivery, err := s.repo.EarliestDeliverySequence(ctx, current.BotID, current.SpaceID, s.nowUTC())
+	if err != nil {
+		return ReplayResult{}, normalizeError(err)
+	}
+	if earliestDelivery > 0 && earliestDelivery < scanFloor {
+		scanFloor = earliestDelivery
 	}
 	expiredAfter, err := s.hasExpiredAfter(ctx, current, cursor)
 	if err != nil {
 		return ReplayResult{}, err
 	}
-	if expiredAfter || (earliest > 0 && cursor < earliest-1) {
+	if expiredAfter || (scanFloor > 0 && cursor < scanFloor-1) {
 		result.SyncRequired = true
 		result.Reason = "replay_window_exceeded"
 		return result, nil
@@ -1405,8 +1420,8 @@ func (s *Service) expireDeliveries(ctx context.Context, value *Auth) error {
 	return nil
 }
 
-func (s *Service) queueWorkspaceEvents(ctx context.Context, value *Auth) error {
-	rows, err := s.repo.ListRecentEvents(ctx, value.SpaceID, s.replayLimit*4)
+func (s *Service) queueWorkspaceEvents(ctx context.Context, current *Auth) error {
+	rows, err := s.repo.ListRecentEvents(ctx, current.SpaceID, s.replayLimit*4)
 	if err != nil {
 		return normalizeError(err)
 	}
@@ -1414,19 +1429,39 @@ func (s *Service) queueWorkspaceEvents(ctx context.Context, value *Auth) error {
 		rows[left], rows[right] = rows[right], rows[left]
 	}
 	for _, event := range rows {
-		if err := s.queueEvent(ctx, value, event); err != nil {
-			return err
+		if ctx.Err() != nil {
+			return normalizeError(ctx.Err())
+		}
+		if eventScope(event.EventType) == "" || strings.TrimSpace(event.ConversationID) == "" {
+			continue
+		}
+		if err := s.queueValidatedEvent(ctx, current, event); err != nil {
+			if ctx.Err() != nil || isInvalidToken(err) {
+				return err
+			}
+			// Isolate per-event data or transient lookup failures so a single
+			// malformed historical event can never head-of-line block newer
+			// group or direct bot triggers.
+			continue
 		}
 	}
 	return nil
 }
 
 func (s *Service) queueEvent(ctx context.Context, value *Auth, event EventRecord) error {
-	authorized, err := s.authorizeDelivery(ctx, value, event)
+	current, err := s.ValidateAuth(ctx, value)
+	if err != nil {
+		return err
+	}
+	return s.queueValidatedEvent(ctx, current, event)
+}
+
+func (s *Service) queueValidatedEvent(ctx context.Context, current *Auth, event EventRecord) error {
+	authorized, err := s.authorizeValidatedDelivery(ctx, current, event)
 	if err != nil || !authorized {
 		return err
 	}
-	if allowed, err := s.passesDeliveryRateLimits(ctx, value, event); err != nil || !allowed {
+	if allowed, err := s.passesDeliveryRateLimits(ctx, current, event); err != nil || !allowed {
 		return err
 	}
 	id, err := s.newID("bot delivery")
@@ -1434,9 +1469,9 @@ func (s *Service) queueEvent(ctx context.Context, value *Auth, event EventRecord
 		return internalError("generate bot delivery id", err)
 	}
 	now := s.nowUTC()
-	input := DeliveryInsert{ID: "bdl_" + id, BotID: value.BotID, SpaceID: value.SpaceID, Sequence: event.Sequence, EventID: event.ID, EventType: event.EventType, ConversationID: event.ConversationID, PayloadJSON: safeDeliveryPayload(event), Status: "queued", CreatedAt: now, ExpiresAt: now.Add(s.replayWindow)}
+	input := DeliveryInsert{ID: "bdl_" + id, BotID: current.BotID, SpaceID: current.SpaceID, Sequence: event.Sequence, EventID: event.ID, EventType: event.EventType, ConversationID: event.ConversationID, PayloadJSON: safeDeliveryPayload(event), Status: "queued", CreatedAt: now, ExpiresAt: now.Add(s.replayWindow)}
 	return s.repo.WithTx(ctx, func(tx Tx) error {
-		if err := tx.Lock(ctx, "workspace-bot-delivery:"+value.BotID+":"+strconv.FormatInt(event.Sequence, 10)); err != nil {
+		if err := tx.Lock(ctx, "workspace-bot-delivery:"+current.BotID+":"+strconv.FormatInt(event.Sequence, 10)); err != nil {
 			return err
 		}
 		_, err := tx.InsertDelivery(ctx, input)
@@ -1480,10 +1515,14 @@ func (s *Service) authorizeDelivery(ctx context.Context, value *Auth, event Even
 	if err != nil {
 		return false, err
 	}
+	return s.authorizeValidatedDelivery(ctx, current, event)
+}
+
+func (s *Service) authorizeValidatedDelivery(ctx context.Context, current *Auth, event EventRecord) (bool, error) {
 	if event.SpaceID != current.SpaceID || eventScope(event.EventType) == "" || !containsScope(current.Scopes, eventScope(event.EventType)) || strings.TrimSpace(event.ConversationID) == "" {
 		return false, nil
 	}
-	_, conversation, err := s.requireConversationCurrent(ctx, current, event.ConversationID)
+	_, conversation, err := s.requireConversationPrevalidated(ctx, current, event.ConversationID)
 	if err != nil {
 		if isGatewayError(err) {
 			return false, nil

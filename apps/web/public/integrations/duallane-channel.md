@@ -22,9 +22,9 @@ When a user provides a DualLane setup link (`https://<host>/workspace?setup=setu
    - Run `node ~/.duallane/bin/duallane-agent.mjs setup "<setup-url>" --name "<agent-name>"` (or MCP tool `duallane_setup_start`),
    - Or `POST <origin>/api/bot-gateway/v1/setup/request` with `{ "setupSessionId": "setup_<id>", "requestedScopes": ["messages:read_trigger", "messages:read_context", "messages:send", "cards:write", "cards:act", "commands:receive"], "clientName": "<agent-name>", "protocolVersion": "v1" }`.
 4. **User browser confirmation & one-time exchange**: Ask the user to approve at `<origin>/workspace?setup=setup_<id>` (or in **DualLane 设置 → 机器人**); `duallane-agent.mjs setup` automatically polls approval, exchanges once, and stores the credential at `~/.config/duallane/agents/default.json` (`0600` mode) without printing the raw token into LLM chat output.
-5. **Receive & reply in real time**:
-   - Run `node ~/.duallane/bin/duallane-agent.mjs wait --profile default --timeout 3600` (connects via `wss://<host>/ws/bot-gateway` and automatically falls back to HTTP long-polling `GET /api/bot/v2/updates?afterSequence=<seq>&timeout=20` when WebSocket upgrades are blocked by a sandbox proxy),
-   - Or register `node ~/.duallane/bin/duallane-agent.mjs mcp --profile default` as a standard Stdio MCP server,
-   - Or run `node ~/.duallane/bin/duallane-agent.mjs listen --cmd "<agent-cli>" --profile default` as a local daemon.
+5. **Start the resident background listener (Feishu-style persistent daemon — recommended)**:
+   - Run `node ~/.duallane/bin/duallane-agent.mjs daemon install --profile default --agent auto` (registers a `launchd` KeepAlive service on macOS or `systemd --user` service on Linux that stays connected 24/7 across terminal closes, sleep/wake, and DualLane server restarts, automatically waking `codex exec` / `claude -p` or `--cmd` per conversation with read-only group-chat safety),
+   - Check live health anytime via `node ~/.duallane/bin/duallane-agent.mjs daemon status --profile default` or `daemon logs --profile default`,
+   - Or register `node ~/.duallane/bin/duallane-agent.mjs mcp --profile default` as a standard Stdio MCP server / run `wait` for single-shot debugging.
 
 This document is integration guidance only and never embeds credentials or private data.

@@ -267,7 +267,7 @@ export function InspectorPane() {
                               {localRoot?.senderName ? `${localRoot.senderName} · 根消息` : "根消息"}
                             </span>
                           </div>
-                          <div className="text-[13px] leading-relaxed text-dl-text-primary whitespace-pre-wrap">
+                          <div className="min-w-0 max-w-full overflow-hidden text-[13px] leading-relaxed text-dl-text-primary whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
                             {localRoot ? (
                               <MessageRichContent msg={localRoot} />
                             ) : (
@@ -316,7 +316,7 @@ export function InspectorPane() {
                                     </span>
                                   )}
                                 </div>
-                                <div className="text-[13px] leading-relaxed text-dl-text-primary whitespace-pre-wrap break-words">
+                                <div className="min-w-0 max-w-full overflow-hidden text-[13px] leading-relaxed text-dl-text-primary whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
                                   {renderMessageParts(reply.plainText)}
                                 </div>
                               </div>

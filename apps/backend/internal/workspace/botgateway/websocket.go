@@ -461,6 +461,9 @@ func (h *WebSocketHandler) handleMessage(ctx context.Context, writer *webSocketW
 				cursor = event.Sequence
 			}
 		}
+		if !result.HasMore && result.CurrentSequence > cursor {
+			cursor = result.CurrentSequence
+		}
 		return cursor, authValue, true
 	}
 
@@ -533,6 +536,9 @@ func (h *WebSocketHandler) pollReplay(ctx context.Context, writer *webSocketWrit
 		if event.Sequence > cursor {
 			cursor = event.Sequence
 		}
+	}
+	if !result.HasMore && result.CurrentSequence > cursor {
+		cursor = result.CurrentSequence
 	}
 	return current, result, cursor, true, nil
 }

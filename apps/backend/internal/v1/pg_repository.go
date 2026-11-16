@@ -188,6 +188,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 	)
 	currentUser.Role = actorRole
 
+	botHeartbeatCutoff := nowUTC.Add(-90 * time.Second)
 	memberRows, err := r.pool.Query(ctx, `
 		SELECT
 			u.id,
@@ -199,12 +200,21 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 			coalesce(u.avatar_url, bs_meta.avatar_url, ''),
 			coalesce(up_bot.prefs_json, '{}'),
 			u.kind,
-			sm.role
+			sm.role,
+			b_meta.id IS NOT NULL AS is_external_bot,
+			CASE
+				WHEN b_meta.id IS NULL THEN FALSE
+				WHEN b_meta.status <> 'active' THEN FALSE
+				WHEN bc_meta.status = 'connected' AND COALESCE(bc_meta.last_heartbeat_at, bc_meta.connected_at) >= $4 THEN TRUE
+				WHEN EXISTS (SELECT 1 FROM bot_webhooks bw WHERE bw.bot_id = b_meta.id AND bw.enabled = TRUE) THEN TRUE
+				ELSE FALSE
+			END AS bot_online
 		FROM space_members sm
 		JOIN users u ON u.id = sm.user_id
 		LEFT JOIN user_remarks ur ON ur.owner_user_id = $2 AND ur.target_user_id = u.id
 		LEFT JOIN workspace_agent_bots b_meta ON b_meta.space_id = $1 AND b_meta.bot_user_id = u.id AND b_meta.status <> 'deleted'
 		LEFT JOIN workspace_agent_bot_settings bs_meta ON bs_meta.bot_id = b_meta.id AND bs_meta.space_id = $1
+		LEFT JOIN workspace_agent_bot_connections bc_meta ON bc_meta.bot_id = b_meta.id AND bc_meta.space_id = $1
 		LEFT JOIN user_preferences up_bot ON up_bot.user_id = u.id AND u.kind = 'bot'
 		WHERE sm.space_id = $1
 			AND sm.removed_at IS NULL
@@ -250,7 +260,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				)
 			)
 		ORDER BY sm.joined_at ASC, u.id ASC
-	`, r.spaceID, actorID, actorRole)
+	`, r.spaceID, actorID, actorRole, botHeartbeatCutoff)
 	if err != nil {
 		return V1BootstrapResponse{}, err
 	}
@@ -258,7 +268,8 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 	memberByID := make(map[string]V1BootstrapMember, 16)
 	for memberRows.Next() {
 		var mID, mGitHub, mDisplay, mNick, mRemark, mDesc, mAvatar, mBotPrefsRaw, mKind, mRole string
-		if scanErr := memberRows.Scan(&mID, &mGitHub, &mDisplay, &mNick, &mRemark, &mDesc, &mAvatar, &mBotPrefsRaw, &mKind, &mRole); scanErr != nil {
+		var isExternalBot, botOnline bool
+		if scanErr := memberRows.Scan(&mID, &mGitHub, &mDisplay, &mNick, &mRemark, &mDesc, &mAvatar, &mBotPrefsRaw, &mKind, &mRole, &isExternalBot, &botOnline); scanErr != nil {
 			memberRows.Close()
 			return V1BootstrapResponse{}, scanErr
 		}
@@ -268,6 +279,10 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 		if mKind == "bot" {
 			if strings.TrimSpace(mDesc) != "" {
 				projected.Description = strings.TrimSpace(mDesc)
+			}
+			if isExternalBot {
+				onlineVal := botOnline
+				projected.BotOnline = &onlineVal
 			}
 			if mBotPrefsRaw != "" && mBotPrefsRaw != "{}" {
 				var botPrefs map[string]any
@@ -1242,6 +1257,10 @@ func loadGroupSummaryTx(ctx context.Context, tx pgx.Tx, spaceID, conversationID 
 		var m GroupMemberSummary
 		if err := rows.Scan(&m.ID, &m.DisplayName, &m.GitHubLogin, &m.Kind, &m.Role, &m.AvatarURL); err != nil {
 			return GroupConversationSummary{}, err
+		}
+		m.AvatarURL = sanitizeBootstrapAvatarURL(m.AvatarURL)
+		if m.Kind == "bot" || strings.HasPrefix(m.GitHubLogin, "__duallane_") {
+			m.GitHubLogin = ""
 		}
 		out.MemberIDs = append(out.MemberIDs, m.ID)
 		out.Members = append(out.Members, m)

@@ -127,15 +127,20 @@ Once `~/.duallane/bin/duallane-agent.mjs` is downloaded, add `duallane` to your 
 
 DualLane Bots connect **outbound** to `wss://<host>/ws/bot-gateway` (and automatically fall back to HTTP long-polling `GET /api/bot/v2/updates?afterSequence=<seq>&timeout=20` if outbound WebSocket upgrades are blocked by a sandbox or HTTP proxy):
 
-- **Reactive Session Wakeup (for interactive coding agents such as Codex CLI, Claude Code, or Antigravity)**:
-  Launch a background listener command:
+- **Feishu-Style 24/7 Resident Background Daemon (Recommended — Never Drops Offline)**:
+  ```bash
+  node ~/.duallane/bin/duallane-agent.mjs daemon install --profile default --agent auto
+  ```
+  Registers an OS-supervised `launchd` (`KeepAlive=true` on macOS) or `systemd --user` (`Restart=always` on Linux) background listener that stays connected across terminal closes, sleep/wake, and DualLane server deployments, automatically waking `codex exec` / `claude -p` (or `--cmd "<custom>"`) per conversation while enforcing strict read-only safety in group chats. Inspect anytime via `daemon status` or `daemon logs`.
+
+- **Reactive Session Wakeup (Single-Shot CLI Debugging)**:
   ```bash
   node ~/.duallane/bin/duallane-agent.mjs wait --profile default --timeout 3600
   ```
   *(Pass `--transport poll` if your sandbox forces HTTP-only proxies.)*
-  When a DualLane message arrives, `wait` automatically marks typing, acks the sequence cursor, prints `{ status: "event", event, context }`, and exits `0` — waking your agent turn to reply via `node ~/.duallane/bin/duallane-agent.mjs send <conversationId> '<reply>'` and re-arm `wait`!
+  When a DualLane message arrives, `wait` automatically marks typing, acks the sequence cursor, prints `{ status: "event", event, context }`, and exits `0`.
 
-- **Standalone 24/7 Local Channel Daemon**:
+- **Foreground Custom Shell Bridge**:
   ```bash
   node ~/.duallane/bin/duallane-agent.mjs listen --cmd "<local-agent-cli-command>" --profile default
   ```

@@ -366,8 +366,17 @@ func ProjectMessageForViewer(record MessageRecord, attachments []AttachmentRecor
 	return projectMessage(record, attachments, reactions, viewer)
 }
 
+func publicGitHubLogin(login, kind string) string {
+	trimmed := normalizeString(login)
+	if kind == "bot" || strings.HasPrefix(trimmed, "__duallane_") {
+		return ""
+	}
+	return trimmed
+}
+
 func projectMessage(record MessageRecord, attachments []AttachmentRecord, reactions []ReactionGroup, viewer *auth.Actor) (Message, error) {
-	authorName := firstNonEmpty(record.AuthorRemark, record.AuthorNickname, record.AuthorGitHubLogin, record.AuthorName)
+	cleanGitHubLogin := publicGitHubLogin(record.AuthorGitHubLogin, record.AuthorKind)
+	authorName := firstNonEmpty(record.AuthorRemark, record.AuthorNickname, cleanGitHubLogin, record.AuthorName)
 	if authorName == "" {
 		if record.AuthorKind == "bot" {
 			authorName = "Bot"
@@ -384,7 +393,7 @@ func projectMessage(record MessageRecord, attachments []AttachmentRecord, reacti
 		AuthorName:          authorName,
 		AuthorNickname:      record.AuthorNickname,
 		AuthorRemark:        record.AuthorRemark,
-		AuthorGitHubLogin:   record.AuthorGitHubLogin,
+		AuthorGitHubLogin:   cleanGitHubLogin,
 		AuthorAvatarURL:     sanitizeMessageAvatar(record.AuthorAvatarURL),
 		AuthorKind:          record.AuthorKind,
 		Kind:                record.Kind,
@@ -726,7 +735,7 @@ func displayName(member MentionMember) string {
 	if value := normalizeString(member.Nickname); value != "" {
 		return value
 	}
-	if value := normalizeString(member.GitHubLogin); value != "" {
+	if value := publicGitHubLogin(member.GitHubLogin, member.Kind); value != "" {
 		return value
 	}
 	if value := normalizeString(member.DisplayName); value != "" {

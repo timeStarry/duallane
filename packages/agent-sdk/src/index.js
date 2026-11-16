@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { LiteWebSocket, OPEN } from "./ws-lite.js";
 
-export const DUALLANE_AGENT_SDK_VERSION = "1.0.8";
+export const DUALLANE_AGENT_SDK_VERSION = "1.0.9";
 export const DUALLANE_GATEWAY_VERSION = 1;
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;

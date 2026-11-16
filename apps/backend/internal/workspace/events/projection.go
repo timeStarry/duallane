@@ -369,8 +369,8 @@ func (r *PGRepository) publicMessagePayload(ctx context.Context, spaceID string,
 	var recallReason *string
 	err := r.pool.QueryRow(ctx, `
 		SELECT m.id, m.conversation_id, m.author_id,
-			COALESCE(ur.remark, u.nickname, u.github_login, u.display_name, ''),
-			u.nickname, u.github_login, u.avatar_url, ur.remark,
+			COALESCE(ur.remark, u.nickname, CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(u.github_login, '') END, u.display_name, ''),
+			u.nickname, CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE u.github_login END, u.avatar_url, ur.remark,
 			m.author_kind, m.kind, m.client_message_id, m.content_json,
 			m.plain_text, m.reply_to_message_id, m.created_at, m.edited_at,
 			m.deleted_at, m.recalled_at, m.recall_reason
@@ -538,8 +538,8 @@ func (r *PGRepository) publicMessageAttachments(ctx context.Context, spaceID str
 func (r *PGRepository) publicMessageReactions(ctx context.Context, spaceID string, actor *auth.Actor, messageID string) ([]any, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT mr.emote_key, mr.created_at, u.id,
-			COALESCE(ur.remark, u.nickname, u.github_login, u.display_name, ''),
-			COALESCE(u.github_login, ''), COALESCE(u.avatar_url, '')
+			COALESCE(ur.remark, u.nickname, CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(u.github_login, '') END, u.display_name, ''),
+			CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN '' ELSE COALESCE(u.github_login, '') END, COALESCE(u.avatar_url, '')
 		FROM message_reactions mr
 		INNER JOIN messages m ON m.id = mr.message_id AND m.space_id = $1
 		INNER JOIN users u ON u.id = mr.user_id
@@ -605,7 +605,7 @@ func (r *PGRepository) publicAttachmentPayload(ctx context.Context, spaceID stri
 	var completedAt *time.Time
 	err := r.pool.QueryRow(ctx, `
 		SELECT a.id, a.file_name, a.mime_type, a.byte_size, a.status, a.visibility,
-			a.uploader_id, COALESCE(ur.remark, u.nickname, u.github_login, u.display_name, ''),
+			a.uploader_id, COALESCE(ur.remark, u.nickname, CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(u.github_login, '') END, u.display_name, ''),
 			a.conversation_id, a.created_at, a.completed_at
 		FROM attachments a
 		INNER JOIN users u ON u.id = a.uploader_id

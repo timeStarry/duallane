@@ -67,7 +67,7 @@ export function DualLaneCardKit({ card, onAction }: DualLaneCardKitProps) {
   return (
     <div
       className={cn(
-        "dl-glass-elevated rounded-2xl p-3.5 max-w-md border border-dl-border-hairline transition-opacity",
+        "dl-glass-elevated w-full max-w-md min-w-0 overflow-hidden rounded-2xl p-3.5 border border-dl-border-hairline transition-opacity [overflow-wrap:anywhere] break-words",
         isLocked && "opacity-70"
       )}
     >

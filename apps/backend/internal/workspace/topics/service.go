@@ -342,14 +342,23 @@ func (s *Service) topicForActor(ctx context.Context, repo ReadRepository, actor 
 	return record, nil, nil
 }
 
+func publicTopicLogin(login string) string {
+	trimmed := strings.TrimSpace(login)
+	if strings.HasPrefix(trimmed, "__duallane_") {
+		return ""
+	}
+	return trimmed
+}
+
 func (s *Service) projectTopic(record TopicRecord, viewerID string, full bool) Topic {
-	creatorName := firstNonEmpty(stringPointerValue(record.CreatorRemark), stringPointerValue(record.CreatorNickname), record.CreatorGitHubLogin, record.CreatorDisplayName)
+	cleanLogin := publicTopicLogin(record.CreatorGitHubLogin)
+	creatorName := firstNonEmpty(stringPointerValue(record.CreatorRemark), stringPointerValue(record.CreatorNickname), cleanLogin, record.CreatorDisplayName)
 	if creatorName == "" {
 		creatorName = "成员"
 	}
 	creator := TopicActor{
 		ID: record.CreatedBy, DisplayName: creatorName, Nickname: record.CreatorNickname,
-		Remark: record.CreatorRemark, GitHubLogin: record.CreatorGitHubLogin,
+		Remark: record.CreatorRemark, GitHubLogin: cleanLogin,
 		AvatarURL: sanitizeAvatarPointer(record.CreatorAvatarURL),
 	}
 	topic := Topic{
@@ -375,14 +384,18 @@ func (s *Service) projectTopic(record TopicRecord, viewerID string, full bool) T
 }
 
 func (s *Service) projectTopicMember(record TopicMemberRecord) TopicMember {
-	displayName := firstNonEmpty(stringPointerValue(record.Remark), stringPointerValue(record.Nickname), record.GitHubLogin, record.DisplayName)
+	cleanLogin := publicTopicLogin(record.GitHubLogin)
+	if record.Kind == "bot" {
+		cleanLogin = ""
+	}
+	displayName := firstNonEmpty(stringPointerValue(record.Remark), stringPointerValue(record.Nickname), cleanLogin, record.DisplayName)
 	if displayName == "" {
 		displayName = "成员"
 	}
 	return TopicMember{
 		UserID: record.UserID, JoinedAt: formatTimestamp(record.JoinedAt),
 		NotificationLevel: firstNonEmpty(record.NotificationLevel, NotificationAll), DisplayName: displayName,
-		Nickname: record.Nickname, GitHubLogin: record.GitHubLogin,
+		Nickname: record.Nickname, GitHubLogin: cleanLogin,
 		AvatarURL: sanitizeAvatarPointer(record.AvatarURL), Kind: record.Kind, Remark: record.Remark,
 	}
 }

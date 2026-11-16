@@ -409,7 +409,7 @@ function renderInlineRichTokens(segment: string): React.ReactNode {
       nodes.push(
         <code
           key={`ic_${match.index}`}
-          className="mx-0.5 rounded-md bg-black/14 px-1.5 py-0.5 font-mono text-[12px]"
+          className="mx-0.5 rounded-md bg-black/14 px-1.5 py-0.5 font-mono text-[12px] whitespace-pre-wrap break-all [overflow-wrap:anywhere]"
         >
           {token.slice(1, -1)}
         </code>
@@ -450,7 +450,7 @@ function renderFormattedTextSegment(text: string): React.ReactNode {
     parts.push(
       <div
         key={`cb_${match.index}`}
-        className="my-1.5 overflow-hidden rounded-xl border border-white/10 bg-[#0f172a] text-slate-100 shadow-xs"
+        className="my-1.5 max-w-full min-w-0 overflow-hidden rounded-xl border border-white/10 bg-[#0f172a] text-slate-100 shadow-xs"
       >
         <div className="flex items-center justify-between border-b border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-mono text-slate-300">
           <span>{lang}</span>
@@ -482,6 +482,7 @@ export function MessageRichContent({
   jumbo?: boolean;
 }) {
   const isPreviewMode = useWorkspaceStore((s) => s.isPreviewMode);
+  const members = useWorkspaceStore((s) => s.members);
   const { library, favoriteFromMessage, openStudio } = useEmoteStore();
 
   if (jumbo) {
@@ -577,7 +578,7 @@ export function MessageRichContent({
 
   if (msg.blocks && msg.blocks.length > 0) {
     return (
-      <div className="whitespace-pre-wrap break-words">
+      <div className="min-w-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
         {msg.blocks.map((block, i) => {
           if (block.type === "text") {
             return (
@@ -587,12 +588,16 @@ export function MessageRichContent({
             );
           }
           if (block.type === "mention") {
-            const cleanLabel = block.label.replace(/^@/, "");
+            const rawLabel = block.label.replace(/^@/, "");
+            const liveName = members[block.userId]?.displayName;
+            const cleanLabel =
+              liveName ||
+              (rawLabel.startsWith("__duallane_") ? "Bot" : rawLabel);
             return (
               <span
                 key={i}
                 data-mention-user-id={block.userId}
-                className="mx-0.5 inline-flex items-center rounded-md bg-black/14 px-1.5 py-0.5 text-[13px] font-semibold"
+                className="mx-0.5 inline rounded-md bg-black/14 px-1.5 py-0.5 text-[13px] font-semibold break-all [overflow-wrap:anywhere]"
               >
                 @{cleanLabel}
               </span>
@@ -644,7 +649,7 @@ export function MessageRichContent({
   }
 
   return (
-    <div className="whitespace-pre-wrap break-words">
+    <div className="min-w-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
       {renderFormattedTextSegment(msg.plainText)}
     </div>
   );
@@ -844,6 +849,16 @@ export function EmoteStickerPopover({
 
   const handleSelectCustom = (emote: CustomEmoteDTO) => {
     if (lane === "workspace" && conversationId) {
+      if (emote.sourceType === "builtin" && emote.emoteKey) {
+        const [packId, itemId] = emote.emoteKey.split(":");
+        const foundPack = emotePacks.find((p) => p.id === packId);
+        const foundItem = foundPack?.items.find((it) => it.id === itemId);
+        if (foundItem) {
+          void sendWorkspaceMessage(conversationId, getEmoteInsertText(foundItem), replyToId);
+          setOpen(false);
+          return;
+        }
+      }
       void sendCustomSticker(conversationId, emote.id, replyToId);
       setOpen(false);
     }

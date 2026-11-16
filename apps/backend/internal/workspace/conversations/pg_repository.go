@@ -852,8 +852,8 @@ LEFT JOIN user_remarks ur ON ur.owner_user_id = $3 AND ur.target_user_id = u.id
 
 const messageSelect = `SELECT
 	m.id, m.conversation_id, COALESCE(m.topic_id, ''), m.author_id,
-	COALESCE(ur.remark, u.nickname, u.github_login, u.display_name, '成员') AS author_name,
-	u.nickname, ur.remark, u.github_login, u.avatar_url,
+	COALESCE(ur.remark, u.nickname, CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(u.github_login, '') END, u.display_name, '成员') AS author_name,
+	u.nickname, ur.remark, CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE u.github_login END, u.avatar_url,
 	m.author_kind, m.kind, m.client_message_id, m.content_json, m.plain_text,
 	m.reply_to_message_id, m.created_at, m.edited_at, m.deleted_at, m.recalled_at, m.recall_reason,
 	p.pinned_by_user_id, p.created_at AS pinned_at
@@ -866,8 +866,8 @@ LEFT JOIN conversation_pinned_messages p ON p.message_id = m.id AND p.conversati
 const pinSelect = `SELECT
 	p.message_id, p.pinned_by_user_id, p.created_at,
 	m.id, m.conversation_id, COALESCE(m.topic_id, ''), m.author_id,
-	COALESCE(ur.remark, u.nickname, u.github_login, u.display_name, '成员') AS author_name,
-	u.nickname, ur.remark, u.github_login, u.avatar_url,
+	COALESCE(ur.remark, u.nickname, CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(u.github_login, '') END, u.display_name, '成员') AS author_name,
+	u.nickname, ur.remark, CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE u.github_login END, u.avatar_url,
 	m.author_kind, m.kind, m.client_message_id, m.content_json, m.plain_text,
 	m.reply_to_message_id, m.created_at, m.edited_at, m.deleted_at, m.recalled_at, m.recall_reason
 FROM conversation_pinned_messages p

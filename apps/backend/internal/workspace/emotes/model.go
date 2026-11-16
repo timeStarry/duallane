@@ -427,6 +427,7 @@ type Delivery struct {
 	Body        io.ReadCloser
 	ContentType string
 	ByteSize    int64
+	RedirectURL string
 }
 
 type AuditInput struct {

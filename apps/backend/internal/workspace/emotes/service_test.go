@@ -1203,6 +1203,23 @@ func TestValidateMessageCustomEmoteRequiresOwnedAvailableMedia(t *testing.T) {
 	if err := service.ValidateMessageCustomEmote(context.Background(), "usr-owner", emote.ID); !isCode(err, "message.invalid_emoji") {
 		t.Fatalf("validate removed emote = %v", err)
 	}
+
+	// Regression: favorited built-in emotes (source_type='builtin', empty storage_key)
+	// must pass ValidateMessageCustomEmote and return RedirectURL on ReadContent.
+	repo.state.emotes["em-builtin-1"] = CustomEmoteRecord{
+		ID:             "em-builtin-1",
+		UserID:         "usr-owner",
+		SourceType:     "builtin",
+		SourceEmoteKey: "bili:doge",
+		Label:          "狗头",
+	}
+	if err := service.ValidateMessageCustomEmote(context.Background(), "usr-owner", "em-builtin-1"); err != nil {
+		t.Fatalf("validate favorited builtin emote failed: %v", err)
+	}
+	delivery, err := service.ReadContent(context.Background(), ReadContentInput{ActorID: "usr-owner", EmoteID: "em-builtin-1"})
+	if err != nil || delivery.RedirectURL != "/emotes/bili/doge.png" {
+		t.Fatalf("read favorited builtin emote = %#v, err=%v", delivery, err)
+	}
 }
 
 func TestServiceCollectionsSharesAndSettingsAreStable(t *testing.T) {

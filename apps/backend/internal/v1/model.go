@@ -34,6 +34,7 @@ type V1BootstrapMember struct {
 	Role        string `json:"role"`
 	AvatarURL   string `json:"avatarUrl,omitempty"`
 	AvatarColor string `json:"avatarColor,omitempty"`
+	BotOnline   *bool  `json:"botOnline,omitempty"`
 }
 
 type V1BootstrapAuth struct {

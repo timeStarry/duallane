@@ -752,10 +752,10 @@ const messageSelect = `
 		m.space_id,
 		m.conversation_id,
 		m.author_id,
-		COALESCE(ur.remark, u.nickname, u.github_login, u.display_name, '') AS author_name,
+		COALESCE(ur.remark, u.nickname, CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(u.github_login, '') END, u.display_name, '') AS author_name,
 		COALESCE(u.nickname, '') AS author_nickname,
 		COALESCE(ur.remark, '') AS author_remark,
-		COALESCE(u.github_login, '') AS author_github_login,
+		CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN '' ELSE COALESCE(u.github_login, '') END AS author_github_login,
 		COALESCE(u.avatar_url, '') AS author_avatar_url,
 		m.author_kind,
 		m.kind,
@@ -991,7 +991,7 @@ func listAttachmentsRows(ctx context.Context, queryer pgQueryer, spaceID, viewer
 	rows, err := queryer.Query(ctx, `
 		SELECT
 			ma.message_id, a.id, a.space_id, a.uploader_id, a.conversation_id,
-			COALESCE(ur.remark, u.nickname, u.github_login, u.display_name, ''),
+			COALESCE(ur.remark, u.nickname, CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(u.github_login, '') END, u.display_name, ''),
 			a.visibility, a.status, a.file_name, a.mime_type, a.byte_size,
 			a.created_at, a.completed_at
 		FROM message_attachments ma
@@ -1038,8 +1038,8 @@ func listReactions(ctx context.Context, queryer pgQueryer, spaceID, viewerID str
 	rows, err := queryer.Query(ctx, `
 		SELECT
 			mr.message_id, mr.emote_key, mr.created_at,
-			u.id, COALESCE(ur.remark, u.nickname, u.github_login, u.display_name, ''),
-			u.github_login, u.avatar_url
+			u.id, COALESCE(ur.remark, u.nickname, CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(u.github_login, '') END, u.display_name, ''),
+			CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE u.github_login END, u.avatar_url
 		FROM message_reactions mr
 		INNER JOIN users u ON u.id = mr.user_id
 		LEFT JOIN user_remarks ur ON ur.owner_user_id = $2 AND ur.target_user_id = u.id
@@ -1122,9 +1122,9 @@ func listMessageEmoteCollectionShares(ctx context.Context, queryer pgQueryer, sp
 	rows, err := queryer.Query(ctx, `
 		SELECT mes.message_id, s.id, s.snapshot_name, s.item_count, s.created_at, s.revoked_at,
 			s.shared_by_user_id,
-			COALESCE(sr.remark, su.nickname, su.github_login, su.display_name, su.id),
+			COALESCE(sr.remark, su.nickname, CASE WHEN su.kind = 'bot' OR su.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(su.github_login, '') END, su.display_name, su.id),
 			s.original_creator_user_id,
-			COALESCE(orr.remark, ou.nickname, ou.github_login, ou.display_name, ou.id)
+			COALESCE(orr.remark, ou.nickname, CASE WHEN ou.kind = 'bot' OR ou.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(ou.github_login, '') END, ou.display_name, ou.id)
 		FROM message_emote_collection_shares mes
 		INNER JOIN messages m ON m.id = mes.message_id
 			AND m.space_id = $1 AND m.deleted_at IS NULL

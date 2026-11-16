@@ -761,6 +761,32 @@ func TestSafeDeliveryPayloadDeliversMessageAndCommandContext(t *testing.T) {
 	}
 }
 
+func TestReplaySkipsSystemNullAuthorMessageWithoutPoisoningQueue(t *testing.T) {
+	repo, service, authValue, _, _ := gatewayFixture(t)
+	repo.events = []EventRecord{
+		{
+			ID: "event_sys_invite", SpaceID: authValue.SpaceID, Sequence: 1, EventType: "message.created",
+			ActorUserID: "owner_1", ConversationID: "conv_direct", TargetType: "message", TargetID: "msg_sys_invite",
+			PayloadJSON: []byte(`{"plainText":"timeStarry 邀请 Comet 加入群聊"}`), CreatedAt: repo.now(),
+		},
+		{
+			ID: "event_dm_after", SpaceID: authValue.SpaceID, Sequence: 2, EventType: "message.created",
+			ActorUserID: "owner_1", ConversationID: "conv_direct", TargetType: "message", TargetID: "msg_dm_after",
+			PayloadJSON: []byte(`{"plainText":"能收到消息吗"}`), CreatedAt: repo.now().Add(time.Second),
+		},
+	}
+	repo.triggers["conv_direct:msg_sys_invite"] = &MessageTrigger{AuthorID: "", PlainText: "timeStarry 邀请 Comet 加入群聊", ContentJSON: []byte(`{"blocks":[{"type":"text","text":"timeStarry 邀请 Comet 加入群聊"}]}`)}
+	repo.triggers["conv_direct:msg_dm_after"] = &MessageTrigger{AuthorID: "owner_1", PlainText: "能收到消息吗", ContentJSON: []byte(`{"blocks":[{"type":"text","text":"能收到消息吗"}]}`)}
+
+	result, err := service.Replay(context.Background(), authValue, ReplayInput{LastSequence: 0, Limit: 10})
+	if err != nil {
+		t.Fatalf("Replay failed after system message: %v", err)
+	}
+	if result.SyncRequired || len(result.Events) != 1 || result.Events[0].Sequence != 2 {
+		t.Fatalf("expected sequence 2 delivered cleanly, got %#v", result)
+	}
+}
+
 func isCode(err error, code string) bool {
 	var value *Error
 	return errors.As(err, &value) && value.Code == code

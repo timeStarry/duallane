@@ -42,6 +42,7 @@ export interface V1User {
   avatarUrl?: string;
   avatarColor?: string;
   description?: string;
+  botOnline?: boolean;
 }
 
 export interface TypingIndicatorEntry {
@@ -268,7 +269,17 @@ export function normalizeReactionEmoteKey(input: string): string {
   return unicodeToEmoteKey.get(trimmed) || trimmed;
 }
 
-function mapRawBlocks(rawContent: unknown): V1MessageBlock[] | undefined {
+function sanitizePublicMemberLabel(raw: string, fallback = "Bot"): string {
+  const cleaned = raw.trim().replace(/^@/, "");
+  if (!cleaned) return fallback;
+  if (cleaned.startsWith("__duallane_")) return fallback;
+  return cleaned;
+}
+
+function mapRawBlocks(
+  rawContent: unknown,
+  members?: Record<string, V1User>
+): V1MessageBlock[] | undefined {
   if (!rawContent || typeof rawContent !== "object") return undefined;
   const blocksRaw = (rawContent as Record<string, unknown>).blocks;
   if (!Array.isArray(blocksRaw) || blocksRaw.length === 0) return undefined;
@@ -278,10 +289,14 @@ function mapRawBlocks(rawContent: unknown): V1MessageBlock[] | undefined {
     if (t === "text" && typeof b.text === "string") {
       out.push({ type: "text", text: b.text });
     } else if (t === "mention" && b.userId) {
+      const uid = String(b.userId);
+      const rawLabel = String(b.label || uid);
+      const resolvedLabel =
+        members?.[uid]?.displayName || sanitizePublicMemberLabel(rawLabel, uid);
       out.push({
         type: "mention",
-        userId: String(b.userId),
-        label: String(b.label || b.userId),
+        userId: uid,
+        label: resolvedLabel,
       });
     } else if (t === "link" && b.url) {
       out.push({
@@ -303,6 +318,26 @@ function mapRawBlocks(rawContent: unknown): V1MessageBlock[] | undefined {
     }
   }
   return out.length > 0 ? out : undefined;
+}
+
+function sanitizePlainTextMentions(
+  rawPlain: string,
+  blocks: V1MessageBlock[] | undefined,
+  members?: Record<string, V1User>
+): string {
+  if (!rawPlain || !rawPlain.includes("@__duallane_")) return rawPlain;
+  let result = rawPlain;
+  if (blocks) {
+    for (const b of blocks) {
+      if (b.type === "mention") {
+        const cleanName = members?.[b.userId]?.displayName || b.label;
+        if (cleanName && !cleanName.startsWith("__duallane_")) {
+          result = result.replace(/@__duallane_[A-Za-z0-9_-]+/, `@${cleanName}`);
+        }
+      }
+    }
+  }
+  return result.replace(/@__duallane_[A-Za-z0-9_-]+/g, "@Bot");
 }
 
 function mapRawReactions(raw: unknown): Record<string, { count: number; reactedByMe: boolean }> {
@@ -475,6 +510,8 @@ function mapRawMessage(
       : typeof m.senderAvatarUrl === "string" && m.senderAvatarUrl.trim()
       ? m.senderAvatarUrl.trim()
       : undefined;
+  const mappedBlocks = recalledAt ? [] : mapRawBlocks(m.content, members);
+  const rawPlain = String(m.plainText || m.text || "");
   return {
     id,
     clientMessageId: m.clientMessageId ? String(m.clientMessageId) : undefined,
@@ -483,18 +520,21 @@ function mapRawMessage(
     senderId,
     senderName:
       members[senderId]?.displayName ||
-      String(
-        m.authorRemark ||
-          m.authorNickname ||
-          m.authorName ||
-          m.authorDisplayName ||
-          authorObj.displayName ||
-          m.senderName ||
-          (kind === "system" ? "系统通知" : "成员")
+      sanitizePublicMemberLabel(
+        String(
+          m.authorRemark ||
+            m.authorNickname ||
+            m.authorName ||
+            m.authorDisplayName ||
+            authorObj.displayName ||
+            m.senderName ||
+            ""
+        ),
+        kind === "system" ? "系统通知" : kind === "bot" ? "Bot" : "成员"
       ),
     senderAvatarUrl: members[senderId]?.avatarUrl || rawAvatar,
-    plainText: String(m.plainText || m.text || ""),
-    blocks: recalledAt ? [] : mapRawBlocks(m.content),
+    plainText: sanitizePlainTextMentions(rawPlain, mappedBlocks, members),
+    blocks: mappedBlocks,
     replyToId: recalledAt
       ? undefined
       : m.replyToMessageId
@@ -530,10 +570,15 @@ function upsertRawMemberRecord(
       : rawRole === "owner" || rawRole === "admin"
       ? rawRole
       : "member";
+  const rawHandle = m.githubLogin ? String(m.githubLogin) : m.handle ? String(m.handle) : "";
+  const cleanHandle =
+    rawHandle && !rawHandle.startsWith("__duallane_") && role !== "bot"
+      ? rawHandle
+      : undefined;
   const candidateName =
-    m.remark || m.nickname || m.displayName || m.name || m.githubLogin || m.handle;
+    m.remark || m.nickname || m.displayName || m.name || cleanHandle;
   const resolvedName = candidateName
-    ? String(candidateName)
+    ? sanitizePublicMemberLabel(String(candidateName), role === "bot" ? "Bot" : id)
     : prev?.displayName && !prev.displayName.startsWith("usr_")
     ? prev.displayName
     : id;
@@ -553,18 +598,17 @@ function upsertRawMemberRecord(
     typeof m.description === "string"
       ? m.description.trim() || undefined
       : prev?.description;
+  const nextBotOnline =
+    typeof m.botOnline === "boolean" ? m.botOnline : prev?.botOnline;
   target[id] = {
     id,
     displayName: resolvedName,
-    handle: m.githubLogin
-      ? String(m.githubLogin)
-      : m.handle
-      ? String(m.handle)
-      : prev?.handle,
+    handle: cleanHandle || prev?.handle,
     role,
     avatarUrl: nextAvatarUrl,
     avatarColor: nextAvatarColor,
     description: nextDescription,
+    ...(typeof nextBotOnline === "boolean" ? { botOnline: nextBotOnline } : {}),
   };
   return id;
 }
@@ -2271,7 +2315,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
               : s.conversations,
           };
         });
-      } catch {
+      } catch (err) {
         set((s) => ({
           messagesByConv: {
             ...s.messagesByConv,
@@ -2280,6 +2324,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             ),
           },
         }));
+        useEmoteStore
+          .getState()
+          .showToast(err instanceof Error ? err.message : "发送消息失败，请稍后重试");
       }
     },
 
@@ -2373,7 +2420,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
               : s.conversations,
           };
         });
-      } catch {
+      } catch (err) {
         set((s) => ({
           messagesByConv: {
             ...s.messagesByConv,
@@ -2382,6 +2429,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             ),
           },
         }));
+        useEmoteStore
+          .getState()
+          .showToast(err instanceof Error ? err.message : "贴纸发送失败，请稍后重试");
       }
     },
 

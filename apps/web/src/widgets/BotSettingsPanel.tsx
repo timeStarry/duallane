@@ -97,7 +97,7 @@ function buildPairingPrompt(botName: string, origin: string, sessionId: string):
     `2. 无需 npm，直接从当前实例下载零依赖单文件运行时（含 CLI / MCP / 实时监听）：`,
     `   mkdir -p ~/.duallane/bin && curl -fsSL "${runtimeUrl}" -o ~/.duallane/bin/duallane-agent.mjs && chmod +x ~/.duallane/bin/duallane-agent.mjs`,
     `3. 使用一次性配对地址发起绑定（无需手动粘贴 Token）：${setupUrl}`,
-    `发起请求后提醒我在网页点击「确认授权」，完成后运行 node ~/.duallane/bin/duallane-agent.mjs wait 即可持续接收并回复实时消息。`,
+    `发起请求后提醒我在网页点击「确认授权」；授权完成后请运行 node ~/.duallane/bin/duallane-agent.mjs daemon install --profile default --agent auto 注册常驻后台守护服务（支持断线自愈重连、私聊/群聊自动唤醒回复与群聊只读安全隔离）。`,
   ].join("\n");
 }
 

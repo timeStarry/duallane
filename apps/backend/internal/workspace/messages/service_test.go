@@ -520,6 +520,32 @@ func TestProjectMessageExactJSONProjection(t *testing.T) {
 		t.Fatalf("projection contains null arrays: %s", serialized)
 	}
 
+	// Regression: synthetic __duallane_bot_* github_login must never override bot DisplayName in mentions or authorName.
+	botLabel := displayName(MentionMember{
+		ID:          "usr_bot_comet",
+		GitHubLogin: "__duallane_bot_4fd877150a26c0fa6505fe88",
+		DisplayName: "Comet",
+		Kind:        "bot",
+	})
+	if botLabel != "Comet" {
+		t.Fatalf("expected bot mention label 'Comet', got %q", botLabel)
+	}
+	botMsg, err := ProjectMessage(MessageRecord{
+		ID:                "msg-bot-1",
+		ConversationID:    "conv-1",
+		AuthorID:          stringPointerValue("usr_bot_comet"),
+		AuthorName:        "Comet",
+		AuthorGitHubLogin: "__duallane_bot_4fd877150a26c0fa6505fe88",
+		AuthorKind:        "bot",
+		Kind:              "bot",
+		ContentJSON:       mustJSON(Content{Format: MessageContentFormat, Blocks: []Block{{Type: "text", Text: "hi"}}}),
+		PlainText:         "hi",
+		CreatedAt:         createdAt,
+	}, nil, nil)
+	if err != nil || botMsg.AuthorName != "Comet" || botMsg.AuthorGitHubLogin != "" {
+		t.Fatalf("expected clean bot projection, got authorName=%q login=%q err=%v", botMsg.AuthorName, botMsg.AuthorGitHubLogin, err)
+	}
+
 	reason := "重新组织内容"
 	recalledAt := createdAt.Add(time.Second)
 	record.RecalledAt = &recalledAt

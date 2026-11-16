@@ -12,6 +12,13 @@ import {
 } from "../src/index.js";
 import { createDualLaneMcpServer, DUALLANE_MCP_TOOLS, startDualLaneMcpStdioServer } from "../src/mcp.js";
 import {
+  buildDaemonAgentPrompt,
+  buildLaunchdPlistXml,
+  buildSystemdUnitFile,
+  manageDaemonCli,
+  runResidentDaemon,
+} from "../src/daemon.js";
+import {
   DEFAULT_SETUP_SCOPES,
   deleteAgentProfile,
   loadAgentProfile,
@@ -31,6 +38,11 @@ export {
   DUALLANE_MCP_TOOLS,
   createDualLaneMcpServer,
   startDualLaneMcpStdioServer,
+  manageDaemonCli,
+  runResidentDaemon,
+  buildDaemonAgentPrompt,
+  buildLaunchdPlistXml,
+  buildSystemdUnitFile,
   loadAgentProfile,
   saveAgentProfile,
   deleteAgentProfile,
@@ -67,6 +79,7 @@ function printHelp() {
 
 Usage:
   duallane-agent setup <setup-url-or-id> [--url <origin>] [--profile default] [--name <agent-name>]
+  duallane-agent daemon <install|start|stop|restart|uninstall|status|logs|run> [--agent auto|codex|claude|cmd] [--workdir <dir>] [--sandbox read-only|workspace-write] [--profile default]
   duallane-agent mcp [--profile default]
   duallane-agent status [--profile default]
   duallane-agent conversations [--profile default]
@@ -618,6 +631,11 @@ async function main() {
         2
       ) + "\n"
     );
+    return;
+  }
+
+  if (subcommand === "daemon") {
+    await manageDaemonCli(positionals.slice(1), flags);
     return;
   }
 

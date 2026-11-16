@@ -758,7 +758,7 @@ func (s *Service) RecallMessage(ctx context.Context, input RecallInput) (Message
 				reason = normalized
 			}
 		}
-		recallText := firstNonEmpty(actor.Nickname, actor.GitHubLogin, actor.DisplayName, "成员") + "因" + reason + "撤回了一条消息"
+		recallText := firstNonEmpty(actor.Nickname, publicGitHubLogin(actor.GitHubLogin, actor.Kind), actor.DisplayName, "成员") + "因" + reason + "撤回了一条消息"
 		emptyContent := Content{Format: MessageContentFormat, PlainText: "", Blocks: make([]Block, 0)}
 		emptyContentJSON, err := canonicalContent(emptyContent)
 		if err != nil {

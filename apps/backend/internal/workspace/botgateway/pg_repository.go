@@ -468,7 +468,7 @@ func (r *PGRepository) ListContextMessages(ctx context.Context, spaceID, convers
 func listContextMessages(ctx context.Context, queryer pgQueryer, spaceID, conversationID string, since time.Time, includeReplies, includeSystemEvents bool, limit int) ([]ContextMessageRecord, error) {
 	limit = boundedLimit(limit, 50, MaxReplayLimit)
 	query := `
-		SELECT id, conversation_id, author_id, author_kind, kind, content_format,
+		SELECT id, conversation_id, COALESCE(author_id, ''), author_kind, kind, content_format,
 		       content_json, plain_text, reply_to_message_id, created_at
 		FROM messages
 		WHERE space_id = $1 AND conversation_id = $2 AND deleted_at IS NULL AND created_at >= $3
@@ -760,16 +760,20 @@ func (r *PGRepository) GetMessageTrigger(ctx context.Context, spaceID, conversat
 func getMessageTrigger(ctx context.Context, queryer pgQueryer, spaceID, conversationID, messageID string) (*MessageTrigger, error) {
 	var value MessageTrigger
 	var content string
+	var kind string
 	err := queryer.QueryRow(ctx, `
-		SELECT author_id, content_json, plain_text, deleted_at, recalled_at
+		SELECT COALESCE(author_id, ''), kind, content_json, plain_text, deleted_at, recalled_at
 		FROM messages
 		WHERE id = $1 AND space_id = $2 AND conversation_id = $3
-	`, messageID, spaceID, conversationID).Scan(&value.AuthorID, &content, &value.PlainText, &value.DeletedAt, &value.RecalledAt)
+	`, messageID, spaceID, conversationID).Scan(&value.AuthorID, &kind, &content, &value.PlainText, &value.DeletedAt, &value.RecalledAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, internalError("read bot trigger message", err)
+	}
+	if kind == "system" || strings.TrimSpace(value.AuthorID) == "" {
+		return nil, nil
 	}
 	value.ContentJSON = []byte(content)
 	if value.DeletedAt != nil {

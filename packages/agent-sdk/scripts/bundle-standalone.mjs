@@ -12,6 +12,7 @@ const sourceFiles = [
   "src/v2.js",
   "src/profile-store.js",
   "src/mcp.js",
+  "src/daemon.js",
   "bin/duallane-agent.mjs",
 ];
 
@@ -36,7 +37,7 @@ const header = `#!/usr/bin/env node
  *   curl -fsSL https://<duallane-host>/integrations/duallane-agent.mjs -o ~/.duallane/bin/duallane-agent.mjs
  *   chmod +x ~/.duallane/bin/duallane-agent.mjs
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
