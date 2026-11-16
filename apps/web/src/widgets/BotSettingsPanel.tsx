@@ -18,6 +18,7 @@ import {
   Unlink,
   X,
 } from "lucide-react";
+import { useEmoteStore } from "@/entities/emote/store";
 import { useLaneStore } from "@/entities/lane/store";
 import { useWorkspaceStore } from "@/entities/workspace/store";
 import {
@@ -81,6 +82,8 @@ const DEFAULT_PAIRING_SCOPES = [
   "cards:write",
   "cards:act",
   "commands:receive",
+  "files:read_metadata",
+  "files:write",
 ];
 
 const SCOPE_LABEL_MAP: Record<string, string> = Object.fromEntries(
@@ -154,15 +157,22 @@ async function copyTextSafe(text: string): Promise<boolean> {
     // Fallback below
   }
   try {
+    const container =
+      (typeof document !== "undefined" &&
+        (document.querySelector('[role="dialog"]') as HTMLElement | null)) ||
+      document.body;
     const el = document.createElement("textarea");
     el.value = text;
+    el.setAttribute("readonly", "true");
     el.style.position = "fixed";
     el.style.opacity = "0";
-    document.body.appendChild(el);
+    el.style.pointerEvents = "none";
+    container.appendChild(el);
+    el.focus();
     el.select();
-    document.execCommand("copy");
-    document.body.removeChild(el);
-    return true;
+    const ok = document.execCommand("copy");
+    container.removeChild(el);
+    return ok;
   } catch {
     return false;
   }
@@ -232,6 +242,7 @@ export function BotSettingsPanel() {
   >({});
   const [confirmDeleteBotId, setConfirmDeleteBotId] = useState<string>("");
   const botAvatarInputRef = useRef<HTMLInputElement | null>(null);
+  const setupCardRef = useRef<HTMLDivElement | null>(null);
   const [connection, setConnection] = useState<BotConnectionInfo | null>(() =>
     isPreviewMode
       ? {
@@ -517,6 +528,12 @@ export function BotSettingsPanel() {
 
   const handleStartPairing = async () => {
     if (!activeBot) return;
+    if (activeBot.status === "paused") {
+      const msg = "机器人处于暂停状态，请先恢复运行后再生成配对指令";
+      setErrorMessage(msg);
+      useEmoteStore.getState().showToast(msg);
+      return;
+    }
     setErrorMessage("");
     setBusyAction("pair");
     try {
@@ -535,6 +552,10 @@ export function BotSettingsPanel() {
         await copyTextSafe(prompt);
         markCopied("prompt");
         setStatusMessage("配对指令已复制，发给任意 AI Agent 即可发起连接");
+        useEmoteStore.getState().showToast("Agent 配对指令已复制");
+        window.requestAnimationFrame(() => {
+          setupCardRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        });
         return;
       }
 
@@ -546,13 +567,20 @@ export function BotSettingsPanel() {
       setPairingPromptText(prompt);
       const copied = await copyTextSafe(prompt);
       if (copied) markCopied("prompt");
-      setStatusMessage(
-        copied
-          ? "配对指令已复制，粘贴给 Claude Code / Codex / Cursor / Antigravity 等任意 Agent 即可"
-          : "配对会话已创建，请复制下方指令发给 Agent"
-      );
+      const msg = copied
+        ? "配对指令已复制，粘贴给 Claude Code / Codex / Cursor / Antigravity 等任意 Agent 即可"
+        : "配对会话已就绪，请点击下方卡片中的「复制配对指令」";
+      setStatusMessage(msg);
+      useEmoteStore
+        .getState()
+        .showToast(copied ? "Agent 配对指令已复制" : "配对指令已生成，请点击复制按钮");
+      window.requestAnimationFrame(() => {
+        setupCardRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "创建配对会话失败");
+      const errMsg = err instanceof Error ? err.message : "创建配对会话失败";
+      setErrorMessage(errMsg);
+      useEmoteStore.getState().showToast(errMsg);
     } finally {
       setBusyAction("");
     }
@@ -1069,7 +1097,10 @@ export function BotSettingsPanel() {
         setupSession.status !== "denied" &&
         setupSession.status !== "expired" &&
         setupSession.status !== "revoked" && (
-          <div className="rounded-2xl border border-dl-lane-shared/35 bg-dl-lane-shared/[0.06] p-4 space-y-3">
+          <div
+            ref={setupCardRef}
+            className="rounded-2xl border border-dl-lane-shared/35 bg-dl-lane-shared/[0.06] p-4 space-y-3"
+          >
             <div className="flex items-start justify-between gap-2">
               <div className="space-y-0.5">
                 <div className="flex items-center gap-1.5 text-xs font-semibold text-dl-text-primary">
@@ -1114,7 +1145,10 @@ export function BotSettingsPanel() {
                   className="gap-1.5"
                   onClick={() => {
                     void copyTextSafe(pairingPromptText).then((ok) => {
-                      if (ok) markCopied("prompt");
+                      if (ok) {
+                        markCopied("prompt");
+                        useEmoteStore.getState().showToast("Agent 配对指令已复制");
+                      }
                     });
                   }}
                 >
@@ -1509,8 +1543,18 @@ export function BotSettingsPanel() {
                 disabled={busyAction === "pair"}
                 onClick={() => void handleStartPairing()}
               >
-                <Link2 className="size-3.5" />
-                生成并复制 Agent 配对指令
+                {busyAction === "pair" ? (
+                  <RefreshCw className="size-3.5 animate-spin" />
+                ) : copiedKey === "prompt" ? (
+                  <Check className="size-3.5" />
+                ) : (
+                  <Link2 className="size-3.5" />
+                )}
+                {busyAction === "pair"
+                  ? "正在生成配对指令…"
+                  : copiedKey === "prompt"
+                  ? "已复制 Agent 配对指令"
+                  : "生成并复制 Agent 配对指令"}
               </Button>
               <Button
                 type="button"
@@ -1522,6 +1566,7 @@ export function BotSettingsPanel() {
                     if (ok) {
                       markCopied("mcp");
                       setStatusMessage("标准 MCP 配置 JSON 已复制");
+                      useEmoteStore.getState().showToast("标准 MCP 配置 JSON 已复制");
                     }
                   });
                 }}
