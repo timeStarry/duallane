@@ -159,6 +159,22 @@ export const apiV1 = {
     requestJSON<{ ok?: boolean; workspace?: { enabled?: boolean } }>("/api/health"),
   getBootstrap: async () => {
     try {
+      const win =
+        typeof window !== "undefined"
+          ? (window as unknown as { __dlEarlyBootstrap?: Promise<Response> | null })
+          : null;
+      if (win?.__dlEarlyBootstrap) {
+        const earlyPromise = win.__dlEarlyBootstrap;
+        win.__dlEarlyBootstrap = null;
+        try {
+          const res = await earlyPromise;
+          if (res.ok) {
+            return (await res.json()) as Record<string, unknown>;
+          }
+        } catch {
+          // Fall through to standard requestJSON
+        }
+      }
       return await requestJSON<Record<string, unknown>>("/api/v1/bootstrap");
     } catch (err) {
       if (err instanceof ApiClientError && err.status === 404) {
@@ -255,6 +271,22 @@ export const apiV1 = {
     }),
   getThread: (messageId: string) =>
     requestJSON<ThreadViewResponse>(`/api/v1/messages/${encodeURIComponent(messageId)}/thread`),
+  listConversationThreads: (conversationId: string) =>
+    requestJSON<{
+      threads: Array<{
+        rootMessageId: string;
+        conversationId: string;
+        threadTitle?: string;
+        rootAuthorId: string;
+        rootAuthorName: string;
+        rootPlainText: string;
+        rootCreatedAt: string;
+        replyCount: number;
+        lastRepliedAt: string;
+        lastAuthorName: string;
+        lastPlainText: string;
+      }>;
+    }>(`/api/v1/conversations/${encodeURIComponent(conversationId)}/threads`),
   replyThread: (messageId: string, plainText: string, alsoSendToChannel: boolean, threadTitle?: string) =>
     requestJSON<ThreadReplyItem>(`/api/v1/messages/${encodeURIComponent(messageId)}/thread`, {
       method: "POST",

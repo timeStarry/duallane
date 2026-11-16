@@ -42,6 +42,12 @@ type MessageShareReader interface {
 	ListMessageEmoteCollectionShares(ctx context.Context, spaceID, viewerID string, messageIDs []string) (map[string]map[string]EmoteCollectionShare, error)
 }
 
+// MessageThreadSummaryReader is an optional read-only extension for Feishu-style
+// inline thread reply count and preview projection on root messages.
+type MessageThreadSummaryReader interface {
+	ListMessageThreadSummaries(ctx context.Context, spaceID, viewerID string, messageIDs []string) (map[string]MessageThreadSummary, error)
+}
+
 // BuiltinEmoteSource resolves only the public image source for an imported
 // built-in emote. The catalog remains owned by the emote domain; messages
 // accepts this tiny read adapter so it does not import or duplicate catalog

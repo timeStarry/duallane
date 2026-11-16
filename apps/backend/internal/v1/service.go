@@ -46,6 +46,7 @@ type Repository interface {
 	EditMessage(ctx context.Context, actorID, messageID, plainText string, now time.Time) error
 	ForwardMessages(ctx context.Context, actorID, targetConversationID string, messageIDs []string, now time.Time) ([]string, error)
 	GetThread(ctx context.Context, actorID, rootMessageID string) (ThreadView, error)
+	ListConversationThreads(ctx context.Context, actorID, conversationID string) ([]ConversationThreadItem, error)
 	ReplyThread(ctx context.Context, actorID, rootMessageID, plainText, threadTitle string, alsoSendToChannel bool, now time.Time) (ThreadReply, error)
 	PinMessage(ctx context.Context, actorID, conversationID, messageID string, now time.Time) error
 	UnpinMessage(ctx context.Context, actorID, conversationID, messageID string) error
@@ -345,6 +346,13 @@ func (s *Service) GetThread(ctx context.Context, actorID, rootMessageID string) 
 		return ThreadView{}, ErrInvalidInput
 	}
 	return s.repo.GetThread(ctx, actorID, rootMessageID)
+}
+
+func (s *Service) ListConversationThreads(ctx context.Context, actorID, conversationID string) ([]ConversationThreadItem, error) {
+	if strings.TrimSpace(conversationID) == "" {
+		return nil, ErrInvalidInput
+	}
+	return s.repo.ListConversationThreads(ctx, actorID, strings.TrimSpace(conversationID))
 }
 
 func (s *Service) ReplyThread(ctx context.Context, actorID, rootMessageID, plainText, threadTitle string, alsoSendToChannel bool) (ThreadReply, error) {

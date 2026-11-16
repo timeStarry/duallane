@@ -99,7 +99,16 @@ export interface V1Message {
   blocks?: V1MessageBlock[];
   replyToId?: string;
   threadRootId?: string;
+  threadTitle?: string;
   threadReplyCount?: number;
+  threadLastRepliedAt?: string;
+  threadPreviewReplies?: Array<{
+    id: string;
+    authorId: string;
+    authorName: string;
+    plainText: string;
+    createdAt: string;
+  }>;
   editedAt?: string;
   recalledAt?: string;
   createdAt: string;
@@ -601,7 +610,25 @@ function mapRawMessage(
       ? String(m.replyToId)
       : undefined,
     threadRootId: m.threadRootId ? String(m.threadRootId) : undefined,
+    threadTitle: m.threadTitle ? String(m.threadTitle) : undefined,
     threadReplyCount: Number(m.threadReplyCount || m.replyCount || 0),
+    threadLastRepliedAt: m.threadLastRepliedAt ? String(m.threadLastRepliedAt) : undefined,
+    threadPreviewReplies: Array.isArray(m.threadPreviewReplies)
+      ? m.threadPreviewReplies
+          .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+          .map((item) => {
+            const aid = String(item.authorId || "");
+            return {
+              id: String(item.id || ""),
+              authorId: aid,
+              authorName:
+                members[aid]?.displayName ||
+                sanitizePublicMemberLabel(String(item.authorName || ""), "成员"),
+              plainText: String(item.plainText || ""),
+              createdAt: String(item.createdAt || createdAt),
+            };
+          })
+      : undefined,
     editedAt: m.editedAt ? String(m.editedAt) : undefined,
     recalledAt,
     createdAt,
@@ -979,6 +1006,7 @@ interface BootstrapShellSnapshot {
   userPreferences: Record<string, unknown>;
   activeConversationId: string | null;
   activeMessages: V1Message[];
+  cachedMessagesByConv?: Record<string, V1Message[]>;
 }
 
 function getSafeBrowserStorage(): Storage | null {
@@ -1026,6 +1054,10 @@ function loadBootstrapShellCache(): BootstrapShellSnapshot | null {
           : {},
       activeConversationId: parsed.activeConversationId ?? null,
       activeMessages: Array.isArray(parsed.activeMessages) ? parsed.activeMessages : [],
+      cachedMessagesByConv:
+        parsed.cachedMessagesByConv && typeof parsed.cachedMessagesByConv === "object"
+          ? parsed.cachedMessagesByConv
+          : undefined,
     };
   } catch {
     return null;
@@ -1063,6 +1095,13 @@ function saveBootstrapShellCache(state: {
         ? state.activeConversationId
         : cappedOrder[0] || null;
     const activeMessages = activeId ? (state.messagesByConv[activeId] || []).slice(-30) : [];
+    const cachedMessagesByConv: Record<string, V1Message[]> = {};
+    for (const cid of cappedOrder.slice(0, 8)) {
+      const list = state.messagesByConv[cid];
+      if (list && list.length > 0) {
+        cachedMessagesByConv[cid] = list.slice(-25);
+      }
+    }
     const payload: BootstrapShellSnapshot = {
       version: 1,
       savedAt: Date.now(),
@@ -1076,6 +1115,7 @@ function saveBootstrapShellCache(state: {
       userPreferences: state.userPreferences,
       activeConversationId: activeId,
       activeMessages,
+      cachedMessagesByConv,
     };
     storage.setItem(BOOTSTRAP_SHELL_CACHE_KEY, JSON.stringify(payload));
   } catch {
@@ -2018,7 +2058,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       if (
         get().authStatus !== "authenticated" &&
         typeof window !== "undefined" &&
-        window.location?.pathname?.startsWith("/workspace")
+        !window.location?.pathname?.startsWith("/direct") &&
+        !(window.location?.hash || "").includes("#k=")
       ) {
         const cached = loadBootstrapShellCache();
         if (cached) {
@@ -2028,6 +2069,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           useDisplayPrefsStore
             .getState()
             .hydrateFromAccountPreferences(cached.userPreferences);
+          const hydratedMessages: Record<string, V1Message[]> = {
+            ...(cached.cachedMessagesByConv || {}),
+          };
+          if (
+            cached.activeConversationId &&
+            cached.activeMessages.length > 0 &&
+            !hydratedMessages[cached.activeConversationId]
+          ) {
+            hydratedMessages[cached.activeConversationId] = cached.activeMessages;
+          }
           set({
             authStatus: "authenticated",
             workspaceAvailability: "ready",
@@ -2042,9 +2093,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             pinnedConversationIds: cached.pinnedConversationIds,
             userPreferences: cached.userPreferences,
             activeConversationId: cached.activeConversationId,
-            messagesByConv: cached.activeConversationId
-              ? { [cached.activeConversationId]: cached.activeMessages }
-              : {},
+            messagesByConv: hydratedMessages,
           });
         }
       }
@@ -3261,12 +3310,38 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             replyCount: 0,
             replies: [],
           };
+          const nextCount = existing.replyCount + 1;
+          const convMsgs = s.messagesByConv[convId];
           return {
+            messagesByConv: convMsgs
+              ? {
+                  ...s.messagesByConv,
+                  [convId]: convMsgs.map((m) =>
+                    m.id === rootMessageId
+                      ? {
+                          ...m,
+                          threadReplyCount: Math.max((m.threadReplyCount || 0) + 1, nextCount),
+                          threadLastRepliedAt: reply.createdAt,
+                          threadPreviewReplies: [
+                            ...(m.threadPreviewReplies || []),
+                            {
+                              id: reply.id,
+                              authorId: reply.authorId,
+                              authorName: reply.authorName,
+                              plainText: reply.plainText,
+                              createdAt: reply.createdAt,
+                            },
+                          ].slice(-3),
+                        }
+                      : m
+                  ),
+                }
+              : s.messagesByConv,
             threadsByRootId: {
               ...s.threadsByRootId,
               [rootMessageId]: {
                 ...existing,
-                replyCount: existing.replyCount + 1,
+                replyCount: nextCount,
                 replies: [...existing.replies, reply],
               },
             },
@@ -3285,12 +3360,40 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           replyCount: 0,
           replies: [],
         };
+        const nextCount = existing.replyCount + 1;
+        const convMsgs = s.messagesByConv[reply.conversationId];
+        const updatedMessagesByConv = convMsgs
+          ? {
+              ...s.messagesByConv,
+              [reply.conversationId]: convMsgs.map((m) =>
+                m.id === rootMessageId
+                  ? {
+                      ...m,
+                      threadReplyCount: Math.max((m.threadReplyCount || 0) + 1, nextCount),
+                      threadLastRepliedAt: reply.createdAt,
+                      threadPreviewReplies: [
+                        ...(m.threadPreviewReplies || []),
+                        {
+                          id: reply.id,
+                          authorId: reply.authorId,
+                          authorName:
+                            s.members[reply.authorId]?.displayName || reply.authorName || "我",
+                          plainText: reply.plainText,
+                          createdAt: reply.createdAt,
+                        },
+                      ].slice(-3),
+                    }
+                  : m
+              ),
+            }
+          : s.messagesByConv;
         return {
+          messagesByConv: updatedMessagesByConv,
           threadsByRootId: {
             ...s.threadsByRootId,
             [rootMessageId]: {
               ...existing,
-              replyCount: existing.replyCount + 1,
+              replyCount: nextCount,
               replies: [...existing.replies, reply],
             },
           },

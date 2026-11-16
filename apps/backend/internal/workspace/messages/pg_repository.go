@@ -223,6 +223,13 @@ func (s *PGRepository) ListMessageEmoteCollectionShares(ctx context.Context, spa
 	return listMessageEmoteCollectionShares(ctx, s.pool, spaceID, viewerID, messageIDs, s.builtinEmoteSource)
 }
 
+func (s *PGRepository) ListMessageThreadSummaries(ctx context.Context, spaceID, viewerID string, messageIDs []string) (map[string]MessageThreadSummary, error) {
+	if s == nil || s.pool == nil {
+		return nil, errors.New("workspace messages postgres pool is required")
+	}
+	return listMessageThreadSummaries(ctx, s.pool, spaceID, viewerID, messageIDs)
+}
+
 func (s *PGRepository) FindMentionMember(ctx context.Context, spaceID, conversationID, userID string) (*MentionMember, error) {
 	if s == nil || s.pool == nil {
 		return nil, errors.New("workspace messages postgres pool is required")
@@ -344,6 +351,10 @@ func (t *pgTx) ListMessageEmoteCollectionShares(ctx context.Context, spaceID, vi
 		source = t.repository.builtinEmoteSource
 	}
 	return listMessageEmoteCollectionShares(ctx, t.tx, spaceID, viewerID, messageIDs, source)
+}
+
+func (t *pgTx) ListMessageThreadSummaries(ctx context.Context, spaceID, viewerID string, messageIDs []string) (map[string]MessageThreadSummary, error) {
+	return listMessageThreadSummaries(ctx, t.tx, spaceID, viewerID, messageIDs)
 }
 
 func (t *pgTx) FindMentionMember(ctx context.Context, spaceID, conversationID, userID string) (*MentionMember, error) {
@@ -778,7 +789,9 @@ const messageSelect = `
 		), 0) AS event_seq,
 		p.pinned_by_user_id,
 		p.created_at AS pinned_at,
-		COALESCE(m.topic_id, '') AS topic_id
+		COALESCE(m.topic_id, '') AS topic_id,
+		COALESCE(m.thread_root_id, '') AS thread_root_id,
+		COALESCE(m.thread_title, '') AS thread_title
 	FROM messages m
 	LEFT JOIN users u ON u.id = m.author_id
 	LEFT JOIN user_remarks ur ON ur.owner_user_id = $4 AND ur.target_user_id = u.id
@@ -805,7 +818,7 @@ func scanMessage(row pgx.Row) (*MessageRecord, error) {
 	err := row.Scan(&record.ID, &record.SpaceID, &record.ConversationID, &authorID, &record.AuthorName,
 		&authorNickname, &authorRemark, &authorGitHub, &authorAvatar, &record.AuthorKind, &record.Kind,
 		&clientID, &contentJSON, &record.PlainText, &replyID, &record.CreatedAt, &editedAt, &deletedAt,
-		&recalledAt, &recallReasonText, &record.Revision, &record.EventSeq, &record.PinnedByUserID, &record.PinnedAt, &record.TopicID)
+		&recalledAt, &recallReasonText, &record.Revision, &record.EventSeq, &record.PinnedByUserID, &record.PinnedAt, &record.TopicID, &record.ThreadRootID, &record.ThreadTitle)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -914,6 +927,7 @@ func listMessageWindow(ctx context.Context, queryer pgQueryer, options ListOptio
 		WHERE m.space_id = $1
 		  AND m.conversation_id = $2
 		  AND m.topic_id IS NULL
+		  AND (m.thread_root_id IS NULL OR m.also_send_to_channel = TRUE)
 		  AND m.deleted_at IS NULL
 	` + whereCursor + `
 		ORDER BY m.created_at ` + order + `, m.id ` + order + `
@@ -956,7 +970,7 @@ func scanMessageRows(rows pgx.Rows) (*MessageRecord, error) {
 	err := rows.Scan(&record.ID, &record.SpaceID, &record.ConversationID, &authorID, &record.AuthorName,
 		&authorNickname, &authorRemark, &authorGitHub, &authorAvatar, &record.AuthorKind, &record.Kind,
 		&clientID, &contentJSON, &record.PlainText, &replyID, &record.CreatedAt, &editedAt, &deletedAt,
-		&recalledAt, &recallReason, &record.Revision, &record.EventSeq, &record.PinnedByUserID, &record.PinnedAt, &record.TopicID)
+		&recalledAt, &recallReason, &record.Revision, &record.EventSeq, &record.PinnedByUserID, &record.PinnedAt, &record.TopicID, &record.ThreadRootID, &record.ThreadTitle)
 	if err != nil {
 		return nil, err
 	}
@@ -1332,5 +1346,73 @@ func normalizeTimestamp(value time.Time) time.Time {
 	return value.UTC().Truncate(time.Millisecond)
 }
 
+func listMessageThreadSummaries(ctx context.Context, queryer pgQueryer, spaceID, viewerID string, messageIDs []string) (map[string]MessageThreadSummary, error) {
+	result := make(map[string]MessageThreadSummary)
+	if len(messageIDs) == 0 {
+		return result, nil
+	}
+	rows, err := queryer.Query(ctx, `
+		WITH ranked AS (
+			SELECT
+				m.thread_root_id,
+				m.id,
+				COALESCE(m.author_id, '') AS author_id,
+				COALESCE(
+					NULLIF(ur.remark, ''),
+					NULLIF(u.nickname, ''),
+					CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(u.github_login, '') END,
+					NULLIF(u.display_name, ''),
+					CASE WHEN m.author_kind = 'bot' THEN 'Bot' ELSE '成员' END
+				) AS author_name,
+				COALESCE(m.plain_text, '') AS plain_text,
+				m.created_at,
+				COUNT(*) OVER (PARTITION BY m.thread_root_id)::int AS total_count,
+				MAX(m.created_at) OVER (PARTITION BY m.thread_root_id) AS last_replied_at,
+				ROW_NUMBER() OVER (PARTITION BY m.thread_root_id ORDER BY m.created_at DESC, m.id DESC) AS rn
+			FROM messages m
+			LEFT JOIN users u ON u.id = m.author_id
+			LEFT JOIN user_remarks ur ON ur.owner_user_id = $2 AND ur.target_user_id = u.id
+			WHERE m.space_id = $1
+				AND m.thread_root_id = ANY($3::text[])
+				AND m.deleted_at IS NULL
+				AND m.recalled_at IS NULL
+		)
+		SELECT thread_root_id, id, author_id, author_name, plain_text, created_at, total_count, last_replied_at
+		FROM ranked
+		WHERE rn <= 3
+		ORDER BY thread_root_id ASC, created_at ASC, id ASC
+	`, normalizeSpaceID(spaceID), strings.TrimSpace(viewerID), messageIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			rootID, replyID, authorID, authorName, plainText string
+			createdAt, lastRepliedAt                         time.Time
+			totalCount                                       int
+		)
+		if scanErr := rows.Scan(&rootID, &replyID, &authorID, &authorName, &plainText, &createdAt, &totalCount, &lastRepliedAt); scanErr != nil {
+			return nil, scanErr
+		}
+		summary := result[rootID]
+		summary.ReplyCount = totalCount
+		summary.LastRepliedAt = formatTimestamp(lastRepliedAt.UTC())
+		summary.RecentReplies = append(summary.RecentReplies, ThreadPreviewReply{
+			ID:         replyID,
+			AuthorID:   authorID,
+			AuthorName: authorName,
+			PlainText:  plainText,
+			CreatedAt:  formatTimestamp(createdAt.UTC()),
+		})
+		result[rootID] = summary
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 var _ Repository = (*PGRepository)(nil)
 var _ RecallReasonLookup = (*PGRepository)(nil)
+var _ MessageThreadSummaryReader = (*PGRepository)(nil)

@@ -7,6 +7,7 @@ import {
   Check,
   CheckCheck,
   ChevronLeft,
+  ChevronRight,
   Clock,
   Copy,
   Download,
@@ -220,6 +221,23 @@ export function TimelinePane() {
   const [savingRemarkModal, setSavingRemarkModal] = useState(false);
   const [hugePasteByConv, setHugePasteByConv] = useState<
     Record<string, { text: string; preDraft: string } | undefined>
+  >({});
+  const [isComposingIme, setIsComposingIme] = useState(false);
+  const [topicsPopoverOpen, setTopicsPopoverOpen] = useState(false);
+  const [remoteThreadsByConv, setRemoteThreadsByConv] = useState<
+    Record<
+      string,
+      Array<{
+        rootMessageId: string;
+        threadTitle?: string;
+        rootAuthorName: string;
+        rootPlainText: string;
+        replyCount: number;
+        lastRepliedAt: string;
+        lastAuthorName: string;
+        lastPlainText: string;
+      }>
+    >
   >({});
   const [replyToId, setReplyToId] = useState<string | undefined>(undefined);
   const [pendingAttachmentsByConv, setPendingAttachmentsByConv] = useState<
@@ -1456,6 +1474,116 @@ export function TimelinePane() {
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          {(() => {
+            const localTopics = messages
+              .filter((m) => !m.recalledAt && (m.threadReplyCount || 0) > 0)
+              .map((m) => {
+                const lastPreview =
+                  m.threadPreviewReplies && m.threadPreviewReplies.length > 0
+                    ? m.threadPreviewReplies[m.threadPreviewReplies.length - 1]
+                    : undefined;
+                return {
+                  rootMessageId: m.id,
+                  threadTitle: m.threadTitle,
+                  rootAuthorName: m.senderName,
+                  rootPlainText: m.plainText || "[富媒体消息]",
+                  replyCount: m.threadReplyCount || 0,
+                  lastRepliedAt: m.threadLastRepliedAt || lastPreview?.createdAt || m.createdAt,
+                  lastAuthorName: lastPreview?.authorName || "",
+                  lastPlainText: lastPreview?.plainText || "",
+                };
+              });
+            const byRoot = new Map(localTopics.map((t) => [t.rootMessageId, t]));
+            for (const rt of remoteThreadsByConv[activeConv.id] || []) {
+              if (!byRoot.has(rt.rootMessageId)) {
+                byRoot.set(rt.rootMessageId, { ...rt, threadTitle: rt.threadTitle });
+              }
+            }
+            const mergedTopics = Array.from(byRoot.values()).sort(
+              (a, b) => Date.parse(b.lastRepliedAt) - Date.parse(a.lastRepliedAt)
+            );
+
+            return (
+              <Popover
+                open={topicsPopoverOpen}
+                onOpenChange={(nextOpen) => {
+                  setTopicsPopoverOpen(nextOpen);
+                  if (nextOpen && !useWorkspaceStore.getState().isPreviewMode) {
+                    const convId = activeConv.id;
+                    void apiV1
+                      .listConversationThreads(convId)
+                      .then((res) => {
+                        setRemoteThreadsByConv((prev) => ({
+                          ...prev,
+                          [convId]: res.threads || [],
+                        }));
+                      })
+                      .catch(() => {});
+                  }
+                }}
+              >
+                <PopoverTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-label="本会话话题列表"
+                    className="gap-1.5 text-xs text-dl-text-secondary hover:text-dl-text-primary max-narrow:px-2"
+                  >
+                    <MessageSquareText className="size-4 shrink-0" strokeWidth={1.8} />
+                    <span className="max-compact:hidden">话题</span>
+                    {mergedTopics.length > 0 && (
+                      <span className="rounded-full bg-dl-lane-shared/14 px-1.5 py-0.2 text-[10.5px] font-semibold text-dl-lane-shared tabular-nums">
+                        {mergedTopics.length}
+                      </span>
+                    )}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="end" side="bottom" className="w-80 p-2">
+                  <div className="px-2 py-1.5 flex items-center justify-between border-b border-dl-border-hairline">
+                    <span className="text-xs font-semibold text-dl-text-primary">
+                      本会话话题讨论 ({mergedTopics.length})
+                    </span>
+                    <span className="text-[11px] text-dl-text-tertiary">点击展开右侧话题栏</span>
+                  </div>
+                  {mergedTopics.length === 0 ? (
+                    <div className="px-3 py-6 text-center text-xs text-dl-text-tertiary">
+                      暂无活跃话题。将鼠标悬停在任意消息上点击「话题回复」即可发起串消息讨论。
+                    </div>
+                  ) : (
+                    <div className="dl-scroll max-h-80 overflow-y-auto divide-y divide-dl-border-hairline/60 pt-1">
+                      {mergedTopics.map((topic) => (
+                        <button
+                          key={topic.rootMessageId}
+                          type="button"
+                          onClick={() => {
+                            setTopicsPopoverOpen(false);
+                            openThreadInspector(topic.rootMessageId);
+                          }}
+                          className="w-full rounded-xl px-2.5 py-2 text-left transition-colors hover:bg-dl-surface-subtle/80 space-y-1"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate text-xs font-semibold text-dl-text-primary">
+                              {topic.threadTitle || `${topic.rootAuthorName}: ${topic.rootPlainText}`}
+                            </span>
+                            <span className="shrink-0 rounded-full bg-dl-lane-shared/12 px-1.5 py-0.5 text-[10px] font-semibold text-dl-lane-shared tabular-nums">
+                              {topic.replyCount} 条回复
+                            </span>
+                          </div>
+                          {topic.lastPlainText && (
+                            <div className="truncate text-[11px] text-dl-text-secondary">
+                              {topic.lastAuthorName ? `${topic.lastAuthorName}: ` : ""}
+                              {topic.lastPlainText}
+                            </div>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </PopoverContent>
+              </Popover>
+            );
+          })()}
+
           <Tooltip content={activeConv.kind === "group" ? "群聊设置" : "会话详情"} side="bottom">
             <Button
               size="sm"
@@ -1625,8 +1753,6 @@ export function TimelinePane() {
 
             const repliedMsg = msg.replyToId ? messageMap.get(msg.replyToId) : undefined;
             const isPinned = activeConv.pinnedMessageIds.includes(msg.id);
-            const hasReactionsOrThread =
-              Object.keys(msg.reactions).length > 0 || (msg.threadReplyCount || 0) > 0;
             const favoritableSource = extractFavoritableSource(msg);
             const isEditableTextMsg =
               isOwn &&
@@ -2293,8 +2419,21 @@ export function TimelinePane() {
                                   )}
                                 </div>
 
-                          {/* Reactions & Thread Entry Pill */}
-                          {hasReactionsOrThread && (
+                          {/* Channel-forwarded thread reply backlink */}
+                          {msg.threadRootId && !msg.recalledAt && (
+                            <button
+                              type="button"
+                              onClick={() => openThreadInspector(msg.threadRootId!)}
+                              className="mt-1 inline-flex items-center gap-1 rounded-full bg-dl-lane-shared/10 px-2.5 py-0.5 text-[11px] font-medium text-dl-lane-shared transition-colors hover:bg-dl-lane-shared/18"
+                            >
+                              <MessageSquareText className="size-3 shrink-0" strokeWidth={2} />
+                              <span>源自话题讨论 · 查看话题</span>
+                              <ChevronRight className="size-3 shrink-0" strokeWidth={2} />
+                            </button>
+                          )}
+
+                          {/* Reactions Row */}
+                          {Object.keys(msg.reactions).length > 0 && (
                             <div className="mt-1.5 flex flex-wrap items-center gap-1 px-0.5">
                               {Object.entries(msg.reactions).map(([emoji, info]) => (
                                 <Button
@@ -2313,19 +2452,51 @@ export function TimelinePane() {
                                   <span>{info.count}</span>
                                 </Button>
                               ))}
-
-                              {(msg.threadReplyCount || 0) > 0 && (
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => openThreadInspector(msg.id)}
-                                  className="h-6 gap-1 rounded-full border border-dl-lane-shared/35 bg-dl-lane-shared/12 px-2.5 text-[11px] font-medium text-dl-lane-shared hover:bg-dl-lane-shared/20"
-                                >
-                                  <MessageSquareText className="size-3" strokeWidth={2} />
-                                  {msg.threadReplyCount} 条线程回复
-                                </Button>
-                              )}
                             </div>
+                          )}
+
+                          {/* Feishu-Style Inline Topic Summary & Preview Card */}
+                          {(msg.threadReplyCount || 0) > 0 && !msg.recalledAt && (
+                            <button
+                              type="button"
+                              data-testid="feishu-inline-topic-card"
+                              onClick={() => openThreadInspector(msg.id)}
+                              className={cn(
+                                "mt-1.5 flex w-fit min-w-[210px] max-w-[min(420px,80vw)] flex-col gap-1 rounded-xl border border-dl-lane-shared/25 bg-dl-surface-subtle/85 px-3 py-2 text-left transition-colors hover:border-dl-lane-shared/45 hover:bg-dl-lane-shared/[0.06]",
+                                isOwn && "items-stretch"
+                              )}
+                            >
+                              {(msg.threadPreviewReplies || []).length > 0 && (
+                                <div className="space-y-0.5 border-l-2 border-dl-lane-shared/45 pl-2">
+                                  {(msg.threadPreviewReplies || []).slice(-3).map((rep) => (
+                                    <div
+                                      key={rep.id}
+                                      className="truncate text-[11.5px] leading-snug text-dl-text-secondary"
+                                    >
+                                      <span className="font-medium text-dl-text-primary">
+                                        {rep.authorName}:{" "}
+                                      </span>
+                                      <span>{rep.plainText}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              <div className="flex items-center justify-between gap-2 text-[11px] font-medium text-dl-lane-shared">
+                                <span className="inline-flex items-center gap-1 tabular-nums">
+                                  <MessageSquareText className="size-3 shrink-0" strokeWidth={2} />
+                                  <span>{msg.threadReplyCount} 条话题回复</span>
+                                  {msg.threadTitle && (
+                                    <span className="max-w-[160px] truncate text-dl-text-secondary font-normal">
+                                      · {msg.threadTitle}
+                                    </span>
+                                  )}
+                                </span>
+                                <span className="inline-flex items-center gap-0.5 text-[10.5px] opacity-85 shrink-0">
+                                  <span>参与讨论</span>
+                                  <ChevronRight className="size-3" strokeWidth={2} />
+                                </span>
+                              </div>
+                            </button>
                           )}
                         </div>
                       </ContextMenuTrigger>
@@ -2463,6 +2634,16 @@ export function TimelinePane() {
                         onClick={triggerStartReply}
                       >
                         <Reply className="size-3.5" strokeWidth={1.85} />
+                      </IconButton>
+
+                      <IconButton
+                        size="sm"
+                        variant="ghost"
+                        className="size-6 rounded-full"
+                        label="话题回复"
+                        onClick={() => openThreadInspector(msg.threadRootId || msg.id)}
+                      >
+                        <MessageSquareText className="size-3.5" strokeWidth={1.85} />
                       </IconButton>
 
                       {favoritableSource && (
@@ -2962,12 +3143,23 @@ export function TimelinePane() {
             }}
           />
 
-          <textarea
-            ref={composerRef}
-            rows={1}
-            value={draft}
-            aria-label={`发送消息到 ${activeConv.title}`}
-            onClick={(e) => setCursorPos(e.currentTarget.selectionStart || 0)}
+          <div className="relative flex min-w-0 flex-1 items-center">
+            {!draft && !isComposingIme && (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-y-0 left-0 right-0 flex items-center truncate text-sm text-dl-text-tertiary select-none"
+              >
+                {`发送消息到 ${activeConv.title}…`}
+              </span>
+            )}
+            <textarea
+              ref={composerRef}
+              rows={1}
+              value={draft}
+              aria-label={`发送消息到 ${activeConv.title}`}
+              onCompositionStart={() => setIsComposingIme(true)}
+              onCompositionEnd={() => setIsComposingIme(false)}
+              onClick={(e) => setCursorPos(e.currentTarget.selectionStart || 0)}
             onSelect={(e) => setCursorPos(e.currentTarget.selectionStart || 0)}
             onPaste={(e) => {
               if (editingMsg) return;
@@ -3090,8 +3282,9 @@ export function TimelinePane() {
               }
             }}
             placeholder={`发送消息到 ${activeConv.title}…`}
-            className="dl-scroll max-h-[132px] min-h-[24px] min-w-0 flex-1 resize-none bg-transparent py-1 text-sm leading-5 text-dl-text-primary placeholder:text-dl-text-tertiary focus:outline-none"
+            className="dl-scroll max-h-[132px] min-h-[24px] min-w-0 flex-1 resize-none bg-transparent py-1 text-sm leading-5 text-dl-text-primary placeholder:text-transparent focus:outline-none"
           />
+          </div>
 
           <div className="flex items-center gap-2 shrink-0">
             <span className="hidden wide:inline-flex items-center gap-1 text-[10px] text-dl-text-tertiary select-none">

@@ -173,9 +173,6 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 	}
 
 	canReadConversations := actorRole == "owner" || actorRole == "admin" || actorRole == "member"
-	if canReadConversations {
-		_, _ = r.GetOrCreateSavedConversation(ctx, actorID, nowUTC)
-	}
 
 	prefs := map[string]any{}
 	_ = json.Unmarshal([]byte(prefsRaw), &prefs)
@@ -321,42 +318,6 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				FROM conversation_members cm
 				JOIN conversations c ON c.id = cm.conversation_id AND c.space_id = $1
 				WHERE cm.user_id = $2 AND cm.removed_at IS NULL
-			),
-			seq_bounds AS (
-				SELECT MIN(last_read_seq) AS min_seq
-				FROM user_convs
-				WHERE last_read_seq IS NOT NULL
-			),
-			seq_unread AS (
-				SELECT m.conversation_id, COUNT(DISTINCT m.id)::int AS cnt
-				FROM seq_bounds sb
-				JOIN workspace_events we
-					ON sb.min_seq IS NOT NULL
-					AND we.space_id = $1
-					AND we.seq > sb.min_seq
-					AND we.type = 'message.created'
-				JOIN messages m ON m.id = we.target_id
-				JOIN user_convs uc ON uc.id = m.conversation_id
-				WHERE uc.last_read_seq IS NOT NULL
-					AND we.seq > uc.last_read_seq
-					AND m.space_id = $1
-					AND m.deleted_at IS NULL
-					AND m.topic_id IS NULL
-					AND m.kind <> 'system'
-					AND (m.author_id IS NULL OR m.author_id <> $2)
-				GROUP BY m.conversation_id
-			),
-			time_unread AS (
-				SELECT uc.id AS conversation_id, COUNT(m.id)::int AS cnt
-				FROM user_convs uc
-				JOIN messages m ON m.conversation_id = uc.id AND m.space_id = $1
-				WHERE uc.last_read_seq IS NULL
-					AND m.deleted_at IS NULL
-					AND m.topic_id IS NULL
-					AND m.kind <> 'system'
-					AND (m.author_id IS NULL OR m.author_id <> $2)
-					AND (uc.last_read_at IS NULL OR m.created_at > uc.last_read_at)
-				GROUP BY uc.id
 			)
 			SELECT
 				uc.id,
@@ -399,14 +360,42 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 					   AND m_peer.author_id <> $2)
 				) AS peer_last_read_at
 			FROM user_convs uc
-			LEFT JOIN seq_unread su ON su.conversation_id = uc.id
-			LEFT JOIN time_unread tu ON tu.conversation_id = uc.id
+			LEFT JOIN LATERAL (
+				SELECT COUNT(DISTINCT m.id)::int AS cnt
+				FROM workspace_events we
+				JOIN messages m ON m.id = we.target_id
+				WHERE uc.last_read_seq IS NOT NULL
+					AND we.space_id = $1
+					AND we.conversation_id = uc.id
+					AND we.seq > uc.last_read_seq
+					AND we.type = 'message.created'
+					AND m.space_id = $1
+					AND m.deleted_at IS NULL
+					AND m.topic_id IS NULL
+					AND (m.thread_root_id IS NULL OR m.also_send_to_channel = TRUE)
+					AND m.kind <> 'system'
+					AND (m.author_id IS NULL OR m.author_id <> $2)
+			) su ON uc.last_read_seq IS NOT NULL
+			LEFT JOIN LATERAL (
+				SELECT COUNT(m.id)::int AS cnt
+				FROM messages m
+				WHERE uc.last_read_seq IS NULL
+					AND m.conversation_id = uc.id
+					AND m.space_id = $1
+					AND m.deleted_at IS NULL
+					AND m.topic_id IS NULL
+					AND (m.thread_root_id IS NULL OR m.also_send_to_channel = TRUE)
+					AND m.kind <> 'system'
+					AND (m.author_id IS NULL OR m.author_id <> $2)
+					AND (uc.last_read_at IS NULL OR m.created_at > uc.last_read_at)
+			) tu ON uc.last_read_seq IS NULL
 			LEFT JOIN LATERAL (
 				SELECT m.created_at
 				FROM messages m
 				WHERE m.conversation_id = uc.id
 					AND m.space_id = $1
 					AND m.topic_id IS NULL
+					AND (m.thread_root_id IS NULL OR m.also_send_to_channel = TRUE)
 					AND m.deleted_at IS NULL
 				ORDER BY m.created_at DESC, m.id DESC
 				LIMIT 1
@@ -425,6 +414,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				WHERE m.conversation_id = uc.id
 					AND m.space_id = $1
 					AND m.topic_id IS NULL
+					AND (m.thread_root_id IS NULL OR m.also_send_to_channel = TRUE)
 					AND m.deleted_at IS NULL
 					AND NOT EXISTS (
 						SELECT 1 FROM message_hidden_states h
@@ -507,6 +497,34 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 			return V1BootstrapResponse{}, err
 		}
 		convRows.Close()
+
+		hasSaved := false
+		for i := range conversations {
+			if conversations[i].Type == "saved" {
+				hasSaved = true
+				break
+			}
+		}
+		if !hasSaved {
+			if savedID, savedErr := r.GetOrCreateSavedConversation(ctx, actorID, nowUTC); savedErr == nil && savedID != "" {
+				savedConv := V1BootstrapConversation{
+					ID:                savedID,
+					Type:              "saved",
+					Title:             "我的收藏",
+					DisplayTitle:      "我的收藏",
+					NotificationLevel: "all",
+					MemberIDs:         []string{actorID},
+					PinnedMessageIDs:  []string{},
+				}
+				convIndexByID[savedID] = len(conversations)
+				convIDs = append(convIDs, savedID)
+				conversations = append([]V1BootstrapConversation{savedConv}, conversations...)
+				// Rebuild convIndexByID after prepend
+				for idx := range conversations {
+					convIndexByID[conversations[idx].ID] = idx
+				}
+			}
+		}
 
 		if len(convIDs) > 0 {
 			cmRows, err := r.pool.Query(ctx, `
@@ -1980,6 +1998,101 @@ func (r *PGRepository) SendConversationTyping(ctx context.Context, actorID, conv
 	return expiresAt, nil
 }
 
+func (r *PGRepository) ListConversationThreads(ctx context.Context, actorID, conversationID string) ([]ConversationThreadItem, error) {
+	var isMember bool
+	if err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM conversation_members cm
+			JOIN conversations c ON c.id = cm.conversation_id AND c.space_id = $1
+			WHERE cm.conversation_id = $2 AND cm.user_id = $3 AND cm.removed_at IS NULL
+		)
+	`, r.spaceID, conversationID, actorID).Scan(&isMember); err != nil {
+		return nil, err
+	}
+	if !isMember {
+		return nil, ErrForbidden
+	}
+
+	rows, err := r.pool.Query(ctx, `
+		WITH thread_agg AS (
+			SELECT
+				r.thread_root_id,
+				COUNT(*)::int AS reply_count,
+				MAX(r.created_at) AS last_replied_at,
+				(ARRAY_AGG(r.id ORDER BY r.created_at DESC, r.id DESC))[1] AS latest_reply_id
+			FROM messages r
+			WHERE r.space_id = $1
+				AND r.conversation_id = $2
+				AND r.thread_root_id IS NOT NULL
+				AND r.deleted_at IS NULL
+				AND r.recalled_at IS NULL
+			GROUP BY r.thread_root_id
+		)
+		SELECT
+			root.id,
+			root.conversation_id,
+			coalesce(root.thread_title, ''),
+			coalesce(root.author_id, ''),
+			coalesce(
+				NULLIF(ur_root.remark, ''),
+				NULLIF(u_root.nickname, ''),
+				CASE WHEN u_root.kind = 'bot' OR u_root.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(u_root.github_login, '') END,
+				NULLIF(u_root.display_name, ''),
+				CASE WHEN root.author_kind = 'bot' THEN 'Bot' ELSE '成员' END
+			) AS root_author_name,
+			CASE WHEN root.recalled_at IS NOT NULL THEN '消息已撤回' ELSE coalesce(root.plain_text, '') END AS root_plain_text,
+			root.created_at,
+			agg.reply_count,
+			agg.last_replied_at,
+			coalesce(
+				NULLIF(ur_last.remark, ''),
+				NULLIF(u_last.nickname, ''),
+				CASE WHEN u_last.kind = 'bot' OR u_last.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(u_last.github_login, '') END,
+				NULLIF(u_last.display_name, ''),
+				CASE WHEN last_msg.author_kind = 'bot' THEN 'Bot' ELSE '成员' END
+			) AS last_author_name,
+			coalesce(last_msg.plain_text, '') AS last_plain_text
+		FROM thread_agg agg
+		JOIN messages root ON root.id = agg.thread_root_id AND root.space_id = $1 AND root.deleted_at IS NULL
+		LEFT JOIN users u_root ON u_root.id = root.author_id
+		LEFT JOIN user_remarks ur_root ON ur_root.owner_user_id = $3 AND ur_root.target_user_id = u_root.id
+		JOIN messages last_msg ON last_msg.id = agg.latest_reply_id
+		LEFT JOIN users u_last ON u_last.id = last_msg.author_id
+		LEFT JOIN user_remarks ur_last ON ur_last.owner_user_id = $3 AND ur_last.target_user_id = u_last.id
+		ORDER BY agg.last_replied_at DESC, root.id DESC
+		LIMIT 60
+	`, r.spaceID, conversationID, actorID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]ConversationThreadItem, 0, 16)
+	for rows.Next() {
+		var item ConversationThreadItem
+		var rootCreatedAt, lastRepliedAt time.Time
+		if scanErr := rows.Scan(
+			&item.RootMessageID,
+			&item.ConversationID,
+			&item.ThreadTitle,
+			&item.RootAuthorID,
+			&item.RootAuthorName,
+			&item.RootPlainText,
+			&rootCreatedAt,
+			&item.ReplyCount,
+			&lastRepliedAt,
+			&item.LastAuthorName,
+			&item.LastPlainText,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		item.RootCreatedAt = rootCreatedAt.UTC().Format(time.RFC3339Nano)
+		item.LastRepliedAt = lastRepliedAt.UTC().Format(time.RFC3339Nano)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (r *PGRepository) GetThread(ctx context.Context, actorID, rootMessageID string) (ThreadView, error) {
 	var convID, threadTitle string
 	err := r.pool.QueryRow(ctx, `
@@ -1993,12 +2106,29 @@ func (r *PGRepository) GetThread(ctx context.Context, actorID, rootMessageID str
 	}
 
 	rows, err := r.pool.Query(ctx, `
-		SELECT m.id, m.conversation_id, m.thread_root_id, m.also_send_to_channel, coalesce(m.author_id, ''), coalesce(u.display_name, '成员'), m.plain_text, m.edited_at, m.created_at
+		SELECT
+			m.id,
+			m.conversation_id,
+			m.thread_root_id,
+			m.also_send_to_channel,
+			coalesce(m.author_id, ''),
+			coalesce(
+				NULLIF(ur.remark, ''),
+				NULLIF(u.nickname, ''),
+				CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(u.github_login, '') END,
+				NULLIF(u.display_name, ''),
+				CASE WHEN m.author_kind = 'bot' THEN 'Bot' ELSE '成员' END
+			),
+			coalesce(u.avatar_url, ''),
+			m.plain_text,
+			m.edited_at,
+			m.created_at
 		FROM messages m
 		LEFT JOIN users u ON u.id = m.author_id
-		WHERE m.thread_root_id = $1 AND m.deleted_at IS NULL
-		ORDER BY m.created_at ASC
-	`, rootMessageID)
+		LEFT JOIN user_remarks ur ON ur.owner_user_id = $2 AND ur.target_user_id = u.id
+		WHERE m.thread_root_id = $1 AND m.deleted_at IS NULL AND m.recalled_at IS NULL
+		ORDER BY m.created_at ASC, m.id ASC
+	`, rootMessageID, actorID)
 	if err != nil {
 		return ThreadView{}, err
 	}
@@ -2009,7 +2139,7 @@ func (r *PGRepository) GetThread(ctx context.Context, actorID, rootMessageID str
 		var item ThreadReply
 		var editedAt *time.Time
 		var createdAt time.Time
-		if err := rows.Scan(&item.ID, &item.ConversationID, &item.ThreadRootID, &item.AlsoSendToChannel, &item.AuthorID, &item.AuthorName, &item.PlainText, &editedAt, &createdAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.ConversationID, &item.ThreadRootID, &item.AlsoSendToChannel, &item.AuthorID, &item.AuthorName, &item.AuthorAvatarURL, &item.PlainText, &editedAt, &createdAt); err != nil {
 			return ThreadView{}, err
 		}
 		if editedAt != nil {
@@ -2027,19 +2157,29 @@ func (r *PGRepository) GetThread(ctx context.Context, actorID, rootMessageID str
 }
 
 func (r *PGRepository) ReplyThread(ctx context.Context, actorID, rootMessageID, plainText, threadTitle string, alsoSendToChannel bool, now time.Time) (ThreadReply, error) {
-	var convID string
-	err := r.pool.QueryRow(ctx, `
-		SELECT m.conversation_id
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return ThreadReply{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var convID, authorName, authorAvatar string
+	err = tx.QueryRow(ctx, `
+		SELECT
+			m.conversation_id,
+			coalesce(NULLIF(u.nickname, ''), NULLIF(u.display_name, ''), '成员'),
+			coalesce(u.avatar_url, '')
 		FROM messages m
 		JOIN conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.user_id = $1 AND cm.removed_at IS NULL
+		LEFT JOIN users u ON u.id = $1
 		WHERE m.id = $2 AND m.deleted_at IS NULL
-	`, actorID, rootMessageID).Scan(&convID)
+	`, actorID, rootMessageID).Scan(&convID, &authorName, &authorAvatar)
 	if err != nil {
 		return ThreadReply{}, ErrNotFound
 	}
 
 	if threadTitle != "" {
-		_, _ = r.pool.Exec(ctx, `UPDATE messages SET thread_title = $1 WHERE id = $2 AND thread_title IS NULL`, threadTitle, rootMessageID)
+		_, _ = tx.Exec(ctx, `UPDATE messages SET thread_title = $1 WHERE id = $2 AND (thread_title IS NULL OR thread_title = '')`, threadTitle, rootMessageID)
 	}
 
 	msgID := randomID("msg")
@@ -2048,11 +2188,34 @@ func (r *PGRepository) ReplyThread(ctx context.Context, actorID, rootMessageID, 
 		"plainText": plainText,
 		"blocks":    []map[string]any{{"type": "text", "text": plainText}},
 	})
-	_, err = r.pool.Exec(ctx, `
-		INSERT INTO messages (id, space_id, conversation_id, author_id, author_kind, kind, content_format, content_json, plain_text, thread_root_id, also_send_to_channel, created_at)
-		VALUES ($1, $2, $3, $4, 'human', 'user', 'duallane.message+json;v=1', $5, $6, $7, $8, $9)
-	`, msgID, r.spaceID, convID, actorID, string(contentJSON), plainText, rootMessageID, alsoSendToChannel, now)
+	var replyToForChannel any
+	if alsoSendToChannel {
+		replyToForChannel = rootMessageID
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO messages (id, space_id, conversation_id, author_id, author_kind, kind, content_format, content_json, plain_text, reply_to_message_id, thread_root_id, also_send_to_channel, created_at)
+		VALUES ($1, $2, $3, $4, 'human', 'user', 'duallane.message+json;v=1', $5, $6, $7, $8, $9, $10)
+	`, msgID, r.spaceID, convID, actorID, string(contentJSON), plainText, replyToForChannel, rootMessageID, alsoSendToChannel, now.UTC())
 	if err != nil {
+		return ThreadReply{}, err
+	}
+
+	// Broadcast updated root message (carrying refreshed threadReplyCount & threadPreviewReplies) to all connected clients
+	if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, convID, "message.edited", "message", rootMessageID, map[string]any{
+		"conversationId": convID,
+		"messageId":      rootMessageID,
+	}, now.UTC()); err != nil {
+		return ThreadReply{}, err
+	}
+
+	// If user checked "also send to channel", broadcast message.created so main timeline shows it immediately
+	if alsoSendToChannel {
+		if err := emitMessageCreatedEvent(ctx, tx, r.spaceID, actorID, convID, msgID, now.UTC()); err != nil {
+			return ThreadReply{}, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
 		return ThreadReply{}, err
 	}
 
@@ -2062,6 +2225,8 @@ func (r *PGRepository) ReplyThread(ctx context.Context, actorID, rootMessageID, 
 		ThreadRootID:      rootMessageID,
 		AlsoSendToChannel: alsoSendToChannel,
 		AuthorID:          actorID,
+		AuthorName:        authorName,
+		AuthorAvatarURL:   authorAvatar,
 		PlainText:         plainText,
 		CreatedAt:         now.UTC().Format(time.RFC3339Nano),
 	}, nil

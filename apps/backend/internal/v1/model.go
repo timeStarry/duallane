@@ -209,6 +209,7 @@ type ThreadReply struct {
 	AlsoSendToChannel bool   `json:"alsoSendToChannel"`
 	AuthorID          string `json:"authorId"`
 	AuthorName        string `json:"authorName"`
+	AuthorAvatarURL   string `json:"authorAvatarUrl,omitempty"`
 	PlainText         string `json:"plainText"`
 	EditedAt          string `json:"editedAt,omitempty"`
 	CreatedAt         string `json:"createdAt"`
@@ -219,6 +220,20 @@ type ThreadView struct {
 	ThreadTitle   string        `json:"threadTitle,omitempty"`
 	ReplyCount    int           `json:"replyCount"`
 	Replies       []ThreadReply `json:"replies"`
+}
+
+type ConversationThreadItem struct {
+	RootMessageID  string `json:"rootMessageId"`
+	ConversationID string `json:"conversationId"`
+	ThreadTitle    string `json:"threadTitle,omitempty"`
+	RootAuthorID   string `json:"rootAuthorId"`
+	RootAuthorName string `json:"rootAuthorName"`
+	RootPlainText  string `json:"rootPlainText"`
+	RootCreatedAt  string `json:"rootCreatedAt"`
+	ReplyCount     int    `json:"replyCount"`
+	LastRepliedAt  string `json:"lastRepliedAt"`
+	LastAuthorName string `json:"lastAuthorName"`
+	LastPlainText  string `json:"lastPlainText"`
 }
 
 type UserDevice struct {

@@ -141,6 +141,9 @@ func (s *stubRepo) ForwardMessages(_ context.Context, _, _ string, ids []string,
 func (s *stubRepo) GetThread(_ context.Context, _, rootID string) (ThreadView, error) {
 	return ThreadView{RootMessageID: rootID, ReplyCount: 1, Replies: []ThreadReply{{ID: "msg_r1", ThreadRootID: rootID}}}, nil
 }
+func (s *stubRepo) ListConversationThreads(_ context.Context, _, convID string) ([]ConversationThreadItem, error) {
+	return []ConversationThreadItem{{RootMessageID: "msg_root_1", ConversationID: convID, ReplyCount: 2, RootPlainText: "讨论方案"}}, nil
+}
 func (s *stubRepo) ReplyThread(_ context.Context, actorID, rootID, text, _ string, also bool, now time.Time) (ThreadReply, error) {
 	return ThreadReply{ID: "msg_r2", ThreadRootID: rootID, AuthorID: actorID, PlainText: text, AlsoSendToChannel: also, CreatedAt: now.Format(time.RFC3339)}, nil
 }

@@ -398,8 +398,11 @@ describe("DualLane v1.0 QA Acceptance Suite", () => {
       expect(timelineHtml).toContain("text-dl-on-shared");
       expect(timelineHtml).not.toContain("bg-dl-lane-shared text-white");
       expect(timelineHtml).toContain('aria-label="更多消息操作"');
+      expect(timelineHtml).toContain('aria-label="话题回复"');
+      expect(timelineHtml).toContain('aria-label="本会话话题列表"');
       expect(timelineHtml).toContain("<textarea");
-      expect(timelineHtml).toContain("3 条线程回复");
+      expect(timelineHtml).toContain("3 条话题回复");
+      expect(timelineHtml).toContain('data-testid="feishu-inline-topic-card"');
     } finally {
       Object.assign(useWorkspaceStore.getInitialState(), prevInitial);
       useWorkspaceStore.setState(prevInitial);

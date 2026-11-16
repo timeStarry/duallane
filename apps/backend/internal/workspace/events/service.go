@@ -657,6 +657,31 @@ func safeMessage(value any, viewerID string) (map[string]any, bool) {
 	if hidden, ok := message["hiddenByCurrentUser"].(bool); ok {
 		result["hiddenByCurrentUser"] = hidden
 	}
+	for _, key := range []string{"threadRootId", "threadTitle", "threadLastRepliedAt"} {
+		if val := stringField(message, key); val != "" {
+			result[key] = val
+		}
+	}
+	if cnt, ok := safeIntField(message["threadReplyCount"]); ok && cnt > 0 {
+		result["threadReplyCount"] = cnt
+	}
+	if rawPreviews, ok := message["threadPreviewReplies"].([]any); ok && len(rawPreviews) > 0 {
+		previews := make([]any, 0, len(rawPreviews))
+		for _, item := range rawPreviews {
+			if m, ok := item.(map[string]any); ok && m != nil {
+				previews = append(previews, map[string]any{
+					"id":         publicString(m["id"]),
+					"authorId":   publicString(m["authorId"]),
+					"authorName": publicString(m["authorName"]),
+					"plainText":  publicString(m["plainText"]),
+					"createdAt":  publicString(m["createdAt"]),
+				})
+			}
+		}
+		if len(previews) > 0 {
+			result["threadPreviewReplies"] = previews
+		}
+	}
 	return result, true
 }
 

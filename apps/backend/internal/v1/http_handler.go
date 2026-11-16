@@ -123,6 +123,7 @@ func (h *HTTPHandler) Mount(r chi.Router) {
 			r.Delete("/conversations/{conversationId}/pins/{messageId}", h.handleUnpin)
 			r.Patch("/messages/{messageId}", h.handleEditMessage)
 			r.Post("/messages/forward", h.handleForwardMessages)
+			r.Get("/conversations/{conversationId}/threads", h.handleListConversationThreads)
 			r.Get("/messages/{messageId}/thread", h.handleGetThread)
 			r.Post("/messages/{messageId}/thread", h.handleReplyThread)
 			r.Get("/devices", h.handleListDevices)
@@ -389,6 +390,18 @@ func (h *HTTPHandler) handleForwardMessages(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"createdIds": ids})
+}
+
+func (h *HTTPHandler) handleListConversationThreads(w http.ResponseWriter, r *http.Request) {
+	items, err := h.service.ListConversationThreads(r.Context(), actorFromContext(r.Context()).ID, chi.URLParam(r, "conversationId"))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	if items == nil {
+		items = []ConversationThreadItem{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"threads": items})
 }
 
 func (h *HTTPHandler) handleGetThread(w http.ResponseWriter, r *http.Request) {

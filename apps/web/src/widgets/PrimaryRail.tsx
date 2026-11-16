@@ -136,8 +136,8 @@ export function PrimaryRail() {
               connectionStatus === "connected"
                 ? `实时连接正常 · 今日配额已用 ${quotaPct}%`
                 : connectionStatus === "reconnecting"
-                ? "正在重连…"
-                : "离线"
+                ? "加载中…"
+                : "未连接"
             }
             side="right"
           >
