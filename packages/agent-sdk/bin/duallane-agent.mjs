@@ -75,6 +75,7 @@ Usage:
   duallane-agent send <conversationId> <text> [--reply-to <messageId>] [--profile default]
   duallane-agent edit <messageId> <text> [--profile default]
   duallane-agent typing <conversationId> [--state thinking|typing] [--profile default]
+  duallane-agent publish-mobile <apkPath> [--title <title>] [--notes <md> | --notes-file <file>] [--profile default]
   duallane-agent unbind [--profile default]
   duallane-agent listen --cmd "<shell-command>" [--transport auto|ws|poll] [--profile default]
 
@@ -573,6 +574,30 @@ async function main() {
     const { client } = requireClient(flags.profile);
     const state = flags.state === "typing" ? "typing" : "thinking";
     const res = await client.setTyping(conversationId, { state });
+    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    return;
+  }
+
+  if (subcommand === "publish-mobile") {
+    const [apkPath] = positionals.slice(1);
+    if (!apkPath) {
+      throw new Error(
+        "Usage: duallane-agent publish-mobile <apkPath> [--title <title>] [--notes <md> | --notes-file <file>] [--profile default]"
+      );
+    }
+    const apkBytes = fs.readFileSync(apkPath);
+    let notes = typeof flags.notes === "string" ? flags.notes : undefined;
+    if (typeof flags["notes-file"] === "string" && flags["notes-file"].trim()) {
+      notes = fs.readFileSync(flags["notes-file"].trim(), "utf8");
+    }
+    const { client } = requireClient(flags.profile);
+    const res = await client.publishMobileRelease({
+      apkBytes,
+      version: typeof flags.version === "string" ? flags.version : undefined,
+      versionCode: flags["version-code"] ? Number(flags["version-code"]) : undefined,
+      title: typeof flags.title === "string" ? flags.title : undefined,
+      notes,
+    });
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
     return;
   }

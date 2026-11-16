@@ -1097,4 +1097,38 @@ func TestMobileReleaseDistributionEndpoints(t *testing.T) {
 	if inmRec.Code != http.StatusNotModified {
 		t.Fatalf("expected 304 Not Modified on matching ETag, got %d", inmRec.Code)
 	}
+
+	// 7. Owner-owned Bot can publish APK + metadata via /api/bot/v2/mobile-release
+	ownerTok := "dl_bot_owner_token_0123456789abcdef0123456789"
+	memberTok := "dl_bot_member_token_0123456789abcdef012345678"
+	botRouter := chi.NewRouter()
+	NewHTTPHandler(svc, resolver).WithBotAuthenticator(botAuthFunc(func(_ context.Context, authHeader string, _ botgateway.TokenAuthOptions) (*botgateway.Auth, error) {
+		if authHeader == "Bearer "+ownerTok {
+			return &botgateway.Auth{BotID: "bot_astra", UserID: "usr_bot_astra", OwnerUserID: "usr_owner_1"}, nil
+		}
+		return &botgateway.Auth{BotID: "bot_no_owner", UserID: "usr_bot_2", OwnerUserID: ""}, nil
+	})).Mount(botRouter)
+
+	deniedBotReq := httptest.NewRequest(http.MethodPut, "/api/bot/v2/mobile-release/apk", bytes.NewReader(apkBytes))
+	deniedBotReq.Header.Set("Authorization", "Bearer "+memberTok)
+	deniedBotRec := httptest.NewRecorder()
+	botRouter.ServeHTTP(deniedBotRec, deniedBotReq)
+	if deniedBotRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for bot without manager owner, got %d", deniedBotRec.Code)
+	}
+
+	apk108 := buildSyntheticDualLaneAPK(t, "1.0.8", 10008)
+	ownerBotUpReq := httptest.NewRequest(http.MethodPut, "/api/bot/v2/mobile-release/apk", bytes.NewReader(apk108))
+	ownerBotUpReq.Header.Set("Authorization", "Bearer "+ownerTok)
+	ownerBotUpRec := httptest.NewRecorder()
+	botRouter.ServeHTTP(ownerBotUpRec, ownerBotUpReq)
+	if ownerBotUpRec.Code != http.StatusOK || repo.mobileRelease.Version != "1.0.8" {
+		t.Fatalf("expected 200 and version 1.0.8 on owner bot APK publish, got %d (%s)", ownerBotUpRec.Code, ownerBotUpRec.Body.String())
+	}
+}
+
+type botAuthFunc func(context.Context, string, botgateway.TokenAuthOptions) (*botgateway.Auth, error)
+
+func (fn botAuthFunc) Authenticate(ctx context.Context, header string, opts botgateway.TokenAuthOptions) (*botgateway.Auth, error) {
+	return fn(ctx, header, opts)
 }

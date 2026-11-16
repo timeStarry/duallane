@@ -59,6 +59,8 @@ func (h *HTTPHandler) Mount(r chi.Router) {
 	r.Patch("/api/bot/v2/messages/{messageId}", h.handleBotEditMessage)
 	r.Post("/api/bot/v2/typing", h.handleBotTyping)
 	r.Post("/api/bot/v2/unbind", h.handleBotUnbind)
+	r.Put("/api/bot/v2/mobile-release/apk", h.handleBotUploadMobileAPK)
+	r.Put("/api/bot/v2/mobile-release", h.handleBotUpdateMobileRelease)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Post("/auth/qr/start", h.handleQRStart)
@@ -1077,6 +1079,58 @@ func (h *HTTPHandler) handleAdminUploadMobileAPK(w http.ResponseWriter, r *http.
 	overrideVersion := strings.TrimSpace(r.URL.Query().Get("version"))
 	overrideCode, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("versionCode")))
 	rel, err := h.service.UploadAdminMobileAPK(r.Context(), actorFromContext(r.Context()).ID, data, overrideVersion, overrideCode)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"release": rel})
+}
+
+func (h *HTTPHandler) handleBotUploadMobileAPK(w http.ResponseWriter, r *http.Request) {
+	botAuth, ok := h.authenticateBotRequest(w, r)
+	if !ok {
+		return
+	}
+	ownerID := strings.TrimSpace(botAuth.OwnerUserID)
+	if ownerID == "" {
+		writeJSONError(w, http.StatusForbidden, "v1.forbidden", "仅空间创建者或管理员名下的机器人可执行分发")
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(r.Body, MaxMobileAPKBytes+1024))
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.invalid_body", "读取安装包数据失败")
+		return
+	}
+	if int64(len(data)) > MaxMobileAPKBytes {
+		writeJSONError(w, http.StatusRequestEntityTooLarge, "v1.apk_too_large", "APK 安装包大小不能超过 30 MB")
+		return
+	}
+	overrideVersion := strings.TrimSpace(r.URL.Query().Get("version"))
+	overrideCode, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("versionCode")))
+	rel, err := h.service.UploadAdminMobileAPK(r.Context(), ownerID, data, overrideVersion, overrideCode)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"release": rel})
+}
+
+func (h *HTTPHandler) handleBotUpdateMobileRelease(w http.ResponseWriter, r *http.Request) {
+	botAuth, ok := h.authenticateBotRequest(w, r)
+	if !ok {
+		return
+	}
+	ownerID := strings.TrimSpace(botAuth.OwnerUserID)
+	if ownerID == "" {
+		writeJSONError(w, http.StatusForbidden, "v1.forbidden", "仅空间创建者或管理员名下的机器人可执行分发")
+		return
+	}
+	var input MobileClientReleaseMetadataInput
+	if err := json.NewDecoder(io.LimitReader(r.Body, 32*1024)).Decode(&input); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.invalid_json", "请求体格式错误")
+		return
+	}
+	rel, err := h.service.UpdateAdminMobileRelease(r.Context(), ownerID, input)
 	if err != nil {
 		writeServiceError(w, err)
 		return

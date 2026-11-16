@@ -530,6 +530,38 @@ export class DualLaneAgentClient {
     return this.#request("POST", "/api/bot/v2/unbind", {});
   }
 
+  async publishMobileRelease(options = {}) {
+    const apkBytes = options.apkBytes;
+    if (!(apkBytes instanceof Uint8Array) || apkBytes.byteLength === 0) {
+      throw new TypeError("apkBytes must be a non-empty Uint8Array or Buffer");
+    }
+    const params = new URLSearchParams();
+    if (typeof options.version === "string" && options.version.trim()) {
+      params.set("version", options.version.trim());
+    }
+    if (Number.isInteger(options.versionCode) && options.versionCode > 0) {
+      params.set("versionCode", String(options.versionCode));
+    }
+    const qs = params.toString();
+    const uploaded = await this.#requestBinary(
+      "PUT",
+      `/api/bot/v2/mobile-release/apk${qs ? `?${qs}` : ""}`,
+      apkBytes,
+      "application/vnd.android.package-archive"
+    );
+    const rel = uploaded?.release || {};
+    if (options.title !== undefined || options.notes !== undefined || options.enabled !== undefined) {
+      return await this.#request("PUT", "/api/bot/v2/mobile-release", {
+        enabled: options.enabled ?? true,
+        version: options.version || rel.version || "",
+        versionCode: options.versionCode || rel.versionCode || 0,
+        title: options.title !== undefined ? String(options.title) : rel.title || "",
+        notes: options.notes !== undefined ? String(options.notes) : rel.notes || ""
+      });
+    }
+    return uploaded;
+  }
+
   async listConversations() {
     return this.#request("GET", "/api/bot/v2/conversations");
   }
@@ -600,6 +632,31 @@ export class DualLaneAgentClient {
           "x-duallane-adapter-version": this.#adapterVersion
         }),
         body: body === undefined ? undefined : JSON.stringify(body)
+      });
+    } catch (cause) {
+      throw new DualLaneAgentError("network.unavailable", "DualLane Agent Gateway is unavailable", { cause, retryable: true });
+    }
+    const payload = await readJson(response);
+    if (!response.ok) {
+      const code = safeErrorCode(payload?.error?.code, "gateway.request_failed");
+      const message = redactToken(safeErrorText(payload?.error?.message, "DualLane Agent Gateway request failed"), this.#token);
+      throw new DualLaneAgentError(code, message, { statusCode: response.status, retryable: response.status === 429 || response.status >= 500 });
+    }
+    return payload;
+  }
+
+  async #requestBinary(method, path, rawBytes, contentType = "application/octet-stream") {
+    let response;
+    try {
+      response = await this.#fetch(new URL(path, this.#origin), {
+        method,
+        headers: compact({
+          authorization: `Bearer ${this.#token}`,
+          accept: "application/json",
+          "content-type": contentType,
+          "x-duallane-adapter-version": this.#adapterVersion
+        }),
+        body: rawBytes
       });
     } catch (cause) {
       throw new DualLaneAgentError("network.unavailable", "DualLane Agent Gateway is unavailable", { cause, retryable: true });
@@ -2181,6 +2238,7 @@ Usage:
   duallane-agent send <conversationId> <text> [--reply-to <messageId>] [--profile default]
   duallane-agent edit <messageId> <text> [--profile default]
   duallane-agent typing <conversationId> [--state thinking|typing] [--profile default]
+  duallane-agent publish-mobile <apkPath> [--title <title>] [--notes <md> | --notes-file <file>] [--profile default]
   duallane-agent unbind [--profile default]
   duallane-agent listen --cmd "<shell-command>" [--transport auto|ws|poll] [--profile default]
 
@@ -2679,6 +2737,30 @@ async function main() {
     const { client } = requireClient(flags.profile);
     const state = flags.state === "typing" ? "typing" : "thinking";
     const res = await client.setTyping(conversationId, { state });
+    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    return;
+  }
+
+  if (subcommand === "publish-mobile") {
+    const [apkPath] = positionals.slice(1);
+    if (!apkPath) {
+      throw new Error(
+        "Usage: duallane-agent publish-mobile <apkPath> [--title <title>] [--notes <md> | --notes-file <file>] [--profile default]"
+      );
+    }
+    const apkBytes = fs.readFileSync(apkPath);
+    let notes = typeof flags.notes === "string" ? flags.notes : undefined;
+    if (typeof flags["notes-file"] === "string" && flags["notes-file"].trim()) {
+      notes = fs.readFileSync(flags["notes-file"].trim(), "utf8");
+    }
+    const { client } = requireClient(flags.profile);
+    const res = await client.publishMobileRelease({
+      apkBytes,
+      version: typeof flags.version === "string" ? flags.version : undefined,
+      versionCode: flags["version-code"] ? Number(flags["version-code"]) : undefined,
+      title: typeof flags.title === "string" ? flags.title : undefined,
+      notes,
+    });
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
     return;
   }
