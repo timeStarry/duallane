@@ -13,6 +13,20 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "1.0.8",
+    releasedAt: "2026-11-16",
+    title: "智能助手命令行一键上架移动端安装包",
+    summary: "支持空间创建者与管理员名下的智能助手通过本地命令行直接上传并发布移动端安装包与更新说明。",
+    categories: [
+      {
+        title: "命令行一键上架分发",
+        items: [
+          "运行程序新增安装包自动上架指令，空间创建者或管理员名下的智能助手可直接上传签名安装包并同步更新说明至站内同源直链"
+        ]
+      }
+    ]
+  },
+  {
     version: "1.0.7",
     releasedAt: "2026-11-16",
     title: "移动端安装包站内极速分发与通告排版升级",
