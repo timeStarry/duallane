@@ -9,6 +9,8 @@ export const DEFAULT_SETUP_SCOPES = Object.freeze([
   "messages:read_trigger",
   "messages:read_context",
   "messages:send",
+  "files:read_metadata",
+  "files:write",
   "cards:write",
   "cards:act",
   "commands:receive",

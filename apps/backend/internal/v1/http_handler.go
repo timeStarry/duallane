@@ -1,11 +1,16 @@
 package v1
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -13,7 +18,11 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/botgateway"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/files"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 )
+
+const MaxBotFileUploadBytes int64 = 50 * 1024 * 1024
 
 type ActorResolver interface {
 	ResolveActor(context.Context, *http.Request) (*auth.Actor, error)
@@ -29,11 +38,22 @@ type BotAuthenticator interface {
 	Authenticate(context.Context, string, botgateway.TokenAuthOptions) (*botgateway.Auth, error)
 }
 
+type BotFileUploader interface {
+	ReserveAgentBotUpload(context.Context, files.ReserveUploadInput) (files.UploadResult, error)
+	CompleteAgentBotUpload(context.Context, files.CompleteUploadInput) (files.UploadResult, error)
+}
+
+type BotMessageCreator interface {
+	Create(context.Context, messages.CreateInput) (messages.Message, error)
+}
+
 type HTTPHandler struct {
-	service  *Service
-	resolver ActorResolver
-	sessions SessionIssuer
-	botAuth  BotAuthenticator
+	service     *Service
+	resolver    ActorResolver
+	sessions    SessionIssuer
+	botAuth     BotAuthenticator
+	botFiles    BotFileUploader
+	botMessages BotMessageCreator
 }
 
 func NewHTTPHandler(service *Service, resolver ActorResolver) *HTTPHandler {
@@ -54,9 +74,17 @@ func (h *HTTPHandler) WithBotAuthenticator(botAuth BotAuthenticator) *HTTPHandle
 	return h
 }
 
+func (h *HTTPHandler) WithBotFilePipeline(botFiles BotFileUploader, botMessages BotMessageCreator) *HTTPHandler {
+	h.botFiles = botFiles
+	h.botMessages = botMessages
+	return h
+}
+
 func (h *HTTPHandler) Mount(r chi.Router) {
 	r.Get("/api/bot/v2/conversations", h.handleBotListConversations)
 	r.Patch("/api/bot/v2/messages/{messageId}", h.handleBotEditMessage)
+	r.Post("/api/bot/v2/conversations/{conversationId}/files", h.handleBotSendConversationFile)
+	r.Put("/api/bot/v2/uploads/{uploadId}/content", h.handleBotCompleteUploadContent)
 	r.Post("/api/bot/v2/typing", h.handleBotTyping)
 	r.Post("/api/bot/v2/unbind", h.handleBotUnbind)
 	r.Put("/api/bot/v2/mobile-release/apk", h.handleBotUploadMobileAPK)
@@ -784,6 +812,290 @@ func (h *HTTPHandler) handleBotEditMessage(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messageId": messageID})
+}
+
+func randomBotClientMessageID() string {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "botfile_fallback"
+	}
+	return "botfile_" + hex.EncodeToString(b[:])
+}
+
+func inferBotUploadMIMEType(rawHeader, rawQuery, fileName string) string {
+	for _, candidate := range []string{rawQuery, rawHeader} {
+		trimmed := strings.TrimSpace(candidate)
+		if trimmed == "" {
+			continue
+		}
+		mediaType, _, err := mime.ParseMediaType(trimmed)
+		if err == nil && mediaType != "" && mediaType != "application/octet-stream" {
+			return strings.ToLower(mediaType)
+		}
+	}
+	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(fileName)))
+	switch ext {
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".webp":
+		return "image/webp"
+	case ".gif":
+		return "image/gif"
+	case ".svg":
+		return "image/svg+xml"
+	case ".pdf":
+		return "application/pdf"
+	case ".md", ".markdown":
+		return "text/markdown"
+	case ".txt", ".log":
+		return "text/plain"
+	case ".json":
+		return "application/json"
+	case ".csv":
+		return "text/csv"
+	case ".html", ".htm":
+		return "text/html"
+	case ".zip":
+		return "application/zip"
+	}
+	if ext != "" {
+		if byExt := mime.TypeByExtension(ext); byExt != "" {
+			if mediaType, _, err := mime.ParseMediaType(byExt); err == nil && mediaType != "" {
+				return strings.ToLower(mediaType)
+			}
+		}
+	}
+	return "application/octet-stream"
+}
+
+func writeBotDomainError(w http.ResponseWriter, err error) {
+	var fileErr *files.Error
+	if errors.As(err, &fileErr) && fileErr != nil {
+		status := fileErr.StatusCode
+		if status < 400 || status >= 600 {
+			status = http.StatusBadRequest
+		}
+		writeJSONError(w, status, fileErr.Code, fileErr.Message)
+		return
+	}
+	var msgErr *messages.Error
+	if errors.As(err, &msgErr) && msgErr != nil {
+		status := msgErr.StatusCode
+		if status < 400 || status >= 600 {
+			status = http.StatusBadRequest
+		}
+		writeJSONError(w, status, msgErr.Code, msgErr.Message)
+		return
+	}
+	writeServiceError(w, err)
+}
+
+func (h *HTTPHandler) handleBotCompleteUploadContent(w http.ResponseWriter, r *http.Request) {
+	botAuth, ok := h.authenticateBotRequest(w, r)
+	if !ok {
+		return
+	}
+	if scopeErr := botgateway.RequireScope(botAuth, botgateway.ScopeFilesWrite); scopeErr != nil {
+		if botgateway.RequireScope(botAuth, botgateway.ScopeMessagesSend) != nil {
+			writeBotGatewayError(w, scopeErr)
+			return
+		}
+	}
+	if h.botFiles == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "v1.unavailable", "文件存储服务未就绪")
+		return
+	}
+	uploadID := strings.TrimSpace(chi.URLParam(r, "uploadId"))
+	if uploadID == "" {
+		writeJSONError(w, http.StatusBadRequest, "upload.invalid", "上传标识无效")
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(r.Body, MaxBotFileUploadBytes+1024))
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.invalid_body", "读取上传文件内容失败")
+		return
+	}
+	if int64(len(data)) > MaxBotFileUploadBytes {
+		writeJSONError(w, http.StatusRequestEntityTooLarge, "file.too_large", "机器人单文件上传不能超过 50 MB")
+		return
+	}
+	completed, err := h.botFiles.CompleteAgentBotUpload(r.Context(), files.CompleteUploadInput{
+		ActorID:  botAuth.UserID,
+		UploadID: uploadID,
+		Mode:     "single",
+		Content:  bytes.NewReader(data),
+	})
+	if err != nil {
+		writeBotDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"upload":     completed,
+		"attachment": completed.Attachment,
+	})
+}
+
+func (h *HTTPHandler) handleBotSendConversationFile(w http.ResponseWriter, r *http.Request) {
+	botAuth, ok := h.authenticateBotRequest(w, r)
+	if !ok {
+		return
+	}
+	sendMsgParam := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sendMessage")))
+	sendMessage := sendMsgParam != "false" && sendMsgParam != "0"
+
+	if sendMessage {
+		if err := botgateway.RequireScope(botAuth, botgateway.ScopeMessagesSend); err != nil {
+			writeBotGatewayError(w, err)
+			return
+		}
+	} else if scopeErr := botgateway.RequireScope(botAuth, botgateway.ScopeFilesWrite); scopeErr != nil {
+		if botgateway.RequireScope(botAuth, botgateway.ScopeMessagesSend) != nil {
+			writeBotGatewayError(w, scopeErr)
+			return
+		}
+	}
+
+	if h.botFiles == nil || (sendMessage && h.botMessages == nil) {
+		writeJSONError(w, http.StatusServiceUnavailable, "v1.unavailable", "机器人文件发送服务未就绪")
+		return
+	}
+
+	conversationID := strings.TrimSpace(chi.URLParam(r, "conversationId"))
+	if conversationID == "" {
+		writeJSONError(w, http.StatusBadRequest, botgateway.CodeInvalidRequest, "会话 ID 不能为空")
+		return
+	}
+
+	convs, err := h.service.ListBotConversations(r.Context(), botAuth.BotID, botAuth.UserID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	allowedConv := false
+	for _, c := range convs {
+		if c.ID == conversationID && c.AllowSend {
+			allowedConv = true
+			break
+		}
+	}
+	if !allowedConv {
+		writeJSONError(w, http.StatusForbidden, "conversation.forbidden", "当前机器人未被授权在该会话中发送文件")
+		return
+	}
+
+	data, err := io.ReadAll(io.LimitReader(r.Body, MaxBotFileUploadBytes+1024))
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.invalid_body", "读取文件内容失败")
+		return
+	}
+	if len(data) == 0 {
+		writeJSONError(w, http.StatusBadRequest, "file.empty", "上传文件内容不能为空")
+		return
+	}
+	if int64(len(data)) > MaxBotFileUploadBytes {
+		writeJSONError(w, http.StatusRequestEntityTooLarge, "file.too_large", "机器人单文件上传不能超过 50 MB")
+		return
+	}
+
+	fileName := strings.TrimSpace(r.URL.Query().Get("fileName"))
+	if fileName == "" {
+		fileName = strings.TrimSpace(r.Header.Get("X-File-Name"))
+	}
+	if fileName == "" {
+		fileName = "attachment.bin"
+	}
+	mimeType := inferBotUploadMIMEType(
+		r.Header.Get("Content-Type"),
+		r.URL.Query().Get("mimeType"),
+		fileName,
+	)
+
+	reserved, err := h.botFiles.ReserveAgentBotUpload(r.Context(), files.ReserveUploadInput{
+		ActorID:        botAuth.UserID,
+		FileName:       fileName,
+		MIMEType:       mimeType,
+		ByteSize:       int64(len(data)),
+		Visibility:     string(files.VisibilityConversation),
+		ConversationID: conversationID,
+	})
+	if err != nil {
+		writeBotDomainError(w, err)
+		return
+	}
+	if reserved.Status != string(files.TransferReserved) || reserved.Upload == nil || reserved.Attachment == nil {
+		writeJSONError(w, http.StatusTooManyRequests, "quota.insufficient", "今日空间文件传输配额不足")
+		return
+	}
+
+	completed, err := h.botFiles.CompleteAgentBotUpload(r.Context(), files.CompleteUploadInput{
+		ActorID:  botAuth.UserID,
+		UploadID: reserved.Upload.ID,
+		Mode:     "single",
+		Content:  bytes.NewReader(data),
+	})
+	if err != nil {
+		writeBotDomainError(w, err)
+		return
+	}
+	att := completed.Attachment
+	if att == nil {
+		att = reserved.Attachment
+	}
+
+	if !sendMessage {
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"ok":         true,
+			"attachment": att,
+		})
+		return
+	}
+
+	caption := strings.TrimSpace(r.URL.Query().Get("text"))
+	replyToID := strings.TrimSpace(r.URL.Query().Get("replyToMessageId"))
+	clientMsgID := strings.TrimSpace(r.URL.Query().Get("clientMessageId"))
+	if clientMsgID == "" {
+		clientMsgID = randomBotClientMessageID()
+	}
+
+	blocks := make([]messages.Block, 0, 2)
+	if caption != "" {
+		blocks = append(blocks, messages.Block{Type: "text", Text: caption})
+	}
+	blocks = append(blocks, messages.Block{Type: "attachment", AttachmentID: att.ID})
+
+	plainFallback := caption
+	if plainFallback == "" {
+		if strings.HasPrefix(att.MIMEType, "image/") {
+			plainFallback = "[图片]"
+		} else {
+			plainFallback = "[文件] " + att.FileName
+		}
+	}
+
+	createdMsg, err := h.botMessages.Create(r.Context(), messages.CreateInput{
+		ActorID:          botAuth.UserID,
+		ConversationID:   conversationID,
+		ClientMessageID:  clientMsgID,
+		ReplyToMessageID: replyToID,
+		Content: messages.Content{
+			Format:    messages.MessageContentFormat,
+			PlainText: plainFallback,
+			Blocks:    blocks,
+		},
+	})
+	if err != nil {
+		writeBotDomainError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"ok":         true,
+		"attachment": att,
+		"message":    createdMsg,
+	})
 }
 
 func (h *HTTPHandler) handleBotTyping(w http.ResponseWriter, r *http.Request) {

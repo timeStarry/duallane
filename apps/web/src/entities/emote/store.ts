@@ -179,7 +179,11 @@ export interface EmoteStoreState {
   loadEmoteState: (isPreviewMode?: boolean, force?: boolean) => Promise<void>;
   refreshLibrary: (isPreviewMode?: boolean) => Promise<void>;
   updateSettingsPatch: (
-    patch: { enabledPackIds?: string[]; clickImageEmoteToSend?: boolean },
+    patch: {
+      enabledPackIds?: string[];
+      clickImageEmoteToSend?: boolean;
+      replyAutoMention?: boolean;
+    },
     isPreviewMode?: boolean
   ) => Promise<void>;
   uploadStickers: (

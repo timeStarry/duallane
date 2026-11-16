@@ -3,6 +3,7 @@ import type { DualLaneCardKitDocument } from "@duallane/protocol";
 import {
   ApiClientError,
   apiV1,
+  type ConversationNotificationLevel,
   type DevInviteProfileInput,
   type EmoteCollectionShareSummaryDTO,
   type SystemAnnouncementDTO,
@@ -11,6 +12,7 @@ import {
 } from "@/shared/lib/api-v1";
 import { emotePacks } from "@/emotes";
 import { useEmoteStore } from "@/entities/emote/store";
+import { useDisplayPrefsStore } from "@/shared/lib/display-prefs";
 import { buildDevPreviewFixture } from "./demo-fixture";
 import {
   loadWorkspaceDrafts,
@@ -37,12 +39,15 @@ import {
 export interface V1User {
   id: string;
   displayName: string;
+  nickname?: string;
+  remark?: string;
   handle?: string;
   role: "owner" | "admin" | "member" | "bot";
   avatarUrl?: string;
   avatarColor?: string;
   description?: string;
   botOnline?: boolean;
+  searchDiscoverable?: boolean;
 }
 
 export interface TypingIndicatorEntry {
@@ -116,6 +121,9 @@ export interface V1Conversation {
   memberIds: string[];
   lastMessageText?: string;
   lastMessageAt?: string;
+  lastMessageSenderId?: string;
+  lastMessageSenderName?: string;
+  notificationLevel?: ConversationNotificationLevel;
   peerLastReadAt?: string;
 }
 
@@ -207,6 +215,17 @@ interface WorkspaceState {
   sendThreadReply: (rootMessageId: string, text: string, alsoSendToChannel: boolean) => Promise<void>;
   triggerCardAction: (cardId: string, actionId: string, payload?: Record<string, unknown>) => Promise<void>;
   patchMemberLocal: (userId: string, patch: Partial<V1User>) => void;
+  updateMyProfile: (patch: {
+    nickname?: string;
+    searchDiscoverable?: boolean;
+  }) => Promise<void>;
+  uploadMyAvatar: (file: File) => Promise<void>;
+  deleteMyAvatar: () => Promise<void>;
+  setMemberRemark: (userId: string, remark: string) => Promise<void>;
+  setConversationNotificationLevel: (
+    conversationId: string,
+    level: ConversationNotificationLevel
+  ) => Promise<void>;
   dismissSystemAnnouncement: () => Promise<void>;
   setBoundEmailLocal: (email: string) => void;
 
@@ -253,11 +272,21 @@ function teardownP2PTransport() {
 }
 
 const unicodeToEmoteKey = new Map<string, string>();
+const emoteTokenToPreviewLabel = new Map<string, string>();
 for (const pack of emotePacks) {
-  if (pack.id !== "emoji") continue;
   for (const item of pack.items) {
     if (item.kind === "unicode" && item.value) {
-      unicodeToEmoteKey.set(item.value, `emoji:${item.id}`);
+      if (pack.id === "emoji") {
+        unicodeToEmoteKey.set(item.value, `emoji:${item.id}`);
+      }
+      emoteTokenToPreviewLabel.set(`[${pack.id}:${item.id}]`, item.value);
+    } else if (item.kind === "image") {
+      const labelToken = `[${item.label}]`;
+      emoteTokenToPreviewLabel.set(item.token, labelToken);
+      emoteTokenToPreviewLabel.set(`[${pack.id}:${item.id}]`, labelToken);
+      for (const alias of item.aliases ?? []) {
+        emoteTokenToPreviewLabel.set(`[${pack.id}:${alias}]`, labelToken);
+      }
     }
   }
 }
@@ -267,6 +296,35 @@ export function normalizeReactionEmoteKey(input: string): string {
   if (!trimmed) return "";
   if (trimmed.includes(":")) return trimmed;
   return unicodeToEmoteKey.get(trimmed) || trimmed;
+}
+
+export function formatConversationPreviewText(rawText?: string): string {
+  if (!rawText) return "";
+  const sanitizedMentions = rawText.replace(/@__duallane_[A-Za-z0-9_-]+/g, "@Bot");
+  const replacedEmotes = sanitizedMentions
+    .replace(/\[custom:[^\]]+\]/gi, "[贴纸]")
+    .replace(/\[([a-z0-9_-]+):([^\]\s:]+)\]/gi, (full) => {
+      return emoteTokenToPreviewLabel.get(full) || full;
+    });
+  return replacedEmotes.replace(/\s*\n+\s*/g, " ").trim();
+}
+
+export function computeGlobalAlertUnreadCount(
+  conversations: Record<string, V1Conversation>
+): number {
+  return Object.values(conversations).reduce((sum, conv) => {
+    if (conv.notificationLevel === "muted") {
+      return sum + Math.max(0, conv.mentionCount || 0);
+    }
+    return sum + Math.max(0, conv.unreadCount || 0);
+  }, 0);
+}
+
+function parseNotificationLevel(raw: unknown): ConversationNotificationLevel | undefined {
+  if (raw === "all" || raw === "mentions" || raw === "muted") {
+    return raw;
+  }
+  return undefined;
 }
 
 function sanitizePublicMemberLabel(raw: string, fallback = "Bot"): string {
@@ -575,8 +633,25 @@ function upsertRawMemberRecord(
     rawHandle && !rawHandle.startsWith("__duallane_") && role !== "bot"
       ? rawHandle
       : undefined;
+  const hasExplicitRemark = "remark" in m;
+  const nextRemark = hasExplicitRemark
+    ? typeof m.remark === "string" && m.remark.trim()
+      ? m.remark.trim()
+      : undefined
+    : prev?.remark;
+  const rawNickname =
+    typeof m.nickname === "string" && m.nickname.trim()
+      ? m.nickname.trim()
+      : typeof m.displayName === "string" && m.displayName.trim()
+      ? m.displayName.trim()
+      : typeof m.name === "string" && m.name.trim()
+      ? m.name.trim()
+      : prev?.nickname;
+  const nextNickname = rawNickname
+    ? sanitizePublicMemberLabel(rawNickname, role === "bot" ? "Bot" : id)
+    : undefined;
   const candidateName =
-    m.remark || m.nickname || m.displayName || m.name || cleanHandle;
+    nextRemark || nextNickname || m.displayName || m.name || cleanHandle;
   const resolvedName = candidateName
     ? sanitizePublicMemberLabel(String(candidateName), role === "bot" ? "Bot" : id)
     : prev?.displayName && !prev.displayName.startsWith("usr_")
@@ -600,15 +675,24 @@ function upsertRawMemberRecord(
       : prev?.description;
   const nextBotOnline =
     typeof m.botOnline === "boolean" ? m.botOnline : prev?.botOnline;
+  const nextSearchDiscoverable =
+    typeof m.searchDiscoverable === "boolean"
+      ? m.searchDiscoverable
+      : prev?.searchDiscoverable;
   target[id] = {
     id,
     displayName: resolvedName,
+    nickname: nextNickname,
+    remark: nextRemark,
     handle: cleanHandle || prev?.handle,
     role,
     avatarUrl: nextAvatarUrl,
     avatarColor: nextAvatarColor,
     description: nextDescription,
     ...(typeof nextBotOnline === "boolean" ? { botOnline: nextBotOnline } : {}),
+    ...(typeof nextSearchDiscoverable === "boolean"
+      ? { searchDiscoverable: nextSearchDiscoverable }
+      : {}),
   };
   return id;
 }
@@ -710,6 +794,12 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
     ? {
         id: String(userObj.id),
         displayName: String(userObj.nickname || userObj.displayName || userObj.name || "我"),
+        nickname:
+          typeof userObj.nickname === "string" && userObj.nickname.trim()
+            ? userObj.nickname.trim()
+            : typeof userObj.displayName === "string" && userObj.displayName.trim()
+            ? userObj.displayName.trim()
+            : undefined,
         handle: userObj.githubLogin
           ? String(userObj.githubLogin)
           : userObj.handle
@@ -717,6 +807,9 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
           : undefined,
         role: (userObj.role as V1User["role"]) || "member",
         avatarUrl: userObj.avatarUrl ? String(userObj.avatarUrl) : undefined,
+        ...(typeof userObj.searchDiscoverable === "boolean"
+          ? { searchDiscoverable: userObj.searchDiscoverable }
+          : {}),
       }
     : null;
 
@@ -767,6 +860,41 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
       typeof c.peerLastReadAt === "string" && c.peerLastReadAt.trim()
         ? c.peerLastReadAt.trim()
         : undefined;
+    const rawLastText = c.lastMessagePlainText
+      ? String(c.lastMessagePlainText)
+      : c.lastMessageText
+      ? String(c.lastMessageText)
+      : lastMsg.plainText
+      ? String(lastMsg.plainText)
+      : undefined;
+    const rawLastSenderId = c.lastMessageSenderId
+      ? String(c.lastMessageSenderId)
+      : lastMsg.authorId
+      ? String(lastMsg.authorId)
+      : lastMsg.senderId
+      ? String(lastMsg.senderId)
+      : undefined;
+    const rawLastSenderName = c.lastMessageSenderName
+      ? String(c.lastMessageSenderName)
+      : lastMsg.authorRemark
+      ? String(lastMsg.authorRemark)
+      : lastMsg.authorNickname
+      ? String(lastMsg.authorNickname)
+      : lastMsg.authorName
+      ? String(lastMsg.authorName)
+      : lastMsg.authorDisplayName
+      ? String(lastMsg.authorDisplayName)
+      : lastMsg.senderName
+      ? String(lastMsg.senderName)
+      : undefined;
+    const resolvedLastSenderName =
+      rawLastSenderId && members[rawLastSenderId]?.displayName
+        ? members[rawLastSenderId].displayName
+        : rawLastSenderName
+        ? sanitizePublicMemberLabel(rawLastSenderName, "成员")
+        : undefined;
+    const notificationLevel = parseNotificationLevel(c.notificationLevel);
+
     conversations[id] = {
       id,
       kind,
@@ -780,18 +908,15 @@ export function parseBootstrapPayload(raw: Record<string, unknown>) {
       mentionCount: Number(c.mentionCount || 0),
       pinnedMessageIds: Array.isArray(c.pinnedMessageIds) ? c.pinnedMessageIds.map(String) : [],
       memberIds: cleanedMemberIds,
-      lastMessageText: c.lastMessagePlainText
-        ? String(c.lastMessagePlainText)
-        : c.lastMessageText
-        ? String(c.lastMessageText)
-        : lastMsg.plainText
-        ? String(lastMsg.plainText)
-        : undefined,
+      lastMessageText: rawLastText !== undefined ? formatConversationPreviewText(rawLastText) : undefined,
       lastMessageAt: c.lastMessageAt
         ? String(c.lastMessageAt)
         : lastMsg.createdAt
         ? String(lastMsg.createdAt)
         : undefined,
+      lastMessageSenderId: rawLastSenderId,
+      lastMessageSenderName: resolvedLastSenderName,
+      notificationLevel,
       peerLastReadAt,
     };
     const rawMsgs = Array.isArray(c.latestMessages)
@@ -1430,11 +1555,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           pinnedMessageIds: prev?.pinnedMessageIds || [],
           memberIds: parsedMemberIds,
           lastMessageText: c.lastMessagePlainText
-            ? String(c.lastMessagePlainText)
+            ? formatConversationPreviewText(String(c.lastMessagePlainText))
             : prev?.lastMessageText,
           lastMessageAt: c.lastMessageAt
             ? String(c.lastMessageAt)
             : prev?.lastMessageAt,
+          lastMessageSenderId: c.lastMessageSenderId
+            ? String(c.lastMessageSenderId)
+            : prev?.lastMessageSenderId,
+          lastMessageSenderName: c.lastMessageSenderName
+            ? sanitizePublicMemberLabel(String(c.lastMessageSenderName), "成员")
+            : prev?.lastMessageSenderName,
+          notificationLevel:
+            parseNotificationLevel(c.notificationLevel) ??
+            parseNotificationLevel(payload.notificationLevel) ??
+            prev?.notificationLevel,
           peerLastReadAt,
         };
 
@@ -1637,7 +1772,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
             ? isOwn
               ? "你撤回了一条消息"
               : `${mapped.senderName} 撤回了一条消息`
-            : mapped.plainText;
+            : formatConversationPreviewText(mapped.plainText);
+        const nextSenderId =
+          evType === "message.recalled" ? undefined : mapped.senderId;
+        const nextSenderName =
+          evType === "message.recalled" ? undefined : mapped.senderName;
 
         const nextConv: V1Conversation = prevConv
           ? {
@@ -1649,6 +1788,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                 evType === "message.edited" || evType === "message.recalled"
                   ? prevConv.lastMessageAt || mapped.createdAt
                   : mapped.createdAt,
+              lastMessageSenderId: isLatestInConv
+                ? nextSenderId
+                : prevConv.lastMessageSenderId,
+              lastMessageSenderName: isLatestInConv
+                ? nextSenderName
+                : prevConv.lastMessageSenderName,
               unreadCount: nextUnreadCount,
               peerLastReadAt: nextPeerLastReadAt,
             }
@@ -1664,6 +1809,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
               memberIds: [],
               lastMessageText: summaryText,
               lastMessageAt: mapped.createdAt,
+              lastMessageSenderId: nextSenderId,
+              lastMessageSenderName: nextSenderName,
               peerLastReadAt: nextPeerLastReadAt,
             };
 
@@ -1878,6 +2025,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           useEmoteStore
             .getState()
             .hydrateTabOrderFromPreferences(cached.userPreferences?.emoteTabOrder);
+          useDisplayPrefsStore
+            .getState()
+            .hydrateFromAccountPreferences(cached.userPreferences);
           set({
             authStatus: "authenticated",
             workspaceAvailability: "ready",
@@ -2013,6 +2163,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
         saveBootstrapShellCache(get());
         useEmoteStore.getState().hydrateTabOrderFromPreferences(userPreferences.emoteTabOrder);
+        useDisplayPrefsStore.getState().hydrateFromAccountPreferences(userPreferences);
         connectWorkspaceRealtime(parsed.eventCursor);
         void setWorkspaceSyncCursor(parsed.eventCursor);
         void useEmoteStore.getState().loadEmoteState(false);
@@ -2231,6 +2382,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           ...s.messagesByConv,
           [conversationId]: [...(s.messagesByConv[conversationId] || []), optimistic],
         },
+        conversations: s.conversations[conversationId]
+          ? {
+              ...s.conversations,
+              [conversationId]: {
+                ...s.conversations[conversationId],
+                lastMessageText: formatConversationPreviewText(displayPlain),
+                lastMessageAt: optimistic.createdAt,
+                lastMessageSenderId: user.id,
+                lastMessageSenderName: user.displayName,
+              },
+            }
+          : s.conversations,
       }));
       get().setDraft(conversationId, "");
 
@@ -2248,8 +2411,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                 ...s.conversations,
                 [conversationId]: {
                   ...s.conversations[conversationId],
-                  lastMessageText: displayPlain,
+                  lastMessageText: formatConversationPreviewText(displayPlain),
                   lastMessageAt: optimistic.createdAt,
+                  lastMessageSenderId: user.id,
+                  lastMessageSenderName: user.displayName,
                 },
               }
             : s.conversations,
@@ -2308,8 +2473,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                   ...s.conversations,
                   [conversationId]: {
                     ...s.conversations[conversationId],
-                    lastMessageText: serverMapped?.plainText || displayPlain,
+                    lastMessageText: formatConversationPreviewText(
+                      serverMapped?.plainText || displayPlain
+                    ),
                     lastMessageAt: optimistic.createdAt,
+                    lastMessageSenderId: user.id,
+                    lastMessageSenderName: user.displayName,
                   },
                 }
               : s.conversations,
@@ -2356,6 +2525,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           ...s.messagesByConv,
           [conversationId]: [...(s.messagesByConv[conversationId] || []), optimistic],
         },
+        conversations: s.conversations[conversationId]
+          ? {
+              ...s.conversations,
+              [conversationId]: {
+                ...s.conversations[conversationId],
+                lastMessageText: "[表情]",
+                lastMessageAt: optimistic.createdAt,
+                lastMessageSenderId: user.id,
+                lastMessageSenderName: user.displayName,
+              },
+            }
+          : s.conversations,
       }));
 
       if (get().isPreviewMode) {
@@ -2415,6 +2596,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                     ...s.conversations[conversationId],
                     lastMessageText: "[表情]",
                     lastMessageAt: optimistic.createdAt,
+                    lastMessageSenderId: user.id,
+                    lastMessageSenderName: user.displayName,
                   },
                 }
               : s.conversations,
@@ -2463,6 +2646,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           ...s.messagesByConv,
           [conversationId]: [...(s.messagesByConv[conversationId] || []), optimistic],
         },
+        conversations: s.conversations[conversationId]
+          ? {
+              ...s.conversations,
+              [conversationId]: {
+                ...s.conversations[conversationId],
+                lastMessageText: displayPlain,
+                lastMessageAt: optimistic.createdAt,
+                lastMessageSenderId: user.id,
+                lastMessageSenderName: user.displayName,
+              },
+            }
+          : s.conversations,
       }));
 
       if (get().isPreviewMode) {
@@ -2521,6 +2716,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                     ...s.conversations[conversationId],
                     lastMessageText: displayPlain,
                     lastMessageAt: optimistic.createdAt,
+                    lastMessageSenderId: user.id,
+                    lastMessageSenderName: user.displayName,
                   },
                 }
               : s.conversations,
@@ -2570,7 +2767,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                   ...s.conversations,
                   [conversationId]: {
                     ...prevConv,
-                    lastMessageText: trimmed,
+                    lastMessageText: formatConversationPreviewText(trimmed),
                   },
                 }
               : s.conversations,
@@ -2649,6 +2846,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
                     lastMessageText: isOwn
                       ? "你撤回了一条消息"
                       : `${prevTarget.senderName} 撤回了一条消息`,
+                    lastMessageSenderId: undefined,
+                    lastMessageSenderName: undefined,
                   },
                 }
               : s.conversations,
@@ -3437,6 +3636,266 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           },
         };
       });
+    },
+
+    updateMyProfile: async (patch) => {
+      const me = get().currentUser;
+      if (!me) return;
+      if (get().isPreviewMode) {
+        const nextNickname =
+          patch.nickname !== undefined
+            ? patch.nickname.trim() || me.handle || me.displayName
+            : me.nickname || me.displayName;
+        const nextMe: V1User = {
+          ...me,
+          displayName: nextNickname,
+          nickname: nextNickname,
+          ...(typeof patch.searchDiscoverable === "boolean"
+            ? { searchDiscoverable: patch.searchDiscoverable }
+            : {}),
+        };
+        set((s) => ({
+          currentUser: nextMe,
+          members: { ...s.members, [me.id]: { ...s.members[me.id], ...nextMe } },
+        }));
+        return;
+      }
+
+      const res = await apiV1.updateMyProfile(patch);
+      const u = (res.user || {}) as Record<string, unknown>;
+      set((s) => {
+        const cur = s.currentUser;
+        if (!cur) return s;
+        const nextMembers = { ...s.members };
+        upsertRawMemberRecord(nextMembers, { ...cur, ...u, id: cur.id });
+        const resolved = nextMembers[cur.id];
+        const nextMe: V1User = {
+          ...cur,
+          ...(resolved || {}),
+          displayName:
+            resolved?.displayName ||
+            (patch.nickname !== undefined ? patch.nickname.trim() || cur.displayName : cur.displayName),
+          nickname:
+            typeof u.nickname === "string"
+              ? u.nickname.trim() || undefined
+              : patch.nickname !== undefined
+              ? patch.nickname.trim() || undefined
+              : cur.nickname,
+          ...(typeof u.searchDiscoverable === "boolean"
+            ? { searchDiscoverable: u.searchDiscoverable }
+            : typeof patch.searchDiscoverable === "boolean"
+            ? { searchDiscoverable: patch.searchDiscoverable }
+            : {}),
+        };
+        nextMembers[cur.id] = { ...(nextMembers[cur.id] || nextMe), ...nextMe };
+        return {
+          currentUser: nextMe,
+          members: nextMembers,
+        };
+      });
+      saveBootstrapShellCache(get());
+    },
+
+    uploadMyAvatar: async (file) => {
+      const me = get().currentUser;
+      if (!me) return;
+      if (get().isPreviewMode) {
+        const blobUrl = URL.createObjectURL(file);
+        set((s) => {
+          const cur = s.currentUser;
+          if (!cur) return s;
+          const nextMe = { ...cur, avatarUrl: blobUrl };
+          return {
+            currentUser: nextMe,
+            members: { ...s.members, [cur.id]: { ...(s.members[cur.id] || nextMe), avatarUrl: blobUrl } },
+          };
+        });
+        return;
+      }
+
+      const res = await apiV1.uploadMyAvatar(file);
+      const u = (res.user || {}) as Record<string, unknown>;
+      const rawAvatar =
+        typeof res.avatarUrl === "string" && res.avatarUrl.trim()
+          ? res.avatarUrl.trim()
+          : typeof u.avatarUrl === "string" && u.avatarUrl.trim()
+          ? u.avatarUrl.trim()
+          : `/api/workspace/avatars/${encodeURIComponent(me.id)}`;
+      const cacheBusted = rawAvatar.includes("?")
+        ? `${rawAvatar}&v=${Date.now()}`
+        : `${rawAvatar}?v=${Date.now()}`;
+
+      set((s) => {
+        const cur = s.currentUser;
+        if (!cur) return s;
+        const nextMe: V1User = { ...cur, avatarUrl: cacheBusted };
+        return {
+          currentUser: nextMe,
+          members: {
+            ...s.members,
+            [cur.id]: { ...(s.members[cur.id] || nextMe), avatarUrl: cacheBusted },
+          },
+        };
+      });
+      saveBootstrapShellCache(get());
+    },
+
+    deleteMyAvatar: async () => {
+      const me = get().currentUser;
+      if (!me) return;
+      if (get().isPreviewMode) {
+        set((s) => {
+          const cur = s.currentUser;
+          if (!cur) return s;
+          const nextMe: V1User = { ...cur, avatarUrl: undefined };
+          return {
+            currentUser: nextMe,
+            members: {
+              ...s.members,
+              [cur.id]: { ...(s.members[cur.id] || nextMe), avatarUrl: undefined },
+            },
+          };
+        });
+        return;
+      }
+
+      const res = await apiV1.deleteMyAvatar();
+      const u = (res.user || {}) as Record<string, unknown>;
+      const restoredUrl =
+        typeof res.avatarUrl === "string" && res.avatarUrl.trim()
+          ? res.avatarUrl.trim()
+          : typeof u.avatarUrl === "string" && u.avatarUrl.trim()
+          ? u.avatarUrl.trim()
+          : undefined;
+
+      set((s) => {
+        const cur = s.currentUser;
+        if (!cur) return s;
+        const nextMe: V1User = { ...cur, avatarUrl: restoredUrl };
+        return {
+          currentUser: nextMe,
+          members: {
+            ...s.members,
+            [cur.id]: { ...(s.members[cur.id] || nextMe), avatarUrl: restoredUrl },
+          },
+        };
+      });
+      saveBootstrapShellCache(get());
+    },
+
+    setMemberRemark: async (userId, remark) => {
+      const targetId = userId.trim();
+      if (!targetId) return;
+      const cleanedRemark = remark.trim();
+      let serverMember: Record<string, unknown> | undefined;
+      if (!get().isPreviewMode) {
+        const res = await apiV1.setMemberRemark(targetId, cleanedRemark);
+        if (res.member && typeof res.member === "object") {
+          serverMember = res.member;
+        }
+      }
+
+      set((s) => {
+        const prev = s.members[targetId];
+        const nextMembers = { ...s.members };
+        if (serverMember) {
+          upsertRawMemberRecord(nextMembers, {
+            ...prev,
+            ...serverMember,
+            id: targetId,
+            remark: cleanedRemark || "",
+          });
+        } else {
+          const fallbackBase =
+            prev?.nickname || prev?.handle || prev?.displayName || targetId;
+          const nextDisplayName = cleanedRemark || fallbackBase;
+          nextMembers[targetId] = {
+            ...(prev || { id: targetId, role: "member" as const }),
+            id: targetId,
+            remark: cleanedRemark || undefined,
+            displayName: nextDisplayName,
+          };
+        }
+
+        const resolvedMember = nextMembers[targetId];
+        const newDisplayName = resolvedMember?.displayName || cleanedRemark || targetId;
+
+        const nextConversations = { ...s.conversations };
+        for (const [cid, conv] of Object.entries(s.conversations)) {
+          let updatedConv = conv;
+          if (
+            conv.kind === "direct" &&
+            conv.memberIds.includes(targetId) &&
+            targetId !== s.currentUser?.id
+          ) {
+            updatedConv = { ...updatedConv, title: newDisplayName };
+          }
+          if (conv.lastMessageSenderId === targetId) {
+            updatedConv = { ...updatedConv, lastMessageSenderName: newDisplayName };
+          }
+          if (updatedConv !== conv) {
+            nextConversations[cid] = updatedConv;
+          }
+        }
+
+        const nextMessagesByConv: Record<string, V1Message[]> = {};
+        for (const [cid, list] of Object.entries(s.messagesByConv)) {
+          let changed = false;
+          const mappedList = list.map((msg) => {
+            if (msg.senderId === targetId && msg.senderName !== newDisplayName) {
+              changed = true;
+              return { ...msg, senderName: newDisplayName };
+            }
+            return msg;
+          });
+          nextMessagesByConv[cid] = changed ? mappedList : list;
+        }
+
+        return {
+          members: nextMembers,
+          conversations: nextConversations,
+          messagesByConv: nextMessagesByConv,
+        };
+      });
+      saveBootstrapShellCache(get());
+    },
+
+    setConversationNotificationLevel: async (conversationId, level) => {
+      const prevConv = get().conversations[conversationId];
+      if (!prevConv) return;
+      const prevLevel = prevConv.notificationLevel;
+      set((s) => ({
+        conversations: s.conversations[conversationId]
+          ? {
+              ...s.conversations,
+              [conversationId]: {
+                ...s.conversations[conversationId],
+                notificationLevel: level,
+              },
+            }
+          : s.conversations,
+      }));
+      saveBootstrapShellCache(get());
+
+      if (get().isPreviewMode) return;
+      try {
+        await apiV1.updateConversationNotification(conversationId, level);
+      } catch (err) {
+        set((s) => ({
+          conversations: s.conversations[conversationId]
+            ? {
+                ...s.conversations,
+                [conversationId]: {
+                  ...s.conversations[conversationId],
+                  notificationLevel: prevLevel,
+                },
+              }
+            : s.conversations,
+        }));
+        useEmoteStore
+          .getState()
+          .showToast(err instanceof Error ? err.message : "更新提醒偏好失败");
+      }
     },
 
     dismissSystemAnnouncement: async () => {

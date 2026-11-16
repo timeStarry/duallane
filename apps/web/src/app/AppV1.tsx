@@ -21,8 +21,12 @@ import {
   inferMobileViewFromLocation,
   useLaneStore,
 } from "@/entities/lane/store";
-import { useWorkspaceStore } from "@/entities/workspace/store";
+import {
+  computeGlobalAlertUnreadCount,
+  useWorkspaceStore,
+} from "@/entities/workspace/store";
 import { apiV1 } from "@/shared/lib/api-v1";
+import { useFaviconUnreadBadge } from "@/shared/lib/favicon-unread";
 import { extractP2PRoomFromUrl } from "@/shared/lib/p2p-lane";
 import { useThemeStore } from "@/shared/theme/vibrancy";
 import { BrandLogo, Button, Input, SegmentedControl, TooltipProvider } from "@/shared/ui";
@@ -64,6 +68,7 @@ export function AppV1() {
     isPreviewMode,
     authStatus,
     currentUser,
+    conversations,
     p2pRoom,
     workspaceAvailability,
     workspaceStatusMessage,
@@ -72,6 +77,13 @@ export function AppV1() {
     joinP2PRoom,
     createP2PRoom,
   } = useWorkspaceStore();
+
+  const isAuthenticated =
+    isPreviewMode || (authStatus === "authenticated" && Boolean(currentUser));
+  const globalAlertUnreadCount = isAuthenticated
+    ? computeGlobalAlertUnreadCount(conversations)
+    : 0;
+  useFaviconUnreadBadge(globalAlertUnreadCount);
 
   const isSpaceManager =
     isPreviewMode ||

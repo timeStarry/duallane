@@ -293,7 +293,7 @@ export class LiteWebSocket extends EventEmitter {
 }
 
 // --- src/index.js ---
-export const DUALLANE_AGENT_SDK_VERSION = "1.0.10";
+export const DUALLANE_AGENT_SDK_VERSION = "1.0.11";
 export const DUALLANE_GATEWAY_VERSION = 1;
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
@@ -618,6 +618,57 @@ export class DualLaneAgentClient {
     const text = typeof plainText === "string" ? plainText.trim() : "";
     if (!text) throw new TypeError("plainText is required");
     return this.#request("PATCH", `/api/bot/v2/messages/${encodeURIComponent(id)}`, { plainText: text });
+  }
+
+  async sendFile(input = {}) {
+    const conversationId = normalizeId(input.conversationId, "conversationId");
+    let rawBytes = input.bytes;
+    if (typeof rawBytes === "string") {
+      rawBytes = Buffer.from(rawBytes, "utf8");
+    }
+    if (!(rawBytes instanceof Uint8Array) || rawBytes.byteLength === 0) {
+      throw new TypeError("bytes must be a non-empty Uint8Array, Buffer, or string");
+    }
+    const fileName = String(input.fileName || "attachment.bin").trim() || "attachment.bin";
+    const mimeType = String(input.mimeType || inferMimeTypeFromFileName(fileName)).trim() || "application/octet-stream";
+    const params = new URLSearchParams();
+    params.set("fileName", fileName);
+    params.set("mimeType", mimeType);
+    if (typeof input.text === "string" && input.text.trim()) {
+      params.set("text", input.text.trim());
+    }
+    if (typeof input.replyToMessageId === "string" && input.replyToMessageId.trim()) {
+      params.set("replyToMessageId", normalizeId(input.replyToMessageId, "replyToMessageId"));
+    }
+    if (typeof input.clientMessageId === "string" && input.clientMessageId.trim()) {
+      params.set("clientMessageId", normalizeId(input.clientMessageId, "clientMessageId"));
+    }
+    if (input.sendMessage === false) {
+      params.set("sendMessage", "false");
+    }
+    return this.#requestBinary(
+      "POST",
+      `/api/bot/v2/conversations/${encodeURIComponent(conversationId)}/files?${params.toString()}`,
+      rawBytes,
+      mimeType
+    );
+  }
+
+  async uploadFile(input = {}) {
+    return this.sendFile({ ...input, sendMessage: false });
+  }
+
+  async completeUploadContent(uploadId, rawBytes, mimeType = "application/octet-stream") {
+    const id = normalizeId(uploadId, "uploadId");
+    if (!(rawBytes instanceof Uint8Array) || rawBytes.byteLength === 0) {
+      throw new TypeError("rawBytes must be a non-empty Uint8Array or Buffer");
+    }
+    return this.#requestBinary(
+      "PUT",
+      `/api/bot/v2/uploads/${encodeURIComponent(id)}/content`,
+      rawBytes,
+      mimeType
+    );
   }
 
   async getUpdates(options = {}) {
@@ -1013,6 +1064,58 @@ function redactToken(value, token) {
   return String(value).split(token).join("[REDACTED]").replace(/dl_bot_[A-Za-z0-9_-]{16,}/gu, "[REDACTED]");
 }
 
+export function inferMimeTypeFromFileName(fileName) {
+  const lower = String(fileName || "").trim().toLowerCase();
+  const dot = lower.lastIndexOf(".");
+  const ext = dot !== -1 ? lower.slice(dot) : "";
+  switch (ext) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".webp":
+      return "image/webp";
+    case ".gif":
+      return "image/gif";
+    case ".svg":
+      return "image/svg+xml";
+    case ".pdf":
+      return "application/pdf";
+    case ".md":
+    case ".markdown":
+      return "text/markdown";
+    case ".txt":
+    case ".log":
+      return "text/plain";
+    case ".json":
+      return "application/json";
+    case ".csv":
+      return "text/csv";
+    case ".html":
+    case ".htm":
+      return "text/html";
+    case ".zip":
+      return "application/zip";
+    case ".js":
+    case ".mjs":
+      return "text/javascript";
+    case ".ts":
+    case ".tsx":
+    case ".py":
+    case ".go":
+    case ".rs":
+    case ".sh":
+    case ".yaml":
+    case ".yml":
+    case ".toml":
+    case ".sql":
+      return "text/plain";
+    default:
+      return "application/octet-stream";
+  }
+}
+
 // --- src/v2.js ---
 /**
  * Verify DualLane Outbound Webhook HMAC-SHA256 signature.
@@ -1164,6 +1267,40 @@ export class DualLaneBotV2 {
     });
   }
 
+  async sendFile(conversationId, bytes, fileName, options = {}) {
+    const raw = typeof bytes === "string" ? Buffer.from(bytes, "utf8") : bytes;
+    const resolvedName = String(fileName || "attachment.bin").trim() || "attachment.bin";
+    const mimeType = String(options.mimeType || inferMimeTypeFromFileName(resolvedName)).trim() || "application/octet-stream";
+    const params = new URLSearchParams();
+    params.set("fileName", resolvedName);
+    params.set("mimeType", mimeType);
+    if (options.text) params.set("text", String(options.text));
+    if (options.replyToMessageId) params.set("replyToMessageId", String(options.replyToMessageId));
+    if (options.clientMessageId) params.set("clientMessageId", String(options.clientMessageId));
+    if (options.sendMessage === false) params.set("sendMessage", "false");
+    const res = await this.fetch(
+      `${this.baseUrl}/api/bot/v2/conversations/${encodeURIComponent(conversationId)}/files?${params.toString()}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          "Content-Type": mimeType,
+        },
+        body: raw,
+      }
+    );
+    const text = await res.text();
+    const body = text ? JSON.parse(text) : {};
+    if (!res.ok) {
+      const msg = body?.error?.message || `HTTP ${res.status}`;
+      const err = new Error(msg);
+      err.status = res.status;
+      err.code = body?.error?.code;
+      throw err;
+    }
+    return body;
+  }
+
   sendCard(conversationId, cardDoc, options = {}) {
     return this.#request("/api/bot-gateway/v1/cards", {
       method: "POST",
@@ -1212,6 +1349,8 @@ export const DEFAULT_SETUP_SCOPES = Object.freeze([
   "messages:read_trigger",
   "messages:read_context",
   "messages:send",
+  "files:read_metadata",
+  "files:write",
   "cards:write",
   "cards:act",
   "commands:receive",
@@ -1555,6 +1694,26 @@ export const DUALLANE_MCP_TOOLS = [
     },
   },
   {
+    name: "duallane_send_file",
+    description:
+      "Upload and send a generated file or image (from a local filePath, UTF-8 contentText, or base64 contentBase64) directly to an authorized DualLane conversation.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        conversationId: { type: "string", description: "Target DualLane conversation ID (conv_...)." },
+        filePath: { type: "string", description: "Local path to the file to upload (provide filePath, contentText, or contentBase64)." },
+        contentText: { type: "string", description: "Inline UTF-8 file text when generating text/markdown/csv/svg/code without writing to disk." },
+        contentBase64: { type: "string", description: "Inline Base64-encoded binary payload when sending generated images/PDFs/ZIPs directly." },
+        fileName: { type: "string", description: "File name shown in DualLane (inferred from filePath if omitted, e.g. 'report.md' or 'chart.png')." },
+        mimeType: { type: "string", description: "Optional MIME type (auto-inferred from fileName extension if omitted)." },
+        text: { type: "string", description: "Optional caption / message text sent together with the file." },
+        replyToMessageId: { type: "string", description: "Optional message ID (msg_...) to reply to." },
+        profile: { type: "string", description: "Local credential profile name (default: 'default')." },
+      },
+      required: ["conversationId"],
+    },
+  },
+  {
     name: "duallane_send_card",
     description:
       "Send an interactive approval/notification card to a DualLane conversation with optional action buttons (confirm, cancel, submit, refresh).",
@@ -1874,6 +2033,41 @@ export function createDualLaneMcpServer(options = {}) {
       case "duallane_edit_message": {
         const { client } = makeClient(profileName);
         return await client.editMessage(args.messageId, args.plainText);
+      }
+
+      case "duallane_send_file": {
+        const { client } = makeClient(profileName);
+        let rawBytes;
+        let resolvedName = typeof args.fileName === "string" ? args.fileName.trim() : "";
+        if (typeof args.filePath === "string" && args.filePath.trim()) {
+          const full = path.resolve(args.filePath.trim());
+          rawBytes = fs.readFileSync(full);
+          if (!resolvedName) {
+            resolvedName = path.basename(full);
+          }
+        } else if (typeof args.contentBase64 === "string" && args.contentBase64.trim()) {
+          const cleanedB64 = args.contentBase64.trim().replace(/^data:[^;]+;base64,/iu, "");
+          rawBytes = Buffer.from(cleanedB64, "base64");
+        } else if (typeof args.contentText === "string" && args.contentText.length > 0) {
+          rawBytes = Buffer.from(args.contentText, "utf8");
+        } else {
+          throw new TypeError("One of filePath, contentText, or contentBase64 is required for duallane_send_file");
+        }
+        if (!resolvedName) {
+          resolvedName = "generated.txt";
+        }
+        const mimeType =
+          typeof args.mimeType === "string" && args.mimeType.trim()
+            ? args.mimeType.trim()
+            : inferMimeTypeFromFileName(resolvedName);
+        return await client.sendFile({
+          conversationId: args.conversationId,
+          bytes: rawBytes,
+          fileName: resolvedName,
+          mimeType,
+          text: args.text,
+          replyToMessageId: args.replyToMessageId,
+        });
       }
 
       case "duallane_send_card": {
@@ -2408,9 +2602,14 @@ export function buildDaemonAgentPrompt({ botName, conversation, event, context }
       ].join("\n")
     : `当前消息来自主人授权的一对一私聊会话。请直接给出清晰、准确、简洁的回复。`;
 
+  const fileGuidance = isGroup
+    ? `如需向群内生成并发送文档、表格、SVG 图表或代码附件，请直接在回复中使用标签包裹文件内容：<duallane-file name="文件名.ext">文件正文</duallane-file>（二进制内容可加 encoding="base64"），外层守护进程会自动将其作为真实文件附件上传并发送到会话。`
+    : `如需向主人发送你生成的文件或图片，可使用 <duallane-file name="文件名.ext">文件正文</duallane-file>（二进制内容加 encoding="base64"），或在工作目录/临时目录生成文件后在回复末尾附上 [[DUALLANE_FILE: /绝对路径/文件名.ext]]，外层守护进程会自动上传并作为会话附件发出。`;
+
   const sections = [
     `你是接入在 DualLane 协作空间中的 AI 智能体「${botName || "Bot"}」。`,
     `请直接输出你要发送到当前聊天窗口的最终回复正文（支持 Markdown，不要输出“以下是回复”等多余包装语，也不要调用 duallane-agent send 发送，外层守护进程会自动将你的最终回复发出）。`,
+    fileGuidance,
     safetyRule,
   ];
 
@@ -2431,6 +2630,77 @@ export function buildDaemonAgentPrompt({ botName, conversation, event, context }
   }
 
   return sections.join("\n\n");
+}
+
+export function extractGeneratedFilesFromReply(rawReply, options = {}) {
+  const allowLocalPath = Boolean(options.allowLocalPath);
+  const workdir = options.workdir ? path.resolve(options.workdir) : "";
+  const files = [];
+
+  let text = String(rawReply || "");
+
+  // 1. Parse inline <duallane-file name="..." [mime="..."] [encoding="base64"]>...</duallane-file>
+  const inlineFileRe = /<duallane-file\s+([^>]*)>([\s\S]*?)<\/duallane-file>/giu;
+  text = text.replace(inlineFileRe, (_full, attrRaw, innerBody) => {
+    const nameMatch = /\bname\s*=\s*["']([^"']+)["']/iu.exec(attrRaw);
+    const mimeMatch = /\bmime\s*=\s*["']([^"']+)["']/iu.exec(attrRaw);
+    const encMatch = /\bencoding\s*=\s*["']([^"']+)["']/iu.exec(attrRaw);
+    const rawName = path.basename(String(nameMatch?.[1] || "generated.txt").trim()) || "generated.txt";
+    const isBase64 = String(encMatch?.[1] || "").trim().toLowerCase() === "base64";
+    const bodyTrimmed = String(innerBody || "").replace(/^\r?\n/, "").replace(/\r?\n$/, "");
+    const bytes = isBase64
+      ? Buffer.from(bodyTrimmed.replace(/\s+/gu, ""), "base64")
+      : Buffer.from(bodyTrimmed, "utf8");
+    if (bytes.byteLength > 0 && files.length < 6) {
+      files.push({
+        fileName: rawName,
+        mimeType: String(mimeMatch?.[1] || inferMimeTypeFromFileName(rawName)).trim(),
+        bytes,
+      });
+    }
+    return "";
+  });
+
+  // 2. Parse [[DUALLANE_FILE: /path/to/file]] (strictly allowed only in private 1-on-1 DM within workdir or tmpdir)
+  const localFileRe = /\[\[DUALLANE_FILE:\s*([^\]]+?)\s*\]\]/gu;
+  text = text.replace(localFileRe, (_full, rawPath) => {
+    if (!allowLocalPath || files.length >= 6) return "";
+    try {
+      const candidate = path.resolve(workdir || process.cwd(), String(rawPath || "").trim());
+      if (!fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) return "";
+      const realCandidate = fs.realpathSync(candidate);
+      const allowedRoots = [os.tmpdir(), workdir].filter(Boolean).map((r) => {
+        try {
+          return fs.realpathSync(r);
+        } catch {
+          return path.resolve(r);
+        }
+      });
+      const withinAllowed = allowedRoots.some(
+        (root) => realCandidate === root || realCandidate.startsWith(root + path.sep)
+      );
+      if (!withinAllowed) return "";
+      const segments = realCandidate.split(path.sep);
+      if (segments.some((seg) => seg.startsWith(".") && seg !== "." && seg !== "..")) {
+        return "";
+      }
+      const bytes = fs.readFileSync(realCandidate);
+      if (bytes.byteLength > 0 && bytes.byteLength <= 50 * 1024 * 1024) {
+        const fileName = path.basename(realCandidate);
+        files.push({
+          fileName,
+          mimeType: inferMimeTypeFromFileName(fileName),
+          bytes,
+        });
+      }
+    } catch {
+      /* ignore inaccessible local path */
+    }
+    return "";
+  });
+
+  const cleanText = text.replace(/\n{3,}/gu, "\n\n").trim();
+  return { cleanText, files };
 }
 
 function readDaemonRecord(profileName, configDir) {
@@ -2722,14 +2992,36 @@ export async function runResidentDaemon(flags = {}) {
           (Array.isArray(context?.messages) && context.messages.length > 0
             ? context.messages[context.messages.length - 1]?.id
             : undefined);
-        await client.sendMessage({
-          conversationId: convId,
-          text: replyText.slice(0, 28_000),
-          replyToMessageId: replyToId,
-          clientMessageId: `${event.eventId}:reply`,
-          idempotencyKey: `${event.eventId}:reply`,
+        const isGroupConv = conversation?.type === "group" || conversation?.kind === "group";
+        const { cleanText, files: generatedFiles } = extractGeneratedFilesFromReply(replyText, {
+          allowLocalPath: !isGroupConv,
+          workdir,
         });
-        logLine(`Replied to conv=${convId} seq=${seq} (${replyText.length} chars)`);
+
+        if (generatedFiles.length > 0) {
+          for (let idx = 0; idx < generatedFiles.length; idx += 1) {
+            const gf = generatedFiles[idx];
+            await client.sendFile({
+              conversationId: convId,
+              bytes: gf.bytes,
+              fileName: gf.fileName,
+              mimeType: gf.mimeType,
+              text: idx === 0 && cleanText ? cleanText.slice(0, 28_000) : undefined,
+              replyToMessageId: idx === 0 ? replyToId : undefined,
+              clientMessageId: `${event.eventId}:file:${idx}`,
+            });
+          }
+          logLine(`Sent ${generatedFiles.length} generated file(s) to conv=${convId} seq=${seq}`);
+        } else if (cleanText) {
+          await client.sendMessage({
+            conversationId: convId,
+            text: cleanText.slice(0, 28_000),
+            replyToMessageId: replyToId,
+            clientMessageId: `${event.eventId}:reply`,
+            idempotencyKey: `${event.eventId}:reply`,
+          });
+          logLine(`Replied to conv=${convId} seq=${seq} (${cleanText.length} chars)`);
+        }
       }
     } catch (err) {
       const safeErr = String(err?.message || err).replace(/dl_bot_[A-Za-z0-9_-]{12,}/gu, "[REDACTED]");
@@ -3148,6 +3440,7 @@ Usage:
   duallane-agent updates [--ack] [--timeout 20] [--profile default]
   duallane-agent wait [--timeout 3600] [--transport auto|ws|poll] [--profile default]
   duallane-agent send <conversationId> <text> [--reply-to <messageId>] [--profile default]
+  duallane-agent send-file <conversationId> <filePath> [--name <fileName>] [--mime <mimeType>] [--text <caption>] [--reply-to <messageId>] [--profile default]
   duallane-agent edit <messageId> <text> [--profile default]
   duallane-agent typing <conversationId> [--state thinking|typing] [--profile default]
   duallane-agent publish-mobile <apkPath> [--min-native-code <code>] [--title <title>] [--notes <md> | --notes-file <file>] [--profile default]
@@ -3624,6 +3917,34 @@ async function main() {
     const res = await client.sendMessage({
       conversationId,
       text,
+      replyToMessageId: typeof flags["reply-to"] === "string" ? flags["reply-to"] : undefined,
+    });
+    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    return;
+  }
+
+  if (subcommand === "send-file") {
+    const [conversationId, filePath] = positionals.slice(1);
+    if (!conversationId || !filePath) {
+      throw new Error(
+        "Usage: duallane-agent send-file <conversationId> <filePath> [--name <fileName>] [--mime <mimeType>] [--text <caption>] [--reply-to <msgId>]"
+      );
+    }
+    const resolvedPath = path.resolve(filePath);
+    const bytes = fs.readFileSync(resolvedPath);
+    const fileName =
+      typeof flags.name === "string" && flags.name.trim() ? flags.name.trim() : path.basename(resolvedPath);
+    const mimeType =
+      typeof flags.mime === "string" && flags.mime.trim()
+        ? flags.mime.trim()
+        : inferMimeTypeFromFileName(fileName);
+    const { client } = requireClient(flags.profile);
+    const res = await client.sendFile({
+      conversationId,
+      bytes,
+      fileName,
+      mimeType,
+      text: typeof flags.text === "string" ? flags.text : undefined,
       replyToMessageId: typeof flags["reply-to"] === "string" ? flags["reply-to"] : undefined,
     });
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");

@@ -75,6 +75,18 @@ export class DualLaneBotV2 {
     options?: { replyToMessageId?: string; clientMessageId?: string; idempotencyKey?: string }
   ): Promise<{ message?: { id: string } }>;
   editMessage(messageId: string, plainText: string): Promise<{ ok: boolean; messageId: string }>;
+  sendFile(
+    conversationId: string,
+    bytes: Uint8Array | Buffer | string,
+    fileName: string,
+    options?: {
+      mimeType?: string;
+      text?: string;
+      replyToMessageId?: string;
+      clientMessageId?: string;
+      sendMessage?: boolean;
+    }
+  ): Promise<{ ok: boolean; attachment?: unknown; message?: { id: string } }>;
   sendCard(
     conversationId: string,
     cardDoc: DualLaneCardKitDocument,

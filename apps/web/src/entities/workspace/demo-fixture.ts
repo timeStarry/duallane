@@ -38,6 +38,8 @@ export function buildDevPreviewFixture() {
       memberIds: ["usr_owner_1", "usr_sumu", "usr_chenche", "usr_bot_echo"],
       lastMessageText: "已生成部署审批卡片，请各位确认签收。",
       lastMessageAt: "2026-11-14T02:05:00Z",
+      lastMessageSenderId: "usr_bot_echo",
+      lastMessageSenderName: "Echo 智能体",
     },
     conv_sumu: {
       id: "conv_sumu",
@@ -49,6 +51,8 @@ export function buildDevPreviewFixture() {
       memberIds: ["usr_owner_1", "usr_sumu"],
       lastMessageText: "深色模式下的气泡文字对比度我核对过了，现在非常通透。",
       lastMessageAt: "2026-11-14T01:58:00Z",
+      lastMessageSenderId: "usr_sumu",
+      lastMessageSenderName: "苏沐",
     },
     conv_mobile: {
       id: "conv_mobile",
@@ -60,6 +64,8 @@ export function buildDevPreviewFixture() {
       memberIds: ["usr_owner_1", "usr_chenche"],
       lastMessageText: "@林知远 /api/v1/sync 增量游标和扫码登录已联调就绪",
       lastMessageAt: "2026-11-14T01:52:00Z",
+      lastMessageSenderId: "usr_chenche",
+      lastMessageSenderName: "陈彻",
     },
   };
 

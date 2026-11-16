@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DualLaneAgentClient, DUALLANE_AGENT_SDK_VERSION } from "./index.js";
+import { DualLaneAgentClient, DUALLANE_AGENT_SDK_VERSION, inferMimeTypeFromFileName } from "./index.js";
 import { getAgentConfigDir, loadAgentProfile, normalizeProfileName, updateProfileCursor } from "./profile-store.js";
 
 const DAEMON_VALID_AGENTS = new Set(["auto", "codex", "claude", "cmd"]);
@@ -168,9 +168,14 @@ export function buildDaemonAgentPrompt({ botName, conversation, event, context }
       ].join("\n")
     : `当前消息来自主人授权的一对一私聊会话。请直接给出清晰、准确、简洁的回复。`;
 
+  const fileGuidance = isGroup
+    ? `如需向群内生成并发送文档、表格、SVG 图表或代码附件，请直接在回复中使用标签包裹文件内容：<duallane-file name="文件名.ext">文件正文</duallane-file>（二进制内容可加 encoding="base64"），外层守护进程会自动将其作为真实文件附件上传并发送到会话。`
+    : `如需向主人发送你生成的文件或图片，可使用 <duallane-file name="文件名.ext">文件正文</duallane-file>（二进制内容加 encoding="base64"），或在工作目录/临时目录生成文件后在回复末尾附上 [[DUALLANE_FILE: /绝对路径/文件名.ext]]，外层守护进程会自动上传并作为会话附件发出。`;
+
   const sections = [
     `你是接入在 DualLane 协作空间中的 AI 智能体「${botName || "Bot"}」。`,
     `请直接输出你要发送到当前聊天窗口的最终回复正文（支持 Markdown，不要输出“以下是回复”等多余包装语，也不要调用 duallane-agent send 发送，外层守护进程会自动将你的最终回复发出）。`,
+    fileGuidance,
     safetyRule,
   ];
 
@@ -191,6 +196,77 @@ export function buildDaemonAgentPrompt({ botName, conversation, event, context }
   }
 
   return sections.join("\n\n");
+}
+
+export function extractGeneratedFilesFromReply(rawReply, options = {}) {
+  const allowLocalPath = Boolean(options.allowLocalPath);
+  const workdir = options.workdir ? path.resolve(options.workdir) : "";
+  const files = [];
+
+  let text = String(rawReply || "");
+
+  // 1. Parse inline <duallane-file name="..." [mime="..."] [encoding="base64"]>...</duallane-file>
+  const inlineFileRe = /<duallane-file\s+([^>]*)>([\s\S]*?)<\/duallane-file>/giu;
+  text = text.replace(inlineFileRe, (_full, attrRaw, innerBody) => {
+    const nameMatch = /\bname\s*=\s*["']([^"']+)["']/iu.exec(attrRaw);
+    const mimeMatch = /\bmime\s*=\s*["']([^"']+)["']/iu.exec(attrRaw);
+    const encMatch = /\bencoding\s*=\s*["']([^"']+)["']/iu.exec(attrRaw);
+    const rawName = path.basename(String(nameMatch?.[1] || "generated.txt").trim()) || "generated.txt";
+    const isBase64 = String(encMatch?.[1] || "").trim().toLowerCase() === "base64";
+    const bodyTrimmed = String(innerBody || "").replace(/^\r?\n/, "").replace(/\r?\n$/, "");
+    const bytes = isBase64
+      ? Buffer.from(bodyTrimmed.replace(/\s+/gu, ""), "base64")
+      : Buffer.from(bodyTrimmed, "utf8");
+    if (bytes.byteLength > 0 && files.length < 6) {
+      files.push({
+        fileName: rawName,
+        mimeType: String(mimeMatch?.[1] || inferMimeTypeFromFileName(rawName)).trim(),
+        bytes,
+      });
+    }
+    return "";
+  });
+
+  // 2. Parse [[DUALLANE_FILE: /path/to/file]] (strictly allowed only in private 1-on-1 DM within workdir or tmpdir)
+  const localFileRe = /\[\[DUALLANE_FILE:\s*([^\]]+?)\s*\]\]/gu;
+  text = text.replace(localFileRe, (_full, rawPath) => {
+    if (!allowLocalPath || files.length >= 6) return "";
+    try {
+      const candidate = path.resolve(workdir || process.cwd(), String(rawPath || "").trim());
+      if (!fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) return "";
+      const realCandidate = fs.realpathSync(candidate);
+      const allowedRoots = [os.tmpdir(), workdir].filter(Boolean).map((r) => {
+        try {
+          return fs.realpathSync(r);
+        } catch {
+          return path.resolve(r);
+        }
+      });
+      const withinAllowed = allowedRoots.some(
+        (root) => realCandidate === root || realCandidate.startsWith(root + path.sep)
+      );
+      if (!withinAllowed) return "";
+      const segments = realCandidate.split(path.sep);
+      if (segments.some((seg) => seg.startsWith(".") && seg !== "." && seg !== "..")) {
+        return "";
+      }
+      const bytes = fs.readFileSync(realCandidate);
+      if (bytes.byteLength > 0 && bytes.byteLength <= 50 * 1024 * 1024) {
+        const fileName = path.basename(realCandidate);
+        files.push({
+          fileName,
+          mimeType: inferMimeTypeFromFileName(fileName),
+          bytes,
+        });
+      }
+    } catch {
+      /* ignore inaccessible local path */
+    }
+    return "";
+  });
+
+  const cleanText = text.replace(/\n{3,}/gu, "\n\n").trim();
+  return { cleanText, files };
 }
 
 function readDaemonRecord(profileName, configDir) {
@@ -482,14 +558,36 @@ export async function runResidentDaemon(flags = {}) {
           (Array.isArray(context?.messages) && context.messages.length > 0
             ? context.messages[context.messages.length - 1]?.id
             : undefined);
-        await client.sendMessage({
-          conversationId: convId,
-          text: replyText.slice(0, 28_000),
-          replyToMessageId: replyToId,
-          clientMessageId: `${event.eventId}:reply`,
-          idempotencyKey: `${event.eventId}:reply`,
+        const isGroupConv = conversation?.type === "group" || conversation?.kind === "group";
+        const { cleanText, files: generatedFiles } = extractGeneratedFilesFromReply(replyText, {
+          allowLocalPath: !isGroupConv,
+          workdir,
         });
-        logLine(`Replied to conv=${convId} seq=${seq} (${replyText.length} chars)`);
+
+        if (generatedFiles.length > 0) {
+          for (let idx = 0; idx < generatedFiles.length; idx += 1) {
+            const gf = generatedFiles[idx];
+            await client.sendFile({
+              conversationId: convId,
+              bytes: gf.bytes,
+              fileName: gf.fileName,
+              mimeType: gf.mimeType,
+              text: idx === 0 && cleanText ? cleanText.slice(0, 28_000) : undefined,
+              replyToMessageId: idx === 0 ? replyToId : undefined,
+              clientMessageId: `${event.eventId}:file:${idx}`,
+            });
+          }
+          logLine(`Sent ${generatedFiles.length} generated file(s) to conv=${convId} seq=${seq}`);
+        } else if (cleanText) {
+          await client.sendMessage({
+            conversationId: convId,
+            text: cleanText.slice(0, 28_000),
+            replyToMessageId: replyToId,
+            clientMessageId: `${event.eventId}:reply`,
+            idempotencyKey: `${event.eventId}:reply`,
+          });
+          logLine(`Replied to conv=${convId} seq=${seq} (${cleanText.length} chars)`);
+        }
       }
     } catch (err) {
       const safeErr = String(err?.message || err).replace(/dl_bot_[A-Za-z0-9_-]{12,}/gu, "[REDACTED]");

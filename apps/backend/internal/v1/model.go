@@ -49,17 +49,20 @@ type V1BootstrapPolicy struct {
 }
 
 type V1BootstrapConversation struct {
-	ID                   string   `json:"id"`
-	Type                 string   `json:"type"`
-	Title                string   `json:"title"`
-	DisplayTitle         string   `json:"displayTitle"`
-	AvatarEmoji          *string  `json:"avatarEmoji,omitempty"`
-	UnreadCount          int      `json:"unreadCount"`
-	PinnedMessageIDs     []string `json:"pinnedMessageIds"`
-	MemberIDs            []string `json:"memberIds"`
-	LastMessagePlainText string   `json:"lastMessagePlainText,omitempty"`
-	LastMessageAt        *string  `json:"lastMessageAt,omitempty"`
-	PeerLastReadAt       *string  `json:"peerLastReadAt,omitempty"`
+	ID                    string   `json:"id"`
+	Type                  string   `json:"type"`
+	Title                 string   `json:"title"`
+	DisplayTitle          string   `json:"displayTitle"`
+	AvatarEmoji           *string  `json:"avatarEmoji,omitempty"`
+	UnreadCount           int      `json:"unreadCount"`
+	NotificationLevel     string   `json:"notificationLevel,omitempty"`
+	PinnedMessageIDs      []string `json:"pinnedMessageIds"`
+	MemberIDs             []string `json:"memberIds"`
+	LastMessagePlainText  string   `json:"lastMessagePlainText,omitempty"`
+	LastMessageSenderID   string   `json:"lastMessageSenderId,omitempty"`
+	LastMessageSenderName string   `json:"lastMessageSenderName,omitempty"`
+	LastMessageAt         *string  `json:"lastMessageAt,omitempty"`
+	PeerLastReadAt        *string  `json:"peerLastReadAt,omitempty"`
 }
 
 type SystemAnnouncement struct {

@@ -15,6 +15,8 @@ import (
 	platformstorage "github.com/timestarry/duallane/apps/backend/internal/platform/storage"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/botgateway"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/files"
+	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 )
 
 type stubRepo struct {
@@ -1182,4 +1184,137 @@ type botAuthFunc func(context.Context, string, botgateway.TokenAuthOptions) (*bo
 
 func (fn botAuthFunc) Authenticate(ctx context.Context, header string, opts botgateway.TokenAuthOptions) (*botgateway.Auth, error) {
 	return fn(ctx, header, opts)
+}
+
+type stubBotFiles struct {
+	reservedInput  files.ReserveUploadInput
+	completedBytes []byte
+}
+
+func (s *stubBotFiles) ReserveAgentBotUpload(_ context.Context, input files.ReserveUploadInput) (files.UploadResult, error) {
+	s.reservedInput = input
+	convID := input.ConversationID
+	return files.UploadResult{
+		Status: string(files.TransferReserved),
+		ID:     "upl_bot_test_1",
+		Upload: &files.UploadPlan{ID: "upl_bot_test_1", Mode: "single", PartSize: files.UploadPartSize, PartCount: 1},
+		Attachment: &files.Attachment{
+			ID:             "att_bot_test_1",
+			FileName:       input.FileName,
+			MIMEType:       input.MIMEType,
+			ByteSize:       input.ByteSize,
+			Status:         string(files.AttachmentPending),
+			Visibility:     input.Visibility,
+			UploaderID:     input.ActorID,
+			ConversationID: &convID,
+		},
+	}, nil
+}
+
+func (s *stubBotFiles) CompleteAgentBotUpload(_ context.Context, input files.CompleteUploadInput) (files.UploadResult, error) {
+	data, err := io.ReadAll(input.Content)
+	if err != nil {
+		return files.UploadResult{}, err
+	}
+	s.completedBytes = data
+	convID := s.reservedInput.ConversationID
+	return files.UploadResult{
+		Status: string(files.TransferCompleted),
+		ID:     input.UploadID,
+		Attachment: &files.Attachment{
+			ID:             "att_bot_test_1",
+			FileName:       s.reservedInput.FileName,
+			MIMEType:       s.reservedInput.MIMEType,
+			ByteSize:       int64(len(data)),
+			Status:         string(files.AttachmentAvailable),
+			Visibility:     string(files.VisibilityConversation),
+			UploaderID:     input.ActorID,
+			ConversationID: &convID,
+		},
+	}, nil
+}
+
+type stubBotMessageCreator struct {
+	lastInput messages.CreateInput
+}
+
+func (s *stubBotMessageCreator) Create(_ context.Context, input messages.CreateInput) (messages.Message, error) {
+	s.lastInput = input
+	return messages.Message{
+		ID:             "msg_bot_file_1",
+		ConversationID: input.ConversationID,
+		PlainText:      input.Content.PlainText,
+		Content:        input.Content,
+	}, nil
+}
+
+func TestBotFileUploadAndSendEndpoints(t *testing.T) {
+	repo := &stubRepo{}
+	svc := NewService(repo)
+	resolver := actorResolverFunc(func(_ context.Context, _ *http.Request) (*auth.Actor, error) {
+		return nil, nil
+	})
+	botFiles := &stubBotFiles{}
+	botMsgs := &stubBotMessageCreator{}
+	validTok := "dl_bot_comet_token_0123456789abcdef0123456789"
+	h := NewHTTPHandler(svc, resolver).
+		WithBotAuthenticator(botAuthFunc(func(_ context.Context, header string, _ botgateway.TokenAuthOptions) (*botgateway.Auth, error) {
+			if header != "Bearer "+validTok {
+				return nil, botgateway.NewError(botgateway.CodeInvalidToken, "invalid", http.StatusUnauthorized)
+			}
+			return &botgateway.Auth{
+				BotID:   "bot_comet",
+				UserID:  "usr_bot_comet",
+				SpaceID: "spc_default",
+				Scopes:  []string{botgateway.ScopeMessagesSend},
+			}, nil
+		})).
+		WithBotFilePipeline(botFiles, botMsgs)
+
+	r := chi.NewRouter()
+	h.Mount(r)
+
+	// 1. Reject unauthorized conversation
+	forbidReq := httptest.NewRequest(http.MethodPost, "/api/bot/v2/conversations/conv_unauthorized/files?fileName=report.md", bytes.NewBufferString("# Report"))
+	forbidReq.Header.Set("Authorization", "Bearer "+validTok)
+	forbidRec := httptest.NewRecorder()
+	r.ServeHTTP(forbidRec, forbidReq)
+	if forbidRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for unauthorized conversation, got %d", forbidRec.Code)
+	}
+
+	// 2. One-shot file upload + message send in authorized conversation (works with messages:send scope!)
+	sendReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/bot/v2/conversations/conv_dm_bot_1/files?fileName=summary.md&text=%E5%B7%B2%E7%94%9F%E6%88%90%E6%8A%A5%E5%91%8A",
+		bytes.NewBufferString("# Weekly Summary\nAll green."),
+	)
+	sendReq.Header.Set("Authorization", "Bearer "+validTok)
+	sendReq.Header.Set("Content-Type", "application/octet-stream")
+	sendRec := httptest.NewRecorder()
+	r.ServeHTTP(sendRec, sendReq)
+	if sendRec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 on bot file send, got %d (%s)", sendRec.Code, sendRec.Body.String())
+	}
+	if botFiles.reservedInput.MIMEType != "text/markdown" || botFiles.reservedInput.Visibility != "conversation" {
+		t.Fatalf("expected inferred text/markdown + conversation visibility, got %+v", botFiles.reservedInput)
+	}
+	if string(botFiles.completedBytes) != "# Weekly Summary\nAll green." {
+		t.Fatalf("unexpected completed bytes: %q", string(botFiles.completedBytes))
+	}
+	if len(botMsgs.lastInput.Content.Blocks) != 2 ||
+		botMsgs.lastInput.Content.Blocks[0].Type != "text" ||
+		botMsgs.lastInput.Content.Blocks[1].Type != "attachment" ||
+		botMsgs.lastInput.Content.Blocks[1].AttachmentID != "att_bot_test_1" {
+		t.Fatalf("unexpected message blocks: %+v", botMsgs.lastInput.Content.Blocks)
+	}
+
+	// 3. Two-step PUT /api/bot/v2/uploads/{uploadId}/content also succeeds
+	putReq := httptest.NewRequest(http.MethodPut, "/api/bot/v2/uploads/upl_bot_test_1/content", bytes.NewBufferString("raw-binary-content"))
+	putReq.Header.Set("Authorization", "Bearer "+validTok)
+	putRec := httptest.NewRecorder()
+	r.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK || string(botFiles.completedBytes) != "raw-binary-content" {
+		t.Fatalf("expected 200 on two-step bot upload content, got %d (%s)", putRec.Code, putRec.Body.String())
+	}
 }

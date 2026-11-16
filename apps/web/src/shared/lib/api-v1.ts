@@ -849,6 +849,73 @@ export const apiV1 = {
       }
     ),
 
+  // Personal Profile, Custom Avatar, Private Member Remarks & Notification Preferences
+  updateMyProfile: (patch: { nickname?: string; searchDiscoverable?: boolean }) =>
+    requestJSON<{ user?: Record<string, unknown> }>("/api/workspace/me/profile", {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  uploadMyAvatar: async (file: File) => {
+    const rawBuffer = await file.arrayBuffer();
+    return requestJSON<{ user?: Record<string, unknown>; avatarUrl?: string }>(
+      "/api/workspace/me/avatar",
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": file.type || "image/png",
+        },
+        body: rawBuffer,
+      }
+    );
+  },
+  deleteMyAvatar: () =>
+    requestJSON<{ user?: Record<string, unknown>; avatarUrl?: string }>(
+      "/api/workspace/me/avatar",
+      {
+        method: "DELETE",
+      }
+    ),
+  setMemberRemark: (userId: string, remark: string) => {
+    const trimmed = remark.trim();
+    const url = `/api/workspace/members/${encodeURIComponent(userId)}/remark`;
+    if (trimmed) {
+      return requestJSON<{ member?: Record<string, unknown>; remark?: string }>(url, {
+        method: "PUT",
+        body: JSON.stringify({ remark: trimmed }),
+      });
+    }
+    return requestJSON<{ member?: Record<string, unknown>; ok?: boolean }>(url, {
+      method: "DELETE",
+    });
+  },
+  updateConversationNotification: (
+    conversationId: string,
+    level: ConversationNotificationLevel
+  ) =>
+    requestJSON<{ conversation?: Record<string, unknown>; level?: ConversationNotificationLevel }>(
+      `/api/workspace/conversations/${encodeURIComponent(conversationId)}/notification`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ level }),
+      }
+    ),
+  getMyNotifications: () =>
+    requestJSON<{ notifications: OfflineEmailNotificationsDTO }>(
+      "/api/workspace/me/notifications"
+    ),
+  updateMyNotifications: (patch: {
+    enabled: boolean;
+    immediateEnabled: boolean;
+    digestEnabled: boolean;
+  }) =>
+    requestJSON<{ notifications: OfflineEmailNotificationsDTO }>(
+      "/api/workspace/me/notifications",
+      {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      }
+    ),
+
   // Emotes, Stickers & Collections (Telegram-style Pack & Subscription System)
   getEmoteSettings: () =>
     requestJSON<{ settings: EmoteSettingsDTO }>("/api/workspace/me/emote-settings"),
@@ -1360,4 +1427,15 @@ export interface MobileClientReleaseMetadataInput {
   versionCode: number;
   title: string;
   notes: string;
+}
+
+export type ConversationNotificationLevel = "all" | "mentions" | "muted";
+
+export interface OfflineEmailNotificationsDTO {
+  enabled: boolean;
+  immediateEnabled: boolean;
+  digestEnabled: boolean;
+  email?: string | null;
+  verified?: boolean;
+  source?: string;
 }

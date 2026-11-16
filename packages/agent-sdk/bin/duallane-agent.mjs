@@ -11,12 +11,14 @@ import {
   DualLaneAgentSetupClient,
   DUALLANE_AGENT_SDK_VERSION,
   DUALLANE_GATEWAY_VERSION,
+  inferMimeTypeFromFileName,
 } from "../src/index.js";
 import { createDualLaneMcpServer, DUALLANE_MCP_TOOLS, startDualLaneMcpStdioServer } from "../src/mcp.js";
 import {
   buildDaemonAgentPrompt,
   buildLaunchdPlistXml,
   buildSystemdUnitFile,
+  extractGeneratedFilesFromReply,
   manageDaemonCli,
   runResidentDaemon,
 } from "../src/daemon.js";
@@ -37,12 +39,14 @@ export {
   DualLaneAgentSetupClient,
   DUALLANE_AGENT_SDK_VERSION,
   DUALLANE_GATEWAY_VERSION,
+  inferMimeTypeFromFileName,
   DUALLANE_MCP_TOOLS,
   createDualLaneMcpServer,
   startDualLaneMcpStdioServer,
   manageDaemonCli,
   runResidentDaemon,
   buildDaemonAgentPrompt,
+  extractGeneratedFilesFromReply,
   buildLaunchdPlistXml,
   buildSystemdUnitFile,
   loadAgentProfile,
@@ -88,6 +92,7 @@ Usage:
   duallane-agent updates [--ack] [--timeout 20] [--profile default]
   duallane-agent wait [--timeout 3600] [--transport auto|ws|poll] [--profile default]
   duallane-agent send <conversationId> <text> [--reply-to <messageId>] [--profile default]
+  duallane-agent send-file <conversationId> <filePath> [--name <fileName>] [--mime <mimeType>] [--text <caption>] [--reply-to <messageId>] [--profile default]
   duallane-agent edit <messageId> <text> [--profile default]
   duallane-agent typing <conversationId> [--state thinking|typing] [--profile default]
   duallane-agent publish-mobile <apkPath> [--min-native-code <code>] [--title <title>] [--notes <md> | --notes-file <file>] [--profile default]
@@ -564,6 +569,34 @@ async function main() {
     const res = await client.sendMessage({
       conversationId,
       text,
+      replyToMessageId: typeof flags["reply-to"] === "string" ? flags["reply-to"] : undefined,
+    });
+    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    return;
+  }
+
+  if (subcommand === "send-file") {
+    const [conversationId, filePath] = positionals.slice(1);
+    if (!conversationId || !filePath) {
+      throw new Error(
+        "Usage: duallane-agent send-file <conversationId> <filePath> [--name <fileName>] [--mime <mimeType>] [--text <caption>] [--reply-to <msgId>]"
+      );
+    }
+    const resolvedPath = path.resolve(filePath);
+    const bytes = fs.readFileSync(resolvedPath);
+    const fileName =
+      typeof flags.name === "string" && flags.name.trim() ? flags.name.trim() : path.basename(resolvedPath);
+    const mimeType =
+      typeof flags.mime === "string" && flags.mime.trim()
+        ? flags.mime.trim()
+        : inferMimeTypeFromFileName(fileName);
+    const { client } = requireClient(flags.profile);
+    const res = await client.sendFile({
+      conversationId,
+      bytes,
+      fileName,
+      mimeType,
+      text: typeof flags.text === "string" ? flags.text : undefined,
       replyToMessageId: typeof flags["reply-to"] === "string" ? flags["reply-to"] : undefined,
     });
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");

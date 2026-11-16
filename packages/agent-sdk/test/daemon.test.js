@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import {
   buildDaemonAgentPrompt,
   buildLaunchdPlistXml,
   buildSystemdUnitFile,
+  extractGeneratedFilesFromReply,
   getDaemonServiceLabel,
 } from "../src/daemon.js";
+import { DualLaneAgentClient } from "../src/index.js";
+import { createDualLaneMcpServer } from "../src/mcp.js";
+import { saveAgentProfile } from "../src/profile-store.js";
 
 test("daemon generates valid macOS launchd plist with KeepAlive and escaped paths", () => {
   const xml = buildLaunchdPlistXml({
@@ -58,4 +65,86 @@ test("daemon prompt enforces read-only safety rule in group chats and formats co
   assert.match(groupPrompt, /无议程同步对齐碰头会/u);
   assert.match(groupPrompt, /\[03:07:00\] timeStarry: 大家好/u);
   assert.match(groupPrompt, /@Comet 能收到群聊信息吗/u);
+});
+
+test("extractGeneratedFilesFromReply parses inline <duallane-file> and enforces DM-only local path boundary", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dl-daemon-file-test-"));
+  const validLocalFile = path.join(tmpDir, "chart.svg");
+  fs.writeFileSync(validLocalFile, "<svg></svg>", "utf8");
+
+  const reply = [
+    "已为您整理好周报与图表：",
+    `<duallane-file name="weekly.md"># 周报\n一切正常</duallane-file>`,
+    `[[DUALLANE_FILE: ${validLocalFile}]]`,
+  ].join("\n\n");
+
+  // Group mode blocks local paths, keeps inline <duallane-file>
+  const groupOut = extractGeneratedFilesFromReply(reply, { allowLocalPath: false, workdir: tmpDir });
+  assert.equal(groupOut.cleanText, "已为您整理好周报与图表：");
+  assert.equal(groupOut.files.length, 1);
+  assert.equal(groupOut.files[0].fileName, "weekly.md");
+  assert.equal(groupOut.files[0].mimeType, "text/markdown");
+
+  // Owner 1-on-1 DM allows files inside workdir/tmpdir
+  const dmOut = extractGeneratedFilesFromReply(reply, { allowLocalPath: true, workdir: tmpDir });
+  assert.equal(dmOut.files.length, 2);
+  assert.equal(dmOut.files[1].fileName, "chart.svg");
+  assert.equal(dmOut.files[1].mimeType, "image/svg+xml");
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("client.sendFile and MCP duallane_send_file upload binary payload with inferred MIME type", async () => {
+  const calls = [];
+  const fakeFetch = async (url, init) => {
+    calls.push({ url: String(url), method: init.method, headers: init.headers, body: Buffer.from(init.body) });
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        attachment: { id: "att_gen_1", fileName: "report.csv", mimeType: "text/csv", byteSize: init.body.byteLength },
+        message: { id: "msg_gen_1" },
+      }),
+      { status: 201, headers: { "content-type": "application/json" } }
+    );
+  };
+
+  const client = new DualLaneAgentClient({
+    url: "https://duallane.example.com",
+    token: "dl_bot_test_token_0123456789abcdef0123456789",
+    fetch: fakeFetch,
+  });
+  const res = await client.sendFile({
+    conversationId: "conv_1",
+    bytes: "a,b\n1,2\n",
+    fileName: "report.csv",
+    text: "数据导出",
+  });
+  assert.equal(res.ok, true);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /\/api\/bot\/v2\/conversations\/conv_1\/files\?/u);
+  assert.match(calls[0].url, /fileName=report\.csv/u);
+  assert.equal(calls[0].headers["content-type"], "text/csv");
+  assert.equal(calls[0].body.toString("utf8"), "a,b\n1,2\n");
+
+  const cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), "dl-mcp-file-test-"));
+  saveAgentProfile(
+    "default",
+    {
+      url: "https://duallane.example.com",
+      token: "dl_bot_test_token_0123456789abcdef0123456789",
+      scopes: ["messages:send", "files:write"],
+    },
+    { configDir: cfgDir }
+  );
+  const mcp = createDualLaneMcpServer({ configDir: cfgDir, fetch: fakeFetch });
+  const mcpRes = await mcp.callTool("duallane_send_file", {
+    conversationId: "conv_1",
+    contentText: "# Hello",
+    fileName: "hello.md",
+    text: "请查收文档",
+  });
+  assert.equal(mcpRes.ok, true);
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].url, /fileName=hello\.md/u);
+  fs.rmSync(cfgDir, { recursive: true, force: true });
 });

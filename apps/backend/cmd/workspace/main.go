@@ -172,6 +172,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	var avatarService *avatars.Service
 	var conversationService *conversations.Service
 	var messageService *messages.Service
+	var botMessageService *messages.Service
 	var cardService *cards.Service
 	var interactionService *interactions.Service
 	var overviewService *overview.Service
@@ -352,7 +353,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 		// Bot identities enter only through the scoped Gateway. Keep the human
 		// API's service closed to bots, and do not install inline topic creation
 		// on this separate, transaction-bound writer.
-		botMessageService := messages.NewService(messages.ServiceOptions{
+		botMessageService = messages.NewService(messages.ServiceOptions{
 			Repository: messageRepository, RequireMessageJobs: true, AllowBots: true,
 			AdvancedBlockValidator: messageblocks.NewValidator(messageblocks.ValidatorOptions{
 				Cards: cardService, Emotes: emoteService, Topics: topicService,
@@ -477,7 +478,7 @@ func newApplication(ctx context.Context, runtimeConfig config.WorkspaceConfig, l
 	var v1Handler *v1.HTTPHandler
 	if pool != nil {
 		v1Svc := v1.NewService(v1.NewPGRepository(pool, auth.DefaultSpaceID)).WithEmailSender(emailService).WithBlobStore(blobStore)
-		v1Handler = v1.NewHTTPHandler(v1Svc, authHandler).WithBotAuthenticator(botGatewayService)
+		v1Handler = v1.NewHTTPHandler(v1Svc, authHandler).WithBotAuthenticator(botGatewayService).WithBotFilePipeline(fileService, botMessageService)
 	}
 	return &application{
 		pool: pool, cancel: cancel, backgroundDone: backgroundDone,

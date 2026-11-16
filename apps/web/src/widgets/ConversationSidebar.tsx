@@ -1,6 +1,8 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AtSign,
+  Bell,
+  BellOff,
   Bookmark,
   Check,
   LogOut,
@@ -11,7 +13,13 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useLaneStore } from "@/entities/lane/store";
-import { useWorkspaceStore } from "@/entities/workspace/store";
+import {
+  formatConversationPreviewText,
+  useWorkspaceStore,
+  type V1Conversation,
+  type V1User,
+} from "@/entities/workspace/store";
+import type { ConversationNotificationLevel } from "@/shared/lib/api-v1";
 import {
   Avatar,
   Button,
@@ -33,6 +41,36 @@ import { cn } from "@/shared/lib/cn";
 type FilterTab = "all" | "unread" | "mentions";
 const GROUP_EMOJI_PRESETS = ["🚀", "💡", "🎨", "🛠️", "📌", "⚡", "🌿", "🎯"];
 
+export const SIDEBAR_WIDTH_STORAGE_KEY = "dl_sidebar_width_v1";
+const MIN_SIDEBAR_WIDTH = 240;
+const MAX_SIDEBAR_WIDTH = 420;
+const DEFAULT_SIDEBAR_WIDTH = 288;
+
+function clampSidebarWidth(width: number): number {
+  if (!Number.isFinite(width)) return DEFAULT_SIDEBAR_WIDTH;
+  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, Math.round(width)));
+}
+
+function loadStoredSidebarWidth(): number {
+  if (typeof window === "undefined") return DEFAULT_SIDEBAR_WIDTH;
+  try {
+    const raw = window.localStorage?.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
+    if (!raw) return DEFAULT_SIDEBAR_WIDTH;
+    return clampSidebarWidth(Number(raw));
+  } catch {
+    return DEFAULT_SIDEBAR_WIDTH;
+  }
+}
+
+function saveStoredSidebarWidth(width: number): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage?.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(clampSidebarWidth(width)));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
 function formatShortTime(iso?: string): string {
   if (!iso) return "";
   try {
@@ -40,6 +78,43 @@ function formatShortTime(iso?: string): string {
   } catch {
     return "";
   }
+}
+
+export function buildSidebarMessagePreview(
+  conv: V1Conversation,
+  currentUserId: string | undefined,
+  members: Record<string, V1User>
+): string {
+  const formatted = formatConversationPreviewText(conv.lastMessageText);
+  if (!formatted) return "暂无消息";
+  if (formatted === "消息已撤回" || formatted.endsWith("撤回了一条消息")) {
+    return formatted;
+  }
+
+  if (conv.kind === "group") {
+    const senderId = conv.lastMessageSenderId;
+    if (senderId && !senderId.startsWith("usr_system_")) {
+      const senderLabel =
+        currentUserId && senderId === currentUserId
+          ? "我"
+          : members[senderId]?.displayName || conv.lastMessageSenderName || "";
+      if (senderLabel) {
+        return `${senderLabel}: ${formatted}`;
+      }
+    } else if (conv.lastMessageSenderName) {
+      return `${conv.lastMessageSenderName}: ${formatted}`;
+    }
+    return formatted;
+  }
+
+  if (conv.kind === "direct") {
+    if (currentUserId && conv.lastMessageSenderId === currentUserId) {
+      return `我: ${formatted}`;
+    }
+    return formatted;
+  }
+
+  return formatted;
 }
 
 export function ConversationSidebar() {
@@ -51,6 +126,7 @@ export function ConversationSidebar() {
     activeConversationId,
     selectConversation,
     togglePinConversation,
+    setConversationNotificationLevel,
     createGroup,
     leaveGroup,
     drafts,
@@ -70,6 +146,60 @@ export function ConversationSidebar() {
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
+
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => loadStoredSidebarWidth());
+  const dragStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const handleResizePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      dragStateRef.current = { startX: e.clientX, startWidth: sidebarWidth };
+
+      const onMove = (moveEv: PointerEvent) => {
+        if (!dragStateRef.current) return;
+        const next = clampSidebarWidth(
+          dragStateRef.current.startWidth + (moveEv.clientX - dragStateRef.current.startX)
+        );
+        setSidebarWidth(next);
+        saveStoredSidebarWidth(next);
+      };
+      const onUp = () => {
+        dragStateRef.current = null;
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
+    [sidebarWidth]
+  );
+
+  useEffect(() => {
+    return () => {
+      dragStateRef.current = null;
+    };
+  }, []);
+
+  const sidebarStyle = useMemo(
+    () => ({ "--dl-sidebar-w": `${sidebarWidth}px` }) as React.CSSProperties,
+    [sidebarWidth]
+  );
+
+  const resizeHandle = (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="拖拽调整会话列表宽度"
+      data-testid="sidebar-resize-handle"
+      onPointerDown={handleResizePointerDown}
+      onDoubleClick={() => {
+        setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
+        saveStoredSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
+      }}
+      className="max-compact:hidden absolute top-0 right-0 z-20 h-full w-1 cursor-col-resize select-none transition-colors hover:bg-dl-lane-shared/35 active:bg-dl-lane-shared/55"
+    />
+  );
 
   const visibleConversations = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -123,12 +253,14 @@ export function ConversationSidebar() {
     return (
       <aside
         aria-label="私密直连会话列表"
+        style={sidebarStyle}
         className={cn(
-          "dl-glass-chrome flex h-full w-[288px] shrink-0 flex-col border-r border-dl-border-hairline",
+          "dl-glass-chrome relative flex h-full w-[var(--dl-sidebar-w)] shrink-0 flex-col border-r border-dl-border-hairline",
           "max-compact:flex-1 max-compact:min-h-0 max-compact:w-full max-compact:border-r-0",
           mobileView === "chat" && "max-compact:hidden"
         )}
       >
+        {resizeHandle}
         <div className="flex items-center justify-between gap-2 border-b border-dl-border-hairline px-4 max-narrow:px-3 py-3.5">
           <h2 className="truncate text-sm font-semibold text-dl-text-primary">私密直连</h2>
           <Button
@@ -234,12 +366,14 @@ export function ConversationSidebar() {
   return (
     <aside
       aria-label="共享空间对话列表"
+      style={sidebarStyle}
       className={cn(
-        "dl-glass-chrome flex h-full w-[288px] shrink-0 flex-col border-r border-dl-border-hairline",
+        "dl-glass-chrome relative flex h-full w-[var(--dl-sidebar-w)] shrink-0 flex-col border-r border-dl-border-hairline",
         "max-compact:flex-1 max-compact:min-h-0 max-compact:w-full max-compact:border-r-0",
         mobileView === "chat" && "max-compact:hidden"
       )}
     >
+      {resizeHandle}
       <div className="space-y-2.5 border-b border-dl-border-hairline p-3">
         <div className="flex items-center justify-between px-0.5">
           <div>
@@ -284,8 +418,11 @@ export function ConversationSidebar() {
           visibleConversations.map((conv) => {
             const active = conv.id === activeConversationId;
             const isPinned = pinnedConversationIds.includes(conv.id);
+            const notifLevel: ConversationNotificationLevel = conv.notificationLevel || "all";
+            const isMuted = notifLevel === "muted";
             const draft = drafts[conv.id];
             const timeLabel = formatShortTime(conv.lastMessageAt);
+            const previewText = buildSidebarMessagePreview(conv, currentUser?.id, members);
             const directPeer =
               conv.kind === "direct"
                 ? conv.memberIds
@@ -336,6 +473,14 @@ export function ConversationSidebar() {
                   <div className="flex items-center justify-between gap-1.5">
                     <span className="flex min-w-0 items-center gap-1 text-[13px] font-semibold text-dl-text-primary">
                       <span className="truncate">{conv.title}</span>
+                      {isMuted && (
+                        <BellOff
+                          aria-label="已开启免打扰"
+                          data-testid="muted-conversation-icon"
+                          className="size-3 shrink-0 text-dl-text-tertiary"
+                          strokeWidth={2}
+                        />
+                      )}
                       {isPinned && (
                         <Pin
                           aria-label="已置顶会话"
@@ -358,7 +503,7 @@ export function ConversationSidebar() {
                           <span>{draft.text}</span>
                         </>
                       ) : (
-                        conv.lastMessageText || "暂无消息"
+                        previewText
                       )}
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
@@ -373,7 +518,13 @@ export function ConversationSidebar() {
                       {conv.unreadCount > 0 && (
                         <span
                           data-testid="unread-badge"
-                          className="inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-dl-lane-shared px-1.5 text-[10px] font-semibold text-dl-on-shared tabular-nums"
+                          data-muted={isMuted ? "true" : undefined}
+                          className={cn(
+                            "inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full px-1.5 text-[10px] font-semibold tabular-nums",
+                            isMuted
+                              ? "bg-dl-text-tertiary/20 text-dl-text-secondary"
+                              : "bg-dl-lane-shared text-dl-on-shared"
+                          )}
                         >
                           {conv.unreadCount}
                         </span>
@@ -407,6 +558,38 @@ export function ConversationSidebar() {
                     }}
                   >
                     {conv.kind === "group" ? "群聊设置" : "会话详情"}
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
+                    icon={<Bell className="size-4" />}
+                    onSelect={() => void setConversationNotificationLevel(conv.id, "all")}
+                  >
+                    <span className="flex items-center justify-between gap-2">
+                      <span>全部提醒</span>
+                      {notifLevel === "all" && <Check className="size-3.5 text-dl-lane-shared" />}
+                    </span>
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    icon={<AtSign className="size-4" />}
+                    onSelect={() => void setConversationNotificationLevel(conv.id, "mentions")}
+                  >
+                    <span className="flex items-center justify-between gap-2">
+                      <span>仅 @我 提醒</span>
+                      {notifLevel === "mentions" && (
+                        <Check className="size-3.5 text-dl-lane-shared" />
+                      )}
+                    </span>
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    icon={<BellOff className="size-4" />}
+                    onSelect={() => void setConversationNotificationLevel(conv.id, "muted")}
+                  >
+                    <span className="flex items-center justify-between gap-2">
+                      <span>免打扰</span>
+                      {notifLevel === "muted" && (
+                        <Check className="size-3.5 text-dl-lane-shared" />
+                      )}
+                    </span>
                   </ContextMenuItem>
                   {conv.kind === "group" && (
                     <>

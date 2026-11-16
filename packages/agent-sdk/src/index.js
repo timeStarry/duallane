@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { LiteWebSocket, OPEN } from "./ws-lite.js";
 
-export const DUALLANE_AGENT_SDK_VERSION = "1.0.10";
+export const DUALLANE_AGENT_SDK_VERSION = "1.0.11";
 export const DUALLANE_GATEWAY_VERSION = 1;
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
@@ -326,6 +326,57 @@ export class DualLaneAgentClient {
     const text = typeof plainText === "string" ? plainText.trim() : "";
     if (!text) throw new TypeError("plainText is required");
     return this.#request("PATCH", `/api/bot/v2/messages/${encodeURIComponent(id)}`, { plainText: text });
+  }
+
+  async sendFile(input = {}) {
+    const conversationId = normalizeId(input.conversationId, "conversationId");
+    let rawBytes = input.bytes;
+    if (typeof rawBytes === "string") {
+      rawBytes = Buffer.from(rawBytes, "utf8");
+    }
+    if (!(rawBytes instanceof Uint8Array) || rawBytes.byteLength === 0) {
+      throw new TypeError("bytes must be a non-empty Uint8Array, Buffer, or string");
+    }
+    const fileName = String(input.fileName || "attachment.bin").trim() || "attachment.bin";
+    const mimeType = String(input.mimeType || inferMimeTypeFromFileName(fileName)).trim() || "application/octet-stream";
+    const params = new URLSearchParams();
+    params.set("fileName", fileName);
+    params.set("mimeType", mimeType);
+    if (typeof input.text === "string" && input.text.trim()) {
+      params.set("text", input.text.trim());
+    }
+    if (typeof input.replyToMessageId === "string" && input.replyToMessageId.trim()) {
+      params.set("replyToMessageId", normalizeId(input.replyToMessageId, "replyToMessageId"));
+    }
+    if (typeof input.clientMessageId === "string" && input.clientMessageId.trim()) {
+      params.set("clientMessageId", normalizeId(input.clientMessageId, "clientMessageId"));
+    }
+    if (input.sendMessage === false) {
+      params.set("sendMessage", "false");
+    }
+    return this.#requestBinary(
+      "POST",
+      `/api/bot/v2/conversations/${encodeURIComponent(conversationId)}/files?${params.toString()}`,
+      rawBytes,
+      mimeType
+    );
+  }
+
+  async uploadFile(input = {}) {
+    return this.sendFile({ ...input, sendMessage: false });
+  }
+
+  async completeUploadContent(uploadId, rawBytes, mimeType = "application/octet-stream") {
+    const id = normalizeId(uploadId, "uploadId");
+    if (!(rawBytes instanceof Uint8Array) || rawBytes.byteLength === 0) {
+      throw new TypeError("rawBytes must be a non-empty Uint8Array or Buffer");
+    }
+    return this.#requestBinary(
+      "PUT",
+      `/api/bot/v2/uploads/${encodeURIComponent(id)}/content`,
+      rawBytes,
+      mimeType
+    );
   }
 
   async getUpdates(options = {}) {
@@ -719,4 +770,56 @@ function safeErrorCode(value, fallback) {
 
 function redactToken(value, token) {
   return String(value).split(token).join("[REDACTED]").replace(/dl_bot_[A-Za-z0-9_-]{16,}/gu, "[REDACTED]");
+}
+
+export function inferMimeTypeFromFileName(fileName) {
+  const lower = String(fileName || "").trim().toLowerCase();
+  const dot = lower.lastIndexOf(".");
+  const ext = dot !== -1 ? lower.slice(dot) : "";
+  switch (ext) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".webp":
+      return "image/webp";
+    case ".gif":
+      return "image/gif";
+    case ".svg":
+      return "image/svg+xml";
+    case ".pdf":
+      return "application/pdf";
+    case ".md":
+    case ".markdown":
+      return "text/markdown";
+    case ".txt":
+    case ".log":
+      return "text/plain";
+    case ".json":
+      return "application/json";
+    case ".csv":
+      return "text/csv";
+    case ".html":
+    case ".htm":
+      return "text/html";
+    case ".zip":
+      return "application/zip";
+    case ".js":
+    case ".mjs":
+      return "text/javascript";
+    case ".ts":
+    case ".tsx":
+    case ".py":
+    case ".go":
+    case ".rs":
+    case ".sh":
+    case ".yaml":
+    case ".yml":
+    case ".toml":
+    case ".sql":
+      return "text/plain";
+    default:
+      return "application/octet-stream";
+  }
 }

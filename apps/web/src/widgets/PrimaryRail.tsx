@@ -12,7 +12,10 @@ import {
 } from "lucide-react";
 import { motion } from "motion/react";
 import { useLaneStore } from "@/entities/lane/store";
-import { useWorkspaceStore } from "@/entities/workspace/store";
+import {
+  computeGlobalAlertUnreadCount,
+  useWorkspaceStore,
+} from "@/entities/workspace/store";
 import {
   Avatar,
   Button,
@@ -48,11 +51,7 @@ export function PrimaryRail() {
   const [userMenuOpen, setUserMenuOpen] = React.useState(false);
 
   const workspaceUnreadCount = React.useMemo(
-    () =>
-      Object.values(conversations).reduce(
-        (sum, conv) => sum + Math.max(0, conv.unreadCount || 0),
-        0
-      ),
+    () => computeGlobalAlertUnreadCount(conversations),
     [conversations]
   );
 

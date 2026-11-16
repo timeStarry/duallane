@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { inferMimeTypeFromFileName } from "./index.js";
 
 /**
  * Verify DualLane Outbound Webhook HMAC-SHA256 signature.
@@ -148,6 +149,40 @@ export class DualLaneBotV2 {
       method: "PATCH",
       body: JSON.stringify({ plainText }),
     });
+  }
+
+  async sendFile(conversationId, bytes, fileName, options = {}) {
+    const raw = typeof bytes === "string" ? Buffer.from(bytes, "utf8") : bytes;
+    const resolvedName = String(fileName || "attachment.bin").trim() || "attachment.bin";
+    const mimeType = String(options.mimeType || inferMimeTypeFromFileName(resolvedName)).trim() || "application/octet-stream";
+    const params = new URLSearchParams();
+    params.set("fileName", resolvedName);
+    params.set("mimeType", mimeType);
+    if (options.text) params.set("text", String(options.text));
+    if (options.replyToMessageId) params.set("replyToMessageId", String(options.replyToMessageId));
+    if (options.clientMessageId) params.set("clientMessageId", String(options.clientMessageId));
+    if (options.sendMessage === false) params.set("sendMessage", "false");
+    const res = await this.fetch(
+      `${this.baseUrl}/api/bot/v2/conversations/${encodeURIComponent(conversationId)}/files?${params.toString()}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          "Content-Type": mimeType,
+        },
+        body: raw,
+      }
+    );
+    const text = await res.text();
+    const body = text ? JSON.parse(text) : {};
+    if (!res.ok) {
+      const msg = body?.error?.message || `HTTP ${res.status}`;
+      const err = new Error(msg);
+      err.status = res.status;
+      err.code = body?.error?.code;
+      throw err;
+    }
+    return body;
   }
 
   sendCard(conversationId, cardDoc, options = {}) {

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowDown,
@@ -10,9 +10,12 @@ import {
   Clock,
   Copy,
   Download,
+  Eye,
+  EyeOff,
   FileText,
   Forward,
   Heart,
+  Image as ImageIcon,
   LogOut,
   MessageSquareText,
   MoreHorizontal,
@@ -29,6 +32,7 @@ import {
   ShieldCheck,
   Slash,
   Smile,
+  UserCheck,
   Upload,
   X,
 } from "lucide-react";
@@ -42,12 +46,18 @@ import {
   type V1MessageAttachment,
 } from "@/entities/workspace/store";
 import { apiV1, type BotCommandSpec } from "@/shared/lib/api-v1";
+import { renderChatMarkdown } from "@/shared/lib/chat-markdown";
+import {
+  analyzeLongMessage,
+  useDisplayPrefsStore,
+} from "@/shared/lib/display-prefs";
 import { triggerBrowserDownload } from "@/shared/lib/download";
 import {
   createSafeP2PBlobUrl,
   safeInlineImageMime,
   scrubP2PRoomFromUrl,
 } from "@/shared/lib/p2p-lane";
+import { useRecentEmojisStore } from "@/shared/lib/recent-emojis-v1";
 import {
   Avatar,
   Button,
@@ -58,6 +68,7 @@ import {
   ContextMenuTrigger,
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DropdownMenu,
@@ -66,6 +77,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   IconButton,
+  Input,
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -85,6 +97,9 @@ import {
 import { cn } from "@/shared/lib/cn";
 
 const GROUP_WINDOW_MS = 5 * 60 * 1000;
+const HUGE_PASTE_CHAR_THRESHOLD = 6000;
+const useIsomorphicLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 function isSameLocalCalendarDay(isoA: string, isoB: string): boolean {
   const dA = new Date(isoA);
@@ -172,6 +187,7 @@ export function TimelinePane() {
     forwardMessage,
     jumpToMessage,
     triggerCardAction,
+    setMemberRemark,
     p2pRoom,
     createP2PRoom,
     leaveP2PRoom,
@@ -181,12 +197,30 @@ export function TimelinePane() {
     sendP2PMessage,
     sendP2PFile,
   } = useWorkspaceStore();
+  const {
+    collapseImagesByDefault,
+    collapseStickersByDefault,
+    collapseLongMessagesByDefault,
+    messageOverrides,
+    setMessageOverride,
+    toggleMessageCollapse,
+  } = useDisplayPrefsStore();
 
   const [pinIndex, setPinIndex] = useState(0);
   const [copiedLink, setCopiedLink] = useState(false);
   const [forwardMsgId, setForwardMsgId] = useState<string | null>(null);
   const [forwardTargetConvId, setForwardTargetConvId] = useState<string>("");
   const [forwarding, setForwarding] = useState(false);
+  const [remarkModalTarget, setRemarkModalTarget] = useState<{
+    userId: string;
+    displayName: string;
+    originalNickname?: string;
+  } | null>(null);
+  const [remarkModalDraft, setRemarkModalDraft] = useState("");
+  const [savingRemarkModal, setSavingRemarkModal] = useState(false);
+  const [hugePasteByConv, setHugePasteByConv] = useState<
+    Record<string, { text: string; preDraft: string } | undefined>
+  >({});
   const [replyToId, setReplyToId] = useState<string | undefined>(undefined);
   const [pendingAttachmentsByConv, setPendingAttachmentsByConv] = useState<
     Record<string, V1MessageAttachment[]>
@@ -209,6 +243,19 @@ export function TimelinePane() {
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [typingClockTick, setTypingClockTick] = useState(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const timelineContentRef = useRef<HTMLDivElement | null>(null);
+  const pinnedConvRef = useRef<{ convId: string | null; populated: boolean }>({
+    convId: null,
+    populated: false,
+  });
+  const isNearBottomRef = useRef<boolean>(true);
+  const p2pScrollRef = useRef<HTMLDivElement | null>(null);
+  const p2pContentRef = useRef<HTMLDivElement | null>(null);
+  const pinnedP2PRoomRef = useRef<{ roomId: string | null; populated: boolean }>({
+    roomId: null,
+    populated: false,
+  });
+  const p2pIsNearBottomRef = useRef<boolean>(true);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const wsFileInputRef = useRef<HTMLInputElement | null>(null);
   const p2pFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -483,23 +530,43 @@ export function TimelinePane() {
     el.style.height = `${Math.min(132, Math.max(24, el.scrollHeight))}px`;
   }, [draft, activeConversationId, activeLane]);
 
-  // Restore pixel scroll position per conversation & reset transient overlays
-  useEffect(() => {
-    setIsNearBottom(true);
-    setUnreadBelowCount(0);
-    setIsDraggingFiles(false);
-    dragDepthRef.current = 0;
-    if (!scrollRef.current || activeLane !== "workspace" || !activeConversationId) return;
-    const saved = useWorkspaceStore.getState().scrollTops[activeConversationId];
-    if (typeof saved === "number") {
-      scrollRef.current.scrollTop = saved;
-    } else {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  // Always pin to bottom when entering/switching a conversation AND when async messages first populate
+  useIsomorphicLayoutEffect(() => {
+    if (activeLane !== "workspace" || !activeConversationId) return;
+    const prevPin = pinnedConvRef.current;
+    const switchedConv = prevPin.convId !== activeConversationId;
+
+    if (switchedConv) {
+      isNearBottomRef.current = true;
+      setIsNearBottom(true);
+      setUnreadBelowCount(0);
+      setIsDraggingFiles(false);
+      dragDepthRef.current = 0;
+      pinnedConvRef.current = {
+        convId: activeConversationId,
+        populated: messages.length > 0,
+      };
+      if (!highlightedMessageId && scrollRef.current) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      }
+      return;
     }
-  }, [activeConversationId, activeLane]);
+
+    if (!prevPin.populated && messages.length > 0) {
+      pinnedConvRef.current = {
+        convId: activeConversationId,
+        populated: true,
+      };
+      if (!highlightedMessageId && scrollRef.current) {
+        isNearBottomRef.current = true;
+        setIsNearBottom(true);
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      }
+    }
+  }, [activeConversationId, activeLane, highlightedMessageId, messages.length]);
 
   // Keep timeline pinned to bottom when near bottom or sending own messages; otherwise count unread below
-  useEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     if (activeLane !== "workspace" || !activeConversationId) return;
     const prev = prevMsgStateRef.current;
     prevMsgStateRef.current = { convId: activeConversationId, count: messages.length };
@@ -509,15 +576,87 @@ export function TimelinePane() {
     const delta = messages.length - prev.count;
     const newest = messages[messages.length - 1];
     const isOwnNewest = Boolean(newest && newest.senderId === currentUser?.id);
-    if (isOwnNewest || isNearBottom) {
-      if (scrollRef.current) {
+    if (isOwnNewest || isNearBottomRef.current) {
+      isNearBottomRef.current = true;
+      setIsNearBottom(true);
+      if (scrollRef.current && !highlightedMessageId) {
         scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
       }
       setUnreadBelowCount(0);
     } else {
       setUnreadBelowCount((n) => n + delta);
     }
-  }, [activeConversationId, activeLane, currentUser?.id, isNearBottom, messages]);
+  }, [activeConversationId, activeLane, currentUser?.id, highlightedMessageId, messages]);
+
+  // Observe inner content height shifts (images, stickers, code blocks, cards) to stay locked at bottom
+  const hasWorkspaceMessages = messages.length > 0;
+  useEffect(() => {
+    if (
+      activeLane !== "workspace" ||
+      typeof ResizeObserver === "undefined" ||
+      !timelineContentRef.current ||
+      !scrollRef.current
+    ) {
+      return;
+    }
+    const scrollEl = scrollRef.current;
+    const contentEl = timelineContentRef.current;
+    const observer = new ResizeObserver(() => {
+      if (isNearBottomRef.current && !useWorkspaceStore.getState().highlightedMessageId) {
+        scrollEl.scrollTop = scrollEl.scrollHeight;
+      }
+    });
+    observer.observe(contentEl);
+    return () => observer.disconnect();
+  }, [activeLane, activeConversationId, hasWorkspaceMessages]);
+
+  // Clean bottom lock for P2P Direct lane
+  useIsomorphicLayoutEffect(() => {
+    if (activeLane !== "p2p") return;
+    const roomId = p2pRoom?.roomId || null;
+    const prevPin = pinnedP2PRoomRef.current;
+    if (prevPin.roomId !== roomId) {
+      p2pIsNearBottomRef.current = true;
+      pinnedP2PRoomRef.current = { roomId, populated: p2pMessages.length > 0 };
+      if (p2pScrollRef.current) {
+        p2pScrollRef.current.scrollTop = p2pScrollRef.current.scrollHeight;
+      }
+      return;
+    }
+    const newest = p2pMessages[p2pMessages.length - 1];
+    if (
+      (!prevPin.populated && p2pMessages.length > 0) ||
+      p2pIsNearBottomRef.current ||
+      newest?.isOwn
+    ) {
+      pinnedP2PRoomRef.current = { roomId, populated: p2pMessages.length > 0 };
+      p2pIsNearBottomRef.current = true;
+      if (p2pScrollRef.current) {
+        p2pScrollRef.current.scrollTop = p2pScrollRef.current.scrollHeight;
+      }
+    }
+  }, [activeLane, p2pMessages, p2pRoom?.roomId]);
+
+  const hasP2PMessages = p2pMessages.length > 0;
+  useEffect(() => {
+    if (
+      activeLane !== "p2p" ||
+      typeof ResizeObserver === "undefined" ||
+      !p2pContentRef.current ||
+      !p2pScrollRef.current
+    ) {
+      return;
+    }
+    const scrollEl = p2pScrollRef.current;
+    const contentEl = p2pContentRef.current;
+    const observer = new ResizeObserver(() => {
+      if (p2pIsNearBottomRef.current) {
+        scrollEl.scrollTop = scrollEl.scrollHeight;
+      }
+    });
+    observer.observe(contentEl);
+    return () => observer.disconnect();
+  }, [activeLane, p2pRoom?.roomId, hasP2PMessages]);
 
   // Auto-scroll to highlighted message when jumping from Search / Pin / File backlink
   useEffect(() => {
@@ -711,7 +850,15 @@ export function TimelinePane() {
           </div>
         )}
 
-        <div className="dl-scroll flex-1 overflow-y-auto overflow-x-hidden min-w-0 px-5 max-compact:px-3 py-4 space-y-2.5">
+        <div
+          ref={p2pScrollRef}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+            p2pIsNearBottomRef.current = dist < 160;
+          }}
+          className="dl-scroll flex-1 overflow-y-auto overflow-x-hidden min-w-0 px-5 max-compact:px-3 py-4"
+        >
           {!p2pRoom ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
               <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-dl-lane-direct/14 text-dl-lane-direct">
@@ -769,7 +916,8 @@ export function TimelinePane() {
               </div>
             </div>
           ) : (
-            p2pMessages.map((msg) => {
+            <div ref={p2pContentRef} className="space-y-2.5 min-w-0">
+              {p2pMessages.map((msg) => {
               const isInlineP2PImg = Boolean(
                 msg.attachment && safeInlineImageMime(msg.attachment.mimeType)
               );
@@ -813,7 +961,9 @@ export function TimelinePane() {
                           isJumboP2PSticker && "dl-jumbo-sticker p-1"
                         )}
                       >
-                        {renderMessageParts(msg.text)}
+                        {isJumboP2PSticker
+                          ? renderMessageParts(msg.text)
+                          : renderChatMarkdown(msg.text, "p2p", `p2p_${msg.id}`)}
                       </div>
                     )}
 
@@ -963,7 +1113,8 @@ export function TimelinePane() {
                   </div>
                 </motion.div>
               );
-            })
+            })}
+            </div>
           )}
         </div>
 
@@ -1132,6 +1283,7 @@ export function TimelinePane() {
       });
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
+    isNearBottomRef.current = true;
     setIsNearBottom(true);
     setUnreadBelowCount(0);
   };
@@ -1376,6 +1528,7 @@ export function TimelinePane() {
           setScrollTop(activeConv.id, el.scrollTop);
           const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
           const near = dist < 160;
+          isNearBottomRef.current = near;
           setIsNearBottom(near);
           if (near) {
             setUnreadBelowCount(0);
@@ -1388,7 +1541,8 @@ export function TimelinePane() {
             还没有消息，发一句打个招呼吧。
           </div>
         ) : (
-          messages.map((msg, idx) => {
+          <div ref={timelineContentRef} className="min-w-0">
+            {messages.map((msg, idx) => {
             const isOwn = msg.senderId === currentUser?.id;
             const isHighlighted = highlightedMessageId === msg.id;
             const prevMsg = messages[idx - 1];
@@ -1503,8 +1657,64 @@ export function TimelinePane() {
 
             const triggerStartReply = () => {
               setReplyToId(msg.id);
+              const shouldAutoMention =
+                Boolean(useEmoteStore.getState().settings.replyAutoMention) &&
+                activeConv.kind === "group" &&
+                !isOwn;
+              if (shouldAutoMention) {
+                const cleanAuthor = msg.senderName.replace(/^@+/, "").trim();
+                if (cleanAuthor && !draft.includes(`@${cleanAuthor}`)) {
+                  const next = draft ? `@${cleanAuthor} ${draft}` : `@${cleanAuthor} `;
+                  setDraft(activeConv.id, next, msg.id);
+                  setCursorPos(next.length);
+                }
+              }
               composerRef.current?.focus();
             };
+
+            const canSetSenderRemark =
+              !isOwn &&
+              senderAvatarKind === "human" &&
+              Boolean(msg.senderId) &&
+              !msg.senderId.startsWith("usr_system_");
+
+            const triggerOpenSenderRemark = () => {
+              if (!canSetSenderRemark) return;
+              setRemarkModalTarget({
+                userId: msg.senderId,
+                displayName: msg.senderName,
+                originalNickname: senderMember?.nickname || senderMember?.handle,
+              });
+              setRemarkModalDraft(senderMember?.remark || "");
+            };
+
+            const msgOverride = messageOverrides[msg.id];
+            const isJumboForCollapse = isJumboStickerMessage(msg);
+            const hasVisibleTextForCollapse =
+              Boolean(msg.blocks && msg.blocks.length > 0) ||
+              Boolean(
+                msg.plainText &&
+                  (!msg.attachments?.length ||
+                    !/^(?:\[文件\]\s*)+$/.test(msg.plainText.trim()))
+              );
+            const allInlineImagesForCollapse =
+              Boolean(msg.attachments?.length) &&
+              msg.attachments!.every(
+                (att) => safeInlineImageMime(att.mimeType) && Boolean(att.url)
+              );
+            const isImageOnlyForCollapse =
+              !hasVisibleTextForCollapse && !msg.replyToId && allInlineImagesForCollapse;
+            const isLongForCollapse =
+              !isJumboForCollapse &&
+              !isEmotePackShareOnlyMessage(msg) &&
+              analyzeLongMessage(msg.plainText || "").isLong;
+
+            const isCurrentlyCollapsed =
+              msgOverride === "collapsed" ||
+              (msgOverride !== "expanded" &&
+                ((isJumboForCollapse && collapseStickersByDefault) ||
+                  (isImageOnlyForCollapse && collapseImagesByDefault) ||
+                  (isLongForCollapse && collapseLongMessagesByDefault)));
 
             const triggerStartEdit = () => {
               setEditingMessageId(msg.id);
@@ -1597,13 +1807,82 @@ export function TimelinePane() {
                           {!isOwn &&
                             (!groupedWithPrev ? (
                               <div className="w-8 shrink-0 self-start pt-0.5 flex justify-center">
-                                <Avatar
-                                  name={msg.senderName}
-                                  src={senderAvatarSrc}
-                                  kind={senderAvatarKind}
-                                  color={senderMember?.avatarColor}
-                                  size="sm"
-                                />
+                                {canSetSenderRemark ? (
+                                  <Popover>
+                                    <PopoverTrigger asChild>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        aria-label={`查看 ${msg.senderName} 资料或设置备注`}
+                                        className="h-auto w-auto rounded-full p-0 hover:bg-transparent"
+                                      >
+                                        <Avatar
+                                          name={msg.senderName}
+                                          src={senderAvatarSrc}
+                                          kind={senderAvatarKind}
+                                          color={senderMember?.avatarColor}
+                                          size="sm"
+                                        />
+                                      </Button>
+                                    </PopoverTrigger>
+                                    <PopoverContent side="right" align="start" className="w-56 p-3 space-y-2.5">
+                                      <div className="flex items-center gap-2.5 min-w-0">
+                                        <Avatar
+                                          name={msg.senderName}
+                                          src={senderAvatarSrc}
+                                          kind={senderAvatarKind}
+                                          color={senderMember?.avatarColor}
+                                          size="md"
+                                        />
+                                        <div className="min-w-0 flex-1">
+                                          <div className="truncate text-xs font-semibold text-dl-text-primary">
+                                            {msg.senderName}
+                                          </div>
+                                          {senderMember?.remark && senderMember?.nickname && (
+                                            <div className="truncate text-[11px] text-dl-text-tertiary">
+                                              原昵称：{senderMember.nickname}
+                                            </div>
+                                          )}
+                                          {senderMember?.handle && (
+                                            <div className="truncate text-[11px] text-dl-text-tertiary">
+                                              @{senderMember.handle}
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                      <div className="flex items-center gap-1.5 pt-1 border-t border-dl-border-hairline">
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="secondary"
+                                          className="h-7 flex-1 gap-1 text-xs"
+                                          onClick={() => insertMentionForAuthor(msg.senderName)}
+                                        >
+                                          <AtSign className="size-3" strokeWidth={2} />
+                                          提及
+                                        </Button>
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="primary"
+                                          className="h-7 flex-1 gap-1 text-xs"
+                                          onClick={triggerOpenSenderRemark}
+                                        >
+                                          <UserCheck className="size-3" strokeWidth={2} />
+                                          设置备注
+                                        </Button>
+                                      </div>
+                                    </PopoverContent>
+                                  </Popover>
+                                ) : (
+                                  <Avatar
+                                    name={msg.senderName}
+                                    src={senderAvatarSrc}
+                                    kind={senderAvatarKind}
+                                    color={senderMember?.avatarColor}
+                                    size="sm"
+                                  />
+                                )}
                               </div>
                             ) : (
                               <div
@@ -1686,8 +1965,51 @@ export function TimelinePane() {
                                         );
                                       const isImageOnlyMsg =
                                         !hasVisibleText && !msg.replyToId && allInlineImages;
+                                      const isImagesCollapsed =
+                                        collapseImagesByDefault && msgOverride !== "expanded";
+
+                                      if (msgOverride === "collapsed" && !isImageOnlyMsg) {
+                                        return (
+                                          <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="ghost"
+                                            data-testid="collapsed-message-pill"
+                                            onClick={() => setMessageOverride(msg.id, "expanded")}
+                                            className="dl-glass-pill h-7 gap-1.5 rounded-full border border-dl-border-hairline px-3 text-xs font-medium text-dl-text-secondary hover:text-dl-text-primary"
+                                          >
+                                            <Eye
+                                              className="size-3.5 text-dl-lane-shared"
+                                              strokeWidth={1.9}
+                                            />
+                                            <span>[已在本机折叠 · 点击展开]</span>
+                                          </Button>
+                                        );
+                                      }
 
                                       if (isImageOnlyMsg && msg.attachments) {
+                                        if (isImagesCollapsed || msgOverride === "collapsed") {
+                                          return (
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              variant="ghost"
+                                              data-testid="collapsed-image-pill"
+                                              onClick={() => setMessageOverride(msg.id, "expanded")}
+                                              className="dl-glass-pill h-7 gap-1.5 rounded-full border border-dl-border-hairline px-3 text-xs font-medium text-dl-text-secondary hover:text-dl-text-primary"
+                                            >
+                                              <ImageIcon
+                                                className="size-3.5 text-dl-lane-shared"
+                                                strokeWidth={1.9}
+                                              />
+                                              <span>
+                                                {msg.attachments.length > 1
+                                                  ? `[图片 ×${msg.attachments.length} · 点击展开]`
+                                                  : "[图片 · 点击展开]"}
+                                              </span>
+                                            </Button>
+                                          );
+                                        }
                                         return (
                                           <div
                                             data-frameless-image="true"
@@ -1838,28 +2160,47 @@ export function TimelinePane() {
                                                 return (
                                                   <div key={att.id} className="min-w-0 max-w-full">
                                                     {isSafeImg ? (
-                                                      <Button
-                                                        type="button"
-                                                        variant="ghost"
-                                                        className="h-auto w-full overflow-hidden rounded-xl p-0"
-                                                        aria-label={`预览图片 ${att.fileName}`}
-                                                        onClick={() =>
-                                                          openLightbox(
-                                                            msg.attachments!.map((a) => ({
-                                                              ...a,
-                                                              conversationId: activeConv.id,
-                                                              sourceMessageId: msg.id,
-                                                            })),
-                                                            attIdx
-                                                          )
-                                                        }
-                                                      >
-                                                        <img
-                                                          src={att.url}
-                                                          alt={att.fileName}
-                                                          className="max-h-60 max-w-full rounded-xl object-contain"
-                                                        />
-                                                      </Button>
+                                                      isImagesCollapsed ? (
+                                                        <Button
+                                                          type="button"
+                                                          size="sm"
+                                                          variant="ghost"
+                                                          data-testid="collapsed-inline-image-pill"
+                                                          onClick={() =>
+                                                            setMessageOverride(msg.id, "expanded")
+                                                          }
+                                                          className="dl-glass-pill h-7 gap-1.5 rounded-full border border-current/20 px-3 text-xs font-medium"
+                                                        >
+                                                          <ImageIcon
+                                                            className="size-3.5"
+                                                            strokeWidth={1.9}
+                                                          />
+                                                          <span>[图片 · 点击展开]</span>
+                                                        </Button>
+                                                      ) : (
+                                                        <Button
+                                                          type="button"
+                                                          variant="ghost"
+                                                          className="h-auto w-full overflow-hidden rounded-xl p-0"
+                                                          aria-label={`预览图片 ${att.fileName}`}
+                                                          onClick={() =>
+                                                            openLightbox(
+                                                              msg.attachments!.map((a) => ({
+                                                                ...a,
+                                                                conversationId: activeConv.id,
+                                                                sourceMessageId: msg.id,
+                                                              })),
+                                                              attIdx
+                                                            )
+                                                          }
+                                                        >
+                                                          <img
+                                                            src={att.url}
+                                                            alt={att.fileName}
+                                                            className="max-h-60 max-w-full rounded-xl object-contain"
+                                                          />
+                                                        </Button>
+                                                      )
                                                     ) : (
                                                       <div
                                                         className={cn(
@@ -1990,9 +2331,10 @@ export function TimelinePane() {
                       </ContextMenuTrigger>
 
                       <ContextMenuContent
-                        onQuickReaction={(emoji) =>
-                          void toggleReaction(activeConv.id, msg.id, emoji)
-                        }
+                        onQuickReaction={(emoji) => {
+                          useRecentEmojisStore.getState().recordEmoji(emoji);
+                          void toggleReaction(activeConv.id, msg.id, emoji);
+                        }}
                       >
                         <ContextMenuItem
                           icon={<Reply className="size-4" strokeWidth={1.85} />}
@@ -2012,6 +2354,26 @@ export function TimelinePane() {
                             onSelect={() => void copyMessagePlainText(msg.plainText)}
                           >
                             复制消息内容
+                          </ContextMenuItem>
+                        )}
+                        <ContextMenuItem
+                          icon={
+                            isCurrentlyCollapsed ? (
+                              <Eye className="size-4" strokeWidth={1.85} />
+                            ) : (
+                              <EyeOff className="size-4" strokeWidth={1.85} />
+                            )
+                          }
+                          onSelect={() => toggleMessageCollapse(msg.id, isCurrentlyCollapsed)}
+                        >
+                          {isCurrentlyCollapsed ? "展开内容" : "在本机折叠此消息"}
+                        </ContextMenuItem>
+                        {canSetSenderRemark && (
+                          <ContextMenuItem
+                            icon={<UserCheck className="size-4" strokeWidth={1.85} />}
+                            onSelect={triggerOpenSenderRemark}
+                          >
+                            设置成员备注…
                           </ContextMenuItem>
                         )}
                         {favoritableSource && (
@@ -2128,9 +2490,10 @@ export function TimelinePane() {
                         </DropdownMenuTrigger>
                         <DropdownMenuContent
                           align={isOwn ? "end" : "start"}
-                          onQuickReaction={(emoji) =>
-                            void toggleReaction(activeConv.id, msg.id, emoji)
-                          }
+                          onQuickReaction={(emoji) => {
+                            useRecentEmojisStore.getState().recordEmoji(emoji);
+                            void toggleReaction(activeConv.id, msg.id, emoji);
+                          }}
                         >
                           <DropdownMenuItem
                             icon={<Reply className="size-4" strokeWidth={1.85} />}
@@ -2150,6 +2513,26 @@ export function TimelinePane() {
                               onSelect={() => void copyMessagePlainText(msg.plainText)}
                             >
                               复制消息内容
+                            </DropdownMenuItem>
+                          )}
+                          <DropdownMenuItem
+                            icon={
+                              isCurrentlyCollapsed ? (
+                                <Eye className="size-4" strokeWidth={1.85} />
+                              ) : (
+                                <EyeOff className="size-4" strokeWidth={1.85} />
+                              )
+                            }
+                            onSelect={() => toggleMessageCollapse(msg.id, isCurrentlyCollapsed)}
+                          >
+                            {isCurrentlyCollapsed ? "展开内容" : "在本机折叠此消息"}
+                          </DropdownMenuItem>
+                          {canSetSenderRemark && (
+                            <DropdownMenuItem
+                              icon={<UserCheck className="size-4" strokeWidth={1.85} />}
+                              onSelect={triggerOpenSenderRemark}
+                            >
+                              设置成员备注…
                             </DropdownMenuItem>
                           )}
                           {favoritableSource && (
@@ -2205,7 +2588,8 @@ export function TimelinePane() {
                 </div>
               </React.Fragment>
             );
-          })
+          })}
+          </div>
         )}
       </div>
 
@@ -2446,6 +2830,61 @@ export function TimelinePane() {
           </div>
         )}
 
+        {hugePasteByConv[activeConv.id] && (
+          <div
+            data-testid="huge-paste-prompt-bar"
+            className="dl-glass-elevated flex flex-wrap items-center justify-between gap-2 rounded-xl border border-dl-lane-shared/35 bg-dl-lane-shared/8 px-3 py-2 text-xs"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <FileText className="size-4 shrink-0 text-dl-lane-shared" strokeWidth={1.9} />
+              <span className="text-dl-text-primary">
+                检测到粘贴超长文本（
+                {hugePasteByConv[activeConv.id]!.text.length.toLocaleString()} 字符），一键转为 .txt
+                附件发送避免刷屏
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <Button
+                type="button"
+                size="sm"
+                variant="primary"
+                busy={uploadingWorkspaceFile}
+                className="h-7 gap-1 px-2.5 text-xs"
+                onClick={async () => {
+                  const convId = activeConv.id;
+                  const entry = hugePasteByConv[convId];
+                  if (!entry) return;
+                  const stamp = new Date()
+                    .toISOString()
+                    .replace(/[:.]/g, "-")
+                    .slice(0, 19);
+                  const txtFile = new File([entry.text], `snippet-${stamp}.txt`, {
+                    type: "text/plain",
+                  });
+                  setHugePasteByConv((prev) => ({ ...prev, [convId]: undefined }));
+                  setDraft(convId, entry.preDraft, replyToId);
+                  setCursorPos(entry.preDraft.length);
+                  await uploadWorkspaceFiles(convId, [txtFile]);
+                }}
+              >
+                转为 .txt 附件发送
+              </Button>
+              <IconButton
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="size-6 rounded-full"
+                label="保留为普通文本"
+                onClick={() =>
+                  setHugePasteByConv((prev) => ({ ...prev, [activeConv.id]: undefined }))
+                }
+              >
+                <X className="size-3.5" strokeWidth={1.9} />
+              </IconButton>
+            </div>
+          </div>
+        )}
+
         <form
           onSubmit={handleSubmit}
           className="dl-glass-pill flex items-end gap-1.5 rounded-2xl border border-dl-border-hairline px-2.5 max-narrow:px-2 py-2 max-narrow:py-1.5 transition-shadow focus-within:border-dl-lane-shared/45"
@@ -2533,9 +2972,18 @@ export function TimelinePane() {
             onPaste={(e) => {
               if (editingMsg) return;
               const files = Array.from(e.clipboardData?.files || []);
-              if (files.length === 0) return;
-              e.preventDefault();
-              void uploadWorkspaceFiles(activeConv.id, files);
+              if (files.length > 0) {
+                e.preventDefault();
+                void uploadWorkspaceFiles(activeConv.id, files);
+                return;
+              }
+              const pastedText = e.clipboardData?.getData("text/plain") || "";
+              if (pastedText.length > HUGE_PASTE_CHAR_THRESHOLD) {
+                setHugePasteByConv((prev) => ({
+                  ...prev,
+                  [activeConv.id]: { text: pastedText, preDraft: draft },
+                }));
+              }
             }}
             onChange={(e) => {
               const val = e.target.value;
@@ -2705,6 +3153,84 @@ export function TimelinePane() {
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Private Member Remark Dialog (A3) */}
+      <Dialog
+        open={Boolean(remarkModalTarget)}
+        onOpenChange={(open) => {
+          if (!open) setRemarkModalTarget(null);
+        }}
+      >
+        <DialogContent size="sm">
+          <DialogHeader>
+            <DialogTitle>设置成员备注（仅自己可见）</DialogTitle>
+            <DialogDescription>
+              {remarkModalTarget?.originalNickname
+                ? `原昵称：${remarkModalTarget.originalNickname} · 留空保存将恢复对方原昵称`
+                : "仅在你自己的会话列表与消息流中显示"}
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!remarkModalTarget) return;
+              setSavingRemarkModal(true);
+              try {
+                await setMemberRemark(remarkModalTarget.userId, remarkModalDraft);
+                useEmoteStore
+                  .getState()
+                  .showToast(remarkModalDraft.trim() ? "成员备注已保存" : "已清除成员备注");
+                setRemarkModalTarget(null);
+              } catch (err) {
+                useEmoteStore
+                  .getState()
+                  .showToast(err instanceof Error ? err.message : "设置备注失败");
+              } finally {
+                setSavingRemarkModal(false);
+              }
+            }}
+            className="space-y-3.5 p-6 max-narrow:p-4 pt-4"
+          >
+            <Input
+              value={remarkModalDraft}
+              onChange={(e) => setRemarkModalDraft(e.target.value)}
+              placeholder="输入备注名（留空清除备注）"
+              aria-label="成员备注名"
+              maxLength={32}
+            />
+            <div className="flex items-center justify-between gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={savingRemarkModal || !remarkModalDraft.trim()}
+                onClick={() => setRemarkModalDraft("")}
+              >
+                清空
+              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={savingRemarkModal}
+                  onClick={() => setRemarkModalTarget(null)}
+                >
+                  取消
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  busy={savingRemarkModal}
+                >
+                  保存备注
+                </Button>
+              </div>
+            </div>
+          </form>
         </DialogContent>
       </Dialog>
     </section>

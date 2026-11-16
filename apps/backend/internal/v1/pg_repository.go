@@ -316,7 +316,8 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 					c.avatar_emoji,
 					c.created_at,
 					cm.last_read_seq,
-					cm.last_read_at
+					cm.last_read_at,
+					coalesce(cm.notification_level, 'all') AS notification_level
 				FROM conversation_members cm
 				JOIN conversations c ON c.id = cm.conversation_id AND c.space_id = $1
 				WHERE cm.user_id = $2 AND cm.removed_at IS NULL
@@ -362,11 +363,20 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				uc.type,
 				uc.title,
 				uc.avatar_emoji,
+				uc.notification_level,
 				CASE
 					WHEN latest.id IS NULL THEN ''
 					WHEN latest.recalled_at IS NOT NULL THEN '消息已撤回'
 					ELSE coalesce(latest.plain_text, '')
 				END AS last_plain_text,
+				CASE
+					WHEN latest.id IS NULL OR latest.recalled_at IS NOT NULL OR latest.kind = 'system' THEN ''
+					ELSE coalesce(latest.author_id, '')
+				END AS last_sender_id,
+				CASE
+					WHEN latest.id IS NULL OR latest.recalled_at IS NOT NULL OR latest.kind = 'system' THEN ''
+					ELSE coalesce(latest.author_name, '')
+				END AS last_sender_name,
 				latest.created_at AS last_msg_at,
 				coalesce(all_latest.created_at, uc.created_at) AS last_activity_at,
 				CASE
@@ -402,8 +412,16 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				LIMIT 1
 			) all_latest ON TRUE
 			LEFT JOIN LATERAL (
-				SELECT m.id, m.plain_text, m.recalled_at, m.created_at
+				SELECT
+					m.id,
+					m.plain_text,
+					m.recalled_at,
+					m.created_at,
+					m.kind,
+					coalesce(m.author_id, '') AS author_id,
+					coalesce(NULLIF(u_author.nickname, ''), NULLIF(u_author.display_name, ''), NULLIF(u_author.github_login, ''), '') AS author_name
 				FROM messages m
+				LEFT JOIN users u_author ON u_author.id = m.author_id
 				WHERE m.conversation_id = uc.id
 					AND m.space_id = $1
 					AND m.topic_id IS NULL
@@ -426,6 +444,7 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 		for convRows.Next() {
 			var (
 				c              V1BootstrapConversation
+				rawSenderName  string
 				lastMsgAt      *time.Time
 				activity       time.Time
 				peerLastReadAt *time.Time
@@ -435,7 +454,10 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 				&c.Type,
 				&c.Title,
 				&c.AvatarEmoji,
+				&c.NotificationLevel,
 				&c.LastMessagePlainText,
+				&c.LastMessageSenderID,
+				&rawSenderName,
 				&lastMsgAt,
 				&activity,
 				&c.UnreadCount,
@@ -443,6 +465,21 @@ func (r *PGRepository) GetBootstrap(ctx context.Context, actorID string, now tim
 			); scanErr != nil {
 				convRows.Close()
 				return V1BootstrapResponse{}, scanErr
+			}
+			c.NotificationLevel = strings.TrimSpace(c.NotificationLevel)
+			if c.NotificationLevel != "mentions" && c.NotificationLevel != "muted" {
+				c.NotificationLevel = "all"
+			}
+			if c.LastMessageSenderID != "" {
+				if mem, ok := memberByID[c.LastMessageSenderID]; ok && strings.TrimSpace(mem.DisplayName) != "" {
+					c.LastMessageSenderName = strings.TrimSpace(mem.DisplayName)
+				} else {
+					cleaned := strings.TrimSpace(rawSenderName)
+					if strings.HasPrefix(cleaned, "__duallane_") {
+						cleaned = "Bot"
+					}
+					c.LastMessageSenderName = cleaned
+				}
 			}
 			if c.Type != "group" {
 				c.AvatarEmoji = nil

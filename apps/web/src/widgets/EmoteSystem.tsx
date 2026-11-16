@@ -38,7 +38,16 @@ import {
   type EmotePack,
 } from "@/emotes";
 import { CachedEmoteImage } from "@/emote-image-cache";
-import { getRecentEmojiIds, recordRecentEmojiUse } from "@/recent-emojis";
+import {
+  ChatSafeLink,
+  ExternalLinkGuardDialog,
+  renderChatMarkdown,
+} from "@/shared/lib/chat-markdown";
+import {
+  analyzeLongMessage,
+  useDisplayPrefsStore,
+} from "@/shared/lib/display-prefs";
+import { useRecentEmojisStore } from "@/shared/lib/recent-emojis-v1";
 import {
   resolveCustomEmoteSrc,
   resolveOrderedPickerTabKeys,
@@ -82,9 +91,6 @@ const QUICK_REACTION_ITEMS: Array<{ key: string; glyph: string; label: string }>
   { key: "emoji:fire", glyph: "🔥", label: "火热" },
   { key: "emoji:eyes", glyph: "👀", label: "围观" },
 ];
-
-const UNICODE_EMOJI_PACK = emotePacks.find((p) => p.id === "emoji");
-const UNICODE_EMOJI_IDS = (UNICODE_EMOJI_PACK?.items || []).map((i) => i.id);
 
 function formatBytesShort(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -220,7 +226,10 @@ export function ReactionPickerPopoverContent({
             variant="ghost"
             aria-label={`回应 ${r.label}`}
             className="h-7 w-7 rounded-full p-0 text-sm"
-            onClick={() => onSelectReaction(r.key)}
+            onClick={() => {
+              useRecentEmojisStore.getState().recordEmoji(r.key);
+              onSelectReaction(r.key);
+            }}
           >
             {r.glyph}
           </Button>
@@ -262,7 +271,13 @@ export function ReactionPickerPopoverContent({
                 title={item.label}
                 aria-label={`回应 ${item.label}`}
                 className="h-8 w-8 rounded-lg p-0"
-                onClick={() => onSelectReaction(`${activePack.id}:${item.id}`)}
+                onClick={() => {
+                  const fullKey = `${activePack.id}:${item.id}`;
+                  if (activePack.id === "emoji") {
+                    useRecentEmojisStore.getState().recordEmoji(fullKey);
+                  }
+                  onSelectReaction(fullKey);
+                }}
               >
                 {item.kind === "unicode" ? (
                   <span className="text-base leading-none">{item.value}</span>
@@ -355,125 +370,6 @@ function EmotePackShareCard({
   );
 }
 
-function CopyCodeSnippetButton({ code }: { code: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <Button
-      type="button"
-      size="sm"
-      variant="ghost"
-      aria-label={copied ? "已复制代码" : "复制代码"}
-      className="h-5 gap-1 px-1.5 text-[10px] text-white/80 hover:bg-white/15 hover:text-white"
-      onClick={() => {
-        void navigator?.clipboard?.writeText?.(code).catch(() => {});
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1600);
-      }}
-    >
-      {copied ? <Check className="size-2.5" /> : <Copy className="size-2.5" />}
-      <span>{copied ? "已复制" : "复制"}</span>
-    </Button>
-  );
-}
-
-const FENCED_CODE_RE = /```([a-zA-Z0-9_+-]*)\n?([\s\S]*?)```/gu;
-const INLINE_TOKEN_RE = /(`[^`\n]+`|@所有人)/gu;
-
-function renderInlineRichTokens(segment: string): React.ReactNode {
-  if (!segment.includes("`") && !segment.includes("@所有人")) {
-    return renderMessageParts(segment);
-  }
-  const nodes: React.ReactNode[] = [];
-  let lastIdx = 0;
-  INLINE_TOKEN_RE.lastIndex = 0;
-  let match = INLINE_TOKEN_RE.exec(segment);
-  while (match) {
-    if (match.index > lastIdx) {
-      nodes.push(
-        <React.Fragment key={`t_${lastIdx}`}>
-          {renderMessageParts(segment.slice(lastIdx, match.index))}
-        </React.Fragment>
-      );
-    }
-    const token = match[0];
-    if (token === "@所有人") {
-      nodes.push(
-        <span
-          key={`all_${match.index}`}
-          className="mx-0.5 inline-flex items-center rounded-md bg-black/14 px-1.5 py-0.5 text-[13px] font-semibold"
-        >
-          @所有人
-        </span>
-      );
-    } else {
-      nodes.push(
-        <code
-          key={`ic_${match.index}`}
-          className="mx-0.5 rounded-md bg-black/14 px-1.5 py-0.5 font-mono text-[12px] whitespace-pre-wrap break-all [overflow-wrap:anywhere]"
-        >
-          {token.slice(1, -1)}
-        </code>
-      );
-    }
-    lastIdx = match.index + token.length;
-    match = INLINE_TOKEN_RE.exec(segment);
-  }
-  if (lastIdx < segment.length) {
-    nodes.push(
-      <React.Fragment key={`tail_${lastIdx}`}>
-        {renderMessageParts(segment.slice(lastIdx))}
-      </React.Fragment>
-    );
-  }
-  return nodes;
-}
-
-function renderFormattedTextSegment(text: string): React.ReactNode {
-  if (!text) return null;
-  if (!text.includes("```")) {
-    return renderInlineRichTokens(text);
-  }
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  FENCED_CODE_RE.lastIndex = 0;
-  let match = FENCED_CODE_RE.exec(text);
-  while (match) {
-    if (match.index > lastIndex) {
-      parts.push(
-        <React.Fragment key={`pre_${lastIndex}`}>
-          {renderInlineRichTokens(text.slice(lastIndex, match.index))}
-        </React.Fragment>
-      );
-    }
-    const lang = (match[1] || "code").trim();
-    const codeBody = (match[2] || "").replace(/\n$/, "");
-    parts.push(
-      <div
-        key={`cb_${match.index}`}
-        className="my-1.5 max-w-full min-w-0 overflow-hidden rounded-xl border border-white/10 bg-[#0f172a] text-slate-100 shadow-xs"
-      >
-        <div className="flex items-center justify-between border-b border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-mono text-slate-300">
-          <span>{lang}</span>
-          <CopyCodeSnippetButton code={codeBody} />
-        </div>
-        <pre className="dl-scroll overflow-x-auto p-2.5 font-mono text-[12px] leading-relaxed whitespace-pre">
-          <code>{codeBody}</code>
-        </pre>
-      </div>
-    );
-    lastIndex = match.index + match[0].length;
-    match = FENCED_CODE_RE.exec(text);
-  }
-  if (lastIndex < text.length) {
-    parts.push(
-      <React.Fragment key={`post_${lastIndex}`}>
-        {renderInlineRichTokens(text.slice(lastIndex))}
-      </React.Fragment>
-    );
-  }
-  return parts;
-}
-
 export function MessageRichContent({
   msg,
   jumbo = false,
@@ -484,8 +380,34 @@ export function MessageRichContent({
   const isPreviewMode = useWorkspaceStore((s) => s.isPreviewMode);
   const members = useWorkspaceStore((s) => s.members);
   const { library, favoriteFromMessage, openStudio } = useEmoteStore();
+  const collapseStickersByDefault = useDisplayPrefsStore((s) => s.collapseStickersByDefault);
+  const collapseLongMessagesByDefault = useDisplayPrefsStore(
+    (s) => s.collapseLongMessagesByDefault
+  );
+  const messageOverride = useDisplayPrefsStore((s) => s.messageOverrides[msg.id]);
+  const setMessageOverride = useDisplayPrefsStore((s) => s.setMessageOverride);
 
   if (jumbo) {
+    const isStickerCollapsed =
+      messageOverride === "collapsed" ||
+      (collapseStickersByDefault && messageOverride !== "expanded");
+
+    if (isStickerCollapsed) {
+      return (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          data-testid="collapsed-sticker-pill"
+          onClick={() => setMessageOverride(msg.id, "expanded")}
+          className="dl-glass-pill h-7 gap-1.5 rounded-full border border-dl-border-hairline px-3 text-xs font-medium text-dl-text-secondary hover:text-dl-text-primary"
+        >
+          <Smile className="size-3.5 text-dl-lane-shared" strokeWidth={1.9} />
+          <span>[贴纸 · 点击展开]</span>
+        </Button>
+      );
+    }
+
     const firstBlock = msg.blocks?.[0];
     if (firstBlock?.type === "emoji") {
       const customId = CUSTOM_SHORTCODE_RE.exec(firstBlock.shortcode)?.[1];
@@ -496,73 +418,90 @@ export function MessageRichContent({
           : `/api/workspace/emotes/${encodeURIComponent(customId)}/content`;
 
         return (
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                aria-label="查看或收藏贴纸"
-                data-testid="jumbo-custom-sticker"
-                className="h-auto w-auto rounded-2xl p-1 hover:bg-dl-surface-subtle/50"
-              >
-                <img
-                  src={src}
-                  alt={previewKnown?.label || "贴纸"}
-                  className="h-32 w-32 object-contain select-none"
-                  loading="lazy"
-                />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent side="top" align="center" className="w-52 p-2 space-y-1.5">
-              <div className="px-1.5 py-0.5 text-[11px] font-semibold text-dl-text-secondary">
-                贴纸快捷操作
-              </div>
+          <div className="flex flex-col items-start gap-1">
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  aria-label="查看或收藏贴纸"
+                  data-testid="jumbo-custom-sticker"
+                  className="h-auto w-auto rounded-2xl p-1 hover:bg-dl-surface-subtle/50"
+                >
+                  <img
+                    src={src}
+                    alt={previewKnown?.label || "贴纸"}
+                    className="h-32 w-32 object-contain select-none"
+                    loading="lazy"
+                  />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent side="top" align="center" className="w-52 p-2 space-y-1.5">
+                <div className="px-1.5 py-0.5 text-[11px] font-semibold text-dl-text-secondary">
+                  贴纸快捷操作
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="primary"
+                  className="w-full justify-start gap-2"
+                  onClick={() =>
+                    void favoriteFromMessage(
+                      { messageId: msg.id, customEmoteId: customId },
+                      undefined,
+                      isPreviewMode
+                    )
+                  }
+                >
+                  <Heart className="size-3.5" />
+                  收藏到我的贴纸
+                </Button>
+                {library.collections
+                  .filter((c) => !c.sourceSubscription?.readOnly)
+                  .slice(0, 4)
+                  .map((pack) => (
+                    <Button
+                      key={pack.id}
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="w-full justify-between text-xs"
+                      onClick={() =>
+                        void favoriteFromMessage(
+                          { messageId: msg.id, customEmoteId: customId },
+                          pack.id,
+                          isPreviewMode
+                        )
+                      }
+                    >
+                      <span className="truncate">收入「{pack.name}」</span>
+                      <Plus className="size-3 shrink-0" />
+                    </Button>
+                  ))}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="w-full justify-start gap-2 text-xs text-dl-text-secondary"
+                  onClick={() => openStudio("create")}
+                >
+                  <FolderPlus className="size-3.5" />
+                  新建表情包…
+                </Button>
+              </PopoverContent>
+            </Popover>
+            {collapseStickersByDefault && messageOverride === "expanded" && (
               <Button
                 type="button"
                 size="sm"
-                variant="primary"
-                className="w-full justify-start gap-2"
-                onClick={() =>
-                  void favoriteFromMessage({ messageId: msg.id, customEmoteId: customId }, undefined, isPreviewMode)
-                }
-              >
-                <Heart className="size-3.5" />
-                收藏到我的贴纸
-              </Button>
-              {library.collections
-                .filter((c) => !c.sourceSubscription?.readOnly)
-                .slice(0, 4)
-                .map((pack) => (
-                  <Button
-                    key={pack.id}
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    className="w-full justify-between text-xs"
-                    onClick={() =>
-                      void favoriteFromMessage(
-                        { messageId: msg.id, customEmoteId: customId },
-                        pack.id,
-                        isPreviewMode
-                      )
-                    }
-                  >
-                    <span className="truncate">收入「{pack.name}」</span>
-                    <Plus className="size-3 shrink-0" />
-                  </Button>
-                ))}
-              <Button
-                type="button"
-                size="sm"
                 variant="ghost"
-                className="w-full justify-start gap-2 text-xs text-dl-text-secondary"
-                onClick={() => openStudio("create")}
+                className="h-5 rounded-full px-2 text-[10.5px] text-dl-text-tertiary hover:text-dl-text-primary"
+                onClick={() => setMessageOverride(msg.id, null)}
               >
-                <FolderPlus className="size-3.5" />
-                新建表情包…
+                收起贴纸
               </Button>
-            </PopoverContent>
-          </Popover>
+            )}
+          </div>
         );
       }
     }
@@ -570,8 +509,52 @@ export function MessageRichContent({
     const rawText =
       firstBlock?.type === "text" ? firstBlock.text : msg.plainText || "";
     return (
-      <div className="dl-jumbo-sticker p-1" data-testid="jumbo-builtin-sticker">
-        {renderMessageParts(rawText)}
+      <div className="flex flex-col items-start gap-1">
+        <div className="dl-jumbo-sticker p-1" data-testid="jumbo-builtin-sticker">
+          {renderMessageParts(rawText)}
+        </div>
+        {collapseStickersByDefault && messageOverride === "expanded" && (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-5 rounded-full px-2 text-[10.5px] text-dl-text-tertiary hover:text-dl-text-primary"
+            onClick={() => setMessageOverride(msg.id, null)}
+          >
+            收起贴纸
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  const hasCollectionShare = Boolean(
+    msg.blocks?.some((b) => b.type === "emote_collection")
+  );
+  const longInfo = hasCollectionShare
+    ? { isLong: false, lineCount: 0, previewText: "" }
+    : analyzeLongMessage(msg.plainText || "");
+
+  if (
+    longInfo.isLong &&
+    collapseLongMessagesByDefault &&
+    messageOverride !== "expanded"
+  ) {
+    return (
+      <div className="min-w-0 max-w-full space-y-2">
+        <div className="min-w-0 max-w-full opacity-92 line-clamp-6 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+          {renderChatMarkdown(longInfo.previewText, "workspace", `lp_${msg.id}`)}
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          data-testid="expand-long-message-pill"
+          onClick={() => setMessageOverride(msg.id, "expanded")}
+          className="dl-glass-pill h-6 gap-1 rounded-full border border-current/20 px-2.5 text-[11.5px] font-medium"
+        >
+          <span>展开全文（共 {longInfo.lineCount} 行）</span>
+        </Button>
       </div>
     );
   }
@@ -583,7 +566,7 @@ export function MessageRichContent({
           if (block.type === "text") {
             return (
               <React.Fragment key={i}>
-                {renderFormattedTextSegment(block.text)}
+                {renderChatMarkdown(block.text, "workspace", `blk_${msg.id}_${i}`)}
               </React.Fragment>
             );
           }
@@ -597,7 +580,7 @@ export function MessageRichContent({
               <span
                 key={i}
                 data-mention-user-id={block.userId}
-                className="mx-0.5 inline rounded-md bg-black/14 px-1.5 py-0.5 text-[13px] font-semibold break-all [overflow-wrap:anywhere]"
+                className="mx-0.5 inline rounded-md bg-black/14 dark:bg-white/15 px-1.5 py-0.5 text-[13px] font-semibold break-all [overflow-wrap:anywhere]"
               >
                 @{cleanLabel}
               </span>
@@ -605,15 +588,9 @@ export function MessageRichContent({
           }
           if (block.type === "link") {
             return (
-              <a
-                key={i}
-                href={block.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline underline-offset-2 break-all"
-              >
+              <ChatSafeLink key={i} url={block.url} lane="workspace">
                 {block.label || block.url}
-              </a>
+              </ChatSafeLink>
             );
           }
           if (block.type === "emoji") {
@@ -644,13 +621,39 @@ export function MessageRichContent({
           }
           return null;
         })}
+        {longInfo.isLong && collapseLongMessagesByDefault && messageOverride === "expanded" && (
+          <div className="mt-1.5">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="dl-glass-pill h-6 rounded-full border border-current/20 px-2.5 text-[11px]"
+              onClick={() => setMessageOverride(msg.id, null)}
+            >
+              收起长文
+            </Button>
+          </div>
+        )}
       </div>
     );
   }
 
   return (
     <div className="min-w-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-      {renderFormattedTextSegment(msg.plainText)}
+      {renderChatMarkdown(msg.plainText, "workspace", `plain_${msg.id}`)}
+      {longInfo.isLong && collapseLongMessagesByDefault && messageOverride === "expanded" && (
+        <div className="mt-1.5">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="dl-glass-pill h-6 rounded-full border border-current/20 px-2.5 text-[11px]"
+            onClick={() => setMessageOverride(msg.id, null)}
+          >
+            收起长文
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -688,9 +691,8 @@ export function EmoteStickerPopover({
   const [reorderingTabs, setReorderingTabs] = useState(false);
   const [draggingTabKey, setDraggingTabKey] = useState<PickerTabKey | null>(null);
   const [dragOverTabKey, setDragOverTabKey] = useState<PickerTabKey | null>(null);
-  const [recentIds, setRecentIds] = useState<string[]>(() =>
-    getRecentEmojiIds(UNICODE_EMOJI_IDS, 8)
-  );
+  const recentIds = useRecentEmojisStore((s) => s.recentIds);
+  const recordEmoji = useRecentEmojisStore((s) => s.recordEmoji);
   const [uploading, setUploading] = useState(false);
   const [sharingBusy, setSharingBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -828,7 +830,7 @@ export function EmoteStickerPopover({
 
   const handleSelectBuiltin = (item: EmoteItem, packId: EmotePack["id"], shiftKey = false) => {
     if (packId === "emoji" && item.kind === "unicode") {
-      setRecentIds(recordRecentEmojiUse(item.id, UNICODE_EMOJI_IDS));
+      recordEmoji(item.id);
       onInsertText(item.value);
       return;
     }
@@ -2138,6 +2140,24 @@ export function EmoteStudioPanel() {
             />
           </div>
 
+          <div className="flex items-center justify-between gap-3 border-t border-dl-border-hairline pt-3">
+            <div>
+              <div className="text-xs font-semibold text-dl-text-primary">
+                群聊回复消息时自动 @对方
+              </div>
+              <div className="text-[11px] text-dl-text-secondary">
+                在群聊中点击引用回复他人消息时，自动在输入框前置 @提及对方
+              </div>
+            </div>
+            <Switch
+              label="群聊回复消息时自动 @对方"
+              checked={Boolean(settings.replyAutoMention)}
+              onCheckedChange={(checked) =>
+                void updateSettingsPatch({ replyAutoMention: checked }, isPreviewMode)
+              }
+            />
+          </div>
+
           <div className="space-y-2 border-t border-dl-border-hairline pt-3">
             <div className="flex items-center justify-between gap-2">
               <div>
@@ -2522,6 +2542,9 @@ export function EmoteGlobalModals() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Off-Site External Link Guard Dialog (Shared Workspace) */}
+      <ExternalLinkGuardDialog />
     </>
   );
 }

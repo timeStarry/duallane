@@ -1,4 +1,12 @@
-import { DualLaneAgentClient, DualLaneAgentError, DualLaneAgentSetupClient, DUALLANE_AGENT_SDK_VERSION } from "./index.js";
+import fs from "node:fs";
+import path from "node:path";
+import {
+  DualLaneAgentClient,
+  DualLaneAgentError,
+  DualLaneAgentSetupClient,
+  DUALLANE_AGENT_SDK_VERSION,
+  inferMimeTypeFromFileName,
+} from "./index.js";
 import {
   clearPendingSetup,
   DEFAULT_SETUP_SCOPES,
@@ -140,6 +148,26 @@ export const DUALLANE_MCP_TOOLS = [
         profile: { type: "string", description: "Local credential profile name (default: 'default')." },
       },
       required: ["messageId", "plainText"],
+    },
+  },
+  {
+    name: "duallane_send_file",
+    description:
+      "Upload and send a generated file or image (from a local filePath, UTF-8 contentText, or base64 contentBase64) directly to an authorized DualLane conversation.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        conversationId: { type: "string", description: "Target DualLane conversation ID (conv_...)." },
+        filePath: { type: "string", description: "Local path to the file to upload (provide filePath, contentText, or contentBase64)." },
+        contentText: { type: "string", description: "Inline UTF-8 file text when generating text/markdown/csv/svg/code without writing to disk." },
+        contentBase64: { type: "string", description: "Inline Base64-encoded binary payload when sending generated images/PDFs/ZIPs directly." },
+        fileName: { type: "string", description: "File name shown in DualLane (inferred from filePath if omitted, e.g. 'report.md' or 'chart.png')." },
+        mimeType: { type: "string", description: "Optional MIME type (auto-inferred from fileName extension if omitted)." },
+        text: { type: "string", description: "Optional caption / message text sent together with the file." },
+        replyToMessageId: { type: "string", description: "Optional message ID (msg_...) to reply to." },
+        profile: { type: "string", description: "Local credential profile name (default: 'default')." },
+      },
+      required: ["conversationId"],
     },
   },
   {
@@ -462,6 +490,41 @@ export function createDualLaneMcpServer(options = {}) {
       case "duallane_edit_message": {
         const { client } = makeClient(profileName);
         return await client.editMessage(args.messageId, args.plainText);
+      }
+
+      case "duallane_send_file": {
+        const { client } = makeClient(profileName);
+        let rawBytes;
+        let resolvedName = typeof args.fileName === "string" ? args.fileName.trim() : "";
+        if (typeof args.filePath === "string" && args.filePath.trim()) {
+          const full = path.resolve(args.filePath.trim());
+          rawBytes = fs.readFileSync(full);
+          if (!resolvedName) {
+            resolvedName = path.basename(full);
+          }
+        } else if (typeof args.contentBase64 === "string" && args.contentBase64.trim()) {
+          const cleanedB64 = args.contentBase64.trim().replace(/^data:[^;]+;base64,/iu, "");
+          rawBytes = Buffer.from(cleanedB64, "base64");
+        } else if (typeof args.contentText === "string" && args.contentText.length > 0) {
+          rawBytes = Buffer.from(args.contentText, "utf8");
+        } else {
+          throw new TypeError("One of filePath, contentText, or contentBase64 is required for duallane_send_file");
+        }
+        if (!resolvedName) {
+          resolvedName = "generated.txt";
+        }
+        const mimeType =
+          typeof args.mimeType === "string" && args.mimeType.trim()
+            ? args.mimeType.trim()
+            : inferMimeTypeFromFileName(resolvedName);
+        return await client.sendFile({
+          conversationId: args.conversationId,
+          bytes: rawBytes,
+          fileName: resolvedName,
+          mimeType,
+          text: args.text,
+          replyToMessageId: args.replyToMessageId,
+        });
       }
 
       case "duallane_send_card": {
