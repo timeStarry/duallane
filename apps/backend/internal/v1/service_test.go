@@ -1,15 +1,18 @@
 package v1
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	platformstorage "github.com/timestarry/duallane/apps/backend/internal/platform/storage"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/botgateway"
 )
@@ -32,6 +35,7 @@ type stubRepo struct {
 	ackedByUser    map[string]string
 	boundByUser    map[string]string
 	challenges     map[string]EmailChallengeStoreRecord
+	mobileRelease  MobileClientRelease
 }
 
 func (s *stubRepo) GetBootstrap(_ context.Context, actorID string, _ time.Time) (V1BootstrapResponse, error) {
@@ -329,6 +333,23 @@ func (s *stubRepo) ResolveEmailLoginMember(_ context.Context, userID, normalized
 		return V1BootstrapMember{}, ErrChallengeInvalid
 	}
 	return V1BootstrapMember{ID: userID, DisplayName: "已绑定成员", Kind: "human", Role: "member"}, nil
+}
+func (s *stubRepo) GetPublicMobileRelease(_ context.Context) (MobileClientRelease, error) {
+	if !s.mobileRelease.Enabled || s.mobileRelease.SHA256 == "" || s.mobileRelease.ByteSize <= 0 {
+		return MobileClientRelease{}, ErrNotFound
+	}
+	return s.mobileRelease, nil
+}
+func (s *stubRepo) GetAdminMobileRelease(_ context.Context, _ string) (MobileClientRelease, error) {
+	if s.mobileRelease.DownloadURL == "" {
+		s.mobileRelease.DownloadURL = "/api/v1/mobile/android/latest.apk"
+	}
+	return s.mobileRelease, nil
+}
+func (s *stubRepo) UpsertAdminMobileRelease(_ context.Context, actorID string, rel MobileClientRelease, _ time.Time) (MobileClientRelease, error) {
+	rel.UpdatedBy = actorID
+	s.mobileRelease = rel
+	return rel, nil
 }
 
 func TestValidateCardKitDocumentAllowsArbitraryActionIDs(t *testing.T) {
@@ -903,5 +924,177 @@ func TestAnnouncementAndEmailBindLoginLifecycle(t *testing.T) {
 	r.ServeHTTP(unbindRec, unbindReq)
 	if unbindRec.Code != http.StatusOK || repo.boundByUser["usr_owner_1"] != "" {
 		t.Fatalf("expected 200 on email unbind, got %d", unbindRec.Code)
+	}
+}
+
+type memBlobStore struct {
+	blobs map[string][]byte
+}
+
+func (m *memBlobStore) Put(_ context.Context, key string, source io.Reader, expectedSize int64, expectedSHA256 string) (platformstorage.StoredObject, error) {
+	if m.blobs == nil {
+		m.blobs = make(map[string][]byte)
+	}
+	data, err := io.ReadAll(source)
+	if err != nil {
+		return platformstorage.StoredObject{}, err
+	}
+	m.blobs[key] = data
+	return platformstorage.StoredObject{
+		Object: platformstorage.Object{
+			Key:      key,
+			SHA256:   expectedSHA256,
+			ByteSize: expectedSize,
+		},
+	}, nil
+}
+
+func (m *memBlobStore) Open(_ context.Context, object platformstorage.Object, _ int64) (platformstorage.OpenedObject, error) {
+	data, ok := m.blobs[object.Key]
+	if !ok {
+		return platformstorage.OpenedObject{}, ErrNotFound
+	}
+	return platformstorage.OpenedObject{
+		Object: object,
+		Body:   io.NopCloser(bytes.NewReader(data)),
+	}, nil
+}
+
+func (m *memBlobStore) Delete(_ context.Context, object platformstorage.Object) error {
+	delete(m.blobs, object.Key)
+	return nil
+}
+
+func buildSyntheticDualLaneAPK(t *testing.T, version string, versionCode int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+
+	mf, err := zw.Create("AndroidManifest.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = mf.Write([]byte("binary-manifest-placeholder-bytes-for-duallane-apk"))
+
+	dex, err := zw.Create("classes.dex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = dex.Write([]byte("dex\n039\x00synthetic-dalvik-bytecode-for-test"))
+
+	cfg, err := zw.Create("assets/app.config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfgJSON, _ := json.Marshal(map[string]any{
+		"name":    "DualLane",
+		"version": version,
+		"android": map[string]any{
+			"package":     "com.timestarry.duallane",
+			"versionCode": versionCode,
+		},
+	})
+	_, _ = cfg.Write(cfgJSON)
+
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestMobileReleaseDistributionEndpoints(t *testing.T) {
+	repo := &stubRepo{}
+	blobs := &memBlobStore{}
+	svc := NewService(repo).WithBlobStore(blobs)
+	resolver := actorResolverFunc(func(_ context.Context, r *http.Request) (*auth.Actor, error) {
+		if r.Header.Get("X-Test-Auth") == "none" {
+			return nil, nil
+		}
+		return &auth.Actor{ID: "usr_owner_1", Role: "owner", Kind: "human"}, nil
+	})
+	h := NewHTTPHandler(svc, resolver)
+	r := chi.NewRouter()
+	h.Mount(r)
+
+	// 1. Before APK upload: latest metadata returns 404, latest.apk 302-redirects to GitHub fallback
+	preLatest := httptest.NewRequest(http.MethodGet, "/api/v1/mobile/releases/latest", nil)
+	preLatest.Header.Set("X-Test-Auth", "none")
+	preLatestRec := httptest.NewRecorder()
+	r.ServeHTTP(preLatestRec, preLatest)
+	if preLatestRec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 before APK upload, got %d", preLatestRec.Code)
+	}
+
+	preApk := httptest.NewRequest(http.MethodGet, "/api/v1/mobile/android/latest.apk", nil)
+	preApk.Header.Set("X-Test-Auth", "none")
+	preApkRec := httptest.NewRecorder()
+	r.ServeHTTP(preApkRec, preApk)
+	if preApkRec.Code != http.StatusFound {
+		t.Fatalf("expected 302 fallback redirect before APK upload, got %d", preApkRec.Code)
+	}
+
+	// 2. Reject non-APK garbage upload
+	badUpload := httptest.NewRequest(http.MethodPut, "/api/v1/admin/mobile-release/apk", bytes.NewBufferString("not-a-valid-apk-zip"))
+	badUploadRec := httptest.NewRecorder()
+	r.ServeHTTP(badUploadRec, badUpload)
+	if badUploadRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid APK upload, got %d", badUploadRec.Code)
+	}
+
+	// 3. Upload valid DualLane APK -> auto-extracts version 1.0.7 and versionCode 10007 from assets/app.config
+	apkBytes := buildSyntheticDualLaneAPK(t, "1.0.7", 10007)
+	upReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/mobile-release/apk", bytes.NewReader(apkBytes))
+	upRec := httptest.NewRecorder()
+	r.ServeHTTP(upRec, upReq)
+	if upRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on APK upload, got %d (%s)", upRec.Code, upRec.Body.String())
+	}
+	if repo.mobileRelease.Version != "1.0.7" || repo.mobileRelease.VersionCode != 10007 || !repo.mobileRelease.Enabled {
+		t.Fatalf("unexpected auto-detected release metadata: %+v", repo.mobileRelease)
+	}
+
+	// 4. Update Markdown release notes via admin endpoint
+	metaReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/mobile-release", bytes.NewBufferString(`{
+		"enabled": true,
+		"version": "1.0.7",
+		"versionCode": 10007,
+		"title": "DualLane Android v1.0.7",
+		"notes": "### 新增与优化\n- **服务端同源分发**：秒级检测与下载"
+	}`))
+	metaRec := httptest.NewRecorder()
+	r.ServeHTTP(metaRec, metaReq)
+	if metaRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on metadata update, got %d (%s)", metaRec.Code, metaRec.Body.String())
+	}
+
+	// 5. Public unauthenticated check returns 200 with full release info
+	pubReq := httptest.NewRequest(http.MethodGet, "/api/v1/mobile/releases/latest", nil)
+	pubReq.Header.Set("X-Test-Auth", "none")
+	pubRec := httptest.NewRecorder()
+	r.ServeHTTP(pubRec, pubReq)
+	if pubRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on public latest release, got %d", pubRec.Code)
+	}
+
+	// 6. Public unauthenticated APK download streams exact APK bytes + ETag 304 support
+	dlReq := httptest.NewRequest(http.MethodGet, "/api/v1/mobile/android/latest.apk", nil)
+	dlReq.Header.Set("X-Test-Auth", "none")
+	dlRec := httptest.NewRecorder()
+	r.ServeHTTP(dlRec, dlReq)
+	if dlRec.Code != http.StatusOK || !bytes.Equal(dlRec.Body.Bytes(), apkBytes) {
+		t.Fatalf("expected 200 and exact APK bytes, got %d (len=%d)", dlRec.Code, dlRec.Body.Len())
+	}
+	etag := dlRec.Header().Get("ETag")
+	if etag == "" || dlRec.Header().Get("Content-Type") != "application/vnd.android.package-archive" {
+		t.Fatalf("unexpected download headers: etag=%q ct=%q", etag, dlRec.Header().Get("Content-Type"))
+	}
+
+	inmReq := httptest.NewRequest(http.MethodGet, "/api/v1/mobile/android/latest.apk", nil)
+	inmReq.Header.Set("X-Test-Auth", "none")
+	inmReq.Header.Set("If-None-Match", etag)
+	inmRec := httptest.NewRecorder()
+	r.ServeHTTP(inmRec, inmReq)
+	if inmRec.Code != http.StatusNotModified {
+		t.Fatalf("expected 304 Not Modified on matching ETag, got %d", inmRec.Code)
 	}
 }

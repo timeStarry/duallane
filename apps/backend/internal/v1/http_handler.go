@@ -65,6 +65,9 @@ func (h *HTTPHandler) Mount(r chi.Router) {
 		r.Post("/auth/qr/{sessionId}/exchange", h.handleQRExchange)
 		r.Post("/auth/email/send-code", h.handleSendLoginEmailCode)
 		r.Post("/auth/email/verify", h.handleVerifyLoginEmail)
+		r.Get("/mobile/releases/latest", h.handlePublicMobileReleaseLatest)
+		r.Get("/mobile/android/latest.apk", h.handlePublicMobileDownloadAPK)
+		r.Head("/mobile/android/latest.apk", h.handlePublicMobileDownloadAPK)
 
 		r.Group(func(r chi.Router) {
 			r.Use(h.requireActor)
@@ -113,6 +116,9 @@ func (h *HTTPHandler) Mount(r chi.Router) {
 				r.Post("/storage/cleanup", h.handleAdminStorageCleanup)
 				r.Get("/announcement", h.handleAdminGetAnnouncement)
 				r.Put("/announcement", h.handleAdminUpdateAnnouncement)
+				r.Get("/mobile-release", h.handleAdminGetMobileRelease)
+				r.Put("/mobile-release", h.handleAdminUpdateMobileRelease)
+				r.Put("/mobile-release/apk", h.handleAdminUploadMobileAPK)
 			})
 		})
 	})
@@ -978,6 +984,104 @@ func (h *HTTPHandler) handleVerifyLoginEmail(w http.ResponseWriter, r *http.Requ
 			"expiresAt": expiresAt,
 		},
 	})
+}
+
+const githubFallbackLatestAPKURL = "https://github.com/timeStarry/duallane-mobile/releases/latest/download/app-release.apk"
+
+func (h *HTTPHandler) handlePublicMobileReleaseLatest(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	rel, err := h.service.GetPublicMobileRelease(r.Context())
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			writeJSONError(w, http.StatusNotFound, "v1.release_not_published", "当前节点暂未托管移动端安装包")
+			return
+		}
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"release": rel})
+}
+
+func (h *HTTPHandler) handlePublicMobileDownloadAPK(w http.ResponseWriter, r *http.Request) {
+	rel, body, err := h.service.OpenPublicMobileAPK(r.Context())
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			w.Header().Set("Cache-Control", "no-store")
+			http.Redirect(w, r, githubFallbackLatestAPKURL, http.StatusFound)
+			return
+		}
+		writeServiceError(w, err)
+		return
+	}
+	defer func() { _ = body.Close() }()
+
+	etag := `"` + rel.SHA256 + `"`
+	fileName := rel.FileName
+	if fileName == "" {
+		fileName = "duallane-latest.apk"
+	}
+	w.Header().Set("Content-Type", "application/vnd.android.package-archive")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+fileName+`"`)
+	w.Header().Set("Content-Length", strconv.FormatInt(rel.ByteSize, 10))
+	w.Header().Set("ETag", etag)
+	w.Header().Set("X-Content-SHA256", rel.SHA256)
+	w.Header().Set("Cache-Control", "no-cache")
+
+	if inm := strings.TrimSpace(r.Header.Get("If-None-Match")); inm != "" && inm == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodHead {
+		return
+	}
+	_, _ = io.Copy(w, body)
+}
+
+func (h *HTTPHandler) handleAdminGetMobileRelease(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	rel, err := h.service.GetAdminMobileRelease(r.Context(), actorFromContext(r.Context()).ID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"release": rel})
+}
+
+func (h *HTTPHandler) handleAdminUpdateMobileRelease(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	var input MobileClientReleaseMetadataInput
+	if err := json.NewDecoder(io.LimitReader(r.Body, 32*1024)).Decode(&input); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.invalid_json", "请求体格式错误")
+		return
+	}
+	rel, err := h.service.UpdateAdminMobileRelease(r.Context(), actorFromContext(r.Context()).ID, input)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"release": rel})
+}
+
+func (h *HTTPHandler) handleAdminUploadMobileAPK(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	data, err := io.ReadAll(io.LimitReader(r.Body, MaxMobileAPKBytes+1024))
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.invalid_body", "读取安装包数据失败")
+		return
+	}
+	if int64(len(data)) > MaxMobileAPKBytes {
+		writeJSONError(w, http.StatusRequestEntityTooLarge, "v1.apk_too_large", "APK 安装包大小不能超过 30 MB")
+		return
+	}
+	overrideVersion := strings.TrimSpace(r.URL.Query().Get("version"))
+	overrideCode, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("versionCode")))
+	rel, err := h.service.UploadAdminMobileAPK(r.Context(), actorFromContext(r.Context()).ID, data, overrideVersion, overrideCode)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"release": rel})
 }
 
 func cleanServiceErrMessage(err error, prefix string) string {

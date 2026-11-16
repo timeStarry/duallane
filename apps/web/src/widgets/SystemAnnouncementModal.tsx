@@ -11,6 +11,115 @@ import {
   DialogTitle,
 } from "@/shared/ui";
 
+function renderInlineMarkdown(text: string, keyPrefix: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\((?:https?:\/\/|\/)[^)]+\))/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let idx = 0;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(text.slice(lastIndex, match.index));
+    }
+    const token = match[0];
+    if (token.startsWith("**") && token.endsWith("**")) {
+      nodes.push(
+        <strong key={`${keyPrefix}_b_${idx++}`} className="font-semibold text-dl-text-primary">
+          {token.slice(2, -2)}
+        </strong>
+      );
+    } else if (token.startsWith("`") && token.endsWith("`")) {
+      nodes.push(
+        <code
+          key={`${keyPrefix}_c_${idx++}`}
+          className="rounded bg-dl-surface-subtle px-1.5 py-0.5 font-mono text-[12.5px] text-dl-text-primary"
+        >
+          {token.slice(1, -1)}
+        </code>
+      );
+    } else if (token.startsWith("[")) {
+      const m = token.match(/^\[([^\]]+)\]\(((?:https?:\/\/|\/)[^)]+)\)$/);
+      if (m) {
+        nodes.push(
+          <a
+            key={`${keyPrefix}_a_${idx++}`}
+            href={m[2]}
+            target={m[2].startsWith("http") ? "_blank" : undefined}
+            rel={m[2].startsWith("http") ? "noopener noreferrer" : undefined}
+            className="font-medium text-dl-lane-shared underline underline-offset-2"
+          >
+            {m[1]}
+          </a>
+        );
+      } else {
+        nodes.push(token);
+      }
+    }
+    lastIndex = match.index + token.length;
+  }
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
+  return nodes;
+}
+
+function AnnouncementBodyMarkdown({ content }: { content: string }) {
+  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  const elements: React.ReactNode[] = [];
+  let listBuffer: string[] = [];
+
+  const flushList = (keyIdx: number) => {
+    if (listBuffer.length === 0) return;
+    const items = listBuffer;
+    listBuffer = [];
+    elements.push(
+      <ul key={`ul_${keyIdx}`} className="space-y-1.5 pl-1">
+        {items.map((item, i) => (
+          <li key={`li_${i}`} className="flex items-start gap-2 text-[13.5px] leading-[1.65] text-dl-text-secondary">
+            <span className="mt-[8px] size-1.5 shrink-0 rounded-full bg-dl-lane-shared/75" />
+            <span className="min-w-0 flex-1">{renderInlineMarkdown(item, `li_${keyIdx}_${i}`)}</span>
+          </li>
+        ))}
+      </ul>
+    );
+  };
+
+  lines.forEach((rawLine, i) => {
+    const trimmed = rawLine.trim();
+    if (!trimmed) {
+      flushList(i);
+      return;
+    }
+    const bulletMatch = trimmed.match(/^(?:[-*•])\s+(.+)$/);
+    if (bulletMatch) {
+      listBuffer.push(bulletMatch[1]);
+      return;
+    }
+    flushList(i);
+    const headingMatch = trimmed.match(/^(#{1,4})\s+(.+)$/);
+    if (headingMatch) {
+      elements.push(
+        <div
+          key={`h_${i}`}
+          className="pt-1 text-[14px] font-bold tracking-tight text-dl-text-primary"
+        >
+          {renderInlineMarkdown(headingMatch[2], `h_${i}`)}
+        </div>
+      );
+      return;
+    }
+    elements.push(
+      <p key={`p_${i}`} className="text-[14px] leading-[1.68] text-dl-text-secondary">
+        {renderInlineMarkdown(trimmed, `p_${i}`)}
+      </p>
+    );
+  });
+  flushList(lines.length);
+
+  return <div className="space-y-2.5">{elements}</div>;
+}
+
 export function SystemAnnouncementModal() {
   const {
     authStatus,
@@ -86,9 +195,7 @@ export function SystemAnnouncementModal() {
         </DialogHeader>
 
         <div className="dl-scroll max-h-[52vh] overflow-y-auto px-6 max-narrow:px-4 pb-5 pt-1">
-          <div className="whitespace-pre-line text-[14px] leading-[1.68] text-dl-text-secondary">
-            {systemAnnouncement.content}
-          </div>
+          <AnnouncementBodyMarkdown content={systemAnnouncement.content} />
         </div>
 
         <DialogFooter className="bg-dl-surface-subtle/40 px-6 max-narrow:px-4 py-3.5">

@@ -747,6 +747,37 @@ export const apiV1 = {
       method: "PUT",
       body: JSON.stringify(input),
     }),
+  getAdminMobileRelease: () =>
+    requestJSON<{ release: MobileClientReleaseDTO }>("/api/v1/admin/mobile-release"),
+  updateAdminMobileRelease: (input: MobileClientReleaseMetadataInput) =>
+    requestJSON<{ release: MobileClientReleaseDTO }>("/api/v1/admin/mobile-release", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  uploadAdminMobileAPK: async (
+    file: File,
+    overrides?: { version?: string; versionCode?: number }
+  ): Promise<{ release: MobileClientReleaseDTO }> => {
+    const params = new URLSearchParams();
+    if (overrides?.version?.trim()) {
+      params.set("version", overrides.version.trim());
+    }
+    if (overrides?.versionCode && overrides.versionCode > 0) {
+      params.set("versionCode", String(overrides.versionCode));
+    }
+    const qs = params.toString();
+    const rawBuffer = await file.arrayBuffer();
+    return requestJSON<{ release: MobileClientReleaseDTO }>(
+      `/api/v1/admin/mobile-release/apk${qs ? `?${qs}` : ""}`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/vnd.android.package-archive",
+        },
+        body: rawBuffer,
+      }
+    );
+  },
   ackAnnouncement: (id: string) =>
     requestJSON<{ ok: boolean }>("/api/v1/announcement/ack", {
       method: "POST",
@@ -1294,4 +1325,27 @@ export interface EmoteCollectionShareDetailDTO extends EmoteCollectionShareSumma
   sourceCollectionId: string;
   canSubscribeToSourceChanges: boolean;
   items: CustomEmoteDTO[];
+}
+
+export interface MobileClientReleaseDTO {
+  enabled: boolean;
+  version: string;
+  versionCode: number;
+  tagName: string;
+  title: string;
+  notes: string;
+  fileName: string;
+  byteSize: number;
+  sha256: string;
+  downloadUrl: string;
+  publishedAt?: string;
+  updatedBy?: string;
+}
+
+export interface MobileClientReleaseMetadataInput {
+  enabled: boolean;
+  version: string;
+  versionCode: number;
+  title: string;
+  notes: string;
 }

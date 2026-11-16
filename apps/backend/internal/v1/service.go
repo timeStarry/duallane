@@ -1,16 +1,24 @@
 package v1
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	platformstorage "github.com/timestarry/duallane/apps/backend/internal/platform/storage"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
 )
+
+const MaxMobileAPKBytes = 30 * 1024 * 1024
 
 type EmailCodeSender interface {
 	SendVerificationCode(ctx context.Context, recipient, code, purpose string) error
@@ -69,11 +77,15 @@ type Repository interface {
 	BindAccountEmail(ctx context.Context, actorID, normalizedEmail string, now time.Time) error
 	UnbindAccountEmail(ctx context.Context, actorID string, now time.Time) error
 	ResolveEmailLoginMember(ctx context.Context, userID, normalizedEmail string, now time.Time) (V1BootstrapMember, error)
+	GetPublicMobileRelease(ctx context.Context) (MobileClientRelease, error)
+	GetAdminMobileRelease(ctx context.Context, actorID string) (MobileClientRelease, error)
+	UpsertAdminMobileRelease(ctx context.Context, actorID string, rel MobileClientRelease, now time.Time) (MobileClientRelease, error)
 }
 
 type Service struct {
 	repo        Repository
 	emailSender EmailCodeSender
+	blobStore   platformstorage.BlobStore
 	codeGen     func() (string, error)
 	now         func() time.Time
 }
@@ -88,6 +100,11 @@ func NewService(repo Repository) *Service {
 
 func (s *Service) WithEmailSender(sender EmailCodeSender) *Service {
 	s.emailSender = sender
+	return s
+}
+
+func (s *Service) WithBlobStore(blobStore platformstorage.BlobStore) *Service {
+	s.blobStore = blobStore
 	return s
 }
 
@@ -872,6 +889,281 @@ func (s *Service) VerifyLoginEmail(ctx context.Context, rawEmail, challengeID, c
 		return V1BootstrapMember{}, err
 	}
 	return s.repo.ResolveEmailLoginMember(ctx, rec.UserID, normalized, now)
+}
+
+type embeddedAPKConfig struct {
+	Version string `json:"version"`
+	Android struct {
+		Package     string `json:"package"`
+		VersionCode int    `json:"versionCode"`
+	} `json:"android"`
+}
+
+func inspectAPKBytes(apkBytes []byte) (version string, versionCode int, err error) {
+	if len(apkBytes) < 128 {
+		return "", 0, fmt.Errorf("%w: 请上传有效的 Android APK 安装包", ErrInvalidInput)
+	}
+	if int64(len(apkBytes)) > MaxMobileAPKBytes {
+		return "", 0, fmt.Errorf("%w: APK 安装包大小不能超过 30 MB", ErrInvalidInput)
+	}
+	zr, zerr := zip.NewReader(bytes.NewReader(apkBytes), int64(len(apkBytes)))
+	if zerr != nil {
+		return "", 0, fmt.Errorf("%w: 请上传有效的 Android APK 安装包", ErrInvalidInput)
+	}
+	hasManifest := false
+	hasDex := false
+	for _, f := range zr.File {
+		switch f.Name {
+		case "AndroidManifest.xml":
+			hasManifest = true
+		case "classes.dex":
+			hasDex = true
+		case "assets/app.config":
+			if f.UncompressedSize64 > 0 && f.UncompressedSize64 <= 64*1024 {
+				rc, openErr := f.Open()
+				if openErr == nil {
+					rawCfg, readErr := io.ReadAll(io.LimitReader(rc, 64*1024))
+					_ = rc.Close()
+					if readErr == nil {
+						var parsed embeddedAPKConfig
+						if json.Unmarshal(rawCfg, &parsed) == nil {
+							if pkg := strings.TrimSpace(parsed.Android.Package); pkg != "" && pkg != "com.timestarry.duallane" {
+								return "", 0, fmt.Errorf("%w: APK 应用包名 (%s) 与 DualLane 不一致", ErrInvalidInput, pkg)
+							}
+							version = strings.TrimPrefix(strings.TrimSpace(parsed.Version), "v")
+							versionCode = parsed.Android.VersionCode
+						}
+					}
+				}
+			}
+		}
+	}
+	if !hasManifest || !hasDex {
+		return "", 0, fmt.Errorf("%w: 请上传包含完整签名结构的 Android APK 安装包", ErrInvalidInput)
+	}
+	return version, versionCode, nil
+}
+
+func normalizeSemverString(raw string) (string, error) {
+	clean := strings.TrimPrefix(strings.TrimSpace(raw), "v")
+	clean = strings.TrimPrefix(clean, "V")
+	if clean == "" || len(clean) > 32 {
+		return "", fmt.Errorf("%w: 请输入有效的语义化版本号（如 1.0.7）", ErrInvalidInput)
+	}
+	parts := strings.Split(clean, ".")
+	if len(parts) < 2 || len(parts) > 4 {
+		return "", fmt.Errorf("%w: 版本号格式无效（示例：1.0.7）", ErrInvalidInput)
+	}
+	for _, p := range parts {
+		if p == "" || len(p) > 8 {
+			return "", fmt.Errorf("%w: 版本号格式无效（示例：1.0.7）", ErrInvalidInput)
+		}
+		for _, r := range p {
+			if r < '0' || r > '9' {
+				return "", fmt.Errorf("%w: 版本号仅允许数字与点号（示例：1.0.7）", ErrInvalidInput)
+			}
+		}
+	}
+	return clean, nil
+}
+
+func deriveDefaultVersionCode(version string) int {
+	parts := strings.Split(version, ".")
+	parsePart := func(idx int) int {
+		if idx >= len(parts) {
+			return 0
+		}
+		n := 0
+		for _, r := range parts[idx] {
+			if r >= '0' && r <= '9' {
+				n = n*10 + int(r-'0')
+			}
+		}
+		return n
+	}
+	code := parsePart(0)*10000 + parsePart(1)*100 + parsePart(2)
+	if code <= 0 {
+		return 1
+	}
+	return code
+}
+
+func (s *Service) GetPublicMobileRelease(ctx context.Context) (MobileClientRelease, error) {
+	return s.repo.GetPublicMobileRelease(ctx)
+}
+
+func (s *Service) OpenPublicMobileAPK(ctx context.Context) (MobileClientRelease, io.ReadCloser, error) {
+	if s.blobStore == nil {
+		return MobileClientRelease{}, nil, ErrNotFound
+	}
+	rel, err := s.repo.GetPublicMobileRelease(ctx)
+	if err != nil {
+		return MobileClientRelease{}, nil, err
+	}
+	key, err := platformstorage.CanonicalObjectKey(rel.SHA256)
+	if err != nil {
+		return MobileClientRelease{}, nil, ErrNotFound
+	}
+	opened, err := s.blobStore.Open(ctx, platformstorage.Object{
+		Key:      key,
+		SHA256:   rel.SHA256,
+		ByteSize: rel.ByteSize,
+	}, MaxMobileAPKBytes+1024*1024)
+	if err != nil {
+		return MobileClientRelease{}, nil, ErrNotFound
+	}
+	return rel, opened.Body, nil
+}
+
+func (s *Service) GetAdminMobileRelease(ctx context.Context, actorID string) (MobileClientRelease, error) {
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" {
+		return MobileClientRelease{}, ErrForbidden
+	}
+	return s.repo.GetAdminMobileRelease(ctx, actorID)
+}
+
+func (s *Service) UploadAdminMobileAPK(ctx context.Context, actorID string, apkBytes []byte, overrideVersion string, overrideVersionCode int) (MobileClientRelease, error) {
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" {
+		return MobileClientRelease{}, ErrForbidden
+	}
+	if s.blobStore == nil {
+		return MobileClientRelease{}, fmt.Errorf("%w: 对象存储服务未就绪", ErrInvalidInput)
+	}
+	existing, err := s.repo.GetAdminMobileRelease(ctx, actorID)
+	if err != nil {
+		return MobileClientRelease{}, err
+	}
+
+	detectedVersion, detectedCode, err := inspectAPKBytes(apkBytes)
+	if err != nil {
+		return MobileClientRelease{}, err
+	}
+
+	rawVer := strings.TrimSpace(overrideVersion)
+	if rawVer == "" {
+		rawVer = detectedVersion
+	}
+	if rawVer == "" {
+		rawVer = existing.Version
+	}
+	if rawVer == "" {
+		return MobileClientRelease{}, fmt.Errorf("%w: 未能从 APK 自动识别版本号，请先填写版本号", ErrInvalidInput)
+	}
+	version, err := normalizeSemverString(rawVer)
+	if err != nil {
+		return MobileClientRelease{}, err
+	}
+
+	versionCode := overrideVersionCode
+	if versionCode <= 0 {
+		versionCode = detectedCode
+	}
+	if versionCode <= 0 {
+		versionCode = deriveDefaultVersionCode(version)
+	}
+
+	sum := sha256.Sum256(apkBytes)
+	shaHex := hex.EncodeToString(sum[:])
+	key, err := platformstorage.CanonicalObjectKey(shaHex)
+	if err != nil {
+		return MobileClientRelease{}, err
+	}
+	if _, err := s.blobStore.Put(ctx, key, bytes.NewReader(apkBytes), int64(len(apkBytes)), shaHex); err != nil {
+		return MobileClientRelease{}, err
+	}
+
+	now := s.now()
+	title := strings.TrimSpace(existing.Title)
+	if title == "" || strings.HasPrefix(title, "DualLane Android v") {
+		title = "DualLane Android v" + version
+	}
+	next := MobileClientRelease{
+		Enabled:     true,
+		Version:     version,
+		VersionCode: versionCode,
+		TagName:     "v" + version,
+		Title:       title,
+		Notes:       existing.Notes,
+		FileName:    fmt.Sprintf("duallane-v%s.apk", version),
+		ByteSize:    int64(len(apkBytes)),
+		SHA256:      shaHex,
+		DownloadURL: "/api/v1/mobile/android/latest.apk",
+		PublishedAt: now.UTC().Format(time.RFC3339),
+	}
+	return s.repo.UpsertAdminMobileRelease(ctx, actorID, next, now)
+}
+
+func (s *Service) UpdateAdminMobileRelease(ctx context.Context, actorID string, input MobileClientReleaseMetadataInput) (MobileClientRelease, error) {
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" {
+		return MobileClientRelease{}, ErrForbidden
+	}
+	existing, err := s.repo.GetAdminMobileRelease(ctx, actorID)
+	if err != nil {
+		return MobileClientRelease{}, err
+	}
+	if input.Enabled && (existing.SHA256 == "" || existing.ByteSize <= 0) {
+		return MobileClientRelease{}, fmt.Errorf("%w: 请先上传签名 APK 安装包后再开启分发", ErrInvalidInput)
+	}
+
+	version := existing.Version
+	if strings.TrimSpace(input.Version) != "" {
+		v, verr := normalizeSemverString(input.Version)
+		if verr != nil {
+			return MobileClientRelease{}, verr
+		}
+		version = v
+	}
+	versionCode := input.VersionCode
+	if versionCode <= 0 {
+		versionCode = existing.VersionCode
+	}
+	if versionCode <= 0 && version != "" {
+		versionCode = deriveDefaultVersionCode(version)
+	}
+
+	title := strings.TrimSpace(input.Title)
+	if utf8.RuneCountInString(title) > 80 {
+		return MobileClientRelease{}, fmt.Errorf("%w: 版本标题不能超过 80 个字符", ErrInvalidInput)
+	}
+	if title == "" && version != "" {
+		title = "DualLane Android v" + version
+	}
+	notes := strings.TrimSpace(input.Notes)
+	if utf8.RuneCountInString(notes) > 4000 {
+		return MobileClientRelease{}, fmt.Errorf("%w: 更新说明不能超过 4000 个字符", ErrInvalidInput)
+	}
+
+	now := s.now()
+	publishedAt := existing.PublishedAt
+	if publishedAt == "" && existing.SHA256 != "" {
+		publishedAt = now.UTC().Format(time.RFC3339)
+	}
+	fileName := existing.FileName
+	if version != "" {
+		fileName = fmt.Sprintf("duallane-v%s.apk", version)
+	}
+	tagName := existing.TagName
+	if version != "" {
+		tagName = "v" + version
+	}
+
+	next := MobileClientRelease{
+		Enabled:     input.Enabled,
+		Version:     version,
+		VersionCode: versionCode,
+		TagName:     tagName,
+		Title:       title,
+		Notes:       notes,
+		FileName:    fileName,
+		ByteSize:    existing.ByteSize,
+		SHA256:      existing.SHA256,
+		DownloadURL: "/api/v1/mobile/android/latest.apk",
+		PublishedAt: publishedAt,
+	}
+	return s.repo.UpsertAdminMobileRelease(ctx, actorID, next, now)
 }
 
 func randomID(prefix string) string {

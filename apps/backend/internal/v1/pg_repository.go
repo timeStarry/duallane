@@ -3639,3 +3639,113 @@ func (r *PGRepository) ResolveEmailLoginMember(ctx context.Context, userID, norm
 	member.Role = role
 	return member, nil
 }
+
+func parseMobileReleaseFromPrefsRaw(raw string) (MobileClientRelease, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return MobileClientRelease{}, false
+	}
+	var outer map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &outer); err != nil {
+		return MobileClientRelease{}, false
+	}
+	relBytes, ok := outer["mobileClientRelease"]
+	if !ok || len(relBytes) == 0 {
+		return MobileClientRelease{}, false
+	}
+	var rel MobileClientRelease
+	if err := json.Unmarshal(relBytes, &rel); err != nil {
+		return MobileClientRelease{}, false
+	}
+	if rel.DownloadURL == "" && rel.SHA256 != "" && rel.ByteSize > 0 {
+		rel.DownloadURL = "/api/v1/mobile/android/latest.apk"
+	}
+	return rel, true
+}
+
+func (r *PGRepository) GetPublicMobileRelease(ctx context.Context) (MobileClientRelease, error) {
+	var raw string
+	err := r.pool.QueryRow(ctx, `SELECT prefs_json FROM user_preferences WHERE user_id = 'usr_system_beacon'`).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MobileClientRelease{}, ErrNotFound
+	}
+	if err != nil {
+		return MobileClientRelease{}, err
+	}
+	rel, ok := parseMobileReleaseFromPrefsRaw(raw)
+	if !ok || !rel.Enabled || rel.SHA256 == "" || rel.ByteSize <= 0 || rel.Version == "" {
+		return MobileClientRelease{}, ErrNotFound
+	}
+	return rel, nil
+}
+
+func (r *PGRepository) GetAdminMobileRelease(ctx context.Context, actorID string) (MobileClientRelease, error) {
+	if _, _, err := r.resolveSpaceManager(ctx, actorID); err != nil {
+		return MobileClientRelease{}, err
+	}
+	var raw string
+	err := r.pool.QueryRow(ctx, `SELECT prefs_json FROM user_preferences WHERE user_id = 'usr_system_beacon'`).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MobileClientRelease{DownloadURL: "/api/v1/mobile/android/latest.apk"}, nil
+	}
+	if err != nil {
+		return MobileClientRelease{}, err
+	}
+	if rel, ok := parseMobileReleaseFromPrefsRaw(raw); ok {
+		return rel, nil
+	}
+	return MobileClientRelease{DownloadURL: "/api/v1/mobile/android/latest.apk"}, nil
+}
+
+func (r *PGRepository) UpsertAdminMobileRelease(ctx context.Context, actorID string, rel MobileClientRelease, now time.Time) (MobileClientRelease, error) {
+	_, githubLogin, err := r.resolveSpaceManager(ctx, actorID)
+	if err != nil {
+		return MobileClientRelease{}, err
+	}
+	nowUTC := now.UTC()
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return MobileClientRelease{}, err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	var existingRaw string
+	err = tx.QueryRow(ctx, `SELECT prefs_json FROM user_preferences WHERE user_id = 'usr_system_beacon' FOR UPDATE`).Scan(&existingRaw)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return MobileClientRelease{}, err
+	}
+	prefs := map[string]any{}
+	if existingRaw != "" {
+		_ = json.Unmarshal([]byte(existingRaw), &prefs)
+	}
+	stored := rel
+	if stored.DownloadURL == "" {
+		stored.DownloadURL = "/api/v1/mobile/android/latest.apk"
+	}
+	stored.UpdatedBy = actorID
+	prefs["mobileClientRelease"] = stored
+	encoded, err := json.Marshal(prefs)
+	if err != nil {
+		return MobileClientRelease{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO user_preferences (user_id, prefs_json, updated_at)
+		VALUES ('usr_system_beacon', $1, $2)
+		ON CONFLICT (user_id) DO UPDATE SET prefs_json = EXCLUDED.prefs_json, updated_at = EXCLUDED.updated_at
+	`, string(encoded), nowUTC); err != nil {
+		return MobileClientRelease{}, err
+	}
+
+	reason := fmt.Sprintf("enabled=%t version=%s code=%d size=%d", stored.Enabled, stored.Version, stored.VersionCode, stored.ByteSize)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_logs (id, space_id, actor_user_id, actor_github_login, action, target_type, target_id, result, reason, created_at)
+		VALUES ($1, $2, $3, NULLIF($4, ''), 'space.mobile_release_update', 'space', $2, 'success', $5, $6)
+	`, randomID("aud"), r.spaceID, actorID, githubLogin, reason, nowUTC); err != nil {
+		return MobileClientRelease{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return MobileClientRelease{}, err
+	}
+	return stored, nil
+}

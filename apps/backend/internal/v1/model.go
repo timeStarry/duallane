@@ -85,6 +85,29 @@ type SystemAnnouncementUpdateInput struct {
 	ResetAck    bool   `json:"resetAck"`
 }
 
+type MobileClientRelease struct {
+	Enabled     bool   `json:"enabled"`
+	Version     string `json:"version"`
+	VersionCode int    `json:"versionCode"`
+	TagName     string `json:"tagName"`
+	Title       string `json:"title"`
+	Notes       string `json:"notes"`
+	FileName    string `json:"fileName"`
+	ByteSize    int64  `json:"byteSize"`
+	SHA256      string `json:"sha256"`
+	DownloadURL string `json:"downloadUrl"`
+	PublishedAt string `json:"publishedAt,omitempty"`
+	UpdatedBy   string `json:"updatedBy,omitempty"`
+}
+
+type MobileClientReleaseMetadataInput struct {
+	Enabled     bool   `json:"enabled"`
+	Version     string `json:"version"`
+	VersionCode int    `json:"versionCode"`
+	Title       string `json:"title"`
+	Notes       string `json:"notes"`
+}
+
 type EmailChallengeSummary struct {
 	ChallengeID        string `json:"challengeId"`
 	MaskedEmail        string `json:"maskedEmail"`

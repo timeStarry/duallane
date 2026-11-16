@@ -33,6 +33,7 @@ import {
   type AdminInviteListResponse,
   type AdminOverviewResponse,
   type MemberVisibilityRule,
+  type MobileClientReleaseDTO,
   type SystemAnnouncementDTO,
 } from "@/shared/lib/api-v1";
 import {
@@ -58,6 +59,7 @@ const ADMIN_TABS: Array<{
 }> = [
   { id: "overview", label: "概览与审计", icon: Activity },
   { id: "announcement", label: "系统通告", icon: Megaphone },
+  { id: "mobile", label: "客户端分发", icon: Smartphone },
   { id: "members", label: "成员与可见性", icon: Users },
   { id: "invites", label: "邀请码治理", icon: KeyRound },
   { id: "storage", label: "存储与配额", icon: HardDrive },
@@ -201,6 +203,15 @@ export function SpaceAdminConsole() {
   const [emailTestedRecipient, setEmailTestedRecipient] = useState("");
   const [busyEmailAction, setBusyEmailAction] = useState<"" | "test" | "save">("");
 
+  // Mobile Client Release Distribution State
+  const [mobileRel, setMobileRel] = useState<MobileClientReleaseDTO | null>(null);
+  const [mobEnabled, setMobEnabled] = useState(false);
+  const [mobVersion, setMobVersion] = useState("");
+  const [mobVersionCode, setMobVersionCode] = useState(0);
+  const [mobTitle, setMobTitle] = useState("");
+  const [mobNotes, setMobNotes] = useState("");
+  const [busyMobAction, setBusyMobAction] = useState<"" | "upload" | "save">("");
+
   const loadOverviewAndAudits = useCallback(async () => {
     if (isPreviewMode) {
       const memberCount = Object.keys(members).length;
@@ -306,6 +317,22 @@ export function SpaceAdminConsole() {
     }
   }, [isPreviewMode]);
 
+  const loadMobileRelease = useCallback(async () => {
+    if (isPreviewMode) {
+      return;
+    }
+    const res = await apiV1.getAdminMobileRelease();
+    const rel = res.release;
+    setMobileRel(rel || null);
+    if (rel) {
+      setMobEnabled(Boolean(rel.enabled));
+      setMobVersion(rel.version || "");
+      setMobVersionCode(rel.versionCode || 0);
+      setMobTitle(rel.title || "");
+      setMobNotes(rel.notes || "");
+    }
+  }, [isPreviewMode]);
+
   const loadEmailSettings = useCallback(async () => {
     if (isPreviewMode) {
       return;
@@ -341,6 +368,8 @@ export function SpaceAdminConsole() {
           await loadMembersDirectory();
         } else if (adminConsoleTab === "announcement") {
           await loadAnnouncement();
+        } else if (adminConsoleTab === "mobile") {
+          await loadMobileRelease();
         } else if (adminConsoleTab === "mail") {
           await loadEmailSettings();
         } else {
@@ -367,6 +396,7 @@ export function SpaceAdminConsole() {
     loadEmailSettings,
     loadInvites,
     loadMembersDirectory,
+    loadMobileRelease,
     loadOverviewAndAudits,
   ]);
 
@@ -581,15 +611,91 @@ export function SpaceAdminConsole() {
 
   const handleFillMobilePromoTemplate = () => {
     setAnnEnabled(true);
-    setAnnBadge("移动端发布");
-    setAnnTitle("DualLane Android 客户端现已可用");
+    setAnnBadge("DualLane 1.x");
+    setAnnTitle("DualLane 1.x 全新重构 · Android 端正式发布");
     setAnnContent(
-      "轻量原生的 DualLane Android 客户端已上线，支持共享空间实时会话、系统通告与已绑定邮箱快捷登录。"
+      "DualLane 已完成 1.x 架构与视觉的全面重构，并同步推出超轻量 Android 客户端：\n\n- **1.x 全新体验**：统一双轨协作架构（共享空间 + 端到端加密直连），升级话题回复、云端贴纸工坊、Agent 实时接入与已绑定邮箱快捷登录。\n- **超轻量移动端**：安装包仅约 650 KB，原生 Keystore 硬件级会话加密，支持站内同源满速下载与更新。\n\n可在「个人设置」绑定常用邮箱，随后在手机端直接通过验证码登录。"
     );
-    setAnnCtaLabel("下载 Android 安装包");
-    setAnnCtaUrl(
-      "https://github.com/timeStarry/duallane-mobile/releases/latest/download/app-release.apk"
-    );
+    setAnnCtaLabel("下载 Android 客户端");
+    setAnnCtaUrl("/api/v1/mobile/android/latest.apk");
+  };
+
+  const handleUploadMobileAPKFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setBannerError("");
+    setBannerSuccess("");
+    setBusyMobAction("upload");
+    try {
+      if (isPreviewMode) {
+        const demoRel: MobileClientReleaseDTO = {
+          enabled: true,
+          version: mobVersion || "1.0.7",
+          versionCode: mobVersionCode || 10007,
+          tagName: `v${mobVersion || "1.0.7"}`,
+          title: mobTitle || `DualLane Android v${mobVersion || "1.0.7"}`,
+          notes: mobNotes,
+          fileName: file.name,
+          byteSize: file.size,
+          sha256: "preview_sha256_digest",
+          downloadUrl: "/api/v1/mobile/android/latest.apk",
+          publishedAt: new Date().toISOString(),
+        };
+        setMobileRel(demoRel);
+        setMobEnabled(true);
+        setMobVersion(demoRel.version);
+        setMobVersionCode(demoRel.versionCode);
+        setMobTitle(demoRel.title);
+        setBannerSuccess(`安装包已上传并解析：v${demoRel.version} (${demoRel.versionCode})`);
+        return;
+      }
+      const res = await apiV1.uploadAdminMobileAPK(file);
+      const rel = res.release;
+      setMobileRel(rel);
+      setMobEnabled(Boolean(rel.enabled));
+      setMobVersion(rel.version || "");
+      setMobVersionCode(rel.versionCode || 0);
+      setMobTitle(rel.title || "");
+      setMobNotes(rel.notes || "");
+      setBannerSuccess(
+        `签名 APK 已上架：v${rel.version} (${rel.versionCode}) · ${formatBytes(rel.byteSize)}`
+      );
+    } catch (err) {
+      setBannerError(err instanceof Error ? err.message : "上传 APK 安装包失败");
+    } finally {
+      setBusyMobAction("");
+    }
+  };
+
+  const handleSaveMobileReleaseMeta = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBannerError("");
+    setBannerSuccess("");
+    setBusyMobAction("save");
+    try {
+      if (isPreviewMode) {
+        setBannerSuccess("客户端分发配置已保存");
+        return;
+      }
+      const res = await apiV1.updateAdminMobileRelease({
+        enabled: mobEnabled,
+        version: mobVersion.trim(),
+        versionCode: Number(mobVersionCode) || 0,
+        title: mobTitle.trim(),
+        notes: mobNotes.trim(),
+      });
+      setMobileRel(res.release);
+      setMobEnabled(Boolean(res.release.enabled));
+      setMobVersion(res.release.version || "");
+      setMobVersionCode(res.release.versionCode || 0);
+      setMobTitle(res.release.title || "");
+      setBannerSuccess(mobEnabled ? "客户端同源分发信息已更新" : "已暂停服务端安装包分发");
+    } catch (err) {
+      setBannerError(err instanceof Error ? err.message : "保存客户端分发信息失败");
+    } finally {
+      setBusyMobAction("");
+    }
   };
 
   const handleSaveAnnouncement = async (resetAck: boolean) => {
@@ -1785,6 +1891,152 @@ export function SpaceAdminConsole() {
                       </Button>
                     </div>
                   )}
+                </div>
+              </form>
+            )}
+
+            {/* Tab 7: Mobile Client Same-Origin Distribution */}
+            {adminConsoleTab === "mobile" && (
+              <form onSubmit={handleSaveMobileReleaseMeta} className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-semibold text-dl-text-primary">
+                      移动端安装包同源分发
+                    </div>
+                    <div className="text-xs text-dl-text-secondary">
+                      直接由当前服务端托管签名 APK 与 Markdown 更新日志，移动端免代理秒级检出更新并满速下载
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-xs font-medium text-dl-text-secondary">
+                      {mobEnabled ? "已开启同源分发" : "未开启"}
+                    </span>
+                    <Switch checked={mobEnabled} onCheckedChange={setMobEnabled} />
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-dl-border-hairline bg-dl-surface-subtle/40 p-4 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold text-dl-text-primary">
+                        {mobileRel?.sha256
+                          ? `当前托管包：${mobileRel.fileName || `duallane-v${mobileRel.version}.apk`}`
+                          : "当前尚未上传签名 APK 安装包"}
+                      </div>
+                      <div className="mt-0.5 text-[11px] text-dl-text-tertiary">
+                        {mobileRel?.sha256
+                          ? `${formatBytes(mobileRel.byteSize)} · SHA-256 ${mobileRel.sha256.slice(0, 12)}… · 发布于 ${formatShortTime(mobileRel.publishedAt)}`
+                          : "上传签好名的 app-release.apk 后会自动解析版本号与 versionCode"}
+                      </div>
+                    </div>
+                    <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-dl-lane-shared px-3.5 py-2 text-xs font-semibold text-white shadow-xs transition hover:opacity-95">
+                      <Smartphone className="size-3.5" strokeWidth={2} />
+                      <span>{busyMobAction === "upload" ? "正在上传解析…" : "上传签名 APK"}</span>
+                      <input
+                        type="file"
+                        accept=".apk,application/vnd.android.package-archive"
+                        disabled={Boolean(busyMobAction)}
+                        onChange={(e) => void handleUploadMobileAPKFile(e)}
+                        className="sr-only"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 rounded-xl border border-dl-border-hairline bg-dl-surface-card/70 px-3 py-2">
+                    <div className="min-w-0">
+                      <div className="text-[10.5px] text-dl-text-tertiary">固定同源下载直链（可用于系统通告或群内分享）</div>
+                      <div className="truncate font-mono text-xs text-dl-text-primary">
+                        {typeof window !== "undefined"
+                          ? `${window.location.origin}/api/v1/mobile/android/latest.apk`
+                          : "/api/v1/mobile/android/latest.apk"}
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      className="shrink-0 gap-1"
+                      onClick={() =>
+                        void copyText(
+                          "mobile_apk_url",
+                          typeof window !== "undefined"
+                            ? `${window.location.origin}/api/v1/mobile/android/latest.apk`
+                            : "/api/v1/mobile/android/latest.apk"
+                        )
+                      }
+                    >
+                      {copiedKey === "mobile_apk_url" ? (
+                        <>
+                          <Check className="size-3.5" />
+                          <span>已复制</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="size-3.5" />
+                          <span>复制直链</span>
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-dl-border-hairline bg-dl-surface-subtle/40 p-4 space-y-3.5">
+                  <div className="grid grid-cols-3 max-compact:grid-cols-1 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-xs text-dl-text-secondary">版本号</label>
+                      <Input
+                        value={mobVersion}
+                        disabled={Boolean(busyMobAction)}
+                        onChange={(e) => setMobVersion(e.target.value)}
+                        placeholder="1.0.7"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-dl-text-secondary">Android versionCode</label>
+                      <Input
+                        type="number"
+                        value={mobVersionCode ? String(mobVersionCode) : ""}
+                        disabled={Boolean(busyMobAction)}
+                        onChange={(e) => setMobVersionCode(Number(e.target.value) || 0)}
+                        placeholder="10007"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-dl-text-secondary">发布标题</label>
+                      <Input
+                        value={mobTitle}
+                        disabled={Boolean(busyMobAction)}
+                        onChange={(e) => setMobTitle(e.target.value)}
+                        placeholder="DualLane Android v1.0.7"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs text-dl-text-secondary">
+                      版本更新说明（支持 Markdown 标题、列表、加粗与行内代码）
+                    </label>
+                    <textarea
+                      rows={6}
+                      value={mobNotes}
+                      disabled={Boolean(busyMobAction)}
+                      onChange={(e) => setMobNotes(e.target.value)}
+                      placeholder={"### 新增与优化\n- **同源极速更新**：直接通过空间服务端检测与下载安装包\n- **持久图片缓存**：表情包与头像离线秒开"}
+                      className="w-full rounded-xl border border-dl-border-subtle bg-dl-surface-card px-3 py-2 text-[13px] leading-relaxed text-dl-text-primary outline-none transition focus:border-dl-lane-shared"
+                    />
+                  </div>
+
+                  <div className="flex justify-end pt-1">
+                    <Button
+                      type="submit"
+                      size="sm"
+                      variant="primary"
+                      busy={busyMobAction === "save"}
+                      disabled={Boolean(busyMobAction)}
+                    >
+                      保存发布信息
+                    </Button>
+                  </div>
                 </div>
               </form>
             )}

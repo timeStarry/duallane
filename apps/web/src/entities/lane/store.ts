@@ -5,7 +5,14 @@ export type LaneId = "workspace" | "p2p";
 export type EntryView = "entry" | "workspace";
 export type ThemeMode = "system" | "light" | "dark";
 export type SettingsTab = "appearance" | "profile" | "emotes" | "devices" | "qr" | "space" | "bots";
-export type SpaceAdminTab = "overview" | "members" | "invites" | "storage" | "announcement" | "mail";
+export type SpaceAdminTab =
+  | "overview"
+  | "members"
+  | "invites"
+  | "storage"
+  | "announcement"
+  | "mobile"
+  | "mail";
 export type InspectorTab = "thread" | "details" | "file";
 
 export interface LightboxItem {
