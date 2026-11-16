@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,7 +20,10 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
 )
 
-const MaxMobileAPKBytes = 30 * 1024 * 1024
+const (
+	MaxMobileAPKBytes = 30 * 1024 * 1024
+	MaxMobileOTABytes = 15 * 1024 * 1024
+)
 
 type EmailCodeSender interface {
 	SendVerificationCode(ctx context.Context, recipient, code, purpose string) error
@@ -988,6 +993,147 @@ func deriveDefaultVersionCode(version string) int {
 	return code
 }
 
+var allowedOTAExtensions = map[string]bool{
+	".html":  true,
+	".js":    true,
+	".mjs":   true,
+	".css":   true,
+	".json":  true,
+	".svg":   true,
+	".png":   true,
+	".jpg":   true,
+	".jpeg":  true,
+	".webp":  true,
+	".gif":   true,
+	".ico":   true,
+	".woff":  true,
+	".woff2": true,
+	".ttf":   true,
+	".txt":   true,
+}
+
+func normalizeOTAEntryName(rawName string) (string, bool) {
+	cleaned := strings.ReplaceAll(strings.TrimSpace(rawName), "\\", "/")
+	cleaned = strings.TrimPrefix(cleaned, "./")
+	if cleaned == "" || strings.HasPrefix(cleaned, "/") || strings.Contains(cleaned, "..") {
+		return "", false
+	}
+	norm := path.Clean(cleaned)
+	if norm == "." || norm == ".." || strings.HasPrefix(norm, "../") || strings.HasPrefix(norm, "/") {
+		return "", false
+	}
+	if strings.HasPrefix(norm, "assets/www/") {
+		norm = strings.TrimPrefix(norm, "assets/www/")
+	} else if strings.HasPrefix(norm, "www/") {
+		norm = strings.TrimPrefix(norm, "www/")
+	}
+	if norm == "" || norm == "." {
+		return "", false
+	}
+	return norm, true
+}
+
+func inspectAndNormalizeOTAZip(rawBytes []byte, fromFullAPK bool) ([]byte, error) {
+	maxCompressed := int64(MaxMobileOTABytes)
+	if fromFullAPK {
+		maxCompressed = int64(MaxMobileAPKBytes)
+	}
+	if len(rawBytes) < 64 || int64(len(rawBytes)) > maxCompressed {
+		return nil, fmt.Errorf("%w: 请上传有效的移动端前端热更资源包 (.zip)", ErrInvalidInput)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(rawBytes), int64(len(rawBytes)))
+	if err != nil {
+		return nil, fmt.Errorf("%w: 热更资源包不是有效的 ZIP 格式", ErrInvalidInput)
+	}
+
+	type otaEntry struct {
+		name string
+		data []byte
+	}
+	entriesByName := map[string][]byte{}
+	var totalUncompressed int64
+	const maxUncompressed = 25 * 1024 * 1024
+
+	for _, f := range zr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		rawName := strings.ReplaceAll(f.Name, "\\", "/")
+		if fromFullAPK && !strings.HasPrefix(rawName, "assets/www/") {
+			continue
+		}
+		norm, ok := normalizeOTAEntryName(rawName)
+		if !ok {
+			if fromFullAPK {
+				continue
+			}
+			return nil, fmt.Errorf("%w: 热更包包含非法路径 %q", ErrInvalidInput, f.Name)
+		}
+		ext := strings.ToLower(path.Ext(norm))
+		if !allowedOTAExtensions[ext] {
+			if fromFullAPK {
+				continue
+			}
+			return nil, fmt.Errorf("%w: 热更包包含不支持的资源后缀 %q", ErrInvalidInput, ext)
+		}
+		if len(entriesByName) >= 500 {
+			return nil, fmt.Errorf("%w: 热更包文件数量超出上限 (500)", ErrInvalidInput)
+		}
+		if f.UncompressedSize64 > uint64(maxUncompressed) {
+			return nil, fmt.Errorf("%w: 热更包单文件体积超出限制", ErrInvalidInput)
+		}
+		rc, openErr := f.Open()
+		if openErr != nil {
+			return nil, fmt.Errorf("%w: 读取热更包内容失败", ErrInvalidInput)
+		}
+		content, readErr := io.ReadAll(io.LimitReader(rc, maxUncompressed+1))
+		_ = rc.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("%w: 读取热更包内容失败", ErrInvalidInput)
+		}
+		totalUncompressed += int64(len(content))
+		if totalUncompressed > maxUncompressed {
+			return nil, fmt.Errorf("%w: 热更包解压后总大小不能超过 25 MB", ErrInvalidInput)
+		}
+		entriesByName[norm] = content
+	}
+
+	indexBytes, hasIndex := entriesByName["index.html"]
+	if !hasIndex || len(indexBytes) == 0 {
+		return nil, fmt.Errorf("%w: 热更包缺少入口文件 index.html", ErrInvalidInput)
+	}
+
+	sortedNames := make([]string, 0, len(entriesByName))
+	for k := range entriesByName {
+		sortedNames = append(sortedNames, k)
+	}
+	sort.Strings(sortedNames)
+
+	var outBuf bytes.Buffer
+	zw := zip.NewWriter(&outBuf)
+	fixedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, name := range sortedNames {
+		hdr := &zip.FileHeader{
+			Name:     name,
+			Method:   zip.Deflate,
+			Modified: fixedTime,
+		}
+		w, werr := zw.CreateHeader(hdr)
+		if werr != nil {
+			_ = zw.Close()
+			return nil, fmt.Errorf("create ota zip entry: %w", werr)
+		}
+		if _, werr := w.Write(entriesByName[name]); werr != nil {
+			_ = zw.Close()
+			return nil, fmt.Errorf("write ota zip entry: %w", werr)
+		}
+	}
+	if cerr := zw.Close(); cerr != nil {
+		return nil, fmt.Errorf("finalize ota zip: %w", cerr)
+	}
+	return outBuf.Bytes(), nil
+}
+
 func (s *Service) GetPublicMobileRelease(ctx context.Context) (MobileClientRelease, error) {
 	return s.repo.GetPublicMobileRelease(ctx)
 }
@@ -999,6 +1145,9 @@ func (s *Service) OpenPublicMobileAPK(ctx context.Context) (MobileClientRelease,
 	rel, err := s.repo.GetPublicMobileRelease(ctx)
 	if err != nil {
 		return MobileClientRelease{}, nil, err
+	}
+	if rel.SHA256 == "" || rel.ByteSize <= 0 {
+		return MobileClientRelease{}, nil, ErrNotFound
 	}
 	key, err := platformstorage.CanonicalObjectKey(rel.SHA256)
 	if err != nil {
@@ -1015,6 +1164,32 @@ func (s *Service) OpenPublicMobileAPK(ctx context.Context) (MobileClientRelease,
 	return rel, opened.Body, nil
 }
 
+func (s *Service) OpenPublicMobileOTA(ctx context.Context) (MobileOTABundle, io.ReadCloser, error) {
+	if s.blobStore == nil {
+		return MobileOTABundle{}, nil, ErrNotFound
+	}
+	rel, err := s.repo.GetPublicMobileRelease(ctx)
+	if err != nil {
+		return MobileOTABundle{}, nil, err
+	}
+	if rel.OTA == nil || !rel.OTA.Enabled || rel.OTA.SHA256 == "" || rel.OTA.ByteSize <= 0 {
+		return MobileOTABundle{}, nil, ErrNotFound
+	}
+	key, err := platformstorage.CanonicalObjectKey(rel.OTA.SHA256)
+	if err != nil {
+		return MobileOTABundle{}, nil, ErrNotFound
+	}
+	opened, err := s.blobStore.Open(ctx, platformstorage.Object{
+		Key:      key,
+		SHA256:   rel.OTA.SHA256,
+		ByteSize: rel.OTA.ByteSize,
+	}, MaxMobileOTABytes+1024*1024)
+	if err != nil {
+		return MobileOTABundle{}, nil, ErrNotFound
+	}
+	return *rel.OTA, opened.Body, nil
+}
+
 func (s *Service) GetAdminMobileRelease(ctx context.Context, actorID string) (MobileClientRelease, error) {
 	actorID = strings.TrimSpace(actorID)
 	if actorID == "" {
@@ -1023,7 +1198,7 @@ func (s *Service) GetAdminMobileRelease(ctx context.Context, actorID string) (Mo
 	return s.repo.GetAdminMobileRelease(ctx, actorID)
 }
 
-func (s *Service) UploadAdminMobileAPK(ctx context.Context, actorID string, apkBytes []byte, overrideVersion string, overrideVersionCode int) (MobileClientRelease, error) {
+func (s *Service) UploadAdminMobileAPK(ctx context.Context, actorID string, apkBytes []byte, overrideVersion string, overrideVersionCode int, minNativeVersionCode ...int) (MobileClientRelease, error) {
 	actorID = strings.TrimSpace(actorID)
 	if actorID == "" {
 		return MobileClientRelease{}, ErrForbidden
@@ -1075,10 +1250,37 @@ func (s *Service) UploadAdminMobileAPK(ctx context.Context, actorID string, apkB
 	}
 
 	now := s.now()
+	nowStr := now.UTC().Format(time.RFC3339)
 	title := strings.TrimSpace(existing.Title)
-	if title == "" || strings.HasPrefix(title, "DualLane Android v") {
+	if title == "" || strings.HasPrefix(title, "DualLane Android v") || strings.HasPrefix(title, "DualLane Mobile v") {
 		title = "DualLane Android v" + version
 	}
+
+	resolvedMinNative := versionCode
+	if len(minNativeVersionCode) > 0 && minNativeVersionCode[0] > 0 {
+		resolvedMinNative = minNativeVersionCode[0]
+	}
+
+	var otaBundle *MobileOTABundle
+	if otaZipBytes, otaErr := inspectAndNormalizeOTAZip(apkBytes, true); otaErr == nil && len(otaZipBytes) > 0 {
+		otaSum := sha256.Sum256(otaZipBytes)
+		otaShaHex := hex.EncodeToString(otaSum[:])
+		if otaKey, kerr := platformstorage.CanonicalObjectKey(otaShaHex); kerr == nil {
+			if _, perr := s.blobStore.Put(ctx, otaKey, bytes.NewReader(otaZipBytes), int64(len(otaZipBytes)), otaShaHex); perr == nil {
+				otaBundle = &MobileOTABundle{
+					Enabled:              true,
+					Version:              version,
+					BundleID:             otaShaHex[:12],
+					MinNativeVersionCode: resolvedMinNative,
+					ByteSize:             int64(len(otaZipBytes)),
+					SHA256:               otaShaHex,
+					DownloadURL:          "/api/v1/mobile/android/latest-ota.zip",
+					PublishedAt:          nowStr,
+				}
+			}
+		}
+	}
+
 	next := MobileClientRelease{
 		Enabled:     true,
 		Version:     version,
@@ -1090,7 +1292,100 @@ func (s *Service) UploadAdminMobileAPK(ctx context.Context, actorID string, apkB
 		ByteSize:    int64(len(apkBytes)),
 		SHA256:      shaHex,
 		DownloadURL: "/api/v1/mobile/android/latest.apk",
-		PublishedAt: now.UTC().Format(time.RFC3339),
+		PublishedAt: nowStr,
+		OTA:         otaBundle,
+	}
+	return s.repo.UpsertAdminMobileRelease(ctx, actorID, next, now)
+}
+
+func (s *Service) UploadAdminMobileOTA(ctx context.Context, actorID string, rawZipBytes []byte, overrideVersion string, minNativeVersionCode int) (MobileClientRelease, error) {
+	actorID = strings.TrimSpace(actorID)
+	if actorID == "" {
+		return MobileClientRelease{}, ErrForbidden
+	}
+	if s.blobStore == nil {
+		return MobileClientRelease{}, fmt.Errorf("%w: 对象存储服务未就绪", ErrInvalidInput)
+	}
+	existing, err := s.repo.GetAdminMobileRelease(ctx, actorID)
+	if err != nil {
+		return MobileClientRelease{}, err
+	}
+
+	rawVer := strings.TrimSpace(overrideVersion)
+	if rawVer == "" {
+		rawVer = existing.Version
+	}
+	if rawVer == "" {
+		return MobileClientRelease{}, fmt.Errorf("%w: 发布热更包时请指定目标版本号（如 1.0.10）", ErrInvalidInput)
+	}
+	version, err := normalizeSemverString(rawVer)
+	if err != nil {
+		return MobileClientRelease{}, err
+	}
+
+	normalizedZip, err := inspectAndNormalizeOTAZip(rawZipBytes, false)
+	if err != nil {
+		return MobileClientRelease{}, err
+	}
+	otaSum := sha256.Sum256(normalizedZip)
+	otaShaHex := hex.EncodeToString(otaSum[:])
+	otaKey, err := platformstorage.CanonicalObjectKey(otaShaHex)
+	if err != nil {
+		return MobileClientRelease{}, err
+	}
+	if _, err := s.blobStore.Put(ctx, otaKey, bytes.NewReader(normalizedZip), int64(len(normalizedZip)), otaShaHex); err != nil {
+		return MobileClientRelease{}, err
+	}
+
+	resolvedMinNative := minNativeVersionCode
+	if resolvedMinNative <= 0 {
+		if existing.OTA != nil && existing.OTA.MinNativeVersionCode > 0 {
+			resolvedMinNative = existing.OTA.MinNativeVersionCode
+		} else if existing.VersionCode > 0 {
+			resolvedMinNative = existing.VersionCode
+		} else {
+			resolvedMinNative = 10009
+		}
+	}
+
+	now := s.now()
+	nowStr := now.UTC().Format(time.RFC3339)
+	title := strings.TrimSpace(existing.Title)
+	if title == "" || strings.HasPrefix(title, "DualLane Android v") || strings.HasPrefix(title, "DualLane Mobile v") {
+		title = "DualLane Android v" + version
+	}
+
+	apkVersionCode := existing.VersionCode
+	if apkVersionCode <= 0 {
+		apkVersionCode = resolvedMinNative
+	}
+	apkFileName := existing.FileName
+	if apkFileName == "" {
+		apkFileName = fmt.Sprintf("duallane-v%s.apk", version)
+	}
+
+	next := MobileClientRelease{
+		Enabled:     true,
+		Version:     version,
+		VersionCode: apkVersionCode,
+		TagName:     "v" + version,
+		Title:       title,
+		Notes:       existing.Notes,
+		FileName:    apkFileName,
+		ByteSize:    existing.ByteSize,
+		SHA256:      existing.SHA256,
+		DownloadURL: "/api/v1/mobile/android/latest.apk",
+		PublishedAt: nowStr,
+		OTA: &MobileOTABundle{
+			Enabled:              true,
+			Version:              version,
+			BundleID:             otaShaHex[:12],
+			MinNativeVersionCode: resolvedMinNative,
+			ByteSize:             int64(len(normalizedZip)),
+			SHA256:               otaShaHex,
+			DownloadURL:          "/api/v1/mobile/android/latest-ota.zip",
+			PublishedAt:          nowStr,
+		},
 	}
 	return s.repo.UpsertAdminMobileRelease(ctx, actorID, next, now)
 }
@@ -1104,8 +1399,10 @@ func (s *Service) UpdateAdminMobileRelease(ctx context.Context, actorID string, 
 	if err != nil {
 		return MobileClientRelease{}, err
 	}
-	if input.Enabled && (existing.SHA256 == "" || existing.ByteSize <= 0) {
-		return MobileClientRelease{}, fmt.Errorf("%w: 请先上传签名 APK 安装包后再开启分发", ErrInvalidInput)
+	hasAPK := existing.SHA256 != "" && existing.ByteSize > 0
+	hasOTA := existing.OTA != nil && existing.OTA.SHA256 != "" && existing.OTA.ByteSize > 0
+	if input.Enabled && !hasAPK && !hasOTA {
+		return MobileClientRelease{}, fmt.Errorf("%w: 请先上传签名 APK 或前端热更包后再开启分发", ErrInvalidInput)
 	}
 
 	version := existing.Version
@@ -1138,16 +1435,31 @@ func (s *Service) UpdateAdminMobileRelease(ctx context.Context, actorID string, 
 
 	now := s.now()
 	publishedAt := existing.PublishedAt
-	if publishedAt == "" && existing.SHA256 != "" {
+	if publishedAt == "" && (hasAPK || hasOTA) {
 		publishedAt = now.UTC().Format(time.RFC3339)
 	}
 	fileName := existing.FileName
-	if version != "" {
+	if fileName == "" && version != "" {
 		fileName = fmt.Sprintf("duallane-v%s.apk", version)
 	}
 	tagName := existing.TagName
 	if version != "" {
 		tagName = "v" + version
+	}
+
+	var nextOTA *MobileOTABundle
+	if existing.OTA != nil {
+		copied := *existing.OTA
+		if version != "" {
+			copied.Version = version
+		}
+		if input.MinNativeVersionCode > 0 {
+			copied.MinNativeVersionCode = input.MinNativeVersionCode
+		}
+		if input.OTAEnabled != nil {
+			copied.Enabled = *input.OTAEnabled
+		}
+		nextOTA = &copied
 	}
 
 	next := MobileClientRelease{
@@ -1162,6 +1474,7 @@ func (s *Service) UpdateAdminMobileRelease(ctx context.Context, actorID string, 
 		SHA256:      existing.SHA256,
 		DownloadURL: "/api/v1/mobile/android/latest.apk",
 		PublishedAt: publishedAt,
+		OTA:         nextOTA,
 	}
 	return s.repo.UpsertAdminMobileRelease(ctx, actorID, next, now)
 }

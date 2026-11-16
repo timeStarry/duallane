@@ -2,7 +2,9 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
+import zlib from "node:zlib";
 import {
   DualLaneAgentClient,
   DualLaneAgentError,
@@ -88,7 +90,8 @@ Usage:
   duallane-agent send <conversationId> <text> [--reply-to <messageId>] [--profile default]
   duallane-agent edit <messageId> <text> [--profile default]
   duallane-agent typing <conversationId> [--state thinking|typing] [--profile default]
-  duallane-agent publish-mobile <apkPath> [--title <title>] [--notes <md> | --notes-file <file>] [--profile default]
+  duallane-agent publish-mobile <apkPath> [--min-native-code <code>] [--title <title>] [--notes <md> | --notes-file <file>] [--profile default]
+  duallane-agent publish-mobile-ota <wwwDirOrZip> --version <semver> [--min-native-code <code>] [--title <title>] [--notes <md> | --notes-file <file>] [--profile default]
   duallane-agent unbind [--profile default]
   duallane-agent listen --cmd "<shell-command>" [--transport auto|ws|poll] [--profile default]
 
@@ -591,11 +594,112 @@ async function main() {
     return;
   }
 
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i += 1) {
+    let c = i;
+    for (let k = 0; k < 8; k += 1) {
+      c = (c & 1) !== 0 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    table[i] = c >>> 0;
+  }
+  return table;
+})();
+
+function crc32Buffer(buf) {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i += 1) {
+    crc = CRC32_TABLE[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function packDirectoryToZipBuffer(rootDir) {
+  const files = [];
+  const walk = (dir, prefix) => {
+    const entries = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    for (const ent of entries) {
+      const full = path.join(dir, ent.name);
+      const rel = prefix ? `${prefix}/${ent.name}` : ent.name;
+      if (ent.isDirectory()) {
+        walk(full, rel);
+      } else if (ent.isFile()) {
+        files.push({ name: rel, data: fs.readFileSync(full) });
+      }
+    }
+  };
+  walk(rootDir, "");
+  if (files.length === 0) {
+    throw new Error(`Directory "${rootDir}" contains no files to pack`);
+  }
+
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+
+  for (const file of files) {
+    const nameBuf = Buffer.from(file.name, "utf8");
+    const raw = file.data;
+    const compressed = zlib.deflateRawSync(raw, { level: 9 });
+    const crc = crc32Buffer(raw);
+
+    const localHdr = Buffer.alloc(30);
+    localHdr.writeUInt32LE(0x04034b50, 0);
+    localHdr.writeUInt16LE(20, 4);
+    localHdr.writeUInt16LE(0x0800, 6);
+    localHdr.writeUInt16LE(8, 8);
+    localHdr.writeUInt16LE(0, 10);
+    localHdr.writeUInt16LE(0x5421, 12);
+    localHdr.writeUInt32LE(crc, 14);
+    localHdr.writeUInt32LE(compressed.length, 18);
+    localHdr.writeUInt32LE(raw.length, 22);
+    localHdr.writeUInt16LE(nameBuf.length, 26);
+    localHdr.writeUInt16LE(0, 28);
+
+    localParts.push(localHdr, nameBuf, compressed);
+
+    const centralHdr = Buffer.alloc(46);
+    centralHdr.writeUInt32LE(0x02014b50, 0);
+    centralHdr.writeUInt16LE(20, 4);
+    centralHdr.writeUInt16LE(20, 6);
+    centralHdr.writeUInt16LE(0x0800, 8);
+    centralHdr.writeUInt16LE(8, 10);
+    centralHdr.writeUInt16LE(0, 12);
+    centralHdr.writeUInt16LE(0x5421, 14);
+    centralHdr.writeUInt32LE(crc, 16);
+    centralHdr.writeUInt32LE(compressed.length, 20);
+    centralHdr.writeUInt32LE(raw.length, 24);
+    centralHdr.writeUInt16LE(nameBuf.length, 28);
+    centralHdr.writeUInt16LE(0, 30);
+    centralHdr.writeUInt16LE(0, 32);
+    centralHdr.writeUInt16LE(0, 34);
+    centralHdr.writeUInt16LE(0, 36);
+    centralHdr.writeUInt32LE(0, 38);
+    centralHdr.writeUInt32LE(offset, 42);
+
+    centralParts.push(centralHdr, nameBuf);
+    offset += localHdr.length + nameBuf.length + compressed.length;
+  }
+
+  const centralSize = centralParts.reduce((acc, b) => acc + b.length, 0);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(files.length, 8);
+  eocd.writeUInt16LE(files.length, 10);
+  eocd.writeUInt32LE(centralSize, 12);
+  eocd.writeUInt32LE(offset, 16);
+  eocd.writeUInt16LE(0, 20);
+
+  return Buffer.concat([...localParts, ...centralParts, eocd]);
+}
+
   if (subcommand === "publish-mobile") {
     const [apkPath] = positionals.slice(1);
     if (!apkPath) {
       throw new Error(
-        "Usage: duallane-agent publish-mobile <apkPath> [--title <title>] [--notes <md> | --notes-file <file>] [--profile default]"
+        "Usage: duallane-agent publish-mobile <apkPath> [--min-native-code <code>] [--title <title>] [--notes <md> | --notes-file <file>] [--profile default]"
       );
     }
     const apkBytes = fs.readFileSync(apkPath);
@@ -603,11 +707,39 @@ async function main() {
     if (typeof flags["notes-file"] === "string" && flags["notes-file"].trim()) {
       notes = fs.readFileSync(flags["notes-file"].trim(), "utf8");
     }
+    const minNativeCode = flags["min-native-code"] ? Number(flags["min-native-code"]) : undefined;
     const { client } = requireClient(flags.profile);
     const res = await client.publishMobileRelease({
       apkBytes,
       version: typeof flags.version === "string" ? flags.version : undefined,
       versionCode: flags["version-code"] ? Number(flags["version-code"]) : undefined,
+      minNativeVersionCode: minNativeCode,
+      title: typeof flags.title === "string" ? flags.title : undefined,
+      notes,
+    });
+    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    return;
+  }
+
+  if (subcommand === "publish-mobile-ota") {
+    const [targetPath] = positionals.slice(1);
+    if (!targetPath || typeof flags.version !== "string" || !flags.version.trim()) {
+      throw new Error(
+        "Usage: duallane-agent publish-mobile-ota <wwwDirOrZip> --version <semver> [--min-native-code <code>] [--title <title>] [--notes <md> | --notes-file <file>] [--profile default]"
+      );
+    }
+    const stat = fs.statSync(targetPath);
+    const zipBytes = stat.isDirectory() ? packDirectoryToZipBuffer(targetPath) : fs.readFileSync(targetPath);
+    let notes = typeof flags.notes === "string" ? flags.notes : undefined;
+    if (typeof flags["notes-file"] === "string" && flags["notes-file"].trim()) {
+      notes = fs.readFileSync(flags["notes-file"].trim(), "utf8");
+    }
+    const minNativeCode = flags["min-native-code"] ? Number(flags["min-native-code"]) : undefined;
+    const { client } = requireClient(flags.profile);
+    const res = await client.publishMobileOTA({
+      zipBytes,
+      version: flags.version.trim(),
+      minNativeVersionCode: minNativeCode,
       title: typeof flags.title === "string" ? flags.title : undefined,
       notes,
     });

@@ -2401,7 +2401,7 @@ export function EmoteGlobalModals() {
               创建、管理、订阅与分享自定义表情包
             </DialogDescription>
           </DialogHeader>
-          <div className="dl-scroll max-h-[74vh] overflow-y-auto p-6 max-narrow:p-4 pt-3">
+          <div className="dl-scroll h-[min(580px,calc(86dvh-72px))] overflow-y-auto p-6 max-narrow:p-4 pt-3 [scrollbar-gutter:stable]">
             <EmoteStudioPanel />
           </div>
         </DialogContent>

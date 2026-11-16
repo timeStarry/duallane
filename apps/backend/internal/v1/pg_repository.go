@@ -3678,6 +3678,9 @@ func parseMobileReleaseFromPrefsRaw(raw string) (MobileClientRelease, bool) {
 	if rel.DownloadURL == "" && rel.SHA256 != "" && rel.ByteSize > 0 {
 		rel.DownloadURL = "/api/v1/mobile/android/latest.apk"
 	}
+	if rel.OTA != nil && rel.OTA.DownloadURL == "" && rel.OTA.SHA256 != "" && rel.OTA.ByteSize > 0 {
+		rel.OTA.DownloadURL = "/api/v1/mobile/android/latest-ota.zip"
+	}
 	return rel, true
 }
 
@@ -3691,7 +3694,9 @@ func (r *PGRepository) GetPublicMobileRelease(ctx context.Context) (MobileClient
 		return MobileClientRelease{}, err
 	}
 	rel, ok := parseMobileReleaseFromPrefsRaw(raw)
-	if !ok || !rel.Enabled || rel.SHA256 == "" || rel.ByteSize <= 0 || rel.Version == "" {
+	hasAPK := rel.SHA256 != "" && rel.ByteSize > 0
+	hasOTA := rel.OTA != nil && rel.OTA.Enabled && rel.OTA.SHA256 != "" && rel.OTA.ByteSize > 0
+	if !ok || !rel.Enabled || rel.Version == "" || (!hasAPK && !hasOTA) {
 		return MobileClientRelease{}, ErrNotFound
 	}
 	return rel, nil

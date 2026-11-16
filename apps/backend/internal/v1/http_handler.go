@@ -60,6 +60,7 @@ func (h *HTTPHandler) Mount(r chi.Router) {
 	r.Post("/api/bot/v2/typing", h.handleBotTyping)
 	r.Post("/api/bot/v2/unbind", h.handleBotUnbind)
 	r.Put("/api/bot/v2/mobile-release/apk", h.handleBotUploadMobileAPK)
+	r.Put("/api/bot/v2/mobile-release/ota", h.handleBotUploadMobileOTA)
 	r.Put("/api/bot/v2/mobile-release", h.handleBotUpdateMobileRelease)
 
 	r.Route("/api/v1", func(r chi.Router) {
@@ -70,6 +71,8 @@ func (h *HTTPHandler) Mount(r chi.Router) {
 		r.Get("/mobile/releases/latest", h.handlePublicMobileReleaseLatest)
 		r.Get("/mobile/android/latest.apk", h.handlePublicMobileDownloadAPK)
 		r.Head("/mobile/android/latest.apk", h.handlePublicMobileDownloadAPK)
+		r.Get("/mobile/android/latest-ota.zip", h.handlePublicMobileDownloadOTA)
+		r.Head("/mobile/android/latest-ota.zip", h.handlePublicMobileDownloadOTA)
 
 		r.Group(func(r chi.Router) {
 			r.Use(h.requireActor)
@@ -121,6 +124,7 @@ func (h *HTTPHandler) Mount(r chi.Router) {
 				r.Get("/mobile-release", h.handleAdminGetMobileRelease)
 				r.Put("/mobile-release", h.handleAdminUpdateMobileRelease)
 				r.Put("/mobile-release/apk", h.handleAdminUploadMobileAPK)
+				r.Put("/mobile-release/ota", h.handleAdminUploadMobileOTA)
 			})
 		})
 	})
@@ -1040,6 +1044,38 @@ func (h *HTTPHandler) handlePublicMobileDownloadAPK(w http.ResponseWriter, r *ht
 	_, _ = io.Copy(w, body)
 }
 
+func (h *HTTPHandler) handlePublicMobileDownloadOTA(w http.ResponseWriter, r *http.Request) {
+	ota, body, err := h.service.OpenPublicMobileOTA(r.Context())
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			writeJSONError(w, http.StatusNotFound, "v1.ota_not_published", "当前节点暂无可用的前端热更资源包")
+			return
+		}
+		writeServiceError(w, err)
+		return
+	}
+	defer func() { _ = body.Close() }()
+
+	etag := `"` + ota.SHA256 + `"`
+	fileName := "duallane-ota-v" + ota.Version + "-" + ota.BundleID + ".zip"
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+fileName+`"`)
+	w.Header().Set("Content-Length", strconv.FormatInt(ota.ByteSize, 10))
+	w.Header().Set("ETag", etag)
+	w.Header().Set("X-Content-SHA256", ota.SHA256)
+	w.Header().Set("Cache-Control", "no-cache")
+
+	if inm := strings.TrimSpace(r.Header.Get("If-None-Match")); inm != "" && inm == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodHead {
+		return
+	}
+	_, _ = io.Copy(w, body)
+}
+
 func (h *HTTPHandler) handleAdminGetMobileRelease(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	rel, err := h.service.GetAdminMobileRelease(r.Context(), actorFromContext(r.Context()).ID)
@@ -1078,7 +1114,29 @@ func (h *HTTPHandler) handleAdminUploadMobileAPK(w http.ResponseWriter, r *http.
 	}
 	overrideVersion := strings.TrimSpace(r.URL.Query().Get("version"))
 	overrideCode, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("versionCode")))
-	rel, err := h.service.UploadAdminMobileAPK(r.Context(), actorFromContext(r.Context()).ID, data, overrideVersion, overrideCode)
+	minNativeCode, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("minNativeVersionCode")))
+	rel, err := h.service.UploadAdminMobileAPK(r.Context(), actorFromContext(r.Context()).ID, data, overrideVersion, overrideCode, minNativeCode)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"release": rel})
+}
+
+func (h *HTTPHandler) handleAdminUploadMobileOTA(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	data, err := io.ReadAll(io.LimitReader(r.Body, MaxMobileOTABytes+1024))
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.invalid_body", "读取热更资源包失败")
+		return
+	}
+	if int64(len(data)) > MaxMobileOTABytes {
+		writeJSONError(w, http.StatusRequestEntityTooLarge, "v1.ota_too_large", "热更资源包大小不能超过 15 MB")
+		return
+	}
+	overrideVersion := strings.TrimSpace(r.URL.Query().Get("version"))
+	minNativeCode, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("minNativeVersionCode")))
+	rel, err := h.service.UploadAdminMobileOTA(r.Context(), actorFromContext(r.Context()).ID, data, overrideVersion, minNativeCode)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -1107,7 +1165,37 @@ func (h *HTTPHandler) handleBotUploadMobileAPK(w http.ResponseWriter, r *http.Re
 	}
 	overrideVersion := strings.TrimSpace(r.URL.Query().Get("version"))
 	overrideCode, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("versionCode")))
-	rel, err := h.service.UploadAdminMobileAPK(r.Context(), ownerID, data, overrideVersion, overrideCode)
+	minNativeCode, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("minNativeVersionCode")))
+	rel, err := h.service.UploadAdminMobileAPK(r.Context(), ownerID, data, overrideVersion, overrideCode, minNativeCode)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"release": rel})
+}
+
+func (h *HTTPHandler) handleBotUploadMobileOTA(w http.ResponseWriter, r *http.Request) {
+	botAuth, ok := h.authenticateBotRequest(w, r)
+	if !ok {
+		return
+	}
+	ownerID := strings.TrimSpace(botAuth.OwnerUserID)
+	if ownerID == "" {
+		writeJSONError(w, http.StatusForbidden, "v1.forbidden", "仅空间创建者或管理员名下的机器人可执行分发")
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(r.Body, MaxMobileOTABytes+1024))
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "v1.invalid_body", "读取热更资源包失败")
+		return
+	}
+	if int64(len(data)) > MaxMobileOTABytes {
+		writeJSONError(w, http.StatusRequestEntityTooLarge, "v1.ota_too_large", "热更资源包大小不能超过 15 MB")
+		return
+	}
+	overrideVersion := strings.TrimSpace(r.URL.Query().Get("version"))
+	minNativeCode, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("minNativeVersionCode")))
+	rel, err := h.service.UploadAdminMobileOTA(r.Context(), ownerID, data, overrideVersion, minNativeCode)
 	if err != nil {
 		writeServiceError(w, err)
 		return

@@ -46,6 +46,7 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import zlib from "node:zlib";
 `;
 
 const sections = sourceFiles.map((relPath) => {

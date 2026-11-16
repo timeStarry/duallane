@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Bot,
   Building2,
@@ -287,6 +287,13 @@ export function SettingsModal() {
     ? `duallane://qr-login?sessionId=${encodeURIComponent(qrSession.id)}&challenge=${encodeURIComponent(qrSession.challenge)}`
     : "";
 
+  const panelScrollRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (panelScrollRef.current) {
+      panelScrollRef.current.scrollTop = 0;
+    }
+  }, [settingsTab]);
+
   return (
     <Dialog
       open={settingsOpen}
@@ -294,8 +301,8 @@ export function SettingsModal() {
         if (!open) closeSettings();
       }}
     >
-      <DialogContent size="lg">
-        <DialogHeader>
+      <DialogContent size="lg" className="p-0 overflow-hidden">
+        <DialogHeader className="bg-dl-surface-subtle/35 shrink-0">
           <DialogTitle className="flex items-center gap-2.5">
             <BrandLogo size={24} withTile />
             <span className="tracking-[-0.025em]">设置</span>
@@ -304,10 +311,10 @@ export function SettingsModal() {
             外观、个人身份、设备与机器人设置
           </DialogDescription>
         </DialogHeader>
-        <div className="flex max-compact:flex-col gap-4 min-h-[300px] max-h-[72vh] p-6 max-narrow:p-3.5 pt-4">
+        <div className="flex max-compact:flex-col h-[min(580px,calc(86dvh-72px))] min-h-0">
           <nav
             aria-label="设置分类"
-            className="w-36 max-compact:w-full shrink-0 max-compact:flex max-compact:flex-wrap max-compact:overflow-x-auto space-y-1 max-compact:space-y-0 max-compact:gap-1 border-r max-compact:border-r-0 max-compact:border-b border-dl-border-hairline pr-3 max-compact:pr-0 max-compact:pb-2.5"
+            className="w-44 max-compact:w-full shrink-0 border-r max-compact:border-r-0 max-compact:border-b border-dl-border-hairline bg-dl-surface-subtle/40 p-3.5 max-compact:p-2.5 flex flex-col max-compact:flex-row max-compact:flex-wrap gap-1 overflow-y-auto"
           >
             {visibleTabs.map((tab) => {
               const Icon = tab.icon;
@@ -316,7 +323,7 @@ export function SettingsModal() {
                   key={tab.id}
                   variant={settingsTab === tab.id ? "primary" : "ghost"}
                   size="sm"
-                  className="w-full max-compact:w-auto justify-start gap-2"
+                  className="w-full max-compact:w-auto justify-start gap-2 shrink-0"
                   onClick={() => setSettingsTab(tab.id)}
                 >
                   <Icon className="size-4 shrink-0" strokeWidth={1.85} />
@@ -326,7 +333,11 @@ export function SettingsModal() {
             })}
           </nav>
 
-          <div className="dl-scroll flex-1 min-w-0 overflow-y-auto pr-1">
+          <div
+            ref={panelScrollRef}
+            data-testid="settings-modal-scroll-pane"
+            className="dl-scroll flex-1 min-w-0 min-h-0 overflow-y-auto p-6 max-compact:p-4 [scrollbar-gutter:stable]"
+          >
             {settingsTab === "appearance" && (
               <div className="space-y-5">
                 <div className="space-y-2">

@@ -86,27 +86,41 @@ type SystemAnnouncementUpdateInput struct {
 	ResetAck    bool   `json:"resetAck"`
 }
 
+type MobileOTABundle struct {
+	Enabled              bool   `json:"enabled"`
+	Version              string `json:"version"`
+	BundleID             string `json:"bundleId"`
+	MinNativeVersionCode int    `json:"minNativeVersionCode"`
+	ByteSize             int64  `json:"byteSize"`
+	SHA256               string `json:"sha256"`
+	DownloadURL          string `json:"downloadUrl"`
+	PublishedAt          string `json:"publishedAt,omitempty"`
+}
+
 type MobileClientRelease struct {
-	Enabled     bool   `json:"enabled"`
-	Version     string `json:"version"`
-	VersionCode int    `json:"versionCode"`
-	TagName     string `json:"tagName"`
-	Title       string `json:"title"`
-	Notes       string `json:"notes"`
-	FileName    string `json:"fileName"`
-	ByteSize    int64  `json:"byteSize"`
-	SHA256      string `json:"sha256"`
-	DownloadURL string `json:"downloadUrl"`
-	PublishedAt string `json:"publishedAt,omitempty"`
-	UpdatedBy   string `json:"updatedBy,omitempty"`
+	Enabled     bool             `json:"enabled"`
+	Version     string           `json:"version"`
+	VersionCode int              `json:"versionCode"`
+	TagName     string           `json:"tagName"`
+	Title       string           `json:"title"`
+	Notes       string           `json:"notes"`
+	FileName    string           `json:"fileName"`
+	ByteSize    int64            `json:"byteSize"`
+	SHA256      string           `json:"sha256"`
+	DownloadURL string           `json:"downloadUrl"`
+	PublishedAt string           `json:"publishedAt,omitempty"`
+	UpdatedBy   string           `json:"updatedBy,omitempty"`
+	OTA         *MobileOTABundle `json:"ota,omitempty"`
 }
 
 type MobileClientReleaseMetadataInput struct {
-	Enabled     bool   `json:"enabled"`
-	Version     string `json:"version"`
-	VersionCode int    `json:"versionCode"`
-	Title       string `json:"title"`
-	Notes       string `json:"notes"`
+	Enabled              bool   `json:"enabled"`
+	Version              string `json:"version"`
+	VersionCode          int    `json:"versionCode"`
+	Title                string `json:"title"`
+	Notes                string `json:"notes"`
+	MinNativeVersionCode int    `json:"minNativeVersionCode,omitempty"`
+	OTAEnabled           *bool  `json:"otaEnabled,omitempty"`
 }
 
 type EmailChallengeSummary struct {

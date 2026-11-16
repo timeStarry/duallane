@@ -996,6 +996,12 @@ func buildSyntheticDualLaneAPK(t *testing.T, version string, versionCode int) []
 	})
 	_, _ = cfg.Write(cfgJSON)
 
+	wwwIndex, err := zw.Create("assets/www/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = wwwIndex.Write([]byte("<!doctype html><html><body>DualLane Mobile " + version + "</body></html>"))
+
 	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -1124,6 +1130,51 @@ func TestMobileReleaseDistributionEndpoints(t *testing.T) {
 	botRouter.ServeHTTP(ownerBotUpRec, ownerBotUpReq)
 	if ownerBotUpRec.Code != http.StatusOK || repo.mobileRelease.Version != "1.0.8" {
 		t.Fatalf("expected 200 and version 1.0.8 on owner bot APK publish, got %d (%s)", ownerBotUpRec.Code, ownerBotUpRec.Body.String())
+	}
+	if repo.mobileRelease.OTA == nil || !repo.mobileRelease.OTA.Enabled || repo.mobileRelease.OTA.MinNativeVersionCode != 10008 {
+		t.Fatalf("expected auto-extracted OTA bundle from APK, got %+v", repo.mobileRelease.OTA)
+	}
+
+	// 8. Reject Zip-Slip / disallowed extension in standalone OTA zip, and accept valid OTA hot-update
+	var evilBuf bytes.Buffer
+	evilZw := zip.NewWriter(&evilBuf)
+	ew, _ := evilZw.Create("../escape.js")
+	_, _ = ew.Write([]byte("alert(1)"))
+	_ = evilZw.Close()
+
+	badOtaReq := httptest.NewRequest(http.MethodPut, "/api/bot/v2/mobile-release/ota?version=1.0.9", bytes.NewReader(evilBuf.Bytes()))
+	badOtaReq.Header.Set("Authorization", "Bearer "+ownerTok)
+	badOtaRec := httptest.NewRecorder()
+	botRouter.ServeHTTP(badOtaRec, badOtaReq)
+	if badOtaRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on path-traversal OTA zip, got %d", badOtaRec.Code)
+	}
+
+	var goodOtaBuf bytes.Buffer
+	goodZw := zip.NewWriter(&goodOtaBuf)
+	idxW, _ := goodZw.Create("www/index.html")
+	_, _ = idxW.Write([]byte("<!doctype html><html><body>OTA 1.0.9</body></html>"))
+	jsW, _ := goodZw.Create("www/assets/app.js")
+	_, _ = jsW.Write([]byte("console.log('ota 1.0.9')"))
+	_ = goodZw.Close()
+
+	goodOtaReq := httptest.NewRequest(http.MethodPut, "/api/bot/v2/mobile-release/ota?version=1.0.9&minNativeVersionCode=10008", bytes.NewReader(goodOtaBuf.Bytes()))
+	goodOtaReq.Header.Set("Authorization", "Bearer "+ownerTok)
+	goodOtaRec := httptest.NewRecorder()
+	botRouter.ServeHTTP(goodOtaRec, goodOtaReq)
+	if goodOtaRec.Code != http.StatusOK || repo.mobileRelease.Version != "1.0.9" || repo.mobileRelease.OTA == nil {
+		t.Fatalf("expected 200 on standalone OTA publish, got %d (%s)", goodOtaRec.Code, goodOtaRec.Body.String())
+	}
+	if repo.mobileRelease.VersionCode != 10008 || repo.mobileRelease.OTA.MinNativeVersionCode != 10008 {
+		t.Fatalf("expected APK versionCode preserved at 10008 and minNativeVersionCode=10008, got %+v", repo.mobileRelease)
+	}
+
+	otaDlReq := httptest.NewRequest(http.MethodGet, "/api/v1/mobile/android/latest-ota.zip", nil)
+	otaDlReq.Header.Set("X-Test-Auth", "none")
+	otaDlRec := httptest.NewRecorder()
+	r.ServeHTTP(otaDlRec, otaDlReq)
+	if otaDlRec.Code != http.StatusOK || otaDlRec.Header().Get("Content-Type") != "application/zip" {
+		t.Fatalf("expected 200 and application/zip on latest-ota.zip, got %d", otaDlRec.Code)
 	}
 }
 

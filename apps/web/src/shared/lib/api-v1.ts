@@ -1327,6 +1327,17 @@ export interface EmoteCollectionShareDetailDTO extends EmoteCollectionShareSumma
   items: CustomEmoteDTO[];
 }
 
+export interface MobileOTABundleDTO {
+  enabled: boolean;
+  version: string;
+  bundleId: string;
+  minNativeVersionCode: number;
+  byteSize: number;
+  sha256: string;
+  downloadUrl: string;
+  publishedAt?: string;
+}
+
 export interface MobileClientReleaseDTO {
   enabled: boolean;
   version: string;
@@ -1340,6 +1351,7 @@ export interface MobileClientReleaseDTO {
   downloadUrl: string;
   publishedAt?: string;
   updatedBy?: string;
+  ota?: MobileOTABundleDTO;
 }
 
 export interface MobileClientReleaseMetadataInput {

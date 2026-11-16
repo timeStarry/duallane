@@ -1768,29 +1768,42 @@ export function TimelinePane() {
                                                 }
                                               }}
                                               className={cn(
-                                                "mb-1.5 flex w-full max-w-full min-w-0 flex-col gap-0.5 overflow-hidden rounded-[10px] border-l-[3px] py-1.5 pl-2.5 pr-3 text-left cursor-pointer select-none transition-colors",
+                                                "group/quote mb-1.5 -mx-1 flex w-full max-w-full min-w-0 items-stretch gap-2 overflow-hidden rounded-md px-1 py-0.5 text-left cursor-pointer select-none transition-colors",
                                                 isOwn
-                                                  ? "border-white/85 bg-white/[0.12] hover:bg-white/[0.18]"
-                                                  : "border-dl-lane-shared bg-dl-lane-shared/[0.08] hover:bg-dl-lane-shared/[0.14]"
+                                                  ? "hover:bg-white/[0.10]"
+                                                  : "hover:bg-dl-text-primary/[0.04]"
                                               )}
                                             >
                                               <span
+                                                aria-hidden="true"
                                                 className={cn(
-                                                  "truncate text-[11.5px] font-semibold leading-tight",
-                                                  isOwn ? "text-white/95" : "text-dl-lane-shared"
+                                                  "my-[2.5px] w-[2px] shrink-0 rounded-full transition-colors",
+                                                  isOwn
+                                                    ? "bg-white/40 group-hover/quote:bg-white/75"
+                                                    : "bg-dl-text-tertiary/40 group-hover/quote:bg-dl-lane-shared/75"
                                                 )}
-                                              >
-                                                {repliedMsg ? repliedMsg.senderName : "引用消息"}
-                                              </span>
+                                              />
                                               <span
                                                 className={cn(
-                                                  "line-clamp-2 text-[12px] leading-[1.35] [overflow-wrap:anywhere] break-all",
-                                                  isOwn ? "text-white/80" : "text-dl-text-secondary"
+                                                  "min-w-0 flex-1 line-clamp-2 text-[12.5px] leading-[1.45] [overflow-wrap:anywhere] break-all",
+                                                  isOwn ? "text-white/78" : "text-dl-text-tertiary"
                                                 )}
                                               >
-                                                {repliedMsg
-                                                  ? repliedMsg.plainText || "[媒体消息]"
-                                                  : `消息 #${msg.replyToId.slice(-6)}`}
+                                                <span
+                                                  className={cn(
+                                                    "font-medium",
+                                                    isOwn ? "text-white/90" : "text-dl-text-secondary"
+                                                  )}
+                                                >
+                                                  {repliedMsg
+                                                    ? `回复 ${repliedMsg.senderName}：`
+                                                    : "引用消息："}
+                                                </span>
+                                                <span>
+                                                  {repliedMsg
+                                                    ? repliedMsg.plainText || "[媒体消息]"
+                                                    : `消息 #${msg.replyToId.slice(-6)}`}
+                                                </span>
                                               </span>
                                             </div>
                                           )}
@@ -2348,19 +2361,23 @@ export function TimelinePane() {
               transition={{ duration: 0.14 }}
               className="dl-glass-elevated flex min-w-0 max-w-full items-center justify-between gap-2.5 overflow-hidden rounded-xl border border-dl-border-hairline px-3 py-1.5 text-xs"
             >
-              <div className="flex min-w-0 flex-1 items-center gap-2.5 overflow-hidden">
+              <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
                 {editingMsg ? (
                   <Pencil className="size-3.5 shrink-0 text-dl-lane-shared" strokeWidth={1.9} />
                 ) : (
-                  <Reply className="size-3.5 shrink-0 text-dl-lane-shared" strokeWidth={1.9} />
+                  <Reply className="size-3.5 shrink-0 text-dl-text-tertiary" strokeWidth={1.9} />
                 )}
-                <div className="min-w-0 flex-1 overflow-hidden border-l-[2.5px] border-dl-lane-shared pl-2.5">
-                  <div className="truncate text-[11px] font-semibold leading-tight text-dl-lane-shared">
-                    {editingMsg ? "正在编辑消息" : `回复 ${replyTarget?.senderName || "成员"}`}
-                  </div>
-                  <div className="truncate text-[12px] leading-snug text-dl-text-secondary">
+                <span
+                  aria-hidden="true"
+                  className="h-3.5 w-[2px] shrink-0 rounded-full bg-dl-text-tertiary/40"
+                />
+                <div className="min-w-0 flex-1 truncate text-[12.5px] leading-snug text-dl-text-tertiary">
+                  <span className="font-medium text-dl-text-secondary">
+                    {editingMsg ? "编辑消息：" : `回复 ${replyTarget?.senderName || "成员"}：`}
+                  </span>
+                  <span>
                     {(editingMsg ? editingMsg.plainText : replyTarget?.plainText) || "[媒体消息]"}
-                  </div>
+                  </span>
                 </div>
               </div>
               <IconButton

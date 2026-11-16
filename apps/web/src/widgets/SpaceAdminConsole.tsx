@@ -1928,6 +1928,13 @@ export function SpaceAdminConsole() {
                           ? `${formatBytes(mobileRel.byteSize)} · SHA-256 ${mobileRel.sha256.slice(0, 12)}… · 发布于 ${formatShortTime(mobileRel.publishedAt)}`
                           : "上传签好名的 app-release.apk 后会自动解析版本号与 versionCode"}
                       </div>
+                      {mobileRel?.ota?.enabled && mobileRel.ota.sha256 && (
+                        <div className="mt-1 inline-flex items-center gap-1.5 rounded-full bg-dl-lane-shared/10 px-2.5 py-0.5 text-[11px] font-medium text-dl-lane-shared">
+                          <span>
+                            秒级热更包已就绪：v{mobileRel.ota.version} · {formatBytes(mobileRel.ota.byteSize)} · 最低底座 {mobileRel.ota.minNativeVersionCode}
+                          </span>
+                        </div>
+                      )}
                     </div>
                     <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-dl-lane-shared px-3.5 py-2 text-xs font-semibold text-white shadow-xs transition hover:opacity-95">
                       <Smartphone className="size-3.5" strokeWidth={2} />
