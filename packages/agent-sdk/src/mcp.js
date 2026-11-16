@@ -20,6 +20,11 @@ import {
   savePendingSetup,
   updateProfileCursor,
 } from "./profile-store.js";
+import {
+  checkRuntimeUpdate,
+  restartInstalledDaemons,
+  stageRuntimeSelfUpdate,
+} from "./daemon.js";
 
 const SUPPORTED_PROTOCOL_VERSIONS = new Set(["2025-06-18", "2025-03-26", "2024-11-05"]);
 const DEFAULT_MCP_PROTOCOL_VERSION = "2024-11-05";
@@ -248,6 +253,36 @@ export const DUALLANE_MCP_TOOLS = [
         profile: { type: "string", description: "Local credential profile name (default: 'default')." },
       },
       required: ["conversationId"],
+    },
+  },
+  {
+    name: "duallane_doctor",
+    description:
+      "Run full health diagnostics for this DualLane Bot: runtime SDK version vs server latest, granted scopes, effective per-conversation trigger/context permissions, block reasons, and recent deliveries.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        profile: { type: "string", description: "Local credential profile name (default: 'default')." },
+      },
+    },
+  },
+  {
+    name: "duallane_runtime_update",
+    description:
+      "Check or apply SHA-256 verified updates to the local standalone duallane-agent.mjs runtime and smoothly restart installed background daemons (lark-cli style).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        checkOnly: {
+          type: "boolean",
+          description: "If true, only check whether a newer SDK version is available without overwriting local files.",
+        },
+        restartDaemons: {
+          type: "boolean",
+          description: "If true (default), restart installed background daemons after updating.",
+        },
+        profile: { type: "string", description: "Local credential profile name (default: 'default')." },
+      },
     },
   },
   {
@@ -667,6 +702,40 @@ export function createDualLaneMcpServer(options = {}) {
       case "duallane_set_typing": {
         const { client } = makeClient(args.profile);
         return await client.setTyping(args.conversationId, { state: args.state || "thinking" });
+      }
+
+      case "duallane_doctor": {
+        const { client, profile } = makeClient(args.profile);
+        const [doctor, updateInfo] = await Promise.all([
+          client.getDoctor().catch(() => null),
+          checkRuntimeUpdate({ origin: profile.url, fetchImpl }).catch(() => null),
+        ]);
+        return {
+          profile: profile.profile,
+          origin: profile.url,
+          localSdkVersion: DUALLANE_AGENT_SDK_VERSION,
+          runtimeUpdate: updateInfo,
+          ...(doctor || {}),
+        };
+      }
+
+      case "duallane_runtime_update": {
+        const { profile } = makeClient(args.profile);
+        if (args.checkOnly) {
+          return await checkRuntimeUpdate({ origin: profile.url, fetchImpl });
+        }
+        const staged = await stageRuntimeSelfUpdate({
+          origin: profile.url,
+          fetchImpl,
+        });
+        let restartedProfiles = [];
+        if (staged.updated && args.restartDaemons !== false) {
+          restartedProfiles = await restartInstalledDaemons({ configDir, quiet: true });
+        }
+        return {
+          ...staged,
+          restartedProfiles,
+        };
       }
 
       case "duallane_unbind": {

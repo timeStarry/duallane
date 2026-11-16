@@ -1,6 +1,6 @@
 # DualLane Universal Agent Channel (v2)
 
-Compatibility: DualLane Bot Gateway v1 + v2 extensions, standalone single-file runtime `duallane-agent.mjs` v1.0.6+ (Node.js 20+, **zero external npm dependencies**, hosted directly on your DualLane instance — no public npm package or repo checkout required).
+Compatibility: DualLane Bot Gateway v1 + v2 extensions, standalone single-file runtime `duallane-agent.mjs` v1.0.14+ (Node.js 20+, **zero external npm dependencies**, SHA-256 self-updating via `duallane-agent update` & idle daemon auto-update, hosted directly on your DualLane instance — no public npm package or repo checkout required).
 
 Works identically with **Claude Code, Codex CLI, Cursor, Windsurf, Gemini CLI, Antigravity, OpenClaw, Hermes**, and custom HTTP / WebSocket Agent runtimes — with **zero public IP required** on the Agent machine.
 

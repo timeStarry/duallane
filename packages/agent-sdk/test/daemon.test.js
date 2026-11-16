@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,10 +8,12 @@ import {
   buildDaemonAgentPrompt,
   buildLaunchdPlistXml,
   buildSystemdUnitFile,
+  checkRuntimeUpdate,
   extractGeneratedFilesFromReply,
   getDaemonServiceLabel,
+  stageRuntimeSelfUpdate,
 } from "../src/daemon.js";
-import { DualLaneAgentClient } from "../src/index.js";
+import { compareRuntimeSemver, DualLaneAgentClient } from "../src/index.js";
 import { createDualLaneMcpServer } from "../src/mcp.js";
 import { saveAgentProfile } from "../src/profile-store.js";
 
@@ -147,4 +150,96 @@ test("client.sendFile and MCP duallane_send_file upload binary payload with infe
   assert.equal(calls.length, 2);
   assert.match(calls[1].url, /fileName=hello\.md/u);
   fs.rmSync(cfgDir, { recursive: true, force: true });
+});
+
+test("runtime updater verifies SHA-256, rejects tampered bundles, and MCP doctor inspects conversations", async () => {
+  assert.equal(compareRuntimeSemver("1.0.15", "1.0.14"), 1);
+  assert.equal(compareRuntimeSemver("1.0.14", "1.0.14"), 0);
+  assert.equal(compareRuntimeSemver("1.0.11", "1.0.14"), -1);
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dl-self-update-test-"));
+  const targetScript = path.join(tmpDir, "duallane-agent.mjs");
+  fs.writeFileSync(targetScript, "#!/usr/bin/env node\nconsole.log('old');\n", "utf8");
+
+  const validNewBundle =
+    "#!/usr/bin/env node\n" +
+    "// " +
+    "x".repeat(1200) +
+    "\nexport const DUALLANE_AGENT_SDK_VERSION = '9.9.9';\n";
+  const validSha256 = crypto.createHash("sha256").update(validNewBundle, "utf8").digest("hex");
+
+  const makeMockFetch = (manifestSha) => async (url) => {
+    const u = String(url);
+    if (u.includes("duallane-agent.manifest.json")) {
+      return new Response(
+        JSON.stringify({
+          version: "9.9.9",
+          sha256: manifestSha,
+          byteSize: Buffer.byteLength(validNewBundle, "utf8"),
+          highlights: ["Test highlight"],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (u.includes("/api/bot/v2/doctor")) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          latestSdkVersion: "9.9.9",
+          bot: { id: "bot_comet", name: "Comet", status: "active" },
+          conversations: [{ id: "conv_dm_1", type: "direct", allowTrigger: true, isOwnerDirect: true }],
+          recentDeliveries: [{ id: "bdl_1", sequence: 99, status: "acked" }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    return new Response(validNewBundle, { status: 200 });
+  };
+
+  const checked = await checkRuntimeUpdate({
+    origin: "https://duallane.example.com",
+    fetchImpl: makeMockFetch(validSha256),
+  });
+  assert.equal(checked.updateAvailable, true);
+  assert.equal(checked.latestVersion, "9.9.9");
+
+  await assert.rejects(
+    () =>
+      stageRuntimeSelfUpdate({
+        origin: "https://duallane.example.com",
+        targetPath: targetScript,
+        fetchImpl: makeMockFetch("0".repeat(64)),
+      }),
+    /SHA-256 mismatch/u
+  );
+  assert.match(fs.readFileSync(targetScript, "utf8"), /old/u);
+
+  const staged = await stageRuntimeSelfUpdate({
+    origin: "https://duallane.example.com",
+    targetPath: targetScript,
+    fetchImpl: makeMockFetch(validSha256),
+  });
+  assert.equal(staged.updated, true);
+  assert.match(fs.readFileSync(targetScript, "utf8"), /9\.9\.9/u);
+
+  const cfgDir = path.join(tmpDir, "cfg");
+  saveAgentProfile(
+    "default",
+    {
+      url: "https://duallane.example.com",
+      token: "dl_bot_test_token_0123456789abcdef0123456789",
+      scopes: ["messages:read_trigger", "messages:send"],
+    },
+    { configDir: cfgDir }
+  );
+  const mcp = createDualLaneMcpServer({
+    configDir: cfgDir,
+    fetch: makeMockFetch(validSha256),
+  });
+  const docRes = await mcp.callTool("duallane_doctor", {});
+  assert.equal(docRes.ok, true);
+  assert.equal(docRes.runtimeUpdate.updateAvailable, true);
+  assert.equal(docRes.conversations[0].isOwnerDirect, true);
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });

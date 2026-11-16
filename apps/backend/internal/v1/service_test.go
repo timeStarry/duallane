@@ -223,15 +223,43 @@ func (s *stubRepo) UpsertBotWebhook(_ context.Context, _, botID, url, _ string, 
 }
 func (s *stubRepo) ListBotConversations(_ context.Context, _, _ string) ([]BotConversationSummary, error) {
 	return []BotConversationSummary{{
-		ID:           "conv_dm_bot_1",
-		Type:         "direct",
-		Title:        "测试成员",
-		AllowSend:    true,
-		AllowTrigger: true,
-		AllowContext: true,
-		MaxMessages:  50,
-		UpdatedAt:    "2026-11-14T15:00:00Z",
+		ID:            "conv_dm_bot_1",
+		Type:          "direct",
+		Title:         "测试成员",
+		IsOwnerDirect: true,
+		AllowSend:     true,
+		AllowTrigger:  true,
+		AllowContext:  true,
+		MaxMessages:   50,
+		TriggerMode:   "direct",
+		UpdatedAt:     "2026-11-14T15:00:00Z",
 	}}, nil
+}
+func (s *stubRepo) ListBotRecentDeliveries(_ context.Context, _ string, _ int) ([]BotDeliveryDiagnostic, error) {
+	return []BotDeliveryDiagnostic{{
+		ID:                "bdl_1",
+		Sequence:          101,
+		EventType:         "message.created",
+		ConversationID:    "conv_dm_bot_1",
+		ConversationTitle: "测试成员",
+		Status:            "acked",
+		Attempts:          1,
+		CreatedAt:         "2026-11-16T15:00:00Z",
+	}}, nil
+}
+func (s *stubRepo) GetBotConsoleOverview(_ context.Context, _, botID string, _ time.Time) (BotConsoleOverview, error) {
+	convs, _ := s.ListBotConversations(context.Background(), botID, "usr_"+botID)
+	dels, _ := s.ListBotRecentDeliveries(context.Background(), botID, 8)
+	return BotConsoleOverview{
+		BotID:            botID,
+		BotUserID:        "usr_" + botID,
+		LatestSDKVersion: LatestAgentSDKVersion,
+		Conversations:    convs,
+		RecentDeliveries: dels,
+	}, nil
+}
+func (s *stubRepo) RequestBotRuntimeUpgrade(_ context.Context, _, _ string, _ time.Time) (string, error) {
+	return LatestAgentSDKVersion, nil
 }
 func (s *stubRepo) GetAdminOverview(_ context.Context, _ string, _ time.Time) (AdminOverviewResponse, error) {
 	return AdminOverviewResponse{
@@ -1319,5 +1347,50 @@ func TestBotFileUploadAndSendEndpoints(t *testing.T) {
 	r.ServeHTTP(putRec, putReq)
 	if putRec.Code != http.StatusOK || string(botFiles.completedBytes) != "raw-binary-content" {
 		t.Fatalf("expected 200 on two-step bot upload content, got %d (%s)", putRec.Code, putRec.Body.String())
+	}
+}
+
+func TestBotConsoleOverviewUpgradeAndDoctorEndpoints(t *testing.T) {
+	repo := &stubRepo{}
+	svc := NewService(repo)
+	resolver := actorResolverFunc(func(_ context.Context, _ *http.Request) (*auth.Actor, error) {
+		return &auth.Actor{ID: "usr_owner", Role: "owner"}, nil
+	})
+	validTok := "dl_bot_comet_token_0123456789abcdef0123456789"
+	h := NewHTTPHandler(svc, resolver).WithBotAuthenticator(botAuthFunc(func(_ context.Context, header string, _ botgateway.TokenAuthOptions) (*botgateway.Auth, error) {
+		if header != "Bearer "+validTok {
+			return nil, botgateway.NewError(botgateway.CodeInvalidToken, "invalid", http.StatusUnauthorized)
+		}
+		return &botgateway.Auth{
+			BotID:       "bot_comet",
+			UserID:      "usr_bot_comet",
+			OwnerUserID: "usr_owner",
+			SpaceID:     "spc_default",
+			Scopes:      []string{botgateway.ScopeMessagesReadTrigger, botgateway.ScopeMessagesSend},
+		}, nil
+	}))
+	r := chi.NewRouter()
+	h.Mount(r)
+
+	ovReq := httptest.NewRequest(http.MethodGet, "/api/v1/bots/bot_comet/overview", nil)
+	ovRec := httptest.NewRecorder()
+	r.ServeHTTP(ovRec, ovReq)
+	if ovRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on bot overview, got %d (%s)", ovRec.Code, ovRec.Body.String())
+	}
+
+	upReq := httptest.NewRequest(http.MethodPost, "/api/v1/bots/bot_comet/request-upgrade", nil)
+	upRec := httptest.NewRecorder()
+	r.ServeHTTP(upRec, upReq)
+	if upRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on bot request-upgrade, got %d (%s)", upRec.Code, upRec.Body.String())
+	}
+
+	docReq := httptest.NewRequest(http.MethodGet, "/api/bot/v2/doctor", nil)
+	docReq.Header.Set("Authorization", "Bearer "+validTok)
+	docRec := httptest.NewRecorder()
+	r.ServeHTTP(docRec, docReq)
+	if docRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on bot doctor, got %d (%s)", docRec.Code, docRec.Body.String())
 	}
 }

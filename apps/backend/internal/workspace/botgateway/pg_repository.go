@@ -762,10 +762,27 @@ func getMessageTrigger(ctx context.Context, queryer pgQueryer, spaceID, conversa
 	var content string
 	var kind string
 	err := queryer.QueryRow(ctx, `
-		SELECT COALESCE(author_id, ''), kind, content_json, plain_text, deleted_at, recalled_at
-		FROM messages
-		WHERE id = $1 AND space_id = $2 AND conversation_id = $3
-	`, messageID, spaceID, conversationID).Scan(&value.AuthorID, &kind, &content, &value.PlainText, &value.DeletedAt, &value.RecalledAt)
+		SELECT
+			COALESCE(m.author_id, ''),
+			COALESCE((SELECT p.author_id FROM messages p WHERE p.id = m.reply_to_message_id), ''),
+			COALESCE((SELECT r.author_id FROM messages r WHERE r.id = m.thread_root_id), ''),
+			m.kind,
+			m.content_json,
+			m.plain_text,
+			m.deleted_at,
+			m.recalled_at
+		FROM messages m
+		WHERE m.id = $1 AND m.space_id = $2 AND m.conversation_id = $3
+	`, messageID, spaceID, conversationID).Scan(
+		&value.AuthorID,
+		&value.ReplyToAuthorID,
+		&value.ThreadRootAuthorID,
+		&kind,
+		&content,
+		&value.PlainText,
+		&value.DeletedAt,
+		&value.RecalledAt,
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

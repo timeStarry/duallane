@@ -649,6 +649,18 @@ export const apiV1 = {
       method: "PUT",
       body: JSON.stringify({ url, secret, enabled }),
     }),
+  getBotOverview: (botId: string) =>
+    requestJSON<BotConsoleOverviewResponse>(
+      `/api/v1/bots/${encodeURIComponent(botId)}/overview`
+    ),
+  requestBotRuntimeUpgrade: (botId: string) =>
+    requestJSON<{ requested: boolean; targetVersion: string }>(
+      `/api/v1/bots/${encodeURIComponent(botId)}/request-upgrade`,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      }
+    ),
   createBotSetupSession: (
     botId: string,
     requestedScopes: string[],
@@ -1318,6 +1330,48 @@ export interface BotGroupPolicy {
   allowContext: boolean;
   contextMaxMessages?: number | null;
   updatedAt?: string;
+}
+
+export interface BotConversationOverviewItem {
+  id: string;
+  type: "direct" | "group" | string;
+  title: string;
+  isOwnerDirect?: boolean;
+  allowSend: boolean;
+  allowTrigger: boolean;
+  allowContext: boolean;
+  maxMessages: number;
+  triggerMode?: "direct" | "mention_or_command" | "all_messages" | string;
+  groupPolicyStatus?: string;
+  blockReason?: string;
+  updatedAt: string;
+}
+
+export interface BotDeliveryDiagnosticItem {
+  id: string;
+  sequence: number;
+  eventType: string;
+  conversationId?: string;
+  conversationTitle?: string;
+  status: "queued" | "delivered" | "acked" | "expired" | string;
+  attempts: number;
+  createdAt: string;
+  ackedAt?: string;
+}
+
+export interface BotConsoleOverviewResponse {
+  botId: string;
+  botUserId: string;
+  latestSdkVersion: string;
+  conversations: BotConversationOverviewItem[];
+  recentDeliveries: BotDeliveryDiagnosticItem[];
+  webhook?: {
+    botId: string;
+    url: string;
+    enabled: boolean;
+    lastStatus?: number;
+    lastError?: string;
+  };
 }
 
 export interface CustomEmoteDTO {

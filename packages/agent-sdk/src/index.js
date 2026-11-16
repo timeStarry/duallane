@@ -1,8 +1,28 @@
 import crypto from "node:crypto";
 import { LiteWebSocket, OPEN } from "./ws-lite.js";
 
-export const DUALLANE_AGENT_SDK_VERSION = "1.0.11";
+export const DUALLANE_AGENT_SDK_VERSION = "1.0.14";
 export const DUALLANE_GATEWAY_VERSION = 1;
+
+export function compareRuntimeSemver(a, b) {
+  const pa = String(a || "")
+    .trim()
+    .replace(/^v/iu, "")
+    .split("-")[0]
+    .split(".")
+    .map((n) => Number.parseInt(n, 10) || 0);
+  const pb = String(b || "")
+    .trim()
+    .replace(/^v/iu, "")
+    .split("-")[0]
+    .split(".")
+    .map((n) => Number.parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i += 1) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff > 0 ? 1 : -1;
+  }
+  return 0;
+}
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 
@@ -319,6 +339,10 @@ export class DualLaneAgentClient {
 
   async listConversations() {
     return this.#request("GET", "/api/bot/v2/conversations");
+  }
+
+  async getDoctor() {
+    return this.#request("GET", "/api/bot/v2/doctor");
   }
 
   async editMessage(messageId, plainText) {

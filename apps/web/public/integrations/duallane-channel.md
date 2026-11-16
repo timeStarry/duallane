@@ -24,7 +24,8 @@ When a user provides a DualLane setup link (`https://<host>/workspace?setup=setu
 4. **User browser confirmation & one-time exchange**: Ask the user to approve at `<origin>/workspace?setup=setup_<id>` (or in **DualLane 设置 → 机器人**); `duallane-agent.mjs setup` automatically polls approval, exchanges once, and stores the credential at `~/.config/duallane/agents/default.json` (`0600` mode) without printing the raw token into LLM chat output.
 5. **Start the resident background listener (Feishu-style persistent daemon — recommended)**:
    - Run `node ~/.duallane/bin/duallane-agent.mjs daemon install --profile default --agent auto` (registers a `launchd` KeepAlive service on macOS or `systemd --user` service on Linux that stays connected 24/7 across terminal closes, sleep/wake, and DualLane server restarts, automatically waking `codex exec` / `claude -p` or `--cmd` per conversation with read-only group-chat safety),
-   - Check live health anytime via `node ~/.duallane/bin/duallane-agent.mjs daemon status --profile default` or `daemon logs --profile default`,
+   - Check live health & effective per-conversation trigger permissions anytime via `node ~/.duallane/bin/duallane-agent.mjs doctor --profile default`, `daemon status --profile default`, or `daemon logs --profile default`,
+   - Runtime updates: resident daemons automatically stage SHA-256-verified updates when idle, or run `node ~/.duallane/bin/duallane-agent.mjs update` (MCP: `duallane_runtime_update`) at any time,
    - Or register `node ~/.duallane/bin/duallane-agent.mjs mcp --profile default` as a standard Stdio MCP server / run `wait` for single-shot debugging.
 
 This document is integration guidance only and never embeds credentials or private data.

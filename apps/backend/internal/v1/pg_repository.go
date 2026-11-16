@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,7 +25,95 @@ func NewPGRepository(pool *pgxpool.Pool, spaceID string) *PGRepository {
 	if spaceID == "" {
 		spaceID = "spc_default"
 	}
-	return &PGRepository{pool: pool, spaceID: spaceID}
+	repo := &PGRepository{pool: pool, spaceID: spaceID}
+	if pool != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			_ = repo.NormalizeLegacyBotPolicies(ctx, time.Now().UTC())
+		}()
+	}
+	return repo
+}
+
+func formatDirectKey(left, right string) string {
+	ids := []string{strings.TrimSpace(left), strings.TrimSpace(right)}
+	sort.Strings(ids)
+	return ids[0] + ":" + ids[1]
+}
+
+// NormalizeLegacyBotPolicies idempotently heals legacy "groups" visibility policies
+// (converting them to creator-safe "private" member visibility while preserving
+// group capability) and ensures every creator's 1-on-1 DM has trigger access.
+func (r *PGRepository) NormalizeLegacyBotPolicies(ctx context.Context, now time.Time) error {
+	if r == nil || r.pool == nil {
+		return nil
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE workspace_agent_bot_settings
+		SET visibility_policy = 'private',
+		    allow_direct = 1,
+		    allow_group = 1,
+		    updated_at = $2
+		WHERE space_id = $1 AND visibility_policy = 'groups'
+	`, r.spaceID, now.UTC()); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE workspace_agent_bots
+		SET visibility_policy = 'private',
+		    conversation_policy = 'group-capable',
+		    updated_at = $2
+		WHERE space_id = $1 AND visibility_policy = 'groups'
+	`, r.spaceID, now.UTC()); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE workspace_agent_bots b
+		SET conversation_policy = CASE WHEN COALESCE(bs.allow_group, 0) = 1 THEN 'group-capable' ELSE 'direct-only' END,
+		    updated_at = $2
+		FROM workspace_agent_bot_settings bs
+		WHERE bs.bot_id = b.id
+		  AND bs.space_id = b.space_id
+		  AND b.space_id = $1
+		  AND b.conversation_policy <> (CASE WHEN COALESCE(bs.allow_group, 0) = 1 THEN 'group-capable' ELSE 'direct-only' END)
+	`, r.spaceID, now.UTC()); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO workspace_agent_bot_context_grants (
+			grant_id, bot_id, space_id, conversation_id, allow_trigger, allow_context, max_messages, granted_by, created_at, updated_at
+		)
+		SELECT
+			'bgr_' || substr(md5(b.id || ':' || c.id), 1, 24),
+			b.id,
+			b.space_id,
+			c.id,
+			1,
+			1,
+			50,
+			b.owner_user_id,
+			$2,
+			$2
+		FROM workspace_agent_bots b
+		JOIN conversation_members cm_bot ON cm_bot.user_id = b.bot_user_id AND cm_bot.removed_at IS NULL
+		JOIN conversations c ON c.id = cm_bot.conversation_id AND c.space_id = b.space_id AND c.type = 'direct'
+		JOIN conversation_members cm_owner ON cm_owner.conversation_id = c.id AND cm_owner.user_id = b.owner_user_id AND cm_owner.removed_at IS NULL
+		WHERE b.space_id = $1 AND b.status <> 'deleted'
+		ON CONFLICT (bot_id, conversation_id) DO UPDATE
+		SET allow_trigger = 1,
+		    updated_at = CASE WHEN workspace_agent_bot_context_grants.allow_trigger = 0 THEN EXCLUDED.updated_at ELSE workspace_agent_bot_context_grants.updated_at END
+	`, r.spaceID, now.UTC()); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }
 
 func sanitizeBootstrapAvatarURL(raw string) string {
@@ -943,21 +1032,23 @@ func (r *PGRepository) ListBotConversations(ctx context.Context, botID, botUserI
 			c.id,
 			c.type,
 			CASE
-				WHEN c.type = 'direct' THEN COALESCE(NULLIF(c.title, ''), peer.peer_name, '私聊会话')
+				WHEN c.type = 'direct' THEN COALESCE(NULLIF(peer.peer_name, ''), NULLIF(c.title, ''), '私聊会话')
 				ELSE COALESCE(NULLIF(c.title, ''), '群聊会话')
 			END AS display_title,
-			CASE
-				WHEN c.type = 'direct' THEN COALESCE(bs.allow_direct = 1, TRUE)
-				WHEN c.type = 'group' THEN (COALESCE(bs.allow_group = 1, FALSE) AND b.conversation_policy = 'group-capable' AND gp.status = 'active')
-				ELSE FALSE
-			END AS allow_send,
-			COALESCE(cg.allow_trigger = 1, FALSE) AS allow_trigger,
-			COALESCE(cg.allow_context = 1, FALSE) AS allow_context,
+			COALESCE(c.type = 'direct' AND peer.peer_id = b.owner_user_id, FALSE) AS is_owner_direct,
+			b.status AS bot_status,
+			COALESCE(bs.visibility_policy, b.visibility_policy, 'private') AS vis_policy,
+			COALESCE(bs.allow_direct = 1, TRUE) AS allow_direct,
+			COALESCE(bs.allow_group = 1, FALSE) AND b.conversation_policy = 'group-capable' AS allow_group_capable,
+			COALESCE(bs.trigger_policy, b.trigger_policy, 'mention-or-command') AS trigger_policy,
+			cg.allow_trigger AS raw_grant_trigger,
+			cg.allow_context AS raw_grant_context,
 			LEAST(
 				COALESCE(NULLIF(cg.max_messages, 0), NULLIF(bs.max_context_messages, 0), 50),
 				COALESCE(NULLIF(bs.max_context_messages, 0), 50)
 			) AS max_messages,
 			COALESCE(gp.status, '') AS group_policy_status,
+			COALESCE(peer.peer_visible, FALSE) AS peer_visible,
 			COALESCE(latest.created_at, c.created_at) AS activity_at
 		FROM conversation_members cm
 		JOIN conversations c ON c.id = cm.conversation_id AND c.space_id = $1
@@ -966,7 +1057,13 @@ func (r *PGRepository) ListBotConversations(ctx context.Context, botID, botUserI
 		LEFT JOIN workspace_agent_bot_context_grants cg ON cg.bot_id = b.id AND cg.space_id = $1 AND cg.conversation_id = c.id
 		LEFT JOIN workspace_agent_bot_group_policies gp ON gp.bot_id = b.id AND gp.space_id = $1 AND gp.conversation_id = c.id
 		LEFT JOIN LATERAL (
-			SELECT COALESCE(NULLIF(u.nickname, ''), NULLIF(u.display_name, ''), NULLIF(u.github_login, ''), '成员') AS peer_name
+			SELECT
+				u.id AS peer_id,
+				COALESCE(NULLIF(u.nickname, ''), NULLIF(u.display_name, ''), NULLIF(u.github_login, ''), '成员') AS peer_name,
+				EXISTS (
+					SELECT 1 FROM workspace_agent_bot_visibility_members vm
+					WHERE vm.bot_id = b.id AND vm.space_id = $1 AND vm.user_id = u.id
+				) AS peer_visible
 			FROM conversation_members pcm
 			JOIN users u ON u.id = pcm.user_id
 			WHERE pcm.conversation_id = c.id AND pcm.user_id <> $3 AND pcm.removed_at IS NULL
@@ -981,7 +1078,7 @@ func (r *PGRepository) ListBotConversations(ctx context.Context, botID, botUserI
 			LIMIT 1
 		) latest ON TRUE
 		WHERE cm.user_id = $3 AND cm.removed_at IS NULL AND c.type IN ('direct', 'group')
-		ORDER BY activity_at DESC, c.id ASC
+		ORDER BY is_owner_direct DESC, activity_at DESC, c.id ASC
 	`, r.spaceID, botID, botUserID)
 	if err != nil {
 		return nil, err
@@ -990,21 +1087,95 @@ func (r *PGRepository) ListBotConversations(ctx context.Context, botID, botUserI
 
 	items := make([]BotConversationSummary, 0, 8)
 	for rows.Next() {
-		var item BotConversationSummary
-		var activityAt time.Time
+		var (
+			item              BotConversationSummary
+			botStatus         string
+			visPolicy         string
+			allowDirect       bool
+			allowGroupCapable bool
+			triggerPolicy     string
+			rawGrantTrigger   *int
+			rawGrantContext   *int
+			peerVisible       bool
+			activityAt        time.Time
+		)
 		if err := rows.Scan(
 			&item.ID,
 			&item.Type,
 			&item.Title,
-			&item.AllowSend,
-			&item.AllowTrigger,
-			&item.AllowContext,
+			&item.IsOwnerDirect,
+			&botStatus,
+			&visPolicy,
+			&allowDirect,
+			&allowGroupCapable,
+			&triggerPolicy,
+			&rawGrantTrigger,
+			&rawGrantContext,
 			&item.MaxMessages,
 			&item.GroupPolicyStatus,
+			&peerVisible,
 			&activityAt,
 		); err != nil {
 			return nil, err
 		}
+
+		activeBot := botStatus == "active"
+		if item.Type == "direct" {
+			item.TriggerMode = "direct"
+			grantTrigger := true
+			if rawGrantTrigger != nil {
+				grantTrigger = *rawGrantTrigger == 1
+			}
+			if item.IsOwnerDirect {
+				grantTrigger = true
+			}
+			grantContext := true
+			if rawGrantContext != nil {
+				grantContext = *rawGrantContext == 1
+			}
+			memberAllowed := item.IsOwnerDirect ||
+				visPolicy == "space_members" ||
+				(visPolicy == "specified_members" && peerVisible)
+			sendAllowed := activeBot && (item.IsOwnerDirect || allowDirect)
+			item.AllowSend = sendAllowed
+			item.AllowContext = sendAllowed && grantContext
+			item.AllowTrigger = sendAllowed && memberAllowed && grantTrigger
+			switch {
+			case !activeBot:
+				item.BlockReason = "bot_paused"
+			case !item.IsOwnerDirect && !allowDirect:
+				item.BlockReason = "direct_disabled"
+			case !memberAllowed:
+				item.BlockReason = "peer_not_in_visibility"
+			case !grantTrigger:
+				item.BlockReason = "trigger_grant_off"
+			}
+		} else {
+			if triggerPolicy == "all-messages" {
+				item.TriggerMode = "all_messages"
+			} else {
+				item.TriggerMode = "mention_or_command"
+			}
+			grantTrigger := rawGrantTrigger != nil && *rawGrantTrigger == 1
+			grantContext := rawGrantContext != nil && *rawGrantContext == 1
+			sendAllowed := activeBot && allowGroupCapable && item.GroupPolicyStatus == "active"
+			item.AllowSend = sendAllowed
+			item.AllowContext = sendAllowed && grantContext
+			item.AllowTrigger = sendAllowed && grantTrigger
+			switch {
+			case !activeBot:
+				item.BlockReason = "bot_paused"
+			case !allowGroupCapable:
+				item.BlockReason = "group_disabled"
+			case item.GroupPolicyStatus == "pending":
+				item.BlockReason = "group_pending_approval"
+			case item.GroupPolicyStatus != "active":
+				item.BlockReason = "group_not_authorized"
+			case !grantTrigger:
+				item.BlockReason = "trigger_grant_off"
+			}
+		}
+
 		item.UpdatedAt = activityAt.UTC().Format(time.RFC3339Nano)
 		items = append(items, item)
 	}
@@ -2627,6 +2798,35 @@ func (r *PGRepository) CreateMultiBot(ctx context.Context, actorID, name string,
 	`, botID, r.spaceID, now); err != nil {
 		return "", err
 	}
+	// Guarantee Creator Sovereignty out-of-the-box: provision the creator's 1v1 DM & grant immediately.
+	dmConvID := randomID("conv")
+	dmKey := formatDirectKey(actorID, botUserID)
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO conversations (id, space_id, type, title, direct_key, retention_count, created_by, created_at)
+		VALUES ($1, $2, 'direct', $3, $4, 10000, $5, $6)
+		ON CONFLICT (space_id, direct_key)
+		DO UPDATE SET title = EXCLUDED.title
+		RETURNING id
+	`, dmConvID, r.spaceID, strings.TrimSpace(name), dmKey, actorID, now.UTC()).Scan(&dmConvID); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at)
+		VALUES ($1, $2, $3, NULL), ($1, $4, $3, NULL)
+		ON CONFLICT (conversation_id, user_id) DO UPDATE SET removed_at = NULL
+	`, dmConvID, actorID, now.UTC(), botUserID); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO workspace_agent_bot_context_grants (
+			grant_id, bot_id, space_id, conversation_id, allow_trigger, allow_context, max_messages, granted_by, created_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, 1, 1, 50, $5, $6, $6)
+		ON CONFLICT (bot_id, conversation_id) DO UPDATE
+		SET allow_trigger = 1, allow_context = 1, updated_at = EXCLUDED.updated_at
+	`, randomID("bgr"), botID, r.spaceID, dmConvID, actorID, now.UTC()); err != nil {
+		return "", err
+	}
 	_ = emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, "", "workspace.member_joined", "user", botUserID, map[string]any{
 		"userId": botUserID,
 		"member": map[string]any{
@@ -3037,6 +3237,184 @@ func (r *PGRepository) UpsertBotWebhook(ctx context.Context, actorID, botID, url
 		return BotWebhookConfig{}, fmt.Errorf("upsert bot webhook: %w", err)
 	}
 	return BotWebhookConfig{BotID: botID, URL: url, Enabled: enabled}, nil
+}
+
+func (r *PGRepository) ListBotRecentDeliveries(ctx context.Context, botID string, limit int) ([]BotDeliveryDiagnostic, error) {
+	if limit <= 0 || limit > 30 {
+		limit = 8
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT
+			d.id,
+			d.sequence,
+			d.event_type,
+			COALESCE(d.conversation_id, ''),
+			COALESCE(c.title, ''),
+			d.status,
+			d.attempts,
+			d.created_at,
+			d.acked_at
+		FROM workspace_agent_bot_deliveries d
+		LEFT JOIN conversations c ON c.id = d.conversation_id AND c.space_id = d.space_id
+		WHERE d.space_id = $1 AND d.bot_id = $2
+		ORDER BY d.sequence DESC
+		LIMIT $3
+	`, r.spaceID, botID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]BotDeliveryDiagnostic, 0, limit)
+	for rows.Next() {
+		var (
+			item      BotDeliveryDiagnostic
+			createdAt time.Time
+			ackedAt   *time.Time
+		)
+		if err := rows.Scan(
+			&item.ID,
+			&item.Sequence,
+			&item.EventType,
+			&item.ConversationID,
+			&item.ConversationTitle,
+			&item.Status,
+			&item.Attempts,
+			&createdAt,
+			&ackedAt,
+		); err != nil {
+			return nil, err
+		}
+		item.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
+		if ackedAt != nil {
+			item.AckedAt = ackedAt.UTC().Format(time.RFC3339Nano)
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r *PGRepository) GetBotConsoleOverview(ctx context.Context, actorID, botID string, now time.Time) (BotConsoleOverview, error) {
+	var ownerID, botUserID, botName string
+	err := r.pool.QueryRow(ctx, `
+		SELECT owner_user_id, bot_user_id, name
+		FROM workspace_agent_bots
+		WHERE space_id = $1 AND id = $2 AND status <> 'deleted'
+	`, r.spaceID, botID).Scan(&ownerID, &botUserID, &botName)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return BotConsoleOverview{}, ErrNotFound
+		}
+		return BotConsoleOverview{}, err
+	}
+	if ownerID != actorID {
+		return BotConsoleOverview{}, ErrForbidden
+	}
+
+	// Ensure legacy policies are healed and owner's 1v1 DM exists & has trigger enabled.
+	_ = r.NormalizeLegacyBotPolicies(ctx, now)
+	dmConvID := randomID("conv")
+	dmKey := formatDirectKey(ownerID, botUserID)
+	if qErr := r.pool.QueryRow(ctx, `
+		INSERT INTO conversations (id, space_id, type, title, direct_key, retention_count, created_by, created_at)
+		VALUES ($1, $2, 'direct', $3, $4, 10000, $5, $6)
+		ON CONFLICT (space_id, direct_key)
+		DO UPDATE SET space_id = EXCLUDED.space_id
+		RETURNING id
+	`, dmConvID, r.spaceID, botName, dmKey, ownerID, now.UTC()).Scan(&dmConvID); qErr == nil && dmConvID != "" {
+		_, _ = r.pool.Exec(ctx, `
+			INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at)
+			VALUES ($1, $2, $3, NULL), ($1, $4, $3, NULL)
+			ON CONFLICT (conversation_id, user_id) DO UPDATE SET removed_at = NULL
+		`, dmConvID, ownerID, now.UTC(), botUserID)
+		_, _ = r.pool.Exec(ctx, `
+			INSERT INTO workspace_agent_bot_context_grants (
+				grant_id, bot_id, space_id, conversation_id, allow_trigger, allow_context, max_messages, granted_by, created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, 1, 1, 50, $5, $6, $6)
+			ON CONFLICT (bot_id, conversation_id) DO UPDATE
+			SET allow_trigger = 1,
+			    updated_at = CASE WHEN workspace_agent_bot_context_grants.allow_trigger = 0 THEN EXCLUDED.updated_at ELSE workspace_agent_bot_context_grants.updated_at END
+		`, randomID("bgr"), botID, r.spaceID, dmConvID, ownerID, now.UTC())
+	}
+
+	convs, err := r.ListBotConversations(ctx, botID, botUserID)
+	if err != nil {
+		return BotConsoleOverview{}, err
+	}
+	deliveries, err := r.ListBotRecentDeliveries(ctx, botID, 8)
+	if err != nil {
+		return BotConsoleOverview{}, err
+	}
+
+	var webhook *BotWebhookConfig
+	var whURL string
+	var whEnabled bool
+	var whLastStatus *int
+	var whLastError *string
+	if whErr := r.pool.QueryRow(ctx, `
+		SELECT url, enabled, last_status, last_error
+		FROM bot_webhooks
+		WHERE bot_id = $1
+	`, botID).Scan(&whURL, &whEnabled, &whLastStatus, &whLastError); whErr == nil {
+		errText := ""
+		if whLastError != nil {
+			errText = *whLastError
+		}
+		webhook = &BotWebhookConfig{
+			BotID:      botID,
+			URL:        whURL,
+			Enabled:    whEnabled,
+			LastStatus: whLastStatus,
+			LastError:  errText,
+		}
+	}
+
+	return BotConsoleOverview{
+		BotID:            botID,
+		BotUserID:        botUserID,
+		LatestSDKVersion: LatestAgentSDKVersion,
+		Conversations:    convs,
+		RecentDeliveries: deliveries,
+		Webhook:          webhook,
+	}, nil
+}
+
+func (r *PGRepository) RequestBotRuntimeUpgrade(ctx context.Context, actorID, botID string, now time.Time) (string, error) {
+	var ownerID, botUserID string
+	err := r.pool.QueryRow(ctx, `
+		SELECT owner_user_id, bot_user_id
+		FROM workspace_agent_bots
+		WHERE space_id = $1 AND id = $2 AND status <> 'deleted'
+	`, r.spaceID, botID).Scan(&ownerID, &botUserID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", err
+	}
+	if ownerID != actorID {
+		return "", ErrForbidden
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := emitWorkspaceEventTx(ctx, tx, r.spaceID, actorID, "", "bot.runtime_upgrade", "agent_bot", botID, map[string]any{
+		"botId":         botID,
+		"botUserId":     botUserID,
+		"targetVersion": LatestAgentSDKVersion,
+		"reason":        "console_request",
+	}, now.UTC()); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return LatestAgentSDKVersion, nil
 }
 
 func (r *PGRepository) resolveSpaceManager(ctx context.Context, actorID string) (string, string, error) {

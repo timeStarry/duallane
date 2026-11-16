@@ -1552,14 +1552,15 @@ export function TimelinePane() {
                   ) : (
                     <div className="dl-scroll max-h-80 overflow-y-auto divide-y divide-dl-border-hairline/60 pt-1">
                       {mergedTopics.map((topic) => (
-                        <button
+                        <Button
                           key={topic.rootMessageId}
                           type="button"
+                          variant="ghost"
                           onClick={() => {
                             setTopicsPopoverOpen(false);
                             openThreadInspector(topic.rootMessageId);
                           }}
-                          className="w-full rounded-xl px-2.5 py-2 text-left transition-colors hover:bg-dl-surface-subtle/80 space-y-1"
+                          className="h-auto w-full flex-col items-stretch justify-start rounded-xl px-2.5 py-2 text-left font-normal hover:bg-dl-surface-subtle/80 space-y-1"
                         >
                           <div className="flex items-center justify-between gap-2">
                             <span className="truncate text-xs font-semibold text-dl-text-primary">
@@ -1575,7 +1576,7 @@ export function TimelinePane() {
                               {topic.lastPlainText}
                             </div>
                           )}
-                        </button>
+                        </Button>
                       ))}
                     </div>
                   )}
@@ -2421,15 +2422,17 @@ export function TimelinePane() {
 
                           {/* Channel-forwarded thread reply backlink */}
                           {msg.threadRootId && !msg.recalledAt && (
-                            <button
+                            <Button
                               type="button"
+                              size="sm"
+                              variant="ghost"
                               onClick={() => openThreadInspector(msg.threadRootId!)}
-                              className="mt-1 inline-flex items-center gap-1 rounded-full bg-dl-lane-shared/10 px-2.5 py-0.5 text-[11px] font-medium text-dl-lane-shared transition-colors hover:bg-dl-lane-shared/18"
+                              className="mt-1 h-6 inline-flex items-center gap-1 rounded-full bg-dl-lane-shared/10 px-2.5 py-0.5 text-[11px] font-medium text-dl-lane-shared hover:bg-dl-lane-shared/18"
                             >
                               <MessageSquareText className="size-3 shrink-0" strokeWidth={2} />
                               <span>源自话题讨论 · 查看话题</span>
                               <ChevronRight className="size-3 shrink-0" strokeWidth={2} />
-                            </button>
+                            </Button>
                           )}
 
                           {/* Reactions Row */}
@@ -2457,13 +2460,13 @@ export function TimelinePane() {
 
                           {/* Feishu-Style Inline Topic Summary & Preview Card */}
                           {(msg.threadReplyCount || 0) > 0 && !msg.recalledAt && (
-                            <button
+                            <Button
                               type="button"
+                              variant="ghost"
                               data-testid="feishu-inline-topic-card"
                               onClick={() => openThreadInspector(msg.id)}
                               className={cn(
-                                "mt-1.5 flex w-fit min-w-[210px] max-w-[min(420px,80vw)] flex-col gap-1 rounded-xl border border-dl-lane-shared/25 bg-dl-surface-subtle/85 px-3 py-2 text-left transition-colors hover:border-dl-lane-shared/45 hover:bg-dl-lane-shared/[0.06]",
-                                isOwn && "items-stretch"
+                                "mt-1.5 flex h-auto w-fit min-w-[210px] max-w-[min(420px,80vw)] flex-col items-stretch gap-1 rounded-xl border border-dl-lane-shared/25 bg-dl-surface-subtle/85 px-3 py-2 text-left font-normal hover:border-dl-lane-shared/45 hover:bg-dl-lane-shared/[0.06]"
                               )}
                             >
                               {(msg.threadPreviewReplies || []).length > 0 && (
@@ -2496,7 +2499,7 @@ export function TimelinePane() {
                                   <ChevronRight className="size-3" strokeWidth={2} />
                                 </span>
                               </div>
-                            </button>
+                            </Button>
                           )}
                         </div>
                       </ContextMenuTrigger>

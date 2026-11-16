@@ -82,6 +82,7 @@ func (h *HTTPHandler) WithBotFilePipeline(botFiles BotFileUploader, botMessages 
 
 func (h *HTTPHandler) Mount(r chi.Router) {
 	r.Get("/api/bot/v2/conversations", h.handleBotListConversations)
+	r.Get("/api/bot/v2/doctor", h.handleBotDoctor)
 	r.Patch("/api/bot/v2/messages/{messageId}", h.handleBotEditMessage)
 	r.Post("/api/bot/v2/conversations/{conversationId}/files", h.handleBotSendConversationFile)
 	r.Put("/api/bot/v2/uploads/{uploadId}/content", h.handleBotCompleteUploadContent)
@@ -138,6 +139,8 @@ func (h *HTTPHandler) Mount(r chi.Router) {
 			r.Get("/bots/{botId}/avatar", h.handleGetBotAvatar)
 			r.Get("/bots/{botId}/commands", h.handleListBotCommandsByBot)
 			r.Put("/bots/{botId}/commands", h.handleRegisterBotCommands)
+			r.Get("/bots/{botId}/overview", h.handleGetBotOverview)
+			r.Post("/bots/{botId}/request-upgrade", h.handleRequestBotUpgrade)
 			r.Get("/conversations/{conversationId}/bot-commands", h.handleListBotCommands)
 			r.Put("/bots/{botId}/webhook", h.handleUpsertBotWebhook)
 
@@ -680,6 +683,29 @@ func (h *HTTPHandler) handleUpsertBotWebhook(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, cfg)
 }
 
+func (h *HTTPHandler) handleGetBotOverview(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	overview, err := h.service.GetBotConsoleOverview(r.Context(), actorFromContext(r.Context()).ID, chi.URLParam(r, "botId"))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, overview)
+}
+
+func (h *HTTPHandler) handleRequestBotUpgrade(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	targetVersion, err := h.service.RequestBotRuntimeUpgrade(r.Context(), actorFromContext(r.Context()).ID, chi.URLParam(r, "botId"))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"requested":     true,
+		"targetVersion": targetVersion,
+	})
+}
+
 func (h *HTTPHandler) requireSpaceManager(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		actor := actorFromContext(r.Context())
@@ -800,7 +826,45 @@ func (h *HTTPHandler) handleBotListConversations(w http.ResponseWriter, r *http.
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"conversations": items})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"conversations":    items,
+		"latestSdkVersion": LatestAgentSDKVersion,
+	})
+}
+
+func (h *HTTPHandler) handleBotDoctor(w http.ResponseWriter, r *http.Request) {
+	botAuth, ok := h.authenticateBotRequest(w, r)
+	if !ok {
+		return
+	}
+	convs, err := h.service.ListBotConversations(r.Context(), botAuth.BotID, botAuth.UserID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	deliveries, err := h.service.ListBotRecentDeliveries(r.Context(), botAuth.BotID, 8)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":               true,
+		"latestSdkVersion": LatestAgentSDKVersion,
+		"manifestPath":     "/integrations/duallane-agent.manifest.json",
+		"downloadPath":     "/integrations/duallane-agent.mjs",
+		"bot": map[string]any{
+			"id":               botAuth.BotID,
+			"botUserId":        botAuth.UserID,
+			"ownerUserId":      botAuth.OwnerUserID,
+			"name":             botAuth.Bot.Name,
+			"status":           botAuth.Bot.Status,
+			"visibilityPolicy": botAuth.Bot.VisibilityPolicy,
+			"triggerPolicy":    botAuth.Bot.TriggerPolicy,
+		},
+		"scopes":           botAuth.Scopes,
+		"conversations":    convs,
+		"recentDeliveries": deliveries,
+	})
 }
 
 func (h *HTTPHandler) handleBotEditMessage(w http.ResponseWriter, r *http.Request) {

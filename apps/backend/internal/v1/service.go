@@ -68,6 +68,9 @@ type Repository interface {
 	UnbindBotToken(ctx context.Context, botID, tokenID string, now time.Time) error
 	UpsertBotWebhook(ctx context.Context, actorID, botID, url, secretHash string, enabled bool, now time.Time) (BotWebhookConfig, error)
 	ListBotConversations(ctx context.Context, botID, botUserID string) ([]BotConversationSummary, error)
+	ListBotRecentDeliveries(ctx context.Context, botID string, limit int) ([]BotDeliveryDiagnostic, error)
+	GetBotConsoleOverview(ctx context.Context, actorID, botID string, now time.Time) (BotConsoleOverview, error)
+	RequestBotRuntimeUpgrade(ctx context.Context, actorID, botID string, now time.Time) (string, error)
 	GetAdminOverview(ctx context.Context, actorID string, now time.Time) (AdminOverviewResponse, error)
 	ListAdminInvites(ctx context.Context, actorID string, now time.Time) (AdminInviteListResponse, error)
 	ListAdminAuditLogs(ctx context.Context, actorID, resultFilter, query string, limit int) ([]AdminAuditLogItem, error)
@@ -601,6 +604,57 @@ func (s *Service) ListBotConversations(ctx context.Context, botID, botUserID str
 		return []BotConversationSummary{}, nil
 	}
 	return items, nil
+}
+
+func (s *Service) ListBotRecentDeliveries(ctx context.Context, botID string, limit int) ([]BotDeliveryDiagnostic, error) {
+	if strings.TrimSpace(botID) == "" {
+		return nil, ErrForbidden
+	}
+	items, err := s.repo.ListBotRecentDeliveries(ctx, strings.TrimSpace(botID), limit)
+	if err != nil {
+		return nil, err
+	}
+	if items == nil {
+		return []BotDeliveryDiagnostic{}, nil
+	}
+	return items, nil
+}
+
+func (s *Service) GetBotConsoleOverview(ctx context.Context, actorID, botID string) (BotConsoleOverview, error) {
+	actorID = strings.TrimSpace(actorID)
+	botID = strings.TrimSpace(botID)
+	if actorID == "" {
+		return BotConsoleOverview{}, ErrForbidden
+	}
+	if botID == "" {
+		return BotConsoleOverview{}, ErrInvalidInput
+	}
+	overview, err := s.repo.GetBotConsoleOverview(ctx, actorID, botID, s.now())
+	if err != nil {
+		return BotConsoleOverview{}, err
+	}
+	if overview.Conversations == nil {
+		overview.Conversations = []BotConversationSummary{}
+	}
+	if overview.RecentDeliveries == nil {
+		overview.RecentDeliveries = []BotDeliveryDiagnostic{}
+	}
+	if overview.LatestSDKVersion == "" {
+		overview.LatestSDKVersion = LatestAgentSDKVersion
+	}
+	return overview, nil
+}
+
+func (s *Service) RequestBotRuntimeUpgrade(ctx context.Context, actorID, botID string) (string, error) {
+	actorID = strings.TrimSpace(actorID)
+	botID = strings.TrimSpace(botID)
+	if actorID == "" {
+		return "", ErrForbidden
+	}
+	if botID == "" {
+		return "", ErrInvalidInput
+	}
+	return s.repo.RequestBotRuntimeUpgrade(ctx, actorID, botID, s.now())
 }
 
 func (s *Service) GetAdminOverview(ctx context.Context, actorID string) (AdminOverviewResponse, error) {

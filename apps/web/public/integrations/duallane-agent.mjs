@@ -293,8 +293,28 @@ export class LiteWebSocket extends EventEmitter {
 }
 
 // --- src/index.js ---
-export const DUALLANE_AGENT_SDK_VERSION = "1.0.11";
+export const DUALLANE_AGENT_SDK_VERSION = "1.0.14";
 export const DUALLANE_GATEWAY_VERSION = 1;
+
+export function compareRuntimeSemver(a, b) {
+  const pa = String(a || "")
+    .trim()
+    .replace(/^v/iu, "")
+    .split("-")[0]
+    .split(".")
+    .map((n) => Number.parseInt(n, 10) || 0);
+  const pb = String(b || "")
+    .trim()
+    .replace(/^v/iu, "")
+    .split("-")[0]
+    .split(".")
+    .map((n) => Number.parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i += 1) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff > 0 ? 1 : -1;
+  }
+  return 0;
+}
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 
@@ -611,6 +631,10 @@ export class DualLaneAgentClient {
 
   async listConversations() {
     return this.#request("GET", "/api/bot/v2/conversations");
+  }
+
+  async getDoctor() {
+    return this.#request("GET", "/api/bot/v2/doctor");
   }
 
   async editMessage(messageId, plainText) {
@@ -1794,6 +1818,36 @@ export const DUALLANE_MCP_TOOLS = [
     },
   },
   {
+    name: "duallane_doctor",
+    description:
+      "Run full health diagnostics for this DualLane Bot: runtime SDK version vs server latest, granted scopes, effective per-conversation trigger/context permissions, block reasons, and recent deliveries.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        profile: { type: "string", description: "Local credential profile name (default: 'default')." },
+      },
+    },
+  },
+  {
+    name: "duallane_runtime_update",
+    description:
+      "Check or apply SHA-256 verified updates to the local standalone duallane-agent.mjs runtime and smoothly restart installed background daemons (lark-cli style).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        checkOnly: {
+          type: "boolean",
+          description: "If true, only check whether a newer SDK version is available without overwriting local files.",
+        },
+        restartDaemons: {
+          type: "boolean",
+          description: "If true (default), restart installed background daemons after updating.",
+        },
+        profile: { type: "string", description: "Local credential profile name (default: 'default')." },
+      },
+    },
+  },
+  {
     name: "duallane_unbind",
     description:
       "Revoke this Agent's bound DualLane Bot token on the server and remove the local ~/.config/duallane/agents/<profile>.json credential file.",
@@ -2210,6 +2264,40 @@ export function createDualLaneMcpServer(options = {}) {
       case "duallane_set_typing": {
         const { client } = makeClient(args.profile);
         return await client.setTyping(args.conversationId, { state: args.state || "thinking" });
+      }
+
+      case "duallane_doctor": {
+        const { client, profile } = makeClient(args.profile);
+        const [doctor, updateInfo] = await Promise.all([
+          client.getDoctor().catch(() => null),
+          checkRuntimeUpdate({ origin: profile.url, fetchImpl }).catch(() => null),
+        ]);
+        return {
+          profile: profile.profile,
+          origin: profile.url,
+          localSdkVersion: DUALLANE_AGENT_SDK_VERSION,
+          runtimeUpdate: updateInfo,
+          ...(doctor || {}),
+        };
+      }
+
+      case "duallane_runtime_update": {
+        const { profile } = makeClient(args.profile);
+        if (args.checkOnly) {
+          return await checkRuntimeUpdate({ origin: profile.url, fetchImpl });
+        }
+        const staged = await stageRuntimeSelfUpdate({
+          origin: profile.url,
+          fetchImpl,
+        });
+        let restartedProfiles = [];
+        if (staged.updated && args.restartDaemons !== false) {
+          restartedProfiles = await restartInstalledDaemons({ configDir, quiet: true });
+        }
+        return {
+          ...staged,
+          restartedProfiles,
+        };
       }
 
       case "duallane_unbind": {
@@ -2732,6 +2820,183 @@ function isDaemonPidAlive(pid) {
   }
 }
 
+export function resolveStandaloneScriptPath(explicitPath = "") {
+  if (typeof explicitPath === "string" && explicitPath.trim()) {
+    return path.resolve(explicitPath.trim());
+  }
+  const argvScript = process.argv[1] ? path.resolve(process.argv[1]) : "";
+  if (
+    argvScript &&
+    argvScript.endsWith("duallane-agent.mjs") &&
+    !argvScript.includes(`${path.sep}packages${path.sep}agent-sdk${path.sep}bin${path.sep}`)
+  ) {
+    return argvScript;
+  }
+  return path.join(os.homedir(), ".duallane", "bin", "duallane-agent.mjs");
+}
+
+export async function checkRuntimeUpdate({
+  origin,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 6000,
+} = {}) {
+  const cleanOrigin = String(origin || "").trim().replace(/\/+$/u, "");
+  if (!cleanOrigin || typeof fetchImpl !== "function") {
+    throw new Error("A DualLane server origin is required to check runtime updates.");
+  }
+  const signal =
+    typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+      ? AbortSignal.timeout(timeoutMs)
+      : undefined;
+  const manifestUrl = `${cleanOrigin}/integrations/duallane-agent.manifest.json?t=${Math.floor(
+    Date.now() / 60000
+  )}`;
+  const downloadUrl = `${cleanOrigin}/integrations/duallane-agent.mjs`;
+
+  const res = await fetchImpl(manifestUrl, {
+    method: "GET",
+    headers: { Accept: "application/json", "Cache-Control": "no-cache" },
+    ...(signal ? { signal } : {}),
+  });
+
+  if (res.ok) {
+    const manifest = await res.json();
+    const latestVersion = String(manifest?.version || "").trim();
+    if (!latestVersion) {
+      throw new Error("Invalid runtime manifest: missing version.");
+    }
+    return {
+      currentVersion: DUALLANE_AGENT_SDK_VERSION,
+      latestVersion,
+      updateAvailable: compareRuntimeSemver(latestVersion, DUALLANE_AGENT_SDK_VERSION) > 0,
+      sha256: String(manifest?.sha256 || "").trim().toLowerCase(),
+      byteSize: Number(manifest?.byteSize || 0),
+      downloadUrl,
+      highlights: Array.isArray(manifest?.highlights) ? manifest.highlights : [],
+    };
+  }
+
+  // Fallback for older servers before manifest endpoint existed
+  const scriptRes = await fetchImpl(downloadUrl, {
+    method: "GET",
+    headers: { "Cache-Control": "no-cache" },
+    ...(signal ? { signal } : {}),
+  });
+  if (!scriptRes.ok) {
+    throw new Error(`Runtime update check failed with HTTP ${scriptRes.status}`);
+  }
+  const scriptText = await scriptRes.text();
+  const verMatch = /DUALLANE_AGENT_SDK_VERSION\s*=\s*["']([^"']+)["']/u.exec(scriptText);
+  const latestVersion = String(verMatch?.[1] || DUALLANE_AGENT_SDK_VERSION).trim();
+  const digest = crypto.createHash("sha256").update(scriptText, "utf8").digest("hex");
+  return {
+    currentVersion: DUALLANE_AGENT_SDK_VERSION,
+    latestVersion,
+    updateAvailable: compareRuntimeSemver(latestVersion, DUALLANE_AGENT_SDK_VERSION) > 0,
+    sha256: digest,
+    byteSize: Buffer.byteLength(scriptText, "utf8"),
+    downloadUrl,
+    highlights: [],
+  };
+}
+
+export async function stageRuntimeSelfUpdate({
+  origin,
+  targetPath = "",
+  force = false,
+  skipSyntaxCheck = false,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 15000,
+} = {}) {
+  const check = await checkRuntimeUpdate({ origin, fetchImpl, timeoutMs });
+  const resolvedTarget = resolveStandaloneScriptPath(targetPath);
+  if (!check.updateAvailable && !force) {
+    return {
+      ...check,
+      updated: false,
+      targetPath: resolvedTarget,
+    };
+  }
+
+  const signal =
+    typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+      ? AbortSignal.timeout(timeoutMs)
+      : undefined;
+  const sep = check.downloadUrl.includes("?") ? "&" : "?";
+  const dlRes = await fetchImpl(
+    `${check.downloadUrl}${sep}v=${encodeURIComponent(check.latestVersion)}&t=${Date.now()}`,
+    {
+      method: "GET",
+      headers: { "Cache-Control": "no-cache" },
+      ...(signal ? { signal } : {}),
+    }
+  );
+  if (!dlRes.ok) {
+    throw new Error(`Failed to download runtime bundle (HTTP ${dlRes.status})`);
+  }
+  const rawBytes = Buffer.from(await dlRes.arrayBuffer());
+  if (rawBytes.byteLength < 1024) {
+    throw new Error("Downloaded runtime bundle is unexpectedly small; aborting update.");
+  }
+  const actualSha256 = crypto.createHash("sha256").update(rawBytes).digest("hex");
+  if (check.sha256 && actualSha256 !== check.sha256) {
+    throw new Error(
+      `Runtime SHA-256 mismatch (expected ${check.sha256.slice(0, 12)}..., got ${actualSha256.slice(0, 12)}...)`
+    );
+  }
+
+  const targetDir = path.dirname(resolvedTarget);
+  fs.mkdirSync(targetDir, { recursive: true });
+  const tmpPath = path.join(
+    targetDir,
+    `.${path.basename(resolvedTarget, ".mjs")}.tmp.${process.pid}.${Date.now()}.mjs`
+  );
+  fs.writeFileSync(tmpPath, rawBytes, { mode: 0o755 });
+  try {
+    fs.chmodSync(tmpPath, 0o755);
+    if (!skipSyntaxCheck) {
+      const syntax = spawnSync(process.execPath, ["--check", tmpPath], { encoding: "utf8" });
+      if (syntax.status !== 0) {
+        throw new Error(`Downloaded runtime failed syntax check: ${syntax.stderr || "invalid JS"}`);
+      }
+    }
+    fs.renameSync(tmpPath, resolvedTarget);
+  } catch (err) {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {
+      /* ignore */
+    }
+    throw err;
+  }
+
+  return {
+    ...check,
+    sha256: actualSha256,
+    updated: true,
+    targetPath: resolvedTarget,
+  };
+}
+
+export async function restartInstalledDaemons({ configDir, quiet = true } = {}) {
+  const dir = getDaemonStateDir(configDir);
+  if (!fs.existsSync(dir)) return [];
+  const restarted = [];
+  for (const entry of fs.readdirSync(dir)) {
+    if (!entry.endsWith(".json")) continue;
+    const profileName = entry.slice(0, -5);
+    const rec = readDaemonRecord(profileName, configDir);
+    if (!rec) continue;
+    try {
+      await manageDaemonCli(["restart"], { profile: profileName, quiet });
+      restarted.push(profileName);
+    } catch {
+      /* ignore stale profile */
+    }
+  }
+  return restarted;
+}
+
 async function invokeDaemonAgentTurn({
   agentMode,
   customCmd,
@@ -2938,6 +3203,98 @@ export async function runResidentDaemon(flags = {}) {
   });
 
   let stopped = false;
+  let inFlightTurns = 0;
+  let pendingRestartVersion = "";
+  let updateCheckBusy = false;
+  const autoUpdateEnabled = flags["auto-update"] !== "false" && flags["auto-update"] !== false;
+  const activeScriptPath = path.resolve(process.argv[1] || resolveStandaloneScriptPath());
+  const isStandaloneRuntime =
+    activeScriptPath.endsWith("duallane-agent.mjs") &&
+    !activeScriptPath.includes(`${path.sep}packages${path.sep}agent-sdk${path.sep}bin${path.sep}`);
+
+  const maybeRestartForPendingUpdate = () => {
+    if (stopped || !pendingRestartVersion || inFlightTurns > 0) return;
+    stopped = true;
+    const targetVer = pendingRestartVersion;
+    logLine(`Idle window reached -> applying silent auto-update to v${targetVer} now...`);
+    client.stop();
+    const rec = readDaemonRecord(profileName) || savedCfg;
+    if (rec?.manager === "detached") {
+      try {
+        const logDir = getDaemonLogDir();
+        const logPath = rec.logPath || path.join(logDir, `${profileName}.log`);
+        const logFd = fs.openSync(logPath, "a");
+        const args = [
+          activeScriptPath,
+          "daemon",
+          "run",
+          "--profile",
+          profileName,
+          "--agent",
+          agentMode,
+          "--workdir",
+          workdir,
+          "--sandbox",
+          sandboxMode,
+          "--transport",
+          transportMode,
+        ];
+        if (model) args.push("--model", model);
+        if (customCmd) args.push("--cmd", customCmd);
+        const child = spawn(process.execPath, args, {
+          cwd: workdir,
+          env: process.env,
+          detached: true,
+          stdio: ["ignore", logFd, logFd],
+        });
+        child.unref();
+        fs.closeSync(logFd);
+        writeDaemonRecord(profileName, { ...rec, pid: child.pid });
+      } catch (err) {
+        logLine(`Detached respawn failed: ${err?.message || err}`);
+      }
+    }
+    setTimeout(() => process.exit(0), 120);
+  };
+
+  const checkAndStageSilentUpdate = async (reason = "periodic") => {
+    if (stopped || updateCheckBusy || pendingRestartVersion || !isStandaloneRuntime) return;
+    updateCheckBusy = true;
+    try {
+      const res = await stageRuntimeSelfUpdate({
+        origin: profile.url,
+        targetPath: activeScriptPath,
+      });
+      if (res.updated) {
+        pendingRestartVersion = res.latestVersion;
+        logLine(
+          `Downloaded & verified runtime v${res.latestVersion} (${reason}, sha256=${res.sha256.slice(
+            0,
+            12
+          )}). ${inFlightTurns > 0 ? "Waiting for active reply to finish..." : "Restarting daemon..."}`
+        );
+        maybeRestartForPendingUpdate();
+      }
+    } catch (err) {
+      if (reason === "remote_request") {
+        logLine(`Silent update check warning: ${err?.message || err}`);
+      }
+    } finally {
+      updateCheckBusy = false;
+    }
+  };
+
+  if (autoUpdateEnabled && isStandaloneRuntime) {
+    const initialUpdateTimer = setTimeout(() => {
+      void checkAndStageSilentUpdate("startup");
+    }, 15_000);
+    initialUpdateTimer.unref?.();
+    const periodicUpdateTimer = setInterval(() => {
+      void checkAndStageSilentUpdate("periodic");
+    }, 20 * 60 * 1000);
+    periodicUpdateTimer.unref?.();
+  }
+
   const conversationQueues = new Map();
   const processedSequences = new Set();
 
@@ -2952,82 +3309,97 @@ export async function runResidentDaemon(flags = {}) {
       }
       updateProfileCursor(profileName, seq);
     }
+    if (event?.type === "bot.runtime_upgrade") {
+      logLine(
+        `Received remote runtime upgrade signal (target=${
+          event?.payload?.targetVersion || "latest"
+        })`
+      );
+      void checkAndStageSilentUpdate("remote_request");
+      return;
+    }
     const convId = String(event?.conversationId || "").trim();
     if (!convId) return;
 
-    if (!convMetaMap.has(convId)) {
-      await refreshConversations();
-    }
-    const conversation = convMetaMap.get(convId) || { id: convId };
-
-    logLine(`Processing event seq=${seq} type=${event.type || "message.created"} conv=${convId}`);
-    await client.setTyping(convId, { state: "thinking" }).catch(() => {});
-    const typingTimer = setInterval(() => {
-      if (!stopped) {
-        void client.setTyping(convId, { state: "thinking" }).catch(() => {});
-      }
-    }, 3800);
-    typingTimer.unref?.();
-
+    inFlightTurns += 1;
     try {
-      let context = null;
-      if (!profile.scopes || profile.scopes.includes("messages:read_context")) {
-        context = await client.getContext(convId, { limit: 20 }).catch(() => null);
+      if (!convMetaMap.has(convId)) {
+        await refreshConversations();
       }
-      const replyText = await invokeDaemonAgentTurn({
-        agentMode,
-        customCmd,
-        workdir,
-        sandboxMode,
-        model,
-        botName,
-        conversation,
-        event,
-        context,
-      });
-      if (replyText) {
-        const replyToId =
-          event.payload?.message?.id ||
-          event.payload?.messageId ||
-          (Array.isArray(context?.messages) && context.messages.length > 0
-            ? context.messages[context.messages.length - 1]?.id
-            : undefined);
-        const isGroupConv = conversation?.type === "group" || conversation?.kind === "group";
-        const { cleanText, files: generatedFiles } = extractGeneratedFilesFromReply(replyText, {
-          allowLocalPath: !isGroupConv,
-          workdir,
-        });
+      const conversation = convMetaMap.get(convId) || { id: convId };
 
-        if (generatedFiles.length > 0) {
-          for (let idx = 0; idx < generatedFiles.length; idx += 1) {
-            const gf = generatedFiles[idx];
-            await client.sendFile({
-              conversationId: convId,
-              bytes: gf.bytes,
-              fileName: gf.fileName,
-              mimeType: gf.mimeType,
-              text: idx === 0 && cleanText ? cleanText.slice(0, 28_000) : undefined,
-              replyToMessageId: idx === 0 ? replyToId : undefined,
-              clientMessageId: `${event.eventId}:file:${idx}`,
-            });
-          }
-          logLine(`Sent ${generatedFiles.length} generated file(s) to conv=${convId} seq=${seq}`);
-        } else if (cleanText) {
-          await client.sendMessage({
-            conversationId: convId,
-            text: cleanText.slice(0, 28_000),
-            replyToMessageId: replyToId,
-            clientMessageId: `${event.eventId}:reply`,
-            idempotencyKey: `${event.eventId}:reply`,
-          });
-          logLine(`Replied to conv=${convId} seq=${seq} (${cleanText.length} chars)`);
+      logLine(`Processing event seq=${seq} type=${event.type || "message.created"} conv=${convId}`);
+      await client.setTyping(convId, { state: "thinking" }).catch(() => {});
+      const typingTimer = setInterval(() => {
+        if (!stopped) {
+          void client.setTyping(convId, { state: "thinking" }).catch(() => {});
         }
+      }, 3800);
+      typingTimer.unref?.();
+
+      try {
+        let context = null;
+        if (!profile.scopes || profile.scopes.includes("messages:read_context")) {
+          context = await client.getContext(convId, { limit: 20 }).catch(() => null);
+        }
+        const replyText = await invokeDaemonAgentTurn({
+          agentMode,
+          customCmd,
+          workdir,
+          sandboxMode,
+          model,
+          botName,
+          conversation,
+          event,
+          context,
+        });
+        if (replyText) {
+          const replyToId =
+            event.payload?.message?.id ||
+            event.payload?.messageId ||
+            (Array.isArray(context?.messages) && context.messages.length > 0
+              ? context.messages[context.messages.length - 1]?.id
+              : undefined);
+          const isGroupConv = conversation?.type === "group" || conversation?.kind === "group";
+          const { cleanText, files: generatedFiles } = extractGeneratedFilesFromReply(replyText, {
+            allowLocalPath: !isGroupConv,
+            workdir,
+          });
+
+          if (generatedFiles.length > 0) {
+            for (let idx = 0; idx < generatedFiles.length; idx += 1) {
+              const gf = generatedFiles[idx];
+              await client.sendFile({
+                conversationId: convId,
+                bytes: gf.bytes,
+                fileName: gf.fileName,
+                mimeType: gf.mimeType,
+                text: idx === 0 && cleanText ? cleanText.slice(0, 28_000) : undefined,
+                replyToMessageId: idx === 0 ? replyToId : undefined,
+                clientMessageId: `${event.eventId}:file:${idx}`,
+              });
+            }
+            logLine(`Sent ${generatedFiles.length} generated file(s) to conv=${convId} seq=${seq}`);
+          } else if (cleanText) {
+            await client.sendMessage({
+              conversationId: convId,
+              text: cleanText.slice(0, 28_000),
+              replyToMessageId: replyToId,
+              clientMessageId: `${event.eventId}:reply`,
+              idempotencyKey: `${event.eventId}:reply`,
+            });
+            logLine(`Replied to conv=${convId} seq=${seq} (${cleanText.length} chars)`);
+          }
+        }
+      } catch (err) {
+        const safeErr = String(err?.message || err).replace(/dl_bot_[A-Za-z0-9_-]{12,}/gu, "[REDACTED]");
+        logLine(`Turn error on conv=${convId} seq=${seq}: ${safeErr}`);
+      } finally {
+        clearInterval(typingTimer);
       }
-    } catch (err) {
-      const safeErr = String(err?.message || err).replace(/dl_bot_[A-Za-z0-9_-]{12,}/gu, "[REDACTED]");
-      logLine(`Turn error on conv=${convId} seq=${seq}: ${safeErr}`);
     } finally {
-      clearInterval(typingTimer);
+      inFlightTurns = Math.max(0, inFlightTurns - 1);
+      maybeRestartForPendingUpdate();
     }
   };
 
@@ -3144,7 +3516,7 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
     return;
   }
 
-  const scriptPath = path.resolve(process.argv[1]);
+  const scriptPath = resolveStandaloneScriptPath(flags.script);
   const nodePath = process.execPath;
   const logDir = getDaemonLogDir();
   fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
@@ -3289,23 +3661,25 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
     };
     writeDaemonRecord(profileName, record);
 
-    process.stdout.write(
-      JSON.stringify(
-        {
-          ok: true,
-          action,
-          profile: profileName,
-          manager,
-          agent: agentMode,
-          sandbox,
-          workdir,
-          logPath,
-          ...(spawnedPid ? { pid: spawnedPid } : {}),
-        },
-        null,
-        2
-      ) + "\n"
-    );
+    if (!flags.quiet) {
+      process.stdout.write(
+        JSON.stringify(
+          {
+            ok: true,
+            action,
+            profile: profileName,
+            manager,
+            agent: agentMode,
+            sandbox,
+            workdir,
+            logPath,
+            ...(spawnedPid ? { pid: spawnedPid } : {}),
+          },
+          null,
+          2
+        ) + "\n"
+      );
+    }
     return;
   }
 
@@ -3433,6 +3807,9 @@ function printHelp() {
 
 Usage:
   duallane-agent setup <setup-url-or-id> [--url <origin>] [--profile default] [--name <agent-name>]
+  duallane-agent version [--check] [--profile default] [--url <origin>]
+  duallane-agent update [--check] [--force] [--no-restart] [--profile default] [--url <origin>]
+  duallane-agent doctor [--profile default]
   duallane-agent daemon <install|start|stop|restart|uninstall|status|logs|run> [--agent auto|codex|claude|cmd] [--workdir <dir>] [--sandbox read-only|workspace-write] [--profile default]
   duallane-agent mcp [--profile default]
   duallane-agent status [--profile default]
@@ -3705,8 +4082,89 @@ async function main() {
   const { positionals, flags } = parseArgs(process.argv.slice(2));
   const subcommand = positionals[0];
 
+  if (flags.version || subcommand === "-v" || subcommand === "version") {
+    const profile = loadAgentProfile(normalizeProfileName(flags.profile || "default"));
+    const origin = String(flags.url || profile?.url || "").trim();
+    if (flags.check && origin) {
+      const check = await checkRuntimeUpdate({ origin });
+      process.stdout.write(JSON.stringify(check, null, 2) + "\n");
+      return;
+    }
+    process.stdout.write(
+      JSON.stringify(
+        {
+          version: DUALLANE_AGENT_SDK_VERSION,
+          gatewayVersion: DUALLANE_GATEWAY_VERSION,
+          node: process.version,
+          scriptPath: resolveStandaloneScriptPath(),
+        },
+        null,
+        2
+      ) + "\n"
+    );
+    return;
+  }
+
   if (!subcommand || flags.help || flags.h || subcommand === "help") {
     printHelp();
+    return;
+  }
+
+  if (subcommand === "update" || subcommand === "upgrade") {
+    const profile = loadAgentProfile(normalizeProfileName(flags.profile || "default"));
+    const origin = String(flags.url || profile?.url || "https://duallane.tsio.top").trim();
+    if (flags.check) {
+      const check = await checkRuntimeUpdate({ origin });
+      process.stdout.write(JSON.stringify(check, null, 2) + "\n");
+      return;
+    }
+    const staged = await stageRuntimeSelfUpdate({
+      origin,
+      targetPath: typeof flags.target === "string" ? flags.target : "",
+      force: Boolean(flags.force),
+    });
+    let restartedProfiles = [];
+    if (staged.updated && !flags["no-restart"]) {
+      restartedProfiles = await restartInstalledDaemons({ quiet: true });
+    }
+    process.stdout.write(
+      JSON.stringify(
+        {
+          ...staged,
+          restartedProfiles,
+        },
+        null,
+        2
+      ) + "\n"
+    );
+    return;
+  }
+
+  if (subcommand === "doctor") {
+    const { client, profile } = requireClient(flags.profile);
+    const [doctor, me, updateInfo] = await Promise.all([
+      client.getDoctor().catch(() => null),
+      client.getMe().catch(() => null),
+      checkRuntimeUpdate({ origin: profile.url }).catch(() => null),
+    ]);
+    process.stdout.write(
+      JSON.stringify(
+        {
+          ok: Boolean(doctor?.ok || me?.bot?.id),
+          profile: profile.profile,
+          origin: profile.url,
+          localSdkVersion: DUALLANE_AGENT_SDK_VERSION,
+          runtimeUpdate: updateInfo,
+          connection: me?.connection || null,
+          bot: doctor?.bot || me?.bot || null,
+          scopes: doctor?.scopes || me?.scopes || [],
+          conversations: doctor?.conversations || [],
+          recentDeliveries: doctor?.recentDeliveries || [],
+        },
+        null,
+        2
+      ) + "\n"
+    );
     return;
   }
 
@@ -3726,11 +4184,22 @@ async function main() {
       client.getMe(),
       client.listConversations().catch(() => ({ conversations: [] })),
     ]);
+    const remoteLatest = String(convs?.latestSdkVersion || "").trim();
+    const updateAvailable =
+      remoteLatest.length > 0 && compareRuntimeSemver(remoteLatest, DUALLANE_AGENT_SDK_VERSION) > 0;
+    if (updateAvailable) {
+      process.stderr.write(
+        `[DualLane] New runtime available: v${DUALLANE_AGENT_SDK_VERSION} -> v${remoteLatest}. Run: duallane-agent update\n`
+      );
+    }
     process.stdout.write(
       JSON.stringify(
         {
           profile: profile.profile,
           origin: profile.url,
+          sdkVersion: DUALLANE_AGENT_SDK_VERSION,
+          latestSdkVersion: remoteLatest || DUALLANE_AGENT_SDK_VERSION,
+          updateAvailable,
           bot: me?.bot,
           scopes: me?.scopes,
           connection: me?.connection,

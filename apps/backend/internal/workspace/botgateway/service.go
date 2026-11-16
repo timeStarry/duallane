@@ -470,6 +470,11 @@ func (s *Service) RequireContextGrant(ctx context.Context, value *Auth, conversa
 	if err != nil {
 		return nil, normalizeError(err)
 	}
+	if grant == nil {
+		if conv, convErr := s.repo.GetConversation(ctx, current.SpaceID, id); convErr == nil && conv != nil && conv.Type == "direct" {
+			return &ContextGrant{AllowTrigger: true, AllowContext: true}, nil
+		}
+	}
 	if grant == nil || !grant.AllowContext {
 		return nil, NewError(CodeContextForbidden, MessageContextForbidden, 403)
 	}
@@ -1432,7 +1437,7 @@ func (s *Service) queueWorkspaceEvents(ctx context.Context, current *Auth) error
 		if ctx.Err() != nil {
 			return normalizeError(ctx.Err())
 		}
-		if eventScope(event.EventType) == "" || strings.TrimSpace(event.ConversationID) == "" {
+		if eventScope(event.EventType) == "" || (event.EventType != "bot.runtime_upgrade" && strings.TrimSpace(event.ConversationID) == "") {
 			continue
 		}
 		if err := s.queueValidatedEvent(ctx, current, event); err != nil {
@@ -1495,7 +1500,7 @@ type ExpiredDeliveryLookup interface {
 
 func eventScope(eventType string) string {
 	switch eventType {
-	case "message.created", "bot.mentioned":
+	case "message.created", "bot.mentioned", "bot.runtime_upgrade":
 		return ScopeMessagesReadTrigger
 	case "command.invoked":
 		return ScopeCommandsReceive
@@ -1519,7 +1524,13 @@ func (s *Service) authorizeDelivery(ctx context.Context, value *Auth, event Even
 }
 
 func (s *Service) authorizeValidatedDelivery(ctx context.Context, current *Auth, event EventRecord) (bool, error) {
-	if event.SpaceID != current.SpaceID || eventScope(event.EventType) == "" || !containsScope(current.Scopes, eventScope(event.EventType)) || strings.TrimSpace(event.ConversationID) == "" {
+	if event.SpaceID != current.SpaceID || eventScope(event.EventType) == "" || !containsScope(current.Scopes, eventScope(event.EventType)) {
+		return false, nil
+	}
+	if event.EventType == "bot.runtime_upgrade" {
+		return eventTargetsBot(current, event, parseObject(event.PayloadJSON)), nil
+	}
+	if strings.TrimSpace(event.ConversationID) == "" {
 		return false, nil
 	}
 	_, conversation, err := s.requireConversationPrevalidated(ctx, current, event.ConversationID)
@@ -1529,18 +1540,22 @@ func (s *Service) authorizeValidatedDelivery(ctx context.Context, current *Auth,
 		}
 		return false, err
 	}
-	grant, err := s.repo.GetContextGrant(ctx, current.BotID, current.SpaceID, conversation.ID)
-	if err != nil {
-		return false, normalizeError(err)
-	}
-	if grant == nil || !grant.AllowTrigger {
-		return false, nil
-	}
 	sender, err := s.repo.GetSender(ctx, current.SpaceID, conversation.ID, event.ActorUserID)
 	if err != nil {
 		return false, normalizeError(err)
 	}
 	if sender == nil || sender.Kind != "human" || sender.Role == "auditor" || sender.ID == current.UserID {
+		return false, nil
+	}
+	isOwnerDirect := conversation.Type == "direct" && current.OwnerUserID != "" && sender.ID == current.OwnerUserID
+	grant, err := s.repo.GetContextGrant(ctx, current.BotID, current.SpaceID, conversation.ID)
+	if err != nil {
+		return false, normalizeError(err)
+	}
+	if grant == nil && conversation.Type == "direct" {
+		grant = &ContextGrant{AllowTrigger: true, AllowContext: true}
+	}
+	if !isOwnerDirect && (grant == nil || !grant.AllowTrigger) {
 		return false, nil
 	}
 	settings, err := s.repo.GetSettings(ctx, current.BotID, current.SpaceID)
@@ -1554,7 +1569,7 @@ func (s *Service) authorizeValidatedDelivery(ctx context.Context, current *Auth,
 	if err != nil || !visible {
 		return false, err
 	}
-	return s.resolveTrigger(ctx, current, event, conversation)
+	return s.resolveTrigger(ctx, current, event, conversation, settings)
 }
 
 func isGatewayError(err error) bool {
@@ -1563,9 +1578,13 @@ func isGatewayError(err error) bool {
 }
 
 func (s *Service) senderVisible(ctx context.Context, value *Auth, senderID string, conversation *Conversation, settings *Settings) (bool, error) {
+	// Ironclad Rule: Bot creator always retains visibility and trigger access.
+	if value.OwnerUserID != "" && senderID == value.OwnerUserID {
+		return true, nil
+	}
 	switch settings.VisibilityPolicy {
 	case "private":
-		return senderID == value.OwnerUserID, nil
+		return false, nil
 	case "space_members":
 		return true, nil
 	case "groups":
@@ -1577,7 +1596,7 @@ func (s *Service) senderVisible(ctx context.Context, value *Auth, senderID strin
 	}
 }
 
-func (s *Service) resolveTrigger(ctx context.Context, value *Auth, event EventRecord, conversation *Conversation) (bool, error) {
+func (s *Service) resolveTrigger(ctx context.Context, value *Auth, event EventRecord, conversation *Conversation, settings *Settings) (bool, error) {
 	payload := parseObject(event.PayloadJSON)
 	switch event.EventType {
 	case "message.created":
@@ -1596,14 +1615,22 @@ func (s *Service) resolveTrigger(ctx context.Context, value *Auth, event EventRe
 		if conversation.Type == "direct" {
 			return true, nil
 		}
+		if settings != nil && settings.TriggerPolicy == "all-messages" {
+			return true, nil
+		}
+		if value.UserID != "" && (message.ReplyToAuthorID == value.UserID || message.ThreadRootAuthorID == value.UserID) {
+			return true, nil
+		}
 		for _, raw := range blocks {
 			block, ok := raw.(map[string]any)
-			if ok && block["type"] == "mention" && block["userId"] == value.UserID {
+			if ok && block["type"] == "mention" && (block["userId"] == value.UserID || block["userId"] == "all") {
 				return true, nil
 			}
 		}
 		return false, nil
 	case "bot.mentioned":
+		return eventTargetsBot(value, event, payload), nil
+	case "bot.runtime_upgrade":
 		return eventTargetsBot(value, event, payload), nil
 	case "command.invoked":
 		if !eventTargetsBot(value, event, payload) {
@@ -1686,6 +1713,16 @@ func safeDeliveryPayload(event EventRecord) []byte {
 		}
 		if args := stringField(payload, "args"); args != "" {
 			result["args"] = truncateUTF8Bytes(args, MaxDeliveryTextBytes)
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return []byte(`{}`)
+		}
+		return encoded
+	case "bot.runtime_upgrade":
+		result := eventStringFields(payload, "botId", "botUserId", "targetVersion", "reason")
+		if identifierPattern.MatchString(event.ActorUserID) {
+			result["actorUserId"] = event.ActorUserID
 		}
 		encoded, err := json.Marshal(result)
 		if err != nil {

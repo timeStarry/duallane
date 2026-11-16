@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Activity,
+  ArrowUpCircle,
   Bot,
   Camera,
   Check,
@@ -8,14 +10,18 @@ import {
   Copy,
   KeyRound,
   Link2,
+  Lock,
   MessageSquare,
   PauseCircle,
   PlayCircle,
+  Puzzle,
   RefreshCw,
   RotateCcw,
   ShieldCheck,
+  Sparkles,
   Trash2,
   Unlink,
+  Users,
   X,
 } from "lucide-react";
 import { useEmoteStore } from "@/entities/emote/store";
@@ -25,6 +31,8 @@ import {
   apiV1,
   type BotCommandSpec,
   type BotConnectionInfo,
+  type BotConversationOverviewItem,
+  type BotDeliveryDiagnosticItem,
   type BotGroupPolicy,
   type BotSetupSession,
   type BotTokenRecord,
@@ -41,6 +49,9 @@ import {
 } from "@/shared/ui";
 import { cn } from "@/shared/lib/cn";
 
+type BotChapterId = "runtime" | "permissions" | "persona" | "extensions";
+type GroupAccessPreset = "disabled" | "owner_only" | "approval_required" | "open";
+
 interface BotItem {
   id: string;
   botUserId?: string;
@@ -54,14 +65,20 @@ interface BotItem {
 }
 
 interface BotSettingsData {
-  visibilityPolicy: string;
+  visibilityPolicy: "private" | "specified_members" | "space_members" | string;
   allowDirect: boolean;
   allowGroup: boolean;
+  groupInviterPolicy: "owner" | "group_admin" | "any_member" | string;
+  requireOwnerApproval: boolean;
   proactiveEnabled: boolean;
   triggerPolicy: string;
   allowedMemberIds: string[];
   description: string;
+  welcomeMessage: string;
   avatarUrl: string;
+  maxContextMessages: number;
+  includeReplies: boolean;
+  includeAttachmentMetadata: boolean;
 }
 
 const VALID_SCOPES = [
@@ -75,20 +92,101 @@ const VALID_SCOPES = [
   { id: "files:write", label: "上传生成文件" },
 ];
 
-const DEFAULT_PAIRING_SCOPES = [
-  "messages:read_trigger",
-  "messages:read_context",
-  "messages:send",
-  "cards:write",
-  "cards:act",
-  "commands:receive",
-  "files:read_metadata",
-  "files:write",
-];
+const DEFAULT_PAIRING_SCOPES = VALID_SCOPES.map((item) => item.id);
 
 const SCOPE_LABEL_MAP: Record<string, string> = Object.fromEntries(
   VALID_SCOPES.map((item) => [item.id, item.label])
 );
+
+const CHAPTER_TABS: ReadonlyArray<{
+  id: BotChapterId;
+  label: string;
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
+}> = [
+  { id: "runtime", label: "连接与运行", icon: Activity },
+  { id: "permissions", label: "权限与会话", icon: Users },
+  { id: "persona", label: "资料与上下文", icon: Sparkles },
+  { id: "extensions", label: "扩展与安全", icon: Puzzle },
+];
+
+function normalizeMemberVisibility(raw?: string): "private" | "specified_members" | "space_members" {
+  if (raw === "space_members") return "space_members";
+  if (raw === "specified_members") return "specified_members";
+  return "private";
+}
+
+function resolveGroupAccessPreset(settings: Pick<BotSettingsData, "allowGroup" | "groupInviterPolicy" | "requireOwnerApproval">): GroupAccessPreset {
+  if (!settings.allowGroup) return "disabled";
+  if (settings.groupInviterPolicy === "owner") return "owner_only";
+  if (settings.requireOwnerApproval) return "approval_required";
+  return "open";
+}
+
+function buildGroupAccessPatch(preset: GroupAccessPreset): Record<string, unknown> {
+  switch (preset) {
+    case "disabled":
+      return { allowGroup: false, groupInviterPolicy: "owner", requireOwnerApproval: true };
+    case "owner_only":
+      return { allowGroup: true, groupInviterPolicy: "owner", requireOwnerApproval: true };
+    case "approval_required":
+      return { allowGroup: true, groupInviterPolicy: "any_member", requireOwnerApproval: true };
+    case "open":
+      return { allowGroup: true, groupInviterPolicy: "any_member", requireOwnerApproval: false };
+  }
+}
+
+function extractSemverFromAdapter(adapterVersion?: string | null): string {
+  if (!adapterVersion) return "";
+  const match = /(\d+\.\d+\.\d+)/u.exec(adapterVersion);
+  return match ? match[1] : "";
+}
+
+function isSemverOlder(currentVer: string, latestVer: string): boolean {
+  if (!currentVer || !latestVer) return false;
+  const pa = currentVer.split(".").map((n) => Number.parseInt(n, 10) || 0);
+  const pb = latestVer.split(".").map((n) => Number.parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i += 1) {
+    const diff = (pb[i] || 0) - (pa[i] || 0);
+    if (diff !== 0) return diff > 0;
+  }
+  return false;
+}
+
+function formatBlockReason(reason?: string): string {
+  switch (reason) {
+    case "bot_paused":
+      return "机器人已暂停";
+    case "direct_disabled":
+      return "成员私聊已关闭";
+    case "peer_not_in_visibility":
+      return "不在可用成员范围";
+    case "trigger_grant_off":
+      return "会话触发已关闭";
+    case "group_disabled":
+      return "未开启群聊准入";
+    case "group_pending_approval":
+      return "待创建者审批";
+    case "group_not_authorized":
+      return "群聊尚未授权";
+    default:
+      return "策略限制";
+  }
+}
+
+function formatDeliveryStatus(status: string): { label: string; toneClass: string } {
+  switch (status) {
+    case "acked":
+      return { label: "已处理", toneClass: "bg-dl-success/14 text-dl-success" };
+    case "delivered":
+      return { label: "投递中", toneClass: "bg-dl-lane-shared/14 text-dl-lane-shared" };
+    case "queued":
+      return { label: "排队中", toneClass: "bg-dl-warning/15 text-dl-warning" };
+    case "expired":
+      return { label: "已过期", toneClass: "bg-dl-surface-subtle text-dl-text-tertiary" };
+    default:
+      return { label: status, toneClass: "bg-dl-surface-subtle text-dl-text-secondary" };
+  }
+}
 
 function buildPairingPrompt(botName: string, origin: string, sessionId: string): string {
   const skillUrl = `${origin}/integrations/duallane-channel.md`;
@@ -97,10 +195,10 @@ function buildPairingPrompt(botName: string, origin: string, sessionId: string):
   return [
     `请接入我的 DualLane 机器人「${botName}」：`,
     `1. 先阅读接入规范：${skillUrl}`,
-    `2. 无需 npm，直接从当前实例下载零依赖单文件运行时（含 CLI / MCP / 实时监听）：`,
+    `2. 无需 npm，直接从当前实例下载零依赖单文件运行时（含 CLI / MCP / 空闲自动热更）：`,
     `   mkdir -p ~/.duallane/bin && curl -fsSL "${runtimeUrl}" -o ~/.duallane/bin/duallane-agent.mjs && chmod +x ~/.duallane/bin/duallane-agent.mjs`,
     `3. 使用一次性配对地址发起绑定（无需手动粘贴 Token）：${setupUrl}`,
-    `发起请求后提醒我在网页点击「确认授权」；授权完成后请运行 node ~/.duallane/bin/duallane-agent.mjs daemon install --profile default --agent auto 注册常驻后台守护服务（支持断线自愈重连、私聊/群聊自动唤醒回复与群聊只读安全隔离）。`,
+    `发起请求后提醒我在网页点击「确认授权」；授权完成后请运行 node ~/.duallane/bin/duallane-agent.mjs daemon install --profile default --agent auto 注册常驻后台守护服务（支持断线自愈、空闲静默热更新与群聊安全隔离）。`,
   ].join("\n");
 }
 
@@ -110,12 +208,7 @@ function buildStandardMcpConfig(): string {
       mcpServers: {
         duallane: {
           command: "node",
-          args: [
-            "~/.duallane/bin/duallane-agent.mjs",
-            "mcp",
-            "--profile",
-            "default",
-          ],
+          args: ["~/.duallane/bin/duallane-agent.mjs", "mcp", "--profile", "default"],
         },
       },
     },
@@ -141,7 +234,7 @@ function buildPreviewSetupSession(
     approvedScopes: [],
     requestedConversations: [],
     approvedConversations: [],
-    clientName: status === "awaiting_user" ? "duallane-mcp/1.0.0" : undefined,
+    clientName: status === "awaiting_user" ? "duallane-mcp/1.0.14" : undefined,
     expiresAt: "2099-01-01T00:10:00.000Z",
     createdAt: "2099-01-01T00:00:00.000Z",
   };
@@ -189,6 +282,7 @@ export function BotSettingsPanel() {
   } = useWorkspaceStore();
   const { pendingBotSetupId, setPendingBotSetupId, closeSettings } = useLaneStore();
 
+  const [activeChapter, setActiveChapter] = useState<BotChapterId>("runtime");
   const [bots, setBots] = useState<BotItem[]>(() =>
     isPreviewMode
       ? [
@@ -205,7 +299,7 @@ export function BotSettingsPanel() {
             botUserId: "usr_bot_release_2",
             name: "Release 审批官",
             status: "active",
-            visibilityPolicy: "groups",
+            visibilityPolicy: "private",
             triggerPolicy: "mention-or-command",
           },
         ]
@@ -218,11 +312,17 @@ export function BotSettingsPanel() {
     visibilityPolicy: isPreviewMode ? "space_members" : "private",
     allowDirect: true,
     allowGroup: true,
+    groupInviterPolicy: "owner",
+    requireOwnerApproval: true,
     proactiveEnabled: isPreviewMode,
     triggerPolicy: "mention-or-command",
     allowedMemberIds: [],
     description: isPreviewMode ? "负责架构评审、会议纪要总结与发布卡片流转" : "",
+    welcomeMessage: "",
     avatarUrl: "",
+    maxContextMessages: 50,
+    includeReplies: true,
+    includeAttachmentMetadata: false,
   });
   const [tokens, setTokens] = useState<BotTokenRecord[]>(() =>
     isPreviewMode
@@ -237,18 +337,23 @@ export function BotSettingsPanel() {
         ]
       : []
   );
+  const [overviewConversations, setOverviewConversations] = useState<BotConversationOverviewItem[]>([]);
+  const [recentDeliveries, setRecentDeliveries] = useState<BotDeliveryDiagnosticItem[]>([]);
+  const [latestSdkVersion, setLatestSdkVersion] = useState<string>("1.0.14");
+
   const [profileDraftsByBot, setProfileDraftsByBot] = useState<
-    Record<string, { name?: string; bio?: string }>
+    Record<string, { name?: string; bio?: string; welcome?: string }>
   >({});
   const [confirmDeleteBotId, setConfirmDeleteBotId] = useState<string>("");
   const botAvatarInputRef = useRef<HTMLInputElement | null>(null);
   const setupCardRef = useRef<HTMLDivElement | null>(null);
+
   const [connection, setConnection] = useState<BotConnectionInfo | null>(() =>
     isPreviewMode
       ? {
           botId: "bot_echo_1",
           status: "connected",
-          adapterVersion: "duallane-mcp/1.0.0",
+          adapterVersion: "duallane-daemon/1.0.14",
           lastHeartbeatAt: new Date().toISOString(),
         }
       : null
@@ -262,11 +367,11 @@ export function BotSettingsPanel() {
   const [approvalScopes, setApprovalScopes] = useState<string[]>(DEFAULT_PAIRING_SCOPES);
   const [enableDmContextOnApprove, setEnableDmContextOnApprove] = useState(true);
   const [pairingPromptText, setPairingPromptText] = useState("");
-  const [copiedKey, setCopiedKey] = useState<"" | "prompt" | "mcp">("");
+  const [copiedKey, setCopiedKey] = useState<"" | "prompt" | "mcp" | "update">("");
   const [busyAction, setBusyAction] = useState<string>("");
 
   const [newName, setNewName] = useState("");
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [expandedSlot, setExpandedSlot] = useState<"" | "commands" | "webhook" | "manual_token">("");
   const [selectedScopes, setSelectedScopes] = useState<string[]>([
     "messages:read_trigger",
     "messages:read_context",
@@ -296,6 +401,30 @@ export function BotSettingsPanel() {
     typeof window !== "undefined" && window.location?.origin
       ? window.location.origin
       : "https://duallane.tsio.top";
+
+  const applyServerSettings = useCallback((s: Record<string, unknown>) => {
+    const ctxObj = (s.context && typeof s.context === "object" ? s.context : {}) as Record<
+      string,
+      unknown
+    >;
+    const rawVis = String(s.visibilityPolicy || "private");
+    setSettings({
+      visibilityPolicy: normalizeMemberVisibility(rawVis),
+      allowDirect: s.allowDirect !== false,
+      allowGroup: rawVis === "groups" ? true : s.allowGroup !== false,
+      groupInviterPolicy: String(s.groupInviterPolicy || "owner"),
+      requireOwnerApproval: s.requireOwnerApproval !== false,
+      proactiveEnabled: Boolean(s.proactiveEnabled),
+      triggerPolicy: String(s.triggerPolicy || "mention-or-command"),
+      allowedMemberIds: Array.isArray(s.allowedMemberIds) ? s.allowedMemberIds.map(String) : [],
+      description: typeof s.description === "string" ? s.description : "",
+      welcomeMessage: typeof s.welcomeMessage === "string" ? s.welcomeMessage : "",
+      avatarUrl: typeof s.avatarUrl === "string" ? s.avatarUrl : "",
+      maxContextMessages: Number(ctxObj.maxMessages || s.maxContextMessages || 50),
+      includeReplies: ctxObj.includeReplies !== false,
+      includeAttachmentMetadata: Boolean(ctxObj.includeAttachmentMetadata),
+    });
+  }, []);
 
   const loadBots = useCallback(async () => {
     if (isPreviewMode) return;
@@ -329,7 +458,8 @@ export function BotSettingsPanel() {
   const refreshBotRuntimeState = useCallback(
     async (botId: string) => {
       if (!botId || isPreviewMode) return;
-      const [settingsRes, cmdRes, connRes, gpRes, tokensRes] = await Promise.all([
+      const [overviewRes, settingsRes, cmdRes, connRes, gpRes, tokensRes] = await Promise.all([
+        apiV1.getBotOverview(botId).catch(() => null),
         apiV1.getBotSettings(botId).catch(() => null),
         apiV1.getBotCommands(botId).catch(() => ({ commands: [] })),
         apiV1.getBotConnection(botId).catch(() => ({ connection: null })),
@@ -337,57 +467,66 @@ export function BotSettingsPanel() {
         apiV1.listBotTokens(botId).catch(() => ({ tokens: [] })),
       ]);
       if (settingsRes?.settings) {
-        const s = settingsRes.settings;
-        const desc = typeof s.description === "string" ? s.description : "";
-        const avatar = typeof s.avatarUrl === "string" ? s.avatarUrl : "";
-        setSettings({
-          visibilityPolicy: String(s.visibilityPolicy || "private"),
-          allowDirect: s.allowDirect !== false,
-          allowGroup: s.allowGroup !== false,
-          proactiveEnabled: Boolean(s.proactiveEnabled),
-          triggerPolicy: String(s.triggerPolicy || "mention-or-command"),
-          allowedMemberIds: Array.isArray(s.allowedMemberIds)
-            ? s.allowedMemberIds.map(String)
-            : [],
-          description: desc,
-          avatarUrl: avatar,
-        });
+        applyServerSettings(settingsRes.settings);
+      }
+      if (overviewRes) {
+        setOverviewConversations(
+          Array.isArray(overviewRes.conversations) ? overviewRes.conversations : []
+        );
+        setRecentDeliveries(
+          Array.isArray(overviewRes.recentDeliveries) ? overviewRes.recentDeliveries : []
+        );
+        if (overviewRes.latestSdkVersion) {
+          setLatestSdkVersion(overviewRes.latestSdkVersion);
+        }
+        if (overviewRes.webhook) {
+          setWebhookUrl(overviewRes.webhook.url || "");
+          setWebhookEnabled(Boolean(overviewRes.webhook.enabled));
+        } else {
+          setWebhookUrl("");
+          setWebhookEnabled(false);
+        }
       }
       setCommands(cmdRes.commands || []);
       setConnection(connRes.connection || null);
       setGroupPolicies(Array.isArray(gpRes.policies) ? gpRes.policies : []);
       setTokens(Array.isArray(tokensRes.tokens) ? tokensRes.tokens : []);
     },
-    [isPreviewMode]
+    [applyServerSettings, isPreviewMode]
   );
 
   useEffect(() => {
     if (!selectedBotId || isPreviewMode) return;
     let active = true;
     void Promise.all([
+      apiV1.getBotOverview(selectedBotId).catch(() => null),
       apiV1.getBotSettings(selectedBotId).catch(() => null),
       apiV1.getBotCommands(selectedBotId).catch(() => ({ commands: [] })),
       apiV1.getBotConnection(selectedBotId).catch(() => ({ connection: null })),
       apiV1.listBotGroupPolicies(selectedBotId).catch(() => ({ policies: [] })),
       apiV1.listBotTokens(selectedBotId).catch(() => ({ tokens: [] })),
-    ]).then(([settingsRes, cmdRes, connRes, gpRes, tokensRes]) => {
+    ]).then(([overviewRes, settingsRes, cmdRes, connRes, gpRes, tokensRes]) => {
       if (!active) return;
       if (settingsRes?.settings) {
-        const s = settingsRes.settings;
-        const desc = typeof s.description === "string" ? s.description : "";
-        const avatar = typeof s.avatarUrl === "string" ? s.avatarUrl : "";
-        setSettings({
-          visibilityPolicy: String(s.visibilityPolicy || "private"),
-          allowDirect: s.allowDirect !== false,
-          allowGroup: s.allowGroup !== false,
-          proactiveEnabled: Boolean(s.proactiveEnabled),
-          triggerPolicy: String(s.triggerPolicy || "mention-or-command"),
-          allowedMemberIds: Array.isArray(s.allowedMemberIds)
-            ? s.allowedMemberIds.map(String)
-            : [],
-          description: desc,
-          avatarUrl: avatar,
-        });
+        applyServerSettings(settingsRes.settings);
+      }
+      if (overviewRes) {
+        setOverviewConversations(
+          Array.isArray(overviewRes.conversations) ? overviewRes.conversations : []
+        );
+        setRecentDeliveries(
+          Array.isArray(overviewRes.recentDeliveries) ? overviewRes.recentDeliveries : []
+        );
+        if (overviewRes.latestSdkVersion) {
+          setLatestSdkVersion(overviewRes.latestSdkVersion);
+        }
+        if (overviewRes.webhook) {
+          setWebhookUrl(overviewRes.webhook.url || "");
+          setWebhookEnabled(Boolean(overviewRes.webhook.enabled));
+        } else {
+          setWebhookUrl("");
+          setWebhookEnabled(false);
+        }
       }
       setCommands(cmdRes.commands || []);
       setConnection(connRes.connection || null);
@@ -397,9 +536,8 @@ export function BotSettingsPanel() {
     return () => {
       active = false;
     };
-  }, [isPreviewMode, selectedBotId]);
+  }, [applyServerSettings, isPreviewMode, selectedBotId]);
 
-  // Load setup session if user arrived via ?setup=setup_... deep link
   useEffect(() => {
     if (!pendingBotSetupId || isPreviewMode) return;
     let active = true;
@@ -409,6 +547,7 @@ export function BotSettingsPanel() {
         if (!active || !res.session) return;
         setSetupSession(res.session);
         setApprovalScopes(res.session.requestedScopes || DEFAULT_PAIRING_SCOPES);
+        setActiveChapter("runtime");
         if (res.session.bot?.id) {
           setSelectedBotId(res.session.bot.id);
         }
@@ -422,7 +561,6 @@ export function BotSettingsPanel() {
     };
   }, [isPreviewMode, pendingBotSetupId]);
 
-  // Live-poll active setup session so Agent request & token exchange appear automatically
   useEffect(() => {
     const activeId = setupSession?.id;
     const status = setupSession?.status;
@@ -458,6 +596,7 @@ export function BotSettingsPanel() {
   }, [isPreviewMode, refreshBotRuntimeState, setupSession?.id, setupSession?.status]);
 
   const activeBot = bots.find((b) => b.id === selectedBotId);
+  const activeBotUserId = activeBot?.botUserId || "";
   const profileNameDraft = activeBot
     ? (profileDraftsByBot[activeBot.id]?.name ?? activeBot.name)
     : "";
@@ -467,30 +606,54 @@ export function BotSettingsPanel() {
       settings.description ??
       "")
     : "";
-  const setProfileNameDraft = (name: string) => {
+  const profileWelcomeDraft = activeBot
+    ? (profileDraftsByBot[activeBot.id]?.welcome ?? settings.welcomeMessage ?? "")
+    : "";
+
+  const setProfileDraftField = (field: "name" | "bio" | "welcome", val: string) => {
     if (!selectedBotId) return;
     setProfileDraftsByBot((prev) => ({
       ...prev,
-      [selectedBotId]: { ...prev[selectedBotId], name },
-    }));
-  };
-  const setProfileBioDraft = (bio: string) => {
-    if (!selectedBotId) return;
-    setProfileDraftsByBot((prev) => ({
-      ...prev,
-      [selectedBotId]: { ...prev[selectedBotId], bio },
+      [selectedBotId]: { ...prev[selectedBotId], [field]: val },
     }));
   };
 
-  const botConversations = activeBot?.botUserId
-    ? Object.values(conversations).filter(
-        (c) =>
-          (c.kind === "direct" || c.kind === "group") &&
-          c.memberIds.includes(activeBot.botUserId!)
-      )
-    : [];
+  // Merge server overview conversations with local store fallback for preview mode
+  const effectiveConversations: BotConversationOverviewItem[] =
+    overviewConversations.length > 0
+      ? overviewConversations
+      : !activeBotUserId
+      ? []
+      : Object.values(conversations)
+          .filter(
+            (c) =>
+              (c.kind === "direct" || c.kind === "group") &&
+              c.memberIds.includes(activeBotUserId)
+          )
+          .map((c) => {
+            const gp = groupPolicies.find((p) => p.conversationId === c.id);
+            const isGroup = c.kind === "group";
+            const groupActive = !isGroup || gp?.status === "active";
+            return {
+              id: c.id,
+              type: c.kind,
+              title: c.title,
+              isOwnerDirect: c.kind === "direct",
+              allowSend: groupActive,
+              allowTrigger: isGroup ? Boolean(gp?.allowTrigger) : true,
+              allowContext: isGroup ? Boolean(gp?.allowContext) : true,
+              maxMessages: 50,
+              triggerMode: isGroup
+                ? settings.triggerPolicy === "all-messages"
+                  ? "all_messages"
+                  : "mention_or_command"
+                : "direct",
+              groupPolicyStatus: gp?.status || "",
+              updatedAt: c.lastMessageAt || new Date().toISOString(),
+            };
+          });
 
-  const markCopied = (key: "prompt" | "mcp") => {
+  const markCopied = (key: "prompt" | "mcp" | "update") => {
     setCopiedKey(key);
     window.setTimeout(() => {
       setCopiedKey((prev) => (prev === key ? "" : prev));
@@ -513,14 +676,15 @@ export function BotSettingsPanel() {
         setBots((prev) => [...prev, created]);
         setSelectedBotId(createdId);
         setNewName("");
-        setStatusMessage("新机器人已创建");
+        setStatusMessage("新机器人已创建，创建者专属私聊已自动就绪");
         return;
       }
       const res = await apiV1.createBot(newName.trim());
       setNewName("");
       await loadBots();
+      await bootstrapWorkspace().catch(() => {});
       if (res.botId) setSelectedBotId(String(res.botId));
-      setStatusMessage("新机器人已创建");
+      setStatusMessage("新机器人已创建，创建者专属私聊已自动开启");
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : "创建失败");
     }
@@ -536,6 +700,7 @@ export function BotSettingsPanel() {
     }
     setErrorMessage("");
     setBusyAction("pair");
+    setActiveChapter("runtime");
     try {
       if (isPreviewMode) {
         const mockId = `setup_${crypto.randomUUID().replace(/-/g, "")}`;
@@ -652,13 +817,9 @@ export function BotSettingsPanel() {
     setErrorMessage("");
     setBusyAction("deny");
     try {
-      if (isPreviewMode) {
-        setSetupSession(null);
-        setPendingBotSetupId("");
-        setStatusMessage("已拒绝本次配对请求");
-        return;
+      if (!isPreviewMode) {
+        await apiV1.denyBotSetupSession(setupSession.id);
       }
-      await apiV1.denyBotSetupSession(setupSession.id);
       setSetupSession(null);
       setPendingBotSetupId("");
       setStatusMessage("已拒绝本次配对请求");
@@ -687,7 +848,7 @@ export function BotSettingsPanel() {
           .updateBotContextGrant(activeBot.id, dmConvId, {
             allowTrigger: true,
             allowContext: true,
-            maxMessages: 50,
+            maxMessages: settings.maxContextMessages || 50,
           })
           .catch(() => {});
         await bootstrapWorkspace();
@@ -712,10 +873,11 @@ export function BotSettingsPanel() {
       }
       const res = await apiV1.testBotConnection(activeBot.id);
       setConnection(res.connection || null);
+      await refreshBotRuntimeState(activeBot.id);
       setStatusMessage(
         res.connection?.status === "connected"
-          ? "连接检测通过：Agent 实时通道在线"
-          : "机器人就绪（当前无常驻 WebSocket，仍可通过 MCP 或 REST 收发消息）"
+          ? "连接检测通过：守护进程实时通道在线"
+          : "机器人就绪（当前无常驻 WebSocket，仍可通过 MCP 或轮询收发消息）"
       );
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : "连接检测失败");
@@ -724,45 +886,75 @@ export function BotSettingsPanel() {
     }
   };
 
-  const handleGrantConversationContext = async (
-    conversationId: string,
-    kind: "direct" | "group"
+  const handleRequestRemoteUpgrade = async () => {
+    if (!activeBot) return;
+    setErrorMessage("");
+    setBusyAction("upgrade");
+    try {
+      if (!isPreviewMode) {
+        const res = await apiV1.requestBotRuntimeUpgrade(activeBot.id);
+        useEmoteStore
+          .getState()
+          .showToast(`已向守护进程下发 v${res.targetVersion} 空闲静默热更指令`);
+      }
+      setStatusMessage("已下发远程热更新通知，在线守护进程将在空闲时自动完成 SHA-256 校验并重启生效");
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "下发升级指令失败");
+    } finally {
+      setBusyAction("");
+    }
+  };
+
+  const handleToggleConversationAccess = async (
+    conv: BotConversationOverviewItem,
+    nextContextEnabled: boolean
   ) => {
     if (!activeBot) return;
     setErrorMessage("");
     try {
       if (!isPreviewMode) {
-        if (kind === "group") {
-          await apiV1.updateBotGroupPolicy(activeBot.id, conversationId, {
+        if (conv.type === "group") {
+          await apiV1.updateBotGroupPolicy(activeBot.id, conv.id, {
             status: "active",
             allowTrigger: true,
-            allowContext: true,
-            maxMessages: 50,
+            allowContext: nextContextEnabled,
+            maxMessages: settings.maxContextMessages || 50,
           });
         } else {
-          await apiV1.updateBotContextGrant(activeBot.id, conversationId, {
+          await apiV1.updateBotContextGrant(activeBot.id, conv.id, {
             allowTrigger: true,
-            allowContext: true,
-            maxMessages: 50,
+            allowContext: nextContextEnabled,
+            maxMessages: settings.maxContextMessages || 50,
           });
         }
         await refreshBotRuntimeState(activeBot.id);
       }
-      setStatusMessage("已开启该会话的触发与上下文读取（最近 50 条）");
+      setStatusMessage(
+        nextContextEnabled
+          ? `已开启「${conv.title}」的触发与上下文读取`
+          : `已仅保留「${conv.title}」触发（关闭历史上下文读取）`
+      );
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : "会话授权更新失败");
     }
   };
 
-  const patchSettings = async (patch: Record<string, unknown>) => {
+  const patchSettings = async (patch: Record<string, unknown>, customNotice?: string) => {
     if (!selectedBotId) return;
     setErrorMessage("");
     try {
       if (!isPreviewMode) {
-        await apiV1.updateBotSettings(selectedBotId, patch);
+        const res = await apiV1.updateBotSettings(selectedBotId, patch);
+        if (res?.settings && typeof res.settings === "object") {
+          applyServerSettings(res.settings as Record<string, unknown>);
+        } else {
+          setSettings((prev) => ({ ...prev, ...patch }));
+        }
+        await refreshBotRuntimeState(selectedBotId);
+      } else {
+        setSettings((prev) => ({ ...prev, ...patch }));
       }
-      setSettings((prev) => ({ ...prev, ...patch }));
-      setStatusMessage("机器人策略已更新");
+      setStatusMessage(customNotice || "机器人策略已保存");
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : "更新策略失败");
     }
@@ -797,24 +989,32 @@ export function BotSettingsPanel() {
     try {
       const nextName = profileNameDraft.trim();
       const nextBio = profileBioDraft.trim();
+      const nextWelcome = profileWelcomeDraft.trim();
       if (!isPreviewMode) {
         await apiV1.updateBotProfile(activeBot.id, {
           name: nextName,
           description: nextBio,
         });
+        if (nextWelcome !== settings.welcomeMessage) {
+          await apiV1.updateBotSettings(activeBot.id, {
+            welcomeMessage: nextWelcome || null,
+          });
+        }
         await loadBots();
         await bootstrapWorkspace().catch(() => {});
       } else {
         setBots((prev) =>
           prev.map((b) =>
-            b.id === activeBot.id
-              ? { ...b, name: nextName, description: nextBio }
-              : b
+            b.id === activeBot.id ? { ...b, name: nextName, description: nextBio } : b
           )
         );
       }
-      setSettings((prev) => ({ ...prev, description: nextBio }));
-      setStatusMessage("机器人资料已更新");
+      setSettings((prev) => ({
+        ...prev,
+        description: nextBio,
+        welcomeMessage: nextWelcome,
+      }));
+      setStatusMessage("机器人资料与欢迎语已保存");
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : "保存资料失败");
     } finally {
@@ -1039,9 +1239,10 @@ export function BotSettingsPanel() {
     setErrorMessage("");
     try {
       await apiV1.putBotWebhook(selectedBotId, webhookUrl, webhookSecret, webhookEnabled);
+      setWebhookSecret("");
       setStatusMessage("Outbound Webhook 已保存");
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Webhook 配置无效（密钥至少 16 位）");
+      setErrorMessage(err instanceof Error ? err.message : "Webhook 设置无效（密钥至少 16 位）");
     }
   };
 
@@ -1070,6 +1271,10 @@ export function BotSettingsPanel() {
   const isConnected = connection?.status === "connected";
   const isPaused = activeBot?.status === "paused";
   const activeTokens = tokens.filter((t) => !t.revokedAt);
+  const connectedSdkVer = extractSemverFromAdapter(connection?.adapterVersion);
+  const sdkUpdateAvailable = isSemverOlder(connectedSdkVer, latestSdkVersion);
+  const groupPreset = resolveGroupAccessPreset(settings);
+
   const activeBotAvatarUrl =
     settings.avatarUrl ||
     activeBot?.avatarUrl ||
@@ -1092,7 +1297,7 @@ export function BotSettingsPanel() {
         </div>
       )}
 
-      {/* Pending / Active Setup Session Approval Card */}
+      {/* Pending / Active Setup Session Approval Banner */}
       {setupSession &&
         setupSession.status !== "denied" &&
         setupSession.status !== "expired" &&
@@ -1222,44 +1427,61 @@ export function BotSettingsPanel() {
           </div>
         )}
 
-      {/* Multi-Bot Create */}
-      <form onSubmit={handleCreateBot} className="flex flex-wrap items-center gap-2">
-        <Input
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-          placeholder="输入新机器人名称"
-          aria-label="新机器人名称"
-          className="min-w-0 flex-1"
-        />
-        <Button type="submit" variant="primary" size="sm" disabled={!newName.trim()}>
-          创建机器人
-        </Button>
-      </form>
-
-      {bots.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {bots.map((bot) => (
-            <Button
-              key={bot.id}
-              size="sm"
-              variant={bot.id === selectedBotId ? "primary" : "secondary"}
-              className="gap-1.5"
-              onClick={() => {
-                setSelectedBotId(bot.id);
-                setConfirmDeleteBotId("");
-              }}
-            >
-              <Bot className="size-3.5" strokeWidth={1.9} />
-              {bot.name}
-            </Button>
-          ))}
+      {/* Top Switcher & Quick Create Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {bots.map((bot) => {
+            const selected = bot.id === selectedBotId;
+            const botOnline =
+              bot.botUserId && members[bot.botUserId]?.botOnline && bot.status !== "paused";
+            return (
+              <Button
+                key={bot.id}
+                size="sm"
+                variant={selected ? "primary" : "secondary"}
+                className="gap-1.5"
+                onClick={() => {
+                  setSelectedBotId(bot.id);
+                  setConfirmDeleteBotId("");
+                }}
+              >
+                <Bot className="size-3.5" strokeWidth={1.9} />
+                <span>{bot.name}</span>
+                <span
+                  className={cn(
+                    "size-1.5 rounded-full",
+                    bot.status === "paused"
+                      ? "bg-dl-warning"
+                      : botOnline
+                      ? "bg-emerald-400"
+                      : selected
+                      ? "bg-white/60"
+                      : "bg-dl-text-tertiary/60"
+                  )}
+                />
+              </Button>
+            );
+          })}
         </div>
-      )}
+
+        <form onSubmit={handleCreateBot} className="flex items-center gap-1.5 min-w-[220px] flex-1 max-w-xs">
+          <Input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="输入新机器人名称"
+            aria-label="新机器人名称"
+            className="h-8 min-w-0 flex-1 text-xs"
+          />
+          <Button type="submit" variant="primary" size="sm" disabled={!newName.trim()}>
+            创建机器人
+          </Button>
+        </form>
+      </div>
 
       {activeBot && (
-        <div className="space-y-4 rounded-2xl border border-dl-border-hairline p-4">
-          {/* 0. Bot Profile, Avatar & Lifecycle Bar (Feishu / BotFather Style) */}
-          <form onSubmit={(e) => void handleSaveBotProfile(e)} className="space-y-3">
+        <div className="rounded-2xl border border-dl-border-hairline overflow-hidden bg-surface">
+          {/* Sticky Bot Overview Header */}
+          <div className="p-4 border-b border-dl-border-hairline bg-dl-surface-subtle/35 space-y-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="relative shrink-0">
@@ -1286,7 +1508,7 @@ export function BotSettingsPanel() {
                       color={activeBotColor}
                       size="lg"
                     />
-                    <span className="absolute -bottom-1 -right-1 flex size-5 items-center justify-center rounded-full border border-dl-border-hairline bg-surface text-dl-text-primary shadow-2xs group-hover:text-dl-lane-shared">
+                    <span className="absolute -bottom-1 -right-1 flex size-5 items-center justify-center rounded-full border border-dl-border-hairline bg-surface text-dl-text-primary shadow-2xs group-hover:text-dl-lane-shared transition-colors duration-150">
                       <Camera className="size-3" strokeWidth={2} />
                     </span>
                   </Button>
@@ -1307,36 +1529,51 @@ export function BotSettingsPanel() {
                     >
                       {isPaused ? "已暂停" : "运行中"}
                     </span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      disabled={busyAction === "avatar"}
-                      onClick={() => botAvatarInputRef.current?.click()}
-                      className="h-6 px-2 text-[11px] text-dl-lane-shared"
+                    <span
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium tabular-nums",
+                        isConnected
+                          ? "bg-dl-lane-shared/12 text-dl-lane-shared"
+                          : "bg-dl-surface-subtle text-dl-text-secondary"
+                      )}
                     >
-                      更换头像
-                    </Button>
-                    {activeBotAvatarUrl && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        disabled={busyAction === "avatar"}
-                        onClick={() => void handleResetBotAvatar()}
-                        className="h-6 gap-1 px-2 text-[11px] text-dl-text-tertiary hover:text-dl-text-primary"
-                      >
-                        <RotateCcw className="size-2.5" strokeWidth={2} />
-                        恢复默认
-                      </Button>
+                      <span
+                        className={cn(
+                          "size-1.5 rounded-full",
+                          isConnected ? "bg-dl-lane-shared" : "bg-dl-text-tertiary"
+                        )}
+                      />
+                      {isConnected
+                        ? `实时在线${connectedSdkVer ? ` · v${connectedSdkVer}` : ""}`
+                        : "待机 / 按需调用"}
+                    </span>
+                    {sdkUpdateAvailable && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-dl-warning/15 px-2 py-0.5 text-[10px] font-semibold text-dl-warning tabular-nums">
+                        可升至 v{latestSdkVersion}
+                      </span>
                     )}
+                  </div>
+                  <div className="text-xs text-dl-text-secondary truncate">
+                    {settings.description || activeBot.description || "暂未填写机器人职责简介"}
                   </div>
                 </div>
               </div>
 
               <div className="flex flex-wrap items-center gap-1.5">
+                {activeBot.botUserId && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="primary"
+                    className="gap-1"
+                    disabled={busyAction === "dm"}
+                    onClick={() => void handleOpenBotDirectChat()}
+                  >
+                    <MessageSquare className="size-3.5" />
+                    发起私聊
+                  </Button>
+                )}
+
                 <Button
                   type="button"
                   size="sm"
@@ -1395,530 +1632,969 @@ export function BotSettingsPanel() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 wide:grid-cols-2 gap-2">
-              <Input
-                value={profileNameDraft}
-                onChange={(e) => setProfileNameDraft(e.target.value)}
-                placeholder="机器人显示名称"
-                aria-label="机器人显示名称"
-                className="h-8 text-xs"
-              />
-              <div className="flex items-center gap-2">
-                <Input
-                  value={profileBioDraft}
-                  onChange={(e) => setProfileBioDraft(e.target.value)}
-                  placeholder="机器人职责简介（如：负责会议纪要与工单分发）"
-                  aria-label="机器人职责简介"
-                  className="h-8 flex-1 text-xs"
-                />
-                <Button
-                  type="submit"
-                  size="sm"
-                  variant="secondary"
-                  disabled={!profileNameDraft.trim() || busyAction === "profile"}
-                  className="h-8 shrink-0 px-3 text-xs"
-                >
-                  保存资料
-                </Button>
-              </div>
-            </div>
-
+            {/* 4-Chapter Modular Navigation */}
             <div
-              data-testid="bot-color-picker"
-              className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-dl-surface-subtle/55 px-3 py-2"
+              role="tablist"
+              aria-label="机器人设置章节"
+              className="grid grid-cols-4 max-narrow:grid-cols-2 gap-1 rounded-xl bg-dl-surface-subtle/80 p-1"
             >
-              <span className="text-[11px] font-medium text-dl-text-secondary">
-                机器人主题色
-              </span>
-              <div className="flex flex-wrap items-center gap-1.5">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => void handleSelectBotColor("")}
-                  aria-label="自动配色"
-                  aria-pressed={!activeBotColor}
-                  className={cn(
-                    "h-6 rounded-full px-2 text-[11px] font-medium",
-                    !activeBotColor
-                      ? "bg-dl-lane-shared/15 text-dl-lane-shared ring-1 ring-dl-lane-shared/40"
-                      : "bg-surface/80 text-dl-text-secondary hover:text-dl-text-primary border border-dl-border-hairline"
-                  )}
-                >
-                  自动
-                </Button>
-                {BOT_AVATAR_COLORS.map((preset) => {
-                  const selected = activeBotColor === preset.id;
-                  return (
-                    <Button
-                      key={preset.id}
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      title={preset.label}
-                      aria-label={`配色：${preset.label}`}
-                      aria-pressed={selected}
-                      onClick={() => void handleSelectBotColor(preset.id)}
-                      style={{ backgroundImage: preset.gradient }}
-                      className={cn(
-                        "relative size-6 min-w-0 rounded-full p-0 text-white shadow-2xs transition-transform hover:scale-105 hover:bg-transparent",
-                        selected
-                          ? "ring-2 ring-offset-2 ring-offset-surface ring-dl-text-primary scale-105"
-                          : "ring-1 ring-black/10 dark:ring-white/15"
-                      )}
-                    >
-                      {selected && <Check className="size-3 stroke-[2.6]" />}
-                    </Button>
-                  );
-                })}
-              </div>
-            </div>
-          </form>
-
-          {/* 1. Universal One-Click Agent Pairing */}
-          <div className="space-y-2.5 border-t border-dl-border-hairline pt-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-dl-text-primary">
-                  一键连接 AI Agent
-                </span>
-                <span
-                  className={cn(
-                    "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium",
-                    isConnected
-                      ? "bg-dl-lane-shared/12 text-dl-lane-shared"
-                      : "bg-dl-surface-subtle text-dl-text-secondary"
-                  )}
-                >
-                  <span
+              {CHAPTER_TABS.map((tab) => {
+                const Icon = tab.icon;
+                const active = activeChapter === tab.id;
+                return (
+                  <Button
+                    key={tab.id}
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setActiveChapter(tab.id)}
                     className={cn(
-                      "size-1.5 rounded-full",
-                      isConnected ? "bg-dl-lane-shared" : "bg-dl-text-tertiary"
+                      "h-8 w-full justify-center gap-1.5 rounded-lg px-2.5 text-xs font-medium",
+                      active
+                        ? "bg-surface text-dl-text-primary shadow-2xs font-semibold hover:bg-surface"
+                        : "text-dl-text-secondary hover:text-dl-text-primary hover:bg-surface/40"
                     )}
-                  />
-                  {isConnected
-                    ? `实时在线${connection?.adapterVersion ? ` · ${connection.adapterVersion}` : ""}`
-                    : "待机 / 按需调用"}
-                </span>
-              </div>
+                  >
+                    <Icon className="size-3.5 shrink-0" strokeWidth={active ? 2.1 : 1.8} />
+                    <span className="truncate">{tab.label}</span>
+                  </Button>
+                );
+              })}
+            </div>
+          </div>
 
-              <div className="flex items-center gap-1.5">
-                {activeBot.botUserId && (
+          <div className="p-4">
+            {/* =================================================================
+                CHAPTER 1: 连接与运行 (Runtime, SDK Updater & Delivery Diagnostics)
+               ================================================================= */}
+            <div className={cn(activeChapter !== "runtime" && "hidden", "space-y-4")}>
+              {/* One-Click Agent Pairing */}
+              <div className="space-y-2.5 rounded-xl border border-dl-border-hairline p-3.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="space-y-0.5">
+                    <div className="text-xs font-semibold text-dl-text-primary">
+                      一键连接 AI Agent
+                    </div>
+                    <div className="text-[11px] text-dl-text-secondary">
+                      通用适配 Claude Code、Codex、Cursor、Antigravity、OpenClaw 等客户端，无需公网 IP 或手动粘贴密钥。
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="gap-1"
+                    disabled={busyAction === "test"}
+                    onClick={() => void handleTestConnection()}
+                  >
+                    <RefreshCw className={cn("size-3.5", busyAction === "test" && "animate-spin")} />
+                    检测连接
+                  </Button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="primary"
+                    className="gap-1.5"
+                    disabled={busyAction === "pair"}
+                    onClick={() => void handleStartPairing()}
+                  >
+                    {busyAction === "pair" ? (
+                      <RefreshCw className="size-3.5 animate-spin" />
+                    ) : copiedKey === "prompt" ? (
+                      <Check className="size-3.5" />
+                    ) : (
+                      <Link2 className="size-3.5" />
+                    )}
+                    {busyAction === "pair"
+                      ? "正在生成配对指令…"
+                      : copiedKey === "prompt"
+                      ? "已复制 Agent 配对指令"
+                      : "生成并复制 Agent 配对指令"}
+                  </Button>
                   <Button
                     type="button"
                     size="sm"
                     variant="secondary"
-                    className="gap-1"
-                    disabled={busyAction === "dm"}
-                    onClick={() => void handleOpenBotDirectChat()}
-                  >
-                    <MessageSquare className="size-3.5" />
-                    发起私聊
-                  </Button>
-                )}
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="gap-1"
-                  disabled={busyAction === "test"}
-                  onClick={() => void handleTestConnection()}
-                >
-                  <RefreshCw className={cn("size-3.5", busyAction === "test" && "animate-spin")} />
-                  检测
-                </Button>
-              </div>
-            </div>
-
-            <div className="text-[11px] text-dl-text-secondary">
-              通用适配 Claude Code、Codex、Cursor、Antigravity、OpenClaw 等客户端，无需公网 IP 或手动复制密钥。
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="primary"
-                className="gap-1.5"
-                disabled={busyAction === "pair"}
-                onClick={() => void handleStartPairing()}
-              >
-                {busyAction === "pair" ? (
-                  <RefreshCw className="size-3.5 animate-spin" />
-                ) : copiedKey === "prompt" ? (
-                  <Check className="size-3.5" />
-                ) : (
-                  <Link2 className="size-3.5" />
-                )}
-                {busyAction === "pair"
-                  ? "正在生成配对指令…"
-                  : copiedKey === "prompt"
-                  ? "已复制 Agent 配对指令"
-                  : "生成并复制 Agent 配对指令"}
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                className="gap-1.5"
-                onClick={() => {
-                  void copyTextSafe(buildStandardMcpConfig()).then((ok) => {
-                    if (ok) {
-                      markCopied("mcp");
-                      setStatusMessage("标准 MCP 配置 JSON 已复制");
-                      useEmoteStore.getState().showToast("标准 MCP 配置 JSON 已复制");
-                    }
-                  });
-                }}
-              >
-                {copiedKey === "mcp" ? (
-                  <Check className="size-3.5" />
-                ) : (
-                  <Copy className="size-3.5" />
-                )}
-                {copiedKey === "mcp" ? "已复制 MCP 配置" : "复制标准 MCP 配置"}
-              </Button>
-            </div>
-          </div>
-
-          {/* 1.5 Bound Agent Credentials & One-Click Unbind */}
-          <div className="space-y-2 border-t border-dl-border-hairline pt-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5 text-xs font-semibold text-dl-text-primary">
-                <KeyRound className="size-3.5 text-dl-lane-shared" strokeWidth={1.9} />
-                <span>已绑定凭证与解绑 ({activeTokens.length})</span>
-              </div>
-              {activeTokens.length > 0 && (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  disabled={busyAction === "revoke-all"}
-                  onClick={() => void handleRevokeAllTokens()}
-                  className="h-6 gap-1 px-2 text-[11px] text-dl-danger hover:bg-dl-danger/10"
-                >
-                  <Unlink className="size-3" strokeWidth={2} />
-                  解绑全部凭证
-                </Button>
-              )}
-            </div>
-
-            {activeTokens.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-dl-border-hairline px-3 py-2 text-[11px] text-dl-text-tertiary">
-                当前未绑定任何 Agent 客户端凭证。点击上方「生成并复制 Agent 配对指令」即可完成无密钥配对。
-              </div>
-            ) : (
-              <div className="space-y-1.5">
-                {activeTokens.map((tok) => (
-                  <div
-                    key={tok.id}
-                    data-testid="bound-agent-token-row"
-                    className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-dl-surface-subtle/60 px-3 py-2 text-xs"
-                  >
-                    <div className="min-w-0 space-y-0.5">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-[11px] font-semibold text-dl-text-primary">
-                          凭证 #{tok.id.slice(-8)}
-                        </span>
-                        <span className="rounded-full bg-dl-lane-shared/12 px-1.5 py-0.5 text-[10px] font-medium text-dl-lane-shared">
-                          {tok.scopes?.length || 0} 项权限
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-dl-text-tertiary">
-                        绑定于 {new Date(tok.createdAt).toLocaleDateString()}
-                        {tok.lastUsedAt
-                          ? ` · 最近活跃 ${new Date(tok.lastUsedAt).toLocaleTimeString([], {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}`
-                          : ""}
-                      </div>
-                    </div>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="secondary"
-                      disabled={busyAction === `revoke:${tok.id}`}
-                      onClick={() => void handleRevokeToken(tok.id)}
-                      className="h-7 gap-1 px-2.5 text-xs hover:text-dl-danger"
-                    >
-                      <Unlink className="size-3.5" strokeWidth={1.9} />
-                      解绑凭证
-                    </Button>
-                  </div>
-                ))}
-                <div className="text-[11px] text-dl-text-tertiary">
-                  提示：也可在 Agent 终端运行 <code className="font-mono text-dl-text-secondary">duallane-agent unbind</code> 主动解绑并清除本地凭证。
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* 2. Conversation Context Grants */}
-          {botConversations.length > 0 && (
-            <div className="space-y-2 border-t border-dl-border-hairline pt-3">
-              <div className="text-xs font-semibold text-dl-text-primary">会话上下文授权</div>
-              <div className="space-y-1.5">
-                {botConversations.map((conv) => {
-                  const gp = groupPolicies.find((p) => p.conversationId === conv.id);
-                  const groupGranted =
-                    conv.kind === "group" && gp?.status === "active" && gp.allowContext;
-                  return (
-                    <div
-                      key={conv.id}
-                      className="flex items-center justify-between gap-2 rounded-xl bg-dl-surface-subtle/60 px-3 py-1.5 text-xs"
-                    >
-                      <span className="truncate text-dl-text-primary">
-                        {conv.kind === "direct" ? `私聊 · ${conv.title}` : `群聊 · ${conv.title}`}
-                      </span>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant={groupGranted ? "ghost" : "secondary"}
-                        onClick={() =>
-                          void handleGrantConversationContext(
-                            conv.id,
-                            conv.kind === "group" ? "group" : "direct"
-                          )
+                    className="gap-1.5"
+                    onClick={() => {
+                      void copyTextSafe(buildStandardMcpConfig()).then((ok) => {
+                        if (ok) {
+                          markCopied("mcp");
+                          setStatusMessage("标准 MCP 配置 JSON 已复制");
+                          useEmoteStore.getState().showToast("标准 MCP 配置 JSON 已复制");
                         }
-                      >
-                        {groupGranted ? "✓ 已授权上下文" : "授权读取最近 50 条"}
-                      </Button>
+                      });
+                    }}
+                  >
+                    {copiedKey === "mcp" ? (
+                      <Check className="size-3.5" />
+                    ) : (
+                      <Copy className="size-3.5" />
+                    )}
+                    {copiedKey === "mcp" ? "已复制 MCP 配置" : "复制标准 MCP 配置"}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Runtime SDK Version & Silent Hot-Update Card */}
+              <div className="rounded-xl border border-dl-border-hairline bg-dl-surface-subtle/40 p-3.5 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-dl-text-primary">
+                      <span>运行时版本与自动热更</span>
+                      <span className="rounded-md bg-surface px-1.5 py-0.5 font-mono text-[10px] text-dl-text-secondary border border-dl-border-hairline tabular-nums">
+                        最新 SDK v{latestSdkVersion}
+                      </span>
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+                    <div className="text-[11px] text-dl-text-secondary">
+                      {connection?.adapterVersion
+                        ? `当前上报客户端：${connection.adapterVersion}`
+                        : "当前暂无活跃长连接上报版本号"}
+                      {" · 常驻守护进程会在空闲时自动校验 SHA-256 并静默升级"}
+                    </div>
+                  </div>
 
-          {/* 3. Core Bot Policies */}
-          <div className="space-y-3 border-t border-dl-border-hairline pt-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs font-semibold text-dl-text-primary">群组隐私模式</div>
-                <div className="text-[11px] text-dl-text-tertiary">仅响应 `@提及` 与 `/指令`</div>
-              </div>
-              <Switch
-                label="Telegram 群组隐私模式"
-                checked={settings.triggerPolicy !== "all-messages"}
-                onCheckedChange={(privacyOn) =>
-                  void patchSettings({
-                    triggerPolicy: privacyOn ? "mention-or-command" : "all-messages",
-                  })
-                }
-              />
-            </div>
-
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-xs font-semibold text-dl-text-primary">允许主动推送消息与卡片</div>
-              <Switch
-                label="允许主动推送消息或卡片"
-                checked={settings.proactiveEnabled}
-                onCheckedChange={(checked) => void patchSettings({ proactiveEnabled: checked })}
-              />
-            </div>
-
-            <div className="space-y-2 pt-1">
-              <div className="text-xs font-semibold text-dl-text-primary">可见范围</div>
-              <Select
-                value={settings.visibilityPolicy}
-                onValueChange={(val) => void patchSettings({ visibilityPolicy: val })}
-                options={[
-                  { value: "private", label: "仅自己可见" },
-                  { value: "specified_members", label: "指定空间成员可用" },
-                  { value: "space_members", label: "全空间成员可用" },
-                  { value: "groups", label: "允许加入群组" },
-                ]}
-              />
-              {settings.visibilityPolicy === "specified_members" && (
-                <div className="max-h-36 overflow-y-auto rounded-xl border border-dl-border-hairline p-2 space-y-1">
-                  {Object.values(members).map((m) => {
-                    const selected = settings.allowedMemberIds.includes(m.id);
-                    return (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {isConnected && (
                       <Button
-                        key={m.id}
                         type="button"
                         size="sm"
-                        variant="ghost"
-                        className={cn(
-                          "w-full justify-between px-2.5",
-                          selected && "bg-dl-lane-shared/10 text-dl-lane-shared"
-                        )}
-                        onClick={() => {
-                          const next = selected
-                            ? settings.allowedMemberIds.filter((id) => id !== m.id)
-                            : [...settings.allowedMemberIds, m.id];
-                          void patchSettings({ allowedMemberIds: next });
-                        }}
+                        variant={sdkUpdateAvailable ? "primary" : "secondary"}
+                        className="gap-1"
+                        disabled={busyAction === "upgrade"}
+                        onClick={() => void handleRequestRemoteUpgrade()}
                       >
-                        <span>{m.displayName}</span>
-                        <span>{selected ? "✓ 已授权" : "点击授权"}</span>
+                        <ArrowUpCircle className="size-3.5" />
+                        {sdkUpdateAvailable ? "立即远程热更" : "推送升级检查"}
                       </Button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* 4. Collapsible Developer Options */}
-          <div className="border-t border-dl-border-hairline pt-3">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => setAdvancedOpen((prev) => !prev)}
-              className="w-full justify-between px-1.5 text-xs font-semibold text-dl-text-secondary hover:text-dl-text-primary"
-            >
-              <span>开发者选项（Slash 指令 / 手动 Token / Webhook）</span>
-              {advancedOpen ? (
-                <ChevronDown className="size-3.5" />
-              ) : (
-                <ChevronRight className="size-3.5" />
-              )}
-            </Button>
-
-            {advancedOpen && (
-              <div className="mt-3 space-y-4">
-                {/* Slash Commands */}
-                <form onSubmit={handleAddCommand} className="space-y-2">
-                  <div className="text-xs font-semibold text-dl-text-primary">
-                    Slash 指令菜单 ({commands.length})
-                  </div>
-                  {commands.length > 0 && (
-                    <div className="space-y-1">
-                      {commands.map((cmd) => (
-                        <div
-                          key={cmd.command}
-                          className="flex items-center justify-between gap-2 rounded-lg bg-dl-surface-subtle/60 px-2.5 py-1 text-xs"
-                        >
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="font-mono font-medium text-dl-lane-shared shrink-0">
-                              /{cmd.command}
-                            </span>
-                            <span className="truncate text-dl-text-secondary">
-                              {cmd.description}
-                            </span>
-                          </div>
-                          <IconButton
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            label={`移除指令 /${cmd.command}`}
-                            className="size-6 shrink-0 text-dl-text-tertiary hover:text-dl-danger"
-                            onClick={() => void handleRemoveCommand(cmd.command)}
-                          >
-                            <X className="size-3" strokeWidth={2} />
-                          </IconButton>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div className="grid grid-cols-3 max-narrow:grid-cols-1 gap-2">
-                    <Input
-                      value={cmdName}
-                      onChange={(e) => setCmdName(e.target.value)}
-                      placeholder="/summarize"
-                      aria-label="Slash 指令名"
-                    />
-                    <Input
-                      value={cmdDesc}
-                      onChange={(e) => setCmdDesc(e.target.value)}
-                      placeholder="总结当前线程"
-                      aria-label="Slash 指令描述"
-                    />
-                    <Button type="submit" size="sm" variant="secondary">
-                      注册指令
-                    </Button>
-                  </div>
-                </form>
-
-                {/* Scopes & Manual Token Issuance */}
-                <div className="space-y-2 border-t border-dl-border-hairline pt-3">
-                  <div className="text-xs font-semibold text-dl-text-primary">
-                    手动签发 Token（服务集成用）
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {VALID_SCOPES.map((s) => {
-                      const active = selectedScopes.includes(s.id);
-                      return (
-                        <Button
-                          key={s.id}
-                          type="button"
-                          size="sm"
-                          variant={active ? "primary" : "ghost"}
-                          onClick={() =>
-                            setSelectedScopes((prev) =>
-                              active ? prev.filter((x) => x !== s.id) : [...prev, s.id]
-                            )
-                          }
-                        >
-                          {active ? "✓ " : ""}
-                          {s.label}
-                        </Button>
-                      );
-                    })}
-                  </div>
-                  <div className="flex items-center gap-2 pt-1">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => void handleIssueOrRotateToken(false)}
-                    >
-                      签发新 Token
-                    </Button>
+                    )}
                     <Button
                       type="button"
                       size="sm"
                       variant="ghost"
-                      onClick={() => void handleIssueOrRotateToken(true)}
+                      className="gap-1 text-xs"
+                      onClick={() => {
+                        const cmd = "node ~/.duallane/bin/duallane-agent.mjs update";
+                        void copyTextSafe(cmd).then((ok) => {
+                          if (ok) {
+                            markCopied("update");
+                            useEmoteStore.getState().showToast("CLI 升级指令已复制");
+                          }
+                        });
+                      }}
                     >
-                      轮换 Token
+                      {copiedKey === "update" ? (
+                        <Check className="size-3.5" />
+                      ) : (
+                        <Copy className="size-3.5" />
+                      )}
+                      {copiedKey === "update" ? "已复制升级命令" : "复制 CLI 更新命令"}
                     </Button>
                   </div>
-                  {issuedToken && (
-                    <div className="rounded-xl bg-dl-surface-subtle p-2.5 text-xs font-mono break-all select-all border border-dl-border-hairline">
-                      {issuedToken}
+                </div>
+
+                <div className="rounded-lg bg-surface/80 px-2.5 py-1.5 font-mono text-[11px] text-dl-text-tertiary border border-dl-border-hairline">
+                  体检与更新命令：duallane-agent doctor · duallane-agent update
+                </div>
+              </div>
+
+              {/* Recent Delivery Queue Diagnostics */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-dl-text-primary">
+                    最近触发投递记录
+                  </span>
+                  <span className="text-[11px] text-dl-text-tertiary tabular-nums">
+                    最近 {recentDeliveries.length} 条
+                  </span>
+                </div>
+                {recentDeliveries.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-dl-border-hairline px-3 py-2.5 text-[11px] text-dl-text-tertiary">
+                    暂无近期触发记录。可在私聊发送消息或在已授权群聊 `@` 提及机器人进行测试。
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {recentDeliveries.slice(0, 6).map((item) => {
+                      const badge = formatDeliveryStatus(item.status);
+                      return (
+                        <div
+                          key={item.id}
+                          className="flex items-center justify-between gap-2 rounded-xl bg-dl-surface-subtle/55 px-3 py-1.5 text-xs"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="font-mono text-[11px] text-dl-text-tertiary tabular-nums shrink-0">
+                              #{item.sequence}
+                            </span>
+                            <span className="truncate text-dl-text-primary">
+                              {item.conversationTitle ||
+                                (item.eventType === "bot.runtime_upgrade"
+                                  ? "远程热更新通知"
+                                  : item.eventType)}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span
+                              className={cn(
+                                "rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+                                badge.toneClass
+                              )}
+                            >
+                              {badge.label}
+                            </span>
+                            <span className="text-[11px] text-dl-text-tertiary tabular-nums">
+                              {new Date(item.createdAt).toLocaleTimeString([], {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* =================================================================
+                CHAPTER 2: 权限与会话 (Orthogonal Permissions & Conversation Grants)
+               ================================================================= */}
+            <div className={cn(activeChapter !== "permissions" && "hidden", "space-y-4")}>
+              {/* Creator Sovereignty Guarantee Banner */}
+              <div className="flex items-center justify-between gap-3 rounded-xl bg-dl-lane-shared/[0.07] border border-dl-lane-shared/20 px-3.5 py-2.5">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Lock className="size-3.5 text-dl-lane-shared shrink-0" strokeWidth={2.1} />
+                  <div className="text-xs text-dl-text-primary">
+                    <span className="font-semibold">创建者本人私聊永久保留</span>
+                    <span className="text-dl-text-secondary">
+                      {" · 无论下方成员范围如何调整，你本人的 1v1 私聊始终允许触发与对话"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Axis 1: Member Discovery & Direct Chat Scope */}
+              <div className="rounded-xl border border-dl-border-hairline p-3.5 space-y-3">
+                <div className="space-y-1">
+                  <div className="text-xs font-semibold text-dl-text-primary">
+                    1. 成员可用范围（谁可以发现并与机器人私聊）
+                  </div>
+                  <div className="text-[11px] text-dl-text-tertiary">
+                    独立控制成员私聊可见性，不再与群聊权限耦合
+                  </div>
+                </div>
+                <Select
+                  value={normalizeMemberVisibility(settings.visibilityPolicy)}
+                  onValueChange={(val) =>
+                    void patchSettings(
+                      { visibilityPolicy: val, allowDirect: true },
+                      "成员可用范围已更新"
+                    )
+                  }
+                  options={[
+                    { value: "private", label: "仅创建者本人可用（默认）" },
+                    { value: "specified_members", label: "创建者 + 指定空间成员可用" },
+                    { value: "space_members", label: "全空间成员可用" },
+                  ]}
+                />
+
+                {normalizeMemberVisibility(settings.visibilityPolicy) === "specified_members" && (
+                  <div className="max-h-36 overflow-y-auto rounded-xl border border-dl-border-hairline p-2 space-y-1">
+                    {Object.values(members)
+                      .filter((m) => m.role !== "bot")
+                      .map((m) => {
+                        const selected = settings.allowedMemberIds.includes(m.id);
+                        return (
+                          <Button
+                            key={m.id}
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className={cn(
+                              "w-full justify-between px-2.5",
+                              selected && "bg-dl-lane-shared/10 text-dl-lane-shared"
+                            )}
+                            onClick={() => {
+                              const next = selected
+                                ? settings.allowedMemberIds.filter((id) => id !== m.id)
+                                : [...settings.allowedMemberIds, m.id];
+                              void patchSettings(
+                                { allowedMemberIds: next },
+                                "指定成员白名单已更新"
+                              );
+                            }}
+                          >
+                            <span>{m.displayName}</span>
+                            <span>{selected ? "✓ 已授权" : "点击授权"}</span>
+                          </Button>
+                        );
+                      })}
+                  </div>
+                )}
+              </div>
+
+              {/* Axis 2: Group Chat Admission & Trigger Policy */}
+              <div className="rounded-xl border border-dl-border-hairline p-3.5 space-y-3">
+                <div className="space-y-1">
+                  <div className="text-xs font-semibold text-dl-text-primary">
+                    2. 群聊准入与唤醒规则
+                  </div>
+                  <div className="text-[11px] text-dl-text-tertiary">
+                    设置谁可以将该机器人拉入群聊，以及群内的消息触发条件
+                  </div>
+                </div>
+
+                <Select
+                  value={groupPreset}
+                  onValueChange={(val) =>
+                    void patchSettings(
+                      buildGroupAccessPatch(val as GroupAccessPreset),
+                      "群聊准入策略已更新"
+                    )
+                  }
+                  options={[
+                    { value: "owner_only", label: "允许入群 · 仅创建者本人可拉入（推荐）" },
+                    { value: "approval_required", label: "允许入群 · 其他成员拉入需我审批" },
+                    { value: "open", label: "允许入群 · 可用范围内的成员可直接拉入" },
+                    { value: "disabled", label: "禁止加入任何群聊（仅限私聊）" },
+                  ]}
+                />
+
+                {settings.allowGroup && (
+                  <div className="flex items-center justify-between gap-3 rounded-lg bg-dl-surface-subtle/60 px-3 py-2">
+                    <div>
+                      <div className="text-xs font-medium text-dl-text-primary">群组隐私模式</div>
+                      <div className="text-[11px] text-dl-text-tertiary">
+                        开启后群内仅响应 `@提及`、回复机器人消息或 `/指令`；关闭则响应群内全部消息
+                      </div>
                     </div>
+                    <Switch
+                      label="Telegram 群组隐私模式"
+                      checked={settings.triggerPolicy !== "all-messages"}
+                      onCheckedChange={(privacyOn) =>
+                        void patchSettings(
+                          { triggerPolicy: privacyOn ? "mention-or-command" : "all-messages" },
+                          privacyOn
+                            ? "已开启群组隐私模式（仅 @提及/回复/指令唤醒）"
+                            : "已开启群聊全量消息响应模式"
+                        )
+                      }
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Connected Conversations & Effective Trigger Status */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-dl-text-primary">
+                    已接入会话与实际生效状态 ({effectiveConversations.length})
+                  </span>
+                  <span className="text-[11px] text-dl-text-tertiary">
+                    网关实时鉴权真值
+                  </span>
+                </div>
+
+                {effectiveConversations.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-dl-border-hairline px-3 py-2.5 text-[11px] text-dl-text-tertiary">
+                    当前尚未加入任何群聊或私聊。点击上方「发起私聊」即可一键开启专属对话。
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {effectiveConversations.map((conv) => {
+                      const triggerLabel = !conv.allowTrigger
+                        ? formatBlockReason(conv.blockReason)
+                        : conv.type === "direct"
+                        ? "私聊实时响应"
+                        : conv.triggerMode === "all_messages"
+                        ? "群内全量响应"
+                        : "群内 @提及 / 回复唤醒";
+                      return (
+                        <div
+                          key={conv.id}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-dl-surface-subtle/60 px-3 py-2 text-xs"
+                        >
+                          <div className="min-w-0 space-y-0.5">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-medium text-dl-text-primary truncate">
+                                {conv.type === "direct"
+                                  ? `私聊 · ${conv.title}`
+                                  : `群聊 · ${conv.title}`}
+                              </span>
+                              {conv.isOwnerDirect && (
+                                <span className="rounded bg-dl-lane-shared/12 px-1.5 py-0.5 text-[10px] font-semibold text-dl-lane-shared shrink-0">
+                                  创建者专属
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1.5 text-[11px]">
+                              <span
+                                className={cn(
+                                  "inline-flex items-center gap-1 font-medium",
+                                  conv.allowTrigger ? "text-dl-success" : "text-dl-warning"
+                                )}
+                              >
+                                <span
+                                  className={cn(
+                                    "size-1.5 rounded-full",
+                                    conv.allowTrigger ? "bg-dl-success" : "bg-dl-warning"
+                                  )}
+                                />
+                                {triggerLabel}
+                              </span>
+                              <span className="text-dl-text-tertiary">
+                                ·{" "}
+                                {conv.allowContext
+                                  ? `可读最近 ${conv.maxMessages} 条上下文`
+                                  : "仅读取单条触发消息"}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {conv.type === "group" && conv.groupPolicyStatus !== "active" ? (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="primary"
+                                onClick={() => void handleToggleConversationAccess(conv, true)}
+                              >
+                                批准接入该群
+                              </Button>
+                            ) : (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={conv.allowContext ? "ghost" : "secondary"}
+                                onClick={() =>
+                                  void handleToggleConversationAccess(conv, !conv.allowContext)
+                                }
+                              >
+                                {conv.allowContext ? "✓ 已授权上下文" : "开启上下文读取"}
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* =================================================================
+                CHAPTER 3: 资料与上下文 (Persona, Theme Color & Context Budget)
+               ================================================================= */}
+            <div className={cn(activeChapter !== "persona" && "hidden", "space-y-4")}>
+              <form onSubmit={(e) => void handleSaveBotProfile(e)} className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-dl-text-primary">
+                    身份资料与欢迎语
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      disabled={busyAction === "avatar"}
+                      onClick={() => botAvatarInputRef.current?.click()}
+                      className="h-7 px-2 text-xs text-dl-lane-shared"
+                    >
+                      更换头像
+                    </Button>
+                    {activeBotAvatarUrl && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={busyAction === "avatar"}
+                        onClick={() => void handleResetBotAvatar()}
+                        className="h-7 gap-1 px-2 text-xs text-dl-text-tertiary hover:text-dl-text-primary"
+                      >
+                        <RotateCcw className="size-3" strokeWidth={2} />
+                        恢复默认
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 wide:grid-cols-2 gap-2.5">
+                  <Input
+                    value={profileNameDraft}
+                    onChange={(e) => setProfileDraftField("name", e.target.value)}
+                    placeholder="机器人显示名称"
+                    aria-label="机器人显示名称"
+                    className="h-8 text-xs"
+                  />
+                  <Input
+                    value={profileBioDraft}
+                    onChange={(e) => setProfileDraftField("bio", e.target.value)}
+                    placeholder="职责简介（如：负责日常巡检、纪要总结与卡片分发）"
+                    aria-label="机器人职责简介"
+                    className="h-8 text-xs"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={profileWelcomeDraft}
+                    onChange={(e) => setProfileDraftField("welcome", e.target.value)}
+                    placeholder="首次对话欢迎语（选填，例如：你好，发给我任意问题或直接拖入文档即可）"
+                    aria-label="机器人欢迎语"
+                    className="h-8 flex-1 text-xs"
+                  />
+                  <Button
+                    type="submit"
+                    size="sm"
+                    variant="primary"
+                    disabled={!profileNameDraft.trim() || busyAction === "profile"}
+                    className="h-8 shrink-0 px-3 text-xs"
+                  >
+                    保存资料
+                  </Button>
+                </div>
+
+                <div
+                  data-testid="bot-color-picker"
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-dl-surface-subtle/55 px-3 py-2.5"
+                >
+                  <span className="text-xs font-medium text-dl-text-primary">机器人主题色</span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => void handleSelectBotColor("")}
+                      aria-label="自动配色"
+                      aria-pressed={!activeBotColor}
+                      className={cn(
+                        "h-6 rounded-full px-2 text-[11px] font-medium",
+                        !activeBotColor
+                          ? "bg-dl-lane-shared/15 text-dl-lane-shared ring-1 ring-dl-lane-shared/40"
+                          : "bg-surface/80 text-dl-text-secondary hover:text-dl-text-primary border border-dl-border-hairline"
+                      )}
+                    >
+                      自动
+                    </Button>
+                    {BOT_AVATAR_COLORS.map((preset) => {
+                      const selected = activeBotColor === preset.id;
+                      return (
+                        <Button
+                          key={preset.id}
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          title={preset.label}
+                          aria-label={`配色：${preset.label}`}
+                          aria-pressed={selected}
+                          onClick={() => void handleSelectBotColor(preset.id)}
+                          style={{ backgroundImage: preset.gradient }}
+                          className={cn(
+                            "relative size-6 min-w-0 rounded-full p-0 text-white shadow-2xs transition-transform duration-150 hover:scale-105 hover:bg-transparent",
+                            selected
+                              ? "ring-2 ring-offset-2 ring-offset-surface ring-dl-text-primary scale-105"
+                              : "ring-1 ring-black/10 dark:ring-white/15"
+                          )}
+                        >
+                          {selected && <Check className="size-3 stroke-[2.6]" />}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </form>
+
+              {/* Context Window Budget Controls */}
+              <div className="rounded-xl border border-dl-border-hairline p-3.5 space-y-3">
+                <div className="space-y-0.5">
+                  <div className="text-xs font-semibold text-dl-text-primary">
+                    上下文读取窗口策略
+                  </div>
+                  <div className="text-[11px] text-dl-text-tertiary">
+                    控制机器人在已授权会话中每次唤醒可读取的历史上下文范围
+                  </div>
+                </div>
+
+                <Select
+                  value={String(settings.maxContextMessages || 50)}
+                  onValueChange={(val) =>
+                    void patchSettings(
+                      { maxContextMessages: Number.parseInt(val, 10) || 50 },
+                      `单次上下文窗口已设为最近 ${val} 条`
+                    )
+                  }
+                  options={[
+                    { value: "20", label: "轻量上下文 · 最近 20 条消息" },
+                    { value: "50", label: "标准上下文 · 最近 50 条消息（推荐）" },
+                    { value: "100", label: "深度上下文 · 最近 100 条消息" },
+                  ]}
+                />
+
+                <div className="flex items-center justify-between gap-3 pt-1">
+                  <div>
+                    <div className="text-xs font-medium text-dl-text-primary">
+                      附带话题与引用回复上下文
+                    </div>
+                    <div className="text-[11px] text-dl-text-tertiary">
+                      允许机器人理解消息所引用的原消息及话题脉络
+                    </div>
+                  </div>
+                  <Switch
+                    label="附带话题与引用回复"
+                    checked={settings.includeReplies}
+                    onCheckedChange={(checked) =>
+                      void patchSettings({ includeReplies: checked }, "话题回复上下文策略已更新")
+                    }
+                  />
+                </div>
+
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-medium text-dl-text-primary">
+                      附带文件与图片附件元数据
+                    </div>
+                    <div className="text-[11px] text-dl-text-tertiary">
+                      在上下文中包含附件文件名、类型与大小摘要
+                    </div>
+                  </div>
+                  <Switch
+                    label="附带附件元数据"
+                    checked={settings.includeAttachmentMetadata}
+                    onCheckedChange={(checked) =>
+                      void patchSettings(
+                        { includeAttachmentMetadata: checked },
+                        "附件元数据读取策略已更新"
+                      )
+                    }
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* =================================================================
+                CHAPTER 4: 扩展与安全 (Modular Capability Slots & Bound Credentials)
+               ================================================================= */}
+            <div className={cn(activeChapter !== "extensions" && "hidden", "space-y-3")}>
+              {/* Slot 1: Proactive Push Switch */}
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-dl-border-hairline px-3.5 py-3">
+                <div>
+                  <div className="text-xs font-semibold text-dl-text-primary">
+                    允许主动推送消息与交互卡片
+                  </div>
+                  <div className="text-[11px] text-dl-text-tertiary">
+                    用于定时巡检日报、CI 构建通知或异步长任务主动回传结果
+                  </div>
+                </div>
+                <Switch
+                  label="允许主动推送消息或卡片"
+                  checked={settings.proactiveEnabled}
+                  onCheckedChange={(checked) =>
+                    void patchSettings({ proactiveEnabled: checked }, "主动推送权限已更新")
+                  }
+                />
+              </div>
+
+              {/* Slot 2: Bound Agent Credentials & One-Click Unbind */}
+              <div className="rounded-xl border border-dl-border-hairline p-3.5 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-dl-text-primary">
+                    <KeyRound className="size-3.5 text-dl-lane-shared" strokeWidth={1.9} />
+                    <span>已绑定凭证与解绑 ({activeTokens.length})</span>
+                  </div>
+                  {activeTokens.length > 0 && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      disabled={busyAction === "revoke-all"}
+                      onClick={() => void handleRevokeAllTokens()}
+                      className="h-6 gap-1 px-2 text-[11px] text-dl-danger hover:bg-dl-danger/10"
+                    >
+                      <Unlink className="size-3" strokeWidth={2} />
+                      解绑全部凭证
+                    </Button>
                   )}
                 </div>
 
-                {/* Outbound Webhook */}
-                <form
-                  onSubmit={handleSaveWebhook}
-                  className="space-y-2 border-t border-dl-border-hairline pt-3"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-dl-text-primary">
-                      Outbound Webhook（HMAC-SHA256）
-                    </span>
-                    <Switch
-                      label="启用 Outbound Webhook"
-                      checked={webhookEnabled}
-                      onCheckedChange={setWebhookEnabled}
-                    />
+                {activeTokens.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-dl-border-hairline px-3 py-2 text-[11px] text-dl-text-tertiary">
+                    当前未绑定任何 Agent 客户端凭证。可在「连接与运行」标签页一键免密配对。
                   </div>
-                  <div className="grid grid-cols-2 max-narrow:grid-cols-1 gap-2">
-                    <Input
-                      value={webhookUrl}
-                      onChange={(e) => setWebhookUrl(e.target.value)}
-                      placeholder="https://agent.example.com/webhook"
-                      aria-label="Webhook 地址"
-                    />
-                    <Input
-                      value={webhookSecret}
-                      onChange={(e) => setWebhookSecret(e.target.value)}
-                      placeholder="签名密钥（至少 16 位）"
-                      aria-label="Webhook 签名密钥"
-                    />
+                ) : (
+                  <div className="space-y-1.5">
+                    {activeTokens.map((tok) => (
+                      <div
+                        key={tok.id}
+                        data-testid="bound-agent-token-row"
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-dl-surface-subtle/60 px-3 py-2 text-xs"
+                      >
+                        <div className="min-w-0 space-y-0.5">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-[11px] font-semibold text-dl-text-primary">
+                              凭证 #{tok.id.slice(-8)}
+                            </span>
+                            <span className="rounded-full bg-dl-lane-shared/12 px-1.5 py-0.5 text-[10px] font-medium text-dl-lane-shared tabular-nums">
+                              {tok.scopes?.length || 0} 项权限
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-dl-text-tertiary tabular-nums">
+                            绑定于 {new Date(tok.createdAt).toLocaleDateString()}
+                            {tok.lastUsedAt
+                              ? ` · 最近活跃 ${new Date(tok.lastUsedAt).toLocaleTimeString([], {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })}`
+                              : ""}
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          disabled={busyAction === `revoke:${tok.id}`}
+                          onClick={() => void handleRevokeToken(tok.id)}
+                          className="h-7 gap-1 px-2.5 text-xs hover:text-dl-danger"
+                        >
+                          <Unlink className="size-3.5" strokeWidth={1.9} />
+                          解绑凭证
+                        </Button>
+                      </div>
+                    ))}
                   </div>
-                  <Button type="submit" size="sm" variant="secondary">
-                    保存 Webhook
-                  </Button>
-                </form>
+                )}
               </div>
-            )}
+
+              {/* Modular Extension Slots Header */}
+              <div className="pt-1 text-[11px] font-semibold text-dl-text-tertiary px-0.5">
+                开发者选项（Slash 指令 / 手动 Token / Webhook）
+              </div>
+
+              {/* Slot 3: Slash Commands Slot */}
+              <div className="rounded-xl border border-dl-border-hairline overflow-hidden">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() =>
+                    setExpandedSlot((prev) => (prev === "commands" ? "" : "commands"))
+                  }
+                  className="h-auto w-full justify-between gap-2 rounded-none px-3.5 py-2.5 text-left hover:bg-dl-surface-subtle/50"
+                >
+                  <div>
+                    <div className="text-xs font-semibold text-dl-text-primary">
+                      Slash 快捷指令菜单
+                    </div>
+                    <div className="text-[11px] text-dl-text-tertiary font-normal">
+                      在聊天输入框键入 `/` 时展示给成员的快捷指令（已注册 {commands.length} 个）
+                    </div>
+                  </div>
+                  {expandedSlot === "commands" ? (
+                    <ChevronDown className="size-4 text-dl-text-tertiary shrink-0" />
+                  ) : (
+                    <ChevronRight className="size-4 text-dl-text-tertiary shrink-0" />
+                  )}
+                </Button>
+
+                {expandedSlot === "commands" && (
+                  <form
+                    onSubmit={handleAddCommand}
+                    className="border-t border-dl-border-hairline p-3.5 space-y-2.5 bg-dl-surface-subtle/25"
+                  >
+                    {commands.length > 0 && (
+                      <div className="space-y-1">
+                        {commands.map((cmd) => (
+                          <div
+                            key={cmd.command}
+                            className="flex items-center justify-between gap-2 rounded-lg bg-surface px-2.5 py-1.5 text-xs border border-dl-border-hairline"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="font-mono font-medium text-dl-lane-shared shrink-0">
+                                /{cmd.command}
+                              </span>
+                              <span className="truncate text-dl-text-secondary">
+                                {cmd.description}
+                              </span>
+                            </div>
+                            <IconButton
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              label={`移除指令 /${cmd.command}`}
+                              className="size-6 shrink-0 text-dl-text-tertiary hover:text-dl-danger"
+                              onClick={() => void handleRemoveCommand(cmd.command)}
+                            >
+                              <X className="size-3" strokeWidth={2} />
+                            </IconButton>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="grid grid-cols-3 max-narrow:grid-cols-1 gap-2">
+                      <Input
+                        value={cmdName}
+                        onChange={(e) => setCmdName(e.target.value)}
+                        placeholder="/summarize"
+                        aria-label="Slash 指令名"
+                      />
+                      <Input
+                        value={cmdDesc}
+                        onChange={(e) => setCmdDesc(e.target.value)}
+                        placeholder="总结当前线程"
+                        aria-label="Slash 指令描述"
+                      />
+                      <Button type="submit" size="sm" variant="secondary">
+                        注册指令
+                      </Button>
+                    </div>
+                  </form>
+                )}
+              </div>
+
+              {/* Slot 4: Outbound Webhook Slot */}
+              <div className="rounded-xl border border-dl-border-hairline overflow-hidden">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() =>
+                    setExpandedSlot((prev) => (prev === "webhook" ? "" : "webhook"))
+                  }
+                  className="h-auto w-full justify-between gap-2 rounded-none px-3.5 py-2.5 text-left hover:bg-dl-surface-subtle/50"
+                >
+                  <div>
+                    <div className="flex items-center gap-2 text-xs font-semibold text-dl-text-primary">
+                      <span>Outbound Webhook（HMAC-SHA256）</span>
+                      {webhookEnabled && webhookUrl && (
+                        <span className="rounded-full bg-dl-success/14 px-1.5 py-0.5 text-[10px] font-medium text-dl-success">
+                          已启用
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-dl-text-tertiary truncate font-normal">
+                      {webhookUrl ? `推送目标：${webhookUrl}` : "适用于无守护进程的外部 Serverless / HTTP 回调接入"}
+                    </div>
+                  </div>
+                  {expandedSlot === "webhook" ? (
+                    <ChevronDown className="size-4 text-dl-text-tertiary shrink-0" />
+                  ) : (
+                    <ChevronRight className="size-4 text-dl-text-tertiary shrink-0" />
+                  )}
+                </Button>
+
+                {expandedSlot === "webhook" && (
+                  <form
+                    onSubmit={handleSaveWebhook}
+                    className="border-t border-dl-border-hairline p-3.5 space-y-2.5 bg-dl-surface-subtle/25"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-dl-text-primary">
+                        启用 HTTP 签名推送
+                      </span>
+                      <Switch
+                        label="启用 Outbound Webhook"
+                        checked={webhookEnabled}
+                        onCheckedChange={setWebhookEnabled}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 max-narrow:grid-cols-1 gap-2">
+                      <Input
+                        value={webhookUrl}
+                        onChange={(e) => setWebhookUrl(e.target.value)}
+                        placeholder="https://agent.example.com/webhook"
+                        aria-label="Webhook 地址"
+                      />
+                      <Input
+                        value={webhookSecret}
+                        onChange={(e) => setWebhookSecret(e.target.value)}
+                        placeholder="签名密钥（至少 16 位）"
+                        aria-label="Webhook 签名密钥"
+                      />
+                    </div>
+                    <Button type="submit" size="sm" variant="secondary">
+                      保存 Webhook
+                    </Button>
+                  </form>
+                )}
+              </div>
+
+              {/* Slot 5: Manual Service Token Slot */}
+              <div className="rounded-xl border border-dl-border-hairline overflow-hidden">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() =>
+                    setExpandedSlot((prev) => (prev === "manual_token" ? "" : "manual_token"))
+                  }
+                  className="h-auto w-full justify-between gap-2 rounded-none px-3.5 py-2.5 text-left hover:bg-dl-surface-subtle/50"
+                >
+                  <div>
+                    <div className="text-xs font-semibold text-dl-text-primary">
+                      手动签发服务集成 Token
+                    </div>
+                    <div className="text-[11px] text-dl-text-tertiary font-normal">
+                      按最小权限勾选 Scope 手动签发或轮换 CI / 自研脚本密钥
+                    </div>
+                  </div>
+                  {expandedSlot === "manual_token" ? (
+                    <ChevronDown className="size-4 text-dl-text-tertiary shrink-0" />
+                  ) : (
+                    <ChevronRight className="size-4 text-dl-text-tertiary shrink-0" />
+                  )}
+                </Button>
+
+                {expandedSlot === "manual_token" && (
+                  <div className="border-t border-dl-border-hairline p-3.5 space-y-2.5 bg-dl-surface-subtle/25">
+                    <div className="flex flex-wrap gap-1.5">
+                      {VALID_SCOPES.map((s) => {
+                        const active = selectedScopes.includes(s.id);
+                        return (
+                          <Button
+                            key={s.id}
+                            type="button"
+                            size="sm"
+                            variant={active ? "primary" : "ghost"}
+                            onClick={() =>
+                              setSelectedScopes((prev) =>
+                                active ? prev.filter((x) => x !== s.id) : [...prev, s.id]
+                              )
+                            }
+                          >
+                            {active ? "✓ " : ""}
+                            {s.label}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex items-center gap-2 pt-1">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => void handleIssueOrRotateToken(false)}
+                      >
+                        签发新 Token
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => void handleIssueOrRotateToken(true)}
+                      >
+                        轮换 Token
+                      </Button>
+                    </div>
+                    {issuedToken && (
+                      <div className="rounded-xl bg-surface p-2.5 text-xs font-mono break-all select-all border border-dl-border-hairline">
+                        {issuedToken}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}

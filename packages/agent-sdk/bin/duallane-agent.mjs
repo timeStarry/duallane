@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 import {
+  compareRuntimeSemver,
   DualLaneAgentClient,
   DualLaneAgentError,
   DualLaneAgentSetupClient,
@@ -18,9 +19,13 @@ import {
   buildDaemonAgentPrompt,
   buildLaunchdPlistXml,
   buildSystemdUnitFile,
+  checkRuntimeUpdate,
   extractGeneratedFilesFromReply,
   manageDaemonCli,
+  resolveStandaloneScriptPath,
+  restartInstalledDaemons,
   runResidentDaemon,
+  stageRuntimeSelfUpdate,
 } from "../src/daemon.js";
 import {
   DEFAULT_SETUP_SCOPES,
@@ -34,6 +39,7 @@ import {
 } from "../src/profile-store.js";
 
 export {
+  compareRuntimeSemver,
   DualLaneAgentClient,
   DualLaneAgentError,
   DualLaneAgentSetupClient,
@@ -45,6 +51,10 @@ export {
   startDualLaneMcpStdioServer,
   manageDaemonCli,
   runResidentDaemon,
+  checkRuntimeUpdate,
+  stageRuntimeSelfUpdate,
+  restartInstalledDaemons,
+  resolveStandaloneScriptPath,
   buildDaemonAgentPrompt,
   extractGeneratedFilesFromReply,
   buildLaunchdPlistXml,
@@ -85,6 +95,9 @@ function printHelp() {
 
 Usage:
   duallane-agent setup <setup-url-or-id> [--url <origin>] [--profile default] [--name <agent-name>]
+  duallane-agent version [--check] [--profile default] [--url <origin>]
+  duallane-agent update [--check] [--force] [--no-restart] [--profile default] [--url <origin>]
+  duallane-agent doctor [--profile default]
   duallane-agent daemon <install|start|stop|restart|uninstall|status|logs|run> [--agent auto|codex|claude|cmd] [--workdir <dir>] [--sandbox read-only|workspace-write] [--profile default]
   duallane-agent mcp [--profile default]
   duallane-agent status [--profile default]
@@ -357,8 +370,89 @@ async function main() {
   const { positionals, flags } = parseArgs(process.argv.slice(2));
   const subcommand = positionals[0];
 
+  if (flags.version || subcommand === "-v" || subcommand === "version") {
+    const profile = loadAgentProfile(normalizeProfileName(flags.profile || "default"));
+    const origin = String(flags.url || profile?.url || "").trim();
+    if (flags.check && origin) {
+      const check = await checkRuntimeUpdate({ origin });
+      process.stdout.write(JSON.stringify(check, null, 2) + "\n");
+      return;
+    }
+    process.stdout.write(
+      JSON.stringify(
+        {
+          version: DUALLANE_AGENT_SDK_VERSION,
+          gatewayVersion: DUALLANE_GATEWAY_VERSION,
+          node: process.version,
+          scriptPath: resolveStandaloneScriptPath(),
+        },
+        null,
+        2
+      ) + "\n"
+    );
+    return;
+  }
+
   if (!subcommand || flags.help || flags.h || subcommand === "help") {
     printHelp();
+    return;
+  }
+
+  if (subcommand === "update" || subcommand === "upgrade") {
+    const profile = loadAgentProfile(normalizeProfileName(flags.profile || "default"));
+    const origin = String(flags.url || profile?.url || "https://duallane.tsio.top").trim();
+    if (flags.check) {
+      const check = await checkRuntimeUpdate({ origin });
+      process.stdout.write(JSON.stringify(check, null, 2) + "\n");
+      return;
+    }
+    const staged = await stageRuntimeSelfUpdate({
+      origin,
+      targetPath: typeof flags.target === "string" ? flags.target : "",
+      force: Boolean(flags.force),
+    });
+    let restartedProfiles = [];
+    if (staged.updated && !flags["no-restart"]) {
+      restartedProfiles = await restartInstalledDaemons({ quiet: true });
+    }
+    process.stdout.write(
+      JSON.stringify(
+        {
+          ...staged,
+          restartedProfiles,
+        },
+        null,
+        2
+      ) + "\n"
+    );
+    return;
+  }
+
+  if (subcommand === "doctor") {
+    const { client, profile } = requireClient(flags.profile);
+    const [doctor, me, updateInfo] = await Promise.all([
+      client.getDoctor().catch(() => null),
+      client.getMe().catch(() => null),
+      checkRuntimeUpdate({ origin: profile.url }).catch(() => null),
+    ]);
+    process.stdout.write(
+      JSON.stringify(
+        {
+          ok: Boolean(doctor?.ok || me?.bot?.id),
+          profile: profile.profile,
+          origin: profile.url,
+          localSdkVersion: DUALLANE_AGENT_SDK_VERSION,
+          runtimeUpdate: updateInfo,
+          connection: me?.connection || null,
+          bot: doctor?.bot || me?.bot || null,
+          scopes: doctor?.scopes || me?.scopes || [],
+          conversations: doctor?.conversations || [],
+          recentDeliveries: doctor?.recentDeliveries || [],
+        },
+        null,
+        2
+      ) + "\n"
+    );
     return;
   }
 
@@ -378,11 +472,22 @@ async function main() {
       client.getMe(),
       client.listConversations().catch(() => ({ conversations: [] })),
     ]);
+    const remoteLatest = String(convs?.latestSdkVersion || "").trim();
+    const updateAvailable =
+      remoteLatest.length > 0 && compareRuntimeSemver(remoteLatest, DUALLANE_AGENT_SDK_VERSION) > 0;
+    if (updateAvailable) {
+      process.stderr.write(
+        `[DualLane] New runtime available: v${DUALLANE_AGENT_SDK_VERSION} -> v${remoteLatest}. Run: duallane-agent update\n`
+      );
+    }
     process.stdout.write(
       JSON.stringify(
         {
           profile: profile.profile,
           origin: profile.url,
+          sdkVersion: DUALLANE_AGENT_SDK_VERSION,
+          latestSdkVersion: remoteLatest || DUALLANE_AGENT_SDK_VERSION,
+          updateAvailable,
           bot: me?.bot,
           scopes: me?.scopes,
           connection: me?.connection,

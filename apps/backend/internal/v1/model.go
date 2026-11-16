@@ -294,6 +294,8 @@ type BotAvatarPayload struct {
 	Data     []byte
 }
 
+const LatestAgentSDKVersion = "1.0.14"
+
 type BotWebhookConfig struct {
 	BotID      string `json:"botId"`
 	URL        string `json:"url"`
@@ -306,12 +308,36 @@ type BotConversationSummary struct {
 	ID                string `json:"id"`
 	Type              string `json:"type"`
 	Title             string `json:"title"`
+	IsOwnerDirect     bool   `json:"isOwnerDirect,omitempty"`
 	AllowSend         bool   `json:"allowSend"`
 	AllowTrigger      bool   `json:"allowTrigger"`
 	AllowContext      bool   `json:"allowContext"`
 	MaxMessages       int    `json:"maxMessages"`
+	TriggerMode       string `json:"triggerMode,omitempty"`
 	GroupPolicyStatus string `json:"groupPolicyStatus,omitempty"`
+	BlockReason       string `json:"blockReason,omitempty"`
 	UpdatedAt         string `json:"updatedAt"`
+}
+
+type BotDeliveryDiagnostic struct {
+	ID                string `json:"id"`
+	Sequence          int64  `json:"sequence"`
+	EventType         string `json:"eventType"`
+	ConversationID    string `json:"conversationId,omitempty"`
+	ConversationTitle string `json:"conversationTitle,omitempty"`
+	Status            string `json:"status"`
+	Attempts          int    `json:"attempts"`
+	CreatedAt         string `json:"createdAt"`
+	AckedAt           string `json:"ackedAt,omitempty"`
+}
+
+type BotConsoleOverview struct {
+	BotID            string                   `json:"botId"`
+	BotUserID        string                   `json:"botUserId"`
+	LatestSDKVersion string                   `json:"latestSdkVersion"`
+	Conversations    []BotConversationSummary `json:"conversations"`
+	RecentDeliveries []BotDeliveryDiagnostic  `json:"recentDeliveries"`
+	Webhook          *BotWebhookConfig        `json:"webhook,omitempty"`
 }
 
 type CardKitBlock struct {

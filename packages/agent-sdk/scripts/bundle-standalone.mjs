@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -5,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const sdkRoot = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(sdkRoot, "..", "..");
+const sdkPkg = JSON.parse(fs.readFileSync(path.join(sdkRoot, "package.json"), "utf8"));
 
 const sourceFiles = [
   "src/ws-lite.js",
@@ -56,6 +59,8 @@ const sections = sourceFiles.map((relPath) => {
 });
 
 const bundle = `${header}\n${sections.join("\n\n")}\n`;
+const bundleBytes = Buffer.from(bundle, "utf8");
+const bundleSha256 = crypto.createHash("sha256").update(bundleBytes).digest("hex");
 
 const targets = [
   path.join(repoRoot, "apps/web/public/integrations/duallane-agent.mjs"),
@@ -64,8 +69,43 @@ const targets = [
 
 for (const target of targets) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, bundle, { mode: 0o755 });
+  fs.writeFileSync(target, bundleBytes, { mode: 0o755 });
   fs.chmodSync(target, 0o755);
+  const check = spawnSync(process.execPath, ["--check", target], { encoding: "utf8" });
+  if (check.status !== 0) {
+    throw new Error(`Bundled runtime syntax check failed for ${target}:\n${check.stderr}`);
+  }
 }
 
-process.stdout.write(`[bundle-standalone] Wrote ${Buffer.byteLength(bundle, "utf8")} bytes to ${targets.length} public integration paths.\n`);
+const manifestPayload =
+  JSON.stringify(
+    {
+      name: "@duallane/agent-sdk",
+      version: String(sdkPkg.version || "1.0.14"),
+      sha256: bundleSha256,
+      byteSize: bundleBytes.byteLength,
+      downloadPath: "/integrations/duallane-agent.mjs",
+      minNodeVersion: "20.0.0",
+      highlights: [
+        "支持 duallane-agent version / update / doctor 一键检查升级与会话触发体检",
+        "常驻守护进程支持空闲态 SHA-256 校验自动静默热更新与远程升级信号",
+        "支持群聊全量消息触发、回复唤醒与创建者私聊永久保底诊断",
+      ],
+    },
+    null,
+    2
+  ) + "\n";
+
+const manifestTargets = [
+  path.join(repoRoot, "apps/web/public/integrations/duallane-agent.manifest.json"),
+  path.join(repoRoot, "apps/web/public/integrations/v2/duallane-agent.manifest.json"),
+];
+
+for (const manifestTarget of manifestTargets) {
+  fs.mkdirSync(path.dirname(manifestTarget), { recursive: true });
+  fs.writeFileSync(manifestTarget, manifestPayload, "utf8");
+}
+
+process.stdout.write(
+  `[bundle-standalone] Wrote ${bundleBytes.byteLength} bytes (sha256=${bundleSha256.slice(0, 12)}...) + manifest v${sdkPkg.version} to ${targets.length} public integration paths.\n`
+);
