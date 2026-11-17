@@ -37,7 +37,8 @@ function minimalEnvironment() {
 
 async function main() {
   const databaseURL = disposableDatabaseURL(process.env);
-  const webOrigin = "http://127.0.0.1:5198";
+  const apiPort = String(Number(process.env.E2E_GO_WORKSPACE_API_PORT || 8898));
+  const webOrigin = process.env.E2E_GO_WORKSPACE_WEB_ORIGIN || "http://127.0.0.1:5198";
   const schema = `duallane_go_browser_${randomUUID().replaceAll("-", "")}`;
   const qualifiedSchema = `"${schema}"`;
   const require = createRequire(path.join(repoRoot, "package.json"));
@@ -106,7 +107,7 @@ async function main() {
       DUALLANE_EMOTE_CATALOG_PATH: path.join(repoRoot, "apps/web/shared/emote-packs.json"),
       DUALLANE_DATA_DIR: path.join(temporaryDirectory, "data"),
       DUALLANE_APP_VERSION: "workspace-go-browser-test", DUALLANE_GIT_COMMIT: "working-tree",
-      HOST: "127.0.0.1", PORT: "8898", NODE_ENV: "test", WORKSPACE_ENABLED: "true",
+      HOST: "127.0.0.1", PORT: apiPort, NODE_ENV: "test", WORKSPACE_ENABLED: "true",
       PUBLIC_BASE_URL: webOrigin, WORKSPACE_FRONTEND_URL: webOrigin,
       WORKSPACE_STORAGE_DRIVER: "local", WORKSPACE_EMAIL_WORKER_ENABLED: "false",
       WORKSPACE_NTFY_WORKER_ENABLED: "false", WORKSPACE_MAINTENANCE_WORKER_ENABLED: "false"

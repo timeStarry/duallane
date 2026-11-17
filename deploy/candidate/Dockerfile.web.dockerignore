@@ -5,6 +5,8 @@
 !apps/
 !apps/web/
 !apps/web/**
+!packages/
+!packages/**
 !scripts/
 !scripts/dev/
 !scripts/dev/go-dev-config.mjs

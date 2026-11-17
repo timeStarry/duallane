@@ -291,7 +291,7 @@ func (r *PGRepository) ListCollections(ctx context.Context, userID string) ([]Co
 
 const collectionSelect = `
 	SELECT c.id, c.user_id, c.name, c.source_collection_id, c.original_creator_user_id,
-		COALESCE(u.nickname, u.github_login, u.display_name, u.id), c.revision,
+		COALESCE(u.nickname, CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(u.github_login, '') END, u.display_name, u.id), c.revision,
 		c.created_at, c.updated_at, s.source_collection_id, s.status, s.source_revision, s.last_synced_at
 	FROM workspace_emote_collections c
 	INNER JOIN users u ON u.id = c.original_creator_user_id
@@ -570,9 +570,9 @@ func getShare(ctx context.Context, queryer pgQueryer, shareID string) (*ShareRec
 	var record ShareRecord
 	err := queryer.QueryRow(ctx, `
 		SELECT s.id, COALESCE(s.collection_id, ''), s.shared_by_user_id,
-			COALESCE(su.nickname, su.github_login, su.display_name, su.id),
+			COALESCE(su.nickname, CASE WHEN su.kind = 'bot' OR su.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(su.github_login, '') END, su.display_name, su.id),
 			s.original_creator_user_id,
-			COALESCE(ou.nickname, ou.github_login, ou.display_name, ou.id),
+			COALESCE(ou.nickname, CASE WHEN ou.kind = 'bot' OR ou.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(ou.github_login, '') END, ou.display_name, ou.id),
 			s.snapshot_name, s.fingerprint, s.item_count, s.created_at, s.revoked_at
 		FROM workspace_emote_collection_shares s
 		INNER JOIN users su ON su.id = s.shared_by_user_id

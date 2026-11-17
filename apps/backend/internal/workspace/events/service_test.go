@@ -339,3 +339,65 @@ func isEventCode(err error, code string) bool {
 	var value *Error
 	return errors.As(err, &value) && value.Code == code
 }
+
+func TestMessageEditedPayloadProjection(t *testing.T) {
+	payload := ParsePayloadObject([]byte(`{
+		"conversationId": "conv_edit_1",
+		"messageId": "msg_edit_1",
+		"message": {
+			"id": "msg_edit_1",
+			"conversationId": "conv_edit_1",
+			"authorId": "usr_viewer",
+			"plainText": "修改后的消息内容",
+			"editedAt": "2026-11-15T01:00:00Z",
+			"content": {
+				"format": "duallane.message+json;v=1",
+				"plainText": "修改后的消息内容",
+				"blocks": [{"type": "text", "text": "修改后的消息内容"}]
+			}
+		}
+	}`))
+	got := projectPayload("message.edited", payload, &auth.Actor{ID: "usr_viewer", Kind: "human", Role: "member"})
+	if got["messageId"] != "msg_edit_1" || got["conversationId"] != "conv_edit_1" {
+		t.Fatalf("projected message.edited ids = %#v", got)
+	}
+	msg, ok := got["message"].(map[string]any)
+	if !ok || msg["plainText"] != "修改后的消息内容" || msg["editedAt"] != "2026-11-15T01:00:00Z" {
+		t.Fatalf("projected message.edited message = %#v", got["message"])
+	}
+}
+
+func TestConversationReadAndTypingPayloadProjection(t *testing.T) {
+	viewer := &auth.Actor{ID: "usr_viewer", Kind: "human", Role: "member"}
+
+	readPayload := ParsePayloadObject([]byte(`{
+		"conversationId": "conv_1",
+		"userId": "usr_peer",
+		"readAt": "2026-11-15T03:00:00Z",
+		"secret": "drop-me"
+	}`))
+	gotRead := projectPayload("conversation.read", readPayload, viewer)
+	if gotRead["conversationId"] != "conv_1" || gotRead["userId"] != "usr_peer" || gotRead["readAt"] != "2026-11-15T03:00:00Z" {
+		t.Fatalf("projected conversation.read = %#v", gotRead)
+	}
+	if _, exists := gotRead["secret"]; exists {
+		t.Fatalf("unexpected secret in conversation.read: %#v", gotRead)
+	}
+
+	typingPayload := ParsePayloadObject([]byte(`{
+		"conversationId": "conv_1",
+		"userId": "usr_bot_1",
+		"displayName": "Astra",
+		"kind": "bot",
+		"state": "thinking",
+		"expiresAt": "2026-11-15T03:00:06Z",
+		"token": "drop-me"
+	}`))
+	gotTyping := projectPayload("conversation.typing", typingPayload, viewer)
+	if gotTyping["conversationId"] != "conv_1" || gotTyping["displayName"] != "Astra" || gotTyping["kind"] != "bot" || gotTyping["state"] != "thinking" {
+		t.Fatalf("projected conversation.typing = %#v", gotTyping)
+	}
+	if _, exists := gotTyping["token"]; exists {
+		t.Fatalf("unexpected token in conversation.typing: %#v", gotTyping)
+	}
+}

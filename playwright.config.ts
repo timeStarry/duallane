@@ -7,8 +7,8 @@ const apiURL = `http://127.0.0.1:${apiPort}`;
 
 export default defineConfig({
   testDir: "./e2e",
-  // The default gate keeps the original P2P assertions, but its server is the
-  // Go P2P candidate. Workspace has a separate complete Go browser job.
+  // Exercise the current AppV1 reading and composition flows against Go P2P.
+  // Transport privacy and Workspace acceptance run in independent jobs.
   testMatch: ["p2p.spec.ts", "p2p-ime.spec.ts"],
   outputDir: ".private-test-results/p2p-go-default",
   fullyParallel: false,

@@ -744,6 +744,111 @@ func TestAcknowledgeAndRateLimit(t *testing.T) {
 	}
 }
 
+func TestSafeDeliveryPayloadDeliversMessageAndCommandContext(t *testing.T) {
+	msgBytes := safeDeliveryPayload(EventRecord{
+		EventType:      "message.created",
+		ActorUserID:    "usr_owner_1",
+		ConversationID: "conv_1",
+		TargetID:       "msg_1",
+		PayloadJSON:    []byte(`{"plainText":"hello @echo","threadRootId":"msg_root_1","command":"/summarize","args":"last 10"}`),
+	})
+	var msgPayload map[string]any
+	if err := json.Unmarshal(msgBytes, &msgPayload); err != nil {
+		t.Fatal(err)
+	}
+	if msgPayload["text"] != "hello @echo" || msgPayload["messageId"] != "msg_1" || msgPayload["threadRootId"] != "msg_root_1" || msgPayload["args"] != "last 10" {
+		t.Fatalf("unexpected message delivery payload: %#v", msgPayload)
+	}
+}
+
+func TestReplaySkipsSystemNullAuthorMessageWithoutPoisoningQueue(t *testing.T) {
+	repo, service, authValue, _, _ := gatewayFixture(t)
+	repo.events = []EventRecord{
+		{
+			ID: "event_sys_invite", SpaceID: authValue.SpaceID, Sequence: 1, EventType: "message.created",
+			ActorUserID: "owner_1", ConversationID: "conv_direct", TargetType: "message", TargetID: "msg_sys_invite",
+			PayloadJSON: []byte(`{"plainText":"timeStarry 邀请 Comet 加入群聊"}`), CreatedAt: repo.now(),
+		},
+		{
+			ID: "event_dm_after", SpaceID: authValue.SpaceID, Sequence: 2, EventType: "message.created",
+			ActorUserID: "owner_1", ConversationID: "conv_direct", TargetType: "message", TargetID: "msg_dm_after",
+			PayloadJSON: []byte(`{"plainText":"能收到消息吗"}`), CreatedAt: repo.now().Add(time.Second),
+		},
+	}
+	repo.triggers["conv_direct:msg_sys_invite"] = &MessageTrigger{AuthorID: "", PlainText: "timeStarry 邀请 Comet 加入群聊", ContentJSON: []byte(`{"blocks":[{"type":"text","text":"timeStarry 邀请 Comet 加入群聊"}]}`)}
+	repo.triggers["conv_direct:msg_dm_after"] = &MessageTrigger{AuthorID: "owner_1", PlainText: "能收到消息吗", ContentJSON: []byte(`{"blocks":[{"type":"text","text":"能收到消息吗"}]}`)}
+
+	result, err := service.Replay(context.Background(), authValue, ReplayInput{LastSequence: 0, Limit: 10})
+	if err != nil {
+		t.Fatalf("Replay failed after system message: %v", err)
+	}
+	if result.SyncRequired || len(result.Events) != 1 || result.Events[0].Sequence != 2 {
+		t.Fatalf("expected sequence 2 delivered cleanly, got %#v", result)
+	}
+}
+
+func TestCreatorDirectSovereigntyGroupTriggerModesAndRuntimeUpgradeSignal(t *testing.T) {
+	repo, service, authValue, _, _ := gatewayFixture(t)
+	// Simulate Comet's exact scenario: visibilityPolicy = "groups" and even missing explicit DM grant row
+	repo.settings.VisibilityPolicy = "groups"
+	repo.settings.TriggerPolicy = "mention-or-command"
+	delete(repo.grants, "conv_direct")
+
+	repo.events = []EventRecord{
+		{
+			ID: "event_owner_dm_groups", SpaceID: authValue.SpaceID, Sequence: 1, EventType: "message.created",
+			ActorUserID: "owner_1", ConversationID: "conv_direct", TargetType: "message", TargetID: "msg_owner_dm_1",
+			PayloadJSON: []byte(`{"plainText":"恢复测试"}`), CreatedAt: repo.now(),
+		},
+		{
+			ID: "event_group_reply_bot", SpaceID: authValue.SpaceID, Sequence: 2, EventType: "message.created",
+			ActorUserID: "owner_1", ConversationID: "conv_group", TargetType: "message", TargetID: "msg_group_reply",
+			PayloadJSON: []byte(`{"plainText":"继续跟进"}`), CreatedAt: repo.now().Add(time.Second),
+		},
+		{
+			ID: "event_runtime_upgrade", SpaceID: authValue.SpaceID, Sequence: 3, EventType: "bot.runtime_upgrade",
+			ActorUserID: "owner_1", TargetType: "agent_bot", TargetID: authValue.BotID,
+			PayloadJSON: []byte(`{"botId":"` + authValue.BotID + `","targetVersion":"1.0.14","reason":"console_request"}`),
+			CreatedAt:   repo.now().Add(2 * time.Second),
+		},
+	}
+	repo.triggers["conv_direct:msg_owner_dm_1"] = &MessageTrigger{
+		AuthorID: "owner_1", PlainText: "恢复测试",
+		ContentJSON: []byte(`{"blocks":[{"type":"text","text":"恢复测试"}]}`),
+	}
+	repo.triggers["conv_group:msg_group_reply"] = &MessageTrigger{
+		AuthorID: "owner_1", ReplyToAuthorID: authValue.UserID, PlainText: "继续跟进",
+		ContentJSON: []byte(`{"blocks":[{"type":"text","text":"继续跟进"}]}`),
+	}
+
+	result, err := service.Replay(context.Background(), authValue, ReplayInput{LastSequence: 0, Limit: 10})
+	if err != nil {
+		t.Fatalf("Replay failed: %v", err)
+	}
+	if len(result.Events) != 3 {
+		t.Fatalf("expected 3 events (owner DM + reply-to-bot group + runtime_upgrade), got %d: %#v", len(result.Events), result.Events)
+	}
+	if result.Events[2].Type != "bot.runtime_upgrade" || result.Events[2].Payload["targetVersion"] != "1.0.14" {
+		t.Fatalf("unexpected runtime upgrade event: %#v", result.Events[2])
+	}
+
+	// Verify group all-messages mode triggers without @mention or reply
+	repo.settings.TriggerPolicy = "all-messages"
+	repo.events = append(repo.events, EventRecord{
+		ID: "event_group_all", SpaceID: authValue.SpaceID, Sequence: 4, EventType: "message.created",
+		ActorUserID: "owner_1", ConversationID: "conv_group", TargetType: "message", TargetID: "msg_group_all",
+		PayloadJSON: []byte(`{"plainText":"群内普通讨论"}`), CreatedAt: repo.now().Add(3 * time.Second),
+	})
+	repo.triggers["conv_group:msg_group_all"] = &MessageTrigger{
+		AuthorID: "owner_1", PlainText: "群内普通讨论",
+		ContentJSON: []byte(`{"blocks":[{"type":"text","text":"群内普通讨论"}]}`),
+	}
+	res2, err := service.Replay(context.Background(), authValue, ReplayInput{LastSequence: 3, Limit: 10})
+	if err != nil || len(res2.Events) != 1 || res2.Events[0].Sequence != 4 {
+		t.Fatalf("expected all-messages group trigger at seq 4, got err=%v events=%#v", err, res2.Events)
+	}
+}
+
 func isCode(err error, code string) bool {
 	var value *Error
 	return errors.As(err, &value) && value.Code == code

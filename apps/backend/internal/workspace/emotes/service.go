@@ -1643,6 +1643,13 @@ func (s *Service) ReadContent(ctx context.Context, input ReadContentInput) (Deli
 	if err != nil {
 		return Delivery{}, err
 	}
+	if resource.SourceType == "builtin" {
+		item, ok := s.catalogImage(resource.SourceEmoteKey)
+		if !ok || strings.TrimSpace(item.Src) == "" {
+			return Delivery{}, notFoundError(CodeEmoteNotFound, MessageEmoteNotFound)
+		}
+		return Delivery{RedirectURL: strings.TrimSpace(item.Src)}, nil
+	}
 	limit := input.MaxBytes
 	if limit <= 0 || limit > MaxOutputBytes {
 		limit = MaxOutputBytes
@@ -1658,6 +1665,12 @@ func (s *Service) resolveResource(ctx context.Context, row *CustomEmoteRecord) (
 	current := row
 	seen := make(map[string]struct{})
 	for current != nil {
+		if current.SourceType == "builtin" && strings.TrimSpace(current.SourceEmoteKey) != "" {
+			if _, ok := s.catalogImage(current.SourceEmoteKey); !ok {
+				return nil, notFoundError(CodeEmoteNotFound, MessageEmoteNotFound)
+			}
+			return current, nil
+		}
 		if current.StorageObjectID != "" || current.StorageKey != "" {
 			return current, nil
 		}

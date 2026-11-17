@@ -64,7 +64,7 @@ func (r *PGRepository) ProjectEventPayload(ctx context.Context, actor *auth.Acto
 			}
 			projected["reactions"] = reactions
 		}
-	case "message.created", "message.recalled":
+	case "message.created", "message.recalled", "message.edited":
 		messageID := stringField(projected, "messageId")
 		if messageID == "" {
 			messageID = pointerString(event.TargetID)
@@ -141,13 +141,15 @@ func (r *PGRepository) publicMemberPayload(ctx context.Context, spaceID string, 
 		displayName, kind, avatarURL = "回声", "bot", stringPointer("/assets/echo-avatar.svg")
 	}
 	projectedRole := role
-	if projectedRole == "owner" && actor.Role != "owner" {
-		projectedRole = "admin"
-	}
-	if projectedRole == "auditor" && actor.Role != "owner" && actor.ID != id {
-		projectedRole = "member"
-	}
 	if projectedRole == "" {
+		projectedRole = "member"
+	} else if actor == nil || (actor.Role != "owner" && actor.Role != "admin") {
+		if !(actor != nil && actor.ID == id && projectedRole == "auditor") {
+			projectedRole = "member"
+		}
+	} else if projectedRole == "owner" && actor.Role != "owner" {
+		projectedRole = "admin"
+	} else if projectedRole == "auditor" && actor.Role != "owner" && actor.ID != id {
 		projectedRole = "member"
 	}
 	if kind == "human" {
@@ -361,17 +363,18 @@ func (r *PGRepository) publicMessagePayload(ctx context.Context, spaceID string,
 	var id, conversationID, displayName, authorKind, kind, plainText string
 	var authorID, clientMessageID, replyToMessageID *string
 	var authorNickname, authorGithubLogin, authorAvatarURL, authorRemark *string
-	var contentJSON string
+	var contentJSON, threadRootID, threadTitle string
 	var createdAt time.Time
 	var editedAt, deletedAt, recalledAt *time.Time
 	var recallReason *string
 	err := r.pool.QueryRow(ctx, `
 		SELECT m.id, m.conversation_id, m.author_id,
-			COALESCE(ur.remark, u.nickname, u.github_login, u.display_name, ''),
-			u.nickname, u.github_login, u.avatar_url, ur.remark,
+			COALESCE(ur.remark, u.nickname, CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(u.github_login, '') END, u.display_name, ''),
+			u.nickname, CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE u.github_login END, u.avatar_url, ur.remark,
 			m.author_kind, m.kind, m.client_message_id, m.content_json,
 			m.plain_text, m.reply_to_message_id, m.created_at, m.edited_at,
-			m.deleted_at, m.recalled_at, m.recall_reason
+			m.deleted_at, m.recalled_at, m.recall_reason,
+			COALESCE(m.thread_root_id, ''), COALESCE(m.thread_title, '')
 		FROM messages m
 		LEFT JOIN users u ON u.id = m.author_id
 		LEFT JOIN user_remarks ur ON ur.owner_user_id = $3 AND ur.target_user_id = u.id
@@ -379,7 +382,7 @@ func (r *PGRepository) publicMessagePayload(ctx context.Context, spaceID string,
 	`, messageID, spaceID, actor.ID).Scan(&id, &conversationID, &authorID, &displayName,
 		&authorNickname, &authorGithubLogin, &authorAvatarURL, &authorRemark, &authorKind, &kind,
 		&clientMessageID, &contentJSON, &plainText, &replyToMessageID, &createdAt, &editedAt,
-		&deletedAt, &recalledAt, &recallReason)
+		&deletedAt, &recalledAt, &recallReason, &threadRootID, &threadTitle)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -471,6 +474,31 @@ func (r *PGRepository) publicMessagePayload(ctx context.Context, spaceID string,
 		return nil, internalError("project workspace message hidden state", err)
 	}
 	result["hiddenByCurrentUser"] = hidden
+	if threadRootID != "" {
+		result["threadRootId"] = threadRootID
+	}
+	if threadTitle != "" {
+		result["threadTitle"] = threadTitle
+	}
+	if threadSummaries, threadErr := shareReader.ListMessageThreadSummaries(ctx, spaceID, actor.ID, []string{id}); threadErr == nil {
+		if ts, hasThread := threadSummaries[id]; hasThread && ts.ReplyCount > 0 {
+			result["threadReplyCount"] = ts.ReplyCount
+			if ts.LastRepliedAt != "" {
+				result["threadLastRepliedAt"] = ts.LastRepliedAt
+			}
+			previewItems := make([]any, 0, len(ts.RecentReplies))
+			for _, pr := range ts.RecentReplies {
+				previewItems = append(previewItems, map[string]any{
+					"id":         pr.ID,
+					"authorId":   pr.AuthorID,
+					"authorName": pr.AuthorName,
+					"plainText":  pr.PlainText,
+					"createdAt":  pr.CreatedAt,
+				})
+			}
+			result["threadPreviewReplies"] = previewItems
+		}
+	}
 
 	var pinnedBy string
 	var pinnedAt time.Time
@@ -536,8 +564,8 @@ func (r *PGRepository) publicMessageAttachments(ctx context.Context, spaceID str
 func (r *PGRepository) publicMessageReactions(ctx context.Context, spaceID string, actor *auth.Actor, messageID string) ([]any, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT mr.emote_key, mr.created_at, u.id,
-			COALESCE(ur.remark, u.nickname, u.github_login, u.display_name, ''),
-			COALESCE(u.github_login, ''), COALESCE(u.avatar_url, '')
+			COALESCE(ur.remark, u.nickname, CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(u.github_login, '') END, u.display_name, ''),
+			CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN '' ELSE COALESCE(u.github_login, '') END, COALESCE(u.avatar_url, '')
 		FROM message_reactions mr
 		INNER JOIN messages m ON m.id = mr.message_id AND m.space_id = $1
 		INNER JOIN users u ON u.id = mr.user_id
@@ -603,7 +631,7 @@ func (r *PGRepository) publicAttachmentPayload(ctx context.Context, spaceID stri
 	var completedAt *time.Time
 	err := r.pool.QueryRow(ctx, `
 		SELECT a.id, a.file_name, a.mime_type, a.byte_size, a.status, a.visibility,
-			a.uploader_id, COALESCE(ur.remark, u.nickname, u.github_login, u.display_name, ''),
+			a.uploader_id, COALESCE(ur.remark, u.nickname, CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(u.github_login, '') END, u.display_name, ''),
 			a.conversation_id, a.created_at, a.completed_at
 		FROM attachments a
 		INNER JOIN users u ON u.id = a.uploader_id
@@ -689,7 +717,7 @@ func safeWorkspaceAvatarURL(value string) string {
 	if value == "" || strings.Contains(value, "..") {
 		return ""
 	}
-	if strings.HasPrefix(value, "/assets/") || strings.HasPrefix(value, "/api/workspace/avatars/") {
+	if strings.HasPrefix(value, "/assets/") || strings.HasPrefix(value, "/api/workspace/avatars/") || strings.HasPrefix(value, "/api/v1/bots/") {
 		return value
 	}
 	parsed, err := url.Parse(value)

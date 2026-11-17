@@ -420,9 +420,20 @@ func (s *Service) projectRecords(ctx context.Context, repo ReadRepository, viewe
 			return nil, err
 		}
 	}
+	threadSummaries := make(map[string]MessageThreadSummary)
+	if reader, ok := repo.(MessageThreadSummaryReader); ok {
+		threadSummaries, err = reader.ListMessageThreadSummaries(ctx, s.space(), viewerID, ids)
+		if err != nil {
+			return nil, err
+		}
+	}
 	for _, record := range records {
 		record.HiddenByCurrentUser = hidden[record.ID]
 		record.EmoteCollectionShares = shares[record.ID]
+		if summary, hasThread := threadSummaries[record.ID]; hasThread && summary.ReplyCount > 0 {
+			summaryCopy := summary
+			record.ThreadSummary = &summaryCopy
+		}
 		projected, err := ProjectMessageForViewer(record, attachments[record.ID], reactions[record.ID], viewer)
 		if err != nil {
 			return nil, internalError("project workspace message", err)
@@ -758,7 +769,7 @@ func (s *Service) RecallMessage(ctx context.Context, input RecallInput) (Message
 				reason = normalized
 			}
 		}
-		recallText := firstNonEmpty(actor.Nickname, actor.GitHubLogin, actor.DisplayName, "成员") + "因" + reason + "撤回了一条消息"
+		recallText := firstNonEmpty(actor.Nickname, publicGitHubLogin(actor.GitHubLogin, actor.Kind), actor.DisplayName, "成员") + "因" + reason + "撤回了一条消息"
 		emptyContent := Content{Format: MessageContentFormat, PlainText: "", Blocks: make([]Block, 0)}
 		emptyContentJSON, err := canonicalContent(emptyContent)
 		if err != nil {

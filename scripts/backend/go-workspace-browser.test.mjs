@@ -19,12 +19,12 @@ test("Go browser database requires exact explicit opt-in and loopback URL", () =
   }
 });
 
-test("Go Workspace browser gate reuses real frontend tests without reusing servers", async () => {
+test("Go Workspace browser gate exercises the production AppV1 without reusing servers", async () => {
   const config = await readFile(new URL("../../playwright.workspace-go.config.ts", import.meta.url), "utf8");
   const server = await readFile(new URL("../../e2e/support/go-workspace-server.mjs", import.meta.url), "utf8");
   const manifest = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
   assert.equal(manifest.scripts["test:e2e:workspace-go"], "playwright test --config=playwright.workspace-go.config.ts");
-  assert.match(config, /testMatch: "workspace\*\.spec\.ts"/);
+  assert.match(config, /testMatch: "workspace-v1-acceptance\.spec\.ts"/);
   assert.match(config, /outputDir: "\.private-test-results\/workspace-go-browser"/);
   assert.equal((config.match(/reuseExistingServer: false/g) || []).length, 2);
   for (const setting of ["trace", "screenshot", "video"]) assert.match(config, new RegExp(`${setting}: "off"`));

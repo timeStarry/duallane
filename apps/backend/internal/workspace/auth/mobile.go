@@ -39,6 +39,10 @@ type MobileRepository interface {
 	Resolve(context.Context, string, time.Time) (*Actor, error)
 	RecordRejection(context.Context, string, RequestMeta, time.Time) error
 }
+type MobileDirectIssuer interface {
+	IssueDirect(ctx context.Context, userID string, tokens MobileTokens, now time.Time) error
+}
+
 type MobileService struct {
 	Repository MobileRepository
 	Now        Clock
@@ -56,6 +60,56 @@ func (s *MobileService) tokens() (MobileTokens, error) {
 	}
 	now := s.now()
 	return MobileTokens{access, refresh, externalTime(now.Add(15 * time.Minute)), externalTime(now.Add(30 * 24 * time.Hour))}, nil
+}
+
+func (s *MobileService) IssueUserTokens(ctx context.Context, userID string) (MobileTokens, error) {
+	if s == nil || s.Repository == nil {
+		return MobileTokens{}, NewError("mobile.not_configured", "服务器尚未开放移动端登录", http.StatusServiceUnavailable)
+	}
+	issuer, ok := s.Repository.(MobileDirectIssuer)
+	if !ok {
+		return MobileTokens{}, NewError("mobile.not_configured", "服务器尚未开放移动端邮箱登录", http.StatusServiceUnavailable)
+	}
+	tokens, err := s.tokens()
+	if err != nil {
+		return MobileTokens{}, wrapInternal("mobile email tokens", err)
+	}
+	if err := issuer.IssueDirect(ctx, strings.TrimSpace(userID), tokens, s.now()); err != nil {
+		if errors.Is(err, errMobileInvalid) {
+			return MobileTokens{}, mobileInvalid()
+		}
+		return MobileTokens{}, wrapInternal("mobile email session", err)
+	}
+	return tokens, nil
+}
+
+func (h *HTTPHandler) CheckPublicAuthRateLimit(ctx context.Context, r *http.Request) (bool, error) {
+	if h == nil || h.Mobile == nil || h.Mobile.Repository == nil {
+		return true, nil
+	}
+	meta := RequestMetaFromRequest(r, h.TrustProxy)
+	return h.Mobile.Repository.Allow(ctx, HashSecret("email:"+meta.IPAddress), h.Mobile.now())
+}
+
+func (h *HTTPHandler) IssueWebLoginSession(w http.ResponseWriter, r *http.Request, userID string) (string, error) {
+	if h == nil || h.Service == nil {
+		return "", NewError("auth.unavailable", "认证服务未就绪", http.StatusServiceUnavailable)
+	}
+	session, err := h.Service.CreateSession(r.Context(), userID)
+	if err != nil {
+		return "", err
+	}
+	secure := RequestIsSecure(r, h.TrustProxy)
+	cookie := SessionCookie(session, secure)
+	http.SetCookie(w, &cookie)
+	return externalTime(session.ExpiresAt), nil
+}
+
+func (h *HTTPHandler) IssueMobileLoginSession(ctx context.Context, userID string) (MobileTokens, error) {
+	if h == nil || h.Mobile == nil {
+		return MobileTokens{}, NewError("mobile.not_configured", "服务器尚未开放移动端登录", http.StatusServiceUnavailable)
+	}
+	return h.Mobile.IssueUserTokens(ctx, userID)
 }
 func mobileInvalid() error {
 	return NewError("auth.mobile_invalid", "登录已失效，请重试", http.StatusUnauthorized)

@@ -1,0 +1,43 @@
+<svg viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="dl-tile-bg" cx="22%" cy="15%" r="115%">
+      <stop offset="0%" stop-color="#1E2D45" />
+      <stop offset="62%" stop-color="#0B111B" />
+      <stop offset="100%" stop-color="#060A11" />
+    </radialGradient>
+    <linearGradient id="dl-tile-border" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.28" />
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.08" />
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.03" />
+    </linearGradient>
+    <linearGradient id="dl-blue" x1="0%" y1="12%" x2="95%" y2="88%">
+      <stop offset="0%" stop-color="#BAE6FD" />
+      <stop offset="45%" stop-color="#0EA5E9" />
+      <stop offset="100%" stop-color="#0369A1" />
+    </linearGradient>
+    <linearGradient id="dl-amber" x1="0%" y1="12%" x2="95%" y2="88%">
+      <stop offset="0%" stop-color="#FDE68A" />
+      <stop offset="45%" stop-color="#F97316" />
+      <stop offset="100%" stop-color="#C2410C" />
+    </linearGradient>
+    <linearGradient id="dl-lens" x1="20%" y1="10%" x2="80%" y2="90%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.96" />
+      <stop offset="55%" stop-color="#E0F2FE" stop-opacity="0.82" />
+      <stop offset="100%" stop-color="#FED7AA" stop-opacity="0.78" />
+    </linearGradient>
+    <clipPath id="dl-clip-blue">
+      <rect x="44" y="64" width="114" height="140" rx="34" transform="rotate(-12 101 134)" />
+    </clipPath>
+  </defs>
+
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#dl-tile-bg)" />
+  <rect x="9.5" y="9.5" width="237" height="237" rx="54.5" stroke="url(#dl-tile-border)" stroke-width="3" />
+
+  <g transform="translate(128 128) scale(0.95) translate(-128 -128)">
+    <rect x="44" y="64" width="114" height="140" rx="34" transform="rotate(-12 101 134)" fill="url(#dl-blue)" />
+    <rect x="98" y="52" width="114" height="140" rx="34" transform="rotate(12 155 122)" fill="url(#dl-amber)" fill-opacity="0.92" />
+    <g clip-path="url(#dl-clip-blue)">
+      <rect x="98" y="52" width="114" height="140" rx="34" transform="rotate(12 155 122)" fill="url(#dl-lens)" />
+    </g>
+  </g>
+</svg>

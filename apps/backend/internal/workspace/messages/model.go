@@ -161,34 +161,54 @@ type ReactionGroup struct {
 	Users                []ReactionUser `json:"users"`
 }
 
+type ThreadPreviewReply struct {
+	ID         string `json:"id"`
+	AuthorID   string `json:"authorId"`
+	AuthorName string `json:"authorName"`
+	PlainText  string `json:"plainText"`
+	CreatedAt  string `json:"createdAt"`
+}
+
+type MessageThreadSummary struct {
+	ReplyCount    int                  `json:"replyCount"`
+	ThreadTitle   string               `json:"threadTitle,omitempty"`
+	LastRepliedAt string               `json:"lastRepliedAt,omitempty"`
+	RecentReplies []ThreadPreviewReply `json:"recentReplies,omitempty"`
+}
+
 // Message is the safe product projection. Sequence and Revision stay out of
 // the public projection because the current HTTP contract does not expose
 // persistence cursors or internal compare-and-swap state.
 type Message struct {
-	ID                  string          `json:"id"`
-	ConversationID      string          `json:"conversationId"`
-	TopicID             string          `json:"topicId,omitempty"`
-	AuthorID            *string         `json:"authorId"`
-	AuthorName          string          `json:"authorName"`
-	AuthorNickname      string          `json:"authorNickname,omitempty"`
-	AuthorRemark        string          `json:"authorRemark,omitempty"`
-	AuthorGitHubLogin   string          `json:"authorGithubLogin,omitempty"`
-	AuthorAvatarURL     string          `json:"authorAvatarUrl,omitempty"`
-	AuthorKind          string          `json:"authorKind"`
-	Kind                string          `json:"kind"`
-	ClientMessageID     *string         `json:"clientMessageId"`
-	Content             Content         `json:"content"`
-	PlainText           string          `json:"plainText"`
-	ReplyToMessageID    *string         `json:"replyToMessageId"`
-	CreatedAt           string          `json:"createdAt"`
-	EditedAt            *string         `json:"editedAt"`
-	DeletedAt           *string         `json:"deletedAt"`
-	RecalledAt          *string         `json:"recalledAt"`
-	RecallReason        *string         `json:"recallReason"`
-	Attachments         []Attachment    `json:"attachments"`
-	Reactions           []ReactionGroup `json:"reactions"`
-	HiddenByCurrentUser bool            `json:"hiddenByCurrentUser"`
-	Pin                 *MessagePin     `json:"pin,omitempty"`
+	ID                   string               `json:"id"`
+	ConversationID       string               `json:"conversationId"`
+	TopicID              string               `json:"topicId,omitempty"`
+	ThreadRootID         string               `json:"threadRootId,omitempty"`
+	ThreadTitle          string               `json:"threadTitle,omitempty"`
+	ThreadReplyCount     int                  `json:"threadReplyCount,omitempty"`
+	ThreadLastRepliedAt  string               `json:"threadLastRepliedAt,omitempty"`
+	ThreadPreviewReplies []ThreadPreviewReply `json:"threadPreviewReplies,omitempty"`
+	AuthorID             *string              `json:"authorId"`
+	AuthorName           string               `json:"authorName"`
+	AuthorNickname       string               `json:"authorNickname,omitempty"`
+	AuthorRemark         string               `json:"authorRemark,omitempty"`
+	AuthorGitHubLogin    string               `json:"authorGithubLogin,omitempty"`
+	AuthorAvatarURL      string               `json:"authorAvatarUrl,omitempty"`
+	AuthorKind           string               `json:"authorKind"`
+	Kind                 string               `json:"kind"`
+	ClientMessageID      *string              `json:"clientMessageId"`
+	Content              Content              `json:"content"`
+	PlainText            string               `json:"plainText"`
+	ReplyToMessageID     *string              `json:"replyToMessageId"`
+	CreatedAt            string               `json:"createdAt"`
+	EditedAt             *string              `json:"editedAt"`
+	DeletedAt            *string              `json:"deletedAt"`
+	RecalledAt           *string              `json:"recalledAt"`
+	RecallReason         *string              `json:"recallReason"`
+	Attachments          []Attachment         `json:"attachments"`
+	Reactions            []ReactionGroup      `json:"reactions"`
+	HiddenByCurrentUser  bool                 `json:"hiddenByCurrentUser"`
+	Pin                  *MessagePin          `json:"pin,omitempty"`
 }
 
 // MessagePin is a viewer-scoped read projection. Pin mutation and authorization
@@ -208,6 +228,9 @@ type MessageRecord struct {
 	SpaceID             string
 	ConversationID      string
 	TopicID             string
+	ThreadRootID        string
+	ThreadTitle         string
+	ThreadSummary       *MessageThreadSummary
 	AuthorID            *string
 	AuthorName          string
 	AuthorNickname      string
@@ -366,8 +389,17 @@ func ProjectMessageForViewer(record MessageRecord, attachments []AttachmentRecor
 	return projectMessage(record, attachments, reactions, viewer)
 }
 
+func publicGitHubLogin(login, kind string) string {
+	trimmed := normalizeString(login)
+	if kind == "bot" || strings.HasPrefix(trimmed, "__duallane_") {
+		return ""
+	}
+	return trimmed
+}
+
 func projectMessage(record MessageRecord, attachments []AttachmentRecord, reactions []ReactionGroup, viewer *auth.Actor) (Message, error) {
-	authorName := firstNonEmpty(record.AuthorRemark, record.AuthorNickname, record.AuthorGitHubLogin, record.AuthorName)
+	cleanGitHubLogin := publicGitHubLogin(record.AuthorGitHubLogin, record.AuthorKind)
+	authorName := firstNonEmpty(record.AuthorRemark, record.AuthorNickname, cleanGitHubLogin, record.AuthorName)
 	if authorName == "" {
 		if record.AuthorKind == "bot" {
 			authorName = "Bot"
@@ -380,11 +412,13 @@ func projectMessage(record MessageRecord, attachments []AttachmentRecord, reacti
 		ID:                  record.ID,
 		ConversationID:      record.ConversationID,
 		TopicID:             record.TopicID,
+		ThreadRootID:        record.ThreadRootID,
+		ThreadTitle:         record.ThreadTitle,
 		AuthorID:            stringPointer(record.AuthorID),
 		AuthorName:          authorName,
 		AuthorNickname:      record.AuthorNickname,
 		AuthorRemark:        record.AuthorRemark,
-		AuthorGitHubLogin:   record.AuthorGitHubLogin,
+		AuthorGitHubLogin:   cleanGitHubLogin,
 		AuthorAvatarURL:     sanitizeMessageAvatar(record.AuthorAvatarURL),
 		AuthorKind:          record.AuthorKind,
 		Kind:                record.Kind,
@@ -427,6 +461,16 @@ func projectMessage(record MessageRecord, attachments []AttachmentRecord, reacti
 	}
 	message.Content = content
 	message.PlainText = content.PlainText
+	if record.ThreadSummary != nil && record.ThreadSummary.ReplyCount > 0 {
+		message.ThreadReplyCount = record.ThreadSummary.ReplyCount
+		message.ThreadLastRepliedAt = record.ThreadSummary.LastRepliedAt
+		if message.ThreadTitle == "" && record.ThreadSummary.ThreadTitle != "" {
+			message.ThreadTitle = record.ThreadSummary.ThreadTitle
+		}
+		if len(record.ThreadSummary.RecentReplies) > 0 {
+			message.ThreadPreviewReplies = append([]ThreadPreviewReply(nil), record.ThreadSummary.RecentReplies...)
+		}
+	}
 	if record.PinnedByUserID != nil && record.PinnedAt != nil && !record.PinnedAt.IsZero() {
 		message.Pin = &MessagePin{
 			PinnedByUserID: *record.PinnedByUserID,
@@ -581,6 +625,9 @@ func sanitizeMessageAvatar(value string) string {
 	if strings.HasPrefix(value, "/api/workspace/avatars/") && !strings.Contains(value, "..") {
 		return value
 	}
+	if strings.HasPrefix(value, "/api/v1/bots/") && !strings.Contains(value, "..") {
+		return value
+	}
 	if strings.HasPrefix(value, "https://avatars.githubusercontent.com/") {
 		return value
 	}
@@ -723,7 +770,7 @@ func displayName(member MentionMember) string {
 	if value := normalizeString(member.Nickname); value != "" {
 		return value
 	}
-	if value := normalizeString(member.GitHubLogin); value != "" {
+	if value := publicGitHubLogin(member.GitHubLogin, member.Kind); value != "" {
 		return value
 	}
 	if value := normalizeString(member.DisplayName); value != "" {

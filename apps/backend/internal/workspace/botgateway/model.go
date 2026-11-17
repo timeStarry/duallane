@@ -465,11 +465,13 @@ type Limits struct {
 }
 
 type MessageTrigger struct {
-	AuthorID    string
-	ContentJSON []byte
-	PlainText   string
-	DeletedAt   *time.Time
-	RecalledAt  *time.Time
+	AuthorID           string
+	ReplyToAuthorID    string
+	ThreadRootAuthorID string
+	ContentJSON        []byte
+	PlainText          string
+	DeletedAt          *time.Time
+	RecalledAt         *time.Time
 }
 
 type Sender struct {

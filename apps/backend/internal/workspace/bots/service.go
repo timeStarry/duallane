@@ -2125,7 +2125,7 @@ func applySettingsPatch(current SettingsRecord, input UpdateSettingsInput, at ti
 			current.GroupInviterPolicy = valueString
 		case "triggerPolicy":
 			valueString, ok := value.(string)
-			if !ok || valueString != TriggerMentionOrCommand {
+			if !ok || (valueString != TriggerMentionOrCommand && valueString != "all-messages") {
 				return SettingsRecord{}, validationError(CodeBotInvalidSettings, "Bot 触发策略无效")
 			}
 			current.TriggerPolicy = valueString

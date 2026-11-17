@@ -70,7 +70,7 @@ large development-tool dependency graph; this does not add SQLite or sqlc to
 the runtime service. Generated SQL preserves the handwritten authorization and
 locking predicates, which must still pass real PostgreSQL/race tests.
 
-The candidate declares Go `1.26` and toolchain `go1.26.8` in `go.mod`. Packages
+The candidate declares Go `1.26` and toolchain `go1.26.11` in `go.mod`. Packages
 that import govips require a usable CGO compiler plus libvips headers/runtime.
 `Dockerfile.workspace` provisions `libvips-dev` and `pkg-config` for its image
 build. The host-run Go CI job installs `gcc`, `libvips-dev`, and `pkg-config`,

@@ -117,7 +117,7 @@ func TestWebSocketHelloReplayAckHeartbeatAndConnectionLifecycle(t *testing.T) {
 	if !ok || eventBody["eventId"] != "event_ws_1" {
 		t.Fatalf("event body = %#v", event["event"])
 	}
-	if payload, ok := eventBody["payload"].(map[string]any); !ok || len(payload) != 0 {
+	if payload, ok := eventBody["payload"].(map[string]any); !ok || payload["plainText"] != nil || payload["message"] != nil {
 		t.Fatalf("event payload leaked content = %#v", eventBody["payload"])
 	}
 

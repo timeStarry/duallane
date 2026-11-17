@@ -1,0 +1,13 @@
+{
+  "name": "@duallane/agent-sdk",
+  "version": "1.0.14",
+  "sha256": "7f8842994d1d2401a6c257b0e932ac44fe94e52da072283d587b61073d661158",
+  "byteSize": 166591,
+  "downloadPath": "/integrations/duallane-agent.mjs",
+  "minNodeVersion": "20.0.0",
+  "highlights": [
+    "支持 duallane-agent version / update / doctor 一键检查升级与会话触发体检",
+    "常驻守护进程支持空闲态 SHA-256 校验自动静默热更新与远程升级信号",
+    "支持群聊全量消息触发、回复唤醒与创建者私聊永久保底诊断"
+  ]
+}

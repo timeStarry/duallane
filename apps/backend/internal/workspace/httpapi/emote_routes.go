@@ -148,6 +148,7 @@ func registerEmoteRoutes(router chi.Router, options RouterOptions) {
 	router.Get("/emote-collection-shares/{shareId}", withActor(options, getEmoteShare))
 	router.Post("/emote-collection-shares/{shareId}/import", withActor(options, importEmoteShare))
 	router.Get("/emotes/{emoteId}/content", withActor(options, getEmoteContent))
+	router.Get("/emotes/custom/{emoteId}", withActor(options, getEmoteContent))
 }
 
 func getEmoteSettings(w http.ResponseWriter, r *http.Request, actor *auth.Actor, options RouterOptions) {
@@ -409,6 +410,13 @@ func getEmoteContent(w http.ResponseWriter, r *http.Request, actor *auth.Actor, 
 	delivery, err := options.Emotes.ReadContent(r.Context(), emotes.ReadContentInput{ActorID: actor.ID, EmoteID: chi.URLParam(r, "emoteId"), MaxBytes: emotes.MaxOutputBytes, Meta: requestMeta(r, options)})
 	if err != nil {
 		writeError(w, err)
+		return
+	}
+	if delivery.RedirectURL != "" {
+		if delivery.Body != nil {
+			_ = delivery.Body.Close()
+		}
+		http.Redirect(w, r, delivery.RedirectURL, http.StatusTemporaryRedirect)
 		return
 	}
 	defer delivery.Body.Close()

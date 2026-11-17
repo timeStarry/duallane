@@ -7,9 +7,9 @@ const apiURL = `http://127.0.0.1:${apiPort}`;
 
 export default defineConfig({
   testDir: "./e2e",
-  // The default config runs the original p2p.spec.ts assertions. This
-  // dedicated job keeps the independent privacy-only cases and output.
-  testMatch: ["p2p-go-privacy.spec.ts", "p2p-ime.spec.ts"],
+  // The default config covers AppV1 reading and composition. This
+  // dedicated job adds transport privacy, transfer and responsive acceptance.
+  testMatch: ["p2p-go-privacy.spec.ts", "p2p-ime.spec.ts", "v1-p2p-acceptance.spec.ts"],
   // Even failure DOM snapshots must not enter the normal CI artifact upload.
   outputDir: ".private-test-results/p2p-go-browser",
   fullyParallel: false,

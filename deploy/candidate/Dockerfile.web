@@ -2,11 +2,18 @@ ARG NODE_IMAGE=docker.m.daocloud.io/library/node:22-alpine@sha256:c610fcdfb1d5b4
 ARG NGINX_IMAGE=docker.m.daocloud.io/library/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
 
 FROM ${NODE_IMAGE} AS build
+ARG NPM_REGISTRY=https://registry.npmjs.org
+ENV COREPACK_NPM_REGISTRY=${NPM_REGISTRY} \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 WORKDIR /app
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/package.json
-RUN pnpm install --frozen-lockfile
+COPY packages/agent-sdk/package.json packages/agent-sdk/package.json
+COPY packages/design-tokens/package.json packages/design-tokens/package.json
+COPY packages/protocol/package.json packages/protocol/package.json
+RUN pnpm install --frozen-lockfile --registry=${NPM_REGISTRY}
+COPY packages packages
 COPY apps/web apps/web
 COPY scripts/dev/go-dev-config.mjs scripts/dev/go-dev-config.mjs
 RUN pnpm --filter @duallane/web build

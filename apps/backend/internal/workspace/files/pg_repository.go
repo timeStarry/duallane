@@ -624,7 +624,7 @@ func listAttachments(ctx context.Context, queryer pgQueryer, query AttachmentLis
 	}
 	rows, err := queryer.Query(ctx, `SELECT
 		a.id, a.space_id, a.uploader_id,
-		COALESCE(ur.remark, u.nickname, u.github_login, u.display_name), c.title,
+		COALESCE(ur.remark, u.nickname, CASE WHEN u.kind = 'bot' OR u.github_login LIKE '__duallane_%' THEN NULL ELSE NULLIF(u.github_login, '') END, u.display_name), c.title,
 		a.conversation_id, a.visibility, a.status, a.file_name, a.mime_type, a.byte_size,
 		a.storage_key, a.upload_transfer_id, a.storage_object_id, a.created_at, a.completed_at,
 		so.id, so.sha256, so.object_key, so.byte_size, so.content_type, so.created_at,

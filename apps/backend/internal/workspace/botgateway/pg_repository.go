@@ -468,7 +468,7 @@ func (r *PGRepository) ListContextMessages(ctx context.Context, spaceID, convers
 func listContextMessages(ctx context.Context, queryer pgQueryer, spaceID, conversationID string, since time.Time, includeReplies, includeSystemEvents bool, limit int) ([]ContextMessageRecord, error) {
 	limit = boundedLimit(limit, 50, MaxReplayLimit)
 	query := `
-		SELECT id, conversation_id, author_id, author_kind, kind, content_format,
+		SELECT id, conversation_id, COALESCE(author_id, ''), author_kind, kind, content_format,
 		       content_json, plain_text, reply_to_message_id, created_at
 		FROM messages
 		WHERE space_id = $1 AND conversation_id = $2 AND deleted_at IS NULL AND created_at >= $3
@@ -760,16 +760,37 @@ func (r *PGRepository) GetMessageTrigger(ctx context.Context, spaceID, conversat
 func getMessageTrigger(ctx context.Context, queryer pgQueryer, spaceID, conversationID, messageID string) (*MessageTrigger, error) {
 	var value MessageTrigger
 	var content string
+	var kind string
 	err := queryer.QueryRow(ctx, `
-		SELECT author_id, content_json, plain_text, deleted_at, recalled_at
-		FROM messages
-		WHERE id = $1 AND space_id = $2 AND conversation_id = $3
-	`, messageID, spaceID, conversationID).Scan(&value.AuthorID, &content, &value.PlainText, &value.DeletedAt, &value.RecalledAt)
+		SELECT
+			COALESCE(m.author_id, ''),
+			COALESCE((SELECT p.author_id FROM messages p WHERE p.id = m.reply_to_message_id), ''),
+			COALESCE((SELECT r.author_id FROM messages r WHERE r.id = m.thread_root_id), ''),
+			m.kind,
+			m.content_json,
+			m.plain_text,
+			m.deleted_at,
+			m.recalled_at
+		FROM messages m
+		WHERE m.id = $1 AND m.space_id = $2 AND m.conversation_id = $3
+	`, messageID, spaceID, conversationID).Scan(
+		&value.AuthorID,
+		&value.ReplyToAuthorID,
+		&value.ThreadRootAuthorID,
+		&kind,
+		&content,
+		&value.PlainText,
+		&value.DeletedAt,
+		&value.RecalledAt,
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, internalError("read bot trigger message", err)
+	}
+	if kind == "system" || strings.TrimSpace(value.AuthorID) == "" {
+		return nil, nil
 	}
 	value.ContentJSON = []byte(content)
 	if value.DeletedAt != nil {
@@ -1195,4 +1216,136 @@ func boundedLimit(value, fallback, maximum int) int {
 		value = maximum
 	}
 	return value
+}
+
+func (r *PGRepository) emitGatewayWorkspaceEventTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	spaceID, actorID, conversationID, eventType, targetType, targetID string,
+	payload map[string]any,
+	now time.Time,
+) error {
+	rawID, err := r.idFactory()
+	if err != nil || strings.TrimSpace(rawID) == "" {
+		rawID = uuid.NewString()
+	}
+	var nextSeq int64
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO workspace_event_cursors (space_id, next_seq)
+		VALUES ($1, 2)
+		ON CONFLICT (space_id) DO UPDATE
+		SET next_seq = workspace_event_cursors.next_seq + 1
+		RETURNING next_seq - 1
+	`, spaceID).Scan(&nextSeq); err != nil {
+		return err
+	}
+	payloadBytes, _ := json.Marshal(payload)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO workspace_events (
+			id, space_id, seq, type, actor_user_id, conversation_id,
+			target_type, target_id, payload_json, created_at
+		)
+		VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), $9, $10)
+	`, "evt_"+strings.TrimSpace(rawID), spaceID, nextSeq, eventType, actorID, conversationID, targetType, targetID, string(payloadBytes), now.UTC()); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `SELECT pg_notify('duallane_workspace_events', '')`)
+	return err
+}
+
+func (r *PGRepository) advanceMemberReadTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	spaceID, conversationID, userID string,
+	now time.Time,
+) error {
+	if strings.TrimSpace(conversationID) == "" || strings.TrimSpace(userID) == "" {
+		return nil
+	}
+	readAt := now.UTC()
+	tag, err := tx.Exec(ctx, `
+		UPDATE conversation_members
+		SET last_read_at = GREATEST(COALESCE(last_read_at, $1), $1)
+		WHERE conversation_id = $2
+		  AND user_id = $3
+		  AND removed_at IS NULL
+		  AND (last_read_at IS NULL OR last_read_at < $1)
+	`, readAt, conversationID, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() > 0 {
+		return r.emitGatewayWorkspaceEventTx(ctx, tx, spaceID, userID, conversationID, "conversation.read", "conversation", conversationID, map[string]any{
+			"conversationId": conversationID,
+			"userId":         userID,
+			"readAt":         readAt.Format(time.RFC3339Nano),
+		}, readAt)
+	}
+	return nil
+}
+
+func (r *PGRepository) RecordBotTyping(ctx context.Context, spaceID, conversationID, botUserID, botName string, now time.Time) error {
+	if r == nil || r.pool == nil || strings.TrimSpace(conversationID) == "" || strings.TrimSpace(botUserID) == "" {
+		return nil
+	}
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	if err := r.advanceMemberReadTx(ctx, tx, spaceID, conversationID, botUserID, now); err != nil {
+		return err
+	}
+	displayName := strings.TrimSpace(botName)
+	if displayName == "" {
+		displayName = "Bot"
+	}
+	expiresAt := now.UTC().Add(6 * time.Second).Format(time.RFC3339Nano)
+	if err := r.emitGatewayWorkspaceEventTx(ctx, tx, spaceID, botUserID, conversationID, "conversation.typing", "conversation", conversationID, map[string]any{
+		"conversationId": conversationID,
+		"userId":         botUserID,
+		"displayName":    displayName,
+		"kind":           "bot",
+		"state":          "thinking",
+		"expiresAt":      expiresAt,
+	}, now); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (r *PGRepository) RecordBotAckRead(ctx context.Context, botID, spaceID, botUserID, eventID string, sequence int64, now time.Time) error {
+	if r == nil || r.pool == nil || strings.TrimSpace(botUserID) == "" {
+		return nil
+	}
+	var convID string
+	if eventID != "" {
+		_ = r.pool.QueryRow(ctx, `
+			SELECT COALESCE(conversation_id, '')
+			FROM workspace_agent_bot_deliveries
+			WHERE bot_id = $1 AND space_id = $2 AND event_id = $3
+			LIMIT 1
+		`, botID, spaceID, eventID).Scan(&convID)
+	}
+	if convID == "" && sequence > 0 {
+		_ = r.pool.QueryRow(ctx, `
+			SELECT COALESCE(conversation_id, '')
+			FROM workspace_agent_bot_deliveries
+			WHERE bot_id = $1 AND space_id = $2 AND sequence = $3
+			LIMIT 1
+		`, botID, spaceID, sequence).Scan(&convID)
+	}
+	if convID == "" {
+		return nil
+	}
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if err := r.advanceMemberReadTx(ctx, tx, spaceID, convID, botUserID, now); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

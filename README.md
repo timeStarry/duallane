@@ -1,7 +1,17 @@
-# DualLane
+<p align="center">
+  <img src="apps/web/public/assets/duallane-mark.svg" width="84" height="84" alt="DualLane Liquid Vibrancy Mark" />
+</p>
+
+<h1 align="center">DualLane</h1>
+
+<p align="center">
+  <strong>Two Trust Lanes. Crystal Clear.</strong><br />
+  <sub>分流式安全会话 · 共享空间与私密直连</sub>
+</p>
 
 DualLane is a self-hosted split-lane communication tool. The private direct lane
-uses browser-to-browser transfer with a signaling-only server. The shared space
+uses end-to-end encrypted WebSocket relay between two browsers without server-side
+content persistence. The shared space
 lane, internally named `Workspace`, is the server-retained path for persistent
 messages, shared files, capacity limits, history retention, and operation
 records.
@@ -17,7 +27,7 @@ The user-facing product has two lanes:
 ## Start Developing
 
 Prerequisites are Node.js 22, Corepack/pnpm 10, the pinned Go 1.26/toolchain
-1.26.8 backend toolchain, Git, and (for host-run Workspace/media work) a CGO
+1.26.11 backend toolchain, Git, and (for host-run Workspace/media work) a CGO
 compiler, `pkg-config`, and libvips headers/runtime. See the [backend validation
 prerequisites](docs/backend/VALIDATION.md#3-candidate-go-gates-and-evidence)
 before running host Go gates. Create a short-lived branch from current
@@ -100,8 +110,10 @@ pnpm exec playwright install chromium
 pnpm test:e2e
 ```
 
-The default `pnpm test:e2e` suite is P2P-only. The complete Go Workspace browser
-gate is separate and requires an explicit loopback disposable PostgreSQL URL and
+The default `pnpm test:e2e` suite checks current AppV1 P2P reading and composition
+flows. `pnpm test:e2e:p2p-go` adds encrypted-relay privacy, file transfer, key
+isolation, and responsive acceptance. The current Go Workspace browser gate is
+separate and requires an explicit loopback disposable PostgreSQL URL and
 schema-creation opt-in:
 
 ```bash
@@ -167,8 +179,9 @@ the frontend URL. In a reverse-proxy deployment, expose one origin and route
 `/api` plus `/ws` to the backend service.
 
 P2P invite links include a browser-only `#k=` fragment. Copy the complete link;
-the server never receives this secret. The optional safety passphrase is used
-only in the browser key derivation and is not sent to the backend.
+the server never receives this secret. Current AppV1 uses that shared key for
+end-to-end encryption of messages, file metadata, and file chunks before sending
+them through the Go WebSocket relay. It does not establish WebRTC or use ICE/TURN.
 
 ## Production Shape
 
@@ -361,7 +374,8 @@ HTTPS origin. In a same-origin deployment, `WORKSPACE_FRONTEND_URL` can be left
 empty. The bundled Compose deployment enables `TRUST_PROXY=true`; the web
 gateway preserves an outer proxy's HTTPS protocol so OAuth and session cookies
 are marked `Secure`. Only enable `TRUST_PROXY` when the API is behind a
-controlled reverse proxy. Production WebRTC should be served over HTTPS.
+controlled reverse proxy. Production must use HTTPS/WSS for the private lane and
+secure authentication callbacks.
 
 If shared space is enabled in production, configure `GITHUB_CLIENT_ID`,
 `GITHUB_CLIENT_SECRET`, `PUBLIC_BASE_URL`, and a long random `SESSION_SECRET`.
@@ -420,15 +434,14 @@ TEST_DATABASE_URL=postgresql://<user>:<password>@127.0.0.1:<port>/<disposable-db
 The gate creates and removes isolated schemas; never point it at production or
 reuse a shared database.
 
-For private-lane reliability, configure TURN fallback with either
-`DUALLANE_TURN_SHARED_SECRET` for coturn REST credentials or static
-`DUALLANE_TURN_USERNAME` / `DUALLANE_TURN_CREDENTIAL` values. Prefer `turns:`
-URLs. `DUALLANE_STUN_URLS` and `DUALLANE_TURN_URLS` accept comma-separated
-server URLs, `DUALLANE_TURN_TTL_SECONDS` controls REST credential lifetime, and
-`DUALLANE_EMPTY_ROOM_GRACE_MS` controls how long an empty private room remains
-available for reconnecting. WebSocket fallback carries only end-to-end
-encrypted envelopes; messages, profiles, and signaling are not sent to the
-server as plaintext.
+The current private lane requires a reachable Go WebSocket relay. Retained
+STUN/TURN settings and ICE endpoints support historical clients; AppV1 does not
+use them for transport or reliability. `DUALLANE_EMPTY_ROOM_GRACE_MS` controls how
+long an empty room remains available for explicit rejoining. A closed socket is
+shown as disconnected; automatic transport recovery is not implemented.
+Messages and files remain in browser memory only, and leaving the room clears
+that local session. Recipients may explicitly download received files; there is
+no transcript-save prompt or durable session recovery.
 
 Access logs should avoid query strings and payloads. The bundled Nginx gateway
 uses a path-only log format and security headers; put HSTS on the outer TLS

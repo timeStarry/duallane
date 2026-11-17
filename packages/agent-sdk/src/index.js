@@ -1,9 +1,29 @@
-import WebSocket from "ws";
+import crypto from "node:crypto";
+import { LiteWebSocket, OPEN } from "./ws-lite.js";
 
-export const DUALLANE_AGENT_SDK_VERSION = "0.15.1";
+export const DUALLANE_AGENT_SDK_VERSION = "1.0.14";
 export const DUALLANE_GATEWAY_VERSION = 1;
 
-const OPEN = 1;
+export function compareRuntimeSemver(a, b) {
+  const pa = String(a || "")
+    .trim()
+    .replace(/^v/iu, "")
+    .split("-")[0]
+    .split(".")
+    .map((n) => Number.parseInt(n, 10) || 0);
+  const pb = String(b || "")
+    .trim()
+    .replace(/^v/iu, "")
+    .split("-")[0]
+    .split(".")
+    .map((n) => Number.parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i += 1) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 
 export class DualLaneAgentError extends Error {
@@ -226,8 +246,208 @@ export class DualLaneAgentClient {
     }));
   }
 
-  async setTyping(conversationId) {
-    return this.#request("POST", "/api/bot-gateway/v1/typing", { conversationId: normalizeId(conversationId, "conversationId") });
+  async setTyping(conversationId, options = {}) {
+    const id = normalizeId(conversationId, "conversationId");
+    const state = typeof options.state === "string" ? options.state.trim() : "";
+    if (state === "typing" || state === "thinking") {
+      return this.#request("POST", "/api/bot/v2/typing", { conversationId: id, state });
+    }
+    return this.#request("POST", "/api/bot-gateway/v1/typing", { conversationId: id });
+  }
+
+  async unbind() {
+    return this.#request("POST", "/api/bot/v2/unbind", {});
+  }
+
+  async publishMobileRelease(options = {}) {
+    const apkBytes = options.apkBytes;
+    if (!(apkBytes instanceof Uint8Array) || apkBytes.byteLength === 0) {
+      throw new TypeError("apkBytes must be a non-empty Uint8Array or Buffer");
+    }
+    const params = new URLSearchParams();
+    if (typeof options.version === "string" && options.version.trim()) {
+      params.set("version", options.version.trim());
+    }
+    if (Number.isInteger(options.versionCode) && options.versionCode > 0) {
+      params.set("versionCode", String(options.versionCode));
+    }
+    if (Number.isInteger(options.minNativeVersionCode) && options.minNativeVersionCode > 0) {
+      params.set("minNativeVersionCode", String(options.minNativeVersionCode));
+    }
+    const qs = params.toString();
+    const uploaded = await this.#requestBinary(
+      "PUT",
+      `/api/bot/v2/mobile-release/apk${qs ? `?${qs}` : ""}`,
+      apkBytes,
+      "application/vnd.android.package-archive"
+    );
+    const rel = uploaded?.release || {};
+    if (
+      options.title !== undefined ||
+      options.notes !== undefined ||
+      options.enabled !== undefined ||
+      options.minNativeVersionCode !== undefined
+    ) {
+      return await this.#request("PUT", "/api/bot/v2/mobile-release", {
+        enabled: options.enabled ?? true,
+        version: options.version || rel.version || "",
+        versionCode: options.versionCode || rel.versionCode || 0,
+        title: options.title !== undefined ? String(options.title) : rel.title || "",
+        notes: options.notes !== undefined ? String(options.notes) : rel.notes || "",
+        ...(Number.isInteger(options.minNativeVersionCode) && options.minNativeVersionCode > 0
+          ? { minNativeVersionCode: options.minNativeVersionCode }
+          : {})
+      });
+    }
+    return uploaded;
+  }
+
+  async publishMobileOTA(options = {}) {
+    const zipBytes = options.zipBytes;
+    if (!(zipBytes instanceof Uint8Array) || zipBytes.byteLength === 0) {
+      throw new TypeError("zipBytes must be a non-empty Uint8Array or Buffer");
+    }
+    const params = new URLSearchParams();
+    if (typeof options.version === "string" && options.version.trim()) {
+      params.set("version", options.version.trim());
+    }
+    if (Number.isInteger(options.minNativeVersionCode) && options.minNativeVersionCode > 0) {
+      params.set("minNativeVersionCode", String(options.minNativeVersionCode));
+    }
+    const qs = params.toString();
+    const uploaded = await this.#requestBinary(
+      "PUT",
+      `/api/bot/v2/mobile-release/ota${qs ? `?${qs}` : ""}`,
+      zipBytes,
+      "application/zip"
+    );
+    const rel = uploaded?.release || {};
+    if (options.title !== undefined || options.notes !== undefined || options.enabled !== undefined) {
+      return await this.#request("PUT", "/api/bot/v2/mobile-release", {
+        enabled: options.enabled ?? true,
+        version: options.version || rel.version || "",
+        versionCode: rel.versionCode || 0,
+        title: options.title !== undefined ? String(options.title) : rel.title || "",
+        notes: options.notes !== undefined ? String(options.notes) : rel.notes || "",
+        ...(Number.isInteger(options.minNativeVersionCode) && options.minNativeVersionCode > 0
+          ? { minNativeVersionCode: options.minNativeVersionCode }
+          : {})
+      });
+    }
+    return uploaded;
+  }
+
+  async listConversations() {
+    return this.#request("GET", "/api/bot/v2/conversations");
+  }
+
+  async getDoctor() {
+    return this.#request("GET", "/api/bot/v2/doctor");
+  }
+
+  async editMessage(messageId, plainText) {
+    const id = normalizeId(messageId, "messageId");
+    const text = typeof plainText === "string" ? plainText.trim() : "";
+    if (!text) throw new TypeError("plainText is required");
+    return this.#request("PATCH", `/api/bot/v2/messages/${encodeURIComponent(id)}`, { plainText: text });
+  }
+
+  async sendFile(input = {}) {
+    const conversationId = normalizeId(input.conversationId, "conversationId");
+    let rawBytes = input.bytes;
+    if (typeof rawBytes === "string") {
+      rawBytes = Buffer.from(rawBytes, "utf8");
+    }
+    if (!(rawBytes instanceof Uint8Array) || rawBytes.byteLength === 0) {
+      throw new TypeError("bytes must be a non-empty Uint8Array, Buffer, or string");
+    }
+    const fileName = String(input.fileName || "attachment.bin").trim() || "attachment.bin";
+    const mimeType = String(input.mimeType || inferMimeTypeFromFileName(fileName)).trim() || "application/octet-stream";
+    const params = new URLSearchParams();
+    params.set("fileName", fileName);
+    params.set("mimeType", mimeType);
+    if (typeof input.text === "string" && input.text.trim()) {
+      params.set("text", input.text.trim());
+    }
+    if (typeof input.replyToMessageId === "string" && input.replyToMessageId.trim()) {
+      params.set("replyToMessageId", normalizeId(input.replyToMessageId, "replyToMessageId"));
+    }
+    if (typeof input.clientMessageId === "string" && input.clientMessageId.trim()) {
+      params.set("clientMessageId", normalizeId(input.clientMessageId, "clientMessageId"));
+    }
+    if (input.sendMessage === false) {
+      params.set("sendMessage", "false");
+    }
+    return this.#requestBinary(
+      "POST",
+      `/api/bot/v2/conversations/${encodeURIComponent(conversationId)}/files?${params.toString()}`,
+      rawBytes,
+      mimeType
+    );
+  }
+
+  async uploadFile(input = {}) {
+    return this.sendFile({ ...input, sendMessage: false });
+  }
+
+  async completeUploadContent(uploadId, rawBytes, mimeType = "application/octet-stream") {
+    const id = normalizeId(uploadId, "uploadId");
+    if (!(rawBytes instanceof Uint8Array) || rawBytes.byteLength === 0) {
+      throw new TypeError("rawBytes must be a non-empty Uint8Array or Buffer");
+    }
+    return this.#requestBinary(
+      "PUT",
+      `/api/bot/v2/uploads/${encodeURIComponent(id)}/content`,
+      rawBytes,
+      mimeType
+    );
+  }
+
+  async getUpdates(options = {}) {
+    const afterSequence = options.afterSequence === undefined ? 0 : normalizeSequence(options.afterSequence, true);
+    const limit = options.limit === undefined ? 50 : normalizeLimit(options.limit);
+    const timeoutRaw = options.timeout === undefined ? 0 : Number(options.timeout);
+    const timeout = Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? Math.min(25, Math.floor(timeoutRaw)) : 0;
+    const timeoutParam = timeout > 0 ? `&timeout=${timeout}` : "";
+    return this.#request("GET", `/api/bot/v2/updates?afterSequence=${afterSequence}&limit=${limit}${timeoutParam}`);
+  }
+
+  async pollNextEvent(options = {}) {
+    const deadlineMs = Date.now() + Math.max(1000, Number(options.timeoutMs || 60_000));
+    const filterConv = typeof options.conversationId === "string" ? options.conversationId.trim() : "";
+    let cursor = normalizeSequence(options.afterSequence ?? 0, true);
+    const signal = options.signal;
+
+    while (Date.now() < deadlineMs && !signal?.aborted) {
+      const remainingSec = Math.max(1, Math.ceil((deadlineMs - Date.now()) / 1000));
+      const longPollSec = Math.min(20, remainingSec);
+      let res = await this.getUpdates({ afterSequence: cursor, limit: 50, timeout: longPollSec });
+      if (res?.syncRequired && Number.isSafeInteger(res?.currentSequence)) {
+        cursor = Math.max(0, Number(res.currentSequence));
+        await options.onSyncRequired?.({ currentSequence: cursor, reason: "sync_required" });
+        continue;
+      }
+      const events = Array.isArray(res?.events) ? res.events : [];
+      for (const ev of events) {
+        const seq = Number(ev?.sequence || 0);
+        if (seq > cursor) {
+          cursor = seq;
+          this.#lastSequence = Math.max(this.#lastSequence, seq);
+        }
+        if (ev?.eventId && seq > 0) {
+          await this.acknowledge({ eventId: ev.eventId, sequence: seq }).catch(() => {});
+        }
+        await options.onCursorAdvance?.(cursor);
+        if (filterConv && ev?.conversationId !== filterConv) {
+          continue;
+        }
+        return { timeout: false, event: ev, lastSequence: cursor, transport: "poll" };
+      }
+      if (events.length === 0 && Date.now() < deadlineMs && !signal?.aborted) {
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    }
+    return { timeout: true, lastSequence: cursor, transport: "poll" };
   }
 
   async #request(method, path, body) {
@@ -242,6 +462,31 @@ export class DualLaneAgentClient {
           "x-duallane-adapter-version": this.#adapterVersion
         }),
         body: body === undefined ? undefined : JSON.stringify(body)
+      });
+    } catch (cause) {
+      throw new DualLaneAgentError("network.unavailable", "DualLane Agent Gateway is unavailable", { cause, retryable: true });
+    }
+    const payload = await readJson(response);
+    if (!response.ok) {
+      const code = safeErrorCode(payload?.error?.code, "gateway.request_failed");
+      const message = redactToken(safeErrorText(payload?.error?.message, "DualLane Agent Gateway request failed"), this.#token);
+      throw new DualLaneAgentError(code, message, { statusCode: response.status, retryable: response.status === 429 || response.status >= 500 });
+    }
+    return payload;
+  }
+
+  async #requestBinary(method, path, rawBytes, contentType = "application/octet-stream") {
+    let response;
+    try {
+      response = await this.#fetch(new URL(path, this.#origin), {
+        method,
+        headers: compact({
+          authorization: `Bearer ${this.#token}`,
+          accept: "application/json",
+          "content-type": contentType,
+          "x-duallane-adapter-version": this.#adapterVersion
+        }),
+        body: rawBytes
       });
     } catch (cause) {
       throw new DualLaneAgentError("network.unavailable", "DualLane Agent Gateway is unavailable", { cause, retryable: true });
@@ -437,7 +682,7 @@ export class DualLaneAgentClient {
 }
 
 function defaultWebSocketFactory(url, options) {
-  return new WebSocket(url, { headers: options.headers });
+  return new LiteWebSocket(url, { headers: options?.headers });
 }
 
 function bindSocket(socket, event, listener) {
@@ -549,4 +794,56 @@ function safeErrorCode(value, fallback) {
 
 function redactToken(value, token) {
   return String(value).split(token).join("[REDACTED]").replace(/dl_bot_[A-Za-z0-9_-]{16,}/gu, "[REDACTED]");
+}
+
+export function inferMimeTypeFromFileName(fileName) {
+  const lower = String(fileName || "").trim().toLowerCase();
+  const dot = lower.lastIndexOf(".");
+  const ext = dot !== -1 ? lower.slice(dot) : "";
+  switch (ext) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".webp":
+      return "image/webp";
+    case ".gif":
+      return "image/gif";
+    case ".svg":
+      return "image/svg+xml";
+    case ".pdf":
+      return "application/pdf";
+    case ".md":
+    case ".markdown":
+      return "text/markdown";
+    case ".txt":
+    case ".log":
+      return "text/plain";
+    case ".json":
+      return "application/json";
+    case ".csv":
+      return "text/csv";
+    case ".html":
+    case ".htm":
+      return "text/html";
+    case ".zip":
+      return "application/zip";
+    case ".js":
+    case ".mjs":
+      return "text/javascript";
+    case ".ts":
+    case ".tsx":
+    case ".py":
+    case ".go":
+    case ".rs":
+    case ".sh":
+    case ".yaml":
+    case ".yml":
+    case ".toml":
+    case ".sql":
+      return "text/plain";
+    default:
+      return "application/octet-stream";
+  }
 }

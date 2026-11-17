@@ -376,6 +376,10 @@ func projectPayload(eventType string, payload map[string]any, actor *auth.Actor)
 			result["conversation"] = conversation
 		}
 		return result
+	case "conversation.read":
+		return stringFields(payload, "conversationId", "userId", "readAt")
+	case "conversation.typing":
+		return stringFields(payload, "conversationId", "userId", "displayName", "kind", "state", "expiresAt")
 	case "emote.settings.updated":
 		return stringFields(payload, "userId")
 	case "emote.library.updated":
@@ -390,7 +394,7 @@ func projectPayload(eventType string, payload map[string]any, actor *auth.Actor)
 			result["revision"] = value
 		}
 		return result
-	case "message.created", "message.recalled":
+	case "message.created", "message.recalled", "message.edited":
 		result := stringFields(payload, "messageId", "conversationId")
 		if message, ok := safeMessage(payload["message"], actorID(actor)); ok {
 			result["message"] = message
@@ -652,6 +656,31 @@ func safeMessage(value any, viewerID string) (map[string]any, bool) {
 	}
 	if hidden, ok := message["hiddenByCurrentUser"].(bool); ok {
 		result["hiddenByCurrentUser"] = hidden
+	}
+	for _, key := range []string{"threadRootId", "threadTitle", "threadLastRepliedAt"} {
+		if val := stringField(message, key); val != "" {
+			result[key] = val
+		}
+	}
+	if cnt, ok := safeIntField(message["threadReplyCount"]); ok && cnt > 0 {
+		result["threadReplyCount"] = cnt
+	}
+	if rawPreviews, ok := message["threadPreviewReplies"].([]any); ok && len(rawPreviews) > 0 {
+		previews := make([]any, 0, len(rawPreviews))
+		for _, item := range rawPreviews {
+			if m, ok := item.(map[string]any); ok && m != nil {
+				previews = append(previews, map[string]any{
+					"id":         publicString(m["id"]),
+					"authorId":   publicString(m["authorId"]),
+					"authorName": publicString(m["authorName"]),
+					"plainText":  publicString(m["plainText"]),
+					"createdAt":  publicString(m["createdAt"]),
+				})
+			}
+		}
+		if len(previews) > 0 {
+			result["threadPreviewReplies"] = previews
+		}
 	}
 	return result, true
 }

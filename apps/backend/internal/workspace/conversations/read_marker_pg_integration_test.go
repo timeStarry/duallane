@@ -124,8 +124,8 @@ func TestPGConversationReadMarkerMatchesNodeSemantics(t *testing.T) {
 		t.Fatalf("list initial conversations: %v", err)
 	}
 	initialConversation := requireConversationForReadTest(t, initial, group.ID)
-	if initialConversation.UnreadCount != 1 {
-		t.Fatalf("initial unread count = %d, want one system message", initialConversation.UnreadCount)
+	if initialConversation.UnreadCount != 0 {
+		t.Fatalf("initial unread count = %d, want 0 (system messages excluded from badge)", initialConversation.UnreadCount)
 	}
 	if initialConversation.LastReadSeq != nil || initialConversation.LastReadMessageID != nil {
 		t.Fatalf("initial read marker = seq:%v message:%v, want nil", initialConversation.LastReadSeq, initialConversation.LastReadMessageID)
@@ -208,8 +208,8 @@ func TestPGConversationReadMarkerMatchesNodeSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list without marker: %v", err)
 	}
-	if got := requireConversationForReadTest(t, withoutMarker, group.ID).UnreadCount; got != 2 {
-		t.Fatalf("unread without persisted marker = %d, want system plus owner message", got)
+	if got := requireConversationForReadTest(t, withoutMarker, group.ID).UnreadCount; got != 1 {
+		t.Fatalf("unread without persisted marker = %d, want owner message only (system excluded)", got)
 	}
 
 	readAgain, err := service.MarkRead(ctx, ConversationInput{

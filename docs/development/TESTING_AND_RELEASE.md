@@ -44,10 +44,12 @@ Install the repository browser once:
 pnpm exec playwright install chromium
 ```
 
-Run the default P2P gate or the separate complete Go Workspace gate:
+Run the default P2P gate, the independent P2P privacy/transfer gate, and the
+separate current Go Workspace gate as applicable:
 
 ```bash
 pnpm test:e2e
+pnpm test:e2e:p2p-go
 DUALLANE_GO_E2E_ALLOW_SCHEMA_CREATION=true \
 TEST_DATABASE_URL=postgresql://<user>:<password>@127.0.0.1:<port>/<disposable-db> \
   pnpm test:e2e:workspace-go
@@ -57,9 +59,22 @@ Use a non-default loopback database for the Workspace command; the harness
 creates and drops an isolated schema. Replace the command with a focused
 Playwright specification only when the changed flow needs one.
 
-The default E2E path is Go P2P-only. The Workspace browser gate uses the Go
-Workspace service and Vite with the explicit disposable PostgreSQL environment
-above. Do not start or depend on the retired Node API, Node worker, or an
+The default E2E path runs `p2p.spec.ts` and `p2p-ime.spec.ts` against the current
+AppV1 UI. The independent `playwright.p2p-go.config.ts` suite adds
+`p2p-go-privacy.spec.ts` and `v1-p2p-acceptance.spec.ts`: encrypted relay frames,
+browser-only keys, wrong-key isolation, file transfer, and responsive behavior.
+The current P2P transport is encrypted WebSocket only; these gates do not claim
+WebRTC, ICE/TURN, automatic reconnection, or local transcript-save coverage.
+
+The Workspace browser gate selects `workspace-v1-acceptance.spec.ts`, using the
+Go Workspace service and Vite with the explicit disposable PostgreSQL environment
+above. Other retained `workspace*.spec.ts` files describe the retired UI and are
+historical regression references, not current browser-gate evidence. Their old
+selectors must not be restored as a substitute for AppV1 acceptance. Backend
+authorization, quota, audit, concurrency, and migration coverage remains required
+through the Go and PostgreSQL gates.
+
+Do not start or depend on the retired Node API, Node worker, or an
 implicit SQLite compatibility service. When a focused harness must target one
 origin, set the documented `DUALLANE_API_ORIGIN` single-origin Go/external test
 override; do not terminate an unknown process or silently fall back to a Node

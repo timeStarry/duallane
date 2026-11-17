@@ -1020,7 +1020,14 @@ func (s *Service) GetStatus(ctx context.Context, input UploadStatusInput) (Uploa
 }
 
 func (s *Service) CompleteUpload(ctx context.Context, input CompleteUploadInput) (UploadResult, error) {
-	actor, err := s.readActor(ctx, input.ActorID)
+	return s.completeUpload(ctx, input, s.lookupActor)
+}
+
+func (s *Service) completeUpload(ctx context.Context, input CompleteUploadInput, lookup fileActorLookup) (UploadResult, error) {
+	if s == nil || s.repo == nil {
+		return UploadResult{}, internalError("complete workspace upload", errors.New("repository is required"))
+	}
+	actor, err := lookup(ctx, s.repo, input.ActorID)
 	if err != nil {
 		return UploadResult{}, err
 	}
@@ -1061,7 +1068,7 @@ func (s *Service) CompleteUpload(ctx context.Context, input CompleteUploadInput)
 		if err != nil {
 			mapped := mapUploadStorageError(err)
 			if shouldFailDuringStorage(mapped) {
-				_ = s.failUploadAfterCompletion(ctx, actor.ID, uploadID, failureReason(mapped), input.Meta)
+				_ = s.failUploadAfterCompletionWithLookup(ctx, actor.ID, uploadID, failureReason(mapped), input.Meta, lookup)
 			}
 			return UploadResult{}, mapped
 		}
@@ -1113,7 +1120,7 @@ func (s *Service) CompleteUpload(ctx context.Context, input CompleteUploadInput)
 		if err != nil {
 			mapped := mapUploadStorageError(err)
 			if shouldFailDuringStorage(mapped) {
-				_ = s.failUploadAfterCompletion(ctx, actor.ID, uploadID, failureReason(mapped), input.Meta)
+				_ = s.failUploadAfterCompletionWithLookup(ctx, actor.ID, uploadID, failureReason(mapped), input.Meta, lookup)
 			}
 			return UploadResult{}, mapped
 		}
@@ -1123,7 +1130,7 @@ func (s *Service) CompleteUpload(ctx context.Context, input CompleteUploadInput)
 		mapped := normalizeStorageError(err)
 		var failErr error
 		if shouldFailDuringStorage(mapped) {
-			failErr = s.failUploadAfterCompletion(context.Background(), actor.ID, uploadID, failureReason(mapped), input.Meta)
+			failErr = s.failUploadAfterCompletionWithLookup(context.Background(), actor.ID, uploadID, failureReason(mapped), input.Meta, lookup)
 		}
 		if failErr != nil {
 			mapped = errors.Join(mapped, failErr)
@@ -1136,7 +1143,7 @@ func (s *Service) CompleteUpload(ctx context.Context, input CompleteUploadInput)
 		s.cleanupTerminalUploadStaging(ctx, actor.ID, uploadID, partRecords, transfer.ByteSize)
 	}()
 	var promotionFailed bool
-	value, txErr := s.withTransaction(ctx, actor.ID, input.Meta, func(tx Tx, currentActor *auth.Actor, now time.Time) (any, *rejection, error) {
+	value, txErr := s.withActorTransaction(ctx, actor.ID, input.Meta, lookup, func(tx Tx, currentActor *auth.Actor, now time.Time) (any, *rejection, error) {
 		if err := lockKeys(ctx, tx, uploadLockKey(uploadID), storageObjectLockKey(objectRecord.ID)); err != nil {
 			return nil, nil, normalizeRepositoryError(err)
 		}
@@ -1192,7 +1199,7 @@ func (s *Service) CompleteUpload(ctx context.Context, input CompleteUploadInput)
 		defer cancelCleanup()
 		_ = s.cleanupObject(cleanupCtx, objectRecord)
 		if (promotionFailed && shouldFailDuringStorage(txErr)) || (!promotionFailed && shouldFailAfterComplete(txErr)) {
-			_ = s.failUploadAfterCompletion(cleanupCtx, actor.ID, uploadID, failureReason(txErr), input.Meta)
+			_ = s.failUploadAfterCompletionWithLookup(cleanupCtx, actor.ID, uploadID, failureReason(txErr), input.Meta, lookup)
 		}
 		return UploadResult{}, txErr
 	}
@@ -1270,7 +1277,14 @@ func (s *Service) cleanupStaged(ctx context.Context, keys []string) error {
 }
 
 func (s *Service) FailUpload(ctx context.Context, input FailUploadInput) (UploadResult, error) {
-	actor, err := s.readActor(ctx, input.ActorID)
+	return s.failUpload(ctx, input, s.lookupActor)
+}
+
+func (s *Service) failUpload(ctx context.Context, input FailUploadInput, lookup fileActorLookup) (UploadResult, error) {
+	if s == nil || s.repo == nil {
+		return UploadResult{}, internalError("fail workspace upload", errors.New("repository is required"))
+	}
+	actor, err := lookup(ctx, s.repo, input.ActorID)
 	if err != nil {
 		return UploadResult{}, err
 	}
@@ -1283,7 +1297,7 @@ func (s *Service) FailUpload(ctx context.Context, input FailUploadInput) (Upload
 		return UploadResult{}, normalizeRepositoryError(partsErr)
 	}
 	var uploadByteSize int64
-	value, err := s.withTransaction(ctx, actor.ID, input.Meta, func(tx Tx, currentActor *auth.Actor, now time.Time) (any, *rejection, error) {
+	value, err := s.withActorTransaction(ctx, actor.ID, input.Meta, lookup, func(tx Tx, currentActor *auth.Actor, now time.Time) (any, *rejection, error) {
 		transfer, attachment, loadErr := s.loadOwnedUpload(ctx, tx, currentActor.ID, uploadID)
 		if loadErr != nil {
 			return nil, nil, loadErr
@@ -1329,8 +1343,8 @@ func (s *Service) FailUpload(ctx context.Context, input FailUploadInput) (Upload
 	return value.(UploadResult), nil
 }
 
-func (s *Service) failUploadAfterCompletion(ctx context.Context, actorID, uploadID, reason string, meta auth.RequestMeta) error {
-	_, err := s.FailUpload(ctx, FailUploadInput{ActorID: actorID, UploadID: uploadID, Reason: reason, Meta: meta})
+func (s *Service) failUploadAfterCompletionWithLookup(ctx context.Context, actorID, uploadID, reason string, meta auth.RequestMeta, lookup fileActorLookup) error {
+	_, err := s.failUpload(ctx, FailUploadInput{ActorID: actorID, UploadID: uploadID, Reason: reason, Meta: meta}, lookup)
 	return err
 }
 

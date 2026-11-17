@@ -57,6 +57,7 @@ services:
       args:
         DUALLANE_APP_VERSION: ${DUALLANE_APP_VERSION:?release version is required}
         DUALLANE_GIT_COMMIT: ${DUALLANE_GIT_COMMIT:?full release commit is required}
+        NPM_REGISTRY: ${DUALLANE_NPM_BUILD_REGISTRY:-https://registry.npmjs.org}
     user: "101:101"
     read_only: true
     tmpfs:

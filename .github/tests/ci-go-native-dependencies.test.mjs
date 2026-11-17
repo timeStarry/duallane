@@ -5,6 +5,36 @@ import test from 'node:test';
 const workflowPath = new URL('../workflows/ci.yml', import.meta.url);
 const workflow = (await readFile(workflowPath, 'utf8')).replace(/\r\n?/g, '\n');
 
+test('the module minimum is supported by the pinned CI and container Go toolchain', async () => {
+  const root = new URL('../../', import.meta.url);
+  const [module, ...containerConfigs] = await Promise.all([
+    'apps/backend/go.mod', 'Dockerfile.p2p', 'Dockerfile.workspace', 'deploy/candidate/compose.yaml',
+  ].map((path) => readFile(new URL(path, root), 'utf8')));
+  const normalizedModule = module.replace(/\r\n?/g, '\n');
+  const minimum = normalizedModule.match(/^go (\d+)\.(\d+)\.(\d+)$/m);
+  const toolchain = normalizedModule.match(/^toolchain go(\d+)\.(\d+)\.(\d+)$/m);
+  assert.ok(minimum, 'the module must declare its minimum Go version');
+  assert.ok(toolchain, 'CI must select an explicit Go toolchain');
+  const version = (match) => match.slice(1).map(Number);
+  const minimumVersion = version(minimum);
+  const toolchainVersion = version(toolchain);
+  const firstDifference = minimumVersion.findIndex((part, index) => part !== toolchainVersion[index]);
+  assert.ok(firstDifference === -1 || minimumVersion[firstDifference] < toolchainVersion[firstDifference],
+    'the pinned toolchain cannot run a module requiring a newer Go version');
+  const imageDigests = new Set();
+  for (const [index, config] of containerConfigs.entries()) {
+    const pins = [...config.matchAll(/golang:(\d+\.\d+\.\d+)-bookworm@sha256:([a-f0-9]{64})/g)];
+    assert.equal(pins.length, index === 2 ? 2 : 1,
+      'every container Go default must pin a full patch version and immutable digest');
+    for (const pin of pins) {
+      assert.equal(pin[1], toolchain.slice(1).join('.'),
+        'container builds must use the same security patch as CI');
+      imageDigests.add(pin[2]);
+    }
+  }
+  assert.equal(imageDigests.size, 1, 'P2P, Workspace, and candidate Go images must share one verified digest');
+});
+
 function goQualityGateBlock(contents) {
   const match = contents.match(
     /\n  go-quality-gate:\n(?<body>[\s\S]*?)\n  quality-gate:\n/,

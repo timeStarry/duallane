@@ -18,6 +18,8 @@ const (
 	ReleaseCompatibilityMigrationSHA256       = "b5c6ed855f9ca76a06f14ac590a8dd96fdec9cd2ec88c75dc5814990669658cb"
 	ReleaseCompatibilityMobileMigrationName   = "035_mobile_sessions.sql"
 	ReleaseCompatibilityMobileMigrationSHA256 = "479d042a0a5f4d07886d3557901b5d8152b8714fe9dfeeceddfba94121e58061"
+	ReleaseCompatibilityV1MigrationName       = "036_v1_clean_architecture.sql"
+	ReleaseCompatibilityV1MigrationSHA256     = "2649cdb3baf4130cee7040a492869db161dd89cae52c3afd27bc8bad922f28f4"
 
 	maxReleaseCompatibilityPolicyBytes = 16 << 10
 	maxReleaseCompatibilityJSONDepth   = 32
@@ -152,12 +154,13 @@ func validateReleaseCompatibilityPolicy(policy CompatibilityPolicy) error {
 	if policy.BaseMigration != ReleaseCompatibilityBaseMigration || !IsCanonicalName(policy.BaseMigration) {
 		return fmt.Errorf("%w: base migration is not the reviewed canonical baseline", ErrInvalidCompatibilityPolicy)
 	}
-	if len(policy.CompatibleMigrations) != 1 && len(policy.CompatibleMigrations) != 2 {
+	if len(policy.CompatibleMigrations) != 1 && len(policy.CompatibleMigrations) != 2 && len(policy.CompatibleMigrations) != 3 {
 		return fmt.Errorf("%w: compatibility allow-list is not a reviewed sequence", ErrInvalidCompatibilityPolicy)
 	}
 	reviewed := [...]CompatibleMigration{
 		{Name: ReleaseCompatibilityMigrationName, SHA256: ReleaseCompatibilityMigrationSHA256},
 		{Name: ReleaseCompatibilityMobileMigrationName, SHA256: ReleaseCompatibilityMobileMigrationSHA256},
+		{Name: ReleaseCompatibilityV1MigrationName, SHA256: ReleaseCompatibilityV1MigrationSHA256},
 	}
 	seen := make(map[string]struct{}, len(policy.CompatibleMigrations))
 	for index, migration := range policy.CompatibleMigrations {
@@ -233,10 +236,16 @@ func (policy CompatibilityPolicy) allowsAfter(required []string, name string) bo
 	if isCanonicalReleaseCompatibilityBaseline(required) {
 		return name == ReleaseCompatibilityMigrationName
 	}
-	return len(required) == len(canonicalReleaseCompatibilityBaseline)+1 &&
+	if len(required) == len(canonicalReleaseCompatibilityBaseline)+1 &&
 		required[len(required)-1] == ReleaseCompatibilityMigrationName &&
-		isCanonicalReleaseCompatibilityBaseline(required[:len(required)-1]) &&
-		name == ReleaseCompatibilityMobileMigrationName
+		isCanonicalReleaseCompatibilityBaseline(required[:len(required)-1]) {
+		return name == ReleaseCompatibilityMobileMigrationName
+	}
+	return len(required) == len(canonicalReleaseCompatibilityBaseline)+2 &&
+		required[len(required)-2] == ReleaseCompatibilityMigrationName &&
+		required[len(required)-1] == ReleaseCompatibilityMobileMigrationName &&
+		isCanonicalReleaseCompatibilityBaseline(required[:len(required)-2]) &&
+		name == ReleaseCompatibilityV1MigrationName
 }
 
 func rejectDuplicateJSONMembers(data []byte) error {

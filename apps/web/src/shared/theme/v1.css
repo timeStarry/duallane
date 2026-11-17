@@ -1,0 +1,278 @@
+@import "tailwindcss";
+
+@theme inline {
+  /* Semantic Colors (driven by vibrancy.ts -> :root CSS variables) */
+  --color-bg: var(--dl-bg);
+  --color-canvas-from: var(--dl-canvas-from);
+  --color-canvas-to: var(--dl-canvas-to);
+  --color-surface: var(--dl-surface);
+  --color-soft: var(--dl-soft);
+  --color-glass-chrome: var(--dl-glass-chrome);
+  --color-glass-elevated: var(--dl-glass-elevated);
+  --color-glass-pill: var(--dl-glass-pill);
+  --color-glass-highlight: var(--dl-glass-highlight);
+  --color-line: var(--dl-line);
+  --color-line-strong: var(--dl-line-strong);
+  --color-text: var(--dl-text);
+  --color-muted: var(--dl-muted);
+  --color-control: var(--dl-control);
+  --color-focus: var(--dl-focus);
+  --color-backdrop: var(--dl-backdrop);
+
+  /* Dual-Lane & Accent Semantics */
+  --color-direct: var(--dl-direct);
+  --color-direct-soft: var(--dl-direct-soft);
+  --color-on-direct: var(--dl-on-direct);
+  --color-shared: var(--dl-shared);
+  --color-shared-soft: var(--dl-shared-soft);
+  --color-on-shared: var(--dl-on-shared);
+  --color-accent: var(--dl-accent);
+  --color-accent-soft: var(--dl-accent-soft);
+  --color-on-accent: var(--dl-on-accent);
+
+  /* Status Semantics */
+  --color-success: var(--dl-success);
+  --color-success-soft: var(--dl-success-soft);
+  --color-warning: var(--dl-warning);
+  --color-warning-soft: var(--dl-warning-soft);
+  --color-danger: var(--dl-danger);
+  --color-danger-soft: var(--dl-danger-soft);
+
+  /* Clean-Room v1 Widget Semantic Aliases (3-tier typography & adaptive contrast) */
+  --color-dl-surface-canvas: var(--dl-bg);
+  --color-dl-surface-subtle: var(--dl-soft);
+  --color-dl-border-hairline: var(--dl-line);
+  --color-dl-border-strong: var(--dl-line-strong);
+  --color-dl-text-primary: var(--dl-text);
+  --color-dl-text-secondary: var(--dl-muted);
+  --color-dl-text-tertiary: var(--dl-muted);
+  --color-dl-lane-shared: var(--dl-shared);
+  --color-dl-on-shared: var(--dl-on-shared);
+  --color-dl-lane-direct: var(--dl-direct);
+  --color-dl-on-direct: var(--dl-on-direct);
+  --color-dl-success: var(--dl-success);
+  --color-dl-warning: var(--dl-warning);
+  --color-dl-danger: var(--dl-danger);
+
+  /* Strict Radii Scale (5 levels + pill) */
+  --radius-tag: 6px;
+  --radius-control: 10px;
+  --radius-entity: 11px;
+  --radius-panel: 16px;
+  --radius-dialog: 20px;
+
+  /* Shadows */
+  --shadow-menu: var(--dl-shadow-menu);
+  --shadow-dialog: var(--dl-shadow-dialog);
+
+  /* Semantic Z-Index */
+  --z-sticky: 20;
+  --z-popover: 40;
+  --z-drawer: 50;
+  --z-dialog: 60;
+  --z-toast: 80;
+
+  /* DualLane Breakpoints */
+  --breakpoint-*: initial;
+  --breakpoint-narrow: 420px;
+  --breakpoint-compact: 760px;
+  --breakpoint-wide: 1100px;
+}
+
+/* macOS / iOS Vibrancy Glass Surfaces */
+.dl-glass-chrome {
+  background-color: var(--dl-glass-chrome);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  box-shadow: inset 0 1px 0 0 var(--dl-glass-highlight);
+}
+
+.dl-glass-elevated {
+  background-color: var(--dl-glass-elevated);
+  backdrop-filter: blur(28px) saturate(190%);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  box-shadow: var(--dl-shadow-menu), inset 0 1px 0 0 var(--dl-glass-highlight);
+}
+
+.dl-glass-dialog {
+  background-color: var(--dl-glass-elevated);
+  backdrop-filter: blur(32px) saturate(190%);
+  -webkit-backdrop-filter: blur(32px) saturate(190%);
+  box-shadow: var(--dl-shadow-dialog), inset 0 1px 0 0 var(--dl-glass-highlight);
+}
+
+.dl-glass-pill {
+  background-color: var(--dl-glass-pill);
+  backdrop-filter: blur(20px) saturate(175%);
+  -webkit-backdrop-filter: blur(20px) saturate(175%);
+  box-shadow: 0 8px 24px -6px rgba(0, 0, 0, 0.12), inset 0 1px 0 0 var(--dl-glass-highlight);
+}
+
+html[data-transparency="solid"] :is(.dl-glass-chrome, .dl-glass-elevated, .dl-glass-dialog, .dl-glass-pill) {
+  background-color: var(--dl-surface);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.dl-canvas-ambient,
+.dl-ambient-canvas {
+  background:
+    radial-gradient(960px 540px at 14% -8%, var(--dl-accent-soft), transparent 66%),
+    radial-gradient(780px 480px at 88% 106%, var(--dl-accent-soft), transparent 70%),
+    linear-gradient(180deg, var(--dl-canvas-from) 0%, var(--dl-canvas-to) 100%);
+}
+
+/* Radix Open/Close Lifecycle Animations */
+@keyframes dl-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes dl-pop-out {
+  from {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.96) translateY(-2px);
+  }
+}
+
+@keyframes dl-scrim-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes dl-scrim-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes dl-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes dl-dialog-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+}
+
+.dl-anim-popover[data-state="open"] {
+  animation: dl-pop-in 160ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.dl-anim-popover[data-state="closed"] {
+  animation: dl-pop-out 120ms ease-in forwards;
+}
+
+.dl-anim-scrim[data-state="open"] {
+  animation: dl-scrim-in 180ms ease-out forwards;
+}
+.dl-anim-scrim[data-state="closed"] {
+  animation: dl-scrim-out 140ms ease-in forwards;
+}
+
+.dl-anim-dialog[data-state="open"] {
+  animation: dl-dialog-in 200ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.dl-anim-dialog[data-state="closed"] {
+  animation: dl-dialog-out 140ms ease-in forwards;
+}
+
+html[data-motion="reduced"] :is(.dl-anim-popover, .dl-anim-scrim, .dl-anim-dialog) {
+  animation-duration: 0.01ms !important;
+}
+
+/* Base Typography & macOS Thin Scrollbars */
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Inter", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--dl-text);
+  background-color: var(--dl-bg);
+}
+
+.dl-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--dl-line-strong) transparent;
+}
+.dl-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.dl-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.dl-scroll::-webkit-scrollbar-thumb {
+  background-color: var(--dl-line-strong);
+  border-radius: 9999px;
+}
+
+.dl-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 500;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  line-height: 1;
+  color: var(--dl-muted);
+  background-color: var(--dl-soft);
+  border: 1px solid var(--dl-line-strong);
+  border-radius: 5px;
+}
+
+/* Inline Emotes, Reaction Glyphs & Telegram-Style Jumbo Stickers */
+.message-emote-image {
+  display: inline-block;
+  width: 24px;
+  height: 24px;
+  margin: 0 2px;
+  vertical-align: -5px;
+  object-fit: contain;
+  user-select: none;
+}
+
+.dl-jumbo-sticker .message-emote-image {
+  display: block;
+  width: 96px;
+  height: 96px;
+  margin: 0;
+  vertical-align: middle;
+}
+
+.dl-reaction-glyph .message-emote-image {
+  display: block;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  vertical-align: middle;
+}
+
+.dl-reaction-glyph .unicode-emote {
+  font-size: 13px;
+  line-height: 1;
+}

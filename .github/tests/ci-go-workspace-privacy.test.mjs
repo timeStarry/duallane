@@ -63,10 +63,10 @@ test("Go Workspace browser coverage provisions only synthetic PostgreSQL and nat
   assert.match(native, /test "\$\(go env CC\)" = "gcc"/);
 });
 
-test("Go Workspace browser coverage runs the unmodified complete suite without private-output publication", () => {
+test("Go Workspace browser coverage runs the current AppV1 acceptance suite without private-output publication", () => {
   const job = jobBlock("go-workspace-browser");
   const chromium = job.indexOf("- name: Install Chromium and system dependencies");
-  const gate = job.indexOf("- name: Run complete Go Workspace browser gate");
+  const gate = job.indexOf("- name: Run Go Workspace AppV1 browser gate");
   assert.ok(chromium >= 0 && gate > chromium, "Chromium must be installed before the browser gate");
   assert.match(job.slice(chromium, gate), /pnpm exec playwright install --with-deps chromium/);
 
@@ -77,7 +77,7 @@ test("Go Workspace browser coverage runs the unmodified complete suite without p
   assert.equal((job.match(/run: pnpm test:e2e:workspace-go\n/g) || []).length, 1);
   assert.doesNotMatch(job, /--grep|--project|--retry|--timeout|continue-on-error|testIgnore|testMatch/);
 
-  assert.match(config, /testMatch: "workspace\*\.spec\.ts"/);
+  assert.match(config, /testMatch: "workspace-v1-acceptance\.spec\.ts"/);
   assert.match(config, /outputDir: "\.private-test-results\/workspace-go-browser"/);
   for (const option of ["trace", "screenshot", "video"]) {
     assert.match(config, new RegExp(`${option}: "off"`));

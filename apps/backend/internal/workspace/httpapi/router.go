@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	v1 "github.com/timestarry/duallane/apps/backend/internal/v1"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bootstrap"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/botgateway"
@@ -133,6 +135,7 @@ type RouterOptions struct {
 	BotGatewaySetup     BotGatewaySetupService
 	BotGatewayWebSocket http.Handler
 	Realtime            http.Handler
+	V1                  *v1.HTTPHandler
 	FrontendURL         string
 	PublicBaseURL       string
 	InteractionSpaceID  string
@@ -141,6 +144,7 @@ type RouterOptions struct {
 
 func NewRouter(options RouterOptions) http.Handler {
 	router := chi.NewRouter()
+	jsonCompress := middleware.Compress(5, "application/json")
 	if options.ObserveHTTP != nil {
 		router.Use(observeHTTP(options.ObserveHTTP))
 	}
@@ -179,7 +183,7 @@ func NewRouter(options RouterOptions) http.Handler {
 	})
 	router.Route("/api/workspace", func(workspace chi.Router) {
 		workspace.Use(options.Gate.Middleware)
-		workspace.Get("/bootstrap", bootstrapHandler(options))
+		workspace.With(jsonCompress).Get("/bootstrap", bootstrapHandler(options))
 		workspace.Post("/invites", createInviteHandler(options))
 		workspace.Post("/invites/{inviteId}/revoke", revokeInviteHandler(options))
 		if options.AuthRoutes != nil {
@@ -187,7 +191,10 @@ func NewRouter(options RouterOptions) http.Handler {
 				options.AuthRoutes.HandleDevelopmentInviteAccept(response, request, chi.URLParam(request, "code"))
 			})
 		}
-		registerCoreRoutes(workspace, options)
+		workspace.Group(func(core chi.Router) {
+			core.Use(jsonCompress)
+			registerCoreRoutes(core, options)
+		})
 		RegisterAvatarRoutes(workspace, AvatarRouteOptions{
 			Service: options.Avatars, ActorResolver: options.ActorResolver, TrustProxy: options.TrustProxy,
 		})
@@ -205,6 +212,11 @@ func NewRouter(options RouterOptions) http.Handler {
 			ActorResolver: options.ActorResolver, TrustProxy: options.TrustProxy,
 		})
 	})
+	if options.V1 != nil {
+		router.With(options.Gate.Middleware, jsonCompress).Group(func(v1Router chi.Router) {
+			options.V1.Mount(v1Router)
+		})
+	}
 	return router
 }
 

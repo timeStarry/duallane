@@ -621,7 +621,11 @@ func (s *Service) validateTopicMentions(ctx context.Context, repo ReadRepository
 
 func (s *Service) projectTopicMessage(record TopicMessageRecord) TopicMessage {
 	authorID := record.AuthorID
-	name := firstNonEmpty(stringPointerValue(record.AuthorRemark), stringPointerValue(record.AuthorNickname), record.AuthorGitHubLogin, record.AuthorDisplayName)
+	cleanLogin := publicTopicLogin(record.AuthorGitHubLogin)
+	if record.AuthorKind == "bot" {
+		cleanLogin = ""
+	}
+	name := firstNonEmpty(stringPointerValue(record.AuthorRemark), stringPointerValue(record.AuthorNickname), cleanLogin, record.AuthorDisplayName)
 	if name == "" {
 		name = "成员"
 	}
@@ -632,7 +636,7 @@ func (s *Service) projectTopicMessage(record TopicMessageRecord) TopicMessage {
 		ClientMessageID: record.ClientMessageID, ContentFormat: record.ContentFormat, Content: content,
 		PlainText: content.PlainText, ReplyToMessageID: record.ReplyToMessageID,
 		CreatedAt: formatTimestamp(record.CreatedAt), EditedAt: formatNullableTimestamp(record.EditedAt), DeletedAt: formatNullableTimestamp(record.DeletedAt),
-		Author: TopicActor{ID: stringPointerValue(authorID), DisplayName: name, Nickname: record.AuthorNickname, Remark: record.AuthorRemark, GitHubLogin: record.AuthorGitHubLogin, AvatarURL: sanitizeAvatarPointer(record.AuthorAvatarURL)},
+		Author: TopicActor{ID: stringPointerValue(authorID), DisplayName: name, Nickname: record.AuthorNickname, Remark: record.AuthorRemark, GitHubLogin: cleanLogin, AvatarURL: sanitizeAvatarPointer(record.AuthorAvatarURL)},
 	}
 }
 

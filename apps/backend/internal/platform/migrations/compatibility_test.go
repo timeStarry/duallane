@@ -16,7 +16,10 @@ func TestEmbeddedReleaseCompatibilityPolicyIsReviewedAndBounded(t *testing.T) {
 	if policy.Version != ReleaseCompatibilityPolicyVersion || policy.BaseMigration != ReleaseCompatibilityBaseMigration {
 		t.Fatalf("unexpected embedded policy: %#v", policy)
 	}
-	if len(policy.CompatibleMigrations) != 2 || policy.CompatibleMigrations[0].Name != ReleaseCompatibilityMigrationName || policy.CompatibleMigrations[0].SHA256 != ReleaseCompatibilityMigrationSHA256 || policy.CompatibleMigrations[1].Name != ReleaseCompatibilityMobileMigrationName || policy.CompatibleMigrations[1].SHA256 != ReleaseCompatibilityMobileMigrationSHA256 {
+	if len(policy.CompatibleMigrations) != 3 ||
+		policy.CompatibleMigrations[0].Name != ReleaseCompatibilityMigrationName || policy.CompatibleMigrations[0].SHA256 != ReleaseCompatibilityMigrationSHA256 ||
+		policy.CompatibleMigrations[1].Name != ReleaseCompatibilityMobileMigrationName || policy.CompatibleMigrations[1].SHA256 != ReleaseCompatibilityMobileMigrationSHA256 ||
+		policy.CompatibleMigrations[2].Name != ReleaseCompatibilityV1MigrationName || policy.CompatibleMigrations[2].SHA256 != ReleaseCompatibilityV1MigrationSHA256 {
 		t.Fatalf("unexpected compatible migration policy: %#v", policy.CompatibleMigrations)
 	}
 }
@@ -29,12 +32,31 @@ func TestReleaseCompatibilityPreservesHistoricalPolicyAuthority(t *testing.T) {
 	}
 	baseline33 := append([]string(nil), canonicalReleaseCompatibilityBaseline[:]...)
 	baseline34 := append(append([]string(nil), baseline33...), ReleaseCompatibilityMigrationName)
-	if !policy.allowsAfter(baseline33, ReleaseCompatibilityMigrationName) || policy.allowsAfter(baseline33, ReleaseCompatibilityMobileMigrationName) || !policy.allowsAfter(baseline34, ReleaseCompatibilityMobileMigrationName) {
+	baseline35 := append(append([]string(nil), baseline34...), ReleaseCompatibilityMobileMigrationName)
+	if !policy.allowsAfter(baseline33, ReleaseCompatibilityMigrationName) ||
+		policy.allowsAfter(baseline33, ReleaseCompatibilityMobileMigrationName) ||
+		policy.allowsAfter(baseline33, ReleaseCompatibilityV1MigrationName) ||
+		!policy.allowsAfter(baseline34, ReleaseCompatibilityMobileMigrationName) ||
+		policy.allowsAfter(baseline34, ReleaseCompatibilityV1MigrationName) ||
+		!policy.allowsAfter(baseline35, ReleaseCompatibilityV1MigrationName) {
 		t.Fatal("bridge exceptions must bind to their exact preceding history")
 	}
-	baseline34[0] = "001_renamed.sql"
-	if policy.allowsAfter(baseline34, ReleaseCompatibilityMobileMigrationName) {
+	baseline35[0] = "001_renamed.sql"
+	if policy.allowsAfter(baseline35, ReleaseCompatibilityV1MigrationName) {
 		t.Fatal("renamed baseline accepted")
+	}
+	policy35 := policy
+	policy35.CompatibleMigrations = append([]CompatibleMigration(nil), policy.CompatibleMigrations[:2]...)
+	document35, err := json.Marshal(policy35)
+	if err != nil {
+		t.Fatal(err)
+	}
+	historical35, err := ParseReleaseCompatibilityPolicy(document35)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if historical35.allows(ReleaseCompatibilityV1MigrationName) || !historical35.allows(ReleaseCompatibilityMobileMigrationName) {
+		t.Fatal("reading schema-35 historical policy widened its authority")
 	}
 	policy.CompatibleMigrations = policy.CompatibleMigrations[:1]
 	document, err := json.Marshal(policy)
@@ -59,7 +81,7 @@ func TestMobileCompatibilityPolicyRejectsUnreviewedExtensions(t *testing.T) {
 		{"changed mobile hash", func(p *CompatibilityPolicy) { p.CompatibleMigrations[1].SHA256 = ReleaseCompatibilityMigrationSHA256 }},
 		{"renamed mobile migration", func(p *CompatibilityPolicy) { p.CompatibleMigrations[1].Name = "035_renamed.sql" }},
 		{"future migration", func(p *CompatibilityPolicy) {
-			p.CompatibleMigrations = append(p.CompatibleMigrations, CompatibleMigration{Name: "036_future.sql", SHA256: ReleaseCompatibilityMobileMigrationSHA256})
+			p.CompatibleMigrations = append(p.CompatibleMigrations, CompatibleMigration{Name: "037_future.sql", SHA256: ReleaseCompatibilityV1MigrationSHA256})
 		}},
 		{"missing historical declaration", func(p *CompatibilityPolicy) { p.CompatibleMigrations = p.CompatibleMigrations[1:] }},
 		{"reordered declarations", func(p *CompatibilityPolicy) {

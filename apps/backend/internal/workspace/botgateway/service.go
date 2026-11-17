@@ -408,6 +408,10 @@ func (s *Service) requireConversationCurrent(ctx context.Context, value *Auth, c
 	if err != nil {
 		return nil, nil, err
 	}
+	return s.requireConversationPrevalidated(ctx, current, conversationID)
+}
+
+func (s *Service) requireConversationPrevalidated(ctx context.Context, current *Auth, conversationID string) (*Auth, *Conversation, error) {
 	id, err := normalizeIdentifier(conversationID, CodeConversationInvalid)
 	if err != nil {
 		return nil, nil, err
@@ -465,6 +469,11 @@ func (s *Service) RequireContextGrant(ctx context.Context, value *Auth, conversa
 	grant, err := s.repo.GetContextGrant(ctx, current.BotID, current.SpaceID, id)
 	if err != nil {
 		return nil, normalizeError(err)
+	}
+	if grant == nil {
+		if conv, convErr := s.repo.GetConversation(ctx, current.SpaceID, id); convErr == nil && conv != nil && conv.Type == "direct" {
+			return &ContextGrant{AllowTrigger: true, AllowContext: true}, nil
+		}
 	}
 	if grant == nil || !grant.AllowContext {
 		return nil, NewError(CodeContextForbidden, MessageContextForbidden, 403)
@@ -1246,13 +1255,21 @@ func (s *Service) CreateAttachment(ctx context.Context, value *Auth, input Creat
 	return map[string]any{"upload": result}, nil
 }
 
+type BotPresenceRecorder interface {
+	RecordBotTyping(ctx context.Context, spaceID, conversationID, botUserID, botName string, now time.Time) error
+	RecordBotAckRead(ctx context.Context, botID, spaceID, botUserID, eventID string, sequence int64, now time.Time) error
+}
+
 func (s *Service) Typing(ctx context.Context, value *Auth, conversationID string) (map[string]any, error) {
-	current, _, err := s.requireConversationCurrent(ctx, value, conversationID)
+	current, conv, err := s.requireConversationCurrent(ctx, value, conversationID)
 	if err != nil {
 		return nil, err
 	}
 	if err := RequireScope(current, ScopeMessagesSend); err != nil {
 		return nil, err
+	}
+	if recorder, ok := s.repo.(BotPresenceRecorder); ok && conv != nil {
+		_ = recorder.RecordBotTyping(ctx, current.SpaceID, conv.ID, current.UserID, current.Bot.Name, s.nowUTC())
 	}
 	return map[string]any{"accepted": true, "expiresInMs": 5000}, nil
 }
@@ -1281,6 +1298,11 @@ func (s *Service) Acknowledge(ctx context.Context, value *Auth, input Acknowledg
 	})
 	if err != nil {
 		return AcknowledgeResult{}, normalizeError(err)
+	}
+	if acknowledged {
+		if recorder, ok := s.repo.(BotPresenceRecorder); ok {
+			_ = recorder.RecordBotAckRead(ctx, current.BotID, current.SpaceID, current.UserID, eventID, sequence, now)
+		}
 	}
 	return AcknowledgeResult{Acknowledged: acknowledged, EventID: eventID, Sequence: sequence}, nil
 }
@@ -1350,15 +1372,26 @@ func (s *Service) Replay(ctx context.Context, value *Auth, input ReplayInput) (R
 		}
 		allowed = append(allowed, candidate)
 	}
-	earliest, err := s.repo.EarliestDeliverySequence(ctx, current.BotID, current.SpaceID, s.nowUTC())
+	earliestWorkspace, err := s.repo.EarliestSequence(ctx, current.SpaceID)
 	if err != nil {
 		return ReplayResult{}, normalizeError(err)
+	}
+	scanFloor := earliestWorkspace
+	if windowFloor := workspaceSequence - int64(s.replayLimit*4) + 1; windowFloor > scanFloor {
+		scanFloor = windowFloor
+	}
+	earliestDelivery, err := s.repo.EarliestDeliverySequence(ctx, current.BotID, current.SpaceID, s.nowUTC())
+	if err != nil {
+		return ReplayResult{}, normalizeError(err)
+	}
+	if earliestDelivery > 0 && earliestDelivery < scanFloor {
+		scanFloor = earliestDelivery
 	}
 	expiredAfter, err := s.hasExpiredAfter(ctx, current, cursor)
 	if err != nil {
 		return ReplayResult{}, err
 	}
-	if expiredAfter || (earliest > 0 && cursor < earliest-1) {
+	if expiredAfter || (scanFloor > 0 && cursor < scanFloor-1) {
 		result.SyncRequired = true
 		result.Reason = "replay_window_exceeded"
 		return result, nil
@@ -1392,8 +1425,8 @@ func (s *Service) expireDeliveries(ctx context.Context, value *Auth) error {
 	return nil
 }
 
-func (s *Service) queueWorkspaceEvents(ctx context.Context, value *Auth) error {
-	rows, err := s.repo.ListRecentEvents(ctx, value.SpaceID, s.replayLimit*4)
+func (s *Service) queueWorkspaceEvents(ctx context.Context, current *Auth) error {
+	rows, err := s.repo.ListRecentEvents(ctx, current.SpaceID, s.replayLimit*4)
 	if err != nil {
 		return normalizeError(err)
 	}
@@ -1401,19 +1434,31 @@ func (s *Service) queueWorkspaceEvents(ctx context.Context, value *Auth) error {
 		rows[left], rows[right] = rows[right], rows[left]
 	}
 	for _, event := range rows {
-		if err := s.queueEvent(ctx, value, event); err != nil {
-			return err
+		if ctx.Err() != nil {
+			return normalizeError(ctx.Err())
+		}
+		if eventScope(event.EventType) == "" || (event.EventType != "bot.runtime_upgrade" && strings.TrimSpace(event.ConversationID) == "") {
+			continue
+		}
+		if err := s.queueValidatedEvent(ctx, current, event); err != nil {
+			if ctx.Err() != nil || isInvalidToken(err) {
+				return err
+			}
+			// Isolate per-event data or transient lookup failures so a single
+			// malformed historical event can never head-of-line block newer
+			// group or direct bot triggers.
+			continue
 		}
 	}
 	return nil
 }
 
-func (s *Service) queueEvent(ctx context.Context, value *Auth, event EventRecord) error {
-	authorized, err := s.authorizeDelivery(ctx, value, event)
+func (s *Service) queueValidatedEvent(ctx context.Context, current *Auth, event EventRecord) error {
+	authorized, err := s.authorizeValidatedDelivery(ctx, current, event)
 	if err != nil || !authorized {
 		return err
 	}
-	if allowed, err := s.passesDeliveryRateLimits(ctx, value, event); err != nil || !allowed {
+	if allowed, err := s.passesDeliveryRateLimits(ctx, current, event); err != nil || !allowed {
 		return err
 	}
 	id, err := s.newID("bot delivery")
@@ -1421,9 +1466,9 @@ func (s *Service) queueEvent(ctx context.Context, value *Auth, event EventRecord
 		return internalError("generate bot delivery id", err)
 	}
 	now := s.nowUTC()
-	input := DeliveryInsert{ID: "bdl_" + id, BotID: value.BotID, SpaceID: value.SpaceID, Sequence: event.Sequence, EventID: event.ID, EventType: event.EventType, ConversationID: event.ConversationID, PayloadJSON: safeDeliveryPayload(event), Status: "queued", CreatedAt: now, ExpiresAt: now.Add(s.replayWindow)}
+	input := DeliveryInsert{ID: "bdl_" + id, BotID: current.BotID, SpaceID: current.SpaceID, Sequence: event.Sequence, EventID: event.ID, EventType: event.EventType, ConversationID: event.ConversationID, PayloadJSON: safeDeliveryPayload(event), Status: "queued", CreatedAt: now, ExpiresAt: now.Add(s.replayWindow)}
 	return s.repo.WithTx(ctx, func(tx Tx) error {
-		if err := tx.Lock(ctx, "workspace-bot-delivery:"+value.BotID+":"+strconv.FormatInt(event.Sequence, 10)); err != nil {
+		if err := tx.Lock(ctx, "workspace-bot-delivery:"+current.BotID+":"+strconv.FormatInt(event.Sequence, 10)); err != nil {
 			return err
 		}
 		_, err := tx.InsertDelivery(ctx, input)
@@ -1447,7 +1492,7 @@ type ExpiredDeliveryLookup interface {
 
 func eventScope(eventType string) string {
 	switch eventType {
-	case "message.created", "bot.mentioned":
+	case "message.created", "bot.mentioned", "bot.runtime_upgrade":
 		return ScopeMessagesReadTrigger
 	case "command.invoked":
 		return ScopeCommandsReceive
@@ -1467,28 +1512,42 @@ func (s *Service) authorizeDelivery(ctx context.Context, value *Auth, event Even
 	if err != nil {
 		return false, err
 	}
-	if event.SpaceID != current.SpaceID || eventScope(event.EventType) == "" || !containsScope(current.Scopes, eventScope(event.EventType)) || strings.TrimSpace(event.ConversationID) == "" {
+	return s.authorizeValidatedDelivery(ctx, current, event)
+}
+
+func (s *Service) authorizeValidatedDelivery(ctx context.Context, current *Auth, event EventRecord) (bool, error) {
+	if event.SpaceID != current.SpaceID || eventScope(event.EventType) == "" || !containsScope(current.Scopes, eventScope(event.EventType)) {
 		return false, nil
 	}
-	_, conversation, err := s.requireConversationCurrent(ctx, current, event.ConversationID)
+	if event.EventType == "bot.runtime_upgrade" {
+		return eventTargetsBot(current, event, parseObject(event.PayloadJSON)), nil
+	}
+	if strings.TrimSpace(event.ConversationID) == "" {
+		return false, nil
+	}
+	_, conversation, err := s.requireConversationPrevalidated(ctx, current, event.ConversationID)
 	if err != nil {
 		if isGatewayError(err) {
 			return false, nil
 		}
 		return false, err
 	}
-	grant, err := s.repo.GetContextGrant(ctx, current.BotID, current.SpaceID, conversation.ID)
-	if err != nil {
-		return false, normalizeError(err)
-	}
-	if grant == nil || !grant.AllowTrigger {
-		return false, nil
-	}
 	sender, err := s.repo.GetSender(ctx, current.SpaceID, conversation.ID, event.ActorUserID)
 	if err != nil {
 		return false, normalizeError(err)
 	}
 	if sender == nil || sender.Kind != "human" || sender.Role == "auditor" || sender.ID == current.UserID {
+		return false, nil
+	}
+	isOwnerDirect := conversation.Type == "direct" && current.OwnerUserID != "" && sender.ID == current.OwnerUserID
+	grant, err := s.repo.GetContextGrant(ctx, current.BotID, current.SpaceID, conversation.ID)
+	if err != nil {
+		return false, normalizeError(err)
+	}
+	if grant == nil && conversation.Type == "direct" {
+		grant = &ContextGrant{AllowTrigger: true, AllowContext: true}
+	}
+	if !isOwnerDirect && (grant == nil || !grant.AllowTrigger) {
 		return false, nil
 	}
 	settings, err := s.repo.GetSettings(ctx, current.BotID, current.SpaceID)
@@ -1502,7 +1561,7 @@ func (s *Service) authorizeDelivery(ctx context.Context, value *Auth, event Even
 	if err != nil || !visible {
 		return false, err
 	}
-	return s.resolveTrigger(ctx, current, event, conversation)
+	return s.resolveTrigger(ctx, current, event, conversation, settings)
 }
 
 func isGatewayError(err error) bool {
@@ -1511,9 +1570,13 @@ func isGatewayError(err error) bool {
 }
 
 func (s *Service) senderVisible(ctx context.Context, value *Auth, senderID string, conversation *Conversation, settings *Settings) (bool, error) {
+	// Ironclad Rule: Bot creator always retains visibility and trigger access.
+	if value.OwnerUserID != "" && senderID == value.OwnerUserID {
+		return true, nil
+	}
 	switch settings.VisibilityPolicy {
 	case "private":
-		return senderID == value.OwnerUserID, nil
+		return false, nil
 	case "space_members":
 		return true, nil
 	case "groups":
@@ -1525,7 +1588,7 @@ func (s *Service) senderVisible(ctx context.Context, value *Auth, senderID strin
 	}
 }
 
-func (s *Service) resolveTrigger(ctx context.Context, value *Auth, event EventRecord, conversation *Conversation) (bool, error) {
+func (s *Service) resolveTrigger(ctx context.Context, value *Auth, event EventRecord, conversation *Conversation, settings *Settings) (bool, error) {
 	payload := parseObject(event.PayloadJSON)
 	switch event.EventType {
 	case "message.created":
@@ -1544,14 +1607,22 @@ func (s *Service) resolveTrigger(ctx context.Context, value *Auth, event EventRe
 		if conversation.Type == "direct" {
 			return true, nil
 		}
+		if settings != nil && settings.TriggerPolicy == "all-messages" {
+			return true, nil
+		}
+		if value.UserID != "" && (message.ReplyToAuthorID == value.UserID || message.ThreadRootAuthorID == value.UserID) {
+			return true, nil
+		}
 		for _, raw := range blocks {
 			block, ok := raw.(map[string]any)
-			if ok && block["type"] == "mention" && block["userId"] == value.UserID {
+			if ok && block["type"] == "mention" && (block["userId"] == value.UserID || block["userId"] == "all") {
 				return true, nil
 			}
 		}
 		return false, nil
 	case "bot.mentioned":
+		return eventTargetsBot(value, event, payload), nil
+	case "bot.runtime_upgrade":
 		return eventTargetsBot(value, event, payload), nil
 	case "command.invoked":
 		if !eventTargetsBot(value, event, payload) {
@@ -1599,24 +1670,71 @@ func eventStringFields(payload map[string]any, keys ...string) map[string]any {
 }
 
 func safeDeliveryPayload(event EventRecord) []byte {
-	if event.EventType != "card.action" {
-		return []byte(`{}`)
-	}
 	payload := parseObject(event.PayloadJSON)
-	result := eventStringFields(payload, "botId", "botUserId", "cardId", "actionId", "clientActionId")
-	if identifierPattern.MatchString(event.ActorUserID) {
-		result["actorUserId"] = event.ActorUserID
-	}
-	data, err := workspacecards.NormalizeCardPayload(payload["data"], workspacecards.Limits{MaxPayloadBytes: MaxDeliveryDataBytes, MaxDepth: MaxDeliveryDataDepth, MaxNodes: MaxDeliveryDataNodes, MaxTextBytes: MaxDeliveryTextBytes}, false)
-	if err != nil {
-		data = map[string]any{}
-	}
-	result["data"] = data
-	encoded, err := json.Marshal(result)
-	if err != nil {
+	switch event.EventType {
+	case "card.action":
+		result := eventStringFields(payload, "botId", "botUserId", "cardId", "actionId", "clientActionId")
+		if identifierPattern.MatchString(event.ActorUserID) {
+			result["actorUserId"] = event.ActorUserID
+		}
+		data, err := workspacecards.NormalizeCardPayload(payload["data"], workspacecards.Limits{MaxPayloadBytes: MaxDeliveryDataBytes, MaxDepth: MaxDeliveryDataDepth, MaxNodes: MaxDeliveryDataNodes, MaxTextBytes: MaxDeliveryTextBytes}, false)
+		if err != nil {
+			data = map[string]any{}
+		}
+		result["data"] = data
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return []byte(`{}`)
+		}
+		return encoded
+	case "message.created", "message.updated", "command.invoked", "thread.reply":
+		result := eventStringFields(payload, "botId", "botUserId", "messageId", "conversationId", "threadRootId", "replyToMessageId", "senderId", "command")
+		if identifierPattern.MatchString(event.ActorUserID) {
+			result["actorUserId"] = event.ActorUserID
+		}
+		if _, ok := result["messageId"]; !ok && identifierPattern.MatchString(event.TargetID) {
+			result["messageId"] = event.TargetID
+		}
+		if _, ok := result["conversationId"]; !ok && identifierPattern.MatchString(event.ConversationID) {
+			result["conversationId"] = event.ConversationID
+		}
+		if text := stringField(payload, "plainText"); text != "" {
+			result["text"] = truncateUTF8Bytes(text, MaxDeliveryTextBytes)
+		} else if text := stringField(payload, "text"); text != "" {
+			result["text"] = truncateUTF8Bytes(text, MaxDeliveryTextBytes)
+		}
+		if args := stringField(payload, "args"); args != "" {
+			result["args"] = truncateUTF8Bytes(args, MaxDeliveryTextBytes)
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return []byte(`{}`)
+		}
+		return encoded
+	case "bot.runtime_upgrade":
+		result := eventStringFields(payload, "botId", "botUserId", "targetVersion", "reason")
+		if identifierPattern.MatchString(event.ActorUserID) {
+			result["actorUserId"] = event.ActorUserID
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return []byte(`{}`)
+		}
+		return encoded
+	default:
 		return []byte(`{}`)
 	}
-	return encoded
+}
+
+func truncateUTF8Bytes(value string, maxBytes int) string {
+	if maxBytes <= 0 || len(value) <= maxBytes {
+		return value
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut]
 }
 
 func (s *Service) passesDeliveryRateLimits(ctx context.Context, value *Auth, event EventRecord) (bool, error) {
