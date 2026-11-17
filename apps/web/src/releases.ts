@@ -13,6 +13,22 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "1.0.15",
+    releasedAt: "2026-11-17",
+    title: "私密直连输入与智能助手连接维护",
+    summary: "修复私密直连输入法确认误发，校准智能助手的版本提示，并修复本地连接工具启动失败与沿用旧命令的问题。",
+    categories: [
+      {
+        title: "输入与连接维护",
+        items: [
+          "私密直连中按回车确认中文候选词后可继续编辑，再按回车发送消息",
+          "智能助手版本提示与实际可用版本保持一致，避免已更新后仍反复提示升级",
+          "修复本地连接工具的启动问题，并正确使用明确指定的运行命令"
+        ]
+      }
+    ]
+  },
+  {
     version: "1.0.14",
     releasedAt: "2026-11-17",
     title: "智能助手分章管理工作台、创建者私聊永久保底与守护进程空闲自动热更",

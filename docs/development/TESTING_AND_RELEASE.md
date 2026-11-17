@@ -128,9 +128,9 @@ tools at production without a separately approved operator plan.
 Merge does not authorize deployment. Deployment begins only on explicit operator
 instruction after the intended commit is on `origin/main`.
 
-## 7. Production Deployment On This Host
+## 7. Production Deployment On The Server
 
-Development, validation, commit, and push happen only in:
+The server's development checkout is:
 
 ```text
 /home/timestarry/projects/duallane
@@ -142,7 +142,8 @@ Production deploys happen only in:
 /home/timestarry/duallane
 ```
 
-Use the local Docker daemon; do not SSH or SCP for this host. After
+Operators may connect to `timestarry@server` over SSH. Run the coordinator in
+the production checkout against the server's local Docker daemon. After
 validation and authorized PR merge, pull with `git pull --ff-only` as the
 checkout owner, verify clean `main` and exact `origin/main`, and pass the full
 `--expected-commit` to the guarded entry point.
@@ -155,7 +156,10 @@ lead's final browser diagnosis. The next application release must follow the
 [Go-to-Go upgrade procedure](../backend/OPERATIONS.md#guarded-go-activation-and-upgrade-inputs),
 using `--release-profile go-full --go-upgrade --previous-release-snapshot` with
 the latest verified private snapshot from the preceding successful release and
-its sidecars. Do not select Node-default or first-cutover permission preparation
+its sidecars. If no usable copy remains, the separately authorized
+[observed-baseline recovery](../../deploy/production/README.md#recover-a-lost-deployment-baseline)
+must verify current running state before an upgrade; it does not waive any
+release check or claim historical success. Do not select Node-default or first-cutover permission preparation
 for an active Go deployment. Run the coordinator with the privileges needed for
 its private artifacts; keep any Git trust exception process-local and prevent
 optional root-owned index refreshes.
@@ -168,16 +172,16 @@ script from the development checkout and never substitute a bare
 The guarded script must verify exact images, passive candidates, authority and
 old-owner fence/drain before activation, then replace the gateway last. The
 first-cutover permission/bootstrap procedure is historical 0.17 material and
-must be run from the retained 0.17 checkout and runbook only. The 0.18 tree
+must be run from the retained 0.17 checkout and runbook only. The current tree
 rejects Node-default/bootstrap/permission-preparation entry points; subsequent
 releases use the previous Go snapshot. If Docker must restart, record all
 running application containers first and restore them afterward.
 
 ## 8. Health Check And Rollback
 
-After deployment, verify the deployed commit/version, public Web response,
-P2P and Workspace gateway health, authentication boundary, Workspace
-enabled/disabled expectation, static assets, WebSocket connection, and the
+After deployment, verify the deployed commit/version, public AppV1 response,
+P2P encrypted WebSocket and Workspace gateway health, authentication boundary,
+Workspace enabled/disabled expectation, static assets, WebSocket connection, and the
 critical changed path. Inspect redacted logs for migration, storage, and
 startup errors.
 

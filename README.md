@@ -71,7 +71,7 @@ architecture, code, UI/UX, security/data, testing, release, and deployment. Only
 GitHub user **`timestarry`** may perform the final merge into `main`.
 
 The [backend architecture index](docs/backend/README.md) is the Go backend
-handbook and live migration ledger. The checked-in 0.18 architecture is Go-only
+handbook and live migration ledger. The current backend architecture is Go-only
 for online P2P, Workspace, Web, and worker paths. The verified 0.17.0 baseline
 is recorded in the [bridge/release record](docs/backend/work-items/2026-09-10-chat-0170-after-bridge.md);
 the [Node-runtime retirement work item](docs/backend/work-items/2026-09-10-node-runtime-retirement.md)
@@ -185,16 +185,16 @@ them through the Go WebSocket relay. It does not establish WebRTC or use ICE/TUR
 
 ## Production Shape
 
-The verified 0.17.0 Go baseline comprises Web, Go P2P, Go Workspace, Go worker,
+The current AppV1 deployment comprises Web, Go P2P, Go Workspace, Go worker,
 the one-shot Go migrator, and PostgreSQL. The root `docker-compose.yml` extends
 `docker-compose.go-production.yml` and is Go-only by default; it has no `api`
 service. The Go Compose contract requires `DUALLANE_APP_VERSION` and
-`DUALLANE_GIT_COMMIT`. `.env.example` supplies local-build values
-(`0.18.0`/`development`); production deployment overwrites them from verified
+`DUALLANE_GIT_COMMIT`. `.env.example` supplies local-build values for the package
+version and a `development` commit; production overwrites them from verified
 release metadata. See [runtime and upgrade operations](docs/backend/OPERATIONS.md)
 before changing this live deployment.
 
-The checked-in 0.18 tree preserves this Go-only online topology and has no Node
+The current tree preserves this Go-only online topology and has no Node
 online API/worker/gateway or Node production bootstrap path. The [Node-runtime
 retirement work item](docs/backend/work-items/2026-09-10-node-runtime-retirement.md)
 records validation and activation status. An installation based on 0.17.0 must
@@ -202,10 +202,12 @@ perform its first migration and permission preparation from the retained 0.17
 checkout and its approved runbook; do not invent or copy a bootstrap command
 from this tree.
 
-On this host, development happens in `/home/timestarry/projects/duallane` and
-the only production checkout is `/home/timestarry/duallane`. Deployment uses
-the local Docker daemon; do not SSH to another host or run the production script
-from the development checkout. Other installations may set a different
+On the production host, the development checkout is
+`/home/timestarry/projects/duallane` and the only production checkout is
+`/home/timestarry/duallane`. Operators may connect to `timestarry@server` over SSH;
+the guarded coordinator then runs in the production checkout against that host's
+local Docker daemon. Do not run it from a development checkout or point it at a
+remote Docker daemon. Other installations may set a different
 absolute `DUALLANE_PRODUCTION_DIR`; when it is empty, the script defaults to
 `${HOME}/duallane` and verifies the physical path before touching Docker.
 
@@ -218,7 +220,10 @@ For the historical 0.18 transition example, the 0.17.0 private base was
 `backups/production/duallane-20260910T080211Z-8d346a04317d.recovery.go-compose.snapshot.json`
 with its three adjacent private sidecars. Future upgrades must use the latest
 verified snapshot captured by the preceding successful release, not this
-historical example. Pull exact `origin/main` as the checkout owner before the
+historical example. If the current configuration and snapshot have been lost,
+first use the separately authorized [observed-baseline recovery](deploy/production/README.md#recover-a-lost-deployment-baseline);
+it verifies running containers and restores missing configuration without
+activating a new release. Pull exact `origin/main` as the checkout owner before the
 privileged release; verify a clean checkout and pass the full
 `--expected-commit`. The current entry point rejects Node-default, bootstrap,
 and `--prepare-go-permissions` forms.
@@ -230,8 +235,9 @@ and `pnpm build`. Merge the validated release through its authorized PR into
 production checkout with `git pull --ff-only`. The deployment entry point
 requires a clean `main` worktree whose HEAD exactly matches the fetched
 `origin/main`; it also requires a full `--expected-commit` and rejects a new
-commit unless its semantic version is greater than the running version. Passing
-the same commit again is an idempotent redeployment.
+commit unless its semantic version is greater than the pinned previous version.
+The Go-to-Go entry point also rejects the same commit; verify an already completed
+release through health checks rather than treating it as another upgrade.
 
 Do not use a bare `docker compose up` for an existing production deployment.
 The deployment script validates that the configured PostgreSQL volume matches
@@ -244,10 +250,11 @@ the same database/storage authority and uses captured immutable images; an
 ambiguous fence/drain fails closed for operator review. Database volume switches
 remain an explicit recovery operation outside the routine script.
 
-Only `web` publishes `DUALLANE_WEB_BIND:DUALLANE_WEB_PORT`. Its Go gateway
+Only `web` publishes `DUALLANE_WEB_BIND:DUALLANE_WEB_PORT`. Its Nginx gateway
 forwards P2P API/WebSockets to `p2p` and Workspace/auth/Bot API/WebSockets to
-`workspace`; private health/metrics endpoints are not public. Neither backend
-nor worker publishes a host port. There is no current Node gateway route.
+`workspace`; AppV1 private sessions use encrypted WebSocket relay without
+WebRTC or ICE/TURN. Private health/metrics endpoints are not public. Neither
+backend nor worker publishes a host port. There is no current Node gateway route.
 
 The script provisions `DUALLANE_BUILDX_BUILDER` on first use with the configured
 `DUALLANE_BUILDKIT_IMAGE`. It starts that builder only for the image build,
@@ -364,9 +371,9 @@ resume only the same authorized phase with its stable run ID. The
 [content-addressed storage runbook](docs/WORKSPACE_CONTENT_ADDRESSED_STORAGE.md)
 contains the full cutover and rollback procedure.
 
-The Go Web image serves the Vite build and the Go gateway proxies only the
+The Web image serves the Vite build and the Nginx gateway proxies only the
 declared P2P and Workspace paths. There is no Node single-process static/API
-fallback in the 0.18 tree.
+fallback in the current tree.
 
 For a public deployment, point your outer Nginx/TLS virtual host at
 `127.0.0.1:${DUALLANE_WEB_PORT:-8787}` and set `PUBLIC_BASE_URL` to the final

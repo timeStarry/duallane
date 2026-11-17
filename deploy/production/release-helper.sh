@@ -327,6 +327,26 @@ release_validate_go_snapshot_sidecars() {
   release_private_artifact_path "${snapshot_file}" "previous Go snapshot" || return 1
   release_private_artifact_path "${compose_file}" "previous canonical recovery Compose" || return 1
   release_private_artifact_path "${snapshot_file}.volumes.json" "previous volume authority manifest" || return 1
+  local recovery_source
+  recovery_source="$(RELEASE_SNAPSHOT_HELPER_PATH="${RELEASE_COMPOSE_SNAPSHOT_HELPER}" node --input-type=module - "${snapshot_file}" <<'NODE'
+import { pathToFileURL } from "node:url";
+try {
+  const { readSnapshot } = await import(pathToFileURL(process.env.RELEASE_SNAPSHOT_HELPER_PATH));
+  const snapshot = await readSnapshot(process.argv[2]);
+  const source = snapshot.compose["x-duallane-recovery-source"];
+  if (source !== undefined && source !== "observed-running-go") throw new Error();
+  process.stdout.write(source ?? "successful-release");
+} catch { process.stderr.write("snapshot recovery provenance invalid\n"); process.exitCode = 1; }
+NODE
+  )" || return 1
+  # The marker lives in the pinned snapshot, so renaming its four artifacts
+  # cannot turn an observed baseline into historical successful-release evidence.
+  if [[ "${recovery_source}" == observed-running-go || \
+    "$(basename -- "${snapshot_file}")" == observed-go-baseline.snapshot.json || \
+    -e "${snapshot_file}.adoption.json" || -L "${snapshot_file}.adoption.json" ]]; then
+    node "${RELEASE_HELPER_DIR}/release-adopt-running.mjs" verify \
+      --snapshot "${snapshot_file}" >/dev/null || return 1
+  fi
   release_private_new_artifact_path "${verification_file}" "snapshot verification Compose" || return 1
 
   if ! node "${RELEASE_COMPOSE_SNAPSHOT_HELPER}" recover \

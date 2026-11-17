@@ -19,7 +19,8 @@ source "${SCRIPT_DIR}/release-helper.sh"
 
 bootstrap=false
 expected_commit=""
-allow_branch=""
+adopt_running=false
+expected_previous_commit=""
 release_profile="go-full"
 go_upgrade=false
 previous_release_snapshot=""
@@ -35,6 +36,7 @@ release_recovery_file=""
 usage() {
   cat <<'EOF'
 Usage: deploy/production/deploy.sh --expected-commit <git-sha> [--release-profile go-full] --go-upgrade --previous-release-snapshot <path>
+       deploy/production/deploy.sh --expected-commit <git-sha> --adopt-running --expected-previous-commit <git-sha>
 
 Deploys only the Go runtime after the Node implementation retirement.
 This coordinator upgrades an existing Go deployment; initial provisioning,
@@ -47,6 +49,11 @@ release, together with its external-file and volume-authority sidecars.
 Candidates, immutable image/SQL checks, writer fencing, drain checks and
 gateway-last activation remain mandatory. Rollback restores the pinned old Go
 application images without restoring stale data or reversing migrations.
+
+If the previous configuration and recovery artifacts were lost, --adopt-running
+captures a verified current Go baseline and restores the missing .env. It needs
+root, an explicit DUALLANE_PRODUCTION_DIR and the observed previous commit.
+It exits without building, migrating, stopping or replacing any service.
 EOF
 }
 
@@ -64,12 +71,16 @@ while (($# > 0)); do
       expected_commit="$2"
       shift 2
       ;;
-    --allow-branch)
+    --adopt-running)
+      adopt_running=true
+      shift
+      ;;
+    --expected-previous-commit)
       if (($# < 2)); then
-        echo "Missing value for --allow-branch" >&2
+        echo "Missing value for --expected-previous-commit" >&2
         exit 2
       fi
-      allow_branch="$2"
+      expected_previous_commit="$2"
       shift 2
       ;;
     --release-profile)
@@ -108,7 +119,18 @@ while (($# > 0)); do
   esac
 done
 
-if [[ "${release_profile}" != go-full || "${go_upgrade}" != true || "${prepare_go_permissions}" == true || "${bootstrap}" == true ]]; then
+if [[ "${adopt_running}" == true ]]; then
+  if [[ "${EUID}" != 0 || "${release_profile}" != go-full || "${go_upgrade}" == true || \
+    "${prepare_go_permissions}" == true || "${bootstrap}" == true || -n "${previous_release_snapshot}" || \
+    ! "${expected_previous_commit}" =~ ^[0-9a-f]{40}$ || -z "${DUALLANE_PRODUCTION_DIR:-}" ]]; then
+    echo "Adoption requires root, an explicit production directory and previous commit, without upgrade or bootstrap options" >&2
+    exit 2
+  fi
+  if [[ "${ENV_FILE}" != "${PROJECT_DIR}/.env" ]]; then
+    echo "Adoption restores only the production checkout's missing .env" >&2
+    exit 2
+  fi
+elif [[ "${release_profile}" != go-full || "${go_upgrade}" != true || "${prepare_go_permissions}" == true || "${bootstrap}" == true || -n "${expected_previous_commit}" ]]; then
   echo "Node runtime retired: only Go-to-Go upgrades with a verified previous snapshot are supported; use the 0.17.0 transition runbook for an earlier owner" >&2
   exit 2
 fi
@@ -219,6 +241,19 @@ wait_for_docker() {
   done
   echo "Docker daemon did not become ready within 20 seconds" >&2
   return 1
+}
+
+require_local_docker() {
+  local endpoint="${DOCKER_HOST:-}"
+  if [[ -n "${DOCKER_CONTEXT:-}" ]]; then
+    endpoint="$(docker context inspect "${DOCKER_CONTEXT}" --format '{{(index .Endpoints "docker").Host}}')" || return 1
+  elif [[ -z "${endpoint}" ]]; then
+    endpoint="$(docker context inspect --format '{{(index .Endpoints "docker").Host}}')" || return 1
+  fi
+  if [[ "${endpoint}" != unix:///* || ! -S "${endpoint#unix://}" ]]; then
+    echo "Production deployment requires this server's local Unix Docker daemon" >&2
+    return 1
+  fi
 }
 
 ensure_buildx_builder() {
@@ -514,7 +549,7 @@ if ! release_load_profile "${release_profile}"; then
   exit 1
 fi
 
-if [[ ! -f "${ENV_FILE}" ]]; then
+if [[ "${adopt_running}" != true && ! -f "${ENV_FILE}" ]]; then
   echo "Production environment file does not exist: ${ENV_FILE}" >&2
   exit 1
 fi
@@ -553,20 +588,9 @@ if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
 fi
 
 readonly current_branch="$(git symbolic-ref --quiet --short HEAD || true)"
-if [[ -z "${allow_branch}" ]]; then
-  if [[ "${current_branch}" != "main" ]]; then
-    echo "Production deployment requires the main branch, found ${current_branch:-detached HEAD}" >&2
-    exit 1
-  fi
-else
-  if [[ ! "${allow_branch}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
-    echo "Invalid --allow-branch value: ${allow_branch}" >&2
-    exit 2
-  fi
-  if [[ "${current_branch}" != "${allow_branch}" ]]; then
-    echo "Production deployment requires branch ${allow_branch}, found ${current_branch:-detached HEAD}" >&2
-    exit 1
-  fi
+if [[ "${current_branch}" != "main" ]]; then
+  echo "Production deployment requires the main branch, found ${current_branch:-detached HEAD}" >&2
+  exit 1
 fi
 readonly current_commit="$(git rev-parse HEAD)"
 requested_commit="${expected_commit}"
@@ -582,27 +606,22 @@ if [[ "${current_commit}" != "${expected_commit}" ]]; then
   echo "Expected commit ${expected_commit}, found ${current_commit}" >&2
   exit 1
 fi
-readonly target_remote_ref="refs/remotes/origin/${allow_branch:-main}"
-if [[ -z "${allow_branch}" ]]; then
-  if ! git show-ref --verify --quiet refs/remotes/origin/main; then
-    echo "Production deployment requires a fetched origin/main reference" >&2
-    exit 1
-  fi
-  readonly origin_main_commit="$(git rev-parse refs/remotes/origin/main)"
-  if [[ "${current_commit}" != "${origin_main_commit}" ]]; then
-    echo "Production HEAD ${current_commit} does not match origin/main ${origin_main_commit}" >&2
-    exit 1
-  fi
-else
-  if ! git show-ref --verify --quiet "${target_remote_ref}"; then
-    echo "Production deployment requires a fetched origin/${allow_branch} reference" >&2
-    exit 1
-  fi
-  readonly origin_branch_commit="$(git rev-parse "${target_remote_ref}")"
-  if [[ "${current_commit}" != "${origin_branch_commit}" ]]; then
-    echo "Production HEAD ${current_commit} does not match origin/${allow_branch} ${origin_branch_commit}" >&2
-    exit 1
-  fi
+if ! git show-ref --verify --quiet refs/remotes/origin/main; then
+  echo "Production deployment requires a fetched origin/main reference" >&2
+  exit 1
+fi
+readonly origin_main_commit="$(git rev-parse refs/remotes/origin/main)"
+if [[ "${current_commit}" != "${origin_main_commit}" ]]; then
+  echo "Production HEAD ${current_commit} does not match origin/main ${origin_main_commit}" >&2
+  exit 1
+fi
+
+if [[ "${adopt_running}" == true ]]; then
+  node "${SCRIPT_DIR}/release-adopt-running.mjs" \
+    --project-dir "${PROJECT_DIR}" \
+    --expected-previous-commit "${expected_previous_commit}" \
+    --output-dir "${BACKUP_DIR}/observed-go-baseline-$(date -u +%Y%m%dT%H%M%SZ)-${expected_previous_commit:0:12}"
+  exit 0
 fi
 
 root_app_version="$(node -p "require('./package.json').version")"
@@ -637,6 +656,7 @@ if [[ ! "${buildx_builder}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]+$ || -z "${buildkit_im
   exit 1
 fi
 
+require_local_docker
 wait_for_docker
 readonly docker_started_before="$(systemctl show docker -p ExecMainStartTimestampMonotonic --value 2>/dev/null || true)"
 if [[ -z "${docker_started_before}" ]]; then
