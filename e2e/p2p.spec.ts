@@ -24,7 +24,7 @@ test("private active sends return to latest while incoming messages preserve his
     for (let index = 0; index < 35; index += 1) {
       const text = `供阅读的直连历史 ${index}`;
       await send(guest, text);
-      await expect(page.locator("[data-p2p-message-id]").filter({ hasText: text })).toHaveCount(1);
+      await expect(page.getByText(text, { exact: true })).toHaveCount(1);
     }
     const list = page.getByRole("region", { name: "私密直连对话" }).locator("div.overflow-y-auto").first();
     const gap = () => list.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop);

@@ -306,13 +306,13 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320
       await ownerDeckSwitch.click();
       await expect(ownerDeckSwitch).toHaveAttribute("data-active-lane", "p2p");
       await expect(ownerDeckSwitch).toHaveAttribute("data-front-card", "p2p");
-      await expect(pageOwner.getByRole("heading", { name: "私密直连", exact: true })).toBeVisible();
+      await expect(pageOwner.getByRole("complementary", { name: "私密直连会话列表" }).getByRole("heading", { name: "私密直连", exact: true })).toBeVisible();
       // P2 Regression Gate: Switching from /workspace to Direct List MUST update URL to /direct AND survive reload!
       expect(new URL(pageOwner.url()).pathname).toBe("/direct");
       await pageOwner.reload();
       expect(new URL(pageOwner.url()).pathname).toBe("/direct");
       await expect(ownerDeckSwitch).toHaveAttribute("data-active-lane", "p2p");
-      await expect(pageOwner.getByRole("heading", { name: "私密直连", exact: true })).toBeVisible();
+      await expect(pageOwner.getByRole("complementary", { name: "私密直连会话列表" }).getByRole("heading", { name: "私密直连", exact: true })).toBeVisible();
 
       await ownerDeckSwitch.click();
       await expect(ownerDeckSwitch).toHaveAttribute("data-active-lane", "workspace");
