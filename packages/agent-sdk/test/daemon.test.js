@@ -3,12 +3,15 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   buildDaemonAgentPrompt,
   buildLaunchdPlistXml,
   buildSystemdUnitFile,
   checkRuntimeUpdate,
+  detectAvailableAgentBinary,
   extractGeneratedFilesFromReply,
   getDaemonServiceLabel,
   stageRuntimeSelfUpdate,
@@ -16,6 +19,39 @@ import {
 import { compareRuntimeSemver, DualLaneAgentClient } from "../src/index.js";
 import { createDualLaneMcpServer } from "../src/mcp.js";
 import { saveAgentProfile } from "../src/profile-store.js";
+
+test("daemon selection stays command-neutral and rejects retired hardcoded agent modes", () => {
+  assert.equal(detectAvailableAgentBinary(), "auto");
+  assert.equal(detectAvailableAgentBinary(" CMD "), "cmd");
+  for (const agent of ["codex", "claude", "unknown"]) {
+    assert.throws(() => detectAvailableAgentBinary(agent), /Use auto or cmd with --cmd <command>/u);
+  }
+});
+
+test("daemon run and install require a handler before gateway or service-manager activity", () => {
+  const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "dl-daemon-handler-test-"));
+  const configDir = path.join(fixtureDir, "agents");
+  try {
+    saveAgentProfile("default", {
+      url: "http://127.0.0.1:1",
+      token: "synthetic-handler-test-token",
+      botId: "bot_handler_test",
+    }, { configDir });
+    const cli = new URL("../bin/duallane-agent.mjs", import.meta.url);
+    for (const action of ["run", "install"]) {
+      const result = spawnSync(process.execPath, [fileURLToPath(cli), "daemon", action], {
+        env: { ...process.env, DUALLANE_AGENT_CONFIG_DIR: configDir },
+        encoding: "utf8",
+        timeout: 5_000,
+      });
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, /Resident daemons require --cmd <command>/u);
+      assert.doesNotMatch(result.stderr, /synthetic-handler-test-token|ECONNREFUSED/u);
+    }
+  } finally {
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  }
+});
 
 test("daemon generates valid macOS launchd plist with KeepAlive and escaped paths", () => {
   const xml = buildLaunchdPlistXml({

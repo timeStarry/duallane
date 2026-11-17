@@ -98,7 +98,7 @@ Usage:
   duallane-agent version [--check] [--profile default] [--url <origin>]
   duallane-agent update [--check] [--force] [--no-restart] [--profile default] [--url <origin>]
   duallane-agent doctor [--profile default]
-  duallane-agent daemon <install|start|stop|restart|uninstall|status|logs|run> [--agent auto|codex|claude|cmd] [--workdir <dir>] [--sandbox read-only|workspace-write] [--profile default]
+  duallane-agent daemon <install|start|stop|restart|uninstall|status|logs|run> --cmd <command> [--agent auto|cmd] [--workdir <dir>] [--profile default]
   duallane-agent mcp [--profile default]
   duallane-agent status [--profile default]
   duallane-agent conversations [--profile default]

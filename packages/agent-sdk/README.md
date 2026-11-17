@@ -39,6 +39,19 @@ Bridge incoming `@Bot` mentions, DMs, `/commands`, and interactive card clicks o
 node packages/agent-sdk/bin/duallane-agent.mjs listen --cmd "my-local-agent-handler"
 ```
 
+For a resident background listener, install the same explicit command adapter:
+
+```bash
+node packages/agent-sdk/bin/duallane-agent.mjs daemon install --cmd "my-local-agent-handler" --profile default
+```
+
+The daemon passes `{ event, context, conversation }` as JSON on the handler's
+stdin and sends its stdout as the reply. It does not select or require Codex,
+Claude, or another agent executable. `--agent auto` and `--agent cmd` both use
+the configured `--cmd`; existing installations using a retired named mode must
+be reinstalled with that explicit command. The handler owns its tool permissions;
+the daemon does not apply an agent-specific sandbox to custom commands.
+
 ## 4. Programmatic SDK (`DualLaneAgentClient` & `DualLaneBotV2`)
 
 ```js

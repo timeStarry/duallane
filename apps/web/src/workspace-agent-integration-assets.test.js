@@ -8,17 +8,12 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 const publicRoot = path.join(repoRoot, "apps", "web", "public", "integrations");
 
 describe("versioned Agent integration assets", () => {
-  it("publishes every stable and v1 Prompt without embedded credentials", async () => {
+  it("publishes stable and v2 universal runtimes and manifests without embedded credentials", async () => {
     const paths = [
-      "duallane-channel.md",
-      "openclaw/duallane-channel.md",
-      "hermes/duallane-channel.md",
-      "v1/duallane-channel.md",
-      "v1/openclaw/duallane-channel.md",
-      "v1/hermes/duallane-channel.md",
-      "v2/duallane-channel.md",
       "duallane-agent.mjs",
-      "v2/duallane-agent.mjs"
+      "duallane-agent.manifest.json",
+      "v2/duallane-agent.mjs",
+      "v2/duallane-agent.manifest.json"
     ];
     for (const relativePath of paths) {
       const content = await readFile(path.join(publicRoot, relativePath), "utf8");
@@ -28,19 +23,36 @@ describe("versioned Agent integration assets", () => {
     }
   });
 
-  it("keeps the v1 SHA-256 manifest synchronized with immutable Prompt bytes", async () => {
-    const manifest = JSON.parse(await readFile(path.join(publicRoot, "v1", "manifest.json"), "utf8"));
-    expect(manifest).toMatchObject({ version: 1, sdkVersion: "0.15.1", algorithm: "sha256" });
-    for (const [relativePath, expectedHash] of Object.entries(manifest.files)) {
-      const content = await readFile(path.join(publicRoot, "v1", relativePath));
-      expect(createHash("sha256").update(content).digest("hex")).toBe(expectedHash);
+  it("binds both runtime manifests to the independently versioned SDK and exact public bytes", async () => {
+    const sdkPackage = JSON.parse(await readFile(path.join(repoRoot, "packages", "agent-sdk", "package.json"), "utf8"));
+    const backendModel = await readFile(path.join(repoRoot, "apps", "backend", "internal", "v1", "model.go"), "utf8");
+    const advertisedSDKVersion = backendModel.match(/const LatestAgentSDKVersion = "([^"]+)"/u)?.[1];
+    expect(advertisedSDKVersion).toBe(sdkPackage.version);
+    const publications = [];
+    for (const prefix of ["", "v2"]) {
+      const directory = path.join(publicRoot, prefix);
+      const manifest = JSON.parse(await readFile(path.join(directory, "duallane-agent.manifest.json"), "utf8"));
+      const content = await readFile(path.join(directory, "duallane-agent.mjs"));
+      expect(manifest).toMatchObject({
+        name: sdkPackage.name,
+        version: sdkPackage.version,
+        downloadPath: "/integrations/duallane-agent.mjs"
+      });
+      expect(manifest.minNodeVersion).toMatch(/^\d+\.\d+\.\d+$/u);
+      expect(manifest.sha256).toMatch(/^[a-f0-9]{64}$/u);
+      expect(manifest.sha256).toBe(createHash("sha256").update(content).digest("hex"));
+      expect(manifest.byteSize).toBe(content.byteLength);
+      publications.push({ manifest, content });
     }
+    expect(publications[1].manifest).toEqual(publications[0].manifest);
+    expect(publications[1].content).toEqual(publications[0].content);
   });
 
-  it("configures ETag, Last-Modified validation, and distinct stable/versioned cache lifetimes", async () => {
+  it("revalidates mutable runtimes and manifests before the immutable historical documentation route", async () => {
     const nginx = (await readFile(path.join(repoRoot, "deploy", "candidate", "nginx.conf"), "utf8")).replace(/\r\n/g, "\n");
-    const versioned = nginx.match(/location ~ \^\/integrations\/v\[0-9\]\+\/ \{([\s\S]*?)\n  \}/u)?.[1] ?? "";
-    const stable = nginx.match(/location \/integrations\/ \{([\s\S]*?)\n  \}/u)?.[1] ?? "";
+    const regexLocations = [...nginx.matchAll(/^([ \t]+)location ~ (\S+) \{([\s\S]*?)^\1\}/gmu)];
+    const versioned = regexLocations.find(([, , expression]) => expression === "^/integrations/v[0-9]+/")?.[3] ?? "";
+    const stable = nginx.match(/^([ \t]+)location \/integrations\/ \{([\s\S]*?)^\1\}/mu)?.[2] ?? "";
     expect(nginx).not.toMatch(/^\s*last_modified\s+/mu);
     expect(versioned).toContain("etag on;");
     expect(versioned).toContain("if_modified_since exact;");
@@ -48,5 +60,22 @@ describe("versioned Agent integration assets", () => {
     expect(stable).toContain("etag on;");
     expect(stable).toContain("if_modified_since exact;");
     expect(stable).toContain("expires 5m;");
+
+    // Nginx uses the first matching regex location after its prefix lookup.
+    expect(nginx).not.toMatch(/location \^~ \/integrations\//u);
+    const route = (requestPath) => regexLocations.find(([, , expression]) => new RegExp(expression, "u").test(requestPath))?.[3];
+    for (const prefix of ["", "v2/", "v3/"]) {
+      for (const file of ["duallane-agent.mjs", "duallane-agent.manifest.json"]) {
+        const runtime = route(`/integrations/${prefix}${file}`);
+        expect(runtime).toBeDefined();
+        expect(runtime).toContain("etag on;");
+        expect(runtime).toContain("if_modified_since exact;");
+        expect(runtime).toContain("expires -1;");
+        expect(runtime).not.toContain("expires 1y;");
+        // A location-level add_header would replace the server security set.
+        expect(runtime).not.toMatch(/\badd_header\b/u);
+      }
+    }
+    expect(route("/integrations/v1/duallane-channel.md")).toContain("expires 1y;");
   });
 });

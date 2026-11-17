@@ -54,13 +54,22 @@ import zlib from "node:zlib";
 
 const sections = sourceFiles.map((relPath) => {
   const fullPath = path.join(sdkRoot, relPath);
-  const raw = fs.readFileSync(fullPath, "utf8");
+  const raw = fs.readFileSync(fullPath, "utf8").replace(/\r\n?/gu, "\n");
   return `// --- ${relPath} ---\n${stripImportsAndReexports(raw, relPath)}`;
 });
 
 const bundle = `${header}\n${sections.join("\n\n")}\n`;
 const bundleBytes = Buffer.from(bundle, "utf8");
 const bundleSha256 = crypto.createHash("sha256").update(bundleBytes).digest("hex");
+
+// Validate before replacing any published runtime or its integrity manifest.
+const check = spawnSync(process.execPath, ["--input-type=module", "--check"], {
+  input: bundle,
+  encoding: "utf8",
+});
+if (check.status !== 0) {
+  throw new Error(`Bundled runtime syntax check failed:\n${check.stderr || check.error || "invalid JavaScript"}`);
+}
 
 const targets = [
   path.join(repoRoot, "apps/web/public/integrations/duallane-agent.mjs"),
@@ -71,11 +80,6 @@ for (const target of targets) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, bundleBytes, { mode: 0o755 });
   fs.chmodSync(target, 0o755);
-  const check = spawnSync(process.execPath, ["--check", target], { encoding: "utf8" });
-  if (check.status !== 0) {
-    // Skip syntax check temporarily during refactor
-    // throw new Error(`Bundled runtime syntax check failed for ${target}:\n${check.stderr}`);
-  }
 }
 
 const manifestPayload =

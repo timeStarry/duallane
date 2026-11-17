@@ -118,19 +118,12 @@ WantedBy=default.target
 `;
 }
 
-export function detectAvailableAgentBinary(preferred = "auto", envPath = process.env.PATH || "") {
+export function detectAvailableAgentBinary(preferred = "auto") {
   const normalized = String(preferred || "auto").trim().toLowerCase();
   if (!DAEMON_VALID_AGENTS.has(normalized)) {
-    
+    throw new TypeError(`Unsupported --agent "${preferred}". Use auto or cmd with --cmd <command>.`);
   }
   return normalized;
-}". `);
-  }
-  if (normalized === "cmd") return "cmd";
-
-  
-  if (checkBin("claude")) return "claude";
-  return "codex";
 }
 
 export function buildDaemonAgentPrompt({ botName, conversation, event, context }) {
@@ -514,89 +507,7 @@ async function invokeDaemonAgentTurn({
     });
   }
 
-  const prompt = buildDaemonAgentPrompt({ botName, conversation, event, context });
-  const isGroup = conversation?.type === "group" || conversation?.kind === "group";
-  const effectiveSandbox = isGroup ? "read-only" : sandboxMode;
-
-  if (agentMode === "claude") { throw new Error("Claude mode removed"); };
-      delete env.DUALLANE_BOT_TOKEN;
-      const child = spawn("claude", args, {
-        cwd: workdir,
-        env,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (c) => { stdout += c.toString("utf8"); });
-      child.stderr.on("data", (c) => { stderr += c.toString("utf8"); });
-      child.on("error", reject);
-      child.on("close", (code) => {
-        if (code !== 0) {
-          reject(new Error(`claude -p exited with code ${code}: ${stderr.slice(-300)}`));
-          return;
-        }
-        resolve(stdout.trim());
-      });
-      child.stdin.end(prompt);
-    });
-  }
-
-  const tmpOut = path.join(
-    os.tmpdir(),
-    `duallane-codex-reply-${process.pid}-${crypto.randomUUID()}.txt`
-  );
-  const args = [
-    "exec",
-    "--skip-git-repo-check",
-    "-s",
-    effectiveSandbox,
-    "-C",
-    workdir,
-    "-o",
-    tmpOut,
-  ];
-  if (model) {
-    args.push("-m", model);
-  }
-  args.push("-");
-
-  try {
-    return await new Promise((resolve, reject) => {
-      const env = { ...process.env };
-      delete env.DUALLANE_BOT_TOKEN;
-      const child = spawn("codex", args, {
-        cwd: workdir,
-        env,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (c) => { stdout += c.toString("utf8"); });
-      child.stderr.on("data", (c) => { stderr += c.toString("utf8"); });
-      child.on("error", reject);
-      child.on("close", (code) => {
-        if (code !== 0) {
-          reject(new Error(`codex exec exited with code ${code}: ${stderr.slice(-400)}`));
-          return;
-        }
-        let reply = "";
-        if (fs.existsSync(tmpOut)) {
-          reply = fs.readFileSync(tmpOut, "utf8").trim();
-        }
-        if (!reply) {
-          reply = stdout.trim();
-        }
-        resolve(reply);
-      });
-      child.stdin.end(prompt);
-    });
-  } finally {
-    try {
-      if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut);
-    } catch {
-      /* ignore */
-    }
-  }
+  throw new TypeError("Resident daemons require --cmd <command>; no agent executable is selected automatically.");
 }
 
 export async function runResidentDaemon(flags = {}) {
@@ -612,6 +523,9 @@ export async function runResidentDaemon(flags = {}) {
   const customCmd = typeof flags.cmd === "string" ? flags.cmd.trim() : (savedCfg.cmd || "");
   const requestedAgent = String(flags.agent || savedCfg.agent || (customCmd ? "cmd" : "auto")).trim();
   const agentMode = detectAvailableAgentBinary(requestedAgent);
+  if (!customCmd) {
+    throw new TypeError("Resident daemons require --cmd <command>; no agent executable is selected automatically.");
+  }
   const workdir = path.resolve(String(flags.workdir || savedCfg.workdir || os.homedir()));
   const rawSandbox = String(flags.sandbox || savedCfg.sandbox || "read-only").trim();
   const sandboxMode = DAEMON_VALID_SANDBOXES.has(rawSandbox) ? rawSandbox : "read-only";
@@ -1017,6 +931,9 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
     const agentMode = detectAvailableAgentBinary(
       flags.agent || prev.agent || (customCmd ? "cmd" : "auto")
     );
+    if (!customCmd) {
+      throw new TypeError("Resident daemons require --cmd <command>; no agent executable is selected automatically.");
+    }
     const workdir = path.resolve(String(flags.workdir || prev.workdir || process.cwd()));
     const rawSandbox = String(flags.sandbox || prev.sandbox || "read-only").trim();
     const sandbox = DAEMON_VALID_SANDBOXES.has(rawSandbox) ? rawSandbox : "read-only";

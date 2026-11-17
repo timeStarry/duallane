@@ -294,7 +294,7 @@ type BotAvatarPayload struct {
 	Data     []byte
 }
 
-const LatestAgentSDKVersion = "1.0.15"
+const LatestAgentSDKVersion = "1.0.14"
 
 type BotWebhookConfig struct {
 	BotID      string `json:"botId"`
@@ -341,14 +341,14 @@ type BotConsoleOverview struct {
 }
 
 type CardKitBlock struct {
-	Type     string         `json:"type"`
-	Title    string         `json:"title,omitempty"`
-	Subtitle string         `json:"subtitle,omitempty"`
-	Badge    string         `json:"badge,omitempty"`
-	Tone     string         `json:"tone,omitempty"`
-	Content  string         `json:"content,omitempty"`
+	Type     string           `json:"type"`
+	Title    string           `json:"title,omitempty"`
+	Subtitle string           `json:"subtitle,omitempty"`
+	Badge    string           `json:"badge,omitempty"`
+	Tone     string           `json:"tone,omitempty"`
+	Content  string           `json:"content,omitempty"`
 	Items    []map[string]any `json:"items,omitempty"`
-	PollID   string         `json:"pollId,omitempty"`
+	PollID   string           `json:"pollId,omitempty"`
 	Options  []map[string]any `json:"options,omitempty"`
 	Elements []map[string]any `json:"elements,omitempty"`
 }
