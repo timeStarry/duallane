@@ -883,6 +883,7 @@ export function createDualLaneMcpServer(options = {}) {
               message: redactSecrets(toolErr?.message || String(toolErr)),
               statusCode: toolErr?.statusCode || null,
               retryable: toolErr?.code === "sdk.upgrade_required" ? false : toolErr?.retryable === true,
+              ...(["rejected", "unknown"].includes(toolErr?.attemptOutcome) ? { attemptOutcome: toolErr.attemptOutcome, safeToRetry: false } : {}),
               ...(toolErr?.upgrade ? { upgrade: toolErr.upgrade, updateCommand: runtimeUpgradeCommand(resolveStandaloneScriptPath(), normalizeProfileName(toolArgs.profile || defaultProfile), toolErr.upgrade.runtimeManifestUrl) } : {}),
               ...(safeAgentOperationReference(toolErr?.operation) ? { operation: safeAgentOperationReference(toolErr.operation) } : {}),
             };

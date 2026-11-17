@@ -323,6 +323,21 @@ export class LiteWebSocket extends EventEmitter {
 
 // --- src/transport.js ---
 // Shared HTTP boundary: credentials stay on the configured gateway origin.
+// Fixed input-validation codes from Go's feishucards converter. Business/action
+// errors and future card.* codes must remain unknown rather than expanding this
+// into a promise about every use of an idempotency key.
+const CARD_VALIDATION_REJECTION_CODES = new Set([
+  "card.feishu_invalid", "card.feishu_elements_required", "card.feishu_invalid_config",
+  "card.feishu_unsupported_version", "card.feishu_invalid_header", "card.feishu_style_forbidden",
+  "card.feishu_invalid_element", "card.feishu_unknown_element", "card.feishu_invalid_note",
+  "card.feishu_invalid_actions", "card.feishu_invalid_button", "card.feishu_invalid_action",
+  "card.feishu_duplicate_action", "card.feishu_invalid_columns", "card.feishu_invalid_column",
+  "card.feishu_invalid_text", "card.unknown_action", "card.feishu_action_input_forbidden",
+  "card.feishu_unknown_field",
+  "card.invalid_payload", "card.payload_too_large", "card.payload_too_complex", "card.payload_too_deep",
+  "card.text_too_large", "card.unsafe_content", "card.invalid_url", "card.url_forbidden", "card.private_url",
+]);
+
 export function optionalGatewayResult(error, fallback = null) {
   if (error?.code === "sdk.upgrade_required") throw error;
   return fallback;
@@ -338,7 +353,7 @@ export function sdkUpgradeInfo(input = {}, origin) {
     } catch { /* Only fixed, same-origin upgrade resources are trusted. */ }
     return new URL(fallback, base).href;
   };
-  const version = (value) => /^1\.(?:0|[1-9]\d{0,5})\.(?:0|[1-9]\d{0,5})$/u.test(value || "") ? value : "1.2.0";
+  const version = (value) => /^1\.(?:0|[1-9]\d{0,5})\.(?:0|[1-9]\d{0,5})$/u.test(value || "") ? value : "1.2.1";
   return Object.freeze({
     minimumSdkVersion: version(input.minimumSdkVersion), latestSdkVersion: version(input.latestSdkVersion),
     runtimeManifestUrl: integrationUrl(input.runtimeManifestUrl, "/integrations/duallane-agent.manifest.json", ["/integrations/duallane-agent.manifest.json", "/integrations/v2/duallane-agent.manifest.json"]),
@@ -438,8 +453,13 @@ export async function requestGateway({ fetchImpl, url, init, timeoutMs = 35_000,
         const data = await readGatewayJson(response);
         const code = response.status === 426 ? "sdk.upgrade_required" : /^[a-z0-9][a-z0-9._-]{0,127}$/u.test(data?.error?.code || "")
           ? data.error.code : "gateway.request_failed";
-        throw gatewayTransportError(code, response.status, response.status === 429 || response.status >= 500,
+        const error = gatewayTransportError(code, response.status, response.status === 429 || response.status >= 500,
           code === "sdk.upgrade_required" ? sdkUpgradeInfo(data.error, url) : undefined);
+        if ([400, 422].includes(response.status) && ["POST", "PATCH", "PUT"].includes(init?.method) && CARD_VALIDATION_REJECTION_CODES.has(code)) {
+          error.attemptOutcome = "rejected";
+          error.safeToRetry = false;
+        }
+        throw error;
       }
       return await read(response);
     })()]);
@@ -789,10 +809,18 @@ export function buildAgentInteractiveCard(input) {
       const actionId = button?.actionId;
       if (!TASK_CARD_ACTIONS.has(actionId) || seen.has(actionId) || typeof button.label !== "string" || button.label.length > 180) throw taskToolError("card.invalid_action");
       seen.add(actionId);
-      const data = button.value;
-      if (data !== undefined && (!data || typeof data !== "object" || Array.isArray(data) || Buffer.byteLength(JSON.stringify(data)) > 4096)) throw taskToolError("card.invalid_input");
+      let data;
+      if (button.value !== undefined) {
+        try {
+          if (!button.value || typeof button.value !== "object" || Array.isArray(button.value)) throw new Error();
+          const encoded = JSON.stringify(button.value);
+          if (Buffer.byteLength(encoded) > 4096) throw new Error();
+          data = JSON.parse(encoded);
+          if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error();
+        } catch { throw taskToolError("card.invalid_input"); }
+      }
       return { tag: "button", text: { tag: "plain_text", content: button.label },
-        type: ["primary", "danger"].includes(button.style) ? button.style : "default", value: { ...data, action: actionId } };
+        type: ["primary", "danger"].includes(button.style) ? button.style : "default", value: { action_id: actionId, ...(data === undefined ? {} : { data }) } };
     });
     elements.push({ tag: "hr" }, { tag: "action", actions });
   }
@@ -917,8 +945,9 @@ export function createTaskToolServer(client, options = {}) {
     } catch (error) {
       const code = /^[a-z0-9][a-z0-9._-]{0,127}$/u.test(error?.code || "") ? error.code : "tool.execution_failed";
       const operation = safeAgentOperationReference(error?.operation, client.task.id);
+      const attempt = ["rejected", "unknown"].includes(error?.attemptOutcome) ? { attemptOutcome: error.attemptOutcome, safeToRetry: false, retryable: error.retryable === true } : {};
       if (code === "sdk.upgrade_required") return { jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: JSON.stringify({ error: { code, retryable: false, upgrade: error.upgrade } }) }] } };
-      return { jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: JSON.stringify({ error: { code, message: "Task tool could not complete; check current authorization, coverage and budget.", ...(operation ? { operation } : {}) } }) }] } };
+      return { jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: JSON.stringify({ error: { code, message: "Task tool could not complete; check current authorization, coverage and budget.", ...attempt, ...(operation ? { operation } : {}) } }) }] } };
     }
   }
   return { callTool, handleJsonRpc, getTools, availableTools };
@@ -980,7 +1009,7 @@ export function createTaskBrokerMcpAdapter({ url = process.env.DUALLANE_TASK_BRO
 }
 
 // --- src/index.js ---
-export const DUALLANE_AGENT_SDK_VERSION = "1.2.0";
+export const DUALLANE_AGENT_SDK_VERSION = "1.2.1";
 export const DUALLANE_GATEWAY_VERSION = 1;
 
 export function compareRuntimeSemver(a, b) {
@@ -1013,6 +1042,8 @@ export class DualLaneAgentError extends Error {
     this.statusCode = options.statusCode ?? null;
     this.retryable = code !== "sdk.upgrade_required" && options.retryable === true;
     if (code === "sdk.upgrade_required" && options.upgrade) this.upgrade = options.upgrade;
+    if (["rejected", "unknown"].includes(options.attemptOutcome)) this.attemptOutcome = options.attemptOutcome;
+    if (options.safeToRetry === false) this.safeToRetry = false;
   }
 }
 
@@ -1541,10 +1572,20 @@ export class DualLaneAgentClient {
   }
 
   async #taskOperation(operation, key, execute) {
-    if (!this.#taskId) return execute();
-    const reference = { taskId: this.#taskId, operation, key };
-    try { return { ...await execute(), operation: reference }; }
-    catch (error) { error.operation = reference; throw error; }
+    const reference = this.#taskId ? { taskId: this.#taskId, operation, key } : undefined;
+    try {
+      const result = await execute();
+      return reference ? { ...result, operation: reference } : result;
+    } catch (error) {
+      if (operation === "card.send" || operation === "card.update") {
+        // A rejected attempt does not prove that another request using this key
+        // never committed. Neither outcome authorizes blind re-submission.
+        error.attemptOutcome ??= "unknown";
+        error.safeToRetry = false;
+      }
+      if (reference) error.operation = reference;
+      throw error;
+    }
   }
 
   async #request(method, path, body, options = {}) {
@@ -1586,6 +1627,8 @@ export class DualLaneAgentClient {
         statusCode: error.statusCode,
         retryable: error.retryable === true,
         upgrade: error.upgrade,
+        attemptOutcome: error.attemptOutcome,
+        safeToRetry: error.safeToRetry,
       });
       if (safe.code === "sdk.upgrade_required") {
         this.stop();
@@ -4725,6 +4768,7 @@ export function createDualLaneMcpServer(options = {}) {
               message: redactSecrets(toolErr?.message || String(toolErr)),
               statusCode: toolErr?.statusCode || null,
               retryable: toolErr?.code === "sdk.upgrade_required" ? false : toolErr?.retryable === true,
+              ...(["rejected", "unknown"].includes(toolErr?.attemptOutcome) ? { attemptOutcome: toolErr.attemptOutcome, safeToRetry: false } : {}),
               ...(toolErr?.upgrade ? { upgrade: toolErr.upgrade, updateCommand: runtimeUpgradeCommand(resolveStandaloneScriptPath(), normalizeProfileName(toolArgs.profile || defaultProfile), toolErr.upgrade.runtimeManifestUrl) } : {}),
               ...(safeAgentOperationReference(toolErr?.operation) ? { operation: safeAgentOperationReference(toolErr.operation) } : {}),
             };
@@ -6504,7 +6548,7 @@ if (isDirectCli) {
       process.stderr.write(JSON.stringify({ code: err.code, retryable: false, updateCommand: runtimeUpgradeCommand(fileURLToPath(import.meta.url), profile, err.upgrade?.runtimeManifestUrl), upgrade: err.upgrade }) + "\n");
     }
     const operation = safeAgentOperationReference(err?.operation);
-    if (operation) process.stderr.write(JSON.stringify({ operation, safeToRetry: false }) + "\n");
+    if (operation || ["rejected", "unknown"].includes(err?.attemptOutcome)) process.stderr.write(JSON.stringify({ ...(operation ? { operation } : {}), ...(err?.attemptOutcome ? { attemptOutcome: err.attemptOutcome } : {}), safeToRetry: false }) + "\n");
     process.exitCode = 1;
   });
 }

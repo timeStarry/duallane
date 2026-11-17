@@ -13,13 +13,13 @@ import (
 )
 
 const (
-	// MinimumSDKVersion is the first server SDK contract that may use the Bot
-	// credential and Agent transport surfaces.
-	MinimumSDKVersion = "1.2.0"
+	// MinimumSDKVersion follows the published release: older SDKs must upgrade
+	// before using Bot credentials, setup or Agent transports.
+	MinimumSDKVersion = LatestSDKVersion
 	// LatestSDKVersion is the newest published contract advertised by this
 	// server. Stable 1.x clients newer than this value are accepted when they
 	// remain backward compatible with the minimum contract.
-	LatestSDKVersion = "1.2.0"
+	LatestSDKVersion = "1.2.1"
 
 	SDKVersionHeader = "X-DualLane-SDK-Version"
 

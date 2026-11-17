@@ -13,6 +13,20 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "1.2.1",
+    releasedAt: "2026-11-18",
+    title: "智能助手确认卡片修复",
+    summary: "修复助手发送和更新确认卡片失败的问题，并明确区分请求被拒绝与发送结果尚未确认。",
+    categories: [{
+      title: "助手卡片",
+      items: [
+        "确认、取消等按钮可随卡片正常发送和更新，保留按钮附带的数据",
+        "卡片内容被拒绝时明确提示；结果尚未确认时保留查询线索，避免重复发送",
+        "所有接入助手均需升级到 SDK 1.2.1，旧运行包将无法连接；保留原有配对和权限选择"
+      ]
+    }]
+  },
+  {
     version: "1.2.0",
     releasedAt: "2026-11-17",
     title: "智能助手按群共享与按需上下文",

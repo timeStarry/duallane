@@ -19,7 +19,8 @@ capabilities rather than assuming every documented operation exists.
 
 ## Connect and verify as an operator
 
-- Use a compatible stable 1.x SDK, minimum 1.2.0. Every Agent must upgrade,
+- Use a compatible stable 1.x SDK, minimum 1.2.1. The minimum follows the published
+  release, including patches, with no legacy compatibility window. Every Agent must upgrade,
   including Bots retaining legacy policies. HTTP 426 `sdk.upgrade_required` is a
   stop-and-upgrade condition, not a retryable task failure. Use the official
   manifest to verify the update; never change a version header to bypass it.
@@ -108,3 +109,7 @@ Use `duallane_query_operation` with the returned operation/key to resolve uncert
 writes within the same task. `committed` confirms server submission, not human
 reading. `unknown` with `safeToRetry: false` does not authorize a new submission.
 Revoked or expired tasks cannot use operation queries to regain access.
+Card-write `attemptOutcome: "rejected"` means this request was refused, not that
+its operation key has never committed. An unknown result remains unsafe to retry.
+Preserve the identity and evidence; a completed failed task is not permission to
+send a replacement card without a new authorized request.

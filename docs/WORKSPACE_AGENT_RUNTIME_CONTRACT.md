@@ -142,15 +142,17 @@ files. Credentials are reused; updating never requires automatic re-pairing.
 
 App 1.2 enforces SDK admission for every Bot, independently of access-policy
 version. All setup, Bot HTTP and WebSocket requests declare
-`X-DualLane-SDK-Version`; only compatible stable 1.x versions at least 1.2.0 are
-accepted. Missing/invalid/older/incompatible declarations return 426
+`X-DualLane-SDK-Version`; only compatible stable 1.x versions at least 1.2.1 are
+accepted. The admission floor follows the published SDK release, including patch
+releases: older SDKs must upgrade, with no legacy compatibility window.
+Missing/invalid/older/incompatible declarations return 426
 `sdk.upgrade_required` with safe upgrade locations. The runtime stops retries
 and requires a verified update while preserving its profile, bridge and policy.
 The declaration is public compatibility metadata, never identity or authority;
 current authentication, scopes, task and object checks remain mandatory.
 Human Session APIs, public downloads, health checks and P2P do not use this gate.
 WebSocket adapters may declare the same version through the public subprotocol
-`duallane-agent-sdk-1.2.0`; conflicts and duplicate declarations fail closed.
+`duallane-agent-sdk-1.2.1`; conflicts and duplicate declarations fail closed.
 Bot authentication remains mandatory and credentials never move to URLs.
 
 Implementation order: transport/authorization regressions; structured task and
@@ -237,3 +239,12 @@ replaced in full. Card updates require revision and the original `card.send`
 receipt for that task; quoting a card does not transfer ownership. Conflicts are
 not automatically overwritten. Operation-result queries distinguish committed
 from unknown without treating transport ACK or timeout as publication evidence.
+
+SDK 1.2.1 maps fixed card buttons to `value.action_id` and nests their optional
+business object in `value.data` on send and update. Data keys cannot override
+the selected action. Go retains the strict unknown-field/action/size boundary.
+Card-write error `attemptOutcome` describes only the attempted request: recognized
+strict-converter HTTP400/422 rejection is `rejected`; transport loss, invalid replies
+and unrecognized failures remain `unknown`. Both retain `safeToRetry: false`.
+An attempt rejection does not prove its operation key has never committed;
+operation queries still return only committed receipts or conservative unknown.

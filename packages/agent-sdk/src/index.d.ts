@@ -22,6 +22,8 @@ export interface AgentTask { id: string; conversationId: string; triggerMessageI
 export type AgentOperation = "message.send" | "message.edit" | "card.send" | "card.update";
 export interface AgentOperationReference { taskId: string; operation: AgentOperation; key: string }
 export type AgentOperationResult = { status: "committed"; result: Record<string, unknown>; humanRead: false } | { status: "unknown"; safeToRetry: false };
+/** This request attempt only; rejected does not rule out an earlier commit for its key. */
+export type AgentWriteAttemptOutcome = "rejected" | "unknown";
 export interface AgentMessageUpdate { plainText?: string; content?: AgentMessageContent; expectedVersion?: string }
 export interface AgentMessageRecord extends Record<string, unknown> { id?: string; conversationId?: string; version?: string }
 export interface AgentHistoryQuery { before?: string; limit?: number; query?: string; authorId?: string; startTime?: string | Date; endTime?: string | Date; signal?: AbortSignal }
@@ -86,6 +88,8 @@ export class DualLaneAgentError extends Error {
   statusCode: number | null;
   retryable: boolean;
   operation?: AgentOperationReference;
+  attemptOutcome?: AgentWriteAttemptOutcome;
+  safeToRetry?: false;
   upgrade?: Readonly<AgentSdkUpgradeInfo>;
 }
 

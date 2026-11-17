@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { expect, test, type APIRequestContext, type Page, type TestInfo } from "@playwright/test";
 import { DualLaneAgentClient, buildMessageContent, messageText, messageMention, messageAttachment,
-  type AgentEvent, type AgentTaskClient } from "../packages/agent-sdk/src/index.js";
+  createTaskToolServer, type AgentEvent, type AgentTaskClient } from "../packages/agent-sdk/src/index.js";
+import { buildAgentInteractiveCard } from "../packages/agent-sdk/src/task-tools.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -453,7 +454,7 @@ test("real SDK task HTTP roundtrip reads history, publishes mixed files, edits w
     // Never attach the token response, log credentials or persist a profile.
     tokenId = requiredString(asRecord(issued.tokenRecord, "issued token record").id, "issued token id");
     const credential = requiredString(issued.token, "issued Bot credential");
-    for (const version of [undefined, "1.1.3", "invalid", "1.2.0-beta.1", "2.0.0"]) {
+    for (const version of [undefined, "1.1.3", "1.2.0", "invalid", "1.2.0-beta.1", "2.0.0"]) {
       const response = await fetch(new URL("/api/bot-gateway/v1/me", baseURL!), {
         headers: { authorization: `Bearer ${credential}`, ...(version === undefined ? {} : { "X-DualLane-SDK-Version": version }) },
         redirect: "error", signal: AbortSignal.timeout(10_000),
@@ -461,7 +462,7 @@ test("real SDK task HTTP roundtrip reads history, publishes mixed files, edits w
       expect(response.status, `SDK declaration ${version ?? "missing"} must be rejected`).toBe(426);
       const error = asRecord(asRecord(await response.json(), "upgrade response").error, "upgrade requirement");
       expect(error.code).toBe("sdk.upgrade_required");
-      expect(error.minimumSdkVersion).toBe("1.2.0"); expect(error.latestSdkVersion).toBe("1.2.0");
+      expect(error.minimumSdkVersion).toBe("1.2.1"); expect(error.latestSdkVersion).toBe("1.2.1");
       expect(error.runtimeManifestUrl).toBe("/integrations/duallane-agent.manifest.json");
       expect(error.docsUrl).toBe("/integrations/v2/duallane-channel.md"); expect(error.skillUrl).toBe("/integrations/duallane-agent/SKILL.md");
     }
@@ -555,6 +556,318 @@ test("real SDK task HTTP roundtrip reads history, publishes mixed files, edits w
   } finally {
     scoped?.close(); client?.stop();
     if (botId && tokenId) await owner.request.post(new URL(`/api/workspace/bots/${botId}/tokens/${tokenId}/revoke`, baseURL!).href, { timeout: 10_000 }).catch(() => undefined);
+    await ownerContext.close();
+  }
+});
+
+test("real SDK interactive Feishu cards preserve actions, CAS and unknown outcomes", async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const runId = randomUUID();
+  const ownerContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  ownerContext.setDefaultTimeout(10_000);
+  const owner = await ownerContext.newPage();
+  let client: DualLaneAgentClient | undefined;
+  let scoped: AgentTaskClient | undefined;
+  let droppedClient: DualLaneAgentClient | undefined;
+  let droppedScoped: AgentTaskClient | undefined;
+  let botId: string | undefined;
+  let tokenId: string | undefined;
+  const human = async (method: "GET" | "POST" | "PATCH", pathname: string, data?: JsonRecord): Promise<JsonRecord> => {
+    const response = await owner.request.fetch(new URL(pathname, baseURL!).href, {
+      method,
+      ...(data ? { data } : {}),
+      timeout: 10_000,
+    });
+    expect(response.ok(), `${method} ${pathname}: ${response.status()}`).toBeTruthy();
+    return asRecord(await response.json(), "synthetic human response");
+  };
+  try {
+    await signInOwner(owner, baseURL!);
+    const boot = await human("GET", "/api/v1/bootstrap");
+    const ownerMember = asRecord(asRecord(boot.auth, "owner auth").currentUser, "owner identity");
+    const ownerId = requiredString(ownerMember.id, "owner user id");
+    const created = await human("POST", "/api/v1/bots", { name: `SDK card acceptance ${runId}` });
+    botId = requiredString(created.botId, "created Bot id");
+    const owned = await human("GET", "/api/workspace/bots");
+    const bot = arrayOfRecords(owned.bots, "owned Bots").find((candidate) => candidate.id === botId);
+    if (!bot) throw new Error("synthetic card Bot is missing");
+    const botUserId = requiredString(bot.botUserId, "Bot user id");
+    await human("PATCH", `/api/workspace/bots/${encodeURIComponent(botId)}/settings`, {
+      accessPolicy: { ...accessPolicyPreset, groups: { ...accessPolicyPreset.groups, audience: "owner_only" } },
+      allowDirect: true,
+      allowGroup: false,
+      maxContextMessages: 20,
+      maxContextChars: 20_000,
+      includeAttachmentMetadata: true,
+      allowAttachmentPreview: true,
+    });
+    const direct = await human("POST", "/api/workspace/conversations", { type: "direct", targetUserId: botUserId });
+    const conversationId = requiredString(asRecord(direct.conversation ?? direct, "Bot direct conversation").id, "Bot conversation id");
+    await human("PATCH", `/api/workspace/bots/${encodeURIComponent(botId)}/context-grants/${encodeURIComponent(conversationId)}`, {
+      allowTrigger: true,
+      allowContext: true,
+      maxMessages: 20,
+    });
+    const issued = await human("POST", `/api/workspace/bots/${encodeURIComponent(botId)}/tokens`, {
+      scopes: ["messages:read_trigger", "messages:read_context", "messages:send", "cards:write"],
+    });
+    tokenId = requiredString(asRecord(issued.tokenRecord, "issued token record").id, "issued token id");
+    const credential = requiredString(issued.token, "issued Bot credential");
+
+    client = new DualLaneAgentClient({ url: baseURL!, token: credential, requestTimeoutMs: 10_000 });
+    expect(asRecord((await client.getMe()).bot, "current SDK Bot identity").id).toBe(botId);
+    const triggerText = `sdk-card-trigger-${runId}`;
+    const trigger = await human("POST", "/api/workspace/messages", {
+      conversationId,
+      clientMessageId: `card-trigger-${runId}`,
+      content: buildMessageContent([messageText(triggerText)]),
+    });
+    const triggerId = requiredString(asRecord(trigger.message ?? trigger, "trigger message").id, "trigger message id");
+    let delivered: AgentEvent | undefined;
+    let afterSequence = 0;
+    await expect.poll(async () => {
+      const update = await client!.getUpdates({ afterSequence, limit: 50, timeoutMs: 10_000 });
+      delivered = update.events.find((event) => event.type === "message.created" && event.conversationId === conversationId && event.payload.messageId === triggerId);
+      for (const event of update.events) afterSequence = Math.max(afterSequence, event.sequence);
+      return Boolean(delivered);
+    }, { timeout: 15_000, message: "real SDK receives the synthetic card trigger", intervals: [100, 250, 500] }).toBe(true);
+    if (!delivered) throw new Error("card trigger delivery missing");
+    const activation = await client.createTask({ eventId: delivered.eventId });
+    scoped = client.forTask(activation.task, { timeoutMs: 60_000 });
+    const capabilities = await scoped.getCapabilities();
+    expect(asRecord(capabilities.features, "card capabilities").taskCardUpdate).toBe(true);
+
+    const initialInput = {
+      title: `合成交互卡片 ${runId}`,
+      markdown: "请选择一个合成操作",
+      tone: "blue",
+      buttons: [
+        { actionId: "confirm", label: "确认", style: "primary", value: { decision: "approve", runId, action: "business-only", action_id: "business-id" } },
+        { actionId: "cancel", label: "取消", style: "danger" },
+      ],
+    } as const;
+    const initialCard = buildAgentInteractiveCard(initialInput);
+    const initialElements = arrayOfRecords((initialCard as JsonRecord).elements, "interactive card elements");
+    const actionElement = initialElements.find((element) => element.tag === "action");
+    if (!actionElement) throw new Error("interactive card action element missing");
+    const actionButtons = arrayOfRecords(actionElement.actions, "interactive card buttons");
+    expect(actionButtons).toHaveLength(2);
+    expect(actionButtons[0].value).toEqual({ action_id: "confirm", data: initialInput.buttons[0].value });
+    expect(actionButtons[1].value).toEqual({ action_id: "cancel" });
+
+    const sent = await scoped.sendFeishuCard({
+      conversationId,
+      clientMessageId: `interactive-card-${runId}`,
+      idempotencyKey: `interactive-card-${runId}`,
+      fallbackText: `交互卡片 ${runId}`,
+      card: initialCard,
+    });
+    const sentCard = asRecord(sent.card, "sent interactive card");
+    const cardId = requiredString(sentCard.id, "interactive card id");
+    expect(Number(sentCard.revision)).toBe(1);
+    const storedButtons = (card: JsonRecord): JsonRecord[] => {
+      const elements = arrayOfRecords(asRecord(card.payload, "stored card payload").elements, "stored card elements");
+      const actions = elements.find((element) => element.type === "actions");
+      if (!actions) throw new Error("stored card actions missing");
+      return arrayOfRecords(actions.buttons, "stored card buttons");
+    };
+    expect(storedButtons(sentCard)).toMatchObject([
+      { actionId: "confirm", data: initialInput.buttons[0].value },
+      { actionId: "cancel", data: {} },
+    ]);
+    const sentMessage = asRecord(sent.message, "sent interactive card message");
+    const sentMessageId = requiredString(sentMessage.id, "sent card message id");
+
+    const updatedInput = {
+      title: `合成交互卡片 ${runId}`,
+      markdown: "状态：已确认",
+      tone: "green",
+      buttons: [
+        { actionId: "confirm", label: "再次确认", style: "primary", value: { decision: "confirm", runId } },
+        { actionId: "cancel", label: "取消", style: "danger" },
+      ],
+    } as const;
+    const updatedCard = buildAgentInteractiveCard(updatedInput);
+    const revised = await scoped.updateFeishuCard(cardId, {
+      expectedRevision: Number(sentCard.revision),
+      fallbackText: `交互卡片已更新 ${runId}`,
+      card: updatedCard,
+    });
+    const revisedCard = asRecord(revised.card, "updated interactive card");
+    expect(revisedCard.id).toBe(cardId);
+    expect(Number(revisedCard.revision)).toBe(2);
+    expect(storedButtons(revisedCard)).toMatchObject([
+      { actionId: "confirm", data: updatedInput.buttons[0].value },
+      { actionId: "cancel", data: {} },
+    ]);
+    const cardTools = createTaskToolServer(scoped);
+    const toolUpdate = asRecord(await cardTools.callTool("duallane_update_card", {
+      ...updatedInput, cardId, expectedRevision: 2, markdown: "状态：任务工具已确认",
+    }, `interactive-update-${runId}`), "task-tool card update");
+    const toolUpdatedCard = asRecord(toolUpdate.card, "task-tool updated card");
+    const currentCardRevision = Number(toolUpdatedCard.revision);
+    expect(currentCardRevision).toBe(3);
+    expect(storedButtons(toolUpdatedCard)).toMatchObject([
+      { actionId: "confirm", data: updatedInput.buttons[0].value },
+      { actionId: "cancel", data: {} },
+    ]);
+
+    let revisionError: { code?: unknown; statusCode?: unknown; attemptOutcome?: unknown; safeToRetry?: unknown } | undefined;
+    await assert.rejects(
+      scoped.updateFeishuCard(cardId, {
+        expectedRevision: 99,
+        fallbackText: `未来版本不应写入 ${runId}`,
+        card: updatedCard,
+      }),
+      (error: unknown) => {
+        revisionError = error as typeof revisionError;
+        return true;
+      }
+    );
+    expect(revisionError?.statusCode).toBe(409);
+    expect(revisionError?.code).toBe("card.revision_conflict");
+    expect(revisionError?.safeToRetry).toBe(false);
+    const cardAfterRevisionReject = await jsonRequest(owner.request, "GET", `/api/workspace/cards/${encodeURIComponent(cardId)}`);
+    expect(Number(asRecord(cardAfterRevisionReject.card, "card after revision rejection").revision)).toBe(currentCardRevision);
+
+    // Task history is anchored before these outputs; observe new delivery as
+    // the authorized human without widening the SDK's history window.
+    const liveMessagesPath = `/api/workspace/conversations/${encodeURIComponent(conversationId)}/messages?limit=50`;
+    const beforeMalformedHistory = await jsonRequest(owner.request, "GET", liveMessagesPath);
+    const malformedFallback = `malformed-old-builder-${runId}`;
+    const malformedKey = `malformed-card-${runId}`;
+    const malformedCard = {
+      header: { title: { tag: "plain_text", content: "旧构造器" }, template: "blue" },
+      elements: [{ tag: "action", actions: [{
+        tag: "button",
+        text: { tag: "plain_text", content: "确认" },
+        type: "primary",
+        // This is the pre-contract shape. The strict converter must reject the
+        // arbitrary value.action field and must not persist a partial card.
+        value: { action: "confirm", runId },
+      }] }],
+    };
+    let malformedError: { code?: unknown; statusCode?: unknown; attemptOutcome?: unknown; safeToRetry?: unknown; operation?: unknown } | undefined;
+    await assert.rejects(
+      scoped.sendCard({
+        conversationId,
+        clientMessageId: `${malformedKey}-message`,
+        idempotencyKey: malformedKey,
+        fallbackText: malformedFallback,
+        format: "feishu-card",
+        feishuCard: malformedCard,
+      }),
+      (error: unknown) => {
+        malformedError = error as typeof malformedError;
+        return true;
+      }
+    );
+    expect(malformedError?.code).toBe("card.feishu_unknown_field");
+    expect(malformedError?.statusCode).toBe(422);
+    expect(malformedError?.safeToRetry).toBe(false);
+    expect(malformedError?.attemptOutcome).toBe("rejected");
+    const malformedOperation = await scoped.getOperation("card.send", malformedKey);
+    expect(asRecord(malformedOperation, "malformed operation receipt").status).toBe("unknown");
+    expect(asRecord(malformedOperation, "malformed operation receipt").safeToRetry).toBe(false);
+    // This rejected attempt does not erase a prior committed use of its key.
+    const committedKey = `interactive-card-${runId}`;
+    await assert.rejects(scoped.sendFeishuCard({
+      conversationId, clientMessageId: committedKey, idempotencyKey: committedKey, card: malformedCard,
+    }), (error: unknown) => {
+      const rejected = asRecord(error, "same-key validation rejection");
+      expect(rejected.statusCode).toBe(422);
+      expect(rejected.attemptOutcome).toBe("rejected");
+      return true;
+    });
+    const previousCommit = asRecord(await scoped.getOperation("card.send", committedKey), "earlier committed operation");
+    expect(previousCommit.status).toBe("committed");
+    expect(asRecord(asRecord(previousCommit.result, "earlier result").card, "earlier card").id).toBe(cardId);
+    const afterMalformedHistory = await jsonRequest(owner.request, "GET", liveMessagesPath);
+    const malformedMessages = arrayOfRecords(afterMalformedHistory.messages, "history after malformed card").filter(
+      (message) => message.plainText === malformedFallback
+    );
+    expect(malformedMessages).toEqual([]);
+    expect(arrayOfRecords(afterMalformedHistory.messages, "messages after rejection").map((message) => message.id).sort())
+      .toEqual(arrayOfRecords(beforeMalformedHistory.messages, "messages before rejection").map((message) => message.id).sort());
+    const cardAfterMalformed = await jsonRequest(owner.request, "GET", `/api/workspace/cards/${encodeURIComponent(cardId)}`);
+    expect(Number(asRecord(cardAfterMalformed.card, "card after malformed card").revision)).toBe(currentCardRevision);
+    expect(arrayOfRecords(beforeMalformedHistory.messages, "history before malformed card").some((message) => message.id === sentMessageId)).toBe(true);
+
+    let droppedPosts = 0;
+    let dropped = false;
+    const realFetch = globalThis.fetch.bind(globalThis);
+    const dropResponseFetch: typeof fetch = async (input, init) => {
+      const requestURL = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const isCardPost = String(init?.method ?? "GET").toUpperCase() === "POST" && new URL(requestURL).pathname === "/api/bot-gateway/v1/cards";
+      if (isCardPost) droppedPosts += 1;
+      const response = await realFetch(input, init);
+      if (!dropped && isCardPost) {
+        dropped = true;
+        await response.arrayBuffer();
+        throw new Error("synthetic response dropped after the Go server committed");
+      }
+      return response;
+    };
+    droppedClient = new DualLaneAgentClient({ url: baseURL!, token: credential, fetch: dropResponseFetch, requestTimeoutMs: 10_000 });
+    droppedScoped = droppedClient.forTask(activation.task, { timeoutMs: 60_000 });
+    const taskTools = createTaskToolServer(droppedScoped, { capabilities });
+    const availableTools = await taskTools.getTools();
+    expect(availableTools.map((tool) => tool.name)).toContain("duallane_send_card");
+    expect(availableTools.map((tool) => tool.name)).toContain("duallane_query_operation");
+    const droppedInput = {
+      title: `未知回执卡片 ${runId}`,
+      markdown: "服务端已处理但响应不可见",
+      buttons: [{ actionId: "confirm", label: "确认", value: { synthetic: runId } }],
+    };
+    const droppedRPC = await taskTools.handleJsonRpc({
+      jsonrpc: "2.0",
+      id: "dropped-card-operation",
+      method: "tools/call",
+      params: { name: "duallane_send_card", arguments: droppedInput },
+    });
+    const droppedResult = asRecord(asRecord(droppedRPC, "dropped card tool response").result, "dropped card tool result");
+    expect(droppedResult.isError).toBe(true);
+    const droppedContent = arrayOfRecords(droppedResult.content, "dropped card tool content");
+    const droppedEnvelope = asRecord(JSON.parse(requiredString(droppedContent[0].text, "dropped card tool error")), "dropped card tool envelope");
+    const droppedError = asRecord(droppedEnvelope.error, "dropped card tool error details");
+    expect(droppedError.code).toBe("network.unavailable");
+    expect(droppedError.attemptOutcome).toBe("unknown");
+    expect(droppedError.safeToRetry).toBe(false);
+    const droppedOperation = asRecord(droppedError.operation, "dropped card operation reference");
+    expect(droppedOperation.operation).toBe("card.send");
+    const committed = await taskTools.callTool("duallane_query_operation", {
+      operation: "card.send",
+      key: requiredString(droppedOperation.key, "dropped card operation key"),
+    });
+    const committedRecord = asRecord(committed, "committed dropped card operation");
+    expect(committedRecord.status).toBe("committed");
+    expect(committedRecord.humanRead).toBe(false);
+    const committedResult = asRecord(committedRecord.result, "committed dropped card result");
+    const committedCard = asRecord(committedResult.card, "committed dropped card");
+    const committedMessage = asRecord(committedResult.message, "committed dropped card message");
+    const committedCardId = requiredString(committedCard.id, "committed dropped card id");
+    const committedMessageId = requiredString(committedMessage.id, "committed dropped card message id");
+    expect(Number(committedCard.revision)).toBe(1);
+    const retryRPC = await taskTools.handleJsonRpc({
+      jsonrpc: "2.0",
+      id: "dropped-card-operation",
+      method: "tools/call",
+      params: { name: "duallane_send_card", arguments: droppedInput },
+    });
+    const retryResult = asRecord(asRecord(retryRPC, "repeated dropped card tool response").result, "repeated dropped card tool result");
+    const retryContent = arrayOfRecords(retryResult.content, "repeated dropped card tool content");
+    const retryEnvelope = asRecord(JSON.parse(requiredString(retryContent[0].text, "repeated dropped card tool error")), "repeated dropped card tool envelope");
+    expect(asRecord(retryEnvelope.error, "repeated dropped card error").attemptOutcome).toBe("unknown");
+    expect(droppedPosts).toBe(1);
+    const committedHistory = await jsonRequest(owner.request, "GET", liveMessagesPath);
+    const committedMessages = arrayOfRecords(committedHistory.messages, "history after dropped card");
+    expect(committedMessages.filter((message) => message.id === committedMessageId)).toHaveLength(1);
+    const committedCardRead = await jsonRequest(owner.request, "GET", `/api/workspace/cards/${encodeURIComponent(committedCardId)}`);
+    expect(Number(asRecord(committedCardRead.card, "committed dropped card read").revision)).toBe(1);
+  } finally {
+    droppedScoped?.close(); droppedClient?.stop();
+    scoped?.close(); client?.stop();
+    if (botId && tokenId) await owner.request.post(new URL(`/api/workspace/bots/${encodeURIComponent(botId)}/tokens/${encodeURIComponent(tokenId)}/revoke`, baseURL!).href, { timeout: 10_000 }).catch(() => undefined);
     await ownerContext.close();
   }
 });

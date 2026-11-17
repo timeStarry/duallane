@@ -13,7 +13,7 @@ import { getDaemonStateDir } from "../src/daemon.js";
 import { loadAgentProfile, saveAgentProfile } from "../src/profile-store.js";
 
 const token = `dl_bot_${"u".repeat(32)}`;
-const upgrade = { error: { code: "sdk.upgrade_required", minimumSdkVersion: "1.2.0", latestSdkVersion: "1.2.0",
+const upgrade = { error: { code: "sdk.upgrade_required", minimumSdkVersion: "1.2.1", latestSdkVersion: "1.2.1",
   runtimeManifestUrl: "/integrations/duallane-agent.manifest.json", docsUrl: "/integrations/v2/duallane-channel.md", skillUrl: "/integrations/duallane-agent/SKILL.md" } };
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const makeClient = (fetch, more = {}) => new DualLaneAgentClient({ url: "https://gateway.example", token, fetch, ...more });
@@ -50,7 +50,7 @@ test("SDK and setup always declare their actual version independently of custom 
   for (const { init } of calls) assert.equal(init.headers["x-duallane-sdk-version"], DUALLANE_AGENT_SDK_VERSION);
   for (const { init } of calls.filter(({ url }) => /setup\/(request|exchange)$/u.test(url))) assert.equal(JSON.parse(init.body).clientVersion, "0.1.0");
   await setup.request(setupId);
-  assert.equal(JSON.parse(calls.at(-1).init.body).clientVersion, "1.2.0");
+  assert.equal(JSON.parse(calls.at(-1).init.body).clientVersion, DUALLANE_AGENT_SDK_VERSION);
   assert.equal(calls[0].init.headers["x-duallane-adapter-version"], "legacy/0.1.0");
 });
 
@@ -58,7 +58,7 @@ test("426 is terminal, does not retain server secrets or attacker upgrade URLs, 
   const payload = { error: { ...upgrade.error, message: token, minimumSdkVersion: token, runtimeManifestUrl: `https://attacker.example/${token}`, docsUrl: `/${token}`, skillUrl: `//attacker.example/${token}` } };
   await assert.rejects(makeClient(async () => json(payload, 426)).getMe(), (error) => {
     assert.equal(error.code, "sdk.upgrade_required"); assert.equal(error.retryable, false); assert.equal(error.statusCode, 426);
-    assert.equal(error.upgrade.minimumSdkVersion, "1.2.0");
+    assert.equal(error.upgrade.minimumSdkVersion, "1.2.1");
     for (const value of Object.values(error.upgrade).filter((item) => item.startsWith("https:"))) assert.ok(value.startsWith("https://gateway.example/integrations/"));
     assert.ok(!JSON.stringify(error).includes(token)); assert.ok(!error.message.includes(token)); return true;
   });
@@ -81,7 +81,7 @@ test("Node WS performs real authenticated preflight and declares SDK version aga
   try {
     await client.connect();
     assert.deepEqual(seen.map((item) => item.route), ["/api/bot-gateway/v1/me", "/ws/bot-gateway"]);
-    for (const item of seen) { assert.equal(item.headers["x-duallane-sdk-version"], "1.2.0"); assert.equal(item.headers.authorization, `Bearer ${token}`); assert.ok(!item.route.includes(token)); }
+    for (const item of seen) { assert.equal(item.headers["x-duallane-sdk-version"], DUALLANE_AGENT_SDK_VERSION); assert.equal(item.headers.authorization, `Bearer ${token}`); assert.ok(!item.route.includes(token)); }
   } finally { client.stop(); await fixture.close(); }
 });
 
@@ -100,7 +100,7 @@ test("WS handshake 426 after a successful preflight is terminal and returns boun
 test("EventTarget WS adapters receive the same fixed headers and terminal upgrade frames stop transport", async () => {
   let closed = false;
   const client = makeClient(async () => json({}), { webSocketFactory(_url, options) {
-    assert.equal(options.headers["x-duallane-sdk-version"], "1.2.0"); assert.equal(options.headers.authorization, `Bearer ${token}`);
+    assert.equal(options.headers["x-duallane-sdk-version"], DUALLANE_AGENT_SDK_VERSION); assert.equal(options.headers.authorization, `Bearer ${token}`);
     const socket = new EventTarget(); socket.readyState = 0;
     socket.close = () => { closed = true; socket.readyState = 3; socket.dispatchEvent(new Event("close")); };
     socket.send = () => { const event = new Event("message"); Object.defineProperty(event, "data", { value: JSON.stringify({ version: 1, type: "error", ...upgrade }) }); socket.dispatchEvent(event); };

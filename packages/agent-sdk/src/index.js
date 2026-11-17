@@ -7,7 +7,7 @@ import { createTaskScopedClient } from "./task-client.js";
 export { buildMessageContent, parseMessageContent, messageText, messageMention, messageAttachment, messageLink, AGENT_MESSAGE_FORMAT } from "./message-content.js";
 export { createTaskToolServer, createTaskToolBroker, createTaskBrokerMcpAdapter, DUALLANE_TASK_TOOLS } from "./task-tools.js";
 
-export const DUALLANE_AGENT_SDK_VERSION = "1.2.0";
+export const DUALLANE_AGENT_SDK_VERSION = "1.2.1";
 export const DUALLANE_GATEWAY_VERSION = 1;
 
 export function compareRuntimeSemver(a, b) {
@@ -40,6 +40,8 @@ export class DualLaneAgentError extends Error {
     this.statusCode = options.statusCode ?? null;
     this.retryable = code !== "sdk.upgrade_required" && options.retryable === true;
     if (code === "sdk.upgrade_required" && options.upgrade) this.upgrade = options.upgrade;
+    if (["rejected", "unknown"].includes(options.attemptOutcome)) this.attemptOutcome = options.attemptOutcome;
+    if (options.safeToRetry === false) this.safeToRetry = false;
   }
 }
 
@@ -568,10 +570,20 @@ export class DualLaneAgentClient {
   }
 
   async #taskOperation(operation, key, execute) {
-    if (!this.#taskId) return execute();
-    const reference = { taskId: this.#taskId, operation, key };
-    try { return { ...await execute(), operation: reference }; }
-    catch (error) { error.operation = reference; throw error; }
+    const reference = this.#taskId ? { taskId: this.#taskId, operation, key } : undefined;
+    try {
+      const result = await execute();
+      return reference ? { ...result, operation: reference } : result;
+    } catch (error) {
+      if (operation === "card.send" || operation === "card.update") {
+        // A rejected attempt does not prove that another request using this key
+        // never committed. Neither outcome authorizes blind re-submission.
+        error.attemptOutcome ??= "unknown";
+        error.safeToRetry = false;
+      }
+      if (reference) error.operation = reference;
+      throw error;
+    }
   }
 
   async #request(method, path, body, options = {}) {
@@ -613,6 +625,8 @@ export class DualLaneAgentClient {
         statusCode: error.statusCode,
         retryable: error.retryable === true,
         upgrade: error.upgrade,
+        attemptOutcome: error.attemptOutcome,
+        safeToRetry: error.safeToRetry,
       });
       if (safe.code === "sdk.upgrade_required") {
         this.stop();

@@ -908,7 +908,7 @@ if (isDirectCli) {
       process.stderr.write(JSON.stringify({ code: err.code, retryable: false, updateCommand: runtimeUpgradeCommand(fileURLToPath(import.meta.url), profile, err.upgrade?.runtimeManifestUrl), upgrade: err.upgrade }) + "\n");
     }
     const operation = safeAgentOperationReference(err?.operation);
-    if (operation) process.stderr.write(JSON.stringify({ operation, safeToRetry: false }) + "\n");
+    if (operation || ["rejected", "unknown"].includes(err?.attemptOutcome)) process.stderr.write(JSON.stringify({ ...(operation ? { operation } : {}), ...(err?.attemptOutcome ? { attemptOutcome: err.attemptOutcome } : {}), safeToRetry: false }) + "\n");
     process.exitCode = 1;
   });
 }

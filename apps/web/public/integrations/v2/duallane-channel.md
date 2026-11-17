@@ -26,9 +26,11 @@ An update must not overwrite a modified or unregistered executable. The official
 updater verifies the manifest, syntax, compatibility and installed-file receipt;
 it records content drift even when the semantic version is unchanged.
 
-The server requires a compatible stable 1.x SDK, minimum `1.2.0`, for every
+The server requires a compatible stable 1.x SDK, minimum `1.2.1`, for every
 Agent connection, including Bots retaining legacy access-policy settings.
-The official runtime sends `X-DualLane-SDK-Version: 1.2.0` on setup, authenticated
+The minimum follows the published release, including patches. Older runtimes
+must upgrade; there is no legacy compatibility window.
+The official runtime sends `X-DualLane-SDK-Version: 1.2.1` on setup, authenticated
 HTTP calls and WebSocket handshakes. Missing, malformed, older or incompatible
 versions are rejected with HTTP `426` and `sdk.upgrade_required`; the response
 provides the minimum version and official runtime/contract/Skill locations.
@@ -38,7 +40,7 @@ Stop automatic retries, update the verified runtime, load the Skill/contract,
 then resume with the existing private profile and trusted bridge. Updating never
 authorizes changing Bot policy, replacing credentials or starting a second owner.
 For an adapter using WebSocket subprotocols, the equivalent public declaration is
-`duallane-agent-sdk-1.2.0`; simultaneous header and subprotocol declarations must
+`duallane-agent-sdk-1.2.1`; simultaneous header and subprotocol declarations must
 agree. The Bot Authorization header remains mandatory. Native browser WebSocket
 cannot attach that credential header directly; do not move credentials into URLs.
 
@@ -143,6 +145,11 @@ the SDK reads it once. A version conflict is never refreshed/retried automatical
 `plainText` edits text-only messages. To edit a mixed message, provide complete `content`; it replaces the entire message and must retain every block you intend to keep.
 Task card updates require `expectedRevision` and a complete replacement card.
 MCP uses only confirm/cancel/submit/refresh buttons, with no arbitrary execution.
+The SDK's `buttons[].actionId` becomes Feishu `button.value.action_id`; optional
+business `buttons[].value` stays nested in `button.value.data`. Business keys
+named `action` or `action_id` remain data and cannot select a different action.
+Send and update use this same conversion; the Go server still rejects unknown
+fields, invalid actions and excessive data.
 Operator CLI supports `edit --content-json ... --expected-version ... --task-id ...`,
 `send-card --card-json ...`, and `update-card --card-json ... --expected-revision ...
 --task-id ...`; legacy text-only `edit` is retained. Card updates through this CLI
@@ -155,6 +162,12 @@ CLI `operation <taskId> <operation> <key>` to query
 `GET /api/bot/v2/tasks/{taskId}/operations/{operation}/{key}`. `committed` is a
 server receipt with `humanRead: false`; `unknown` with `safeToRetry: false` must
 not be blindly resubmitted with a new identity. Queries revalidate the task.
+Card-write errors may include `attemptOutcome: "rejected" | "unknown"` and
+`safeToRetry: false`. A recognized strict-input HTTP400/422 rejection describes only
+this request attempt; it does not disprove an earlier commit under the same key.
+A timeout, invalid response or unrecognized failure remains unknown. Inspect the
+operation receipt when needed, retain the original identity and never infer that
+an unknown query result makes a fresh-key retry safe. No retry is automatic.
 
 History tools use these authorized endpoints:
 
