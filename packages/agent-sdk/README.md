@@ -159,6 +159,24 @@ official bundle separately and retain the existing bridge/policy/supervisor.
 An interrupted two-file update has a private recovery journal and an exclusive
 installer lock. Pairing and credentials are not replaced by update operations.
 
+## Interactive card values and failed attempts
+
+The shared CLI/MCP card builder permits `confirm`, `cancel`, `submit`, and
+`refresh`. A button's `value` is an optional JSON object of business data, bounded
+to 4096 UTF-8 bytes. It becomes the converter envelope
+`{ action_id: actionId, data: value }`; business keys named `action` or
+`action_id` stay inside `data` and cannot select a different control action.
+
+Card write errors may include `attemptOutcome: "rejected" | "unknown"`, an
+operation reference, and `safeToRetry: false`. `rejected` means this HTTP attempt
+received a recognized input-validation rejection; it does **not** mean the
+operation key has never committed through another request. Timeouts, network
+failures, malformed responses, server failures, and unrecognized errors remain
+`unknown`. Preserve the reference and query the operation when authorized;
+`unknown` from that query still does not permit blind re-submission. Neither
+field proves human reading, and the SDK does not automatically resend a card or
+refresh a conflicted revision.
+
 SDK 1.1 expects App 1.1 for the new attachment/status endpoints and complete
 trigger-text markers. Older servers need an authorized exact-message context to
 resolve an event; an unmarked truncated preview is never treated as the request.

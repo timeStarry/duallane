@@ -108,3 +108,7 @@ Use `duallane_query_operation` with the returned operation/key to resolve uncert
 writes within the same task. `committed` confirms server submission, not human
 reading. `unknown` with `safeToRetry: false` does not authorize a new submission.
 Revoked or expired tasks cannot use operation queries to regain access.
+Card-write `attemptOutcome: "rejected"` means this request was refused, not that
+its operation key has never committed. An unknown result remains unsafe to retry.
+Preserve the identity and evidence; a completed failed task is not permission to
+send a replacement card without a new authorized request.

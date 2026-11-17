@@ -1,4 +1,19 @@
 // Shared HTTP boundary: credentials stay on the configured gateway origin.
+// Fixed input-validation codes from Go's feishucards converter. Business/action
+// errors and future card.* codes must remain unknown rather than expanding this
+// into a promise about every use of an idempotency key.
+const CARD_VALIDATION_REJECTION_CODES = new Set([
+  "card.feishu_invalid", "card.feishu_elements_required", "card.feishu_invalid_config",
+  "card.feishu_unsupported_version", "card.feishu_invalid_header", "card.feishu_style_forbidden",
+  "card.feishu_invalid_element", "card.feishu_unknown_element", "card.feishu_invalid_note",
+  "card.feishu_invalid_actions", "card.feishu_invalid_button", "card.feishu_invalid_action",
+  "card.feishu_duplicate_action", "card.feishu_invalid_columns", "card.feishu_invalid_column",
+  "card.feishu_invalid_text", "card.unknown_action", "card.feishu_action_input_forbidden",
+  "card.feishu_unknown_field",
+  "card.invalid_payload", "card.payload_too_large", "card.payload_too_complex", "card.payload_too_deep",
+  "card.text_too_large", "card.unsafe_content", "card.invalid_url", "card.url_forbidden", "card.private_url",
+]);
+
 export function optionalGatewayResult(error, fallback = null) {
   if (error?.code === "sdk.upgrade_required") throw error;
   return fallback;
@@ -114,8 +129,13 @@ export async function requestGateway({ fetchImpl, url, init, timeoutMs = 35_000,
         const data = await readGatewayJson(response);
         const code = response.status === 426 ? "sdk.upgrade_required" : /^[a-z0-9][a-z0-9._-]{0,127}$/u.test(data?.error?.code || "")
           ? data.error.code : "gateway.request_failed";
-        throw gatewayTransportError(code, response.status, response.status === 429 || response.status >= 500,
+        const error = gatewayTransportError(code, response.status, response.status === 429 || response.status >= 500,
           code === "sdk.upgrade_required" ? sdkUpgradeInfo(data.error, url) : undefined);
+        if ([400, 422].includes(response.status) && ["POST", "PATCH", "PUT"].includes(init?.method) && CARD_VALIDATION_REJECTION_CODES.has(code)) {
+          error.attemptOutcome = "rejected";
+          error.safeToRetry = false;
+        }
+        throw error;
       }
       return await read(response);
     })()]);

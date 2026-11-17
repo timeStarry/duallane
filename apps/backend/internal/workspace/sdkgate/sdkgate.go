@@ -19,7 +19,7 @@ const (
 	// LatestSDKVersion is the newest published contract advertised by this
 	// server. Stable 1.x clients newer than this value are accepted when they
 	// remain backward compatible with the minimum contract.
-	LatestSDKVersion = "1.2.0"
+	LatestSDKVersion = "1.2.1"
 
 	SDKVersionHeader = "X-DualLane-SDK-Version"
 

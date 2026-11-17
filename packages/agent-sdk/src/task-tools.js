@@ -30,10 +30,18 @@ export function buildAgentInteractiveCard(input) {
       const actionId = button?.actionId;
       if (!TASK_CARD_ACTIONS.has(actionId) || seen.has(actionId) || typeof button.label !== "string" || button.label.length > 180) throw taskToolError("card.invalid_action");
       seen.add(actionId);
-      const data = button.value;
-      if (data !== undefined && (!data || typeof data !== "object" || Array.isArray(data) || Buffer.byteLength(JSON.stringify(data)) > 4096)) throw taskToolError("card.invalid_input");
+      let data;
+      if (button.value !== undefined) {
+        try {
+          if (!button.value || typeof button.value !== "object" || Array.isArray(button.value)) throw new Error();
+          const encoded = JSON.stringify(button.value);
+          if (Buffer.byteLength(encoded) > 4096) throw new Error();
+          data = JSON.parse(encoded);
+          if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error();
+        } catch { throw taskToolError("card.invalid_input"); }
+      }
       return { tag: "button", text: { tag: "plain_text", content: button.label },
-        type: ["primary", "danger"].includes(button.style) ? button.style : "default", value: { ...data, action: actionId } };
+        type: ["primary", "danger"].includes(button.style) ? button.style : "default", value: { action_id: actionId, ...(data === undefined ? {} : { data }) } };
     });
     elements.push({ tag: "hr" }, { tag: "action", actions });
   }
@@ -158,8 +166,9 @@ export function createTaskToolServer(client, options = {}) {
     } catch (error) {
       const code = /^[a-z0-9][a-z0-9._-]{0,127}$/u.test(error?.code || "") ? error.code : "tool.execution_failed";
       const operation = safeAgentOperationReference(error?.operation, client.task.id);
+      const attempt = ["rejected", "unknown"].includes(error?.attemptOutcome) ? { attemptOutcome: error.attemptOutcome, safeToRetry: false, retryable: error.retryable === true } : {};
       if (code === "sdk.upgrade_required") return { jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: JSON.stringify({ error: { code, retryable: false, upgrade: error.upgrade } }) }] } };
-      return { jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: JSON.stringify({ error: { code, message: "Task tool could not complete; check current authorization, coverage and budget.", ...(operation ? { operation } : {}) } }) }] } };
+      return { jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: JSON.stringify({ error: { code, message: "Task tool could not complete; check current authorization, coverage and budget.", ...attempt, ...(operation ? { operation } : {}) } }) }] } };
     }
   }
   return { callTool, handleJsonRpc, getTools, availableTools };

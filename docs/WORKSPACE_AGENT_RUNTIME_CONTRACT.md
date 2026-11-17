@@ -237,3 +237,12 @@ replaced in full. Card updates require revision and the original `card.send`
 receipt for that task; quoting a card does not transfer ownership. Conflicts are
 not automatically overwritten. Operation-result queries distinguish committed
 from unknown without treating transport ACK or timeout as publication evidence.
+
+SDK 1.2.1 maps fixed card buttons to `value.action_id` and nests their optional
+business object in `value.data` on send and update. Data keys cannot override
+the selected action. Go retains the strict unknown-field/action/size boundary.
+Card-write error `attemptOutcome` describes only the attempted request: recognized
+strict-converter HTTP400/422 rejection is `rejected`; transport loss, invalid replies
+and unrecognized failures remain `unknown`. Both retain `safeToRetry: false`.
+An attempt rejection does not prove its operation key has never committed;
+operation queries still return only committed receipts or conservative unknown.

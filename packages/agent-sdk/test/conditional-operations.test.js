@@ -86,7 +86,7 @@ test("task card/edit tools follow current features and fixed actions, with bound
     const names = (await tools.getTools()).map((tool) => tool.name);
     assert.ok(names.includes("duallane_edit_message")); assert.ok(names.includes("duallane_update_card")); assert.ok(names.includes("duallane_query_operation"));
     const card = { title: "Review", markdown: "Done", buttons: [{ actionId: "confirm", label: "OK", value: { action: "arbitrary", id: "1" } }] };
-    assert.equal(buildAgentInteractiveCard(card).elements.at(-1).actions[0].value.action, "confirm");
+    assert.deepEqual(buildAgentInteractiveCard(card).elements.at(-1).actions[0].value, { action_id: "confirm", data: { action: "arbitrary", id: "1" } });
     assert.throws(() => buildAgentInteractiveCard({ ...card, buttons: [{ actionId: "run_shell", label: "No" }] }), { code: "card.invalid_action" });
     await assert.rejects(tools.callTool("duallane_update_card", { cardId: "card", ...card }, "no-revision"), { code: "tool.invalid_arguments" });
     const id = "c".repeat(128);

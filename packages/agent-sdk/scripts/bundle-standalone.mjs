@@ -110,6 +110,8 @@ const manifestPayload =
       buildId: crypto.createHash("sha256").update(sections.join("\n")).digest("hex"),
       compatibility: { gatewayVersion: 1, bridgeProtocolVersion: 1, sdkVersionHeader: "X-DualLane-SDK-Version", minimumSdkVersion: "1.2.0", sdkMajorVersion: 1 },
       highlights: [
+        "修复确认、取消卡片的按钮结构，发送和更新保留嵌套业务数据与固定动作边界",
+        "卡片写入区分本次校验拒绝与结果未知，保留原操作引用且不盲目重发",
         "SDK 1.2.0 必须声明兼容版本；服务端拒绝旧版接入，升级拒绝会暂停常驻消费并保留既有身份与桥接配置",
         "任务限定的历史、消息、成员与附件工具，受控提及和机器人协作",
         "按需上下文与查询覆盖说明；条件修改和未知操作结果协调",

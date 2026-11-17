@@ -143,6 +143,21 @@ func TestOrderedPayloadUsesJavaScriptObjectKeyOrder(t *testing.T) {
 	}
 }
 
+func TestOldBuilderActionValueIsRejectedByStrictConverter(t *testing.T) {
+	input := []byte(`{"elements":[{"tag":"action","actions":[{"tag":"button","text":"确认","type":"primary","value":{"action":"confirm","runId":"synthetic"}}]}]}`)
+	_, err := ConvertJSON(input)
+	if err == nil {
+		t.Fatal("old value.action builder shape unexpectedly converted")
+	}
+	var validation *ValidationError
+	if !errors.As(err, &validation) {
+		t.Fatalf("error = %T %v, want ValidationError", err, err)
+	}
+	if validation.Code != "card.feishu_unknown_field" {
+		t.Fatalf("validation code = %q, want card.feishu_unknown_field", validation.Code)
+	}
+}
+
 func TestValidatedRawPayloadPreservesDuplicateKeyOrderAndSurrogate(t *testing.T) {
 	raw := []byte(`{"format":"duallane.feishu-card.v1","config":{"version":"1.0","wideScreen":false},"header":null,"elements":[{"type":"actions","buttons":[{"type":"button","label":"确认","actionId":"confirm","style":"default","data":{"z":"first","0":"zero","z":"last","a":"first","surrogate":"\ud800"}}]}]}`)
 	_, canonical, err := ValidateConvertedJSON(raw)
