@@ -30,7 +30,7 @@ Use these terms precisely in migration notes and evidence records:
 
 ### Current implementation map
 
-- The Go `1.26` language baseline and `go1.26.8` toolchain are declared in
+- The Go `1.26` language baseline and `go1.26.11` toolchain are declared in
   [`apps/backend/go.mod`](../../apps/backend/go.mod). The required module
   versions and the `staticcheck`/`govulncheck` tools are also declared there.
 - The exact Go checks are integrated through
@@ -57,7 +57,8 @@ Use these terms precisely in migration notes and evidence records:
   application owns the connection and an absolute operation deadline, including
   greeting, TLS, authentication, DATA and QUIT. Cancellation closes the raw
   connection rather than concurrently invoking graceful SMTP shutdown. The
-  unified module graph selects x/crypto v0.55.0 and retains x/text v0.41.0.
+  unified module graph selects x/crypto v0.57.0 and x/text v0.42.0 through
+  the security-patched x/net v0.60.0 requirement.
   Loopback protocol tests do not establish real-provider delivery or credentials.
 - `Dockerfile.p2p` and `Dockerfile.workspace` build the online Go services
   selected by Compose. Their default base images are digest-pinned; the
@@ -70,7 +71,7 @@ Use these terms precisely in migration notes and evidence records:
 
 | Concern | Selection | Required use |
 | --- | --- | --- |
-| Language | Go 1.26 with candidate toolchain `go1.26.8` | Source authority is `apps/backend/go.mod`; test an upgrade before changing the `go` or toolchain directive |
+| Language | Go 1.26 with candidate toolchain `go1.26.11` | Source authority is `apps/backend/go.mod`; test an upgrade before changing the `go` or toolchain directive |
 | Module layout | One module at `apps/backend` | Multiple commands, shared internal packages, no separate repositories |
 | HTTP server | Standard `net/http` | Server lifecycle, timeouts, cancellation, streaming, and middleware contracts |
 | Router | `github.com/go-chi/chi/v5` | Thin route grouping and parameters while retaining `http.Handler` compatibility |

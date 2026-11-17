@@ -37,7 +37,7 @@ services:
       context: ../..
       dockerfile: Dockerfile.p2p
       args:
-        GO_IMAGE: ${CANDIDATE_GO_IMAGE:-docker.m.daocloud.io/library/golang:1.26-bookworm@sha256:9fdc884aacc3bec89b20ffc69f4bb369c78210e3e4f600387b5128b12c199f81}
+        GO_IMAGE: ${CANDIDATE_GO_IMAGE:-docker.m.daocloud.io/library/golang:1.26.11-bookworm@sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0}
         GOPROXY: ${CANDIDATE_GOPROXY:-https://proxy.golang.org,direct}
         DEBIAN_MIRROR: ${CANDIDATE_DEBIAN_MIRROR:-http://deb.debian.org}
         RUNTIME_IMAGE: ${CANDIDATE_RUNTIME_IMAGE:-docker.m.daocloud.io/library/debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171}
@@ -78,7 +78,7 @@ services:
       dockerfile: Dockerfile.workspace
       args:
         DEBIAN_MIRROR: ${CANDIDATE_DEBIAN_MIRROR:-http://deb.debian.org}
-        GO_IMAGE: ${CANDIDATE_GO_IMAGE:-docker.m.daocloud.io/library/golang:1.26-bookworm@sha256:9fdc884aacc3bec89b20ffc69f4bb369c78210e3e4f600387b5128b12c199f81}
+        GO_IMAGE: ${CANDIDATE_GO_IMAGE:-docker.m.daocloud.io/library/golang:1.26.11-bookworm@sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0}
         GOPROXY: ${CANDIDATE_GOPROXY:-https://proxy.golang.org,direct}
         RUNTIME_IMAGE: ${CANDIDATE_RUNTIME_IMAGE:-docker.m.daocloud.io/library/debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171}
         DUALLANE_APP_VERSION: ${DUALLANE_APP_VERSION:-candidate}

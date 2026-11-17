@@ -27,7 +27,7 @@ The user-facing product has two lanes:
 ## Start Developing
 
 Prerequisites are Node.js 22, Corepack/pnpm 10, the pinned Go 1.26/toolchain
-1.26.8 backend toolchain, Git, and (for host-run Workspace/media work) a CGO
+1.26.11 backend toolchain, Git, and (for host-run Workspace/media work) a CGO
 compiler, `pkg-config`, and libvips headers/runtime. See the [backend validation
 prerequisites](docs/backend/VALIDATION.md#3-candidate-go-gates-and-evidence)
 before running host Go gates. Create a short-lived branch from current
