@@ -6,7 +6,7 @@ import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "n
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { AdoptionError, adoptRunning, containerEnvironment, observationFingerprint, parseCLI, recoverEnvironment, serializeEnvironment, validateObservedContainers, verifyAdoptionEvidence, verifyRuntimeAgainstCompose } from "../../deploy/production/release-adopt-running.mjs";
+import { AdoptionError, adoptRunning, containerEnvironment, observationFingerprint, observedLogging, parseCLI, recoverEnvironment, serializeEnvironment, validateObservedContainers, verifyAdoptionEvidence, verifyRuntimeAgainstCompose } from "../../deploy/production/release-adopt-running.mjs";
 
 const COMMIT = "a".repeat(40);
 const PROJECT = "duallane-synthetic-adoption";
@@ -97,24 +97,95 @@ test("runtime comparison rejects environment, secret, network, privilege and lis
   assert.equal(verifyRuntimeAgainstCompose(f.compose, f.observed, f.images), true);
   const cases = [
     [c => { c.workspace.Config.Env.push("UNKNOWN_SECRET=must-not-be-ignored"); }, "runtime_environment_mismatch_workspace"],
-    [c => { c.workspace.Mounts[1].Source = "/other/secret.json"; }, "runtime_mounts_mismatch"],
-    [c => { c.web.HostConfig.PortBindings["8080/tcp"][0].HostIp = "0.0.0.0"; }, "runtime_ports_mismatch"],
+    [c => { c.workspace.Mounts[1].Source = "/other/secret.json"; }, "runtime_mounts_mismatch_workspace"],
+    [c => { c.web.HostConfig.PortBindings["8080/tcp"][0].HostIp = "0.0.0.0"; }, "runtime_ports_mismatch_web"],
     [c => { c.worker.HostConfig.Privileged = true; }, "unsupported_host_config"],
     [c => { c.worker.HostConfig.Devices = [{ PathOnHost: "/dev/sda" }]; }, "unsupported_host_config"],
-    [c => { c.p2p.NetworkSettings.Networks[`${PROJECT}_default`].Aliases.push("foreign"); }, "runtime_network_aliases_mismatch"],
+    [c => { c.p2p.NetworkSettings.Networks[`${PROJECT}_default`].Aliases.push("foreign"); }, "runtime_network_aliases_mismatch_p2p"],
     [c => { c.worker.HostConfig.Memory = 1; }, "unsupported_host_config"],
-    [c => { c.worker.Config.StopSignal = "SIGKILL"; }, "runtime_stop_signal_mismatch"],
-    [c => { c.worker.Config.StopTimeout = 1; }, "runtime_stop_timeout_mismatch"],
+    [c => { c.worker.Config.StopSignal = "SIGKILL"; }, "runtime_stop_signal_mismatch_worker"],
+    [c => { c.worker.Config.StopTimeout = 1; }, "runtime_stop_timeout_mismatch_worker"],
     [c => { c.worker.HostConfig.OomKillDisable = true; }, "unsupported_host_config"],
-    [c => { c.worker.HostConfig.ShmSize = 1024; }, "runtime_shm_size_mismatch"],
+    [c => { c.worker.HostConfig.ShmSize = 1024; }, "runtime_shm_size_mismatch_worker"],
     [c => { c.worker.HostConfig.MaskedPaths = []; }, "unsupported_system_paths"],
     [c => { c.worker.HostConfig.ReadonlyPaths.push("/custom"); }, "unsupported_system_paths"],
-    [c => { c.worker.Config.Hostname = "custom"; }, "runtime_hostname_mismatch"],
+    [c => { c.worker.Config.Hostname = "custom"; }, "runtime_hostname_mismatch_worker"],
   ];
   for (const [mutate, code] of cases) {
     const containers = clone(f.observed); mutate(containers);
     expectCode(() => verifyRuntimeAgainstCompose(f.compose, containers, f.images), code);
   }
+});
+
+test("Compose null commands inherit image defaults while explicit empty values clear them", () => {
+  const inheritedEntry = ["/docker-entrypoint.sh"];
+  const inheritedCommand = ["nginx", "-g", "daemon off;"];
+  const cases = [
+    { entrypoint: undefined, command: undefined, entry: inheritedEntry, cmd: inheritedCommand },
+    { entrypoint: null, command: null, entry: inheritedEntry, cmd: inheritedCommand },
+    { entrypoint: [], command: null, entry: [], cmd: null },
+    { entrypoint: "", command: null, entry: null, cmd: [] },
+    { entrypoint: null, command: [], entry: inheritedEntry, cmd: [] },
+    { entrypoint: null, command: "", entry: inheritedEntry, cmd: null },
+    { entrypoint: ["/wrapper"], command: null, entry: ["/wrapper"], cmd: null },
+    { entrypoint: ["/wrapper"], command: [], entry: ["/wrapper"], cmd: [] },
+    { entrypoint: ["/wrapper"], command: ["explicit"], entry: ["/wrapper"], cmd: ["explicit"] },
+    { entrypoint: [], command: ["explicit"], entry: null, cmd: ["explicit"] },
+  ];
+  for (const scenario of cases) {
+    const f = fixture();
+    const service = f.compose.services.web;
+    const actual = f.observed.web.Config;
+    const base = f.images[f.observed.web.Image].Config;
+    base.Entrypoint = inheritedEntry;
+    base.Cmd = inheritedCommand;
+    service.entrypoint = scenario.entrypoint;
+    service.command = scenario.command;
+    actual.Entrypoint = scenario.entry;
+    actual.Cmd = scenario.cmd;
+    assert.equal(verifyRuntimeAgainstCompose(f.compose, f.observed, f.images), true);
+    actual.Cmd = ["unexpected-override"];
+    expectCode(() => verifyRuntimeAgainstCompose(f.compose, f.observed, f.images), "runtime_command_mismatch_web");
+  }
+});
+
+test("null optional stop and health fields retain the image defaults", () => {
+  const f = fixture();
+  const service = f.compose.services.web;
+  const actual = f.observed.web.Config;
+  const base = f.images[f.observed.web.Image].Config;
+  base.StopSignal = "SIGQUIT";
+  actual.StopSignal = "SIGQUIT";
+  base.StopTimeout = 12;
+  actual.StopTimeout = 12;
+  base.Healthcheck = clone(actual.Healthcheck);
+  service.stop_signal = null;
+  service.stop_grace_period = null;
+  service.healthcheck = { test: null, interval: null, timeout: null, retries: null, start_period: null, start_interval: null };
+  assert.equal(verifyRuntimeAgainstCompose(f.compose, f.observed, f.images), true);
+  actual.StopTimeout = 10;
+  expectCode(() => verifyRuntimeAgainstCompose(f.compose, f.observed, f.images), "runtime_stop_timeout_mismatch_web");
+});
+
+test("Compose build labels may differ from live worker ownership without hiding custom labels", () => {
+  const f = fixture();
+  const labels = f.images[f.observed.workspace.Image].Config.Labels;
+  Object.assign(labels, {
+    "com.docker.compose.project": "synthetic-build-project",
+    "com.docker.compose.service": "workspace",
+    "com.docker.compose.version": "5.1.0",
+  });
+  f.observed.worker.Config.Labels["com.docker.compose.version"] = "5.1.1";
+  assert.equal(f.observed.worker.Config.Labels["com.docker.compose.service"], "worker");
+  assert.deepEqual(validateObservedContainers(Object.values(f.observed), { project: PROJECT, expectedPreviousCommit: COMMIT }), f.observed);
+  assert.equal(verifyRuntimeAgainstCompose(f.compose, f.observed, f.images), true);
+  labels["com.example.runtime-contract"] = "must-be-preserved";
+  f.observed.workspace.Config.Labels["com.example.runtime-contract"] = "must-be-preserved";
+  expectCode(() => verifyRuntimeAgainstCompose(f.compose, f.observed, f.images), "runtime_labels_mismatch_worker");
+  f.observed.worker.Config.Labels["com.example.runtime-contract"] = "must-be-preserved";
+  assert.equal(verifyRuntimeAgainstCompose(f.compose, f.observed, f.images), true);
+  f.observed.worker.Config.Labels["com.docker.compose.project"] = "foreign-project";
+  expectCode(() => validateObservedContainers(Object.values(f.observed), { project: PROJECT, expectedPreviousCommit: COMMIT }), "container_identity_invalid");
 });
 
 test("env recovery uses worker enablement and physical mounts without copying unrelated image values", () => {
@@ -128,6 +199,15 @@ test("env recovery uses worker enablement and physical mounts without copying un
   assert.equal(values.WORKSPACE_S3_CREDENTIALS_FILE, "/synthetic/secret.json");
   assert.equal(values.PATH, undefined);
   assert.match(serializeEnvironment(values), /POSTGRES_PASSWORD='synthetic-\$-password'/);
+});
+
+test("observed logging preserves supported json-file options and rejects unknown drivers or options", () => {
+  assert.deepEqual(observedLogging({ HostConfig: { LogConfig: { Type: "json-file", Config: {} } } }), { driver: "json-file" });
+  const options = { "max-size": "10m", "max-file": "5", compress: "true" };
+  assert.deepEqual(observedLogging({ HostConfig: { LogConfig: { Type: "json-file", Config: options } } }), { driver: "json-file", options });
+  expectCode(() => observedLogging({ HostConfig: { LogConfig: { Type: "syslog", Config: {} } } }), "logging_unsupported");
+  expectCode(() => observedLogging({ HostConfig: { LogConfig: { Type: "json-file", Config: { env: "SECRET" } } } }), "logging_options_unsupported");
+  expectCode(() => observedLogging({ HostConfig: { LogConfig: { Type: "json-file", Config: { "max-file": "0" } } } }), "logging_options_unsupported");
 });
 
 test("state fingerprints ignore health log timestamps but detect restarts and effective changes", () => {
@@ -221,6 +301,9 @@ async function withAdoptionFixture(callback) {
 }
 
 test("adoption captures verified evidence and env without lifecycle Docker calls", { skip: !platform }, async () => withAdoptionFixture(async f => {
+  // PostgreSQL predates the newer template's log rotation configuration.
+  // Capturing its actual defaults must not alter it or weaken new Web defaults.
+  f.observed.postgres.HostConfig.LogConfig.Config = {};
   const result = await adoptRunning({ projectDir: f.projectDir, outputDir: f.outputDir, expectedPreviousCommit: COMMIT, project: PROJECT }, f.dependencies);
   assert.equal(result.status, "PASS");
   const evidence = JSON.parse(await readFile(`${result.snapshotPath}.adoption.json`, "utf8"));
@@ -228,6 +311,9 @@ test("adoption captures verified evidence and env without lifecycle Docker calls
   assert.equal(evidence.source, "observed-running-go");
   const snapshot = JSON.parse(await readFile(result.snapshotPath, "utf8"));
   assert.equal(snapshot.compose["x-duallane-recovery-source"], "observed-running-go");
+  assert.deepEqual(snapshot.compose.services.postgres.logging, { driver: "json-file" });
+  assert.deepEqual(snapshot.compose.services.web.logging, { driver: "json-file", options: { "max-size": "10m", "max-file": "5" } });
+  assert.match(await readFile(path.join(f.projectDir, ".env"), "utf8"), /DUALLANE_LOG_MAX_SIZE=10m\n/);
   assert.equal((await stat(path.join(f.projectDir, ".env"))).mode & 0o777, 0o600);
   assert.equal((await verifyAdoptionEvidence(result.snapshotPath)).status, "PASS");
   const renamed = path.join(f.outputDir, "renamed.snapshot.json");
@@ -298,6 +384,7 @@ test("current Git Compose templates reconstruct runtime values and retain proxy 
   await writeFile(recoveredEnv, serializeEnvironment(recovered), { mode: 0o600 });
   const after = resolve(recoveredEnv, files);
   assert.deepEqual(after, prior);
+  after.services.postgres.logging = observedLogging({ HostConfig: { LogConfig: { Type: "json-file", Config: {} } } });
   after["x-duallane-recovery-source"] = "observed-running-go";
   const frozen = path.join(sourceDir, "frozen.json");
   await writeFile(frozen, JSON.stringify(after), { mode: 0o600 });

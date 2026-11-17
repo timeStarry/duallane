@@ -141,6 +141,24 @@ export function serializeEnvironment(values) {
   }).join("\n") + "\n";
 }
 
+export function observedLogging(container) {
+  const logging = container.HostConfig?.LogConfig;
+  if (logging?.Type !== "json-file" || !logging.Config || typeof logging.Config !== "object" || Array.isArray(logging.Config)) reject("logging_unsupported");
+  const allowed = {
+    "max-size": /^(?:-1|[1-9]\d*(?:[kmgt](?:i?b)?)?)$/i,
+    "max-file": /^[1-9]\d*$/,
+    compress: /^(?:true|false)$/,
+  };
+  for (const [key, value] of Object.entries(logging.Config)) {
+    if (!allowed[key] || typeof value !== "string" || !allowed[key].test(value)) reject("logging_options_unsupported");
+  }
+  // Canonical Compose omits an empty options map; runtime comparison treats
+  // that as the same empty Docker LogConfig without changing daemon defaults.
+  return Object.keys(logging.Config).length
+    ? { driver: "json-file", options: { ...logging.Config } }
+    : { driver: "json-file" };
+}
+
 function ns(value) {
   if (value === undefined) return undefined;
   if (typeof value === "number") return value;
@@ -181,55 +199,64 @@ function expectedMounts(compose, service) {
 
 export function verifyRuntimeAgainstCompose(compose, observed, images) {
   for (const [name, container] of Object.entries(observed)) {
+    if (![...REQUIRED, "v2ray"].includes(name)) reject("unsupported_observed_service");
+    const mismatch = code => reject(`${code}_${name}`);
     rejectUnsupportedHostConfig(container);
     const service = literals(compose.services?.[name]);
     const image = images[container.Image];
-    if (!service || !image || image.Id !== container.Image || service.image !== container.Image) reject("runtime_image_mismatch");
+    if (!service || !image || image.Id !== container.Image || service.image !== container.Image) mismatch("runtime_image_mismatch");
     const base = image.Config ?? {};
     const actual = container.Config;
     const expectedEnv = { ...containerEnvironment({ Config: { Env: base.Env ?? [] } }), ...(service.environment ?? {}) };
     for (const key of Object.keys(expectedEnv)) expectedEnv[key] = String(expectedEnv[key]);
-    if (!equal(expectedEnv, containerEnvironment(container))) reject(`runtime_environment_mismatch_${name}`);
+    if (!equal(expectedEnv, containerEnvironment(container))) mismatch("runtime_environment_mismatch");
+    // Compose emits null for inherited image defaults. An explicit entrypoint,
+    // including [], clears the image CMD unless command supplies a replacement.
     const entrypoint = service.entrypoint ?? base.Entrypoint ?? null;
-    const command = service.command ?? (service.entrypoint === undefined ? base.Cmd ?? null : null);
-    if (!equal(entrypoint, actual.Entrypoint ?? null) || !equal(command?.length ? command : null, actual.Cmd?.length ? actual.Cmd : null)) reject("runtime_command_mismatch");
-    if ((service.user ?? base.User ?? "") !== (actual.User ?? "") || (service.working_dir ?? base.WorkingDir ?? "") !== (actual.WorkingDir ?? "")) reject("runtime_identity_mismatch");
-    if ((service.hostname ?? container.Id.slice(0, 12)) !== actual.Hostname) reject("runtime_hostname_mismatch");
-    if ((service.stop_signal ?? base.StopSignal ?? "") !== (actual.StopSignal ?? "")) reject("runtime_stop_signal_mismatch");
-    const stopTimeout = service.stop_grace_period === undefined ? base.StopTimeout ?? 10 : ns(service.stop_grace_period) / 1e9;
-    if (stopTimeout !== (actual.StopTimeout ?? 10)) reject("runtime_stop_timeout_mismatch");
-    if ((service.shm_size ?? 67108864) !== container.HostConfig.ShmSize) reject("runtime_shm_size_mismatch");
-    if ((service.read_only ?? false) !== container.HostConfig.ReadonlyRootfs) reject("runtime_readonly_mismatch");
+    const command = service.command ?? (service.entrypoint == null ? base.Cmd ?? null : null);
+    const nonempty = value => value?.length ? value : null;
+    if (!equal(nonempty(entrypoint), nonempty(actual.Entrypoint)) || !equal(nonempty(command), nonempty(actual.Cmd))) mismatch("runtime_command_mismatch");
+    if ((service.user ?? base.User ?? "") !== (actual.User ?? "") || (service.working_dir ?? base.WorkingDir ?? "") !== (actual.WorkingDir ?? "")) mismatch("runtime_identity_mismatch");
+    if ((service.hostname ?? container.Id.slice(0, 12)) !== actual.Hostname) mismatch("runtime_hostname_mismatch");
+    if ((service.stop_signal ?? base.StopSignal ?? "") !== (actual.StopSignal ?? "")) mismatch("runtime_stop_signal_mismatch");
+    const stopTimeout = service.stop_grace_period == null ? base.StopTimeout ?? 10 : ns(service.stop_grace_period) / 1e9;
+    if (stopTimeout !== (actual.StopTimeout ?? 10)) mismatch("runtime_stop_timeout_mismatch");
+    if ((service.shm_size ?? 67108864) !== container.HostConfig.ShmSize) mismatch("runtime_shm_size_mismatch");
+    if ((service.read_only ?? false) !== container.HostConfig.ReadonlyRootfs) mismatch("runtime_readonly_mismatch");
     const tmpfs = Object.fromEntries((service.tmpfs ?? []).map(entry => { const i = entry.indexOf(":"); return i < 0 ? [entry, ""] : [entry.slice(0, i), entry.slice(i + 1)]; }));
-    if (!equal(tmpfs, container.HostConfig.Tmpfs ?? {})) reject("runtime_tmpfs_mismatch");
+    if (!equal(tmpfs, container.HostConfig.Tmpfs ?? {})) mismatch("runtime_tmpfs_mismatch");
     const restart = { Name: service.restart ?? "no", MaximumRetryCount: 0 };
-    if (!equal(restart, container.HostConfig.RestartPolicy)) reject("runtime_restart_mismatch");
-    if (!equal({ Type: service.logging?.driver ?? "json-file", Config: service.logging?.options ?? {} }, container.HostConfig.LogConfig)) reject("runtime_logging_mismatch");
+    if (!equal(restart, container.HostConfig.RestartPolicy)) mismatch("runtime_restart_mismatch");
+    if (!equal({ Type: service.logging?.driver ?? "json-file", Config: service.logging?.options ?? {} }, container.HostConfig.LogConfig)) mismatch("runtime_logging_mismatch");
     const expectedHealth = { ...(base.Healthcheck ?? {}) };
     for (const [key, target] of Object.entries({ test: "Test", interval: "Interval", timeout: "Timeout", retries: "Retries", start_period: "StartPeriod", start_interval: "StartInterval" })) {
-      if (service.healthcheck?.[key] !== undefined) expectedHealth[target] = key === "test" || key === "retries" ? service.healthcheck[key] : ns(service.healthcheck[key]);
+      if (service.healthcheck?.[key] != null) expectedHealth[target] = key === "test" || key === "retries" ? service.healthcheck[key] : ns(service.healthcheck[key]);
     }
     const actualHealth = { ...(actual.Healthcheck ?? {}) };
     for (const value of [expectedHealth, actualHealth]) for (const key of Object.keys(value)) if (value[key] === 0) delete value[key];
-    if (!equal(expectedHealth, actualHealth)) reject("runtime_healthcheck_mismatch");
-    const expectedLabels = { ...(base.Labels ?? {}), ...(service.labels ?? {}) };
-    const actualLabels = Object.fromEntries(Object.entries(actual.Labels ?? {}).filter(([key]) => !key.startsWith("com.docker.compose.")));
-    if (!equal(expectedLabels, actualLabels)) reject("runtime_labels_mismatch");
+    if (!equal(expectedHealth, actualHealth)) mismatch("runtime_healthcheck_mismatch");
+    // Compose overwrites its reserved build metadata at container creation.
+    // Project/service ownership is checked separately against the live owner;
+    // OCI, custom and release-run labels remain part of runtime equivalence.
+    const runtimeLabels = labels => Object.fromEntries(Object.entries(labels).filter(([key]) => !key.startsWith("com.docker.compose.")));
+    const expectedLabels = runtimeLabels({ ...(base.Labels ?? {}), ...(service.labels ?? {}) });
+    const actualLabels = runtimeLabels(actual.Labels ?? {});
+    if (!equal(expectedLabels, actualLabels)) mismatch("runtime_labels_mismatch");
     const mounts = container.Mounts.map(m => ({ type: m.Type, source: m.Type === "volume" ? m.Name : m.Source, target: m.Destination, rw: m.RW, propagation: m.Propagation ?? "" })).sort((a, b) => a.target.localeCompare(b.target));
-    if (!equal(expectedMounts(compose, service), mounts)) reject("runtime_mounts_mismatch");
+    if (!equal(expectedMounts(compose, service), mounts)) mismatch("runtime_mounts_mismatch");
     const bindings = {};
     for (const port of service.ports ?? []) {
       const key = `${port.target}/${port.protocol ?? "tcp"}`;
       (bindings[key] ??= []).push({ HostIp: port.host_ip ?? "", HostPort: String(port.published) });
     }
-    if (!equal(bindings, container.HostConfig.PortBindings ?? {})) reject("runtime_ports_mismatch");
+    if (!equal(bindings, container.HostConfig.PortBindings ?? {})) mismatch("runtime_ports_mismatch");
     const networks = service.networks ?? { default: null };
     const expectedNames = Object.keys(networks).map(key => compose.networks?.[key]?.name ?? `${compose.name}_${key}`).sort();
-    if (!equal(expectedNames, Object.keys(container.NetworkSettings?.Networks ?? {}).sort())) reject("runtime_networks_mismatch");
+    if (!equal(expectedNames, Object.keys(container.NetworkSettings?.Networks ?? {}).sort())) mismatch("runtime_networks_mismatch");
     for (const [key, config] of Object.entries(networks)) {
       const network = container.NetworkSettings.Networks[compose.networks?.[key]?.name ?? `${compose.name}_${key}`];
       const expectedAliases = [...new Set([container.Name.replace(/^\//, ""), name, ...(config?.aliases ?? [])])].sort();
-      if (!equal(expectedAliases, [...new Set(network.Aliases ?? [])].sort()) || network.IPAMConfig) reject("runtime_network_aliases_mismatch");
+      if (!equal(expectedAliases, [...new Set(network.Aliases ?? [])].sort()) || network.IPAMConfig) mismatch("runtime_network_aliases_mismatch");
     }
   }
   return true;
@@ -342,6 +369,10 @@ export async function adoptRunning({ projectDir, expectedPreviousCommit, outputD
     const service = resolved.services[name];
     if (!service) reject("template_service_missing");
     service.image = c.Image;
+    // Long-lived auxiliary services may predate the current rotation defaults.
+    // Freeze their observed settings for recovery without changing live logs;
+    // future release defaults still come from the restored Web configuration.
+    service.logging = observedLogging(c);
     // The original coordinator supplied this run identity in a generated
     // override, not the Git template. Preserve the exact observed label.
     const runLabel = c.Config.Labels["com.duallane.release-run"];
