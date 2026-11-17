@@ -96,6 +96,32 @@ export class LiteWebSocket extends EventEmitter {
     });
 
     req.on("response", (res) => {
+      if (res.statusCode === 426) {
+        const chunks = [];
+        let total = 0;
+        const origin = new URL(parsed); origin.protocol = isSecure ? "https:" : "http:";
+        let finished = false;
+        const failUpgrade = (input = {}) => {
+          if (finished) return;
+          finished = true;
+          this.#fail(gatewayTransportError("sdk.upgrade_required", 426, false, sdkUpgradeInfo(input, origin)));
+        };
+        const timer = setTimeout(() => { res.destroy(); failUpgrade(); }, 1000);
+        timer.unref?.();
+        res.on("data", (chunk) => {
+          total += chunk.length;
+          if (total > 16 * 1024) { clearTimeout(timer); res.destroy(); failUpgrade(); }
+          else chunks.push(chunk);
+        });
+        res.on("end", () => {
+          clearTimeout(timer);
+          let input;
+          try { input = JSON.parse(Buffer.concat(chunks).toString("utf8"))?.error; } catch { /* Safe same-origin defaults suffice. */ }
+          failUpgrade(input);
+        });
+        res.on("error", () => { clearTimeout(timer); failUpgrade(); });
+        return;
+      }
       res.resume();
       this.#fail(new Error(`Unexpected HTTP response status: ${res.statusCode}`));
     });
@@ -273,6 +299,7 @@ export class LiteWebSocket extends EventEmitter {
   }
 
   #fail(error) {
+    if (this.#closeEmitted) return;
     if (this.listenerCount("error") > 0) {
       this.emit("error", error);
     }
@@ -296,13 +323,41 @@ export class LiteWebSocket extends EventEmitter {
 
 // --- src/transport.js ---
 // Shared HTTP boundary: credentials stay on the configured gateway origin.
-export function gatewayTransportError(code, statusCode = 0, retryable = false) {
+export function optionalGatewayResult(error, fallback = null) {
+  if (error?.code === "sdk.upgrade_required") throw error;
+  return fallback;
+}
+
+export function sdkUpgradeInfo(input = {}, origin) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) input = {};
+  const base = new URL(origin);
+  const integrationUrl = (value, fallback, allowed) => {
+    try {
+      const parsed = new URL(value || fallback, base);
+      if (parsed.origin === base.origin && !parsed.username && !parsed.password && !parsed.search && !parsed.hash && allowed.includes(parsed.pathname)) return parsed.href;
+    } catch { /* Only fixed, same-origin upgrade resources are trusted. */ }
+    return new URL(fallback, base).href;
+  };
+  const version = (value) => /^1\.(?:0|[1-9]\d{0,5})\.(?:0|[1-9]\d{0,5})$/u.test(value || "") ? value : "1.2.0";
+  return Object.freeze({
+    minimumSdkVersion: version(input.minimumSdkVersion), latestSdkVersion: version(input.latestSdkVersion),
+    runtimeManifestUrl: integrationUrl(input.runtimeManifestUrl, "/integrations/duallane-agent.manifest.json", ["/integrations/duallane-agent.manifest.json", "/integrations/v2/duallane-agent.manifest.json"]),
+    docsUrl: integrationUrl(input.docsUrl, "/integrations/v2/duallane-channel.md", ["/integrations/duallane-channel.md", "/integrations/v2/duallane-channel.md"]),
+    skillUrl: integrationUrl(input.skillUrl, "/integrations/duallane-agent/SKILL.md", ["/integrations/duallane-agent/SKILL.md"]),
+  });
+}
+
+export function gatewayTransportError(code, statusCode = 0, retryable = false, upgrade) {
   const error = new Error("DualLane gateway request failed");
   error.name = "DualLaneAgentError";
   error.code = code;
   error.statusCode = statusCode;
   error.status = statusCode;
-  error.retryable = retryable;
+  error.retryable = code === "sdk.upgrade_required" ? false : retryable;
+  if (code === "sdk.upgrade_required") {
+    error.message = "DualLane Agent SDK upgrade required";
+    if (upgrade) error.upgrade = upgrade;
+  }
   return error;
 }
 
@@ -381,9 +436,10 @@ export async function requestGateway({ fetchImpl, url, init, timeoutMs = 35_000,
       const response = await fetchImpl(url, { ...init, redirect: "error", signal: controller.signal });
       if (!response.ok) {
         const data = await readGatewayJson(response);
-        const code = /^[a-z0-9][a-z0-9._-]{0,127}$/u.test(data?.error?.code || "")
+        const code = response.status === 426 ? "sdk.upgrade_required" : /^[a-z0-9][a-z0-9._-]{0,127}$/u.test(data?.error?.code || "")
           ? data.error.code : "gateway.request_failed";
-        throw gatewayTransportError(code, response.status, response.status === 429 || response.status >= 500);
+        throw gatewayTransportError(code, response.status, response.status === 429 || response.status >= 500,
+          code === "sdk.upgrade_required" ? sdkUpgradeInfo(data.error, url) : undefined);
       }
       return await read(response);
     })()]);
@@ -861,6 +917,7 @@ export function createTaskToolServer(client, options = {}) {
     } catch (error) {
       const code = /^[a-z0-9][a-z0-9._-]{0,127}$/u.test(error?.code || "") ? error.code : "tool.execution_failed";
       const operation = safeAgentOperationReference(error?.operation, client.task.id);
+      if (code === "sdk.upgrade_required") return { jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: JSON.stringify({ error: { code, retryable: false, upgrade: error.upgrade } }) }] } };
       return { jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: JSON.stringify({ error: { code, message: "Task tool could not complete; check current authorization, coverage and budget.", ...(operation ? { operation } : {}) } }) }] } };
     }
   }
@@ -954,7 +1011,8 @@ export class DualLaneAgentError extends Error {
     this.name = "DualLaneAgentError";
     this.code = code;
     this.statusCode = options.statusCode ?? null;
-    this.retryable = options.retryable === true;
+    this.retryable = code !== "sdk.upgrade_required" && options.retryable === true;
+    if (code === "sdk.upgrade_required" && options.upgrade) this.upgrade = options.upgrade;
   }
 }
 
@@ -974,7 +1032,7 @@ export class DualLaneAgentSetupClient {
       requestedScopes: input.requestedScopes,
       conversationIds: input.conversationIds,
       clientName: input.clientName,
-      clientVersion: input.clientVersion,
+      clientVersion: input.clientVersion ?? DUALLANE_AGENT_SDK_VERSION,
       protocolVersion: input.protocolVersion,
       capabilities: input.capabilities
     });
@@ -989,31 +1047,21 @@ export class DualLaneAgentSetupClient {
     return this.#request("POST", "/api/bot-gateway/v1/setup/exchange", {
       setupSessionId: normalizeSetupSessionId(setupSessionId),
       clientName: input.clientName,
-      clientVersion: input.clientVersion,
+      clientVersion: input.clientVersion ?? DUALLANE_AGENT_SDK_VERSION,
       protocolVersion: input.protocolVersion
     });
   }
 
   async #request(method, path, body) {
-    let response;
     try {
-      response = await this.#fetch(new URL(path, this.#origin), {
+      return await requestGateway({ fetchImpl: this.#fetch, url: new URL(path, this.#origin), init: {
         method,
-        headers: compact({ accept: "application/json", "content-type": body === undefined ? undefined : "application/json" }),
+        headers: compact({ accept: "application/json", "x-duallane-sdk-version": DUALLANE_AGENT_SDK_VERSION, "content-type": body === undefined ? undefined : "application/json" }),
         body: body === undefined ? undefined : JSON.stringify(compact(body))
-      });
-    } catch (cause) {
-      throw new DualLaneAgentError("network.unavailable", "DualLane Agent setup endpoint is unavailable", { cause, retryable: true });
+      } });
+    } catch (error) {
+      throw new DualLaneAgentError(error.code || "network.unavailable", error.code === "sdk.upgrade_required" ? error.message : "DualLane Agent setup request failed", error);
     }
-    const payload = await readJson(response);
-    if (!response.ok) {
-      throw new DualLaneAgentError(
-        safeErrorCode(payload?.error?.code, "gateway.setup_failed"),
-        safeErrorText(payload?.error?.message, "DualLane Agent setup request failed"),
-        { statusCode: response.status, retryable: response.status === 429 || response.status >= 500 }
-      );
-    }
-    return payload;
   }
 }
 
@@ -1023,6 +1071,7 @@ export class DualLaneAgentClient {
   #fetch;
   #webSocketFactory;
   #adapterVersion;
+  #onUpgradeRequired;
   #heartbeatMs;
   #ackTimeoutMs;
   #connectTimeoutMs;
@@ -1048,6 +1097,7 @@ export class DualLaneAgentClient {
     this.#webSocketFactory = options.webSocketFactory ?? defaultWebSocketFactory;
     if (typeof this.#webSocketFactory !== "function") throw new TypeError("webSocketFactory must be a function");
     this.#adapterVersion = normalizeAdapterVersion(options.adapterVersion ?? `duallane-js/${DUALLANE_AGENT_SDK_VERSION}`);
+    this.#onUpgradeRequired = typeof options.onUpgradeRequired === "function" ? options.onUpgradeRequired : () => {};
     this.#heartbeatMs = normalizeDuration(options.heartbeatMs, 20_000, 5_000, 120_000, "heartbeatMs");
     this.#ackTimeoutMs = normalizeDuration(options.ackTimeoutMs, 8_000, 1_000, 60_000, "ackTimeoutMs");
     this.#connectTimeoutMs = normalizeDuration(options.connectTimeoutMs, 10_000, 1_000, 60_000, "connectTimeoutMs");
@@ -1088,7 +1138,7 @@ export class DualLaneAgentClient {
       }
       options.signal.addEventListener("abort", () => this.stop(), { once: true });
     }
-    await this.#open();
+    try { await this.#open(); } catch (error) { this.stop(); throw error; }
     return this;
   }
 
@@ -1103,7 +1153,7 @@ export class DualLaneAgentClient {
     this.#rejectPendingAcks(new DualLaneAgentError("gateway.disconnected", "DualLane Agent Gateway disconnected", { retryable: true }));
     const socket = this.#socket;
     this.#socket = null;
-    if (socket && socket.readyState === OPEN) socket.close(1000, "client stopped");
+    if (socket && socket.readyState < 2) socket.close(1000, "client stopped");
     this.#callbacks.onStatus?.({ status: "stopped", lastSequence: this.#lastSequence });
   }
 
@@ -1136,7 +1186,7 @@ export class DualLaneAgentClient {
   forTask(task, options = {}) {
     const credentialed = new DualLaneAgentClient({ url: this.#origin, token: this.#token, fetch: this.#fetch,
       webSocketFactory: this.#webSocketFactory, adapterVersion: this.#adapterVersion,
-      requestTimeoutMs: this.#requestTimeoutMs, taskId: task.id });
+      requestTimeoutMs: this.#requestTimeoutMs, taskId: task.id, onUpgradeRequired: this.#onUpgradeRequired });
     return createTaskScopedClient(credentialed, task, options);
   }
 
@@ -1525,22 +1575,33 @@ export class DualLaneAgentClient {
             "content-type": options.contentType,
             "content-length": options.byteSize === undefined ? undefined : String(options.byteSize),
             "x-duallane-adapter-version": this.#adapterVersion,
+            "x-duallane-sdk-version": DUALLANE_AGENT_SDK_VERSION,
             "x-duallane-task": this.#taskId || undefined,
           }),
           body: options.body,
         },
       });
     } catch (error) {
-      throw new DualLaneAgentError(error.code || "network.unavailable", "DualLane Agent Gateway request failed", {
+      const safe = new DualLaneAgentError(error.code || "network.unavailable", error.code === "sdk.upgrade_required" ? error.message : "DualLane Agent Gateway request failed", {
         statusCode: error.statusCode,
         retryable: error.retryable === true,
+        upgrade: error.upgrade,
       });
+      if (safe.code === "sdk.upgrade_required") {
+        this.stop();
+        try { this.#onUpgradeRequired(safe); } catch { /* Observability cannot restart incompatible SDKs. */ }
+      }
+      throw safe;
     }
   }
 
   async #open() {
     const generation = ++this.#generation;
     this.#callbacks.onStatus?.({ status: this.#attempt ? "reconnecting" : "connecting", attempt: this.#attempt, lastSequence: this.#lastSequence });
+    // Browser WebSocket cannot attach Bot Authorization. Adapters must preserve
+    // both handshake headers; this preflight never replaces the WS server gate.
+    await this.getMe();
+    if (this.#stopped || generation !== this.#generation) throw new DualLaneAgentError("sdk.aborted", "DualLane Agent connection was aborted");
     const socketUrl = new URL("/ws/bot-gateway", this.#origin);
     socketUrl.protocol = socketUrl.protocol === "https:" ? "wss:" : "ws:";
     let socket;
@@ -1548,10 +1609,12 @@ export class DualLaneAgentClient {
       socket = await this.#webSocketFactory(socketUrl.toString(), {
         headers: {
           authorization: `Bearer ${this.#token}`,
+          "x-duallane-sdk-version": DUALLANE_AGENT_SDK_VERSION,
           "x-duallane-adapter-version": this.#adapterVersion
         }
       });
-    } catch {
+    } catch (error) {
+      if (error?.code === "sdk.upgrade_required") throw new DualLaneAgentError(error.code, "DualLane Agent SDK upgrade required", { statusCode: 426, upgrade: sdkUpgradeInfo(error.upgrade, this.#origin) });
       throw new DualLaneAgentError("gateway.connection_failed", "DualLane Agent Gateway connection failed", { retryable: true });
     }
     if (!socket || typeof socket.send !== "function") throw new TypeError("webSocketFactory returned an invalid socket");
@@ -1637,7 +1700,9 @@ export class DualLaneAgentClient {
           return;
         }
         if (frame.type === "error") {
-          this.#reportError(new DualLaneAgentError(safeErrorCode(frame.error?.code, "gateway.error"), redactToken(safeErrorText(frame.error?.message, "DualLane Agent Gateway error"), this.#token)));
+          const code = safeErrorCode(frame.error?.code, "gateway.error");
+          const error = this.#reportError(new DualLaneAgentError(code, code === "sdk.upgrade_required" ? "DualLane Agent SDK upgrade required" : redactToken(safeErrorText(frame.error?.message, "DualLane Agent Gateway error"), this.#token), { upgrade: code === "sdk.upgrade_required" ? sdkUpgradeInfo(frame.error, this.#origin) : undefined }));
+          if (code === "sdk.upgrade_required") { clearTimeout(timeout); this.stop(); reject(error); }
         }
       });
       bindSocket(socket, "close", () => {
@@ -1650,8 +1715,11 @@ export class DualLaneAgentClient {
         if (!ready) reject(new DualLaneAgentError("gateway.connection_failed", "DualLane Agent Gateway connection failed", { retryable: true }));
         if (!this.#stopped) this.#scheduleReconnect();
       });
-      bindSocket(socket, "error", () => {
-        this.#reportError(new DualLaneAgentError("gateway.socket_error", "DualLane Agent Gateway socket error", { retryable: true }));
+      bindSocket(socket, "error", (error) => {
+        if (error?.code === "sdk.upgrade_required") {
+          const safe = this.#reportError(new DualLaneAgentError(error.code, "DualLane Agent SDK upgrade required", { statusCode: 426, upgrade: sdkUpgradeInfo(error.upgrade, this.#origin) }));
+          clearTimeout(timeout); this.stop(); reject(safe);
+        } else this.#reportError(new DualLaneAgentError("gateway.socket_error", "DualLane Agent Gateway socket error", { retryable: true }));
       });
     });
   }
@@ -1712,6 +1780,7 @@ export class DualLaneAgentClient {
     this.#reconnectTimer = setTimeout(() => {
       this.#open().catch((error) => {
         this.#reportError(error);
+        if (error?.code === "sdk.upgrade_required") this.stop();
         if (!this.#stopped) this.#scheduleReconnect();
       });
     }, delay);
@@ -1728,9 +1797,13 @@ export class DualLaneAgentClient {
 
   #reportError(error) {
     const safe = error instanceof DualLaneAgentError
-      ? new DualLaneAgentError(safeErrorCode(error.code, "gateway.error"), redactToken(error.message, this.#token), { statusCode: error.statusCode, retryable: error.retryable })
+      ? new DualLaneAgentError(safeErrorCode(error.code, "gateway.error"), redactToken(error.message, this.#token), { statusCode: error.statusCode, retryable: error.retryable, upgrade: error.upgrade })
       : new DualLaneAgentError("sdk.callback_failed", "DualLane Agent callback failed");
     try { this.#callbacks.onError?.(safe); } catch { /* callbacks cannot break transport */ }
+    if (safe.code === "sdk.upgrade_required") {
+      this.stop();
+      try { this.#onUpgradeRequired(safe); } catch { /* Compatibility failures remain terminal. */ }
+    }
     return safe;
   }
 }
@@ -1830,12 +1903,6 @@ function createClientId(prefix) {
 
 function compact(value) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
-}
-
-async function readJson(response) {
-  const type = response.headers?.get?.("content-type") ?? "";
-  if (!type.toLowerCase().includes("json")) return {};
-  try { return await response.json(); } catch { return {}; }
 }
 
 function safeErrorText(value, fallback) {
@@ -2429,7 +2496,7 @@ export function safeAgentError(error, stage = "running") {
   return {
     code,
     stage,
-    retryable: error?.retryable === true || [408, 429, 502, 503, 504].includes(error?.statusCode ?? error?.status),
+    retryable: error?.code !== "sdk.upgrade_required" && (error?.retryable === true || [408, 429, 502, 503, 504].includes(error?.statusCode ?? error?.status)),
   };
 }
 
@@ -2878,7 +2945,7 @@ export function createAgentTaskRuntime(options) {
           || ["cancelled", "expired", "revoked"].includes(result.task.status)
           || Date.parse(result.task.expiresAt) <= now()) throw new AgentRuntimeError("task.authorization_denied");
       }
-      catch (error) { if (!stopped) controller.abort(new AgentRuntimeError(error?.code || "task.authorization_denied")); }
+      catch (error) { if (!stopped) controller.abort(error?.code === "sdk.upgrade_required" ? error : new AgentRuntimeError(error?.code || "task.authorization_denied")); }
       finally { pending = false; }
     };
     const timer = setInterval(check, Math.min(30_000, Math.max(100, options.authorizationPollMs ?? 5000)));
@@ -2939,6 +3006,7 @@ export function createAgentTaskRuntime(options) {
           encoding: "base64", data: artifact.bytes.toString("base64") });
       } catch (error) {
         taskCheckCancelled(signal);
+        if (error?.code === "sdk.upgrade_required") throw error;
         request.inputs.push({ artifactId: reference.artifactId, status: "unavailable", code: safeAgentError(error).code });
       }
     }
@@ -3134,6 +3202,10 @@ export function createAgentTaskRuntime(options) {
       await publish(task, controller.signal);
     } catch (error) {
       stopThinking();
+      if (error?.code === "sdk.upgrade_required" || controller.signal.reason?.code === "sdk.upgrade_required") {
+        setState(task, "failed", { error: safeAgentError(controller.signal.reason?.code === "sdk.upgrade_required" ? controller.signal.reason : error, task.state), notificationAttempts: 3 });
+        return;
+      }
       const safe = safeAgentError(error, task.state);
       if (controller.signal.aborted && closed) { setState(task, "received", { error: null }); return; }
       if (controller.signal.aborted || ["task.cancelled", "bridge.cancelled"].includes(safe.code)) { setState(task, "cancelled", { error: { code: "task.cancelled", stage: task.state, retryable: false } }); return; }
@@ -4159,7 +4231,7 @@ export function createDualLaneMcpServer(options = {}) {
             : [...DEFAULT_SETUP_SCOPES];
 
         const setupClient = new DualLaneAgentSetupClient({ url: target.origin, fetch: fetchImpl });
-        const initialCheck = await setupClient.status(target.setupSessionId).catch(() => null);
+        const initialCheck = await setupClient.status(target.setupSessionId).catch(optionalGatewayResult);
         const initialSession = initialCheck?.setup || initialCheck?.session || null;
         const initialStatus = initialSession ? String(initialSession.status || "") : "";
 
@@ -4275,7 +4347,8 @@ export function createDualLaneMcpServer(options = {}) {
           me = await verifyClient.getMe();
           const convRes = await verifyClient.listConversations();
           conversations = convRes?.conversations || [];
-        } catch {
+        } catch (error) {
+          optionalGatewayResult(error);
           /* non-fatal verification enrichment */
         }
 
@@ -4309,7 +4382,7 @@ export function createDualLaneMcpServer(options = {}) {
         const { client, profile } = makeClient(profileName);
         const [me, convRes] = await Promise.all([
           client.getMe(),
-          client.listConversations().catch(() => ({ conversations: [] })),
+          client.listConversations().catch((error) => optionalGatewayResult(error, { conversations: [] })),
         ]);
         return {
           connected: true,
@@ -4514,7 +4587,7 @@ export function createDualLaneMcpServer(options = {}) {
       case "duallane_doctor": {
         const { client, profile } = makeClient(args.profile);
         const [doctor, updateInfo] = await Promise.all([
-          client.getDoctor().catch(() => null),
+          client.getDoctor().catch(optionalGatewayResult),
           checkRuntimeUpdate({ origin: profile.url, targetPath: resolveStandaloneScriptPath(), fetchImpl }).catch(() => null),
         ]);
         return {
@@ -4651,6 +4724,8 @@ export function createDualLaneMcpServer(options = {}) {
               code: toolErr?.code || "tool.execution_failed",
               message: redactSecrets(toolErr?.message || String(toolErr)),
               statusCode: toolErr?.statusCode || null,
+              retryable: toolErr?.code === "sdk.upgrade_required" ? false : toolErr?.retryable === true,
+              ...(toolErr?.upgrade ? { upgrade: toolErr.upgrade, updateCommand: runtimeUpgradeCommand(resolveStandaloneScriptPath(), normalizeProfileName(toolArgs.profile || defaultProfile), toolErr.upgrade.runtimeManifestUrl) } : {}),
               ...(safeAgentOperationReference(toolErr?.operation) ? { operation: safeAgentOperationReference(toolErr.operation) } : {}),
             };
             return {
@@ -5013,6 +5088,13 @@ export function resolveStandaloneScriptPath(explicitPath = "") {
   return path.join(os.homedir(), ".duallane", "bin", "duallane-agent.mjs");
 }
 
+export function runtimeUpgradeCommand(scriptPath, profileName = "default", origin) {
+  const quote = (value) => process.platform === "win32" ? `'${String(value).replace(/'/gu, "''")}'` : `'${String(value).replace(/'/gu, "'\\''")}'`;
+  const args = [process.execPath, scriptPath, "update", "--profile", normalizeProfileName(profileName)];
+  if (origin) args.push("--url", new URL(origin).origin);
+  return `${process.platform === "win32" ? "& " : ""}${args.map((value) => quote(value)).join(" ")}`;
+}
+
 export async function checkRuntimeUpdate(options = {}) {
   return inspectOfficialRuntime(options);
 }
@@ -5106,6 +5188,7 @@ export async function runResidentDaemon(flags = {}) {
     // Revoked credentials remain paused across supervisor restarts until an
     // operator explicitly runs daemon start/restart with the updated profile.
     writeDaemonRecord(profileName, { ...savedCfg, pid: process.pid, healthy: false });
+    if (savedCfg.pausedReason === "sdk.upgrade_required") process.stderr.write(`DualLane Agent SDK upgrade required. Run: ${runtimeUpgradeCommand(resolveStandaloneScriptPath(), profileName, profile.url)}\n${JSON.stringify(savedCfg.upgrade || {})}\n`);
     await new Promise((resolve) => {
       const timer = setInterval(() => {}, 60_000);
       const resume = () => { clearInterval(timer); process.removeListener("SIGINT", resume); process.removeListener("SIGTERM", resume); resolve(); };
@@ -5125,23 +5208,27 @@ export async function runResidentDaemon(flags = {}) {
   const mediaDnsServers = typeof flags["media-dns-servers"] === "string" ? flags["media-dns-servers"].split(",").map((value) => value.trim()).filter(Boolean) : (savedCfg.mediaDnsServers || []);
   const autoUpdateEnabled = flags["auto-update"] === undefined ? savedCfg.autoUpdateEnabled !== false : flags["auto-update"] !== "false" && flags["auto-update"] !== false;
   const stateDir = path.join(getDaemonStateDir(), "tasks");
-  const client = new DualLaneAgentClient({ url: profile.url, token: profile.token, adapterVersion: `duallane-daemon/${DUALLANE_AGENT_SDK_VERSION}` });
+  let pauseUpgrade;
+  const client = new DualLaneAgentClient({ url: profile.url, token: profile.token, adapterVersion: `duallane-daemon/${DUALLANE_AGENT_SDK_VERSION}`, onUpgradeRequired(error) { pauseUpgrade?.(error); } });
   const log = (code) => process.stderr.write(`[${new Date().toISOString()}] [DualLane] ${code}\n`);
   let record = { ...savedCfg, profile: profileName, agent: agentMode, cmd: customCmd,
     workdir, sandbox: sandboxMode, model: model || undefined, transport: transportMode,
     allowPublicMedia, mediaDnsServers, autoUpdateEnabled, pid: process.pid, healthy: false, probeError: null,
     startedAt: new Date().toISOString() };
   let me;
+  // The child owns runtime state from its first network probe onward. A parent
+  // must never replace a freshly written pause after launching this process.
+  writeDaemonRecord(profileName, record);
   try { me = await client.getMe(); }
   catch (error) {
-    if ([401, 403].includes(error?.statusCode ?? error?.status)) {
-      writeDaemonRecord(profileName, { ...record, pausedReason: safeAgentError(error).code, probeError: safeAgentError(error).code });
+    if (error?.code === "sdk.upgrade_required" || [401, 403].includes(error?.statusCode ?? error?.status)) {
+      writeDaemonRecord(profileName, { ...record, pausedReason: safeAgentError(error).code, probeError: safeAgentError(error).code, ...(error.upgrade ? { upgrade: error.upgrade } : {}) });
     }
     throw error;
   }
   const botId = me?.bot?.id || profile.botId;
   const scopes = Array.isArray(me?.scopes) ? me.scopes : [];
-  let stopped = false, runtime, pendingRestart = false, updateBusy = false, stopResolve;
+  let stopped = false, runtime, pendingRestart = false, updateBusy = false, stopResolve, upgradeFailure;
   const shutdownSignal = new Promise((resolve) => { stopResolve = resolve; });
   const timers = [];
   const updateRecord = (patch) => {
@@ -5154,6 +5241,12 @@ export async function runResidentDaemon(flags = {}) {
     await runtime?.close(); stopResolve();
   };
   const signalShutdown = () => { void shutdown(); };
+  pauseUpgrade = (error) => {
+    if (upgradeFailure) return;
+    upgradeFailure = error;
+    updateRecord({ healthy: false, pausedReason: "sdk.upgrade_required", probeError: "sdk.upgrade_required", upgrade: error.upgrade });
+    void shutdown();
+  };
   process.once("SIGINT", signalShutdown); process.once("SIGTERM", signalShutdown);
   runtime = createAgentTaskRuntime({ stateDir, origin: profile.url, botId, client, scopes,
     maxConcurrency: Number(flags.concurrency || savedCfg.concurrency || 2),
@@ -5213,6 +5306,7 @@ export async function runResidentDaemon(flags = {}) {
       } catch (error) {
         const safe = safeAgentError(error); failures += 1;
         updateRecord({ healthy: false, probeError: safe.code }); log(safe.code);
+        if (error?.code === "sdk.upgrade_required") { pauseUpgrade(error); throw error; }
         if ([401, 403].includes(error?.statusCode ?? error?.status)) updateRecord({ pausedReason: safe.code });
         if ([401, 403].includes(error?.statusCode ?? error?.status) || !safe.retryable || failures >= 3) throw new AgentRuntimeError(safe.code);
         await new Promise((resolve) => setTimeout(resolve, Math.min(5000, failures * 1000)));
@@ -5244,13 +5338,15 @@ export async function runResidentDaemon(flags = {}) {
     process.removeListener("SIGINT", signalShutdown); process.removeListener("SIGTERM", signalShutdown);
     updateRecord({ healthy: false, stoppedAt: new Date().toISOString() });
   }
+  if (upgradeFailure) throw upgradeFailure;
   if (pendingRestart && record.manager === "detached") {
     const args = [activeScriptPath, "daemon", "run", "--profile", profileName];
     const logPath = record.logPath || path.join(getDaemonLogDir(), `${profileName}.log`);
     const logFd = fs.openSync(logPath, "a", 0o600);
     try {
+      updateRecord({ pid: undefined, healthy: false });
       const child = spawn(process.execPath, args, { cwd: workdir, env: process.env, detached: true, windowsHide: true, stdio: ["ignore", logFd, logFd] });
-      child.unref(); updateRecord({ pid: child.pid });
+      child.unref();
     } finally { fs.closeSync(logFd); }
   }
 }
@@ -5366,6 +5462,13 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
       LANG: process.env.LANG || "en_US.UTF-8",
     };
 
+    const startingRecord = (manager) => ({
+      profile: profileName, botName: profile.botName || null, manager, label,
+      agent: agentMode, cmd: customCmd, workdir, sandbox, model: model || undefined,
+      transport, allowPublicMedia, mediaDnsServers, autoUpdateEnabled, logPath,
+      healthy: false, probeError: null, pausedReason: null,
+      installedAt: new Date().toISOString(),
+    });
     let manager = "detached";
     if (process.platform === "darwin" && typeof process.getuid === "function") {
       const plistPath = getMacLaunchAgentPath(profileName);
@@ -5384,11 +5487,12 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
       const domain = `gui/${process.getuid()}`;
       spawnSync("launchctl", ["bootout", domain, plistPath], { stdio: "ignore" });
       stopDetachedPidIfRunning(profileName);
+      writeDaemonRecord(profileName, startingRecord("launchd"));
       const boot = spawnSync("launchctl", ["bootstrap", domain, plistPath], { encoding: "utf8" });
       if (boot.status === 0) {
         spawnSync("launchctl", ["kickstart", "-k", `${domain}/${label}`], { stdio: "ignore" });
         manager = "launchd";
-      }
+      } else spawnSync("launchctl", ["bootout", domain, plistPath], { stdio: "ignore" });
     } else if (process.platform === "linux") {
       const unitPath = getLinuxSystemdUnitPath(profileName);
       fs.mkdirSync(path.dirname(unitPath), { recursive: true });
@@ -5404,7 +5508,9 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
         "utf8"
       );
       stopDetachedPidIfRunning(profileName);
+      spawnSync("systemctl", ["--user", "stop", getLinuxSystemdUnitName(profileName)], { stdio: "ignore" });
       spawnSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
+      writeDaemonRecord(profileName, startingRecord("systemd"));
       const enable = spawnSync(
         "systemctl",
         ["--user", "enable", "--now", getLinuxSystemdUnitName(profileName)],
@@ -5415,12 +5521,13 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
           stdio: "ignore",
         });
         manager = "systemd";
-      }
+      } else spawnSync("systemctl", ["--user", "stop", getLinuxSystemdUnitName(profileName)], { stdio: "ignore" });
     }
 
     let spawnedPid = null;
     if (manager === "detached") {
       stopDetachedPidIfRunning(profileName);
+      writeDaemonRecord(profileName, startingRecord("detached"));
       const logFd = fs.openSync(logPath, "a");
       const child = spawn(programArguments[0], programArguments.slice(1), {
         cwd: workdir,
@@ -5433,25 +5540,9 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
       spawnedPid = child.pid;
     }
 
-    const record = {
-      profile: profileName,
-      botName: profile.botName || null,
-      manager,
-      label,
-      agent: agentMode,
-      cmd: customCmd || undefined,
-      workdir,
-      sandbox,
-      model: model || undefined,
-      transport,
-      allowPublicMedia,
-      mediaDnsServers,
-      autoUpdateEnabled,
-      logPath,
-      pid: spawnedPid || undefined,
-      installedAt: new Date().toISOString(),
-    };
-    writeDaemonRecord(profileName, record);
+    // No record write is allowed after launch: the child may already have
+    // persisted a newer health result or mandatory-upgrade pause. It records
+    // its own PID before probing; installation is not a health assertion.
 
     if (!flags.quiet) {
       process.stdout.write(
@@ -5546,7 +5637,10 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
         const me = await client.getMe();
         remoteConnection = me?.connection || null;
         if (me?.bot?.id) taskSummary = readAgentTaskSummary({ stateDir: path.join(getDaemonStateDir(), "tasks"), origin: profile.url, botId: me.bot.id });
-      } catch (error) { probeError = safeAgentError(error).code; }
+      } catch (error) {
+        if (error?.code === "sdk.upgrade_required") throw error;
+        probeError = safeAgentError(error).code;
+      }
     }
 
     process.stdout.write(
@@ -5658,7 +5752,7 @@ async function runSetup(positionals, flags) {
     : [...DEFAULT_SETUP_SCOPES];
 
   const setupClient = new DualLaneAgentSetupClient({ url: target.origin });
-  const initialCheck = await setupClient.status(target.setupSessionId).catch(() => null);
+  const initialCheck = await setupClient.status(target.setupSessionId).catch(optionalGatewayResult);
   const initialSession = initialCheck?.setup || initialCheck?.session || null;
   const initialStatus = initialSession ? String(initialSession.status || "") : "";
 
@@ -5696,8 +5790,8 @@ async function runSetup(positionals, flags) {
       });
       const rawToken = String(exchanged?.token || "").trim();
       const client = new DualLaneAgentClient({ url: target.origin, token: rawToken });
-      const me = await client.getMe().catch(() => null);
-      const convs = await client.listConversations().catch(() => ({ conversations: [] }));
+      const me = await client.getMe().catch(optionalGatewayResult);
+      const convs = await client.listConversations().catch((error) => optionalGatewayResult(error, { conversations: [] }));
 
       const saved = saveAgentProfile(profile, {
         url: target.origin,
@@ -5823,8 +5917,8 @@ async function main() {
   if (subcommand === "doctor") {
     const { client, profile } = requireClient(flags.profile);
     const [doctor, me, updateInfo] = await Promise.all([
-      client.getDoctor().catch(() => null),
-      client.getMe().catch(() => null),
+      client.getDoctor().catch(optionalGatewayResult),
+      client.getMe().catch(optionalGatewayResult),
       checkRuntimeUpdate({ origin: profile.url, targetPath: resolveStandaloneScriptPath(flags.script) }).catch(() => null),
     ]);
     process.stdout.write(
@@ -5927,7 +6021,7 @@ async function main() {
     const { client, profile } = requireClient(flags.profile);
     const [me, convs] = await Promise.all([
       client.getMe(),
-      client.listConversations().catch(() => ({ conversations: [] })),
+      client.listConversations().catch((error) => optionalGatewayResult(error, { conversations: [] })),
     ]);
     const remoteLatest = String(convs?.latestSdkVersion || "").trim();
     const updateAvailable =
@@ -5976,7 +6070,7 @@ async function main() {
       const fallbackSeq = Math.max(0, Number(res.currentSequence) - 100);
       const retry = await client
         .getUpdates({ afterSequence: fallbackSeq, limit: Number(flags.limit || 50), timeout })
-        .catch(() => null);
+        .catch(optionalGatewayResult);
       if (retry && !retry.syncRequired) {
         res = retry;
       }
@@ -6031,11 +6125,11 @@ async function main() {
       }
       const ev = polled.event;
       if (ev.conversationId) {
-        await client.setTyping(ev.conversationId).catch(() => {});
+        await client.setTyping(ev.conversationId).catch(optionalGatewayResult);
       }
       let context = null;
       if (ev.conversationId && profile.scopes?.includes("messages:read_context")) {
-        context = await client.getContext(ev.conversationId, { limit: 15 }).catch(() => null);
+        context = await client.getContext(ev.conversationId, { limit: 15 }).catch(optionalGatewayResult);
       }
       return {
         status: "event",
@@ -6078,11 +6172,11 @@ async function main() {
                   settled = true;
                   clearTimeout(timer);
                   if (event.conversationId) {
-                    await client.setTyping(event.conversationId).catch(() => {});
+                    await client.setTyping(event.conversationId).catch(optionalGatewayResult);
                   }
                   let context = null;
                   if (event.conversationId && profile.scopes?.includes("messages:read_context")) {
-                    context = await client.getContext(event.conversationId, { limit: 15 }).catch(() => null);
+                    context = await client.getContext(event.conversationId, { limit: 15 }).catch(optionalGatewayResult);
                   }
                   setImmediate(() => client.stop());
                   resolve({
@@ -6404,6 +6498,11 @@ if (isDirectCli) {
   main().catch((err) => {
     const safeMsg = String(err?.message || err).replace(/dl_bot_[A-Za-z0-9_-]{12,}/gu, "[REDACTED]");
     process.stderr.write(`[DualLane Error] ${safeMsg}\n`);
+    if (err?.code === "sdk.upgrade_required") {
+      const { flags } = parseArgs(process.argv.slice(2));
+      const profile = typeof flags.profile === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(flags.profile) ? flags.profile : "default";
+      process.stderr.write(JSON.stringify({ code: err.code, retryable: false, updateCommand: runtimeUpgradeCommand(fileURLToPath(import.meta.url), profile, err.upgrade?.runtimeManifestUrl), upgrade: err.upgrade }) + "\n");
+    }
     const operation = safeAgentOperationReference(err?.operation);
     if (operation) process.stderr.write(JSON.stringify({ operation, safeToRetry: false }) + "\n");
     process.exitCode = 1;

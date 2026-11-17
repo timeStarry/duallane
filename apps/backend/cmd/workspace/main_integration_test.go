@@ -30,6 +30,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/emotes"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/presence"
+	sdkgate "github.com/timestarry/duallane/apps/backend/internal/workspace/sdkgate"
 )
 
 func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
@@ -355,6 +356,7 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, "/api/bot-gateway/v1/messages", bytes.NewReader(gatewayBody))
 			r.Header.Set("Content-Type", "application/json")
 			r.Header.Set("Authorization", "Bearer "+tokenBody.Token)
+			r.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 			response := httptest.NewRecorder()
 			app.handler.ServeHTTP(response, r)
 			var message struct {
@@ -393,7 +395,10 @@ func TestEnabledApplicationServesEmotesWithRealMediaAndStorage(t *testing.T) {
 		server := httptest.NewServer(app.handler)
 		defer server.Close()
 		connection, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/ws/bot-gateway", &websocket.DialOptions{
-			HTTPHeader: http.Header{"Authorization": {"Bearer " + tokenBody.Token}},
+			HTTPHeader: http.Header{
+				"Authorization":          {"Bearer " + tokenBody.Token},
+				sdkgate.SDKVersionHeader: {sdkgate.MinimumSDKVersion},
+			},
 		})
 		if err != nil {
 			t.Fatal("composed gateway dial failed")

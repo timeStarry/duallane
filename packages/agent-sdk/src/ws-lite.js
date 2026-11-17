@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import http from "node:http";
 import https from "node:https";
+import { gatewayTransportError, sdkUpgradeInfo } from "./transport.js";
 
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -77,6 +78,32 @@ export class LiteWebSocket extends EventEmitter {
     });
 
     req.on("response", (res) => {
+      if (res.statusCode === 426) {
+        const chunks = [];
+        let total = 0;
+        const origin = new URL(parsed); origin.protocol = isSecure ? "https:" : "http:";
+        let finished = false;
+        const failUpgrade = (input = {}) => {
+          if (finished) return;
+          finished = true;
+          this.#fail(gatewayTransportError("sdk.upgrade_required", 426, false, sdkUpgradeInfo(input, origin)));
+        };
+        const timer = setTimeout(() => { res.destroy(); failUpgrade(); }, 1000);
+        timer.unref?.();
+        res.on("data", (chunk) => {
+          total += chunk.length;
+          if (total > 16 * 1024) { clearTimeout(timer); res.destroy(); failUpgrade(); }
+          else chunks.push(chunk);
+        });
+        res.on("end", () => {
+          clearTimeout(timer);
+          let input;
+          try { input = JSON.parse(Buffer.concat(chunks).toString("utf8"))?.error; } catch { /* Safe same-origin defaults suffice. */ }
+          failUpgrade(input);
+        });
+        res.on("error", () => { clearTimeout(timer); failUpgrade(); });
+        return;
+      }
       res.resume();
       this.#fail(new Error(`Unexpected HTTP response status: ${res.statusCode}`));
     });
@@ -254,6 +281,7 @@ export class LiteWebSocket extends EventEmitter {
   }
 
   #fail(error) {
+    if (this.#closeEmitted) return;
     if (this.listenerCount("error") > 0) {
       this.emit("error", error);
     }

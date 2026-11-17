@@ -1,18 +1,22 @@
 {
   "name": "@duallane/agent-sdk",
   "version": "1.2.0",
-  "sha256": "367f444a88765c103c87d545612a9e5ca2556b4d8276f8fa385447ff680a0afe",
-  "byteSize": 301721,
+  "sha256": "c4fba3b8e93ec212f94804d19ba26f5f0ae2c33c77b6b0a3b63e32589c49e481",
+  "byteSize": 310538,
   "downloadPath": "/integrations/duallane-agent.mjs",
   "documentationPath": "/integrations/v2/duallane-channel.md",
   "skillPath": "/integrations/duallane-agent/SKILL.md",
   "minNodeVersion": "20.0.0",
-  "buildId": "7f28cf28b9042fe1b21343ee35d4594ef0118d2f24f4ac9e1e472cee53cc6211",
+  "buildId": "61816c8d6289b11d8bbc5ce5e8e322cb3d632cae274a658f6bd30a6260aa887f",
   "compatibility": {
     "gatewayVersion": 1,
-    "bridgeProtocolVersion": 1
+    "bridgeProtocolVersion": 1,
+    "sdkVersionHeader": "X-DualLane-SDK-Version",
+    "minimumSdkVersion": "1.2.0",
+    "sdkMajorVersion": 1
   },
   "highlights": [
+    "SDK 1.2.0 必须声明兼容版本；服务端拒绝旧版接入，升级拒绝会暂停常驻消费并保留既有身份与桥接配置",
     "任务限定的历史、消息、成员与附件工具，受控提及和机器人协作",
     "按需上下文与查询覆盖说明；条件修改和未知操作结果协调",
     "接入 Skill 明确聊天能力、外部 Agent 工具与授权边界",

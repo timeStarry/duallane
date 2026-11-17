@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/cards"
+	sdkgate "github.com/timestarry/duallane/apps/backend/internal/workspace/sdkgate"
 )
 
 func assertFeishuHTTPComposition(t *testing.T, ctx context.Context, conn *pgx.Conn, app *application, request func(string, string, string, []byte) *httptest.ResponseRecorder, token, conversationID string) {
@@ -26,6 +27,7 @@ func assertFeishuHTTPComposition(t *testing.T, ctx context.Context, conn *pgx.Co
 	}
 	r := httptest.NewRequest(http.MethodPost, "/api/bot-gateway/v1/cards", bytes.NewReader(body))
 	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	r.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	app.handler.ServeHTTP(response, r)
@@ -65,6 +67,7 @@ func assertFeishuHTTPComposition(t *testing.T, ctx context.Context, conn *pgx.Co
 	// composed action repository. Both must retain Bot owner authorization.
 	update := httptest.NewRequest(http.MethodPatch, "/api/bot-gateway/v1/cards/"+created.Card.ID, strings.NewReader(`{"expectedRevision":1,"fallbackText":"Updated synthetic card","format":"feishu-card","feishuCard":{"elements":[{"tag":"div","text":{"tag":"plain_text","content":"Updated synthetic card"}}]}}`))
 	update.Header.Set("Authorization", "Bearer "+token)
+	update.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 	update.Header.Set("Content-Type", "application/json")
 	updated := httptest.NewRecorder()
 	app.handler.ServeHTTP(updated, update)

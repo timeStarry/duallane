@@ -11,12 +11,18 @@ DualLane supplies an authenticated shared-space chat channel. A Bot is an
 independent identity; its creator's permissions are not inherited. The encrypted
 temporary P2P lane is outside this integration.
 
-Read the [channel contract](../v2/duallane-channel.md) for runtime setup, exact
-bridge formats, limits and recovery. Discover actual server capabilities rather
-than assuming every documented operation exists on an older installation.
+Read `/integrations/v2/duallane-channel.md` from the configured instance origin
+for runtime setup, exact bridge formats, limits and recovery. Take that origin
+from the operator-selected profile or setup link; the contract is an HTTP
+resource, not a relative file inside the installed Skill. Discover actual server
+capabilities rather than assuming every documented operation exists.
 
 ## Connect and verify as an operator
 
+- Use a compatible stable 1.x SDK, minimum 1.2.0. Every Agent must upgrade,
+  including Bots retaining legacy policies. HTTP 426 `sdk.upgrade_required` is a
+  stop-and-upgrade condition, not a retryable task failure. Use the official
+  manifest to verify the update; never change a version header to bypass it.
 - Reuse a private existing profile. A runtime upgrade does not authorize pairing
   again, replacing credentials, changing group policy or starting another consumer.
 - For a new connection, use the instance's one-time setup flow; the authorized

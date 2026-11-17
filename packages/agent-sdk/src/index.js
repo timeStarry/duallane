@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { LiteWebSocket, OPEN } from "./ws-lite.js";
-import { requestGateway, readGatewayBytes } from "./transport.js";
+import { requestGateway, readGatewayBytes, sdkUpgradeInfo } from "./transport.js";
 import { normalizeFileBytes } from "./file-input.js";
 import { buildMessageContent } from "./message-content.js";
 import { createTaskScopedClient } from "./task-client.js";
@@ -38,7 +38,8 @@ export class DualLaneAgentError extends Error {
     this.name = "DualLaneAgentError";
     this.code = code;
     this.statusCode = options.statusCode ?? null;
-    this.retryable = options.retryable === true;
+    this.retryable = code !== "sdk.upgrade_required" && options.retryable === true;
+    if (code === "sdk.upgrade_required" && options.upgrade) this.upgrade = options.upgrade;
   }
 }
 
@@ -58,7 +59,7 @@ export class DualLaneAgentSetupClient {
       requestedScopes: input.requestedScopes,
       conversationIds: input.conversationIds,
       clientName: input.clientName,
-      clientVersion: input.clientVersion,
+      clientVersion: input.clientVersion ?? DUALLANE_AGENT_SDK_VERSION,
       protocolVersion: input.protocolVersion,
       capabilities: input.capabilities
     });
@@ -73,31 +74,21 @@ export class DualLaneAgentSetupClient {
     return this.#request("POST", "/api/bot-gateway/v1/setup/exchange", {
       setupSessionId: normalizeSetupSessionId(setupSessionId),
       clientName: input.clientName,
-      clientVersion: input.clientVersion,
+      clientVersion: input.clientVersion ?? DUALLANE_AGENT_SDK_VERSION,
       protocolVersion: input.protocolVersion
     });
   }
 
   async #request(method, path, body) {
-    let response;
     try {
-      response = await this.#fetch(new URL(path, this.#origin), {
+      return await requestGateway({ fetchImpl: this.#fetch, url: new URL(path, this.#origin), init: {
         method,
-        headers: compact({ accept: "application/json", "content-type": body === undefined ? undefined : "application/json" }),
+        headers: compact({ accept: "application/json", "x-duallane-sdk-version": DUALLANE_AGENT_SDK_VERSION, "content-type": body === undefined ? undefined : "application/json" }),
         body: body === undefined ? undefined : JSON.stringify(compact(body))
-      });
-    } catch (cause) {
-      throw new DualLaneAgentError("network.unavailable", "DualLane Agent setup endpoint is unavailable", { cause, retryable: true });
+      } });
+    } catch (error) {
+      throw new DualLaneAgentError(error.code || "network.unavailable", error.code === "sdk.upgrade_required" ? error.message : "DualLane Agent setup request failed", error);
     }
-    const payload = await readJson(response);
-    if (!response.ok) {
-      throw new DualLaneAgentError(
-        safeErrorCode(payload?.error?.code, "gateway.setup_failed"),
-        safeErrorText(payload?.error?.message, "DualLane Agent setup request failed"),
-        { statusCode: response.status, retryable: response.status === 429 || response.status >= 500 }
-      );
-    }
-    return payload;
   }
 }
 
@@ -107,6 +98,7 @@ export class DualLaneAgentClient {
   #fetch;
   #webSocketFactory;
   #adapterVersion;
+  #onUpgradeRequired;
   #heartbeatMs;
   #ackTimeoutMs;
   #connectTimeoutMs;
@@ -132,6 +124,7 @@ export class DualLaneAgentClient {
     this.#webSocketFactory = options.webSocketFactory ?? defaultWebSocketFactory;
     if (typeof this.#webSocketFactory !== "function") throw new TypeError("webSocketFactory must be a function");
     this.#adapterVersion = normalizeAdapterVersion(options.adapterVersion ?? `duallane-js/${DUALLANE_AGENT_SDK_VERSION}`);
+    this.#onUpgradeRequired = typeof options.onUpgradeRequired === "function" ? options.onUpgradeRequired : () => {};
     this.#heartbeatMs = normalizeDuration(options.heartbeatMs, 20_000, 5_000, 120_000, "heartbeatMs");
     this.#ackTimeoutMs = normalizeDuration(options.ackTimeoutMs, 8_000, 1_000, 60_000, "ackTimeoutMs");
     this.#connectTimeoutMs = normalizeDuration(options.connectTimeoutMs, 10_000, 1_000, 60_000, "connectTimeoutMs");
@@ -172,7 +165,7 @@ export class DualLaneAgentClient {
       }
       options.signal.addEventListener("abort", () => this.stop(), { once: true });
     }
-    await this.#open();
+    try { await this.#open(); } catch (error) { this.stop(); throw error; }
     return this;
   }
 
@@ -187,7 +180,7 @@ export class DualLaneAgentClient {
     this.#rejectPendingAcks(new DualLaneAgentError("gateway.disconnected", "DualLane Agent Gateway disconnected", { retryable: true }));
     const socket = this.#socket;
     this.#socket = null;
-    if (socket && socket.readyState === OPEN) socket.close(1000, "client stopped");
+    if (socket && socket.readyState < 2) socket.close(1000, "client stopped");
     this.#callbacks.onStatus?.({ status: "stopped", lastSequence: this.#lastSequence });
   }
 
@@ -220,7 +213,7 @@ export class DualLaneAgentClient {
   forTask(task, options = {}) {
     const credentialed = new DualLaneAgentClient({ url: this.#origin, token: this.#token, fetch: this.#fetch,
       webSocketFactory: this.#webSocketFactory, adapterVersion: this.#adapterVersion,
-      requestTimeoutMs: this.#requestTimeoutMs, taskId: task.id });
+      requestTimeoutMs: this.#requestTimeoutMs, taskId: task.id, onUpgradeRequired: this.#onUpgradeRequired });
     return createTaskScopedClient(credentialed, task, options);
   }
 
@@ -609,22 +602,33 @@ export class DualLaneAgentClient {
             "content-type": options.contentType,
             "content-length": options.byteSize === undefined ? undefined : String(options.byteSize),
             "x-duallane-adapter-version": this.#adapterVersion,
+            "x-duallane-sdk-version": DUALLANE_AGENT_SDK_VERSION,
             "x-duallane-task": this.#taskId || undefined,
           }),
           body: options.body,
         },
       });
     } catch (error) {
-      throw new DualLaneAgentError(error.code || "network.unavailable", "DualLane Agent Gateway request failed", {
+      const safe = new DualLaneAgentError(error.code || "network.unavailable", error.code === "sdk.upgrade_required" ? error.message : "DualLane Agent Gateway request failed", {
         statusCode: error.statusCode,
         retryable: error.retryable === true,
+        upgrade: error.upgrade,
       });
+      if (safe.code === "sdk.upgrade_required") {
+        this.stop();
+        try { this.#onUpgradeRequired(safe); } catch { /* Observability cannot restart incompatible SDKs. */ }
+      }
+      throw safe;
     }
   }
 
   async #open() {
     const generation = ++this.#generation;
     this.#callbacks.onStatus?.({ status: this.#attempt ? "reconnecting" : "connecting", attempt: this.#attempt, lastSequence: this.#lastSequence });
+    // Browser WebSocket cannot attach Bot Authorization. Adapters must preserve
+    // both handshake headers; this preflight never replaces the WS server gate.
+    await this.getMe();
+    if (this.#stopped || generation !== this.#generation) throw new DualLaneAgentError("sdk.aborted", "DualLane Agent connection was aborted");
     const socketUrl = new URL("/ws/bot-gateway", this.#origin);
     socketUrl.protocol = socketUrl.protocol === "https:" ? "wss:" : "ws:";
     let socket;
@@ -632,10 +636,12 @@ export class DualLaneAgentClient {
       socket = await this.#webSocketFactory(socketUrl.toString(), {
         headers: {
           authorization: `Bearer ${this.#token}`,
+          "x-duallane-sdk-version": DUALLANE_AGENT_SDK_VERSION,
           "x-duallane-adapter-version": this.#adapterVersion
         }
       });
-    } catch {
+    } catch (error) {
+      if (error?.code === "sdk.upgrade_required") throw new DualLaneAgentError(error.code, "DualLane Agent SDK upgrade required", { statusCode: 426, upgrade: sdkUpgradeInfo(error.upgrade, this.#origin) });
       throw new DualLaneAgentError("gateway.connection_failed", "DualLane Agent Gateway connection failed", { retryable: true });
     }
     if (!socket || typeof socket.send !== "function") throw new TypeError("webSocketFactory returned an invalid socket");
@@ -721,7 +727,9 @@ export class DualLaneAgentClient {
           return;
         }
         if (frame.type === "error") {
-          this.#reportError(new DualLaneAgentError(safeErrorCode(frame.error?.code, "gateway.error"), redactToken(safeErrorText(frame.error?.message, "DualLane Agent Gateway error"), this.#token)));
+          const code = safeErrorCode(frame.error?.code, "gateway.error");
+          const error = this.#reportError(new DualLaneAgentError(code, code === "sdk.upgrade_required" ? "DualLane Agent SDK upgrade required" : redactToken(safeErrorText(frame.error?.message, "DualLane Agent Gateway error"), this.#token), { upgrade: code === "sdk.upgrade_required" ? sdkUpgradeInfo(frame.error, this.#origin) : undefined }));
+          if (code === "sdk.upgrade_required") { clearTimeout(timeout); this.stop(); reject(error); }
         }
       });
       bindSocket(socket, "close", () => {
@@ -734,8 +742,11 @@ export class DualLaneAgentClient {
         if (!ready) reject(new DualLaneAgentError("gateway.connection_failed", "DualLane Agent Gateway connection failed", { retryable: true }));
         if (!this.#stopped) this.#scheduleReconnect();
       });
-      bindSocket(socket, "error", () => {
-        this.#reportError(new DualLaneAgentError("gateway.socket_error", "DualLane Agent Gateway socket error", { retryable: true }));
+      bindSocket(socket, "error", (error) => {
+        if (error?.code === "sdk.upgrade_required") {
+          const safe = this.#reportError(new DualLaneAgentError(error.code, "DualLane Agent SDK upgrade required", { statusCode: 426, upgrade: sdkUpgradeInfo(error.upgrade, this.#origin) }));
+          clearTimeout(timeout); this.stop(); reject(safe);
+        } else this.#reportError(new DualLaneAgentError("gateway.socket_error", "DualLane Agent Gateway socket error", { retryable: true }));
       });
     });
   }
@@ -796,6 +807,7 @@ export class DualLaneAgentClient {
     this.#reconnectTimer = setTimeout(() => {
       this.#open().catch((error) => {
         this.#reportError(error);
+        if (error?.code === "sdk.upgrade_required") this.stop();
         if (!this.#stopped) this.#scheduleReconnect();
       });
     }, delay);
@@ -812,9 +824,13 @@ export class DualLaneAgentClient {
 
   #reportError(error) {
     const safe = error instanceof DualLaneAgentError
-      ? new DualLaneAgentError(safeErrorCode(error.code, "gateway.error"), redactToken(error.message, this.#token), { statusCode: error.statusCode, retryable: error.retryable })
+      ? new DualLaneAgentError(safeErrorCode(error.code, "gateway.error"), redactToken(error.message, this.#token), { statusCode: error.statusCode, retryable: error.retryable, upgrade: error.upgrade })
       : new DualLaneAgentError("sdk.callback_failed", "DualLane Agent callback failed");
     try { this.#callbacks.onError?.(safe); } catch { /* callbacks cannot break transport */ }
+    if (safe.code === "sdk.upgrade_required") {
+      this.stop();
+      try { this.#onUpgradeRequired(safe); } catch { /* Compatibility failures remain terminal. */ }
+    }
     return safe;
   }
 }
@@ -914,12 +930,6 @@ function createClientId(prefix) {
 
 function compact(value) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
-}
-
-async function readJson(response) {
-  const type = response.headers?.get?.("content-type") ?? "";
-  if (!type.toLowerCase().includes("json")) return {};
-  try { return await response.json(); } catch { return {}; }
 }
 
 function safeErrorText(value, fallback) {

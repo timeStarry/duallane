@@ -29,6 +29,13 @@ attachment bytes. Nullable V2 policies leave legacy behavior in place. Explicit
 V2 saves conservatively mirror legacy discovery as private; rollback must never
 reconstruct previous public grants.
 
+All Agent connections require a compatible stable 1.x SDK, minimum 1.2.0,
+regardless of whether a Bot has opted into V2 policy. Setup, authenticated HTTP
+and WebSocket reject missing, invalid, old or incompatible SDK declarations with
+426 `sdk.upgrade_required`. Existing policy/profile retention does not authorize
+old runtime admission. Verified updating preserves credentials and bridge policy;
+the version declaration is not authentication and cannot grant task access.
+
 ## Required two-release rollout
 
 The existing production 1.1.1 schema36 image has no immutable authorization for
@@ -77,6 +84,15 @@ Completed on the implementation tree:
   task creation, bounded history/search, members, mixed file/mention publication,
   attachment bytes, conditional edits/conflicts, operation receipts, card updates
   and cancelled-task rejection. No mocked SDK transport or production credentials.
+- Mandatory SDK admission follow-up: SDK153/153, Web399/399, lint/build and the
+  Go1.26.11 full quality gate passed. Regression coverage includes HTTP/WS426,
+  terminal upgrade pauses, safe update guidance and preserving child-written
+  pause state during daemon startup. Final PostgreSQL/CI/image acceptance is
+  required again before activating this follow-up.
+- Bridge PR28 is online as1.1.3/schema36. The isolated immutable Go-only
+  rehearsal passed36→37 activation and exact1.1.3 image recovery on the same
+  schema37 database, including private sidecars and unchanged volume authority.
+  Repeat with the final merged activation images after the SDK admission change.
 
 Bridge PR28 is merged at `74523762e53a030382beebf47f4daa5249b57aff` and
 production1.1.3 passed the guarded deployment and26 gateway checks. It includes

@@ -421,8 +421,8 @@ test("real SDK task HTTP roundtrip reads history, publishes mixed files, edits w
   let scoped: AgentTaskClient | undefined;
   let botId: string | undefined;
   let tokenId: string | undefined;
-  // Only setup/human messages use the Session API. All Bot operations below use
-  // the real SDK's native fetch and public HTTP routes, never a mocked adapter.
+  // Setup/human messages use the Session API. Bot business operations use the
+  // real SDK; explicit raw requests below only prove the version gate rejects.
   const human = async (method: "GET" | "POST" | "PATCH", pathname: string, data?: JsonRecord): Promise<JsonRecord> => {
     const response = await owner.request.fetch(new URL(pathname, baseURL!).href, { method, ...(data ? { data } : {}), timeout: 10_000 });
     expect(response.ok(), `${method} ${pathname}: ${response.status()}`).toBeTruthy();
@@ -452,7 +452,21 @@ test("real SDK task HTTP roundtrip reads history, publishes mixed files, edits w
     });
     // Never attach the token response, log credentials or persist a profile.
     tokenId = requiredString(asRecord(issued.tokenRecord, "issued token record").id, "issued token id");
-    client = new DualLaneAgentClient({ url: baseURL!, token: requiredString(issued.token, "issued Bot credential"), requestTimeoutMs: 10_000 });
+    const credential = requiredString(issued.token, "issued Bot credential");
+    for (const version of [undefined, "1.1.3", "invalid", "1.2.0-beta.1", "2.0.0"]) {
+      const response = await fetch(new URL("/api/bot-gateway/v1/me", baseURL!), {
+        headers: { authorization: `Bearer ${credential}`, ...(version === undefined ? {} : { "X-DualLane-SDK-Version": version }) },
+        redirect: "error", signal: AbortSignal.timeout(10_000),
+      });
+      expect(response.status, `SDK declaration ${version ?? "missing"} must be rejected`).toBe(426);
+      const error = asRecord(asRecord(await response.json(), "upgrade response").error, "upgrade requirement");
+      expect(error.code).toBe("sdk.upgrade_required");
+      expect(error.minimumSdkVersion).toBe("1.2.0"); expect(error.latestSdkVersion).toBe("1.2.0");
+      expect(error.runtimeManifestUrl).toBe("/integrations/duallane-agent.manifest.json");
+      expect(error.docsUrl).toBe("/integrations/v2/duallane-channel.md"); expect(error.skillUrl).toBe("/integrations/duallane-agent/SKILL.md");
+    }
+    client = new DualLaneAgentClient({ url: baseURL!, token: credential, requestTimeoutMs: 10_000 });
+    expect(asRecord((await client.getMe()).bot, "current SDK Bot identity").id).toBe(botId);
     const capabilities = await client.getCapabilities(conversationId);
     expect(capabilities.taskRequired).toBe(true);
     expect(asRecord(capabilities.features, "server features").taskAuthorization).toBe(true);

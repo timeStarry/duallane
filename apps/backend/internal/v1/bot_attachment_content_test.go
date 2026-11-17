@@ -12,6 +12,7 @@ import (
 	platformstorage "github.com/timestarry/duallane/apps/backend/internal/platform/storage"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/botgateway"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/files"
+	sdkgate "github.com/timestarry/duallane/apps/backend/internal/workspace/sdkgate"
 )
 
 type attachmentAuthStub struct {
@@ -64,6 +65,7 @@ func TestBotUploadStatusRecoversReceiptWithFileScope(t *testing.T) {
 	request := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest("GET", "/api/bot/v2/uploads/upload_1", nil)
 		req.Header.Set("Authorization", "Bearer dl_bot_synthetic_012345678901234567890123456789")
+		req.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, req)
 		return rec
@@ -85,6 +87,7 @@ func TestBotAttachmentContentUsesAuthorizedLogicalReader(t *testing.T) {
 	request := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest("GET", "/api/bot/v2/conversations/conv_1/attachments/att_1/content?messageId=msg_1&mode=preview", nil)
 		req.Header.Set("Authorization", "Bearer dl_bot_synthetic_012345678901234567890123456789")
+		req.Header.Set(sdkgate.SDKVersionHeader, sdkgate.MinimumSDKVersion)
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, req)
 		return rec

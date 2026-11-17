@@ -210,17 +210,18 @@ function formatDeliveryStatus(status: string): { label: string; toneClass: strin
   }
 }
 
-function buildPairingPrompt(botName: string, origin: string, sessionId: string): string {
-  const skillUrl = `${origin}/integrations/duallane-channel.md`;
-  const runtimeUrl = `${origin}/integrations/duallane-agent.mjs`;
+export function buildPairingPrompt(botName: string, origin: string, sessionId: string): string {
+  const skillUrl = `${origin}/integrations/duallane-agent/SKILL.md`;
+  const manifestUrl = `${origin}/integrations/duallane-agent.manifest.json`;
   const setupUrl = `${origin}/workspace?setup=${encodeURIComponent(sessionId)}`;
   return [
     `请接入我的 DualLane 机器人「${botName}」：`,
-    `1. 先阅读接入规范：${skillUrl}`,
-    `2. 无需 npm，直接从当前实例下载零依赖单文件运行时（含 CLI / MCP / 空闲自动热更）：`,
-    `   mkdir -p ~/.duallane/bin && curl -fsSL "${runtimeUrl}" -o ~/.duallane/bin/duallane-agent.mjs && chmod +x ~/.duallane/bin/duallane-agent.mjs`,
-    `3. 使用一次性配对地址发起绑定（无需手动粘贴 Token）：${setupUrl}`,
-    `发起请求后提醒我在网页点击「确认授权」；授权完成后请运行 node ~/.duallane/bin/duallane-agent.mjs daemon install --profile default --agent auto 注册常驻后台守护服务（支持断线自愈、空闲静默热更新与群聊安全隔离）。`,
+    `1. 安装并加载接入 Skill：${skillUrl}；宿主不支持 Skill 时，读取其中引用的契约与工具 Schema。`,
+    `2. 官方运行包清单：${manifestUrl}。平台最低要求兼容的 SDK 1.2.0；按契约核验版本、摘要和桥接能力。`,
+    `3. 如果已有配对，请复用已有 profile、凭证与可信桥接，使用官方 update 更新；不要覆盖自定义文件、重复配对或启动第二个消费者。`,
+    `4. 仅新接入使用一次性配对地址：${setupUrl}。先说明所需会话和权限，再提醒我在网页确认授权；不要索要、回显或把 Token 放进提示词。`,
+    `5. 依据宿主能力明确选择可信桥接命令，以 daemon install --profile <已有或新建的名称> --cmd <可信桥接命令> 安装。群任务仅获得任务限定工具，实际模型、搜索、生图、记忆与执行隔离由桥接提供。`,
+    `完成后验证单一消费者、真实消息与附件收发，并报告当前权限、工具能力与尚不支持的能力。`,
   ].join("\n");
 }
 
@@ -1869,6 +1870,9 @@ export function BotSettingsPanel() {
                         : "当前暂无活跃长连接上报版本号"}
                       {" · 常驻守护进程会在空闲时自动校验 SHA-256 并静默升级"}
                     </div>
+                    <p className="text-[11px] leading-5 text-dl-text-secondary">
+                      最低要求 SDK 1.2.0，旧版无法连接。请先使用下方命令升级，并按接入 Skill 核验；原有配对、桥接与权限配置会保留。
+                    </p>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-1.5">
@@ -2030,7 +2034,7 @@ export function BotSettingsPanel() {
                   <div className="rounded-lg bg-dl-surface-subtle/60 px-3 py-2 text-[11px] leading-5 text-dl-text-secondary">
                     旧版设置不会在打开页面时自动转换。启用后，目录发现、私聊准入和群内使用会分别保存；
                     群内当前成员可用也不会自动开放其他 Bot 互相触发。
-                    启用前请先将助手运行包升级到 1.2，并按接入 Skill 确认会话任务工具可用。
+                    平台要求助手运行包至少为兼容的 1.2.0 版本；请按接入 Skill 确认会话任务工具可用。
                   </div>
                 ) : (
                   <div className="space-y-3">

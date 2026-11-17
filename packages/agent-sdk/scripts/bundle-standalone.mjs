@@ -108,8 +108,9 @@ const manifestPayload =
       skillPath: "/integrations/duallane-agent/SKILL.md",
       minNodeVersion: "20.0.0",
       buildId: crypto.createHash("sha256").update(sections.join("\n")).digest("hex"),
-      compatibility: { gatewayVersion: 1, bridgeProtocolVersion: 1 },
+      compatibility: { gatewayVersion: 1, bridgeProtocolVersion: 1, sdkVersionHeader: "X-DualLane-SDK-Version", minimumSdkVersion: "1.2.0", sdkMajorVersion: 1 },
       highlights: [
+        "SDK 1.2.0 必须声明兼容版本；服务端拒绝旧版接入，升级拒绝会暂停常驻消费并保留既有身份与桥接配置",
         "任务限定的历史、消息、成员与附件工具，受控提及和机器人协作",
         "按需上下文与查询覆盖说明；条件修改和未知操作结果协调",
         "接入 Skill 明确聊天能力、外部 Agent 工具与授权边界",

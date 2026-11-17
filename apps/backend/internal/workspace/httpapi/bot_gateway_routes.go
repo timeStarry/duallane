@@ -15,6 +15,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/botgateway"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/bots"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/gate"
+	sdkgate "github.com/timestarry/duallane/apps/backend/internal/workspace/sdkgate"
 )
 
 // BotGatewayService is the transport-facing portion of the Bot Gateway. Bot
@@ -261,6 +262,10 @@ func withBotGatewayAuth(options BotGatewayRouteOptions, handler botGatewayAuthHa
 			writeError(response, botgateway.NewError(botgateway.CodeInvalidToken, botgateway.MessageInvalidToken, http.StatusUnauthorized))
 			return
 		}
+		if err := sdkgate.RequireHTTP(request); err != nil {
+			writeError(response, err)
+			return
+		}
 		request = request.WithContext(botgateway.WithAgentTaskID(request.Context(), request.Header.Get(botgateway.AgentTaskHeader)))
 		handler(response, request, value)
 	}
@@ -275,6 +280,10 @@ func withBotGatewaySetup(options BotGatewayRouteOptions, handler botGatewaySetup
 			return
 		}
 		response.Header().Set("Cache-Control", "no-store")
+		if err := sdkgate.RequireHTTP(request); err != nil {
+			writeError(response, err)
+			return
+		}
 		if missingService(response, options.Setup) {
 			return
 		}

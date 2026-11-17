@@ -20,6 +20,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/email"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/files"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
+	sdkgate "github.com/timestarry/duallane/apps/backend/internal/workspace/sdkgate"
 )
 
 const MaxBotFileUploadBytes int64 = 50 * 1024 * 1024
@@ -816,6 +817,10 @@ func (h *HTTPHandler) authenticateBotRequest(w http.ResponseWriter, r *http.Requ
 		writeJSONError(w, http.StatusUnauthorized, botgateway.CodeInvalidToken, botgateway.MessageInvalidToken)
 		return nil, false
 	}
+	if err := sdkgate.RequireHTTP(r); err != nil {
+		writeBotGatewayError(w, err)
+		return nil, false
+	}
 	if gateway, ok := h.botAuth.(*botgateway.Service); ok && !h.authorizeAgentHTTP(w, r, botAuth, gateway) {
 		return nil, false
 	}
@@ -823,6 +828,11 @@ func (h *HTTPHandler) authenticateBotRequest(w http.ResponseWriter, r *http.Requ
 }
 
 func writeBotGatewayError(w http.ResponseWriter, err error) {
+	var sdkError sdkgate.UpgradeRequiredError
+	if errors.As(err, &sdkError) {
+		writeJSON(w, http.StatusUpgradeRequired, map[string]any{"error": sdkError.Public()})
+		return
+	}
 	var gwErr *botgateway.Error
 	if errors.As(err, &gwErr) && gwErr != nil {
 		status := gwErr.StatusCode

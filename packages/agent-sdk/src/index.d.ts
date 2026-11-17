@@ -74,15 +74,36 @@ export interface AgentAttachmentInput {
   signal?: AbortSignal;
 }
 
+export interface AgentSdkUpgradeInfo {
+  minimumSdkVersion: string;
+  latestSdkVersion: string;
+  runtimeManifestUrl: string;
+  docsUrl: string;
+  skillUrl: string;
+}
 export class DualLaneAgentError extends Error {
   code: string;
   statusCode: number | null;
   retryable: boolean;
   operation?: AgentOperationReference;
+  upgrade?: Readonly<AgentSdkUpgradeInfo>;
+}
+
+export interface AgentSetupClientInput {
+  clientName?: string;
+  /** Host/adapter metadata. The SDK compatibility header always declares the installed SDK version. */
+  clientVersion?: string;
+  protocolVersion?: string;
+}
+export class DualLaneAgentSetupClient {
+  constructor(options: { url: string; fetch?: typeof fetch });
+  request(setupSessionId: string, input?: AgentSetupClientInput & { requestedScopes?: string[]; conversationIds?: string[]; capabilities?: string[] }): Promise<Record<string, unknown>>;
+  status(setupSessionId: string): Promise<Record<string, unknown>>;
+  exchange(setupSessionId: string, input?: AgentSetupClientInput): Promise<Record<string, unknown>>;
 }
 
 export class DualLaneAgentClient {
-  constructor(options: { url: string; token: string; fetch?: typeof fetch; adapterVersion?: string; requestTimeoutMs?: number; taskId?: string });
+  constructor(options: { url: string; token: string; fetch?: typeof fetch; adapterVersion?: string; requestTimeoutMs?: number; taskId?: string; onUpgradeRequired?: (error: DualLaneAgentError) => void });
   readonly connected: boolean;
   readonly lastSequence: number;
   getMe(): Promise<Record<string, unknown>>;

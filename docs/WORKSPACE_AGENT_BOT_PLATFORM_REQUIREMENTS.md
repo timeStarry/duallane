@@ -21,6 +21,11 @@
 [Agent runtime, tasks, and artifacts](WORKSPACE_AGENT_RUNTIME_CONTRACT.md)。
 该文档明确区分已实现与验收范围；旧版本状态记录不代表新运行时已在线启用。
 
+App1.2 起全部外部 Bot 连接强制使用兼容的稳定1.x SDK，最低1.2.0；保留旧权限配置的
+Bot 也适用。缺失、非法、过旧或不兼容的版本声明由服务端统一返回426
+`sdk.upgrade_required` 和官方升级指引。HTTP、配对、WebSocket 不设旧版旁路；
+人类 Session 管理界面和 P2P 不受此接入门槛影响。版本声明不替代任何身份或对象授权。
+
 ### v0.15 实现状态（2026-08-20）
 
 - 已实现 Bot 生命周期、Token/Scope、WebSocket Gateway、心跳、确认、有限续传、消息发送和授权上下文读取。

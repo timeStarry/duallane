@@ -24,7 +24,7 @@ export function safeAgentError(error, stage = "running") {
   return {
     code,
     stage,
-    retryable: error?.retryable === true || [408, 429, 502, 503, 504].includes(error?.statusCode ?? error?.status),
+    retryable: error?.code !== "sdk.upgrade_required" && (error?.retryable === true || [408, 429, 502, 503, 504].includes(error?.statusCode ?? error?.status)),
   };
 }
 

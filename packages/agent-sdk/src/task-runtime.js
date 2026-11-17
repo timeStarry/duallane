@@ -313,7 +313,7 @@ export function createAgentTaskRuntime(options) {
           || ["cancelled", "expired", "revoked"].includes(result.task.status)
           || Date.parse(result.task.expiresAt) <= now()) throw new AgentRuntimeError("task.authorization_denied");
       }
-      catch (error) { if (!stopped) controller.abort(new AgentRuntimeError(error?.code || "task.authorization_denied")); }
+      catch (error) { if (!stopped) controller.abort(error?.code === "sdk.upgrade_required" ? error : new AgentRuntimeError(error?.code || "task.authorization_denied")); }
       finally { pending = false; }
     };
     const timer = setInterval(check, Math.min(30_000, Math.max(100, options.authorizationPollMs ?? 5000)));
@@ -374,6 +374,7 @@ export function createAgentTaskRuntime(options) {
           encoding: "base64", data: artifact.bytes.toString("base64") });
       } catch (error) {
         taskCheckCancelled(signal);
+        if (error?.code === "sdk.upgrade_required") throw error;
         request.inputs.push({ artifactId: reference.artifactId, status: "unavailable", code: safeAgentError(error).code });
       }
     }
@@ -569,6 +570,10 @@ export function createAgentTaskRuntime(options) {
       await publish(task, controller.signal);
     } catch (error) {
       stopThinking();
+      if (error?.code === "sdk.upgrade_required" || controller.signal.reason?.code === "sdk.upgrade_required") {
+        setState(task, "failed", { error: safeAgentError(controller.signal.reason?.code === "sdk.upgrade_required" ? controller.signal.reason : error, task.state), notificationAttempts: 3 });
+        return;
+      }
       const safe = safeAgentError(error, task.state);
       if (controller.signal.aborted && closed) { setState(task, "received", { error: null }); return; }
       if (controller.signal.aborted || ["task.cancelled", "bridge.cancelled"].includes(safe.code)) { setState(task, "cancelled", { error: { code: "task.cancelled", stage: task.state, retryable: false } }); return; }

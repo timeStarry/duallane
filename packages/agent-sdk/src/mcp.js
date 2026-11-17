@@ -1,5 +1,6 @@
 import path from "node:path";
 import crypto from "node:crypto";
+import { optionalGatewayResult } from "./transport.js";
 import { decodeArtifactBase64 } from "./base64.js";
 import { AGENT_DIRECT_FILE_MAX_BYTES, normalizeFileBytes, readBoundedFile } from "./file-input.js";
 import {
@@ -26,6 +27,7 @@ import {
   checkRuntimeUpdate,
   getDaemonStateDir,
   resolveStandaloneScriptPath,
+  runtimeUpgradeCommand,
   restartInstalledDaemons,
   stageRuntimeSelfUpdate,
 } from "./daemon.js";
@@ -387,7 +389,7 @@ export function createDualLaneMcpServer(options = {}) {
             : [...DEFAULT_SETUP_SCOPES];
 
         const setupClient = new DualLaneAgentSetupClient({ url: target.origin, fetch: fetchImpl });
-        const initialCheck = await setupClient.status(target.setupSessionId).catch(() => null);
+        const initialCheck = await setupClient.status(target.setupSessionId).catch(optionalGatewayResult);
         const initialSession = initialCheck?.setup || initialCheck?.session || null;
         const initialStatus = initialSession ? String(initialSession.status || "") : "";
 
@@ -503,7 +505,8 @@ export function createDualLaneMcpServer(options = {}) {
           me = await verifyClient.getMe();
           const convRes = await verifyClient.listConversations();
           conversations = convRes?.conversations || [];
-        } catch {
+        } catch (error) {
+          optionalGatewayResult(error);
           /* non-fatal verification enrichment */
         }
 
@@ -537,7 +540,7 @@ export function createDualLaneMcpServer(options = {}) {
         const { client, profile } = makeClient(profileName);
         const [me, convRes] = await Promise.all([
           client.getMe(),
-          client.listConversations().catch(() => ({ conversations: [] })),
+          client.listConversations().catch((error) => optionalGatewayResult(error, { conversations: [] })),
         ]);
         return {
           connected: true,
@@ -742,7 +745,7 @@ export function createDualLaneMcpServer(options = {}) {
       case "duallane_doctor": {
         const { client, profile } = makeClient(args.profile);
         const [doctor, updateInfo] = await Promise.all([
-          client.getDoctor().catch(() => null),
+          client.getDoctor().catch(optionalGatewayResult),
           checkRuntimeUpdate({ origin: profile.url, targetPath: resolveStandaloneScriptPath(), fetchImpl }).catch(() => null),
         ]);
         return {
@@ -879,6 +882,8 @@ export function createDualLaneMcpServer(options = {}) {
               code: toolErr?.code || "tool.execution_failed",
               message: redactSecrets(toolErr?.message || String(toolErr)),
               statusCode: toolErr?.statusCode || null,
+              retryable: toolErr?.code === "sdk.upgrade_required" ? false : toolErr?.retryable === true,
+              ...(toolErr?.upgrade ? { upgrade: toolErr.upgrade, updateCommand: runtimeUpgradeCommand(resolveStandaloneScriptPath(), normalizeProfileName(toolArgs.profile || defaultProfile), toolErr.upgrade.runtimeManifestUrl) } : {}),
               ...(safeAgentOperationReference(toolErr?.operation) ? { operation: safeAgentOperationReference(toolErr.operation) } : {}),
             };
             return {

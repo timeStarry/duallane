@@ -241,6 +241,13 @@ export function resolveStandaloneScriptPath(explicitPath = "") {
   return path.join(os.homedir(), ".duallane", "bin", "duallane-agent.mjs");
 }
 
+export function runtimeUpgradeCommand(scriptPath, profileName = "default", origin) {
+  const quote = (value) => process.platform === "win32" ? `'${String(value).replace(/'/gu, "''")}'` : `'${String(value).replace(/'/gu, "'\\''")}'`;
+  const args = [process.execPath, scriptPath, "update", "--profile", normalizeProfileName(profileName)];
+  if (origin) args.push("--url", new URL(origin).origin);
+  return `${process.platform === "win32" ? "& " : ""}${args.map((value) => quote(value)).join(" ")}`;
+}
+
 export async function checkRuntimeUpdate(options = {}) {
   return inspectOfficialRuntime(options);
 }
@@ -334,6 +341,7 @@ export async function runResidentDaemon(flags = {}) {
     // Revoked credentials remain paused across supervisor restarts until an
     // operator explicitly runs daemon start/restart with the updated profile.
     writeDaemonRecord(profileName, { ...savedCfg, pid: process.pid, healthy: false });
+    if (savedCfg.pausedReason === "sdk.upgrade_required") process.stderr.write(`DualLane Agent SDK upgrade required. Run: ${runtimeUpgradeCommand(resolveStandaloneScriptPath(), profileName, profile.url)}\n${JSON.stringify(savedCfg.upgrade || {})}\n`);
     await new Promise((resolve) => {
       const timer = setInterval(() => {}, 60_000);
       const resume = () => { clearInterval(timer); process.removeListener("SIGINT", resume); process.removeListener("SIGTERM", resume); resolve(); };
@@ -353,23 +361,27 @@ export async function runResidentDaemon(flags = {}) {
   const mediaDnsServers = typeof flags["media-dns-servers"] === "string" ? flags["media-dns-servers"].split(",").map((value) => value.trim()).filter(Boolean) : (savedCfg.mediaDnsServers || []);
   const autoUpdateEnabled = flags["auto-update"] === undefined ? savedCfg.autoUpdateEnabled !== false : flags["auto-update"] !== "false" && flags["auto-update"] !== false;
   const stateDir = path.join(getDaemonStateDir(), "tasks");
-  const client = new DualLaneAgentClient({ url: profile.url, token: profile.token, adapterVersion: `duallane-daemon/${DUALLANE_AGENT_SDK_VERSION}` });
+  let pauseUpgrade;
+  const client = new DualLaneAgentClient({ url: profile.url, token: profile.token, adapterVersion: `duallane-daemon/${DUALLANE_AGENT_SDK_VERSION}`, onUpgradeRequired(error) { pauseUpgrade?.(error); } });
   const log = (code) => process.stderr.write(`[${new Date().toISOString()}] [DualLane] ${code}\n`);
   let record = { ...savedCfg, profile: profileName, agent: agentMode, cmd: customCmd,
     workdir, sandbox: sandboxMode, model: model || undefined, transport: transportMode,
     allowPublicMedia, mediaDnsServers, autoUpdateEnabled, pid: process.pid, healthy: false, probeError: null,
     startedAt: new Date().toISOString() };
   let me;
+  // The child owns runtime state from its first network probe onward. A parent
+  // must never replace a freshly written pause after launching this process.
+  writeDaemonRecord(profileName, record);
   try { me = await client.getMe(); }
   catch (error) {
-    if ([401, 403].includes(error?.statusCode ?? error?.status)) {
-      writeDaemonRecord(profileName, { ...record, pausedReason: safeAgentError(error).code, probeError: safeAgentError(error).code });
+    if (error?.code === "sdk.upgrade_required" || [401, 403].includes(error?.statusCode ?? error?.status)) {
+      writeDaemonRecord(profileName, { ...record, pausedReason: safeAgentError(error).code, probeError: safeAgentError(error).code, ...(error.upgrade ? { upgrade: error.upgrade } : {}) });
     }
     throw error;
   }
   const botId = me?.bot?.id || profile.botId;
   const scopes = Array.isArray(me?.scopes) ? me.scopes : [];
-  let stopped = false, runtime, pendingRestart = false, updateBusy = false, stopResolve;
+  let stopped = false, runtime, pendingRestart = false, updateBusy = false, stopResolve, upgradeFailure;
   const shutdownSignal = new Promise((resolve) => { stopResolve = resolve; });
   const timers = [];
   const updateRecord = (patch) => {
@@ -382,6 +394,12 @@ export async function runResidentDaemon(flags = {}) {
     await runtime?.close(); stopResolve();
   };
   const signalShutdown = () => { void shutdown(); };
+  pauseUpgrade = (error) => {
+    if (upgradeFailure) return;
+    upgradeFailure = error;
+    updateRecord({ healthy: false, pausedReason: "sdk.upgrade_required", probeError: "sdk.upgrade_required", upgrade: error.upgrade });
+    void shutdown();
+  };
   process.once("SIGINT", signalShutdown); process.once("SIGTERM", signalShutdown);
   runtime = createAgentTaskRuntime({ stateDir, origin: profile.url, botId, client, scopes,
     maxConcurrency: Number(flags.concurrency || savedCfg.concurrency || 2),
@@ -441,6 +459,7 @@ export async function runResidentDaemon(flags = {}) {
       } catch (error) {
         const safe = safeAgentError(error); failures += 1;
         updateRecord({ healthy: false, probeError: safe.code }); log(safe.code);
+        if (error?.code === "sdk.upgrade_required") { pauseUpgrade(error); throw error; }
         if ([401, 403].includes(error?.statusCode ?? error?.status)) updateRecord({ pausedReason: safe.code });
         if ([401, 403].includes(error?.statusCode ?? error?.status) || !safe.retryable || failures >= 3) throw new AgentRuntimeError(safe.code);
         await new Promise((resolve) => setTimeout(resolve, Math.min(5000, failures * 1000)));
@@ -472,13 +491,15 @@ export async function runResidentDaemon(flags = {}) {
     process.removeListener("SIGINT", signalShutdown); process.removeListener("SIGTERM", signalShutdown);
     updateRecord({ healthy: false, stoppedAt: new Date().toISOString() });
   }
+  if (upgradeFailure) throw upgradeFailure;
   if (pendingRestart && record.manager === "detached") {
     const args = [activeScriptPath, "daemon", "run", "--profile", profileName];
     const logPath = record.logPath || path.join(getDaemonLogDir(), `${profileName}.log`);
     const logFd = fs.openSync(logPath, "a", 0o600);
     try {
+      updateRecord({ pid: undefined, healthy: false });
       const child = spawn(process.execPath, args, { cwd: workdir, env: process.env, detached: true, windowsHide: true, stdio: ["ignore", logFd, logFd] });
-      child.unref(); updateRecord({ pid: child.pid });
+      child.unref();
     } finally { fs.closeSync(logFd); }
   }
 }
@@ -594,6 +615,13 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
       LANG: process.env.LANG || "en_US.UTF-8",
     };
 
+    const startingRecord = (manager) => ({
+      profile: profileName, botName: profile.botName || null, manager, label,
+      agent: agentMode, cmd: customCmd, workdir, sandbox, model: model || undefined,
+      transport, allowPublicMedia, mediaDnsServers, autoUpdateEnabled, logPath,
+      healthy: false, probeError: null, pausedReason: null,
+      installedAt: new Date().toISOString(),
+    });
     let manager = "detached";
     if (process.platform === "darwin" && typeof process.getuid === "function") {
       const plistPath = getMacLaunchAgentPath(profileName);
@@ -612,11 +640,12 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
       const domain = `gui/${process.getuid()}`;
       spawnSync("launchctl", ["bootout", domain, plistPath], { stdio: "ignore" });
       stopDetachedPidIfRunning(profileName);
+      writeDaemonRecord(profileName, startingRecord("launchd"));
       const boot = spawnSync("launchctl", ["bootstrap", domain, plistPath], { encoding: "utf8" });
       if (boot.status === 0) {
         spawnSync("launchctl", ["kickstart", "-k", `${domain}/${label}`], { stdio: "ignore" });
         manager = "launchd";
-      }
+      } else spawnSync("launchctl", ["bootout", domain, plistPath], { stdio: "ignore" });
     } else if (process.platform === "linux") {
       const unitPath = getLinuxSystemdUnitPath(profileName);
       fs.mkdirSync(path.dirname(unitPath), { recursive: true });
@@ -632,7 +661,9 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
         "utf8"
       );
       stopDetachedPidIfRunning(profileName);
+      spawnSync("systemctl", ["--user", "stop", getLinuxSystemdUnitName(profileName)], { stdio: "ignore" });
       spawnSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
+      writeDaemonRecord(profileName, startingRecord("systemd"));
       const enable = spawnSync(
         "systemctl",
         ["--user", "enable", "--now", getLinuxSystemdUnitName(profileName)],
@@ -643,12 +674,13 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
           stdio: "ignore",
         });
         manager = "systemd";
-      }
+      } else spawnSync("systemctl", ["--user", "stop", getLinuxSystemdUnitName(profileName)], { stdio: "ignore" });
     }
 
     let spawnedPid = null;
     if (manager === "detached") {
       stopDetachedPidIfRunning(profileName);
+      writeDaemonRecord(profileName, startingRecord("detached"));
       const logFd = fs.openSync(logPath, "a");
       const child = spawn(programArguments[0], programArguments.slice(1), {
         cwd: workdir,
@@ -661,25 +693,9 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
       spawnedPid = child.pid;
     }
 
-    const record = {
-      profile: profileName,
-      botName: profile.botName || null,
-      manager,
-      label,
-      agent: agentMode,
-      cmd: customCmd || undefined,
-      workdir,
-      sandbox,
-      model: model || undefined,
-      transport,
-      allowPublicMedia,
-      mediaDnsServers,
-      autoUpdateEnabled,
-      logPath,
-      pid: spawnedPid || undefined,
-      installedAt: new Date().toISOString(),
-    };
-    writeDaemonRecord(profileName, record);
+    // No record write is allowed after launch: the child may already have
+    // persisted a newer health result or mandatory-upgrade pause. It records
+    // its own PID before probing; installation is not a health assertion.
 
     if (!flags.quiet) {
       process.stdout.write(
@@ -774,7 +790,10 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
         const me = await client.getMe();
         remoteConnection = me?.connection || null;
         if (me?.bot?.id) taskSummary = readAgentTaskSummary({ stateDir: path.join(getDaemonStateDir(), "tasks"), origin: profile.url, botId: me.bot.id });
-      } catch (error) { probeError = safeAgentError(error).code; }
+      } catch (error) {
+        if (error?.code === "sdk.upgrade_required") throw error;
+        probeError = safeAgentError(error).code;
+      }
     }
 
     process.stdout.write(

@@ -158,6 +158,7 @@ export function createTaskToolServer(client, options = {}) {
     } catch (error) {
       const code = /^[a-z0-9][a-z0-9._-]{0,127}$/u.test(error?.code || "") ? error.code : "tool.execution_failed";
       const operation = safeAgentOperationReference(error?.operation, client.task.id);
+      if (code === "sdk.upgrade_required") return { jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: JSON.stringify({ error: { code, retryable: false, upgrade: error.upgrade } }) }] } };
       return { jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: JSON.stringify({ error: { code, message: "Task tool could not complete; check current authorization, coverage and budget.", ...(operation ? { operation } : {}) } }) }] } };
     }
   }

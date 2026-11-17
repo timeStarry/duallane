@@ -15,6 +15,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
+	sdkgate "github.com/timestarry/duallane/apps/backend/internal/workspace/sdkgate"
 )
 
 const (
@@ -194,10 +195,19 @@ func (h *WebSocketHandler) ServeHTTP(response http.ResponseWriter, request *http
 		return
 	}
 	defer h.release()
-	connection, err := websocket.Accept(response, request, &websocket.AcceptOptions{
+	sdkProtocol, err := sdkgate.RequireWebSocket(request)
+	if err != nil {
+		sdkgate.WriteUpgradeRequired(response)
+		return
+	}
+	acceptOptions := &websocket.AcceptOptions{
 		OriginPatterns:  h.originPatterns,
 		CompressionMode: websocket.CompressionDisabled,
-	})
+	}
+	if sdkProtocol != "" {
+		acceptOptions.Subprotocols = []string{sdkProtocol}
+	}
+	connection, err := websocket.Accept(response, request, acceptOptions)
 	if err != nil {
 		return
 	}

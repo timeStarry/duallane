@@ -32,6 +32,19 @@ const event = (id = "event", conversationId = "c") => ({ eventId: id, sequence: 
 const document = (extra = {}) => JSON.stringify({ protocol: "duallane.agent.result", version: 1, status: "completed", text: "report", artifacts: [
   { id: "report", source: "inline", fileName: "report.txt", mimeType: "text/plain", encoding: "utf8", data: "synthetic document" }], ...extra });
 
+test("mandatory SDK upgrade never invokes a model, retries a task or sends an ordinary failure message", async () => {
+  let probes = 0;
+  const f = fixture({ maxAttempts: 3, client: { async getCapabilities() {
+    probes++; throw Object.assign(new Error("upgrade required"), { code: "sdk.upgrade_required", statusCode: 426, retryable: true });
+  } } });
+  try {
+    const accepted = f.runtime.accept(event()); f.runtime.start(); await f.runtime.idle();
+    const task = f.runtime.getTask(accepted.taskId);
+    assert.equal(task.state, "failed"); assert.equal(task.error.code, "sdk.upgrade_required"); assert.equal(task.error.retryable, false);
+    assert.equal(task.attempts, 1); assert.equal(probes, 1); assert.equal(f.calls.invoke, 0); assert.equal(f.calls.sends.length, 0);
+  } finally { await f.cleanup(); }
+});
+
 test("thinking starts only for executing work, renews its lease and stops after publication", async (t) => {
   const heartbeats = [], started = [];
   let finishFirst;

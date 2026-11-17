@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	sdkgate "github.com/timestarry/duallane/apps/backend/internal/workspace/sdkgate"
 )
 
 var fakeConnectionDisconnectNonces sync.Map
@@ -24,6 +25,69 @@ func TestWebSocketHandlerWithoutGatewayReturnsServiceUnavailable(t *testing.T) {
 	NewWebSocketHandler(WebSocketHandlerOptions{}).ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, body = %q", response.Code, response.Body.String())
+	}
+}
+
+func TestWebSocketHandshakeRequiresCurrentSDK(t *testing.T) {
+	_, service, _, _, _ := gatewayFixture(t)
+	server := httptest.NewServer(NewWebSocketHandler(WebSocketHandlerOptions{
+		Gateway: service, PollInterval: time.Hour, HeartbeatInterval: time.Hour,
+	}))
+	t.Cleanup(server.Close)
+
+	for _, version := range []string{"", "1.1.9", "invalid", "2.0.0"} {
+		t.Run("version-"+strings.ReplaceAll(version, ".", "_"), func(t *testing.T) {
+			parsed, err := url.Parse(server.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parsed.Scheme = "ws"
+			parsed.Path = "/ws/bot-gateway"
+			headers := http.Header{"Authorization": []string{"Bearer dl_bot_" + strings.Repeat("x", 32)}}
+			if version != "" {
+				headers.Set(sdkgate.SDKVersionHeader, version)
+			}
+			_, response, err := websocket.Dial(context.Background(), parsed.String(), &websocket.DialOptions{HTTPHeader: headers})
+			if err == nil {
+				t.Fatal("unsupported SDK handshake unexpectedly succeeded")
+			}
+			if response == nil || response.StatusCode != http.StatusUpgradeRequired {
+				t.Fatalf("response = %#v, err=%v; want HTTP 426", response, err)
+			}
+			var payload map[string]any
+			if decodeErr := json.NewDecoder(response.Body).Decode(&payload); decodeErr != nil {
+				t.Fatalf("decode response: %v", decodeErr)
+			}
+			errorBody, ok := payload["error"].(map[string]any)
+			if !ok || errorBody["code"] != sdkgate.UpgradeRequiredCode || errorBody["minimumSdkVersion"] != sdkgate.MinimumSDKVersion || errorBody["runtimeManifestUrl"] != sdkgate.RuntimeManifestURL {
+				t.Fatalf("upgrade response = %#v", payload)
+			}
+		})
+	}
+}
+
+func TestWebSocketHandshakeAcceptsBrowserSubprotocolVersion(t *testing.T) {
+	_, service, _, _, _ := gatewayFixture(t)
+	server := httptest.NewServer(NewWebSocketHandler(WebSocketHandlerOptions{
+		Gateway: service, PollInterval: time.Hour, HeartbeatInterval: time.Hour,
+	}))
+	t.Cleanup(server.Close)
+	parsed, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed.Scheme = "ws"
+	parsed.Path = "/ws/bot-gateway"
+	connection, response, err := websocket.Dial(context.Background(), parsed.String(), &websocket.DialOptions{
+		HTTPHeader:   http.Header{"Authorization": []string{"Bearer dl_bot_" + strings.Repeat("x", 32)}},
+		Subprotocols: []string{sdkgate.WebSocketProtocol(sdkgate.MinimumSDKVersion)},
+	})
+	if err != nil {
+		t.Fatalf("browser-compatible handshake failed (response=%v): %v", response, err)
+	}
+	t.Cleanup(func() { _ = connection.Close(websocket.StatusNormalClosure, "test complete") })
+	if got := connection.Subprotocol(); got != sdkgate.WebSocketProtocol(sdkgate.MinimumSDKVersion) {
+		t.Fatalf("selected subprotocol = %q, want %q", got, sdkgate.WebSocketProtocol(sdkgate.MinimumSDKVersion))
 	}
 }
 
@@ -95,7 +159,10 @@ func TestWebSocketHelloReplayAckHeartbeatAndConnectionLifecycle(t *testing.T) {
 	}
 	serverURL.Scheme = "ws"
 	connection, _, err := websocket.Dial(context.Background(), serverURL.String(), &websocket.DialOptions{
-		HTTPHeader: map[string][]string{"Authorization": {"Bearer dl_bot_" + strings.Repeat("x", 32)}},
+		HTTPHeader: map[string][]string{
+			"Authorization":          {"Bearer dl_bot_" + strings.Repeat("x", 32)},
+			sdkgate.SDKVersionHeader: {sdkgate.MinimumSDKVersion},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +243,10 @@ func TestWebSocketInvalidHelloIsBoundedAndSyncCanResume(t *testing.T) {
 	serverURL, _ := url.Parse(server.URL)
 	serverURL.Scheme = "ws"
 	connection, _, err := websocket.Dial(context.Background(), serverURL.String(), &websocket.DialOptions{
-		HTTPHeader: map[string][]string{"Authorization": {"Bearer dl_bot_" + strings.Repeat("x", 32)}},
+		HTTPHeader: map[string][]string{
+			"Authorization":          {"Bearer dl_bot_" + strings.Repeat("x", 32)},
+			sdkgate.SDKVersionHeader: {sdkgate.MinimumSDKVersion},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -639,9 +709,9 @@ func dialBotGateway(t *testing.T, serverURL, authorization string) (*websocket.C
 	}
 	parsed.Scheme = "ws"
 	parsed.Path = "/ws/bot-gateway"
-	options := &websocket.DialOptions{}
+	options := &websocket.DialOptions{HTTPHeader: http.Header{sdkgate.SDKVersionHeader: []string{sdkgate.MinimumSDKVersion}}}
 	if authorization != "" {
-		options.HTTPHeader = http.Header{"Authorization": []string{authorization}}
+		options.HTTPHeader.Set("Authorization", authorization)
 	}
 	return websocket.Dial(context.Background(), parsed.String(), options)
 }

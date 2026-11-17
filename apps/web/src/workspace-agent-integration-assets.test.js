@@ -26,7 +26,9 @@ describe("versioned Agent integration assets", () => {
   it("binds both runtime manifests to the independently versioned SDK and exact public bytes", async () => {
     const sdkPackage = JSON.parse(await readFile(path.join(repoRoot, "packages", "agent-sdk", "package.json"), "utf8"));
     const backendModel = await readFile(path.join(repoRoot, "apps", "backend", "internal", "v1", "model.go"), "utf8");
-    const advertisedSDKVersion = backendModel.match(/const LatestAgentSDKVersion = "([^"]+)"/u)?.[1];
+    const admission = await readFile(path.join(repoRoot, "apps", "backend", "internal", "workspace", "sdkgate", "sdkgate.go"), "utf8");
+    expect(backendModel).toContain("const LatestAgentSDKVersion = sdkgate.LatestSDKVersion");
+    const advertisedSDKVersion = admission.match(/LatestSDKVersion\s*=\s*"([^"]+)"/u)?.[1];
     expect(advertisedSDKVersion).toBe(sdkPackage.version);
     const publications = [];
     for (const prefix of ["", "v2"]) {
@@ -77,7 +79,7 @@ describe("versioned Agent integration assets", () => {
       }
     }
     expect(route("/integrations/v1/duallane-channel.md")).toContain("expires 1y;");
-    for (const current of ["/integrations/v2/duallane-channel.md", "/integrations/duallane-agent/SKILL.md"]) {
+    for (const current of ["/integrations/duallane-channel.md", "/integrations/v2/duallane-channel.md", "/integrations/duallane-agent/SKILL.md"]) {
       expect(route(current)).toContain("expires -1;");
       expect(route(current)).not.toMatch(/\badd_header\b/u);
     }

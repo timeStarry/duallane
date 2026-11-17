@@ -144,7 +144,7 @@ type BotSetupSession = {
 };
 
 const DEFAULT_TOKEN_SCOPES = ["messages:read_trigger", "messages:send", "commands:receive"];
-export const DUALLANE_AGENT_SKILL_URL = "https://duallane.tsio.top/integrations/duallane-channel.md";
+export const DUALLANE_AGENT_SKILL_URL = "https://duallane.tsio.top/integrations/duallane-agent/SKILL.md";
 
 export function resolveBotGroupPolicyMode(settings: Pick<BotSettings, "allowGroup" | "requireOwnerApproval">): BotGroupPolicyMode {
   if (!settings.allowGroup) return "direct_only";

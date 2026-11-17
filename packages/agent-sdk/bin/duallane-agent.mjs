@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 import { readBoundedFile } from "../src/file-input.js";
+import { optionalGatewayResult } from "../src/transport.js";
 import {
   compareRuntimeSemver,
   DualLaneAgentClient,
@@ -30,6 +31,7 @@ import {
   resolveStandaloneScriptPath,
   restartInstalledDaemons,
   runResidentDaemon,
+  runtimeUpgradeCommand,
   stageRuntimeSelfUpdate,
 } from "../src/daemon.js";
 import {
@@ -154,7 +156,7 @@ async function runSetup(positionals, flags) {
     : [...DEFAULT_SETUP_SCOPES];
 
   const setupClient = new DualLaneAgentSetupClient({ url: target.origin });
-  const initialCheck = await setupClient.status(target.setupSessionId).catch(() => null);
+  const initialCheck = await setupClient.status(target.setupSessionId).catch(optionalGatewayResult);
   const initialSession = initialCheck?.setup || initialCheck?.session || null;
   const initialStatus = initialSession ? String(initialSession.status || "") : "";
 
@@ -192,8 +194,8 @@ async function runSetup(positionals, flags) {
       });
       const rawToken = String(exchanged?.token || "").trim();
       const client = new DualLaneAgentClient({ url: target.origin, token: rawToken });
-      const me = await client.getMe().catch(() => null);
-      const convs = await client.listConversations().catch(() => ({ conversations: [] }));
+      const me = await client.getMe().catch(optionalGatewayResult);
+      const convs = await client.listConversations().catch((error) => optionalGatewayResult(error, { conversations: [] }));
 
       const saved = saveAgentProfile(profile, {
         url: target.origin,
@@ -319,8 +321,8 @@ async function main() {
   if (subcommand === "doctor") {
     const { client, profile } = requireClient(flags.profile);
     const [doctor, me, updateInfo] = await Promise.all([
-      client.getDoctor().catch(() => null),
-      client.getMe().catch(() => null),
+      client.getDoctor().catch(optionalGatewayResult),
+      client.getMe().catch(optionalGatewayResult),
       checkRuntimeUpdate({ origin: profile.url, targetPath: resolveStandaloneScriptPath(flags.script) }).catch(() => null),
     ]);
     process.stdout.write(
@@ -423,7 +425,7 @@ async function main() {
     const { client, profile } = requireClient(flags.profile);
     const [me, convs] = await Promise.all([
       client.getMe(),
-      client.listConversations().catch(() => ({ conversations: [] })),
+      client.listConversations().catch((error) => optionalGatewayResult(error, { conversations: [] })),
     ]);
     const remoteLatest = String(convs?.latestSdkVersion || "").trim();
     const updateAvailable =
@@ -472,7 +474,7 @@ async function main() {
       const fallbackSeq = Math.max(0, Number(res.currentSequence) - 100);
       const retry = await client
         .getUpdates({ afterSequence: fallbackSeq, limit: Number(flags.limit || 50), timeout })
-        .catch(() => null);
+        .catch(optionalGatewayResult);
       if (retry && !retry.syncRequired) {
         res = retry;
       }
@@ -527,11 +529,11 @@ async function main() {
       }
       const ev = polled.event;
       if (ev.conversationId) {
-        await client.setTyping(ev.conversationId).catch(() => {});
+        await client.setTyping(ev.conversationId).catch(optionalGatewayResult);
       }
       let context = null;
       if (ev.conversationId && profile.scopes?.includes("messages:read_context")) {
-        context = await client.getContext(ev.conversationId, { limit: 15 }).catch(() => null);
+        context = await client.getContext(ev.conversationId, { limit: 15 }).catch(optionalGatewayResult);
       }
       return {
         status: "event",
@@ -574,11 +576,11 @@ async function main() {
                   settled = true;
                   clearTimeout(timer);
                   if (event.conversationId) {
-                    await client.setTyping(event.conversationId).catch(() => {});
+                    await client.setTyping(event.conversationId).catch(optionalGatewayResult);
                   }
                   let context = null;
                   if (event.conversationId && profile.scopes?.includes("messages:read_context")) {
-                    context = await client.getContext(event.conversationId, { limit: 15 }).catch(() => null);
+                    context = await client.getContext(event.conversationId, { limit: 15 }).catch(optionalGatewayResult);
                   }
                   setImmediate(() => client.stop());
                   resolve({
@@ -900,6 +902,11 @@ if (isDirectCli) {
   main().catch((err) => {
     const safeMsg = String(err?.message || err).replace(/dl_bot_[A-Za-z0-9_-]{12,}/gu, "[REDACTED]");
     process.stderr.write(`[DualLane Error] ${safeMsg}\n`);
+    if (err?.code === "sdk.upgrade_required") {
+      const { flags } = parseArgs(process.argv.slice(2));
+      const profile = typeof flags.profile === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(flags.profile) ? flags.profile : "default";
+      process.stderr.write(JSON.stringify({ code: err.code, retryable: false, updateCommand: runtimeUpgradeCommand(fileURLToPath(import.meta.url), profile, err.upgrade?.runtimeManifestUrl), upgrade: err.upgrade }) + "\n");
+    }
     const operation = safeAgentOperationReference(err?.operation);
     if (operation) process.stderr.write(JSON.stringify({ operation, safeToRetry: false }) + "\n");
     process.exitCode = 1;

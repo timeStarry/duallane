@@ -29,6 +29,7 @@ import (
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/messages"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/ntfy"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/overview"
+	sdkgate "github.com/timestarry/duallane/apps/backend/internal/workspace/sdkgate"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/topics"
 )
 
@@ -376,6 +377,11 @@ func internalError() *publicError {
 }
 
 func writeError(response http.ResponseWriter, err error) {
+	var sdkError sdkgate.UpgradeRequiredError
+	if errors.As(err, &sdkError) {
+		writeJSON(response, http.StatusUpgradeRequired, map[string]any{"error": sdkError.Public()})
+		return
+	}
 	value := internalError()
 	var authError *auth.Error
 	var inviteError *invites.Error

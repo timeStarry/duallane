@@ -140,6 +140,19 @@ Same-version different bytes are reported as drift. Auto-update does not replace
 an unregistered or locally modified executable or touch bridge/policy/supervisor
 files. Credentials are reused; updating never requires automatic re-pairing.
 
+App 1.2 enforces SDK admission for every Bot, independently of access-policy
+version. All setup, Bot HTTP and WebSocket requests declare
+`X-DualLane-SDK-Version`; only compatible stable 1.x versions at least 1.2.0 are
+accepted. Missing/invalid/older/incompatible declarations return 426
+`sdk.upgrade_required` with safe upgrade locations. The runtime stops retries
+and requires a verified update while preserving its profile, bridge and policy.
+The declaration is public compatibility metadata, never identity or authority;
+current authentication, scopes, task and object checks remain mandatory.
+Human Session APIs, public downloads, health checks and P2P do not use this gate.
+WebSocket adapters may declare the same version through the public subprotocol
+`duallane-agent-sdk-1.2.0`; conflicts and duplicate declarations fail closed.
+Bot authentication remains mandatory and credentials never move to URLs.
+
 Implementation order: transport/authorization regressions; structured task and
 artifact foundations; bounded media and incoming attachments; recovery/observability;
 publication manifests and integration documentation. Each stage records tests
@@ -192,7 +205,8 @@ A task is created only from an authorized delivered `message.created` event. The
 server binds the token, Bot, conversation, exact input version and current human
 requester; a Bot child inherits the original requester and root budgets. A task
 reference is not a credential. Omitting it cannot restore a V2 Bot's broad Token
-business authority. Legacy policy is retained until an owner explicitly opts in.
+business authority. Legacy policy is retained until an owner explicitly opts in;
+the minimum SDK admission requirement still applies to those Bots.
 
 The initial SDK context has at most twelve recent messages. Exact message reads,
 keyset history/search and members are exposed consistently in JS, CLI and task

@@ -1,4 +1,4 @@
-# DualLane Agent channel — SDK 1.1
+# DualLane Agent channel — SDK 1.2
 
 This document describes channel capabilities. It does not grant access, override
 an Agent's safety policy, or authorize installation or model/tool execution.
@@ -25,6 +25,22 @@ Keep custom bridges, group policies and service supervision in separate files.
 An update must not overwrite a modified or unregistered executable. The official
 updater verifies the manifest, syntax, compatibility and installed-file receipt;
 it records content drift even when the semantic version is unchanged.
+
+The server requires a compatible stable 1.x SDK, minimum `1.2.0`, for every
+Agent connection, including Bots retaining legacy access-policy settings.
+The official runtime sends `X-DualLane-SDK-Version: 1.2.0` on setup, authenticated
+HTTP calls and WebSocket handshakes. Missing, malformed, older or incompatible
+versions are rejected with HTTP `426` and `sdk.upgrade_required`; the response
+provides the minimum version and official runtime/contract/Skill locations.
+This public version declaration is not a credential and grants no permissions.
+Do not forge a newer declaration to run old code or fall back to another route.
+Stop automatic retries, update the verified runtime, load the Skill/contract,
+then resume with the existing private profile and trusted bridge. Updating never
+authorizes changing Bot policy, replacing credentials or starting a second owner.
+For an adapter using WebSocket subprotocols, the equivalent public declaration is
+`duallane-agent-sdk-1.2.0`; simultaneous header and subprotocol declarations must
+agree. The Bot Authorization header remains mandatory. Native browser WebSocket
+cannot attach that credential header directly; do not move credentials into URLs.
 
 ## Generic command bridge
 
@@ -124,7 +140,7 @@ tool environment; the SDK cannot isolate an arbitrary operator-installed bridge.
 
 Task message edits accept `expectedVersion` from `message.version`; when omitted,
 the SDK reads it once. A version conflict is never refreshed/retried automatically.
-`plainText` edits text-only messages. Mixed messages require complete `content`; it replaces the entire message and must retain every block you intend to keep.
+`plainText` edits text-only messages. To edit a mixed message, provide complete `content`; it replaces the entire message and must retain every block you intend to keep.
 Task card updates require `expectedRevision` and a complete replacement card.
 MCP uses only confirm/cancel/submit/refresh buttons, with no arbitrary execution.
 Operator CLI supports `edit --content-json ... --expected-version ... --task-id ...`,
@@ -188,6 +204,6 @@ been handled. Use the managed listener for recoverable model tasks.
 
 `doctor` and `daemon status` separate transport health from local task failures.
 Diagnostics must not include message text, model stderr, credentials or internal
-paths in group-visible feedback. SDK 1.1 and App 1.1 are required for the complete
+paths in group-visible feedback. SDK 1.2 and App 1.2 are required for the complete
 attachment and task contract; old servers without an exact authorized message or
 a complete trigger-text marker fail safely rather than execute a guessed request.

@@ -187,6 +187,7 @@ test("failed admission invalidates later events and a queued sync checkpoint", a
   const client = new DualLaneAgentClient({
     url: "https://duallane.example.com", token: TOKEN,
     reconnect: { minDelayMs: 1000, maxDelayMs: 1000 },
+    fetch: async () => jsonResponse({}),
     webSocketFactory: async (url, options) => (socket = new FakeSocket(url, options)),
   });
   await client.connect({

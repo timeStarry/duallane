@@ -10,6 +10,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	sdkgate "github.com/timestarry/duallane/apps/backend/internal/workspace/sdkgate"
 )
 
 var (
@@ -297,7 +299,7 @@ type BotAvatarPayload struct {
 	Data     []byte
 }
 
-const LatestAgentSDKVersion = "1.2.0"
+const LatestAgentSDKVersion = sdkgate.LatestSDKVersion
 
 type BotWebhookConfig struct {
 	BotID      string `json:"botId"`
