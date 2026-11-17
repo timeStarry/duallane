@@ -400,7 +400,7 @@ export async function requestGateway({ fetchImpl, url, init, timeoutMs = 35_000,
 }
 
 // --- src/index.js ---
-export const DUALLANE_AGENT_SDK_VERSION = "1.1.0";
+export const DUALLANE_AGENT_SDK_VERSION = "1.1.1";
 export const DUALLANE_GATEWAY_VERSION = 1;
 
 export function compareRuntimeSemver(a, b) {
@@ -658,10 +658,11 @@ export class DualLaneAgentClient {
   async setTyping(conversationId, options = {}) {
     const id = normalizeId(conversationId, "conversationId");
     const state = typeof options.state === "string" ? options.state.trim() : "";
+    const request = { signal: options.signal, timeoutMs: options.timeoutMs };
     if (state === "typing" || state === "thinking") {
-      return this.#request("POST", "/api/bot/v2/typing", { conversationId: id, state });
+      return this.#request("POST", "/api/bot/v2/typing", { conversationId: id, state }, request);
     }
-    return this.#request("POST", "/api/bot-gateway/v1/typing", { conversationId: id });
+    return this.#request("POST", "/api/bot-gateway/v1/typing", { conversationId: id }, request);
   }
 
   async unbind() {
@@ -1958,6 +1959,30 @@ const TASK_FILE_LIMIT = 16 * 1024 * 1024;
 const taskDigest = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const taskCheckCancelled = (signal) => { if (signal?.aborted) throw new AgentRuntimeError("task.cancelled"); };
 
+function taskStartThinking(client, conversationId, signal) {
+  if (typeof client.setTyping !== "function" || signal.aborted) return () => {};
+  const request = new AbortController();
+  let stopped = false, pending = false;
+  const renew = () => {
+    if (stopped || pending || signal.aborted) return;
+    pending = true;
+    // This six-second server lease is advisory; a failed heartbeat cannot fail
+    // a business task or accumulate overlapping requests on a slow gateway.
+    Promise.resolve().then(() => {
+      if (!stopped) return client.setTyping(conversationId, { state: "thinking", signal: request.signal, timeoutMs: 3000 });
+    }).catch(() => {}).finally(() => { pending = false; });
+  };
+  const timer = setInterval(renew, 3800);
+  timer.unref?.();
+  const stop = () => {
+    stopped = true; clearInterval(timer); request.abort();
+    signal.removeEventListener("abort", stop);
+  };
+  signal.addEventListener("abort", stop, { once: true });
+  renew();
+  return stop;
+}
+
 function taskPrivateDirectory(directory) {
   const resolved = path.resolve(directory);
   let cursor = path.parse(resolved).root;
@@ -2411,20 +2436,23 @@ export function createAgentTaskRuntime(options) {
 
   async function execute(task, controller) {
     task.attempts += 1; task.error = null; setState(task, "running");
+    let stopThinking = () => {};
     try {
       const authorization = await authorize(task);
       taskCheckCancelled(controller.signal);
+      stopThinking = taskStartThinking(client, task.event.conversationId, controller.signal);
       if (!task.generated) await generate(task, authorization, controller.signal);
       if (controller.signal.aborted) throw new AgentRuntimeError("task.cancelled");
       await publish(task, controller.signal);
     } catch (error) {
+      stopThinking();
       const safe = safeAgentError(error, task.state);
       if (controller.signal.aborted && closed) { setState(task, "received", { error: null }); return; }
       if (controller.signal.aborted || ["task.cancelled", "bridge.cancelled"].includes(safe.code)) { setState(task, "cancelled", { error: { code: "task.cancelled", stage: task.state, retryable: false } }); return; }
       if (safe.retryable && task.attempts < maxAttempts && safe.code !== "upload.outcome_unknown") {
         setState(task, "received", { error: safe, nextAttemptAt: now() + retryDelayMs * 2 ** (task.attempts - 1) });
       } else { setState(task, "failed", { error: safe }); await failureReceipt(task); }
-    }
+    } finally { stopThinking(); }
   }
 
   function control(taskId, action) {

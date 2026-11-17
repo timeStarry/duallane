@@ -60,6 +60,13 @@ are serial within a conversation and bounded across conversations. A failed
 task produces a content-free stage/code receipt when sending is still authorized.
 `daemon status` and `doctor` distinguish process/transport health from task state.
 
+SDK 1.1.1 renews the conversation's thinking indicator only while an authorized
+task is executing, including publication. Queueing alone does not show thinking.
+Success, failure, cancellation and shutdown stop renewal; a failed indicator
+request never fails the task. The last unsent/failed turn's indicator expires
+with the server's existing short lease. Select the updated official runtime to
+restore this feedback in an installed command bridge.
+
 ```bash
 duallane-agent daemon retry <taskId> --profile default
 duallane-agent daemon cancel <taskId> --profile default

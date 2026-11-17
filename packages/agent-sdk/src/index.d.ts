@@ -29,6 +29,7 @@ export class DualLaneAgentClient {
   readonly lastSequence: number;
   getMe(): Promise<Record<string, unknown>>;
   getDoctor(): Promise<Record<string, unknown>>;
+  setTyping(conversationId: string, options?: { state?: "typing" | "thinking"; signal?: AbortSignal; timeoutMs?: number }): Promise<Record<string, unknown>>;
   listConversations(): Promise<{ conversations: Array<Record<string, unknown>> }>;
   getContext(conversationId: string, options?: { limit?: number }): Promise<{ conversation: Record<string, unknown>; messages: Array<Record<string, unknown>> }>;
   acknowledge(input: { eventId: string; sequence: number }): Promise<{ acknowledged: true; eventId: string; sequence: number }>;

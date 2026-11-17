@@ -13,6 +13,22 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "1.1.1",
+    releasedAt: "2026-11-17",
+    title: "会话阅读导航与机器人思考提示",
+    summary: "恢复机器人正在思考提示，让键盘选择提及成员时列表跟随，并在返回会话后提供新消息回看入口。",
+    categories: [
+      {
+        title: "聊天交互",
+        items: [
+          "机器人执行任务时持续显示正在思考，结束后停止更新",
+          "提及成员和快捷指令的键盘选择自动保持在列表可见区域",
+          "返回会话默认显示最新消息，可从顶部新消息提示向上回看；手机和桌面行为一致"
+        ]
+      }
+    ]
+  },
+  {
     version: "1.1.0",
     releasedAt: "2026-11-17",
     title: "智能助手文件协作与可靠回复",

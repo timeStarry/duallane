@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import {
   AlertCircle,
   ArrowDown,
+  ArrowUp,
   AtSign,
   Bookmark,
   Check,
@@ -97,6 +98,7 @@ import {
   ReactionPickerPopoverContent,
 } from "@/widgets/EmoteSystem";
 import { cn } from "@/shared/lib/cn";
+import { useAutocompleteScroll } from "@/shared/lib/autocomplete-scroll";
 
 const GROUP_WINDOW_MS = 5 * 60 * 1000;
 const HUGE_PASTE_CHAR_THRESHOLD = 6000;
@@ -172,6 +174,7 @@ export function TimelinePane() {
     conversations,
     conversationOrder,
     activeConversationId,
+    conversationEntry,
     messagesByConv,
     highlightedMessageId,
     drafts,
@@ -261,6 +264,10 @@ export function TimelinePane() {
   const [unreadBelowCount, setUnreadBelowCount] = useState(0);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [typingClockTick, setTypingClockTick] = useState(0);
+  const [returnUnread, setReturnUnread] = useState<{ count: number; targetId: string | null } | null>(null);
+  const [compactViewport, setCompactViewport] = useState(() => typeof window !== "undefined" && Boolean(window.matchMedia?.("(max-width: 760px)").matches));
+  const chatVisible = activeLane === "workspace" && (!compactViewport || mobileView === "chat");
+  const entryRevisionRef = useRef<number | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const timelineContentRef = useRef<HTMLDivElement | null>(null);
   const pinnedConvRef = useRef<{ convId: string | null; populated: boolean }>({
@@ -462,6 +469,21 @@ export function TimelinePane() {
     return { items, query, triggerKey };
   }, [activeConv, dismissedTriggerKey, draft, editingMessageId, effectiveSlashCommands, hasBotInConversation]);
 
+  const mentionListRef = useAutocompleteScroll({ activeIndex: mentionMenuIdx,
+    optionCount: mentionAutocomplete?.items.length ?? 0,
+    listKey: mentionAutocomplete ? `${activeConversationId}:${mentionAutocomplete.triggerKey}` : null });
+  const slashListRef = useAutocompleteScroll({ activeIndex: slashMenuIdx,
+    optionCount: slashAutocomplete?.items.length ?? 0,
+    listKey: slashAutocomplete ? `${activeConversationId}:${slashAutocomplete.triggerKey}` : null });
+
+  useEffect(() => {
+    const query = window.matchMedia?.("(max-width: 760px)");
+    if (!query) return;
+    const update = () => setCompactViewport(query.matches);
+    update(); query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
   const uploadWorkspaceFiles = useCallback(
     async (convId: string, files: File[]) => {
       if (!convId || files.length === 0) return;
@@ -551,11 +573,28 @@ export function TimelinePane() {
 
   // Always pin to bottom when entering/switching a conversation AND when async messages first populate
   useIsomorphicLayoutEffect(() => {
-    if (activeLane !== "workspace" || !activeConversationId) return;
+    if (!chatVisible || !activeConversationId) {
+      pinnedConvRef.current = { convId: null, populated: false };
+      return;
+    }
     const prevPin = pinnedConvRef.current;
-    const switchedConv = prevPin.convId !== activeConversationId;
+    // Returning from the other lane/mobile list can reveal the same selected
+    // conversation without a sidebar click. Capture and acknowledge that visit.
+    if (prevPin.convId !== activeConversationId && entryRevisionRef.current === conversationEntry?.revision && (activeConv?.unreadCount || 0) > 0) {
+      useWorkspaceStore.getState().selectConversation(activeConversationId);
+      return;
+    }
+    const switchedConv = prevPin.convId !== activeConversationId || entryRevisionRef.current !== conversationEntry?.revision;
 
     if (switchedConv) {
+      const freshSelection = entryRevisionRef.current !== conversationEntry?.revision;
+      entryRevisionRef.current = conversationEntry?.revision;
+      const count = freshSelection && conversationEntry?.conversationId === activeConversationId
+        ? conversationEntry.unreadCount : activeConv?.unreadCount || 0;
+      const incoming = messages.filter((m) => m.senderId !== currentUser?.id && m.kind !== "system" && !m.recalledAt);
+      setReturnUnread(!highlightedMessageId && count > 0 ? {
+        count, targetId: !conversationEntry?.loading && incoming.length ? incoming[Math.max(0, incoming.length - count)].id : null,
+      } : null);
       isNearBottomRef.current = true;
       setIsNearBottom(true);
       setUnreadBelowCount(0);
@@ -582,11 +621,20 @@ export function TimelinePane() {
         scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
       }
     }
-  }, [activeConversationId, activeLane, highlightedMessageId, messages.length]);
+  }, [activeConversationId, activeLane, chatVisible, conversationEntry, highlightedMessageId, messages.length, activeConv?.unreadCount, currentUser?.id]);
+
+  useIsomorphicLayoutEffect(() => {
+    if (!returnUnread || returnUnread.targetId || !messages.length || conversationEntry?.loading) return;
+    const incoming = messages.filter((m) => m.senderId !== currentUser?.id && m.kind !== "system" && !m.recalledAt);
+    if (incoming.length) setReturnUnread({ ...returnUnread, targetId: incoming[Math.max(0, incoming.length - returnUnread.count)].id });
+  }, [returnUnread, messages, currentUser?.id, conversationEntry?.loading]);
 
   // Keep timeline pinned to bottom when near bottom or sending own messages; otherwise count unread below
   useIsomorphicLayoutEffect(() => {
-    if (activeLane !== "workspace" || !activeConversationId) return;
+    if (!chatVisible || !activeConversationId) {
+      prevMsgStateRef.current = { convId: null, count: 0 };
+      return;
+    }
     const prev = prevMsgStateRef.current;
     prevMsgStateRef.current = { convId: activeConversationId, count: messages.length };
     if (prev.convId !== activeConversationId || messages.length <= prev.count) {
@@ -605,7 +653,7 @@ export function TimelinePane() {
     } else {
       setUnreadBelowCount((n) => n + delta);
     }
-  }, [activeConversationId, activeLane, currentUser?.id, highlightedMessageId, messages]);
+  }, [activeConversationId, activeLane, chatVisible, currentUser?.id, highlightedMessageId, messages]);
 
   // Observe inner content height shifts (images, stickers, code blocks, cards) to stay locked at bottom
   const hasWorkspaceMessages = messages.length > 0;
@@ -1656,8 +1704,33 @@ export function TimelinePane() {
       </AnimatePresence>
 
       {/* Message Timeline */}
+      {returnUnread && (
+        <div className="absolute left-0 right-0 top-20 z-20 flex justify-center px-4 pointer-events-none">
+          <div className="pointer-events-auto dl-glass-elevated flex items-center rounded-full border border-dl-border-hairline shadow-sm">
+            <Button type="button" variant="ghost" size="sm" data-testid="return-unread-banner"
+              disabled={!returnUnread.targetId}
+              onClick={() => {
+                const target = returnUnread.targetId && scrollRef.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(returnUnread.targetId)}"]`);
+                if (!target || !scrollRef.current) return;
+                isNearBottomRef.current = false; setIsNearBottom(false);
+                const offset = target.getBoundingClientRect().top - scrollRef.current.getBoundingClientRect().top;
+                scrollRef.current.scrollTo({ top: scrollRef.current.scrollTop + offset - 12,
+                  behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+                setReturnUnread(null);
+              }}
+              className="min-h-11 gap-1.5 rounded-full px-4 text-xs font-medium text-dl-lane-shared tabular-nums"
+              aria-label={`向上查看 ${returnUnread.count} 条新消息`}>
+              <ArrowUp className="size-3.5" aria-hidden="true" />
+              <span>{returnUnread.count} 条新消息</span>
+            </Button>
+            <IconButton variant="ghost" size="sm" label="关闭新消息提示" className="min-h-11 min-w-11 rounded-full"
+              onClick={() => setReturnUnread(null)}><X className="size-3.5" /></IconButton>
+          </div>
+        </div>
+      )}
       <div
         ref={scrollRef}
+        data-testid="workspace-timeline-scroll"
         onScroll={(e) => {
           const el = e.currentTarget;
           setScrollTop(activeConv.id, el.scrollTop);
@@ -2814,9 +2887,9 @@ export function TimelinePane() {
             className="flex items-center gap-2 px-1.5 py-0.5 text-xs font-medium text-dl-lane-shared"
           >
             <span className="inline-flex items-center gap-0.5" aria-hidden="true">
-              <span className="size-1.5 rounded-full bg-dl-lane-shared animate-bounce" />
-              <span className="size-1.5 rounded-full bg-dl-lane-shared animate-bounce [animation-delay:140ms]" />
-              <span className="size-1.5 rounded-full bg-dl-lane-shared animate-bounce [animation-delay:280ms]" />
+              <span className="size-1.5 rounded-full bg-dl-lane-shared animate-bounce motion-reduce:animate-none" />
+              <span className="size-1.5 rounded-full bg-dl-lane-shared animate-bounce motion-reduce:animate-none [animation-delay:140ms]" />
+              <span className="size-1.5 rounded-full bg-dl-lane-shared animate-bounce motion-reduce:animate-none [animation-delay:280ms]" />
             </span>
             <span className="truncate">{activeTypingText}</span>
           </div>
@@ -2831,6 +2904,8 @@ export function TimelinePane() {
         {mentionAutocomplete && (
           <div
             data-testid="mention-autocomplete-popover"
+            id="workspace-mention-options"
+            ref={mentionListRef}
             role="listbox"
             aria-label="选择要提及的成员"
             className="dl-glass-elevated max-h-56 overflow-y-auto rounded-2xl border border-dl-border-hairline p-1.5 shadow-lg space-y-0.5"
@@ -2844,6 +2919,11 @@ export function TimelinePane() {
               return (
                 <Button
                   key={item.id}
+                  data-autocomplete-index={itemIdx}
+                  id={`workspace-mention-option-${itemIdx}`}
+                  tabIndex={-1}
+                  role="option"
+                  aria-selected={selected}
                   type="button"
                   variant="ghost"
                   size="sm"
@@ -2890,6 +2970,8 @@ export function TimelinePane() {
         {!mentionAutocomplete && slashAutocomplete && (
           <div
             data-testid="slash-autocomplete-popover"
+            id="workspace-slash-options"
+            ref={slashListRef}
             role="listbox"
             aria-label="选择机器人指令"
             className="dl-glass-elevated max-h-52 overflow-y-auto rounded-2xl border border-dl-border-hairline p-1.5 shadow-lg space-y-0.5"
@@ -2903,6 +2985,11 @@ export function TimelinePane() {
               return (
                 <Button
                   key={`${cmd.botId || "bot"}:${cmd.command}`}
+                  data-autocomplete-index={cmdIdx}
+                  id={`workspace-slash-option-${cmdIdx}`}
+                  role="option"
+                  aria-selected={selected}
+                  tabIndex={-1}
                   type="button"
                   variant="ghost"
                   size="sm"
@@ -3163,6 +3250,11 @@ export function TimelinePane() {
             )}
             <textarea
               ref={composerRef}
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={Boolean(mentionAutocomplete || slashAutocomplete)}
+              aria-controls={mentionAutocomplete ? "workspace-mention-options" : slashAutocomplete ? "workspace-slash-options" : undefined}
+              aria-activedescendant={mentionAutocomplete ? `workspace-mention-option-${mentionMenuIdx % mentionAutocomplete.items.length}` : slashAutocomplete ? `workspace-slash-option-${slashMenuIdx % slashAutocomplete.items.length}` : undefined}
               rows={1}
               value={draft}
               aria-label={`发送消息到 ${activeConv.title}`}

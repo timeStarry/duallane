@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useLaneStore } from "@/entities/lane/store";
 import type { DualLaneCardKitDocument } from "@duallane/protocol";
 import {
   ApiClientError,
@@ -163,6 +164,7 @@ interface WorkspaceState {
   messagesByConv: Record<string, V1Message[]>;
   members: Record<string, V1User>;
   activeConversationId: string | null;
+  conversationEntry: { conversationId: string; revision: number; unreadCount: number; loading: boolean } | null;
   highlightedMessageId: string | null;
   threadsByRootId: Record<string, ThreadViewResponse>;
 
@@ -316,6 +318,12 @@ export function formatConversationPreviewText(rawText?: string): string {
       return emoteTokenToPreviewLabel.get(full) || full;
     });
   return replacedEmotes.replace(/\s*\n+\s*/g, " ").trim();
+}
+
+function isWorkspaceChatVisible(): boolean {
+  const ui = useLaneStore.getState();
+  return ui.activeLane === "workspace" && ui.entryView === "workspace" &&
+    !(typeof window !== "undefined" && window.matchMedia?.("(max-width: 760px)").matches && ui.mobileView === "list");
 }
 
 export function computeGlobalAlertUnreadCount(
@@ -1588,7 +1596,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           avatarUrl: hasExplicitAvatarKey ? parsedAvatar.avatarUrl : prev?.avatarUrl,
           avatarEmoji: hasExplicitAvatarKey ? parsedAvatar.avatarEmoji : prev?.avatarEmoji,
           unreadCount:
-            convId === s.activeConversationId
+            convId === s.activeConversationId && isWorkspaceChatVisible()
               ? 0
               : Number(c.unreadCount ?? prev?.unreadCount ?? 0),
           mentionCount: prev?.mentionCount || 0,
@@ -1698,7 +1706,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         evType === "message.created" &&
         !isOwnSnap &&
         !isSystemMessage &&
-        convId === stateSnap.activeConversationId &&
+        convId === stateSnap.activeConversationId && isWorkspaceChatVisible() &&
         !stateSnap.isPreviewMode
       ) {
         void apiV1.markConversationRead(convId).catch(() => {});
@@ -1793,7 +1801,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
           }
         }
 
-        const isActive = convId === s.activeConversationId;
+        const isActive = convId === s.activeConversationId && isWorkspaceChatVisible();
         const baseUnread = prevConv?.unreadCount || 0;
         const nextUnreadCount = isActive
           ? 0
@@ -2013,6 +2021,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     messagesByConv: {},
     members: {},
     activeConversationId: null,
+    conversationEntry: null,
     highlightedMessageId: null,
     threadsByRootId: {},
     drafts: {},
@@ -2300,6 +2309,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
     loadConversationMessages: async (conversationId) => {
       if (get().isPreviewMode) return;
+      const revision = get().conversationEntry?.revision;
       try {
         const res = await apiV1.listMessages(conversationId);
         if (!Array.isArray(res.messages)) return;
@@ -2327,12 +2337,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         }
       } catch {
         // Keep existing cached messages
+      } finally {
+        set((s) => s.conversationEntry?.conversationId === conversationId && s.conversationEntry.revision === revision
+          ? { conversationEntry: { ...s.conversationEntry, loading: false } } : {});
       }
     },
 
     selectConversation: (conversationId) => {
       set((s) => ({
         activeConversationId: conversationId,
+        conversationEntry: {
+          conversationId,
+          revision: (s.conversationEntry?.revision || 0) + 1,
+          unreadCount: s.conversations[conversationId]?.unreadCount || 0,
+          loading: !s.isPreviewMode,
+        },
         highlightedMessageId: null,
         conversations: s.conversations[conversationId]
           ? {

@@ -203,6 +203,9 @@ jobs:
       - name: Run Playwright E2E tests
         run: pnpm test:e2e
 
+      - name: Validate AppV1 chat navigation at desktop and mobile widths
+        run: node apps/web/src/widgets/verify-chat-navigation.mjs
+
   go-workspace-browser:
     name: Go Workspace Chromium integration and privacy
     runs-on: ubuntu-latest
