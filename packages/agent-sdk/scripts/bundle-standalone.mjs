@@ -11,7 +11,13 @@ const sdkPkg = JSON.parse(fs.readFileSync(path.join(sdkRoot, "package.json"), "u
 
 const sourceFiles = [
   "src/ws-lite.js",
+  "src/transport.js",
   "src/index.js",
+  "src/media.js",
+  "src/inbound.js",
+  "src/bridge-protocol.js",
+  "src/task-runtime.js",
+  "src/runtime-update.js",
   "src/v2.js",
   "src/profile-store.js",
   "src/mcp.js",
@@ -44,6 +50,8 @@ import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import dns from "node:dns/promises";
+import net from "node:net";
 import http from "node:http";
 import https from "node:https";
 import os from "node:os";
@@ -86,15 +94,18 @@ const manifestPayload =
   JSON.stringify(
     {
       name: "@duallane/agent-sdk",
-      version: String(sdkPkg.version || "1.0.14"),
+      version: String(sdkPkg.version),
       sha256: bundleSha256,
       byteSize: bundleBytes.byteLength,
       downloadPath: "/integrations/duallane-agent.mjs",
+      documentationPath: "/integrations/v2/duallane-channel.md",
       minNodeVersion: "20.0.0",
+      buildId: crypto.createHash("sha256").update(sections.join("\n")).digest("hex"),
+      compatibility: { gatewayVersion: 1, bridgeProtocolVersion: 1 },
       highlights: [
-        "支持 duallane-agent version / update / doctor 一键检查升级与会话触发体检",
-        "常驻守护进程支持空闲态 SHA-256 校验自动静默热更新与远程升级信号",
-        "支持群聊全量消息触发、回复唤醒与创建者私聊永久保底诊断",
+        "通用命令桥接采用版本化任务与产物协议，支持受控媒体获取和授权入站附件",
+        "任务持久接收后确认事件，按上传与发送回执恢复，并提供安全失败状态和显式重试",
+        "官方运行包按版本、摘要和协议核验更新，保留独立bridge、策略和服务配置",
       ],
     },
     null,

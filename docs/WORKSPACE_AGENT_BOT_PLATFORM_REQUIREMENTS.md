@@ -13,6 +13,10 @@
 
 本文是需求和架构契约，不是某个 Agent 框架的插件实现说明。Workspace 负责安全的消息渠道和授权边界；Hermes、OpenClaw 或其他 Agent Runtime 负责模型、记忆、工具和 Agent 循环。
 
+当前通用命令桥接、任务接收与完成、产物、入站附件、受控媒体获取和更新边界见
+[Agent runtime, tasks, and artifacts](WORKSPACE_AGENT_RUNTIME_CONTRACT.md)。
+该文档明确区分已实现与验收范围；旧版本状态记录不代表新运行时已在线启用。
+
 ### v0.15 实现状态（2026-08-20）
 
 - 已实现 Bot 生命周期、Token/Scope、WebSocket Gateway、心跳、确认、有限续传、消息发送和授权上下文读取。

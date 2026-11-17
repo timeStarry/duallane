@@ -10,6 +10,11 @@ import {
   inferMimeTypeFromFileName,
 } from "./index.js";
 import { getAgentConfigDir, loadAgentProfile, normalizeProfileName, updateProfileCursor } from "./profile-store.js";
+import { AgentRuntimeError, AGENT_MAX_RESULT_BYTES, parseAgentBridgeResult, resolveAgentTrigger, safeAgentError } from "./bridge-protocol.js";
+import { createAgentTaskRuntime, readAgentTaskSummary, recoverAgentTaskOwner, requestAgentTaskControl } from "./task-runtime.js";
+import { fetchPublicMedia, validateArtifactBytes } from "./media.js";
+import { prepareAgentInputs } from "./inbound.js";
+import { inspectOfficialRuntime, installOfficialRuntime } from "./runtime-update.js";
 
 const DAEMON_VALID_AGENTS = new Set(["auto", "cmd"]);
 const DAEMON_VALID_SANDBOXES = new Set(["read-only", "workspace-write", "danger-full-access"]);
@@ -20,6 +25,12 @@ export function getDaemonStateDir(configDir) {
 
 export function getDaemonLogDir(configDir) {
   return path.resolve(getAgentConfigDir(configDir), "..", "logs");
+}
+
+export function createDaemonMediaResolver({ enabled, dnsServers = [], fetchMedia = fetchPublicMedia }) {
+  if (!enabled) return undefined;
+  return (url, { signal } = {}) => fetchMedia(url, { enabled: true, signal,
+    ...(dnsServers.length ? { dnsServers } : {}) });
 }
 
 export function getDaemonServiceLabel(profileName) {
@@ -143,13 +154,7 @@ export function buildDaemonAgentPrompt({ botName, conversation, event, context }
     return `[${ts}] ${speaker}: ${text}`;
   });
 
-  const latestMsgText =
-    String(
-      payload?.message?.plainText ||
-        payload?.text ||
-        (contextMessages.length > 0 ? contextMessages[contextMessages.length - 1]?.plainText : "") ||
-        ""
-    ).trim();
+  const latestMsgText = String(resolveAgentTrigger(event, context)?.plainText || "").trim();
 
   const safetyRule = isGroup
     ? [
@@ -158,9 +163,7 @@ export function buildDaemonAgentPrompt({ botName, conversation, event, context }
       ].join("\n")
     : `当前消息来自主人授权的一对一私聊会话。请直接给出清晰、准确、简洁的回复。`;
 
-  const fileGuidance = isGroup
-    ? `如需向群内生成并发送文档、表格、SVG 图表或代码附件，请直接在回复中使用标签包裹文件内容：<duallane-file name="文件名.ext">文件正文</duallane-file>（二进制内容可加 encoding="base64"），外层守护进程会自动将其作为真实文件附件上传并发送到会话。`
-    : `如需向主人发送你生成的文件或图片，可使用 <duallane-file name="文件名.ext">文件正文</duallane-file>（二进制内容加 encoding="base64"），或在工作目录/临时目录生成文件后在回复末尾附上 [[DUALLANE_FILE: /绝对路径/文件名.ext]]，外层守护进程会自动上传并作为会话附件发出。`;
+  const fileGuidance = `生成产物应通过 duallane.agent.result v1 结构化协议导出真实字节。兼容文本模式可使用 <duallane-file name="文件名.ext">文件正文</duallane-file>（二进制内容加 encoding="base64"）。不得提供本机路径；只有渠道返回发送回执后才能确认附件已经发出。`;
 
   const sections = [
     `你是接入在 DualLane 协作空间中的 AI 智能体「${botName || "Bot"}」。`,
@@ -188,75 +191,10 @@ export function buildDaemonAgentPrompt({ botName, conversation, event, context }
   return sections.join("\n\n");
 }
 
-export function extractGeneratedFilesFromReply(rawReply, options = {}) {
-  const allowLocalPath = Boolean(options.allowLocalPath);
-  const workdir = options.workdir ? path.resolve(options.workdir) : "";
-  const files = [];
-
-  let text = String(rawReply || "");
-
-  // 1. Parse inline <duallane-file name="..." [mime="..."] [encoding="base64"]>...</duallane-file>
-  const inlineFileRe = /<duallane-file\s+([^>]*)>([\s\S]*?)<\/duallane-file>/giu;
-  text = text.replace(inlineFileRe, (_full, attrRaw, innerBody) => {
-    const nameMatch = /\bname\s*=\s*["']([^"']+)["']/iu.exec(attrRaw);
-    const mimeMatch = /\bmime\s*=\s*["']([^"']+)["']/iu.exec(attrRaw);
-    const encMatch = /\bencoding\s*=\s*["']([^"']+)["']/iu.exec(attrRaw);
-    const rawName = path.basename(String(nameMatch?.[1] || "generated.txt").trim()) || "generated.txt";
-    const isBase64 = String(encMatch?.[1] || "").trim().toLowerCase() === "base64";
-    const bodyTrimmed = String(innerBody || "").replace(/^\r?\n/, "").replace(/\r?\n$/, "");
-    const bytes = isBase64
-      ? Buffer.from(bodyTrimmed.replace(/\s+/gu, ""), "base64")
-      : Buffer.from(bodyTrimmed, "utf8");
-    if (bytes.byteLength > 0 && files.length < 6) {
-      files.push({
-        fileName: rawName,
-        mimeType: String(mimeMatch?.[1] || inferMimeTypeFromFileName(rawName)).trim(),
-        bytes,
-      });
-    }
-    return "";
-  });
-
-  // 2. Parse [[DUALLANE_FILE: /path/to/file]] (strictly allowed only in private 1-on-1 DM within workdir or tmpdir)
-  const localFileRe = /\[\[DUALLANE_FILE:\s*([^\]]+?)\s*\]\]/gu;
-  text = text.replace(localFileRe, (_full, rawPath) => {
-    if (!allowLocalPath || files.length >= 6) return "";
-    try {
-      const candidate = path.resolve(workdir || process.cwd(), String(rawPath || "").trim());
-      if (!fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) return "";
-      const realCandidate = fs.realpathSync(candidate);
-      const allowedRoots = [os.tmpdir(), workdir].filter(Boolean).map((r) => {
-        try {
-          return fs.realpathSync(r);
-        } catch {
-          return path.resolve(r);
-        }
-      });
-      const withinAllowed = allowedRoots.some(
-        (root) => realCandidate === root || realCandidate.startsWith(root + path.sep)
-      );
-      if (!withinAllowed) return "";
-      const segments = realCandidate.split(path.sep);
-      if (segments.some((seg) => seg.startsWith(".") && seg !== "." && seg !== "..")) {
-        return "";
-      }
-      const bytes = fs.readFileSync(realCandidate);
-      if (bytes.byteLength > 0 && bytes.byteLength <= 50 * 1024 * 1024) {
-        const fileName = path.basename(realCandidate);
-        files.push({
-          fileName,
-          mimeType: inferMimeTypeFromFileName(fileName),
-          bytes,
-        });
-      }
-    } catch {
-      /* ignore inaccessible local path */
-    }
-    return "";
-  });
-
-  const cleanText = text.replace(/\n{3,}/gu, "\n\n").trim();
-  return { cleanText, files };
+export function extractGeneratedFilesFromReply(rawReply) {
+  const result = parseAgentBridgeResult(String(rawReply || ""), { validateBytes: validateArtifactBytes });
+  if (result.artifacts.some((artifact) => artifact.source !== "inline")) throw new AgentRuntimeError("artifact.runtime_required");
+  return { cleanText: result.text, files: result.artifacts.map(({ fileName, mimeType, bytes }) => ({ fileName, mimeType, bytes })) };
 }
 
 function readDaemonRecord(profileName, configDir) {
@@ -303,147 +241,12 @@ export function resolveStandaloneScriptPath(explicitPath = "") {
   return path.join(os.homedir(), ".duallane", "bin", "duallane-agent.mjs");
 }
 
-export async function checkRuntimeUpdate({
-  origin,
-  fetchImpl = globalThis.fetch,
-  timeoutMs = 6000,
-} = {}) {
-  const cleanOrigin = String(origin || "").trim().replace(/\/+$/u, "");
-  if (!cleanOrigin || typeof fetchImpl !== "function") {
-    throw new Error("A DualLane server origin is required to check runtime updates.");
-  }
-  const signal =
-    typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
-      ? AbortSignal.timeout(timeoutMs)
-      : undefined;
-  const manifestUrl = `${cleanOrigin}/integrations/duallane-agent.manifest.json?t=${Math.floor(
-    Date.now() / 60000
-  )}`;
-  const downloadUrl = `${cleanOrigin}/integrations/duallane-agent.mjs`;
-
-  const res = await fetchImpl(manifestUrl, {
-    method: "GET",
-    headers: { Accept: "application/json", "Cache-Control": "no-cache" },
-    ...(signal ? { signal } : {}),
-  });
-
-  if (res.ok) {
-    const manifest = await res.json();
-    const latestVersion = String(manifest?.version || "").trim();
-    if (!latestVersion) {
-      throw new Error("Invalid runtime manifest: missing version.");
-    }
-    return {
-      currentVersion: DUALLANE_AGENT_SDK_VERSION,
-      latestVersion,
-      updateAvailable: compareRuntimeSemver(latestVersion, DUALLANE_AGENT_SDK_VERSION) > 0,
-      sha256: String(manifest?.sha256 || "").trim().toLowerCase(),
-      byteSize: Number(manifest?.byteSize || 0),
-      downloadUrl,
-      highlights: Array.isArray(manifest?.highlights) ? manifest.highlights : [],
-    };
-  }
-
-  // Fallback for older servers before manifest endpoint existed
-  const scriptRes = await fetchImpl(downloadUrl, {
-    method: "GET",
-    headers: { "Cache-Control": "no-cache" },
-    ...(signal ? { signal } : {}),
-  });
-  if (!scriptRes.ok) {
-    throw new Error(`Runtime update check failed with HTTP ${scriptRes.status}`);
-  }
-  const scriptText = await scriptRes.text();
-  const verMatch = /DUALLANE_AGENT_SDK_VERSION\s*=\s*["']([^"']+)["']/u.exec(scriptText);
-  const latestVersion = String(verMatch?.[1] || DUALLANE_AGENT_SDK_VERSION).trim();
-  const digest = crypto.createHash("sha256").update(scriptText, "utf8").digest("hex");
-  return {
-    currentVersion: DUALLANE_AGENT_SDK_VERSION,
-    latestVersion,
-    updateAvailable: compareRuntimeSemver(latestVersion, DUALLANE_AGENT_SDK_VERSION) > 0,
-    sha256: digest,
-    byteSize: Buffer.byteLength(scriptText, "utf8"),
-    downloadUrl,
-    highlights: [],
-  };
+export async function checkRuntimeUpdate(options = {}) {
+  return inspectOfficialRuntime(options);
 }
 
-export async function stageRuntimeSelfUpdate({
-  origin,
-  targetPath = "",
-  force = false,
-  skipSyntaxCheck = false,
-  fetchImpl = globalThis.fetch,
-  timeoutMs = 15000,
-} = {}) {
-  const check = await checkRuntimeUpdate({ origin, fetchImpl, timeoutMs });
-  const resolvedTarget = resolveStandaloneScriptPath(targetPath);
-  if (!check.updateAvailable && !force) {
-    return {
-      ...check,
-      updated: false,
-      targetPath: resolvedTarget,
-    };
-  }
-
-  const signal =
-    typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
-      ? AbortSignal.timeout(timeoutMs)
-      : undefined;
-  const sep = check.downloadUrl.includes("?") ? "&" : "?";
-  const dlRes = await fetchImpl(
-    `${check.downloadUrl}${sep}v=${encodeURIComponent(check.latestVersion)}&t=${Date.now()}`,
-    {
-      method: "GET",
-      headers: { "Cache-Control": "no-cache" },
-      ...(signal ? { signal } : {}),
-    }
-  );
-  if (!dlRes.ok) {
-    throw new Error(`Failed to download runtime bundle (HTTP ${dlRes.status})`);
-  }
-  const rawBytes = Buffer.from(await dlRes.arrayBuffer());
-  if (rawBytes.byteLength < 1024) {
-    throw new Error("Downloaded runtime bundle is unexpectedly small; aborting update.");
-  }
-  const actualSha256 = crypto.createHash("sha256").update(rawBytes).digest("hex");
-  if (check.sha256 && actualSha256 !== check.sha256) {
-    throw new Error(
-      `Runtime SHA-256 mismatch (expected ${check.sha256.slice(0, 12)}..., got ${actualSha256.slice(0, 12)}...)`
-    );
-  }
-
-  const targetDir = path.dirname(resolvedTarget);
-  fs.mkdirSync(targetDir, { recursive: true });
-  const tmpPath = path.join(
-    targetDir,
-    `.${path.basename(resolvedTarget, ".mjs")}.tmp.${process.pid}.${Date.now()}.mjs`
-  );
-  fs.writeFileSync(tmpPath, rawBytes, { mode: 0o755 });
-  try {
-    fs.chmodSync(tmpPath, 0o755);
-    if (!skipSyntaxCheck) {
-      const syntax = spawnSync(process.execPath, ["--check", tmpPath], { encoding: "utf8" });
-      if (syntax.status !== 0) {
-        throw new Error(`Downloaded runtime failed syntax check: ${syntax.stderr || "invalid JS"}`);
-      }
-    }
-    fs.renameSync(tmpPath, resolvedTarget);
-  } catch (err) {
-    try {
-      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
-    } catch {
-      /* ignore */
-    }
-    throw err;
-  }
-
-  return {
-    ...check,
-    sha256: actualSha256,
-    updated: true,
-    targetPath: resolvedTarget,
-  };
+export async function stageRuntimeSelfUpdate(options = {}) {
+  return installOfficialRuntime({ ...options, targetPath: resolveStandaloneScriptPath(options.targetPath) });
 }
 
 export async function restartInstalledDaemons({ configDir, quiet = true } = {}) {
@@ -465,421 +268,212 @@ export async function restartInstalledDaemons({ configDir, quiet = true } = {}) 
   return restarted;
 }
 
-async function invokeDaemonAgentTurn({
-  agentMode,
-  customCmd,
-  workdir,
-  sandboxMode,
-  model,
-  botName,
-  conversation,
-  event,
-  context,
-}) {
-  if (agentMode === "cmd" || customCmd) {
-    return await new Promise((resolve, reject) => {
-      const env = { ...process.env };
-      delete env.DUALLANE_BOT_TOKEN;
-      env.DUALLANE_CONVERSATION_ID = String(event?.conversationId || "");
-      env.DUALLANE_EVENT_TYPE = String(event?.type || "");
-      env.DUALLANE_MESSAGE_TEXT = String(
-        event?.payload?.message?.plainText || event?.payload?.text || ""
-      );
-      const child = spawn(customCmd, {
-        cwd: workdir,
-        shell: true,
-        env,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (c) => { stdout += c.toString("utf8"); });
-      child.stderr.on("data", (c) => { stderr += c.toString("utf8"); });
-      child.on("error", reject);
-      child.on("close", (code) => {
-        if (code !== 0) {
-          reject(new Error(`Custom bridge command exited with code ${code}: ${stderr.slice(-300)}`));
-          return;
+export async function invokeDaemonAgentTurn({ customCmd, workdir, request, signal, timeoutMs = 300_000 }) {
+  if (!customCmd) throw new TypeError("Resident daemons require --cmd <command>; no agent executable is selected automatically.");
+  const input = JSON.stringify(request);
+  if (Buffer.byteLength(input) > 16 * 1024 * 1024) throw new AgentRuntimeError("bridge.input_limit");
+  if (signal?.aborted) throw new AgentRuntimeError("bridge.cancelled");
+  return await new Promise((resolve, reject) => {
+    const env = { ...process.env };
+    delete env.DUALLANE_BOT_TOKEN;
+    delete env.DUALLANE_TOKEN;
+    delete env.DUALLANE_MESSAGE_TEXT;
+    env.DUALLANE_CONVERSATION_ID = String(request.event.conversationId);
+    env.DUALLANE_EVENT_TYPE = String(request.event.type || "");
+    const child = spawn(customCmd, { cwd: workdir, shell: true, windowsHide: true,
+      detached: process.platform !== "win32", env, stdio: ["pipe", "pipe", "pipe"] });
+    let stdoutBytes = 0, stderrBytes = 0, failure, settled = false;
+    const chunks = [];
+    const terminate = (code) => {
+      if (failure) return;
+      failure = new AgentRuntimeError(code);
+      if (child.pid) {
+        if (process.platform === "win32") {
+          spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore", timeout: 5000 });
+        } else {
+          try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
         }
-        resolve(stdout.trim());
-      });
-      child.stdin.end(JSON.stringify({ event, context, conversation }));
+      }
+    };
+    const aborted = () => terminate("bridge.cancelled");
+    const timer = setTimeout(() => terminate("bridge.timeout"), Math.min(600_000, Math.max(100, timeoutMs)));
+    const finish = (error, value) => {
+      if (settled) return; settled = true;
+      clearTimeout(timer); signal?.removeEventListener("abort", aborted);
+      if (error) reject(error); else resolve(value);
+    };
+    signal?.addEventListener("abort", aborted, { once: true });
+    child.stdout.on("data", (chunk) => {
+      stdoutBytes += chunk.length;
+      if (stdoutBytes > AGENT_MAX_RESULT_BYTES) terminate("bridge.output_limit");
+      else chunks.push(chunk);
     });
-  }
-
-  throw new TypeError("Resident daemons require --cmd <command>; no agent executable is selected automatically.");
+    child.stderr.on("data", (chunk) => {
+      stderrBytes += chunk.length;
+      if (stderrBytes > 64 * 1024) terminate("bridge.stderr_limit");
+    });
+    child.stdin.on("error", () => { /* Exit/error below determines the safe result. */ });
+    child.on("error", () => finish(new AgentRuntimeError("bridge.spawn_failed")));
+    child.on("close", (code) => finish(failure || (code !== 0 ? new AgentRuntimeError("bridge.failed") : null), Buffer.concat(chunks).toString("utf8").trim()));
+    child.stdin.end(input);
+  });
 }
 
 export async function runResidentDaemon(flags = {}) {
   const profileName = normalizeProfileName(flags.profile || "default");
   const profile = loadAgentProfile(profileName);
-  if (!profile) {
-    throw new Error(
-      `Profile "${profileName}" is not configured. Run: duallane-agent setup "<setupUrl>" --profile ${profileName}`
-    );
-  }
-
+  if (!profile) throw new Error(`Profile "${profileName}" is not configured. Run setup first.`);
   const savedCfg = readDaemonRecord(profileName) || {};
-  const customCmd = typeof flags.cmd === "string" ? flags.cmd.trim() : (savedCfg.cmd || "");
-  const requestedAgent = String(
-    flags.agent ||
-    (typeof flags.cmd === "string" && flags.cmd.trim() ? "cmd" : savedCfg.agent) ||
-    (customCmd ? "cmd" : "auto")
-  ).trim();
-  const agentMode = detectAvailableAgentBinary(requestedAgent);
-  if (!customCmd) {
-    throw new TypeError("Resident daemons require --cmd <command>; no agent executable is selected automatically.");
+  if (savedCfg.pausedReason) {
+    // Revoked credentials remain paused across supervisor restarts until an
+    // operator explicitly runs daemon start/restart with the updated profile.
+    writeDaemonRecord(profileName, { ...savedCfg, pid: process.pid, healthy: false });
+    await new Promise((resolve) => {
+      const timer = setInterval(() => {}, 60_000);
+      const resume = () => { clearInterval(timer); process.removeListener("SIGINT", resume); process.removeListener("SIGTERM", resume); resolve(); };
+      process.once("SIGINT", resume); process.once("SIGTERM", resume);
+    });
+    return;
   }
+  const customCmd = typeof flags.cmd === "string" ? flags.cmd.trim() : (savedCfg.cmd || "");
+  const agentMode = detectAvailableAgentBinary(flags.agent || (typeof flags.cmd === "string" && flags.cmd.trim() ? "cmd" : savedCfg.agent) || (customCmd ? "cmd" : "auto"));
+  if (!customCmd) throw new TypeError("Resident daemons require --cmd <command>; no agent executable is selected automatically.");
   const workdir = path.resolve(String(flags.workdir || savedCfg.workdir || os.homedir()));
   const rawSandbox = String(flags.sandbox || savedCfg.sandbox || "read-only").trim();
   const sandboxMode = DAEMON_VALID_SANDBOXES.has(rawSandbox) ? rawSandbox : "read-only";
   const model = typeof flags.model === "string" ? flags.model.trim() : (savedCfg.model || "");
   const transportMode = String(flags.transport || savedCfg.transport || "auto").trim().toLowerCase();
-
-  const client = new DualLaneAgentClient({
-    url: profile.url,
-    token: profile.token,
-    adapterVersion: `duallane-daemon/${DUALLANE_AGENT_SDK_VERSION}`,
-  });
-
-  const logLine = (msg) => {
-    process.stderr.write(`[${new Date().toISOString()}] [DualLane Daemon:${profileName}] ${msg}\n`);
-  };
-
-  let botName = profile.botName || "Bot";
-  const convMetaMap = new Map();
-  const refreshConversations = async () => {
-    try {
-      const [me, convs] = await Promise.all([
-        client.getMe().catch(() => null),
-        client.listConversations().catch(() => null),
-      ]);
-      if (me?.bot?.name) botName = me.bot.name;
-      for (const c of convs?.conversations || []) {
-        if (c?.id) convMetaMap.set(c.id, c);
-      }
-    } catch {
-      /* non-fatal */
+  const allowPublicMedia = flags["allow-public-media"] === true || flags["allow-public-media"] === "true" || (flags["allow-public-media"] === undefined && savedCfg.allowPublicMedia === true);
+  const mediaDnsServers = typeof flags["media-dns-servers"] === "string" ? flags["media-dns-servers"].split(",").map((value) => value.trim()).filter(Boolean) : (savedCfg.mediaDnsServers || []);
+  const autoUpdateEnabled = flags["auto-update"] === undefined ? savedCfg.autoUpdateEnabled !== false : flags["auto-update"] !== "false" && flags["auto-update"] !== false;
+  const stateDir = path.join(getDaemonStateDir(), "tasks");
+  const client = new DualLaneAgentClient({ url: profile.url, token: profile.token, adapterVersion: `duallane-daemon/${DUALLANE_AGENT_SDK_VERSION}` });
+  const log = (code) => process.stderr.write(`[${new Date().toISOString()}] [DualLane] ${code}\n`);
+  let record = { ...savedCfg, profile: profileName, agent: agentMode, cmd: customCmd,
+    workdir, sandbox: sandboxMode, model: model || undefined, transport: transportMode,
+    allowPublicMedia, mediaDnsServers, autoUpdateEnabled, pid: process.pid, healthy: false, probeError: null,
+    startedAt: new Date().toISOString() };
+  let me;
+  try { me = await client.getMe(); }
+  catch (error) {
+    if ([401, 403].includes(error?.statusCode ?? error?.status)) {
+      writeDaemonRecord(profileName, { ...record, pausedReason: safeAgentError(error).code, probeError: safeAgentError(error).code });
     }
-  };
-  await refreshConversations();
-
-  let initialSeq = Number(profile.lastSequence || 0);
-  if (initialSeq === 0) {
-    const probe = await client.getUpdates({ afterSequence: 0, limit: 1 }).catch(() => null);
-    if (probe?.syncRequired && Number(probe.currentSequence) > 0) {
-      initialSeq = Math.max(0, Number(probe.currentSequence) - 20);
-      updateProfileCursor(profileName, initialSeq);
-    }
+    throw error;
   }
-
-  logLine(
-    `Started resident listener for "${botName}" (agent=${agentMode}, sandbox=${sandboxMode}, seq=${initialSeq}, pid=${process.pid})`
-  );
-
-  writeDaemonRecord(profileName, {
-    ...savedCfg,
-    profile: profileName,
-    botName,
-    agent: agentMode,
-    cmd: customCmd || undefined,
-    workdir,
-    sandbox: sandboxMode,
-    model: model || undefined,
-    transport: transportMode,
-    pid: process.pid,
-    startedAt: new Date().toISOString(),
-  });
-
-  let stopped = false;
-  let inFlightTurns = 0;
-  let pendingRestartVersion = "";
-  let updateCheckBusy = false;
-  const autoUpdateEnabled = flags["auto-update"] !== "false" && flags["auto-update"] !== false;
-  const activeScriptPath = path.resolve(process.argv[1] || resolveStandaloneScriptPath());
-  const isStandaloneRuntime =
-    activeScriptPath.endsWith("duallane-agent.mjs") &&
-    !activeScriptPath.includes(`${path.sep}packages${path.sep}agent-sdk${path.sep}bin${path.sep}`);
-
-  const maybeRestartForPendingUpdate = () => {
-    if (stopped || !pendingRestartVersion || inFlightTurns > 0) return;
-    stopped = true;
-    const targetVer = pendingRestartVersion;
-    logLine(`Idle window reached -> applying silent auto-update to v${targetVer} now...`);
-    client.stop();
-    const rec = readDaemonRecord(profileName) || savedCfg;
-    if (rec?.manager === "detached") {
-      try {
-        const logDir = getDaemonLogDir();
-        const logPath = rec.logPath || path.join(logDir, `${profileName}.log`);
-        const logFd = fs.openSync(logPath, "a");
-        const args = [
-          activeScriptPath,
-          "daemon",
-          "run",
-          "--profile",
-          profileName,
-          "--agent",
-          agentMode,
-          "--workdir",
-          workdir,
-          "--sandbox",
-          sandboxMode,
-          "--transport",
-          transportMode,
-        ];
-        if (model) args.push("--model", model);
-        if (customCmd) args.push("--cmd", customCmd);
-        const child = spawn(process.execPath, args, {
-          cwd: workdir,
-          env: process.env,
-          detached: true,
-          stdio: ["ignore", logFd, logFd],
-        });
-        child.unref();
-        fs.closeSync(logFd);
-        writeDaemonRecord(profileName, { ...rec, pid: child.pid });
-      } catch (err) {
-        logLine(`Detached respawn failed: ${err?.message || err}`);
-      }
-    }
-    setTimeout(() => process.exit(0), 120);
+  const botId = me?.bot?.id || profile.botId;
+  const scopes = Array.isArray(me?.scopes) ? me.scopes : [];
+  let stopped = false, runtime, pendingRestart = false, updateBusy = false, stopResolve;
+  const shutdownSignal = new Promise((resolve) => { stopResolve = resolve; });
+  const timers = [];
+  const updateRecord = (patch) => {
+    record = { ...record, ...patch, updatedAt: new Date().toISOString() };
+    writeDaemonRecord(profileName, record);
   };
-
-  const checkAndStageSilentUpdate = async (reason = "periodic") => {
-    if (stopped || updateCheckBusy || pendingRestartVersion || !isStandaloneRuntime) return;
-    updateCheckBusy = true;
-    try {
-      const res = await stageRuntimeSelfUpdate({
-        origin: profile.url,
-        targetPath: activeScriptPath,
-      });
-      if (res.updated) {
-        pendingRestartVersion = res.latestVersion;
-        logLine(
-          `Downloaded & verified runtime v${res.latestVersion} (${reason}, sha256=${res.sha256.slice(
-            0,
-            12
-          )}). ${inFlightTurns > 0 ? "Waiting for active reply to finish..." : "Restarting daemon..."}`
-        );
-        maybeRestartForPendingUpdate();
-      }
-    } catch (err) {
-      if (reason === "remote_request") {
-        logLine(`Silent update check warning: ${err?.message || err}`);
-      }
-    } finally {
-      updateCheckBusy = false;
-    }
-  };
-
-  if (autoUpdateEnabled && isStandaloneRuntime) {
-    const initialUpdateTimer = setTimeout(() => {
-      void checkAndStageSilentUpdate("startup");
-    }, 15_000);
-    initialUpdateTimer.unref?.();
-    const periodicUpdateTimer = setInterval(() => {
-      void checkAndStageSilentUpdate("periodic");
-    }, 20 * 60 * 1000);
-    periodicUpdateTimer.unref?.();
-  }
-
-  const conversationQueues = new Map();
-  const processedSequences = new Set();
-
-  const processSingleEvent = async (event) => {
-    const seq = Number(event?.sequence || 0);
-    if (seq > 0) {
-      if (processedSequences.has(seq)) return;
-      processedSequences.add(seq);
-      if (processedSequences.size > 500) {
-        const oldest = processedSequences.values().next().value;
-        processedSequences.delete(oldest);
-      }
-      updateProfileCursor(profileName, seq);
-    }
-    if (event?.type === "bot.runtime_upgrade") {
-      logLine(
-        `Received remote runtime upgrade signal (target=${
-          event?.payload?.targetVersion || "latest"
-        })`
-      );
-      void checkAndStageSilentUpdate("remote_request");
-      return;
-    }
-    const convId = String(event?.conversationId || "").trim();
-    if (!convId) return;
-
-    inFlightTurns += 1;
-    try {
-      if (!convMetaMap.has(convId)) {
-        await refreshConversations();
-      }
-      const conversation = convMetaMap.get(convId) || { id: convId };
-
-      logLine(`Processing event seq=${seq} type=${event.type || "message.created"} conv=${convId}`);
-      await client.setTyping(convId, { state: "thinking" }).catch(() => {});
-      const typingTimer = setInterval(() => {
-        if (!stopped) {
-          void client.setTyping(convId, { state: "thinking" }).catch(() => {});
-        }
-      }, 3800);
-      typingTimer.unref?.();
-
-      try {
-        let context = null;
-        if (!profile.scopes || profile.scopes.includes("messages:read_context")) {
-          context = await client.getContext(convId, { limit: 20 }).catch(() => null);
-        }
-        const replyText = await invokeDaemonAgentTurn({
-          agentMode,
-          customCmd,
-          workdir,
-          sandboxMode,
-          model,
-          botName,
-          conversation,
-          event,
-          context,
-        });
-        if (replyText) {
-          const replyToId =
-            event.payload?.message?.id ||
-            event.payload?.messageId ||
-            (Array.isArray(context?.messages) && context.messages.length > 0
-              ? context.messages[context.messages.length - 1]?.id
-              : undefined);
-          const isGroupConv = conversation?.type === "group" || conversation?.kind === "group";
-          const { cleanText, files: generatedFiles } = extractGeneratedFilesFromReply(replyText, {
-            allowLocalPath: !isGroupConv,
-            workdir,
-          });
-
-          if (generatedFiles.length > 0) {
-            for (let idx = 0; idx < generatedFiles.length; idx += 1) {
-              const gf = generatedFiles[idx];
-              await client.sendFile({
-                conversationId: convId,
-                bytes: gf.bytes,
-                fileName: gf.fileName,
-                mimeType: gf.mimeType,
-                text: idx === 0 && cleanText ? cleanText.slice(0, 28_000) : undefined,
-                replyToMessageId: idx === 0 ? replyToId : undefined,
-                clientMessageId: `${event.eventId}:file:${idx}`,
-              });
-            }
-            logLine(`Sent ${generatedFiles.length} generated file(s) to conv=${convId} seq=${seq}`);
-          } else if (cleanText) {
-            await client.sendMessage({
-              conversationId: convId,
-              text: cleanText.slice(0, 28_000),
-              replyToMessageId: replyToId,
-              clientMessageId: `${event.eventId}:reply`,
-              idempotencyKey: `${event.eventId}:reply`,
-            });
-            logLine(`Replied to conv=${convId} seq=${seq} (${cleanText.length} chars)`);
-          }
-        }
-      } catch (err) {
-        const safeErr = String(err?.message || err).replace(/dl_bot_[A-Za-z0-9_-]{12,}/gu, "[REDACTED]");
-        logLine(`Turn error on conv=${convId} seq=${seq}: ${safeErr}`);
-      } finally {
-        clearInterval(typingTimer);
-      }
-    } finally {
-      inFlightTurns = Math.max(0, inFlightTurns - 1);
-      maybeRestartForPendingUpdate();
-    }
-  };
-
-  const enqueueConversationEvent = (event) => {
-    const convId = String(event?.conversationId || "__global__");
-    const prev = conversationQueues.get(convId) || Promise.resolve();
-    const next = prev
-      .then(() => processSingleEvent(event))
-      .catch((err) => logLine(`Queue error: ${err?.message || err}`));
-    conversationQueues.set(convId, next);
-    return next;
-  };
-
-  const shutdown = () => {
+  const shutdown = async () => {
     if (stopped) return;
-    stopped = true;
-    logLine("Shutting down resident daemon...");
-    client.stop();
-    process.exit(0);
+    stopped = true; client.stop(); timers.forEach(clearInterval);
+    await runtime?.close(); stopResolve();
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-
-  const runPollingSupervisor = async (startCursor) => {
-    let cursor = startCursor;
-    logLine(`HTTP long-polling supervisor active (seq=${cursor})`);
+  const signalShutdown = () => { void shutdown(); };
+  process.once("SIGINT", signalShutdown); process.once("SIGTERM", signalShutdown);
+  runtime = createAgentTaskRuntime({ stateDir, origin: profile.url, botId, client, scopes,
+    maxConcurrency: Number(flags.concurrency || savedCfg.concurrency || 2),
+    prepareInputs: prepareAgentInputs,
+    validateBytes: validateArtifactBytes,
+    resolveMedia: createDaemonMediaResolver({ enabled: allowPublicMedia, dnsServers: mediaDnsServers }),
+    invoke: (request, { signal }) => invokeDaemonAgentTurn({ customCmd, workdir, request, signal }),
+    onState(summary) {
+      updateRecord({ taskSummary: summary });
+      if (pendingRestart && summary.pending === 0 && summary.active === 0) void shutdown();
+    },
+  });
+  try { writeDaemonRecord(profileName, record); runtime.start(); }
+  catch (error) {
+    await runtime.close(); process.removeListener("SIGINT", signalShutdown); process.removeListener("SIGTERM", signalShutdown); throw error;
+  }
+  let cursor = Number(profile.lastSequence || 0);
+  const acceptEvent = (event) => {
+    const isBusinessEvent = ["message.created", "bot.mentioned", "command.invoked", "card.action"].includes(event.type);
+    const accepted = runtime.accept(isBusinessEvent ? event : { ...event, conversationId: event.conversationId || "__runtime__" }, { completed: !isBusinessEvent });
+    if (event.type === "bot.runtime_upgrade") void checkUpdate();
+    return accepted;
+  };
+  const activeScriptPath = path.resolve(process.argv[1] || resolveStandaloneScriptPath());
+  const isStandalone = activeScriptPath.endsWith("duallane-agent.mjs") && !activeScriptPath.includes(`${path.sep}packages${path.sep}agent-sdk${path.sep}bin${path.sep}`);
+  const checkUpdate = async () => {
+    if (!autoUpdateEnabled || !isStandalone || stopped || updateBusy || pendingRestart) return;
+    updateBusy = true;
+    try {
+      const result = await stageRuntimeSelfUpdate({ origin: profile.url, targetPath: activeScriptPath });
+      if (result.updated) {
+        pendingRestart = true;
+        if (runtime.summary().pending === 0 && runtime.summary().active === 0) await shutdown();
+      }
+    } catch (error) { log(`update.${safeAgentError(error).code}`); }
+    finally { updateBusy = false; }
+  };
+  if (autoUpdateEnabled && isStandalone) {
+    const first = setTimeout(() => { void checkUpdate(); }, 15_000); first.unref?.(); timers.push(first);
+    const periodic = setInterval(() => { void checkUpdate(); }, 20 * 60_000); periodic.unref?.(); timers.push(periodic);
+  }
+  const polling = async () => {
+    let failures = 0;
     while (!stopped) {
       try {
-        const polled = await client.pollNextEvent({
-          afterSequence: cursor,
-          timeoutMs: 25_000,
-          onCursorAdvance: (seq) => {
-            cursor = seq;
-            updateProfileCursor(profileName, seq);
-          },
-          onSyncRequired: ({ currentSequence }) => {
-            cursor = currentSequence;
-            updateProfileCursor(profileName, currentSequence);
-          },
-        });
-        cursor = polled.lastSequence;
-        if (!polled.timeout && polled.event) {
-          await enqueueConversationEvent(polled.event);
+        const result = await client.pollNextEvent({ afterSequence: cursor, timeoutMs: 25_000, ack: false,
+          onSyncRequired({ currentSequence }) {
+            cursor = currentSequence; updateProfileCursor(profileName, cursor);
+          } });
+        if (result.event) {
+          acceptEvent(result.event);
+          await client.acknowledge({ eventId: result.event.eventId, sequence: result.event.sequence });
+          cursor = result.event.sequence;
+          updateProfileCursor(profileName, cursor);
         }
-      } catch (err) {
-        if (stopped) break;
-        logLine(`Long-poll error (${err?.code || "network"}): ${err?.message || err}; retrying in 3s`);
-        await new Promise((r) => setTimeout(r, 3000));
+        failures = 0; updateRecord({ healthy: true, probeError: null });
+      } catch (error) {
+        const safe = safeAgentError(error); failures += 1;
+        updateRecord({ healthy: false, probeError: safe.code }); log(safe.code);
+        if ([401, 403].includes(error?.statusCode ?? error?.status)) updateRecord({ pausedReason: safe.code });
+        if ([401, 403].includes(error?.statusCode ?? error?.status) || !safe.retryable || failures >= 3) throw new AgentRuntimeError(safe.code);
+        await new Promise((resolve) => setTimeout(resolve, Math.min(5000, failures * 1000)));
       }
     }
   };
-
-  if (transportMode === "poll") {
-    await runPollingSupervisor(initialSeq);
-    return;
-  }
-
-  while (!stopped) {
-    try {
-      await client.connect({
-        lastSequence: Number(loadAgentProfile(profileName)?.lastSequence ?? initialSeq),
-        onStatus(state) {
-          if (state.status === "connected") {
-            logLine(`WebSocket connected (seq=${state.currentSequence ?? state.lastSequence})`);
-          } else if (state.status === "disconnected") {
-            logLine(`WebSocket disconnected (attempt=${state.attempt}), reconnecting in ${state.retryInMs}ms...`);
-          }
-        },
-        onEvent(event) {
-          return enqueueConversationEvent(event);
-        },
-        async onSyncRequired({ currentSequence, reason }) {
-          logLine(`Cursor sync_required (${reason}) -> advancing to seq=${currentSequence}`);
-          updateProfileCursor(profileName, currentSequence);
-        },
-        onError(err) {
-          logLine(`Gateway warning (${err.code}): ${err.message}`);
-        },
-      });
-      await new Promise(() => {});
-    } catch (err) {
-      if (stopped) break;
-      client.stop();
-      if (transportMode === "auto" && err?.retryable) {
-        logLine(`WebSocket initial handshake unavailable (${err.code}), switching to HTTP long-polling...`);
-        await runPollingSupervisor(client.lastSequence || initialSeq);
-        return;
+  try {
+    if (transportMode === "poll") await polling();
+    else {
+      try {
+        await client.connect({ lastSequence: cursor,
+          onEvent(event) { acceptEvent(event); updateProfileCursor(profileName, event.sequence); },
+          onStatus(state) { updateRecord({ healthy: state.status === "connected", probeError: state.status === "connected" ? null : "gateway.disconnected" }); },
+          onSyncRequired({ currentSequence }) { cursor = currentSequence; updateProfileCursor(profileName, cursor); },
+          onError(error) {
+            const safe = safeAgentError(error); updateRecord({ healthy: false, probeError: safe.code }); log(safe.code);
+            if ([401, 403].includes(error?.statusCode ?? error?.status)) { updateRecord({ pausedReason: safe.code }); void shutdown(); }
+          },
+        });
+        await shutdownSignal;
+      } catch (error) {
+        client.stop();
+        if (transportMode === "auto" && error?.retryable) await polling();
+        else throw error;
       }
-      logLine(`Connection failed (${err?.code || "error"}): ${err?.message || err}; retrying in 5s...`);
-      await new Promise((r) => setTimeout(r, 5000));
     }
+  } finally {
+    await shutdown();
+    process.removeListener("SIGINT", signalShutdown); process.removeListener("SIGTERM", signalShutdown);
+    updateRecord({ healthy: false, stoppedAt: new Date().toISOString() });
+  }
+  if (pendingRestart && record.manager === "detached") {
+    const args = [activeScriptPath, "daemon", "run", "--profile", profileName];
+    const logPath = record.logPath || path.join(getDaemonLogDir(), `${profileName}.log`);
+    const logFd = fs.openSync(logPath, "a", 0o600);
+    try {
+      const child = spawn(process.execPath, args, { cwd: workdir, env: process.env, detached: true, windowsHide: true, stdio: ["ignore", logFd, logFd] });
+      child.unref(); updateRecord({ pid: child.pid });
+    } finally { fs.closeSync(logFd); }
   }
 }
 
@@ -899,6 +493,24 @@ function stopDetachedPidIfRunning(profileName, configDir) {
 export async function manageDaemonCli(positionals = [], flags = {}) {
   const action = String(positionals[0] || "status").trim().toLowerCase();
   const profileName = normalizeProfileName(flags.profile || "default");
+
+  if (action === "recover-lock") {
+    const profile = loadAgentProfile(profileName);
+    if (!profile?.botId) throw new AgentRuntimeError("runtime.identity_required");
+    const recovered = recoverAgentTaskOwner({ stateDir: path.join(getDaemonStateDir(), "tasks"), origin: profile.url, botId: profile.botId },
+      { confirmStopped: flags["confirm-stopped"] === true || flags["confirm-stopped"] === "true" });
+    process.stdout.write(JSON.stringify(recovered) + "\n");
+    return;
+  }
+
+  if (action === "retry" || action === "cancel") {
+    const profile = loadAgentProfile(profileName);
+    if (!profile?.botId) throw new AgentRuntimeError("runtime.identity_required");
+    const control = requestAgentTaskControl({ stateDir: path.join(getDaemonStateDir(), "tasks"),
+      origin: profile.url, botId: profile.botId }, String(positionals[1] || ""), action);
+    process.stdout.write(JSON.stringify(control) + "\n");
+    return;
+  }
 
   if (action === "run") {
     await runResidentDaemon(flags);
@@ -945,6 +557,9 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
     const sandbox = DAEMON_VALID_SANDBOXES.has(rawSandbox) ? rawSandbox : "read-only";
     const model = typeof flags.model === "string" ? flags.model.trim() : (prev.model || "");
     const transport = String(flags.transport || prev.transport || "auto").trim().toLowerCase();
+    const allowPublicMedia = flags["allow-public-media"] === undefined ? prev.allowPublicMedia === true : [true, "true"].includes(flags["allow-public-media"]);
+    const mediaDnsServers = typeof flags["media-dns-servers"] === "string" ? flags["media-dns-servers"].split(",").map((value) => value.trim()).filter(Boolean) : (prev.mediaDnsServers || []);
+    const autoUpdateEnabled = flags["auto-update"] === undefined ? prev.autoUpdateEnabled !== false : ![false, "false"].includes(flags["auto-update"]);
 
     const programArguments = [
       nodePath,
@@ -964,6 +579,8 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
     ];
     if (model) programArguments.push("--model", model);
     if (customCmd) programArguments.push("--cmd", customCmd);
+    programArguments.push("--allow-public-media", String(allowPublicMedia), "--auto-update", String(autoUpdateEnabled));
+    if (mediaDnsServers.length) programArguments.push("--media-dns-servers", mediaDnsServers.join(","));
 
     const env = {
       HOME: os.homedir(),
@@ -1049,6 +666,9 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
       sandbox,
       model: model || undefined,
       transport,
+      allowPublicMedia,
+      mediaDnsServers,
+      autoUpdateEnabled,
       logPath,
       pid: spawnedPid || undefined,
       installedAt: new Date().toISOString(),
@@ -1136,7 +756,7 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
       serviceRunning = true;
     }
 
-    let remoteConnection = null;
+    let remoteConnection = null, probeError = null, taskSummary = null;
     const profile = loadAgentProfile(profileName);
     if (profile) {
       const client = new DualLaneAgentClient({
@@ -1144,8 +764,11 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
         token: profile.token,
         adapterVersion: `duallane-cli/${DUALLANE_AGENT_SDK_VERSION}`,
       });
-      const me = await client.getMe().catch(() => null);
-      remoteConnection = me?.connection || null;
+      try {
+        const me = await client.getMe();
+        remoteConnection = me?.connection || null;
+        if (me?.bot?.id) taskSummary = readAgentTaskSummary({ stateDir: path.join(getDaemonStateDir(), "tasks"), origin: profile.url, botId: me.bot.id });
+      } catch (error) { probeError = safeAgentError(error).code; }
     }
 
     process.stdout.write(
@@ -1153,6 +776,9 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
         {
           profile: profileName,
           running: serviceRunning,
+          healthy: serviceRunning && !probeError && rec?.healthy === true,
+          probeError,
+          taskSummary,
           daemon: rec || null,
           gatewayConnection: remoteConnection,
           logPath,
@@ -1165,6 +791,6 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
   }
 
   throw new Error(
-    `Unknown daemon action "${action}". Usage: duallane-agent daemon <install|start|stop|restart|uninstall|status|logs|run> [--profile default]`
+    `Unknown daemon action "${action}". Usage: duallane-agent daemon <install|start|stop|restart|uninstall|status|logs|run|retry|cancel> [taskId] [--profile default]`
   );
 }

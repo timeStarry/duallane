@@ -1,6 +1,6 @@
 {
   "name": "@duallane/agent-sdk",
-  "version": "1.0.14",
+  "version": "1.1.0",
   "description": "Zero-dependency universal JavaScript SDK, CLI, and Stdio MCP server for the DualLane Agent Bot Gateway.",
   "type": "module",
   "private": true,
@@ -16,12 +16,16 @@
     "./openclaw": "./src/openclaw.js",
     "./mcp": "./src/mcp.js",
     "./daemon": "./src/daemon.js",
-    "./profile-store": "./src/profile-store.js"
+    "./profile-store": "./src/profile-store.js",
+    "./runtime": "./src/task-runtime.js",
+    "./bridge": "./src/bridge-protocol.js",
+    "./media": "./src/media.js",
+    "./inbound": "./src/inbound.js"
   },
   "types": "./src/index.d.ts",
   "scripts": {
     "bundle": "node scripts/bundle-standalone.mjs",
-    "lint": "node --check src/index.js && node --check src/ws-lite.js && node --check src/v2.js && node --check src/openclaw.js && node --check src/profile-store.js && node --check src/mcp.js && node --check src/daemon.js && node --check bin/duallane-agent.mjs",
+    "lint": "node --check src/index.js && node --check src/transport.js && node --check src/ws-lite.js && node --check src/v2.js && node --check src/media.js && node --check src/inbound.js && node --check src/bridge-protocol.js && node --check src/task-runtime.js && node --check src/runtime-update.js && node --check src/openclaw.js && node --check src/profile-store.js && node --check src/mcp.js && node --check src/daemon.js && node --check bin/duallane-agent.mjs",
     "test": "node --test"
   },
   "engines": {

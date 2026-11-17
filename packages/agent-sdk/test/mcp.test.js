@@ -63,6 +63,9 @@ test("MCP setup_start -> setup_finish pairs Bot, persists its profile, and never
     if (href.endsWith("/api/bot-gateway/v1/messages")) {
       return jsonResponse({ message: { id: "msg_out_1", conversationId: "conv_dm_1" } }, 201);
     }
+    if (href.endsWith("/api/bot-gateway/v1/events/ack")) {
+      return jsonResponse({ acknowledged: true, ...JSON.parse(init.body) });
+    }
     if (href.endsWith("/api/bot/v2/messages/msg_out_1")) {
       return jsonResponse({ ok: true, messageId: "msg_out_1" });
     }
@@ -153,14 +156,17 @@ test("MCP setup_start -> setup_finish pairs Bot, persists its profile, and never
   });
   assert.equal(cardRes.card.id, "card_1");
 
-  // 5. Wait for incoming event over WebSocket and persist sequence cursor
+  // 5. Receiving a message leaves it unacknowledged until explicit handling.
   const waitRes = await server.callTool("duallane_wait_for_event", {
     timeoutSeconds: 5,
     conversationId: "conv_dm_1",
   });
   assert.equal(waitRes.timeout, false);
   assert.equal(waitRes.event.eventId, "evt_live_9");
-  assert.equal(loadAgentProfile("default", { configDir: tmpDir }).lastSequence, 9);
+  assert.equal(waitRes.requiresAck, true);
+  assert.notEqual(loadAgentProfile("default", { configDir: tmpDir }).lastSequence, 9);
+  await server.callTool("duallane_ack_event", { eventId: waitRes.event.eventId, sequence: waitRes.event.sequence });
+  assert.notEqual(loadAgentProfile("default", { configDir: tmpDir }).lastSequence, 9);
 
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });

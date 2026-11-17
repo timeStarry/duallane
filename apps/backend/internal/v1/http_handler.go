@@ -1,7 +1,6 @@
 package v1
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -13,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
@@ -41,6 +41,10 @@ type BotAuthenticator interface {
 type BotFileUploader interface {
 	ReserveAgentBotUpload(context.Context, files.ReserveUploadInput) (files.UploadResult, error)
 	CompleteAgentBotUpload(context.Context, files.CompleteUploadInput) (files.UploadResult, error)
+}
+
+type botUploadFailureReleaser interface {
+	FailAgentBotUpload(context.Context, files.FailUploadInput) (files.UploadResult, error)
 }
 
 type BotMessageCreator interface {
@@ -86,6 +90,8 @@ func (h *HTTPHandler) Mount(r chi.Router) {
 	r.Patch("/api/bot/v2/messages/{messageId}", h.handleBotEditMessage)
 	r.Post("/api/bot/v2/conversations/{conversationId}/files", h.handleBotSendConversationFile)
 	r.Put("/api/bot/v2/uploads/{uploadId}/content", h.handleBotCompleteUploadContent)
+	r.Get("/api/bot/v2/uploads/{uploadId}", h.handleBotUploadStatus)
+	r.Get("/api/bot/v2/conversations/{conversationId}/attachments/{attachmentId}/content", h.handleBotAttachmentContent)
 	r.Post("/api/bot/v2/typing", h.handleBotTyping)
 	r.Post("/api/bot/v2/unbind", h.handleBotUnbind)
 	r.Put("/api/bot/v2/mobile-release/apk", h.handleBotUploadMobileAPK)
@@ -975,10 +981,8 @@ func (h *HTTPHandler) handleBotCompleteUploadContent(w http.ResponseWriter, r *h
 		return
 	}
 	if scopeErr := botgateway.RequireScope(botAuth, botgateway.ScopeFilesWrite); scopeErr != nil {
-		if botgateway.RequireScope(botAuth, botgateway.ScopeMessagesSend) != nil {
-			writeBotGatewayError(w, scopeErr)
-			return
-		}
+		writeBotGatewayError(w, scopeErr)
+		return
 	}
 	if h.botFiles == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "v1.unavailable", "文件存储服务未就绪")
@@ -989,12 +993,8 @@ func (h *HTTPHandler) handleBotCompleteUploadContent(w http.ResponseWriter, r *h
 		writeJSONError(w, http.StatusBadRequest, "upload.invalid", "上传标识无效")
 		return
 	}
-	data, err := io.ReadAll(io.LimitReader(r.Body, MaxBotFileUploadBytes+1024))
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "v1.invalid_body", "读取上传文件内容失败")
-		return
-	}
-	if int64(len(data)) > MaxBotFileUploadBytes {
+	if r.ContentLength > MaxBotFileUploadBytes {
+		h.releaseBotUpload(r, botAuth.UserID, uploadID)
 		writeJSONError(w, http.StatusRequestEntityTooLarge, "file.too_large", "机器人单文件上传不能超过 50 MB")
 		return
 	}
@@ -1002,9 +1002,10 @@ func (h *HTTPHandler) handleBotCompleteUploadContent(w http.ResponseWriter, r *h
 		ActorID:  botAuth.UserID,
 		UploadID: uploadID,
 		Mode:     "single",
-		Content:  bytes.NewReader(data),
+		Content:  http.MaxBytesReader(w, r.Body, MaxBotFileUploadBytes),
 	})
 	if err != nil {
+		h.releaseBotUpload(r, botAuth.UserID, uploadID)
 		writeBotDomainError(w, err)
 		return
 	}
@@ -1022,15 +1023,14 @@ func (h *HTTPHandler) handleBotSendConversationFile(w http.ResponseWriter, r *ht
 	}
 	sendMsgParam := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sendMessage")))
 	sendMessage := sendMsgParam != "false" && sendMsgParam != "0"
+	if err := botgateway.RequireScope(botAuth, botgateway.ScopeFilesWrite); err != nil {
+		writeBotGatewayError(w, err)
+		return
+	}
 
 	if sendMessage {
 		if err := botgateway.RequireScope(botAuth, botgateway.ScopeMessagesSend); err != nil {
 			writeBotGatewayError(w, err)
-			return
-		}
-	} else if scopeErr := botgateway.RequireScope(botAuth, botgateway.ScopeFilesWrite); scopeErr != nil {
-		if botgateway.RequireScope(botAuth, botgateway.ScopeMessagesSend) != nil {
-			writeBotGatewayError(w, scopeErr)
 			return
 		}
 	}
@@ -1063,16 +1063,15 @@ func (h *HTTPHandler) handleBotSendConversationFile(w http.ResponseWriter, r *ht
 		return
 	}
 
-	data, err := io.ReadAll(io.LimitReader(r.Body, MaxBotFileUploadBytes+1024))
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "v1.invalid_body", "读取文件内容失败")
+	if r.ContentLength < 0 {
+		writeJSONError(w, http.StatusLengthRequired, "file.length_required", "上传文件必须声明内容长度")
 		return
 	}
-	if len(data) == 0 {
+	if r.ContentLength == 0 {
 		writeJSONError(w, http.StatusBadRequest, "file.empty", "上传文件内容不能为空")
 		return
 	}
-	if int64(len(data)) > MaxBotFileUploadBytes {
+	if r.ContentLength > MaxBotFileUploadBytes {
 		writeJSONError(w, http.StatusRequestEntityTooLarge, "file.too_large", "机器人单文件上传不能超过 50 MB")
 		return
 	}
@@ -1094,7 +1093,7 @@ func (h *HTTPHandler) handleBotSendConversationFile(w http.ResponseWriter, r *ht
 		ActorID:        botAuth.UserID,
 		FileName:       fileName,
 		MIMEType:       mimeType,
-		ByteSize:       int64(len(data)),
+		ByteSize:       r.ContentLength,
 		Visibility:     string(files.VisibilityConversation),
 		ConversationID: conversationID,
 	})
@@ -1111,9 +1110,10 @@ func (h *HTTPHandler) handleBotSendConversationFile(w http.ResponseWriter, r *ht
 		ActorID:  botAuth.UserID,
 		UploadID: reserved.Upload.ID,
 		Mode:     "single",
-		Content:  bytes.NewReader(data),
+		Content:  http.MaxBytesReader(w, r.Body, r.ContentLength+1),
 	})
 	if err != nil {
+		h.releaseBotUpload(r, botAuth.UserID, reserved.Upload.ID)
 		writeBotDomainError(w, err)
 		return
 	}
@@ -1173,6 +1173,14 @@ func (h *HTTPHandler) handleBotSendConversationFile(w http.ResponseWriter, r *ht
 		"attachment": att,
 		"message":    createdMsg,
 	})
+}
+
+func (h *HTTPHandler) releaseBotUpload(r *http.Request, actorID, uploadID string) {
+	if releaser, ok := h.botFiles.(botUploadFailureReleaser); ok {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+		defer cancel()
+		_, _ = releaser.FailAgentBotUpload(ctx, files.FailUploadInput{ActorID: actorID, UploadID: uploadID, Reason: "content_transfer_failed"})
+	}
 }
 
 func (h *HTTPHandler) handleBotTyping(w http.ResponseWriter, r *http.Request) {

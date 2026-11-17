@@ -31,15 +31,16 @@ test("verifyWebhookSignature validates HMAC-SHA256 signatures", () => {
 test("DualLaneBotV2.streamReply sends initial message and flushes PATCH edits", async () => {
   const calls = [];
   const mockFetch = async (url, init) => {
-    calls.push({ url, method: init.method, body: JSON.parse(init.body) });
+    calls.push({ url: String(url), method: init.method, body: JSON.parse(init.body) });
     return {
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ message: { id: "msg_stream_1" } }),
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => ({ message: { id: "msg_stream_1" } }),
     };
   };
 
-  const bot = new DualLaneBotV2({ baseUrl: "https://duallane.local", token: "dlb_test", fetchImpl: mockFetch });
+  const bot = new DualLaneBotV2({ baseUrl: "https://duallane.local", token: `dl_bot_${"a".repeat(32)}`, fetchImpl: mockFetch });
   async function* gen() {
     yield "Hello ";
     yield "DualLane!";

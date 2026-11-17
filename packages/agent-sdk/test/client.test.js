@@ -177,7 +177,31 @@ test("errors redact Bot tokens from server-provided messages", async () => {
     token: TOKEN,
     fetch: async () => jsonResponse({ error: { code: "bad", message: `do not expose ${TOKEN}` } }, 400)
   });
-  await assert.rejects(client.getMe(), (error) => error.code === "bad" && !error.message.includes(TOKEN) && error.message.includes("[REDACTED]"));
+  await assert.rejects(client.getMe(), (error) => error.code === "bad" && !error.message.includes(TOKEN) && !error.message.includes("do not expose") && !error.cause);
+});
+
+test("failed admission invalidates later events and a queued sync checkpoint", async () => {
+  let socket;
+  let errors = 0;
+  const events = [];
+  const client = new DualLaneAgentClient({
+    url: "https://duallane.example.com", token: TOKEN,
+    reconnect: { minDelayMs: 1000, maxDelayMs: 1000 },
+    webSocketFactory: async (url, options) => (socket = new FakeSocket(url, options)),
+  });
+  await client.connect({
+    onEvent: async (event) => { events.push(event.eventId); throw new Error("disk failed"); },
+    onError: () => { errors += 1; },
+  });
+  socket.emitFrame({ version: 1, type: "event", event: { eventId: "first", sequence: 1 } });
+  socket.emitFrame({ version: 1, type: "event", event: { eventId: "second", sequence: 2 } });
+  socket.emitFrame({ version: 1, type: "sync_required", currentSequence: 100 });
+  await waitFor(() => errors > 0);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events, ["first"]);
+  assert.equal(client.lastSequence, 0);
+  assert.equal(socket.sent.some((frame) => frame.type === "ack"), false);
+  client.stop();
 });
 
 class FakeSocket extends EventEmitter {

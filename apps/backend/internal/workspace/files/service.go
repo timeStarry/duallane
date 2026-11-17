@@ -948,7 +948,14 @@ func (s *Service) loadUploaderRecords(ctx context.Context, repo ReadRepository, 
 }
 
 func (s *Service) GetUploadStatus(ctx context.Context, input UploadStatusInput) (UploadStatus, error) {
-	actor, err := s.readActor(ctx, input.ActorID)
+	return s.getUploadStatus(ctx, input, s.lookupActor)
+}
+
+func (s *Service) getUploadStatus(ctx context.Context, input UploadStatusInput, lookup fileActorLookup) (UploadStatus, error) {
+	if s == nil || s.repo == nil {
+		return UploadStatus{}, internalError("workspace file service", errors.New("repository is required"))
+	}
+	actor, err := lookup(ctx, s.repo, input.ActorID)
 	if err != nil {
 		return UploadStatus{}, err
 	}
@@ -1602,7 +1609,14 @@ func (s *Service) attachmentVisible(ctx context.Context, repo ReadRepository, ac
 }
 
 func (s *Service) ReserveDownload(ctx context.Context, input ReserveDownloadInput) (DownloadResult, error) {
-	actor, err := s.readActor(ctx, input.ActorID)
+	return s.reserveDownload(ctx, input, s.lookupActor)
+}
+
+func (s *Service) reserveDownload(ctx context.Context, input ReserveDownloadInput, lookup fileActorLookup) (DownloadResult, error) {
+	if s == nil || s.repo == nil {
+		return DownloadResult{}, internalError("workspace file service", errors.New("repository is required"))
+	}
+	actor, err := lookup(ctx, s.repo, input.ActorID)
 	if err != nil {
 		return DownloadResult{}, err
 	}
@@ -1612,7 +1626,7 @@ func (s *Service) ReserveDownload(ctx context.Context, input ReserveDownloadInpu
 	if _, err := s.ReleaseStaleUploadReservations(ctx); err != nil {
 		return DownloadResult{}, err
 	}
-	value, err := s.withTransaction(ctx, actor.ID, input.Meta, func(tx Tx, currentActor *auth.Actor, now time.Time) (any, *rejection, error) {
+	value, err := s.withActorTransaction(ctx, actor.ID, input.Meta, lookup, func(tx Tx, currentActor *auth.Actor, now time.Time) (any, *rejection, error) {
 		attachmentID := strings.TrimSpace(input.AttachmentID)
 		if attachmentID == "" {
 			return nil, nil, fileNotFoundError()
@@ -1682,7 +1696,14 @@ func (s *Service) ReserveDownload(ctx context.Context, input ReserveDownloadInpu
 }
 
 func (s *Service) ReleaseDownloadReservation(ctx context.Context, input ReleaseDownloadInput) (bool, error) {
-	actor, err := s.readActor(ctx, input.ActorID)
+	return s.releaseDownloadReservation(ctx, input, s.lookupActor)
+}
+
+func (s *Service) releaseDownloadReservation(ctx context.Context, input ReleaseDownloadInput, lookup fileActorLookup) (bool, error) {
+	if s == nil || s.repo == nil {
+		return false, internalError("workspace file service", errors.New("repository is required"))
+	}
+	actor, err := lookup(ctx, s.repo, input.ActorID)
 	if err != nil {
 		return false, err
 	}
@@ -1690,7 +1711,7 @@ func (s *Service) ReleaseDownloadReservation(ctx context.Context, input ReleaseD
 	if transferID == "" {
 		return false, downloadInvalidError()
 	}
-	value, err := s.withTransaction(ctx, actor.ID, input.Meta, func(tx Tx, currentActor *auth.Actor, now time.Time) (any, *rejection, error) {
+	value, err := s.withActorTransaction(ctx, actor.ID, input.Meta, lookup, func(tx Tx, currentActor *auth.Actor, now time.Time) (any, *rejection, error) {
 		transfer, getErr := tx.GetTransfer(ctx, s.space(), currentActor.ID, transferID, TransferDownload)
 		if getErr != nil {
 			return nil, nil, normalizeRepositoryError(getErr)
@@ -1722,7 +1743,14 @@ func (s *Service) ReleaseDownloadReservation(ctx context.Context, input ReleaseD
 // GetCompletedDownload repeats both attachment visibility and transfer
 // ownership checks. A transfer id alone is never a bearer capability.
 func (s *Service) GetCompletedDownload(ctx context.Context, input CompletedDownloadInput) (DownloadGrant, error) {
-	actor, err := s.readActor(ctx, input.ActorID)
+	return s.getCompletedDownload(ctx, input, s.lookupActor)
+}
+
+func (s *Service) getCompletedDownload(ctx context.Context, input CompletedDownloadInput, lookup fileActorLookup) (DownloadGrant, error) {
+	if s == nil || s.repo == nil {
+		return DownloadGrant{}, internalError("workspace file service", errors.New("repository is required"))
+	}
+	actor, err := lookup(ctx, s.repo, input.ActorID)
 	if err != nil {
 		return DownloadGrant{}, err
 	}

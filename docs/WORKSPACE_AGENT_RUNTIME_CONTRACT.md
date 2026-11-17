@@ -1,0 +1,181 @@
+# Agent runtime, tasks, and artifacts
+
+Status: implemented for SDK/App 1.1, under validation and review. This contract
+extends the [Bot platform requirements](WORKSPACE_AGENT_BOT_PLATFORM_REQUIREMENTS.md).
+It does not authorize production activation or changes to an installed Agent.
+
+## Behavior and ownership
+
+This is a Workspace feature. P2P never enters this pipeline. A trigger identifies
+one user request; receiving it is distinct from completing the work or publishing
+an attachment. A model statement such as "sent" is not a delivery receipt.
+
+| Capability | Authority and responsibility | Required evidence |
+| --- | --- | --- |
+| Trigger/context | Server filters events and grants; SDK anchors the exact trigger message | Missing explicit IDs fail; history is never substituted |
+| Model/tools | Operator-installed command bridge owns model execution and its sandbox | Versioned input/output; bounded execution; no credentials in input |
+| Public media | Explicitly enabled SDK HTTPS fetcher | Public pinned DNS, every redirect checked, bounded validated bytes |
+| Incoming files | Server authorizes each logical attachment; SDK supplies bounded multimodal input | File scope plus current conversation/context authorization |
+| Generated artifacts | Bridge exports actual bytes through the result protocol | Completion, declared type, signature/size, task-bound identity |
+| Cross-turn reuse | Private SDK artifact index, scoped to origin/Bot/conversation | Reauthorize, enforce expiry, reference exact artifact ID |
+| Publication | SDK uploads and sends; server enforces quota and idempotency | Persist returned attachment/message IDs independently |
+| Delivery/task health | Transport reports delivery; SDK reports business stages | ACK never means model, upload, or publication success |
+| Updates | Official runtime, user bridge/policy and supervisor are separate | Version + digest + compatibility, preserve local modifications |
+
+## Trust boundaries
+
+The server remains authoritative for Bot scopes, membership, context grants,
+attachment visibility, transfer quota, retention and audit. Local caches never
+grant access after server authorization is withdrawn. Bot tokens are never sent
+to a model, remote media origin, output artifact, log, or chat message.
+
+An installed bridge is trusted executable configuration. Conversation content,
+model output, URLs, names and attachment bytes are untrusted data. The generic SDK
+does not pretend that a prompt or `--sandbox` label isolates an arbitrary command.
+The bridge must enforce group read-only and confidentiality policy independently;
+messages cannot change executable configuration or grant capabilities. No built-in
+Codex/Claude switch or special-case SVG behavior is added.
+
+## Bridge protocol v1
+
+The existing `{ event, context, conversation }` stdin fields remain available.
+Structured bridges additionally receive `protocol: "duallane.agent.request"`,
+`version: 1`, a stable task ID, an explicitly resolved `triggerMessage`, declared
+capabilities and authorized input/artifact references. Input is finite JSON.
+References are scoped IDs, never arbitrary filesystem paths or credential URLs.
+
+A structured stdout result is one JSON document:
+
+```json
+{
+  "protocol": "duallane.agent.result",
+  "version": 1,
+  "status": "completed",
+  "text": "Here is the requested image.",
+  "artifacts": [
+    {
+      "id": "image-1",
+      "source": "inline",
+      "fileName": "image.png",
+      "mimeType": "image/png",
+      "encoding": "base64",
+      "data": "..."
+    }
+  ]
+}
+```
+
+Sources are `inline` (actual exported bytes), `https` (an explicitly requested
+public-media fetch), or `artifact` (a prior scoped artifact ID). Unknown versions,
+sources, malformed base64, uncompleted results and excess output fail explicitly.
+Text, bitmap, vector, document and retrieved-media results share the artifact
+contract. A URL in Markdown remains a link; it is not automatically fetched.
+Legacy stdout text and inline file tags are a bounded compatibility adapter.
+Local-path tags do not authorize filesystem reads in the new task pipeline.
+
+## Task and publication lifecycle
+
+Task identity derives from origin, Bot identity and event ID. The SDK accepts an
+event into a private durable inbox before transport ACK or cursor advancement.
+It does not store credentials. Tasks progress through received, running,
+generated, uploading, sending, completed, failed or cancelled. Per-artifact
+upload and publication receipts survive process restart. Stable operation keys
+prevent a retried message from producing another visible message.
+
+One local consumer owns a Bot/origin at a time. A conversation is serial; global
+concurrency and queue size are bounded. Transport duplicates join the existing
+task. Recoverable network failures use bounded retries; authorization failures
+pause/refuse rather than retry around the policy. Incomplete model execution is
+never interpreted as a successful result. A lost response can cause a repeated
+external model invocation; the SDK cannot promise exactly-once model execution.
+
+Gateway replay reprojects the current authorized trigger text. Once a message
+event is durably accepted, a replay for the same event and source message joins
+that task and preserves its accepted event snapshot and receipts, even if the
+message was edited. At execution, an authorized context read may supply the
+current text. A different source message, conversation or event type is a
+conflict; an edit does not implicitly schedule another model invocation.
+
+User-visible failures identify a safe stage and stable code, with an explicit
+retry route. Partial success preserves already published items. Logs and doctor
+summaries contain stage/count/error codes, never message text, model stderr,
+paths, tokens or source URLs. Transport health and business health are separate.
+
+## Media and attachment policy
+
+Public-media fetch is opt-in operator policy and does not expand the model's
+sandbox. It accepts HTTPS only, rejects URL credentials and non-public addresses,
+pins the validated DNS address, and rechecks every redirect. No Authorization,
+Cookie, Referer or runtime proxy credential is forwarded. Deadlines, redirect
+counts and streamed-byte limits are enforced before allocation or upload.
+Compressed responses and unsupported or mismatched MIME/signatures fail closed.
+Provenance stores a sanitized source without query/fragment credentials.
+
+Incoming attachment content requires a dedicated Bot endpoint; the human session
+endpoint is not a substitute. The server checks file scope, source message,
+conversation membership and grant on every read, and accounts transfer quota.
+Metadata, bounded text preview and supported image bytes are separate capabilities.
+SDK preparation uses a bounded allowlist; archives, executables and unsupported
+formats are not interpreted. Model bridges receive content as untrusted input.
+
+Artifacts bind task/event/source-message/conversation to type, size, digest,
+expiry, upload and message receipts. On POSIX, the SDK enforces mode 0600 files
+in a private directory. On Windows it inherits the profile directory's ACL;
+operators must keep that directory restricted to their account. Storage has finite
+byte/count limits and expiry; it is not a second permanent conversation archive.
+Cross-turn references require current server authorization and matching scope.
+Expiry/removal fails explicitly; the model must not guess an old local pathname.
+
+## Compatibility and rollout
+
+The universal command bridge remains the supported architecture. New SDK
+capabilities receive a new SDK version; the application version is independent.
+The published manifest identifies protocol compatibility, byte size and digest.
+Same-version different bytes are reported as drift. Auto-update does not replace
+an unregistered or locally modified executable or touch bridge/policy/supervisor
+files. Credentials are reused; updating never requires automatic re-pairing.
+
+Implementation order: transport/authorization regressions; structured task and
+artifact foundations; bounded media and incoming attachments; recovery/observability;
+publication manifests and integration documentation. Each stage records tests
+before the next depends on it. Changes go through review and CI. Existing live
+Comet service and production deployment remain unchanged until separately selected.
+
+## Acceptance matrix
+
+- Exact trigger amid queued human and Bot messages; missing ID and legacy events.
+- Incoming event to bridge to bytes to upload to visible message receipt.
+- Model, fetch, upload and send failure with safe user feedback.
+- Duplicate events, process interruption, partial upload/send, same-conversation
+  ordering, bounded cross-conversation work and a competing consumer.
+- HTTPS private/mixed DNS, rebinding, redirect, credential, timeout, size and
+  content-type rejection; no permission widening.
+- Incoming image/text, scope denial, revoked context and cross-conversation read.
+- Cross-turn resend, reuse, expiry, deletion and mismatched artifact identity.
+- Disconnect/recovery, 401/403 pause, transient failure bounds and HTML success.
+- Digest drift, corrupt downloads, incompatible protocol and local-policy survival.
+
+Synthetic integration proves the complete control flow without production data.
+A real-model test and an authorized live channel test are separate evidence; one
+must not be claimed on the strength of the other.
+
+## Verification and activation boundary
+
+The implementation is covered by SDK synthetic integration (actual child-process
+bridge execution, durable tasks, transport/ACK and updater recovery), Go route and
+service tests, and disposable PostgreSQL authorization/quota tests. These checks
+do not establish that a particular model bridge understands every input type or
+has exported the intended model artifact. Record the final repository and CI
+results in the PR.
+
+The development network currently resolves public media hosts to reserved
+fake-IP addresses. The public-media policy correctly refuses those addresses;
+a real public download remains an operator-network acceptance step. No private
+address exception is allowed to make that check pass.
+
+Before selecting this runtime for a live Agent, use an isolated credential
+profile and authorized test conversation to verify image/text input, generated
+attachment publication, public-media retrieval and cross-turn reuse with that
+Agent's actual bridge. Keep its command, group policy and supervisor separate
+from the official runtime. The implementation does not update the installed
+Comet service or activate an application release.

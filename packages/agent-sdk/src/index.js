@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import { LiteWebSocket, OPEN } from "./ws-lite.js";
+import { requestGateway, readGatewayBytes } from "./transport.js";
 
-export const DUALLANE_AGENT_SDK_VERSION = "1.0.14";
+export const DUALLANE_AGENT_SDK_VERSION = "1.1.0";
 export const DUALLANE_GATEWAY_VERSION = 1;
 
 export function compareRuntimeSemver(a, b) {
@@ -104,6 +105,7 @@ export class DualLaneAgentClient {
   #heartbeatMs;
   #ackTimeoutMs;
   #connectTimeoutMs;
+  #requestTimeoutMs;
   #reconnect;
   #socket = null;
   #stopped = true;
@@ -127,6 +129,7 @@ export class DualLaneAgentClient {
     this.#heartbeatMs = normalizeDuration(options.heartbeatMs, 20_000, 5_000, 120_000, "heartbeatMs");
     this.#ackTimeoutMs = normalizeDuration(options.ackTimeoutMs, 8_000, 1_000, 60_000, "ackTimeoutMs");
     this.#connectTimeoutMs = normalizeDuration(options.connectTimeoutMs, 10_000, 1_000, 60_000, "connectTimeoutMs");
+    this.#requestTimeoutMs = normalizeDuration(options.requestTimeoutMs, 35_000, 1, 120_000, "requestTimeoutMs");
     this.#reconnect = Object.freeze({
       minDelayMs: normalizeDuration(options.reconnect?.minDelayMs, 500, 100, 60_000, "reconnect.minDelayMs"),
       maxDelayMs: normalizeDuration(options.reconnect?.maxDelayMs, 30_000, 500, 120_000, "reconnect.maxDelayMs"),
@@ -149,6 +152,7 @@ export class DualLaneAgentClient {
     this.#stopped = false;
     this.#lastSequence = normalizeSequence(options.lastSequence ?? 0, true);
     this.#callbacks = {
+      manualAck: options.ack === false,
       onEvent: typeof options.onEvent === "function" ? options.onEvent : async () => {},
       onError: typeof options.onError === "function" ? options.onError : () => {},
       onStatus: typeof options.onStatus === "function" ? options.onStatus : () => {},
@@ -192,7 +196,13 @@ export class DualLaneAgentClient {
 
   async acknowledge(input) {
     const body = normalizeAck(input);
-    return this.#request("POST", "/api/bot-gateway/v1/events/ack", body);
+    const result = await this.#request("POST", "/api/bot-gateway/v1/events/ack", body);
+    if (result.acknowledged !== true
+      || (result.eventId !== undefined && result.eventId !== body.eventId)
+      || (result.sequence !== undefined && result.sequence !== body.sequence)) {
+      throw new DualLaneAgentError("gateway.ack_rejected", "Event acknowledgement was rejected");
+    }
+    return result;
   }
 
   async sendMessage(input = {}) {
@@ -223,7 +233,8 @@ export class DualLaneAgentClient {
       fallbackText: input.fallbackText,
       payload: input.payload,
       format: input.format,
-      feishuCard: input.feishuCard
+      feishuCard: input.feishuCard,
+      card: input.card
     }));
   }
 
@@ -390,6 +401,43 @@ export class DualLaneAgentClient {
     return this.sendFile({ ...input, sendMessage: false });
   }
 
+  async reserveUpload(input = {}) {
+    const byteSize = normalizeDuration(input.byteSize, undefined, 1, 50 * 1024 * 1024, "byteSize");
+    const fileName = String(input.fileName || "attachment.bin").trim();
+    if (!fileName || fileName.length > 240 || /[\x00-\x1f\\/]/u.test(fileName)) throw new TypeError("fileName is invalid");
+    return this.#request("POST", "/api/bot-gateway/v1/attachments", {
+      conversationId: normalizeId(input.conversationId, "conversationId"),
+      fileName,
+      mimeType: String(input.mimeType || inferMimeTypeFromFileName(fileName)),
+      byteSize,
+      visibility: "conversation",
+    });
+  }
+
+  async getUploadStatus(uploadId) {
+    return this.#request("GET", `/api/bot/v2/uploads/${encodeURIComponent(normalizeId(uploadId, "uploadId"))}`);
+  }
+
+  async readAttachment(input = {}) {
+    const conversationId = normalizeId(input.conversationId, "conversationId");
+    const attachmentId = normalizeId(input.attachmentId, "attachmentId");
+    const messageId = normalizeId(input.messageId, "messageId");
+    const mode = input.mode ?? "content";
+    if (mode !== "content" && mode !== "preview") throw new TypeError("attachment mode is invalid");
+    const limit = mode === "preview" ? 64 * 1024 : 10 * 1024 * 1024;
+    const maxBytes = normalizeDuration(input.maxBytes, limit, 1, limit, "maxBytes");
+    const query = new URLSearchParams({ messageId, mode });
+    return this.#gatewayRequest("GET", `/api/bot/v2/conversations/${encodeURIComponent(conversationId)}/attachments/${encodeURIComponent(attachmentId)}/content?${query}`, {
+      signal: input.signal,
+      accept: "application/octet-stream",
+      read: async (response) => {
+        const mimeType = String(response.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+        const bytes = await readGatewayBytes(response, maxBytes);
+        return { bytes, mimeType, byteSize: bytes.byteLength };
+      },
+    });
+  }
+
   async completeUploadContent(uploadId, rawBytes, mimeType = "application/octet-stream") {
     const id = normalizeId(uploadId, "uploadId");
     if (!(rawBytes instanceof Uint8Array) || rawBytes.byteLength === 0) {
@@ -409,19 +457,20 @@ export class DualLaneAgentClient {
     const timeoutRaw = options.timeout === undefined ? 0 : Number(options.timeout);
     const timeout = Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? Math.min(25, Math.floor(timeoutRaw)) : 0;
     const timeoutParam = timeout > 0 ? `&timeout=${timeout}` : "";
-    return this.#request("GET", `/api/bot/v2/updates?afterSequence=${afterSequence}&limit=${limit}${timeoutParam}`);
+    return this.#request("GET", `/api/bot/v2/updates?afterSequence=${afterSequence}&limit=${limit}${timeoutParam}`, undefined, { signal: options.signal, timeoutMs: options.timeoutMs });
   }
 
   async pollNextEvent(options = {}) {
     const deadlineMs = Date.now() + Math.max(1000, Number(options.timeoutMs || 60_000));
     const filterConv = typeof options.conversationId === "string" ? options.conversationId.trim() : "";
-    let cursor = normalizeSequence(options.afterSequence ?? 0, true);
+    const initialCursor = normalizeSequence(options.afterSequence ?? 0, true);
+    let cursor = initialCursor;
     const signal = options.signal;
 
     while (Date.now() < deadlineMs && !signal?.aborted) {
       const remainingSec = Math.max(1, Math.ceil((deadlineMs - Date.now()) / 1000));
       const longPollSec = Math.min(20, remainingSec);
-      let res = await this.getUpdates({ afterSequence: cursor, limit: 50, timeout: longPollSec });
+      const res = await this.getUpdates({ afterSequence: cursor, limit: 50, timeout: longPollSec, signal, timeoutMs: Math.min(this.#requestTimeoutMs, Math.max(1, deadlineMs - Date.now())) });
       if (res?.syncRequired && Number.isSafeInteger(res?.currentSequence)) {
         cursor = Math.max(0, Number(res.currentSequence));
         await options.onSyncRequired?.({ currentSequence: cursor, reason: "sync_required" });
@@ -429,75 +478,68 @@ export class DualLaneAgentClient {
       }
       const events = Array.isArray(res?.events) ? res.events : [];
       for (const ev of events) {
-        const seq = Number(ev?.sequence || 0);
-        if (seq > cursor) {
-          cursor = seq;
-          this.#lastSequence = Math.max(this.#lastSequence, seq);
-        }
-        if (ev?.eventId && seq > 0) {
-          await this.acknowledge({ eventId: ev.eventId, sequence: seq }).catch(() => {});
-        }
-        await options.onCursorAdvance?.(cursor);
+        const seq = normalizeSequence(ev?.sequence);
+        normalizeId(ev?.eventId, "eventId");
         if (filterConv && ev?.conversationId !== filterConv) {
+          // A filtered read must not acknowledge or persist another conversation.
+          cursor = Math.max(cursor, seq);
           continue;
         }
-        return { timeout: false, event: ev, lastSequence: cursor, transport: "poll" };
+        if (options.ack === true) {
+          await this.acknowledge({ eventId: ev.eventId, sequence: seq });
+          cursor = Math.max(cursor, seq);
+          if (!filterConv) {
+            this.#lastSequence = Math.max(this.#lastSequence, seq);
+            await options.onCursorAdvance?.(cursor);
+          }
+        }
+        return { timeout: false, event: ev, lastSequence: Math.max(initialCursor, this.#lastSequence), nextSequence: seq, requiresAck: options.ack !== true, transport: "poll" };
       }
       if (events.length === 0 && Date.now() < deadlineMs && !signal?.aborted) {
         await new Promise((r) => setTimeout(r, 400));
       }
     }
-    return { timeout: true, lastSequence: cursor, transport: "poll" };
+    return { timeout: true, lastSequence: Math.max(initialCursor, this.#lastSequence), transport: "poll" };
   }
 
-  async #request(method, path, body) {
-    let response;
-    try {
-      response = await this.#fetch(new URL(path, this.#origin), {
-        method,
-        headers: compact({
-          authorization: `Bearer ${this.#token}`,
-          accept: "application/json",
-          "content-type": body === undefined ? undefined : "application/json",
-          "x-duallane-adapter-version": this.#adapterVersion
-        }),
-        body: body === undefined ? undefined : JSON.stringify(body)
-      });
-    } catch (cause) {
-      throw new DualLaneAgentError("network.unavailable", "DualLane Agent Gateway is unavailable", { cause, retryable: true });
-    }
-    const payload = await readJson(response);
-    if (!response.ok) {
-      const code = safeErrorCode(payload?.error?.code, "gateway.request_failed");
-      const message = redactToken(safeErrorText(payload?.error?.message, "DualLane Agent Gateway request failed"), this.#token);
-      throw new DualLaneAgentError(code, message, { statusCode: response.status, retryable: response.status === 429 || response.status >= 500 });
-    }
-    return payload;
+  async #request(method, path, body, options = {}) {
+    return this.#gatewayRequest(method, path, {
+      body: body === undefined ? undefined : JSON.stringify(body),
+      contentType: body === undefined ? undefined : "application/json",
+      ...options,
+    });
   }
 
   async #requestBinary(method, path, rawBytes, contentType = "application/octet-stream") {
-    let response;
+    return this.#gatewayRequest(method, path, { body: rawBytes, contentType, byteSize: rawBytes.byteLength });
+  }
+
+  async #gatewayRequest(method, route, options = {}) {
     try {
-      response = await this.#fetch(new URL(path, this.#origin), {
-        method,
-        headers: compact({
-          authorization: `Bearer ${this.#token}`,
-          accept: "application/json",
-          "content-type": contentType,
-          "x-duallane-adapter-version": this.#adapterVersion
-        }),
-        body: rawBytes
+      return await requestGateway({
+        fetchImpl: this.#fetch,
+        url: new URL(route, this.#origin),
+        timeoutMs: options.timeoutMs ?? this.#requestTimeoutMs,
+        signal: options.signal,
+        read: options.read,
+        init: {
+          method,
+          headers: compact({
+            authorization: `Bearer ${this.#token}`,
+            accept: options.accept || "application/json",
+            "content-type": options.contentType,
+            "content-length": options.byteSize === undefined ? undefined : String(options.byteSize),
+            "x-duallane-adapter-version": this.#adapterVersion,
+          }),
+          body: options.body,
+        },
       });
-    } catch (cause) {
-      throw new DualLaneAgentError("network.unavailable", "DualLane Agent Gateway is unavailable", { cause, retryable: true });
+    } catch (error) {
+      throw new DualLaneAgentError(error.code || "network.unavailable", "DualLane Agent Gateway request failed", {
+        statusCode: error.statusCode,
+        retryable: error.retryable === true,
+      });
     }
-    const payload = await readJson(response);
-    if (!response.ok) {
-      const code = safeErrorCode(payload?.error?.code, "gateway.request_failed");
-      const message = redactToken(safeErrorText(payload?.error?.message, "DualLane Agent Gateway request failed"), this.#token);
-      throw new DualLaneAgentError(code, message, { statusCode: response.status, retryable: response.status === 429 || response.status >= 500 });
-    }
-    return payload;
   }
 
   async #open() {
@@ -559,16 +601,30 @@ export class DualLaneAgentClient {
           return;
         }
         if (frame.type === "event") {
-          this.#eventChain = this.#eventChain.then(() => this.#consumeEvent(frame.event)).catch((error) => this.#reportError(error));
+          this.#eventChain = this.#eventChain.then(async () => {
+            if (generation !== this.#generation || this.#stopped) return;
+            await this.#consumeEvent(frame.event);
+          }).catch((error) => {
+            this.#reportError(error);
+            if (generation === this.#generation) {
+              this.#generation += 1;
+              this.#socket = null;
+              socket.close(1011, "event not accepted");
+              this.#rejectPendingAcks(new DualLaneAgentError("gateway.disconnected", "Event was not accepted", { retryable: true }));
+              if (!this.#stopped) this.#scheduleReconnect();
+            }
+          });
           return;
         }
         if (frame.type === "sync_required") {
           const currentSequence = normalizeSequence(frame.currentSequence ?? 0, true);
           this.#eventChain = this.#eventChain.then(async () => {
+            if (generation !== this.#generation || this.#stopped) return;
             await this.#callbacks.onSyncRequired?.({
               currentSequence,
               reason: safeErrorText(frame.reason, "sync_required")
             });
+            if (generation !== this.#generation || this.#stopped) return;
             this.#lastSequence = currentSequence;
             if (!ready) {
               ready = true;
@@ -609,7 +665,9 @@ export class DualLaneAgentClient {
     const sequence = normalizeSequence(event.sequence);
     const eventId = normalizeId(event.eventId, "eventId");
     if (sequence > this.#lastSequence) await this.#callbacks.onEvent?.(Object.freeze({ ...event, sequence, eventId }));
-    await this.#ackOverSocket({ sequence, eventId });
+    if (this.#callbacks.manualAck) return;
+    const ack = await this.#ackOverSocket({ sequence, eventId });
+    if (!ack.acknowledged) throw new DualLaneAgentError("gateway.ack_rejected", "Event acknowledgement was rejected");
     this.#lastSequence = Math.max(this.#lastSequence, sequence);
   }
 

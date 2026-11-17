@@ -11,6 +11,7 @@ import {
   buildLaunchdPlistXml,
   buildSystemdUnitFile,
   checkRuntimeUpdate,
+  createDaemonMediaResolver,
   detectAvailableAgentBinary,
   extractGeneratedFilesFromReply,
   getDaemonServiceLabel,
@@ -19,6 +20,16 @@ import {
 import { compareRuntimeSemver, DualLaneAgentClient } from "../src/index.js";
 import { createDualLaneMcpServer } from "../src/mcp.js";
 import { saveAgentProfile } from "../src/profile-store.js";
+
+test("enabled daemon media uses system DNS by default and only forwards explicit operator DNS", async () => {
+  const calls = [];
+  const fetchMedia = async (url, options) => { calls.push({ url, options }); return { bytes: Buffer.from("safe") }; };
+  assert.equal(createDaemonMediaResolver({ enabled: false, fetchMedia }), undefined);
+  await createDaemonMediaResolver({ enabled: true, fetchMedia })("https://example.com/media");
+  assert.equal(Object.hasOwn(calls[0].options, "dnsServers"), false);
+  await createDaemonMediaResolver({ enabled: true, dnsServers: ["1.1.1.1"], fetchMedia })("https://example.com/media");
+  assert.deepEqual(calls[1].options.dnsServers, ["1.1.1.1"]);
+});
 
 test("daemon selection stays command-neutral and rejects retired hardcoded agent modes", () => {
   assert.equal(detectAvailableAgentBinary(), "auto");
@@ -74,10 +85,10 @@ test("an explicit command migrates retired daemon records unless an agent mode i
           childProcess.spawnSync = () => ({ status: 0, stdout: "", stderr: "" });
           childProcess.spawn = () => ({ pid: 0, unref() {} });
           syncBuiltinESMExports();
-          globalThis.fetch = async () => { throw new Error("synthetic network boundary"); };
+          globalThis.fetch = async () => new Response(JSON.stringify({ bot: { id: "synthetic-bot" }, scopes: [] }), { headers: { "content-type": "application/json" } });
           const writeFile = fs.writeFileSync;
           fs.writeFileSync = (target, content, ...args) => {
-            if (path.resolve(target) === ${JSON.stringify(recordPath)}) {
+            if (typeof target === "string" && path.resolve(target) === ${JSON.stringify(recordPath)}) {
               const record = JSON.parse(content);
               process.stdout.write(JSON.stringify({ agent: record.agent, cmd: record.cmd }));
               throw new Error("synthetic record boundary");
@@ -176,31 +187,15 @@ test("daemon prompt enforces read-only safety rule in group chats and formats co
   assert.match(groupPrompt, /@Comet 能收到群聊信息吗/u);
 });
 
-test("extractGeneratedFilesFromReply parses inline <duallane-file> and enforces DM-only local path boundary", () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dl-daemon-file-test-"));
-  const validLocalFile = path.join(tmpDir, "chart.svg");
-  fs.writeFileSync(validLocalFile, "<svg></svg>", "utf8");
-
-  const reply = [
-    "已为您整理好周报与图表：",
-    `<duallane-file name="weekly.md"># 周报\n一切正常</duallane-file>`,
-    `[[DUALLANE_FILE: ${validLocalFile}]]`,
-  ].join("\n\n");
-
-  // Group mode blocks local paths, keeps inline <duallane-file>
-  const groupOut = extractGeneratedFilesFromReply(reply, { allowLocalPath: false, workdir: tmpDir });
-  assert.equal(groupOut.cleanText, "已为您整理好周报与图表：");
-  assert.equal(groupOut.files.length, 1);
-  assert.equal(groupOut.files[0].fileName, "weekly.md");
-  assert.equal(groupOut.files[0].mimeType, "text/markdown");
-
-  // Owner 1-on-1 DM allows files inside workdir/tmpdir
-  const dmOut = extractGeneratedFilesFromReply(reply, { allowLocalPath: true, workdir: tmpDir });
-  assert.equal(dmOut.files.length, 2);
-  assert.equal(dmOut.files[1].fileName, "chart.svg");
-  assert.equal(dmOut.files[1].mimeType, "image/svg+xml");
-
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+test("legacy extraction shares structured validation and refuses local paths in every conversation", () => {
+  const reply = 'report\n<duallane-file name="weekly.md"># report</duallane-file>';
+  const parsed = extractGeneratedFilesFromReply(reply);
+  assert.equal(parsed.cleanText, "report");
+  assert.equal(parsed.files[0].fileName, "weekly.md");
+  assert.equal(parsed.files[0].bytes.toString(), "# report");
+  for (const allowLocalPath of [false, true]) {
+    assert.throws(() => extractGeneratedFilesFromReply('[[DUALLANE_FILE: /tmp/private.txt]]', { allowLocalPath }), { code: "artifact.local_path_denied" });
+  }
 });
 
 test("client.sendFile and MCP duallane_send_file upload binary payload with inferred MIME type", async () => {
@@ -265,7 +260,7 @@ test("runtime updater verifies SHA-256, rejects tampered bundles, and MCP doctor
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dl-self-update-test-"));
   const targetScript = path.join(tmpDir, "duallane-agent.mjs");
-  fs.writeFileSync(targetScript, "#!/usr/bin/env node\nconsole.log('old');\n", "utf8");
+
 
   const validNewBundle =
     "#!/usr/bin/env node\n" +
@@ -316,9 +311,9 @@ test("runtime updater verifies SHA-256, rejects tampered bundles, and MCP doctor
         targetPath: targetScript,
         fetchImpl: makeMockFetch("0".repeat(64)),
       }),
-    /SHA-256 mismatch/u
+    { code: "runtime.integrity_mismatch" }
   );
-  assert.match(fs.readFileSync(targetScript, "utf8"), /old/u);
+  assert.equal(fs.existsSync(targetScript), false);
 
   const staged = await stageRuntimeSelfUpdate({
     origin: "https://duallane.example.com",
