@@ -12,6 +12,8 @@ const sdkPkg = JSON.parse(fs.readFileSync(path.join(sdkRoot, "package.json"), "u
 const sourceFiles = [
   "src/ws-lite.js",
   "src/transport.js",
+  "src/base64.js",
+  "src/file-input.js",
   "src/index.js",
   "src/media.js",
   "src/inbound.js",
@@ -103,6 +105,7 @@ const manifestPayload =
       buildId: crypto.createHash("sha256").update(sections.join("\n")).digest("hex"),
       compatibility: { gatewayVersion: 1, bridgeProtocolVersion: 1 },
       highlights: [
+        "修复较大图片内联编码触发解析失败，严格校验编码和文件大小边界",
         "恢复机器人执行期间的思考状态，任务结束、失败或取消后停止续租",
         "通用命令桥接采用版本化任务与产物协议，支持受控媒体获取和授权入站附件",
         "任务持久接收后确认事件，按上传与发送回执恢复，并提供安全失败状态和显式重试",

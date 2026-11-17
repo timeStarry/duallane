@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import { LiteWebSocket, OPEN } from "./ws-lite.js";
 import { requestGateway, readGatewayBytes } from "./transport.js";
+import { normalizeFileBytes } from "./file-input.js";
 
-export const DUALLANE_AGENT_SDK_VERSION = "1.1.1";
+export const DUALLANE_AGENT_SDK_VERSION = "1.1.2";
 export const DUALLANE_GATEWAY_VERSION = 1;
 
 export function compareRuntimeSemver(a, b) {
@@ -366,13 +367,7 @@ export class DualLaneAgentClient {
 
   async sendFile(input = {}) {
     const conversationId = normalizeId(input.conversationId, "conversationId");
-    let rawBytes = input.bytes;
-    if (typeof rawBytes === "string") {
-      rawBytes = Buffer.from(rawBytes, "utf8");
-    }
-    if (!(rawBytes instanceof Uint8Array) || rawBytes.byteLength === 0) {
-      throw new TypeError("bytes must be a non-empty Uint8Array, Buffer, or string");
-    }
+    const rawBytes = normalizeFileBytes(input.bytes);
     const fileName = String(input.fileName || "attachment.bin").trim() || "attachment.bin";
     const mimeType = String(input.mimeType || inferMimeTypeFromFileName(fileName)).trim() || "application/octet-stream";
     const params = new URLSearchParams();
@@ -441,9 +436,7 @@ export class DualLaneAgentClient {
 
   async completeUploadContent(uploadId, rawBytes, mimeType = "application/octet-stream") {
     const id = normalizeId(uploadId, "uploadId");
-    if (!(rawBytes instanceof Uint8Array) || rawBytes.byteLength === 0) {
-      throw new TypeError("rawBytes must be a non-empty Uint8Array or Buffer");
-    }
+    rawBytes = normalizeFileBytes(rawBytes, { allowText: false });
     return this.#requestBinary(
       "PUT",
       `/api/bot/v2/uploads/${encodeURIComponent(id)}/content`,

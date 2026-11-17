@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
+import { readBoundedFile } from "../src/file-input.js";
 import {
   compareRuntimeSemver,
   DualLaneAgentClient,
@@ -568,7 +569,7 @@ async function main() {
       );
     }
     const resolvedPath = path.resolve(filePath);
-    const bytes = fs.readFileSync(resolvedPath);
+    const bytes = readBoundedFile(resolvedPath);
     const fileName =
       typeof flags.name === "string" && flags.name.trim() ? flags.name.trim() : path.basename(resolvedPath);
     const mimeType =

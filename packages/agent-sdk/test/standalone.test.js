@@ -4,7 +4,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { largePngFixture } from "../test-support/large-artifact-fixture.js";
 import test from "node:test";
 
 const sdkRoot = fileURLToPath(new URL("../", import.meta.url));
@@ -64,4 +65,13 @@ test("the bundler rejects invalid JavaScript before replacing a published runtim
     assert.equal(fs.existsSync(path.join(fixture, publicPath, "duallane-agent.manifest.json")), false);
     assert.equal(fs.existsSync(path.join(fixture, publicPath, "v2/duallane-agent.mjs")), false);
   });
+});
+
+test("published standalone parser preserves a multi-megabyte inline PNG", async () => {
+  const runtime = await import(pathToFileURL(path.join(repoRoot, publicPath, "duallane-agent.mjs")));
+  const png = largePngFixture();
+  const result = runtime.parseAgentBridgeResult(JSON.stringify({ protocol: "duallane.agent.result", version: 1,
+    status: "completed", text: "Fixture", artifacts: [{ id: "large", source: "inline", fileName: "large.png",
+      mimeType: "image/png", encoding: "base64", data: png.toString("base64") }] }), { validateBytes: runtime.validateArtifactBytes });
+  assert.deepEqual(result.artifacts[0].bytes, png);
 });

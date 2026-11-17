@@ -13,6 +13,21 @@ export type DualLaneRelease = {
 
 export const DUAL_LANE_RELEASES: DualLaneRelease[] = [
   {
+    version: "1.1.2",
+    releasedAt: "2026-11-17",
+    title: "智能助手大图片交付修复",
+    summary: "修复智能助手已生成较大图片却无法发送的问题，并完善文件编码与大小检查。",
+    categories: [
+      {
+        title: "智能助手文件",
+        items: [
+          "较大图片可在现有大小限制内正常解析和发送，无需压缩或重新生成",
+          "完善文件编码与大小检查，避免损坏的文件被误当作成功交付"
+        ]
+      }
+    ]
+  },
+  {
     version: "1.1.1",
     releasedAt: "2026-11-17",
     title: "会话阅读导航与机器人思考提示",

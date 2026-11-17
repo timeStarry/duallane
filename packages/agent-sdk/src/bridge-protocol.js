@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { inferMimeTypeFromFileName } from "./index.js";
+import { decodeArtifactBase64 } from "./base64.js";
 
 export const AGENT_BRIDGE_PROTOCOL_VERSION = 1;
 export const AGENT_MAX_RESULT_BYTES = 70 * 1024 * 1024;
@@ -90,18 +91,14 @@ function bridgeFileName(value) {
   return value.trim();
 }
 
-function bridgeDecodeBytes(data, encoding) {
+function bridgeDecodeBytes(data, encoding, maxBytes) {
   if (typeof data !== "string") throw new AgentRuntimeError("artifact.invalid_data");
+  if (maxBytes < 1) throw new AgentRuntimeError("artifact.too_large");
   if (encoding === "base64") {
-    if (data.length > Math.ceil(BRIDGE_MAX_ARTIFACT_BYTES / 3) * 4 || data.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(data)) {
-      throw new AgentRuntimeError("artifact.invalid_base64");
-    }
-    const bytes = Buffer.from(data, "base64");
-    if (bytes.toString("base64") !== data) throw new AgentRuntimeError("artifact.invalid_base64");
-    return bytes;
+    return decodeArtifactBase64(data, { maxBytes });
   }
   if (encoding !== "utf8") throw new AgentRuntimeError("artifact.invalid_encoding");
-  if (Buffer.byteLength(data) > BRIDGE_MAX_ARTIFACT_BYTES) throw new AgentRuntimeError("artifact.too_large");
+  if (Buffer.byteLength(data) > maxBytes) throw new AgentRuntimeError("artifact.too_large");
   return Buffer.from(data, "utf8");
 }
 
@@ -147,7 +144,7 @@ export function parseAgentBridgeResult(raw, { taskId, validateBytes } = {}) {
     if (artifact.source !== "inline") throw new AgentRuntimeError("artifact.source_unsupported");
     const fileName = bridgeFileName(artifact.fileName);
     const mimeType = String(artifact.mimeType || inferMimeTypeFromFileName(fileName)).toLowerCase();
-    const bytes = bridgeDecodeBytes(artifact.data, artifact.encoding);
+    const bytes = bridgeDecodeBytes(artifact.data, artifact.encoding, Math.min(BRIDGE_MAX_ARTIFACT_BYTES, BRIDGE_MAX_TOTAL_BYTES - totalBytes));
     totalBytes += bytes.length;
     if (!bytes.length || bytes.length > BRIDGE_MAX_ARTIFACT_BYTES || totalBytes > BRIDGE_MAX_TOTAL_BYTES) throw new AgentRuntimeError("artifact.too_large");
     const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");

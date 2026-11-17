@@ -399,8 +399,90 @@ export async function requestGateway({ fetchImpl, url, init, timeoutMs = 35_000,
   }
 }
 
+// --- src/base64.js ---
+const ARTIFACT_BASE64_VALUES = new Uint8Array(128).fill(255);
+for (const [index, character] of [..."ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"].entries()) {
+  ARTIFACT_BASE64_VALUES[character.charCodeAt(0)] = index;
+}
+
+function artifactBase64Error(code) {
+  return Object.assign(new Error(code), { code });
+}
+
+/** Strict RFC 4648 decoding with O(n) time and constant validation stack space. */
+export function decodeArtifactBase64(data, { maxBytes = 25 * 1024 * 1024 } = {}) {
+  if (typeof data !== "string") throw artifactBase64Error("artifact.invalid_data");
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new TypeError("maxBytes must be a positive integer");
+  if (data.length > Math.ceil(maxBytes / 3) * 4) throw artifactBase64Error("artifact.too_large");
+  if (data.length % 4 !== 0) throw artifactBase64Error("artifact.invalid_base64");
+  const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+  const end = data.length - padding;
+  const decodedLength = data.length / 4 * 3 - padding;
+  if (decodedLength > maxBytes) throw artifactBase64Error("artifact.too_large");
+  // Buffer.from alone silently accepts whitespace, URL-safe characters and bad
+  // padding. Validate every character and the unused trailing bits first.
+  let last = 0;
+  for (let index = 0; index < end; index += 1) {
+    const code = data.charCodeAt(index);
+    if (code >= ARTIFACT_BASE64_VALUES.length || ARTIFACT_BASE64_VALUES[code] === 255) {
+      throw artifactBase64Error("artifact.invalid_base64");
+    }
+    last = ARTIFACT_BASE64_VALUES[code];
+  }
+  if ((padding === 2 && (last & 15) !== 0) || (padding === 1 && (last & 3) !== 0)) {
+    throw artifactBase64Error("artifact.invalid_base64");
+  }
+  return Buffer.from(data, "base64");
+}
+
+// --- src/file-input.js ---
+export const AGENT_DIRECT_FILE_MAX_BYTES = 50 * 1024 * 1024;
+
+function fileInputError(code) {
+  return Object.assign(new TypeError("File input is invalid or exceeds the allowed byte limit."), { code });
+}
+
+/** Apply the direct-upload budget before allocating a UTF-8 buffer. */
+export function normalizeFileBytes(value, { allowText = true } = {}) {
+  if (typeof value === "string" && allowText) {
+    const byteSize = Buffer.byteLength(value, "utf8");
+    if (byteSize > AGENT_DIRECT_FILE_MAX_BYTES) throw fileInputError("artifact.too_large");
+    if (!byteSize) throw fileInputError("artifact.invalid_data");
+    return Buffer.from(value, "utf8");
+  }
+  if (!(value instanceof Uint8Array) || !value.byteLength) throw fileInputError("artifact.invalid_data");
+  if (value.byteLength > AGENT_DIRECT_FILE_MAX_BYTES) throw fileInputError("artifact.too_large");
+  return value;
+}
+
+/** Read a regular file with a finite allocation, refusing a changed size. */
+export function readBoundedFile(filePath) {
+  let fd;
+  try {
+    fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0));
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || !Number.isSafeInteger(stat.size) || stat.size <= 0) throw fileInputError("artifact.invalid_data");
+    if (stat.size > AGENT_DIRECT_FILE_MAX_BYTES) throw fileInputError("artifact.too_large");
+    // One extra byte detects growth without allocating or reading an unbounded body.
+    const bytes = Buffer.allocUnsafe(stat.size + 1);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const count = fs.readSync(fd, bytes, offset, Math.min(1024 * 1024, bytes.length - offset), offset);
+      if (!count) break;
+      offset += count;
+    }
+    if (offset !== stat.size || fs.fstatSync(fd).size !== stat.size) throw fileInputError("artifact.input_changed");
+    return bytes.subarray(0, offset);
+  } catch (error) {
+    if (typeof error?.code === "string" && error.code.startsWith("artifact.")) throw error;
+    throw fileInputError("artifact.file_unavailable");
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* Preserve the bounded-input failure. */ } }
+  }
+}
+
 // --- src/index.js ---
-export const DUALLANE_AGENT_SDK_VERSION = "1.1.1";
+export const DUALLANE_AGENT_SDK_VERSION = "1.1.2";
 export const DUALLANE_GATEWAY_VERSION = 1;
 
 export function compareRuntimeSemver(a, b) {
@@ -764,13 +846,7 @@ export class DualLaneAgentClient {
 
   async sendFile(input = {}) {
     const conversationId = normalizeId(input.conversationId, "conversationId");
-    let rawBytes = input.bytes;
-    if (typeof rawBytes === "string") {
-      rawBytes = Buffer.from(rawBytes, "utf8");
-    }
-    if (!(rawBytes instanceof Uint8Array) || rawBytes.byteLength === 0) {
-      throw new TypeError("bytes must be a non-empty Uint8Array, Buffer, or string");
-    }
+    const rawBytes = normalizeFileBytes(input.bytes);
     const fileName = String(input.fileName || "attachment.bin").trim() || "attachment.bin";
     const mimeType = String(input.mimeType || inferMimeTypeFromFileName(fileName)).trim() || "application/octet-stream";
     const params = new URLSearchParams();
@@ -839,9 +915,7 @@ export class DualLaneAgentClient {
 
   async completeUploadContent(uploadId, rawBytes, mimeType = "application/octet-stream") {
     const id = normalizeId(uploadId, "uploadId");
-    if (!(rawBytes instanceof Uint8Array) || rawBytes.byteLength === 0) {
-      throw new TypeError("rawBytes must be a non-empty Uint8Array or Buffer");
-    }
+    rawBytes = normalizeFileBytes(rawBytes, { allowText: false });
     return this.#requestBinary(
       "PUT",
       `/api/bot/v2/uploads/${encodeURIComponent(id)}/content`,
@@ -1372,6 +1446,20 @@ function mediaUtf8(bytes) {
   }
 }
 
+function mediaSvgPrefix(text) {
+  let offset = 0;
+  // Match the existing whitespace/XML-declaration prefix without a repeated
+  // regexp group whose stack grows with a large, otherwise valid SVG input.
+  while (offset < text.length) {
+    while (offset < text.length && /\s/u.test(text[offset])) offset += 1;
+    if (!text.startsWith("<?xml", offset)) break;
+    const end = text.indexOf("?", offset + 5);
+    if (end < 0 || text[end + 1] !== ">") return false;
+    offset = end + 2;
+  }
+  return text.startsWith("<svg", offset) && (text[offset + 4] === ">" || /\s/u.test(text[offset + 4] || ""));
+}
+
 // This validates the bounded container envelope, not document safety or content.
 // No entry is decompressed, rendered, followed, or executed by the SDK.
 function mediaOfficeEnvelope(bytes, extension) {
@@ -1466,7 +1554,7 @@ export function validateArtifactBytes(rawBytes, declaredMimeType, options = {}) 
   } else {
     const text = mediaUtf8(bytes);
     matches = text !== null;
-    if (matches && mimeType === "image/svg+xml") matches = /^(?:\s|<\?xml[^?]*\?>)*<svg(?:\s|>)/u.test(text);
+    if (matches && mimeType === "image/svg+xml") matches = mediaSvgPrefix(text);
     if (matches && mimeType === "application/json") {
       try { JSON.parse(text); } catch { matches = false; }
     }
@@ -1883,18 +1971,14 @@ function bridgeFileName(value) {
   return value.trim();
 }
 
-function bridgeDecodeBytes(data, encoding) {
+function bridgeDecodeBytes(data, encoding, maxBytes) {
   if (typeof data !== "string") throw new AgentRuntimeError("artifact.invalid_data");
+  if (maxBytes < 1) throw new AgentRuntimeError("artifact.too_large");
   if (encoding === "base64") {
-    if (data.length > Math.ceil(BRIDGE_MAX_ARTIFACT_BYTES / 3) * 4 || data.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(data)) {
-      throw new AgentRuntimeError("artifact.invalid_base64");
-    }
-    const bytes = Buffer.from(data, "base64");
-    if (bytes.toString("base64") !== data) throw new AgentRuntimeError("artifact.invalid_base64");
-    return bytes;
+    return decodeArtifactBase64(data, { maxBytes });
   }
   if (encoding !== "utf8") throw new AgentRuntimeError("artifact.invalid_encoding");
-  if (Buffer.byteLength(data) > BRIDGE_MAX_ARTIFACT_BYTES) throw new AgentRuntimeError("artifact.too_large");
+  if (Buffer.byteLength(data) > maxBytes) throw new AgentRuntimeError("artifact.too_large");
   return Buffer.from(data, "utf8");
 }
 
@@ -1940,7 +2024,7 @@ export function parseAgentBridgeResult(raw, { taskId, validateBytes } = {}) {
     if (artifact.source !== "inline") throw new AgentRuntimeError("artifact.source_unsupported");
     const fileName = bridgeFileName(artifact.fileName);
     const mimeType = String(artifact.mimeType || inferMimeTypeFromFileName(fileName)).toLowerCase();
-    const bytes = bridgeDecodeBytes(artifact.data, artifact.encoding);
+    const bytes = bridgeDecodeBytes(artifact.data, artifact.encoding, Math.min(BRIDGE_MAX_ARTIFACT_BYTES, BRIDGE_MAX_TOTAL_BYTES - totalBytes));
     totalBytes += bytes.length;
     if (!bytes.length || bytes.length > BRIDGE_MAX_ARTIFACT_BYTES || totalBytes > BRIDGE_MAX_TOTAL_BYTES) throw new AgentRuntimeError("artifact.too_large");
     const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
@@ -3617,15 +3701,15 @@ export function createDualLaneMcpServer(options = {}) {
         let resolvedName = typeof args.fileName === "string" ? args.fileName.trim() : "";
         if (typeof args.filePath === "string" && args.filePath.trim()) {
           const full = path.resolve(args.filePath.trim());
-          rawBytes = fs.readFileSync(full);
+          rawBytes = readBoundedFile(full);
           if (!resolvedName) {
             resolvedName = path.basename(full);
           }
         } else if (typeof args.contentBase64 === "string" && args.contentBase64.trim()) {
           const cleanedB64 = args.contentBase64.trim().replace(/^data:[^;]+;base64,/iu, "");
-          rawBytes = Buffer.from(cleanedB64, "base64");
+          rawBytes = decodeArtifactBase64(cleanedB64, { maxBytes: AGENT_DIRECT_FILE_MAX_BYTES });
         } else if (typeof args.contentText === "string" && args.contentText.length > 0) {
-          rawBytes = Buffer.from(args.contentText, "utf8");
+          rawBytes = normalizeFileBytes(args.contentText);
         } else {
           throw new TypeError("One of filePath, contentText, or contentBase64 is required for duallane_send_file");
         }
@@ -5343,7 +5427,7 @@ async function main() {
       );
     }
     const resolvedPath = path.resolve(filePath);
-    const bytes = fs.readFileSync(resolvedPath);
+    const bytes = readBoundedFile(resolvedPath);
     const fileName =
       typeof flags.name === "string" && flags.name.trim() ? flags.name.trim() : path.basename(resolvedPath);
     const mimeType =

@@ -69,6 +69,20 @@ function mediaUtf8(bytes) {
   }
 }
 
+function mediaSvgPrefix(text) {
+  let offset = 0;
+  // Match the existing whitespace/XML-declaration prefix without a repeated
+  // regexp group whose stack grows with a large, otherwise valid SVG input.
+  while (offset < text.length) {
+    while (offset < text.length && /\s/u.test(text[offset])) offset += 1;
+    if (!text.startsWith("<?xml", offset)) break;
+    const end = text.indexOf("?", offset + 5);
+    if (end < 0 || text[end + 1] !== ">") return false;
+    offset = end + 2;
+  }
+  return text.startsWith("<svg", offset) && (text[offset + 4] === ">" || /\s/u.test(text[offset + 4] || ""));
+}
+
 // This validates the bounded container envelope, not document safety or content.
 // No entry is decompressed, rendered, followed, or executed by the SDK.
 function mediaOfficeEnvelope(bytes, extension) {
@@ -163,7 +177,7 @@ export function validateArtifactBytes(rawBytes, declaredMimeType, options = {}) 
   } else {
     const text = mediaUtf8(bytes);
     matches = text !== null;
-    if (matches && mimeType === "image/svg+xml") matches = /^(?:\s|<\?xml[^?]*\?>)*<svg(?:\s|>)/u.test(text);
+    if (matches && mimeType === "image/svg+xml") matches = mediaSvgPrefix(text);
     if (matches && mimeType === "application/json") {
       try { JSON.parse(text); } catch { matches = false; }
     }

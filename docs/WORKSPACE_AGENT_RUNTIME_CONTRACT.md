@@ -70,6 +70,11 @@ public-media fetch), or `artifact` (a prior scoped artifact ID). Unknown version
 sources, malformed base64, uncompleted results and excess output fail explicitly.
 Text, bitmap, vector, document and retrieved-media results share the artifact
 contract. A URL in Markdown remains a link; it is not automatically fetched.
+Inline Base64 uses the standard RFC 4648 alphabet, required padding and canonical
+unused trailing bits; whitespace, URL-safe substitutions and malformed encodings
+are rejected. Validation uses a linear scan with constant stack space, and checks
+decoded size before allocation: 25 MiB per bridge artifact and 50 MiB cumulatively.
+The structured stdout limit remains 70 MiB and the artifact count remains six.
 Legacy stdout text and inline file tags are a bounded compatibility adapter.
 Local-path tags do not authorize filesystem reads in the new task pipeline.
 
