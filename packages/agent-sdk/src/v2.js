@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { inferMimeTypeFromFileName } from "./index.js";
+import { DualLaneAgentClient } from "./index.js";
 
 /**
  * Verify DualLane Outbound Webhook HMAC-SHA256 signature.
@@ -84,119 +84,21 @@ export function createCardKitBuilder(cardId, cardType = "custom") {
  * DualLane Bot Gateway v2 client with HTTP long-polling, Card Kit v1, and AI streaming replies.
  */
 export class DualLaneBotV2 {
-  constructor({ baseUrl, token, fetchImpl = globalThis.fetch }) {
-    this.baseUrl = String(baseUrl || "").replace(/\/+$/, "");
-    this.token = token;
-    this.fetch = fetchImpl;
+  #client;
+
+  constructor({ baseUrl, token, fetchImpl = globalThis.fetch, requestTimeoutMs }) {
+    this.#client = new DualLaneAgentClient({ url: baseUrl, token, fetch: fetchImpl, requestTimeoutMs });
   }
 
-  async #request(path, init = {}) {
-    const res = await this.fetch(`${this.baseUrl}${path}`, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        "Content-Type": "application/json",
-        ...(init.headers || {}),
-      },
-    });
-    const text = await res.text();
-    const body = text ? JSON.parse(text) : {};
-    if (!res.ok) {
-      const msg = body?.error?.message || `HTTP ${res.status}`;
-      const err = new Error(msg);
-      err.status = res.status;
-      err.code = body?.error?.code;
-      throw err;
-    }
-    return body;
-  }
-
-  getMe() {
-    return this.#request("/api/bot-gateway/v1/me", { method: "GET" });
-  }
-
-  listConversations() {
-    return this.#request("/api/bot/v2/conversations", { method: "GET" });
-  }
-
-  getContext(conversationId, limit = 50) {
-    return this.#request(`/api/bot-gateway/v1/conversations/${encodeURIComponent(conversationId)}/context?limit=${limit}`, {
-      method: "GET",
-    });
-  }
-
-  getUpdates(afterSequence = 0, limit = 50) {
-    return this.#request(`/api/bot/v2/updates?afterSequence=${afterSequence}&limit=${limit}`, {
-      method: "GET",
-    });
-  }
-
-  sendMessage(conversationId, text, options = {}) {
-    return this.#request("/api/bot-gateway/v1/messages", {
-      method: "POST",
-      body: JSON.stringify({
-        conversationId,
-        text,
-        replyToMessageId: options.replyToMessageId,
-        clientMessageId: options.clientMessageId || `sdk_${crypto.randomUUID()}`,
-        idempotencyKey: options.idempotencyKey || `idem_${crypto.randomUUID()}`,
-      }),
-    });
-  }
-
-  editMessage(messageId, plainText) {
-    return this.#request(`/api/bot/v2/messages/${encodeURIComponent(messageId)}`, {
-      method: "PATCH",
-      body: JSON.stringify({ plainText }),
-    });
-  }
-
-  async sendFile(conversationId, bytes, fileName, options = {}) {
-    const raw = typeof bytes === "string" ? Buffer.from(bytes, "utf8") : bytes;
-    const resolvedName = String(fileName || "attachment.bin").trim() || "attachment.bin";
-    const mimeType = String(options.mimeType || inferMimeTypeFromFileName(resolvedName)).trim() || "application/octet-stream";
-    const params = new URLSearchParams();
-    params.set("fileName", resolvedName);
-    params.set("mimeType", mimeType);
-    if (options.text) params.set("text", String(options.text));
-    if (options.replyToMessageId) params.set("replyToMessageId", String(options.replyToMessageId));
-    if (options.clientMessageId) params.set("clientMessageId", String(options.clientMessageId));
-    if (options.sendMessage === false) params.set("sendMessage", "false");
-    const res = await this.fetch(
-      `${this.baseUrl}/api/bot/v2/conversations/${encodeURIComponent(conversationId)}/files?${params.toString()}`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-          "Content-Type": mimeType,
-        },
-        body: raw,
-      }
-    );
-    const text = await res.text();
-    const body = text ? JSON.parse(text) : {};
-    if (!res.ok) {
-      const msg = body?.error?.message || `HTTP ${res.status}`;
-      const err = new Error(msg);
-      err.status = res.status;
-      err.code = body?.error?.code;
-      throw err;
-    }
-    return body;
-  }
-
-  sendCard(conversationId, cardDoc, options = {}) {
-    return this.#request("/api/bot-gateway/v1/cards", {
-      method: "POST",
-      body: JSON.stringify({
-        conversationId,
-        card: cardDoc,
-        replyToMessageId: options.replyToMessageId,
-        clientMessageId: options.clientMessageId || `sdk_${crypto.randomUUID()}`,
-        idempotencyKey: options.idempotencyKey || `idem_${crypto.randomUUID()}`,
-      }),
-    });
-  }
+  getMe() { return this.#client.getMe(); }
+  listConversations() { return this.#client.listConversations(); }
+  getContext(conversationId, limit = 50) { return this.#client.getContext(conversationId, { limit }); }
+  getUpdates(afterSequence = 0, limit = 50) { return this.#client.getUpdates({ afterSequence, limit }); }
+  sendMessage(conversationId, text, options = {}) { return this.#client.sendMessage({ ...options, conversationId, text }); }
+  editMessage(messageId, plainText) { return this.#client.editMessage(messageId, plainText); }
+  sendFile(conversationId, bytes, fileName, options = {}) { return this.#client.sendFile({ ...options, conversationId, bytes, fileName }); }
+  readAttachment(input) { return this.#client.readAttachment(input); }
+  sendCard(conversationId, cardDoc, options = {}) { return this.#client.sendCard({ ...options, conversationId, card: cardDoc }); }
 
   /**
    * Stream an AI async iterable of text chunks into a single DualLane message via batched PATCH edits.

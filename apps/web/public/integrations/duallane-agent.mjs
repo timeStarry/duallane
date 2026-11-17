@@ -12,6 +12,8 @@ import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import dns from "node:dns/promises";
+import net from "node:net";
 import http from "node:http";
 import https from "node:https";
 import os from "node:os";
@@ -292,8 +294,113 @@ export class LiteWebSocket extends EventEmitter {
   }
 }
 
+// --- src/transport.js ---
+// Shared HTTP boundary: credentials stay on the configured gateway origin.
+export function gatewayTransportError(code, statusCode = 0, retryable = false) {
+  const error = new Error("DualLane gateway request failed");
+  error.name = "DualLaneAgentError";
+  error.code = code;
+  error.statusCode = statusCode;
+  error.status = statusCode;
+  error.retryable = retryable;
+  return error;
+}
+
+export async function readGatewayBytes(response, maxBytes = 4 * 1024 * 1024) {
+  const length = Number(response.headers?.get?.("content-length"));
+  if (Number.isFinite(length) && length > maxBytes) {
+    await response.body?.cancel?.().catch(() => {});
+    throw gatewayTransportError("gateway.response_too_large");
+  }
+  if (!response.body?.getReader) {
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.byteLength > maxBytes) throw gatewayTransportError("gateway.response_too_large");
+    return bytes;
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) throw gatewayTransportError("gateway.response_too_large");
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks, total);
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+export async function readGatewayJson(response) {
+  const type = response.headers?.get?.("content-type") || "";
+  if (!/\bapplication\/(?:[a-z0-9.+-]*\+)?json\b/iu.test(type)) {
+    await response.body?.cancel?.().catch(() => {});
+    if (!response.ok) return {};
+    throw gatewayTransportError("gateway.invalid_response", response.status, true);
+  }
+  try {
+    const data = response.body || response.arrayBuffer
+      ? JSON.parse((await readGatewayBytes(response)).toString("utf8"))
+      : await response.json();
+    if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error();
+    return data;
+  } catch (error) {
+    if (error?.code === "gateway.response_too_large") throw error;
+    if (!response.ok) return {};
+    throw gatewayTransportError("gateway.invalid_response", response.status, true);
+  }
+}
+
+export async function requestGateway({ fetchImpl, url, init, timeoutMs = 35_000, signal, read = readGatewayJson }) {
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) {
+    throw new TypeError("requestTimeoutMs is invalid");
+  }
+  const controller = new AbortController();
+  let rejectDeadline;
+  let timedOut = false;
+  const deadline = new Promise((_, reject) => { rejectDeadline = reject; });
+  const abort = () => {
+    controller.abort();
+    rejectDeadline(gatewayTransportError("sdk.aborted"));
+  };
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+    rejectDeadline(gatewayTransportError("network.timeout", 0, true));
+  }, timeoutMs);
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    if (signal?.aborted) throw gatewayTransportError("sdk.aborted");
+    return await Promise.race([deadline, (async () => {
+      const response = await fetchImpl(url, { ...init, redirect: "error", signal: controller.signal });
+      if (!response.ok) {
+        const data = await readGatewayJson(response);
+        const code = /^[a-z0-9][a-z0-9._-]{0,127}$/u.test(data?.error?.code || "")
+          ? data.error.code : "gateway.request_failed";
+        throw gatewayTransportError(code, response.status, response.status === 429 || response.status >= 500);
+      }
+      return await read(response);
+    })()]);
+  } catch (error) {
+    if (timedOut) throw gatewayTransportError("network.timeout", 0, true);
+    if (signal?.aborted) throw gatewayTransportError("sdk.aborted");
+    if (error?.name === "DualLaneAgentError") throw error;
+    // Never retain a fetch cause, URL, response body, or arbitrary server message.
+    throw gatewayTransportError("network.unavailable", 0, true);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+  }
+}
+
 // --- src/index.js ---
-export const DUALLANE_AGENT_SDK_VERSION = "1.0.14";
+export const DUALLANE_AGENT_SDK_VERSION = "1.1.0";
 export const DUALLANE_GATEWAY_VERSION = 1;
 
 export function compareRuntimeSemver(a, b) {
@@ -396,6 +503,7 @@ export class DualLaneAgentClient {
   #heartbeatMs;
   #ackTimeoutMs;
   #connectTimeoutMs;
+  #requestTimeoutMs;
   #reconnect;
   #socket = null;
   #stopped = true;
@@ -419,6 +527,7 @@ export class DualLaneAgentClient {
     this.#heartbeatMs = normalizeDuration(options.heartbeatMs, 20_000, 5_000, 120_000, "heartbeatMs");
     this.#ackTimeoutMs = normalizeDuration(options.ackTimeoutMs, 8_000, 1_000, 60_000, "ackTimeoutMs");
     this.#connectTimeoutMs = normalizeDuration(options.connectTimeoutMs, 10_000, 1_000, 60_000, "connectTimeoutMs");
+    this.#requestTimeoutMs = normalizeDuration(options.requestTimeoutMs, 35_000, 1, 120_000, "requestTimeoutMs");
     this.#reconnect = Object.freeze({
       minDelayMs: normalizeDuration(options.reconnect?.minDelayMs, 500, 100, 60_000, "reconnect.minDelayMs"),
       maxDelayMs: normalizeDuration(options.reconnect?.maxDelayMs, 30_000, 500, 120_000, "reconnect.maxDelayMs"),
@@ -441,6 +550,7 @@ export class DualLaneAgentClient {
     this.#stopped = false;
     this.#lastSequence = normalizeSequence(options.lastSequence ?? 0, true);
     this.#callbacks = {
+      manualAck: options.ack === false,
       onEvent: typeof options.onEvent === "function" ? options.onEvent : async () => {},
       onError: typeof options.onError === "function" ? options.onError : () => {},
       onStatus: typeof options.onStatus === "function" ? options.onStatus : () => {},
@@ -484,7 +594,13 @@ export class DualLaneAgentClient {
 
   async acknowledge(input) {
     const body = normalizeAck(input);
-    return this.#request("POST", "/api/bot-gateway/v1/events/ack", body);
+    const result = await this.#request("POST", "/api/bot-gateway/v1/events/ack", body);
+    if (result.acknowledged !== true
+      || (result.eventId !== undefined && result.eventId !== body.eventId)
+      || (result.sequence !== undefined && result.sequence !== body.sequence)) {
+      throw new DualLaneAgentError("gateway.ack_rejected", "Event acknowledgement was rejected");
+    }
+    return result;
   }
 
   async sendMessage(input = {}) {
@@ -515,7 +631,8 @@ export class DualLaneAgentClient {
       fallbackText: input.fallbackText,
       payload: input.payload,
       format: input.format,
-      feishuCard: input.feishuCard
+      feishuCard: input.feishuCard,
+      card: input.card
     }));
   }
 
@@ -682,6 +799,43 @@ export class DualLaneAgentClient {
     return this.sendFile({ ...input, sendMessage: false });
   }
 
+  async reserveUpload(input = {}) {
+    const byteSize = normalizeDuration(input.byteSize, undefined, 1, 50 * 1024 * 1024, "byteSize");
+    const fileName = String(input.fileName || "attachment.bin").trim();
+    if (!fileName || fileName.length > 240 || /[\x00-\x1f\\/]/u.test(fileName)) throw new TypeError("fileName is invalid");
+    return this.#request("POST", "/api/bot-gateway/v1/attachments", {
+      conversationId: normalizeId(input.conversationId, "conversationId"),
+      fileName,
+      mimeType: String(input.mimeType || inferMimeTypeFromFileName(fileName)),
+      byteSize,
+      visibility: "conversation",
+    });
+  }
+
+  async getUploadStatus(uploadId) {
+    return this.#request("GET", `/api/bot/v2/uploads/${encodeURIComponent(normalizeId(uploadId, "uploadId"))}`);
+  }
+
+  async readAttachment(input = {}) {
+    const conversationId = normalizeId(input.conversationId, "conversationId");
+    const attachmentId = normalizeId(input.attachmentId, "attachmentId");
+    const messageId = normalizeId(input.messageId, "messageId");
+    const mode = input.mode ?? "content";
+    if (mode !== "content" && mode !== "preview") throw new TypeError("attachment mode is invalid");
+    const limit = mode === "preview" ? 64 * 1024 : 10 * 1024 * 1024;
+    const maxBytes = normalizeDuration(input.maxBytes, limit, 1, limit, "maxBytes");
+    const query = new URLSearchParams({ messageId, mode });
+    return this.#gatewayRequest("GET", `/api/bot/v2/conversations/${encodeURIComponent(conversationId)}/attachments/${encodeURIComponent(attachmentId)}/content?${query}`, {
+      signal: input.signal,
+      accept: "application/octet-stream",
+      read: async (response) => {
+        const mimeType = String(response.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+        const bytes = await readGatewayBytes(response, maxBytes);
+        return { bytes, mimeType, byteSize: bytes.byteLength };
+      },
+    });
+  }
+
   async completeUploadContent(uploadId, rawBytes, mimeType = "application/octet-stream") {
     const id = normalizeId(uploadId, "uploadId");
     if (!(rawBytes instanceof Uint8Array) || rawBytes.byteLength === 0) {
@@ -701,19 +855,20 @@ export class DualLaneAgentClient {
     const timeoutRaw = options.timeout === undefined ? 0 : Number(options.timeout);
     const timeout = Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? Math.min(25, Math.floor(timeoutRaw)) : 0;
     const timeoutParam = timeout > 0 ? `&timeout=${timeout}` : "";
-    return this.#request("GET", `/api/bot/v2/updates?afterSequence=${afterSequence}&limit=${limit}${timeoutParam}`);
+    return this.#request("GET", `/api/bot/v2/updates?afterSequence=${afterSequence}&limit=${limit}${timeoutParam}`, undefined, { signal: options.signal, timeoutMs: options.timeoutMs });
   }
 
   async pollNextEvent(options = {}) {
     const deadlineMs = Date.now() + Math.max(1000, Number(options.timeoutMs || 60_000));
     const filterConv = typeof options.conversationId === "string" ? options.conversationId.trim() : "";
-    let cursor = normalizeSequence(options.afterSequence ?? 0, true);
+    const initialCursor = normalizeSequence(options.afterSequence ?? 0, true);
+    let cursor = initialCursor;
     const signal = options.signal;
 
     while (Date.now() < deadlineMs && !signal?.aborted) {
       const remainingSec = Math.max(1, Math.ceil((deadlineMs - Date.now()) / 1000));
       const longPollSec = Math.min(20, remainingSec);
-      let res = await this.getUpdates({ afterSequence: cursor, limit: 50, timeout: longPollSec });
+      const res = await this.getUpdates({ afterSequence: cursor, limit: 50, timeout: longPollSec, signal, timeoutMs: Math.min(this.#requestTimeoutMs, Math.max(1, deadlineMs - Date.now())) });
       if (res?.syncRequired && Number.isSafeInteger(res?.currentSequence)) {
         cursor = Math.max(0, Number(res.currentSequence));
         await options.onSyncRequired?.({ currentSequence: cursor, reason: "sync_required" });
@@ -721,75 +876,68 @@ export class DualLaneAgentClient {
       }
       const events = Array.isArray(res?.events) ? res.events : [];
       for (const ev of events) {
-        const seq = Number(ev?.sequence || 0);
-        if (seq > cursor) {
-          cursor = seq;
-          this.#lastSequence = Math.max(this.#lastSequence, seq);
-        }
-        if (ev?.eventId && seq > 0) {
-          await this.acknowledge({ eventId: ev.eventId, sequence: seq }).catch(() => {});
-        }
-        await options.onCursorAdvance?.(cursor);
+        const seq = normalizeSequence(ev?.sequence);
+        normalizeId(ev?.eventId, "eventId");
         if (filterConv && ev?.conversationId !== filterConv) {
+          // A filtered read must not acknowledge or persist another conversation.
+          cursor = Math.max(cursor, seq);
           continue;
         }
-        return { timeout: false, event: ev, lastSequence: cursor, transport: "poll" };
+        if (options.ack === true) {
+          await this.acknowledge({ eventId: ev.eventId, sequence: seq });
+          cursor = Math.max(cursor, seq);
+          if (!filterConv) {
+            this.#lastSequence = Math.max(this.#lastSequence, seq);
+            await options.onCursorAdvance?.(cursor);
+          }
+        }
+        return { timeout: false, event: ev, lastSequence: Math.max(initialCursor, this.#lastSequence), nextSequence: seq, requiresAck: options.ack !== true, transport: "poll" };
       }
       if (events.length === 0 && Date.now() < deadlineMs && !signal?.aborted) {
         await new Promise((r) => setTimeout(r, 400));
       }
     }
-    return { timeout: true, lastSequence: cursor, transport: "poll" };
+    return { timeout: true, lastSequence: Math.max(initialCursor, this.#lastSequence), transport: "poll" };
   }
 
-  async #request(method, path, body) {
-    let response;
-    try {
-      response = await this.#fetch(new URL(path, this.#origin), {
-        method,
-        headers: compact({
-          authorization: `Bearer ${this.#token}`,
-          accept: "application/json",
-          "content-type": body === undefined ? undefined : "application/json",
-          "x-duallane-adapter-version": this.#adapterVersion
-        }),
-        body: body === undefined ? undefined : JSON.stringify(body)
-      });
-    } catch (cause) {
-      throw new DualLaneAgentError("network.unavailable", "DualLane Agent Gateway is unavailable", { cause, retryable: true });
-    }
-    const payload = await readJson(response);
-    if (!response.ok) {
-      const code = safeErrorCode(payload?.error?.code, "gateway.request_failed");
-      const message = redactToken(safeErrorText(payload?.error?.message, "DualLane Agent Gateway request failed"), this.#token);
-      throw new DualLaneAgentError(code, message, { statusCode: response.status, retryable: response.status === 429 || response.status >= 500 });
-    }
-    return payload;
+  async #request(method, path, body, options = {}) {
+    return this.#gatewayRequest(method, path, {
+      body: body === undefined ? undefined : JSON.stringify(body),
+      contentType: body === undefined ? undefined : "application/json",
+      ...options,
+    });
   }
 
   async #requestBinary(method, path, rawBytes, contentType = "application/octet-stream") {
-    let response;
+    return this.#gatewayRequest(method, path, { body: rawBytes, contentType, byteSize: rawBytes.byteLength });
+  }
+
+  async #gatewayRequest(method, route, options = {}) {
     try {
-      response = await this.#fetch(new URL(path, this.#origin), {
-        method,
-        headers: compact({
-          authorization: `Bearer ${this.#token}`,
-          accept: "application/json",
-          "content-type": contentType,
-          "x-duallane-adapter-version": this.#adapterVersion
-        }),
-        body: rawBytes
+      return await requestGateway({
+        fetchImpl: this.#fetch,
+        url: new URL(route, this.#origin),
+        timeoutMs: options.timeoutMs ?? this.#requestTimeoutMs,
+        signal: options.signal,
+        read: options.read,
+        init: {
+          method,
+          headers: compact({
+            authorization: `Bearer ${this.#token}`,
+            accept: options.accept || "application/json",
+            "content-type": options.contentType,
+            "content-length": options.byteSize === undefined ? undefined : String(options.byteSize),
+            "x-duallane-adapter-version": this.#adapterVersion,
+          }),
+          body: options.body,
+        },
       });
-    } catch (cause) {
-      throw new DualLaneAgentError("network.unavailable", "DualLane Agent Gateway is unavailable", { cause, retryable: true });
+    } catch (error) {
+      throw new DualLaneAgentError(error.code || "network.unavailable", "DualLane Agent Gateway request failed", {
+        statusCode: error.statusCode,
+        retryable: error.retryable === true,
+      });
     }
-    const payload = await readJson(response);
-    if (!response.ok) {
-      const code = safeErrorCode(payload?.error?.code, "gateway.request_failed");
-      const message = redactToken(safeErrorText(payload?.error?.message, "DualLane Agent Gateway request failed"), this.#token);
-      throw new DualLaneAgentError(code, message, { statusCode: response.status, retryable: response.status === 429 || response.status >= 500 });
-    }
-    return payload;
   }
 
   async #open() {
@@ -851,16 +999,30 @@ export class DualLaneAgentClient {
           return;
         }
         if (frame.type === "event") {
-          this.#eventChain = this.#eventChain.then(() => this.#consumeEvent(frame.event)).catch((error) => this.#reportError(error));
+          this.#eventChain = this.#eventChain.then(async () => {
+            if (generation !== this.#generation || this.#stopped) return;
+            await this.#consumeEvent(frame.event);
+          }).catch((error) => {
+            this.#reportError(error);
+            if (generation === this.#generation) {
+              this.#generation += 1;
+              this.#socket = null;
+              socket.close(1011, "event not accepted");
+              this.#rejectPendingAcks(new DualLaneAgentError("gateway.disconnected", "Event was not accepted", { retryable: true }));
+              if (!this.#stopped) this.#scheduleReconnect();
+            }
+          });
           return;
         }
         if (frame.type === "sync_required") {
           const currentSequence = normalizeSequence(frame.currentSequence ?? 0, true);
           this.#eventChain = this.#eventChain.then(async () => {
+            if (generation !== this.#generation || this.#stopped) return;
             await this.#callbacks.onSyncRequired?.({
               currentSequence,
               reason: safeErrorText(frame.reason, "sync_required")
             });
+            if (generation !== this.#generation || this.#stopped) return;
             this.#lastSequence = currentSequence;
             if (!ready) {
               ready = true;
@@ -901,7 +1063,9 @@ export class DualLaneAgentClient {
     const sequence = normalizeSequence(event.sequence);
     const eventId = normalizeId(event.eventId, "eventId");
     if (sequence > this.#lastSequence) await this.#callbacks.onEvent?.(Object.freeze({ ...event, sequence, eventId }));
-    await this.#ackOverSocket({ sequence, eventId });
+    if (this.#callbacks.manualAck) return;
+    const ack = await this.#ackOverSocket({ sequence, eventId });
+    if (!ack.acknowledged) throw new DualLaneAgentError("gateway.ack_rejected", "Event acknowledgement was rejected");
     this.#lastSequence = Math.max(this.#lastSequence, sequence);
   }
 
@@ -1140,6 +1304,1421 @@ export function inferMimeTypeFromFileName(fileName) {
   }
 }
 
+// --- src/media.js ---
+const MEDIA_MIB = 1024 * 1024;
+const MEDIA_HARD_MAX_BYTES = 50 * MEDIA_MIB;
+const MEDIA_REMOTE_TYPES = new Set([
+  "image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "text/plain",
+]);
+const MEDIA_EXTENSIONS = new Map([
+  ["image/png", "png"], ["image/jpeg", "jpg"], ["image/gif", "gif"], ["image/webp", "webp"],
+  ["application/pdf", "pdf"], ["image/svg+xml", "svg"], ["text/plain", "txt"],
+  ["text/markdown", "md"], ["text/csv", "csv"], ["text/html", "html"], ["text/css", "css"],
+  ["text/javascript", "js"], ["application/javascript", "js"], ["text/xml", "xml"],
+  ["application/xml", "xml"], ["application/json", "json"],
+  ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx"],
+  ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"],
+  ["application/vnd.openxmlformats-officedocument.presentationml.presentation", "pptx"],
+]);
+const MEDIA_OFFICE_PARTS = new Map([
+  ["docx", "word/document.xml"], ["xlsx", "xl/workbook.xml"], ["pptx", "ppt/presentation.xml"],
+]);
+const MEDIA_ERROR_MESSAGES = {
+  "media.disabled": "Public media retrieval is not enabled.",
+  "media.invalid_options": "Media retrieval limits are invalid.",
+  "media.invalid_url": "The media URL is invalid.",
+  "media.destination_denied": "The media destination is not permitted.",
+  "media.dns_failed": "The media destination could not be resolved.",
+  "media.network": "The media connection failed.",
+  "media.timeout": "Media retrieval timed out.",
+  "media.cancelled": "Media retrieval was cancelled.",
+  "media.redirect_limit": "The media redirect limit was reached.",
+  "media.response_invalid": "The media response is invalid.",
+  "media.http_error": "The media server refused the request.",
+  "media.encoding_unsupported": "Compressed media responses are not supported.",
+  "media.too_large": "The media exceeds the byte limit.",
+  "artifact.invalid_bytes": "The artifact must contain non-empty bytes.",
+  "artifact.too_large": "The artifact exceeds the byte limit.",
+  "artifact.unsupported_type": "The artifact format is not supported.",
+  "artifact.type_mismatch": "The artifact bytes do not match the declared format.",
+};
+
+export class MediaPolicyError extends Error {
+  constructor(code, options = {}) {
+    super(MEDIA_ERROR_MESSAGES[code] || "Media validation failed.");
+    this.name = "MediaPolicyError";
+    this.code = Object.hasOwn(MEDIA_ERROR_MESSAGES, code) ? code : "media.response_invalid";
+    this.retryable = options.retryable === true;
+    if (Number.isInteger(options.status)) this.status = options.status;
+  }
+}
+
+function mediaLimit(value, fallback, maximum) {
+  const result = value === undefined ? fallback : value;
+  if (!Number.isSafeInteger(result) || result < 1 || result > maximum) {
+    throw new MediaPolicyError("media.invalid_options");
+  }
+  return result;
+}
+
+function mediaUtf8(bytes) {
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(text)) return null;
+    return text;
+  } catch {
+    return null;
+  }
+}
+
+// This validates the bounded container envelope, not document safety or content.
+// No entry is decompressed, rendered, followed, or executed by the SDK.
+function mediaOfficeEnvelope(bytes, extension) {
+  if (bytes.length < 22 || bytes.readUInt32LE(0) !== 0x04034b50) return false;
+  let end = -1;
+  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65557); i -= 1) {
+    if (bytes.readUInt32LE(i) === 0x06054b50 && i + 22 + bytes.readUInt16LE(i + 20) === bytes.length) {
+      end = i;
+      break;
+    }
+  }
+  if (end < 0 || bytes.readUInt16LE(end + 4) !== 0 || bytes.readUInt16LE(end + 6) !== 0) return false;
+  const count = bytes.readUInt16LE(end + 10);
+  const centralSize = bytes.readUInt32LE(end + 12);
+  const centralStart = bytes.readUInt32LE(end + 16);
+  if (count < 2 || count > 2048 || bytes.readUInt16LE(end + 8) !== count || centralStart + centralSize !== end) return false;
+  const names = new Set();
+  const ranges = [];
+  let offset = centralStart;
+  let expanded = 0;
+  for (let i = 0; i < count; i += 1) {
+    if (offset + 46 > end || bytes.readUInt32LE(offset) !== 0x02014b50) return false;
+    const flags = bytes.readUInt16LE(offset + 8);
+    const method = bytes.readUInt16LE(offset + 10);
+    const compressed = bytes.readUInt32LE(offset + 20);
+    const size = bytes.readUInt32LE(offset + 24);
+    const nameLength = bytes.readUInt16LE(offset + 28);
+    const extraLength = bytes.readUInt16LE(offset + 30);
+    const commentLength = bytes.readUInt16LE(offset + 32);
+    const entryEnd = offset + 46 + nameLength + extraLength + commentLength;
+    const mode = bytes.readUInt32LE(offset + 38) >>> 16;
+    const local = bytes.readUInt32LE(offset + 42);
+    if (entryEnd > end || nameLength < 1 || nameLength > 1024 || flags & 0x41 || ![0, 8].includes(method) ||
+        (method === 0 && compressed !== size) ||
+        bytes.readUInt16LE(offset + 34) !== 0 || (mode & 0xf000) === 0xa000) return false;
+    const nameBytes = bytes.subarray(offset + 46, offset + 46 + nameLength);
+    const name = mediaUtf8(nameBytes);
+    if (!name || name.startsWith("/") || /[\\:\u0000]/u.test(name) ||
+        name.split("/").some((part) => part === "." || part === "..") || names.has(name)) return false;
+    expanded += size;
+    if (expanded > MEDIA_HARD_MAX_BYTES || compressed > MEDIA_HARD_MAX_BYTES ||
+        size === 0xffffffff || local + 30 > centralStart || bytes.readUInt32LE(local) !== 0x04034b50) return false;
+    const localNameLength = bytes.readUInt16LE(local + 26);
+    const localExtraLength = bytes.readUInt16LE(local + 28);
+    const dataStart = local + 30 + localNameLength + localExtraLength;
+    if (dataStart + compressed > centralStart || localNameLength !== nameLength ||
+        bytes.readUInt16LE(local + 6) !== flags || bytes.readUInt16LE(local + 8) !== method ||
+        !bytes.subarray(local + 30, local + 30 + nameLength).equals(nameBytes)) return false;
+    if (!(flags & 8) && (bytes.readUInt32LE(local + 18) !== compressed || bytes.readUInt32LE(local + 22) !== size)) return false;
+    ranges.push([local, dataStart + compressed]);
+    names.add(name);
+    offset = entryEnd;
+  }
+  ranges.sort((a, b) => a[0] - b[0]);
+  if (ranges.some((range, index) => index > 0 && range[0] < ranges[index - 1][1])) return false;
+  return offset === end && names.has("[Content_Types].xml") && names.has(MEDIA_OFFICE_PARTS.get(extension));
+}
+
+/** Validate an opaque artifact envelope; this does not render or sanitize documents. */
+export function validateArtifactBytes(rawBytes, declaredMimeType, options = {}) {
+  const maxBytes = mediaLimit(options.maxBytes, 25 * MEDIA_MIB, MEDIA_HARD_MAX_BYTES);
+  if (!(rawBytes instanceof Uint8Array) || rawBytes.byteLength === 0) {
+    throw new MediaPolicyError("artifact.invalid_bytes");
+  }
+  if (rawBytes.byteLength > maxBytes) throw new MediaPolicyError("artifact.too_large");
+  const bytes = Buffer.from(rawBytes.buffer, rawBytes.byteOffset, rawBytes.byteLength);
+  const mimeType = String(declaredMimeType || "").split(";", 1)[0].trim().toLowerCase();
+  const extension = MEDIA_EXTENSIONS.get(mimeType);
+  if (!extension || (options.source === "https" && !MEDIA_REMOTE_TYPES.has(mimeType))) {
+    throw new MediaPolicyError("artifact.unsupported_type");
+  }
+  let matches = false;
+  if (mimeType === "image/png") {
+    matches = bytes.length >= 33 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) &&
+      bytes.readUInt32BE(8) === 13 && bytes.toString("ascii", 12, 16) === "IHDR" &&
+      bytes.readUInt32BE(16) > 0 && bytes.readUInt32BE(20) > 0;
+  } else if (mimeType === "image/jpeg") {
+    matches = bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff &&
+      bytes[bytes.length - 2] === 0xff && bytes[bytes.length - 1] === 0xd9;
+  } else if (mimeType === "image/gif") {
+    matches = bytes.length >= 14 && ["GIF87a", "GIF89a"].includes(bytes.toString("ascii", 0, 6)) &&
+      bytes.readUInt16LE(6) > 0 && bytes.readUInt16LE(8) > 0 && bytes[bytes.length - 1] === 0x3b;
+  } else if (mimeType === "image/webp") {
+    matches = bytes.length >= 20 && bytes.toString("ascii", 0, 4) === "RIFF" &&
+      bytes.toString("ascii", 8, 12) === "WEBP" && ["VP8 ", "VP8L", "VP8X"].includes(bytes.toString("ascii", 12, 16)) &&
+      bytes.readUInt32LE(4) + 8 === bytes.length;
+  } else if (mimeType === "application/pdf") {
+    matches = bytes.length >= 14 && /^%PDF-[12]\.\d/u.test(bytes.toString("ascii", 0, 8)) &&
+      /%%EOF\s*$/u.test(bytes.subarray(Math.max(0, bytes.length - 1024)).toString("ascii"));
+  } else if (MEDIA_OFFICE_PARTS.has(extension)) {
+    matches = mediaOfficeEnvelope(bytes, extension);
+  } else {
+    const text = mediaUtf8(bytes);
+    matches = text !== null;
+    if (matches && mimeType === "image/svg+xml") matches = /^(?:\s|<\?xml[^?]*\?>)*<svg(?:\s|>)/u.test(text);
+    if (matches && mimeType === "application/json") {
+      try { JSON.parse(text); } catch { matches = false; }
+    }
+    if (matches && options.source === "https") {
+      // A remote HTML error/login page is not a text attachment.
+      matches = !/^\s*(?:<!doctype\s+html|<html|<script|<svg|<\?xml)/iu.test(text);
+    }
+  }
+  if (!matches) throw new MediaPolicyError("artifact.type_mismatch");
+  return { mimeType, byteSize: bytes.length, sha256: crypto.createHash("sha256").update(bytes).digest("hex"), extension };
+}
+
+function mediaIpv4Public(address) {
+  const [a, b, c] = address.split(".").map(Number);
+  return !(a === 0 || a === 10 || a === 127 || a >= 224 ||
+    (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) ||
+    (a === 192 && b === 0 && (c === 0 || c === 2)) || (a === 192 && b === 88 && c === 99) ||
+    (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) ||
+    (a === 203 && b === 0 && c === 113));
+}
+
+function mediaIpv6Words(address) {
+  if (address.includes(".") || address.includes("%")) return null;
+  const halves = address.toLowerCase().split("::");
+  const left = halves[0] ? halves[0].split(":") : [];
+  const right = halves[1] ? halves[1].split(":") : [];
+  return [...left, ...Array(Math.max(0, 8 - left.length - right.length)).fill("0"), ...right].map((part) => parseInt(part, 16));
+}
+
+function mediaPublicAddress(address) {
+  if (typeof address !== "string" || address.length > 64) return false;
+  const family = net.isIP(address);
+  if (family === 4) return mediaIpv4Public(address);
+  if (family !== 6) return false;
+  const words = mediaIpv6Words(address);
+  // Only ordinary global unicast, excluding protocol, transition and documentation ranges.
+  // This deliberately rejects mapped/NAT64/6to4/Teredo even when their embedded IPv4 is public.
+  return words !== null && (words[0] & 0xe000) === 0x2000 &&
+    !(words[0] === 0x2001 && words[1] < 0x200) &&
+    !(words[0] === 0x2001 && words[1] === 0xdb8) && words[0] !== 0x2002 &&
+    !(words[0] === 0x3fff && (words[1] & 0xf000) === 0);
+}
+
+function mediaDestination(rawUrl) {
+  let url;
+  try { url = new URL(rawUrl); } catch { throw new MediaPolicyError("media.invalid_url"); }
+  if (typeof rawUrl !== "string" || rawUrl.length > 8192 || /[\u0000-\u0020\u007f\\]/u.test(rawUrl)) {
+    throw new MediaPolicyError("media.invalid_url");
+  }
+  if (url.protocol !== "https:" || (url.port && url.port !== "443") || url.username || url.password) {
+    throw new MediaPolicyError("media.destination_denied");
+  }
+  const hostname = url.hostname.replace(/^\[|\]$/gu, "");
+  if (!hostname || hostname.endsWith(".") || (!net.isIP(hostname) && !hostname.includes("."))) {
+    throw new MediaPolicyError("media.destination_denied");
+  }
+  url.hash = "";
+  return { url, hostname };
+}
+
+function mediaAbortError(signal) {
+  return signal.reason instanceof MediaPolicyError ? signal.reason : new MediaPolicyError("media.cancelled");
+}
+
+function mediaAwaitSignal(promise, signal) {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(mediaAbortError(signal));
+    if (signal.aborted) return abort();
+    signal.addEventListener("abort", abort, { once: true });
+    Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
+async function mediaResolveAddress(hostname, signal, resolver) {
+  if (signal.aborted) throw mediaAbortError(signal);
+  let addresses;
+  try {
+    const family = net.isIP(hostname);
+    if (family) {
+      addresses = [{ address: hostname, family }];
+    } else if (resolver) {
+      const resolveFamily = async (version) => {
+        try {
+          const records = await (version === 4 ? resolver.resolve4(hostname) : resolver.resolve6(hostname));
+          return records.map((address) => ({ address, family: version }));
+        } catch (error) {
+          if (["ENODATA", "ENOTFOUND"].includes(error.code)) return [];
+          throw error;
+        }
+      };
+      addresses = (await mediaAwaitSignal(Promise.all([resolveFamily(4), resolveFamily(6)]), signal)).flat();
+    } else {
+      addresses = await mediaAwaitSignal(dns.lookup(hostname, { all: true, verbatim: true }), signal);
+    }
+  } catch (error) {
+    if (signal.aborted) throw mediaAbortError(signal);
+    if (error instanceof MediaPolicyError) throw error;
+    throw new MediaPolicyError("media.dns_failed", { retryable: true });
+  }
+  if (!Array.isArray(addresses) || addresses.length < 1 || addresses.length > 64 ||
+      addresses.some((entry) => !mediaPublicAddress(entry.address) || net.isIP(entry.address) !== entry.family)) {
+    throw new MediaPolicyError("media.destination_denied");
+  }
+  return addresses[0];
+}
+
+function mediaSameAddress(actual, expected) {
+  if (typeof actual !== "string" || typeof expected !== "string") return false;
+  if (actual === expected) return true;
+  if (net.isIP(expected) === 4 && actual === `::ffff:${expected}`) return true;
+  return net.isIP(actual) === 6 && net.isIP(expected) === 6 &&
+    String(mediaIpv6Words(actual)) === String(mediaIpv6Words(expected));
+}
+
+function mediaRequest(destination, pinned, limits, signal) {
+  return new Promise((resolve, reject) => {
+    let request;
+    let response;
+    let settled = false;
+    let secure = false;
+    let connectionTimer;
+    const agent = new https.Agent({ keepAlive: false, maxSockets: 1, maxCachedSessions: 0, proxyEnv: {} });
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(connectionTimer);
+      signal.removeEventListener("abort", onAbort);
+      if (error) reject(error); else resolve(result);
+      response?.destroy();
+      request?.destroy();
+      agent.destroy();
+    };
+    const onAbort = () => finish(mediaAbortError(signal));
+    if (signal.aborted) return finish(mediaAbortError(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      request = https.request(destination.url, {
+        method: "GET", agent, rejectUnauthorized: true,
+        maxHeaderSize: 16 * 1024,
+        family: pinned.family,
+        lookup: (_hostname, opts, callback) => {
+          const cb = typeof opts === "function" ? opts : callback;
+          if (opts?.all) cb(null, [{ address: pinned.address, family: pinned.family }]);
+          else cb(null, pinned.address, pinned.family);
+        },
+        headers: {
+          Accept: [...MEDIA_REMOTE_TYPES].join(", "),
+          "Accept-Encoding": "identity",
+          "User-Agent": "DualLane-Media/1",
+        },
+      }, (incoming) => {
+        response = incoming;
+        incoming.on("error", () => finish(new MediaPolicyError("media.network", { retryable: true })));
+        if (settled) return incoming.destroy();
+        if (!secure || !mediaSameAddress(incoming.socket?.remoteAddress, pinned.address)) {
+          return finish(new MediaPolicyError("media.destination_denied"));
+        }
+        const status = incoming.statusCode;
+        if ([301, 302, 303, 307, 308].includes(status)) {
+          const location = incoming.headers.location;
+          if (typeof location !== "string" || !location) return finish(new MediaPolicyError("media.response_invalid"));
+          return finish(null, { redirect: location });
+        }
+        if (status !== 200) return finish(new MediaPolicyError("media.http_error", { status, retryable: status >= 500 || status === 429 }));
+        const encoding = incoming.headers["content-encoding"];
+        if (encoding && String(encoding).toLowerCase() !== "identity") return finish(new MediaPolicyError("media.encoding_unsupported"));
+        const type = incoming.headers["content-type"];
+        if (typeof type !== "string" || !MEDIA_REMOTE_TYPES.has(type.split(";", 1)[0].trim().toLowerCase())) {
+          return finish(new MediaPolicyError("artifact.unsupported_type"));
+        }
+        const lengthHeader = incoming.headers["content-length"];
+        let declaredLength;
+        if (lengthHeader !== undefined) {
+          if (typeof lengthHeader !== "string" || !/^\d+$/u.test(lengthHeader)) return finish(new MediaPolicyError("media.response_invalid"));
+          declaredLength = Number(lengthHeader);
+          if (!Number.isSafeInteger(declaredLength) || declaredLength > limits.maxBytes) return finish(new MediaPolicyError("media.too_large"));
+        }
+        const chunks = [];
+        let received = 0;
+        incoming.on("data", (chunk) => {
+          if (settled) return;
+          if (!(chunk instanceof Uint8Array)) return finish(new MediaPolicyError("media.response_invalid"));
+          received += chunk.byteLength;
+          if (received > limits.maxBytes) return finish(new MediaPolicyError("media.too_large"));
+          chunks.push(chunk);
+        });
+        incoming.on("aborted", () => finish(new MediaPolicyError("media.network", { retryable: true })));
+        incoming.on("end", () => {
+          if (settled) return;
+          if (incoming.complete !== true || (declaredLength !== undefined && received !== declaredLength)) {
+            return finish(new MediaPolicyError("media.response_invalid"));
+          }
+          finish(null, { bytes: Buffer.concat(chunks, received), mimeType: type });
+        });
+      });
+      request.on("socket", (socket) => {
+        socket.once("secureConnect", () => {
+          if (!socket.authorized || !mediaSameAddress(socket.remoteAddress, pinned.address)) {
+            return finish(new MediaPolicyError("media.destination_denied"));
+          }
+          secure = true;
+          clearTimeout(connectionTimer);
+        });
+      });
+      request.on("error", () => finish(new MediaPolicyError("media.network", { retryable: true })));
+      connectionTimer = setTimeout(() => finish(new MediaPolicyError("media.timeout", { retryable: true })), limits.connectTimeoutMs);
+      request.end();
+    } catch {
+      finish(new MediaPolicyError("media.network", { retryable: true }));
+    }
+  });
+}
+
+/** Retrieve public media with no ambient credentials, proxy, or caller-supplied headers. */
+export async function fetchPublicMedia(rawUrl, options = {}) {
+  if (options.enabled !== true) throw new MediaPolicyError("media.disabled");
+  const limits = {
+    maxBytes: mediaLimit(options.maxBytes, 10 * MEDIA_MIB, MEDIA_HARD_MAX_BYTES),
+    timeoutMs: mediaLimit(options.timeoutMs, 15000, 60000),
+    connectTimeoutMs: mediaLimit(options.connectTimeoutMs, 5000, 15000),
+    maxRedirects: options.maxRedirects === undefined ? 3 : options.maxRedirects,
+  };
+  if (!Number.isInteger(limits.maxRedirects) || limits.maxRedirects < 0 || limits.maxRedirects > 3 ||
+      (options.signal !== undefined && !(options.signal instanceof AbortSignal))) {
+    throw new MediaPolicyError("media.invalid_options");
+  }
+  let resolver;
+  if (options.dnsServers !== undefined) {
+    if (!Array.isArray(options.dnsServers) || options.dnsServers.length < 1 || options.dnsServers.length > 3 ||
+        options.dnsServers.some((server) => typeof server !== "string" || !mediaPublicAddress(server))) {
+      throw new MediaPolicyError("media.invalid_options");
+    }
+    // This is operator configuration, not an input from a bridge result or chat.
+    // A separate resolver prevents changing the process-global DNS configuration.
+    try {
+      resolver = new dns.Resolver({ timeout: Math.min(limits.timeoutMs, limits.connectTimeoutMs), tries: 1 });
+      resolver.setServers([...options.dnsServers]);
+    } catch {
+      throw new MediaPolicyError("media.invalid_options");
+    }
+  }
+  const controller = new AbortController();
+  const onExternalAbort = () => controller.abort(new MediaPolicyError("media.cancelled"));
+  const onResolverAbort = () => resolver?.cancel();
+  controller.signal.addEventListener("abort", onResolverAbort, { once: true });
+  const timer = setTimeout(() => controller.abort(new MediaPolicyError("media.timeout", { retryable: true })), limits.timeoutMs);
+  options.signal?.addEventListener("abort", onExternalAbort, { once: true });
+  if (options.signal?.aborted) onExternalAbort();
+  try {
+    let destination = mediaDestination(rawUrl);
+    for (let redirectCount = 0; ; redirectCount += 1) {
+      const pinned = await mediaResolveAddress(destination.hostname, controller.signal, resolver);
+      const result = await mediaRequest(destination, pinned, limits, controller.signal);
+      if (result.redirect !== undefined) {
+        if (redirectCount >= limits.maxRedirects) throw new MediaPolicyError("media.redirect_limit");
+        let next;
+        try { next = new URL(result.redirect, destination.url).href; } catch { throw new MediaPolicyError("media.invalid_url"); }
+        if (/[\u0000-\u0020\u007f\\]/u.test(result.redirect)) throw new MediaPolicyError("media.invalid_url");
+        destination = mediaDestination(next);
+        continue;
+      }
+      const verified = validateArtifactBytes(result.bytes, result.mimeType, { maxBytes: limits.maxBytes, source: "https" });
+      return {
+        bytes: result.bytes, mimeType: verified.mimeType,
+        fileName: `media.${verified.extension}`, byteSize: verified.byteSize, sha256: verified.sha256,
+        source: { kind: "https", origin: destination.url.origin, redirectCount },
+      };
+    }
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener("abort", onExternalAbort);
+    controller.signal.removeEventListener("abort", onResolverAbort);
+    resolver?.cancel();
+  }
+}
+
+// --- src/inbound.js ---
+// Only the trigger's logical references enter the model input; history and
+// generated local paths do not implicitly authorize another download.
+export async function prepareAgentInputs({ client, event, triggerMessage, context, conversation, scopes = [], signal }) {
+  const conversationId = event?.conversationId;
+  const messageId = triggerMessage?.id;
+  if (!conversationId || !messageId || (conversation?.id && conversation.id !== conversationId)) return [];
+  const authorized = context?.messages?.find((message) => message.id === messageId);
+  if (!authorized) return [];
+  const blocks = Array.isArray(authorized.content?.blocks) ? authorized.content.blocks : [];
+  const ids = [...new Set(blocks.filter((block) => block.type === "attachment").map((block) => block.attachmentId).filter((id) => typeof id === "string"))];
+  if (ids.length > 6) throw Object.assign(new Error("Too many input attachments"), { code: "input.attachment_limit" });
+  const canRead = scopes.includes("messages:read_context") && scopes.includes("files:read_content");
+  const canPreview = scopes.includes("messages:read_context") && scopes.includes("files:read_preview");
+  let remaining = 10 * 1024 * 1024;
+  const inputs = [];
+  for (const attachmentId of ids) {
+    const reference = { attachmentId, messageId, conversationId };
+    if (!canRead && !canPreview) {
+      inputs.push({ ...reference, status: "unavailable", code: "input.attachment_scope_required" });
+      continue;
+    }
+    if (remaining <= 0) throw Object.assign(new Error("Input attachments exceed the byte limit"), { code: "input.attachment_limit" });
+    try {
+      const mode = canRead ? "content" : "preview";
+      const result = await client.readAttachment({ ...reference, mode, maxBytes: Math.min(remaining, mode === "preview" ? 64 * 1024 : remaining), signal });
+      const available = remaining;
+      remaining -= result.bytes.byteLength;
+      validateArtifactBytes(result.bytes, result.mimeType, { source: "https", maxBytes: available });
+      inputs.push({
+        ...reference,
+        status: "available",
+        kind: result.mimeType.startsWith("image/") ? "image" : result.mimeType === "text/plain" ? "text" : "document",
+        mimeType: result.mimeType,
+        byteSize: result.bytes.byteLength,
+        encoding: result.mimeType === "text/plain" ? "utf8" : "base64",
+        data: result.mimeType === "text/plain" ? result.bytes.toString("utf8") : result.bytes.toString("base64"),
+        trust: "untrusted-attachment",
+      });
+    } catch (error) {
+      if (error?.code === "sdk.aborted") throw error;
+      if (error?.code === "gateway.response_too_large") remaining = 0;
+      const code = typeof error?.code === "string" && /^[a-z0-9][a-z0-9._-]{0,80}$/u.test(error.code) ? error.code : "input.attachment_unavailable";
+      inputs.push({ ...reference, status: "unavailable", code });
+    }
+  }
+  return inputs;
+}
+
+// --- src/bridge-protocol.js ---
+export const AGENT_BRIDGE_PROTOCOL_VERSION = 1;
+export const AGENT_MAX_RESULT_BYTES = 70 * 1024 * 1024;
+const BRIDGE_MAX_ARTIFACT_BYTES = 25 * 1024 * 1024;
+const BRIDGE_MAX_TOTAL_BYTES = 50 * 1024 * 1024;
+
+export class AgentRuntimeError extends Error {
+  constructor(code, { retryable = false, stage = "running" } = {}) {
+    super(code);
+    this.name = "AgentRuntimeError";
+    this.code = code;
+    this.retryable = retryable;
+    this.stage = stage;
+  }
+}
+
+export function safeAgentError(error, stage = "running") {
+  const code = typeof error?.code === "string" && /^[a-z][a-z0-9_.]{1,63}$/u.test(error.code)
+    ? error.code : "task.failed";
+  return {
+    code,
+    stage,
+    retryable: error?.retryable === true || [408, 429, 502, 503, 504].includes(error?.statusCode ?? error?.status),
+  };
+}
+
+function bridgeHumanMessage(message) {
+  return message && ["human", "user"].includes(message.authorKind || message.senderKind || message.kind);
+}
+
+export function resolveAgentTrigger(event, context) {
+  const payload = event?.payload || {};
+  if (event?.type === "command.invoked") {
+    if (payload.argsComplete === false) throw new AgentRuntimeError("input.trigger_truncated");
+    return null;
+  }
+  if (event?.type === "card.action") return null;
+  const explicitId = payload.messageId || payload.message?.id || event?.messageId;
+  const messages = Array.isArray(context?.messages) ? context.messages : [];
+  if (explicitId) {
+    const message = payload.message?.id === explicitId ? payload.message : messages.find((item) => item?.id === explicitId);
+    if (!message && payload.textComplete === true && typeof payload.text === "string") {
+      return { id: explicitId, authorKind: "human", plainText: payload.text };
+    }
+    if (!message || ["bot", "system"].includes(message.authorKind || message.kind)) {
+      throw new AgentRuntimeError("input.trigger_unavailable");
+    }
+    return structuredClone(message);
+  }
+  if (typeof payload.text === "string" && payload.text.trim()) {
+    return { id: null, authorKind: "human", plainText: payload.text };
+  }
+  const human = [...messages].reverse().find(bridgeHumanMessage);
+  if (!human) throw new AgentRuntimeError("input.trigger_unavailable");
+  return structuredClone(human);
+}
+
+export function buildAgentBridgeRequest({ taskId, event, context, conversation, capabilities = {}, inputs = [], artifacts = [] }) {
+  if (!conversation?.id || conversation.id !== event?.conversationId) {
+    throw new AgentRuntimeError("input.conversation_mismatch");
+  }
+  const triggerMessage = resolveAgentTrigger(event, context);
+  return {
+    protocol: "duallane.agent.request",
+    version: AGENT_BRIDGE_PROTOCOL_VERSION,
+    taskId,
+    event,
+    context,
+    conversation,
+    triggerMessage,
+    capabilities: {
+      resultProtocolVersion: AGENT_BRIDGE_PROTOCOL_VERSION,
+      maxArtifacts: 6,
+      maxArtifactBytes: BRIDGE_MAX_ARTIFACT_BYTES,
+      localPathOutput: false,
+      publicMedia: false,
+      ...capabilities,
+    },
+    inputs,
+    artifacts,
+  };
+}
+
+function bridgeFileName(value) {
+  if (typeof value !== "string" || !value.trim() || value.length > 180 || /[\\/\x00-\x1f\x7f]/u.test(value) || value === "." || value === "..") {
+    throw new AgentRuntimeError("artifact.invalid_name");
+  }
+  return value.trim();
+}
+
+function bridgeDecodeBytes(data, encoding) {
+  if (typeof data !== "string") throw new AgentRuntimeError("artifact.invalid_data");
+  if (encoding === "base64") {
+    if (data.length > Math.ceil(BRIDGE_MAX_ARTIFACT_BYTES / 3) * 4 || data.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(data)) {
+      throw new AgentRuntimeError("artifact.invalid_base64");
+    }
+    const bytes = Buffer.from(data, "base64");
+    if (bytes.toString("base64") !== data) throw new AgentRuntimeError("artifact.invalid_base64");
+    return bytes;
+  }
+  if (encoding !== "utf8") throw new AgentRuntimeError("artifact.invalid_encoding");
+  if (Buffer.byteLength(data) > BRIDGE_MAX_ARTIFACT_BYTES) throw new AgentRuntimeError("artifact.too_large");
+  return Buffer.from(data, "utf8");
+}
+
+function bridgeLegacyResult(text) {
+  if (/\[\[DUALLANE_FILE:/u.test(text)) throw new AgentRuntimeError("artifact.local_path_denied");
+  const artifacts = [];
+  const cleanText = text.replace(/<duallane-file\s+([^>]*)>([\s\S]*?)<\/duallane-file>/giu, (_full, attrs, inner) => {
+    const attr = (name) => new RegExp(`\\b${name}\\s*=\\s*["']([^"']+)["']`, "iu").exec(attrs)?.[1];
+    const fileName = attr("name") || "generated.txt";
+    artifacts.push({ id: `legacy-${artifacts.length + 1}`, source: "inline", fileName,
+      mimeType: attr("mime") || inferMimeTypeFromFileName(fileName),
+      encoding: attr("encoding") || "utf8", data: inner.replace(/^\r?\n/u, "").replace(/\r?\n$/u, "") });
+    return "";
+  }).replace(/\n{3,}/gu, "\n\n").trim();
+  return { protocol: "duallane.agent.result", version: 1, status: "completed", text: cleanText, artifacts };
+}
+
+export function parseAgentBridgeResult(raw, { taskId, validateBytes } = {}) {
+  if (typeof raw !== "string" || Buffer.byteLength(raw) > AGENT_MAX_RESULT_BYTES) throw new AgentRuntimeError("bridge.output_limit");
+  let result;
+  try { result = JSON.parse(raw); } catch { /* Plain stdout is a supported compatibility format. */ }
+  if (!result || typeof result !== "object" || Array.isArray(result) || !Object.hasOwn(result, "protocol")) result = bridgeLegacyResult(raw);
+  if (result.protocol !== "duallane.agent.result" || result.version !== 1) throw new AgentRuntimeError("bridge.protocol_unsupported");
+  if (result.taskId !== undefined && result.taskId !== taskId) throw new AgentRuntimeError("bridge.task_mismatch");
+  if (result.status !== "completed") throw new AgentRuntimeError(result.status === "cancelled" ? "bridge.cancelled" : "bridge.incomplete");
+  if (typeof result.text !== "string" || result.text.length > 28_000) throw new AgentRuntimeError("bridge.invalid_text");
+  if (!Array.isArray(result.artifacts) || result.artifacts.length > 6) throw new AgentRuntimeError("artifact.count_limit");
+  const seen = new Set(); let totalBytes = 0;
+  const artifacts = result.artifacts.map((artifact) => {
+    if (!artifact || typeof artifact !== "object" || typeof artifact.id !== "string" || !/^[A-Za-z0-9_-]{1,80}$/u.test(artifact.id) || seen.has(artifact.id)) {
+      throw new AgentRuntimeError("artifact.invalid_id");
+    }
+    seen.add(artifact.id);
+    if (artifact.source === "artifact") {
+      if (typeof artifact.artifactId !== "string" || !/^[a-f0-9]{64}$/u.test(artifact.artifactId)) throw new AgentRuntimeError("artifact.invalid_reference");
+      return { id: artifact.id, source: "artifact", artifactId: artifact.artifactId };
+    }
+    if (artifact.source === "https") {
+      if (typeof artifact.url !== "string" || artifact.url.length > 4096) throw new AgentRuntimeError("media.invalid_url");
+      return { id: artifact.id, source: "https", url: artifact.url,
+        ...(artifact.fileName !== undefined ? { fileName: bridgeFileName(artifact.fileName) } : {}) };
+    }
+    if (artifact.source !== "inline") throw new AgentRuntimeError("artifact.source_unsupported");
+    const fileName = bridgeFileName(artifact.fileName);
+    const mimeType = String(artifact.mimeType || inferMimeTypeFromFileName(fileName)).toLowerCase();
+    const bytes = bridgeDecodeBytes(artifact.data, artifact.encoding);
+    totalBytes += bytes.length;
+    if (!bytes.length || bytes.length > BRIDGE_MAX_ARTIFACT_BYTES || totalBytes > BRIDGE_MAX_TOTAL_BYTES) throw new AgentRuntimeError("artifact.too_large");
+    const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+    if (artifact.byteSize !== undefined && artifact.byteSize !== bytes.length) throw new AgentRuntimeError("artifact.size_mismatch");
+    if (artifact.sha256 !== undefined && artifact.sha256 !== sha256) throw new AgentRuntimeError("artifact.digest_mismatch");
+    validateBytes?.(bytes, mimeType);
+    return { id: artifact.id, source: "inline", fileName, mimeType, bytes, sha256 };
+  });
+  if (!result.text.trim() && !artifacts.length) throw new AgentRuntimeError("bridge.empty_result");
+  return { text: result.text.trim(), artifacts };
+}
+
+// --- src/task-runtime.js ---
+const TASK_TERMINAL = new Set(["completed", "failed", "cancelled"]);
+const TASK_FILE_LIMIT = 16 * 1024 * 1024;
+const taskDigest = (value) => crypto.createHash("sha256").update(value).digest("hex");
+const taskCheckCancelled = (signal) => { if (signal?.aborted) throw new AgentRuntimeError("task.cancelled"); };
+
+function taskPrivateDirectory(directory) {
+  const resolved = path.resolve(directory);
+  let cursor = path.parse(resolved).root;
+  for (const segment of resolved.slice(cursor.length).split(path.sep).filter(Boolean)) {
+    cursor = path.join(cursor, segment);
+    if (!fs.existsSync(cursor)) fs.mkdirSync(cursor, { mode: 0o700 });
+    const stat = fs.lstatSync(cursor);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new AgentRuntimeError("runtime.unsafe_state_path");
+  }
+  if (process.platform !== "win32" && (fs.statSync(resolved).mode & 0o077) !== 0) throw new AgentRuntimeError("runtime.state_permissions");
+  return resolved;
+}
+
+function taskReadFile(file, maxBytes = TASK_FILE_LIMIT) {
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > maxBytes) throw new AgentRuntimeError("runtime.unsafe_state_file");
+  if (process.platform !== "win32" && (stat.mode & 0o077) !== 0) throw new AgentRuntimeError("runtime.state_permissions");
+  return fs.readFileSync(file);
+}
+
+function taskAtomicWrite(file, bytes) {
+  const temporary = `${file}.${crypto.randomUUID()}.tmp`;
+  let fd;
+  try {
+    fd = fs.openSync(temporary, "wx", 0o600);
+    fs.writeFileSync(fd, bytes);
+    fs.fsyncSync(fd);
+    fs.closeSync(fd); fd = undefined;
+    if (fs.existsSync(file)) taskReadFile(file);
+    fs.renameSync(temporary, file);
+    // Persist the rename where directory fsync is supported.
+    if (process.platform !== "win32") {
+      const directoryFd = fs.openSync(path.dirname(file), "r");
+      try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
+    }
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+    if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+  }
+}
+
+function taskIdentity(origin, botId) {
+  const base = new URL(origin);
+  if (base.username || base.password || !["https:", "http:"].includes(base.protocol) || typeof botId !== "string" || !botId.trim()) throw new AgentRuntimeError("runtime.invalid_identity");
+  return taskDigest(`${base.origin}\n${botId}`);
+}
+
+function taskEventFingerprint(event) {
+  const messageId = event.payload?.messageId || event.payload?.message?.id || event.messageId;
+  // Replay reprojects current authorized text. An edit does not create a new
+  // event or replace an already accepted task's input and publication receipts.
+  const identity = event.type === "message.created" && typeof messageId === "string" && messageId
+    ? { messageId } : event.payload || null;
+  return taskDigest(JSON.stringify([event.type, event.conversationId, identity]));
+}
+
+function taskOwnerAlive(pid) {
+  if (!Number.isSafeInteger(pid) || pid < 1) return true;
+  try { process.kill(pid, 0); return true; } catch (error) { return error?.code !== "ESRCH"; }
+}
+
+function acquireTaskOwner(directory) {
+  const lock = path.join(directory, "owner.json");
+  const gate = path.join(directory, "owner-acquisition");
+  const recovery = path.join(directory, "owner-recovery");
+  if (fs.existsSync(recovery)) throw new AgentRuntimeError("runtime.owner_recovery_active");
+  try { fs.mkdirSync(gate, { mode: 0o700 }); } catch { throw new AgentRuntimeError("runtime.owner_busy"); }
+  const nonce = crypto.randomUUID();
+  const claimant = path.join(gate, "claimant.json");
+  try {
+    const claimFd = fs.openSync(claimant, "wx", 0o600);
+    try { fs.writeFileSync(claimFd, JSON.stringify({ pid: process.pid, nonce })); fs.fsyncSync(claimFd); } finally { fs.closeSync(claimFd); }
+    if (fs.existsSync(recovery)) throw new AgentRuntimeError("runtime.owner_recovery_active");
+    if (fs.existsSync(lock)) {
+      const old = JSON.parse(taskReadFile(lock, 4096).toString("utf8"));
+      if (taskOwnerAlive(old.pid)) throw new AgentRuntimeError("runtime.owner_busy");
+      fs.unlinkSync(lock);
+    }
+    const fd = fs.openSync(lock, "wx", 0o600);
+    try { fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, nonce })); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  } finally {
+    if (fs.existsSync(claimant)) {
+      const claim = JSON.parse(taskReadFile(claimant, 4096).toString("utf8"));
+      if (claim.pid === process.pid && claim.nonce === nonce) fs.unlinkSync(claimant);
+    }
+    if (fs.existsSync(gate)) fs.rmdirSync(gate);
+  }
+  return () => {
+    if (!fs.existsSync(lock)) return;
+    const owner = JSON.parse(taskReadFile(lock, 4096).toString("utf8"));
+    if (owner.pid === process.pid && owner.nonce === nonce) fs.unlinkSync(lock);
+  };
+}
+
+export function recoverAgentTaskOwner(options, { confirmStopped = false } = {}) {
+  if (confirmStopped !== true) throw new AgentRuntimeError("runtime.offline_confirmation_required");
+  const directory = taskPrivateDirectory(agentTaskDirectory(options));
+  const recovery = path.join(directory, "owner-recovery");
+  try { fs.mkdirSync(recovery, { mode: 0o700 }); } catch { throw new AgentRuntimeError("runtime.owner_recovery_active"); }
+  try {
+    const lock = path.join(directory, "owner.json");
+    if (fs.existsSync(lock)) {
+      const owner = JSON.parse(taskReadFile(lock, 4096).toString("utf8"));
+      if (taskOwnerAlive(owner.pid)) throw new AgentRuntimeError("runtime.owner_busy");
+    }
+    const gate = path.join(directory, "owner-acquisition");
+    if (fs.existsSync(gate)) {
+      taskPrivateDirectory(gate);
+      const entries = fs.readdirSync(gate);
+      if (entries.some((name) => name !== "claimant.json")) throw new AgentRuntimeError("runtime.unsafe_state_path");
+      const claimant = path.join(gate, "claimant.json");
+      if (entries.length) {
+        const claim = JSON.parse(taskReadFile(claimant, 4096).toString("utf8"));
+        if (taskOwnerAlive(claim.pid)) throw new AgentRuntimeError("runtime.owner_busy");
+        fs.unlinkSync(claimant);
+      }
+      // An acquiring process must write its claimant before touching owner.json.
+      // If it wins this race, rmdir fails on the non-empty gate; no recursive deletion.
+      fs.rmdirSync(gate);
+    }
+    if (fs.existsSync(lock)) fs.unlinkSync(lock);
+    return { recovered: true };
+  } finally { fs.rmdirSync(recovery); }
+}
+
+function agentTaskDirectory({ stateDir, origin, botId }) {
+  return path.join(path.resolve(stateDir), taskIdentity(origin, botId));
+}
+
+export function readAgentTaskSummary(options) {
+  const directory = agentTaskDirectory(options);
+  if (fs.existsSync(directory)) taskPrivateDirectory(directory);
+  const file = path.join(directory, "tasks.json");
+  if (!fs.existsSync(file)) return { total: 0, active: 0, failed: 0, completed: 0, tasks: [] };
+  const state = JSON.parse(taskReadFile(file).toString("utf8"));
+  const tasks = (state.tasks || []).map((task) => ({ taskId: task.taskId, state: task.state, attempts: task.attempts,
+    error: task.error || null, updatedAt: task.updatedAt, expiresAt: task.expiresAt }));
+  return { total: tasks.length, active: tasks.filter((t) => !TASK_TERMINAL.has(t.state)).length,
+    failed: tasks.filter((t) => t.state === "failed").length, completed: tasks.filter((t) => t.state === "completed").length, tasks };
+}
+
+export function requestAgentTaskControl(options, taskId, action = "retry") {
+  if (!/^[a-f0-9]{64}$/u.test(taskId) || !["retry", "cancel"].includes(action)) throw new AgentRuntimeError("task.invalid_control");
+  const directory = agentTaskDirectory(options);
+  taskPrivateDirectory(directory);
+  const state = readAgentTaskSummary(options);
+  if (!state.tasks.some((task) => task.taskId === taskId)) throw new AgentRuntimeError("task.not_found");
+  taskAtomicWrite(path.join(directory, `control-${taskId}.json`), JSON.stringify({ taskId, action }));
+  return { taskId, action, queued: true };
+}
+
+/** A local durable inbox. Transport ACK confirms accept(), never business completion. */
+export function createAgentTaskRuntime(options) {
+  const { client, invoke, prepareInputs = async () => [], resolveMedia, validateBytes,
+    onState = () => {}, now = Date.now, scopes = [] } = options;
+  if (!client || typeof invoke !== "function") throw new AgentRuntimeError("runtime.invalid_adapter");
+  for (const field of ["maxTasks", "maxBytes", "retentionMs", "maxConcurrency", "maxAttempts", "retryDelayMs"]) {
+    if (options[field] !== undefined && (!Number.isSafeInteger(options[field]) || options[field] < (field === "retryDelayMs" ? 0 : 1))) throw new AgentRuntimeError("runtime.invalid_limit");
+  }
+  const maxTasks = Math.min(1000, Math.max(1, options.maxTasks ?? 200));
+  const maxBytes = Math.min(1024 * 1024 * 1024, Math.max(1, options.maxBytes ?? 256 * 1024 * 1024));
+  const retentionMs = Math.min(7 * 24 * 3600_000, Math.max(60_000, options.retentionMs ?? 24 * 3600_000));
+  const concurrency = Math.min(8, Math.max(1, options.maxConcurrency ?? 2));
+  const maxAttempts = Math.min(5, Math.max(1, options.maxAttempts ?? 3));
+  const retryDelayMs = Math.max(0, options.retryDelayMs ?? 1500);
+  taskPrivateDirectory(path.resolve(options.stateDir));
+  const directory = taskPrivateDirectory(agentTaskDirectory(options));
+  const releaseOwner = acquireTaskOwner(directory);
+  const stateFile = path.join(directory, "tasks.json");
+  let tasks = [], closed = false, started = false, timer, scheduling = false;
+  const running = new Map(), activeConversations = new Set(), waiters = [], notifying = new Map();
+  const notify = () => { try { onState(summary()); } catch { /* Observability cannot alter task state. */ } };
+  const persist = () => {
+    const bytes = Buffer.from(JSON.stringify({ version: 1, tasks }));
+    if (bytes.length > TASK_FILE_LIMIT) throw new AgentRuntimeError("runtime.state_limit");
+    taskAtomicWrite(stateFile, bytes);
+  };
+  const setState = (task, state, patch = {}) => { Object.assign(task, patch, { state, updatedAt: now() }); persist(); notify(); };
+  const blobPath = (id) => {
+    if (!/^[a-f0-9]{64}$/u.test(id)) throw new AgentRuntimeError("artifact.invalid_reference");
+    return path.join(directory, `${id}.blob`);
+  };
+  const usedBytes = () => fs.readdirSync(directory).filter((name) => /^[a-f0-9]{64}\.blob$/u.test(name))
+    .reduce((total, name) => total + fs.lstatSync(path.join(directory, name)).size, 0);
+  const summary = () => ({ total: tasks.length, active: running.size,
+    pending: tasks.filter((task) => !TASK_TERMINAL.has(task.state)).length,
+    failed: tasks.filter((task) => task.state === "failed").length,
+    completed: tasks.filter((task) => task.state === "completed").length,
+    lastError: [...tasks].reverse().find((task) => task.error)?.error || null });
+  const prune = () => {
+    const expired = tasks.filter((task) => task.expiresAt <= now() && !running.has(task.taskId));
+    if (!expired.length) return;
+    tasks = tasks.filter((task) => !expired.includes(task)); persist();
+    for (const task of expired) for (const artifact of task.artifacts || []) {
+      const file = blobPath(artifact.artifactId);
+      if (fs.existsSync(file)) { taskReadFile(file, 50 * 1024 * 1024); fs.unlinkSync(file); }
+    }
+  };
+  try {
+    for (const name of fs.readdirSync(directory).filter((name) => /^(?:tasks\.json|[a-f0-9]{64}\.blob)\.[a-f0-9-]{36}\.tmp$/u.test(name))) {
+      const file = path.join(directory, name); taskReadFile(file, 25 * 1024 * 1024); fs.unlinkSync(file);
+    }
+    if (fs.existsSync(stateFile)) {
+      const state = JSON.parse(taskReadFile(stateFile).toString("utf8"));
+      if (state.version !== 1 || !Array.isArray(state.tasks) || state.tasks.length > 1000) throw new AgentRuntimeError("runtime.invalid_state");
+      tasks = state.tasks;
+      for (const task of tasks) {
+        if (!/^[a-f0-9]{64}$/u.test(task.taskId) || typeof task.event?.conversationId !== "string" || !Number.isFinite(task.expiresAt)) throw new AgentRuntimeError("runtime.invalid_state");
+        if (!TASK_TERMINAL.has(task.state)) {
+          if ((task.artifacts || []).some((artifact) => ["uploading", "reserving"].includes(artifact.state) && !artifact.uploadId && !artifact.attachmentId)) {
+            for (const artifact of task.artifacts || []) if (["uploading", "reserving"].includes(artifact.state) && !artifact.uploadId && !artifact.attachmentId) artifact.state = "unknown";
+            task.state = "failed"; task.error = { code: "upload.outcome_unknown", stage: "uploading", retryable: false };
+          } else task.state = "received";
+        }
+      }
+    }
+    prune(); persist();
+    const referenced = new Set(tasks.flatMap((task) => (task.artifacts || []).map((artifact) => `${artifact.artifactId}.blob`)));
+    for (const name of fs.readdirSync(directory).filter((name) => /^[a-f0-9]{64}\.blob$/u.test(name) && !referenced.has(name))) {
+      const file = path.join(directory, name); taskReadFile(file, 25 * 1024 * 1024); fs.unlinkSync(file);
+    }
+  } catch (error) { releaseOwner(); throw error; }
+
+  async function authorize(task) {
+    const result = await client.listConversations();
+    const conversation = result?.conversations?.find((item) => item.id === task.event.conversationId);
+    if (!conversation || conversation.allowTrigger === false || conversation.allowSend === false) throw new AgentRuntimeError("task.authorization_denied");
+    let context = null;
+    if (scopes.includes("messages:read_context") && conversation.allowContext !== false) context = await client.getContext(conversation.id, { limit: 50 });
+    return { conversation, context };
+  }
+
+  function visibleArtifacts(conversationId, context) {
+    if (!scopes.includes("files:read_content") || !scopes.includes("messages:read_context")) return [];
+    const visibleMessages = new Map((context?.messages || []).filter((message) => !message.recalledAt && !message.deletedAt && !message.removedAt && !["recalled", "removed", "deleted"].includes(message.status)).map((message) => [message.id, message]));
+    return tasks.filter((task) => task.event.conversationId === conversationId && task.expiresAt > now())
+      .flatMap((task) => (task.artifacts || []).filter((artifact) => artifact.messageId &&
+        visibleMessages.get(artifact.messageId)?.content?.blocks?.some((block) => block.type === "attachment" && block.attachmentId === artifact.attachmentId && !["removed", "deleted", "failed"].includes(block.status)))
+        .map((artifact) => ({ artifactId: artifact.artifactId, fileName: artifact.fileName, mimeType: artifact.mimeType,
+          byteSize: artifact.byteSize, attachmentId: artifact.attachmentId, messageId: artifact.messageId, sourceMessageId: task.triggerMessageId || null,
+          expiresAt: task.expiresAt })));
+  }
+
+  async function readArtifact(id, conversationId, context, signal, maxBytes = 10 * 1024 * 1024) {
+    if (!scopes.includes("files:read_content") || !scopes.includes("messages:read_context") || typeof client.readAttachment !== "function") throw new AgentRuntimeError("artifact.read_scope_required");
+    const visible = visibleArtifacts(conversationId, context).find((artifact) => artifact.artifactId === id);
+    if (!visible) throw new AgentRuntimeError("artifact.reference_denied");
+    const owner = tasks.find((task) => (task.artifacts || []).some((artifact) => artifact.artifactId === id));
+    const record = owner.artifacts.find((artifact) => artifact.artifactId === id);
+    if (record.byteSize > maxBytes) throw new AgentRuntimeError("input.attachment_limit");
+    const result = await client.readAttachment({ conversationId, messageId: record.messageId, attachmentId: record.attachmentId,
+      mode: "content", signal, maxBytes });
+    taskCheckCancelled(signal);
+    if (owner.expiresAt <= now()) throw new AgentRuntimeError("artifact.expired");
+    const bytes = Buffer.from(result.bytes);
+    if (bytes.length !== record.byteSize || taskDigest(bytes) !== record.sha256) throw new AgentRuntimeError("artifact.integrity_failed");
+    validateBytes?.(bytes, record.mimeType);
+    return { bytes, fileName: record.fileName, mimeType: record.mimeType, attachmentId: record.attachmentId,
+      source: { kind: "artifact", artifactId: id, attachmentId: record.attachmentId, messageId: record.messageId } };
+  }
+
+  async function generate(task, authorization, signal) {
+    taskCheckCancelled(signal);
+    const { conversation, context } = authorization;
+    const request = buildAgentBridgeRequest({ taskId: task.taskId, event: task.event, conversation, context,
+      capabilities: { publicMedia: Boolean(resolveMedia), incomingAttachments: scopes.some((scope) => ["files:read_content", "files:read_preview"].includes(scope)) },
+      artifacts: visibleArtifacts(conversation.id, context) });
+    task.triggerMessageId = request.triggerMessage?.id || null;
+    persist();
+    request.inputs = await prepareInputs({ client, event: task.event, triggerMessage: request.triggerMessage, context, conversation, scopes, signal });
+    taskCheckCancelled(signal);
+    let remainingInputBytes = 10 * 1024 * 1024 - request.inputs.reduce((total, input) => total + (input.byteSize || 0), 0);
+    const alreadyIncluded = new Set(request.inputs.map((input) => input.attachmentId));
+    for (const reference of [...request.artifacts].reverse().filter((artifact) => !alreadyIncluded.has(artifact.attachmentId)).slice(0, 2)) {
+      if (alreadyIncluded.has(reference.attachmentId) || request.inputs.length >= 6 || reference.byteSize > remainingInputBytes) continue;
+      try {
+        const artifact = await readArtifact(reference.artifactId, conversation.id, context, signal, remainingInputBytes);
+        remainingInputBytes -= artifact.bytes.length;
+        alreadyIncluded.add(reference.attachmentId);
+        request.inputs.push({ artifactId: reference.artifactId, attachmentId: reference.attachmentId, messageId: reference.messageId,
+          conversationId: conversation.id, status: "available", trust: "untrusted-attachment", mimeType: artifact.mimeType,
+          byteSize: artifact.bytes.length, type: /^image\/(?:png|jpeg|gif|webp)$/u.test(artifact.mimeType) ? "image" : "document",
+          encoding: "base64", data: artifact.bytes.toString("base64") });
+      } catch (error) {
+        taskCheckCancelled(signal);
+        request.inputs.push({ artifactId: reference.artifactId, status: "unavailable", code: safeAgentError(error).code });
+      }
+    }
+    const result = parseAgentBridgeResult(await invoke(request, { signal }), { taskId: task.taskId, validateBytes });
+    taskCheckCancelled(signal);
+    const artifacts = [];
+    let total = 0;
+    try { for (const descriptor of result.artifacts) {
+      let artifact = descriptor;
+      if (descriptor.source === "https") {
+        if (!resolveMedia) throw new AgentRuntimeError("media.disabled");
+        artifact = await resolveMedia(descriptor.url, { signal });
+        taskCheckCancelled(signal);
+        if (descriptor.fileName) artifact.fileName = descriptor.fileName;
+      } else if (descriptor.source === "artifact") artifact = await readArtifact(descriptor.artifactId, conversation.id, context, signal);
+      validateBytes?.(artifact.bytes, artifact.mimeType, { source: descriptor.source === "https" ? "https" : "inline" });
+      total += artifact.bytes.length;
+      if (total > 50 * 1024 * 1024 || usedBytes() + artifact.bytes.length > maxBytes) throw new AgentRuntimeError("artifact.storage_limit");
+      const artifactId = taskDigest(`${task.taskId}\n${descriptor.id}`);
+      const sha256 = taskDigest(artifact.bytes);
+      const file = blobPath(artifactId);
+      if (fs.existsSync(file)) {
+        if (taskDigest(taskReadFile(file, 25 * 1024 * 1024)) !== sha256) throw new AgentRuntimeError("artifact.conflicting_result");
+      } else taskAtomicWrite(file, artifact.bytes);
+      artifacts.push({ artifactId, fileName: artifact.fileName, mimeType: artifact.mimeType, byteSize: artifact.bytes.length,
+        sha256, state: descriptor.source === "artifact" && artifact.attachmentId ? "uploaded" : "generated",
+        source: ["https", "artifact"].includes(descriptor.source) ? artifact.source : { kind: descriptor.source },
+        attachmentId: descriptor.source === "artifact" ? artifact.attachmentId : null, messageId: null });
+    } } catch (error) {
+      for (const artifact of artifacts) {
+        const file = blobPath(artifact.artifactId);
+        if (fs.existsSync(file)) fs.unlinkSync(file);
+      }
+      throw error;
+    }
+    task.text = result.text; task.artifacts = artifacts; task.generated = true;
+    setState(task, "generated");
+  }
+
+  async function publish(task, signal) {
+    for (let index = 0; index < task.artifacts.length; index += 1) {
+      const artifact = task.artifacts[index];
+      if (artifact.messageId) continue;
+      if (signal.aborted) throw new AgentRuntimeError("task.cancelled");
+      const authorization = await authorize(task);
+      taskCheckCancelled(signal);
+      if (artifact.source?.kind === "artifact") {
+        const current = await readArtifact(artifact.source.artifactId, task.event.conversationId, authorization.context, signal);
+        if (taskDigest(current.bytes) !== artifact.sha256) throw new AgentRuntimeError("artifact.integrity_failed");
+      }
+      if (!artifact.attachmentId) {
+        if (artifact.state === "uploading" || artifact.state === "unknown") throw new AgentRuntimeError("upload.outcome_unknown");
+        const bytes = taskReadFile(blobPath(artifact.artifactId), 25 * 1024 * 1024);
+        if (taskDigest(bytes) !== artifact.sha256) throw new AgentRuntimeError("artifact.integrity_failed");
+        setState(task, "uploading");
+        if (typeof client.reserveUpload === "function" && typeof client.getUploadStatus === "function") {
+          if (!artifact.uploadId) {
+            artifact.state = "reserving"; persist();
+            let reservationRejected = false;
+            try {
+              const reserved = await client.reserveUpload({ conversationId: task.event.conversationId,
+                fileName: artifact.fileName, mimeType: artifact.mimeType, byteSize: artifact.byteSize });
+              // Quota rejection is a successful gateway response with no upload ID.
+              if (reserved?.upload?.status === "rejected") {
+                reservationRejected = true;
+                throw new AgentRuntimeError("quota.insufficient");
+              }
+              const uploadId = reserved?.upload?.id;
+              if (typeof uploadId !== "string" || !uploadId) throw new AgentRuntimeError("upload.outcome_unknown");
+              artifact.uploadId = uploadId; artifact.state = "reserved"; persist();
+            } catch (error) {
+              const status = error?.statusCode ?? error?.status;
+              const rejected = reservationRejected || (Number.isInteger(status) && status >= 400 && status < 500);
+              artifact.state = rejected ? "generated" : "unknown"; persist();
+              if (!rejected) throw new AgentRuntimeError("upload.outcome_unknown");
+              throw error;
+            }
+          }
+          if (artifact.state === "reserved") {
+            taskCheckCancelled(signal);
+            artifact.state = "completing"; persist();
+            try {
+              const complete = await client.completeUploadContent(artifact.uploadId, bytes, artifact.mimeType);
+              const receipt = complete?.attachment || complete?.upload?.attachment;
+              if (receipt?.id) { artifact.attachmentId = receipt.id; artifact.state = "uploaded"; persist(); }
+              else { artifact.state = "checking"; persist(); }
+            } catch (error) {
+              const status = error?.statusCode ?? error?.status;
+              if (Number.isInteger(status) && status >= 400 && status < 500) {
+                // A definitive rejection did not accept this transfer. Preserve the
+                // reservation and original error; an explicit retry may try it again.
+                artifact.state = "reserved"; persist(); throw error;
+              }
+              // Reconcile only an uncertain completion instead of retransferring bytes.
+              artifact.state = "checking"; persist();
+            }
+          }
+          taskCheckCancelled(signal);
+          if (!artifact.attachmentId) {
+            const status = await client.getUploadStatus(artifact.uploadId);
+            if (status?.upload?.status === "completed" && status.upload.attachment?.id) {
+              artifact.attachmentId = status.upload.attachment.id; artifact.state = "uploaded"; persist();
+            } else if (status?.upload?.status === "failed") throw new AgentRuntimeError("upload.failed");
+            else throw new AgentRuntimeError("upload.status_pending", { retryable: true });
+          }
+        } else {
+          // Older custom clients cannot reconcile a lost one-step upload receipt.
+          artifact.state = "uploading"; persist();
+          try {
+            const uploaded = await client.uploadFile({ conversationId: task.event.conversationId, bytes,
+              fileName: artifact.fileName, mimeType: artifact.mimeType,
+              clientMessageId: `artifact-${artifact.artifactId}`, idempotencyKey: `artifact-${artifact.artifactId}` });
+            if (typeof uploaded?.attachment?.id !== "string" || !uploaded.attachment.id) throw new AgentRuntimeError("upload.outcome_unknown");
+            artifact.attachmentId = uploaded.attachment.id; artifact.state = "uploaded"; persist();
+          } catch (error) {
+            const status = error?.statusCode ?? error?.status;
+            const rejected = Number.isInteger(status) && status >= 400 && status < 500;
+            artifact.state = rejected ? "generated" : "unknown"; persist();
+            if (!rejected) throw new AgentRuntimeError("upload.outcome_unknown");
+            throw error;
+          }
+        }
+      }
+      if (signal.aborted) throw new AgentRuntimeError("task.cancelled");
+      setState(task, "sending");
+      const text = index === 0 ? task.text : "";
+      const sent = await client.sendMessage({ conversationId: task.event.conversationId,
+        content: { format: "duallane.message+json;v=1", plainText: text,
+          blocks: [...(text ? [{ type: "text", text }] : []), { type: "attachment", attachmentId: artifact.attachmentId }] },
+        replyToMessageId: task.triggerMessageId || undefined,
+        clientMessageId: `publish-${artifact.artifactId}`, idempotencyKey: `publish-${artifact.artifactId}` });
+      if (!sent?.message?.id) throw new AgentRuntimeError("send.invalid_receipt", { retryable: true });
+      artifact.messageId = sent.message.id; artifact.state = "sent"; persist();
+      taskCheckCancelled(signal);
+    }
+    if (!task.artifacts.length && !task.messageId) {
+      await authorize(task); taskCheckCancelled(signal); setState(task, "sending");
+      const sent = await client.sendMessage({ conversationId: task.event.conversationId, text: task.text,
+        replyToMessageId: task.triggerMessageId || undefined,
+        clientMessageId: `reply-${task.taskId}`, idempotencyKey: `reply-${task.taskId}` });
+      if (!sent?.message?.id) throw new AgentRuntimeError("send.invalid_receipt", { retryable: true });
+      task.messageId = sent.message.id; persist();
+      taskCheckCancelled(signal);
+    }
+    taskCheckCancelled(signal);
+    setState(task, "completed", { error: null });
+  }
+
+  async function failureReceipt(task) {
+    if (task.failureNotified || task.state === "cancelled" || task.notificationAttempts >= 3) return;
+    task.notificationAttempts = (task.notificationAttempts || 0) + 1;
+    task.nextNotificationAt = now() + Math.max(1000, retryDelayMs) * 2 ** (task.notificationAttempts - 1);
+    persist();
+    try {
+      await authorize(task);
+      const error = task.error;
+      const result = await client.sendMessage({ conversationId: task.event.conversationId,
+        text: `请求未完成（阶段：${error.stage}；错误：${error.code}）。已成功发送的附件会保留。请联系机器人管理员重试任务 ${task.taskId}。`,
+        replyToMessageId: task.triggerMessageId || task.event.payload?.messageId || undefined,
+        clientMessageId: `failure-${task.taskId}-${task.generation || 0}`, idempotencyKey: `failure-${task.taskId}-${task.generation || 0}` });
+      if (result?.message?.id) { task.failureNotified = true; persist(); }
+    } catch (error) {
+      if (!safeAgentError(error).retryable) { task.notificationAttempts = 3; persist(); }
+    }
+  }
+
+  async function execute(task, controller) {
+    task.attempts += 1; task.error = null; setState(task, "running");
+    try {
+      const authorization = await authorize(task);
+      taskCheckCancelled(controller.signal);
+      if (!task.generated) await generate(task, authorization, controller.signal);
+      if (controller.signal.aborted) throw new AgentRuntimeError("task.cancelled");
+      await publish(task, controller.signal);
+    } catch (error) {
+      const safe = safeAgentError(error, task.state);
+      if (controller.signal.aborted && closed) { setState(task, "received", { error: null }); return; }
+      if (controller.signal.aborted || ["task.cancelled", "bridge.cancelled"].includes(safe.code)) { setState(task, "cancelled", { error: { code: "task.cancelled", stage: task.state, retryable: false } }); return; }
+      if (safe.retryable && task.attempts < maxAttempts && safe.code !== "upload.outcome_unknown") {
+        setState(task, "received", { error: safe, nextAttemptAt: now() + retryDelayMs * 2 ** (task.attempts - 1) });
+      } else { setState(task, "failed", { error: safe }); await failureReceipt(task); }
+    }
+  }
+
+  function control(taskId, action) {
+    const task = tasks.find((item) => item.taskId === taskId);
+    if (!task || task.expiresAt <= now()) throw new AgentRuntimeError("task.not_found");
+    if (action === "cancel") {
+      if (running.has(taskId)) running.get(taskId).controller.abort();
+      else if (!TASK_TERMINAL.has(task.state)) setState(task, "cancelled");
+      return;
+    }
+    if (task.state !== "failed") throw new AgentRuntimeError("task.not_retryable");
+    if ((task.artifacts || []).some((artifact) => ["unknown", "uploading", "reserving"].includes(artifact.state) && !artifact.uploadId)) throw new AgentRuntimeError("upload.outcome_unknown");
+    task.attempts = 0; task.failureNotified = false; task.notificationAttempts = 0; task.generation = (task.generation || 0) + 1;
+    setState(task, "received", { error: null, nextAttemptAt: 0 }); schedule();
+  }
+
+  function schedule() {
+    if (!started || closed || scheduling) return;
+    scheduling = true;
+    try {
+      prune();
+      for (const file of fs.readdirSync(directory).filter((name) => /^control-[a-f0-9]{64}\.json$/u.test(name))) {
+        const filePath = path.join(directory, file);
+        const input = JSON.parse(taskReadFile(filePath, 4096).toString("utf8"));
+        try { control(input.taskId, input.action); } catch { /* Invalid/stale operator requests do not run a task. */ }
+        fs.unlinkSync(filePath);
+      }
+      const waitingConversations = new Set(activeConversations);
+      for (const task of tasks) {
+        if (running.size >= concurrency) break;
+        if (task.state !== "received" || waitingConversations.has(task.event.conversationId)) continue;
+        waitingConversations.add(task.event.conversationId);
+        if ((task.nextAttemptAt || 0) > now()) continue;
+        const controller = new AbortController();
+        activeConversations.add(task.event.conversationId);
+        // Publish ownership before execute() can synchronously persist/notify.
+        const slot = { controller, promise: null }; running.set(task.taskId, slot);
+        slot.promise = execute(task, controller).catch(() => {
+          // Disk failures stop admission; accepting more events would lose durable ownership.
+          closed = true;
+        }).finally(() => {
+          running.delete(task.taskId); activeConversations.delete(task.event.conversationId);
+          queueMicrotask(schedule);
+          if (!running.size && !tasks.some((item) => item.state === "received")) for (const waiter of waiters.splice(0)) waiter();
+          notify();
+        });
+      }
+      for (const task of tasks) {
+        if (running.size + notifying.size >= concurrency) break;
+        if (task.state !== "failed" || task.failureNotified || task.notificationAttempts >= 3 || (task.nextNotificationAt || 0) > now() || notifying.has(task.taskId)) continue;
+        const work = failureReceipt(task).catch(() => { closed = true; }).finally(() => notifying.delete(task.taskId));
+        notifying.set(task.taskId, work);
+      }
+    } finally { scheduling = false; }
+  }
+
+  return {
+    accept(event, { completed = false } = {}) {
+      if (closed) throw new AgentRuntimeError("runtime.closed");
+      if (!event || typeof event.eventId !== "string" || !event.eventId || event.eventId.length > 180 || typeof event.conversationId !== "string" || !event.conversationId || Buffer.byteLength(JSON.stringify(event)) > 64 * 1024) throw new AgentRuntimeError("task.invalid_event");
+      prune();
+      const taskId = taskDigest(`${taskIdentity(options.origin, options.botId)}\n${event.eventId}`);
+      const fingerprint = taskEventFingerprint(event);
+      const previous = tasks.find((task) => task.taskId === taskId);
+      if (previous) {
+        if (taskEventFingerprint(previous.event) !== fingerprint) throw new AgentRuntimeError("task.event_conflict");
+        return { taskId, duplicate: true };
+      }
+      if (tasks.length >= maxTasks) throw new AgentRuntimeError("runtime.queue_full", { retryable: true });
+      const timestamp = now();
+      tasks.push({ taskId, fingerprint, event: structuredClone(event), state: completed ? "completed" : "received", createdAt: timestamp, updatedAt: timestamp,
+        expiresAt: timestamp + retentionMs, attempts: 0, artifacts: [], generated: false });
+      try { persist(); } catch (error) { tasks.pop(); throw error; }
+      queueMicrotask(schedule); notify();
+      return { taskId, duplicate: false };
+    },
+    start() {
+      if (closed) throw new AgentRuntimeError("runtime.closed");
+      if (started) return;
+      started = true; timer = setInterval(schedule, Math.max(20, Math.min(retryDelayMs || 20, 500))); schedule();
+    },
+    retry(taskId) { control(taskId, "retry"); },
+    cancel(taskId) { control(taskId, "cancel"); },
+    summary,
+    getTask(taskId) { const task = tasks.find((item) => item.taskId === taskId); return task ? structuredClone(task) : null; },
+    listArtifacts(conversationId, context) { return visibleArtifacts(conversationId, context); },
+    async idle() {
+      if (!running.size && !tasks.some((task) => task.state === "received")) return;
+      await new Promise((resolve) => waiters.push(resolve));
+    },
+    async close() {
+      closed = true; clearInterval(timer);
+      for (const { controller } of running.values()) controller.abort();
+      await Promise.allSettled([...running.values()].map((slot) => slot.promise));
+      await Promise.allSettled([...notifying.values()]);
+      releaseOwner();
+      for (const waiter of waiters.splice(0)) waiter();
+    },
+  };
+}
+
+// --- src/runtime-update.js ---
+const RUNTIME_MAX_BYTES = 5 * 1024 * 1024;
+
+function runtimeUpdateError(code) {
+  return Object.assign(new Error("Official runtime update could not complete safely."), { code });
+}
+
+function runtimeAtomicWrite(file, bytes, mode = 0o600) {
+  const temporary = `${file}.${crypto.randomUUID()}.tmp`;
+  let fd;
+  try {
+    fd = fs.openSync(temporary, "wx", mode);
+    fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
+    fs.renameSync(temporary, file);
+    if (process.platform !== "win32") {
+      const directory = fs.openSync(path.dirname(file), "r");
+      try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+    }
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+    if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+  }
+}
+
+function runtimeReadPrivateJson(file, maximum = 8192) {
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > maximum) throw runtimeUpdateError("runtime.unsafe_target");
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { throw runtimeUpdateError("runtime.recovery_required"); }
+}
+
+function runtimeAcquireUpdateLock(target) {
+  const lock = `${target}.update-lock`;
+  const owner = { pid: process.pid, nonce: crypto.randomUUID() };
+  const alive = (pid) => {
+    if (!Number.isSafeInteger(pid) || pid < 1) return true;
+    try { process.kill(pid, 0); return true; } catch (error) { return error.code !== "ESRCH"; }
+  };
+  const create = () => fs.writeFileSync(lock, JSON.stringify(owner), { flag: "wx", mode: 0o600 });
+  try { create(); } catch (error) {
+    if (error.code !== "EEXIST" || alive(runtimeReadPrivateJson(lock).pid)) throw runtimeUpdateError("runtime.update_busy");
+    const gate = `${lock}.recovery`;
+    try { fs.mkdirSync(gate, { mode: 0o700 }); } catch { throw runtimeUpdateError("runtime.update_busy"); }
+    try {
+      if (alive(runtimeReadPrivateJson(lock).pid)) throw runtimeUpdateError("runtime.update_busy");
+      fs.unlinkSync(lock); create();
+    } finally { fs.rmdirSync(gate); }
+  }
+  return () => {
+    if (runtimeReadPrivateJson(lock).nonce === owner.nonce) fs.unlinkSync(lock);
+  };
+}
+
+function runtimeRecoverUpdate(target) {
+  const journalPath = `${target}.update.json`;
+  if (!fs.existsSync(journalPath)) return;
+  const journal = runtimeReadPrivateJson(journalPath);
+  if (journal.version !== 1 || !/^[a-f0-9]{64}$/u.test(journal.next?.sha256 || "") ||
+      journal.next.fileName !== path.basename(target) || journal.next.format !== "duallane.official-runtime") throw runtimeUpdateError("runtime.recovery_required");
+  const identity = runtimeFileIdentity(target);
+  const installed = runtimeInstallRecord(target);
+  if (installed && installed.sha256 !== journal.previous?.sha256 && installed.sha256 !== journal.next.sha256) throw runtimeUpdateError("runtime.recovery_required");
+  if (identity?.sha256 === journal.next.sha256) {
+    runtimeAtomicWrite(`${target}.install.json`, JSON.stringify(journal.next) + "\n");
+  } else if ((identity?.sha256 || null) === (journal.previous?.sha256 || null)) {
+    if (journal.previous) runtimeAtomicWrite(`${target}.install.json`, JSON.stringify(journal.previous) + "\n");
+    else if (installed) fs.unlinkSync(`${target}.install.json`);
+  } else {
+    throw runtimeUpdateError("runtime.recovery_required");
+  }
+  fs.unlinkSync(journalPath);
+}
+
+function runtimeFileIdentity(target) {
+  if (!target || !fs.existsSync(target)) return null;
+  const stat = fs.lstatSync(target);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > RUNTIME_MAX_BYTES) throw runtimeUpdateError("runtime.unsafe_target");
+  let parent = path.dirname(path.resolve(target));
+  while (true) {
+    if (fs.lstatSync(parent).isSymbolicLink()) throw runtimeUpdateError("runtime.unsafe_target");
+    const next = path.dirname(parent);
+    if (next === parent) break;
+    parent = next;
+  }
+  return { sha256: crypto.createHash("sha256").update(fs.readFileSync(target)).digest("hex"), byteSize: stat.size };
+}
+
+function runtimeInstallRecord(target) {
+  const recordPath = `${target}.install.json`;
+  if (!fs.existsSync(recordPath)) return null;
+  const stat = fs.lstatSync(recordPath);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 4096) throw runtimeUpdateError("runtime.invalid_install_record");
+  try {
+    const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+    if (record.format !== "duallane.official-runtime" || record.version !== 1 || !/^[a-f0-9]{64}$/u.test(record.sha256)) throw new Error();
+    return record;
+  } catch { throw runtimeUpdateError("runtime.invalid_install_record"); }
+}
+
+export async function inspectOfficialRuntime({ origin, targetPath, fetchImpl = globalThis.fetch, timeoutMs = 6000 } = {}) {
+  let base;
+  try { base = new URL(origin); } catch { throw runtimeUpdateError("runtime.invalid_origin"); }
+  if (!["https:", "http:"].includes(base.protocol) || base.username || base.password || base.search || base.hash || base.pathname !== "/") throw runtimeUpdateError("runtime.invalid_origin");
+  const manifest = await requestGateway({
+    fetchImpl, url: new URL("/integrations/duallane-agent.manifest.json", base), timeoutMs,
+    init: { method: "GET", headers: { accept: "application/json", "cache-control": "no-cache" } },
+  });
+  if (!/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/u.test(manifest.version || "") ||
+      !/^[a-f0-9]{64}$/u.test(manifest.sha256 || "") || !Number.isSafeInteger(manifest.byteSize) ||
+      manifest.byteSize < 1024 || manifest.byteSize > RUNTIME_MAX_BYTES) throw runtimeUpdateError("runtime.invalid_manifest");
+  const compatibility = manifest.compatibility;
+  if (compatibility && (compatibility.gatewayVersion !== 1 || compatibility.bridgeProtocolVersion !== 1)) throw runtimeUpdateError("runtime.incompatible");
+  const current = runtimeFileIdentity(targetPath);
+  const record = targetPath ? runtimeInstallRecord(targetPath) : null;
+  const contentChanged = current ? current.sha256 !== manifest.sha256 : null;
+  const versionOrder = compareRuntimeSemver(manifest.version, DUALLANE_AGENT_SDK_VERSION);
+  return {
+    currentVersion: DUALLANE_AGENT_SDK_VERSION,
+    latestVersion: manifest.version,
+    updateAvailable: versionOrder > 0 || (versionOrder === 0 && contentChanged === true),
+    contentChanged,
+    sameVersionDrift: versionOrder === 0 && contentChanged === true,
+    managed: Boolean(current && record && record.sha256 === current.sha256 && record.origin === base.origin && record.fileName === path.basename(targetPath)),
+    locallyModified: Boolean(current && record && record.sha256 !== current.sha256),
+    sha256: manifest.sha256,
+    byteSize: manifest.byteSize,
+    buildId: typeof manifest.buildId === "string" && /^[a-f0-9]{64}$/u.test(manifest.buildId) ? manifest.buildId : null,
+    compatibility: compatibility || { gatewayVersion: 1, bridgeProtocolVersion: 1 },
+    downloadUrl: new URL("/integrations/duallane-agent.mjs", base).href,
+    highlights: Array.isArray(manifest.highlights) ? manifest.highlights.filter((v) => typeof v === "string" && v.length < 300).slice(0, 8) : [],
+  };
+}
+
+export async function installOfficialRuntime({ origin, targetPath, force = false, fetchImpl = globalThis.fetch, timeoutMs = 15000 } = {}) {
+  const target = path.resolve(targetPath);
+  if (path.basename(target) !== "duallane-agent.mjs") throw runtimeUpdateError("runtime.unmanaged_target");
+  const dir = path.dirname(target);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  let ancestor = dir;
+  while (true) {
+    if (fs.lstatSync(ancestor).isSymbolicLink()) throw runtimeUpdateError("runtime.unsafe_target");
+    const next = path.dirname(ancestor); if (next === ancestor) break; ancestor = next;
+  }
+  const release = runtimeAcquireUpdateLock(target);
+  try {
+  runtimeRecoverUpdate(target);
+  const check = await inspectOfficialRuntime({ origin, targetPath: target, fetchImpl, timeoutMs });
+  const original = runtimeFileIdentity(target);
+  // An exact published bundle may establish provenance without overwriting it.
+  // Unknown old bundles and local extensions require a separate clean install.
+  if (original && !check.managed && original.sha256 !== check.sha256) throw runtimeUpdateError("runtime.local_changes_preserved");
+  if (check.locallyModified) throw runtimeUpdateError("runtime.local_changes_preserved");
+  if (!check.updateAvailable && !force && original?.sha256 === check.sha256 && check.managed) return { ...check, updated: false, targetPath: target };
+  if (compareRuntimeSemver(check.latestVersion, DUALLANE_AGENT_SDK_VERSION) < 0) throw runtimeUpdateError("runtime.downgrade_denied");
+  const bytes = await requestGateway({
+    fetchImpl, url: check.downloadUrl, timeoutMs,
+    init: { method: "GET", headers: { "cache-control": "no-cache" } },
+    read: (response) => readGatewayBytes(response, RUNTIME_MAX_BYTES),
+  });
+  if (bytes.byteLength !== check.byteSize || crypto.createHash("sha256").update(bytes).digest("hex") !== check.sha256) throw runtimeUpdateError("runtime.integrity_mismatch");
+  const syntax = spawnSync(process.execPath, ["--input-type=module", "--check"], { input: bytes, timeout: 10_000, encoding: "utf8", maxBuffer: 64 * 1024, windowsHide: true });
+  if (syntax.status !== 0) throw runtimeUpdateError("runtime.invalid_script");
+  const current = runtimeFileIdentity(target);
+  if (current?.sha256 !== original?.sha256) throw runtimeUpdateError("runtime.target_changed");
+  const previousBytes = original ? fs.readFileSync(target) : null;
+  const previous = runtimeInstallRecord(target);
+  const journalPath = `${target}.update.json`;
+  const record = { format: "duallane.official-runtime", version: 1, origin: new URL(origin).origin, fileName: path.basename(target), sha256: check.sha256, byteSize: bytes.byteLength, sdkVersion: check.latestVersion };
+  runtimeAtomicWrite(journalPath, JSON.stringify({ version: 1, previous: previous || (original ? { ...record, ...original } : null), next: record }));
+  try {
+    runtimeAtomicWrite(target, bytes, 0o755);
+    runtimeAtomicWrite(`${target}.install.json`, JSON.stringify(record) + "\n");
+    fs.unlinkSync(journalPath);
+  } catch {
+    try {
+      if (runtimeFileIdentity(target)?.sha256 === record.sha256) {
+        if (previousBytes) runtimeAtomicWrite(target, previousBytes, 0o755);
+        else fs.unlinkSync(target);
+      }
+      const currentRecord = runtimeInstallRecord(target);
+      if (currentRecord?.sha256 === record.sha256 && previous?.sha256 !== record.sha256) {
+        if (previous) runtimeAtomicWrite(`${target}.install.json`, JSON.stringify(previous) + "\n");
+        else fs.unlinkSync(`${target}.install.json`);
+      }
+      fs.unlinkSync(journalPath);
+    } catch {
+      // The journal records both legitimate identities for the next locked run.
+    }
+    throw runtimeUpdateError("runtime.install_failed");
+  }
+  return { ...check, managed: true, updated: original?.sha256 !== check.sha256, targetPath: target };
+  } finally { release(); }
+}
+
 // --- src/v2.js ---
 /**
  * Verify DualLane Outbound Webhook HMAC-SHA256 signature.
@@ -1224,119 +2803,21 @@ export function createCardKitBuilder(cardId, cardType = "custom") {
  * DualLane Bot Gateway v2 client with HTTP long-polling, Card Kit v1, and AI streaming replies.
  */
 export class DualLaneBotV2 {
-  constructor({ baseUrl, token, fetchImpl = globalThis.fetch }) {
-    this.baseUrl = String(baseUrl || "").replace(/\/+$/, "");
-    this.token = token;
-    this.fetch = fetchImpl;
+  #client;
+
+  constructor({ baseUrl, token, fetchImpl = globalThis.fetch, requestTimeoutMs }) {
+    this.#client = new DualLaneAgentClient({ url: baseUrl, token, fetch: fetchImpl, requestTimeoutMs });
   }
 
-  async #request(path, init = {}) {
-    const res = await this.fetch(`${this.baseUrl}${path}`, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        "Content-Type": "application/json",
-        ...(init.headers || {}),
-      },
-    });
-    const text = await res.text();
-    const body = text ? JSON.parse(text) : {};
-    if (!res.ok) {
-      const msg = body?.error?.message || `HTTP ${res.status}`;
-      const err = new Error(msg);
-      err.status = res.status;
-      err.code = body?.error?.code;
-      throw err;
-    }
-    return body;
-  }
-
-  getMe() {
-    return this.#request("/api/bot-gateway/v1/me", { method: "GET" });
-  }
-
-  listConversations() {
-    return this.#request("/api/bot/v2/conversations", { method: "GET" });
-  }
-
-  getContext(conversationId, limit = 50) {
-    return this.#request(`/api/bot-gateway/v1/conversations/${encodeURIComponent(conversationId)}/context?limit=${limit}`, {
-      method: "GET",
-    });
-  }
-
-  getUpdates(afterSequence = 0, limit = 50) {
-    return this.#request(`/api/bot/v2/updates?afterSequence=${afterSequence}&limit=${limit}`, {
-      method: "GET",
-    });
-  }
-
-  sendMessage(conversationId, text, options = {}) {
-    return this.#request("/api/bot-gateway/v1/messages", {
-      method: "POST",
-      body: JSON.stringify({
-        conversationId,
-        text,
-        replyToMessageId: options.replyToMessageId,
-        clientMessageId: options.clientMessageId || `sdk_${crypto.randomUUID()}`,
-        idempotencyKey: options.idempotencyKey || `idem_${crypto.randomUUID()}`,
-      }),
-    });
-  }
-
-  editMessage(messageId, plainText) {
-    return this.#request(`/api/bot/v2/messages/${encodeURIComponent(messageId)}`, {
-      method: "PATCH",
-      body: JSON.stringify({ plainText }),
-    });
-  }
-
-  async sendFile(conversationId, bytes, fileName, options = {}) {
-    const raw = typeof bytes === "string" ? Buffer.from(bytes, "utf8") : bytes;
-    const resolvedName = String(fileName || "attachment.bin").trim() || "attachment.bin";
-    const mimeType = String(options.mimeType || inferMimeTypeFromFileName(resolvedName)).trim() || "application/octet-stream";
-    const params = new URLSearchParams();
-    params.set("fileName", resolvedName);
-    params.set("mimeType", mimeType);
-    if (options.text) params.set("text", String(options.text));
-    if (options.replyToMessageId) params.set("replyToMessageId", String(options.replyToMessageId));
-    if (options.clientMessageId) params.set("clientMessageId", String(options.clientMessageId));
-    if (options.sendMessage === false) params.set("sendMessage", "false");
-    const res = await this.fetch(
-      `${this.baseUrl}/api/bot/v2/conversations/${encodeURIComponent(conversationId)}/files?${params.toString()}`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-          "Content-Type": mimeType,
-        },
-        body: raw,
-      }
-    );
-    const text = await res.text();
-    const body = text ? JSON.parse(text) : {};
-    if (!res.ok) {
-      const msg = body?.error?.message || `HTTP ${res.status}`;
-      const err = new Error(msg);
-      err.status = res.status;
-      err.code = body?.error?.code;
-      throw err;
-    }
-    return body;
-  }
-
-  sendCard(conversationId, cardDoc, options = {}) {
-    return this.#request("/api/bot-gateway/v1/cards", {
-      method: "POST",
-      body: JSON.stringify({
-        conversationId,
-        card: cardDoc,
-        replyToMessageId: options.replyToMessageId,
-        clientMessageId: options.clientMessageId || `sdk_${crypto.randomUUID()}`,
-        idempotencyKey: options.idempotencyKey || `idem_${crypto.randomUUID()}`,
-      }),
-    });
-  }
+  getMe() { return this.#client.getMe(); }
+  listConversations() { return this.#client.listConversations(); }
+  getContext(conversationId, limit = 50) { return this.#client.getContext(conversationId, { limit }); }
+  getUpdates(afterSequence = 0, limit = 50) { return this.#client.getUpdates({ afterSequence, limit }); }
+  sendMessage(conversationId, text, options = {}) { return this.#client.sendMessage({ ...options, conversationId, text }); }
+  editMessage(messageId, plainText) { return this.#client.editMessage(messageId, plainText); }
+  sendFile(conversationId, bytes, fileName, options = {}) { return this.#client.sendFile({ ...options, conversationId, bytes, fileName }); }
+  readAttachment(input) { return this.#client.readAttachment(input); }
+  sendCard(conversationId, cardDoc, options = {}) { return this.#client.sendCard({ ...options, conversationId, card: cardDoc }); }
 
   /**
    * Stream an AI async iterable of text chunks into a single DualLane message via batched PATCH edits.
@@ -1776,7 +3257,7 @@ export const DUALLANE_MCP_TOOLS = [
   {
     name: "duallane_wait_for_event",
     description:
-      "Wait in real time (via outbound WebSocket with replay cursor) for the next incoming DualLane message, @mention, /command, or interactive card button click.",
+      "Wait in real time (via outbound WebSocket with replay cursor) for the next incoming DualLane message, @mention, /command, or interactive card button click. Receiving does not acknowledge completion: call duallane_ack_event after durable handling. Use the resident task runtime for recoverable model jobs.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1797,6 +3278,19 @@ export const DUALLANE_MCP_TOOLS = [
         },
         profile: { type: "string", description: "Local credential profile name (default: 'default')." },
       },
+    },
+  },
+  {
+    name: "duallane_ack_event",
+    description: "Acknowledge an event only after its work has completed or been durably accepted. Does not send a reply or advance the shared profile cursor. Pass an explicit afterSequence on the next wait only when all earlier events have been handled.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        eventId: { type: "string" },
+        sequence: { type: "integer", minimum: 1 },
+        profile: { type: "string" },
+      },
+      required: ["eventId", "sequence"],
     },
   },
   {
@@ -2186,8 +3680,8 @@ export function createDualLaneMcpServer(options = {}) {
             afterSequence: cursor,
             timeoutMs: remainingMs,
             conversationId: filterConv,
-            onCursorAdvance: (seq) => updateProfileCursor(profileName, seq, { configDir }),
-            onSyncRequired: ({ currentSequence }) => updateProfileCursor(profileName, currentSequence, { configDir }),
+            ack: false,
+            onSyncRequired: () => { throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization"); },
           });
           if (polled.timeout) {
             return {
@@ -2200,6 +3694,7 @@ export function createDualLaneMcpServer(options = {}) {
             timeout: false,
             event: polled.event,
             lastSequence: polled.lastSequence,
+            requiresAck: true,
           };
         };
 
@@ -2220,8 +3715,8 @@ export function createDualLaneMcpServer(options = {}) {
           client
             .connect({
               lastSequence: startSeq,
+              ack: false,
               async onEvent(event) {
-                updateProfileCursor(profileName, event.sequence, { configDir });
                 if (filterConv && event.conversationId !== filterConv) {
                   return;
                 }
@@ -2232,11 +3727,12 @@ export function createDualLaneMcpServer(options = {}) {
                 resolve({
                   timeout: false,
                   event,
-                  lastSequence: event.sequence,
+                  lastSequence: startSeq,
+                  requiresAck: true,
                 });
               },
-              async onSyncRequired({ currentSequence }) {
-                updateProfileCursor(profileName, currentSequence, { configDir });
+              async onSyncRequired() {
+                throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization");
               },
               onError(err) {
                 if (!settled && !err?.retryable) {
@@ -2261,6 +3757,12 @@ export function createDualLaneMcpServer(options = {}) {
         });
       }
 
+      case "duallane_ack_event": {
+        const { client } = makeClient(profileName);
+        const result = await client.acknowledge({ eventId: args.eventId, sequence: args.sequence });
+        return { ...result, acknowledgedSequence: args.sequence, profileCursorUnchanged: true };
+      }
+
       case "duallane_set_typing": {
         const { client } = makeClient(args.profile);
         return await client.setTyping(args.conversationId, { state: args.state || "thinking" });
@@ -2270,7 +3772,7 @@ export function createDualLaneMcpServer(options = {}) {
         const { client, profile } = makeClient(args.profile);
         const [doctor, updateInfo] = await Promise.all([
           client.getDoctor().catch(() => null),
-          checkRuntimeUpdate({ origin: profile.url, fetchImpl }).catch(() => null),
+          checkRuntimeUpdate({ origin: profile.url, targetPath: resolveStandaloneScriptPath(), fetchImpl }).catch(() => null),
         ]);
         return {
           profile: profile.profile,
@@ -2278,13 +3780,16 @@ export function createDualLaneMcpServer(options = {}) {
           localSdkVersion: DUALLANE_AGENT_SDK_VERSION,
           runtimeUpdate: updateInfo,
           ...(doctor || {}),
+          localTasks: (doctor?.bot?.id || profile.botId) ? readAgentTaskSummary({
+            stateDir: path.join(getDaemonStateDir(configDir), "tasks"), origin: profile.url, botId: doctor?.bot?.id || profile.botId,
+          }) : null,
         };
       }
 
       case "duallane_runtime_update": {
         const { profile } = makeClient(args.profile);
         if (args.checkOnly) {
-          return await checkRuntimeUpdate({ origin: profile.url, fetchImpl });
+          return await checkRuntimeUpdate({ origin: profile.url, targetPath: resolveStandaloneScriptPath(), fetchImpl });
         }
         const staged = await stageRuntimeSelfUpdate({
           origin: profile.url,
@@ -2539,6 +4044,12 @@ export function getDaemonLogDir(configDir) {
   return path.resolve(getAgentConfigDir(configDir), "..", "logs");
 }
 
+export function createDaemonMediaResolver({ enabled, dnsServers = [], fetchMedia = fetchPublicMedia }) {
+  if (!enabled) return undefined;
+  return (url, { signal } = {}) => fetchMedia(url, { enabled: true, signal,
+    ...(dnsServers.length ? { dnsServers } : {}) });
+}
+
 export function getDaemonServiceLabel(profileName) {
   return `top.tsio.duallane.agent.${normalizeProfileName(profileName)}`;
 }
@@ -2660,13 +4171,7 @@ export function buildDaemonAgentPrompt({ botName, conversation, event, context }
     return `[${ts}] ${speaker}: ${text}`;
   });
 
-  const latestMsgText =
-    String(
-      payload?.message?.plainText ||
-        payload?.text ||
-        (contextMessages.length > 0 ? contextMessages[contextMessages.length - 1]?.plainText : "") ||
-        ""
-    ).trim();
+  const latestMsgText = String(resolveAgentTrigger(event, context)?.plainText || "").trim();
 
   const safetyRule = isGroup
     ? [
@@ -2675,9 +4180,7 @@ export function buildDaemonAgentPrompt({ botName, conversation, event, context }
       ].join("\n")
     : `当前消息来自主人授权的一对一私聊会话。请直接给出清晰、准确、简洁的回复。`;
 
-  const fileGuidance = isGroup
-    ? `如需向群内生成并发送文档、表格、SVG 图表或代码附件，请直接在回复中使用标签包裹文件内容：<duallane-file name="文件名.ext">文件正文</duallane-file>（二进制内容可加 encoding="base64"），外层守护进程会自动将其作为真实文件附件上传并发送到会话。`
-    : `如需向主人发送你生成的文件或图片，可使用 <duallane-file name="文件名.ext">文件正文</duallane-file>（二进制内容加 encoding="base64"），或在工作目录/临时目录生成文件后在回复末尾附上 [[DUALLANE_FILE: /绝对路径/文件名.ext]]，外层守护进程会自动上传并作为会话附件发出。`;
+  const fileGuidance = `生成产物应通过 duallane.agent.result v1 结构化协议导出真实字节。兼容文本模式可使用 <duallane-file name="文件名.ext">文件正文</duallane-file>（二进制内容加 encoding="base64"）。不得提供本机路径；只有渠道返回发送回执后才能确认附件已经发出。`;
 
   const sections = [
     `你是接入在 DualLane 协作空间中的 AI 智能体「${botName || "Bot"}」。`,
@@ -2705,75 +4208,10 @@ export function buildDaemonAgentPrompt({ botName, conversation, event, context }
   return sections.join("\n\n");
 }
 
-export function extractGeneratedFilesFromReply(rawReply, options = {}) {
-  const allowLocalPath = Boolean(options.allowLocalPath);
-  const workdir = options.workdir ? path.resolve(options.workdir) : "";
-  const files = [];
-
-  let text = String(rawReply || "");
-
-  // 1. Parse inline <duallane-file name="..." [mime="..."] [encoding="base64"]>...</duallane-file>
-  const inlineFileRe = /<duallane-file\s+([^>]*)>([\s\S]*?)<\/duallane-file>/giu;
-  text = text.replace(inlineFileRe, (_full, attrRaw, innerBody) => {
-    const nameMatch = /\bname\s*=\s*["']([^"']+)["']/iu.exec(attrRaw);
-    const mimeMatch = /\bmime\s*=\s*["']([^"']+)["']/iu.exec(attrRaw);
-    const encMatch = /\bencoding\s*=\s*["']([^"']+)["']/iu.exec(attrRaw);
-    const rawName = path.basename(String(nameMatch?.[1] || "generated.txt").trim()) || "generated.txt";
-    const isBase64 = String(encMatch?.[1] || "").trim().toLowerCase() === "base64";
-    const bodyTrimmed = String(innerBody || "").replace(/^\r?\n/, "").replace(/\r?\n$/, "");
-    const bytes = isBase64
-      ? Buffer.from(bodyTrimmed.replace(/\s+/gu, ""), "base64")
-      : Buffer.from(bodyTrimmed, "utf8");
-    if (bytes.byteLength > 0 && files.length < 6) {
-      files.push({
-        fileName: rawName,
-        mimeType: String(mimeMatch?.[1] || inferMimeTypeFromFileName(rawName)).trim(),
-        bytes,
-      });
-    }
-    return "";
-  });
-
-  // 2. Parse [[DUALLANE_FILE: /path/to/file]] (strictly allowed only in private 1-on-1 DM within workdir or tmpdir)
-  const localFileRe = /\[\[DUALLANE_FILE:\s*([^\]]+?)\s*\]\]/gu;
-  text = text.replace(localFileRe, (_full, rawPath) => {
-    if (!allowLocalPath || files.length >= 6) return "";
-    try {
-      const candidate = path.resolve(workdir || process.cwd(), String(rawPath || "").trim());
-      if (!fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) return "";
-      const realCandidate = fs.realpathSync(candidate);
-      const allowedRoots = [os.tmpdir(), workdir].filter(Boolean).map((r) => {
-        try {
-          return fs.realpathSync(r);
-        } catch {
-          return path.resolve(r);
-        }
-      });
-      const withinAllowed = allowedRoots.some(
-        (root) => realCandidate === root || realCandidate.startsWith(root + path.sep)
-      );
-      if (!withinAllowed) return "";
-      const segments = realCandidate.split(path.sep);
-      if (segments.some((seg) => seg.startsWith(".") && seg !== "." && seg !== "..")) {
-        return "";
-      }
-      const bytes = fs.readFileSync(realCandidate);
-      if (bytes.byteLength > 0 && bytes.byteLength <= 50 * 1024 * 1024) {
-        const fileName = path.basename(realCandidate);
-        files.push({
-          fileName,
-          mimeType: inferMimeTypeFromFileName(fileName),
-          bytes,
-        });
-      }
-    } catch {
-      /* ignore inaccessible local path */
-    }
-    return "";
-  });
-
-  const cleanText = text.replace(/\n{3,}/gu, "\n\n").trim();
-  return { cleanText, files };
+export function extractGeneratedFilesFromReply(rawReply) {
+  const result = parseAgentBridgeResult(String(rawReply || ""), { validateBytes: validateArtifactBytes });
+  if (result.artifacts.some((artifact) => artifact.source !== "inline")) throw new AgentRuntimeError("artifact.runtime_required");
+  return { cleanText: result.text, files: result.artifacts.map(({ fileName, mimeType, bytes }) => ({ fileName, mimeType, bytes })) };
 }
 
 function readDaemonRecord(profileName, configDir) {
@@ -2820,147 +4258,12 @@ export function resolveStandaloneScriptPath(explicitPath = "") {
   return path.join(os.homedir(), ".duallane", "bin", "duallane-agent.mjs");
 }
 
-export async function checkRuntimeUpdate({
-  origin,
-  fetchImpl = globalThis.fetch,
-  timeoutMs = 6000,
-} = {}) {
-  const cleanOrigin = String(origin || "").trim().replace(/\/+$/u, "");
-  if (!cleanOrigin || typeof fetchImpl !== "function") {
-    throw new Error("A DualLane server origin is required to check runtime updates.");
-  }
-  const signal =
-    typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
-      ? AbortSignal.timeout(timeoutMs)
-      : undefined;
-  const manifestUrl = `${cleanOrigin}/integrations/duallane-agent.manifest.json?t=${Math.floor(
-    Date.now() / 60000
-  )}`;
-  const downloadUrl = `${cleanOrigin}/integrations/duallane-agent.mjs`;
-
-  const res = await fetchImpl(manifestUrl, {
-    method: "GET",
-    headers: { Accept: "application/json", "Cache-Control": "no-cache" },
-    ...(signal ? { signal } : {}),
-  });
-
-  if (res.ok) {
-    const manifest = await res.json();
-    const latestVersion = String(manifest?.version || "").trim();
-    if (!latestVersion) {
-      throw new Error("Invalid runtime manifest: missing version.");
-    }
-    return {
-      currentVersion: DUALLANE_AGENT_SDK_VERSION,
-      latestVersion,
-      updateAvailable: compareRuntimeSemver(latestVersion, DUALLANE_AGENT_SDK_VERSION) > 0,
-      sha256: String(manifest?.sha256 || "").trim().toLowerCase(),
-      byteSize: Number(manifest?.byteSize || 0),
-      downloadUrl,
-      highlights: Array.isArray(manifest?.highlights) ? manifest.highlights : [],
-    };
-  }
-
-  // Fallback for older servers before manifest endpoint existed
-  const scriptRes = await fetchImpl(downloadUrl, {
-    method: "GET",
-    headers: { "Cache-Control": "no-cache" },
-    ...(signal ? { signal } : {}),
-  });
-  if (!scriptRes.ok) {
-    throw new Error(`Runtime update check failed with HTTP ${scriptRes.status}`);
-  }
-  const scriptText = await scriptRes.text();
-  const verMatch = /DUALLANE_AGENT_SDK_VERSION\s*=\s*["']([^"']+)["']/u.exec(scriptText);
-  const latestVersion = String(verMatch?.[1] || DUALLANE_AGENT_SDK_VERSION).trim();
-  const digest = crypto.createHash("sha256").update(scriptText, "utf8").digest("hex");
-  return {
-    currentVersion: DUALLANE_AGENT_SDK_VERSION,
-    latestVersion,
-    updateAvailable: compareRuntimeSemver(latestVersion, DUALLANE_AGENT_SDK_VERSION) > 0,
-    sha256: digest,
-    byteSize: Buffer.byteLength(scriptText, "utf8"),
-    downloadUrl,
-    highlights: [],
-  };
+export async function checkRuntimeUpdate(options = {}) {
+  return inspectOfficialRuntime(options);
 }
 
-export async function stageRuntimeSelfUpdate({
-  origin,
-  targetPath = "",
-  force = false,
-  skipSyntaxCheck = false,
-  fetchImpl = globalThis.fetch,
-  timeoutMs = 15000,
-} = {}) {
-  const check = await checkRuntimeUpdate({ origin, fetchImpl, timeoutMs });
-  const resolvedTarget = resolveStandaloneScriptPath(targetPath);
-  if (!check.updateAvailable && !force) {
-    return {
-      ...check,
-      updated: false,
-      targetPath: resolvedTarget,
-    };
-  }
-
-  const signal =
-    typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
-      ? AbortSignal.timeout(timeoutMs)
-      : undefined;
-  const sep = check.downloadUrl.includes("?") ? "&" : "?";
-  const dlRes = await fetchImpl(
-    `${check.downloadUrl}${sep}v=${encodeURIComponent(check.latestVersion)}&t=${Date.now()}`,
-    {
-      method: "GET",
-      headers: { "Cache-Control": "no-cache" },
-      ...(signal ? { signal } : {}),
-    }
-  );
-  if (!dlRes.ok) {
-    throw new Error(`Failed to download runtime bundle (HTTP ${dlRes.status})`);
-  }
-  const rawBytes = Buffer.from(await dlRes.arrayBuffer());
-  if (rawBytes.byteLength < 1024) {
-    throw new Error("Downloaded runtime bundle is unexpectedly small; aborting update.");
-  }
-  const actualSha256 = crypto.createHash("sha256").update(rawBytes).digest("hex");
-  if (check.sha256 && actualSha256 !== check.sha256) {
-    throw new Error(
-      `Runtime SHA-256 mismatch (expected ${check.sha256.slice(0, 12)}..., got ${actualSha256.slice(0, 12)}...)`
-    );
-  }
-
-  const targetDir = path.dirname(resolvedTarget);
-  fs.mkdirSync(targetDir, { recursive: true });
-  const tmpPath = path.join(
-    targetDir,
-    `.${path.basename(resolvedTarget, ".mjs")}.tmp.${process.pid}.${Date.now()}.mjs`
-  );
-  fs.writeFileSync(tmpPath, rawBytes, { mode: 0o755 });
-  try {
-    fs.chmodSync(tmpPath, 0o755);
-    if (!skipSyntaxCheck) {
-      const syntax = spawnSync(process.execPath, ["--check", tmpPath], { encoding: "utf8" });
-      if (syntax.status !== 0) {
-        throw new Error(`Downloaded runtime failed syntax check: ${syntax.stderr || "invalid JS"}`);
-      }
-    }
-    fs.renameSync(tmpPath, resolvedTarget);
-  } catch (err) {
-    try {
-      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
-    } catch {
-      /* ignore */
-    }
-    throw err;
-  }
-
-  return {
-    ...check,
-    sha256: actualSha256,
-    updated: true,
-    targetPath: resolvedTarget,
-  };
+export async function stageRuntimeSelfUpdate(options = {}) {
+  return installOfficialRuntime({ ...options, targetPath: resolveStandaloneScriptPath(options.targetPath) });
 }
 
 export async function restartInstalledDaemons({ configDir, quiet = true } = {}) {
@@ -2982,421 +4285,212 @@ export async function restartInstalledDaemons({ configDir, quiet = true } = {}) 
   return restarted;
 }
 
-async function invokeDaemonAgentTurn({
-  agentMode,
-  customCmd,
-  workdir,
-  sandboxMode,
-  model,
-  botName,
-  conversation,
-  event,
-  context,
-}) {
-  if (agentMode === "cmd" || customCmd) {
-    return await new Promise((resolve, reject) => {
-      const env = { ...process.env };
-      delete env.DUALLANE_BOT_TOKEN;
-      env.DUALLANE_CONVERSATION_ID = String(event?.conversationId || "");
-      env.DUALLANE_EVENT_TYPE = String(event?.type || "");
-      env.DUALLANE_MESSAGE_TEXT = String(
-        event?.payload?.message?.plainText || event?.payload?.text || ""
-      );
-      const child = spawn(customCmd, {
-        cwd: workdir,
-        shell: true,
-        env,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (c) => { stdout += c.toString("utf8"); });
-      child.stderr.on("data", (c) => { stderr += c.toString("utf8"); });
-      child.on("error", reject);
-      child.on("close", (code) => {
-        if (code !== 0) {
-          reject(new Error(`Custom bridge command exited with code ${code}: ${stderr.slice(-300)}`));
-          return;
+export async function invokeDaemonAgentTurn({ customCmd, workdir, request, signal, timeoutMs = 300_000 }) {
+  if (!customCmd) throw new TypeError("Resident daemons require --cmd <command>; no agent executable is selected automatically.");
+  const input = JSON.stringify(request);
+  if (Buffer.byteLength(input) > 16 * 1024 * 1024) throw new AgentRuntimeError("bridge.input_limit");
+  if (signal?.aborted) throw new AgentRuntimeError("bridge.cancelled");
+  return await new Promise((resolve, reject) => {
+    const env = { ...process.env };
+    delete env.DUALLANE_BOT_TOKEN;
+    delete env.DUALLANE_TOKEN;
+    delete env.DUALLANE_MESSAGE_TEXT;
+    env.DUALLANE_CONVERSATION_ID = String(request.event.conversationId);
+    env.DUALLANE_EVENT_TYPE = String(request.event.type || "");
+    const child = spawn(customCmd, { cwd: workdir, shell: true, windowsHide: true,
+      detached: process.platform !== "win32", env, stdio: ["pipe", "pipe", "pipe"] });
+    let stdoutBytes = 0, stderrBytes = 0, failure, settled = false;
+    const chunks = [];
+    const terminate = (code) => {
+      if (failure) return;
+      failure = new AgentRuntimeError(code);
+      if (child.pid) {
+        if (process.platform === "win32") {
+          spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore", timeout: 5000 });
+        } else {
+          try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
         }
-        resolve(stdout.trim());
-      });
-      child.stdin.end(JSON.stringify({ event, context, conversation }));
+      }
+    };
+    const aborted = () => terminate("bridge.cancelled");
+    const timer = setTimeout(() => terminate("bridge.timeout"), Math.min(600_000, Math.max(100, timeoutMs)));
+    const finish = (error, value) => {
+      if (settled) return; settled = true;
+      clearTimeout(timer); signal?.removeEventListener("abort", aborted);
+      if (error) reject(error); else resolve(value);
+    };
+    signal?.addEventListener("abort", aborted, { once: true });
+    child.stdout.on("data", (chunk) => {
+      stdoutBytes += chunk.length;
+      if (stdoutBytes > AGENT_MAX_RESULT_BYTES) terminate("bridge.output_limit");
+      else chunks.push(chunk);
     });
-  }
-
-  throw new TypeError("Resident daemons require --cmd <command>; no agent executable is selected automatically.");
+    child.stderr.on("data", (chunk) => {
+      stderrBytes += chunk.length;
+      if (stderrBytes > 64 * 1024) terminate("bridge.stderr_limit");
+    });
+    child.stdin.on("error", () => { /* Exit/error below determines the safe result. */ });
+    child.on("error", () => finish(new AgentRuntimeError("bridge.spawn_failed")));
+    child.on("close", (code) => finish(failure || (code !== 0 ? new AgentRuntimeError("bridge.failed") : null), Buffer.concat(chunks).toString("utf8").trim()));
+    child.stdin.end(input);
+  });
 }
 
 export async function runResidentDaemon(flags = {}) {
   const profileName = normalizeProfileName(flags.profile || "default");
   const profile = loadAgentProfile(profileName);
-  if (!profile) {
-    throw new Error(
-      `Profile "${profileName}" is not configured. Run: duallane-agent setup "<setupUrl>" --profile ${profileName}`
-    );
-  }
-
+  if (!profile) throw new Error(`Profile "${profileName}" is not configured. Run setup first.`);
   const savedCfg = readDaemonRecord(profileName) || {};
-  const customCmd = typeof flags.cmd === "string" ? flags.cmd.trim() : (savedCfg.cmd || "");
-  const requestedAgent = String(
-    flags.agent ||
-    (typeof flags.cmd === "string" && flags.cmd.trim() ? "cmd" : savedCfg.agent) ||
-    (customCmd ? "cmd" : "auto")
-  ).trim();
-  const agentMode = detectAvailableAgentBinary(requestedAgent);
-  if (!customCmd) {
-    throw new TypeError("Resident daemons require --cmd <command>; no agent executable is selected automatically.");
+  if (savedCfg.pausedReason) {
+    // Revoked credentials remain paused across supervisor restarts until an
+    // operator explicitly runs daemon start/restart with the updated profile.
+    writeDaemonRecord(profileName, { ...savedCfg, pid: process.pid, healthy: false });
+    await new Promise((resolve) => {
+      const timer = setInterval(() => {}, 60_000);
+      const resume = () => { clearInterval(timer); process.removeListener("SIGINT", resume); process.removeListener("SIGTERM", resume); resolve(); };
+      process.once("SIGINT", resume); process.once("SIGTERM", resume);
+    });
+    return;
   }
+  const customCmd = typeof flags.cmd === "string" ? flags.cmd.trim() : (savedCfg.cmd || "");
+  const agentMode = detectAvailableAgentBinary(flags.agent || (typeof flags.cmd === "string" && flags.cmd.trim() ? "cmd" : savedCfg.agent) || (customCmd ? "cmd" : "auto"));
+  if (!customCmd) throw new TypeError("Resident daemons require --cmd <command>; no agent executable is selected automatically.");
   const workdir = path.resolve(String(flags.workdir || savedCfg.workdir || os.homedir()));
   const rawSandbox = String(flags.sandbox || savedCfg.sandbox || "read-only").trim();
   const sandboxMode = DAEMON_VALID_SANDBOXES.has(rawSandbox) ? rawSandbox : "read-only";
   const model = typeof flags.model === "string" ? flags.model.trim() : (savedCfg.model || "");
   const transportMode = String(flags.transport || savedCfg.transport || "auto").trim().toLowerCase();
-
-  const client = new DualLaneAgentClient({
-    url: profile.url,
-    token: profile.token,
-    adapterVersion: `duallane-daemon/${DUALLANE_AGENT_SDK_VERSION}`,
-  });
-
-  const logLine = (msg) => {
-    process.stderr.write(`[${new Date().toISOString()}] [DualLane Daemon:${profileName}] ${msg}\n`);
-  };
-
-  let botName = profile.botName || "Bot";
-  const convMetaMap = new Map();
-  const refreshConversations = async () => {
-    try {
-      const [me, convs] = await Promise.all([
-        client.getMe().catch(() => null),
-        client.listConversations().catch(() => null),
-      ]);
-      if (me?.bot?.name) botName = me.bot.name;
-      for (const c of convs?.conversations || []) {
-        if (c?.id) convMetaMap.set(c.id, c);
-      }
-    } catch {
-      /* non-fatal */
+  const allowPublicMedia = flags["allow-public-media"] === true || flags["allow-public-media"] === "true" || (flags["allow-public-media"] === undefined && savedCfg.allowPublicMedia === true);
+  const mediaDnsServers = typeof flags["media-dns-servers"] === "string" ? flags["media-dns-servers"].split(",").map((value) => value.trim()).filter(Boolean) : (savedCfg.mediaDnsServers || []);
+  const autoUpdateEnabled = flags["auto-update"] === undefined ? savedCfg.autoUpdateEnabled !== false : flags["auto-update"] !== "false" && flags["auto-update"] !== false;
+  const stateDir = path.join(getDaemonStateDir(), "tasks");
+  const client = new DualLaneAgentClient({ url: profile.url, token: profile.token, adapterVersion: `duallane-daemon/${DUALLANE_AGENT_SDK_VERSION}` });
+  const log = (code) => process.stderr.write(`[${new Date().toISOString()}] [DualLane] ${code}\n`);
+  let record = { ...savedCfg, profile: profileName, agent: agentMode, cmd: customCmd,
+    workdir, sandbox: sandboxMode, model: model || undefined, transport: transportMode,
+    allowPublicMedia, mediaDnsServers, autoUpdateEnabled, pid: process.pid, healthy: false, probeError: null,
+    startedAt: new Date().toISOString() };
+  let me;
+  try { me = await client.getMe(); }
+  catch (error) {
+    if ([401, 403].includes(error?.statusCode ?? error?.status)) {
+      writeDaemonRecord(profileName, { ...record, pausedReason: safeAgentError(error).code, probeError: safeAgentError(error).code });
     }
-  };
-  await refreshConversations();
-
-  let initialSeq = Number(profile.lastSequence || 0);
-  if (initialSeq === 0) {
-    const probe = await client.getUpdates({ afterSequence: 0, limit: 1 }).catch(() => null);
-    if (probe?.syncRequired && Number(probe.currentSequence) > 0) {
-      initialSeq = Math.max(0, Number(probe.currentSequence) - 20);
-      updateProfileCursor(profileName, initialSeq);
-    }
+    throw error;
   }
-
-  logLine(
-    `Started resident listener for "${botName}" (agent=${agentMode}, sandbox=${sandboxMode}, seq=${initialSeq}, pid=${process.pid})`
-  );
-
-  writeDaemonRecord(profileName, {
-    ...savedCfg,
-    profile: profileName,
-    botName,
-    agent: agentMode,
-    cmd: customCmd || undefined,
-    workdir,
-    sandbox: sandboxMode,
-    model: model || undefined,
-    transport: transportMode,
-    pid: process.pid,
-    startedAt: new Date().toISOString(),
-  });
-
-  let stopped = false;
-  let inFlightTurns = 0;
-  let pendingRestartVersion = "";
-  let updateCheckBusy = false;
-  const autoUpdateEnabled = flags["auto-update"] !== "false" && flags["auto-update"] !== false;
-  const activeScriptPath = path.resolve(process.argv[1] || resolveStandaloneScriptPath());
-  const isStandaloneRuntime =
-    activeScriptPath.endsWith("duallane-agent.mjs") &&
-    !activeScriptPath.includes(`${path.sep}packages${path.sep}agent-sdk${path.sep}bin${path.sep}`);
-
-  const maybeRestartForPendingUpdate = () => {
-    if (stopped || !pendingRestartVersion || inFlightTurns > 0) return;
-    stopped = true;
-    const targetVer = pendingRestartVersion;
-    logLine(`Idle window reached -> applying silent auto-update to v${targetVer} now...`);
-    client.stop();
-    const rec = readDaemonRecord(profileName) || savedCfg;
-    if (rec?.manager === "detached") {
-      try {
-        const logDir = getDaemonLogDir();
-        const logPath = rec.logPath || path.join(logDir, `${profileName}.log`);
-        const logFd = fs.openSync(logPath, "a");
-        const args = [
-          activeScriptPath,
-          "daemon",
-          "run",
-          "--profile",
-          profileName,
-          "--agent",
-          agentMode,
-          "--workdir",
-          workdir,
-          "--sandbox",
-          sandboxMode,
-          "--transport",
-          transportMode,
-        ];
-        if (model) args.push("--model", model);
-        if (customCmd) args.push("--cmd", customCmd);
-        const child = spawn(process.execPath, args, {
-          cwd: workdir,
-          env: process.env,
-          detached: true,
-          stdio: ["ignore", logFd, logFd],
-        });
-        child.unref();
-        fs.closeSync(logFd);
-        writeDaemonRecord(profileName, { ...rec, pid: child.pid });
-      } catch (err) {
-        logLine(`Detached respawn failed: ${err?.message || err}`);
-      }
-    }
-    setTimeout(() => process.exit(0), 120);
+  const botId = me?.bot?.id || profile.botId;
+  const scopes = Array.isArray(me?.scopes) ? me.scopes : [];
+  let stopped = false, runtime, pendingRestart = false, updateBusy = false, stopResolve;
+  const shutdownSignal = new Promise((resolve) => { stopResolve = resolve; });
+  const timers = [];
+  const updateRecord = (patch) => {
+    record = { ...record, ...patch, updatedAt: new Date().toISOString() };
+    writeDaemonRecord(profileName, record);
   };
-
-  const checkAndStageSilentUpdate = async (reason = "periodic") => {
-    if (stopped || updateCheckBusy || pendingRestartVersion || !isStandaloneRuntime) return;
-    updateCheckBusy = true;
-    try {
-      const res = await stageRuntimeSelfUpdate({
-        origin: profile.url,
-        targetPath: activeScriptPath,
-      });
-      if (res.updated) {
-        pendingRestartVersion = res.latestVersion;
-        logLine(
-          `Downloaded & verified runtime v${res.latestVersion} (${reason}, sha256=${res.sha256.slice(
-            0,
-            12
-          )}). ${inFlightTurns > 0 ? "Waiting for active reply to finish..." : "Restarting daemon..."}`
-        );
-        maybeRestartForPendingUpdate();
-      }
-    } catch (err) {
-      if (reason === "remote_request") {
-        logLine(`Silent update check warning: ${err?.message || err}`);
-      }
-    } finally {
-      updateCheckBusy = false;
-    }
-  };
-
-  if (autoUpdateEnabled && isStandaloneRuntime) {
-    const initialUpdateTimer = setTimeout(() => {
-      void checkAndStageSilentUpdate("startup");
-    }, 15_000);
-    initialUpdateTimer.unref?.();
-    const periodicUpdateTimer = setInterval(() => {
-      void checkAndStageSilentUpdate("periodic");
-    }, 20 * 60 * 1000);
-    periodicUpdateTimer.unref?.();
-  }
-
-  const conversationQueues = new Map();
-  const processedSequences = new Set();
-
-  const processSingleEvent = async (event) => {
-    const seq = Number(event?.sequence || 0);
-    if (seq > 0) {
-      if (processedSequences.has(seq)) return;
-      processedSequences.add(seq);
-      if (processedSequences.size > 500) {
-        const oldest = processedSequences.values().next().value;
-        processedSequences.delete(oldest);
-      }
-      updateProfileCursor(profileName, seq);
-    }
-    if (event?.type === "bot.runtime_upgrade") {
-      logLine(
-        `Received remote runtime upgrade signal (target=${
-          event?.payload?.targetVersion || "latest"
-        })`
-      );
-      void checkAndStageSilentUpdate("remote_request");
-      return;
-    }
-    const convId = String(event?.conversationId || "").trim();
-    if (!convId) return;
-
-    inFlightTurns += 1;
-    try {
-      if (!convMetaMap.has(convId)) {
-        await refreshConversations();
-      }
-      const conversation = convMetaMap.get(convId) || { id: convId };
-
-      logLine(`Processing event seq=${seq} type=${event.type || "message.created"} conv=${convId}`);
-      await client.setTyping(convId, { state: "thinking" }).catch(() => {});
-      const typingTimer = setInterval(() => {
-        if (!stopped) {
-          void client.setTyping(convId, { state: "thinking" }).catch(() => {});
-        }
-      }, 3800);
-      typingTimer.unref?.();
-
-      try {
-        let context = null;
-        if (!profile.scopes || profile.scopes.includes("messages:read_context")) {
-          context = await client.getContext(convId, { limit: 20 }).catch(() => null);
-        }
-        const replyText = await invokeDaemonAgentTurn({
-          agentMode,
-          customCmd,
-          workdir,
-          sandboxMode,
-          model,
-          botName,
-          conversation,
-          event,
-          context,
-        });
-        if (replyText) {
-          const replyToId =
-            event.payload?.message?.id ||
-            event.payload?.messageId ||
-            (Array.isArray(context?.messages) && context.messages.length > 0
-              ? context.messages[context.messages.length - 1]?.id
-              : undefined);
-          const isGroupConv = conversation?.type === "group" || conversation?.kind === "group";
-          const { cleanText, files: generatedFiles } = extractGeneratedFilesFromReply(replyText, {
-            allowLocalPath: !isGroupConv,
-            workdir,
-          });
-
-          if (generatedFiles.length > 0) {
-            for (let idx = 0; idx < generatedFiles.length; idx += 1) {
-              const gf = generatedFiles[idx];
-              await client.sendFile({
-                conversationId: convId,
-                bytes: gf.bytes,
-                fileName: gf.fileName,
-                mimeType: gf.mimeType,
-                text: idx === 0 && cleanText ? cleanText.slice(0, 28_000) : undefined,
-                replyToMessageId: idx === 0 ? replyToId : undefined,
-                clientMessageId: `${event.eventId}:file:${idx}`,
-              });
-            }
-            logLine(`Sent ${generatedFiles.length} generated file(s) to conv=${convId} seq=${seq}`);
-          } else if (cleanText) {
-            await client.sendMessage({
-              conversationId: convId,
-              text: cleanText.slice(0, 28_000),
-              replyToMessageId: replyToId,
-              clientMessageId: `${event.eventId}:reply`,
-              idempotencyKey: `${event.eventId}:reply`,
-            });
-            logLine(`Replied to conv=${convId} seq=${seq} (${cleanText.length} chars)`);
-          }
-        }
-      } catch (err) {
-        const safeErr = String(err?.message || err).replace(/dl_bot_[A-Za-z0-9_-]{12,}/gu, "[REDACTED]");
-        logLine(`Turn error on conv=${convId} seq=${seq}: ${safeErr}`);
-      } finally {
-        clearInterval(typingTimer);
-      }
-    } finally {
-      inFlightTurns = Math.max(0, inFlightTurns - 1);
-      maybeRestartForPendingUpdate();
-    }
-  };
-
-  const enqueueConversationEvent = (event) => {
-    const convId = String(event?.conversationId || "__global__");
-    const prev = conversationQueues.get(convId) || Promise.resolve();
-    const next = prev
-      .then(() => processSingleEvent(event))
-      .catch((err) => logLine(`Queue error: ${err?.message || err}`));
-    conversationQueues.set(convId, next);
-    return next;
-  };
-
-  const shutdown = () => {
+  const shutdown = async () => {
     if (stopped) return;
-    stopped = true;
-    logLine("Shutting down resident daemon...");
-    client.stop();
-    process.exit(0);
+    stopped = true; client.stop(); timers.forEach(clearInterval);
+    await runtime?.close(); stopResolve();
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-
-  const runPollingSupervisor = async (startCursor) => {
-    let cursor = startCursor;
-    logLine(`HTTP long-polling supervisor active (seq=${cursor})`);
+  const signalShutdown = () => { void shutdown(); };
+  process.once("SIGINT", signalShutdown); process.once("SIGTERM", signalShutdown);
+  runtime = createAgentTaskRuntime({ stateDir, origin: profile.url, botId, client, scopes,
+    maxConcurrency: Number(flags.concurrency || savedCfg.concurrency || 2),
+    prepareInputs: prepareAgentInputs,
+    validateBytes: validateArtifactBytes,
+    resolveMedia: createDaemonMediaResolver({ enabled: allowPublicMedia, dnsServers: mediaDnsServers }),
+    invoke: (request, { signal }) => invokeDaemonAgentTurn({ customCmd, workdir, request, signal }),
+    onState(summary) {
+      updateRecord({ taskSummary: summary });
+      if (pendingRestart && summary.pending === 0 && summary.active === 0) void shutdown();
+    },
+  });
+  try { writeDaemonRecord(profileName, record); runtime.start(); }
+  catch (error) {
+    await runtime.close(); process.removeListener("SIGINT", signalShutdown); process.removeListener("SIGTERM", signalShutdown); throw error;
+  }
+  let cursor = Number(profile.lastSequence || 0);
+  const acceptEvent = (event) => {
+    const isBusinessEvent = ["message.created", "bot.mentioned", "command.invoked", "card.action"].includes(event.type);
+    const accepted = runtime.accept(isBusinessEvent ? event : { ...event, conversationId: event.conversationId || "__runtime__" }, { completed: !isBusinessEvent });
+    if (event.type === "bot.runtime_upgrade") void checkUpdate();
+    return accepted;
+  };
+  const activeScriptPath = path.resolve(process.argv[1] || resolveStandaloneScriptPath());
+  const isStandalone = activeScriptPath.endsWith("duallane-agent.mjs") && !activeScriptPath.includes(`${path.sep}packages${path.sep}agent-sdk${path.sep}bin${path.sep}`);
+  const checkUpdate = async () => {
+    if (!autoUpdateEnabled || !isStandalone || stopped || updateBusy || pendingRestart) return;
+    updateBusy = true;
+    try {
+      const result = await stageRuntimeSelfUpdate({ origin: profile.url, targetPath: activeScriptPath });
+      if (result.updated) {
+        pendingRestart = true;
+        if (runtime.summary().pending === 0 && runtime.summary().active === 0) await shutdown();
+      }
+    } catch (error) { log(`update.${safeAgentError(error).code}`); }
+    finally { updateBusy = false; }
+  };
+  if (autoUpdateEnabled && isStandalone) {
+    const first = setTimeout(() => { void checkUpdate(); }, 15_000); first.unref?.(); timers.push(first);
+    const periodic = setInterval(() => { void checkUpdate(); }, 20 * 60_000); periodic.unref?.(); timers.push(periodic);
+  }
+  const polling = async () => {
+    let failures = 0;
     while (!stopped) {
       try {
-        const polled = await client.pollNextEvent({
-          afterSequence: cursor,
-          timeoutMs: 25_000,
-          onCursorAdvance: (seq) => {
-            cursor = seq;
-            updateProfileCursor(profileName, seq);
-          },
-          onSyncRequired: ({ currentSequence }) => {
-            cursor = currentSequence;
-            updateProfileCursor(profileName, currentSequence);
-          },
-        });
-        cursor = polled.lastSequence;
-        if (!polled.timeout && polled.event) {
-          await enqueueConversationEvent(polled.event);
+        const result = await client.pollNextEvent({ afterSequence: cursor, timeoutMs: 25_000, ack: false,
+          onSyncRequired({ currentSequence }) {
+            cursor = currentSequence; updateProfileCursor(profileName, cursor);
+          } });
+        if (result.event) {
+          acceptEvent(result.event);
+          await client.acknowledge({ eventId: result.event.eventId, sequence: result.event.sequence });
+          cursor = result.event.sequence;
+          updateProfileCursor(profileName, cursor);
         }
-      } catch (err) {
-        if (stopped) break;
-        logLine(`Long-poll error (${err?.code || "network"}): ${err?.message || err}; retrying in 3s`);
-        await new Promise((r) => setTimeout(r, 3000));
+        failures = 0; updateRecord({ healthy: true, probeError: null });
+      } catch (error) {
+        const safe = safeAgentError(error); failures += 1;
+        updateRecord({ healthy: false, probeError: safe.code }); log(safe.code);
+        if ([401, 403].includes(error?.statusCode ?? error?.status)) updateRecord({ pausedReason: safe.code });
+        if ([401, 403].includes(error?.statusCode ?? error?.status) || !safe.retryable || failures >= 3) throw new AgentRuntimeError(safe.code);
+        await new Promise((resolve) => setTimeout(resolve, Math.min(5000, failures * 1000)));
       }
     }
   };
-
-  if (transportMode === "poll") {
-    await runPollingSupervisor(initialSeq);
-    return;
-  }
-
-  while (!stopped) {
-    try {
-      await client.connect({
-        lastSequence: Number(loadAgentProfile(profileName)?.lastSequence ?? initialSeq),
-        onStatus(state) {
-          if (state.status === "connected") {
-            logLine(`WebSocket connected (seq=${state.currentSequence ?? state.lastSequence})`);
-          } else if (state.status === "disconnected") {
-            logLine(`WebSocket disconnected (attempt=${state.attempt}), reconnecting in ${state.retryInMs}ms...`);
-          }
-        },
-        onEvent(event) {
-          return enqueueConversationEvent(event);
-        },
-        async onSyncRequired({ currentSequence, reason }) {
-          logLine(`Cursor sync_required (${reason}) -> advancing to seq=${currentSequence}`);
-          updateProfileCursor(profileName, currentSequence);
-        },
-        onError(err) {
-          logLine(`Gateway warning (${err.code}): ${err.message}`);
-        },
-      });
-      await new Promise(() => {});
-    } catch (err) {
-      if (stopped) break;
-      client.stop();
-      if (transportMode === "auto" && err?.retryable) {
-        logLine(`WebSocket initial handshake unavailable (${err.code}), switching to HTTP long-polling...`);
-        await runPollingSupervisor(client.lastSequence || initialSeq);
-        return;
+  try {
+    if (transportMode === "poll") await polling();
+    else {
+      try {
+        await client.connect({ lastSequence: cursor,
+          onEvent(event) { acceptEvent(event); updateProfileCursor(profileName, event.sequence); },
+          onStatus(state) { updateRecord({ healthy: state.status === "connected", probeError: state.status === "connected" ? null : "gateway.disconnected" }); },
+          onSyncRequired({ currentSequence }) { cursor = currentSequence; updateProfileCursor(profileName, cursor); },
+          onError(error) {
+            const safe = safeAgentError(error); updateRecord({ healthy: false, probeError: safe.code }); log(safe.code);
+            if ([401, 403].includes(error?.statusCode ?? error?.status)) { updateRecord({ pausedReason: safe.code }); void shutdown(); }
+          },
+        });
+        await shutdownSignal;
+      } catch (error) {
+        client.stop();
+        if (transportMode === "auto" && error?.retryable) await polling();
+        else throw error;
       }
-      logLine(`Connection failed (${err?.code || "error"}): ${err?.message || err}; retrying in 5s...`);
-      await new Promise((r) => setTimeout(r, 5000));
     }
+  } finally {
+    await shutdown();
+    process.removeListener("SIGINT", signalShutdown); process.removeListener("SIGTERM", signalShutdown);
+    updateRecord({ healthy: false, stoppedAt: new Date().toISOString() });
+  }
+  if (pendingRestart && record.manager === "detached") {
+    const args = [activeScriptPath, "daemon", "run", "--profile", profileName];
+    const logPath = record.logPath || path.join(getDaemonLogDir(), `${profileName}.log`);
+    const logFd = fs.openSync(logPath, "a", 0o600);
+    try {
+      const child = spawn(process.execPath, args, { cwd: workdir, env: process.env, detached: true, windowsHide: true, stdio: ["ignore", logFd, logFd] });
+      child.unref(); updateRecord({ pid: child.pid });
+    } finally { fs.closeSync(logFd); }
   }
 }
 
@@ -3416,6 +4510,24 @@ function stopDetachedPidIfRunning(profileName, configDir) {
 export async function manageDaemonCli(positionals = [], flags = {}) {
   const action = String(positionals[0] || "status").trim().toLowerCase();
   const profileName = normalizeProfileName(flags.profile || "default");
+
+  if (action === "recover-lock") {
+    const profile = loadAgentProfile(profileName);
+    if (!profile?.botId) throw new AgentRuntimeError("runtime.identity_required");
+    const recovered = recoverAgentTaskOwner({ stateDir: path.join(getDaemonStateDir(), "tasks"), origin: profile.url, botId: profile.botId },
+      { confirmStopped: flags["confirm-stopped"] === true || flags["confirm-stopped"] === "true" });
+    process.stdout.write(JSON.stringify(recovered) + "\n");
+    return;
+  }
+
+  if (action === "retry" || action === "cancel") {
+    const profile = loadAgentProfile(profileName);
+    if (!profile?.botId) throw new AgentRuntimeError("runtime.identity_required");
+    const control = requestAgentTaskControl({ stateDir: path.join(getDaemonStateDir(), "tasks"),
+      origin: profile.url, botId: profile.botId }, String(positionals[1] || ""), action);
+    process.stdout.write(JSON.stringify(control) + "\n");
+    return;
+  }
 
   if (action === "run") {
     await runResidentDaemon(flags);
@@ -3462,6 +4574,9 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
     const sandbox = DAEMON_VALID_SANDBOXES.has(rawSandbox) ? rawSandbox : "read-only";
     const model = typeof flags.model === "string" ? flags.model.trim() : (prev.model || "");
     const transport = String(flags.transport || prev.transport || "auto").trim().toLowerCase();
+    const allowPublicMedia = flags["allow-public-media"] === undefined ? prev.allowPublicMedia === true : [true, "true"].includes(flags["allow-public-media"]);
+    const mediaDnsServers = typeof flags["media-dns-servers"] === "string" ? flags["media-dns-servers"].split(",").map((value) => value.trim()).filter(Boolean) : (prev.mediaDnsServers || []);
+    const autoUpdateEnabled = flags["auto-update"] === undefined ? prev.autoUpdateEnabled !== false : ![false, "false"].includes(flags["auto-update"]);
 
     const programArguments = [
       nodePath,
@@ -3481,6 +4596,8 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
     ];
     if (model) programArguments.push("--model", model);
     if (customCmd) programArguments.push("--cmd", customCmd);
+    programArguments.push("--allow-public-media", String(allowPublicMedia), "--auto-update", String(autoUpdateEnabled));
+    if (mediaDnsServers.length) programArguments.push("--media-dns-servers", mediaDnsServers.join(","));
 
     const env = {
       HOME: os.homedir(),
@@ -3566,6 +4683,9 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
       sandbox,
       model: model || undefined,
       transport,
+      allowPublicMedia,
+      mediaDnsServers,
+      autoUpdateEnabled,
       logPath,
       pid: spawnedPid || undefined,
       installedAt: new Date().toISOString(),
@@ -3653,7 +4773,7 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
       serviceRunning = true;
     }
 
-    let remoteConnection = null;
+    let remoteConnection = null, probeError = null, taskSummary = null;
     const profile = loadAgentProfile(profileName);
     if (profile) {
       const client = new DualLaneAgentClient({
@@ -3661,8 +4781,11 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
         token: profile.token,
         adapterVersion: `duallane-cli/${DUALLANE_AGENT_SDK_VERSION}`,
       });
-      const me = await client.getMe().catch(() => null);
-      remoteConnection = me?.connection || null;
+      try {
+        const me = await client.getMe();
+        remoteConnection = me?.connection || null;
+        if (me?.bot?.id) taskSummary = readAgentTaskSummary({ stateDir: path.join(getDaemonStateDir(), "tasks"), origin: profile.url, botId: me.bot.id });
+      } catch (error) { probeError = safeAgentError(error).code; }
     }
 
     process.stdout.write(
@@ -3670,6 +4793,9 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
         {
           profile: profileName,
           running: serviceRunning,
+          healthy: serviceRunning && !probeError && rec?.healthy === true,
+          probeError,
+          taskSummary,
           daemon: rec || null,
           gatewayConnection: remoteConnection,
           logPath,
@@ -3682,7 +4808,7 @@ export async function manageDaemonCli(positionals = [], flags = {}) {
   }
 
   throw new Error(
-    `Unknown daemon action "${action}". Usage: duallane-agent daemon <install|start|stop|restart|uninstall|status|logs|run> [--profile default]`
+    `Unknown daemon action "${action}". Usage: duallane-agent daemon <install|start|stop|restart|uninstall|status|logs|run|retry|cancel> [taskId] [--profile default]`
   );
 }
 
@@ -3721,6 +4847,11 @@ Usage:
   duallane-agent version [--check] [--profile default] [--url <origin>]
   duallane-agent update [--check] [--force] [--no-restart] [--profile default] [--url <origin>]
   duallane-agent doctor [--profile default]
+  duallane-agent ack <eventId> <sequence> [--profile default]
+  duallane-agent daemon retry <taskId> [--profile default]
+  duallane-agent daemon cancel <taskId> [--profile default]
+  duallane-agent daemon recover-lock --confirm-stopped true [--profile default]
+  duallane-agent daemon run --cmd <command> [--allow-public-media] [--media-dns-servers 1.1.1.1,8.8.8.8]
   duallane-agent daemon <install|start|stop|restart|uninstall|status|logs|run> --cmd <command> [--agent auto|cmd] [--workdir <dir>] [--profile default]
   duallane-agent mcp [--profile default]
   duallane-agent status [--profile default]
@@ -3851,142 +4982,9 @@ function requireClient(profileFlag) {
   return { client, profile, profileName };
 }
 
-async function runBridgeCommand(shellCmd, payload) {
-  return await new Promise((resolve, reject) => {
-    const env = { ...process.env };
-    delete env.DUALLANE_BOT_TOKEN;
-    env.DUALLANE_CONVERSATION_ID = String(payload.event?.conversationId || "");
-    env.DUALLANE_EVENT_TYPE = String(payload.event?.type || "");
-    env.DUALLANE_MESSAGE_TEXT = String(
-      payload.event?.payload?.message?.plainText || payload.event?.payload?.plainText || ""
-    );
-
-    const child = spawn(shellCmd, {
-      shell: true,
-      env,
-      stdio: ["pipe", "pipe", "inherit"],
-    });
-    let stdout = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`Bridge command exited with code ${code}`));
-        return;
-      }
-      resolve(stdout.trim());
-    });
-    child.stdin.end(JSON.stringify(payload));
-  });
-}
-
 async function runListen(flags) {
-  const cmd = typeof flags.cmd === "string" ? flags.cmd.trim() : "";
-  if (!cmd) {
-    throw new Error("Missing --cmd \"<shell-command>\" for incoming event bridge.");
-  }
-  const transportMode = String(flags.transport || "auto").trim().toLowerCase();
-  const { client, profile, profileName } = requireClient(flags.profile);
-  const me = await client.getMe();
-  process.stderr.write(
-    `[DualLane] Listening as "${me?.bot?.name || profile.botName || "Bot"}" (${profile.url}) -> forwarding events to: ${cmd}\n`
-  );
-
-  let stopped = false;
-  const handleIncomingEvent = async (event) => {
-    updateProfileCursor(profileName, event.sequence);
-    if (!event.conversationId) return;
-
-    await client.setTyping(event.conversationId).catch(() => {});
-    let context = null;
-    if (profile.scopes.includes("messages:read_context")) {
-      context = await client.getContext(event.conversationId, { limit: 20 }).catch(() => null);
-    }
-
-    const replyText = await runBridgeCommand(cmd, { event, context });
-    if (replyText) {
-      await client.sendMessage({
-        conversationId: event.conversationId,
-        text: replyText,
-        replyToMessageId: event.payload?.message?.id || event.payload?.messageId,
-        clientMessageId: `${event.eventId}:reply`,
-        idempotencyKey: `${event.eventId}:reply`,
-      });
-    }
-  };
-
-  const runPollLoop = async (initialSeq) => {
-    let cursor = initialSeq;
-    process.stderr.write(`[DualLane] HTTP long-polling active (seq=${cursor})\n`);
-    while (!stopped) {
-      try {
-        const polled = await client.pollNextEvent({
-          afterSequence: cursor,
-          timeoutMs: 25_000,
-          onCursorAdvance: (seq) => {
-            cursor = seq;
-            updateProfileCursor(profileName, seq);
-          },
-          onSyncRequired: ({ currentSequence }) => {
-            cursor = currentSequence;
-            updateProfileCursor(profileName, currentSequence);
-          },
-        });
-        cursor = polled.lastSequence;
-        if (!polled.timeout && polled.event) {
-          await handleIncomingEvent(polled.event);
-        }
-      } catch (err) {
-        if (stopped) break;
-        process.stderr.write(`[DualLane] Poll error (${err?.code || "poll_failed"}): ${err?.message || err}\n`);
-        await new Promise((r) => setTimeout(r, 2000));
-      }
-    }
-  };
-
-  const shutdown = () => {
-    stopped = true;
-    process.stderr.write("\n[DualLane] Stopping listener...\n");
-    client.stop();
-    process.exit(0);
-  };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-
-  if (transportMode === "poll") {
-    await runPollLoop(profile.lastSequence || 0);
-    return;
-  }
-
-  try {
-    await client.connect({
-      lastSequence: profile.lastSequence || 0,
-      onStatus(state) {
-        if (state.status === "connected") {
-          process.stderr.write(`[DualLane] WebSocket connected (seq=${state.currentSequence ?? state.lastSequence})\n`);
-        } else if (state.status === "disconnected") {
-          process.stderr.write(`[DualLane] Disconnected, retrying in ${state.retryInMs}ms...\n`);
-        }
-      },
-      onEvent: handleIncomingEvent,
-      async onSyncRequired({ currentSequence }) {
-        updateProfileCursor(profileName, currentSequence);
-      },
-      onError(err) {
-        process.stderr.write(`[DualLane] Gateway error (${err.code}): ${err.message}\n`);
-      },
-    });
-  } catch (err) {
-    if (transportMode === "auto" && err?.retryable) {
-      client.stop();
-      process.stderr.write(`[DualLane] WebSocket unavailable (${err.code}), falling back to HTTP long-polling...\n`);
-      await runPollLoop(client.lastSequence || profile.lastSequence || 0);
-      return;
-    }
-    throw err;
-  }
+  // Interactive and managed listeners use the same durable task boundary.
+  return runResidentDaemon({ ...flags, agent: "cmd" });
 }
 
 async function main() {
@@ -3997,7 +4995,7 @@ async function main() {
     const profile = loadAgentProfile(normalizeProfileName(flags.profile || "default"));
     const origin = String(flags.url || profile?.url || "").trim();
     if (flags.check && origin) {
-      const check = await checkRuntimeUpdate({ origin });
+      const check = await checkRuntimeUpdate({ origin, targetPath: resolveStandaloneScriptPath(flags.script) });
       process.stdout.write(JSON.stringify(check, null, 2) + "\n");
       return;
     }
@@ -4025,7 +5023,7 @@ async function main() {
     const profile = loadAgentProfile(normalizeProfileName(flags.profile || "default"));
     const origin = String(flags.url || profile?.url || "https://duallane.tsio.top").trim();
     if (flags.check) {
-      const check = await checkRuntimeUpdate({ origin });
+      const check = await checkRuntimeUpdate({ origin, targetPath: resolveStandaloneScriptPath(flags.target) });
       process.stdout.write(JSON.stringify(check, null, 2) + "\n");
       return;
     }
@@ -4056,7 +5054,7 @@ async function main() {
     const [doctor, me, updateInfo] = await Promise.all([
       client.getDoctor().catch(() => null),
       client.getMe().catch(() => null),
-      checkRuntimeUpdate({ origin: profile.url }).catch(() => null),
+      checkRuntimeUpdate({ origin: profile.url, targetPath: resolveStandaloneScriptPath(flags.script) }).catch(() => null),
     ]);
     process.stdout.write(
       JSON.stringify(
@@ -4071,6 +5069,9 @@ async function main() {
           scopes: doctor?.scopes || me?.scopes || [],
           conversations: doctor?.conversations || [],
           recentDeliveries: doctor?.recentDeliveries || [],
+          localTasks: (doctor?.bot?.id || profile.botId) ? readAgentTaskSummary({
+            stateDir: path.join(getDaemonStateDir(), "tasks"), origin: profile.url, botId: doctor?.bot?.id || profile.botId,
+          }) : null,
         },
         null,
         2
@@ -4149,16 +5150,20 @@ async function main() {
     }
     const events = Array.isArray(res?.events) ? res.events : [];
     if (flags.ack) {
-      const maxSeq =
-        events.length > 0
-          ? Math.max(...events.map((e) => Number(e.sequence || 0)))
-          : Number(res?.currentSequence || 0);
-      if (maxSeq > 0) {
-        await client.acknowledge({ sequence: maxSeq }).catch(() => {});
-        updateProfileCursor(profileName, maxSeq);
+      if (res?.syncRequired) throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization");
+      for (const event of events) {
+        await client.acknowledge({ eventId: event.eventId, sequence: event.sequence });
+        updateProfileCursor(profileName, event.sequence);
       }
     }
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    return;
+  }
+
+  if (subcommand === "ack") {
+    const { client } = requireClient(flags.profile);
+    const result = await client.acknowledge({ eventId: positionals[1], sequence: Number(positionals[2]) });
+    process.stdout.write(JSON.stringify({ ...result, profileCursorUnchanged: true }) + "\n");
     return;
   }
 
@@ -4179,8 +5184,8 @@ async function main() {
         afterSequence: cursor,
         timeoutMs: remainingMs,
         conversationId: filterConv,
-        onCursorAdvance: (seq) => updateProfileCursor(profileName, seq),
-        onSyncRequired: ({ currentSequence }) => updateProfileCursor(profileName, currentSequence),
+        ack: false,
+        onSyncRequired: () => { throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization"); },
       });
       if (polled.timeout || !polled.event) {
         return {
@@ -4201,6 +5206,7 @@ async function main() {
       }
       return {
         status: "event",
+        requiresAck: true,
         profile: profileName,
         lastSequence: polled.lastSequence,
         transport: "poll",
@@ -4230,11 +5236,8 @@ async function main() {
             client
               .connect({
                 lastSequence: startSeq,
+                ack: false,
                 async onEvent(event) {
-                  updateProfileCursor(profileName, event.sequence);
-                  await client
-                    .acknowledge({ eventId: event.eventId, sequence: event.sequence })
-                    .catch(() => {});
                   if (filterConv && event.conversationId !== filterConv) {
                     return;
                   }
@@ -4252,14 +5255,15 @@ async function main() {
                   resolve({
                     status: "event",
                     profile: profileName,
-                    lastSequence: event.sequence,
+                    lastSequence: startSeq,
+                    requiresAck: true,
                     transport: "ws",
                     event,
                     context,
                   });
                 },
-                async onSyncRequired({ currentSequence }) {
-                  updateProfileCursor(profileName, currentSequence);
+                async onSyncRequired() {
+                  throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization");
                 },
                 onError(err) {
                   if (!settled && !err?.retryable) {
@@ -4553,6 +5557,6 @@ if (isDirectCli) {
   main().catch((err) => {
     const safeMsg = String(err?.message || err).replace(/dl_bot_[A-Za-z0-9_-]{12,}/gu, "[REDACTED]");
     process.stderr.write(`[DualLane Error] ${safeMsg}\n`);
-    process.exit(1);
+    process.exitCode = 1;
   });
 }

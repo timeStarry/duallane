@@ -22,9 +22,13 @@ import {
 } from "./profile-store.js";
 import {
   checkRuntimeUpdate,
+  getDaemonStateDir,
+  resolveStandaloneScriptPath,
   restartInstalledDaemons,
   stageRuntimeSelfUpdate,
 } from "./daemon.js";
+
+import { readAgentTaskSummary } from "./task-runtime.js";
 
 const SUPPORTED_PROTOCOL_VERSIONS = new Set(["2025-06-18", "2025-03-26", "2024-11-05"]);
 const DEFAULT_MCP_PROTOCOL_VERSION = "2024-11-05";
@@ -214,7 +218,7 @@ export const DUALLANE_MCP_TOOLS = [
   {
     name: "duallane_wait_for_event",
     description:
-      "Wait in real time (via outbound WebSocket with replay cursor) for the next incoming DualLane message, @mention, /command, or interactive card button click.",
+      "Wait in real time (via outbound WebSocket with replay cursor) for the next incoming DualLane message, @mention, /command, or interactive card button click. Receiving does not acknowledge completion: call duallane_ack_event after durable handling. Use the resident task runtime for recoverable model jobs.",
     inputSchema: {
       type: "object",
       properties: {
@@ -235,6 +239,19 @@ export const DUALLANE_MCP_TOOLS = [
         },
         profile: { type: "string", description: "Local credential profile name (default: 'default')." },
       },
+    },
+  },
+  {
+    name: "duallane_ack_event",
+    description: "Acknowledge an event only after its work has completed or been durably accepted. Does not send a reply or advance the shared profile cursor. Pass an explicit afterSequence on the next wait only when all earlier events have been handled.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        eventId: { type: "string" },
+        sequence: { type: "integer", minimum: 1 },
+        profile: { type: "string" },
+      },
+      required: ["eventId", "sequence"],
     },
   },
   {
@@ -624,8 +641,8 @@ export function createDualLaneMcpServer(options = {}) {
             afterSequence: cursor,
             timeoutMs: remainingMs,
             conversationId: filterConv,
-            onCursorAdvance: (seq) => updateProfileCursor(profileName, seq, { configDir }),
-            onSyncRequired: ({ currentSequence }) => updateProfileCursor(profileName, currentSequence, { configDir }),
+            ack: false,
+            onSyncRequired: () => { throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization"); },
           });
           if (polled.timeout) {
             return {
@@ -638,6 +655,7 @@ export function createDualLaneMcpServer(options = {}) {
             timeout: false,
             event: polled.event,
             lastSequence: polled.lastSequence,
+            requiresAck: true,
           };
         };
 
@@ -658,8 +676,8 @@ export function createDualLaneMcpServer(options = {}) {
           client
             .connect({
               lastSequence: startSeq,
+              ack: false,
               async onEvent(event) {
-                updateProfileCursor(profileName, event.sequence, { configDir });
                 if (filterConv && event.conversationId !== filterConv) {
                   return;
                 }
@@ -670,11 +688,12 @@ export function createDualLaneMcpServer(options = {}) {
                 resolve({
                   timeout: false,
                   event,
-                  lastSequence: event.sequence,
+                  lastSequence: startSeq,
+                  requiresAck: true,
                 });
               },
-              async onSyncRequired({ currentSequence }) {
-                updateProfileCursor(profileName, currentSequence, { configDir });
+              async onSyncRequired() {
+                throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization");
               },
               onError(err) {
                 if (!settled && !err?.retryable) {
@@ -699,6 +718,12 @@ export function createDualLaneMcpServer(options = {}) {
         });
       }
 
+      case "duallane_ack_event": {
+        const { client } = makeClient(profileName);
+        const result = await client.acknowledge({ eventId: args.eventId, sequence: args.sequence });
+        return { ...result, acknowledgedSequence: args.sequence, profileCursorUnchanged: true };
+      }
+
       case "duallane_set_typing": {
         const { client } = makeClient(args.profile);
         return await client.setTyping(args.conversationId, { state: args.state || "thinking" });
@@ -708,7 +733,7 @@ export function createDualLaneMcpServer(options = {}) {
         const { client, profile } = makeClient(args.profile);
         const [doctor, updateInfo] = await Promise.all([
           client.getDoctor().catch(() => null),
-          checkRuntimeUpdate({ origin: profile.url, fetchImpl }).catch(() => null),
+          checkRuntimeUpdate({ origin: profile.url, targetPath: resolveStandaloneScriptPath(), fetchImpl }).catch(() => null),
         ]);
         return {
           profile: profile.profile,
@@ -716,13 +741,16 @@ export function createDualLaneMcpServer(options = {}) {
           localSdkVersion: DUALLANE_AGENT_SDK_VERSION,
           runtimeUpdate: updateInfo,
           ...(doctor || {}),
+          localTasks: (doctor?.bot?.id || profile.botId) ? readAgentTaskSummary({
+            stateDir: path.join(getDaemonStateDir(configDir), "tasks"), origin: profile.url, botId: doctor?.bot?.id || profile.botId,
+          }) : null,
         };
       }
 
       case "duallane_runtime_update": {
         const { profile } = makeClient(args.profile);
         if (args.checkOnly) {
-          return await checkRuntimeUpdate({ origin: profile.url, fetchImpl });
+          return await checkRuntimeUpdate({ origin: profile.url, targetPath: resolveStandaloneScriptPath(), fetchImpl });
         }
         const staged = await stageRuntimeSelfUpdate({
           origin: profile.url,

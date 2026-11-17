@@ -470,11 +470,6 @@ func (s *Service) RequireContextGrant(ctx context.Context, value *Auth, conversa
 	if err != nil {
 		return nil, normalizeError(err)
 	}
-	if grant == nil {
-		if conv, convErr := s.repo.GetConversation(ctx, current.SpaceID, id); convErr == nil && conv != nil && conv.Type == "direct" {
-			return &ContextGrant{AllowTrigger: true, AllowContext: true}, nil
-		}
-	}
 	if grant == nil || !grant.AllowContext {
 		return nil, NewError(CodeContextForbidden, MessageContextForbidden, 403)
 	}
@@ -519,7 +514,7 @@ func (s *Service) GetContext(ctx context.Context, value *Auth, conversationID st
 		}
 		includeReplies = settings.IncludeReplies
 		includeSystemEvents = settings.IncludeSystemEvents
-		includeAttachments = settings.IncludeAttachmentMetadata
+		includeAttachments = settings.IncludeAttachmentMetadata && RequireScope(current, ScopeFilesReadMetadata) == nil
 	}
 	if grant.MaxMessages != nil && *grant.MaxMessages > 0 && *grant.MaxMessages < configuredMessages {
 		configuredMessages = *grant.MaxMessages
@@ -1207,16 +1202,19 @@ func (s *Service) GetAttachment(ctx context.Context, value *Auth, attachmentID s
 	if err != nil {
 		return nil, normalizeError(err)
 	}
-	if row == nil {
+	if row == nil || row.Status != "available" || row.SpaceID != current.SpaceID || (row.Visibility != "conversation" && row.Visibility != "space" && row.Visibility != "private_staging") {
 		return nil, NewError(CodeAttachmentNotFound, MessageAttachmentNotFound, 404)
 	}
-	if row.ConversationID != nil && strings.TrimSpace(*row.ConversationID) != "" {
-		active, err := s.repo.ConversationMemberActive(ctx, current.SpaceID, *row.ConversationID, current.UserID)
-		if err != nil {
-			return nil, normalizeError(err)
-		}
-		if !active {
+	if row.Visibility == "private_staging" || row.ConversationID == nil || strings.TrimSpace(*row.ConversationID) == "" {
+		if row.UploaderID != current.UserID {
 			return nil, NewError(CodeAttachmentNotFound, MessageAttachmentNotFound, 404)
+		}
+	} else {
+		if _, _, err := s.requireConversationCurrent(ctx, current, *row.ConversationID); err != nil {
+			return nil, NewError(CodeAttachmentNotFound, MessageAttachmentNotFound, 404)
+		}
+		if _, err := s.RequireContextGrant(ctx, current, *row.ConversationID); err != nil {
+			return nil, err
 		}
 	}
 	return map[string]any{"attachment": projectAttachment(*row)}, nil
@@ -1358,8 +1356,9 @@ func (s *Service) Replay(ctx context.Context, value *Auth, input ReplayInput) (R
 			return ReplayResult{}, normalizeError(getErr)
 		}
 		visible := false
+		var message *MessageTrigger
 		if event != nil {
-			visible, getErr = s.authorizeDelivery(ctx, current, *event)
+			visible, message, getErr = s.authorizeDelivery(ctx, current, *event)
 		}
 		if getErr != nil {
 			return ReplayResult{}, getErr
@@ -1370,6 +1369,9 @@ func (s *Service) Replay(ctx context.Context, value *Auth, input ReplayInput) (R
 			}
 			continue
 		}
+		// Rebuild from current authorized data, including deliveries queued before
+		// trigger text was projected. A stored event payload is not message authority.
+		candidate.PayloadJSON = authorizedDeliveryPayload(*event, message)
 		allowed = append(allowed, candidate)
 	}
 	earliestWorkspace, err := s.repo.EarliestSequence(ctx, current.SpaceID)
@@ -1454,7 +1456,7 @@ func (s *Service) queueWorkspaceEvents(ctx context.Context, current *Auth) error
 }
 
 func (s *Service) queueValidatedEvent(ctx context.Context, current *Auth, event EventRecord) error {
-	authorized, err := s.authorizeValidatedDelivery(ctx, current, event)
+	authorized, message, err := s.authorizeValidatedDelivery(ctx, current, event)
 	if err != nil || !authorized {
 		return err
 	}
@@ -1466,7 +1468,7 @@ func (s *Service) queueValidatedEvent(ctx context.Context, current *Auth, event 
 		return internalError("generate bot delivery id", err)
 	}
 	now := s.nowUTC()
-	input := DeliveryInsert{ID: "bdl_" + id, BotID: current.BotID, SpaceID: current.SpaceID, Sequence: event.Sequence, EventID: event.ID, EventType: event.EventType, ConversationID: event.ConversationID, PayloadJSON: safeDeliveryPayload(event), Status: "queued", CreatedAt: now, ExpiresAt: now.Add(s.replayWindow)}
+	input := DeliveryInsert{ID: "bdl_" + id, BotID: current.BotID, SpaceID: current.SpaceID, Sequence: event.Sequence, EventID: event.ID, EventType: event.EventType, ConversationID: event.ConversationID, PayloadJSON: authorizedDeliveryPayload(event, message), Status: "queued", CreatedAt: now, ExpiresAt: now.Add(s.replayWindow)}
 	return s.repo.WithTx(ctx, func(tx Tx) error {
 		if err := tx.Lock(ctx, "workspace-bot-delivery:"+current.BotID+":"+strconv.FormatInt(event.Sequence, 10)); err != nil {
 			return err
@@ -1504,62 +1506,63 @@ func eventScope(eventType string) string {
 }
 
 func (s *Service) AuthorizeDelivery(ctx context.Context, value *Auth, event EventRecord) (bool, error) {
-	return s.authorizeDelivery(ctx, value, event)
+	authorized, _, err := s.authorizeDelivery(ctx, value, event)
+	return authorized, err
 }
 
-func (s *Service) authorizeDelivery(ctx context.Context, value *Auth, event EventRecord) (bool, error) {
+func (s *Service) authorizeDelivery(ctx context.Context, value *Auth, event EventRecord) (bool, *MessageTrigger, error) {
 	current, err := s.ValidateAuth(ctx, value)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	return s.authorizeValidatedDelivery(ctx, current, event)
 }
 
-func (s *Service) authorizeValidatedDelivery(ctx context.Context, current *Auth, event EventRecord) (bool, error) {
+func (s *Service) authorizeValidatedDelivery(ctx context.Context, current *Auth, event EventRecord) (bool, *MessageTrigger, error) {
 	if event.SpaceID != current.SpaceID || eventScope(event.EventType) == "" || !containsScope(current.Scopes, eventScope(event.EventType)) {
-		return false, nil
+		return false, nil, nil
 	}
 	if event.EventType == "bot.runtime_upgrade" {
-		return eventTargetsBot(current, event, parseObject(event.PayloadJSON)), nil
+		return eventTargetsBot(current, event, parseObject(event.PayloadJSON)), nil, nil
 	}
 	if strings.TrimSpace(event.ConversationID) == "" {
-		return false, nil
+		return false, nil, nil
 	}
 	_, conversation, err := s.requireConversationPrevalidated(ctx, current, event.ConversationID)
 	if err != nil {
 		if isGatewayError(err) {
-			return false, nil
+			return false, nil, nil
 		}
-		return false, err
+		return false, nil, err
 	}
 	sender, err := s.repo.GetSender(ctx, current.SpaceID, conversation.ID, event.ActorUserID)
 	if err != nil {
-		return false, normalizeError(err)
+		return false, nil, normalizeError(err)
 	}
 	if sender == nil || sender.Kind != "human" || sender.Role == "auditor" || sender.ID == current.UserID {
-		return false, nil
+		return false, nil, nil
 	}
 	isOwnerDirect := conversation.Type == "direct" && current.OwnerUserID != "" && sender.ID == current.OwnerUserID
 	grant, err := s.repo.GetContextGrant(ctx, current.BotID, current.SpaceID, conversation.ID)
 	if err != nil {
-		return false, normalizeError(err)
+		return false, nil, normalizeError(err)
 	}
 	if grant == nil && conversation.Type == "direct" {
 		grant = &ContextGrant{AllowTrigger: true, AllowContext: true}
 	}
 	if !isOwnerDirect && (grant == nil || !grant.AllowTrigger) {
-		return false, nil
+		return false, nil, nil
 	}
 	settings, err := s.repo.GetSettings(ctx, current.BotID, current.SpaceID)
 	if err != nil {
-		return false, normalizeError(err)
+		return false, nil, normalizeError(err)
 	}
 	if settings == nil {
-		return false, nil
+		return false, nil, nil
 	}
 	visible, err := s.senderVisible(ctx, current, sender.ID, conversation, settings)
 	if err != nil || !visible {
-		return false, err
+		return false, nil, err
 	}
 	return s.resolveTrigger(ctx, current, event, conversation, settings)
 }
@@ -1588,48 +1591,48 @@ func (s *Service) senderVisible(ctx context.Context, value *Auth, senderID strin
 	}
 }
 
-func (s *Service) resolveTrigger(ctx context.Context, value *Auth, event EventRecord, conversation *Conversation, settings *Settings) (bool, error) {
+func (s *Service) resolveTrigger(ctx context.Context, value *Auth, event EventRecord, conversation *Conversation, settings *Settings) (bool, *MessageTrigger, error) {
 	payload := parseObject(event.PayloadJSON)
 	switch event.EventType {
 	case "message.created":
 		message, err := s.repo.GetMessageTrigger(ctx, value.SpaceID, conversation.ID, event.TargetID)
 		if err != nil {
-			return false, normalizeError(err)
+			return false, nil, normalizeError(err)
 		}
 		if message == nil || message.AuthorID != event.ActorUserID || message.DeletedAt != nil || message.RecalledAt != nil {
-			return false, nil
+			return false, nil, nil
 		}
 		content := parseObject(message.ContentJSON)
 		blocks, ok := content["blocks"].([]any)
 		if !ok || len(blocks) == 0 || len(blocks) > MaxTriggerBlocks || len([]byte(message.PlainText)) == 0 || len([]byte(message.PlainText)) > MaxTriggerBytes {
-			return false, nil
+			return false, nil, nil
 		}
 		if conversation.Type == "direct" {
-			return true, nil
+			return true, message, nil
 		}
 		if settings != nil && settings.TriggerPolicy == "all-messages" {
-			return true, nil
+			return true, message, nil
 		}
 		if value.UserID != "" && (message.ReplyToAuthorID == value.UserID || message.ThreadRootAuthorID == value.UserID) {
-			return true, nil
+			return true, message, nil
 		}
 		for _, raw := range blocks {
 			block, ok := raw.(map[string]any)
 			if ok && block["type"] == "mention" && (block["userId"] == value.UserID || block["userId"] == "all") {
-				return true, nil
+				return true, message, nil
 			}
 		}
-		return false, nil
+		return false, nil, nil
 	case "bot.mentioned":
-		return eventTargetsBot(value, event, payload), nil
+		return eventTargetsBot(value, event, payload), nil, nil
 	case "bot.runtime_upgrade":
-		return eventTargetsBot(value, event, payload), nil
+		return eventTargetsBot(value, event, payload), nil, nil
 	case "command.invoked":
 		if !eventTargetsBot(value, event, payload) {
-			return false, nil
+			return false, nil, nil
 		}
 		if conversation.Type != "group" {
-			return true, nil
+			return true, nil, nil
 		}
 		mentioned := false
 		if ids, ok := payload["mentionedBotIds"].([]any); ok {
@@ -1640,12 +1643,32 @@ func (s *Service) resolveTrigger(ctx context.Context, value *Auth, event EventRe
 			}
 		}
 		trigger, _ := payload["trigger"].(map[string]any)
-		return mentioned || trigger["type"] == "mention", nil
+		return mentioned || trigger["type"] == "mention", nil, nil
 	case "card.action":
-		return eventTargetsBot(value, event, payload), nil
+		return eventTargetsBot(value, event, payload), nil, nil
 	default:
-		return false, nil
+		return false, nil, nil
 	}
+}
+
+func authorizedDeliveryPayload(event EventRecord, message *MessageTrigger) []byte {
+	if event.EventType != "message.created" {
+		return safeDeliveryPayload(event)
+	}
+	if message == nil {
+		return []byte(`{}`)
+	}
+	// Use only the exact message already checked by resolveTrigger. Producers use
+	// different event shapes, and nested snapshots may be stale or inconsistent.
+	encoded, err := json.Marshal(map[string]any{
+		"messageId": event.TargetID, "conversationId": event.ConversationID,
+		"actorUserId": event.ActorUserID, "text": truncateUTF8Bytes(message.PlainText, MaxDeliveryTextBytes),
+		"textComplete": len(message.PlainText) <= MaxDeliveryTextBytes,
+	})
+	if err != nil {
+		return []byte(`{}`)
+	}
+	return encoded
 }
 
 func eventTargetsBot(value *Auth, event EventRecord, payload map[string]any) bool {
@@ -1700,11 +1723,14 @@ func safeDeliveryPayload(event EventRecord) []byte {
 		}
 		if text := stringField(payload, "plainText"); text != "" {
 			result["text"] = truncateUTF8Bytes(text, MaxDeliveryTextBytes)
+			result["textComplete"] = len(text) <= MaxDeliveryTextBytes
 		} else if text := stringField(payload, "text"); text != "" {
 			result["text"] = truncateUTF8Bytes(text, MaxDeliveryTextBytes)
+			result["textComplete"] = len(text) <= MaxDeliveryTextBytes
 		}
 		if args := stringField(payload, "args"); args != "" {
 			result["args"] = truncateUTF8Bytes(args, MaxDeliveryTextBytes)
+			result["argsComplete"] = len(args) <= MaxDeliveryTextBytes
 		}
 		encoded, err := json.Marshal(result)
 		if err != nil {

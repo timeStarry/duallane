@@ -14,6 +14,7 @@ import {
   DUALLANE_GATEWAY_VERSION,
   inferMimeTypeFromFileName,
 } from "../src/index.js";
+import { readAgentTaskSummary } from "../src/task-runtime.js";
 import { createDualLaneMcpServer, DUALLANE_MCP_TOOLS, startDualLaneMcpStdioServer } from "../src/mcp.js";
 import {
   buildDaemonAgentPrompt,
@@ -22,6 +23,7 @@ import {
   checkRuntimeUpdate,
   extractGeneratedFilesFromReply,
   manageDaemonCli,
+  getDaemonStateDir,
   resolveStandaloneScriptPath,
   restartInstalledDaemons,
   runResidentDaemon,
@@ -98,6 +100,11 @@ Usage:
   duallane-agent version [--check] [--profile default] [--url <origin>]
   duallane-agent update [--check] [--force] [--no-restart] [--profile default] [--url <origin>]
   duallane-agent doctor [--profile default]
+  duallane-agent ack <eventId> <sequence> [--profile default]
+  duallane-agent daemon retry <taskId> [--profile default]
+  duallane-agent daemon cancel <taskId> [--profile default]
+  duallane-agent daemon recover-lock --confirm-stopped true [--profile default]
+  duallane-agent daemon run --cmd <command> [--allow-public-media] [--media-dns-servers 1.1.1.1,8.8.8.8]
   duallane-agent daemon <install|start|stop|restart|uninstall|status|logs|run> --cmd <command> [--agent auto|cmd] [--workdir <dir>] [--profile default]
   duallane-agent mcp [--profile default]
   duallane-agent status [--profile default]
@@ -228,142 +235,9 @@ function requireClient(profileFlag) {
   return { client, profile, profileName };
 }
 
-async function runBridgeCommand(shellCmd, payload) {
-  return await new Promise((resolve, reject) => {
-    const env = { ...process.env };
-    delete env.DUALLANE_BOT_TOKEN;
-    env.DUALLANE_CONVERSATION_ID = String(payload.event?.conversationId || "");
-    env.DUALLANE_EVENT_TYPE = String(payload.event?.type || "");
-    env.DUALLANE_MESSAGE_TEXT = String(
-      payload.event?.payload?.message?.plainText || payload.event?.payload?.plainText || ""
-    );
-
-    const child = spawn(shellCmd, {
-      shell: true,
-      env,
-      stdio: ["pipe", "pipe", "inherit"],
-    });
-    let stdout = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`Bridge command exited with code ${code}`));
-        return;
-      }
-      resolve(stdout.trim());
-    });
-    child.stdin.end(JSON.stringify(payload));
-  });
-}
-
 async function runListen(flags) {
-  const cmd = typeof flags.cmd === "string" ? flags.cmd.trim() : "";
-  if (!cmd) {
-    throw new Error("Missing --cmd \"<shell-command>\" for incoming event bridge.");
-  }
-  const transportMode = String(flags.transport || "auto").trim().toLowerCase();
-  const { client, profile, profileName } = requireClient(flags.profile);
-  const me = await client.getMe();
-  process.stderr.write(
-    `[DualLane] Listening as "${me?.bot?.name || profile.botName || "Bot"}" (${profile.url}) -> forwarding events to: ${cmd}\n`
-  );
-
-  let stopped = false;
-  const handleIncomingEvent = async (event) => {
-    updateProfileCursor(profileName, event.sequence);
-    if (!event.conversationId) return;
-
-    await client.setTyping(event.conversationId).catch(() => {});
-    let context = null;
-    if (profile.scopes.includes("messages:read_context")) {
-      context = await client.getContext(event.conversationId, { limit: 20 }).catch(() => null);
-    }
-
-    const replyText = await runBridgeCommand(cmd, { event, context });
-    if (replyText) {
-      await client.sendMessage({
-        conversationId: event.conversationId,
-        text: replyText,
-        replyToMessageId: event.payload?.message?.id || event.payload?.messageId,
-        clientMessageId: `${event.eventId}:reply`,
-        idempotencyKey: `${event.eventId}:reply`,
-      });
-    }
-  };
-
-  const runPollLoop = async (initialSeq) => {
-    let cursor = initialSeq;
-    process.stderr.write(`[DualLane] HTTP long-polling active (seq=${cursor})\n`);
-    while (!stopped) {
-      try {
-        const polled = await client.pollNextEvent({
-          afterSequence: cursor,
-          timeoutMs: 25_000,
-          onCursorAdvance: (seq) => {
-            cursor = seq;
-            updateProfileCursor(profileName, seq);
-          },
-          onSyncRequired: ({ currentSequence }) => {
-            cursor = currentSequence;
-            updateProfileCursor(profileName, currentSequence);
-          },
-        });
-        cursor = polled.lastSequence;
-        if (!polled.timeout && polled.event) {
-          await handleIncomingEvent(polled.event);
-        }
-      } catch (err) {
-        if (stopped) break;
-        process.stderr.write(`[DualLane] Poll error (${err?.code || "poll_failed"}): ${err?.message || err}\n`);
-        await new Promise((r) => setTimeout(r, 2000));
-      }
-    }
-  };
-
-  const shutdown = () => {
-    stopped = true;
-    process.stderr.write("\n[DualLane] Stopping listener...\n");
-    client.stop();
-    process.exit(0);
-  };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-
-  if (transportMode === "poll") {
-    await runPollLoop(profile.lastSequence || 0);
-    return;
-  }
-
-  try {
-    await client.connect({
-      lastSequence: profile.lastSequence || 0,
-      onStatus(state) {
-        if (state.status === "connected") {
-          process.stderr.write(`[DualLane] WebSocket connected (seq=${state.currentSequence ?? state.lastSequence})\n`);
-        } else if (state.status === "disconnected") {
-          process.stderr.write(`[DualLane] Disconnected, retrying in ${state.retryInMs}ms...\n`);
-        }
-      },
-      onEvent: handleIncomingEvent,
-      async onSyncRequired({ currentSequence }) {
-        updateProfileCursor(profileName, currentSequence);
-      },
-      onError(err) {
-        process.stderr.write(`[DualLane] Gateway error (${err.code}): ${err.message}\n`);
-      },
-    });
-  } catch (err) {
-    if (transportMode === "auto" && err?.retryable) {
-      client.stop();
-      process.stderr.write(`[DualLane] WebSocket unavailable (${err.code}), falling back to HTTP long-polling...\n`);
-      await runPollLoop(client.lastSequence || profile.lastSequence || 0);
-      return;
-    }
-    throw err;
-  }
+  // Interactive and managed listeners use the same durable task boundary.
+  return runResidentDaemon({ ...flags, agent: "cmd" });
 }
 
 async function main() {
@@ -374,7 +248,7 @@ async function main() {
     const profile = loadAgentProfile(normalizeProfileName(flags.profile || "default"));
     const origin = String(flags.url || profile?.url || "").trim();
     if (flags.check && origin) {
-      const check = await checkRuntimeUpdate({ origin });
+      const check = await checkRuntimeUpdate({ origin, targetPath: resolveStandaloneScriptPath(flags.script) });
       process.stdout.write(JSON.stringify(check, null, 2) + "\n");
       return;
     }
@@ -402,7 +276,7 @@ async function main() {
     const profile = loadAgentProfile(normalizeProfileName(flags.profile || "default"));
     const origin = String(flags.url || profile?.url || "https://duallane.tsio.top").trim();
     if (flags.check) {
-      const check = await checkRuntimeUpdate({ origin });
+      const check = await checkRuntimeUpdate({ origin, targetPath: resolveStandaloneScriptPath(flags.target) });
       process.stdout.write(JSON.stringify(check, null, 2) + "\n");
       return;
     }
@@ -433,7 +307,7 @@ async function main() {
     const [doctor, me, updateInfo] = await Promise.all([
       client.getDoctor().catch(() => null),
       client.getMe().catch(() => null),
-      checkRuntimeUpdate({ origin: profile.url }).catch(() => null),
+      checkRuntimeUpdate({ origin: profile.url, targetPath: resolveStandaloneScriptPath(flags.script) }).catch(() => null),
     ]);
     process.stdout.write(
       JSON.stringify(
@@ -448,6 +322,9 @@ async function main() {
           scopes: doctor?.scopes || me?.scopes || [],
           conversations: doctor?.conversations || [],
           recentDeliveries: doctor?.recentDeliveries || [],
+          localTasks: (doctor?.bot?.id || profile.botId) ? readAgentTaskSummary({
+            stateDir: path.join(getDaemonStateDir(), "tasks"), origin: profile.url, botId: doctor?.bot?.id || profile.botId,
+          }) : null,
         },
         null,
         2
@@ -526,16 +403,20 @@ async function main() {
     }
     const events = Array.isArray(res?.events) ? res.events : [];
     if (flags.ack) {
-      const maxSeq =
-        events.length > 0
-          ? Math.max(...events.map((e) => Number(e.sequence || 0)))
-          : Number(res?.currentSequence || 0);
-      if (maxSeq > 0) {
-        await client.acknowledge({ sequence: maxSeq }).catch(() => {});
-        updateProfileCursor(profileName, maxSeq);
+      if (res?.syncRequired) throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization");
+      for (const event of events) {
+        await client.acknowledge({ eventId: event.eventId, sequence: event.sequence });
+        updateProfileCursor(profileName, event.sequence);
       }
     }
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    return;
+  }
+
+  if (subcommand === "ack") {
+    const { client } = requireClient(flags.profile);
+    const result = await client.acknowledge({ eventId: positionals[1], sequence: Number(positionals[2]) });
+    process.stdout.write(JSON.stringify({ ...result, profileCursorUnchanged: true }) + "\n");
     return;
   }
 
@@ -556,8 +437,8 @@ async function main() {
         afterSequence: cursor,
         timeoutMs: remainingMs,
         conversationId: filterConv,
-        onCursorAdvance: (seq) => updateProfileCursor(profileName, seq),
-        onSyncRequired: ({ currentSequence }) => updateProfileCursor(profileName, currentSequence),
+        ack: false,
+        onSyncRequired: () => { throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization"); },
       });
       if (polled.timeout || !polled.event) {
         return {
@@ -578,6 +459,7 @@ async function main() {
       }
       return {
         status: "event",
+        requiresAck: true,
         profile: profileName,
         lastSequence: polled.lastSequence,
         transport: "poll",
@@ -607,11 +489,8 @@ async function main() {
             client
               .connect({
                 lastSequence: startSeq,
+                ack: false,
                 async onEvent(event) {
-                  updateProfileCursor(profileName, event.sequence);
-                  await client
-                    .acknowledge({ eventId: event.eventId, sequence: event.sequence })
-                    .catch(() => {});
                   if (filterConv && event.conversationId !== filterConv) {
                     return;
                   }
@@ -629,14 +508,15 @@ async function main() {
                   resolve({
                     status: "event",
                     profile: profileName,
-                    lastSequence: event.sequence,
+                    lastSequence: startSeq,
+                    requiresAck: true,
                     transport: "ws",
                     event,
                     context,
                   });
                 },
-                async onSyncRequired({ currentSequence }) {
-                  updateProfileCursor(profileName, currentSequence);
+                async onSyncRequired() {
+                  throw new DualLaneAgentError("gateway.sync_required", "Event replay requires explicit resynchronization");
                 },
                 onError(err) {
                   if (!settled && !err?.retryable) {
@@ -930,6 +810,6 @@ if (isDirectCli) {
   main().catch((err) => {
     const safeMsg = String(err?.message || err).replace(/dl_bot_[A-Za-z0-9_-]{12,}/gu, "[REDACTED]");
     process.stderr.write(`[DualLane Error] ${safeMsg}\n`);
-    process.exit(1);
+    process.exitCode = 1;
   });
 }

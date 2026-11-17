@@ -294,7 +294,7 @@ type BotAvatarPayload struct {
 	Data     []byte
 }
 
-const LatestAgentSDKVersion = "1.0.14"
+const LatestAgentSDKVersion = "1.1.0"
 
 type BotWebhookConfig struct {
 	BotID      string `json:"botId"`

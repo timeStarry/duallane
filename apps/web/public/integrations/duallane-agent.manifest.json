@@ -1,13 +1,19 @@
 {
   "name": "@duallane/agent-sdk",
-  "version": "1.0.14",
-  "sha256": "7f8842994d1d2401a6c257b0e932ac44fe94e52da072283d587b61073d661158",
-  "byteSize": 166591,
+  "version": "1.1.0",
+  "sha256": "9f53ba05c662672302fd330bbb7dac79c27a7a1652f67804ef090bae58b6dfe8",
+  "byteSize": 240844,
   "downloadPath": "/integrations/duallane-agent.mjs",
+  "documentationPath": "/integrations/v2/duallane-channel.md",
   "minNodeVersion": "20.0.0",
+  "buildId": "0da9b277a4635b21c6b1cd8f25543c67df07e0d2273ac646afb6c03235f8ec50",
+  "compatibility": {
+    "gatewayVersion": 1,
+    "bridgeProtocolVersion": 1
+  },
   "highlights": [
-    "支持 duallane-agent version / update / doctor 一键检查升级与会话触发体检",
-    "常驻守护进程支持空闲态 SHA-256 校验自动静默热更新与远程升级信号",
-    "支持群聊全量消息触发、回复唤醒与创建者私聊永久保底诊断"
+    "通用命令桥接采用版本化任务与产物协议，支持受控媒体获取和授权入站附件",
+    "任务持久接收后确认事件，按上传与发送回执恢复，并提供安全失败状态和显式重试",
+    "官方运行包按版本、摘要和协议核验更新，保留独立bridge、策略和服务配置"
   ]
 }

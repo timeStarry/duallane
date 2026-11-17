@@ -556,7 +556,7 @@ func projectContextMessage(record ContextMessageRecord, includeAttachmentMetadat
 	if len(record.ContentJSON) > 0 && json.Unmarshal(record.ContentJSON, &decoded) == nil {
 		if object, ok := decoded.(map[string]any); ok {
 			content = object
-			if blocks, ok := object["blocks"].([]any); ok && !includeAttachmentMetadata {
+			if blocks, ok := object["blocks"].([]any); ok {
 				filtered := make([]any, 0, len(blocks))
 				for _, value := range blocks {
 					block, ok := value.(map[string]any)
@@ -564,7 +564,15 @@ func projectContextMessage(record ContextMessageRecord, includeAttachmentMetadat
 						filtered = append(filtered, value)
 						continue
 					}
-					filtered = append(filtered, map[string]any{"type": "attachment", "attachmentId": block["attachmentId"]})
+					attachment := map[string]any{"type": "attachment", "attachmentId": block["attachmentId"]}
+					if includeAttachmentMetadata {
+						for _, key := range []string{"fileName", "mimeType", "byteSize", "width", "height", "status"} {
+							if value, present := block[key]; present {
+								attachment[key] = value
+							}
+						}
+					}
+					filtered = append(filtered, attachment)
 				}
 				copy := make(map[string]any, len(object))
 				for key, value := range object {

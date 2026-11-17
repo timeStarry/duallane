@@ -168,9 +168,13 @@ func TestPGBotGatewayAuthenticationContextAndReplay(t *testing.T) {
 		"actorUserId":    "user-owner-botgateway",
 		"conversationId": "conversation-botgateway",
 		"messageId":      "message-botgateway",
+		"text":           "context",
+		"textComplete":   true,
 	}
+	// Exact equality excludes nested message/attachment data and private fields
+	// from the bounded, currently authorized trigger projection.
 	if !reflect.DeepEqual(replay.Events[0].Payload, expectedDeliveryPayload) {
-		t.Fatalf("message delivery reference payload = %#v", replay.Events[0].Payload)
+		t.Fatalf("message delivery trigger payload = %#v", replay.Events[0].Payload)
 	}
 	var deliveryStatus, persistedDeliveryPayload string
 	if err := pool.QueryRow(ctx, `SELECT status, payload_json FROM workspace_agent_bot_deliveries WHERE bot_id = $1 AND sequence = 1`, authValue.BotID).Scan(&deliveryStatus, &persistedDeliveryPayload); err != nil {
@@ -181,7 +185,7 @@ func TestPGBotGatewayAuthenticationContextAndReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(storedPayload, expectedDeliveryPayload) {
-		t.Fatalf("persisted message delivery reference payload = %#v", storedPayload)
+		t.Fatalf("persisted message delivery trigger payload = %#v", storedPayload)
 	}
 	if deliveryStatus != "delivered" {
 		t.Fatalf("delivery status = %q", deliveryStatus)

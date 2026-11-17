@@ -1220,10 +1220,16 @@ func (fn botAuthFunc) Authenticate(ctx context.Context, header string, opts botg
 type stubBotFiles struct {
 	reservedInput  files.ReserveUploadInput
 	completedBytes []byte
+	reserveError   error
+	completeError  error
+	failedUploadID string
 }
 
 func (s *stubBotFiles) ReserveAgentBotUpload(_ context.Context, input files.ReserveUploadInput) (files.UploadResult, error) {
 	s.reservedInput = input
+	if s.reserveError != nil {
+		return files.UploadResult{}, s.reserveError
+	}
 	convID := input.ConversationID
 	return files.UploadResult{
 		Status: string(files.TransferReserved),
@@ -1243,6 +1249,9 @@ func (s *stubBotFiles) ReserveAgentBotUpload(_ context.Context, input files.Rese
 }
 
 func (s *stubBotFiles) CompleteAgentBotUpload(_ context.Context, input files.CompleteUploadInput) (files.UploadResult, error) {
+	if s.completeError != nil {
+		return files.UploadResult{}, s.completeError
+	}
 	data, err := io.ReadAll(input.Content)
 	if err != nil {
 		return files.UploadResult{}, err
@@ -1263,6 +1272,11 @@ func (s *stubBotFiles) CompleteAgentBotUpload(_ context.Context, input files.Com
 			ConversationID: &convID,
 		},
 	}, nil
+}
+
+func (s *stubBotFiles) FailAgentBotUpload(_ context.Context, input files.FailUploadInput) (files.UploadResult, error) {
+	s.failedUploadID = input.UploadID
+	return files.UploadResult{Status: string(files.TransferFailed)}, nil
 }
 
 type stubBotMessageCreator struct {
@@ -1297,7 +1311,7 @@ func TestBotFileUploadAndSendEndpoints(t *testing.T) {
 				BotID:   "bot_comet",
 				UserID:  "usr_bot_comet",
 				SpaceID: "spc_default",
-				Scopes:  []string{botgateway.ScopeMessagesSend},
+				Scopes:  []string{botgateway.ScopeMessagesSend, botgateway.ScopeFilesWrite},
 			}, nil
 		})).
 		WithBotFilePipeline(botFiles, botMsgs)

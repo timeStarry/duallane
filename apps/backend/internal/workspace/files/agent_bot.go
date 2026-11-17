@@ -2,8 +2,11 @@ package files
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"time"
 
+	platformstorage "github.com/timestarry/duallane/apps/backend/internal/platform/storage"
 	"github.com/timestarry/duallane/apps/backend/internal/workspace/auth"
 )
 
@@ -24,6 +27,51 @@ func (s *Service) CompleteAgentBotUpload(ctx context.Context, input CompleteUplo
 // FailAgentBotUpload releases a pending Agent Bot upload reservation on error.
 func (s *Service) FailAgentBotUpload(ctx context.Context, input FailUploadInput) (UploadResult, error) {
 	return s.failUpload(ctx, input, s.lookupAgentBotActor)
+}
+
+func (s *Service) GetAgentBotUploadStatus(ctx context.Context, input UploadStatusInput) (UploadStatus, error) {
+	return s.getUploadStatus(ctx, input, s.lookupAgentBotActor)
+}
+
+// OpenAgentBotAttachmentContent is called only after the gateway's file-scope,
+// source-message and context-grant checks. The files domain repeats current Bot
+// identity, logical visibility and quota checks before opening any object bytes.
+func (s *Service) OpenAgentBotAttachmentContent(ctx context.Context, input OpenAttachmentInput) (platformstorage.OpenedObject, error) {
+	if s == nil || s.repo == nil {
+		return platformstorage.OpenedObject{}, internalError("open bot attachment", errors.New("repository is required"))
+	}
+	if input.MaxBytes <= 0 {
+		return platformstorage.OpenedObject{}, validationError(CodeFileInvalidSize, MessageFileInvalidSize)
+	}
+	if _, err := s.lookupAgentBotActor(ctx, s.repo, input.ActorID); err != nil {
+		return platformstorage.OpenedObject{}, err
+	}
+	record, err := s.repo.GetAttachment(ctx, s.space(), strings.TrimSpace(input.AttachmentID))
+	if err != nil {
+		return platformstorage.OpenedObject{}, normalizeRepositoryError(err)
+	}
+	if record == nil || record.Status != string(AttachmentAvailable) || record.ByteSize > input.MaxBytes {
+		return platformstorage.OpenedObject{}, fileNotFoundError()
+	}
+	reserved, err := s.reserveDownload(ctx, ReserveDownloadInput{ActorID: input.ActorID, AttachmentID: input.AttachmentID, Meta: input.Meta}, s.lookupAgentBotActor)
+	if err != nil {
+		return platformstorage.OpenedObject{}, err
+	}
+	if reserved.Status != string(TransferCompleted) {
+		return platformstorage.OpenedObject{}, NewError(CodeQuotaInsufficient, MessageQuotaInsufficient, 429)
+	}
+	grant, err := s.getCompletedDownload(ctx, CompletedDownloadInput{ActorID: input.ActorID, AttachmentID: input.AttachmentID, TransferID: reserved.ID, MaxBytes: input.MaxBytes, Meta: input.Meta}, s.lookupAgentBotActor)
+	if err == nil {
+		var opened platformstorage.OpenedObject
+		opened, err = s.openAttachmentRecord(ctx, grant.Attachment, input.MaxBytes, "open bot attachment")
+		if err == nil {
+			return opened, nil
+		}
+	}
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_, _ = s.releaseDownloadReservation(cleanup, ReleaseDownloadInput{ActorID: input.ActorID, TransferID: reserved.ID, Meta: input.Meta}, s.lookupAgentBotActor)
+	return platformstorage.OpenedObject{}, err
 }
 
 // This capability is separate from the human repository contract. Adapters
