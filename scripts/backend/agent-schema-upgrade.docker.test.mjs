@@ -167,19 +167,35 @@ function ownedContainers(project, runID, allowedImages) {
   });
 }
 
+function baselineState(record) {
+  return { id: record.Id, image: record.Image, status: record.State.Status, running: record.State.Running,
+    startedAt: record.State.StartedAt, restarts: record.RestartCount, health: record.State.Health?.Status,
+    restartPolicy: record.HostConfig.RestartPolicy };
+}
+
 function baselineContainers() {
   return docker(["ps", "--no-trunc", "-q"]).stdout.trim().split(/\s+/u).filter(Boolean).map((id) => {
-    const record = inspect("container", id);
-    return { id: record.Id, image: record.Image, status: record.State.Status, running: record.State.Running,
-      startedAt: record.State.StartedAt, restarts: record.RestartCount, health: record.State.Health?.Status };
+    return baselineState(inspect("container", id));
   });
 }
 
-function verifyBaseline(records) {
+function unstableBaselineID(environment, records) {
+  const id = environment.DUALLANE_AGENT_SCHEMA_UNSTABLE_BASELINE_CONTAINER_ID;
+  if (id === undefined) return undefined;
+  if (!containerPattern.test(id) || !records.some((record) => record.id === id && record.restarts > 0)) fail("invalid_unstable_baseline_container");
+  return id;
+}
+
+function verifyBaseline(records, unstableID) {
   for (const before of records) {
-    const current = inspect("container", before.id);
-    assert.deepEqual({ id: current.Id, image: current.Image, status: current.State.Status, running: current.State.Running,
-      startedAt: current.State.StartedAt, restarts: current.RestartCount, health: current.State.Health?.Status }, before, "pre-existing running container changed");
+    const current = baselineState(inspect("container", before.id));
+    if (before.id === unstableID) {
+      // Explicitly pinned, independently observed pre-existing crash loop only.
+      // Identity and restart policy remain protected; never touch the container.
+      assert.deepEqual({ id: current.id, image: current.image, restartPolicy: current.restartPolicy },
+        { id: before.id, image: before.image, restartPolicy: before.restartPolicy });
+      assert.ok(current.restarts >= before.restarts);
+    } else assert.deepEqual(current, before, "pre-existing running container changed");
   }
 }
 
@@ -226,6 +242,16 @@ test("Go-only agent upgrade rejects mutable image inputs and drops the retired s
   assert.ok(Object.values(compose.services).every((service) => service.image === image));
 });
 
+test("pre-existing crash-loop exception requires one exact running baseline identity", () => {
+  const id = "a".repeat(64), key = "DUALLANE_AGENT_SCHEMA_UNSTABLE_BASELINE_CONTAINER_ID";
+  assert.equal(unstableBaselineID({}, []), undefined);
+  for (const value of ["", "all", "a".repeat(12), "b".repeat(64)]) {
+    assert.throws(() => unstableBaselineID({ [key]: value }, [{ id, restarts: 1 }]), /invalid_unstable_baseline_container/u);
+  }
+  assert.throws(() => unstableBaselineID({ [key]: id }, [{ id, restarts: 0 }]), /invalid_unstable_baseline_container/u);
+  assert.equal(unstableBaselineID({ [key]: id }, [{ id, restarts: 1 }]), id);
+});
+
 test("Go-only rehearsal keeps actual production lifecycle and fresh upgrade-helper initialization", async () => {
   const source = (await readFile(path.join(root, "deploy/production/deploy.sh"), "utf8")).replaceAll("\r\n", "\n");
   const bootstrap = bootstrapScript(source), upgrade = upgradeScript(source);
@@ -254,6 +280,8 @@ test("immutable Go images upgrade schema 036 to 037 and restore old Go on the sa
   assert.equal(proof.status, "compatible"); assert.equal(proof.previousMigrationCount, 36); assert.equal(proof.targetMigrationCount, 37);
   assert.equal(proof.commonMigrationCount, 36); assert.equal(proof.addedMigrationCount, 1); assert.equal(proof.removedMigrationCount, 0);
   const baseline = baselineContainers();
+  const unstableID = unstableBaselineID(process.env, baseline);
+  if (unstableID) t.diagnostic(`explicit pre-existing crash-loop baseline: ${unstableID}; identity/image/restart policy remain checked`);
   const runID = randomBytes(24).toString("hex"), project = `dl-agent-schema-${runID.slice(0, 18)}`;
   const names = { network: `${project}-private`, gatewayNetwork: `${project}-gateway`, postgresVolume: `${project}-pg`, dataVolume: `${project}-data` };
   const allowed = new Set([images.postgres, ...Object.values(images.old), ...Object.values(images.target)]);
@@ -338,7 +366,7 @@ test("immutable Go images upgrade schema 036 to 037 and restore old Go on the sa
         if ((resource.id && network.Id !== resource.id) || network.Name !== resource.name || network.Internal !== resource.internal || network.Labels?.[ownerLabel] !== runID || Object.keys(network.Containers ?? {}).length) fail("cleanup_network_owner_changed");
         docker(["network", "rm", network.Id]);
       }
-      verifyBaseline(baseline);
+      verifyBaseline(baseline, unstableID);
     } catch { cleanupError = new Error("agent_schema_owned_cleanup_or_baseline_failed"); }
     if (!cleanupError) await rm(directory, { recursive: true, force: true });
     if (cleanupError) throw new AggregateError(primary ? [primary, cleanupError] : [cleanupError], "agent_schema_rehearsal_failed");

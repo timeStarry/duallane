@@ -73,6 +73,23 @@ Completed on the implementation tree:
   compatibility/upgrade guards32/32 passed on Linux Node22. No gates were weakened.
 - Desktop1280 and phone390×844 permission screenshots inspected: no horizontal
   overflow; existing Go Workspace messages/uploads/downloads acceptance passed.
+- Real SDK-to-Go HTTP acceptance passed on disposable data: delivered triggers,
+  task creation, bounded history/search, members, mixed file/mention publication,
+  attachment bytes, conditional edits/conflicts, operation receipts, card updates
+  and cancelled-task rejection. No mocked SDK transport or production credentials.
+
+Bridge PR28 is merged at `74523762e53a030382beebf47f4daa5249b57aff` and
+production1.1.3 passed the guarded deployment and26 gateway checks. It includes
+the previously undeployed artifact fix from PR26. The successful schema36
+recovery snapshot is `duallane-20261117T131946Z-74523762e53a.recovery.go-compose.snapshot.json`.
+
+The shared validation host has an independently observed pre-existing OpenResty
+crash loop (more than119,000 prior restarts). The isolated Docker rehearsal may
+explicitly pin that one full container ID through
+`DUALLANE_AGENT_SCHEMA_UNSTABLE_BASELINE_CONTAINER_ID`; its existing identity,
+image and restart policy must remain unchanged. All other pre-existing running
+containers retain strict lifecycle checks. This exception neither operates on
+that container nor changes production deployment guards.
 
 Agent browser acceptance also passed: independent owner/member, exact source Bot
 IDs, desktop/390px policy save, status-only group approval/rejection, real mention

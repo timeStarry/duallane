@@ -1,4 +1,8 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { expect, test, type APIRequestContext, type Page, type TestInfo } from "@playwright/test";
+import { DualLaneAgentClient, buildMessageContent, messageText, messageMention, messageAttachment,
+  type AgentEvent, type AgentTaskClient } from "../packages/agent-sdk/src/index.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -405,4 +409,138 @@ test.describe("Agent platform permissions and group-request acceptance", () => {
       await Promise.all([ownerContext.close(), memberContext.close()]);
     }
   });
+});
+
+test("real SDK task HTTP roundtrip reads history, publishes mixed files, edits with CAS and rejects cancelled authority", async ({ browser, baseURL }) => {
+  test.setTimeout(120_000);
+  const runId = randomUUID();
+  const ownerContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  ownerContext.setDefaultTimeout(10_000);
+  const owner = await ownerContext.newPage();
+  let client: DualLaneAgentClient | undefined;
+  let scoped: AgentTaskClient | undefined;
+  let botId: string | undefined;
+  let tokenId: string | undefined;
+  // Only setup/human messages use the Session API. All Bot operations below use
+  // the real SDK's native fetch and public HTTP routes, never a mocked adapter.
+  const human = async (method: "GET" | "POST" | "PATCH", pathname: string, data?: JsonRecord): Promise<JsonRecord> => {
+    const response = await owner.request.fetch(new URL(pathname, baseURL!).href, { method, ...(data ? { data } : {}), timeout: 10_000 });
+    expect(response.ok(), `${method} ${pathname}: ${response.status()}`).toBeTruthy();
+    return asRecord(await response.json(), "synthetic human response");
+  };
+  try {
+    await signInOwner(owner, baseURL!);
+    const boot = await human("GET", "/api/v1/bootstrap");
+    const ownerMember = asRecord(asRecord(boot.auth, "owner auth").currentUser, "owner identity");
+    const ownerId = requiredString(ownerMember.id, "owner user id");
+    const created = await human("POST", "/api/v1/bots", { name: `SDK acceptance ${runId}` });
+    botId = requiredString(created.botId, "created Bot id");
+    const owned = await human("GET", "/api/workspace/bots");
+    const bot = arrayOfRecords(owned.bots, "owned Bots").find((candidate) => candidate.id === botId);
+    if (!bot) throw new Error("synthetic Bot is missing");
+    const botUserId = requiredString(bot.botUserId, "Bot user id");
+    await human("PATCH", `/api/workspace/bots/${botId}/settings`, {
+      accessPolicy: { ...accessPolicyPreset, groups: { ...accessPolicyPreset.groups, audience: "owner_only" } },
+      allowDirect: true, allowGroup: false, maxContextMessages: 20, maxContextChars: 20_000,
+      includeAttachmentMetadata: true, allowAttachmentPreview: true,
+    });
+    const direct = await human("POST", "/api/workspace/conversations", { type: "direct", targetUserId: botUserId });
+    const conversationId = requiredString(asRecord(direct.conversation ?? direct, "Bot direct conversation").id, "Bot conversation id");
+    await human("PATCH", `/api/workspace/bots/${botId}/context-grants/${conversationId}`, { allowTrigger: true, allowContext: true, maxMessages: 20 });
+    const issued = await human("POST", `/api/workspace/bots/${botId}/tokens`, {
+      scopes: ["messages:read_trigger", "messages:read_context", "messages:send", "files:read_metadata", "files:read_content", "files:write", "cards:write"],
+    });
+    // Never attach the token response, log credentials or persist a profile.
+    tokenId = requiredString(asRecord(issued.tokenRecord, "issued token record").id, "issued token id");
+    client = new DualLaneAgentClient({ url: baseURL!, token: requiredString(issued.token, "issued Bot credential"), requestTimeoutMs: 10_000 });
+    const capabilities = await client.getCapabilities(conversationId);
+    expect(capabilities.taskRequired).toBe(true);
+    expect(asRecord(capabilities.features, "server features").taskAuthorization).toBe(true);
+    await assert.rejects(client.sendMessage({ conversationId, text: "must require task", clientMessageId: `unscoped-${runId}` }),
+      (error: unknown) => asRecord(error, "unscoped error").code === "task.authorization_required");
+
+    const historyText = `sdk-history-${runId}`;
+    const postHuman = (text: string, key: string) => human("POST", "/api/workspace/messages", {
+      conversationId, clientMessageId: `${key}-${runId}`, content: buildMessageContent([messageText(text)]),
+    });
+    const history = await postHuman(historyText, "history");
+    const historyId = requiredString(asRecord(history.message ?? history, "historical message").id, "historical message id");
+    const triggerText = `sdk-trigger-${runId}`;
+    const sentTrigger = await postHuman(triggerText, "trigger");
+    const triggerId = requiredString(asRecord(sentTrigger.message ?? sentTrigger, "trigger message").id, "trigger message id");
+    let delivered: AgentEvent | undefined;
+    let afterSequence = 0;
+    await expect.poll(async () => {
+      const update = await client!.getUpdates({ afterSequence, limit: 50, timeoutMs: 10_000 });
+      delivered = update.events.find((event) => event.type === "message.created" && event.conversationId === conversationId && event.payload.messageId === triggerId);
+      for (const event of update.events) afterSequence = Math.max(afterSequence, event.sequence);
+      return Boolean(delivered);
+    }, { timeout: 10_000, message: "real SDK receives the precise human trigger", intervals: [100, 250, 500] }).toBe(true);
+    if (!delivered) throw new Error("trigger delivery missing");
+    const activation = await client.createTask({ eventId: delivered.eventId });
+    expect(activation.task.conversationId).toBe(conversationId);
+    expect(activation.task.triggerMessageId).toBe(triggerId);
+    scoped = client.forTask(activation.task, { timeoutMs: 60_000 });
+    const exact = await scoped.getMessage(triggerId);
+    expect(exact.message.plainText).toBe(triggerText);
+    const page = await scoped.searchMessages(conversationId, { query: historyText, limit: 5 });
+    expect(page.messages.map((message) => message.id)).toContain(historyId);
+    expect(page.coverage).toHaveProperty("since");
+    expect(typeof page.hasMore).toBe("boolean");
+    const members = await scoped.listMembers(conversationId);
+    expect(members.members.map((member) => member.id)).toEqual(expect.arrayContaining([ownerId, botUserId]));
+
+    const bytes = Buffer.from(`synthetic attachment ${runId}\n`, "utf8");
+    const reservation = await scoped.reserveUpload({ conversationId, fileName: `sdk-${runId}.txt`, mimeType: "text/plain", byteSize: bytes.length });
+    const uploadId = requiredString(reservation.upload.id, "reserved upload id");
+    const completed = await scoped.completeUploadContent(uploadId, bytes, "text/plain");
+    const attachmentId = requiredString(completed.attachment?.id, "completed attachment id");
+    const content = buildMessageContent([messageText("SDK 首发 "), messageMention(ownerId, "验收创建者"), messageAttachment(attachmentId)]);
+    const published = await scoped.sendMessage({ conversationId, content, clientMessageId: `mixed-${runId}`, idempotencyKey: `mixed-${runId}` });
+    const messageId = requiredString(published.message.id, "mixed message id");
+    const beforeEdit = await scoped.getMessage(messageId);
+    const version = requiredString(beforeEdit.message.version, "message CAS version");
+    expect(arrayOfRecords(asRecord(beforeEdit.message.content, "mixed content").blocks, "mixed blocks").map((block) => block.type)).toEqual(["text", "mention", "attachment"]);
+    const replacement = buildMessageContent([messageText("SDK 已修订 "), messageMention(ownerId, "验收创建者"), messageAttachment(attachmentId)]);
+    const edited = await scoped.editMessage(messageId, { content: replacement, expectedVersion: version });
+    expect(edited.message.id).toBe(messageId);
+    await assert.rejects(scoped.editMessage(messageId, { plainText: "stale overwrite must fail", expectedVersion: version }),
+      (error: unknown) => asRecord(error, "CAS error").statusCode === 409);
+    const afterEdit = await scoped.getMessage(messageId);
+    expect(afterEdit.message.version).not.toBe(version);
+    // Display labels are canonicalized from current membership by Go. The
+    // stable mention/resource identities and full block set must survive CAS.
+    const editedBlocks = arrayOfRecords(asRecord(afterEdit.message.content, "edited content").blocks, "edited blocks");
+    expect(editedBlocks).toHaveLength(3);
+    expect(editedBlocks).toMatchObject([{ type: "text", text: "SDK 已修订 " }, { type: "mention", userId: ownerId }, { type: "attachment", attachmentId }]);
+    const readBack = await scoped.readAttachment({ conversationId, messageId, attachmentId, mode: "content", maxBytes: bytes.length });
+    expect(Buffer.from(readBack.bytes).equals(bytes)).toBe(true);
+    const receipt = await scoped.getOperation("message.send", `mixed-${runId}`);
+    expect(receipt.status).toBe("committed");
+    if (receipt.status !== "committed") throw new Error("publication receipt missing");
+    expect(receipt.humanRead).toBe(false);
+    expect(asRecord(receipt.result.message, "committed message").id).toBe(messageId);
+    const editKey = requiredString(edited.operation?.key, "edit operation key");
+    expect((await scoped.getOperation("message.edit", editKey)).status).toBe("committed");
+
+    const taskFeatures = asRecord((await scoped.getCapabilities()).features, "task features");
+    if (taskFeatures.taskCardUpdate === true) {
+      const card = await scoped.sendFeishuCard({ conversationId, clientMessageId: `card-${runId}`, idempotencyKey: `card-${runId}`,
+        card: { header: { title: { tag: "plain_text", content: "SDK 验收卡片" } }, elements: [{ tag: "markdown", content: "初始状态" }] } });
+      const record = asRecord(card.card, "created card");
+      const cardId = requiredString(record.id, "created card id");
+      const revised = await scoped.updateFeishuCard(cardId, { expectedRevision: Number(record.revision),
+        card: { header: { title: { tag: "plain_text", content: "SDK 验收卡片" } }, elements: [{ tag: "markdown", content: "已更新" }] } });
+      expect(asRecord(revised.card, "updated card").revision).toBe(Number(record.revision) + 1);
+      expect((await scoped.getOperation("card.update", requiredString(asRecord(revised.operation, "card operation").key, "card operation key"))).status).toBe("committed");
+    }
+    expect((await client.cancelAgentTask(activation.task.id)).cancelled).toBe(true);
+    await assert.rejects(scoped.getMessage(triggerId), (error: unknown) => asRecord(error, "cancelled task error").code === "task.invalidated");
+    await assert.rejects(scoped.sendMessage({ conversationId, text: "cancelled publish must fail", clientMessageId: `cancelled-${runId}` }),
+      (error: unknown) => asRecord(error, "cancelled publish error").code === "task.invalidated");
+  } finally {
+    scoped?.close(); client?.stop();
+    if (botId && tokenId) await owner.request.post(new URL(`/api/workspace/bots/${botId}/tokens/${tokenId}/revoke`, baseURL!).href, { timeout: 10_000 }).catch(() => undefined);
+    await ownerContext.close();
+  }
 });
