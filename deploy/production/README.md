@@ -1,10 +1,29 @@
 # Production release tooling
 
-The 0.18 `deploy.sh` path is Go-to-Go only. It requires a clean `main`
+The current `deploy.sh` upgrade path is Go-to-Go only. It requires a clean `main`
 checkout, a full `--expected-commit`, verified release metadata, the
 authoritative PostgreSQL volume, and a verified logical backup. It rejects
 `node-default`, `--bootstrap`, and `--prepare-go-permissions`; it does not
 provide a current-tree first-install or permission-bootstrap command.
+
+The deployed frontend is AppV1. P2P uses encrypted WebSocket relay only;
+Workspace and its worker remain the only online owners of retained content.
+Build and activate a reviewed commit from `origin/main`, with a strictly newer
+application version than the current recovery baseline. Do not use a feature
+branch, patch a production Dockerfile, or weaken the version gate to release a
+different commit under an already deployed version.
+
+On this installation, operators may connect to `timestarry@server` over SSH,
+then run the coordinator from `/home/timestarry/duallane` against the server's
+local Docker daemon. Keep development work in a separate checkout. After fetching
+and fast-forwarding `main`, supply its full SHA explicitly:
+
+```bash
+deploy/production/deploy.sh \
+  --expected-commit <full-origin-main-commit> \
+  --release-profile go-full --go-upgrade \
+  --previous-release-snapshot <verified-private-snapshot>
+```
 
 An existing 0.17 installation's first migration and permission preparation
 must be completed from the retained 0.17 checkout and its approved runbook.
@@ -20,7 +39,9 @@ release-helper/immutable-image material remains only for exact old-image
 recovery and synthetic tests, not as a current Node Compose profile.
 
 Use the latest verified private snapshot from the preceding successful release
-and its `.compose.json`, `.external.json`, and `.volumes.json` sidecars. The
+and its `.compose.json`, `.external.json`, and `.volumes.json` sidecars. If these
+were lost, first follow [Recover a lost deployment baseline](#recover-a-lost-deployment-baseline)
+to establish an explicitly observed baseline. The
 0.18 transition's historical 0.17 base is
 `backups/production/duallane-20260910T080211Z-8d346a04317d.recovery.go-compose.snapshot.json`
 from the Go release at
@@ -28,6 +49,42 @@ from the Go release at
 on 0.16.1 or a stale database copy. Do not indefinitely reuse this example for
 subsequent releases; consult the [retirement acceptance record](../../docs/backend/work-items/2026-09-10-node-runtime-retirement.md)
 and the latest release's activation evidence.
+
+## Recover a lost deployment baseline
+
+When no usable copy of the current deployment configuration and recovery
+artifacts remains, an operator may explicitly authorize reconstruction from the
+running Go containers. This is a separate operation from an upgrade; it does not
+prove a historical release completed successfully. Preserve any surviving
+artifacts before proceeding.
+
+Use the same clean `main`, exact `origin/main` commit, production directory and
+deployment lock as a normal release. Pin the expected running commit separately:
+
+```bash
+sudo DUALLANE_PRODUCTION_DIR=/home/timestarry/duallane \
+  deploy/production/deploy.sh \
+  --expected-commit <full-origin-main-commit> \
+  --adopt-running --expected-previous-commit <full-running-commit>
+```
+
+The adoption mode validates the existing Go topology, immutable image identities,
+configuration, external files and data authority. It accepts only a topology
+that the supported Compose template can reproduce exactly; unsupported or
+ambiguous state is rejected. It creates private artifacts under
+`backups/production/observed-go-baseline-<UTC>-<old-commit-prefix>/`, including the
+snapshot, its three sidecars and an `.adoption.json` provenance record. Only after
+verification does it create the missing `.env`, using exclusive creation so an
+existing file is never overwritten.
+
+This mode exits without building images, migrating data, or stopping or starting
+application services. It does not change the running release or replace data.
+After reviewing the observed baseline, run the normal Go-to-Go command with its
+snapshot as `--previous-release-snapshot`. All normal backup, schema compatibility,
+candidate health, fence/drain and gateway-last checks still apply. The next
+successful release supplies the baseline for subsequent upgrades.
+
+## Candidate isolation
 
 The Go candidate rehearsal additionally uses the fixed
 `deploy/production/go-candidate.compose.yml` overlay. The script creates one

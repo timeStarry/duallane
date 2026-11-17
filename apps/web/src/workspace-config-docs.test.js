@@ -183,8 +183,9 @@ describe("workspace configuration docs", () => {
     expect(envExample).toContain("DUALLANE_GIT_COMMIT=development");
     expect(readme).toMatch(/verified\s+release metadata/);
     expect(readme).toContain("/home/timestarry/duallane");
-    expect(agents).toContain("Deploy production only from the local checkout at `/home/timestarry/duallane`");
-    expect(agents).toContain("Do not use SSH or SCP");
+    expect(agents).toContain("Deploy production only from `/home/timestarry/duallane` on the production host.");
+    expect(agents).toContain("An operator may connect to `timestarry@server` over SSH");
+    expect(agents).toMatch(/that host's\s+local Docker daemon and guarded deployment entry point/);
     expect(existsSync(path.join(repoRoot, "Dockerfile.api"))).toBe(false);
     expect(existsSync(path.join(repoRoot, "Dockerfile.web"))).toBe(false);
     expect(existsSync(path.join(repoRoot, "deploy", "nginx", "default.conf"))).toBe(false);

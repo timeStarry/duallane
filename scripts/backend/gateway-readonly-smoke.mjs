@@ -21,6 +21,9 @@ const PROFILE_CONTRACTS = new Set(PROFILE_NAMES);
 
 const WORKSPACE_HELLO = JSON.stringify({ version: 1, type: "hello", lastSeq: 0 });
 const WS_HANDSHAKE_KEY = Buffer.alloc(16, 0x5a).toString("base64");
+// Generated room IDs are 22-character base64url values. This longer, fixed ID
+// cannot join a real room, and probing it never creates one or sends content.
+const MISSING_P2P_ROOM = "deployment-readonly-missing-room";
 
 export const GATEWAY_SMOKE_LIMITS = Object.freeze({
   totalTimeoutMs: TOTAL_TIMEOUT_MS,
@@ -110,6 +113,16 @@ function normalizeOptions(options) {
     WebSocketImpl: options.WebSocketImpl ?? globalThis.WebSocket,
     signal: options.signal
   };
+}
+
+function usesAppV1ReleaseContract(options) {
+  if (options.profile !== "go-full") return false;
+  const parts = /^(\d+)\.(\d+)\.(\d+)$/.exec(options.expectedVersion);
+  if (!parts) return false;
+  const [major, minor, patch] = parts.slice(1).map(Number);
+  // 1.0.15 is the first release that requires this deployment gate. Retained
+  // immutable releases keep their original smoke contract during recovery.
+  return major > 1 || (major === 1 && (minor > 0 || patch >= 15));
 }
 
 function createRunContext(parentSignal) {
@@ -563,6 +576,12 @@ function isForbiddenWorkspaceFrame(frame, stage) {
   }
 }
 
+function validateMissingP2PRoomFrame(frame, stage) {
+  if (!isRecord(frame) || frame.type !== "system" || frame.event !== "room-not-found") {
+    throw smokeError("p2p_ws_missing_room_contract", stage);
+  }
+}
+
 function closeSocket(socket) {
   try {
     if (typeof socket.close === "function") socket.close(1000, "smoke complete");
@@ -579,7 +598,7 @@ function closeSocket(socket) {
 function probeWebSocket(context, options, contract, stage) {
   const WebSocketImpl = options.WebSocketImpl;
   if (typeof WebSocketImpl !== "function") return Promise.reject(smokeError("ws_client_unavailable", stage));
-  const wsURL = routeURL(options.baseURL, "/ws/workspace", stage);
+  const wsURL = routeURL(options.baseURL, contract.websocketPath ?? "/ws/workspace", stage);
   wsURL.protocol = "ws:";
 
   return new Promise((resolve, reject) => {
@@ -619,8 +638,9 @@ function probeWebSocket(context, options, contract, stage) {
 
     const onOpen = () => {
       opened = true;
+      if (contract.hello === null) return;
       try {
-        socket.send(WORKSPACE_HELLO);
+        socket.send(contract.hello ?? WORKSPACE_HELLO);
       } catch {
         finishFailure("ws_send_failed");
       }
@@ -636,7 +656,7 @@ function probeWebSocket(context, options, contract, stage) {
       const bytes = await socketDataToBytes(data);
       if (bytes.byteLength > MAX_WS_FRAME_BYTES) throw smokeError("ws_frame_too_large", stage);
       const frame = parseJSON(bytes, stage);
-      isForbiddenWorkspaceFrame(frame, stage);
+      (contract.validateFrame ?? isForbiddenWorkspaceFrame)(frame, stage);
     };
     const onMessage = (event) => {
       if (settled || closing) {
@@ -668,6 +688,10 @@ function probeWebSocket(context, options, contract, stage) {
       const event = normalizeSocketCloseEvent(first, second);
       const code = Number(event.code);
       if (contract.websocketCloseCodes.includes(code)) {
+        if (frameCount < (contract.minimumFrames ?? 0)) {
+          finishFailure("ws_missing_expected_frame");
+          return;
+        }
         finishSuccess();
         return;
       }
@@ -791,11 +815,32 @@ export async function run(options = {}) {
     const publicCommit = verifyReleaseIdentity(health.payload, normalized.expectedVersion, currentStage);
     stages.push({ ...successStage(currentStage), publicCommit });
 
-    currentStage = "ice";
-    const ice = await requestJSON(context, normalized, "/api/p2p/ice-servers", currentStage);
-    requireStatus(ice, 200, currentStage);
-    validateICEServers(ice.payload, currentStage);
-    stages.push(successStage(currentStage));
+    const appV1Contract = usesAppV1ReleaseContract(normalized);
+    if (appV1Contract) {
+      currentStage = "p2p-room";
+      const missingRoom = await requestJSON(context, normalized, `/api/p2p/rooms/${MISSING_P2P_ROOM}`, currentStage);
+      requireStatus(missingRoom, 404, currentStage);
+      if (!isRecord(missingRoom.payload) || missingRoom.payload.error !== "room not found") {
+        throw smokeError("p2p_missing_room_contract", currentStage);
+      }
+      stages.push(successStage(currentStage));
+
+      currentStage = "p2p-ws";
+      await probeWebSocket(context, normalized, {
+        websocketPath: `/ws/p2p/${MISSING_P2P_ROOM}`,
+        hello: null,
+        validateFrame: validateMissingP2PRoomFrame,
+        minimumFrames: 1,
+        websocketCloseCodes: [1005]
+      }, currentStage);
+      stages.push(successStage(currentStage));
+    } else {
+      currentStage = "ice";
+      const ice = await requestJSON(context, normalized, "/api/p2p/ice-servers", currentStage);
+      requireStatus(ice, 200, currentStage);
+      validateICEServers(ice.payload, currentStage);
+      stages.push(successStage(currentStage));
+    }
 
     const workspaceContract = workspaceContractFor(normalized.workspaceEnabled);
     currentStage = "workspace-bootstrap";
@@ -803,6 +848,26 @@ export async function run(options = {}) {
     requireStatus(bootstrap, workspaceContract.bootstrapStatus, currentStage);
     requireErrorCode(bootstrap.payload, workspaceContract.bootstrapCode, currentStage);
     stages.push(successStage(currentStage));
+
+    if (appV1Contract) {
+      currentStage = "workspace-v1";
+      const workspacePaths = ["/api/v1/bootstrap", "/api/v1/sync", "/api/v1/admin/overview"];
+      for (const pathname of workspacePaths) {
+        const response = await requestJSON(context, normalized, pathname, currentStage);
+        requireStatus(response, 401, currentStage);
+        requireErrorCode(response.payload, "auth.required", currentStage);
+      }
+      stages.push(successStage(currentStage, workspacePaths.length));
+
+      currentStage = "bot-v2";
+      const botPaths = ["/api/bot/v2/conversations", "/api/bot/v2/doctor", "/api/bot/v2/updates"];
+      for (const pathname of botPaths) {
+        const response = await requestJSON(context, normalized, pathname, currentStage);
+        requireStatus(response, 401, currentStage);
+        requireErrorCode(response.payload, "bot.invalid_token", currentStage);
+      }
+      stages.push(successStage(currentStage, botPaths.length));
+    }
 
     currentStage = "private-entries";
     const privateExposure = new Set();

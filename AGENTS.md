@@ -38,7 +38,7 @@ behavior, but do not override higher-level safety requirements.
   access control without a written threat analysis and maintainer approval.
 - Do not modify imported emote assets unless the task is specifically about them.
 
-The checked-in 0.18.0 online architecture is Go-only. `apps/web/server/migrations`
+The current online backend architecture is Go-only. `apps/web/server/migrations`
 remains the canonical SQL path; `tools/node-compat` is an explicitly invoked,
 profile-only offline package for storage maintenance and does not start with Go
 services, run migrations, or seed data automatically. The verified 0.17.0
@@ -91,7 +91,7 @@ The complete lifecycle and PR contract are in
   a documented migration or version transition.
 - Use the capability ledger to identify the current owner. Never enable duplicate
   production writers, job claimers, or migration runners. Online request-serving
-  and worker behavior is Go-owned for 0.18.0; retained Node code is limited to
+  and worker behavior is Go-owned; retained Node code is limited to
   explicitly documented offline compatibility or historical recovery material.
 - Keep routes thin, domain rules in services, and persistence details behind the
   database or storage boundary. Validate and authorize on the server.
@@ -146,8 +146,9 @@ A change is complete only when:
 
 - Use `/home/timestarry/projects/duallane` only for development, validation,
   commits, and pushes.
-- Deploy production only from the local checkout at `/home/timestarry/duallane`.
-  Use the local Docker daemon. Do not use SSH or SCP for this deployment.
+- Deploy production only from `/home/timestarry/duallane` on the production host.
+  An operator may connect to `timestarry@server` over SSH, then use that host's
+  local Docker daemon and guarded deployment entry point.
 - Validate, commit, and push first. In the production checkout, use
   `git pull --ff-only`, verify the exact `origin/main` commit, then run
   `deploy/production/deploy.sh` with `--expected-commit`.
