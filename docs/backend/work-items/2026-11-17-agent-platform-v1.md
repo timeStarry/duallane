@@ -86,3 +86,22 @@ is claimed by these local results.
 Fixtures are synthetic. No production chat content, private Agent profile or
 failed real task is copied into tests. Updating an installed external runtime or
 replaying its historical task requires separately applicable operator authority.
+
+## Go-only immutable-image rehearsal
+
+`scripts/backend/agent-schema-upgrade.docker.test.mjs` does not require the retired
+Node images. Its default CI run checks fixture contracts and skips the real
+Docker lifecycle until explicitly selected on Linux with seven local image IDs.
+Set `DUALLANE_AGENT_SCHEMA_UPGRADE_DOCKER_TEST=true` and the immutable
+`DUALLANE_AGENT_SCHEMA_OLD_{WORKSPACE,P2P,WEB}_IMAGE`,
+`DUALLANE_AGENT_SCHEMA_TARGET_{WORKSPACE,P2P,WEB}_IMAGE` and
+`DUALLANE_AGENT_SCHEMA_POSTGRES_IMAGE` values, then run `node --test` on that file.
+
+Only an empty synthetic baseline uses fixture bootstrap. The target upgrade
+executes the existing production upgrade helper unchanged: authority, migration,
+fence/drain, readiness, gateway smoke, snapshot and exact old-Go recovery. The
+fixture derives the old schema inventory from the old immutable image, checks
+actual PostgreSQL remains37 after recovery, preserves its container/volume and
+verifies every pre-existing active container is unchanged. All created resources
+are owned by a fresh project/run label and removed only after identity checks.
+No production env, snapshot contents or application data enter this rehearsal.
