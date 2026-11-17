@@ -79,7 +79,7 @@ describe("workspace configuration docs", () => {
     expect(defaultPlaywright).toContain("node e2e/support/test-server.mjs");
     expect(defaultTestServer).toContain("./go-p2p-server.mjs");
     expect(defaultTestServer).not.toContain("server/index.mjs");
-    expect(workspacePlaywright).toContain('testMatch: "workspace-v1-acceptance.spec.ts"');
+    expect(workspacePlaywright).toContain('testMatch: ["workspace-v1-acceptance.spec.ts", "agent-platform-acceptance.spec.ts"]');
     expect(workspacePlaywright).toContain("go-workspace-server.mjs");
   });
 
