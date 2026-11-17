@@ -26,13 +26,6 @@ func NewPGRepository(pool *pgxpool.Pool, spaceID string) *PGRepository {
 		spaceID = "spc_default"
 	}
 	repo := &PGRepository{pool: pool, spaceID: spaceID}
-	if pool != nil {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-			defer cancel()
-			_ = repo.NormalizeLegacyBotPolicies(ctx, time.Now().UTC())
-		}()
-	}
 	return repo
 }
 
@@ -42,9 +35,10 @@ func formatDirectKey(left, right string) string {
 	return ids[0] + ":" + ids[1]
 }
 
-// NormalizeLegacyBotPolicies idempotently heals legacy "groups" visibility policies
-// (converting them to creator-safe "private" member visibility while preserving
-// group capability) and ensures every creator's 1-on-1 DM has trigger access.
+// NormalizeLegacyBotPolicies is an explicit, operator-invoked legacy migration
+// helper. It is never run from a read path. In particular it does not create
+// context grants: visibility normalization must not manufacture message or
+// trigger authority.
 func (r *PGRepository) NormalizeLegacyBotPolicies(ctx context.Context, now time.Time) error {
 	if r == nil || r.pool == nil {
 		return nil
@@ -86,33 +80,6 @@ func (r *PGRepository) NormalizeLegacyBotPolicies(ctx context.Context, now time.
 	`, r.spaceID, now.UTC()); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO workspace_agent_bot_context_grants (
-			grant_id, bot_id, space_id, conversation_id, allow_trigger, allow_context, max_messages, granted_by, created_at, updated_at
-		)
-		SELECT
-			'bgr_' || substr(md5(b.id || ':' || c.id), 1, 24),
-			b.id,
-			b.space_id,
-			c.id,
-			1,
-			1,
-			50,
-			b.owner_user_id,
-			$2,
-			$2
-		FROM workspace_agent_bots b
-		JOIN conversation_members cm_bot ON cm_bot.user_id = b.bot_user_id AND cm_bot.removed_at IS NULL
-		JOIN conversations c ON c.id = cm_bot.conversation_id AND c.space_id = b.space_id AND c.type = 'direct'
-		JOIN conversation_members cm_owner ON cm_owner.conversation_id = c.id AND cm_owner.user_id = b.owner_user_id AND cm_owner.removed_at IS NULL
-		WHERE b.space_id = $1 AND b.status <> 'deleted'
-		ON CONFLICT (bot_id, conversation_id) DO UPDATE
-		SET allow_trigger = 1,
-		    updated_at = CASE WHEN workspace_agent_bot_context_grants.allow_trigger = 0 THEN EXCLUDED.updated_at ELSE workspace_agent_bot_context_grants.updated_at END
-	`, r.spaceID, now.UTC()); err != nil {
-		return err
-	}
-
 	return tx.Commit(ctx)
 }
 
@@ -3311,33 +3278,7 @@ func (r *PGRepository) GetBotConsoleOverview(ctx context.Context, actorID, botID
 		return BotConsoleOverview{}, ErrForbidden
 	}
 
-	// Ensure legacy policies are healed and owner's 1v1 DM exists & has trigger enabled.
-	_ = r.NormalizeLegacyBotPolicies(ctx, now)
-	dmConvID := randomID("conv")
-	dmKey := formatDirectKey(ownerID, botUserID)
-	if qErr := r.pool.QueryRow(ctx, `
-		INSERT INTO conversations (id, space_id, type, title, direct_key, retention_count, created_by, created_at)
-		VALUES ($1, $2, 'direct', $3, $4, 10000, $5, $6)
-		ON CONFLICT (space_id, direct_key)
-		DO UPDATE SET space_id = EXCLUDED.space_id
-		RETURNING id
-	`, dmConvID, r.spaceID, botName, dmKey, ownerID, now.UTC()).Scan(&dmConvID); qErr == nil && dmConvID != "" {
-		_, _ = r.pool.Exec(ctx, `
-			INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at)
-			VALUES ($1, $2, $3, NULL), ($1, $4, $3, NULL)
-			ON CONFLICT (conversation_id, user_id) DO UPDATE SET removed_at = NULL
-		`, dmConvID, ownerID, now.UTC(), botUserID)
-		_, _ = r.pool.Exec(ctx, `
-			INSERT INTO workspace_agent_bot_context_grants (
-				grant_id, bot_id, space_id, conversation_id, allow_trigger, allow_context, max_messages, granted_by, created_at, updated_at
-			)
-			VALUES ($1, $2, $3, $4, 1, 1, 50, $5, $6, $6)
-			ON CONFLICT (bot_id, conversation_id) DO UPDATE
-			SET allow_trigger = 1,
-			    updated_at = CASE WHEN workspace_agent_bot_context_grants.allow_trigger = 0 THEN EXCLUDED.updated_at ELSE workspace_agent_bot_context_grants.updated_at END
-		`, randomID("bgr"), botID, r.spaceID, dmConvID, ownerID, now.UTC())
-	}
-
+	// Diagnostics never create conversations, restore membership or grant access.
 	convs, err := r.ListBotConversations(ctx, botID, botUserID)
 	if err != nil {
 		return BotConsoleOverview{}, err
