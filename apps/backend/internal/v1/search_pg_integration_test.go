@@ -317,4 +317,23 @@ func TestPGSearchResolvesAttachmentSourceMessageFromJoinTable(t *testing.T) {
 		t.Fatalf("outsider approval list: %v", err)
 	}
 
+	// Reading connection diagnostics must not recreate a revoked trigger grant.
+	botID, err := repo.CreateMultiBot(ctx, "usr_owner", "Read-only console fixture", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE workspace_agent_bot_context_grants SET allow_trigger=0,allow_context=0 WHERE bot_id=$1`, botID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewPGRepository(pool, "default").GetBotConsoleOverview(ctx, "usr_owner", botID, now); err != nil {
+		t.Fatal(err)
+	}
+	var allowTrigger, allowContext int
+	if err := conn.QueryRow(ctx, `SELECT allow_trigger,allow_context FROM workspace_agent_bot_context_grants WHERE bot_id=$1`, botID).Scan(&allowTrigger, &allowContext); err != nil {
+		t.Fatal(err)
+	}
+	if allowTrigger != 0 || allowContext != 0 {
+		t.Fatalf("console read restored revoked access: trigger=%d context=%d", allowTrigger, allowContext)
+	}
+
 }
