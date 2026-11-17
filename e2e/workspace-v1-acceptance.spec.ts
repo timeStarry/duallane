@@ -150,7 +150,7 @@ test.describe("DualLane v1.0 Shared Workspace Login, Search, File Transfer & 320
 
       // 2. Owner generates a Workspace Invite Code
       await pageOwner.getByRole("button", { name: "设置中心" }).click();
-      const settingsDialog = pageOwner.getByRole("dialog", { name: "DualLane 设置中心" });
+      const settingsDialog = pageOwner.getByRole("dialog", { name: "设置", exact: true });
       await expect(settingsDialog).toBeVisible();
 
       await settingsDialog.getByRole("button", { name: "个人" }).click();

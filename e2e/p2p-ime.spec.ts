@@ -1,74 +1,39 @@
 import { randomUUID } from "node:crypto";
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 
-test.describe.configure({ timeout: 120_000 });
-
-type SyntheticKeyOptions = {
-  isComposing: boolean;
-  keyCode: number;
-  key?: string;
-  shiftKey?: boolean;
-};
-
-async function dispatchSyntheticKey(input: Locator, options: SyntheticKeyOptions) {
-  return input.evaluate((element, keyOptions) => {
-    const event = new KeyboardEvent("keydown", {
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      code: "Enter",
-      key: keyOptions.key ?? "Enter",
-      shiftKey: Boolean(keyOptions.shiftKey)
-    });
-    Object.defineProperty(event, "isComposing", { configurable: true, value: keyOptions.isComposing });
-    Object.defineProperty(event, "keyCode", { configurable: true, value: keyOptions.keyCode });
-    Object.defineProperty(event, "which", { configurable: true, value: keyOptions.keyCode });
-    return { dispatched: element.dispatchEvent(event), defaultPrevented: event.defaultPrevented };
-  }, options);
+async function pressImeEnter(input: Locator, isComposing: boolean) {
+  await input.evaluate((element, composing) => {
+    // Preserve the browser's real implicit form submission. dispatchEvent alone
+    // cannot reproduce this regression after the composer became an input.
+    element.addEventListener("keydown", (event) => {
+      Object.defineProperty(event, "isComposing", { configurable: true, value: composing });
+      Object.defineProperty(event, "keyCode", { configurable: true, value: 229 });
+      Object.defineProperty(event, "which", { configurable: true, value: 229 });
+    }, { capture: true, once: true });
+  }, isComposing);
+  await input.press("Enter");
 }
 
-async function dispatchSafariImeEnter(input: Locator) {
-  return input.evaluate((element) => {
-    element.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "" }));
-    element.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "中" }));
-    const event = new KeyboardEvent("keydown", {
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      code: "Enter",
-      key: "Enter"
-    });
-    Object.defineProperty(event, "isComposing", { configurable: true, value: false });
-    Object.defineProperty(event, "keyCode", { configurable: true, value: 229 });
-    Object.defineProperty(event, "which", { configurable: true, value: 229 });
-    return { dispatched: element.dispatchEvent(event), defaultPrevented: event.defaultPrevented };
-  });
-}
-
-test("P2P textarea leaves an IME confirmation in the draft", async ({ page }) => {
-  const suffix = randomUUID().slice(0, 8);
+test("P2P composer leaves IME confirmation in the draft and sends ordinary Enter once", async ({ page }) => {
+  const text = `p2p-ime-${randomUUID().slice(0, 8)}`;
   await page.goto("/");
-  await page.getByRole("button", { name: /一对一直连/ }).click();
-  await page.getByLabel("显示名称").fill(`IME P2P ${suffix}`);
-  await page.getByRole("button", { name: "开始会话" }).click();
-  await expect(page.getByRole("heading", { name: "邀请对方，开始交流" })).toBeVisible();
-
-  const input = page.getByLabel("输入消息");
-  const p2pHttpWrites: string[] = [];
-  page.on("request", (request) => {
-    if (request.method() === "POST" && request.url().includes("/api/p2p/")) {
-      p2pHttpWrites.push(request.url());
-    }
-  });
-  const text = `p2p-ime-${suffix}`;
+  await page.getByTestId("home-card-direct").click();
+  await expect(page.getByTestId("p2p-peer-status")).toContainText("等待对端加入");
+  const input = page.getByLabel("发送端到端加密消息", { exact: true });
+  const messages = page.locator("[data-p2p-message-id]").filter({ hasText: text });
   await input.fill(text);
-  const imeKey = await dispatchSafariImeEnter(input);
-  expect(imeKey).toEqual({ dispatched: true, defaultPrevented: false });
-  await expect(input).toHaveValue(text);
-  await expect(page.locator("article.message").filter({ hasText: text })).toHaveCount(0);
-  expect(p2pHttpWrites).toHaveLength(0);
 
-  const ordinaryKey = await dispatchSyntheticKey(input, { isComposing: false, keyCode: 13 });
-  expect(ordinaryKey).toEqual({ dispatched: false, defaultPrevented: true });
-  await expect(page.locator("article.message").filter({ hasText: text })).toHaveCount(1);
+  await pressImeEnter(input, true);
+  await expect(input).toHaveValue(text);
+  await expect(messages).toHaveCount(0);
+
+  // Safari may report isComposing=false for the confirming Enter, but retains
+  // keyCode 229. That key must not trigger the input's form submission either.
+  await pressImeEnter(input, false);
+  await expect(input).toHaveValue(text);
+  await expect(messages).toHaveCount(0);
+
+  await input.press("Enter");
+  await expect(messages).toHaveCount(1);
+  await expect(input).toHaveValue("");
 });

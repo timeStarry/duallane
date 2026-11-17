@@ -82,7 +82,6 @@ jobs:
     env:
       CI: "true"
       TEST_DATABASE_URL: ""
-      DUALLANE_APP_VERSION: "1.0.8"
       DUALLANE_GIT_COMMIT: ${{ github.sha }}
       POSTGRES_PASSWORD: duallane-ci-password
 
@@ -108,6 +107,9 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+
+      - name: Read application release version
+        run: node -e "const fs = require('node:fs'); fs.appendFileSync(process.env.GITHUB_ENV, 'DUALLANE_APP_VERSION=' + require('./package.json').version + '\n')"
 
       - name: Validate backend tooling guards
         run: node --test .github/tests/ci-go-native-dependencies.test.mjs .github/tests/ci-go-p2p-privacy.test.mjs .github/tests/ci-go-workspace-privacy.test.mjs .github/tests/ci-unit-fixtures.test.mjs scripts/dev/go-dev.test.mjs scripts/backend/schema-coexistence.test.mjs scripts/backend/owned-process.test.mjs scripts/backend/go-workspace-browser.test.mjs scripts/backend/local-gateway-binding.test.mjs scripts/backend/gateway-readonly-smoke.test.mjs scripts/backend/storage-operator-retained.test.mjs scripts/backend/p2p-frozen-contract.test.mjs scripts/backend/frozen-legacy-contract.harness.test.mjs
@@ -176,7 +178,6 @@ jobs:
 
       - name: Validate production deployment config
         env:
-          DUALLANE_APP_VERSION: "1.0.8"
           DUALLANE_GIT_COMMIT: ${{ github.sha }}
           POSTGRES_VOLUME_NAME: duallane-ci-postgres
           POSTGRES_PASSWORD: duallane-ci-password
@@ -274,7 +275,7 @@ jobs:
       - name: Install Chromium and system dependencies
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Run complete Go Workspace browser gate
+      - name: Run Go Workspace AppV1 browser gate
         env:
           TEST_DATABASE_URL: postgres://duallane:duallane-ci-password@127.0.0.1:5432/duallane?sslmode=disable
           DUALLANE_GO_E2E_ALLOW_SCHEMA_CREATION: "true"

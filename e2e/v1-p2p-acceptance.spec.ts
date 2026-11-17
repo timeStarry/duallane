@@ -262,7 +262,7 @@ test.describe("DualLane v1.0 P2P Direct Lane, File Transfer, 320px Responsive, A
 
       // Verify Guest Personal Settings & User Menu do NOT expose empty ID/Role or Logout buttons
       await pageA.getByRole("button", { name: "设置中心" }).click();
-      const guestSettingsDialog = pageA.getByRole("dialog", { name: "DualLane 设置中心" });
+      const guestSettingsDialog = pageA.getByRole("dialog", { name: "设置", exact: true });
       await expect(guestSettingsDialog).toBeVisible();
       await expect(guestSettingsDialog.getByRole("button", { name: "设备" })).toHaveCount(0);
       await expect(guestSettingsDialog.getByRole("button", { name: "扫码" })).toHaveCount(0);
@@ -346,12 +346,12 @@ test.describe("DualLane v1.0 P2P Direct Lane, File Transfer, 320px Responsive, A
       // #k= secret, plaintext message, and secret filename MUST NEVER appear in any HTTP URL/header/body or plaintext WS frame!
       const combinedNetwork = networkTranscript.join("\n");
       const combinedWs = wsFramesTranscript.join("\n");
-      expect(combinedNetwork).not.toContain(keySecret);
-      expect(combinedNetwork).not.toContain(secretText);
-      expect(combinedNetwork).not.toContain(secretFileName);
-      expect(combinedWs).not.toContain(keySecret);
-      expect(combinedWs).not.toContain(secretText);
-      expect(combinedWs).not.toContain(secretFileName);
+      expect(combinedNetwork.includes(keySecret)).toBe(false);
+      expect(combinedNetwork.includes(secretText)).toBe(false);
+      expect(combinedNetwork.includes(secretFileName)).toBe(false);
+      expect(combinedWs.includes(keySecret)).toBe(false);
+      expect(combinedWs.includes(secretText)).toBe(false);
+      expect(combinedWs.includes(secretFileName)).toBe(false);
 
       // Verify localStorage / sessionStorage / IndexedDB contain zero P2P secrets or plaintext
       for (const page of [pageA, pageB]) {
@@ -361,10 +361,10 @@ test.describe("DualLane v1.0 P2P Direct Lane, File Transfer, 320px Responsive, A
           const dbs = "databases" in indexedDB ? await indexedDB.databases() : [];
           return { ls, ss, dbCount: dbs.length };
         });
-        expect(storageDump.ls).not.toContain(keySecret);
-        expect(storageDump.ls).not.toContain(secretText);
-        expect(storageDump.ss).not.toContain(keySecret);
-        expect(storageDump.ss).not.toContain(secretText);
+        expect(storageDump.ls.includes(keySecret)).toBe(false);
+        expect(storageDump.ls.includes(secretText)).toBe(false);
+        expect(storageDump.ss.includes(keySecret)).toBe(false);
+        expect(storageDump.ss.includes(secretText)).toBe(false);
         expect(storageDump.dbCount).toBe(0);
       }
 
@@ -467,7 +467,7 @@ test.describe("DualLane v1.0 P2P Direct Lane, File Transfer, 320px Responsive, A
       await expect(searchDialog).toBeHidden();
 
       await page.getByRole("button", { name: "设置中心" }).click();
-      const settingsDialog = page.getByRole("dialog", { name: "DualLane 设置中心" });
+      const settingsDialog = page.getByRole("dialog", { name: "设置", exact: true });
       await expect(settingsDialog).toBeVisible();
       await assertNoOverflowOrControlOverlap(page, 320, "320px Settings Modal (Light)");
 

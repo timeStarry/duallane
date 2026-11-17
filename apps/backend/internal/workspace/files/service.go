@@ -1343,10 +1343,6 @@ func (s *Service) failUpload(ctx context.Context, input FailUploadInput, lookup 
 	return value.(UploadResult), nil
 }
 
-func (s *Service) failUploadAfterCompletion(ctx context.Context, actorID, uploadID, reason string, meta auth.RequestMeta) error {
-	return s.failUploadAfterCompletionWithLookup(ctx, actorID, uploadID, reason, meta, s.lookupActor)
-}
-
 func (s *Service) failUploadAfterCompletionWithLookup(ctx context.Context, actorID, uploadID, reason string, meta auth.RequestMeta, lookup fileActorLookup) error {
 	_, err := s.failUpload(ctx, FailUploadInput{ActorID: actorID, UploadID: uploadID, Reason: reason, Meta: meta}, lookup)
 	return err

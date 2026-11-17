@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 test("Go P2P browser gate owns its server and never uploads private failure output", async () => {
@@ -22,9 +25,28 @@ test("Go P2P browser gate owns its server and never uploads private failure outp
   assert.doesNotMatch(server, /apps\/web\/server|openTestDatabase|createApp/);
   assert.match(server, /go-p2p-server\.mjs/);
   assert.match(qualityGate, /- name: Set up Go\n        uses: actions\/setup-go@v7\n        with:\n          go-version-file: apps\/backend\/go\.mod\n          cache-dependency-path: apps\/backend\/go\.sum/);
-  assert.equal(qualityGate.match(/DUALLANE_APP_VERSION: "([^"]+)"/)?.[1], JSON.parse(manifest).version);
+  assert.doesNotMatch(qualityGate, /DUALLANE_APP_VERSION:\s*["']\d/);
+  const versionCommand = qualityGate.match(/- name: Read application release version\n\s+run: node -e "([^\n]+)"/)?.[1];
+  assert.ok(versionCommand, "CI must read the release version from package.json");
+  const fixture = await mkdtemp(path.join(tmpdir(), "duallane-ci-version-"));
+  try {
+    const envFile = path.join(fixture, "github-env");
+    for (const version of [JSON.parse(manifest).version, "2.3.4"]) {
+      await writeFile(path.join(fixture, "package.json"), JSON.stringify({ version }));
+      await writeFile(envFile, "");
+      const result = spawnSync(process.execPath, ["-e", versionCommand], {
+        cwd: fixture,
+        env: { ...process.env, GITHUB_ENV: envFile },
+        encoding: "utf8"
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(await readFile(envFile, "utf8"), `DUALLANE_APP_VERSION=${version}\n`);
+    }
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
   assert.match(qualityGate, /docker compose --profile storage-migration build storage-provision/);
-  assert.match(config, /testMatch:\s*\[\s*"p2p-go-privacy\.spec\.ts",\s*"p2p-ime\.spec\.ts"\s*\]/);
+  assert.match(config, /testMatch:\s*\[\s*"p2p-go-privacy\.spec\.ts",\s*"p2p-ime\.spec\.ts",\s*"v1-p2p-acceptance\.spec\.ts"\s*\]/);
   assert.match(config, /outputDir: "\.private-test-results\/p2p-go-browser"/);
   for (const option of ["trace", "screenshot", "video"]) assert.match(config, new RegExp(`${option}: "off"`));
   assert.equal((config.match(/reuseExistingServer: false/g) || []).length, 2);

@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { isSingleImageEmoteText, renderMessageParts } from "@/emotes";
+import { isImeCompositionEnter } from "@/workspace-composer-ime";
 import { useEmoteStore } from "@/entities/emote/store";
 import { useLaneStore } from "@/entities/lane/store";
 import {
@@ -1176,6 +1177,11 @@ export function TimelinePane() {
               <input
                 value={p2pDraft}
                 onChange={(e) => setP2PDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  // A single-line input otherwise implicitly submits its form
+                  // when Safari confirms an IME candidate with Enter.
+                  if (isImeCompositionEnter(e.nativeEvent)) e.preventDefault();
+                }}
                 placeholder={
                   p2pRoom.status === "peer_connected"
                     ? "发送端到端加密消息…"

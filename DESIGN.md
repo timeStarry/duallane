@@ -10,7 +10,7 @@
 
 DualLane is a small-scale, self-hosted communication tool with two deliberately separated trust models:
 
-- **私密直连 / One-to-One Direct:** a short-lived one-to-one lane for temporary private chat and file transfer. It requires no login, uses the server only for signaling or encrypted fallback envelopes, and does not persist conversation content on the server.
+- **私密直连 / One-to-One Direct:** a short-lived one-to-one lane for temporary private chat and file transfer. It requires no login, encrypts content between browsers before WebSocket relay, and does not persist conversation content on the server.
 - **共享空间 / Shared Space:** a long-lived shared chat and file space for friends, family, partners, interest groups, and small trusted teams. The internal engineering name is `Workspace`; internally it is the audited relay lane with persisted messages, file storage, permissions, quotas, retention, and operation records.
 
 The product is not a generic chat app or an enterprise collaboration suite. Its core value is helping users choose the right lane before a conversation starts:
@@ -46,7 +46,7 @@ DualLane is designed for personal use, familiar small groups, and self-hosted de
 - No full-text search in the MVP.
 - No multi-party private direct group chat in the MVP.
 - No complex organization hierarchy in the MVP.
-- No guarantee that private direct sessions work across every network without optional TURN support.
+- No guarantee that private direct sessions remain available when the WebSocket relay or network is unavailable.
 - No claim that shared spaces are end-to-end private; shared spaces are server-retained by design.
 
 ## 5. Product Documents
@@ -99,7 +99,7 @@ The first screen has two primary choices:
 - **私密直连**
   - One-to-one.
   - No login.
-  - Server only handles temporary signaling or encrypted fallback envelopes.
+  - Server handles temporary room metadata and validated encrypted relay envelopes.
   - Conversation content is not stored by the server.
 
 - **共享空间**
@@ -120,35 +120,33 @@ The entry UI should avoid marketing-style content. It should feel like a precise
 Flow:
 
 1. User clicks **私密直连**.
-2. User enters a public display name.
-3. User starts a session.
-4. The app creates a session identifier and invite link.
-5. User shares the invite link externally.
-6. Another user joins through the link.
-7. The page becomes a chat interface.
-8. Users send text messages or files over the direct connection.
-9. When the session ends, each user chooses whether to save the session locally.
+2. The browser creates a room, a random encryption key, and an invite link.
+3. The waiting/chat surface opens without a separate display-name setup step.
+4. User shares the complete invite link externally.
+5. Another user joins through the link.
+6. Both browsers use the shared fragment key to encrypt text and file payloads before WebSocket relay.
+7. Users may explicitly download received files.
+8. Leaving the room clears its messages, draft, key, and file Blob references from browser memory.
 
 Behavior:
 
 - No account is required.
-- Server may temporarily relay signaling messages.
+- Server relays validated secure envelopes; message bodies and file metadata/bytes are encrypted in the browser.
 - Server must not store chat messages or transferred files.
-- Session content is not persisted by default.
-- At session end, ask whether to keep this session locally.
-- If saved, data is stored only in the user's local browser storage or exported local file.
-- If not saved, the local session state is discarded.
+- Session content stays in browser memory and is not written to browser databases or local storage.
+- Returning to the conversation list in the same running page preserves the room and draft; explicitly leaving clears them.
+- Socket closure shows a disconnected state. Automatic reconnection and durable session recovery are not implemented.
+- The current UI has no local transcript export or session-end save prompt.
 
-Suggested end-state UI:
+Current transport:
 
-- Center icon.
-- Text: "本次直连已结束。"
-- Primary action: "保存到本机"
-- Secondary action: "不保存并关闭"
+- AppV1 uses end-to-end encrypted WebSocket relay only; it does not create WebRTC DataChannels or use ICE/TURN.
+- Messages, file metadata, file chunks, and acknowledgements use authenticated AES-GCM envelopes.
+- The shared invite link grants access to the room key; this is not independent peer identity verification.
 
 Privacy note:
 
-The MVP should phrase the private-lane promise as "the server does not store conversation content." If the product later adds TURN relay support, the copy should say "content remains encrypted in transit and is not stored by the server" unless application-layer end-to-end encryption and key verification are implemented.
+The private-lane promise is "content is end-to-end encrypted and the server does not store conversation content." The relay still observes connection and traffic metadata. Do not claim independently verified peer identities or that traffic bypasses the server.
 
 ### 6.3 共享空间 / Workspace Relay Lane
 
@@ -349,7 +347,7 @@ Recommended MVP stack:
 - Icons: `lucide-react`.
 - Online backend: Go services for P2P, Workspace, and worker processes.
 - Realtime: Go WebSocket handlers with the existing versioned contracts.
-- Private direct: WebRTC DataChannel plus WebSocket signaling.
+- Private direct: browser-side AES-GCM encryption over the Go WebSocket relay.
 - Database: PostgreSQL with versioned migrations.
 - File storage: private S3-compatible object storage, with a local adapter for development and rollback.
 - Deployment: Docker Compose with the Go-only default and verified release
@@ -370,7 +368,6 @@ Suggested services:
   not an online service or a complete Go replacement.
 - `storage`: private S3-compatible bucket for Workspace attachments and profile
   avatars; the Go Workspace boundary remains the authenticated upload boundary.
-- Optional future `turn`: coturn for improved private-direct connection success.
 
 The checked-in 0.18 online architecture and deployment boundary:
 
@@ -386,7 +383,7 @@ compatibility package does not connect during online startup.
 Historical MVP deployment assumption:
 
 - Small trusted deployment.
-- HTTPS required for production WebRTC and secure OAuth callbacks.
+- HTTPS/WSS required for production private-lane transport and secure OAuth callbacks.
 - Public access should be protected by invite-only account checks.
 - Workspace APIs stay disabled by default unless `WORKSPACE_ENABLED=true`.
 
@@ -414,9 +411,9 @@ Shared-space layout must use a real information hierarchy instead of placing all
 features in one flat page:
 
 - Entry: two large lane choices.
-- Private direct setup: centered single-action screen.
-- Private direct waiting: centered link sharing state.
-- Private direct chat: compact message surface with local-save status.
+- Private direct entry: creates the room and opens the waiting/chat surface.
+- Private direct waiting: link sharing state within the conversation surface.
+- Private direct chat: compact message surface with connection and delivery status.
 - Shared space desktop: conversation list/navigation rail, active chat, and a collapsible context drawer for conversation details, files, members, or settings.
 - Shared space mobile: conversation list, active chat, and details/settings as separate navigable views or sheets.
 - Group chat configuration: group details surface with overview, members, files, and settings; not an always-visible admin strip.
@@ -454,9 +451,9 @@ Included:
 
 - Two-lane entry screen.
 - Private direct one-to-one session creation and join link.
-- WebRTC DataChannel text messaging.
-- WebRTC DataChannel file transfer.
-- Private direct session end with local-save confirmation.
+- End-to-end encrypted WebSocket text messaging.
+- End-to-end encrypted WebSocket file transfer, currently limited to 8 MiB per file in browser memory.
+- Explicit private-room exit that clears local session state.
 - GitHub OAuth login for shared spaces.
 - Invite-only account acceptance.
 - Seeded first owner: `timeStarry` / `timestarry@qq.com`.
@@ -480,7 +477,7 @@ Included:
 
 Excluded from MVP:
 
-- TURN relay by default.
+- WebRTC, ICE/TURN transport, automatic P2P socket recovery, and private transcript export in the current AppV1 implementation.
 - Multi-party private direct chat.
 - Public registration.
 - Push notifications.
@@ -493,7 +490,6 @@ Excluded from MVP:
 
 Phase 2:
 
-- Optional TURN relay with clear privacy copy.
 - Time-based message retention.
 - Export local private-direct transcript.
 - Space settings for quota and storage usage.
@@ -502,7 +498,7 @@ Phase 2:
 
 Phase 3:
 
-- Application-layer end-to-end encryption for private direct with key verification.
+- Independent peer key verification for the already encrypted private lane.
 - Optional encrypted shared-space room mode.
 - Shared attachment storage and cross-instance realtime transport.
 - Multi-device session management.
@@ -514,9 +510,9 @@ Phase 3:
 Prototype checks:
 
 - Create private direct session and join from a second browser profile.
-- Send text over WebRTC DataChannel.
-- Transfer a file over WebRTC DataChannel.
-- End private direct session and confirm local save prompt.
+- Send text and transfer a file through browser-encrypted WebSocket envelopes.
+- Reject invalid invite keys before opening the room socket and prevent decryption with a different valid key.
+- Leave the private room and confirm messages, draft, and fragment secret are cleared.
 - Verify server does not persist private direct message or file content.
 - Login with GitHub OAuth.
 - Accept invite and create a shared-space account.
@@ -555,10 +551,10 @@ Recommended defaults are included where possible.
 | --- | --- |
 | Database | PostgreSQL with versioned migrations. |
 | File storage | Private S3-compatible bucket; local volume is the development and rollback adapter. |
-| Private direct persistence | Ask at session end; default to not saving. |
+| Private direct persistence | Browser memory only; explicit received-file download, no transcript-save prompt. |
 | Shared-space message retention | Recent `10000` messages per conversation. |
 | Shared-space file quota | Upload and download combined, `2 GiB / user / day`. |
 | Operation-record retention | Permanent in MVP, configurable later. |
-| TURN support | Post-MVP optional feature. |
+| Private direct transport | End-to-end encrypted WebSocket relay; retained ICE/TURN settings are for historical clients. |
 | External shared-space label | Use `共享空间` or `空间`; avoid exposing `Workspace` to normal users. |
 | Workspace implementation contract | Use [Workspace MVP Development Contract](docs/WORKSPACE_MVP_DEVELOPMENT_CONTRACT.md). |

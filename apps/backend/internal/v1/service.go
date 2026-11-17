@@ -1108,10 +1108,6 @@ func inspectAndNormalizeOTAZip(rawBytes []byte, fromFullAPK bool) ([]byte, error
 		return nil, fmt.Errorf("%w: 热更资源包不是有效的 ZIP 格式", ErrInvalidInput)
 	}
 
-	type otaEntry struct {
-		name string
-		data []byte
-	}
 	entriesByName := map[string][]byte{}
 	var totalUncompressed int64
 	const maxUncompressed = 25 * 1024 * 1024

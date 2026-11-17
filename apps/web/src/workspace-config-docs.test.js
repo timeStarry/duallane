@@ -79,7 +79,7 @@ describe("workspace configuration docs", () => {
     expect(defaultPlaywright).toContain("node e2e/support/test-server.mjs");
     expect(defaultTestServer).toContain("./go-p2p-server.mjs");
     expect(defaultTestServer).not.toContain("server/index.mjs");
-    expect(workspacePlaywright).toContain('testMatch: "workspace*.spec.ts"');
+    expect(workspacePlaywright).toContain('testMatch: "workspace-v1-acceptance.spec.ts"');
     expect(workspacePlaywright).toContain("go-workspace-server.mjs");
   });
 
@@ -257,19 +257,16 @@ describe("workspace configuration docs", () => {
     expect(caddy).toContain("output discard");
   });
 
-  it("documents private-lane relay and room lifecycle settings in the Go P2P implementation", async () => {
+  it("documents the current encrypted relay and distinguishes retained ICE compatibility settings", async () => {
     const readme = await readFile(path.join(repoRoot, "README.md"), "utf8");
     const config = await readFile(path.join(repoRoot, "apps", "backend", "internal", "platform", "config", "config.go"), "utf8");
     const p2p = await readFile(path.join(repoRoot, "apps", "backend", "internal", "p2p", "transport.go"), "utf8");
 
-    expect(readme).toContain("DUALLANE_TURN_SHARED_SECRET");
-    expect(readme).toContain("DUALLANE_STUN_URLS");
-    expect(readme).toContain("DUALLANE_TURN_URLS");
-    expect(readme).toContain("DUALLANE_TURN_TTL_SECONDS");
-    expect(readme).toContain("DUALLANE_TURN_USERNAME");
-    expect(readme).toContain("DUALLANE_TURN_CREDENTIAL");
+    expect(readme).toContain("end-to-end encrypted WebSocket relay");
+    expect(readme).toContain("STUN/TURN settings and ICE endpoints support historical clients");
+    expect(readme).toContain("AppV1 does not");
+    expect(readme).toContain("automatic transport recovery is not implemented");
     expect(readme).toContain("DUALLANE_EMPTY_ROOM_GRACE_MS");
-    expect(readme).toContain("Prefer `turns:`");
     expect(config).toContain('"DUALLANE_STUN_URLS"');
     expect(config).toContain('"DUALLANE_TURN_URLS"');
     expect(p2p).toContain('router.Get("/api/p2p/ice-servers"');

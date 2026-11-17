@@ -5,6 +5,28 @@ import test from 'node:test';
 const workflowPath = new URL('../workflows/ci.yml', import.meta.url);
 const workflow = (await readFile(workflowPath, 'utf8')).replace(/\r\n?/g, '\n');
 
+test('the module minimum is supported by the pinned CI and container Go toolchain', async () => {
+  const root = new URL('../../', import.meta.url);
+  const [module, ...dockerfiles] = await Promise.all([
+    'apps/backend/go.mod', 'Dockerfile.p2p', 'Dockerfile.workspace',
+  ].map((path) => readFile(new URL(path, root), 'utf8')));
+  const normalizedModule = module.replace(/\r\n?/g, '\n');
+  const minimum = normalizedModule.match(/^go (\d+)\.(\d+)\.(\d+)$/m);
+  const toolchain = normalizedModule.match(/^toolchain go(\d+)\.(\d+)\.(\d+)$/m);
+  assert.ok(minimum, 'the module must declare its minimum Go version');
+  assert.ok(toolchain, 'CI must select an explicit Go toolchain');
+  const version = (match) => match.slice(1).map(Number);
+  const minimumVersion = version(minimum);
+  const toolchainVersion = version(toolchain);
+  const firstDifference = minimumVersion.findIndex((part, index) => part !== toolchainVersion[index]);
+  assert.ok(firstDifference === -1 || minimumVersion[firstDifference] < toolchainVersion[firstDifference],
+    'the pinned toolchain cannot run a module requiring a newer Go version');
+  for (const dockerfile of dockerfiles) {
+    assert.match(dockerfile, new RegExp(`golang:${toolchain[1]}\\.${toolchain[2]}(?:[.-])`),
+      'container builds must use the same Go release line as CI');
+  }
+});
+
 function goQualityGateBlock(contents) {
   const match = contents.match(
     /\n  go-quality-gate:\n(?<body>[\s\S]*?)\n  quality-gate:\n/,

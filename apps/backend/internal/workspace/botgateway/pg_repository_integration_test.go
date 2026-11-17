@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -163,12 +164,24 @@ func TestPGBotGatewayAuthenticationContextAndReplay(t *testing.T) {
 	if replay.CurrentSequence != 1 || len(replay.Events) != 1 || replay.Events[0].Sequence != 1 || replay.Events[0].Status != "delivered" {
 		t.Fatalf("first replay = %#v", replay)
 	}
-	if len(replay.Events[0].Payload) != 0 {
-		t.Fatalf("message delivery persisted content = %#v", replay.Events[0].Payload)
+	expectedDeliveryPayload := map[string]any{
+		"actorUserId":    "user-owner-botgateway",
+		"conversationId": "conversation-botgateway",
+		"messageId":      "message-botgateway",
 	}
-	var deliveryStatus string
-	if err := pool.QueryRow(ctx, `SELECT status FROM workspace_agent_bot_deliveries WHERE bot_id = $1 AND sequence = 1`, authValue.BotID).Scan(&deliveryStatus); err != nil {
+	if !reflect.DeepEqual(replay.Events[0].Payload, expectedDeliveryPayload) {
+		t.Fatalf("message delivery reference payload = %#v", replay.Events[0].Payload)
+	}
+	var deliveryStatus, persistedDeliveryPayload string
+	if err := pool.QueryRow(ctx, `SELECT status, payload_json FROM workspace_agent_bot_deliveries WHERE bot_id = $1 AND sequence = 1`, authValue.BotID).Scan(&deliveryStatus, &persistedDeliveryPayload); err != nil {
 		t.Fatal(err)
+	}
+	var storedPayload map[string]any
+	if err := json.Unmarshal([]byte(persistedDeliveryPayload), &storedPayload); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(storedPayload, expectedDeliveryPayload) {
+		t.Fatalf("persisted message delivery reference payload = %#v", storedPayload)
 	}
 	if deliveryStatus != "delivered" {
 		t.Fatalf("delivery status = %q", deliveryStatus)
@@ -283,7 +296,7 @@ func seedBotGatewayPG(t *testing.T, ctx context.Context, conn *pgx.Conn, now tim
 			id, space_id, seq, type, actor_user_id, conversation_id, target_type, target_id, payload_json, created_at
 		) VALUES (
 			'event-botgateway', $1, 1, 'message.created', 'user-owner-botgateway', 'conversation-botgateway',
-			'message', 'message-botgateway', '{"messageId":"message-botgateway"}', $2
+			'message', 'message-botgateway', '{"messageId":"message-botgateway","content":{"blocks":[{"type":"text","text":"synthetic-private-message-content"}]},"storageKey":"workspace/private-object","token":"synthetic-token"}', $2
 		)
 	`, DefaultSpaceID, now)
 	mustExecBotGatewayPG(t, ctx, conn, `

@@ -5,7 +5,7 @@ const apiURL = "http://127.0.0.1:8898";
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: "workspace*.spec.ts",
+  testMatch: "workspace-v1-acceptance.spec.ts",
   outputDir: ".private-test-results/workspace-go-browser",
   fullyParallel: false,
   workers: 1,
@@ -15,8 +15,9 @@ export default defineConfig({
   failOnFlakyTests: true,
   retries: 0,
   reporter: "list",
-  // Reuse the existing assertions and their effective motion behavior. All
-  // data is synthetic; never reuse a running server or publish failure dumps.
+  // AppV1 is the only production UI. The acceptance suite uses its real Go
+  // flows; legacy workspace*.spec.ts selectors target the retired UI.
+  // All data is synthetic; never reuse a server or publish failure dumps.
   use: { baseURL, trace: "off", screenshot: "off", video: "off" },
   projects: [{ name: "chromium-go-workspace", use: { ...devices["Desktop Chrome"] } }],
   webServer: [

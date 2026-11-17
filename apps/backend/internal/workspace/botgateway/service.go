@@ -1453,14 +1453,6 @@ func (s *Service) queueWorkspaceEvents(ctx context.Context, current *Auth) error
 	return nil
 }
 
-func (s *Service) queueEvent(ctx context.Context, value *Auth, event EventRecord) error {
-	current, err := s.ValidateAuth(ctx, value)
-	if err != nil {
-		return err
-	}
-	return s.queueValidatedEvent(ctx, current, event)
-}
-
 func (s *Service) queueValidatedEvent(ctx context.Context, current *Auth, event EventRecord) error {
 	authorized, err := s.authorizeValidatedDelivery(ctx, current, event)
 	if err != nil || !authorized {
