@@ -3278,33 +3278,7 @@ func (r *PGRepository) GetBotConsoleOverview(ctx context.Context, actorID, botID
 		return BotConsoleOverview{}, ErrForbidden
 	}
 
-	// The console path explicitly ensures the owner's private DM exists. Read
-	// projection must never normalize unrelated legacy policies or grants.
-	dmConvID := randomID("conv")
-	dmKey := formatDirectKey(ownerID, botUserID)
-	if qErr := r.pool.QueryRow(ctx, `
-		INSERT INTO conversations (id, space_id, type, title, direct_key, retention_count, created_by, created_at)
-		VALUES ($1, $2, 'direct', $3, $4, 10000, $5, $6)
-		ON CONFLICT (space_id, direct_key)
-		DO UPDATE SET space_id = EXCLUDED.space_id
-		RETURNING id
-	`, dmConvID, r.spaceID, botName, dmKey, ownerID, now.UTC()).Scan(&dmConvID); qErr == nil && dmConvID != "" {
-		_, _ = r.pool.Exec(ctx, `
-			INSERT INTO conversation_members (conversation_id, user_id, joined_at, removed_at)
-			VALUES ($1, $2, $3, NULL), ($1, $4, $3, NULL)
-			ON CONFLICT (conversation_id, user_id) DO UPDATE SET removed_at = NULL
-		`, dmConvID, ownerID, now.UTC(), botUserID)
-		_, _ = r.pool.Exec(ctx, `
-			INSERT INTO workspace_agent_bot_context_grants (
-				grant_id, bot_id, space_id, conversation_id, allow_trigger, allow_context, max_messages, granted_by, created_at, updated_at
-			)
-			VALUES ($1, $2, $3, $4, 1, 1, 50, $5, $6, $6)
-			ON CONFLICT (bot_id, conversation_id) DO UPDATE
-			SET allow_trigger = 1,
-			    updated_at = CASE WHEN workspace_agent_bot_context_grants.allow_trigger = 0 THEN EXCLUDED.updated_at ELSE workspace_agent_bot_context_grants.updated_at END
-		`, randomID("bgr"), botID, r.spaceID, dmConvID, ownerID, now.UTC())
-	}
-
+	// Diagnostics never create conversations, restore membership or grant access.
 	convs, err := r.ListBotConversations(ctx, botID, botUserID)
 	if err != nil {
 		return BotConsoleOverview{}, err
