@@ -22,7 +22,7 @@ test("parseSetupTarget accepts full workspace setup URLs and bare setup IDs", ()
   assert.equal(fromBare.setupSessionId, SETUP_ID);
 });
 
-test("MCP setup_start -> setup_finish pairs Bot, writes 0600 profile, and never exposes raw token to LLM", async () => {
+test("MCP setup_start -> setup_finish pairs Bot, persists its profile, and never exposes raw token to LLM", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "duallane-mcp-test-"));
   const calls = [];
 
@@ -122,8 +122,11 @@ test("MCP setup_start -> setup_finish pairs Bot, writes 0600 profile, and never 
   // Check file mode 0600 on POSIX
   const savedProfile = loadAgentProfile("default", { configDir: tmpDir });
   assert.equal(savedProfile.token, RAW_TOKEN);
-  const mode = fs.statSync(savedProfile.filePath).mode & 0o777;
-  assert.equal(mode, 0o600);
+  // Windows fs modes do not represent owner/group/other ACL permissions.
+  if (process.platform !== "win32") {
+    const mode = fs.statSync(savedProfile.filePath).mode & 0o777;
+    assert.equal(mode, 0o600);
+  }
 
   // 4. Send message, edit message, and send interactive card
   const sendRes = await server.callTool("duallane_send_message", {
