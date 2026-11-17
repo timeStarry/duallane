@@ -373,6 +373,8 @@ test.describe("DualLane v1.0 P2P Direct Lane, File Transfer, 320px Responsive, A
                   ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
                   : null;
             if (bytes) {
+              const text = new TextDecoder().decode(bytes);
+              containsP2PContent ||= tokens.some(token => text.includes(token));
               containsP2PFile ||= bytes.length === fileBytes.length && bytes.every((byte, index) => byte === fileBytes[index]);
               return;
             }
